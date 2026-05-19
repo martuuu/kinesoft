@@ -1,0 +1,677 @@
+// KineSoft — Prisma schema
+// Multi-tenant SaaS for kinesiology practices.
+// Per-tenant clinical data + a globally shared anatomy/condition/exercise catalog.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Tenancy & Auth
+// ═════════════════════════════════════════════════════════════════════
+
+model Tenant {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  legalName   String?
+  taxId       String?
+  timezone    String   @default("America/Argentina/Buenos_Aires")
+  currency    String   @default("ARS")
+  palette     String   @default("sky")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships    Membership[]
+  practitioners  Practitioner[]
+  patients       Patient[]
+  patientLinks   PatientTenantLink[]
+  services       Service[]
+  bookings       Booking[]
+  programs       TreatmentProgram[]
+  cases          ClinicalCase[]
+  auditEvents    AuditEvent[]
+
+  @@index([slug])
+}
+
+model UserProfile {
+  id           String        @id // Supabase auth user id
+  email        String        @unique
+  fullName     String?
+  avatarUrl    String?
+  locale       String        @default("es-AR")
+  createdAt    DateTime      @default(now())
+
+  memberships  Membership[]
+  practitioner Practitioner?
+  patient      Patient?
+}
+
+model Membership {
+  id           String   @id @default(cuid())
+  userId       String
+  tenantId     String
+  role         Role
+  invitedAt    DateTime @default(now())
+  acceptedAt   DateTime?
+
+  user   UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  PRACTITIONER
+  ASSISTANT
+  BILLING
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// People
+// ═════════════════════════════════════════════════════════════════════
+
+model Practitioner {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String   @unique
+  licenseNumber String?  // "Matrícula Nacional"
+  specialty     String?
+  bio           String?
+  rating        Float?
+  yearsExp      Int?
+  createdAt     DateTime @default(now())
+
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     UserProfile @relation(fields: [userId], references: [id])
+  services Service[]
+  bookings Booking[]
+  sessions Session[]
+  cases    ClinicalCase[]
+
+  @@index([tenantId])
+}
+
+model Patient {
+  id            String   @id @default(cuid())
+  tenantId      String   // home tenant (the first clinic to register them)
+  userId        String?  @unique // optional Supabase identity for portal access
+  firstName     String
+  lastName      String
+  email         String?
+  phone         String?
+  dateOfBirth   DateTime?
+  documentId    String?  // DNI
+  notes         String?
+  archivedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  user         UserProfile? @relation(fields: [userId], references: [id])
+  coverages    Coverage[]
+  bookings     Booking[]
+  programs     TreatmentProgram[]
+  tenantLinks  PatientTenantLink[]
+  evaScores    EvaScore[]
+  emergency    EmergencyContact[]
+  files        PatientFile[]
+
+  @@unique([tenantId, documentId])
+  @@index([tenantId, lastName])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Patient files — Archivos tab on the EHR.
+// Metadata lives in Postgres; the binary lives in Supabase Storage (or
+// any S3-compatible bucket). `storageKey` is the object key.
+// ═════════════════════════════════════════════════════════════════════
+enum PatientFileCategory {
+  REPORT       // Informe médico / RMI / estudios
+  DERIVATION   // Derivación / orden
+  CONSENT      // Consentimiento informado
+  IMAGE        // Foto / video clínico
+  RECEIPT      // Recibo / factura
+  OTHER
+}
+
+model PatientFile {
+  id          String   @id @default(cuid())
+  tenantId    String   // duplicated for fast tenant filtering
+  patientId   String
+  uploaderId  String?  // UserProfile id
+  name        String
+  mime        String
+  sizeBytes   Int
+  storageKey  String   // path in object storage (or "stub:<id>" in local dev)
+  category    PatientFileCategory @default(OTHER)
+  description String?
+  createdAt   DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([patientId])
+}
+
+// Same human (one Supabase identity) can be a patient at multiple clinics.
+model PatientTenantLink {
+  id        String   @id @default(cuid())
+  patientId String
+  tenantId  String
+  createdAt DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, tenantId])
+}
+
+model Coverage {
+  id           String   @id @default(cuid())
+  patientId    String
+  insurer      String   // "OSDE", "Swiss Medical", "Particular", etc.
+  planName     String?
+  memberId     String?
+  validUntil   DateTime?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+model EmergencyContact {
+  id        String  @id @default(cuid())
+  patientId String
+  name      String
+  relation  String?
+  phone     String
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Anatomy & Condition Catalog  (GLOBAL — not tenant-scoped)
+// ═════════════════════════════════════════════════════════════════════
+
+enum TagKind {
+  ZONE          // tobillo, rodilla
+  SUBZONE       // lateral, medial, posterior
+  SYMPTOM       // punzante, sordo, quemante
+  TRIGGER       // reposo, escaleras, correr
+  PHASE         // aguda, subaguda, crónica
+  EQUIPMENT     // banda, mancuernas, ninguno
+  GOAL          // movilidad, fuerza, estabilidad
+  CHAIN         // marker for kinematic-chain relations (e.g. "glute-med", "core")
+}
+
+model Tag {
+  id        String  @id @default(cuid())
+  slug      String  @unique
+  label     String
+  kind      TagKind
+  parentId  String?
+  parent    Tag?    @relation("TagTree", fields: [parentId], references: [id])
+  children  Tag[]   @relation("TagTree")
+
+  conditions ConditionTag[]
+  exercises  ExerciseTag[]
+
+  @@index([kind])
+  @@index([parentId])
+}
+
+model Condition {
+  id               String   @id @default(cuid())
+  cie10            String?
+  slug             String   @unique
+  name             String
+  summary          String?
+  contra           String?  // contraindications, plain text
+  severity         Severity?
+  recoveryWeeksMin Int?
+  recoveryWeeksMax Int?
+  mechanism        String?  // "Sobrecarga", "Trauma", "Repetitivo", "Postural"
+  redFlags         String?  // when to refer urgently
+  createdAt        DateTime @default(now())
+
+  tags      ConditionTag[]
+  anatomy   ConditionAnatomy[]
+  exercises ConditionExerciseLink[]
+  diagnoses Diagnosis[]
+}
+
+enum Severity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+model ConditionTag {
+  conditionId String
+  tagId       String
+  weight      Float  @default(1.0)
+  // when this condition matches, the tag contributes `weight` to its score
+
+  condition Condition @relation(fields: [conditionId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id])
+
+  @@id([conditionId, tagId])
+}
+
+model Exercise {
+  id           String  @id @default(cuid())
+  slug         String  @unique
+  name         String
+  description  String?
+  videoUrl     String?
+  difficulty   Int     @default(1)        // 1..5
+  defaultSets  Int     @default(3)
+  defaultReps  Int     @default(12)
+  instructions String? // markdown bullets
+  equipment    String? // comma-separated: "banda, foam roller"
+  muscleGroups String? // "Glúteo medio, Cadera"
+  cues         String? // form cues / coaching points
+  createdAt    DateTime @default(now())
+
+  tags        ExerciseTag[]
+  conditions  ConditionExerciseLink[]
+  sessions    SessionExercise[]
+}
+
+model ExerciseTag {
+  exerciseId String
+  tagId      String
+
+  exercise Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id])
+
+  @@id([exerciseId, tagId])
+}
+
+enum ExerciseRelation {
+  DIRECT
+  INDIRECT      // related via kinematic chain (e.g. ITBS → glute med)
+  ANTAGONIST    // balances/counteracts
+  PREVENTIVE
+}
+
+enum ProgramPhase {
+  ACTIVATION    // activation / dosage of dormant muscles
+  STABILITY     // motor control + lumbo-pelvic stability
+  LOAD          // progressive resistance
+  PROGRESSION   // sport-specific / return to play
+}
+
+// The crown jewel: condition ↔ exercise links with semantics + weight + phase.
+model ConditionExerciseLink {
+  conditionId String
+  exerciseId  String
+  relation    ExerciseRelation
+  phase       ProgramPhase @default(ACTIVATION)
+  weight      Float        @default(1.0)
+  rationale   String?  // e.g. "kinematic chain: glute med insufficiency drives ITB tension"
+
+  condition Condition @relation(fields: [conditionId], references: [id], onDelete: Cascade)
+  exercise  Exercise  @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@id([conditionId, exerciseId, relation])
+  @@index([conditionId])
+  @@index([exerciseId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Anatomical regions — drives the interactive body map AND the matching
+// engine's spatial scoring. Each region has SVG geometry so the body map
+// renders from data, and an optional `tagSlug` linking it to the Tag tree
+// for the unified scoring algorithm.
+// ═════════════════════════════════════════════════════════════════════
+
+enum AnatomicalView {
+  FRONT
+  BACK
+}
+
+enum BodySide {
+  LEFT
+  RIGHT
+  CENTER
+}
+
+enum ShapeKind {
+  RECT
+  ELLIPSE
+  PATH
+}
+
+enum AnatomyRole {
+  PRIMARY      // condition lives here
+  SECONDARY    // condition also involves
+  RELATED      // kinematic chain — surfaces "indirect" exercises
+}
+
+model AnatomicalRegion {
+  slug        String         @id
+  label       String
+  view        AnatomicalView
+  side        BodySide       @default(CENTER)
+  parentSlug  String?
+  parent      AnatomicalRegion? @relation("RegionTree", fields: [parentSlug], references: [slug])
+  children    AnatomicalRegion[] @relation("RegionTree")
+  tagSlug     String?       // bridge into the Tag tree
+  shape       ShapeKind     @default(ELLIPSE)
+  x           Float?        // shared by RECT (top-left x) and ELLIPSE (cx)
+  y           Float?        // shared by RECT (top-left y) and ELLIPSE (cy)
+  width       Float?        // RECT
+  height      Float?        // RECT
+  rx          Float?        // ELLIPSE radius x  | RECT corner radius
+  ry          Float?        // ELLIPSE radius y
+  path        String?       // SVG path data for PATH
+  sortOrder   Int           @default(0)
+
+  conditions  ConditionAnatomy[]
+
+  @@index([view, sortOrder])
+}
+
+model ConditionAnatomy {
+  conditionId String
+  regionSlug  String
+  role        AnatomyRole
+
+  condition Condition        @relation(fields: [conditionId], references: [id], onDelete: Cascade)
+  region    AnatomicalRegion @relation(fields: [regionSlug], references: [slug])
+
+  @@id([conditionId, regionSlug, role])
+  @@index([regionSlug])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Diagnosis flow  (per-tenant clinical artefacts)
+// ═════════════════════════════════════════════════════════════════════
+
+// Patient-agnostic snapshot from the Diagnosis page.
+// Captures the practitioner's selections before any patient is assigned.
+model ClinicalCase {
+  id             String   @id @default(cuid())
+  tenantId       String
+  authorId       String   // practitioner
+  // selections persisted as JSON for forward compat with the matching engine
+  selectedZones  Json     // e.g. ["knee-lateral-right", "hip-external-right"]
+  refinements    Json     // { sub-zones, symptoms, triggers, evolution, intensity }
+  notes          String?
+  patientId      String?  // becomes set when assigned to a patient
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id])
+  author       Practitioner   @relation(fields: [authorId], references: [id])
+  diagnoses    Diagnosis[]
+  program      TreatmentProgram?
+
+  @@index([tenantId])
+  @@index([patientId])
+}
+
+// One ranked condition for a case.
+model Diagnosis {
+  id          String   @id @default(cuid())
+  caseId      String
+  conditionId String
+  matchScore  Float    // 0..1
+  confirmed   Boolean  @default(false)
+  rank        Int
+
+  case      ClinicalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  condition Condition    @relation(fields: [conditionId], references: [id])
+
+  @@index([caseId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Treatment programs & sessions
+// ═════════════════════════════════════════════════════════════════════
+
+model TreatmentProgram {
+  id           String   @id @default(cuid())
+  tenantId     String
+  patientId    String
+  caseId       String?  @unique
+  title        String
+  totalSessions Int     @default(8)
+  frequency    Int      @default(2) // per week
+  startDate    DateTime
+  status       ProgramStatus @default(ACTIVE)
+  createdAt    DateTime @default(now())
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id])
+  patient  Patient       @relation(fields: [patientId], references: [id])
+  case     ClinicalCase? @relation(fields: [caseId], references: [id])
+  sessions Session[]
+
+  @@index([tenantId, patientId])
+}
+
+enum ProgramStatus {
+  ACTIVE
+  COMPLETED
+  PAUSED
+  CANCELLED
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  programId    String
+  practitionerId String
+  index        Int       // 1..N
+  scheduledFor DateTime
+  completedAt  DateTime?
+  notes        String?
+  rpe          Int?      // perceived effort 0..10
+  paInPre      Int?      // pain pre 0..10
+  paInPost     Int?      // pain post 0..10
+
+  program      TreatmentProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  practitioner Practitioner     @relation(fields: [practitionerId], references: [id])
+  exercises    SessionExercise[]
+
+  @@index([programId])
+}
+
+model SessionExercise {
+  id         String  @id @default(cuid())
+  sessionId  String
+  exerciseId String
+  order      Int
+  sets       Int
+  reps       Int
+  status     SessionExerciseStatus @default(PENDING)
+  notes      String?
+
+  session  Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  exercise Exercise @relation(fields: [exerciseId], references: [id])
+
+  @@unique([sessionId, order])
+}
+
+enum SessionExerciseStatus {
+  PENDING
+  DONE
+  SKIPPED
+  PROGRESSED
+}
+
+// Visual Analog Scale data points for the patient's evolution chart.
+model EvaScore {
+  id        String   @id @default(cuid())
+  patientId String
+  takenAt   DateTime @default(now())
+  value     Int      // 0..10
+  source    String?  // "pre", "post", "weekly-checkin"
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, takenAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Scheduling & Payments
+// ═════════════════════════════════════════════════════════════════════
+
+model Service {
+  id           String   @id @default(cuid())
+  tenantId     String
+  practitionerId String?
+  name         String   // "Sesión kinésica"
+  durationMin  Int      @default(45)
+  priceCents   Int      @default(0)
+  description  String?
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id])
+  bookings     Booking[]
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  tenantId        String
+  patientId       String?       // null while pending guest checkout
+  practitionerId  String
+  serviceId       String
+  scheduledFor    DateTime
+  durationMin     Int
+  status          BookingStatus @default(PENDING)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  guestName       String?
+  guestEmail      String?
+  guestPhone      String?
+  idempotencyKey  String        @unique
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  patient      Patient?      @relation(fields: [patientId], references: [id])
+  practitioner Practitioner  @relation(fields: [practitionerId], references: [id])
+  service      Service       @relation(fields: [serviceId], references: [id])
+  payment      Payment?
+
+  @@index([tenantId, scheduledFor])
+  @@index([practitionerId, scheduledFor])
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  NO_SHOW
+  COMPLETED
+}
+
+enum PaymentStatus {
+  UNPAID
+  AUTHORIZED
+  PAID
+  REFUNDED
+  FAILED
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  bookingId       String   @unique
+  provider        String   @default("mercadopago")
+  externalId      String?  // MP preference/payment id
+  status          PaymentStatus @default(UNPAID)
+  amountCents     Int
+  currency        String   @default("ARS")
+  rawPayload      Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([externalId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Notifications — per-user feed surfaced in the dashboard bell.
+// Created automatically by domain mutations (booking.create / payment.paid
+// / session.due / program.completing).
+// ═════════════════════════════════════════════════════════════════════
+enum NotificationKind {
+  BOOKING_CREATED
+  BOOKING_CANCELLED
+  PAYMENT_RECEIVED
+  PROGRAM_NEARING_DISCHARGE
+  PATIENT_NEW
+  SYSTEM
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String   // recipient
+  kind      NotificationKind
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId, readAt])
+  @@index([tenantId, createdAt])
+}
+
+// Per-user reminder dismissals — the "Más tarde" button on the dashboard
+// records (userId, key, dismissedUntil). The reminder card hides itself
+// until the date passes.
+model DismissedReminder {
+  id             String   @id @default(cuid())
+  tenantId       String
+  userId         String
+  reminderKey    String   // e.g. "near-discharge", "weekly-rollup"
+  dismissedUntil DateTime
+  createdAt      DateTime @default(now())
+
+  @@unique([tenantId, userId, reminderKey])
+}
+
+// Per-user preferences — which KPIs are pinned to the dashboard, which
+// palette is active, etc.
+model UserPreferences {
+  userId       String   @id
+  tenantId     String?  // active tenant for the user (in case of multi-clinic)
+  palette      String   @default("sky")
+  pinnedKpis   Json     @default("[\"activePatients\",\"weekSessions\",\"activePrograms\"]")
+  sidebarCollapsed Boolean @default(false)
+  updatedAt    DateTime @updatedAt
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Audit log — every PHI read/write
+// ═════════════════════════════════════════════════════════════════════
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  actorId   String?  // userId, null for system
+  action    String   // "patient.read", "case.create", etc.
+  entity    String
+  entityId  String?
+  ip        String?
+  userAgent String?
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([entity, entityId])
+}

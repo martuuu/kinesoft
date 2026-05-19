@@ -1,0 +1,950 @@
+"use client";
+
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import type { BookingStatus } from "@prisma/client";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Avatar } from "@/components/ui/avatar";
+import { Tag } from "@/components/ui/tag";
+import {
+  IconArrow,
+  IconChevL,
+  IconChevR,
+  IconCheck,
+  IconPlus,
+  IconX,
+} from "@/components/ui/icons";
+import { createBooking, deleteBooking, setBookingStatus } from "@/lib/bookings";
+
+type BookingDTO = {
+  id: string;
+  scheduledFor: string;
+  durationMin: number;
+  status: BookingStatus;
+  serviceName: string;
+  practitionerId: string;
+  patientId: string | null;
+  patientName: string;
+  patientCondition: string | null;
+  notes: string | null;
+};
+
+type Props = {
+  view: "timeline" | "week" | "list";
+  anchorISO: string;
+  weekStartISO: string;
+  autoCreate?: boolean;
+  autoCreatePatientId?: string | null;
+  bookings: BookingDTO[];
+  services: { id: string; name: string; durationMin: number; priceCents: number }[];
+  practitioners: { id: string; name: string }[];
+  patients: { id: string; name: string }[];
+};
+
+const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
+
+function fmtHour(d: Date) {
+  return d.toLocaleTimeString("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+}
+
+function isoToLocalInput(iso: string) {
+  // Render an ISO timestamp into a value that `<input type=datetime-local>` accepts (no Z).
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function AgendaClient(props: Props) {
+  const router = useRouter();
+  const [creating, setCreating] = useState<null | {
+    defaultISO?: string;
+    defaultPatientId?: string | null;
+  }>(null);
+  const [editing, setEditing] = useState<BookingDTO | null>(null);
+
+  // Deep-link from "Nuevo turno" quick action: /agenda?new=1&patient=<id>
+  // opens the create modal pre-filled with that patient. We clear the
+  // query string after opening so a refresh doesn't re-trigger.
+  useEffect(() => {
+    if (!props.autoCreate) return;
+    setCreating({ defaultPatientId: props.autoCreatePatientId ?? null });
+    const next = new URL(window.location.href);
+    next.searchParams.delete("new");
+    next.searchParams.delete("patient");
+    window.history.replaceState(null, "", next.toString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const anchor = useMemo(() => new Date(props.anchorISO), [props.anchorISO]);
+  const weekStart = useMemo(() => new Date(props.weekStartISO), [props.weekStartISO]);
+
+  const bookingsByDay = useMemo(() => {
+    const map = new Map<string, BookingDTO[]>();
+    for (const b of props.bookings) {
+      const k = new Date(b.scheduledFor).toISOString().slice(0, 10);
+      map.set(k, [...(map.get(k) ?? []), b]);
+    }
+    return map;
+  }, [props.bookings]);
+
+  const todayKey = anchor.toISOString().slice(0, 10);
+  const todayList = (bookingsByDay.get(todayKey) ?? []).sort(
+    (a, b) => +new Date(a.scheduledFor) - +new Date(b.scheduledFor)
+  );
+
+  const navigate = (deltaDays: number) => {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() + deltaDays);
+    const next = d.toISOString().slice(0, 10);
+    router.push(`/agenda?view=${props.view}&date=${next}`);
+  };
+
+  const setView = (v: Props["view"]) => {
+    const next = anchor.toISOString().slice(0, 10);
+    router.push(`/agenda?view=${v}&date=${next}`);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: "calc(100vh - 60px)" }}>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Agenda</div>
+          <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
+            {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long" })}
+          </h1>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => navigate(-7)} style={chevBtn} aria-label="Semana anterior">
+              <IconChevL size={14} />
+            </button>
+            <Button variant="ghost" onClick={() => router.push(`/agenda?view=${props.view}&date=${new Date().toISOString().slice(0, 10)}`)}>
+              Hoy
+            </Button>
+            <button onClick={() => navigate(7)} style={chevBtn} aria-label="Semana siguiente">
+              <IconChevR size={14} />
+            </button>
+          </div>
+          <div className="k-glass" style={{ display: "flex", alignItems: "center", borderRadius: 999, padding: 4 }}>
+            {(["timeline", "week", "list"] as const).map((v) => {
+              const on = props.view === v;
+              const label = v === "timeline" ? "Día" : v === "week" ? "Semana" : "Lista";
+              return (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: 999,
+                    border: "none",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: on ? "var(--navy-900)" : "transparent",
+                    color: on ? "#fff" : "var(--navy-500)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <Button variant="primary" onClick={() => setCreating({})}>
+            <IconPlus size={14} /> Nuevo turno
+          </Button>
+        </div>
+      </header>
+
+      <WeekStrip
+        weekStart={weekStart}
+        anchor={anchor}
+        bookingsByDay={bookingsByDay}
+        onPick={(d) => router.push(`/agenda?view=${props.view}&date=${d.toISOString().slice(0, 10)}`)}
+      />
+
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {props.view === "timeline" && (
+          <TimelineView
+            bookings={todayList}
+            onCreate={(iso) => setCreating({ defaultISO: iso })}
+            onEdit={setEditing}
+          />
+        )}
+        {props.view === "week" && (
+          <WeekGridView weekStart={weekStart} bookings={props.bookings} onEdit={setEditing} />
+        )}
+        {props.view === "list" && (
+          <ListView bookings={todayList} onEdit={setEditing} />
+        )}
+      </div>
+
+      {creating && (
+        <BookingModal
+          mode="create"
+          defaultISO={creating.defaultISO ?? anchor.toISOString()}
+          defaultPatientId={creating.defaultPatientId ?? null}
+          services={props.services}
+          practitioners={props.practitioners}
+          patients={props.patients}
+          onClose={() => setCreating(null)}
+          onSaved={() => {
+            setCreating(null);
+            router.refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <BookingModal
+          mode="edit"
+          booking={editing}
+          services={props.services}
+          practitioners={props.practitioners}
+          patients={props.patients}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const chevBtn: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.7)",
+  border: "1px solid rgba(15,30,51,0.06)",
+  cursor: "pointer",
+  color: "var(--navy-700)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+function WeekStrip({
+  weekStart,
+  anchor,
+  bookingsByDay,
+  onPick,
+}: {
+  weekStart: Date;
+  anchor: Date;
+  bookingsByDay: Map<string, BookingDTO[]>;
+  onPick: (d: Date) => void;
+}) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+      {DAYS.map((d, i) => {
+        const day = new Date(weekStart);
+        day.setDate(day.getDate() + i);
+        const key = day.toISOString().slice(0, 10);
+        const count = bookingsByDay.get(key)?.length ?? 0;
+        const on = day.toDateString() === anchor.toDateString();
+        return (
+          <button
+            key={key}
+            onClick={() => onPick(day)}
+            className={on ? undefined : "k-glass"}
+            style={{
+              padding: "10px 6px",
+              borderRadius: 14,
+              textAlign: "center",
+              border: "none",
+              cursor: "pointer",
+              background: on ? "var(--sky-700)" : undefined,
+              color: on ? "#fff" : "var(--navy-500)",
+              boxShadow: on ? "0 8px 20px rgba(31,79,190,0.28)" : undefined,
+            }}
+          >
+            <div style={{ fontSize: 10, opacity: 0.7, textTransform: "uppercase", fontWeight: 600 }}>{d}</div>
+            <div
+              className="k-display"
+              style={{ fontSize: 18, fontWeight: 700, color: on ? "#fff" : "var(--navy-900)", margin: "2px 0" }}
+            >
+              {day.getDate()}
+            </div>
+            <div style={{ fontSize: 10, opacity: 0.8 }}>
+              {count} {count === 1 ? "turno" : "turnos"}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TimelineView({
+  bookings,
+  onCreate,
+  onEdit,
+}: {
+  bookings: BookingDTO[];
+  onCreate: (iso: string) => void;
+  onEdit: (b: BookingDTO) => void;
+}) {
+  const HOURS = Array.from({ length: 12 }, (_, i) => i + 8); // 08..19
+  const ROW = 56;
+
+  return (
+    <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
+        <div style={{ position: "relative", height: HOURS.length * ROW }}>
+          {HOURS.map((h, i) => {
+            const baseIso = new Date(
+              new Date(bookings[0]?.scheduledFor ?? new Date()).setHours(h, 0, 0, 0)
+            ).toISOString();
+            return (
+              <div
+                key={h}
+                onClick={() => onCreate(baseIso)}
+                style={{
+                  position: "absolute",
+                  top: i * ROW,
+                  left: 0,
+                  right: 0,
+                  height: ROW,
+                  borderTop: "1px solid rgba(15,30,51,0.06)",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  cursor: "pointer",
+                }}
+              >
+                <div
+                  className="k-mono"
+                  style={{
+                    width: 56,
+                    paddingTop: 4,
+                    fontSize: 11,
+                    color: "var(--navy-300)",
+                  }}
+                >
+                  {String(h).padStart(2, "0")}:00
+                </div>
+              </div>
+            );
+          })}
+
+          {bookings.map((b) => {
+            const date = new Date(b.scheduledFor);
+            const h = date.getHours() + date.getMinutes() / 60;
+            const top = (h - HOURS[0]) * ROW;
+            const height = (b.durationMin / 60) * ROW - 4;
+            const isCancelled = b.status === "CANCELLED";
+            const isDone = b.status === "COMPLETED";
+            return (
+              <button
+                key={b.id}
+                onClick={() => onEdit(b)}
+                style={{
+                  position: "absolute",
+                  left: 64,
+                  right: 8,
+                  top,
+                  height,
+                  borderRadius: 12,
+                  padding: "8px 12px",
+                  background: isCancelled
+                    ? "rgba(228,70,70,0.1)"
+                    : isDone
+                      ? "rgba(246,249,253,0.9)"
+                      : "rgba(255,255,255,0.85)",
+                  border: "1px solid " + (isCancelled ? "rgba(228,70,70,0.3)" : isDone ? "rgba(15,30,51,0.06)" : "rgba(31,79,190,0.12)"),
+                  boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
+                  color: "var(--navy-900)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  opacity: isCancelled ? 0.6 : isDone ? 0.7 : 1,
+                  cursor: "pointer",
+                  textDecoration: isCancelled ? "line-through" : "none",
+                  textAlign: "left",
+                }}
+              >
+                <div
+                  style={{
+                    width: 3,
+                    alignSelf: "stretch",
+                    borderRadius: 2,
+                    background: isCancelled ? "#9F1F1F" : isDone ? "var(--navy-100)" : "var(--sky-500)",
+                  }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 600 }}>
+                      {fmtHour(date)}
+                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{b.patientName}</span>
+                    {isDone && <Tag tone="soft"><IconCheck size={10} stroke={3} /> Hecho</Tag>}
+                    {b.status === "PENDING" && <Tag tone="soft">Pendiente</Tag>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    {b.serviceName} · {b.durationMin} min
+                  </div>
+                </div>
+                <Avatar name={b.patientName} size={28} tone="sky" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function WeekGridView({
+  weekStart,
+  bookings,
+  onEdit,
+}: {
+  weekStart: Date;
+  bookings: BookingDTO[];
+  onEdit: (b: BookingDTO) => void;
+}) {
+  const HOURS = Array.from({ length: 11 }, (_, i) => i + 8); // 8..18
+  const ROW = 50;
+  return (
+    <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "52px repeat(7, 1fr)", gap: 6, marginBottom: 6 }}>
+        <div />
+        {DAYS.map((d, i) => {
+          const day = new Date(weekStart);
+          day.setDate(day.getDate() + i);
+          return (
+            <div
+              key={i}
+              style={{
+                textAlign: "center",
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--navy-500)",
+                padding: "6px 0",
+              }}
+            >
+              {d} {day.getDate()}
+            </div>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "grid",
+          gridTemplateColumns: "52px repeat(7, 1fr)",
+          gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
+          gap: 6,
+          position: "relative",
+          overflow: "auto",
+        }}
+      >
+        {HOURS.map((h, i) => (
+          <div
+            key={"h" + h}
+            className="k-mono"
+            style={{
+              gridColumn: 1,
+              gridRow: i + 1,
+              fontSize: 10,
+              color: "var(--navy-300)",
+              paddingTop: 4,
+            }}
+          >
+            {String(h).padStart(2, "0")}:00
+          </div>
+        ))}
+        {HOURS.map((_, i) =>
+          DAYS.map((_, j) => (
+            <div
+              key={`cell${i}-${j}`}
+              style={{
+                gridColumn: j + 2,
+                gridRow: i + 1,
+                background: "rgba(255,255,255,0.5)",
+                borderRadius: 8,
+                border: "1px solid rgba(15,30,51,0.04)",
+              }}
+            />
+          ))
+        )}
+        {bookings.map((b) => {
+          const date = new Date(b.scheduledFor);
+          const dayCol = (date.getDay() + 6) % 7; // Monday = 0
+          const h = date.getHours() + date.getMinutes() / 60;
+          const rowStart = Math.max(1, Math.round(h - HOURS[0]) + 1);
+          const span = Math.max(1, Math.round(b.durationMin / 60));
+          return (
+            <button
+              key={b.id}
+              onClick={() => onEdit(b)}
+              style={{
+                gridColumn: dayCol + 2,
+                gridRow: `${rowStart} / span ${span}`,
+                background: "var(--sky-700)",
+                color: "#fff",
+                padding: "6px 8px",
+                borderRadius: 8,
+                fontSize: 11,
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                opacity: b.status === "CANCELLED" ? 0.4 : 1,
+              }}
+            >
+              <div className="k-mono" style={{ fontSize: 10, opacity: 0.85 }}>{fmtHour(date)}</div>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {b.patientName}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function ListView({
+  bookings,
+  onEdit,
+}: {
+  bookings: BookingDTO[];
+  onEdit: (b: BookingDTO) => void;
+}) {
+  if (!bookings.length) {
+    return (
+      <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
+        No hay turnos para este día.
+      </Card>
+    );
+  }
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      <div
+        style={{
+          padding: "12px 18px",
+          display: "grid",
+          gridTemplateColumns: "70px 1fr 1.4fr 1fr 100px 90px",
+          gap: 14,
+          fontSize: 10,
+          fontWeight: 700,
+          color: "var(--navy-300)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          borderBottom: "1px solid rgba(15,30,51,0.06)",
+        }}
+      >
+        <span>Hora</span>
+        <span>Paciente</span>
+        <span>Servicio</span>
+        <span>Notas</span>
+        <span>Duración</span>
+        <span style={{ textAlign: "right" }}>Estado</span>
+      </div>
+      {bookings.map((b) => {
+        const date = new Date(b.scheduledFor);
+        return (
+          <button
+            key={b.id}
+            onClick={() => onEdit(b)}
+            style={{
+              padding: "14px 18px",
+              display: "grid",
+              gap: 14,
+              gridTemplateColumns: "70px 1fr 1.4fr 1fr 100px 90px",
+              alignItems: "center",
+              fontSize: 13,
+              width: "100%",
+              border: "none",
+              background: "transparent",
+              borderBottom: "1px solid rgba(15,30,51,0.04)",
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>
+              {fmtHour(date)}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Avatar name={b.patientName} size={32} tone="sky" />
+              <div>
+                <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
+                {b.patientCondition && (
+                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>{b.patientCondition}</div>
+                )}
+              </div>
+            </div>
+            <div style={{ color: "var(--navy-700)" }}>{b.serviceName}</div>
+            <div style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {b.notes ?? "—"}
+            </div>
+            <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+              {b.durationMin} min
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <StatusTag s={b.status} />
+            </div>
+          </button>
+        );
+      })}
+    </Card>
+  );
+}
+
+function StatusTag({ s }: { s: BookingStatus }) {
+  if (s === "CONFIRMED") return <Tag tone="sky">Confirmado</Tag>;
+  if (s === "COMPLETED") return <Tag tone="soft"><IconCheck size={10} stroke={3} /> Hecho</Tag>;
+  if (s === "CANCELLED") return <Tag tone="soft">Cancelado</Tag>;
+  if (s === "NO_SHOW") return <Tag tone="soft">Ausente</Tag>;
+  return <Tag tone="lime">Pendiente</Tag>;
+}
+
+function BookingModal({
+  mode,
+  booking,
+  defaultISO,
+  defaultPatientId,
+  services,
+  practitioners,
+  patients,
+  onClose,
+  onSaved,
+}: {
+  mode: "create" | "edit";
+  booking?: BookingDTO;
+  defaultISO?: string;
+  defaultPatientId?: string | null;
+  services: Props["services"];
+  practitioners: Props["practitioners"];
+  patients: Props["patients"];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (formData: FormData) => {
+    setError(null);
+    start(async () => {
+      if (mode === "create") {
+        const result = await createBooking({
+          patientId: String(formData.get("patientId") ?? "") || undefined,
+          serviceId: String(formData.get("serviceId") ?? ""),
+          practitionerId: String(formData.get("practitionerId") ?? ""),
+          scheduledFor: String(formData.get("scheduledFor") ?? ""),
+          durationMin: Number(formData.get("durationMin")) || 45,
+          notes: String(formData.get("notes") ?? "") || undefined,
+          guestName: String(formData.get("guestName") ?? "") || undefined,
+          guestEmail: String(formData.get("guestEmail") ?? "") || undefined,
+          guestPhone: String(formData.get("guestPhone") ?? "") || undefined,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        onSaved();
+        return;
+      }
+      // edit-only flow: status change handled via the buttons below
+      onSaved();
+    });
+  };
+
+  const setStatus = (status: BookingStatus) => {
+    if (!booking) return;
+    start(async () => {
+      const result = await setBookingStatus(booking.id, status);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      onSaved();
+    });
+  };
+
+  const remove = () => {
+    if (!booking) return;
+    if (!confirm("¿Eliminar este turno?")) return;
+    start(async () => {
+      const result = await deleteBooking(booking.id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      onSaved();
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,30,51,0.45)",
+        backdropFilter: "blur(4px)",
+        zIndex: 40,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div className="k-glass-strong" style={{ width: "min(560px, 100%)", borderRadius: 24, padding: 22 }}>
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 14,
+          }}
+        >
+          <h2 className="k-display" style={{ fontSize: 20, margin: 0, fontWeight: 700 }}>
+            {mode === "create" ? "Nuevo turno" : "Turno"}
+          </h2>
+          <button
+            onClick={onClose}
+            aria-label="Cerrar"
+            style={{
+              border: "none",
+              background: "rgba(255,255,255,0.7)",
+              width: 32,
+              height: 32,
+              borderRadius: 10,
+              cursor: "pointer",
+              color: "var(--navy-700)",
+            }}
+          >
+            <IconX size={14} />
+          </button>
+        </header>
+
+        {mode === "edit" && booking ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Card style={{ padding: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <Avatar name={booking.patientName} size={40} tone="sky" />
+                <div>
+                  <div style={{ fontWeight: 700 }}>{booking.patientName}</div>
+                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                    {new Date(booking.scheduledFor).toLocaleString("es-AR", {
+                      weekday: "long",
+                      day: "2-digit",
+                      month: "long",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    {" · "}
+                    {booking.durationMin} min · {booking.serviceName}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+              <Button variant="primary" onClick={() => setStatus("CONFIRMED")} disabled={pending}>
+                Confirmar
+              </Button>
+              <Button variant="lime" onClick={() => setStatus("COMPLETED")} disabled={pending}>
+                <IconCheck size={12} stroke={3} /> Marcar realizado
+              </Button>
+              <Button variant="ghost" onClick={() => setStatus("NO_SHOW")} disabled={pending}>
+                Ausente
+              </Button>
+              <Button variant="ghost" onClick={() => setStatus("CANCELLED")} disabled={pending}>
+                Cancelar turno
+              </Button>
+            </div>
+
+            {error && (
+              <div
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  background: "rgba(228,70,70,0.1)",
+                  color: "#9F1F1F",
+                  fontSize: 12,
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+              <button
+                onClick={remove}
+                disabled={pending}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#9F1F1F",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Eliminar
+              </button>
+              <Button variant="ghost" onClick={onClose}>
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <form action={submit} style={{ display: "grid", gap: 10 }}>
+            <Select label="Profesional" name="practitionerId" required>
+              {practitioners.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            <Select label="Servicio" name="serviceId" required>
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {s.durationMin}m
+                </option>
+              ))}
+            </Select>
+            <Select
+              label="Paciente"
+              name="patientId"
+              defaultValue={defaultPatientId ?? ""}
+            >
+              <option value="">— Reserva externa (datos abajo) —</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+              <Field
+                label="Fecha y hora"
+                name="scheduledFor"
+                type="datetime-local"
+                required
+                defaultValue={defaultISO ? isoToLocalInput(defaultISO) : ""}
+              />
+              <Field label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <Field label="Nombre (guest)" name="guestName" />
+              <Field label="Email (guest)" name="guestEmail" type="email" />
+              <Field label="Tel (guest)" name="guestPhone" />
+            </div>
+            <Field label="Notas" name="notes" textarea />
+            {error && (
+              <div
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  background: "rgba(228,70,70,0.1)",
+                  color: "#9F1F1F",
+                  fontSize: 12,
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+                Cancelar
+              </Button>
+              <Button type="submit" variant="primary" disabled={pending}>
+                {pending ? "Creando…" : "Crear turno"} <IconArrow size={12} />
+              </Button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  name,
+  required,
+  type = "text",
+  textarea,
+  defaultValue,
+  min,
+  max,
+}: {
+  label: string;
+  name: string;
+  required?: boolean;
+  type?: string;
+  textarea?: boolean;
+  defaultValue?: string | number;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <label style={{ display: "block", fontSize: 12 }}>
+      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
+        {label}
+        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
+      </span>
+      {textarea ? (
+        <textarea name={name} rows={3} defaultValue={defaultValue} style={inputStyle} />
+      ) : (
+        <input
+          name={name}
+          type={type}
+          required={required}
+          defaultValue={defaultValue}
+          min={min}
+          max={max}
+          style={inputStyle}
+        />
+      )}
+    </label>
+  );
+}
+
+function Select({
+  label,
+  name,
+  required,
+  defaultValue = "",
+  children,
+}: {
+  label: string;
+  name: string;
+  required?: boolean;
+  defaultValue?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={{ display: "block", fontSize: 12 }}>
+      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
+        {label}
+        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
+      </span>
+      <select name={name} required={required} style={inputStyle} defaultValue={defaultValue}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  marginTop: 6,
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.7)",
+  border: "1px solid rgba(15,30,51,0.08)",
+  width: "100%",
+  fontSize: 14,
+  color: "var(--navy-900)",
+  outline: "none",
+};

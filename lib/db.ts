@@ -1,0 +1,79 @@
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+  });
+
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+// Audit extension is applied lazily on first import to avoid circular
+// imports between `lib/db.ts` and `lib/audit-extension.ts` (which itself
+// reads `prisma` for the AuditEvent write). Use `getAuditedPrisma()` from
+// route handlers / server actions when you want auto-recorded PHI reads
+// on top of the manual `audit(...)` calls.
+let _auditedPrisma: ReturnType<PrismaClient["$extends"]> | null = null;
+export async function getAuditedPrisma() {
+  if (!_auditedPrisma) {
+    const { auditExtension } = await import("@/lib/audit-extension");
+    _auditedPrisma = prisma.$extends(auditExtension);
+  }
+  return _auditedPrisma;
+}
+
+const TENANT_SCOPED_MODELS = new Set<string>([
+  "Practitioner",
+  "Patient",
+  "PatientTenantLink",
+  "Service",
+  "Booking",
+  "TreatmentProgram",
+  "Session",
+  "ClinicalCase",
+  "AuditEvent",
+]);
+
+const READ_OPS = new Set<string>([
+  "findFirst",
+  "findFirstOrThrow",
+  "findMany",
+  "findUnique",
+  "findUniqueOrThrow",
+  "count",
+  "aggregate",
+  "groupBy",
+]);
+
+/**
+ * Returns a Prisma client scoped to a tenant.
+ *
+ * - Auto-injects `tenantId` into reads on tenant-scoped models
+ *   (defense-in-depth on top of Postgres RLS).
+ * - Use this anywhere you're acting on behalf of a logged-in member.
+ *   For background jobs / webhooks / seeds use `prisma` directly.
+ */
+export function getTenantPrisma(tenantId: string) {
+  return prisma.$extends({
+    name: "tenant-scope",
+    query: {
+      $allModels: {
+        $allOperations({ args, query, model, operation }) {
+          if (
+            model &&
+            TENANT_SCOPED_MODELS.has(model) &&
+            READ_OPS.has(operation)
+          ) {
+            const a = args as { where?: Record<string, unknown> };
+            a.where = { ...(a.where ?? {}), tenantId };
+          }
+          return query(args);
+        },
+      },
+    },
+  });
+}
