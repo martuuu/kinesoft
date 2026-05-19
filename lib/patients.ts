@@ -14,7 +14,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { notify } from "@/lib/notifications";
+import { notify } from "@/lib/notifications-internal";
 import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
@@ -24,31 +24,22 @@ import {
   type PatientUpdateInput,
 } from "@/lib/validation";
 
-export type PatientRow = {
-  id: string;
-  firstName: string;
-  lastName: string;
-  email: string | null;
-  phone: string | null;
-  documentId: string | null;
-  dateOfBirth: Date | null;
-  notes: string | null;
-  createdAt: Date;
-  activeProgramTitle: string | null;
-  sessionsTotal: number;
-  sessionsDone: number;
-  lastVisit: Date | null;
-  upcomingAt: Date | null;
-};
+import type { PatientRow, PatientSort } from "@/lib/patients-types";
 
 export async function listPatients(opts: {
   q?: string;
-  filter?: "all" | "active" | "no-program";
+  filter?: "all" | "active" | "no-program" | "archived";
+  sort?: PatientSort;
+  insurer?: string;
 } = {}): Promise<PatientRow[]> {
   const actor = await getActor();
   const q = opts.q?.trim();
+  const sort = opts.sort ?? "lastName.asc";
   const where: Prisma.PatientWhereInput = {
     tenantId: actor.tenantId,
+    ...(opts.filter === "archived"
+      ? { archivedAt: { not: null } }
+      : { archivedAt: null }),
     ...(q
       ? {
           OR: [
@@ -64,10 +55,27 @@ export async function listPatients(opts: {
       : opts.filter === "no-program"
         ? { programs: { none: {} } }
         : {}),
+    ...(opts.insurer
+      ? { coverages: { some: { insurer: { contains: opts.insurer, mode: "insensitive" } } } }
+      : {}),
   };
+
+  // Map sort directly when supported by Prisma; for upcoming/lastVisit we
+  // sort in-memory after the read since they depend on related rows.
+  const orderBy: Prisma.PatientOrderByWithRelationInput[] =
+    sort === "lastName.asc"
+      ? [{ lastName: "asc" }, { firstName: "asc" }]
+      : sort === "lastName.desc"
+        ? [{ lastName: "desc" }, { firstName: "desc" }]
+        : sort === "createdAt.desc"
+          ? [{ createdAt: "desc" }]
+          : sort === "createdAt.asc"
+            ? [{ createdAt: "asc" }]
+            : [{ lastName: "asc" }];
+
   const rows = await prisma.patient.findMany({
     where,
-    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+    orderBy,
     include: {
       programs: {
         where: { status: "ACTIVE" },
@@ -106,7 +114,91 @@ export async function listPatients(opts: {
       lastVisit: lastDone?.completedAt ?? null,
       upcomingAt: p.bookings[0]?.scheduledFor ?? null,
     };
+  })
+    .sort((a, b) => {
+      // Secondary in-memory sort for fields that depend on joined data.
+      if (sort === "upcoming.asc") {
+        const va = a.upcomingAt ? +a.upcomingAt : Number.POSITIVE_INFINITY;
+        const vb = b.upcomingAt ? +b.upcomingAt : Number.POSITIVE_INFINITY;
+        return va - vb;
+      }
+      if (sort === "lastVisit.desc") {
+        const va = a.lastVisit ? +a.lastVisit : 0;
+        const vb = b.lastVisit ? +b.lastVisit : 0;
+        return vb - va;
+      }
+      return 0;
+    });
+}
+
+export async function setPatientArchived(input: {
+  id: string;
+  archived: boolean;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: input.id, tenantId: actor.tenantId },
+    select: { id: true },
   });
+  if (!owned) return { ok: false, error: "Paciente no encontrado." };
+  await prisma.patient.update({
+    where: { id: input.id },
+    data: { archivedAt: input.archived ? new Date() : null },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: input.archived ? "patient.archive" : "patient.unarchive",
+    entity: "Patient",
+    entityId: input.id,
+  });
+  revalidatePath("/pacientes");
+  revalidatePath(`/pacientes/${input.id}`);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Build CSV rows for export. Server-only — never sends PII over the
+ * wire as a string until the route handler streams it.
+ */
+export async function exportPatientsCsv(): Promise<string> {
+  const rows = await listPatients({ filter: "all" });
+  const header = [
+    "ID",
+    "Apellido",
+    "Nombre",
+    "DNI",
+    "Email",
+    "Telefono",
+    "Plan activo",
+    "Sesiones",
+    "Proximo turno",
+    "Alta",
+  ].join(",");
+  const body = rows
+    .map((p) =>
+      [
+        p.id,
+        csv(p.lastName),
+        csv(p.firstName),
+        csv(p.documentId ?? ""),
+        csv(p.email ?? ""),
+        csv(p.phone ?? ""),
+        csv(p.activeProgramTitle ?? ""),
+        p.sessionsTotal ? `${p.sessionsDone}/${p.sessionsTotal}` : "",
+        p.upcomingAt ? p.upcomingAt.toISOString() : "",
+        p.createdAt.toISOString(),
+      ].join(",")
+    )
+    .join("\n");
+  return header + "\n" + body + "\n";
+}
+
+function csv(s: string) {
+  if (s == null) return "";
+  const needsQuote = /[",\n]/.test(s);
+  const esc = s.replace(/"/g, '""');
+  return needsQuote ? `"${esc}"` : esc;
 }
 
 export async function getPatient(id: string) {

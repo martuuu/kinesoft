@@ -3,7 +3,8 @@ import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { IconArrow, IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
-import { getPortalAuth, type PortalPatient } from "@/lib/portal";
+import { getPortalAuth } from "@/lib/portal";
+import type { PortalPatient } from "@/lib/portal-types";
 
 export const dynamic = "force-dynamic";
 
@@ -75,16 +76,32 @@ function PatientCard({ p }: { p: PortalPatient }) {
       </div>
 
       {program ? (
-        <div
+        <Link
+          href={`/portal/c/${p.tenantSlug}`}
           style={{
             padding: 14,
             borderRadius: 14,
             background: "rgba(246,249,253,0.7)",
             border: "1px solid rgba(15,30,51,0.06)",
+            textDecoration: "none",
+            color: "inherit",
+            display: "block",
           }}
         >
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Tu plan
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Tu plan
+            </div>
+            <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 700 }}>
+              Ver timeline →
+            </span>
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{program.title}</div>
           <div
@@ -110,7 +127,7 @@ function PatientCard({ p }: { p: PortalPatient }) {
           >
             {program.completedSessions} / {program.totalSessions} sesiones
           </div>
-        </div>
+        </Link>
       ) : (
         <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
           Todavía no tenés un plan de tratamiento activo en este centro.

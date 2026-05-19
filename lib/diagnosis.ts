@@ -18,38 +18,35 @@ import { ProgramPhase, ProgramStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { gatingForActor } from "@/lib/plan-gating";
 import type { ActionResult } from "@/lib/validation";
 import { rankSelection } from "@/lib/diagnosis-engine";
 import type {
+  AssignInput,
   CaseSelection,
   CatalogDTO,
   Ranking,
-} from "@/lib/diagnosis-engine";
-
-// Re-export types so call sites can keep importing from `@/lib/diagnosis`.
-// Type-only exports are erased at compile time and don't violate the
-// "use server" rule that runtime exports must be async functions.
-export type {
-  CaseSelection,
-  CatalogConditionDTO,
-  CatalogDTO,
-  ChipChoice,
-  Ranking,
-  RegionDTO,
-} from "@/lib/diagnosis-engine";
+} from "@/lib/diagnosis-types";
 
 // ──────────────────────────────────────────────────────────────────────
 // Catalog loader
 // ──────────────────────────────────────────────────────────────────────
 
 export async function loadCatalog(): Promise<CatalogDTO> {
+  const gate = await gatingForActor();
   const [regions, conditions, symptoms, triggers, phases] = await Promise.all([
     prisma.anatomicalRegion.findMany({ orderBy: [{ view: "asc" }, { sortOrder: "asc" }] }),
     prisma.condition.findMany({
       include: {
         tags: { include: { tag: true } },
         anatomy: true,
-        exercises: { include: { exercise: true } },
+        // Filter included exercises by the tenant's plan — FREE/STARTER
+        // tenants only see basic + own private exercises through the
+        // diagnosis suggestions.
+        exercises: {
+          where: { exercise: gate.visibility },
+          include: { exercise: true },
+        },
       },
     }),
     prisma.tag.findMany({ where: { kind: "SYMPTOM" }, orderBy: { label: "asc" } }),
@@ -117,17 +114,6 @@ export async function loadCatalog(): Promise<CatalogDTO> {
 // Plan Builder mutation
 // ──────────────────────────────────────────────────────────────────────
 
-export type AssignInput = {
-  patientId: string;
-  conditionSlug: string;
-  selection: CaseSelection;
-  topRankings: Ranking[];
-  exerciseIds: string[];
-  totalSessions: number;
-  frequency: number;
-  startDate: string;
-  programTitle?: string;
-};
 
 /**
  * Writes ClinicalCase → top-N Diagnosis → TreatmentProgram → N Sessions →
@@ -331,4 +317,50 @@ export async function searchPatientsForAssignment(q: string) {
         ? "Con plan activo"
         : "Sin plan",
   }));
+}
+
+/**
+ * Save the current selections as a patient-agnostic draft case. The
+ * practitioner can later open it from the patient profile + click
+ * "Asignar" to materialise the program.
+ */
+export async function saveDiagnosisDraft(input: {
+  conditionSlug?: string;
+  selection: CaseSelection;
+  topRankings: Ranking[];
+  notes?: string;
+}): Promise<ActionResult<{ caseId: string }>> {
+  const actor = await getActor();
+  const caseRow = await prisma.clinicalCase.create({
+    data: {
+      tenantId: actor.tenantId,
+      authorId: actor.practitionerId,
+      patientId: null,
+      selectedZones: input.selection.regions,
+      refinements: {
+        symptoms: input.selection.symptoms,
+        triggers: input.selection.triggers,
+        phase: input.selection.phase,
+        intensity: input.selection.intensity,
+      },
+      notes: input.notes ?? null,
+      diagnoses: {
+        create: input.topRankings.slice(0, 4).map((r, i) => ({
+          conditionId: r.conditionId,
+          matchScore: r.matchScore,
+          confirmed: r.slug === input.conditionSlug,
+          rank: i + 1,
+        })),
+      },
+    },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "diagnosis.draft.create",
+    entity: "ClinicalCase",
+    entityId: caseRow.id,
+  });
+  revalidatePath("/diagnostico");
+  return { ok: true, data: { caseId: caseRow.id } };
 }

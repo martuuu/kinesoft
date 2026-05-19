@@ -11,13 +11,14 @@
  * top-N diagnoses, treatment program and per-session exercises.
  */
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { AnatomyRole, ExerciseRelation, ProgramPhase } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { SortableList } from "@/components/ui/sortable-list";
 import { IconArrow, IconCheck, IconUsers, IconX } from "@/components/ui/icons";
 import {
   assignDiagnosisAndCreateProgram,
@@ -183,6 +184,11 @@ export function DiagnosticoScreen({
 
       {showAssign && activeRanking && (
         <AssignPlanModal
+          // Re-mount when the user changes their exercise selection so the
+          // modal's local `orderedIds` reflects the new prop. This
+          // replaces a `useState(prop)` + `useEffect(setState, [prop])`
+          // double-render anti-pattern.
+          key={selectedExerciseIds.join("|")}
           condition={catalog.conditions.find((c) => c.slug === activeRanking.slug)!}
           ranking={topRanking}
           selectedExercises={activeExercises.filter((e) => selectedExerciseIds.includes(e.exerciseId))}
@@ -904,18 +910,31 @@ function AssignPlanModal({
   const [patientId, setPatientId] = useState<string | null>(initialPatients[0]?.id ?? null);
   const [search, setSearch] = useState("");
   const [searching, startSearch] = useTransition();
-  const [totalSessions, setTotalSessions] = useState(
-    condition.recoveryWeeksMax ? Math.min(24, condition.recoveryWeeksMax * 2) : 8
-  );
-  const [frequency, setFrequency] = useState(2);
+  // Default to 10 sessions per the latest brief. Practitioner can override.
+  const [totalSessions, setTotalSessions] = useState(10);
+  // Day-of-week picker (0=Mon..6=Sun). Default Mon/Wed/Fri.
+  const [dows, setDows] = useState<number[]>([0, 2, 4]);
+  const frequency = Math.max(1, dows.length);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Local order of exercises (sortable below). The modal is re-mounted
+  // by its parent via `key=selectedExerciseIds.join("|")`, so the prop
+  // is always fresh on mount — no useEffect-sync needed.
+  const [orderedIds, setOrderedIds] = useState<string[]>(
+    selectedExercises.map((e) => e.exerciseId)
+  );
+
+  // Sequence-guard rapid keystrokes — only the latest invocation's
+  // response is allowed to update state.
+  const searchSeq = useRef(0);
   const onSearch = (q: string) => {
     setSearch(q);
+    const mySeq = ++searchSeq.current;
     startSearch(async () => {
       const r = await searchPatientsForAssignment(q);
+      if (mySeq !== searchSeq.current) return;
       setPatients(r);
       if (!r.find((p) => p.id === patientId)) setPatientId(r[0]?.id ?? null);
     });
@@ -934,7 +953,8 @@ function AssignPlanModal({
         conditionSlug: condition.slug,
         selection,
         topRankings: ranking,
-        exerciseIds: selectedExerciseIds,
+        // Persist in the practitioner-chosen order.
+        exerciseIds: orderedIds.length ? orderedIds : selectedExerciseIds,
         totalSessions,
         frequency,
         startDate,
@@ -1091,20 +1111,13 @@ function AssignPlanModal({
         </Step>
 
         <Step number={2} title="Configuración del plan">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <NumberField
               label="Sesiones totales"
               value={totalSessions}
               onChange={setTotalSessions}
               min={2}
-              max={24}
-            />
-            <NumberField
-              label="Frecuencia / semana"
-              value={frequency}
-              onChange={setFrequency}
-              min={1}
-              max={5}
+              max={48}
             />
             <div>
               <div
@@ -1133,6 +1146,7 @@ function AssignPlanModal({
               />
             </div>
           </div>
+          <DayOfWeekPicker dows={dows} onChange={setDows} />
         </Step>
 
         <Step number={3} title={`Distribución automática · ${selectedExercises.length} ejercicios`}>
@@ -1173,6 +1187,42 @@ function AssignPlanModal({
             Las sesiones avanzan automáticamente: arranca con activación y suma estabilidad, carga
             y progresión a medida que progresa el plan.
           </p>
+        </Step>
+
+        <Step number={4} title="Orden de ejercicios">
+          <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "0 0 10px" }}>
+            Arrastrá ⋮⋮ para ajustar la secuencia. Es el orden con el que se cargarán en cada sesión.
+          </p>
+          <SortableList
+            items={orderedIds
+              .map((id) => selectedExercises.find((e) => e.exerciseId === id))
+              .filter(Boolean)
+              .map((e) => ({ id: e!.exerciseId, ex: e! }))}
+            onReorder={(ids) => setOrderedIds(ids)}
+            emptyLabel="Volvé a la pantalla anterior y marcá ejercicios."
+            renderRow={(item, i) => (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "28px 1fr auto",
+                  gap: 10,
+                  alignItems: "center",
+                  fontSize: 13,
+                }}
+              >
+                <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)" }}>
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <div>
+                  <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{item.ex.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+                    {item.ex.muscleGroups ?? "—"} · {item.ex.defaultSets}×{item.ex.defaultReps}
+                  </div>
+                </div>
+                <Tag tone={item.ex.relation === "DIRECT" ? "sky" : "lime"}>{item.ex.relation}</Tag>
+              </div>
+            )}
+          />
         </Step>
 
         {error && (
@@ -1257,6 +1307,67 @@ function Step({
       </div>
       {children}
     </section>
+  );
+}
+
+const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+function DayOfWeekPicker({
+  dows,
+  onChange,
+}: {
+  dows: number[];
+  onChange: (next: number[]) => void;
+}) {
+  const toggle = (d: number) => {
+    onChange(dows.includes(d) ? dows.filter((x) => x !== d) : [...dows, d].sort((a, b) => a - b));
+  };
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          color: "var(--navy-300)",
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          marginBottom: 6,
+        }}
+      >
+        Días de la semana
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {DOW_LABELS.map((label, i) => {
+          const on = dows.includes(i);
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => toggle(i)}
+              aria-pressed={on}
+              style={{
+                width: 56,
+                height: 36,
+                borderRadius: 12,
+                border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.08)",
+                background: on ? "var(--sky-700)" : "rgba(255,255,255,0.7)",
+                color: on ? "#fff" : "var(--navy-700)",
+                fontSize: 12.5,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
+        {dows.length === 0
+          ? "Elegí al menos un día (por defecto: lun/mié/vie)."
+          : `${dows.length} ${dows.length === 1 ? "día" : "días"} por semana`}
+      </div>
+    </div>
   );
 }
 

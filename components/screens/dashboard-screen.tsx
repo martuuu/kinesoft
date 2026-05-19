@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
@@ -20,8 +19,8 @@ import {
 } from "@/components/ui/icons";
 import { useTweaks } from "@/components/layout/tweaks-context";
 import type { DashboardData } from "@/lib/dashboard";
-import { dismissReminder } from "@/lib/notifications";
-import type { KpiKey, Preferences } from "@/lib/preferences";
+import { dismissReminder, restoreReminder } from "@/lib/notifications";
+import type { KpiKey, Preferences } from "@/lib/preferences-constants";
 import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { MiniCalendar } from "@/components/dashboard/mini-calendar";
 import { SessionsChart } from "@/components/dashboard/sessions-chart";
@@ -63,12 +62,11 @@ export function DashboardScreen({
     <div style={{ display: "flex", gap: 18, minHeight: 0 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
         {useSidebar && <DashTopRow name={data.greetingName} todayCount={data.todayCount} />}
-        {!data.reminderDismissed && (
-          <HeroReminder
-            nearingDischarge={data.pinned.nearingDischarge}
-            reminderKey={data.reminderKey}
-          />
-        )}
+        <ReminderSlot
+          initiallyDismissed={data.reminderDismissed}
+          nearingDischarge={data.pinned.nearingDischarge}
+          reminderKey={data.reminderKey}
+        />
         <PinnedRow pinned={data.pinned} pinnedKpis={data.pinnedKpis} todayCount={data.todayCount} monthCents={data.monthRevenueCents} />
         <BottomRow bars={data.weeklyBars} recent={data.recent} />
       </div>
@@ -150,19 +148,111 @@ function DashTopRow({ name, todayCount }: { name: string; todayCount: number }) 
   );
 }
 
-function HeroReminder({
+/**
+ * Owns the local "dismissed" flag so the banner hides instantly when the
+ * user clicks "Más tarde" — the server write is fire-and-forget. While
+ * hidden, a small pill renders in place so the user can bring it back.
+ */
+function ReminderSlot({
+  initiallyDismissed,
   nearingDischarge,
   reminderKey,
 }: {
+  initiallyDismissed: boolean;
   nearingDischarge: number;
   reminderKey: string;
 }) {
-  const router = useRouter();
+  const [hidden, setHidden] = useState(initiallyDismissed);
+
+  if (hidden) {
+    return (
+      <RestoreReminderPill
+        nearingDischarge={nearingDischarge}
+        reminderKey={reminderKey}
+        onRestore={() => setHidden(false)}
+      />
+    );
+  }
+  return (
+    <HeroReminder
+      nearingDischarge={nearingDischarge}
+      reminderKey={reminderKey}
+      onDismiss={() => setHidden(true)}
+    />
+  );
+}
+
+function RestoreReminderPill({
+  nearingDischarge,
+  reminderKey,
+  onRestore,
+}: {
+  nearingDischarge: number;
+  reminderKey: string;
+  onRestore: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const restore = () => {
+    onRestore();
+    start(async () => {
+      await restoreReminder(reminderKey);
+    });
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        padding: "10px 14px",
+        borderRadius: 999,
+        background: "rgba(255,255,255,0.55)",
+        border: "1px dashed rgba(15,30,51,0.12)",
+        fontSize: 12.5,
+        color: "var(--navy-500)",
+      }}
+    >
+      <span>
+        Recordatorio oculto · {nearingDischarge}{" "}
+        {nearingDischarge === 1 ? "paciente" : "pacientes"} cerca del alta
+      </span>
+      <button
+        type="button"
+        onClick={restore}
+        disabled={pending}
+        style={{
+          padding: "5px 12px",
+          borderRadius: 999,
+          border: "none",
+          background: "var(--sky-700)",
+          color: "#fff",
+          fontSize: 11.5,
+          fontWeight: 700,
+          cursor: pending ? "wait" : "pointer",
+        }}
+      >
+        {pending ? "Restaurando…" : "Mostrar"}
+      </button>
+    </div>
+  );
+}
+
+function HeroReminder({
+  nearingDischarge,
+  reminderKey,
+  onDismiss,
+}: {
+  nearingDischarge: number;
+  reminderKey: string;
+  onDismiss: () => void;
+}) {
   const [pending, start] = useTransition();
   const dismiss = () => {
+    // Optimistic — hide immediately, persist in the background.
+    onDismiss();
     start(async () => {
       await dismissReminder({ key: reminderKey, hours: 24 * 7 });
-      router.refresh();
     });
   };
   return (

@@ -142,10 +142,21 @@ async function exercise(input: {
   cues?: string;
   instructions?: string;
 }) {
+  // Globally-managed catalog: no tenant, `isBasic` flagged for items
+  // a handful of starter exercises any plan can use. Slugs prefixed
+  // with "basic-" or matching the canonical first-line activations are
+  // promoted to basic.
+  const BASIC = new Set([
+    "clamshell",
+    "glute-bridge-uni",
+    "foam-roller-itb",
+    "itb-stretch",
+  ]);
+  const isBasic = BASIC.has(input.slug);
   return prisma.exercise.upsert({
     where: { slug: input.slug },
-    create: input,
-    update: input,
+    create: { ...input, isBasic },
+    update: { ...input, isBasic },
   });
 }
 
@@ -1259,8 +1270,9 @@ async function seedDemoTenant() {
       name: "Centro KineMovare",
       legalName: "Movare S.R.L.",
       palette: "sky",
+      plan: "PRO",
     },
-    update: { name: "Centro KineMovare" },
+    update: { name: "Centro KineMovare", plan: "PRO" },
   });
 
   const userId = "demo-lucia";

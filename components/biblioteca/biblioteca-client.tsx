@@ -5,8 +5,13 @@ import { useMemo, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
-import { IconSearch, IconX, IconFilter, IconDumbbell } from "@/components/ui/icons";
-import type { ExerciseRow, FilterFacets } from "@/lib/exercises";
+import { ModalCloseButton } from "@/components/ui/modal-close";
+import { TagCombobox, type TagOption } from "@/components/ui/tag-combobox";
+import { IconSearch, IconX, IconFilter, IconDumbbell, IconPlus, IconStar } from "@/components/ui/icons";
+import { createExercise, ensureTag } from "@/lib/exercises";
+import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
+import { toggleFavourite } from "@/lib/favourites";
+import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 
 type Active = {
   q?: string;
@@ -14,21 +19,34 @@ type Active = {
   muscleGroup?: string;
   equipment?: string;
   conditionSlug?: string;
+  favouritesOnly?: boolean;
+  privateOnly?: boolean;
+};
+
+export type Capabilities = {
+  plan: string;
+  canFavourite: boolean;
+  hasFullCatalog: boolean;
 };
 
 export function BibliotecaClient({
   items,
   facets,
   active,
+  tags,
+  capabilities,
 }: {
   items: ExerciseRow[];
   facets: FilterFacets;
   active: Active;
+  tags: TagOption[];
+  capabilities: Capabilities;
 }) {
   const router = useRouter();
   const [pendingNav, start] = useTransition();
   const [open, setOpen] = useState<ExerciseRow | null>(null);
-  const [draftQ, setDraftQ] = useState(active.q ?? "");
+  const [creating, setCreating] = useState(false);
+  const [q, setQ, flushQ] = useDebouncedSearchParam("q", 300);
 
   const pushFilters = (next: Partial<Active>) => {
     const merged = { ...active, ...next };
@@ -38,19 +56,21 @@ export function BibliotecaClient({
     if (merged.muscleGroup) sp.set("muscle", merged.muscleGroup);
     if (merged.equipment) sp.set("equipment", merged.equipment);
     if (merged.conditionSlug) sp.set("condition", merged.conditionSlug);
+    if (merged.favouritesOnly) sp.set("favs", "1");
+    if (merged.privateOnly) sp.set("priv", "1");
     start(() => router.push(`/biblioteca${sp.toString() ? "?" + sp.toString() : ""}`));
-  };
-
-  const onSubmitSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    pushFilters({ q: draftQ });
   };
 
   const activeFiltersCount = useMemo(
     () =>
-      [active.difficulty, active.muscleGroup, active.equipment, active.conditionSlug].filter(
-        (x) => x != null && x !== ""
-      ).length,
+      [
+        active.difficulty,
+        active.muscleGroup,
+        active.equipment,
+        active.conditionSlug,
+        active.favouritesOnly ? "favs" : undefined,
+        active.privateOnly ? "priv" : undefined,
+      ].filter((x) => x != null && x !== "").length,
     [active]
   );
 
@@ -66,42 +86,69 @@ export function BibliotecaClient({
         }}
       >
         <div>
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Biblioteca</div>
+          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>
+            Biblioteca · plan{" "}
+            <span
+              style={{
+                fontWeight: 700,
+                color: capabilities.hasFullCatalog ? "var(--sky-700)" : "var(--navy-500)",
+              }}
+            >
+              {capabilities.plan}
+            </span>
+          </div>
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
             <span style={{ color: "var(--sky-700)" }}>{items.length}</span> ejercicios
           </h1>
+          {!capabilities.hasFullCatalog && (
+            <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>
+              Estás viendo el catálogo básico + tus ejercicios. Pasá a PRO para ver el catálogo
+              completo con videos.
+            </div>
+          )}
         </div>
-        <form
-          onSubmit={onSubmitSearch}
-          className="k-glass"
-          style={{
-            padding: "8px 14px",
-            borderRadius: 999,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            minWidth: 280,
-            fontSize: 13,
-            color: "var(--navy-300)",
-          }}
-        >
-          <IconSearch size={15} />
-          <input
-            type="search"
-            value={draftQ}
-            onChange={(e) => setDraftQ(e.target.value)}
-            placeholder="Buscar por nombre, músculo, descripción…"
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div
+            className="k-glass"
             style={{
-              flex: 1,
-              border: "none",
-              outline: "none",
-              background: "transparent",
+              padding: "8px 14px",
+              borderRadius: 999,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              minWidth: 280,
               fontSize: 13,
-              color: "var(--navy-900)",
+              color: "var(--navy-300)",
             }}
-          />
-          {pendingNav && <span style={{ fontSize: 11 }}>…</span>}
-        </form>
+          >
+            <IconSearch size={15} />
+            <input
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  flushQ();
+                }
+              }}
+              placeholder="Buscar por nombre, músculo, descripción…"
+              aria-label="Buscar ejercicio"
+              style={{
+                flex: 1,
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                fontSize: 13,
+                color: "var(--navy-900)",
+              }}
+            />
+            {pendingNav && <span style={{ fontSize: 11 }}>…</span>}
+          </div>
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            <IconPlus size={14} /> Nuevo ejercicio
+          </Button>
+        </div>
       </header>
 
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 14 }}>
@@ -149,6 +196,22 @@ export function BibliotecaClient({
                 </button>
               )}
             </div>
+
+            <FilterSection label="Acceso rápido">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <QuickPill
+                  label="⭐ Favoritos"
+                  on={!!active.favouritesOnly}
+                  onToggle={() => pushFilters({ favouritesOnly: !active.favouritesOnly })}
+                  locked={!capabilities.canFavourite}
+                />
+                <QuickPill
+                  label="🔒 Mis ejercicios"
+                  on={!!active.privateOnly}
+                  onToggle={() => pushFilters({ privateOnly: !active.privateOnly })}
+                />
+              </div>
+            </FilterSection>
 
             <FilterSection label="Dificultad">
               <ChipRow
@@ -230,7 +293,12 @@ export function BibliotecaClient({
               }}
             >
               {items.map((ex) => (
-                <ExerciseCard key={ex.id} ex={ex} onOpen={() => setOpen(ex)} />
+                <ExerciseCard
+                  key={ex.id}
+                  ex={ex}
+                  onOpen={() => setOpen(ex)}
+                  canFavourite={capabilities.canFavourite}
+                />
               ))}
             </div>
           )}
@@ -238,6 +306,9 @@ export function BibliotecaClient({
       </div>
 
       {open && <ExerciseDetail ex={open} onClose={() => setOpen(null)} />}
+      {creating && (
+        <CreateExerciseModal tags={tags} onClose={() => setCreating(false)} />
+      )}
     </div>
   );
 }
@@ -298,7 +369,33 @@ function ChipRow({
   );
 }
 
-function ExerciseCard({ ex, onOpen }: { ex: ExerciseRow; onOpen: () => void }) {
+function ExerciseCard({
+  ex,
+  onOpen,
+  canFavourite,
+}: {
+  ex: ExerciseRow;
+  onOpen: () => void;
+  canFavourite: boolean;
+}) {
+  const router = useRouter();
+  const [favOptimistic, setFavOptimistic] = useState(ex.isFavourite);
+  const [pendingFav, startFav] = useTransition();
+
+  const onStar = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!canFavourite) return;
+    setFavOptimistic((s) => !s);
+    startFav(async () => {
+      const r = await toggleFavourite(ex.id);
+      if (!r.ok) {
+        setFavOptimistic((s) => !s); // revert
+        return;
+      }
+      router.refresh();
+    });
+  };
+
   return (
     <button
       onClick={onOpen}
@@ -307,12 +404,15 @@ function ExerciseCard({ ex, onOpen }: { ex: ExerciseRow; onOpen: () => void }) {
         padding: 14,
         borderRadius: 14,
         background: "#fff",
-        border: "1px solid rgba(15,30,51,0.06)",
+        border: ex.isPrivate
+          ? "1px solid rgba(31,79,190,0.2)"
+          : "1px solid rgba(15,30,51,0.06)",
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
         gap: 8,
         boxShadow: "var(--shadow-card)",
+        position: "relative",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -321,8 +421,8 @@ function ExerciseCard({ ex, onOpen }: { ex: ExerciseRow; onOpen: () => void }) {
             width: 32,
             height: 32,
             borderRadius: 8,
-            background: "var(--sky-100)",
-            color: "var(--sky-700)",
+            background: ex.isPrivate ? "var(--sky-700)" : "var(--sky-100)",
+            color: ex.isPrivate ? "#fff" : "var(--sky-700)",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -330,7 +430,32 @@ function ExerciseCard({ ex, onOpen }: { ex: ExerciseRow; onOpen: () => void }) {
         >
           <IconDumbbell size={16} />
         </span>
-        <Tag tone="soft">Nivel {ex.difficulty}</Tag>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Tag tone="soft">Nivel {ex.difficulty}</Tag>
+          {canFavourite && (
+            <button
+              type="button"
+              onClick={onStar}
+              aria-label={favOptimistic ? "Quitar de favoritos" : "Agregar a favoritos"}
+              aria-pressed={favOptimistic}
+              disabled={pendingFav}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                border: "none",
+                background: favOptimistic ? "var(--lime-300)" : "rgba(255,255,255,0.6)",
+                color: favOptimistic ? "var(--navy-900)" : "var(--navy-300)",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <IconStar size={13} fill={favOptimistic ? "var(--navy-900)" : "none"} />
+            </button>
+          )}
+        </div>
       </div>
       <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)", lineHeight: 1.25 }}>
         {ex.name}
@@ -342,10 +467,56 @@ function ExerciseCard({ ex, onOpen }: { ex: ExerciseRow; onOpen: () => void }) {
         {ex.defaultSets}×{ex.defaultReps}
         {ex.equipment ? ` · ${ex.equipment}` : ""}
       </div>
-      {ex.conditionsCount > 0 && (
-        <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-          Usado en {ex.conditionsCount} diagnóstico{ex.conditionsCount === 1 ? "" : "s"}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+        {ex.conditionsCount > 0 ? (
+          <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+            Usado en {ex.conditionsCount} diagnóstico{ex.conditionsCount === 1 ? "" : "s"}
+          </div>
+        ) : (
+          <span />
+        )}
+        {ex.isPrivate ? (
+          <Tag tone="sky">🔒 Mío</Tag>
+        ) : ex.isBasic ? (
+          <Tag tone="soft">Básico</Tag>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+function QuickPill({
+  label,
+  on,
+  onToggle,
+  locked,
+}: {
+  label: string;
+  on: boolean;
+  onToggle: () => void;
+  locked?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={locked ? undefined : onToggle}
+      disabled={locked}
+      title={locked ? "Mejorá tu plan para usar favoritos" : undefined}
+      style={{
+        textAlign: "left",
+        padding: "7px 10px",
+        borderRadius: 10,
+        border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.08)",
+        background: on ? "rgba(31,79,190,0.06)" : "rgba(255,255,255,0.5)",
+        cursor: locked ? "not-allowed" : "pointer",
+        fontSize: 12,
+        fontWeight: 600,
+        color: locked ? "var(--navy-300)" : "var(--navy-700)",
+      }}
+    >
+      {label}
+      {locked && (
+        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>plan PRO</span>
       )}
     </button>
   );
@@ -514,3 +685,186 @@ function Stat({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+function CreateExerciseModal({
+  tags,
+  onClose,
+}: {
+  tags: TagOption[];
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [availableTags, setAvailableTags] = useState(tags);
+
+  const onCreateTag = async (label: string) => {
+    const created = await ensureTag(label, "GOAL");
+    setAvailableTags((s) => (s.find((t) => t.slug === created.slug) ? s : [...s, created]));
+    return created;
+  };
+
+  const submit = (form: FormData) => {
+    setError(null);
+    start(async () => {
+      const r = await createExercise({
+        name: String(form.get("name") ?? ""),
+        description: String(form.get("description") ?? "") || undefined,
+        difficulty: Number(form.get("difficulty")) || 1,
+        defaultSets: Number(form.get("defaultSets")) || 3,
+        defaultReps: Number(form.get("defaultReps")) || 12,
+        equipment: String(form.get("equipment") ?? "") || undefined,
+        muscleGroups: String(form.get("muscleGroups") ?? "") || undefined,
+        cues: String(form.get("cues") ?? "") || undefined,
+        instructions: String(form.get("instructions") ?? "") || undefined,
+        tagSlugs: selectedTags,
+      });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onClose();
+      router.refresh();
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,30,51,0.45)",
+        backdropFilter: "blur(4px)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="k-glass-strong k-scroll"
+        style={{
+          position: "relative",
+          width: "min(600px, 100%)",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          borderRadius: 22,
+          padding: 24,
+        }}
+      >
+        <ModalCloseButton onClose={onClose} />
+        <header style={{ marginRight: 40, marginBottom: 16 }}>
+          <Tag tone="lime">Nuevo ejercicio</Tag>
+          <h2 className="k-display" style={{ fontSize: 22, margin: "8px 0 0", fontWeight: 700 }}>
+            Crear ejercicio personalizado
+          </h2>
+        </header>
+
+        <form action={submit} style={{ display: "grid", gap: 12 }}>
+          <Labeled label="Nombre" required>
+            <input name="name" required style={fieldStyle} placeholder="Sentadilla búlgara" />
+          </Labeled>
+          <Labeled label="Grupo muscular">
+            <input name="muscleGroups" style={fieldStyle} placeholder="Cuádriceps, Glúteo" />
+          </Labeled>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            <Labeled label="Series">
+              <input name="defaultSets" type="number" min={1} max={10} defaultValue={3} style={fieldStyle} />
+            </Labeled>
+            <Labeled label="Reps">
+              <input name="defaultReps" type="number" min={1} max={100} defaultValue={12} style={fieldStyle} />
+            </Labeled>
+            <Labeled label="Dificultad">
+              <input
+                name="difficulty"
+                type="number"
+                min={1}
+                max={5}
+                defaultValue={1}
+                style={fieldStyle}
+              />
+            </Labeled>
+          </div>
+          <Labeled label="Equipo">
+            <input name="equipment" style={fieldStyle} placeholder="banda, foam roller" />
+          </Labeled>
+          <Labeled label="Descripción">
+            <textarea name="description" rows={3} style={{ ...fieldStyle, resize: "vertical" }} />
+          </Labeled>
+          <Labeled label="Cues / coaching">
+            <textarea name="cues" rows={2} style={{ ...fieldStyle, resize: "vertical" }} />
+          </Labeled>
+          <Labeled label="Tags">
+            <TagCombobox
+              suggestions={availableTags}
+              value={selectedTags}
+              onChange={setSelectedTags}
+              onCreate={onCreateTag}
+              placeholder="Tocá Enter para crear un tag nuevo"
+            />
+          </Labeled>
+
+          {error && (
+            <div
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                background: "rgba(228,70,70,0.1)",
+                color: "#9F1F1F",
+                fontSize: 12,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+              Cancelar
+            </Button>
+            <Button type="submit" variant="primary" disabled={pending}>
+              {pending ? "Creando…" : "Crear ejercicio"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Labeled({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={{ display: "block", fontSize: 12 }}>
+      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
+        {label}
+        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
+      </span>
+      <div style={{ marginTop: 6 }}>{children}</div>
+    </label>
+  );
+}
+
+const fieldStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.7)",
+  border: "1px solid rgba(15,30,51,0.08)",
+  fontSize: 14,
+  color: "var(--navy-900)",
+  outline: "none",
+};

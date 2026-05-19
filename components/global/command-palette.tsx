@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { globalSearch, type SearchHit } from "@/lib/search";
+import { globalSearch } from "@/lib/search";
+import type { SearchHit } from "@/lib/search-types";
 import { IconSearch } from "@/components/ui/icons";
 
 /**
@@ -58,14 +59,20 @@ export function CommandPalette() {
   useEffect(() => {
     if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Sequence guard — drop stale responses so a late slow query can't
+    // overwrite a newer fast one. Each effect run owns its own `cancelled`
+    // flag and tears it down via the cleanup.
+    let cancelled = false;
     debounceRef.current = setTimeout(() => {
       start(async () => {
         const r = await globalSearch(q);
+        if (cancelled) return;
         setHits(r);
         setActive(0);
       });
     }, 200);
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [q, open]);

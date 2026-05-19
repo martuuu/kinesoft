@@ -7,6 +7,12 @@
  *   — uses Upstash's REST API with `INCR` + `PEXPIRE` for atomic counts
  *   across replicas. Falls back automatically.
  *
+ * **PRODUCTION REQUIREMENT**: on Vercel (serverless), the in-memory map
+ * does *not* share state across lambda isolates — each cold start resets
+ * the counters and concurrent invocations see independent buckets. This
+ * makes the in-memory limiter advisory at best. Configure Upstash before
+ * shipping public surfaces.
+ *
  * Usage:
  *
  *     const { ok, retryAfterMs } = await rateLimit("login:" + ip, { limit: 5, windowMs: 60_000 });

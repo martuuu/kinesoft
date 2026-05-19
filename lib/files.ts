@@ -25,16 +25,41 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const BUCKET = "patient-files";
 
-export type PatientFileRow = {
-  id: string;
-  name: string;
-  mime: string;
-  sizeBytes: number;
-  category: PatientFileCategory;
-  description: string | null;
-  createdAt: Date;
-  hasDownload: boolean;
-};
+/**
+ * Allow-list of MIME types we accept on the Archivos tab. Anything outside
+ * this list is rejected at upload time so the signed download URL can never
+ * render arbitrary HTML / SVG / JS in the browser tab.
+ */
+const ALLOWED_MIME = new Set<string>([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "video/mp4",
+  "video/quicktime",
+  "audio/mpeg",
+  "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+
+const SAFE_EXT_RE = /^[a-z0-9]{1,8}$/;
+
+const ALLOWED_CATEGORIES = new Set<string>([
+  "REPORT",
+  "DERIVATION",
+  "CONSENT",
+  "IMAGE",
+  "RECEIPT",
+  "OTHER",
+]);
+
+import type { PatientFileRow } from "@/lib/files-types";
 
 function storageEnabled() {
   return !!(env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
@@ -76,7 +101,10 @@ export async function uploadPatientFile(
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
   const file = formData.get("file");
-  const category = (formData.get("category") as PatientFileCategory) ?? PatientFileCategory.OTHER;
+  const rawCategory = String(formData.get("category") ?? "OTHER");
+  const category: PatientFileCategory = (ALLOWED_CATEGORIES.has(rawCategory)
+    ? rawCategory
+    : "OTHER") as PatientFileCategory;
   const description = (formData.get("description") as string | null) || undefined;
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, error: "Adjuntá un archivo." };
@@ -84,17 +112,26 @@ export async function uploadPatientFile(
   if (file.size > 25 * 1024 * 1024) {
     return { ok: false, error: "El archivo no puede superar 25 MB." };
   }
+  // MIME allow-list — protects the signed download URL from rendering
+  // arbitrary HTML / SVG. Browsers honour the stored Content-Type when
+  // serving a Supabase Storage signed URL inline.
+  const mime = (file.type || "application/octet-stream").toLowerCase();
+  if (!ALLOWED_MIME.has(mime)) {
+    return { ok: false, error: "Tipo de archivo no permitido." };
+  }
 
   const id = randomBytes(12).toString("hex");
   let storageKey = `stub:${id}`;
 
   if (storageEnabled()) {
     const supabase = getSupabaseServerClient();
-    const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+    // Sanitise extension — only short alphanumerics, no traversal characters.
+    const raw = (file.name.split(".").pop() ?? "bin").toLowerCase();
+    const ext = SAFE_EXT_RE.test(raw) ? raw : "bin";
     storageKey = `${actor.tenantId}/${patientId}/${id}.${ext}`;
     const buf = new Uint8Array(await file.arrayBuffer());
     const { error } = await supabase.storage.from(BUCKET).upload(storageKey, buf, {
-      contentType: file.type || "application/octet-stream",
+      contentType: mime,
       upsert: false,
     });
     if (error) return { ok: false, error: "No pudimos subir el archivo." };
@@ -106,7 +143,7 @@ export async function uploadPatientFile(
       patientId,
       uploaderId: actor.userId ?? undefined,
       name: file.name,
-      mime: file.type || "application/octet-stream",
+      mime,
       sizeBytes: file.size,
       storageKey,
       category,
@@ -166,5 +203,14 @@ export async function getDownloadUrl(id: string): Promise<ActionResult<{ url: st
   if (error || !data?.signedUrl) {
     return { ok: false, error: "No pudimos generar el link." };
   }
+  // Record every download attempt — exfiltration is invisible without this.
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patientFile.download",
+    entity: "PatientFile",
+    entityId: id,
+    payload: { name: row.name, patientId: row.patientId },
+  });
   return { ok: true, data: { url: data.signedUrl } };
 }

@@ -10,6 +10,7 @@ type SP = {
   view?: "timeline" | "week" | "list";
   new?: string;
   patient?: string;
+  practitioner?: string;
 };
 
 function parseDate(v?: string) {
@@ -33,8 +34,13 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
 
+  const practitionerFilter = searchParams.practitioner ?? null;
   const [bookings, services, practitioners, patients] = await Promise.all([
-    listBookingsInRange({ from: weekStart, to: weekEnd }),
+    listBookingsInRange({
+      from: weekStart,
+      to: weekEnd,
+      practitionerId: practitionerFilter ?? undefined,
+    }),
     listServices(),
     listPractitioners(),
     listPatients(),
@@ -47,6 +53,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       weekStartISO={weekStart.toISOString()}
       autoCreate={searchParams.new === "1"}
       autoCreatePatientId={searchParams.patient ?? null}
+      practitionerFilterId={practitionerFilter}
       bookings={bookings.map((b) => ({
         ...b,
         scheduledFor: b.scheduledFor.toISOString(),

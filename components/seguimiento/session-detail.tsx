@@ -1,18 +1,24 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import type { Prisma, SessionExerciseStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
-import { IconArrow, IconCheck } from "@/components/ui/icons";
+import { IconArrow, IconCheck, IconPlus, IconX } from "@/components/ui/icons";
+import { SortableList } from "@/components/ui/sortable-list";
 import {
+  addSessionExercise,
   completeSessionFromSeguimiento,
+  removeSessionExercise,
+  reorderSessionExercises,
   updateSessionExercise,
   updateSessionMeta,
 } from "@/lib/sessions";
+import { listExercises } from "@/lib/exercises";
+import type { ExerciseRow } from "@/lib/exercises-types";
 
 type SessionDTO = Prisma.SessionGetPayload<{
   include: {
@@ -140,36 +146,17 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
           </div>
         )}
 
-        <Card style={{ padding: 0, overflow: "hidden" }}>
-          <div
-            style={{
-              padding: "12px 18px",
-              display: "grid",
-              gridTemplateColumns: "32px 1fr 90px 70px 70px 110px",
-              fontSize: 10,
-              fontWeight: 700,
-              color: "var(--navy-300)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              borderBottom: "1px solid rgba(15,30,51,0.06)",
-            }}
-          >
-            <span />
-            <span>Ejercicio</span>
-            <span>Equipo</span>
-            <span style={{ textAlign: "center" }}>Series</span>
-            <span style={{ textAlign: "center" }}>Reps</span>
-            <span style={{ textAlign: "right" }}>Estado</span>
-          </div>
-          {session.exercises.map((sx, i) => (
-            <ExerciseRow key={sx.id} sx={sx} order={i + 1} disabled={completed} />
-          ))}
-          {session.exercises.length === 0 && (
-            <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)" }}>
-              Esta sesión no tiene ejercicios asignados.
-            </div>
-          )}
-        </Card>
+        <ExerciseSequencer
+          // Keying on the persisted order signature lets us reset the
+          // sequencer's local optimistic state whenever the server
+          // payload genuinely changes (after refresh / reorder commit).
+          // This replaces the `useState(exercises)` + `useEffect` sync
+          // anti-pattern that double-rendered on every prop change.
+          key={session.exercises.map((e) => e.id).join("|")}
+          sessionId={session.id}
+          exercises={session.exercises}
+          disabled={completed}
+        />
       </main>
 
       <SessionNotes session={session} disabled={completed} />
@@ -177,14 +164,132 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
   );
 }
 
+/**
+ * ExerciseSequencer — the drag-and-drop list of exercises for a session.
+ *
+ * Owns the local ordering so the reorder feels instant. The server save
+ * happens in the background; on failure we fall back to the server view
+ * via `router.refresh()`.
+ */
+function ExerciseSequencer({
+  sessionId,
+  exercises,
+  disabled,
+}: {
+  sessionId: string;
+  exercises: SessionDTO["exercises"];
+  disabled: boolean;
+}) {
+  const router = useRouter();
+  // Component is keyed by the order signature in its parent, so on a
+  // genuine server refresh we re-mount and `exercises` is the fresh prop.
+  // No useEffect-sync anti-pattern needed.
+  const [local, setLocal] = useState(exercises);
+  const [picker, setPicker] = useState(false);
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  const reorder = (nextIds: string[]) => {
+    const next = nextIds
+      .map((id) => local.find((sx) => sx.id === id))
+      .filter(Boolean) as SessionDTO["exercises"];
+    setLocal(next);
+    start(async () => {
+      const r = await reorderSessionExercises({ sessionId, orderedIds: nextIds });
+      if (!r.ok) {
+        setError(r.error);
+        router.refresh();
+      }
+    });
+  };
+
+  const onRemove = (id: string) => {
+    if (!confirm("¿Quitar este ejercicio de la sesión?")) return;
+    setLocal((s) => s.filter((x) => x.id !== id));
+    start(async () => {
+      const r = await removeSessionExercise(id);
+      if (!r.ok) {
+        setError(r.error);
+        router.refresh();
+      }
+    });
+  };
+
+  return (
+    <Card style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
+            Ejercicios de la sesión
+          </div>
+          <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+            Arrastrá ⋮⋮ para reordenar · click para editar
+          </div>
+        </div>
+        {!disabled && (
+          <Button variant="ghost" onClick={() => setPicker(true)} style={{ fontSize: 12, padding: "6px 12px" }}>
+            <IconPlus size={12} /> Agregar
+          </Button>
+        )}
+      </header>
+
+      <SortableList
+        items={local}
+        onReorder={reorder}
+        emptyLabel="Sin ejercicios. Apretá Agregar para sumar uno."
+        renderRow={(sx, i) => (
+          <ExerciseRow
+            sx={sx}
+            order={i + 1}
+            disabled={disabled}
+            onRemove={disabled ? undefined : () => onRemove(sx.id)}
+          />
+        )}
+      />
+
+      {error && (
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 10,
+            background: "rgba(228,70,70,0.1)",
+            color: "#9F1F1F",
+            fontSize: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {picker && (
+        <ExercisePicker
+          sessionId={sessionId}
+          existingIds={new Set(local.map((sx) => sx.exerciseId))}
+          onClose={() => setPicker(false)}
+          onAdded={() => {
+            setPicker(false);
+            router.refresh();
+          }}
+        />
+      )}
+
+      {pending && (
+        <div style={{ fontSize: 10.5, color: "var(--navy-300)", textAlign: "right" }}>guardando…</div>
+      )}
+    </Card>
+  );
+}
+
 function ExerciseRow({
   sx,
   order,
   disabled,
+  onRemove,
 }: {
   sx: SessionDTO["exercises"][number];
   order: number;
   disabled: boolean;
+  onRemove?: () => void;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -208,13 +313,11 @@ function ExerciseRow({
   return (
     <div
       style={{
-        padding: "12px 18px",
         display: "grid",
-        gridTemplateColumns: "32px 1fr 90px 70px 70px 110px",
-        gap: 8,
+        gridTemplateColumns: "28px 1fr 60px 60px auto auto",
+        gap: 10,
         alignItems: "center",
         fontSize: 13,
-        borderBottom: "1px solid rgba(15,30,51,0.04)",
         opacity: sx.status === "SKIPPED" ? 0.55 : 1,
       }}
     >
@@ -263,17 +366,38 @@ function ExerciseRow({
           />
         )}
       </div>
-      <span style={{ fontSize: 11, color: "var(--navy-500)" }}>{sx.exercise.equipment ?? "—"}</span>
-      <NumberInline value={sets} onChange={(v) => { setSets(v); save({ sets: v }); }} disabled={disabled} />
-      <NumberInline value={reps} onChange={(v) => { setReps(v); save({ reps: v }); }} disabled={disabled} />
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
+      <NumberInline
+        value={sets}
+        label="series"
+        onChange={(v) => {
+          setSets(v);
+          save({ sets: v });
+        }}
+        disabled={disabled}
+      />
+      <NumberInline
+        value={reps}
+        label="reps"
+        onChange={(v) => {
+          setReps(v);
+          save({ reps: v });
+        }}
+        disabled={disabled}
+      />
+      <div style={{ display: "flex", gap: 4 }}>
         <StatusButton
           on={sx.status === "DONE"}
           onClick={() => flipStatus(sx.status === "DONE" ? "PENDING" : "DONE")}
           disabled={disabled || pending}
           tone="done"
         >
-          {sx.status === "DONE" ? <><IconCheck size={11} stroke={3} /> Hecho</> : "Marcar"}
+          {sx.status === "DONE" ? (
+            <>
+              <IconCheck size={11} stroke={3} /> Hecho
+            </>
+          ) : (
+            "Marcar"
+          )}
         </StatusButton>
         <StatusButton
           on={sx.status === "SKIPPED"}
@@ -284,6 +408,22 @@ function ExerciseRow({
           Skip
         </StatusButton>
       </div>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Quitar ejercicio"
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "#9F1F1F",
+            cursor: "pointer",
+            padding: 4,
+          }}
+        >
+          <IconX size={12} />
+        </button>
+      )}
     </div>
   );
 }
@@ -292,31 +432,201 @@ function NumberInline({
   value,
   onChange,
   disabled,
+  label,
 }: {
   value: number;
   onChange: (v: number) => void;
   disabled: boolean;
+  label?: string;
 }) {
   return (
-    <input
-      type="number"
-      value={value}
-      min={0}
-      max={200}
-      disabled={disabled}
-      onChange={(e) => onChange(Number(e.target.value))}
+    <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <input
+        type="number"
+        value={value}
+        min={0}
+        max={200}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{
+          width: "100%",
+          textAlign: "center",
+          padding: "6px 8px",
+          borderRadius: 8,
+          border: "1px solid rgba(15,30,51,0.08)",
+          background: "rgba(255,255,255,0.7)",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "var(--navy-900)",
+        }}
+      />
+      {label && (
+        <span style={{ fontSize: 9, color: "var(--navy-300)", letterSpacing: "0.04em" }}>
+          {label}
+        </span>
+      )}
+    </label>
+  );
+}
+
+/**
+ * Exercise picker — adds an existing exercise to the session via the
+ * server action. Debounced search; click to add.
+ */
+function ExercisePicker({
+  sessionId,
+  existingIds,
+  onClose,
+  onAdded,
+}: {
+  sessionId: string;
+  existingIds: Set<string>;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<ExerciseRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      const rows = await listExercises({ q: q.trim() || undefined });
+      if (cancelled) return;
+      setResults(rows.slice(0, 20));
+      setLoading(false);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  const add = (ex: ExerciseRow) => {
+    start(async () => {
+      const r = await addSessionExercise({ sessionId, exerciseId: ex.id });
+      if (r.ok) onAdded();
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      onClick={onClose}
       style={{
-        width: "100%",
-        textAlign: "center",
-        padding: "6px 8px",
-        borderRadius: 8,
-        border: "1px solid rgba(15,30,51,0.08)",
-        background: "rgba(255,255,255,0.7)",
-        fontSize: 13,
-        fontWeight: 600,
-        color: "var(--navy-900)",
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,30,51,0.45)",
+        backdropFilter: "blur(4px)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
       }}
-    />
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="k-glass-strong k-scroll"
+        style={{
+          position: "relative",
+          width: "min(560px, 100%)",
+          maxHeight: "80vh",
+          overflowY: "auto",
+          borderRadius: 20,
+          padding: 22,
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Cerrar"
+          onClick={onClose}
+          style={{
+            position: "absolute",
+            top: 16,
+            right: 16,
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            border: "none",
+            background: "rgba(255,255,255,0.7)",
+            cursor: "pointer",
+          }}
+        >
+          <IconX size={14} />
+        </button>
+        <h2
+          className="k-display"
+          style={{ fontSize: 20, margin: "0 40px 12px 0", fontWeight: 700 }}
+        >
+          Agregar ejercicio
+        </h2>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar por nombre, músculo, descripción…"
+          autoFocus
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px solid rgba(15,30,51,0.08)",
+            background: "rgba(255,255,255,0.7)",
+            fontSize: 14,
+            marginBottom: 12,
+          }}
+        />
+        {loading && (
+          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Buscando…</div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {results.map((ex) => {
+            const taken = existingIds.has(ex.id);
+            return (
+              <button
+                key={ex.id}
+                type="button"
+                disabled={taken || pending}
+                onClick={() => add(ex)}
+                style={{
+                  textAlign: "left",
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(15,30,51,0.06)",
+                  background: taken ? "rgba(15,30,51,0.04)" : "#fff",
+                  cursor: taken ? "not-allowed" : "pointer",
+                  opacity: taken ? 0.55 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{ex.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    {ex.muscleGroups ?? "—"} · Nivel {ex.difficulty}
+                  </div>
+                </div>
+                <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+                  {ex.defaultSets}×{ex.defaultReps}
+                </div>
+                <span style={{ color: taken ? "var(--navy-300)" : "var(--sky-700)", fontWeight: 700 }}>
+                  {taken ? "✓" : "+"}
+                </span>
+              </button>
+            );
+          })}
+          {!loading && results.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--navy-300)", padding: 12, textAlign: "center" }}>
+              Sin resultados.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

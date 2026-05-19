@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
@@ -8,8 +9,12 @@ export const runtime = "nodejs";
  * Supabase OAuth callback. Exchanges the `code` for a session, then
  * upserts the `UserProfile` row so app code can rely on the FK existing.
  *
- * For patients (portal flow) we also create a `Patient` if the email
- * matches and a `PatientTenantLink` for the tenant in `?tenant=`.
+ * Patient linking (portal flow):
+ *   - Requires `email_confirmed_at` on the Supabase user — unverified
+ *     identities are never linked to PHI.
+ *   - Only links if the user has no other Patient linked yet in this
+ *     tenant (prevents account-takeover by re-binding to a different
+ *     Patient row via the same email).
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -24,6 +29,7 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${url.origin}/login?error=${encodeURIComponent(error?.message ?? "oauth")}`);
   }
   const user = session.user;
+  const emailVerified = !!user.email_confirmed_at;
 
   await prisma.userProfile.upsert({
     where: { id: user.id },
@@ -40,14 +46,17 @@ export async function GET(req: Request) {
     },
   });
 
-  // Patient portal: associate to a tenant if requested
-  if (tenantSlug) {
+  if (tenantSlug && user.email && emailVerified) {
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
-    if (tenant && user.email) {
+    if (tenant) {
       const patient = await prisma.patient.findFirst({
-        where: { tenantId: tenant.id, email: user.email },
+        where: { tenantId: tenant.id, email: user.email.toLowerCase() },
+        select: { id: true, userId: true },
       });
-      if (patient) {
+      // Only link if this Patient row has no userId yet OR is already
+      // bound to this same user. Refuses to "steal" a Patient already
+      // linked to another Supabase identity.
+      if (patient && (patient.userId == null || patient.userId === user.id)) {
         await prisma.patient.update({
           where: { id: patient.id },
           data: { userId: user.id },
@@ -57,8 +66,20 @@ export async function GET(req: Request) {
           create: { patientId: patient.id, tenantId: tenant.id },
           update: {},
         });
+      } else if (patient && patient.userId && patient.userId !== user.id) {
+        logger.warn("portal.link.refused", {
+          tenantSlug,
+          email: user.email,
+          reason: "patient already linked to a different identity",
+        });
       }
     }
+  } else if (tenantSlug && !emailVerified) {
+    logger.warn("portal.link.refused", {
+      tenantSlug,
+      email: user.email,
+      reason: "email_not_confirmed",
+    });
   }
 
   return NextResponse.redirect(`${url.origin}${next}`);

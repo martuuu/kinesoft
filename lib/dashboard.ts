@@ -8,7 +8,8 @@
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { isReminderDismissed } from "@/lib/notifications";
-import { getUserPreferences, type KpiKey } from "@/lib/preferences";
+import { getUserPreferences } from "@/lib/preferences";
+import type { KpiKey } from "@/lib/preferences-constants";
 
 function startOfDay(d: Date) {
   const x = new Date(d);

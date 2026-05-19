@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { notify } from "@/lib/notifications";
+import { notify } from "@/lib/notifications-internal";
 import { NotificationKind } from "@prisma/client";
 import {
   BookingCreate,
@@ -25,25 +25,19 @@ import {
   type BookingUpdateInput,
 } from "@/lib/validation";
 
-export type BookingRow = {
-  id: string;
-  scheduledFor: Date;
-  durationMin: number;
-  status: BookingStatus;
-  serviceName: string;
-  practitionerId: string;
-  patientId: string | null;
-  patientName: string;
-  patientCondition: string | null;
-  notes: string | null;
-};
+import type { BookingRow } from "@/lib/bookings-types";
 
-export async function listBookingsInRange(opts: { from: Date; to: Date }): Promise<BookingRow[]> {
+export async function listBookingsInRange(opts: {
+  from: Date;
+  to: Date;
+  practitionerId?: string;
+}): Promise<BookingRow[]> {
   const actor = await getActor();
   const rows = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
+      ...(opts.practitionerId ? { practitionerId: opts.practitionerId } : {}),
     },
     orderBy: { scheduledFor: "asc" },
     include: {
@@ -324,4 +318,143 @@ export async function deleteBooking(id: string): Promise<ActionResult> {
   revalidatePath("/agenda");
   if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
   return { ok: true, data: undefined };
+}
+
+/**
+ * Recurring booking helper — creates the same booking weekly for
+ * `repeatWeeks` occurrences. Conflicts skip silently (returns the count
+ * of created vs. skipped). Idempotency key derived per occurrence.
+ */
+export async function createBookingSeries(
+  raw: BookingCreateInput & { repeatWeeks: number }
+): Promise<ActionResult<{ created: number; skipped: number }>> {
+  const actor = await getActor();
+  const parsed = BookingCreate.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  const data = parsed.data;
+  const weeks = Math.min(12, Math.max(1, Math.floor(raw.repeatWeeks ?? 1)));
+  const service = await prisma.service.findFirst({
+    where: { id: data.serviceId, tenantId: actor.tenantId },
+    select: { id: true, durationMin: true },
+  });
+  if (!service) return { ok: false, error: "Servicio inválido." };
+  const duration = data.durationMin ?? service.durationMin;
+
+  let created = 0;
+  let skipped = 0;
+  for (let i = 0; i < weeks; i++) {
+    const when = new Date(data.scheduledFor.getTime() + i * 7 * 86_400_000);
+    const end = new Date(when.getTime() + duration * 60_000);
+    const clash = await prisma.booking.findFirst({
+      where: {
+        tenantId: actor.tenantId,
+        practitionerId: data.practitionerId,
+        status: { notIn: ["CANCELLED"] },
+        scheduledFor: {
+          gte: new Date(when.getTime() - 240 * 60_000),
+          lt: end,
+        },
+      },
+      select: { id: true, scheduledFor: true, durationMin: true },
+    });
+    const overlap =
+      clash &&
+      clash.scheduledFor < end &&
+      new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > when;
+    if (overlap) {
+      skipped++;
+      continue;
+    }
+    try {
+      await prisma.booking.create({
+        data: {
+          tenantId: actor.tenantId,
+          practitionerId: data.practitionerId,
+          serviceId: service.id,
+          scheduledFor: when,
+          durationMin: duration,
+          patientId: data.patientId,
+          guestName: data.guestName,
+          guestEmail: data.guestEmail,
+          guestPhone: data.guestPhone,
+          notes: data.notes,
+          status: data.patientId ? "CONFIRMED" : "PENDING",
+          idempotencyKey: randomBytes(16).toString("hex"),
+        },
+      });
+      created++;
+    } catch {
+      skipped++;
+    }
+  }
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "booking.series.create",
+    entity: "Booking",
+    payload: { created, skipped, weeks },
+  });
+  revalidatePath("/agenda");
+  return { ok: true, data: { created, skipped } };
+}
+
+/**
+ * Build a minimal `.ics` representation of every booking in a window.
+ * The route handler stamps the right Content-Type / filename.
+ */
+export async function exportBookingsIcs(opts: { from: Date; to: Date }): Promise<string> {
+  const actor = await getActor();
+  const rows = await prisma.booking.findMany({
+    where: {
+      tenantId: actor.tenantId,
+      scheduledFor: { gte: opts.from, lt: opts.to },
+      status: { notIn: ["CANCELLED"] },
+    },
+    include: { patient: true, service: true },
+    orderBy: { scheduledFor: "asc" },
+  });
+  const lines: string[] = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//KineSoft//ES//ES",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+  for (const b of rows) {
+    const end = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
+    const who = b.patient ? `${b.patient.firstName} ${b.patient.lastName}` : b.guestName ?? "Reserva";
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${b.id}@kinesoft`,
+      `DTSTAMP:${ics(new Date())}`,
+      `DTSTART:${ics(b.scheduledFor)}`,
+      `DTEND:${ics(end)}`,
+      `SUMMARY:${escapeIcs(b.service.name + " · " + who)}`,
+      b.notes ? `DESCRIPTION:${escapeIcs(b.notes)}` : "",
+      `STATUS:${b.status === "CONFIRMED" ? "CONFIRMED" : "TENTATIVE"}`,
+      "END:VEVENT"
+    );
+  }
+  lines.push("END:VCALENDAR");
+  return lines.filter(Boolean).join("\r\n") + "\r\n";
+}
+
+function ics(d: Date) {
+  return d
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
+}
+
+function escapeIcs(s: string) {
+  // Per RFC 5545: backslash, comma, semicolon must be escaped; newlines
+  // become literal "\n". Backslashes must be escaped FIRST so we don't
+  // double-escape the ones we add.
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
 }

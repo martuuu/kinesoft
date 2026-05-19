@@ -426,6 +426,266 @@ Secrets: `MP_ACCESS_TOKEN` (server only), `MP_WEBHOOK_SECRET`, `MP_PUBLIC_KEY` (
 - [x] **"+" pinned-KPI picker** ([components/dashboard/pin-kpi-button.tsx](components/dashboard/pin-kpi-button.tsx)) — replaces the inert "+ Agregar" pill on the dashboard's pinned-KPI row. Modal mirrors the same `KPI_OPTIONS` whitelist as the profile-menu Settings modal but stays scoped to KPIs; selection order is numbered (1..6) so the user can re-order by re-clicking.
 - [x] `tsc` clean; `next lint` shows only the pre-existing custom-font notice.
 
+### Sprint 8 — UX polish + sequencer (this session)
+Reusable primitives + cross-screen fixes.
+
+- [x] **Foundations** (one source of truth for the patterns repeated everywhere):
+    - [hooks/use-debounced-search-param.ts](hooks/use-debounced-search-param.ts) — 300 ms-debounced two-way bind between an input and a URL search param; Enter flushes immediately; back/forward re-syncs.
+    - [components/ui/drawer.tsx](components/ui/drawer.tsx) — right-side sliding panel with backdrop, Escape close, body-scroll lock.
+    - [components/ui/sortable-list.tsx](components/ui/sortable-list.tsx) — vertical drag-and-drop list (native HTML5 DnD, zero deps).
+    - [components/ui/tag-combobox.tsx](components/ui/tag-combobox.tsx) — autocomplete with arrow-key nav + create-tag-on-the-fly.
+    - [components/ui/modal-close.tsx](components/ui/modal-close.tsx) — standard X button positioned at `top:16, right:16` so it never drifts across modals.
+    - Themed scrollbar via `.k-scroll` (CSS in [globals.css](app/globals.css)).
+- [x] **Topbar**: added `Diagnóstico` link (was missing from the topbar chrome).
+- [x] **Dashboard banner**: now hides instantly on "Más tarde" via optimistic local state; while hidden, a small pill renders in place so the user can bring it back. `restoreReminder` server action added.
+- [x] **Pacientes search**: now debounced — typing live-updates the URL without Enter; pressing Enter flushes immediately.
+- [x] **Biblioteca**: search debounced; added a "Nuevo ejercicio" button + modal with `TagCombobox` for tags (autocomplete existing + create new via `ensureTag`); `createExercise` server action with slug uniqueness.
+- [x] **Agenda**:
+    - Aligned the Prev/Today/Next cluster into a single 36 px glass pill (was misaligned).
+    - Replaced the booking edit modal with a right-side `BookingDrawer` that previews the patient + booking + status actions + a deep link "Abrir historia clínica".
+    - New `ViewOptionsMenu` next to the Day/Week/List switch — density toggle + show/hide week strip.
+- [x] **Patient profile sesiones**: clicking a row now navigates to `/seguimiento/[id]` for the real editor (the old "Cargar" modal was outdated).
+- [x] **SessionDetail editor** ([components/seguimiento/session-detail.tsx](components/seguimiento/session-detail.tsx)):
+    - `ExerciseSequencer` wraps `SortableList` — drag ⋮⋮ to reorder; backed by new `reorderSessionExercises` action.
+    - "Agregar" opens an `ExercisePicker` with debounced search; uses `addSessionExercise`.
+    - Per-row X removes via `removeSessionExercise`.
+    - Inline series/reps editors + status toggles persist via `updateSessionExercise`.
+- [x] **Diagnóstico assign modal**:
+    - Default sessions = **10** (was 8).
+    - `DayOfWeekPicker` (Lun-Dom multi-select) — frequency derives from the count of selected days; default Lun/Mié/Vie.
+    - New **Step 4 "Orden de ejercicios"** with `SortableList` — the practitioner orders the suggested sequence before assignment; `assignDiagnosisAndCreateProgram` now persists in the chosen order.
+- [x] `tsc` clean; `next build` produces all 19 routes; `next lint` shows only the pre-existing custom-font notice.
+
+### Sprint 9 — Phase 7 (this session)
+The big subscription + workflow upgrade pass. Highlights:
+
+- [x] **Schema** — added `TenantPlan` (`FREE / STARTER / PRO / ENTERPRISE`) + `SubscriptionStatus`, `Exercise.tenantId` (null = global catalog) + `Exercise.isBasic` (visible to FREE) + `Exercise.createdById`, plus two new models: `Favorite` (per-user stars) and `PlanTemplate` (reusable plan scaffolds with ordered exercise list).
+- [x] **Plan gating** ([lib/plan-gating.ts](lib/plan-gating.ts)) — single source of truth for visibility + capabilities.
+    - **FREE** sees `tenantId = self OR isBasic`. **PRO/ENTERPRISE** sees everything except other tenants' private exercises.
+    - **STARTER+** unlocks favourites + plan templates.
+    - Returns a Prisma `where` fragment + capability booleans so every callsite ORs the same predicate in.
+- [x] **Gating applied across** [lib/exercises.ts](lib/exercises.ts) (`listExercises`, `getExercise`, `loadFilterFacets`), [lib/diagnosis.ts](lib/diagnosis.ts) `loadCatalog` (filters included exercises so a FREE tenant doesn't see PRO suggestions in the matching engine), [lib/search.ts](lib/search.ts) `globalSearch`, and [lib/sessions.ts](lib/sessions.ts) `addSessionExercise`.
+- [x] **Custom exercises** — `createExercise` now stamps `tenantId = actor.tenantId` + `createdById`, so practitioner-authored exercises are private to their tenant by default.
+- [x] **Favourites** ([lib/favourites.ts](lib/favourites.ts) + UI in Biblioteca):
+    - Star button on each card (optimistic), wired to `toggleFavourite` with full visibility / plan-gate validation server-side.
+    - Sidebar **"Acceso rápido"** filter section with "⭐ Favoritos" + "🔒 Mis ejercicios" toggles, URL-synced.
+    - Card shows a `🔒 Mío` tag for tenant-private and a `Básico` tag for the curated FREE subset.
+    - Header now surfaces the active plan name + a "pasá a PRO" hint when the catalog is gated.
+- [x] **Plan templates** ([lib/plan-templates.ts](lib/plan-templates.ts)) — `create`, `list`, `delete`, and **`applyPlanTemplate`** which spins up a `TreatmentProgram` with N sessions each pre-loaded with the template's exercises in order. Wired into the patient profile Plan tab via [PlanTemplateApplyButton](components/patients/plan-template-apply.tsx).
+- [x] **Pacientes power features**:
+    - Sortable columns (Apellido A→Z / Z→A / Más recientes / Próximo turno / Última visita) via URL `?sort=` — derived sorts (`upcoming`, `lastVisit`) handled in-memory after the join.
+    - **Archive** action via [PatientRowActions](components/patients/patient-row-actions.tsx) ⋯ menu + a "Ver archivados" toggle in the toolbar; `Patient.archivedAt` is the source of truth.
+    - **Advanced filter**: cobertura (insurer) text-input on the toolbar.
+    - **CSV export** via [GET /api/pacientes/export](app/api/pacientes/export/route.ts) — streams a UTF-8 CSV scoped to the active tenant.
+- [x] **Agenda power features**:
+    - **Practitioner filter** — dropdown in the toolbar (only shown when there's >1 practitioner) wired through `listBookingsInRange({ practitionerId })`.
+    - **Recurring bookings** — new "Repetir (semanas)" field in the create modal; `createBookingSeries` creates N occurrences weekly with per-slot conflict-skip + idempotency keys.
+    - **`.ics` export** ([GET /api/agenda/export](app/api/agenda/export/route.ts)) — `exportBookingsIcs` emits a minimal VCALENDAR per visible booking in the requested window; toolbar has a quick "ics" button.
+- [x] **Sessions polish**:
+    - `addCustomSession` — append a free-form named session to an active program; auto-bumps `totalSessions`. UI in the Plan tab via "Sesión a medida".
+    - `substituteSessionExercise` — swap one exercise for another while keeping the order slot, using a two-step rebind to bypass the `(sessionId, order)` unique index.
+- [x] **Diagnostico drafts** — `saveDiagnosisDraft` persists a patient-less `ClinicalCase` with the top-N rankings; reachable later from the patient profile to materialise the program.
+- [x] **Seed update** — demo tenant `movare` upgraded to `plan: PRO` so all 60 seeded exercises render; the 4 ITBS staples are flagged `isBasic: true` so FREE tenants have a starter set out of the box.
+- [x] `tsc` + `next lint` + `next build` clean (16 routes, 2 new API routes registered).
+
+### Sprint 10 — Phase 8 + Phase 9 sneak-in (this session)
+End-to-end public booking via Mercado Pago + patient self-registration via Google + plan timeline on the patient portal.
+
+- [x] **Public booking domain** ([lib/public-booking.ts](lib/public-booking.ts)):
+    - `getPublicClinic(slug)` — practitioners + services for the unauthenticated turnero, no actor required.
+    - `listPublicSlots(...)` — generates 8-19h × 45 min slots Mon-Sat, removes conflicts with non-cancelled bookings, hides past slots.
+    - `submitPublicBooking(...)` — Zod-validated, server-side conflict re-check, **`Patient` upsert by (tenantId, email|documentId)**, creates `Coverage` + `EmergencyContact` when supplied + missing, creates `Booking` (PENDING/UNPAID) with idempotency key, returns `init_point` for Mercado Pago redirect.
+    - `getPublicBookingStatus(id)` — drives the post-MP polling on the success/pending pages.
+    - `findPatientByEmail(email)` — used right after Google sign-in to pre-fill the HC form.
+    - `devMarkBookingPaid(id)` — dev-only stub so the success flow is testable without a public webhook URL.
+- [x] **`/c/[slug]/booking` rebuilt as a full wizard** ([components/booking/public-booking-wizard.tsx](components/booking/public-booking-wizard.tsx)) — 4 steps (Profesional, Servicio, Fecha+hora, Tus datos). Skips step 1 if there's only one practitioner. Slot grid live-fetches via the server action. Right-side summary updates as you go. Submit redirects to `init_point`.
+- [x] **HC fields collected at booking** — firstName, lastName, email, phone, DNI, dateOfBirth (all required) + coverage insurer/plan, emergency contact name/phone, motivo de consulta (optional). Saved to `Patient` + `Coverage` + `EmergencyContact` on submit so the practitioner has a populated HC the first time the patient walks in.
+- [x] **Google sign-in inside the booking flow** — top-right "Iniciar sesión" link points at `/api/auth/google?next=/c/<slug>/booking`. `/auth/callback` already honoured `?next`. When the user lands back, the server component pulls their email from the Supabase session and pre-fills the HC form via `findPatientByEmail`. Same email at another clinic → instant pre-fill.
+- [x] **Result pages** — `/booking/[id]/ok`, `/booking/[id]/pending`, `/booking/[id]/failed` (in the `(booking)` group) load the booking server-side and render [BookingResult](components/booking/booking-result.tsx). The component polls `/api/booking/[id]/status` every 3s (up to 60 attempts) and auto-promotes pending → ok when the Mercado Pago webhook catches up. Dev-only "Simular webhook PAID" button shown when running locally.
+- [x] **`/api/booking/[id]/status` polling endpoint** with `no-store` cache, returning the minimum needed for the result page (no PHI leak).
+- [x] **Mercado Pago back-urls** already pointed at `/booking/[id]/{ok|pending|failed}` — those routes now exist.
+- [x] **Phase 9 sneak-in — Plan timeline + pre-session check-in**:
+    - [lib/portal.ts](lib/portal.ts) `getPortalPlan(tenantSlug)` + `submitCheckIn(...)` — both filter strictly by `Supabase user.email == Patient.email AND Tenant.slug == requested`. Strict privacy, no PHI leak across patients.
+    - [/portal/c/[slug]](app/%28portal%29/portal/c/%5Bslug%5D/page.tsx) — per-clinic page with progress bar + "Próxima sesión" card + full sessions timeline. The next-session card embeds [PortalCheckInForm](components/portal/check-in-form.tsx): EVA 0-10 slider + free-form notes. Check-ins persist as `EvaScore(source = checkin-<sessionId>)` plus an append to `Patient.notes` so the practitioner sees the pre-visit state when they open the HC.
+    - The clinic card on `/portal` is now a link → `/portal/c/<slug>` with "Ver timeline →".
+- [x] `tsc` + `next build` + `next lint` clean. **24 routes** registered (3 new public booking result pages + the per-tenant portal page + 1 new API route).
+
+### Phase 9 — remaining (queued)
+- Exercise videos inline on the timeline (Supabase Storage URLs).
+- Downloadable receipts (PDF render).
+- Push notifications (`web-push`).
+- Practitioner can manually link a guest booking to an existing Patient when emails differ.
+
+### Sprint 11 — Auth & security hardening (this session)
+Full audit + remediation pass driven by 4 parallel review agents (security,
+React+TS, redundancy, animations). Security findings F-1 to F-33 grouped
+and prioritised; this sprint ships the bloqueantes for production. The
+full model lives in [SECURITY.md](docs/SECURITY.md).
+
+- [x] **`getActor()` rebuilt** ([lib/session.ts](lib/session.ts)) — now
+    backed by Supabase auth + `Membership` lookup, not by a
+    client-controlled cookie. The `kine_tenant` cookie is honoured only
+    when the user is actually a member of that tenant. The
+    `x-tenant-slug` header is **never** consulted for authentication.
+    Throws `UnauthenticatedError` on a missing session; `tryGetActor()`
+    is the null-returning variant for surfaces that render a sign-in
+    state. Demo fallback is gated by `KINESOFT_ALLOW_DEMO_ACTOR=1` and
+    refuses to run in `NODE_ENV=production` (F-1, F-2).
+- [x] **Middleware strips `x-tenant-slug` + `x-tenant-id`**
+    ([middleware.ts](middleware.ts)) on every inbound request before
+    optionally re-setting them for `/c/<slug>/…` paths and subdomains.
+    Closes the header-smuggling vector (F-31).
+- [x] **`app/(app)/layout.tsx` is now a guard** — redirects to `/login`
+    when there is no actor.
+- [x] **`auth/callback` requires `email_confirmed_at`**
+    ([app/auth/callback/route.ts](app/auth/callback/route.ts)) before
+    linking a Supabase identity to a `Patient`. Refuses to overwrite an
+    existing `Patient.userId`. Account-takeover via mistyped patient
+    email is no longer possible (F-33).
+- [x] **`findPatientByEmail` removed from `"use server"`** —
+    moved to [lib/public-booking-internal.ts](lib/public-booking-internal.ts)
+    behind `import "server-only"`. The server component at
+    `/c/[slug]/booking` calls it only after verifying
+    `user.email_confirmed_at`. The PII enumeration oracle is closed (F-5).
+- [x] **`submitPublicBooking` never overwrites existing Patient PII**
+    ([lib/public-booking.ts](lib/public-booking.ts)) — only fills `null`
+    fields. `firstName`/`lastName` of an existing Patient are never
+    touched. Aggressive rate limit (5 submits per 5 min per IP) (F-6, F-25).
+- [x] **`getPublicBookingStatus` returns minimal payload** — initials
+    only, no email/phone/full name. The polling endpoint is harder to
+    weaponise via leaked URLs / referers (F-4).
+- [x] **`listPublicSlots` rate-limited** to stop booking-density
+    enumeration scrapes.
+- [x] **Mercado Pago webhook hardened**
+    ([lib/mercadopago.ts](lib/mercadopago.ts) +
+    [app/api/webhooks/mercadopago/route.ts](app/api/webhooks/mercadopago/route.ts)):
+    - Signature verification **always required** when `MP_WEBHOOK_SECRET`
+      is set; no prod-only carve-out (F-16).
+    - 5-minute timestamp window rejects replay (F-17).
+    - `external_reference` resolved to a booking server-side; the
+      captured `transaction_amount` is compared to the stored
+      `Service.priceCents` before flipping to PAID. Mismatches refused
+      (F-18, F-19).
+    - `consumeWebhook` is idempotent — replays short-circuit without
+      re-firing notifications.
+    - `Payment.rawPayload` is redacted to a known-safe MP field subset
+      (F-20). No more cardholder PII / device fingerprint persistence.
+    - 60-per-minute per-IP rate limit on the route.
+- [x] **Export routes require auth + are rate-limited**:
+    `/api/pacientes/export` and `/api/agenda/export` now call
+    `tryGetActor()` and 401 when unauthenticated. Per-user rate limits
+    (5/min CSV, 10/min ICS). The ICS export caps the range at 90 days
+    (F-8, F-9).
+- [x] **`escapeIcs` bug fixed** ([lib/bookings.ts](lib/bookings.ts)) — the
+    `\;` regex replacement was a literal `;`. RFC 5545 escaping is now
+    correct for `,`, `;`, `\`, and `\n` (F-30).
+- [x] **File uploads hardened** ([lib/files.ts](lib/files.ts)):
+    - MIME allow-list (PDF / JPG / PNG / WEBP / GIF / HEIC / MP4 /
+      DOCX / XLSX / TXT / MP3 / MOV) — blocks XSS-via-signed-URL (F-21).
+    - File extension sanitised against `/^[a-z0-9]{1,8}$/`. Storage path
+      traversal is no longer possible (F-22).
+    - `getDownloadUrl` writes an `AuditEvent` for every signed URL
+      minted (F-23).
+    - `category` is validated against an allow-list, not blindly cast.
+- [x] **Internal helpers moved out of `"use server"` files** —
+    `notify()` and `notifyTenantOwners()` now live in
+    [lib/notifications-internal.ts](lib/notifications-internal.ts) with
+    `import "server-only"`. They are no longer reachable as RPC
+    endpoints, so attackers can't inject notifications into any
+    practitioner's bell (F-11, F-12). `ensureTag` requires
+    `getActor()` so the global tag table can't be polluted anonymously
+    (F-13).
+- [x] **Portal hardening** ([lib/portal.ts](lib/portal.ts)):
+    - All portal reads/writes require `email_confirmed_at` on the
+      Supabase session (F-7).
+    - `submitCheckIn` is per-IP rate-limited (4/min) and refuses a
+      second check-in for the same `(patient, sessionId)`. The runaway
+      append into `Patient.notes` is bounded — patient text is capped
+      at 500 chars per entry, prepended (newest first), then the whole
+      buffer truncated to 4 kB so practitioner notes stay readable (F-10).
+- [x] **`server-only` dependency added** so internal helpers fail loudly
+    if any client-side bundler ever pulls them in.
+- [x] **`SECURITY.md`** drafted — single source of truth for the auth
+    + tenancy + public-surface + portal + webhook + RLS model.
+- [x] **`tsc` + `next build` clean**; 19 routes register correctly.
+
+### Sprint 11 — risks documented (queued, not bloqueante)
+- **F-3 — RLS adoption.** `lib/rls.ts#runWithRls(tenantId, fn)` is the
+    on-ramp; policies are deployed in
+    [prisma/migrations/policies.sql](prisma/migrations/policies.sql).
+    Wholesale migration of every server action to `runWithRls` is queued
+    for Sprint 12 (Quality pass). The app-layer `tenantId` filter from
+    `getActor()` is the primary gate today.
+- **F-24 — Upstash for production rate-limit.** Documented in
+    [SECURITY.md](docs/SECURITY.md); the in-memory limiter is fine for dev
+    but advisory on Vercel serverless. Must configure
+    `UPSTASH_REDIS_REST_URL` + TOKEN before public launch.
+
+### Sprint 12 — Quality pass (this session)
+Follow-up to Sprint 11. React/TS hygiene + redundancy from the audit:
+types out of `"use server"`, cancellation guards, derived-state-in-useState
+fixes, dead code removal, shared UI primitives, format helpers, ownership
+helper. Full details in [docs/SPRINT_12.md](docs/SPRINT_12.md).
+
+- [x] **Types out of `"use server"` files** — every server module in
+    `lib/` now only exports `async function`s. DTOs + type aliases live
+    in sibling `*-types.ts` files. 9 new type modules: `patients-types`,
+    `bookings-types`, `exercises-types`, `files-types`, `sessions-types`,
+    `plan-templates-types`, `search-types`, `portal-types`,
+    `diagnosis-types`. Consumers migrated to import types from there.
+- [x] **Cancellation guards** added on 4 stale-response race sites:
+    `command-palette` (debounced search), `mini-calendar` (month nav
+    fetch + redundant first-fetch removed), `patient-profile/ArchivosView`
+    (patientId switch), `diagnostico-screen/onSearch` (keystroke handler
+    via `useRef` sequence counter).
+- [x] **Derived-state-in-useState anti-pattern removed** in
+    `session-detail#ExerciseSequencer` and
+    `diagnostico-screen#AssignPlanModal` via parent `key=` reset. No
+    more double-render on every prop change.
+- [x] **Optimistic rollback** in `notifications-bell` — `onRowClick` and
+    `onMarkAll` snapshot prev state and restore on `!r.ok`.
+- [x] **Dead code deleted**: `lib/matching.ts` (94), `lib/tenancy.ts`
+    (24), `components/screens/booking-screen.tsx` (696). `lib/rls.ts`
+    left in place — documented in SECURITY.md as the Phase 13 on-ramp.
+- [x] **Shared UI primitives** ([components/ui/](components/ui/)):
+    - `<Modal>` with Escape close, body-scroll lock, click-on-backdrop
+      close, themed scrollbar, composes `ModalCloseButton`. Replaces
+      ~10 hand-rolled modal markups.
+    - `<FormField as="input|textarea|select">` with label + required
+      marker + error + hint. Replaces the `Field`/`Labeled`/`ModalField`
+      helpers redeclared in five files.
+    - `<EyebrowLabel tone="muted|accent|lime">` — the uppercase 11px
+      micro-label pattern (~20 occurrences).
+    - Migrated: `patient-profile.tsx` (-130 lines), `agenda-client.tsx`,
+      `new-patient-button.tsx`. Other callsites stay hand-rolled until
+      they're touched.
+- [x] **`lib/format.ts`** — `formatDateAR(d, preset)` with 7 presets
+    anchored to `America/Argentina/Buenos_Aires`, `formatARS(cents)`,
+    `formatRelativeAR(d)`. Replaces `fmtArs` redeclared 3 times and ~25
+    ad-hoc `toLocaleString` calls.
+- [x] **`requireOwned(model, id, actor)`** added in `lib/session.ts` —
+    walks Prisma to a tenant-scoped row and throws `NotFoundError`.
+    Supersedes the `findFirst({ where: { id, tenantId } })` boilerplate
+    that recurs ~15 times across `lib/`. Supports `patient`, `booking`,
+    `service`, `practitioner`, `treatmentProgram`, `planTemplate`,
+    `patientFile`.
+- [x] **`docs/.gitignore`** — excludes everything except itself, so
+    `docs/SECURITY.md`, `docs/SPRINT_12.md` etc. stay local.
+- [x] Verified: Prisma type-only imports in client components were
+    already correct (`patient-profile`, `session-detail`, `agenda-client`,
+    `diagnostico-screen`). `useDebouncedSearchParam` timer cleanup ✓.
+- [x] `tsc` + `next lint` + `next build` clean. `/pacientes` -2 kB,
+    `/pacientes/[id]` -2.1 kB after adopting shared primitives.
+
+### Sprint 12 — queued (not bloqueante)
+- **File splits** of the five 1000+ line components — pure churn unless
+    paired with a real refactor, queued for when the surfaces evolve.
+- **Adoption of new primitives** across the remaining hand-rolled
+    callsites (`plan-template-apply`, `pin-kpi-button`, `biblioteca-client`'s
+    detail/create modals, `diagnostico-screen`'s AssignPlanModal,
+    `seguimiento/session-detail` modals, `screens/login-screen`).
+    Migrate opportunistically.
+
 ### Next iterations (open)
 - [ ] **Phase 7 — workspace mockup → full flow**:
     - Pacientes sortable columns + archive + bulk export + advanced filters.

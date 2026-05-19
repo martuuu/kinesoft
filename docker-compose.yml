@@ -1,3 +1,14 @@
+# Local dev fallback only. Production uses Supabase (see .env / .env.local).
+#
+# Boot:   docker compose up -d db
+# Stop:   docker compose down
+# Reset:  docker compose down -v   (wipes the volume)
+#
+# When using Supabase (the default since Sprint 10), leave this down. Only
+# bring it up if you need to develop completely offline — point your
+# DATABASE_URL/DIRECT_URL at localhost:5433 in `.env.local` and re-run
+# `npx prisma migrate deploy && npm run prisma:seed`.
+
 services:
   db:
     image: postgres:16-alpine

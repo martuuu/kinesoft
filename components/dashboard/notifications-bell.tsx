@@ -6,8 +6,8 @@ import {
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
-  type NotificationRow,
 } from "@/lib/notifications";
+import type { NotificationRow } from "@/lib/notifications-types";
 import { IconBell, IconCheck } from "@/components/ui/icons";
 
 /**
@@ -78,11 +78,19 @@ export function NotificationsBell() {
 
   const onRowClick = (row: NotificationRow) => {
     if (!row.readAt) {
-      // optimistic
+      // Optimistic — snapshot the prior state so we can roll back if the
+      // server action fails (e.g. session lost, RPC 401).
+      const prevRows = rows;
+      const prevUnread = unread;
       setRows((s) => s.map((r) => (r.id === row.id ? { ...r, readAt: new Date() } : r)));
       setUnread((n) => Math.max(0, n - 1));
       start(async () => {
-        await markNotificationRead(row.id);
+        const r = await markNotificationRead(row.id);
+        if (!r.ok) {
+          // Rollback.
+          setRows(prevRows);
+          setUnread(prevUnread);
+        }
       });
     }
     if (row.link) {
@@ -92,10 +100,16 @@ export function NotificationsBell() {
   };
 
   const onMarkAll = () => {
+    const prevRows = rows;
+    const prevUnread = unread;
     setRows((s) => s.map((r) => (r.readAt ? r : { ...r, readAt: new Date() })));
     setUnread(0);
     start(async () => {
-      await markAllNotificationsRead();
+      const r = await markAllNotificationsRead();
+      if (!r.ok) {
+        setRows(prevRows);
+        setUnread(prevUnread);
+      }
     });
   };
 

@@ -8,6 +8,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconArrow, IconFile, IconPlus, IconX, IconCheck } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/modal";
+import { FormField } from "@/components/ui/form-field";
 import {
   completeSession,
   createProgram,
@@ -20,8 +22,10 @@ import {
   getDownloadUrl,
   listPatientFiles,
   uploadPatientFile,
-  type PatientFileRow,
 } from "@/lib/files";
+import type { PatientFileRow } from "@/lib/files-types";
+import { PlanTemplateApplyButton } from "@/components/patients/plan-template-apply";
+import { addCustomSession } from "@/lib/sessions";
 
 type PatientWithRelations = Prisma.PatientGetPayload<{
   include: {
@@ -211,16 +215,16 @@ function EditPatientModal({
     <Modal onClose={onClose} title="Editar paciente">
       <form action={submit} style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <ModalField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
-          <ModalField label="Apellido" name="lastName" required defaultValue={patient.lastName} />
+          <FormField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
+          <FormField label="Apellido" name="lastName" required defaultValue={patient.lastName} />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <ModalField label="DNI" name="documentId" defaultValue={patient.documentId ?? ""} />
-          <ModalField label="Nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
+          <FormField label="DNI" name="documentId" defaultValue={patient.documentId ?? ""} />
+          <FormField label="Nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
         </div>
-        <ModalField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
-        <ModalField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
-        <ModalField label="Notas" name="notes" textarea defaultValue={patient.notes ?? ""} />
+        <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
+        <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
+        <FormField as="textarea" label="Notas" name="notes" defaultValue={patient.notes ?? ""} />
         {error && (
           <div
             style={{
@@ -638,101 +642,72 @@ function SesionesView({
 
 function SessionRow({
   session,
-  patientId,
 }: {
   session: PatientWithRelations["programs"][number]["sessions"][number];
   patientId: string;
 }) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [open, setOpen] = useState(false);
   const completed = !!session.completedAt;
-
-  const submit = (formData: FormData) => {
-    start(async () => {
-      const result = await completeSession({
-        sessionId: session.id,
-        notes: String(formData.get("notes") ?? "") || undefined,
-        paInPre: Number(formData.get("paInPre")) || undefined,
-        paInPost: Number(formData.get("paInPost")) || undefined,
-        rpe: Number(formData.get("rpe")) || undefined,
-      });
-      if (result.ok) {
-        setOpen(false);
-        router.refresh();
-      }
-    });
-  };
-
+  const exerciseCount = session.exercises.length;
   return (
-    <>
-      <div
+    <a
+      href={`/seguimiento/${session.id}`}
+      style={{
+        textDecoration: "none",
+        color: "inherit",
+        padding: "14px 18px",
+        display: "grid",
+        gridTemplateColumns: "70px 1fr 120px 1fr 110px",
+        alignItems: "center",
+        gap: 12,
+        fontSize: 13,
+        borderBottom: "1px solid rgba(15,30,51,0.04)",
+        opacity: completed ? 0.85 : 1,
+      }}
+    >
+      <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)" }}>
+        {String(session.index).padStart(2, "0")}
+      </span>
+      <span style={{ color: "var(--navy-700)" }}>
+        {session.scheduledFor.toLocaleString("es-AR", {
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "America/Argentina/Buenos_Aires",
+        })}
+      </span>
+      <span>
+        {completed ? (
+          <Tag tone="lime">
+            <IconCheck size={10} stroke={3} /> Hecho
+          </Tag>
+        ) : (
+          <Tag tone="soft">Programada</Tag>
+        )}
+      </span>
+      <span
         style={{
-          padding: "14px 18px",
-          display: "grid",
-          gridTemplateColumns: "70px 1fr 120px 1fr 90px",
-          alignItems: "center",
-          gap: 12,
-          fontSize: 13,
-          borderBottom: "1px solid rgba(15,30,51,0.04)",
-          opacity: completed ? 0.85 : 1,
+          color: "var(--navy-500)",
+          fontSize: 12,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
         }}
       >
-        <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)" }}>
-          {String(session.index).padStart(2, "0")}
-        </span>
-        <span style={{ color: "var(--navy-700)" }}>
-          {session.scheduledFor.toLocaleString("es-AR", {
-            day: "2-digit",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "America/Argentina/Buenos_Aires",
-          })}
-        </span>
-        <span>
-          {completed ? (
-            <Tag tone="lime">
-              <IconCheck size={10} stroke={3} /> Hecho
-            </Tag>
-          ) : (
-            <Tag tone="soft">Programada</Tag>
-          )}
-        </span>
-        <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {session.notes ?? (completed ? "—" : "Pendiente de carga")}
-        </span>
-        <span style={{ display: "flex", justifyContent: "flex-end" }}>
-          {!completed && (
-            <Button variant="ghost" onClick={() => setOpen(true)} style={{ fontSize: 12, padding: "6px 12px" }}>
-              Cargar
-            </Button>
-          )}
-        </span>
-      </div>
-
-      {open && (
-        <Modal onClose={() => setOpen(false)} title={`Sesión ${session.index}`}>
-          <form action={submit} style={{ display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <ModalField label="EVA pre" name="paInPre" type="number" min={0} max={10} />
-              <ModalField label="EVA post" name="paInPost" type="number" min={0} max={10} />
-              <ModalField label="RPE" name="rpe" type="number" min={0} max={10} />
-            </div>
-            <ModalField label="Notas de sesión" name="notes" textarea />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={pending}>
-                Cancelar
-              </Button>
-              <Button type="submit" variant="primary" disabled={pending}>
-                {pending ? "Guardando…" : "Marcar realizada"}
-              </Button>
-            </div>
-            <input type="hidden" name="patientId" value={patientId} />
-          </form>
-        </Modal>
-      )}
-    </>
+        {session.notes ?? (completed ? "—" : `${exerciseCount} ejercicios asignados`)}
+      </span>
+      <span
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          fontSize: 12,
+          fontWeight: 600,
+          color: "var(--sky-700)",
+        }}
+      >
+        Editar sesión →
+      </span>
+    </a>
   );
 }
 
@@ -749,9 +724,12 @@ function PlanView({
     return (
       <Card style={{ padding: 24, textAlign: "center" }}>
         <p style={{ color: "var(--navy-500)" }}>Este paciente no tiene un plan activo.</p>
-        <Button variant="primary" onClick={() => setCreating(true)}>
-          <IconPlus size={14} /> Crear plan
-        </Button>
+        <div style={{ display: "inline-flex", gap: 8 }}>
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            <IconPlus size={14} /> Crear plan
+          </Button>
+          <PlanTemplateApplyButton patientId={patient.id} />
+        </div>
         {creating && (
           <CreateProgramModal
             patientId={patient.id}
@@ -767,21 +745,47 @@ function PlanView({
   }
   return (
     <Card style={{ padding: 18 }}>
-      <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-        {activeProgram.title}
-      </div>
-      <div style={{ fontSize: 12, color: "var(--navy-500)", marginBottom: 12 }}>
-        Inicio {activeProgram.startDate.toLocaleDateString("es-AR")} · {activeProgram.frequency}×/semana · {activeProgram.totalSessions} sesiones
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
+            {activeProgram.title}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            Inicio {activeProgram.startDate.toLocaleDateString("es-AR")} ·{" "}
+            {activeProgram.frequency}×/semana · {activeProgram.totalSessions} sesiones
+          </div>
+        </div>
+        <AddCustomSessionButton programId={activeProgram.id} />
+      </header>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+          gap: 10,
+        }}
+      >
         {activeProgram.sessions.map((s) => (
-          <div
+          <a
             key={s.id}
+            href={`/seguimiento/${s.id}`}
             style={{
+              textDecoration: "none",
+              color: "inherit",
               padding: 12,
               borderRadius: 12,
               background: s.completedAt ? "rgba(200,245,100,0.18)" : "rgba(246,249,253,0.7)",
               border: "1px solid rgba(15,30,51,0.06)",
+              cursor: "pointer",
+              display: "block",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -794,12 +798,36 @@ function PlanView({
               {s.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })}
             </div>
             <div style={{ fontSize: 11, color: "var(--navy-700)", marginTop: 6 }}>
-              {s.exercises.length} ejercicios · {s.exercises.reduce((a, e) => a + e.sets * e.reps, 0)} repeticiones
+              {s.exercises.length} ejercicios ·{" "}
+              {s.exercises.reduce((a, e) => a + e.sets * e.reps, 0)} repeticiones
             </div>
-          </div>
+          </a>
         ))}
       </div>
     </Card>
+  );
+}
+
+function AddCustomSessionButton({ programId }: { programId: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const add = () => {
+    const title = prompt("Título o nota corta de la sesión a medida (opcional):") ?? undefined;
+    setError(null);
+    start(async () => {
+      const r = await addCustomSession({ programId, title });
+      if (!r.ok) setError(r.error);
+      else router.refresh();
+    });
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+      <Button variant="ghost" onClick={add} disabled={pending}>
+        <IconPlus size={12} /> {pending ? "Agregando…" : "Sesión a medida"}
+      </Button>
+      {error && <span style={{ fontSize: 11, color: "#9F1F1F" }}>{error}</span>}
+    </div>
   );
 }
 
@@ -937,11 +965,11 @@ function CreateProgramModal({
   return (
     <Modal onClose={onClose} title="Crear plan de tratamiento">
       <form action={submit} style={{ display: "grid", gap: 10 }}>
-        <ModalField label="Nombre" name="title" required defaultValue="Plan kinésico" />
+        <FormField label="Nombre" name="title" required defaultValue="Plan kinésico" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <ModalField label="Sesiones" name="totalSessions" type="number" min={1} max={64} defaultValue={8} />
-          <ModalField label="Freq/sem" name="frequency" type="number" min={1} max={5} defaultValue={2} />
-          <ModalField label="Inicio" name="startDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
+          <FormField label="Sesiones" name="totalSessions" type="number" min={1} max={64} defaultValue={8} />
+          <FormField label="Freq/sem" name="frequency" type="number" min={1} max={5} defaultValue={2} />
+          <FormField label="Inicio" name="startDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
         </div>
         {error && (
           <div
@@ -987,21 +1015,30 @@ function ArchivosView({ patientId }: { patientId: string }) {
   const [loading, setLoading] = useState(true);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Bumped on every successful mutation so the effect below re-fetches.
+  const [bump, setBump] = useState(0);
 
-  const refresh = () => {
+  // Sequence-guarded fetch: a rapid patientId switch can't have a stale
+  // response from the previous patient overwrite the current one.
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     listPatientFiles(patientId)
       .then((r) => {
+        if (cancelled) return;
         setFiles(r);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
-  };
+      .catch(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId, bump]);
 
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patientId]);
+  const refresh = () => setBump((b) => b + 1);
 
   const onUpload = (formData: FormData) => {
     setError(null);
@@ -1355,120 +1392,4 @@ function BookingStatusTag({ status }: { status: PatientWithRelations["bookings"]
   return <Tag tone={m.tone}>{m.label}</Tag>;
 }
 
-function Modal({
-  onClose,
-  title,
-  children,
-}: {
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      role="dialog"
-      aria-modal
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 40,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div className="k-glass-strong" style={{ width: "min(520px, 100%)", borderRadius: 24, padding: 22 }}>
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 14,
-          }}
-        >
-          <h2 className="k-display" style={{ fontSize: 18, margin: 0, fontWeight: 700 }}>
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Cerrar"
-            style={{
-              border: "none",
-              background: "rgba(255,255,255,0.7)",
-              width: 32,
-              height: 32,
-              borderRadius: 10,
-              cursor: "pointer",
-              color: "var(--navy-700)",
-            }}
-          >
-            <IconX size={14} />
-          </button>
-        </header>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function ModalField({
-  label,
-  name,
-  required,
-  type = "text",
-  textarea,
-  defaultValue,
-  min,
-  max,
-}: {
-  label: string;
-  name: string;
-  required?: boolean;
-  type?: string;
-  textarea?: boolean;
-  defaultValue?: string | number;
-  min?: number;
-  max?: number;
-}) {
-  return (
-    <label style={{ display: "block", fontSize: 12 }}>
-      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
-        {label}
-        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
-      </span>
-      {textarea ? (
-        <textarea
-          name={name}
-          rows={3}
-          defaultValue={defaultValue}
-          style={inputStyle}
-        />
-      ) : (
-        <input
-          name={name}
-          type={type}
-          required={required}
-          defaultValue={defaultValue}
-          min={min}
-          max={max}
-          style={inputStyle}
-        />
-      )}
-    </label>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  marginTop: 6,
-  padding: "10px 12px",
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.7)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-};
+// Modal + FormField primitives are imported from `components/ui/`.

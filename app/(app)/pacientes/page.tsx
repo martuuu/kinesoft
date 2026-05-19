@@ -1,87 +1,154 @@
 import Link from "next/link";
 import { listPatients } from "@/lib/patients";
+import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
-import { IconSearch, IconUsers, IconPlus } from "@/components/ui/icons";
+import { Button } from "@/components/ui/button";
+import { IconUsers, IconPlus } from "@/components/ui/icons";
 import { NewPatientButton } from "@/components/patients/new-patient-button";
+import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
+import { PatientRowActions } from "@/components/patients/patient-row-actions";
 
 export const metadata = { title: "Pacientes · KineSoft" };
 export const dynamic = "force-dynamic";
 
-type SP = { q?: string; filter?: "all" | "active" | "no-program" };
+type SP = {
+  q?: string;
+  filter?: "all" | "active" | "no-program" | "archived";
+  sort?: PatientSort;
+  insurer?: string;
+};
+
+const SORT_OPTIONS: { value: PatientSort; label: string }[] = [
+  { value: "lastName.asc", label: "Apellido A→Z" },
+  { value: "lastName.desc", label: "Apellido Z→A" },
+  { value: "createdAt.desc", label: "Más recientes" },
+  { value: "upcoming.asc", label: "Próximo turno" },
+  { value: "lastVisit.desc", label: "Última visita" },
+];
 
 export default async function PacientesPage({ searchParams }: { searchParams: SP }) {
   const q = searchParams.q ?? "";
   const filter = (searchParams.filter ?? "all") as NonNullable<SP["filter"]>;
-  const patients = await listPatients({ q, filter });
+  const sort = (searchParams.sort ?? "lastName.asc") as PatientSort;
+  const insurer = searchParams.insurer ?? "";
+  const patients = await listPatients({ q, filter, sort, insurer: insurer || undefined });
   const totals = {
     all: patients.length,
     withProgram: patients.filter((p) => p.activeProgramTitle).length,
     withoutProgram: patients.filter((p) => !p.activeProgramTitle).length,
   };
 
+  const baseQS = (override: Record<string, string | undefined>) => {
+    const sp = new URLSearchParams();
+    const merged: Record<string, string | undefined> = { q, filter, sort, insurer, ...override };
+    for (const [k, v] of Object.entries(merged)) {
+      if (v) sp.set(k, v);
+    }
+    const qs = sp.toString();
+    return qs ? `?${qs}` : "";
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 12,
+        }}
+      >
         <div>
           <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Pacientes</div>
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
             Directorio · <span style={{ color: "var(--sky-700)" }}>{totals.all}</span> pacientes
           </h1>
         </div>
-        <NewPatientButton />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <a href="/api/pacientes/export" target="_blank" rel="noopener noreferrer">
+            <Button variant="ghost">Exportar CSV</Button>
+          </a>
+          <NewPatientButton />
+        </div>
       </header>
 
-      <Card glass style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <form action="/pacientes" method="get" style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 240 }}>
-          <span style={{ color: "var(--navy-300)" }}>
-            <IconSearch size={15} />
-          </span>
+      <PatientsSearchBar filter={filter} totals={totals} />
+
+      {/* Sort + advanced filters row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          fontSize: 12,
+          color: "var(--navy-500)",
+        }}
+      >
+        <span style={{ fontWeight: 600 }}>Ordenar:</span>
+        {SORT_OPTIONS.map((s) => {
+          const on = sort === s.value;
+          return (
+            <Link
+              key={s.value}
+              href={`/pacientes${baseQS({ sort: s.value })}`}
+              scroll={false}
+              style={{
+                padding: "5px 10px",
+                borderRadius: 999,
+                fontSize: 11.5,
+                fontWeight: 600,
+                background: on ? "var(--sky-700)" : "rgba(255,255,255,0.6)",
+                color: on ? "#fff" : "var(--navy-700)",
+                textDecoration: "none",
+                border: on ? "none" : "1px solid rgba(15,30,51,0.06)",
+              }}
+            >
+              {s.label}
+            </Link>
+          );
+        })}
+        <span style={{ marginLeft: 12, fontWeight: 600 }}>Cobertura:</span>
+        <form action="/pacientes" method="get" style={{ display: "inline-flex", gap: 4 }}>
+          <input type="hidden" name="filter" value={filter} />
+          <input type="hidden" name="sort" value={sort} />
+          {q && <input type="hidden" name="q" value={q} />}
           <input
-            type="search"
-            name="q"
-            defaultValue={q}
-            placeholder="Buscar por nombre, email o DNI…"
+            type="text"
+            name="insurer"
+            defaultValue={insurer}
+            placeholder="OSDE, Swiss…"
             style={{
-              flex: 1,
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              fontSize: 14,
-              color: "var(--navy-900)",
+              padding: "5px 10px",
+              borderRadius: 999,
+              fontSize: 11.5,
+              border: "1px solid rgba(15,30,51,0.08)",
+              background: "rgba(255,255,255,0.7)",
+              width: 140,
             }}
           />
-          <input type="hidden" name="filter" value={filter} />
         </form>
-        <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: 999, background: "rgba(15,30,51,0.04)" }}>
-          {([
-            ["all", `Todos · ${totals.all}`],
-            ["active", `Con plan · ${totals.withProgram}`],
-            ["no-program", `Sin plan · ${totals.withoutProgram}`],
-          ] as const).map(([key, label]) => {
-            const on = key === filter;
-            return (
-              <Link
-                key={key}
-                href={`/pacientes?filter=${key}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
-                style={{
-                  padding: "6px 12px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  textDecoration: "none",
-                  background: on ? "#fff" : "transparent",
-                  color: on ? "var(--navy-900)" : "var(--navy-500)",
-                  boxShadow: on ? "0 2px 6px rgba(15,30,51,0.08)" : "none",
-                }}
-              >
-                {label}
-              </Link>
-            );
-          })}
-        </div>
-      </Card>
+        <Link
+          href={`/pacientes${baseQS({ filter: filter === "archived" ? "all" : "archived" })}`}
+          scroll={false}
+          style={{
+            marginLeft: "auto",
+            padding: "5px 10px",
+            borderRadius: 999,
+            fontSize: 11.5,
+            fontWeight: 600,
+            background: filter === "archived" ? "var(--navy-900)" : "rgba(255,255,255,0.6)",
+            color: filter === "archived" ? "#fff" : "var(--navy-500)",
+            textDecoration: "none",
+            border: "1px solid rgba(15,30,51,0.06)",
+          }}
+        >
+          {filter === "archived" ? "Volver a activos" : "Ver archivados"}
+        </Link>
+      </div>
 
       {patients.length === 0 ? (
         <EmptyState />
@@ -91,7 +158,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             style={{
               padding: "12px 18px",
               display: "grid",
-              gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px",
+              gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px 40px",
               gap: 14,
               fontSize: 10,
               fontWeight: 700,
@@ -106,29 +173,37 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             <span>Próx. turno</span>
             <span>Última visita</span>
             <span style={{ textAlign: "right" }}>Estado</span>
+            <span />
           </div>
           {patients.map((p) => {
             const initials = `${p.firstName} ${p.lastName}`;
             const tone: "sky" | "lime" | "navy" = p.activeProgramTitle ? "lime" : "sky";
             return (
-              <Link
+              <div
                 key={p.id}
-                href={`/pacientes/${p.id}`}
                 style={{
                   padding: "14px 18px",
                   display: "grid",
-                  gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px",
+                  gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px 40px",
                   gap: 14,
                   alignItems: "center",
                   fontSize: 13,
-                  textDecoration: "none",
-                  color: "inherit",
                   borderBottom: "1px solid rgba(15,30,51,0.04)",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <Link
+                  href={`/pacientes/${p.id}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    textDecoration: "none",
+                    color: "inherit",
+                    minWidth: 0,
+                  }}
+                >
                   <Avatar name={initials} size={36} tone={tone} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>
                       {p.lastName}, {p.firstName}
                     </div>
@@ -136,7 +211,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                       {p.email ?? p.phone ?? p.documentId ?? "—"}
                     </div>
                   </div>
-                </div>
+                </Link>
                 <div style={{ color: p.activeProgramTitle ? "var(--navy-700)" : "var(--navy-300)" }}>
                   {p.activeProgramTitle ?? "Sin plan asignado"}
                   {p.sessionsTotal > 0 && (
@@ -171,7 +246,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                     <Tag tone="soft">Inactivo</Tag>
                   )}
                 </div>
-              </Link>
+                <PatientRowActions patientId={p.id} archived={filter === "archived"} />
+              </div>
             );
           })}
         </Card>
@@ -199,11 +275,10 @@ function EmptyState() {
         <IconUsers size={26} />
       </div>
       <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-        Todavía no hay pacientes
+        Sin pacientes en esta vista
       </div>
       <p style={{ color: "var(--navy-500)", maxWidth: 360, margin: "8px auto 16px" }}>
-        Empezá creando el primero — vas a poder armarle un plan de tratamiento
-        y cargar sus sesiones.
+        Probá quitar filtros o creá tu primer paciente.
       </p>
       <div style={{ display: "inline-flex", gap: 8 }}>
         <span

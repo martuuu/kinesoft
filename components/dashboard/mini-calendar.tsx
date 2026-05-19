@@ -21,12 +21,24 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
   const [pending, start] = useTransition();
   const isCurrentMonth = year === today.getFullYear() && month === today.getMonth();
 
-  // Reload booking days when the month changes.
+  // Reload booking days when the month changes. Sequence-guarded so a
+  // late response from a previous month can't overwrite the current view.
   useEffect(() => {
+    // Skip the first fetch — we already received the initial booking days
+    // from the server component for the current month.
+    if (year === today.getFullYear() && month === today.getMonth()) {
+      return;
+    }
+    let cancelled = false;
     start(async () => {
       const days = await getMonthBookingDays(year, month);
+      if (cancelled) return;
       setBookingDays(new Set(days));
     });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, month]);
 
   const nav = (delta: -1 | 1) => {

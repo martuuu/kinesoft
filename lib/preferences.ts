@@ -19,10 +19,6 @@ import {
   type Preferences,
 } from "@/lib/preferences-constants";
 
-// Re-export the types so existing call sites keep working. Type-only
-// re-exports are erased at compile time and don't violate "use server".
-export type { KpiKey, Palette, Preferences } from "@/lib/preferences-constants";
-
 export async function getUserPreferences(): Promise<Preferences> {
   const actor = await getActor();
   if (!actor.userId) return DEFAULT_PREFERENCES;

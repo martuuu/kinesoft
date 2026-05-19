@@ -12,14 +12,9 @@
  */
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
+import { gatingForActor } from "@/lib/plan-gating";
 
-export type SearchHit = {
-  id: string;
-  category: "patient" | "exercise" | "condition" | "booking" | "shortcut";
-  label: string;
-  sublabel?: string;
-  href: string;
-};
+import type { SearchHit } from "@/lib/search-types";
 
 const SHORTCUTS: SearchHit[] = [
   { id: "nav:dashboard", category: "shortcut", label: "Dashboard", href: "/dashboard" },
@@ -36,6 +31,7 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
   if (!term) return SHORTCUTS;
 
   const actor = await getActor();
+  const gate = await gatingForActor();
   const insensitive = "insensitive" as const;
 
   const [patients, exercises, conditions, bookings] = await Promise.all([
@@ -55,10 +51,15 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
     }),
     prisma.exercise.findMany({
       where: {
-        OR: [
-          { name: { contains: term, mode: insensitive } },
-          { muscleGroups: { contains: term, mode: insensitive } },
-          { description: { contains: term, mode: insensitive } },
+        AND: [
+          gate.visibility,
+          {
+            OR: [
+              { name: { contains: term, mode: insensitive } },
+              { muscleGroups: { contains: term, mode: insensitive } },
+              { description: { contains: term, mode: insensitive } },
+            ],
+          },
         ],
       },
       take: 6,

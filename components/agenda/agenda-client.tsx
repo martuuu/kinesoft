@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Drawer } from "@/components/ui/drawer";
+import { ModalCloseButton } from "@/components/ui/modal-close";
+import { FormField } from "@/components/ui/form-field";
 import type { BookingStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +19,12 @@ import {
   IconPlus,
   IconX,
 } from "@/components/ui/icons";
-import { createBooking, deleteBooking, setBookingStatus } from "@/lib/bookings";
+import {
+  createBooking,
+  createBookingSeries,
+  deleteBooking,
+  setBookingStatus,
+} from "@/lib/bookings";
 
 type BookingDTO = {
   id: string;
@@ -36,6 +45,7 @@ type Props = {
   weekStartISO: string;
   autoCreate?: boolean;
   autoCreatePatientId?: string | null;
+  practitionerFilterId?: string | null;
   bookings: BookingDTO[];
   services: { id: string; name: string; durationMin: number; priceCents: number }[];
   practitioners: { id: string; name: string }[];
@@ -66,6 +76,8 @@ export function AgendaClient(props: Props) {
     defaultPatientId?: string | null;
   }>(null);
   const [editing, setEditing] = useState<BookingDTO | null>(null);
+  const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
+  const [showWeekStrip, setShowWeekStrip] = useState(true);
 
   // Deep-link from "Nuevo turno" quick action: /agenda?new=1&patient=<id>
   // opens the create modal pre-filled with that patient. We clear the
@@ -118,19 +130,62 @@ export function AgendaClient(props: Props) {
             {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long" })}
           </h1>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => navigate(-7)} style={chevBtn} aria-label="Semana anterior">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* Week nav cluster — consistent 36 px height for all three controls */}
+          <div
+            className="k-glass"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 2,
+              padding: 3,
+              borderRadius: 999,
+              height: 36,
+            }}
+          >
+            <button
+              onClick={() => navigate(-7)}
+              aria-label="Semana anterior"
+              style={navPillBtn}
+            >
               <IconChevL size={14} />
             </button>
-            <Button variant="ghost" onClick={() => router.push(`/agenda?view=${props.view}&date=${new Date().toISOString().slice(0, 10)}`)}>
+            <button
+              onClick={() =>
+                router.push(
+                  `/agenda?view=${props.view}&date=${new Date().toISOString().slice(0, 10)}`
+                )
+              }
+              style={{
+                ...navPillBtn,
+                width: "auto",
+                padding: "0 14px",
+                fontSize: 12.5,
+                fontWeight: 600,
+              }}
+            >
               Hoy
-            </Button>
-            <button onClick={() => navigate(7)} style={chevBtn} aria-label="Semana siguiente">
+            </button>
+            <button
+              onClick={() => navigate(7)}
+              aria-label="Semana siguiente"
+              style={navPillBtn}
+            >
               <IconChevR size={14} />
             </button>
           </div>
-          <div className="k-glass" style={{ display: "flex", alignItems: "center", borderRadius: 999, padding: 4 }}>
+
+          {/* View switch */}
+          <div
+            className="k-glass"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              borderRadius: 999,
+              padding: 3,
+              height: 36,
+            }}
+          >
             {(["timeline", "week", "list"] as const).map((v) => {
               const on = props.view === v;
               const label = v === "timeline" ? "Día" : v === "week" ? "Semana" : "Lista";
@@ -139,10 +194,11 @@ export function AgendaClient(props: Props) {
                   key={v}
                   onClick={() => setView(v)}
                   style={{
-                    padding: "6px 14px",
+                    height: 30,
+                    padding: "0 14px",
                     borderRadius: 999,
                     border: "none",
-                    fontSize: 12,
+                    fontSize: 12.5,
                     fontWeight: 600,
                     background: on ? "var(--navy-900)" : "transparent",
                     color: on ? "#fff" : "var(--navy-500)",
@@ -154,18 +210,69 @@ export function AgendaClient(props: Props) {
               );
             })}
           </div>
-          <Button variant="primary" onClick={() => setCreating({})}>
+
+          {props.practitioners.length > 1 && (
+            <select
+              value={props.practitionerFilterId ?? ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                const sp = new URLSearchParams(window.location.search);
+                if (val) sp.set("practitioner", val);
+                else sp.delete("practitioner");
+                router.push(`/agenda?${sp.toString()}`);
+              }}
+              aria-label="Filtrar por profesional"
+              style={{
+                height: 36,
+                padding: "0 12px",
+                borderRadius: 999,
+                fontSize: 12.5,
+                fontWeight: 600,
+                border: "1px solid rgba(15,30,51,0.08)",
+                background: "rgba(255,255,255,0.7)",
+                color: "var(--navy-700)",
+              }}
+            >
+              <option value="">Todos los profesionales</option>
+              {props.practitioners.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <ViewOptionsMenu density={density} setDensity={setDensity} showWeekStrip={showWeekStrip} setShowWeekStrip={setShowWeekStrip} />
+
+          <a
+            href={`/api/agenda/export?from=${weekStart.toISOString().slice(0, 10)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Exportar semana a .ics"
+            style={{ textDecoration: "none" }}
+          >
+            <Button variant="ghost" style={{ height: 36, padding: "0 14px" }}>
+              .ics
+            </Button>
+          </a>
+          <Button
+            variant="primary"
+            onClick={() => setCreating({})}
+            style={{ height: 36, padding: "0 18px" }}
+          >
             <IconPlus size={14} /> Nuevo turno
           </Button>
         </div>
       </header>
 
-      <WeekStrip
-        weekStart={weekStart}
-        anchor={anchor}
-        bookingsByDay={bookingsByDay}
-        onPick={(d) => router.push(`/agenda?view=${props.view}&date=${d.toISOString().slice(0, 10)}`)}
-      />
+      {showWeekStrip && (
+        <WeekStrip
+          weekStart={weekStart}
+          anchor={anchor}
+          bookingsByDay={bookingsByDay}
+          onPick={(d) => router.push(`/agenda?view=${props.view}&date=${d.toISOString().slice(0, 10)}`)}
+        />
+      )}
 
       <div style={{ flex: 1, minHeight: 0 }}>
         {props.view === "timeline" && (
@@ -173,6 +280,7 @@ export function AgendaClient(props: Props) {
             bookings={todayList}
             onCreate={(iso) => setCreating({ defaultISO: iso })}
             onEdit={setEditing}
+            density={density}
           />
         )}
         {props.view === "week" && (
@@ -198,30 +306,25 @@ export function AgendaClient(props: Props) {
           }}
         />
       )}
-      {editing && (
-        <BookingModal
-          mode="edit"
-          booking={editing}
-          services={props.services}
-          practitioners={props.practitioners}
-          patients={props.patients}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            router.refresh();
-          }}
-        />
-      )}
+
+      <BookingDrawer
+        booking={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          router.refresh();
+        }}
+      />
     </div>
   );
 }
 
-const chevBtn: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 12,
-  background: "rgba(255,255,255,0.7)",
-  border: "1px solid rgba(15,30,51,0.06)",
+const navPillBtn: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 999,
+  background: "transparent",
+  border: "none",
   cursor: "pointer",
   color: "var(--navy-700)",
   display: "inline-flex",
@@ -285,13 +388,15 @@ function TimelineView({
   bookings,
   onCreate,
   onEdit,
+  density,
 }: {
   bookings: BookingDTO[];
   onCreate: (iso: string) => void;
   onEdit: (b: BookingDTO) => void;
+  density: "comfortable" | "compact";
 }) {
   const HOURS = Array.from({ length: 12 }, (_, i) => i + 8); // 08..19
-  const ROW = 56;
+  const ROW = density === "compact" ? 40 : 56;
 
   return (
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
@@ -605,6 +710,357 @@ function StatusTag({ s }: { s: BookingStatus }) {
   return <Tag tone="lime">Pendiente</Tag>;
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// View Options dropdown — small menu next to the day/week/list switch
+// ──────────────────────────────────────────────────────────────────────
+
+function ViewOptionsMenu({
+  density,
+  setDensity,
+  showWeekStrip,
+  setShowWeekStrip,
+}: {
+  density: "comfortable" | "compact";
+  setDensity: (d: "comfortable" | "compact") => void;
+  showWeekStrip: boolean;
+  setShowWeekStrip: (v: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="true"
+        aria-expanded={open}
+        className="k-glass"
+        style={{
+          height: 36,
+          padding: "0 12px",
+          borderRadius: 999,
+          border: "none",
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "var(--navy-700)",
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        Vista
+        <span style={{ fontSize: 9, color: "var(--navy-300)" }}>▾</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="k-glass-strong"
+          style={{
+            position: "absolute",
+            top: 44,
+            right: 0,
+            width: 240,
+            borderRadius: 14,
+            padding: 10,
+            zIndex: 25,
+          }}
+        >
+          <div style={menuLabel}>Densidad</div>
+          <div
+            style={{
+              display: "flex",
+              padding: 3,
+              borderRadius: 999,
+              background: "rgba(15,30,51,0.04)",
+              marginBottom: 10,
+            }}
+          >
+            {(["comfortable", "compact"] as const).map((d) => {
+              const on = density === d;
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDensity(d)}
+                  style={{
+                    flex: 1,
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    border: "none",
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    background: on ? "#fff" : "transparent",
+                    color: on ? "var(--navy-900)" : "var(--navy-500)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {d === "comfortable" ? "Cómoda" : "Compacta"}
+                </button>
+              );
+            })}
+          </div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 4px",
+              fontSize: 13,
+              color: "var(--navy-700)",
+              cursor: "pointer",
+            }}
+          >
+            Mostrar tira de días
+            <input
+              type="checkbox"
+              checked={showWeekStrip}
+              onChange={(e) => setShowWeekStrip(e.target.checked)}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const menuLabel: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "var(--navy-300)",
+  padding: "0 4px 6px",
+};
+
+// ──────────────────────────────────────────────────────────────────────
+// Booking drawer — right-side panel; replaces the old edit modal
+// ──────────────────────────────────────────────────────────────────────
+
+function BookingDrawer({
+  booking,
+  onClose,
+  onSaved,
+}: {
+  booking: BookingDTO | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  const setStatus = (status: BookingStatus) => {
+    if (!booking) return;
+    setError(null);
+    start(async () => {
+      const r = await setBookingStatus(booking.id, status);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onSaved();
+    });
+  };
+
+  const remove = () => {
+    if (!booking) return;
+    if (!confirm("¿Eliminar este turno?")) return;
+    setError(null);
+    start(async () => {
+      const r = await deleteBooking(booking.id);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onSaved();
+    });
+  };
+
+  return (
+    <Drawer open={!!booking} onClose={onClose} title={booking ? "Turno" : undefined}>
+      {booking && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 14,
+              background: "rgba(255,255,255,0.6)",
+              border: "1px solid rgba(15,30,51,0.06)",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <Avatar name={booking.patientName} size={44} tone="sky" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy-900)" }}>
+                {booking.patientName}
+              </div>
+              {booking.patientCondition && (
+                <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{booking.patientCondition}</div>
+              )}
+            </div>
+            <StatusTag s={booking.status} />
+          </div>
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 14,
+              background: "rgba(246,249,253,0.7)",
+              border: "1px solid rgba(15,30,51,0.06)",
+              display: "grid",
+              gap: 8,
+              fontSize: 12.5,
+            }}
+          >
+            <Row label="Cuándo">
+              {new Date(booking.scheduledFor).toLocaleString("es-AR", {
+                weekday: "long",
+                day: "2-digit",
+                month: "long",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </Row>
+            <Row label="Duración">{booking.durationMin} min</Row>
+            <Row label="Servicio">{booking.serviceName}</Row>
+            {booking.notes && <Row label="Notas">{booking.notes}</Row>}
+          </div>
+
+          {booking.patientId && (
+            <Link
+              href={`/pacientes/${booking.patientId}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: "var(--sky-700)",
+                color: "#fff",
+                fontWeight: 700,
+                textDecoration: "none",
+                fontSize: 13,
+              }}
+            >
+              Abrir historia clínica
+              <span aria-hidden>→</span>
+            </Link>
+          )}
+
+          <div>
+            <div style={menuLabel}>Cambiar estado</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <Button
+                variant="primary"
+                onClick={() => setStatus("CONFIRMED")}
+                disabled={pending}
+                style={{ justifyContent: "center" }}
+              >
+                Confirmar
+              </Button>
+              <Button
+                variant="lime"
+                onClick={() => setStatus("COMPLETED")}
+                disabled={pending}
+                style={{ justifyContent: "center" }}
+              >
+                <IconCheck size={12} stroke={3} /> Realizado
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setStatus("NO_SHOW")}
+                disabled={pending}
+                style={{ justifyContent: "center" }}
+              >
+                Ausente
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setStatus("CANCELLED")}
+                disabled={pending}
+                style={{ justifyContent: "center" }}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </div>
+
+          {error && (
+            <div
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                background: "rgba(228,70,70,0.1)",
+                color: "#9F1F1F",
+                fontSize: 12,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={remove}
+            disabled={pending}
+            style={{
+              alignSelf: "flex-start",
+              background: "transparent",
+              border: "none",
+              color: "#9F1F1F",
+              cursor: "pointer",
+              fontSize: 12.5,
+              fontWeight: 700,
+              padding: 0,
+              marginTop: 4,
+            }}
+          >
+            Eliminar turno
+          </button>
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", gap: 10 }}>
+      <div
+        style={{
+          width: 80,
+          fontSize: 10.5,
+          color: "var(--navy-300)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          paddingTop: 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ flex: 1, color: "var(--navy-900)", fontWeight: 500 }}>{children}</div>
+    </div>
+  );
+}
+
 function BookingModal({
   mode,
   booking,
@@ -633,7 +1089,8 @@ function BookingModal({
     setError(null);
     start(async () => {
       if (mode === "create") {
-        const result = await createBooking({
+        const repeatWeeks = Math.max(1, Number(formData.get("repeatWeeks")) || 1);
+        const payload = {
           patientId: String(formData.get("patientId") ?? "") || undefined,
           serviceId: String(formData.get("serviceId") ?? ""),
           practitionerId: String(formData.get("practitionerId") ?? ""),
@@ -643,7 +1100,11 @@ function BookingModal({
           guestName: String(formData.get("guestName") ?? "") || undefined,
           guestEmail: String(formData.get("guestEmail") ?? "") || undefined,
           guestPhone: String(formData.get("guestPhone") ?? "") || undefined,
-        });
+        };
+        const result =
+          repeatWeeks > 1
+            ? await createBookingSeries({ ...payload, repeatWeeks })
+            : await createBooking(payload);
         if (!result.ok) {
           setError(result.error);
           return;
@@ -825,22 +1286,30 @@ function BookingModal({
                 </option>
               ))}
             </Select>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-              <Field
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+              <FormField
                 label="Fecha y hora"
                 name="scheduledFor"
                 type="datetime-local"
                 required
                 defaultValue={defaultISO ? isoToLocalInput(defaultISO) : ""}
               />
-              <Field label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
+              <FormField label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
+              <FormField
+                label="Repetir (semanas)"
+                name="repeatWeeks"
+                type="number"
+                min={1}
+                max={12}
+                defaultValue={1}
+              />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <Field label="Nombre (guest)" name="guestName" />
-              <Field label="Email (guest)" name="guestEmail" type="email" />
-              <Field label="Tel (guest)" name="guestPhone" />
+              <FormField label="Nombre (guest)" name="guestName" />
+              <FormField label="Email (guest)" name="guestEmail" type="email" />
+              <FormField label="Tel (guest)" name="guestPhone" />
             </div>
-            <Field label="Notas" name="notes" textarea />
+            <FormField as="textarea" label="Notas" name="notes" />
             {error && (
               <div
                 style={{
@@ -866,48 +1335,6 @@ function BookingModal({
         )}
       </div>
     </div>
-  );
-}
-
-function Field({
-  label,
-  name,
-  required,
-  type = "text",
-  textarea,
-  defaultValue,
-  min,
-  max,
-}: {
-  label: string;
-  name: string;
-  required?: boolean;
-  type?: string;
-  textarea?: boolean;
-  defaultValue?: string | number;
-  min?: number;
-  max?: number;
-}) {
-  return (
-    <label style={{ display: "block", fontSize: 12 }}>
-      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
-        {label}
-        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
-      </span>
-      {textarea ? (
-        <textarea name={name} rows={3} defaultValue={defaultValue} style={inputStyle} />
-      ) : (
-        <input
-          name={name}
-          type={type}
-          required={required}
-          defaultValue={defaultValue}
-          min={min}
-          max={max}
-          style={inputStyle}
-        />
-      )}
-    </label>
   );
 }
 

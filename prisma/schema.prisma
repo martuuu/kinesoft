@@ -25,20 +25,40 @@ model Tenant {
   timezone    String   @default("America/Argentina/Buenos_Aires")
   currency    String   @default("ARS")
   palette     String   @default("sky")
+  plan        TenantPlan @default(FREE)
+  subscriptionStatus SubscriptionStatus @default(ACTIVE)
+  trialEndsAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  memberships    Membership[]
-  practitioners  Practitioner[]
-  patients       Patient[]
-  patientLinks   PatientTenantLink[]
-  services       Service[]
-  bookings       Booking[]
-  programs       TreatmentProgram[]
-  cases          ClinicalCase[]
-  auditEvents    AuditEvent[]
+  memberships     Membership[]
+  practitioners   Practitioner[]
+  patients        Patient[]
+  patientLinks    PatientTenantLink[]
+  services        Service[]
+  bookings        Booking[]
+  programs        TreatmentProgram[]
+  cases           ClinicalCase[]
+  auditEvents     AuditEvent[]
+  exercises       Exercise[]
+  planTemplates   PlanTemplate[]
+  favorites       Favorite[]
 
   @@index([slug])
+}
+
+enum TenantPlan {
+  FREE        // basic catalog only (`Exercise.isBasic = true`) + own custom exercises
+  STARTER     // same catalog visibility as FREE; unlocks templates + favourites
+  PRO         // full global catalog with videos + everything
+  ENTERPRISE  // future: SSO, audit retention, multi-clinic
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELLED
 }
 
 model UserProfile {
@@ -92,12 +112,13 @@ model Practitioner {
   yearsExp      Int?
   createdAt     DateTime @default(now())
 
-  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user     UserProfile @relation(fields: [userId], references: [id])
-  services Service[]
-  bookings Booking[]
-  sessions Session[]
-  cases    ClinicalCase[]
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          UserProfile @relation(fields: [userId], references: [id])
+  services      Service[]
+  bookings      Booking[]
+  sessions      Session[]
+  cases         ClinicalCase[]
+  planTemplates PlanTemplate[]
 
   @@index([tenantId])
 }
@@ -280,11 +301,57 @@ model Exercise {
   equipment    String? // comma-separated: "banda, foam roller"
   muscleGroups String? // "Glúteo medio, Cadera"
   cues         String? // form cues / coaching points
+  // Visibility: tenantId NULL = global catalog (PRO/ENTERPRISE only).
+  // tenantId set = private to that tenant. `isBasic` = visible to FREE/STARTER.
+  tenantId     String?
+  createdById  String?  // UserProfile id of the practitioner who authored
+  isBasic      Boolean  @default(false)
   createdAt    DateTime @default(now())
 
+  tenant      Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tags        ExerciseTag[]
   conditions  ConditionExerciseLink[]
   sessions    SessionExercise[]
+  favorites   Favorite[]
+
+  @@index([tenantId])
+  @@index([isBasic])
+}
+
+// Per-user starred exercises. Surfaced as a filter chip in the Biblioteca.
+model Favorite {
+  id         String   @id @default(cuid())
+  userId     String   // UserProfile id
+  exerciseId String
+  tenantId   String   // for quick filtering by active tenant
+  createdAt  DateTime @default(now())
+
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, exerciseId])
+  @@index([tenantId, userId])
+}
+
+// Reusable plan templates ("my plans") — practitioner-curated session
+// scaffolds that can be applied to any patient. exerciseIds stores the
+// ordered list as JSON so we don't need a join table for the template.
+model PlanTemplate {
+  id            String   @id @default(cuid())
+  tenantId      String
+  authorId      String   // Practitioner id
+  name          String
+  description   String?
+  totalSessions Int      @default(10)
+  frequency     Int      @default(2)
+  exerciseIds   Json     // string[] in the canonical order
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author  Practitioner @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, authorId])
 }
 
 model ExerciseTag {
