@@ -13,9 +13,9 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { notify, NotificationKind } from "@/lib/notifications";
+import { notify } from "@/lib/notifications";
 import type { ActionResult } from "@/lib/validation";
-import type { SessionExerciseStatus } from "@prisma/client";
+import { NotificationKind, type SessionExerciseStatus } from "@prisma/client";
 
 export type OpenSessionRow = {
   id: string;

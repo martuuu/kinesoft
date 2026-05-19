@@ -13,7 +13,8 @@ import crypto from "node:crypto";
 import { MercadoPagoConfig, Preference, Payment as MpPayment } from "mercadopago";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/db";
-import { notifyTenantOwners, NotificationKind } from "@/lib/notifications";
+import { notifyTenantOwners } from "@/lib/notifications";
+import { NotificationKind } from "@prisma/client";
 
 function client() {
   if (!env.MP_ACCESS_TOKEN) throw new Error("MP_ACCESS_TOKEN not configured");

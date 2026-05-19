@@ -5,13 +5,13 @@ import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { IconCheck, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
+import { updateUserPreferences } from "@/lib/preferences";
 import {
   KPI_OPTIONS,
-  updateUserPreferences,
   type KpiKey,
   type Palette,
   type Preferences,
-} from "@/lib/preferences";
+} from "@/lib/preferences-constants";
 import { useTweaks } from "@/components/layout/tweaks-context";
 
 const PALETTES: { value: Palette; swatch: [string, string, string]; label: string }[] = [

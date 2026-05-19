@@ -4,11 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { IconCheck, IconPlus, IconX } from "@/components/ui/icons";
-import {
-  KPI_OPTIONS,
-  updateUserPreferences,
-  type KpiKey,
-} from "@/lib/preferences";
+import { updateUserPreferences } from "@/lib/preferences";
+import { KPI_OPTIONS, type KpiKey } from "@/lib/preferences-constants";
 
 /**
  * The "+ Agregar" button on the pinned-KPIs row.

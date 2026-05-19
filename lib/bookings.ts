@@ -15,7 +15,8 @@ import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { notify, NotificationKind } from "@/lib/notifications";
+import { notify } from "@/lib/notifications";
+import { NotificationKind } from "@prisma/client";
 import {
   BookingCreate,
   BookingUpdate,

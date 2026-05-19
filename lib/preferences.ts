@@ -1,65 +1,42 @@
 "use server";
 
 /**
- * Per-user preferences — palette, pinned KPIs, sidebar default.
+ * Per-user preferences — server actions only.
  *
- * Defaults live here so a brand-new user has a sensible dashboard
- * before they tweak anything.
+ * Pure types + `KPI_OPTIONS` live in `lib/preferences-constants.ts` so
+ * client components can consume them without violating the
+ * "use server" → every-export-must-be-async rule.
  */
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
+import {
+  DEFAULT_PREFERENCES,
+  KPI_OPTIONS,
+  type KpiKey,
+  type Palette,
+  type Preferences,
+} from "@/lib/preferences-constants";
 
-export type Palette = "sky" | "mint" | "coral" | "violet";
-
-export type KpiKey =
-  | "activePatients"
-  | "weekSessions"
-  | "activePrograms"
-  | "todayCount"
-  | "monthRevenue"
-  | "adherence"
-  | "nearingDischarge"
-  | "newPatientsMonth";
-
-export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] = [
-  { key: "activePatients", label: "Pacientes activos", description: "Con plan en curso" },
-  { key: "weekSessions", label: "Sesiones esta semana", description: "Confirmadas + completadas" },
-  { key: "activePrograms", label: "Planes en curso", description: "Programs ACTIVE" },
-  { key: "todayCount", label: "Turnos de hoy", description: "Sin contar cancelados" },
-  { key: "monthRevenue", label: "Ingresos del mes", description: "Pagos PAID" },
-  { key: "adherence", label: "Adherencia semanal", description: "Realizadas / total" },
-  { key: "nearingDischarge", label: "Cerca del alta", description: "Programas casi terminados" },
-  { key: "newPatientsMonth", label: "Pacientes nuevos", description: "Altas este mes" },
-];
-
-export type Preferences = {
-  palette: Palette;
-  pinnedKpis: KpiKey[];
-  sidebarCollapsed: boolean;
-};
-
-const DEFAULTS: Preferences = {
-  palette: "sky",
-  pinnedKpis: ["activePatients", "weekSessions", "activePrograms"],
-  sidebarCollapsed: false,
-};
+// Re-export the types so existing call sites keep working. Type-only
+// re-exports are erased at compile time and don't violate "use server".
+export type { KpiKey, Palette, Preferences } from "@/lib/preferences-constants";
 
 export async function getUserPreferences(): Promise<Preferences> {
   const actor = await getActor();
-  if (!actor.userId) return DEFAULTS;
+  if (!actor.userId) return DEFAULT_PREFERENCES;
   const row = await prisma.userPreferences.findUnique({ where: { userId: actor.userId } });
-  if (!row) return DEFAULTS;
+  if (!row) return DEFAULT_PREFERENCES;
   const pinned = Array.isArray(row.pinnedKpis)
     ? (row.pinnedKpis as unknown[]).filter(
         (k): k is KpiKey => typeof k === "string" && KPI_OPTIONS.some((o) => o.key === k)
       )
-    : DEFAULTS.pinnedKpis;
+    : DEFAULT_PREFERENCES.pinnedKpis;
   return {
-    palette: (row.palette as Palette) ?? DEFAULTS.palette,
-    pinnedKpis: pinned.length ? pinned : DEFAULTS.pinnedKpis,
-    sidebarCollapsed: row.sidebarCollapsed ?? DEFAULTS.sidebarCollapsed,
+    palette: (row.palette as Palette) ?? DEFAULT_PREFERENCES.palette,
+    pinnedKpis: pinned.length ? pinned : DEFAULT_PREFERENCES.pinnedKpis,
+    sidebarCollapsed: row.sidebarCollapsed ?? DEFAULT_PREFERENCES.sidebarCollapsed,
   };
 }
 
@@ -68,7 +45,6 @@ export async function updateUserPreferences(
 ): Promise<ActionResult<Preferences>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
-  // Validate palette + KPIs.
   const palettes: Palette[] = ["sky", "mint", "coral", "violet"];
   if (patch.palette && !palettes.includes(patch.palette)) {
     return { ok: false, error: "Paleta inválida." };

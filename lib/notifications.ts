@@ -20,8 +20,6 @@ import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 
-export { NotificationKind };
-
 export type NotificationRow = {
   id: string;
   kind: NotificationKind;
