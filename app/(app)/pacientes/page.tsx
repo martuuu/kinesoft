@@ -9,6 +9,11 @@ import { IconUsers, IconPlus } from "@/components/ui/icons";
 import { NewPatientButton } from "@/components/patients/new-patient-button";
 import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
 import { PatientRowActions } from "@/components/patients/patient-row-actions";
+import {
+  BulkActionBar,
+  BulkSelectCheckbox,
+  BulkSelectProvider,
+} from "@/components/patients/bulk-select";
 
 export const metadata = { title: "Pacientes · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -153,12 +158,13 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       {patients.length === 0 ? (
         <EmptyState />
       ) : (
+        <BulkSelectProvider>
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div
             style={{
               padding: "12px 18px",
               display: "grid",
-              gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px 40px",
+              gridTemplateColumns: "28px 1.6fr 1fr 1.2fr 100px 90px 40px",
               gap: 14,
               fontSize: 10,
               fontWeight: 700,
@@ -168,6 +174,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
               borderBottom: "1px solid rgba(15,30,51,0.06)",
             }}
           >
+            <span />
             <span>Paciente</span>
             <span>Plan activo</span>
             <span>Próx. turno</span>
@@ -184,13 +191,16 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                 style={{
                   padding: "14px 18px",
                   display: "grid",
-                  gridTemplateColumns: "1.6fr 1fr 1.2fr 100px 90px 40px",
+                  gridTemplateColumns: "28px 1.6fr 1fr 1.2fr 100px 90px 40px",
                   gap: 14,
                   alignItems: "center",
                   fontSize: 13,
                   borderBottom: "1px solid rgba(15,30,51,0.04)",
                 }}
               >
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <BulkSelectCheckbox patientId={p.id} />
+                </span>
                 <Link
                   href={`/pacientes/${p.id}`}
                   style={{
@@ -251,6 +261,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             );
           })}
         </Card>
+        <BulkActionBar archivedView={filter === "archived"} />
+        </BulkSelectProvider>
       )}
     </div>
   );

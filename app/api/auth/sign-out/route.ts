@@ -5,11 +5,14 @@ import { env } from "@/lib/env";
 export const runtime = "nodejs";
 
 /**
- * Signs the current Supabase session out. Used by the patient portal
- * "Cerrar sesión" form and (eventually) the practitioner top-bar.
+ * Signs the current Supabase session out and bounces back to the
+ * practitioner login. The patient portal (which has its own sign-out
+ * form) can pass `?next=/portal` to override the destination.
  */
-export async function POST() {
+export async function POST(req: Request) {
   const supabase = getSupabaseServerClient();
   await supabase.auth.signOut();
-  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/portal`, { status: 303 });
+  const url = new URL(req.url);
+  const next = url.searchParams.get("next") ?? "/login";
+  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}${next}`, { status: 303 });
 }

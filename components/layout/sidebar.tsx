@@ -25,6 +25,7 @@ const NAV: NavItem[] = [
   { href: "/diagnostico", icon: IconHeart, label: "Diagnóstico" },
   { href: "/seguimiento", icon: IconActivity, label: "Seguimiento" },
   { href: "/biblioteca", icon: IconDumbbell, label: "Ejercicios" },
+  { href: "/terapia-manual", icon: IconActivity, label: "Terapia Manual" },
   { href: "/reportes", icon: IconChart, label: "Reportes" },
 ];
 
@@ -108,38 +109,52 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           alignItems: collapsed ? "center" : "stretch",
         }}
       >
-        <div
+        <Link
+          href="/configuracion"
+          title={collapsed ? "Configuración" : undefined}
           style={{
+            textDecoration: "none",
             display: "flex",
             alignItems: "center",
             gap: 12,
             padding: collapsed ? 0 : "11px 14px",
             width: collapsed ? 44 : "auto",
             height: collapsed ? 40 : "auto",
-            color: "var(--navy-500)",
+            color:
+              pathname?.startsWith("/configuracion") ? "var(--sky-700)" : "var(--navy-500)",
             fontSize: 13.5,
+            fontWeight: pathname?.startsWith("/configuracion") ? 700 : 500,
             justifyContent: collapsed ? "center" : "flex-start",
+            borderRadius: 12,
           }}
         >
           <IconSettings size={18} />
-          {!collapsed && <span>Ajustes</span>}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: collapsed ? 0 : "11px 14px",
-            width: collapsed ? 44 : "auto",
-            height: collapsed ? 40 : "auto",
-            color: "var(--navy-300)",
-            fontSize: 13.5,
-            justifyContent: collapsed ? "center" : "flex-start",
-          }}
-        >
-          <IconLogout size={18} />
-          {!collapsed && <span>Cerrar sesión</span>}
-        </div>
+          {!collapsed && <span>Configuración</span>}
+        </Link>
+        <form action="/api/auth/sign-out" method="post" style={{ width: "100%" }}>
+          <button
+            type="submit"
+            title={collapsed ? "Cerrar sesión" : undefined}
+            style={{
+              all: "unset",
+              boxSizing: "border-box",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: collapsed ? 0 : "11px 14px",
+              width: collapsed ? 44 : "100%",
+              height: collapsed ? 40 : "auto",
+              color: "var(--navy-300)",
+              fontSize: 13.5,
+              justifyContent: collapsed ? "center" : "flex-start",
+              borderRadius: 12,
+            }}
+          >
+            <IconLogout size={18} />
+            {!collapsed && <span>Cerrar sesión</span>}
+          </button>
+        </form>
       </div>
     </aside>
   );

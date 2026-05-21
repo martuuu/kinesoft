@@ -25,7 +25,15 @@ type SessionDTO = Prisma.SessionGetPayload<{
       include: {
         patient: true;
         case: { include: { diagnoses: { include: { condition: true } } } };
-        sessions: { select: { id: true; index: true; completedAt: true } };
+        sessions: {
+          select: {
+            id: true;
+            index: true;
+            completedAt: true;
+            paInPre: true;
+            paInPost: true;
+          };
+        };
       };
     };
     exercises: { include: { exercise: true } };
@@ -130,6 +138,11 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
             </Button>
           )}
         </Card>
+
+        <PainTimeline
+          sessions={session.program.sessions}
+          currentIndex={session.index}
+        />
 
         {error && (
           <div
@@ -618,5 +631,171 @@ function MiniField({
         }}
       />
     </label>
+  );
+}
+
+/**
+ * PainTimeline — inline sparkline rendering pre/post EVA values across
+ * all sessions of the active plan. Reads from the `program.sessions`
+ * shape that already comes with `paInPre` + `paInPost`. The current
+ * session is highlighted; sessions without data fall into a "no
+ * datapoint" gap.
+ *
+ * Lightweight SVG — no charting dep. Width adapts to container.
+ */
+function PainTimeline({
+  sessions,
+  currentIndex,
+}: {
+  sessions: { id: string; index: number; paInPre: number | null; paInPost: number | null }[];
+  currentIndex: number;
+}) {
+  if (sessions.length < 2) return null;
+  const hasAnyData = sessions.some((s) => s.paInPre != null || s.paInPost != null);
+  if (!hasAnyData) {
+    return (
+      <Card style={{ padding: 14 }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--navy-300)",
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          Dolor (EVA) · timeline
+        </div>
+        <div style={{ marginTop: 6, fontSize: 12, color: "var(--navy-500)" }}>
+          Cuando cierres sesiones con EVA pre/post, vas a ver acá la evolución del dolor.
+        </div>
+      </Card>
+    );
+  }
+
+  const W = 100; // viewBox units; SVG scales via CSS
+  const H = 38;
+  const xStep = W / Math.max(sessions.length - 1, 1);
+  const yFor = (v: number | null) =>
+    v == null ? null : H - 4 - (v / 10) * (H - 10);
+
+  type PointShape = { x: number; y: number | null; v: number | null };
+  const preLine: PointShape[] = sessions.map((s, i) => ({
+    x: i * xStep,
+    y: yFor(s.paInPre),
+    v: s.paInPre,
+  }));
+  const postLine: PointShape[] = sessions.map((s, i) => ({
+    x: i * xStep,
+    y: yFor(s.paInPost),
+    v: s.paInPost,
+  }));
+
+  // Stitch consecutive defined points into path segments.
+  const pathFrom = (line: PointShape[]) => {
+    let d = "";
+    let pen: "M" | "L" = "M";
+    for (const p of line) {
+      if (p.y == null) {
+        pen = "M";
+        continue;
+      }
+      d += `${pen}${p.x.toFixed(2)} ${p.y.toFixed(2)} `;
+      pen = "L";
+    }
+    return d.trim();
+  };
+
+  const last = sessions[sessions.length - 1];
+  const trend =
+    last.paInPost != null && sessions[0].paInPre != null
+      ? last.paInPost - sessions[0].paInPre
+      : null;
+
+  return (
+    <Card style={{ padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--navy-300)",
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          Dolor (EVA) · evolución
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Legend dot="var(--sky-700)" label="Pre" />
+          <Legend dot="var(--lime-700, #4f8a10)" label="Post" />
+          {trend != null && (
+            <span
+              className="k-mono"
+              style={{
+                fontSize: 11,
+                color: trend < 0 ? "var(--lime-700, #4f8a10)" : trend > 0 ? "#9F1F1F" : "var(--navy-500)",
+                fontWeight: 700,
+              }}
+              title="Variación entre la primera EVA pre y la última EVA post"
+            >
+              {trend > 0 ? "+" : ""}
+              {trend.toFixed(1)}
+            </span>
+          )}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 64 }}>
+        {/* Gridlines at 0 / 5 / 10 */}
+        {[0, 5, 10].map((v) => (
+          <line
+            key={v}
+            x1={0}
+            x2={W}
+            y1={(yFor(v) ?? 0).toFixed(2)}
+            y2={(yFor(v) ?? 0).toFixed(2)}
+            stroke="rgba(15,30,51,0.08)"
+            strokeWidth={0.25}
+          />
+        ))}
+        {/* Current session marker */}
+        {(() => {
+          const i = sessions.findIndex((s) => s.index === currentIndex);
+          if (i < 0) return null;
+          return (
+            <line
+              x1={i * xStep}
+              x2={i * xStep}
+              y1={0}
+              y2={H}
+              stroke="rgba(31,79,190,0.25)"
+              strokeWidth={0.6}
+              strokeDasharray="1.5 1.5"
+            />
+          );
+        })()}
+        <path d={pathFrom(preLine)} fill="none" stroke="var(--sky-700)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
+        <path d={pathFrom(postLine)} fill="none" stroke="var(--lime-700, #4f8a10)" strokeWidth={0.9} strokeLinecap="round" strokeLinejoin="round" />
+        {preLine.map((p) =>
+          p.y == null ? null : (
+            <circle key={`pre-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--sky-700)" />
+          )
+        )}
+        {postLine.map((p) =>
+          p.y == null ? null : (
+            <circle key={`post-${p.x}`} cx={p.x} cy={p.y} r={1.1} fill="var(--lime-700, #4f8a10)" />
+          )
+        )}
+      </svg>
+    </Card>
+  );
+}
+
+function Legend({ dot, label }: { dot: string; label: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--navy-500)" }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, display: "inline-block" }} />
+      {label}
+    </span>
   );
 }

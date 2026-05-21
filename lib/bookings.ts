@@ -115,9 +115,66 @@ export async function listPractitioners() {
   });
 }
 
+/**
+ * Find the next slot of `durationMin` after `from` for `practitionerId`
+ * that doesn't overlap with any non-cancelled booking. Walks in 15-min
+ * steps within working hours (8-19) Mon-Sat, capped at 14 days lookahead.
+ * Returns null if nothing free within the window.
+ */
+async function suggestNextFreeSlot(
+  tenantId: string,
+  practitionerId: string,
+  from: Date,
+  durationMin: number
+): Promise<string | null> {
+  const STEP_MIN = 15;
+  const HORIZON_MS = 14 * 86_400_000;
+  const start = new Date(from.getTime() + STEP_MIN * 60_000);
+  // Pre-load all bookings in the window so we don't query inside the loop.
+  const bookings = await prisma.booking.findMany({
+    where: {
+      tenantId,
+      practitionerId,
+      status: { notIn: ["CANCELLED"] },
+      scheduledFor: {
+        gte: start,
+        lt: new Date(start.getTime() + HORIZON_MS),
+      },
+    },
+    select: { scheduledFor: true, durationMin: true },
+  });
+  const overlaps = (slot: Date, end: Date) =>
+    bookings.some((b) => {
+      const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
+      return b.scheduledFor < end && bEnd > slot;
+    });
+  const cursor = new Date(start);
+  // Round to next 15-min boundary.
+  cursor.setMinutes(Math.ceil(cursor.getMinutes() / STEP_MIN) * STEP_MIN, 0, 0);
+  while (cursor.getTime() - from.getTime() < HORIZON_MS) {
+    const dow = cursor.getDay(); // 0 Sun..6 Sat
+    const hour = cursor.getHours();
+    if (dow !== 0 && hour >= 8 && hour <= 19) {
+      const end = new Date(cursor.getTime() + durationMin * 60_000);
+      if (!overlaps(cursor, end)) {
+        return cursor.toISOString();
+      }
+    }
+    cursor.setTime(cursor.getTime() + STEP_MIN * 60_000);
+  }
+  return null;
+}
+
 export async function createBooking(
-  raw: BookingCreateInput
-): Promise<ActionResult<{ id: string }>> {
+  raw: BookingCreateInput & { allowOverbooking?: boolean }
+): Promise<
+  ActionResult<{ id: string }> & {
+    conflict?: {
+      practitionerName: string;
+      nextFreeISO: string | null;
+    };
+  }
+> {
   const actor = await getActor();
   const parsed = BookingCreate.safeParse(raw);
   if (!parsed.success) {
@@ -145,7 +202,8 @@ export async function createBooking(
   const duration = data.durationMin ?? service.durationMin;
   const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
 
-  // Conflict check for the same practitioner.
+  // Conflict check for the SAME practitioner (other kines in the same
+  // hour are fine — multiple boxes / kines in the same consultorio).
   const clash = await prisma.booking.findFirst({
     where: {
       tenantId: actor.tenantId,
@@ -154,19 +212,42 @@ export async function createBooking(
       scheduledFor: { lt: end },
       AND: [
         {
-          // overlapping window
           scheduledFor: { gte: new Date(data.scheduledFor.getTime() - 240 * 60_000) },
         },
       ],
     },
     select: { id: true, scheduledFor: true, durationMin: true },
   });
-  if (clash) {
-    const clashEnd = new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000);
-    if (clash.scheduledFor < end && clashEnd > data.scheduledFor) {
-      return { ok: false, error: "El profesional ya tiene un turno en ese horario." };
-    }
+  const overlapping =
+    clash &&
+    clash.scheduledFor < end &&
+    new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > data.scheduledFor;
+  if (overlapping && !raw.allowOverbooking) {
+    // Compute a suggestion + tell the UI it can re-call with
+    // allowOverbooking=true to force a sobreturno.
+    const [prac, suggestion] = await Promise.all([
+      prisma.practitioner.findUnique({
+        where: { id: data.practitionerId },
+        include: { user: { select: { fullName: true, email: true } } },
+      }),
+      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration),
+    ]);
+    return {
+      ok: false,
+      error: "El profesional ya tiene un turno en ese horario. Podés elegir el próximo libre o forzar un sobreturno.",
+      conflict: {
+        practitionerName: prac?.user.fullName ?? prac?.user.email ?? "El profesional",
+        nextFreeISO: suggestion,
+      },
+    };
   }
+
+  // Tag overbooked rows so the UI / reports can distinguish them. Until
+  // we add a column, we prepend "[SOBRETURNO]" to the notes field.
+  const notes =
+    overlapping && raw.allowOverbooking
+      ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
+      : data.notes;
 
   try {
     const b = await prisma.booking.create({
@@ -180,7 +261,7 @@ export async function createBooking(
         guestName: data.guestName,
         guestEmail: data.guestEmail,
         guestPhone: data.guestPhone,
-        notes: data.notes,
+        notes,
         status: data.patientId ? "CONFIRMED" : "PENDING",
         idempotencyKey: randomBytes(16).toString("hex"),
       },
@@ -232,8 +313,12 @@ export async function createBooking(
 }
 
 export async function updateBooking(
-  raw: BookingUpdateInput
-): Promise<ActionResult> {
+  raw: BookingUpdateInput & { allowOverbooking?: boolean }
+): Promise<
+  ActionResult & {
+    conflict?: { practitionerName: string; nextFreeISO: string | null };
+  }
+> {
   const actor = await getActor();
   const parsed = BookingUpdate.safeParse(raw);
   if (!parsed.success) {
@@ -247,10 +332,59 @@ export async function updateBooking(
       patientId: true,
       status: true,
       scheduledFor: true,
+      durationMin: true,
+      practitionerId: true,
       patient: { select: { firstName: true, lastName: true } },
     },
   });
   if (!before) return { ok: false, error: "Turno no encontrado." };
+
+  // Re-check conflicts only when scheduledFor or durationMin actually
+  // change. Status-only updates don't touch the calendar slot.
+  const newWhen = patch.scheduledFor ?? before.scheduledFor;
+  const newDuration = patch.durationMin ?? before.durationMin;
+  const slotChanged =
+    patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
+  if (slotChanged && patch.status !== "CANCELLED") {
+    const end = new Date(newWhen.getTime() + newDuration * 60_000);
+    const clash = await prisma.booking.findFirst({
+      where: {
+        tenantId: actor.tenantId,
+        practitionerId: before.practitionerId,
+        id: { not: id },
+        status: { notIn: ["CANCELLED"] },
+        scheduledFor: { lt: end },
+        AND: [
+          {
+            scheduledFor: { gte: new Date(newWhen.getTime() - 240 * 60_000) },
+          },
+        ],
+      },
+      select: { id: true, scheduledFor: true, durationMin: true },
+    });
+    const overlapping =
+      clash &&
+      clash.scheduledFor < end &&
+      new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > newWhen;
+    if (overlapping && !raw.allowOverbooking) {
+      const [prac, suggestion] = await Promise.all([
+        prisma.practitioner.findUnique({
+          where: { id: before.practitionerId },
+          include: { user: { select: { fullName: true, email: true } } },
+        }),
+        suggestNextFreeSlot(actor.tenantId, before.practitionerId, newWhen, newDuration),
+      ]);
+      return {
+        ok: false,
+        error: "El profesional ya tiene un turno en ese horario.",
+        conflict: {
+          practitionerName: prac?.user.fullName ?? prac?.user.email ?? "El profesional",
+          nextFreeISO: suggestion,
+        },
+      };
+    }
+  }
+
   await prisma.booking.update({ where: { id }, data: patch });
   await audit({
     tenantId: actor.tenantId,

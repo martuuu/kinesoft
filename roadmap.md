@@ -807,15 +807,125 @@ en [docs/SPRINT_14.md](docs/SPRINT_14.md). Sin schema changes.
     común" cuando `assignedPractitionerId == null`.
 - [x] `tsc` + `next build` clean. 30 routes.
 
+### Sprint 15 — Phase 7 closeout + workspace polish (this session)
+Cierra los gaps de Phase 7 que quedaban, fixes urgentes de navegación + UX
+y agrega features de alto valor (multi-CRUD en planes, sobreturno con
+confirmación, bulk archive). Sin schema changes.
+
+**Fixes urgentes**:
+- [x] **Sign-out redirige a `/login`** ([app/api/auth/sign-out](app/api/auth/sign-out/route.ts))
+    — antes mandaba al `/portal` siempre. Ahora acepta `?next=/portal`
+    para que el portal del paciente lo siga usando explícitamente.
+- [x] **Sidebar + Topbar nav completos** — el sidebar tenía
+    `/configuracion` y "Cerrar sesión" como `<div>` decorativos sin
+    handlers. Ahora ambos son `<Link>`/`<form>` reales. Agregado link
+    a `/terapia-manual`.
+- [x] **Tab count "Plan" del paciente arreglado** — antes mostraba
+    `activeProgram.totalSessions` (un solo plan); ahora muestra
+    `patient.programs.length` (cantidad de planes). Tab "Sesiones"
+    también muestra el agregado real de todas las sesiones.
+- [x] **PlanView refactorizado** ([components/patients/patient-profile.tsx](components/patients/patient-profile.tsx))
+    — cards colapsables (cerradas por default), click expande las
+    sesiones. Cada `ProgramCard` ahora tiene:
+    - Select de estado (Activo / Pausado / Completado / Cancelado)
+    - Botón "Editar" → `EditProgramModal` (título, totalSessions,
+      frequency, startDate)
+    - "Sesión a medida" (`AddCustomSessionButton`)
+    - "Eliminar" → modal de confirmación → `deleteProgram` action
+    Sesiones individuales: además de "Reprogramar" + "Abrir sesión
+    completa", ahora también tienen "Eliminar" (`deleteSession`).
+- [x] **Asignación de kine al EditPatientModal** — sale del hero (era
+    feo) y entra a su propia sección "Asignación" dentro del modal de
+    editar. Solo visible para OWNER/ADMIN. El hero ahora muestra el
+    nombre del kine como un `HeroFact` read-only.
+- [x] **EditPatientModal layout reescrito** — ahora con `<Section>`
+    cards agrupadas (Datos personales / Cobertura / Asignación /
+    Notas). Width 620. Sin overlap entre el header del modal y el
+    botón X. Botón "Guardar cambios" claro.
+
+**Phase 7 — items completados**:
+- [x] **Send-to-portal action** ([lib/patients.ts](lib/patients.ts)) —
+    `sendPatientPortalInvite(patientId)` usa Supabase Admin API para
+    enviar magic link al email del paciente con `redirectTo` al portal
+    de su tenant. Idempotente: si ya está linkeado, solo re-envía.
+    Botón en el patient hero "Enviar al portal" / "Reenviar portal"
+    con feedback visual (banner sky / amber según resultado).
+- [x] **Inline pain timeline** ([components/seguimiento/session-detail.tsx](components/seguimiento/session-detail.tsx))
+    — sparkline SVG ligero (sin charting dep) que muestra EVA pre +
+    post de todas las sesiones del plan, con la sesión actual marcada,
+    delta calculado y leyenda. Cae elegante a "Cuando cierres sesiones
+    con EVA, vas a ver acá la evolución…" cuando no hay data.
+- [x] **Bulk archive en Pacientes** ([components/patients/bulk-select.tsx](components/patients/bulk-select.tsx))
+    — checkbox per-row + floating bar al footer con "Exportar CSV /
+    Archivar / Cancelar". `bulkArchivePatients({ ids, archived })`
+    action con tenant-scope check y cap de 200 ids. Soporta "Ver
+    archivados" mode para restaurar masivamente.
+- [x] **Conflict resolution + sobreturno** ([lib/bookings.ts](lib/bookings.ts))
+    — `createBooking` y `updateBooking` ahora detectan clash con el
+    MISMO practitioner (otros kines del consultorio pueden tener
+    turnos al mismo tiempo, son boxes paralelos). En clash retornan
+    `{ conflict: { practitionerName, nextFreeISO } }`. El modal de
+    agenda muestra un banner ámbar con dos opciones:
+    1. **Usar próximo libre** — `suggestNextFreeSlot()` busca en 15-min
+       steps dentro de horario laboral, 14 días horizonte.
+    2. **Forzar sobreturno** — re-llama con `allowOverbooking: true` y
+       prepende `[SOBRETURNO]` a las notas para trazabilidad.
+- [x] **Activity feed tab** en patient profile — query
+    `getPatientActivity(patientId)` que agrega `AuditEvent` del Patient
+    y de todos sus child entities (Booking, TreatmentProgram, Session,
+    PatientFile). UI: tab "Actividad" con eventos agrupados por día,
+    hora, actor, payload colapsable, traducciones humanas de cada
+    action (`humanizeAction`).
+- [x] `tsc` + `next build` clean. 30 rutas.
+
+### Sprint 15 — queued (anexar a futuros sprints)
+
+**Próximo sprint — Phase 7 mediano**:
+- **Bulk-assign exercises a un programa existente** — checkbox grid en
+    biblioteca + "Asignar a plan". Server action `bulkAddSessionExercises`.
+- **Advanced filters** en Pacientes — edad (rangos), último
+    diagnóstico (por slug), alta (rango de fecha). UI: bloque
+    expandible "Filtros avanzados" en la search bar.
+
+**Sprint aparte (Phase 7 grande)**:
+- **Practitioner override + custom condition** en Diagnóstico —
+    schema: nuevo modelo `CustomCondition` (tenant-scoped) que extiende
+    el catálogo global. UI en el panel de Refinement: botón "Crear
+    diagnóstico personalizado" con form (nombre, CIE-10 opcional,
+    tags, exercises sugeridos via picker). Persiste en la
+    `ClinicalCase` con el flag `confirmed: true` + `customConditionId`.
+
+### Descartados (no entran en el roadmap actual)
+
+Estos items del Phase 7 original se descartaron por baja prioridad o
+porque tienen mejores alternativas:
+
+- ~~**Print HC export (PDF)**~~ — la lista de auditoría + el exportador
+    CSV cubren la necesidad de "evidencia documental". PDF requiere
+    `@react-pdf/renderer` (~150 kB) y un layout específico que casi
+    nadie pide. Reservado para cuando aparezca un caso de uso real
+    (ej. proveer expedientes a una obra social).
+- ~~**Drag-to-reschedule** en Agenda~~ — el patient hover dropdown +
+    `rescheduleSession` del PlanView ya resuelve el caso real
+    (reprogramar una sesión específica). DnD en timeline es invasivo
+    en mobile y requiere fallback de teclado para a11y.
+- ~~**WhatsApp reminder** action~~ — depende de Twilio/360dialog (costo)
+    o un `wa.me` link manual que no agrega valor sobre copiar la URL.
+    Si aparece demanda, se hace en un sprint dedicado.
+- ~~**Compare top Dx side-by-side**~~ — el ranking del body map ya
+    muestra el % de matching de los top 4. Side-by-side comparator es
+    una visualización accesoria.
+- ~~**Exercise videos inline en portal**~~ — Supabase Storage cobra
+    egress; mejor referenciar YouTube/Vimeo cuando se haga.
+- ~~**Receipt download (PDF)** en portal~~ — pisa con "Print HC export"
+    y la responsabilidad del recibo es del proveedor de pagos (Mercado
+    Pago ya emite comprobantes).
+
 ### Next iterations (open)
-- [ ] **Phase 7 — workspace mockup → full flow**:
-    - Pacientes sortable columns + archive + bulk export + advanced filters.
-    - Agenda drag-to-reschedule + practitioner filter + recurring + .ics + send-reminder.
-    - Seguimiento substitute-exercise on the fly + drag-reorder + add ad-hoc exercise.
-    - Biblioteca tenant-private exercises + favourites + "my plans" templates.
-    - Diagnostico draft cases + override + custom condition.
-    - Patient portal: plan timeline + check-in + receipts.
 - [ ] Practitioner email/password auth (Supabase).
 - [ ] Playwright E2E (booking + diagnosis golden paths).
 - [ ] Sentry sender (DSN is wired in env).
 - [ ] Public booking → Mercado Pago end-to-end test once MP sandbox keys exist.
+- [ ] Bulk-assign exercises a un programa existente (Sprint 16).
+- [ ] Advanced filters de pacientes (edad, último Dx) (Sprint 16).
+- [ ] Practitioner override + custom condition en Diagnóstico (Sprint 17).

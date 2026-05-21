@@ -20,7 +20,16 @@ import {
   updatePatient,
 } from "@/lib/patients";
 import { rescheduleSession } from "@/lib/sessions";
-import { assignPatientToPractitioner } from "@/lib/patients";
+import {
+  assignPatientToPractitioner,
+  deleteProgram,
+  deleteSession,
+  getPatientActivity,
+  sendPatientPortalInvite,
+  setProgramStatus,
+  updateProgram,
+} from "@/lib/patients";
+import type { ActivityEvent } from "@/lib/patients-types";
 
 type PractitionerOption = { id: string; name: string };
 
@@ -52,7 +61,7 @@ type PatientWithRelations = Prisma.PatientGetPayload<{
   };
 }>;
 
-type Tab = "resumen" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact";
+type Tab = "resumen" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact" | "actividad";
 
 export function PatientProfile({
   patient,
@@ -68,8 +77,16 @@ export function PatientProfile({
   const [tab, setTab] = useState<Tab>("resumen");
   const activeProgram = patient.programs.find((p) => p.status === "ACTIVE") ?? patient.programs[0];
   const diagnosis = activeProgram?.case?.diagnoses?.[0]?.condition ?? null;
+  // For the Resumen + Sesiones tab we still focus on the most relevant
+  // ACTIVE program. The `plan` tab count, in contrast, reflects ALL the
+  // patient's plans (the bug pre-fix was showing totalSessions of just
+  // the first program, which looked random when multiple plans existed).
   const sessions = activeProgram?.sessions ?? [];
   const done = sessions.filter((s) => s.completedAt).length;
+  const allSessionsCount = patient.programs.reduce(
+    (acc, p) => acc + p.sessions.length,
+    0
+  );
   const age = patient.dateOfBirth
     ? Math.floor((Date.now() - +patient.dateOfBirth) / (365.25 * 86_400_000))
     : null;
@@ -91,8 +108,8 @@ export function PatientProfile({
         active={tab}
         onChange={setTab}
         counts={{
-          sesiones: sessions.length,
-          plan: activeProgram?.totalSessions ?? 0,
+          sesiones: allSessionsCount,
+          plan: patient.programs.length,
           fact: patient.bookings.filter((b) => b.paymentStatus !== "UNPAID").length,
         }}
       />
@@ -111,6 +128,7 @@ export function PatientProfile({
       {tab === "antec" && <AntecedentesView patient={patient} />}
       {tab === "evol" && <EvolucionView patient={patient} />}
       {tab === "fact" && <FacturacionView patient={patient} />}
+      {tab === "actividad" && <ActivityView patientId={patient.id} />}
     </div>
   );
 }
@@ -169,99 +187,66 @@ function PatientHero({
           <HeroFact label="Tel." value={patient.phone ?? "—"} />
           <HeroFact label="Email" value={patient.email ?? "—"} />
           <HeroFact label="Cobertura" value={coverageLabel} />
-          <AssignedKineFact
-            patient={patient}
-            practitioners={practitioners}
-            canReassign={canReassign}
+          <HeroFact
+            label="Kine"
+            value={
+              patient.assignedPractitionerId
+                ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
+                : "Consultorio común"
+            }
           />
         </div>
       </div>
-      <PatientHeroActions patient={patient} insurers={insurers} />
+      <PatientHeroActions
+        patient={patient}
+        insurers={insurers}
+        practitioners={practitioners}
+        canReassign={canReassign}
+      />
     </Card>
-  );
-}
-
-function AssignedKineFact({
-  patient,
-  practitioners,
-  canReassign,
-}: {
-  patient: PatientWithRelations;
-  practitioners: PractitionerOption[];
-  canReassign: boolean;
-}) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const current = patient.assignedPractitionerId
-    ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
-    : "Consultorio común";
-
-  if (!canReassign) {
-    return <HeroFact label="Kine" value={current} />;
-  }
-  const onChange = (value: string) => {
-    start(async () => {
-      const r = await assignPatientToPractitioner({
-        patientId: patient.id,
-        practitionerId: value || null,
-      });
-      if (r.ok) router.refresh();
-    });
-  };
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 10,
-          fontWeight: 700,
-          color: "var(--navy-300)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-        }}
-      >
-        Kine
-      </div>
-      <select
-        value={patient.assignedPractitionerId ?? ""}
-        disabled={pending}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          marginTop: 2,
-          padding: "4px 8px",
-          borderRadius: 8,
-          border: "1px solid rgba(15,30,51,0.08)",
-          background: "rgba(255,255,255,0.7)",
-          fontSize: 13,
-          color: "var(--navy-900)",
-          fontWeight: 600,
-          cursor: "pointer",
-        }}
-      >
-        <option value="">Consultorio común</option>
-        {practitioners.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-    </div>
   );
 }
 
 function PatientHeroActions({
   patient,
   insurers,
+  practitioners,
+  canReassign,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
+  practitioners: PractitionerOption[];
+  canReassign: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [portalSending, startPortal] = useTransition();
+  const [portalResult, setPortalResult] = useState<
+    | { ok: true; emailSent: boolean; portalUrl: string }
+    | { ok: false; error: string }
+    | null
+  >(null);
+
+  const sendToPortal = () => {
+    setPortalResult(null);
+    startPortal(async () => {
+      const r = await sendPatientPortalInvite({ patientId: patient.id });
+      if (r.ok) setPortalResult({ ok: true, ...r.data });
+      else setPortalResult({ ok: false, error: r.error });
+    });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <Button variant="ghost" style={{ fontSize: 12, padding: "8px 14px" }}>
-          <IconFile size={12} /> Exportar PDF
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <Button
+          variant="ghost"
+          onClick={sendToPortal}
+          disabled={portalSending || !patient.email}
+          title={patient.email ? "Invitar al paciente al portal" : "Cargá un email primero"}
+          style={{ fontSize: 12, padding: "8px 14px" }}
+        >
+          {portalSending ? "Enviando…" : patient.userId ? "Reenviar portal" : "Enviar al portal"}
         </Button>
         <Button variant="ghost" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "8px 14px" }}>
           Editar
@@ -274,6 +259,29 @@ function PatientHeroActions({
           Eliminar
         </Button>
       </div>
+      {portalResult && (
+        <div
+          style={{
+            maxWidth: 320,
+            padding: 8,
+            borderRadius: 8,
+            fontSize: 11.5,
+            background: portalResult.ok
+              ? portalResult.emailSent
+                ? "rgba(200,245,100,0.18)"
+                : "rgba(255,176,32,0.15)"
+              : "rgba(228,70,70,0.1)",
+            color: portalResult.ok ? "var(--navy-900)" : "#9F1F1F",
+            textAlign: "right",
+          }}
+        >
+          {portalResult.ok
+            ? portalResult.emailSent
+              ? "✓ Email enviado al paciente."
+              : `Email no enviado (server sin SMTP). URL: ${portalResult.portalUrl}`
+            : portalResult.error}
+        </div>
+      )}
       <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
         Última actualización:{" "}
         {patient.updatedAt.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}
@@ -282,6 +290,8 @@ function PatientHeroActions({
         <EditPatientModal
           patient={patient}
           insurers={insurers}
+          practitioners={practitioners}
+          canReassign={canReassign}
           onClose={() => setEditing(false)}
         />
       )}
@@ -293,18 +303,20 @@ function PatientHeroActions({
 function EditPatientModal({
   patient,
   insurers,
+  practitioners,
+  canReassign,
   onClose,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
+  practitioners: PractitionerOption[];
+  canReassign: boolean;
   onClose: () => void;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const currentCoverage = patient.coverages[0];
-  // The select value is either an Insurer id ("ins:<id>"), the literal
-  // "particular" sentinel (no coverage), or "other" (free-form text).
   const initialCoverageMode = currentCoverage
     ? currentCoverage.insurerId
       ? `ins:${currentCoverage.insurerId}`
@@ -314,11 +326,14 @@ function EditPatientModal({
   const [otherInsurerName, setOtherInsurerName] = useState(
     currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : ""
   );
+  const [assignedKine, setAssignedKine] = useState<string>(
+    patient.assignedPractitionerId ?? ""
+  );
 
   const submit = (formData: FormData) => {
     setError(null);
     start(async () => {
-      const r = await updatePatient({
+      const updateResult = await updatePatient({
         id: patient.id,
         firstName: String(formData.get("firstName") ?? ""),
         lastName: String(formData.get("lastName") ?? ""),
@@ -328,11 +343,12 @@ function EditPatientModal({
         dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
         notes: String(formData.get("notes") ?? ""),
       });
-      if (!r.ok) {
-        setError(r.error);
+      if (!updateResult.ok) {
+        setError(updateResult.error);
         return;
       }
-      // Coverage update — only fire when the practitioner changed it.
+
+      // Coverage update — only when changed.
       if (coverageMode !== initialCoverageMode || coverageMode === "other") {
         const planName = String(formData.get("coveragePlan") ?? "") || undefined;
         const memberId = String(formData.get("coverageMember") ?? "") || undefined;
@@ -360,38 +376,45 @@ function EditPatientModal({
           return;
         }
       }
+
+      // Re-assignment (OWNER/ADMIN only).
+      if (canReassign && assignedKine !== (patient.assignedPractitionerId ?? "")) {
+        const r = await assignPatientToPractitioner({
+          patientId: patient.id,
+          practitionerId: assignedKine || null,
+        });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+      }
+
       onClose();
       router.refresh();
     });
   };
-  const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
-  return (
-    <Modal onClose={onClose} title="Editar paciente">
-      <form action={submit} style={{ display: "grid", gap: 10 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FormField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
-          <FormField label="Apellido" name="lastName" required defaultValue={patient.lastName} />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FormField label="DNI" name="documentId" defaultValue={patient.documentId ?? ""} />
-          <FormField label="Nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
-        </div>
-        <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
-        <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
 
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            padding: 12,
-            borderRadius: 12,
-            background: "rgba(15,30,51,0.03)",
-            border: "1px solid rgba(15,30,51,0.06)",
-          }}
-        >
-          <div style={{ fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Cobertura
-          </div>
+  const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
+
+  return (
+    <Modal onClose={onClose} title="Editar paciente" width={620}>
+      <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Section title="Datos personales">
+          <Grid2>
+            <FormField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
+            <FormField label="Apellido" name="lastName" required defaultValue={patient.lastName} />
+          </Grid2>
+          <Grid2>
+            <FormField label="DNI" name="documentId" defaultValue={patient.documentId ?? ""} />
+            <FormField label="Fecha de nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
+          </Grid2>
+          <Grid2>
+            <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
+            <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
+          </Grid2>
+        </Section>
+
+        <Section title="Cobertura">
           <FormField
             as="select"
             label="Obra social"
@@ -412,23 +435,42 @@ function EditPatientModal({
             />
           )}
           {coverageMode !== "particular" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Grid2>
               <FormField
                 label="Plan"
                 name="coveragePlan"
                 defaultValue={currentCoverage?.planName ?? ""}
-                placeholder="210, Black, etc."
+                placeholder="210, Black, …"
               />
               <FormField
                 label="N° de afiliado"
                 name="coverageMember"
                 defaultValue={currentCoverage?.memberId ?? ""}
               />
-            </div>
+            </Grid2>
           )}
-        </div>
+        </Section>
 
-        <FormField as="textarea" label="Notas" name="notes" defaultValue={patient.notes ?? ""} />
+        {canReassign && (
+          <Section title="Asignación">
+            <FormField
+              as="select"
+              label="Kinesiólogo asignado"
+              hint="«Consultorio común» = visible para todos los kines del consultorio."
+              value={assignedKine}
+              onChange={(v) => setAssignedKine(v)}
+              options={[
+                { value: "", label: "Consultorio común" },
+                ...practitioners.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+          </Section>
+        )}
+
+        <Section title="Notas">
+          <FormField as="textarea" label="Notas internas" name="notes" defaultValue={patient.notes ?? ""} />
+        </Section>
+
         {error && (
           <div
             style={{
@@ -442,6 +484,7 @@ function EditPatientModal({
             {error}
           </div>
         )}
+
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
             Cancelar
@@ -452,6 +495,47 @@ function EditPatientModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        padding: 14,
+        borderRadius: 14,
+        background: "rgba(246,249,253,0.6)",
+        border: "1px solid rgba(15,30,51,0.05)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--navy-300)",
+          fontWeight: 700,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}
+      >
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Grid2({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>{children}</div>
   );
 }
 
@@ -575,6 +659,7 @@ function TabsBar({
     { id: "antec", label: "Antecedentes" },
     { id: "evol", label: "Evolución" },
     { id: "fact", label: "Facturación", count: counts.fact || undefined },
+    { id: "actividad", label: "Actividad" },
   ];
   return (
     <div
@@ -987,6 +1072,12 @@ function ProgramCard({
 }: {
   program: PatientWithRelations["programs"][number];
 }) {
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [pending, start] = useTransition();
+
   const done = program.sessions.filter((s) => s.completedAt).length;
   const pct = program.totalSessions
     ? Math.round((done / program.totalSessions) * 100)
@@ -1001,42 +1092,117 @@ function ProgramCard({
           ? <Tag tone="soft">Pausado</Tag>
           : <Tag tone="soft">Cancelado</Tag>;
 
+  const changeStatus = (next: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED") => {
+    start(async () => {
+      const r = await setProgramStatus({ id: program.id, status: next });
+      if (r.ok) router.refresh();
+    });
+  };
+
+  const confirmDelete = () => {
+    start(async () => {
+      const r = await deleteProgram(program.id);
+      if (r.ok) {
+        setDeleting(false);
+        router.refresh();
+      }
+    });
+  };
+
   return (
-    <Card style={{ padding: 18 }}>
+    <Card style={{ padding: 0, overflow: "hidden" }}>
       <header
         style={{
+          padding: 16,
           display: "flex",
           alignItems: "flex-start",
-          justifyContent: "space-between",
           gap: 12,
-          marginBottom: 12,
           flexWrap: "wrap",
         }}
       >
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            {statusTag}
-            <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
-              {done}/{program.totalSessions} · {pct}%
-            </span>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            textAlign: "left",
+            color: "inherit",
+            padding: 0,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 8,
+              background: "rgba(15,30,51,0.06)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 12,
+              color: "var(--navy-500)",
+              flexShrink: 0,
+              transition: "transform 160ms ease",
+              transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+            }}
+          >
+            ›
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
+              {statusTag}
+              <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
+                {done}/{program.totalSessions} · {pct}%
+              </span>
+            </div>
+            <div className="k-display" style={{ fontSize: 16, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {program.title}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+              Inicio {program.startDate.toLocaleDateString("es-AR")} ·{" "}
+              {program.frequency}×/semana
+            </div>
           </div>
-          <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-            {program.title}
-          </div>
-          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-            Inicio {program.startDate.toLocaleDateString("es-AR")} ·{" "}
-            {program.frequency}×/semana · {program.totalSessions} sesiones
-          </div>
+        </button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <ProgramStatusMenu
+            current={status}
+            onChange={changeStatus}
+            disabled={pending}
+          />
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            disabled={pending}
+            style={miniBtn}
+          >
+            Editar
+          </button>
+          <AddCustomSessionButton programId={program.id} />
+          <button
+            type="button"
+            onClick={() => setDeleting(true)}
+            disabled={pending}
+            style={{ ...miniBtn, color: "#9F1F1F" }}
+          >
+            Eliminar
+          </button>
         </div>
-        <AddCustomSessionButton programId={program.id} />
       </header>
       <div
         style={{
-          height: 6,
-          borderRadius: 3,
+          height: 4,
           background: "rgba(15,30,51,0.06)",
           overflow: "hidden",
-          marginBottom: 12,
         }}
       >
         <div
@@ -1047,18 +1213,190 @@ function ProgramCard({
           }}
         />
       </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: 10,
-        }}
-      >
-        {program.sessions.map((s) => (
-          <SessionCardRow key={s.id} session={s} />
-        ))}
-      </div>
+      {expanded && (
+        <div
+          style={{
+            padding: 16,
+            borderTop: "1px solid rgba(15,30,51,0.05)",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+            gap: 10,
+            background: "rgba(246,249,253,0.5)",
+          }}
+        >
+          {program.sessions.length === 0 && (
+            <div style={{ gridColumn: "1 / -1", padding: 12, color: "var(--navy-500)", fontSize: 13 }}>
+              Este plan todavía no tiene sesiones cargadas.
+            </div>
+          )}
+          {program.sessions.map((s) => (
+            <SessionCardRow key={s.id} session={s} />
+          ))}
+        </div>
+      )}
+      {editing && (
+        <EditProgramModal program={program} onClose={() => setEditing(false)} />
+      )}
+      {deleting && (
+        <ConfirmDeleteProgram
+          program={program}
+          pending={pending}
+          onConfirm={confirmDelete}
+          onClose={() => setDeleting(false)}
+        />
+      )}
     </Card>
+  );
+}
+
+const miniBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(15,30,51,0.08)",
+  borderRadius: 999,
+  padding: "5px 10px",
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: "var(--navy-700)",
+  cursor: "pointer",
+};
+
+function ProgramStatusMenu({
+  current,
+  onChange,
+  disabled,
+}: {
+  current: "ACTIVE" | "COMPLETED" | "PAUSED" | "CANCELLED";
+  onChange: (s: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED") => void;
+  disabled: boolean;
+}) {
+  return (
+    <select
+      value={current}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value as "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED")}
+      style={{
+        padding: "5px 8px",
+        borderRadius: 999,
+        border: "1px solid rgba(15,30,51,0.08)",
+        background: "rgba(255,255,255,0.8)",
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: "pointer",
+      }}
+    >
+      <option value="ACTIVE">Activo</option>
+      <option value="PAUSED">Pausado</option>
+      <option value="COMPLETED">Completado</option>
+      <option value="CANCELLED">Cancelado</option>
+    </select>
+  );
+}
+
+function EditProgramModal({
+  program,
+  onClose,
+}: {
+  program: PatientWithRelations["programs"][number];
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const submit = (formData: FormData) => {
+    setError(null);
+    start(async () => {
+      const r = await updateProgram({
+        id: program.id,
+        title: String(formData.get("title") ?? ""),
+        totalSessions: Number(formData.get("totalSessions") ?? program.totalSessions),
+        frequency: Number(formData.get("frequency") ?? program.frequency),
+        startDate: String(formData.get("startDate") ?? ""),
+      });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onClose();
+      router.refresh();
+    });
+  };
+  const startDateIso = program.startDate.toISOString().slice(0, 10);
+  return (
+    <Modal onClose={onClose} title="Editar plan" width={480}>
+      <form action={submit} style={{ display: "grid", gap: 12 }}>
+        <FormField label="Nombre del plan" name="title" required defaultValue={program.title} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <FormField
+            label="Total de sesiones"
+            name="totalSessions"
+            type="number"
+            min={1}
+            max={64}
+            defaultValue={program.totalSessions}
+          />
+          <FormField
+            label="Frecuencia (× semana)"
+            name="frequency"
+            type="number"
+            min={1}
+            max={7}
+            defaultValue={program.frequency}
+          />
+        </div>
+        <FormField label="Fecha de inicio" name="startDate" type="date" defaultValue={startDateIso} />
+        {error && (
+          <div style={{ padding: 10, borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+            Cancelar
+          </Button>
+          <Button type="submit" variant="primary" disabled={pending}>
+            {pending ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ConfirmDeleteProgram({
+  program,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  program: PatientWithRelations["programs"][number];
+  pending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal onClose={onClose} title="Eliminar plan" width={440}>
+      <p style={{ fontSize: 13, color: "var(--navy-700)", margin: "0 0 8px" }}>
+        Vas a eliminar <strong>{program.title}</strong> con sus {program.totalSessions} sesiones cargadas.
+        Esta acción no se puede deshacer.
+      </p>
+      <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "0 0 14px" }}>
+        Los turnos creados desde este plan permanecen en la agenda — eliminalos manualmente si querés.
+      </p>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+          Cancelar
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={onConfirm}
+          disabled={pending}
+          style={{ background: "#9F1F1F" }}
+        >
+          {pending ? "Eliminando…" : "Eliminar definitivamente"}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1149,6 +1487,20 @@ function EditSessionModal({
     });
   };
 
+  const remove = () => {
+    if (!confirm(`¿Eliminar sesión ${session.index}? Esta acción es definitiva.`)) return;
+    setError(null);
+    start(async () => {
+      const r = await deleteSession(session.id);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onClose();
+      router.refresh();
+    });
+  };
+
   return (
     <Modal
       onClose={onClose}
@@ -1189,6 +1541,7 @@ function EditSessionModal({
             alignItems: "center",
             gap: 8,
             marginTop: 4,
+            flexWrap: "wrap",
           }}
         >
           <Link
@@ -1202,7 +1555,24 @@ function EditSessionModal({
           >
             Abrir sesión completa →
           </Link>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {!session.completedAt && (
+              <button
+                type="button"
+                onClick={remove}
+                disabled={pending}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#9F1F1F",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                Eliminar
+              </button>
+            )}
             <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
               Cancelar
             </Button>
@@ -1803,3 +2173,194 @@ function BookingStatusTag({ status }: { status: PatientWithRelations["bookings"]
 }
 
 // Modal + FormField primitives are imported from `components/ui/`.
+
+function ActivityView({ patientId }: { patientId: string }) {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getPatientActivity(patientId, { limit: 80 })
+      .then((rows) => {
+        if (cancelled) return;
+        setEvents(rows);
+        setLoading(false);
+      })
+      .catch(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
+
+  if (loading) {
+    return (
+      <Card style={{ padding: 18, textAlign: "center", color: "var(--navy-500)" }}>
+        Cargando actividad…
+      </Card>
+    );
+  }
+  if (events.length === 0) {
+    return (
+      <Card style={{ padding: 18, textAlign: "center", color: "var(--navy-500)" }}>
+        Todavía no hay actividad registrada para este paciente.
+      </Card>
+    );
+  }
+
+  // Group by date for a clean timeline.
+  const groups = new Map<string, ActivityEvent[]>();
+  for (const ev of events) {
+    const k = ev.createdAt.toLocaleDateString("es-AR", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+      timeZone: "America/Argentina/Buenos_Aires",
+    });
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(ev);
+  }
+
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      <div
+        style={{
+          padding: "14px 18px",
+          borderBottom: "1px solid rgba(15,30,51,0.06)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "var(--navy-300)",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            Actividad
+          </div>
+          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            {events.length} eventos · todo cambio sobre la HC queda registrado.
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
+        {Array.from(groups.entries()).map(([date, items]) => (
+          <div key={date}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--navy-300)",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                marginBottom: 8,
+              }}
+            >
+              {date}
+            </div>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+              {items.map((ev) => (
+                <li
+                  key={ev.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "60px 1fr auto",
+                    gap: 12,
+                    alignItems: "center",
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    background: "rgba(246,249,253,0.6)",
+                    border: "1px solid rgba(15,30,51,0.04)",
+                  }}
+                >
+                  <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    {ev.createdAt.toLocaleTimeString("es-AR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      timeZone: "America/Argentina/Buenos_Aires",
+                    })}
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
+                      {humanizeAction(ev.action)}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                      {ev.entity}
+                      {ev.actorName ? ` · ${ev.actorName}` : ""}
+                    </div>
+                  </div>
+                  {ev.payload && Object.keys(ev.payload).length > 0 && (
+                    <details>
+                      <summary
+                        style={{
+                          fontSize: 11,
+                          color: "var(--sky-700)",
+                          cursor: "pointer",
+                          fontWeight: 600,
+                        }}
+                      >
+                        ver detalle
+                      </summary>
+                      <pre
+                        style={{
+                          marginTop: 6,
+                          padding: 8,
+                          background: "rgba(15,30,51,0.05)",
+                          borderRadius: 8,
+                          fontSize: 11,
+                          maxWidth: 280,
+                          overflow: "auto",
+                        }}
+                      >
+                        {JSON.stringify(ev.payload, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function humanizeAction(action: string): string {
+  const map: Record<string, string> = {
+    "patient.read": "HC consultada",
+    "patient.update": "Datos actualizados",
+    "patient.create": "Paciente creado",
+    "patient.delete": "Paciente eliminado",
+    "patient.archive": "Paciente archivado",
+    "patient.unarchive": "Paciente restaurado",
+    "patient.coverage.update": "Cobertura actualizada",
+    "patient.reassign": "Re-asignado a otro kine",
+    "patient.bulk_archive": "Archivado en lote",
+    "patient.bulk_unarchive": "Restaurado en lote",
+    "patient.portal_invite": "Invitado al portal",
+    "patient.portal_invite.resend": "Invitación al portal reenviada",
+    "booking.create": "Turno creado",
+    "booking.update": "Turno actualizado",
+    "booking.delete": "Turno eliminado",
+    "booking.series.create": "Serie de turnos creada",
+    "booking.plan.create": "Plan creado desde la agenda",
+    "booking.public.create": "Reserva pública creada",
+    "program.create": "Plan creado",
+    "program.update": "Plan editado",
+    "program.delete": "Plan eliminado",
+    "program.status": "Estado del plan cambiado",
+    "session.complete": "Sesión cerrada",
+    "session.reschedule": "Sesión reprogramada",
+    "session.delete": "Sesión eliminada",
+    "patientFile.upload": "Archivo subido",
+    "patientFile.delete": "Archivo eliminado",
+    "patientFile.download": "Archivo descargado",
+  };
+  return map[action] ?? action;
+}

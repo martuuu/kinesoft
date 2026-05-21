@@ -22,3 +22,14 @@ export type PatientSort =
   | "createdAt.asc"
   | "upcoming.asc"
   | "lastVisit.desc";
+
+export type ActivityEvent = {
+  id: string;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  createdAt: Date;
+  actorName: string | null;
+  ip: string | null;
+  payload: Record<string, unknown> | null;
+};

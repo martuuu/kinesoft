@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  *
  * Rate-limit: 5 exports per minute per user to stop scrape attacks.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const actor = await tryGetActor();
   if (!actor) {
     return new Response("Unauthorized", { status: 401 });
@@ -32,7 +32,9 @@ export async function GET() {
     });
   }
 
-  const csv = await exportPatientsCsv();
+  const url = new URL(req.url);
+  const ids = url.searchParams.get("ids")?.split(",").filter(Boolean);
+  const csv = await exportPatientsCsv(ids && ids.length ? { ids } : undefined);
   const filename = `pacientes-${new Date().toISOString().slice(0, 10)}.csv`;
   return new Response(csv, {
     status: 200,

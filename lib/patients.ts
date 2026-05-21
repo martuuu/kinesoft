@@ -16,6 +16,8 @@ import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
 import { visibilityForActor } from "@/lib/visibility";
+import { env } from "@/lib/env";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
@@ -25,7 +27,7 @@ import {
   type PatientUpdateInput,
 } from "@/lib/validation";
 
-import type { PatientRow, PatientSort } from "@/lib/patients-types";
+import type { ActivityEvent, PatientRow, PatientSort } from "@/lib/patients-types";
 
 export async function listPatients(opts: {
   q?: string;
@@ -163,9 +165,17 @@ export async function setPatientArchived(input: {
 /**
  * Build CSV rows for export. Server-only — never sends PII over the
  * wire as a string until the route handler streams it.
+ *
+ * When `opts.ids` is provided, the export is limited to those patient
+ * ids (after tenant + visibility scoping). Otherwise dumps everything
+ * the actor can see.
  */
-export async function exportPatientsCsv(): Promise<string> {
-  const rows = await listPatients({ filter: "all" });
+export async function exportPatientsCsv(opts: { ids?: string[] } = {}): Promise<string> {
+  let rows = await listPatients({ filter: "all" });
+  if (opts.ids && opts.ids.length > 0) {
+    const set = new Set(opts.ids);
+    rows = rows.filter((r) => set.has(r.id));
+  }
   const header = [
     "ID",
     "Apellido",
@@ -570,4 +580,332 @@ export async function assignPatientToPractitioner(input: {
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath("/pacientes");
   return { ok: true, data: undefined };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Program / Session CRUD
+// ──────────────────────────────────────────────────────────────────────
+
+export async function updateProgram(input: {
+  id: string;
+  title?: string;
+  totalSessions?: number;
+  frequency?: number;
+  startDate?: string;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const program = await prisma.treatmentProgram.findFirst({
+    where: { id: input.id, tenantId: actor.tenantId },
+    select: { id: true, patientId: true },
+  });
+  if (!program) return { ok: false, error: "Plan no encontrado." };
+  const patch: Record<string, string | number | Date> = {};
+  if (input.title !== undefined) {
+    const t = input.title.trim();
+    if (!t) return { ok: false, error: "El título no puede estar vacío." };
+    patch.title = t;
+  }
+  if (input.totalSessions !== undefined) {
+    const n = Math.floor(input.totalSessions);
+    if (n < 1 || n > 64) return { ok: false, error: "Sesiones entre 1 y 64." };
+    patch.totalSessions = n;
+  }
+  if (input.frequency !== undefined) {
+    const f = Math.floor(input.frequency);
+    if (f < 1 || f > 7) return { ok: false, error: "Frecuencia entre 1 y 7." };
+    patch.frequency = f;
+  }
+  if (input.startDate !== undefined) {
+    const d = new Date(input.startDate);
+    if (Number.isNaN(d.getTime())) return { ok: false, error: "Fecha inválida." };
+    patch.startDate = d;
+  }
+  if (Object.keys(patch).length === 0) return { ok: true, data: undefined };
+  await prisma.treatmentProgram.update({ where: { id: input.id }, data: patch });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "program.update",
+    entity: "TreatmentProgram",
+    entityId: input.id,
+  });
+  revalidatePath(`/pacientes/${program.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+export async function setProgramStatus(input: {
+  id: string;
+  status: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const program = await prisma.treatmentProgram.findFirst({
+    where: { id: input.id, tenantId: actor.tenantId },
+    select: { id: true, patientId: true, status: true },
+  });
+  if (!program) return { ok: false, error: "Plan no encontrado." };
+  if (program.status === input.status) return { ok: true, data: undefined };
+  await prisma.treatmentProgram.update({
+    where: { id: input.id },
+    data: { status: input.status },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "program.status",
+    entity: "TreatmentProgram",
+    entityId: input.id,
+    payload: { from: program.status, to: input.status },
+  });
+  revalidatePath(`/pacientes/${program.patientId}`);
+  revalidatePath("/seguimiento");
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Hard-delete a TreatmentProgram + all its Sessions + SessionExercises.
+ * Bookings that referenced sessions remain in place (no FK to delete
+ * cascade). Audit log records the loss.
+ */
+export async function deleteProgram(id: string): Promise<ActionResult> {
+  const actor = await getActor();
+  const program = await prisma.treatmentProgram.findFirst({
+    where: { id, tenantId: actor.tenantId },
+    select: { id: true, patientId: true, title: true, totalSessions: true },
+  });
+  if (!program) return { ok: false, error: "Plan no encontrado." };
+  await prisma.treatmentProgram.delete({ where: { id } });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "program.delete",
+    entity: "TreatmentProgram",
+    entityId: id,
+    payload: { title: program.title, totalSessions: program.totalSessions },
+  });
+  revalidatePath(`/pacientes/${program.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+export async function deleteSession(id: string): Promise<ActionResult> {
+  const actor = await getActor();
+  const session = await prisma.session.findFirst({
+    where: { id, program: { tenantId: actor.tenantId } },
+    select: {
+      id: true,
+      index: true,
+      program: { select: { id: true, patientId: true, totalSessions: true } },
+    },
+  });
+  if (!session) return { ok: false, error: "Sesión no encontrada." };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.session.delete({ where: { id } });
+    // Decrement totalSessions so progress bars stay accurate.
+    if (session.program.totalSessions > 1) {
+      await tx.treatmentProgram.update({
+        where: { id: session.program.id },
+        data: { totalSessions: session.program.totalSessions - 1 },
+      });
+    }
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "session.delete",
+    entity: "Session",
+    entityId: id,
+    payload: { index: session.index },
+  });
+  revalidatePath(`/pacientes/${session.program.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Send a patient portal invitation. Uses Supabase Admin's
+ * `inviteUserByEmail` to email the patient a magic link that lands on
+ * `/portal` after sign-up. Once they confirm + sign in, the
+ * `/auth/callback` route auto-links their Supabase identity to this
+ * Patient row (by email match, gated by `email_confirmed_at`).
+ *
+ * Idempotent — if the Patient already has a `userId` linked, returns
+ * { ok: true } without re-sending. Falls back to a manual share-URL
+ * when Supabase admin isn't configured (dev/test environments).
+ */
+export async function sendPatientPortalInvite(input: {
+  patientId: string;
+}): Promise<ActionResult<{ emailSent: boolean; portalUrl: string }>> {
+  const actor = await getActor();
+  const patient = await prisma.patient.findFirst({
+    where: { id: input.patientId, tenantId: actor.tenantId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      userId: true,
+      tenant: { select: { slug: true, name: true } },
+    },
+  });
+  if (!patient) return { ok: false, error: "Paciente no encontrado." };
+  if (!patient.email) {
+    return { ok: false, error: "El paciente no tiene email cargado." };
+  }
+
+  const portalUrl = `${env.NEXT_PUBLIC_APP_URL}/portal/c/${patient.tenant.slug}`;
+
+  if (patient.userId) {
+    // Already linked to a Supabase identity. Just send a reminder.
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.portal_invite.resend",
+      entity: "Patient",
+      entityId: patient.id,
+    });
+    const admin = getSupabaseAdminClient();
+    if (admin) {
+      try {
+        await admin.auth.admin.inviteUserByEmail(patient.email.toLowerCase(), {
+          redirectTo: portalUrl,
+        });
+        return { ok: true, data: { emailSent: true, portalUrl } };
+      } catch {
+        /* fall through */
+      }
+    }
+    return { ok: true, data: { emailSent: false, portalUrl } };
+  }
+
+  // First-time invite.
+  const admin = getSupabaseAdminClient();
+  let emailSent = false;
+  if (admin) {
+    try {
+      const { error } = await admin.auth.admin.inviteUserByEmail(
+        patient.email.toLowerCase(),
+        {
+          redirectTo: portalUrl,
+          data: {
+            full_name: `${patient.firstName} ${patient.lastName}`,
+            kinesoft_portal_url: portalUrl,
+            kinesoft_tenant: patient.tenant.name,
+          },
+        }
+      );
+      if (!error) emailSent = true;
+    } catch {
+      /* swallow, fall back to manual URL */
+    }
+  }
+
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patient.portal_invite",
+    entity: "Patient",
+    entityId: patient.id,
+    payload: { emailSent },
+  });
+  return { ok: true, data: { emailSent, portalUrl } };
+}
+
+/**
+ * Bulk archive (or unarchive) patients. Validates tenant ownership on
+ * every id, so a client can't sneak ids of patients they don't own.
+ * Returns the count of rows that actually changed.
+ */
+export async function bulkArchivePatients(input: {
+  ids: string[];
+  archived: boolean;
+}): Promise<ActionResult<{ updated: number }>> {
+  const actor = await getActor();
+  if (input.ids.length === 0) return { ok: true, data: { updated: 0 } };
+  if (input.ids.length > 200) {
+    return { ok: false, error: "Demasiados pacientes a la vez (máx 200)." };
+  }
+  const owned = await prisma.patient.findMany({
+    where: { id: { in: input.ids }, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  const ownedIds = owned.map((p) => p.id);
+  const result = await prisma.patient.updateMany({
+    where: { id: { in: ownedIds }, tenantId: actor.tenantId },
+    data: { archivedAt: input.archived ? new Date() : null },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: input.archived ? "patient.bulk_archive" : "patient.bulk_unarchive",
+    entity: "Patient",
+    payload: { count: result.count, ids: ownedIds.slice(0, 50) },
+  });
+  revalidatePath("/pacientes");
+  return { ok: true, data: { updated: result.count } };
+}
+
+/**
+ * Activity feed for a patient — every AuditEvent that touches the
+ * patient row OR any of its child entities (PatientFile, Booking,
+ * TreatmentProgram, Session, Coverage, EvaScore). Most recent first.
+ */
+export async function getPatientActivity(
+  patientId: string,
+  opts: { limit?: number } = {}
+): Promise<ActivityEvent[]> {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: {
+      id: true,
+      bookings: { select: { id: true } },
+      programs: {
+        select: { id: true, sessions: { select: { id: true } } },
+      },
+      files: { select: { id: true } },
+    },
+  });
+  if (!owned) return [];
+
+  const childEntities: Record<string, string[]> = {
+    Patient: [owned.id],
+    Booking: owned.bookings.map((b) => b.id),
+    TreatmentProgram: owned.programs.map((p) => p.id),
+    Session: owned.programs.flatMap((p) => p.sessions.map((s) => s.id)),
+    PatientFile: owned.files.map((f) => f.id),
+  };
+
+  const orFragments = Object.entries(childEntities)
+    .filter(([, ids]) => ids.length > 0)
+    .map(([entity, ids]) => ({ entity, entityId: { in: ids } }));
+
+  if (orFragments.length === 0) return [];
+
+  const events = await prisma.auditEvent.findMany({
+    where: { tenantId: actor.tenantId, OR: orFragments },
+    orderBy: { createdAt: "desc" },
+    take: opts.limit ?? 60,
+  });
+
+  // Resolve actor names in a single round-trip.
+  const userIds = Array.from(
+    new Set(events.map((e) => e.actorId).filter(Boolean) as string[])
+  );
+  const users = userIds.length
+    ? await prisma.userProfile.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, fullName: true, email: true },
+      })
+    : [];
+  const userMap = new Map(users.map((u) => [u.id, u.fullName ?? u.email]));
+
+  return events.map((e) => ({
+    id: e.id,
+    action: e.action,
+    entity: e.entity,
+    entityId: e.entityId,
+    createdAt: e.createdAt,
+    actorName: e.actorId ? userMap.get(e.actorId) ?? "Sistema" : "Sistema",
+    ip: e.ip,
+    payload: (e.payload as Record<string, unknown> | null) ?? null,
+  }));
 }

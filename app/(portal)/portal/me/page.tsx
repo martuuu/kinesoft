@@ -72,7 +72,7 @@ export default async function PortalMe() {
         )}
       </Card>
 
-      <form action="/api/auth/sign-out" method="post">
+      <form action="/api/auth/sign-out?next=/portal" method="post">
         <Button variant="ghost" type="submit" style={{ width: "100%", justifyContent: "center" }}>
           Cerrar sesión
         </Button>

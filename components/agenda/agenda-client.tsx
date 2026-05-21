@@ -1295,14 +1295,38 @@ function BookingModal({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{
+    practitionerName: string;
+    nextFreeISO: string | null;
+    payload: Parameters<typeof createBooking>[0];
+  } | null>(null);
   // "Crear como plan" toggle — when on, the modal switches the
   // repeat-weeks input for a full plan layout (sessions + days of week).
   const [planMode, setPlanMode] = useState(false);
   const [planSessions, setPlanSessions] = useState(8);
   const [planDows, setPlanDows] = useState<number[]>([0, 2, 4]);
 
+  const finalizeCreate = async (payload: Parameters<typeof createBooking>[0]) => {
+    const result = await createBooking(payload);
+    if (!result.ok) {
+      if (result.conflict) {
+        setConflict({
+          practitionerName: result.conflict.practitionerName,
+          nextFreeISO: result.conflict.nextFreeISO,
+          payload,
+        });
+        setError(null);
+        return;
+      }
+      setError(result.error);
+      return;
+    }
+    onSaved();
+  };
+
   const submit = (formData: FormData) => {
     setError(null);
+    setConflict(null);
     start(async () => {
       if (mode === "create") {
         const patientId = String(formData.get("patientId") ?? "") || undefined;
@@ -1342,19 +1366,39 @@ function BookingModal({
           guestEmail: String(formData.get("guestEmail") ?? "") || undefined,
           guestPhone: String(formData.get("guestPhone") ?? "") || undefined,
         };
-        const result =
-          repeatWeeks > 1
-            ? await createBookingSeries({ ...payload, repeatWeeks })
-            : await createBooking(payload);
-        if (!result.ok) {
-          setError(result.error);
+        if (repeatWeeks > 1) {
+          const result = await createBookingSeries({ ...payload, repeatWeeks });
+          if (!result.ok) {
+            setError(result.error);
+            return;
+          }
+          onSaved();
           return;
         }
-        onSaved();
+        await finalizeCreate(payload);
         return;
       }
       // edit-only flow: status change handled via the buttons below
       onSaved();
+    });
+  };
+
+  const useSuggestedSlot = () => {
+    if (!conflict || !conflict.nextFreeISO) return;
+    start(async () => {
+      await finalizeCreate({
+        ...conflict.payload,
+        scheduledFor: conflict.nextFreeISO!,
+      });
+      setConflict(null);
+    });
+  };
+
+  const forceOverbooking = () => {
+    if (!conflict) return;
+    start(async () => {
+      await finalizeCreate({ ...conflict.payload, allowOverbooking: true });
+      setConflict(null);
     });
   };
 
@@ -1611,6 +1655,65 @@ function BookingModal({
                 }}
               >
                 {error}
+              </div>
+            )}
+            {conflict && (
+              <div
+                role="alert"
+                style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  background: "rgba(255,176,32,0.14)",
+                  border: "1px solid rgba(255,176,32,0.45)",
+                  display: "grid",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+                  ⚠ {conflict.practitionerName} ya tiene un turno en ese horario
+                </div>
+                <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
+                  Otros profesionales pueden tener turnos al mismo tiempo (varios kines en
+                  paralelo), pero el mismo kine no puede atender dos pacientes en simultáneo.
+                  Tenés dos opciones:
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {conflict.nextFreeISO && (
+                    <Button
+                      type="button"
+                      variant="primary"
+                      onClick={useSuggestedSlot}
+                      disabled={pending}
+                    >
+                      Usar próximo libre ·{" "}
+                      {new Date(conflict.nextFreeISO).toLocaleString("es-AR", {
+                        weekday: "short",
+                        day: "2-digit",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: "America/Argentina/Buenos_Aires",
+                      })}
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={forceOverbooking}
+                    disabled={pending}
+                    style={{ color: "#7A4A00", borderColor: "rgba(122,74,0,0.3)" }}
+                  >
+                    Forzar sobreturno
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setConflict(null)}
+                    disabled={pending}
+                  >
+                    Volver atrás
+                  </Button>
+                </div>
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

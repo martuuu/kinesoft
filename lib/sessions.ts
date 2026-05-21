@@ -64,7 +64,16 @@ export async function getSessionDetail(id: string) {
           case: {
             include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } },
           },
-          sessions: { orderBy: { index: "asc" }, select: { id: true, index: true, completedAt: true } },
+          sessions: {
+            orderBy: { index: "asc" },
+            select: {
+              id: true,
+              index: true,
+              completedAt: true,
+              paInPre: true,
+              paInPost: true,
+            },
+          },
         },
       },
       exercises: {
