@@ -19,7 +19,9 @@ import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { SortableList } from "@/components/ui/sortable-list";
-import { IconArrow, IconCheck, IconUsers, IconX } from "@/components/ui/icons";
+import { IconArrow, IconCheck, IconPlus, IconUsers, IconX } from "@/components/ui/icons";
+import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
+import type { ExerciseRow } from "@/lib/exercises-types";
 import {
   assignDiagnosisAndCreateProgram,
   searchPatientsForAssignment,
@@ -50,6 +52,10 @@ export function DiagnosticoScreen({
   const [intensity, setIntensity] = useState(5);
   const [confirmedSlug, setConfirmedSlug] = useState<string | null>(null);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
+  // "Extras" — exercises/maniobras added by the kine from the unified
+  // picker that are not part of the condition's suggested catalogue.
+  // Persisted as DIRECT/ACTIVATION links by the server action.
+  const [extraExercises, setExtraExercises] = useState<ExerciseRow[]>([]);
   const [showAssign, setShowAssign] = useState(false);
 
   const selection: CaseSelection = useMemo(
@@ -149,6 +155,15 @@ export function DiagnosticoScreen({
           setSelectedExerciseIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
         }
         catalog={catalog}
+        extraExercises={extraExercises}
+        onAddExtra={(ex) => {
+          setExtraExercises((s) => (s.some((e) => e.id === ex.id) ? s : [...s, ex]));
+          setSelectedExerciseIds((s) => (s.includes(ex.id) ? s : [...s, ex.id]));
+        }}
+        onRemoveExtra={(id) => {
+          setExtraExercises((s) => s.filter((e) => e.id !== id));
+          setSelectedExerciseIds((s) => s.filter((x) => x !== id));
+        }}
       />
 
       <ActionBar
@@ -191,7 +206,31 @@ export function DiagnosticoScreen({
           key={selectedExerciseIds.join("|")}
           condition={catalog.conditions.find((c) => c.slug === activeRanking.slug)!}
           ranking={topRanking}
-          selectedExercises={activeExercises.filter((e) => selectedExerciseIds.includes(e.exerciseId))}
+          selectedExercises={[
+            ...activeExercises.filter((e) => selectedExerciseIds.includes(e.exerciseId)),
+            // "Extras" added by the kine from the unified picker. They get
+            // synthetic DIRECT/ACTIVATION links — the server action treats
+            // them like any other selected exercise.
+            ...extraExercises
+              .filter((ex) => selectedExerciseIds.includes(ex.id))
+              .map((ex) => ({
+                exerciseId: ex.id,
+                slug: ex.slug,
+                name: ex.name,
+                relation: "DIRECT" as ExerciseRelation,
+                phase: "ACTIVATION" as ProgramPhase,
+                weight: 1,
+                rationale:
+                  ex.kind === "MANUAL_THERAPY"
+                    ? "Maniobra de terapia manual agregada por el kinesiólogo."
+                    : "Ejercicio agregado por el kinesiólogo.",
+                muscleGroups: ex.muscleGroups,
+                equipment: ex.equipment,
+                defaultSets: ex.defaultSets,
+                defaultReps: ex.defaultReps,
+                difficulty: ex.difficulty,
+              })),
+          ]}
           selectedExerciseIds={selectedExerciseIds}
           selection={selection}
           initialPatients={initialPatients}
@@ -577,6 +616,9 @@ function RightStack({
   selectedExerciseIds,
   toggleExercise,
   catalog,
+  extraExercises,
+  onAddExtra,
+  onRemoveExtra,
 }: {
   ranking: Ranking[];
   confirmedSlug: string | null;
@@ -585,7 +627,18 @@ function RightStack({
   selectedExerciseIds: string[];
   toggleExercise: (id: string) => void;
   catalog: CatalogDTO;
+  extraExercises: ExerciseRow[];
+  onAddExtra: (ex: ExerciseRow) => void;
+  onRemoveExtra: (id: string) => void;
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // existingIds excludes from the picker both the suggested catalogue
+  // items and the ones already added as extras.
+  const existingIds = useMemo(() => {
+    const s = new Set<string>(exercises.map((e) => e.exerciseId));
+    for (const ex of extraExercises) s.add(ex.id);
+    return s;
+  }, [exercises, extraExercises]);
   return (
     <aside style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
       <Card glass style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -649,7 +702,95 @@ function RightStack({
             </span>
           )}
         </div>
+
+        {extraExercises.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-300)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+              Extras agregados ({extraExercises.length})
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {extraExercises.map((ex) => {
+                const manual = ex.kind === "MANUAL_THERAPY";
+                return (
+                  <div
+                    key={ex.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 10px",
+                      borderRadius: 10,
+                      background: manual ? "rgba(200,245,100,0.16)" : "rgba(31,79,190,0.06)",
+                      border: "1px solid " + (manual ? "rgba(160,200,80,0.4)" : "rgba(31,79,190,0.15)"),
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 3,
+                        alignSelf: "stretch",
+                        borderRadius: 2,
+                        background: manual ? "var(--lime-700, #4f8a10)" : "var(--sky-700)",
+                      }}
+                    />
+                    <span style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{ex.name}</span>
+                    {manual ? <Tag tone="lime">Maniobra</Tag> : <Tag tone="sky">Ejercicio</Tag>}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveExtra(ex.id)}
+                      aria-label="Quitar"
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        color: "#9F1F1F",
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setPickerOpen(true)}
+          style={{
+            marginTop: 8,
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px dashed rgba(15,30,51,0.2)",
+            background: "rgba(255,255,255,0.5)",
+            color: "var(--navy-700)",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+        >
+          <IconPlus size={12} /> Agregar ejercicio o maniobra
+        </button>
       </Card>
+
+      <ExerciseSearchPicker
+        open={pickerOpen}
+        title="Agregar al plan"
+        description="Buscá entre ejercicios y maniobras manuales — se suman al plan como extras."
+        existingIds={existingIds}
+        onPick={(ex) => {
+          onAddExtra(ex);
+          setPickerOpen(false);
+        }}
+        onClose={() => setPickerOpen(false)}
+      />
     </aside>
   );
 }

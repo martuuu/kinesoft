@@ -22,9 +22,11 @@ import {
 import {
   createBooking,
   createBookingSeries,
+  createBookingPlan,
   deleteBooking,
   setBookingStatus,
 } from "@/lib/bookings";
+import { searchPatientsForAssignment } from "@/lib/diagnosis";
 
 type BookingDTO = {
   id: string;
@@ -67,6 +69,215 @@ function isoToLocalInput(iso: string) {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// PatientPicker — debounced server-side search + dropdown.
+// Drop-in replacement for the previous `<Select label="Paciente">` that
+// scrolled through every patient (unusable past a few dozen).
+// ──────────────────────────────────────────────────────────────────────
+
+function PatientPicker({
+  name,
+  initialPatientId,
+  initialPatients,
+}: {
+  name: string;
+  initialPatientId?: string | null;
+  initialPatients: { id: string; name: string }[];
+}) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [hits, setHits] = useState<{ id: string; name: string; hc: string }[]>([]);
+  const [selected, setSelected] = useState<{ id: string; name: string } | null>(() => {
+    if (!initialPatientId) return null;
+    const found = initialPatients.find((p) => p.id === initialPatientId);
+    return found ? { id: found.id, name: found.name } : null;
+  });
+  const seqRef = useRef(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const term = q.trim();
+    const seq = ++seqRef.current;
+    const t = setTimeout(async () => {
+      const r = await searchPatientsForAssignment(term);
+      if (seq !== seqRef.current) return;
+      setHits(r.map((p) => ({ id: p.id, name: p.name, hc: p.hc ?? "" })));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [q, open]);
+
+  const pick = (p: { id: string; name: string }) => {
+    setSelected(p);
+    setOpen(false);
+    setQ("");
+  };
+  const clear = () => {
+    setSelected(null);
+    setOpen(true);
+    setQ("");
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <label style={{ display: "block", fontSize: 12 }}>
+        <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Paciente</span>
+        <input type="hidden" name={name} value={selected?.id ?? ""} />
+        {selected ? (
+          <div
+            style={{
+              marginTop: 6,
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(15,30,51,0.08)",
+              background: "rgba(255,255,255,0.85)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <Avatar name={selected.name} size={28} tone="sky" />
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{selected.name}</span>
+            <button
+              type="button"
+              onClick={clear}
+              aria-label="Cambiar paciente"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--navy-500)",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Cambiar
+            </button>
+          </div>
+        ) : (
+          <input
+            type="text"
+            placeholder="Buscá por nombre, DNI o email…"
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            style={{
+              marginTop: 6,
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.7)",
+              border: "1px solid rgba(15,30,51,0.08)",
+              width: "100%",
+              fontSize: 14,
+              color: "var(--navy-900)",
+              outline: "none",
+            }}
+          />
+        )}
+      </label>
+      {open && !selected && (
+        <div
+          className="k-glass-strong k-scroll"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            marginTop: 4,
+            maxHeight: 240,
+            overflowY: "auto",
+            borderRadius: 12,
+            padding: 4,
+            zIndex: 30,
+            boxShadow: "0 10px 32px rgba(15,30,51,0.18)",
+          }}
+        >
+          {hits.length === 0 ? (
+            <div style={{ padding: 14, fontSize: 12.5, color: "var(--navy-500)", textAlign: "center" }}>
+              {q.trim() ? "Sin resultados — vas a crear un turno de reserva externa." : "Empezá a tipear el nombre del paciente."}
+            </div>
+          ) : (
+            hits.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => pick(p)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  padding: "8px 10px",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontSize: 13,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(15,30,51,0.04)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <Avatar name={p.name} size={28} tone="sky" />
+                <span style={{ flex: 1, fontWeight: 600 }}>{p.name}</span>
+                {p.hc && <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>{p.hc}</span>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+function DayOfWeekPicker({ value, onChange }: { value: number[]; onChange: (v: number[]) => void }) {
+  const toggle = (d: number) => {
+    if (value.includes(d)) onChange(value.filter((x) => x !== d));
+    else onChange([...value, d].sort((a, b) => a - b));
+  };
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      {DOW_LABELS.map((label, i) => {
+        const on = value.includes(i);
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => toggle(i)}
+            style={{
+              flex: 1,
+              padding: "8px 0",
+              borderRadius: 10,
+              border: "1px solid " + (on ? "var(--sky-700)" : "rgba(15,30,51,0.1)"),
+              background: on ? "var(--sky-700)" : "rgba(255,255,255,0.7)",
+              color: on ? "#fff" : "var(--navy-700)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function AgendaClient(props: Props) {
@@ -1084,14 +1295,44 @@ function BookingModal({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // "Crear como plan" toggle — when on, the modal switches the
+  // repeat-weeks input for a full plan layout (sessions + days of week).
+  const [planMode, setPlanMode] = useState(false);
+  const [planSessions, setPlanSessions] = useState(8);
+  const [planDows, setPlanDows] = useState<number[]>([0, 2, 4]);
 
   const submit = (formData: FormData) => {
     setError(null);
     start(async () => {
       if (mode === "create") {
+        const patientId = String(formData.get("patientId") ?? "") || undefined;
+
+        if (planMode) {
+          if (!patientId) {
+            setError("Los planes requieren un paciente registrado.");
+            return;
+          }
+          const r = await createBookingPlan({
+            patientId,
+            serviceId: String(formData.get("serviceId") ?? ""),
+            practitionerId: String(formData.get("practitionerId") ?? ""),
+            startScheduledFor: String(formData.get("scheduledFor") ?? ""),
+            durationMin: Number(formData.get("durationMin")) || 45,
+            totalSessions: planSessions,
+            daysOfWeek: planDows,
+            notes: String(formData.get("notes") ?? "") || undefined,
+          });
+          if (!r.ok) {
+            setError(r.error);
+            return;
+          }
+          onSaved();
+          return;
+        }
+
         const repeatWeeks = Math.max(1, Number(formData.get("repeatWeeks")) || 1);
         const payload = {
-          patientId: String(formData.get("patientId") ?? "") || undefined,
+          patientId,
           serviceId: String(formData.get("serviceId") ?? ""),
           practitionerId: String(formData.get("practitionerId") ?? ""),
           scheduledFor: String(formData.get("scheduledFor") ?? ""),
@@ -1267,48 +1508,97 @@ function BookingModal({
                 </option>
               ))}
             </Select>
-            <Select label="Servicio" name="serviceId" required>
+            <Select label="Servicio" name="serviceId" required defaultValue="">
+              <option value="" disabled>— Seleccioná un servicio —</option>
               {services.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} · {s.durationMin}m
                 </option>
               ))}
             </Select>
-            <Select
-              label="Paciente"
+            <PatientPicker
               name="patientId"
-              defaultValue={defaultPatientId ?? ""}
+              initialPatientId={defaultPatientId ?? null}
+              initialPatients={patients}
+            />
+
+            {/* Plan-mode toggle */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: planMode ? "rgba(31,79,190,0.06)" : "rgba(15,30,51,0.03)",
+                border: "1px solid " + (planMode ? "rgba(31,79,190,0.2)" : "rgba(15,30,51,0.06)"),
+                cursor: "pointer",
+              }}
             >
-              <option value="">— Reserva externa (datos abajo) —</option>
-              {patients.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Convertir en plan</div>
+                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  Crea N sesiones consecutivas con sus turnos automáticos. Requiere paciente registrado.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={planMode}
+                onChange={(e) => setPlanMode(e.target.checked)}
+              />
+            </label>
+
+            <div style={{ display: "grid", gridTemplateColumns: planMode ? "2fr 1fr" : "2fr 1fr 1fr", gap: 10 }}>
               <FormField
-                label="Fecha y hora"
+                label={planMode ? "Inicio del plan" : "Fecha y hora"}
                 name="scheduledFor"
                 type="datetime-local"
                 required
                 defaultValue={defaultISO ? isoToLocalInput(defaultISO) : ""}
               />
               <FormField label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
-              <FormField
-                label="Repetir (semanas)"
-                name="repeatWeeks"
-                type="number"
-                min={1}
-                max={12}
-                defaultValue={1}
-              />
+              {!planMode && (
+                <FormField
+                  label="Repetir (semanas)"
+                  name="repeatWeeks"
+                  type="number"
+                  min={1}
+                  max={12}
+                  defaultValue={1}
+                />
+              )}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <FormField label="Nombre (guest)" name="guestName" />
-              <FormField label="Email (guest)" name="guestEmail" type="email" />
-              <FormField label="Tel (guest)" name="guestPhone" />
-            </div>
+
+            {planMode && (
+              <div style={{ display: "grid", gap: 10 }}>
+                <FormField
+                  label="Cantidad de sesiones"
+                  name="planSessions"
+                  type="number"
+                  min={1}
+                  max={64}
+                  value={planSessions}
+                  onChange={(v) => setPlanSessions(Math.max(1, Math.min(64, Number(v) || 1)))}
+                />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 6 }}>
+                    Días de la semana
+                  </div>
+                  <DayOfWeekPicker value={planDows} onChange={setPlanDows} />
+                  <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 6 }}>
+                    Frecuencia derivada: {planDows.length}×/semana
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!planMode && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <FormField label="Nombre (guest)" name="guestName" />
+                <FormField label="Email (guest)" name="guestEmail" type="email" />
+                <FormField label="Tel (guest)" name="guestPhone" />
+              </div>
+            )}
             <FormField as="textarea" label="Notas" name="notes" />
             {error && (
               <div
@@ -1328,7 +1618,12 @@ function BookingModal({
                 Cancelar
               </Button>
               <Button type="submit" variant="primary" disabled={pending}>
-                {pending ? "Creando…" : "Crear turno"} <IconArrow size={12} />
+                {pending
+                  ? "Creando…"
+                  : planMode
+                    ? `Crear plan (${planSessions} sesiones)`
+                    : "Crear turno"}{" "}
+                <IconArrow size={12} />
               </Button>
             </div>
           </form>

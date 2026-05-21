@@ -28,6 +28,10 @@ model Tenant {
   plan        TenantPlan @default(FREE)
   subscriptionStatus SubscriptionStatus @default(ACTIVE)
   trialEndsAt DateTime?
+  // When `true`, every practitioner of the tenant sees all patients +
+  // bookings. When `false` (default), each practitioner only sees the
+  // patients assigned to them (via `Patient.assignedPractitionerId`).
+  sharedPatientView Boolean @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -43,6 +47,8 @@ model Tenant {
   exercises       Exercise[]
   planTemplates   PlanTemplate[]
   favorites       Favorite[]
+  insurers        Insurer[]
+  invitations     Invitation[]
 
   @@index([slug])
 }
@@ -116,6 +122,7 @@ model Practitioner {
   user          UserProfile @relation(fields: [userId], references: [id])
   services      Service[]
   bookings      Booking[]
+  assignedPatients Patient[] @relation("AssignedPatients")
   sessions      Session[]
   cases         ClinicalCase[]
   planTemplates PlanTemplate[]
@@ -127,6 +134,12 @@ model Patient {
   id            String   @id @default(cuid())
   tenantId      String   // home tenant (the first clinic to register them)
   userId        String?  @unique // optional Supabase identity for portal access
+  // The kine that "owns" this patient. When `Tenant.sharedPatientView` is
+  // false (default), each practitioner only sees patients where this id
+  // matches their own; OWNER/ADMIN always see all. Nullable for legacy
+  // patients created before this field existed — those count as
+  // "consultorio común" and are visible to everyone.
+  assignedPractitionerId String?
   firstName     String
   lastName      String
   email         String?
@@ -140,6 +153,7 @@ model Patient {
 
   tenant       Tenant       @relation(fields: [tenantId], references: [id])
   user         UserProfile? @relation(fields: [userId], references: [id])
+  assignedPractitioner Practitioner? @relation("AssignedPatients", fields: [assignedPractitionerId], references: [id])
   coverages    Coverage[]
   bookings     Booking[]
   programs     TreatmentProgram[]
@@ -150,6 +164,7 @@ model Patient {
 
   @@unique([tenantId, documentId])
   @@index([tenantId, lastName])
+  @@index([tenantId, assignedPractitionerId])
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -201,12 +216,66 @@ model PatientTenantLink {
 model Coverage {
   id           String   @id @default(cuid())
   patientId    String
-  insurer      String   // "OSDE", "Swiss Medical", "Particular", etc.
+  // `insurer` is the legacy free-form name (kept as a cached display
+  // string). When the practitioner picks an `Insurer` row from the
+  // tenant catalogue, `insurerId` points to it and copago/fixedFee are
+  // resolved through that. When the field is left as free-form text,
+  // `insurerId` stays null and the booking falls back to "particular".
+  insurer      String
+  insurerId    String?
   planName     String?
   memberId     String?
   validUntil   DateTime?
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient      Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  insurerRef   Insurer?  @relation(fields: [insurerId], references: [id])
+
+  @@index([insurerId])
+}
+
+// Per-tenant insurer catalogue (Obras Sociales / Prepagas). Each row
+// carries the copago the patient pays per session + the fixed fee the
+// insurer reimburses the practitioner.
+model Insurer {
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String   // "OSDE", "Swiss Medical", "IOMA", etc.
+  copagoCents   Int      @default(0)   // patient pays per session
+  fixedFeeCents Int      @default(0)   // insurer pays kine per session
+  active        Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  coverages Coverage[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// Pending invitations. The OWNER (Subscriber) issues these; the invitee
+// receives the URL `/invite/<token>` and signs up through Supabase to
+// accept. On acceptance we create UserProfile + Practitioner + Membership
+// rows and stamp `acceptedAt` here.
+model Invitation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  email       String
+  firstName   String
+  lastName    String
+  role        Role     @default(PRACTITIONER)
+  specialty   String?
+  token       String   @unique
+  invitedById String   // UserProfile id of the OWNER who created the invite
+  invitedAt   DateTime @default(now())
+  acceptedAt  DateTime?
+  expiresAt   DateTime
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([email])
 }
 
 model EmergencyContact {
@@ -288,6 +357,11 @@ model ConditionTag {
   @@id([conditionId, tagId])
 }
 
+enum ExerciseKind {
+  EXERCISE        // Equipment-based / patient-performed exercise
+  MANUAL_THERAPY  // Practitioner-performed manual maneuver / soft tissue work
+}
+
 model Exercise {
   id           String  @id @default(cuid())
   slug         String  @unique
@@ -301,6 +375,12 @@ model Exercise {
   equipment    String? // comma-separated: "banda, foam roller"
   muscleGroups String? // "Glúteo medio, Cadera"
   cues         String? // form cues / coaching points
+  // EXERCISE (default) → patient-performed item with sets/reps. Lives in
+  // the Biblioteca de Ejercicios. MANUAL_THERAPY → practitioner-performed
+  // maneuver / soft tissue work. Lives in the Terapia Manual catalogue
+  // but is appendable to the same SessionExercise list, so a session can
+  // mix 2 ejercicios + 1 maniobra. The picker UI colours them differently.
+  kind         ExerciseKind @default(EXERCISE)
   // Visibility: tenantId NULL = global catalog (PRO/ENTERPRISE only).
   // tenantId set = private to that tenant. `isBasic` = visible to FREE/STARTER.
   tenantId     String?
@@ -316,6 +396,7 @@ model Exercise {
 
   @@index([tenantId])
   @@index([isBasic])
+  @@index([kind])
 }
 
 // Per-user starred exercises. Surfaced as a filter chip in the Biblioteca.

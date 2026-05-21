@@ -114,6 +114,98 @@ export async function updateSessionExercise(input: {
   return { ok: true, data: undefined };
 }
 
+/**
+ * Reschedule one session within a plan + sync its companion booking
+ * (if any). Used from the patient profile PlanView when the patient
+ * can't make the original slot.
+ *
+ * Strategy for booking sync:
+ *   - Look for a booking belonging to the same patient + practitioner
+ *     within ±2 h of the original `scheduledFor`. If we find one,
+ *     update it to the new datetime + practitioner.
+ *   - If there's no companion booking (e.g. the plan was created from
+ *     /diagnostico, which doesn't auto-create bookings), the session
+ *     just gets the new datetime — the kine can create the booking
+ *     manually from /agenda.
+ */
+export async function rescheduleSession(input: {
+  sessionId: string;
+  scheduledFor: string; // ISO
+  practitionerId?: string;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const session = await prisma.session.findFirst({
+    where: { id: input.sessionId, program: { tenantId: actor.tenantId } },
+    include: {
+      program: { select: { id: true, patientId: true, tenantId: true } },
+    },
+  });
+  if (!session) return { ok: false, error: "Sesión no encontrada." };
+
+  const newDate = new Date(input.scheduledFor);
+  if (Number.isNaN(newDate.getTime())) {
+    return { ok: false, error: "Fecha inválida." };
+  }
+
+  const targetPractitioner = input.practitionerId ?? session.practitionerId;
+  if (targetPractitioner !== session.practitionerId) {
+    const ownedPrac = await prisma.practitioner.findFirst({
+      where: { id: targetPractitioner, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
+  }
+
+  // Look for a companion booking within ±2h of the original session time
+  // belonging to the same patient + practitioner.
+  const originalTime = session.scheduledFor.getTime();
+  const window = 2 * 3_600_000;
+  const companion = await prisma.booking.findFirst({
+    where: {
+      tenantId: actor.tenantId,
+      patientId: session.program.patientId,
+      practitionerId: session.practitionerId,
+      scheduledFor: {
+        gte: new Date(originalTime - window),
+        lt: new Date(originalTime + window),
+      },
+      status: { notIn: ["CANCELLED"] },
+    },
+    select: { id: true },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.session.update({
+      where: { id: input.sessionId },
+      data: { scheduledFor: newDate, practitionerId: targetPractitioner },
+    });
+    if (companion) {
+      await tx.booking.update({
+        where: { id: companion.id },
+        data: { scheduledFor: newDate, practitionerId: targetPractitioner },
+      });
+    }
+  });
+
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "session.reschedule",
+    entity: "Session",
+    entityId: input.sessionId,
+    payload: {
+      from: session.scheduledFor.toISOString(),
+      to: newDate.toISOString(),
+      practitionerId: targetPractitioner,
+      bookingSynced: !!companion,
+    },
+  });
+
+  revalidatePath(`/pacientes/${session.program.patientId}`);
+  revalidatePath("/agenda");
+  return { ok: true, data: undefined };
+}
+
 export async function updateSessionMeta(input: {
   sessionId: string;
   notes?: string;

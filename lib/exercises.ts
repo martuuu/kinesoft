@@ -26,9 +26,20 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
   const gate = await gatingForActor();
   const q = f.q?.trim();
 
+  // Default to EXERCISE-only so existing callers (Biblioteca) don't
+  // suddenly start seeing manual-therapy maneuvers mixed in. The unified
+  // picker in session modals passes `kind: "all"` to opt out.
+  const kindFilter: Prisma.ExerciseWhereInput =
+    f.kind === "all"
+      ? {}
+      : f.kind === "MANUAL_THERAPY"
+        ? { kind: "MANUAL_THERAPY" }
+        : { kind: "EXERCISE" };
+
   const where: Prisma.ExerciseWhereInput = {
     AND: [
       gate.visibility,
+      kindFilter,
       q
         ? {
             OR: [
@@ -79,6 +90,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
     cues: e.cues,
     instructions: e.instructions,
     videoUrl: e.videoUrl,
+    kind: e.kind,
     isPrivate: e.tenantId === actor.tenantId,
     isBasic: e.isBasic,
     isFavourite: Array.isArray(e.favorites) ? e.favorites.length > 0 : false,
@@ -200,6 +212,9 @@ export async function createExercise(input: {
   cues?: string;
   instructions?: string;
   tagSlugs?: string[];
+  /** EXERCISE (default) or MANUAL_THERAPY. Controls which catalogue
+   * page the new row shows up in. */
+  kind?: "EXERCISE" | "MANUAL_THERAPY";
   /** `private` = visible only to this tenant. Custom-created exercises
    * default to `private`. */
   visibility?: "private";
@@ -230,6 +245,7 @@ export async function createExercise(input: {
         muscleGroups: input.muscleGroups?.trim() || null,
         cues: input.cues?.trim() || null,
         instructions: input.instructions?.trim() || null,
+        kind: input.kind ?? "EXERCISE",
         // Practitioner-authored exercises always belong to their tenant
         // — the global catalog is curated centrally.
         tenantId: actor.tenantId,
@@ -252,6 +268,7 @@ export async function createExercise(input: {
       payload: { name },
     });
     revalidatePath("/biblioteca");
+    revalidatePath("/terapia-manual");
     return { ok: true, data: { id: ex.id, slug: ex.slug } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {

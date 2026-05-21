@@ -16,6 +16,7 @@ import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
+import { visibilityForActor } from "@/lib/visibility";
 import { NotificationKind } from "@prisma/client";
 import {
   BookingCreate,
@@ -33,9 +34,11 @@ export async function listBookingsInRange(opts: {
   practitionerId?: string;
 }): Promise<BookingRow[]> {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const rows = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
+      ...v.bookingWhere,
       scheduledFor: { gte: opts.from, lt: opts.to },
       ...(opts.practitionerId ? { practitionerId: opts.practitionerId } : {}),
     },
@@ -77,9 +80,11 @@ export async function listBookingsInRange(opts: {
 
 export async function getDayCounts(opts: { from: Date; to: Date }) {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const rows = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
+      ...v.bookingWhere,
       scheduledFor: { gte: opts.from, lt: opts.to },
       status: { not: "CANCELLED" },
     },
@@ -398,6 +403,160 @@ export async function createBookingSeries(
   });
   revalidatePath("/agenda");
   return { ok: true, data: { created, skipped } };
+}
+
+/**
+ * Create a full TreatmentProgram from the agenda — one `Booking` per
+ * scheduled `Session`, all linked to the same program. Used when the
+ * practitioner wants to lay out a whole plan from the calendar without
+ * going through Diagnóstico.
+ *
+ * `daysOfWeek` is a 0..6 array (Mon=0..Sun=6). The first session falls
+ * on `startScheduledFor`; subsequent sessions advance to the next
+ * matching weekday at the same time. Repeats until `totalSessions` is
+ * filled (or until we hit the safety cap of 64).
+ */
+export async function createBookingPlan(input: {
+  patientId: string;
+  serviceId: string;
+  practitionerId: string;
+  startScheduledFor: string; // ISO
+  durationMin?: number;
+  totalSessions: number;
+  daysOfWeek: number[]; // 0..6 (Mon..Sun)
+  title?: string;
+  notes?: string;
+}): Promise<ActionResult<{ programId: string; created: number; skipped: number }>> {
+  const actor = await getActor();
+  if (!input.patientId) return { ok: false, error: "Elegí un paciente." };
+  if (!input.daysOfWeek.length) return { ok: false, error: "Elegí al menos un día de la semana." };
+  const total = Math.min(64, Math.max(1, Math.floor(input.totalSessions)));
+
+  const [patient, service] = await Promise.all([
+    prisma.patient.findFirst({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      select: { id: true },
+    }),
+    prisma.service.findFirst({
+      where: { id: input.serviceId, tenantId: actor.tenantId },
+      select: { id: true, name: true, durationMin: true },
+    }),
+  ]);
+  if (!patient) return { ok: false, error: "Paciente fuera del tenant." };
+  if (!service) return { ok: false, error: "Servicio inválido." };
+
+  const start = new Date(input.startScheduledFor);
+  if (Number.isNaN(start.getTime())) return { ok: false, error: "Fecha de inicio inválida." };
+  const duration = input.durationMin ?? service.durationMin;
+  const dowSet = new Set(input.daysOfWeek.map((d) => ((d % 7) + 7) % 7));
+
+  // Generate dates: keep the time-of-day from `start`, walk forward day
+  // by day, emit a session whenever the day-of-week is in dowSet.
+  const dates: Date[] = [];
+  const cursor = new Date(start);
+  // Always include the start date even if its DOW isn't in the set, so
+  // the practitioner's chosen "first session" is honoured. After that,
+  // pick subsequent matching DOWs.
+  dates.push(new Date(cursor));
+  cursor.setDate(cursor.getDate() + 1);
+  while (dates.length < total) {
+    const dow = (cursor.getDay() + 6) % 7; // Mon=0..Sun=6
+    if (dowSet.has(dow)) {
+      const next = new Date(cursor);
+      next.setHours(start.getHours(), start.getMinutes(), 0, 0);
+      dates.push(next);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+    // Safety net — at most 365 days lookahead.
+    if (cursor.getTime() - start.getTime() > 365 * 86_400_000) break;
+  }
+
+  // Per-session conflict check before write.
+  const frequency = Math.max(1, dowSet.size);
+  const programTitle =
+    input.title?.trim() || `Plan ${service.name} · ${total} sesiones`;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const program = await tx.treatmentProgram.create({
+      data: {
+        tenantId: actor.tenantId,
+        patientId: input.patientId,
+        title: programTitle,
+        totalSessions: dates.length,
+        frequency,
+        startDate: dates[0],
+        status: "ACTIVE",
+        sessions: {
+          create: dates.map((d, i) => ({
+            practitionerId: input.practitionerId,
+            index: i + 1,
+            scheduledFor: d,
+          })),
+        },
+      },
+    });
+    // Create bookings 1:1 with sessions. Skip on conflict (don't break
+    // the whole plan — the practitioner can reschedule the skipped slot
+    // manually from the agenda).
+    let created = 0;
+    let skipped = 0;
+    for (const when of dates) {
+      const end = new Date(when.getTime() + duration * 60_000);
+      const clash = await tx.booking.findFirst({
+        where: {
+          tenantId: actor.tenantId,
+          practitionerId: input.practitionerId,
+          status: { notIn: ["CANCELLED"] },
+          scheduledFor: {
+            gte: new Date(when.getTime() - 240 * 60_000),
+            lt: end,
+          },
+        },
+        select: { id: true, scheduledFor: true, durationMin: true },
+      });
+      const overlap =
+        clash &&
+        clash.scheduledFor < end &&
+        new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > when;
+      if (overlap) {
+        skipped++;
+        continue;
+      }
+      try {
+        await tx.booking.create({
+          data: {
+            tenantId: actor.tenantId,
+            practitionerId: input.practitionerId,
+            serviceId: service.id,
+            scheduledFor: when,
+            durationMin: duration,
+            patientId: input.patientId,
+            notes: input.notes,
+            status: "CONFIRMED",
+            idempotencyKey: randomBytes(16).toString("hex"),
+          },
+        });
+        created++;
+      } catch {
+        skipped++;
+      }
+    }
+    return { programId: program.id, created, skipped };
+  });
+
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "booking.plan.create",
+    entity: "TreatmentProgram",
+    entityId: result.programId,
+    payload: { totalSessions: dates.length, created: result.created, skipped: result.skipped },
+  });
+
+  revalidatePath("/agenda");
+  revalidatePath("/dashboard");
+  revalidatePath(`/pacientes/${input.patientId}`);
+  return { ok: true, data: result };
 }
 
 /**

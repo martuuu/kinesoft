@@ -1,3 +1,5 @@
+import type { ExerciseKind } from "@prisma/client";
+
 export type ExerciseRow = {
   id: string;
   slug: string;
@@ -11,6 +13,7 @@ export type ExerciseRow = {
   cues: string | null;
   instructions: string | null;
   videoUrl: string | null;
+  kind: ExerciseKind;
   isPrivate: boolean;
   isBasic: boolean;
   isFavourite: boolean;
@@ -28,6 +31,10 @@ export type ExerciseFilters = {
   favouritesOnly?: boolean;
   /** When true, restrict to exercises this tenant created. */
   privateOnly?: boolean;
+  /** Filter by kind. When omitted, returns EXERCISE only (the default
+   * library). Pass `MANUAL_THERAPY` for the maniobras page, or `"all"`
+   * for the unified picker used in session modals. */
+  kind?: ExerciseKind | "all";
 };
 
 export type FilterFacets = {

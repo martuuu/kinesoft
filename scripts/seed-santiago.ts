@@ -63,6 +63,27 @@ async function main() {
   });
   console.log("✅ Membership creado (Rol: OWNER)");
 
+  // 5. Servicios del consultorio
+  const SERVICIOS = [
+    { name: "Kinesiología General",  durationMin: 45, priceCents: 0 },
+    { name: "Osteopatía",            durationMin: 60, priceCents: 0 },
+    { name: "ATM",                   durationMin: 45, priceCents: 0 },
+    { name: "RPG",                   durationMin: 60, priceCents: 0 },
+    { name: "Traumatología",         durationMin: 45, priceCents: 0 },
+  ];
+  for (const srv of SERVICIOS) {
+    // Verificamos si ya existe para no duplicar
+    const existing = await prisma.service.findFirst({
+      where: { tenantId: tenant.id, name: srv.name },
+    });
+    if (!existing) {
+      await prisma.service.create({
+        data: { ...srv, tenantId: tenant.id },
+      });
+    }
+  }
+  console.log("✅ Servicios creados: " + SERVICIOS.map((s) => s.name).join(", "));
+
   console.log("🎉 ¡Listo! Ya podés iniciar sesión con 'olimpo' u otra clave que hayas puesto.");
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { Card, PhotoSlot } from "@/components/ui/card";
@@ -15,8 +16,15 @@ import {
   createProgram,
   deletePatient,
   recordEvaScore,
+  setPatientCoverage,
   updatePatient,
 } from "@/lib/patients";
+import { rescheduleSession } from "@/lib/sessions";
+import { assignPatientToPractitioner } from "@/lib/patients";
+
+type PractitionerOption = { id: string; name: string };
+
+type InsurerOption = { id: string; name: string };
 import {
   deletePatientFile,
   getDownloadUrl,
@@ -46,7 +54,17 @@ type PatientWithRelations = Prisma.PatientGetPayload<{
 
 type Tab = "resumen" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact";
 
-export function PatientProfile({ patient }: { patient: PatientWithRelations }) {
+export function PatientProfile({
+  patient,
+  insurers = [],
+  practitioners = [],
+  canReassign = false,
+}: {
+  patient: PatientWithRelations;
+  insurers?: InsurerOption[];
+  practitioners?: PractitionerOption[];
+  canReassign?: boolean;
+}) {
   const [tab, setTab] = useState<Tab>("resumen");
   const activeProgram = patient.programs.find((p) => p.status === "ACTIVE") ?? patient.programs[0];
   const diagnosis = activeProgram?.case?.diagnoses?.[0]?.condition ?? null;
@@ -64,6 +82,9 @@ export function PatientProfile({ patient }: { patient: PatientWithRelations }) {
         age={age}
         coverageLabel={coverage ? `${coverage.insurer}${coverage.planName ? " " + coverage.planName : ""}` : "Particular"}
         active={!!activeProgram}
+        insurers={insurers}
+        practitioners={practitioners}
+        canReassign={canReassign}
       />
 
       <TabsBar
@@ -85,7 +106,7 @@ export function PatientProfile({ patient }: { patient: PatientWithRelations }) {
         />
       )}
       {tab === "sesiones" && <SesionesView patient={patient} sessions={sessions} />}
-      {tab === "plan" && <PlanView patient={patient} activeProgram={activeProgram} />}
+      {tab === "plan" && <PlanView patient={patient} />}
       {tab === "archivos" && <ArchivosView patientId={patient.id} />}
       {tab === "antec" && <AntecedentesView patient={patient} />}
       {tab === "evol" && <EvolucionView patient={patient} />}
@@ -99,11 +120,17 @@ function PatientHero({
   age,
   coverageLabel,
   active,
+  insurers,
+  practitioners,
+  canReassign,
 }: {
   patient: PatientWithRelations;
   age: number | null;
   coverageLabel: string;
   active: boolean;
+  insurers: InsurerOption[];
+  practitioners: PractitionerOption[];
+  canReassign: boolean;
 }) {
   return (
     <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
@@ -142,14 +169,92 @@ function PatientHero({
           <HeroFact label="Tel." value={patient.phone ?? "—"} />
           <HeroFact label="Email" value={patient.email ?? "—"} />
           <HeroFact label="Cobertura" value={coverageLabel} />
+          <AssignedKineFact
+            patient={patient}
+            practitioners={practitioners}
+            canReassign={canReassign}
+          />
         </div>
       </div>
-      <PatientHeroActions patient={patient} />
+      <PatientHeroActions patient={patient} insurers={insurers} />
     </Card>
   );
 }
 
-function PatientHeroActions({ patient }: { patient: PatientWithRelations }) {
+function AssignedKineFact({
+  patient,
+  practitioners,
+  canReassign,
+}: {
+  patient: PatientWithRelations;
+  practitioners: PractitionerOption[];
+  canReassign: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const current = patient.assignedPractitionerId
+    ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
+    : "Consultorio común";
+
+  if (!canReassign) {
+    return <HeroFact label="Kine" value={current} />;
+  }
+  const onChange = (value: string) => {
+    start(async () => {
+      const r = await assignPatientToPractitioner({
+        patientId: patient.id,
+        practitionerId: value || null,
+      });
+      if (r.ok) router.refresh();
+    });
+  };
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: "var(--navy-300)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}
+      >
+        Kine
+      </div>
+      <select
+        value={patient.assignedPractitionerId ?? ""}
+        disabled={pending}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          marginTop: 2,
+          padding: "4px 8px",
+          borderRadius: 8,
+          border: "1px solid rgba(15,30,51,0.08)",
+          background: "rgba(255,255,255,0.7)",
+          fontSize: 13,
+          color: "var(--navy-900)",
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        <option value="">Consultorio común</option>
+        {practitioners.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function PatientHeroActions({
+  patient,
+  insurers,
+}: {
+  patient: PatientWithRelations;
+  insurers: InsurerOption[];
+}) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   return (
@@ -173,7 +278,13 @@ function PatientHeroActions({ patient }: { patient: PatientWithRelations }) {
         Última actualización:{" "}
         {patient.updatedAt.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}
       </div>
-      {editing && <EditPatientModal patient={patient} onClose={() => setEditing(false)} />}
+      {editing && (
+        <EditPatientModal
+          patient={patient}
+          insurers={insurers}
+          onClose={() => setEditing(false)}
+        />
+      )}
       {deleting && <DeletePatientModal patient={patient} onClose={() => setDeleting(false)} />}
     </div>
   );
@@ -181,14 +292,29 @@ function PatientHeroActions({ patient }: { patient: PatientWithRelations }) {
 
 function EditPatientModal({
   patient,
+  insurers,
   onClose,
 }: {
   patient: PatientWithRelations;
+  insurers: InsurerOption[];
   onClose: () => void;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const currentCoverage = patient.coverages[0];
+  // The select value is either an Insurer id ("ins:<id>"), the literal
+  // "particular" sentinel (no coverage), or "other" (free-form text).
+  const initialCoverageMode = currentCoverage
+    ? currentCoverage.insurerId
+      ? `ins:${currentCoverage.insurerId}`
+      : "other"
+    : "particular";
+  const [coverageMode, setCoverageMode] = useState(initialCoverageMode);
+  const [otherInsurerName, setOtherInsurerName] = useState(
+    currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : ""
+  );
+
   const submit = (formData: FormData) => {
     setError(null);
     start(async () => {
@@ -205,6 +331,34 @@ function EditPatientModal({
       if (!r.ok) {
         setError(r.error);
         return;
+      }
+      // Coverage update — only fire when the practitioner changed it.
+      if (coverageMode !== initialCoverageMode || coverageMode === "other") {
+        const planName = String(formData.get("coveragePlan") ?? "") || undefined;
+        const memberId = String(formData.get("coverageMember") ?? "") || undefined;
+        let cov;
+        if (coverageMode === "particular") {
+          cov = await setPatientCoverage({ patientId: patient.id });
+        } else if (coverageMode === "other") {
+          cov = await setPatientCoverage({
+            patientId: patient.id,
+            insurerName: otherInsurerName,
+            planName,
+            memberId,
+          });
+        } else {
+          const insurerId = coverageMode.replace("ins:", "");
+          cov = await setPatientCoverage({
+            patientId: patient.id,
+            insurerId,
+            planName,
+            memberId,
+          });
+        }
+        if (!cov.ok) {
+          setError(cov.error);
+          return;
+        }
       }
       onClose();
       router.refresh();
@@ -224,6 +378,56 @@ function EditPatientModal({
         </div>
         <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
         <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
+
+        <div
+          style={{
+            display: "grid",
+            gap: 10,
+            padding: 12,
+            borderRadius: 12,
+            background: "rgba(15,30,51,0.03)",
+            border: "1px solid rgba(15,30,51,0.06)",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Cobertura
+          </div>
+          <FormField
+            as="select"
+            label="Obra social"
+            value={coverageMode}
+            onChange={(v) => setCoverageMode(v)}
+            options={[
+              { value: "particular", label: "Particular (sin cobertura)" },
+              ...insurers.map((i) => ({ value: `ins:${i.id}`, label: i.name })),
+              { value: "other", label: "Otra (escribir manualmente)" },
+            ]}
+          />
+          {coverageMode === "other" && (
+            <FormField
+              label="Nombre de la obra social"
+              value={otherInsurerName}
+              onChange={(v) => setOtherInsurerName(v)}
+              placeholder="Ej: PAMI, IOSFA…"
+            />
+          )}
+          {coverageMode !== "particular" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <FormField
+                label="Plan"
+                name="coveragePlan"
+                defaultValue={currentCoverage?.planName ?? ""}
+                placeholder="210, Black, etc."
+              />
+              <FormField
+                label="N° de afiliado"
+                name="coverageMember"
+                defaultValue={currentCoverage?.memberId ?? ""}
+              />
+            </div>
+          )}
+        </div>
+
         <FormField as="textarea" label="Notas" name="notes" defaultValue={patient.notes ?? ""} />
         {error && (
           <div
@@ -711,38 +915,92 @@ function SessionRow({
   );
 }
 
-function PlanView({
-  patient,
-  activeProgram,
-}: {
-  patient: PatientWithRelations;
-  activeProgram?: PatientWithRelations["programs"][number];
-}) {
+function PlanView({ patient }: { patient: PatientWithRelations }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
-  if (!activeProgram) {
-    return (
-      <Card style={{ padding: 24, textAlign: "center" }}>
-        <p style={{ color: "var(--navy-500)" }}>Este paciente no tiene un plan activo.</p>
-        <div style={{ display: "inline-flex", gap: 8 }}>
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            <IconPlus size={14} /> Crear plan
-          </Button>
-          <PlanTemplateApplyButton patientId={patient.id} />
-        </div>
-        {creating && (
-          <CreateProgramModal
-            patientId={patient.id}
-            onClose={() => setCreating(false)}
-            onCreated={() => {
-              setCreating(false);
-              router.refresh();
+  // Show ALL programs of this patient as separate cards. Pre-Sprint 13
+  // only the first ACTIVE program was rendered, which made a second plan
+  // look like it had "merged" into the first.
+  const programs = patient.programs;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {programs.length === 0 ? (
+        <Card style={{ padding: 24, textAlign: "center" }}>
+          <p style={{ color: "var(--navy-500)" }}>Este paciente no tiene planes todavía.</p>
+          <div style={{ display: "inline-flex", gap: 8 }}>
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <IconPlus size={14} /> Crear plan
+            </Button>
+            <PlanTemplateApplyButton patientId={patient.id} />
+          </div>
+        </Card>
+      ) : (
+        <>
+          <header
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
             }}
-          />
-        )}
-      </Card>
-    );
-  }
+          >
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--navy-300)",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+            >
+              {programs.length} {programs.length === 1 ? "plan" : "planes"}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button variant="ghost" onClick={() => setCreating(true)} style={{ fontSize: 12 }}>
+                <IconPlus size={12} /> Plan nuevo
+              </Button>
+              <PlanTemplateApplyButton patientId={patient.id} />
+            </div>
+          </header>
+          {programs.map((prog) => (
+            <ProgramCard key={prog.id} program={prog} />
+          ))}
+        </>
+      )}
+      {creating && (
+        <CreateProgramModal
+          patientId={patient.id}
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProgramCard({
+  program,
+}: {
+  program: PatientWithRelations["programs"][number];
+}) {
+  const done = program.sessions.filter((s) => s.completedAt).length;
+  const pct = program.totalSessions
+    ? Math.round((done / program.totalSessions) * 100)
+    : 0;
+  const status = program.status;
+  const statusTag =
+    status === "ACTIVE"
+      ? <Tag tone="lime">Activo</Tag>
+      : status === "COMPLETED"
+        ? <Tag tone="soft"><IconCheck size={10} stroke={3} /> Completado</Tag>
+        : status === "PAUSED"
+          ? <Tag tone="soft">Pausado</Tag>
+          : <Tag tone="soft">Cancelado</Tag>;
+
   return (
     <Card style={{ padding: 18 }}>
       <header
@@ -756,16 +1014,39 @@ function PlanView({
         }}
       >
         <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            {statusTag}
+            <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
+              {done}/{program.totalSessions} · {pct}%
+            </span>
+          </div>
           <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-            {activeProgram.title}
+            {program.title}
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-            Inicio {activeProgram.startDate.toLocaleDateString("es-AR")} ·{" "}
-            {activeProgram.frequency}×/semana · {activeProgram.totalSessions} sesiones
+            Inicio {program.startDate.toLocaleDateString("es-AR")} ·{" "}
+            {program.frequency}×/semana · {program.totalSessions} sesiones
           </div>
         </div>
-        <AddCustomSessionButton programId={activeProgram.id} />
+        <AddCustomSessionButton programId={program.id} />
       </header>
+      <div
+        style={{
+          height: 6,
+          borderRadius: 3,
+          background: "rgba(15,30,51,0.06)",
+          overflow: "hidden",
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: "linear-gradient(90deg, var(--sky-500), var(--lime-400))",
+          }}
+        />
+      </div>
       <div
         style={{
           display: "grid",
@@ -773,38 +1054,167 @@ function PlanView({
           gap: 10,
         }}
       >
-        {activeProgram.sessions.map((s) => (
-          <a
-            key={s.id}
-            href={`/seguimiento/${s.id}`}
-            style={{
-              textDecoration: "none",
-              color: "inherit",
-              padding: 12,
-              borderRadius: 12,
-              background: s.completedAt ? "rgba(200,245,100,0.18)" : "rgba(246,249,253,0.7)",
-              border: "1px solid rgba(15,30,51,0.06)",
-              cursor: "pointer",
-              display: "block",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 11, color: "var(--navy-500)", fontWeight: 700 }}>
-                Sesión {s.index}
-              </span>
-              {s.completedAt && <IconCheck size={12} stroke={3} />}
-            </div>
-            <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-              {s.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--navy-700)", marginTop: 6 }}>
-              {s.exercises.length} ejercicios ·{" "}
-              {s.exercises.reduce((a, e) => a + e.sets * e.reps, 0)} repeticiones
-            </div>
-          </a>
+        {program.sessions.map((s) => (
+          <SessionCardRow key={s.id} session={s} />
         ))}
       </div>
     </Card>
+  );
+}
+
+function SessionCardRow({
+  session,
+}: {
+  session: PatientWithRelations["programs"][number]["sessions"][number];
+}) {
+  const [editing, setEditing] = useState(false);
+  const done = !!session.completedAt;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        style={{
+          textAlign: "left",
+          padding: 12,
+          borderRadius: 12,
+          background: done ? "rgba(200,245,100,0.18)" : "rgba(246,249,253,0.7)",
+          border: "1px solid rgba(15,30,51,0.06)",
+          cursor: "pointer",
+          display: "block",
+          width: "100%",
+          color: "inherit",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 11, color: "var(--navy-500)", fontWeight: 700 }}>
+            Sesión {session.index}
+          </span>
+          {done && <IconCheck size={12} stroke={3} />}
+        </div>
+        <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+          {session.scheduledFor.toLocaleString("es-AR", {
+            day: "2-digit",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "America/Argentina/Buenos_Aires",
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--navy-700)", marginTop: 6 }}>
+          {session.exercises.length} ejercicios ·{" "}
+          {session.exercises.reduce((a, e) => a + e.sets * e.reps, 0)} repeticiones
+        </div>
+      </button>
+      {editing && (
+        <EditSessionModal
+          session={session}
+          onClose={() => setEditing(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function EditSessionModal({
+  session,
+  onClose,
+}: {
+  session: PatientWithRelations["programs"][number]["sessions"][number];
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const initialLocal = useMemo(() => {
+    const d = session.scheduledFor;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }, [session.scheduledFor]);
+  const [when, setWhen] = useState(initialLocal);
+
+  const save = () => {
+    setError(null);
+    start(async () => {
+      const r = await rescheduleSession({
+        sessionId: session.id,
+        scheduledFor: new Date(when).toISOString(),
+      });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onClose();
+      router.refresh();
+    });
+  };
+
+  return (
+    <Modal
+      onClose={onClose}
+      title={`Sesión ${session.index}`}
+      description={
+        session.completedAt
+          ? "Esta sesión ya fue realizada. Solo podés revisar su detalle."
+          : "Cambiá la fecha/hora si el paciente necesita reprogramar. El turno asociado se mueve automáticamente."
+      }
+      width={460}
+    >
+      <div style={{ display: "grid", gap: 12 }}>
+        <FormField
+          label="Fecha y hora"
+          name="scheduledFor"
+          type="datetime-local"
+          value={when}
+          onChange={(v) => setWhen(v)}
+          disabled={!!session.completedAt}
+        />
+        {error && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              background: "rgba(228,70,70,0.1)",
+              color: "#9F1F1F",
+              fontSize: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <Link
+            href={`/seguimiento/${session.id}`}
+            style={{
+              fontSize: 12.5,
+              color: "var(--sky-700)",
+              textDecoration: "none",
+              fontWeight: 700,
+            }}
+          >
+            Abrir sesión completa →
+          </Link>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+              Cancelar
+            </Button>
+            {!session.completedAt && (
+              <Button type="button" variant="primary" onClick={save} disabled={pending}>
+                {pending ? "Guardando…" : "Guardar"}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

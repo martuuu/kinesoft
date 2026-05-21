@@ -15,6 +15,7 @@ import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
+import { visibilityForActor } from "@/lib/visibility";
 import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
@@ -33,10 +34,12 @@ export async function listPatients(opts: {
   insurer?: string;
 } = {}): Promise<PatientRow[]> {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const q = opts.q?.trim();
   const sort = opts.sort ?? "lastName.asc";
   const where: Prisma.PatientWhereInput = {
     tenantId: actor.tenantId,
+    ...v.patientWhere,
     ...(opts.filter === "archived"
       ? { archivedAt: { not: null } }
       : { archivedAt: null }),
@@ -203,8 +206,9 @@ function csv(s: string) {
 
 export async function getPatient(id: string) {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const patient = await prisma.patient.findFirst({
-    where: { id, tenantId: actor.tenantId },
+    where: { id, tenantId: actor.tenantId, ...v.patientWhere },
     include: {
       coverages: true,
       emergency: true,
@@ -250,7 +254,14 @@ export async function createPatient(
   }
   try {
     const p = await prisma.patient.create({
-      data: { ...parsed.data, tenantId: actor.tenantId },
+      data: {
+        ...parsed.data,
+        tenantId: actor.tenantId,
+        // Auto-assign the new patient to the kine creating them, so the
+        // per-kine visibility mode works out of the box. OWNER/ADMIN can
+        // later re-assign or set null for "consultorio común".
+        assignedPractitionerId: actor.practitionerId,
+      },
     });
     await audit({
       tenantId: actor.tenantId,
@@ -433,5 +444,130 @@ export async function completeSession(input: {
     entityId: input.sessionId,
   });
   revalidatePath(`/pacientes/${sess.program.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Coverage (Obra Social) management
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Set (replace) the patient's primary coverage. Either `insurerId`
+ * resolves to a tenant Insurer row, OR `insurerName` writes a free-form
+ * name (when the practitioner hasn't created the Insurer yet).
+ *
+ * Strategy: delete the patient's existing coverages and create one new
+ * row. Coverage history is currently denormalised — when we need it we
+ * can introduce an "active" flag instead.
+ */
+export async function setPatientCoverage(input: {
+  patientId: string;
+  insurerId?: string;
+  insurerName?: string;
+  planName?: string;
+  memberId?: string;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: input.patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return { ok: false, error: "Paciente no encontrado." };
+
+  let resolvedName = input.insurerName?.trim() || "";
+  let resolvedInsurerId: string | null = null;
+  if (input.insurerId) {
+    const ins = await prisma.insurer.findFirst({
+      where: { id: input.insurerId, tenantId: actor.tenantId },
+      select: { id: true, name: true },
+    });
+    if (!ins) return { ok: false, error: "Obra social no encontrada." };
+    resolvedInsurerId = ins.id;
+    resolvedName = ins.name;
+  }
+  if (!resolvedName) {
+    // Clearing coverage — delete all rows.
+    await prisma.coverage.deleteMany({ where: { patientId: input.patientId } });
+    revalidatePath(`/pacientes/${input.patientId}`);
+    return { ok: true, data: undefined };
+  }
+
+  await prisma.$transaction([
+    prisma.coverage.deleteMany({ where: { patientId: input.patientId } }),
+    prisma.coverage.create({
+      data: {
+        patientId: input.patientId,
+        insurer: resolvedName,
+        insurerId: resolvedInsurerId,
+        planName: input.planName?.trim() || null,
+        memberId: input.memberId?.trim() || null,
+      },
+    }),
+  ]);
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patient.coverage.update",
+    entity: "Patient",
+    entityId: input.patientId,
+    payload: { insurer: resolvedName, insurerId: resolvedInsurerId },
+  });
+  revalidatePath(`/pacientes/${input.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Re-assign a patient to another practitioner of the same tenant — or
+ * unassign (set to `null` = "consultorio común").
+ *
+ * Auth: OWNER + ADMIN only (PRACTITIONER could only see their own
+ * patients in per-kine mode and shouldn't be able to give them away).
+ * The visibility filter already enforces who sees what, so we just
+ * enforce the role on write.
+ */
+export async function assignPatientToPractitioner(input: {
+  patientId: string;
+  practitionerId: string | null;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  const membership = await prisma.membership.findUnique({
+    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+    select: { role: true },
+  });
+  if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return { ok: false, error: "Solo OWNER/ADMIN pueden re-asignar pacientes." };
+  }
+
+  const owned = await prisma.patient.findFirst({
+    where: { id: input.patientId, tenantId: actor.tenantId },
+    select: { id: true, assignedPractitionerId: true },
+  });
+  if (!owned) return { ok: false, error: "Paciente no encontrado." };
+
+  if (input.practitionerId) {
+    const prac = await prisma.practitioner.findFirst({
+      where: { id: input.practitionerId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!prac) return { ok: false, error: "Profesional fuera del tenant." };
+  }
+
+  await prisma.patient.update({
+    where: { id: input.patientId },
+    data: { assignedPractitionerId: input.practitionerId },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patient.reassign",
+    entity: "Patient",
+    entityId: input.patientId,
+    payload: {
+      from: owned.assignedPractitionerId,
+      to: input.practitionerId,
+    },
+  });
+  revalidatePath(`/pacientes/${input.patientId}`);
+  revalidatePath("/pacientes");
   return { ok: true, data: undefined };
 }

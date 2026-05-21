@@ -13,6 +13,8 @@ const NAV = [
   { href: "/diagnostico", label: "Diagnóstico" },
   { href: "/seguimiento", label: "Seguimiento" },
   { href: "/biblioteca", label: "Ejercicios" },
+  { href: "/terapia-manual", label: "Terapia Manual" },
+  { href: "/configuracion", label: "Config" },
 ];
 
 export function TopBar() {

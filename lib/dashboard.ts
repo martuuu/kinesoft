@@ -7,6 +7,7 @@
 
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
+import { visibilityForActor } from "@/lib/visibility";
 import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
 import type { KpiKey } from "@/lib/preferences-constants";
@@ -63,6 +64,7 @@ export type DashboardData = {
 
 export async function getDashboardData(): Promise<DashboardData> {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const now = new Date();
   const today = startOfDay(now);
   const tomorrow = new Date(today);
@@ -89,6 +91,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     prisma.booking.count({
       where: {
         tenantId: actor.tenantId,
+        ...v.bookingWhere,
         scheduledFor: { gte: today, lt: tomorrow },
         status: { not: "CANCELLED" },
       },
@@ -96,25 +99,39 @@ export async function getDashboardData(): Promise<DashboardData> {
     prisma.booking.findMany({
       where: {
         tenantId: actor.tenantId,
+        ...v.bookingWhere,
         scheduledFor: { gte: weekStart, lt: nextWeekStart },
       },
       select: { scheduledFor: true, status: true },
     }),
     prisma.patient.count({
-      where: { tenantId: actor.tenantId, programs: { some: { status: "ACTIVE" } } },
+      where: {
+        tenantId: actor.tenantId,
+        ...v.patientWhere,
+        programs: { some: { status: "ACTIVE" } },
+      },
     }),
     prisma.treatmentProgram.count({
-      where: { tenantId: actor.tenantId, status: "ACTIVE" },
+      where: {
+        tenantId: actor.tenantId,
+        status: "ACTIVE",
+        ...(v.seesAll ? {} : { patient: v.patientWhere }),
+      },
     }),
     prisma.treatmentProgram.count({
       where: {
         tenantId: actor.tenantId,
         status: "ACTIVE",
         sessions: { some: { completedAt: { not: null } } },
+        ...(v.seesAll ? {} : { patient: v.patientWhere }),
       },
     }),
     prisma.patient.count({
-      where: { tenantId: actor.tenantId, createdAt: { gte: monthStart } },
+      where: {
+        tenantId: actor.tenantId,
+        ...v.patientWhere,
+        createdAt: { gte: monthStart },
+      },
     }),
     prisma.session.findMany({
       where: {
@@ -147,6 +164,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     prisma.booking.findMany({
       where: {
         tenantId: actor.tenantId,
+        ...v.bookingWhere,
         scheduledFor: { gte: now },
         status: { notIn: ["CANCELLED", "COMPLETED"] },
       },

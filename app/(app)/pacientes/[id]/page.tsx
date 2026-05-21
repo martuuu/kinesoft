@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPatient } from "@/lib/patients";
+import { listInsurers } from "@/lib/insurers";
+import { getActor } from "@/lib/session";
+import { prisma } from "@/lib/db";
 import { PatientProfile } from "@/components/patients/patient-profile";
 
 export const dynamic = "force-dynamic";
@@ -11,13 +14,35 @@ export async function generateMetadata({ params }: { params: { id: string } }) {
 }
 
 export default async function PatientPage({ params }: { params: { id: string } }) {
-  const patient = await getPatient(params.id);
+  const actor = await getActor();
+  const [patient, insurers, practitioners, membership] = await Promise.all([
+    getPatient(params.id),
+    listInsurers({ onlyActive: true }),
+    prisma.practitioner.findMany({
+      where: { tenantId: actor.tenantId },
+      include: { user: { select: { fullName: true, email: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.membership.findUnique({
+      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+      select: { role: true },
+    }),
+  ]);
   if (!patient) notFound();
+  const canReassign = membership?.role === "OWNER" || membership?.role === "ADMIN";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Breadcrumbs name={`${patient.firstName} ${patient.lastName}`} />
-      <PatientProfile patient={patient} />
+      <PatientProfile
+        patient={patient}
+        insurers={insurers.map((i) => ({ id: i.id, name: i.name }))}
+        practitioners={practitioners.map((p) => ({
+          id: p.id,
+          name: p.user.fullName ?? p.user.email,
+        }))}
+        canReassign={canReassign}
+      />
     </div>
   );
 }

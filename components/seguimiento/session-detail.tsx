@@ -17,8 +17,7 @@ import {
   updateSessionExercise,
   updateSessionMeta,
 } from "@/lib/sessions";
-import { listExercises } from "@/lib/exercises";
-import type { ExerciseRow } from "@/lib/exercises-types";
+import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
 
 type SessionDTO = Prisma.SessionGetPayload<{
   include: {
@@ -261,17 +260,20 @@ function ExerciseSequencer({
         </div>
       )}
 
-      {picker && (
-        <ExercisePicker
-          sessionId={sessionId}
-          existingIds={new Set(local.map((sx) => sx.exerciseId))}
-          onClose={() => setPicker(false)}
-          onAdded={() => {
-            setPicker(false);
-            router.refresh();
-          }}
-        />
-      )}
+      <ExerciseSearchPicker
+        open={picker}
+        existingIds={new Set(local.map((sx) => sx.exerciseId))}
+        onClose={() => setPicker(false)}
+        onPick={(ex) => {
+          start(async () => {
+            const r = await addSessionExercise({ sessionId, exerciseId: ex.id });
+            if (r.ok) {
+              setPicker(false);
+              router.refresh();
+            }
+          });
+        }}
+      />
 
       {pending && (
         <div style={{ fontSize: 10.5, color: "var(--navy-300)", textAlign: "right" }}>guardando…</div>
@@ -473,162 +475,9 @@ function NumberInline({
  * Exercise picker — adds an existing exercise to the session via the
  * server action. Debounced search; click to add.
  */
-function ExercisePicker({
-  sessionId,
-  existingIds,
-  onClose,
-  onAdded,
-}: {
-  sessionId: string;
-  existingIds: Set<string>;
-  onClose: () => void;
-  onAdded: () => void;
-}) {
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<ExerciseRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [pending, start] = useTransition();
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    const t = setTimeout(async () => {
-      const rows = await listExercises({ q: q.trim() || undefined });
-      if (cancelled) return;
-      setResults(rows.slice(0, 20));
-      setLoading(false);
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [q]);
-
-  const add = (ex: ExerciseRow) => {
-    start(async () => {
-      const r = await addSessionExercise({ sessionId, exerciseId: ex.id });
-      if (r.ok) onAdded();
-    });
-  };
-
-  return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 60,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="k-glass-strong k-scroll"
-        style={{
-          position: "relative",
-          width: "min(560px, 100%)",
-          maxHeight: "80vh",
-          overflowY: "auto",
-          borderRadius: 20,
-          padding: 22,
-        }}
-      >
-        <button
-          type="button"
-          aria-label="Cerrar"
-          onClick={onClose}
-          style={{
-            position: "absolute",
-            top: 16,
-            right: 16,
-            width: 32,
-            height: 32,
-            borderRadius: 10,
-            border: "none",
-            background: "rgba(255,255,255,0.7)",
-            cursor: "pointer",
-          }}
-        >
-          <IconX size={14} />
-        </button>
-        <h2
-          className="k-display"
-          style={{ fontSize: 20, margin: "0 40px 12px 0", fontWeight: 700 }}
-        >
-          Agregar ejercicio
-        </h2>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por nombre, músculo, descripción…"
-          autoFocus
-          style={{
-            width: "100%",
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid rgba(15,30,51,0.08)",
-            background: "rgba(255,255,255,0.7)",
-            fontSize: 14,
-            marginBottom: 12,
-          }}
-        />
-        {loading && (
-          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Buscando…</div>
-        )}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {results.map((ex) => {
-            const taken = existingIds.has(ex.id);
-            return (
-              <button
-                key={ex.id}
-                type="button"
-                disabled={taken || pending}
-                onClick={() => add(ex)}
-                style={{
-                  textAlign: "left",
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(15,30,51,0.06)",
-                  background: taken ? "rgba(15,30,51,0.04)" : "#fff",
-                  cursor: taken ? "not-allowed" : "pointer",
-                  opacity: taken ? 0.55 : 1,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>{ex.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                    {ex.muscleGroups ?? "—"} · Nivel {ex.difficulty}
-                  </div>
-                </div>
-                <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-                  {ex.defaultSets}×{ex.defaultReps}
-                </div>
-                <span style={{ color: taken ? "var(--navy-300)" : "var(--sky-700)", fontWeight: 700 }}>
-                  {taken ? "✓" : "+"}
-                </span>
-              </button>
-            );
-          })}
-          {!loading && results.length === 0 && (
-            <div style={{ fontSize: 12, color: "var(--navy-300)", padding: 12, textAlign: "center" }}>
-              Sin resultados.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+// ExercisePicker — replaced by `<ExerciseSearchPicker>` from
+// `components/ui/exercise-search-picker.tsx`, which supports both
+// EXERCISE and MANUAL_THERAPY in a single unified search.
 
 function StatusButton({
   on,

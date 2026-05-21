@@ -686,6 +686,127 @@ helper. Full details in [docs/SPRINT_12.md](docs/SPRINT_12.md).
     `seguimiento/session-detail` modals, `screens/login-screen`).
     Migrate opportunistically.
 
+### Sprint 13 — Configuración + Multi-user + Manual Therapy + Agenda UX (this session)
+Big feature sprint. Full details in [docs/SPRINT_13.md](docs/SPRINT_13.md).
+
+- [x] **Bug fix planes "pisados"** ([components/patients/patient-profile.tsx](components/patients/patient-profile.tsx)) —
+    `PlanView` ahora itera TODOS los `programs` del paciente, cada uno en
+    su propia `ProgramCard` con badge de estado + progress bar.
+    `AddCustomSessionButton` apunta al `programId` correcto. Pre-Sprint 13
+    sólo se renderizaba `programs.find(p => p.status === "ACTIVE")`; los
+    planes siempre estuvieron correctos en la DB.
+- [x] **Schema additions** (migration
+    `20260520170944_sprint_13_insurers_invitations_manual_therapy`):
+    - `enum ExerciseKind { EXERCISE, MANUAL_THERAPY }` + `Exercise.kind`
+      (default `EXERCISE`).
+    - `model Insurer { tenantId, name, copagoCents, fixedFeeCents,
+      active, notes }` — unique `(tenantId, name)`.
+    - `Coverage.insurerId` (FK opcional). `Coverage.insurer` queda como
+      cached display name.
+    - `Patient.assignedPractitionerId` (FK opcional) — drive del modo
+      per-kine.
+    - `Tenant.sharedPatientView Boolean @default(false)`.
+    - `model Invitation { tenantId, email, firstName, lastName, role,
+      specialty, token, invitedById, invitedAt, acceptedAt, expiresAt }`.
+- [x] **/configuracion** (OWNER + ADMIN only) — Subscriber control
+    panel con 4 tabs:
+    - **General**: nombre/razón social/CUIT + **switch Vista compartida
+      del consultorio** (multi-user view toggle).
+    - **Servicios**: CRUD completo del catálogo `Service` (antes solo
+      por seed).
+    - **Obras Sociales**: CRUD `Insurer` con copago (paciente) + monto
+      fijo (prestadora). Soft-deactivate cuando hay coverages
+      apuntando.
+    - **Usuarios** (OWNER only): invitar / cambiar rol / quitar
+      miembros. Lista de invitaciones pendientes con regenerar URL +
+      revocar.
+- [x] **Invitations flow** ([lib/invitations.ts](lib/invitations.ts) +
+    [app/invite/[token]](app/invite/%5Btoken%5D/)):
+    - OWNER mintea token + 7-day expiry. Devuelve URL
+      `${NEXT_PUBLIC_APP_URL}/invite/<token>`.
+    - `/invite/[token]` exige login Supabase con email confirmado que
+      coincida.
+    - `acceptInvite` crea `UserProfile` + `Practitioner` + `Membership`
+      transactional, stamp `acceptedAt`.
+    - `changeMemberRole` / `removeMember` con transfer-owner-protection.
+- [x] **Multi-user visibility** ([lib/visibility.ts](lib/visibility.ts))
+    — `visibilityForActor(actor)` devuelve `{ patientWhere,
+    bookingWhere, seesAll, sharedView }`. Aplicado en:
+    `listPatients`, `getPatient`, `exportPatientsCsv`,
+    `searchPatientsForAssignment`, `listBookingsInRange`, `getDayCounts`,
+    todo el `getDashboardData`. OWNER/ADMIN siempre ven todo;
+    `sharedView=true` lo replica para todos; `sharedView=false`
+    restringe PRACTITIONER a sus pacientes asignados (+ los `null` que
+    son "del consultorio común"). `createPatient` auto-asigna el
+    paciente al kine que lo crea.
+- [x] **Terapia Manual** ([app/(app)/terapia-manual/page.tsx](app/%28app%29/terapia-manual/page.tsx)) —
+    reusa `BibliotecaClient` con `mode="manual-therapy"`. Filter por
+    `kind`. Card stamp lime `Maniobra` tag. `createExercise` acepta
+    `kind`. Seed: 10 maniobras curadas (Cyriax, Masaje
+    descontracturante, FNP cervical, Bombeos articulares, etc.) como
+    rows globales en `scripts/seed-sprint13.ts`.
+- [x] **Agenda UX**:
+    - **`<PatientPicker>`** — search debounced + sequence-guarded
+      (`useRef`), drop-down con avatar + chip al seleccionar.
+      Reemplaza el `<select>` con scroll de 1000 pacientes.
+    - **Convertir en plan** — toggle en el modal de nuevo turno. Cuando
+      se activa, muestra `Cantidad de sesiones` + `DayOfWeekPicker`
+      (Lun-Dom multi-select) y rutea a `createBookingPlan` que crea un
+      `TreatmentProgram` con N sesiones + N bookings 1-a-1 (skip on
+      conflict).
+- [x] **Coverage Insurer dropdown** en `EditPatientModal` — select con
+    insurers del tenant + "Particular" + "Otra (escribir
+    manualmente)". `setPatientCoverage(patientId, { insurerId |
+    insurerName, planName, memberId })` reemplaza la cobertura primaria
+    en transacción.
+- [x] **Seed** ([scripts/seed-sprint13.ts](scripts/seed-sprint13.ts)) —
+    idempotente, 8 obras sociales × 2 tenants + 10 maniobras de
+    terapia manual.
+- [x] `tsc` + `next build` clean. **30 routes** (3 nuevas).
+
+### Sprint 14 — Picker unificado + Edit sesión + Email invitaciones + Re-asignar paciente (this session)
+Cierra los 4 items que quedaron pendientes de Sprint 13. Full details
+en [docs/SPRINT_14.md](docs/SPRINT_14.md). Sin schema changes.
+
+- [x] **`<ExerciseSearchPicker>`** primitiva en
+    [components/ui/exercise-search-picker.tsx](components/ui/exercise-search-picker.tsx)
+    — search debounced + sequence-guard + 3 chips (Ambos / Ejercicios /
+    Maniobras) + diferenciación por color (lime maniobras, sky
+    ejercicios).
+- [x] **Wired en `session-detail.tsx`** — reemplaza el
+    `<ExercisePicker>` local (~155 líneas borradas, route bajó de 7.1
+    kB → 3.93 kB).
+- [x] **Wired en `diagnostico-screen.tsx`** — botón "+ Agregar ejercicio
+    o maniobra" en `RightStack`. State `extraExercises` separado del
+    catálogo de la condición. Sección "Extras agregados (N)" con tags
+    de color + × por item. Al asignar el plan, los extras se mapean a
+    links sintéticos `DIRECT/ACTIVATION` (peso 1) para que el server
+    action los distribuya por fase.
+- [x] **`rescheduleSession`** action en
+    [lib/sessions.ts](lib/sessions.ts) — mueve `Session.scheduledFor` +
+    opcionalmente `practitionerId`, y **sincroniza el Booking
+    companion** (±2h del slot original). Transactional, con audit.
+- [x] **`SessionCardRow` + `EditSessionModal`** en `PlanView` — click
+    en card abre modal con `datetime-local` editable + link "Abrir
+    sesión completa". Disabled cuando la sesión ya está completada.
+- [x] **`lib/supabase/admin.ts`** — `getSupabaseAdminClient()` con
+    `SUPABASE_SERVICE_ROLE_KEY` + `import "server-only"`. Retorna null
+    cuando no hay env → fallback graceful.
+- [x] **Email invitaciones** en
+    [lib/invitations.ts](lib/invitations.ts) — `sendInvitationEmail`
+    helper llama `supabase.auth.admin.inviteUserByEmail(email, {
+    redirectTo: inviteUrl, data })`. `createInvitation` y
+    `regenerateInvitationUrl` retornan `emailSent: boolean`.
+    `ShareInviteModal` muestra banner success/warning según resultado.
+    Botón "Ver link" → "Reenviar" (re-dispara mail sin re-mintar
+    token).
+- [x] **`assignPatientToPractitioner`** action — OWNER/ADMIN only,
+    valida tenant scope, audit con from/to.
+- [x] **`AssignedKineFact`** en patient hero — select inline para
+    OWNER/ADMIN, texto read-only para PRACTITIONER. "Consultorio
+    común" cuando `assignedPractitionerId == null`.
+- [x] `tsc` + `next build` clean. 30 routes.
+
 ### Next iterations (open)
 - [ ] **Phase 7 — workspace mockup → full flow**:
     - Pacientes sortable columns + archive + bulk export + advanced filters.

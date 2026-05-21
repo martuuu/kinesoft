@@ -29,24 +29,35 @@ export type Capabilities = {
   hasFullCatalog: boolean;
 };
 
+type Mode = "exercises" | "manual-therapy";
+
 export function BibliotecaClient({
   items,
   facets,
   active,
   tags,
   capabilities,
+  mode = "exercises",
 }: {
   items: ExerciseRow[];
   facets: FilterFacets;
   active: Active;
   tags: TagOption[];
   capabilities: Capabilities;
+  mode?: Mode;
 }) {
   const router = useRouter();
   const [pendingNav, start] = useTransition();
   const [open, setOpen] = useState<ExerciseRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [q, setQ, flushQ] = useDebouncedSearchParam("q", 300);
+
+  const basePath = mode === "manual-therapy" ? "/terapia-manual" : "/biblioteca";
+  const pageTitle = mode === "manual-therapy" ? "Terapia Manual" : "Biblioteca de ejercicios";
+  const pageSubtitle =
+    mode === "manual-therapy"
+      ? "Maniobras y técnicas manuales para combinar con ejercicios en cada sesión."
+      : "Catálogo de ejercicios. Combinalos con maniobras de terapia manual al armar una sesión.";
 
   const pushFilters = (next: Partial<Active>) => {
     const merged = { ...active, ...next };
@@ -58,7 +69,7 @@ export function BibliotecaClient({
     if (merged.conditionSlug) sp.set("condition", merged.conditionSlug);
     if (merged.favouritesOnly) sp.set("favs", "1");
     if (merged.privateOnly) sp.set("priv", "1");
-    start(() => router.push(`/biblioteca${sp.toString() ? "?" + sp.toString() : ""}`));
+    start(() => router.push(`${basePath}${sp.toString() ? "?" + sp.toString() : ""}`));
   };
 
   const activeFiltersCount = useMemo(
@@ -87,7 +98,7 @@ export function BibliotecaClient({
       >
         <div>
           <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>
-            Biblioteca · plan{" "}
+            {pageTitle} · plan{" "}
             <span
               style={{
                 fontWeight: 700,
@@ -98,11 +109,15 @@ export function BibliotecaClient({
             </span>
           </div>
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-            <span style={{ color: "var(--sky-700)" }}>{items.length}</span> ejercicios
+            <span style={{ color: mode === "manual-therapy" ? "var(--lime-700, #4f8a10)" : "var(--sky-700)" }}>
+              {items.length}
+            </span>{" "}
+            {mode === "manual-therapy" ? "maniobras" : "ejercicios"}
           </h1>
+          <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>{pageSubtitle}</div>
           {!capabilities.hasFullCatalog && (
             <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>
-              Estás viendo el catálogo básico + tus ejercicios. Pasá a PRO para ver el catálogo
+              Estás viendo el catálogo básico + tus elementos. Pasá a PRO para ver el catálogo
               completo con videos.
             </div>
           )}
@@ -307,7 +322,11 @@ export function BibliotecaClient({
 
       {open && <ExerciseDetail ex={open} onClose={() => setOpen(null)} />}
       {creating && (
-        <CreateExerciseModal tags={tags} onClose={() => setCreating(false)} />
+        <CreateExerciseModal
+          tags={tags}
+          kind={mode === "manual-therapy" ? "MANUAL_THERAPY" : "EXERCISE"}
+          onClose={() => setCreating(false)}
+        />
       )}
     </div>
   );
@@ -475,11 +494,14 @@ function ExerciseCard({
         ) : (
           <span />
         )}
-        {ex.isPrivate ? (
-          <Tag tone="sky">🔒 Mío</Tag>
-        ) : ex.isBasic ? (
-          <Tag tone="soft">Básico</Tag>
-        ) : null}
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {ex.kind === "MANUAL_THERAPY" && <Tag tone="lime">Maniobra</Tag>}
+          {ex.isPrivate ? (
+            <Tag tone="sky">🔒 Mío</Tag>
+          ) : ex.isBasic ? (
+            <Tag tone="soft">Básico</Tag>
+          ) : null}
+        </div>
       </div>
     </button>
   );
@@ -689,9 +711,11 @@ function Stat({ label, value }: { label: string; value: string }) {
 function CreateExerciseModal({
   tags,
   onClose,
+  kind = "EXERCISE",
 }: {
   tags: TagOption[];
   onClose: () => void;
+  kind?: "EXERCISE" | "MANUAL_THERAPY";
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -719,6 +743,7 @@ function CreateExerciseModal({
         cues: String(form.get("cues") ?? "") || undefined,
         instructions: String(form.get("instructions") ?? "") || undefined,
         tagSlugs: selectedTags,
+        kind,
       });
       if (!r.ok) {
         setError(r.error);

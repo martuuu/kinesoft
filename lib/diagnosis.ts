@@ -19,6 +19,7 @@ import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
+import { visibilityForActor } from "@/lib/visibility";
 import type { ActionResult } from "@/lib/validation";
 import { rankSelection } from "@/lib/diagnosis-engine";
 import type {
@@ -276,9 +277,11 @@ export async function assignDiagnosisAndCreateProgram(
 
 export async function searchPatientsForAssignment(q: string) {
   const actor = await getActor();
+  const v = await visibilityForActor(actor);
   const term = q.trim();
   const where = {
     tenantId: actor.tenantId,
+    ...v.patientWhere,
     ...(term
       ? {
           OR: [
