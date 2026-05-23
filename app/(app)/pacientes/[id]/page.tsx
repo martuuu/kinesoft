@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPatient } from "@/lib/patients";
+import {
+  getPatientCore,
+  getPatientProgramsFull,
+  getPatientBookingsAll,
+  getPatientEvaScores,
+  getPatientName,
+} from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
 import { prisma } from "@/lib/db";
@@ -9,31 +15,44 @@ import { PatientProfile } from "@/components/patients/patient-profile";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: { id: string } }) {
-  const p = await getPatient(params.id);
+  const p = await getPatientName(params.id);
   return { title: p ? `${p.firstName} ${p.lastName} · HC · KineSoft` : "Paciente · KineSoft" };
 }
 
 export default async function PatientPage({ params }: { params: { id: string } }) {
   const actor = await getActor();
-  const [patient, insurers, practitioners, membership] = await Promise.all([
-    getPatient(params.id),
-    listInsurers({ onlyActive: true }),
-    prisma.practitioner.findMany({
-      where: { tenantId: actor.tenantId },
-      include: { user: { select: { fullName: true, email: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-      select: { role: true },
-    }),
-  ]);
-  if (!patient) notFound();
+  // Run independent queries in parallel — the previous monolithic
+  // `getPatient` join hydrated ~150 rows of SessionExercise + joins to
+  // Exercise in a single read; splitting lets Postgres pick narrower
+  // plans per slice and starts work on each in parallel.
+  const [core, programs, bookings, evaScores, insurers, practitioners, membership] =
+    await Promise.all([
+      getPatientCore(params.id),
+      getPatientProgramsFull(params.id),
+      getPatientBookingsAll(params.id, 20),
+      getPatientEvaScores(params.id),
+      listInsurers({ onlyActive: true }),
+      prisma.practitioner.findMany({
+        where: { tenantId: actor.tenantId },
+        include: { user: { select: { fullName: true, email: true } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.membership.findUnique({
+        where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+        select: { role: true },
+      }),
+    ]);
+  if (!core) notFound();
   const canReassign = membership?.role === "OWNER" || membership?.role === "ADMIN";
+
+  // Compose the legacy `PatientWithRelations` shape so the (large)
+  // PatientProfile client component doesn't need a refactor on this pass.
+  // A future split (Sprint 17) can fetch programs / bookings on tab click.
+  const patient = { ...core, programs, bookings, evaScores };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Breadcrumbs name={`${patient.firstName} ${patient.lastName}`} />
+      <Breadcrumbs name={`${core.firstName} ${core.lastName}`} />
       <PatientProfile
         patient={patient}
         insurers={insurers.map((i) => ({ id: i.id, name: i.name }))}

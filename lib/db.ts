@@ -56,9 +56,27 @@ const READ_OPS = new Set<string>([
  *   (defense-in-depth on top of Postgres RLS).
  * - Use this anywhere you're acting on behalf of a logged-in member.
  *   For background jobs / webhooks / seeds use `prisma` directly.
+ *
+ * **Performance**: the `$extends()` object is memoised per tenantId on
+ * the same `globalForPrisma` object that holds the base client. Building
+ * a new extension per request adds GC pressure for nothing — the
+ * extension closure is pure and tenantId-keyed, so we can hand back the
+ * same instance for the lifetime of the process.
  */
+const tenantClients =
+  (globalForPrisma as typeof globalForPrisma & {
+    tenantClients?: Map<string, ReturnType<PrismaClient["$extends"]>>;
+  }).tenantClients ?? new Map<string, ReturnType<PrismaClient["$extends"]>>();
+if (process.env.NODE_ENV !== "production") {
+  (globalForPrisma as typeof globalForPrisma & {
+    tenantClients?: Map<string, ReturnType<PrismaClient["$extends"]>>;
+  }).tenantClients = tenantClients;
+}
+
 export function getTenantPrisma(tenantId: string) {
-  return prisma.$extends({
+  const cached = tenantClients.get(tenantId);
+  if (cached) return cached;
+  const client = prisma.$extends({
     name: "tenant-scope",
     query: {
       $allModels: {
@@ -76,4 +94,6 @@ export function getTenantPrisma(tenantId: string) {
       },
     },
   });
+  tenantClients.set(tenantId, client);
+  return client;
 }

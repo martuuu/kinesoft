@@ -13,13 +13,14 @@
  *
  * Re-exports the engine types so existing imports keep working.
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, unstable_cache } from "next/cache";
 import { ProgramPhase, ProgramStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
 import { visibilityForActor } from "@/lib/visibility";
+import { tags as cacheTags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import { rankSelection } from "@/lib/diagnosis-engine";
 import type {
@@ -34,26 +35,64 @@ import type {
 // ──────────────────────────────────────────────────────────────────────
 
 export async function loadCatalog(): Promise<CatalogDTO> {
+  const actor = await getActor();
   const gate = await gatingForActor();
-  const [regions, conditions, symptoms, triggers, phases] = await Promise.all([
-    prisma.anatomicalRegion.findMany({ orderBy: [{ view: "asc" }, { sortOrder: "asc" }] }),
-    prisma.condition.findMany({
-      include: {
-        tags: { include: { tag: true } },
-        anatomy: true,
-        // Filter included exercises by the tenant's plan — FREE/STARTER
-        // tenants only see basic + own private exercises through the
-        // diagnosis suggestions.
-        exercises: {
-          where: { exercise: gate.visibility },
-          include: { exercise: true },
-        },
-      },
-    }),
-    prisma.tag.findMany({ where: { kind: "SYMPTOM" }, orderBy: { label: "asc" } }),
-    prisma.tag.findMany({ where: { kind: "TRIGGER" }, orderBy: { label: "asc" } }),
-    prisma.tag.findMany({ where: { kind: "PHASE" }, orderBy: { label: "asc" } }),
-  ]);
+  const fetcher = unstable_cache(
+    async (): Promise<CatalogDTO> => {
+      const [regions, conditions, symptoms, triggers, phases] = await Promise.all([
+        prisma.anatomicalRegion.findMany({
+          orderBy: [{ view: "asc" }, { sortOrder: "asc" }],
+        }),
+        prisma.condition.findMany({
+          include: {
+            tags: { include: { tag: true } },
+            anatomy: true,
+            // Filter included exercises by the tenant's plan — FREE/STARTER
+            // tenants only see basic + own private exercises through the
+            // diagnosis suggestions.
+            exercises: {
+              where: { exercise: gate.visibility },
+              include: { exercise: true },
+            },
+          },
+        }),
+        prisma.tag.findMany({ where: { kind: "SYMPTOM" }, orderBy: { label: "asc" } }),
+        prisma.tag.findMany({ where: { kind: "TRIGGER" }, orderBy: { label: "asc" } }),
+        prisma.tag.findMany({ where: { kind: "PHASE" }, orderBy: { label: "asc" } }),
+      ]);
+      return buildCatalogDTO(regions, conditions, symptoms, triggers, phases);
+    },
+    ["diagnosis:catalog", actor.tenantId, gate.hasFullCatalog ? "full" : "basic"],
+    {
+      // 1h TTL — the catalog (anatomy, conditions, tags) changes only
+      // when seed/migration runs. Invalidated when a tenant adds a
+      // custom exercise (via revalidateTag on `catalog`).
+      tags: [cacheTags.catalog(), cacheTags.anatomy()],
+      revalidate: ttl.long,
+    }
+  );
+  return fetcher();
+}
+
+type _RegionRow = Awaited<ReturnType<typeof prisma.anatomicalRegion.findMany>>[number];
+type _ConditionRow = Awaited<
+  ReturnType<typeof prisma.condition.findMany<{
+    include: {
+      tags: { include: { tag: true } };
+      anatomy: true;
+      exercises: { include: { exercise: true } };
+    };
+  }>>
+>[number];
+type _TagRow = Awaited<ReturnType<typeof prisma.tag.findMany>>[number];
+
+function buildCatalogDTO(
+  regions: _RegionRow[],
+  conditions: _ConditionRow[],
+  symptoms: _TagRow[],
+  triggers: _TagRow[],
+  phases: _TagRow[]
+): CatalogDTO {
 
   return {
     regions: regions.map((r) => ({

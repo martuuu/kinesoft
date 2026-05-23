@@ -605,6 +605,9 @@ model TreatmentProgram {
   sessions Session[]
 
   @@index([tenantId, patientId])
+  // Hot read: `getPatientProgramsLite/Full` orders programs per patient
+  // by createdAt desc — this composite makes that an index-only scan.
+  @@index([patientId, createdAt])
 }
 
 enum ProgramStatus {
@@ -631,6 +634,13 @@ model Session {
   exercises    SessionExercise[]
 
   @@index([programId])
+  // Hot read: sessions are always loaded ordered by `index` within a
+  // program. Composite avoids a sort step on every patient profile load.
+  @@index([programId, index])
+  // Hot read: dashboard "recent sessions" filters `completedAt IS NOT
+  // NULL` then sorts by it descending. A partial index would be ideal
+  // but Prisma doesn't expose them; this still helps the planner.
+  @@index([completedAt])
 }
 
 model SessionExercise {
@@ -713,6 +723,10 @@ model Booking {
 
   @@index([tenantId, scheduledFor])
   @@index([practitionerId, scheduledFor])
+  // Hot read: patient profile bookings list filters by patientId and
+  // orders by scheduledFor desc. The implicit FK index on patientId
+  // alone wouldn't help the sort step.
+  @@index([patientId, scheduledFor])
 }
 
 enum BookingStatus {

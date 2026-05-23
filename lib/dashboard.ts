@@ -5,11 +5,13 @@
  */
 "use server";
 
+import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { visibilityForActor } from "@/lib/visibility";
 import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
+import { tags, ttl } from "@/lib/cache-tags";
 import type { KpiKey } from "@/lib/preferences-constants";
 
 function startOfDay(d: Date) {
@@ -391,17 +393,24 @@ export async function getMonthBookingDays(
   monthIndex0: number
 ): Promise<number[]> {
   const actor = await getActor();
-  const start = new Date(year, monthIndex0, 1);
-  const end = new Date(year, monthIndex0 + 1, 1);
-  const rows = await prisma.booking.findMany({
-    where: {
-      tenantId: actor.tenantId,
-      scheduledFor: { gte: start, lt: end },
-      status: { notIn: ["CANCELLED"] },
+  const fetcher = unstable_cache(
+    async (tenantId: string, y: number, m: number): Promise<number[]> => {
+      const start = new Date(y, m, 1);
+      const end = new Date(y, m + 1, 1);
+      const rows = await prisma.booking.findMany({
+        where: {
+          tenantId,
+          scheduledFor: { gte: start, lt: end },
+          status: { notIn: ["CANCELLED"] },
+        },
+        select: { scheduledFor: true },
+      });
+      const days = new Set<number>();
+      for (const r of rows) days.add(r.scheduledFor.getDate());
+      return Array.from(days).sort((a, b) => a - b);
     },
-    select: { scheduledFor: true },
-  });
-  const days = new Set<number>();
-  for (const r of rows) days.add(r.scheduledFor.getDate());
-  return Array.from(days).sort((a, b) => a - b);
+    ["booking-days", actor.tenantId, String(year), String(monthIndex0)],
+    { tags: [tags.bookingDays(actor.tenantId)], revalidate: ttl.micro }
+  );
+  return fetcher(actor.tenantId, year, monthIndex0);
 }

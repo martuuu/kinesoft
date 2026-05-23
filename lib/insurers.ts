@@ -11,12 +11,13 @@
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER role can read
  * but not mutate — keeping the catalogue stable across the consultorio.
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { InsurerRow } from "@/lib/insurers-types";
 
@@ -32,26 +33,45 @@ async function requireAdminActor() {
   return actor;
 }
 
+/**
+ * `unstable_cache` notes:
+ *
+ *   - It cannot wrap a function that reads `cookies()`/`headers()` —
+ *     hence the `getActor()` call lives OUTSIDE the cached fetcher.
+ *   - `keyParts` is the cache disambiguator; we include tenantId so each
+ *     tenant has its own slice.
+ *   - `tags` is the invalidation handle; we include the tenant prefix so
+ *     `revalidateTag(tags.insurers(tenantId))` only invalidates this
+ *     tenant. Other tenants stay warm.
+ */
 export async function listInsurers(opts: { onlyActive?: boolean } = {}): Promise<InsurerRow[]> {
   const actor = await getActor();
-  const rows = await prisma.insurer.findMany({
-    where: {
-      tenantId: actor.tenantId,
-      ...(opts.onlyActive ? { active: true } : {}),
+  const onlyActive = !!opts.onlyActive;
+  const fetcher = unstable_cache(
+    async (tenantId: string, active: boolean): Promise<InsurerRow[]> => {
+      const rows = await prisma.insurer.findMany({
+        where: {
+          tenantId,
+          ...(active ? { active: true } : {}),
+        },
+        orderBy: [{ active: "desc" }, { name: "asc" }],
+        include: { _count: { select: { coverages: true } } },
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        copagoCents: r.copagoCents,
+        fixedFeeCents: r.fixedFeeCents,
+        active: r.active,
+        notes: r.notes,
+        patientsCount: r._count.coverages,
+        createdAt: r.createdAt,
+      }));
     },
-    orderBy: [{ active: "desc" }, { name: "asc" }],
-    include: { _count: { select: { coverages: true } } },
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    copagoCents: r.copagoCents,
-    fixedFeeCents: r.fixedFeeCents,
-    active: r.active,
-    notes: r.notes,
-    patientsCount: r._count.coverages,
-    createdAt: r.createdAt,
-  }));
+    ["insurers:list", actor.tenantId, String(onlyActive)],
+    { tags: [tags.insurers(actor.tenantId)], revalidate: ttl.short }
+  );
+  return fetcher(actor.tenantId, onlyActive);
 }
 
 const InsurerInput = z.object({
@@ -94,6 +114,7 @@ export async function createInsurer(
       payload: { name: row.name },
     });
     revalidatePath("/configuracion");
+    revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: { id: row.id } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -137,6 +158,7 @@ export async function updateInsurer(
     entityId: id,
   });
   revalidatePath("/configuracion");
+  revalidateTag(tags.insurers(actor.tenantId));
   return { ok: true, data: undefined };
 }
 
@@ -159,6 +181,7 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
       entityId: id,
     });
     revalidatePath("/configuracion");
+    revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: undefined };
   }
   await prisma.insurer.delete({ where: { id } });
@@ -170,5 +193,6 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
     entityId: id,
   });
   revalidatePath("/configuracion");
+  revalidateTag(tags.insurers(actor.tenantId));
   return { ok: true, data: undefined };
 }

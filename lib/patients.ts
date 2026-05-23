@@ -214,6 +214,172 @@ function csv(s: string) {
   return needsQuote ? `"${esc}"` : esc;
 }
 
+/**
+ * Patient core — base patient + coverages + emergency contacts.
+ *
+ * **Hot path.** This is what the server component for `/pacientes/[id]`
+ * loads on every page hit. Heavier slices (programs+sessions+exercises,
+ * full bookings list, eva scores) are split into their own fetchers so
+ * the initial paint isn't paying for tabs the user may never open.
+ *
+ * Audit log is written here — `patient.read` fires once per page load
+ * regardless of which tabs the user navigates into afterwards.
+ */
+export async function getPatientCore(id: string) {
+  const actor = await getActor();
+  const v = await visibilityForActor(actor);
+  const patient = await prisma.patient.findFirst({
+    where: { id, tenantId: actor.tenantId, ...v.patientWhere },
+    include: {
+      coverages: true,
+      emergency: true,
+    },
+  });
+  if (patient) {
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.read",
+      entity: "Patient",
+      entityId: patient.id,
+    });
+  }
+  return patient;
+}
+
+/**
+ * Lite list of patient's programs — id + title + status + counters,
+ * **without** sessions/exercises. Enough for the Resumen tab + tab
+ * badges + "active program" detection.
+ */
+export async function getPatientProgramsLite(patientId: string) {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return [];
+  return prisma.treatmentProgram.findMany({
+    where: { patientId },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      totalSessions: true,
+      frequency: true,
+      startDate: true,
+      createdAt: true,
+      _count: { select: { sessions: true } },
+      case: {
+        select: {
+          diagnoses: {
+            take: 1,
+            orderBy: { rank: "asc" },
+            select: { condition: { select: { id: true, name: true, cie10: true } } },
+          },
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/**
+ * Full patient programs — all sessions + ordered exercises, with the
+ * clinical case + diagnoses. Heavy. Only fetch when the user opens
+ * the Sesiones or Plan tab.
+ */
+export async function getPatientProgramsFull(patientId: string) {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return [];
+  return prisma.treatmentProgram.findMany({
+    where: { patientId },
+    include: {
+      sessions: {
+        orderBy: { index: "asc" },
+        include: {
+          exercises: { include: { exercise: true }, orderBy: { order: "asc" } },
+        },
+      },
+      case: { include: { diagnoses: { include: { condition: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/**
+ * Recent bookings — capped at `take`. Used by the Resumen tab.
+ */
+export async function getPatientBookingsSummary(patientId: string, take = 5) {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return [];
+  return prisma.booking.findMany({
+    where: { patientId },
+    orderBy: { scheduledFor: "desc" },
+    take,
+    select: {
+      id: true,
+      scheduledFor: true,
+      durationMin: true,
+      status: true,
+      paymentStatus: true,
+      notes: true,
+    },
+  });
+}
+
+/**
+ * Full bookings list for the Facturación tab. Capped at 100 so it
+ * doesn't blow up for long-running patients. Returns scalar fields
+ * only — neither `service` nor `payments` are consumed by the current
+ * FacturacionView (it derives everything from `paymentStatus`).
+ */
+export async function getPatientBookingsAll(patientId: string, take = 100) {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return [];
+  return prisma.booking.findMany({
+    where: { patientId },
+    orderBy: { scheduledFor: "desc" },
+    take,
+  });
+}
+
+/**
+ * EVA scores — chronological. Used by the Evolución tab chart.
+ */
+export async function getPatientEvaScores(patientId: string) {
+  const actor = await getActor();
+  const owned = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true },
+  });
+  if (!owned) return [];
+  return prisma.evaScore.findMany({
+    where: { patientId },
+    orderBy: { takenAt: "asc" },
+  });
+}
+
+/**
+ * **Backwards-compatible wrapper** — loads everything in one shot like
+ * the pre-Sprint-16 implementation. Kept so callers that haven't
+ * migrated yet (`generateMetadata`, ad-hoc scripts) still work.
+ *
+ * New code should call the slice-specific fetchers above so it doesn't
+ * pay for relations it doesn't render.
+ */
 export async function getPatient(id: string) {
   const actor = await getActor();
   const v = await visibilityForActor(actor);
@@ -248,6 +414,18 @@ export async function getPatient(id: string) {
     });
   }
   return patient;
+}
+
+/**
+ * Lightweight name-only fetch for metadata + breadcrumbs. Avoids the
+ * audit write so it doesn't double-log every page view.
+ */
+export async function getPatientName(id: string) {
+  const actor = await getActor();
+  return prisma.patient.findFirst({
+    where: { id, tenantId: actor.tenantId },
+    select: { firstName: true, lastName: true },
+  });
 }
 
 export async function createPatient(

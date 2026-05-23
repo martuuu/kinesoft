@@ -10,12 +10,13 @@
  *
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER can read.
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { ServiceRow } from "@/lib/services-types";
 
@@ -33,26 +34,33 @@ async function requireAdminActor() {
 
 export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   const actor = await getActor();
-  const rows = await prisma.service.findMany({
-    where: { tenantId: actor.tenantId },
-    orderBy: { name: "asc" },
-    include: {
-      practitioner: { include: { user: { select: { fullName: true, email: true } } } },
-      _count: { select: { bookings: true } },
+  const fetcher = unstable_cache(
+    async (tenantId: string): Promise<ServiceRow[]> => {
+      const rows = await prisma.service.findMany({
+        where: { tenantId },
+        orderBy: { name: "asc" },
+        include: {
+          practitioner: { include: { user: { select: { fullName: true, email: true } } } },
+          _count: { select: { bookings: true } },
+        },
+      });
+      return rows.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        durationMin: s.durationMin,
+        priceCents: s.priceCents,
+        practitionerId: s.practitionerId,
+        practitionerName: s.practitioner
+          ? (s.practitioner.user.fullName ?? s.practitioner.user.email)
+          : null,
+        bookingsCount: s._count.bookings,
+      }));
     },
-  });
-  return rows.map((s) => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    durationMin: s.durationMin,
-    priceCents: s.priceCents,
-    practitionerId: s.practitionerId,
-    practitionerName: s.practitioner
-      ? (s.practitioner.user.fullName ?? s.practitioner.user.email)
-      : null,
-    bookingsCount: s._count.bookings,
-  }));
+    ["services:list-counts", actor.tenantId],
+    { tags: [tags.services(actor.tenantId)], revalidate: ttl.short }
+  );
+  return fetcher(actor.tenantId);
 }
 
 const ServiceInput = z.object({
@@ -104,6 +112,7 @@ export async function createService(
     });
     revalidatePath("/configuracion");
     revalidatePath("/agenda");
+    revalidateTag(tags.services(actor.tenantId));
     return { ok: true, data: { id: row.id } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -157,6 +166,7 @@ export async function updateService(
   });
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
+  revalidateTag(tags.services(actor.tenantId));
   return { ok: true, data: undefined };
 }
 
@@ -183,5 +193,6 @@ export async function deleteService(id: string): Promise<ActionResult> {
   });
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
+  revalidateTag(tags.services(actor.tenantId));
   return { ok: true, data: undefined };
 }

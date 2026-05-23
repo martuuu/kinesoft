@@ -9,7 +9,7 @@
  * joined. Mutations are intentionally narrow: create, reschedule, change
  * status (confirm / cancel / mark no-show / complete).
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
@@ -17,7 +17,19 @@ import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
 import { visibilityForActor } from "@/lib/visibility";
+import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
+
+/**
+ * Wipe every booking-derived cache slot for a tenant. Called after any
+ * create/update/delete of a Booking — both the agenda calendar dots and
+ * the dashboard KPIs depend on bookings, so invalidating one without
+ * the other surfaces stale data.
+ */
+function invalidateBookingDerivedCaches(tenantId: string) {
+  revalidateTag(tags.bookingDays(tenantId));
+  revalidateTag(tags.dashboard(tenantId));
+}
 import {
   BookingCreate,
   BookingUpdate,
@@ -100,19 +112,31 @@ export async function getDayCounts(opts: { from: Date; to: Date }) {
 
 export async function listServices() {
   const actor = await getActor();
-  return prisma.service.findMany({
-    where: { tenantId: actor.tenantId },
-    orderBy: { name: "asc" },
-  });
+  const fetcher = unstable_cache(
+    async (tenantId: string) =>
+      prisma.service.findMany({
+        where: { tenantId },
+        orderBy: { name: "asc" },
+      }),
+    ["services:list", actor.tenantId],
+    { tags: [tags.services(actor.tenantId)], revalidate: ttl.short }
+  );
+  return fetcher(actor.tenantId);
 }
 
 export async function listPractitioners() {
   const actor = await getActor();
-  return prisma.practitioner.findMany({
-    where: { tenantId: actor.tenantId },
-    include: { user: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const fetcher = unstable_cache(
+    async (tenantId: string) =>
+      prisma.practitioner.findMany({
+        where: { tenantId },
+        include: { user: true },
+        orderBy: { createdAt: "asc" },
+      }),
+    ["practitioners:list", actor.tenantId],
+    { tags: [tags.practitioners(actor.tenantId)], revalidate: ttl.short }
+  );
+  return fetcher(actor.tenantId);
 }
 
 /**
@@ -303,6 +327,7 @@ export async function createBooking(
     revalidatePath("/agenda");
     revalidatePath("/dashboard");
     if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
+    invalidateBookingDerivedCaches(actor.tenantId);
     return { ok: true, data: { id: b.id } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -429,6 +454,7 @@ export async function updateBooking(
   revalidatePath("/agenda");
   revalidatePath("/dashboard");
   if (before.patientId) revalidatePath(`/pacientes/${before.patientId}`);
+  invalidateBookingDerivedCaches(actor.tenantId);
   return { ok: true, data: undefined };
 }
 
@@ -456,6 +482,7 @@ export async function deleteBooking(id: string): Promise<ActionResult> {
   });
   revalidatePath("/agenda");
   if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
+  invalidateBookingDerivedCaches(actor.tenantId);
   return { ok: true, data: undefined };
 }
 
@@ -536,6 +563,7 @@ export async function createBookingSeries(
     payload: { created, skipped, weeks },
   });
   revalidatePath("/agenda");
+  invalidateBookingDerivedCaches(actor.tenantId);
   return { ok: true, data: { created, skipped } };
 }
 
@@ -690,6 +718,7 @@ export async function createBookingPlan(input: {
   revalidatePath("/agenda");
   revalidatePath("/dashboard");
   revalidatePath(`/pacientes/${input.patientId}`);
+  invalidateBookingDerivedCaches(actor.tenantId);
   return { ok: true, data: result };
 }
 

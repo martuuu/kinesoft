@@ -7,12 +7,13 @@
  * mutations: `createExercise` for new custom exercises and `ensureTag`
  * for the tag-combobox create-on-the-fly flow.
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
 import { Prisma, TagKind } from "@prisma/client";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
+import { tags as cacheTags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 
 import type {
@@ -104,53 +105,79 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
 }
 
 export async function getExercise(slug: string) {
+  const actor = await getActor();
   const gate = await gatingForActor();
-  return prisma.exercise.findFirst({
-    where: { AND: [{ slug }, gate.visibility] },
-    include: {
-      conditions: {
-        include: { condition: true },
-        orderBy: { weight: "desc" },
-      },
-      tags: { include: { tag: true } },
-    },
-  });
+  const fetcher = unstable_cache(
+    async (s: string) =>
+      prisma.exercise.findFirst({
+        where: { AND: [{ slug: s }, gate.visibility] },
+        include: {
+          conditions: {
+            include: { condition: true },
+            orderBy: { weight: "desc" },
+          },
+          tags: { include: { tag: true } },
+        },
+      }),
+    ["exercise:slug", slug, actor.tenantId, gate.hasFullCatalog ? "full" : "basic"],
+    {
+      tags: [cacheTags.exercises(actor.tenantId), cacheTags.catalog()],
+      revalidate: ttl.long,
+    }
+  );
+  return fetcher(slug);
 }
 
 export async function loadFilterFacets(): Promise<FilterFacets> {
+  const actor = await getActor();
   const gate = await gatingForActor();
-  const exercises = await prisma.exercise.findMany({
-    where: gate.visibility,
-    select: { difficulty: true, muscleGroups: true, equipment: true },
-  });
-  const muscle = new Set<string>();
-  const equip = new Set<string>();
-  const diff = new Set<number>();
-  for (const e of exercises) {
-    if (e.muscleGroups) {
-      for (const m of e.muscleGroups.split(",")) {
-        const t = m.trim();
-        if (t) muscle.add(t);
+  // The visibility filter (`gate.visibility`) is a Prisma where fragment
+  // that can include the tenantId for private exercises. We pass it as
+  // a stringified key part so different gate states get distinct cache
+  // slots, then re-hand the actual where object via a closure.
+  const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog });
+  const fetcher = unstable_cache(
+    async (): Promise<FilterFacets> => {
+      const exercises = await prisma.exercise.findMany({
+        where: gate.visibility,
+        select: { difficulty: true, muscleGroups: true, equipment: true },
+      });
+      const muscle = new Set<string>();
+      const equip = new Set<string>();
+      const diff = new Set<number>();
+      for (const e of exercises) {
+        if (e.muscleGroups) {
+          for (const m of e.muscleGroups.split(",")) {
+            const t = m.trim();
+            if (t) muscle.add(t);
+          }
+        }
+        if (e.equipment) {
+          for (const m of e.equipment.split(",")) {
+            const t = m.trim();
+            if (t) equip.add(t);
+          }
+        }
+        diff.add(e.difficulty);
       }
+      const conditions = await prisma.condition.findMany({
+        select: { slug: true, name: true },
+        orderBy: { name: "asc" },
+      });
+      return {
+        muscleGroups: Array.from(muscle).sort(),
+        equipment: Array.from(equip).sort(),
+        difficulties: Array.from(diff).sort(),
+        conditions,
+      };
+    },
+    ["exercise-facets", gateKey],
+    {
+      tags: [cacheTags.exerciseFacets(actor.tenantId), cacheTags.catalog()],
+      revalidate: ttl.long,
     }
-    if (e.equipment) {
-      for (const m of e.equipment.split(",")) {
-        const t = m.trim();
-        if (t) equip.add(t);
-      }
-    }
-    diff.add(e.difficulty);
-  }
-  const conditions = await prisma.condition.findMany({
-    select: { slug: true, name: true },
-    orderBy: { name: "asc" },
-  });
-  return {
-    muscleGroups: Array.from(muscle).sort(),
-    equipment: Array.from(equip).sort(),
-    difficulties: Array.from(diff).sort(),
-    conditions,
-  };
+  );
+  return fetcher();
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -269,6 +296,8 @@ export async function createExercise(input: {
     });
     revalidatePath("/biblioteca");
     revalidatePath("/terapia-manual");
+    revalidateTag(cacheTags.exercises(actor.tenantId));
+    revalidateTag(cacheTags.exerciseFacets(actor.tenantId));
     return { ok: true, data: { id: ex.id, slug: ex.slug } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
