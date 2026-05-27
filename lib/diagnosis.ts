@@ -44,6 +44,12 @@ export async function loadCatalog(): Promise<CatalogDTO> {
           orderBy: [{ view: "asc" }, { sortOrder: "asc" }],
         }),
         prisma.condition.findMany({
+          // Sprint 17: include global rows + this tenant's custom
+          // conditions. Custom rows have no anatomy/tag/exercise
+          // links but still show up in the AssignPlanModal picker.
+          where: {
+            OR: [{ tenantId: null }, { tenantId: actor.tenantId }],
+          },
           include: {
             tags: { include: { tag: true } },
             anatomy: true,
@@ -122,6 +128,7 @@ function buildCatalogDTO(
       recoveryWeeksMax: c.recoveryWeeksMax,
       mechanism: c.mechanism,
       redFlags: c.redFlags,
+      isCustom: c.tenantId != null,
       tags: c.tags.map((t) => ({
         slug: t.tag.slug,
         label: t.tag.label,

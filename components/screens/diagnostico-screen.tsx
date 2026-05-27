@@ -831,8 +831,29 @@ function DxSuggestionCard({
       }}
       aria-pressed={on}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>{cond.name}</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {cond.name}
+          </span>
+          {cond.isCustom && (
+            <span
+              title="Diagnóstico personalizado del consultorio"
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                padding: "1px 6px",
+                borderRadius: 999,
+                background: "var(--lime-300)",
+                color: "var(--navy-900)",
+                letterSpacing: "0.04em",
+                flexShrink: 0,
+              }}
+            >
+              PERSONALIZADO
+            </span>
+          )}
+        </span>
         <span
           className="k-mono"
           style={{
@@ -842,6 +863,7 @@ function DxSuggestionCard({
             background: score >= 80 ? "var(--lime-300)" : "var(--sky-100)",
             color: score >= 80 ? "var(--navy-900)" : "var(--sky-700)",
             fontWeight: 700,
+            flexShrink: 0,
           }}
         >
           {score}%
@@ -1153,7 +1175,12 @@ function AssignPlanModal({
       >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <div>
-            <Tag tone="lime">Asignar diagnóstico</Tag>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <Tag tone="lime">Asignar diagnóstico</Tag>
+              {condition.isCustom && (
+                <Tag tone="sky">Personalizado</Tag>
+              )}
+            </div>
             <h2 className="k-display" style={{ fontSize: 26, margin: "8px 0 4px", letterSpacing: "-0.02em" }}>
               {condition.name}
             </h2>

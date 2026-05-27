@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listPatients } from "@/lib/patients";
+import { loadFilterFacets } from "@/lib/exercises";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
@@ -9,6 +10,7 @@ import { IconUsers, IconPlus } from "@/components/ui/icons";
 import { NewPatientButton } from "@/components/patients/new-patient-button";
 import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
 import { PatientRowActions } from "@/components/patients/patient-row-actions";
+import { AdvancedPatientFilters } from "@/components/patients/advanced-filters";
 import {
   BulkActionBar,
   BulkSelectCheckbox,
@@ -23,6 +25,11 @@ type SP = {
   filter?: "all" | "active" | "no-program" | "archived";
   sort?: PatientSort;
   insurer?: string;
+  ageMin?: string;
+  ageMax?: string;
+  diagnosisSlug?: string;
+  lastVisitFrom?: string;
+  lastVisitTo?: string;
 };
 
 const SORT_OPTIONS: { value: PatientSort; label: string }[] = [
@@ -38,7 +45,29 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   const filter = (searchParams.filter ?? "all") as NonNullable<SP["filter"]>;
   const sort = (searchParams.sort ?? "lastName.asc") as PatientSort;
   const insurer = searchParams.insurer ?? "";
-  const patients = await listPatients({ q, filter, sort, insurer: insurer || undefined });
+  const ageMin = searchParams.ageMin ? Number(searchParams.ageMin) : undefined;
+  const ageMax = searchParams.ageMax ? Number(searchParams.ageMax) : undefined;
+  const diagnosisSlug = searchParams.diagnosisSlug ?? "";
+  const lastVisitFrom = searchParams.lastVisitFrom ?? "";
+  const lastVisitTo = searchParams.lastVisitTo ?? "";
+
+  // Conditions list — reusing `loadFilterFacets` keeps the catalog
+  // cached (1h TTL) so the page renders without an extra DB roundtrip
+  // on warm cache hits.
+  const [patients, facets] = await Promise.all([
+    listPatients({
+      q,
+      filter,
+      sort,
+      insurer: insurer || undefined,
+      ageMin: Number.isFinite(ageMin) ? ageMin : undefined,
+      ageMax: Number.isFinite(ageMax) ? ageMax : undefined,
+      diagnosisSlug: diagnosisSlug || undefined,
+      lastVisitFrom: lastVisitFrom || undefined,
+      lastVisitTo: lastVisitTo || undefined,
+    }),
+    loadFilterFacets(),
+  ]);
   const totals = {
     all: patients.length,
     withProgram: patients.filter((p) => p.activeProgramTitle).length,
@@ -47,7 +76,18 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 
   const baseQS = (override: Record<string, string | undefined>) => {
     const sp = new URLSearchParams();
-    const merged: Record<string, string | undefined> = { q, filter, sort, insurer, ...override };
+    const merged: Record<string, string | undefined> = {
+      q,
+      filter,
+      sort,
+      insurer,
+      ageMin: ageMin?.toString(),
+      ageMax: ageMax?.toString(),
+      diagnosisSlug,
+      lastVisitFrom,
+      lastVisitTo,
+      ...override,
+    };
     for (const [k, v] of Object.entries(merged)) {
       if (v) sp.set(k, v);
     }
@@ -155,6 +195,18 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
         </Link>
       </div>
 
+      <AdvancedPatientFilters
+        conditions={facets.conditions}
+        preservedParams={{ q, filter, sort, insurer }}
+        current={{
+          ageMin: searchParams.ageMin,
+          ageMax: searchParams.ageMax,
+          diagnosisSlug,
+          lastVisitFrom,
+          lastVisitTo,
+        }}
+      />
+
       {patients.length === 0 ? (
         <EmptyState />
       ) : (
@@ -184,7 +236,15 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           </div>
           {patients.map((p) => {
             const initials = `${p.firstName} ${p.lastName}`;
-            const tone: "sky" | "lime" | "navy" = p.activeProgramTitle ? "lime" : "sky";
+            const isBasic = p.access === "basic";
+            // Basic rows: muted styling, no plan info, no insurer line,
+            // no archive action (the row's owner controls that), no
+            // bulk-select (those mutate PHI).
+            const tone: "sky" | "lime" | "navy" = isBasic
+              ? "sky"
+              : p.activeProgramTitle
+                ? "lime"
+                : "sky";
             return (
               <div
                 key={p.id}
@@ -196,10 +256,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                   alignItems: "center",
                   fontSize: 13,
                   borderBottom: "1px solid rgba(15,30,51,0.04)",
+                  opacity: isBasic ? 0.75 : 1,
                 }}
               >
                 <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <BulkSelectCheckbox patientId={p.id} />
+                  {isBasic ? <span /> : <BulkSelectCheckbox patientId={p.id} />}
                 </span>
                 <Link
                   href={`/pacientes/${p.id}`}
@@ -218,16 +279,24 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                       {p.lastName}, {p.firstName}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                      {p.email ?? p.phone ?? p.documentId ?? "—"}
+                      {isBasic
+                        ? p.documentId ? `DNI ${p.documentId}` : "Sin acceso"
+                        : (p.email ?? p.phone ?? p.documentId ?? "—")}
                     </div>
                   </div>
                 </Link>
-                <div style={{ color: p.activeProgramTitle ? "var(--navy-700)" : "var(--navy-300)" }}>
-                  {p.activeProgramTitle ?? "Sin plan asignado"}
-                  {p.sessionsTotal > 0 && (
-                    <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-                      {p.sessionsDone} / {p.sessionsTotal}
-                    </div>
+                <div style={{ color: isBasic ? "var(--navy-300)" : p.activeProgramTitle ? "var(--navy-700)" : "var(--navy-300)" }}>
+                  {isBasic ? (
+                    <Tag tone="soft">Sin acceso</Tag>
+                  ) : (
+                    <>
+                      {p.activeProgramTitle ?? "Sin plan asignado"}
+                      {p.sessionsTotal > 0 && (
+                        <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+                          {p.sessionsDone} / {p.sessionsTotal}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 <div style={{ color: "var(--navy-500)" }}>
@@ -242,21 +311,29 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                     : "—"}
                 </div>
                 <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
-                  {p.lastVisit
-                    ? p.lastVisit.toLocaleDateString("es-AR", {
-                        day: "2-digit",
-                        month: "short",
-                      })
-                    : "—"}
+                  {isBasic
+                    ? "—"
+                    : p.lastVisit
+                      ? p.lastVisit.toLocaleDateString("es-AR", {
+                          day: "2-digit",
+                          month: "short",
+                        })
+                      : "—"}
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  {p.activeProgramTitle ? (
+                  {isBasic ? (
+                    <Tag tone="soft">—</Tag>
+                  ) : p.activeProgramTitle ? (
                     <Tag tone="lime">Activo</Tag>
                   ) : (
                     <Tag tone="soft">Inactivo</Tag>
                   )}
                 </div>
-                <PatientRowActions patientId={p.id} archived={filter === "archived"} />
+                {isBasic ? (
+                  <span />
+                ) : (
+                  <PatientRowActions patientId={p.id} archived={filter === "archived"} />
+                )}
               </div>
             );
           })}

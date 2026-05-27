@@ -64,233 +64,307 @@ export type DashboardData = {
   reminderKey: string;
 };
 
+/**
+ * Cacheable inner shape — everything that derives purely from tenantId,
+ * visibility scope and date markers. Excludes per-user bits
+ * (`greetingName`, `pinnedKpis`, `reminderDismissed`, `reminderKey`)
+ * which the outer wrapper layers on top.
+ */
+type DashboardCounts = Omit<
+  DashboardData,
+  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey"
+>;
+
+/**
+ * Heavy DB work — wrapped in `unstable_cache` so repeated dashboard hits
+ * within `ttl.micro` (60s) re-use the result. Cache key includes
+ * `tenantId + scope + dayKey`; the scope token captures whether the
+ * actor is OWNER/ADMIN (`all`), in shared mode (`shared`), or scoped to
+ * a single practitioner (the practitionerId). Two practitioners with
+ * identical scope on the same tenant share the cache entry.
+ *
+ * Cannot read cookies/headers/getActor inside — all inputs are
+ * primitives so the wrapper can serialise them into the cache key.
+ */
+const _loadDashboardCounts = unstable_cache(
+  async (
+    tenantId: string,
+    scope: "all" | string, // "all" or a practitionerId
+    dayKey: string // ISO yyyy-mm-dd, anchors the date ranges
+  ): Promise<DashboardCounts> => {
+    const now = new Date(`${dayKey}T12:00:00`);
+    const today = startOfDay(now);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const weekStart = startOfWeek(now);
+    const nextWeekStart = new Date(weekStart);
+    nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const seesAll = scope === "all";
+    const bookingWhere = seesAll ? {} : { practitionerId: scope };
+    const patientWhere = seesAll
+      ? {}
+      : { OR: [{ assignedPractitionerId: scope }, { assignedPractitionerId: null }] };
+
+    const [
+      todayCount,
+      weekBookings,
+      activePatients,
+      activePrograms,
+      nearingDischarge,
+      newPatientsMonth,
+      recentSessions,
+      nextAppts,
+      monthPayments,
+      prevMonthPayments,
+      insurerPayments,
+    ] = await Promise.all([
+      prisma.booking.count({
+        where: {
+          tenantId,
+          ...bookingWhere,
+          scheduledFor: { gte: today, lt: tomorrow },
+          status: { not: "CANCELLED" },
+        },
+      }),
+      prisma.booking.findMany({
+        where: {
+          tenantId,
+          ...bookingWhere,
+          scheduledFor: { gte: weekStart, lt: nextWeekStart },
+        },
+        select: { scheduledFor: true, status: true },
+      }),
+      prisma.patient.count({
+        where: {
+          tenantId,
+          ...patientWhere,
+          programs: { some: { status: "ACTIVE" } },
+        },
+      }),
+      prisma.treatmentProgram.count({
+        where: {
+          tenantId,
+          status: "ACTIVE",
+          ...(seesAll ? {} : { patient: patientWhere }),
+        },
+      }),
+      prisma.treatmentProgram.count({
+        where: {
+          tenantId,
+          status: "ACTIVE",
+          sessions: { some: { completedAt: { not: null } } },
+          ...(seesAll ? {} : { patient: patientWhere }),
+        },
+      }),
+      prisma.patient.count({
+        where: {
+          tenantId,
+          ...patientWhere,
+          createdAt: { gte: monthStart },
+        },
+      }),
+      prisma.session.findMany({
+        where: {
+          program: { tenantId },
+          completedAt: { not: null },
+        },
+        orderBy: { completedAt: "desc" },
+        take: 4,
+        include: {
+          program: {
+            include: {
+              patient: {
+                include: {
+                  bookings: {
+                    where: {
+                      scheduledFor: { gte: now },
+                      status: { notIn: ["CANCELLED", "COMPLETED"] },
+                    },
+                    orderBy: { scheduledFor: "asc" },
+                    take: 1,
+                    select: { id: true, scheduledFor: true },
+                  },
+                },
+              },
+              case: {
+                include: {
+                  diagnoses: {
+                    include: { condition: true },
+                    take: 1,
+                    orderBy: { rank: "asc" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      prisma.booking.findMany({
+        where: {
+          tenantId,
+          ...bookingWhere,
+          scheduledFor: { gte: now },
+          status: { notIn: ["CANCELLED", "COMPLETED"] },
+        },
+        orderBy: { scheduledFor: "asc" },
+        take: 3,
+        include: { patient: true, service: true },
+      }),
+      prisma.payment.aggregate({
+        where: {
+          booking: { tenantId },
+          status: "PAID",
+          createdAt: { gte: monthStart },
+        },
+        _sum: { amountCents: true },
+      }),
+      prisma.payment.aggregate({
+        where: {
+          booking: { tenantId },
+          status: "PAID",
+          createdAt: { gte: prevMonthStart, lt: monthStart },
+        },
+        _sum: { amountCents: true },
+      }),
+      prisma.payment.aggregate({
+        where: {
+          booking: { tenantId, patient: { coverages: { some: {} } } },
+          status: "PAID",
+          createdAt: { gte: monthStart },
+        },
+        _sum: { amountCents: true },
+      }),
+    ]);
+
+    const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
+      const dayStart = new Date(weekStart);
+      dayStart.setDate(dayStart.getDate() + i);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      let c = 0;
+      let a = 0;
+      for (const b of weekBookings) {
+        if (b.scheduledFor >= dayStart && b.scheduledFor < dayEnd) {
+          if (b.status === "COMPLETED" || b.status === "CONFIRMED") c++;
+          else if (b.status === "NO_SHOW" || b.status === "CANCELLED") a++;
+        }
+      }
+      return { d, c, a };
+    });
+
+    const weekSessions = bars.reduce((s, b) => s + b.c, 0);
+    const totalSlots = weekSessions + bars.reduce((s, b) => s + b.a, 0);
+    const adherencePct = totalSlots ? Math.round((weekSessions / totalSlots) * 100) : 100;
+
+    const monthCents = monthPayments._sum.amountCents ?? 0;
+    const prevCents = prevMonthPayments._sum.amountCents ?? 0;
+    const insurerCents = insurerPayments._sum.amountCents ?? 0;
+    const privateShare = monthCents
+      ? Math.round(((monthCents - insurerCents) / monthCents) * 100)
+      : 0;
+    const insurerShare = monthCents
+      ? Math.round((insurerCents / monthCents) * 100)
+      : 0;
+
+    return {
+      todayCount,
+      weeklyBars: bars,
+      pinned: {
+        activePatients,
+        weekSessions,
+        activePrograms,
+        adherencePct,
+        newPatientsMonth,
+        nearingDischarge,
+      },
+      recent: recentSessions.map((s) => ({
+        id: s.program.patient.id,
+        name: `${s.program.patient.firstName} ${s.program.patient.lastName}`,
+        cond: s.program.case?.diagnoses[0]?.condition?.name ?? s.program.title,
+        sessionsDone: s.index,
+        sessionsTotal: s.program.totalSessions,
+        nextBookingId: s.program.patient.bookings[0]?.id ?? null,
+        nextBookingAt: s.program.patient.bookings[0]?.scheduledFor ?? null,
+      })),
+      next: nextAppts.map((b) => ({
+        id: b.id,
+        time: b.scheduledFor.toLocaleTimeString("es-AR", {
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "America/Argentina/Buenos_Aires",
+        }),
+        name: b.patient
+          ? `${b.patient.firstName} ${b.patient.lastName}`
+          : b.guestName ?? "Sin asignar",
+        tag: b.service.name,
+      })),
+      monthRevenueCents: monthCents,
+      revenuePrevMonthCents: prevCents,
+      privateShare,
+      insurerShare,
+    };
+  },
+  ["dashboard:counts"],
+  // Tags are static here; the per-tenant invalidation is achieved by the
+  // dashboard mutations (createBooking, etc.) calling
+  // `revalidateTag(tags.dashboard(tenantId))`. The wrapper itself is keyed
+  // by tenantId in `keyParts` so different tenants get separate slots.
+  { revalidate: ttl.micro }
+);
+
+/** ISO-week token; rolls over Monday at 00:00 — matches the dismissal key. */
+function isoWeekKey(d: Date): string {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() + 3 - ((x.getDay() + 6) % 7));
+  const week1 = new Date(x.getFullYear(), 0, 4);
+  return (
+    x.getFullYear() +
+    "-W" +
+    String(
+      1 +
+        Math.round(
+          ((x.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
+        )
+    ).padStart(2, "0")
+  );
+}
+
 export async function getDashboardData(): Promise<DashboardData> {
   const actor = await getActor();
   const v = await visibilityForActor(actor);
   const now = new Date();
-  const today = startOfDay(now);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const weekStart = startOfWeek(now);
-  const nextWeekStart = new Date(weekStart);
-  nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const dayKey = now.toISOString().slice(0, 10);
+  const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId;
 
-  const [
-    todayCount,
-    weekBookings,
-    activePatients,
-    activePrograms,
-    nearingDischarge,
-    newPatientsMonth,
-    recentSessions,
-    nextAppts,
-    monthPayments,
-    prevMonthPayments,
-    insurerPayments,
-  ] = await Promise.all([
-    prisma.booking.count({
-      where: {
-        tenantId: actor.tenantId,
-        ...v.bookingWhere,
-        scheduledFor: { gte: today, lt: tomorrow },
-        status: { not: "CANCELLED" },
-      },
-    }),
-    prisma.booking.findMany({
-      where: {
-        tenantId: actor.tenantId,
-        ...v.bookingWhere,
-        scheduledFor: { gte: weekStart, lt: nextWeekStart },
-      },
-      select: { scheduledFor: true, status: true },
-    }),
-    prisma.patient.count({
-      where: {
-        tenantId: actor.tenantId,
-        ...v.patientWhere,
-        programs: { some: { status: "ACTIVE" } },
-      },
-    }),
-    prisma.treatmentProgram.count({
-      where: {
-        tenantId: actor.tenantId,
-        status: "ACTIVE",
-        ...(v.seesAll ? {} : { patient: v.patientWhere }),
-      },
-    }),
-    prisma.treatmentProgram.count({
-      where: {
-        tenantId: actor.tenantId,
-        status: "ACTIVE",
-        sessions: { some: { completedAt: { not: null } } },
-        ...(v.seesAll ? {} : { patient: v.patientWhere }),
-      },
-    }),
-    prisma.patient.count({
-      where: {
-        tenantId: actor.tenantId,
-        ...v.patientWhere,
-        createdAt: { gte: monthStart },
-      },
-    }),
-    prisma.session.findMany({
-      where: {
-        program: { tenantId: actor.tenantId },
-        completedAt: { not: null },
-      },
-      orderBy: { completedAt: "desc" },
-      take: 4,
-      include: {
-        program: {
-          include: {
-            patient: {
-              include: {
-                bookings: {
-                  where: {
-                    scheduledFor: { gte: now },
-                    status: { notIn: ["CANCELLED", "COMPLETED"] },
-                  },
-                  orderBy: { scheduledFor: "asc" },
-                  take: 1,
-                  select: { id: true, scheduledFor: true },
-                },
-              },
-            },
-            case: { include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } } },
-          },
-        },
-      },
-    }),
-    prisma.booking.findMany({
-      where: {
-        tenantId: actor.tenantId,
-        ...v.bookingWhere,
-        scheduledFor: { gte: now },
-        status: { notIn: ["CANCELLED", "COMPLETED"] },
-      },
-      orderBy: { scheduledFor: "asc" },
-      take: 3,
-      include: { patient: true, service: true },
-    }),
-    prisma.payment.aggregate({
-      where: {
-        booking: { tenantId: actor.tenantId },
-        status: "PAID",
-        createdAt: { gte: monthStart },
-      },
-      _sum: { amountCents: true },
-    }),
-    prisma.payment.aggregate({
-      where: {
-        booking: { tenantId: actor.tenantId },
-        status: "PAID",
-        createdAt: { gte: prevMonthStart, lt: monthStart },
-      },
-      _sum: { amountCents: true },
-    }),
-    prisma.payment.aggregate({
-      where: {
-        booking: { tenantId: actor.tenantId, patient: { coverages: { some: {} } } },
-        status: "PAID",
-        createdAt: { gte: monthStart },
-      },
-      _sum: { amountCents: true },
-    }),
-  ]);
+  // Per-tenant cache via dynamically tagged wrapper. The static
+  // `_loadDashboardCounts` provides the underlying compute; this thin
+  // wrapper attaches the tenant-scoped tag so `revalidateTag` from a
+  // mutation only nukes one tenant's slot, not all.
+  const taggedFetcher = unstable_cache(
+    (tenantId: string, s: "all" | string, k: string) =>
+      _loadDashboardCounts(tenantId, s, k),
+    ["dashboard:counts", actor.tenantId, scope, dayKey],
+    { tags: [tags.dashboard(actor.tenantId)], revalidate: ttl.micro }
+  );
 
-  // Weekly bars (7 days, Mon..Sun): realised vs absent (NO_SHOW + CANCELLED).
-  const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
-    const dayStart = new Date(weekStart);
-    dayStart.setDate(dayStart.getDate() + i);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setDate(dayEnd.getDate() + 1);
-    let c = 0;
-    let a = 0;
-    for (const b of weekBookings) {
-      if (b.scheduledFor >= dayStart && b.scheduledFor < dayEnd) {
-        if (b.status === "COMPLETED" || b.status === "CONFIRMED") c++;
-        else if (b.status === "NO_SHOW" || b.status === "CANCELLED") a++;
-      }
-    }
-    return { d, c, a };
-  });
+  const counts = await taggedFetcher(actor.tenantId, scope, dayKey);
 
-  const weekSessions = bars.reduce((s, b) => s + b.c, 0);
-  const totalSlots = weekSessions + bars.reduce((s, b) => s + b.a, 0);
-  const adherencePct = totalSlots ? Math.round((weekSessions / totalSlots) * 100) : 100;
-
-  const monthCents = monthPayments._sum.amountCents ?? 0;
-  const prevCents = prevMonthPayments._sum.amountCents ?? 0;
-  const insurerCents = insurerPayments._sum.amountCents ?? 0;
-  const privateShare = monthCents
-    ? Math.round(((monthCents - insurerCents) / monthCents) * 100)
-    : 0;
-  const insurerShare = monthCents
-    ? Math.round((insurerCents / monthCents) * 100)
-    : 0;
-
-  // ISO-week dismissal key (so the "Más tarde" clears on Monday).
-  const isoWeek = (() => {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
-    const week1 = new Date(d.getFullYear(), 0, 4);
-    return (
-      d.getFullYear() +
-      "-W" +
-      String(
-        1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
-      ).padStart(2, "0")
-    );
-  })();
-  const reminderKey = `near-discharge:${isoWeek}`;
+  // Per-user bits computed outside the cache — preferences / reminder
+  // dismissal differ per practitioner and would explode cache cardinality.
+  const reminderKey = `near-discharge:${isoWeekKey(now)}`;
   const [reminderDismissed, prefs] = await Promise.all([
     isReminderDismissed(reminderKey),
     getUserPreferences(),
   ]);
 
   return {
+    ...counts,
     greetingName: actor.practitionerName.split(" ")[0],
     pinnedKpis: prefs.pinnedKpis,
-    todayCount,
-    weeklyBars: bars,
-    pinned: {
-      activePatients,
-      weekSessions,
-      activePrograms,
-      adherencePct,
-      newPatientsMonth,
-      nearingDischarge,
-    },
-    recent: recentSessions.map((s) => ({
-      id: s.program.patient.id,
-      name: `${s.program.patient.firstName} ${s.program.patient.lastName}`,
-      cond:
-        s.program.case?.diagnoses[0]?.condition?.name ??
-        s.program.title,
-      sessionsDone: s.index,
-      sessionsTotal: s.program.totalSessions,
-      nextBookingId: s.program.patient.bookings[0]?.id ?? null,
-      nextBookingAt: s.program.patient.bookings[0]?.scheduledFor ?? null,
-    })),
-    next: nextAppts.map((b) => ({
-      id: b.id,
-      time: b.scheduledFor.toLocaleTimeString("es-AR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "America/Argentina/Buenos_Aires",
-      }),
-      name: b.patient
-        ? `${b.patient.firstName} ${b.patient.lastName}`
-        : b.guestName ?? "Sin asignar",
-      tag: b.service.name,
-    })),
-    monthRevenueCents: monthCents,
-    revenuePrevMonthCents: prevCents,
-    privateShare,
-    insurerShare,
     reminderDismissed,
     reminderKey,
   };

@@ -12,7 +12,11 @@ const baseInputStyle: React.CSSProperties = {
   marginTop: 6,
   padding: "10px 12px",
   borderRadius: 12,
-  background: "rgba(255,255,255,0.7)",
+  // Was rgba(...,0.7) — too transparent against glass modal backgrounds,
+  // the underlying card content showed through and made selects
+  // unreadable (Sprint 18 UX fix). Bumped to 0.96 keeps a subtle glass
+  // feel while staying legible.
+  background: "rgba(255,255,255,0.96)",
   border: "1px solid rgba(15,30,51,0.08)",
   width: "100%",
   fontSize: 14,
@@ -103,10 +107,14 @@ export function FormField(props: FormFieldProps) {
           disabled={disabled}
           autoFocus={autoFocus}
           onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-          style={inputStyle}
+          // Force a solid background on the select control + its
+          // native dropdown popup. Without `#fff` on both layers,
+          // browsers in some color modes render the popup with the
+          // page background showing through.
+          style={{ ...inputStyle, background: "#fff", appearance: "auto" }}
         >
           {props.options.map((o) => (
-            <option key={o.value} value={o.value}>
+            <option key={o.value} value={o.value} style={{ background: "#fff", color: "var(--navy-900)" }}>
               {o.label}
             </option>
           ))}

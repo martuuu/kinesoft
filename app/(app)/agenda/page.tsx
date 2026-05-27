@@ -1,5 +1,6 @@
 import { listBookingsInRange, listPractitioners, listServices } from "@/lib/bookings";
 import { listPatients } from "@/lib/patients";
+import { getTenantSettings } from "@/lib/tenant-settings";
 import { AgendaClient } from "@/components/agenda/agenda-client";
 
 export const metadata = { title: "Agenda · KineSoft" };
@@ -35,7 +36,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   weekEnd.setDate(weekEnd.getDate() + 7);
 
   const practitionerFilter = searchParams.practitioner ?? null;
-  const [bookings, services, practitioners, patients] = await Promise.all([
+  const [bookings, services, practitioners, patients, settings] = await Promise.all([
     listBookingsInRange({
       from: weekStart,
       to: weekEnd,
@@ -44,6 +45,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     listServices(),
     listPractitioners(),
     listPatients(),
+    getTenantSettings(),
   ]);
 
   return (
@@ -64,6 +66,10 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
         name: p.user.fullName ?? p.user.email,
       }))}
       patients={patients.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }))}
+      businessHours={{
+        start: settings.businessHoursStart,
+        end: settings.businessHoursEnd,
+      }}
     />
   );
 }

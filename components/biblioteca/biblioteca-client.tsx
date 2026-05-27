@@ -12,6 +12,7 @@ import { createExercise, ensureTag } from "@/lib/exercises";
 import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
 import { toggleFavourite } from "@/lib/favourites";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
+import { BulkAssignModal } from "@/components/biblioteca/bulk-assign-modal";
 
 type Active = {
   q?: string;
@@ -51,6 +52,27 @@ export function BibliotecaClient({
   const [open, setOpen] = useState<ExerciseRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [q, setQ, flushQ] = useDebouncedSearchParam("q", 300);
+
+  // Bulk selection — when `bulkMode` is on, card clicks toggle selection
+  // instead of opening the detail modal. The floating action bar at the
+  // bottom shows the count and a button to open the BulkAssignModal.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [appliedMsg, setAppliedMsg] = useState<string | null>(null);
+
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const clearSelection = () => setSelected(new Set());
+  const exitBulk = () => {
+    setBulkMode(false);
+    clearSelection();
+  };
 
   const basePath = mode === "manual-therapy" ? "/terapia-manual" : "/biblioteca";
   const pageTitle = mode === "manual-therapy" ? "Terapia Manual" : "Biblioteca de ejercicios";
@@ -160,6 +182,14 @@ export function BibliotecaClient({
             />
             {pendingNav && <span style={{ fontSize: 11 }}>…</span>}
           </div>
+          <Button
+            variant={bulkMode ? "primary" : "ghost"}
+            onClick={() => (bulkMode ? exitBulk() : setBulkMode(true))}
+            style={{ fontSize: 12 }}
+            title={bulkMode ? "Salir del modo selección" : "Seleccionar varios para asignar a un plan"}
+          >
+            {bulkMode ? "Salir de selección" : "Seleccionar"}
+          </Button>
           <Button variant="primary" onClick={() => setCreating(true)}>
             <IconPlus size={14} /> Nuevo ejercicio
           </Button>
@@ -311,8 +341,13 @@ export function BibliotecaClient({
                 <ExerciseCard
                   key={ex.id}
                   ex={ex}
-                  onOpen={() => setOpen(ex)}
+                  onOpen={() => {
+                    if (bulkMode) toggleSelected(ex.id);
+                    else setOpen(ex);
+                  }}
                   canFavourite={capabilities.canFavourite}
+                  bulkMode={bulkMode}
+                  selected={selected.has(ex.id)}
                 />
               ))}
             </div>
@@ -327,6 +362,85 @@ export function BibliotecaClient({
           kind={mode === "manual-therapy" ? "MANUAL_THERAPY" : "EXERCISE"}
           onClose={() => setCreating(false)}
         />
+      )}
+
+      {bulkMode && selected.size > 0 && (
+        <div
+          role="region"
+          aria-label="Acciones de selección"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 60,
+            padding: "12px 16px",
+            borderRadius: 999,
+            background: "var(--navy-900)",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            boxShadow: "0 16px 40px -10px rgba(15,30,51,0.4)",
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            {selected.size} {selected.size === 1 ? "seleccionado" : "seleccionados"}
+          </span>
+          <Button
+            variant="primary"
+            onClick={() => setAssignOpen(true)}
+            style={{ fontSize: 12, padding: "8px 14px" }}
+          >
+            Asignar a plan
+          </Button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "rgba(255,255,255,0.7)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Limpiar
+          </button>
+        </div>
+      )}
+      {assignOpen && (
+        <BulkAssignModal
+          exerciseIds={Array.from(selected)}
+          onClose={() => setAssignOpen(false)}
+          onApplied={(created) => {
+            setAssignOpen(false);
+            setAppliedMsg(`✓ ${created} asignaciones creadas.`);
+            clearSelection();
+            setTimeout(() => setAppliedMsg(null), 3000);
+          }}
+        />
+      )}
+      {appliedMsg && (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            right: 24,
+            zIndex: 60,
+            padding: "12px 16px",
+            borderRadius: 12,
+            background: "rgba(200,245,100,0.95)",
+            color: "var(--navy-900)",
+            fontSize: 13,
+            fontWeight: 600,
+            boxShadow: "0 12px 30px -10px rgba(15,30,51,0.3)",
+          }}
+        >
+          {appliedMsg}
+        </div>
       )}
     </div>
   );
@@ -392,10 +506,15 @@ function ExerciseCard({
   ex,
   onOpen,
   canFavourite,
+  bulkMode = false,
+  selected = false,
 }: {
   ex: ExerciseRow;
   onOpen: () => void;
   canFavourite: boolean;
+  /** When true, card click toggles selection and shows a check chip. */
+  bulkMode?: boolean;
+  selected?: boolean;
 }) {
   const router = useRouter();
   const [favOptimistic, setFavOptimistic] = useState(ex.isFavourite);
@@ -418,14 +537,17 @@ function ExerciseCard({
   return (
     <button
       onClick={onOpen}
+      aria-pressed={bulkMode ? selected : undefined}
       style={{
         textAlign: "left",
         padding: 14,
         borderRadius: 14,
-        background: "#fff",
-        border: ex.isPrivate
-          ? "1px solid rgba(31,79,190,0.2)"
-          : "1px solid rgba(15,30,51,0.06)",
+        background: selected ? "rgba(200,245,100,0.18)" : "#fff",
+        border: selected
+          ? "1.5px solid var(--sky-700)"
+          : ex.isPrivate
+            ? "1px solid rgba(31,79,190,0.2)"
+            : "1px solid rgba(15,30,51,0.06)",
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
@@ -434,6 +556,27 @@ function ExerciseCard({
         position: "relative",
       }}
     >
+      {bulkMode && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            width: 22,
+            height: 22,
+            borderRadius: 8,
+            background: selected ? "var(--sky-700)" : "rgba(15,30,51,0.06)",
+            color: "#fff",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: selected ? "none" : "1.5px solid rgba(15,30,51,0.18)",
+          }}
+        >
+          {selected ? "✓" : ""}
+        </span>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span
           style={{

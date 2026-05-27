@@ -43,6 +43,13 @@ export type CatalogConditionDTO = {
   recoveryWeeksMax: number | null;
   mechanism: string | null;
   redFlags: string | null;
+  /**
+   * Sprint 17: `true` when this condition was authored by a practitioner
+   * via /configuracion (tenantId != null). Custom rows don't participate
+   * in the matching engine (no tags/anatomy/exercises) but are pickable
+   * as the confirmed diagnosis in the AssignPlanModal.
+   */
+  isCustom: boolean;
   tags: { slug: string; label: string; kind: string; weight: number }[];
   anatomy: { regionSlug: string; role: AnatomyRole }[];
   exercises: {

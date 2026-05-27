@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { ModalCloseButton } from "@/components/ui/modal-close";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 /**
  * Standard centered modal.
@@ -31,6 +32,8 @@ export function Modal({
   width?: number | string;
   lockBackdrop?: boolean;
 }) {
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -65,6 +68,8 @@ export function Modal({
       }}
     >
       <div
+        ref={trapRef}
+        tabIndex={-1}
         className="k-glass-strong k-scroll"
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -74,6 +79,7 @@ export function Modal({
           overflowY: "auto",
           borderRadius: 24,
           padding: 22,
+          outline: "none",
         }}
       >
         <ModalCloseButton onClose={onClose} />

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Prisma } from "@prisma/client";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -18,8 +17,10 @@ import {
   recordEvaScore,
   setPatientCoverage,
   updatePatient,
+  getPatientBookingsAll,
 } from "@/lib/patients";
 import { rescheduleSession } from "@/lib/sessions";
+import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
 import {
   assignPatientToPractitioner,
   deleteProgram,
@@ -29,58 +30,102 @@ import {
   setProgramStatus,
   updateProgram,
 } from "@/lib/patients";
-import type { ActivityEvent } from "@/lib/patients-types";
+import type {
+  ActivityEvent,
+  PatientCore,
+  PatientProgramLite,
+  PatientBookingSummary,
+  PatientBookingFull,
+} from "@/lib/patients-types";
+import type { EvaScore } from "@prisma/client";
 
 type PractitionerOption = { id: string; name: string };
 
 type InsurerOption = { id: string; name: string };
-import {
-  deletePatientFile,
-  getDownloadUrl,
-  listPatientFiles,
-  uploadPatientFile,
-} from "@/lib/files";
-import type { PatientFileRow } from "@/lib/files-types";
 import { PlanTemplateApplyButton } from "@/components/patients/plan-template-apply";
+import { SharePatientButton } from "@/components/patients/share-patient-button";
+import { ActivityView } from "@/components/patients/activity-view";
+import { ArchivosView } from "@/components/patients/archivos-view";
 import { addCustomSession } from "@/lib/sessions";
 
-type PatientWithRelations = Prisma.PatientGetPayload<{
-  include: {
-    coverages: true;
-    emergency: true;
-    programs: {
-      include: {
-        sessions: {
-          include: { exercises: { include: { exercise: true } } };
-        };
-        case: { include: { diagnoses: { include: { condition: true } } } };
-      };
-    };
-    bookings: true;
-    evaScores: true;
-  };
-}>;
+/**
+ * Composite patient prop shape consumed by the views. Built from the
+ * initial server payload (`patientCore + programsLite + recentBookings
+ * + evaScores`) plus lazy slices fetched on tab activation.
+ *
+ * `programs[].sessions` come pre-loaded (with `_count.exercises` only —
+ * no full Exercise rows) because every tab uses session metadata.
+ * `bookings` is replaced with the full list after Facturación opens.
+ */
+type PatientWithRelations = PatientCore & {
+  programs: PatientProgramLite[];
+  bookings: PatientBookingSummary[] | PatientBookingFull[];
+  evaScores: EvaScore[];
+};
 
 type Tab = "resumen" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact" | "actividad";
 
 export function PatientProfile({
-  patient,
+  patientCore,
+  programsLite,
+  recentBookings,
+  billableCount,
+  evaScores,
   insurers = [],
   practitioners = [],
   canReassign = false,
 }: {
-  patient: PatientWithRelations;
+  patientCore: PatientCore;
+  programsLite: PatientProgramLite[];
+  recentBookings: PatientBookingSummary[];
+  billableCount: number;
+  evaScores: EvaScore[];
   insurers?: InsurerOption[];
   practitioners?: PractitionerOption[];
   canReassign?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("resumen");
+
+  // Lazy slice: the full bookings list is only needed for FacturacionView.
+  // While not loaded, `recentBookings` (5 rows) covers Resumen's "próxima
+  // cita" card. The first time the user opens Facturación we fetch it
+  // and cache in component state for the rest of the session.
+  const [bookingsAll, setBookingsAll] = useState<PatientBookingFull[] | null>(null);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+
+  useEffect(() => {
+    if (tab === "fact" && bookingsAll === null && !loadingBookings) {
+      setLoadingBookings(true);
+      let cancelled = false;
+      getPatientBookingsAll(patientCore.id, 100)
+        .then((rows) => {
+          if (!cancelled) setBookingsAll(rows as PatientBookingFull[]);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingBookings(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [tab, bookingsAll, loadingBookings, patientCore.id]);
+
+  // Synthesize the legacy composite shape used by sub-views. The
+  // `bookings` field swaps between recent (initial) and full (after
+  // Facturación opens). Both shapes have the scalar fields the views
+  // read (paymentStatus, scheduledFor, status, durationMin).
+  const patient: PatientWithRelations = useMemo(
+    () => ({
+      ...patientCore,
+      programs: programsLite,
+      bookings: bookingsAll ?? recentBookings,
+      evaScores,
+    }),
+    [patientCore, programsLite, bookingsAll, recentBookings, evaScores]
+  );
+
   const activeProgram = patient.programs.find((p) => p.status === "ACTIVE") ?? patient.programs[0];
   const diagnosis = activeProgram?.case?.diagnoses?.[0]?.condition ?? null;
-  // For the Resumen + Sesiones tab we still focus on the most relevant
-  // ACTIVE program. The `plan` tab count, in contrast, reflects ALL the
-  // patient's plans (the bug pre-fix was showing totalSessions of just
-  // the first program, which looked random when multiple plans existed).
   const sessions = activeProgram?.sessions ?? [];
   const done = sessions.filter((s) => s.completedAt).length;
   const allSessionsCount = patient.programs.reduce(
@@ -110,7 +155,9 @@ export function PatientProfile({
         counts={{
           sesiones: allSessionsCount,
           plan: patient.programs.length,
-          fact: patient.bookings.filter((b) => b.paymentStatus !== "UNPAID").length,
+          // Use the cheap aggregate count for the Facturación badge —
+          // accurate even before the full bookings list is loaded.
+          fact: billableCount,
         }}
       />
 
@@ -127,7 +174,9 @@ export function PatientProfile({
       {tab === "archivos" && <ArchivosView patientId={patient.id} />}
       {tab === "antec" && <AntecedentesView patient={patient} />}
       {tab === "evol" && <EvolucionView patient={patient} />}
-      {tab === "fact" && <FacturacionView patient={patient} />}
+      {tab === "fact" && (
+        <FacturacionView patient={patient} loading={loadingBookings} loaded={bookingsAll !== null} />
+      )}
       {tab === "actividad" && <ActivityView patientId={patient.id} />}
     </div>
   );
@@ -239,6 +288,19 @@ function PatientHeroActions({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <Link
+          href={`/agenda?new=1&patient=${patient.id}`}
+          style={{ textDecoration: "none" }}
+        >
+          <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+            <IconPlus size={12} /> Agregar turno
+          </Button>
+        </Link>
+        <SharePatientButton
+          patientId={patient.id}
+          ownerPractitionerId={patient.assignedPractitionerId}
+          practitioners={practitioners}
+        />
         <Button
           variant="ghost"
           onClick={sendToPortal}
@@ -936,7 +998,7 @@ function SessionRow({
   patientId: string;
 }) {
   const completed = !!session.completedAt;
-  const exerciseCount = session.exercises.length;
+  const exerciseCount = session._count.exercises;
   return (
     <a
       href={`/seguimiento/${session.id}`}
@@ -1440,8 +1502,7 @@ function SessionCardRow({
           })}
         </div>
         <div style={{ fontSize: 11, color: "var(--navy-700)", marginTop: 6 }}>
-          {session.exercises.length} ejercicios ·{" "}
-          {session.exercises.reduce((a, e) => a + e.sets * e.reps, 0)} repeticiones
+          {session._count.exercises} ejercicio{session._count.exercises === 1 ? "" : "s"}
         </div>
       </button>
       {editing && (
@@ -1464,11 +1525,14 @@ function EditSessionModal({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const initialLocal = useMemo(() => {
-    const d = session.scheduledFor;
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }, [session.scheduledFor]);
+  // AR wall-clock formatting via Intl — works the same on the
+  // server (SSR snapshot) and the browser. The old `getFullYear` /
+  // `getHours` path read the runtime's local tz, which on a UTC
+  // host put sessions on the wrong day.
+  const initialLocal = useMemo(
+    () => isoToARLocalInput(session.scheduledFor),
+    [session.scheduledFor]
+  );
   const [when, setWhen] = useState(initialLocal);
 
   const save = () => {
@@ -1476,7 +1540,9 @@ function EditSessionModal({
     start(async () => {
       const r = await rescheduleSession({
         sessionId: session.id,
-        scheduledFor: new Date(when).toISOString(),
+        // Tag with AR offset so the server parses 14:00 as 14:00 AR,
+        // not 14:00 UTC (which displays back as 11:00 AR).
+        scheduledFor: localToARIso(when),
       });
       if (!r.ok) {
         setError(r.error);
@@ -1781,268 +1847,30 @@ function CreateProgramModal({
 // Archivos tab
 // ──────────────────────────────────────────────────────────────────────
 
-const FILE_CATEGORIES: { value: string; label: string }[] = [
-  { value: "REPORT", label: "Informe / estudio" },
-  { value: "DERIVATION", label: "Derivación" },
-  { value: "CONSENT", label: "Consentimiento" },
-  { value: "IMAGE", label: "Imagen / video" },
-  { value: "RECEIPT", label: "Recibo" },
-  { value: "OTHER", label: "Otro" },
-];
-
-function ArchivosView({ patientId }: { patientId: string }) {
-  const [files, setFiles] = useState<PatientFileRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  // Bumped on every successful mutation so the effect below re-fetches.
-  const [bump, setBump] = useState(0);
-
-  // Sequence-guarded fetch: a rapid patientId switch can't have a stale
-  // response from the previous patient overwrite the current one.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    listPatientFiles(patientId)
-      .then((r) => {
-        if (cancelled) return;
-        setFiles(r);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [patientId, bump]);
-
-  const refresh = () => setBump((b) => b + 1);
-
-  const onUpload = (formData: FormData) => {
-    setError(null);
-    start(async () => {
-      const r = await uploadPatientFile(patientId, formData);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      refresh();
-    });
-  };
-
-  const onDelete = (id: string) => {
-    if (!confirm("¿Eliminar este archivo?")) return;
-    start(async () => {
-      const r = await deletePatientFile(id);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      setFiles((s) => s.filter((f) => f.id !== id));
-    });
-  };
-
-  const onDownload = (id: string) => {
-    start(async () => {
-      const r = await getDownloadUrl(id);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      window.open(r.data.url, "_blank");
-    });
-  };
-
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 14 }}>
-      <Card glass style={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
-          Subir archivo
-        </div>
-        <form action={onUpload} style={{ display: "grid", gap: 10 }}>
-          <label
-            style={{
-              padding: "20px 14px",
-              border: "1.5px dashed rgba(31,79,190,0.4)",
-              borderRadius: 14,
-              textAlign: "center",
-              cursor: "pointer",
-              background: "rgba(31,79,190,0.05)",
-              fontSize: 12.5,
-              color: "var(--navy-700)",
-              display: "block",
-            }}
-          >
-            <input type="file" name="file" required style={{ display: "none" }} />
-            <IconFile size={20} />
-            <div style={{ marginTop: 6, fontWeight: 600 }}>Elegir archivo</div>
-            <div style={{ fontSize: 10.5, color: "var(--navy-300)", marginTop: 2 }}>
-              Hasta 25 MB · PDF, jpg, png…
-            </div>
-          </label>
-          <label style={{ fontSize: 11, fontWeight: 600, color: "var(--navy-500)" }}>
-            Categoría
-            <select
-              name="category"
-              defaultValue="REPORT"
-              style={{
-                marginTop: 4,
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid rgba(15,30,51,0.08)",
-                background: "rgba(255,255,255,0.7)",
-                fontSize: 13,
-              }}
-            >
-              {FILE_CATEGORIES.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ fontSize: 11, fontWeight: 600, color: "var(--navy-500)" }}>
-            Descripción (opcional)
-            <input
-              name="description"
-              style={{
-                marginTop: 4,
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 10,
-                border: "1px solid rgba(15,30,51,0.08)",
-                background: "rgba(255,255,255,0.7)",
-                fontSize: 13,
-              }}
-            />
-          </label>
-          {error && (
-            <div
-              style={{
-                padding: 8,
-                borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
-                fontSize: 11.5,
-              }}
-            >
-              {error}
-            </div>
-          )}
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending ? "Subiendo…" : "Subir"}
-          </Button>
-        </form>
-      </Card>
-
-      <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div
-          style={{
-            padding: "12px 18px",
-            display: "grid",
-            gridTemplateColumns: "1.5fr 1fr 80px 90px 100px",
-            gap: 14,
-            fontSize: 10,
-            fontWeight: 700,
-            color: "var(--navy-300)",
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            borderBottom: "1px solid rgba(15,30,51,0.06)",
-          }}
-        >
-          <span>Nombre</span>
-          <span>Categoría</span>
-          <span>Tamaño</span>
-          <span>Subido</span>
-          <span style={{ textAlign: "right" }}>Acción</span>
-        </div>
-        {loading ? (
-          <div style={{ padding: 24, color: "var(--navy-300)", textAlign: "center", fontSize: 13 }}>
-            Cargando archivos…
-          </div>
-        ) : files.length === 0 ? (
-          <div style={{ padding: 24, color: "var(--navy-300)", textAlign: "center", fontSize: 13 }}>
-            Sin archivos cargados.
-          </div>
-        ) : (
-          files.map((f) => (
-            <div
-              key={f.id}
-              style={{
-                padding: "12px 18px",
-                display: "grid",
-                gridTemplateColumns: "1.5fr 1fr 80px 90px 100px",
-                gap: 14,
-                alignItems: "center",
-                fontSize: 13,
-                borderBottom: "1px solid rgba(15,30,51,0.04)",
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{f.name}</div>
-                {f.description && (
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>{f.description}</div>
-                )}
-              </div>
-              <span style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-                {FILE_CATEGORIES.find((c) => c.value === f.category)?.label ?? f.category}
-              </span>
-              <span className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-                {(f.sizeBytes / 1024).toFixed(0)} KB
-              </span>
-              <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                {f.createdAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })}
-              </span>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
-                {f.hasDownload && (
-                  <button
-                    onClick={() => onDownload(f.id)}
-                    style={{
-                      background: "rgba(31,79,190,0.08)",
-                      color: "var(--sky-700)",
-                      border: "none",
-                      padding: "5px 10px",
-                      borderRadius: 8,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Descargar
-                  </button>
-                )}
-                <button
-                  onClick={() => onDelete(f.id)}
-                  style={{
-                    background: "transparent",
-                    color: "#9F1F1F",
-                    border: "none",
-                    padding: "5px 8px",
-                    borderRadius: 8,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  <IconX size={11} />
-                </button>
-              </div>
-            </div>
-          ))
-        )}
-      </Card>
-    </div>
-  );
-}
-
 // ──────────────────────────────────────────────────────────────────────
 // Facturación tab
 // ──────────────────────────────────────────────────────────────────────
 
-function FacturacionView({ patient }: { patient: PatientWithRelations }) {
+function FacturacionView({
+  patient,
+  loading,
+  loaded,
+}: {
+  patient: PatientWithRelations;
+  loading: boolean;
+  loaded: boolean;
+}) {
+  // While the full bookings list is in flight, render a lightweight
+  // skeleton instead of computing aggregates from the partial 5-row
+  // recent slice (which would show misleading numbers in the summary
+  // cards). Once loaded, the in-memory aggregates are authoritative.
+  if (loading || !loaded) {
+    return (
+      <Card glass style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
+        Cargando movimientos…
+      </Card>
+    );
+  }
   const totalPaid = patient.bookings
     .filter((b) => b.paymentStatus === "PAID")
     .length;
@@ -2172,195 +2000,3 @@ function BookingStatusTag({ status }: { status: PatientWithRelations["bookings"]
   return <Tag tone={m.tone}>{m.label}</Tag>;
 }
 
-// Modal + FormField primitives are imported from `components/ui/`.
-
-function ActivityView({ patientId }: { patientId: string }) {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    getPatientActivity(patientId, { limit: 80 })
-      .then((rows) => {
-        if (cancelled) return;
-        setEvents(rows);
-        setLoading(false);
-      })
-      .catch(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [patientId]);
-
-  if (loading) {
-    return (
-      <Card style={{ padding: 18, textAlign: "center", color: "var(--navy-500)" }}>
-        Cargando actividad…
-      </Card>
-    );
-  }
-  if (events.length === 0) {
-    return (
-      <Card style={{ padding: 18, textAlign: "center", color: "var(--navy-500)" }}>
-        Todavía no hay actividad registrada para este paciente.
-      </Card>
-    );
-  }
-
-  // Group by date for a clean timeline.
-  const groups = new Map<string, ActivityEvent[]>();
-  for (const ev of events) {
-    const k = ev.createdAt.toLocaleDateString("es-AR", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-      timeZone: "America/Argentina/Buenos_Aires",
-    });
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k)!.push(ev);
-  }
-
-  return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
-      <div
-        style={{
-          padding: "14px 18px",
-          borderBottom: "1px solid rgba(15,30,51,0.06)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: "var(--navy-300)",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-            }}
-          >
-            Actividad
-          </div>
-          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-            {events.length} eventos · todo cambio sobre la HC queda registrado.
-          </div>
-        </div>
-      </div>
-      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
-        {Array.from(groups.entries()).map(([date, items]) => (
-          <div key={date}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: "var(--navy-300)",
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                marginBottom: 8,
-              }}
-            >
-              {date}
-            </div>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-              {items.map((ev) => (
-                <li
-                  key={ev.id}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "60px 1fr auto",
-                    gap: 12,
-                    alignItems: "center",
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    background: "rgba(246,249,253,0.6)",
-                    border: "1px solid rgba(15,30,51,0.04)",
-                  }}
-                >
-                  <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                    {ev.createdAt.toLocaleTimeString("es-AR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      timeZone: "America/Argentina/Buenos_Aires",
-                    })}
-                  </span>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
-                      {humanizeAction(ev.action)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                      {ev.entity}
-                      {ev.actorName ? ` · ${ev.actorName}` : ""}
-                    </div>
-                  </div>
-                  {ev.payload && Object.keys(ev.payload).length > 0 && (
-                    <details>
-                      <summary
-                        style={{
-                          fontSize: 11,
-                          color: "var(--sky-700)",
-                          cursor: "pointer",
-                          fontWeight: 600,
-                        }}
-                      >
-                        ver detalle
-                      </summary>
-                      <pre
-                        style={{
-                          marginTop: 6,
-                          padding: 8,
-                          background: "rgba(15,30,51,0.05)",
-                          borderRadius: 8,
-                          fontSize: 11,
-                          maxWidth: 280,
-                          overflow: "auto",
-                        }}
-                      >
-                        {JSON.stringify(ev.payload, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function humanizeAction(action: string): string {
-  const map: Record<string, string> = {
-    "patient.read": "HC consultada",
-    "patient.update": "Datos actualizados",
-    "patient.create": "Paciente creado",
-    "patient.delete": "Paciente eliminado",
-    "patient.archive": "Paciente archivado",
-    "patient.unarchive": "Paciente restaurado",
-    "patient.coverage.update": "Cobertura actualizada",
-    "patient.reassign": "Re-asignado a otro kine",
-    "patient.bulk_archive": "Archivado en lote",
-    "patient.bulk_unarchive": "Restaurado en lote",
-    "patient.portal_invite": "Invitado al portal",
-    "patient.portal_invite.resend": "Invitación al portal reenviada",
-    "booking.create": "Turno creado",
-    "booking.update": "Turno actualizado",
-    "booking.delete": "Turno eliminado",
-    "booking.series.create": "Serie de turnos creada",
-    "booking.plan.create": "Plan creado desde la agenda",
-    "booking.public.create": "Reserva pública creada",
-    "program.create": "Plan creado",
-    "program.update": "Plan editado",
-    "program.delete": "Plan eliminado",
-    "program.status": "Estado del plan cambiado",
-    "session.complete": "Sesión cerrada",
-    "session.reschedule": "Sesión reprogramada",
-    "session.delete": "Sesión eliminada",
-    "patientFile.upload": "Archivo subido",
-    "patientFile.delete": "Archivo eliminado",
-    "patientFile.download": "Archivo descargado",
-  };
-  return map[action] ?? action;
-}

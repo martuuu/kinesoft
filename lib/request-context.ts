@@ -15,6 +15,13 @@ export type RequestContext = {
   practitionerId: string | null;
   ip?: string;
   userAgent?: string;
+  /**
+   * Per-request trace ID minted by middleware. Stamped on every log
+   * line via the `logger.withRequest()` helper so a single ID lets
+   * you grep one request across services. Optional because background
+   * jobs / webhooks don't run inside the middleware-tagged ALS frame.
+   */
+  requestId?: string;
 };
 
 const als = new AsyncLocalStorage<RequestContext>();

@@ -516,3 +516,192 @@ export async function substituteSessionExercise(input: {
   revalidatePath(`/pacientes/${sx.session.program.patientId}`);
   return { ok: true, data: { id: input.newExerciseId } };
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Bulk-assign — Sprint 16 (D.1)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Programs the actor can pick when bulk-assigning exercises from the
+ * Biblioteca. We list every ACTIVE / PAUSED program in the tenant the
+ * actor has access to (owner or shared); the picker UI filters by
+ * patient as the user types.
+ */
+export async function listAssignablePrograms(): Promise<
+  {
+    id: string;
+    title: string;
+    patientId: string;
+    patientName: string;
+    totalSessions: number;
+    completedSessions: number;
+    status: "ACTIVE" | "PAUSED";
+  }[]
+> {
+  const actor = await getActor();
+  const rows = await prisma.treatmentProgram.findMany({
+    where: {
+      tenantId: actor.tenantId,
+      status: { in: ["ACTIVE", "PAUSED"] },
+    },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      totalSessions: true,
+      patient: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          assignedPractitionerId: true,
+        },
+      },
+      _count: {
+        select: { sessions: { where: { completedAt: { not: null } } } },
+      },
+    },
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+  });
+
+  // Visibility gate: we don't want to leak that other-owner patients
+  // exist via the program picker. Filter using the same access model.
+  const { bulkPatientAccess } = await import("@/lib/visibility");
+  const access = await bulkPatientAccess(
+    actor,
+    rows.map((r) => r.patient.id)
+  );
+  return rows
+    .filter((r) => access.get(r.patient.id) === "full")
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      patientId: r.patient.id,
+      patientName: `${r.patient.firstName} ${r.patient.lastName}`,
+      totalSessions: r.totalSessions,
+      completedSessions: r._count.sessions,
+      status: r.status as "ACTIVE" | "PAUSED",
+    }));
+}
+
+/**
+ * Append exercises to a contiguous range of sessions in a program. The
+ * `range` decides which sessions receive them:
+ *
+ *   - `"all"`        → every session
+ *   - `{ fromIndex }` → from session N to the end
+ *   - `{ phases: [...] }` → only sessions whose phase matches (uses
+ *     each session's `index` modulo program length to bucket into
+ *     ACTIVATION / STABILITY / LOAD / PROGRESSION — same convention as
+ *     `assignDiagnosisAndCreateProgram`)
+ *
+ * For each target session, every chosen exercise is appended at the end
+ * (max order + 1). Default sets/reps come from the Exercise row.
+ * Returns the number of (session, exercise) pairs created.
+ *
+ * Plan-gating is enforced: a FREE tenant cannot bulk-assign exercises
+ * outside its visibility window.
+ */
+export async function bulkAddSessionExercises(input: {
+  programId: string;
+  exerciseIds: string[];
+  range: { kind: "all" } | { kind: "fromIndex"; fromIndex: number };
+}): Promise<ActionResult<{ created: number; skipped: number }>> {
+  const actor = await getActor();
+  if (input.exerciseIds.length === 0) {
+    return { ok: false, error: "No seleccionaste ejercicios." };
+  }
+  if (input.exerciseIds.length > 50) {
+    return { ok: false, error: "Demasiados ejercicios (máx. 50 por operación)." };
+  }
+
+  const program = await prisma.treatmentProgram.findFirst({
+    where: { id: input.programId, tenantId: actor.tenantId },
+    select: { id: true, patientId: true, totalSessions: true },
+  });
+  if (!program) return { ok: false, error: "Plan no encontrado." };
+
+  // Visibility check on the patient — same gate as everywhere else.
+  const { patientAccessFor } = await import("@/lib/visibility");
+  if ((await patientAccessFor(actor, program.patientId)) !== "full") {
+    return { ok: false, error: "No tenés acceso a este paciente." };
+  }
+
+  // Plan-gate the exercise selection: drop any id the actor can't see.
+  const gate = await gatingForActor();
+  const allowed = await prisma.exercise.findMany({
+    where: { AND: [{ id: { in: input.exerciseIds } }, gate.visibility] },
+    select: { id: true, defaultSets: true, defaultReps: true },
+  });
+  if (allowed.length === 0) {
+    return { ok: false, error: "Ningún ejercicio disponible en tu plan." };
+  }
+
+  // Resolve target sessions.
+  const sessions = await prisma.session.findMany({
+    where: {
+      programId: program.id,
+      ...(input.range.kind === "fromIndex"
+        ? { index: { gte: input.range.fromIndex } }
+        : {}),
+    },
+    select: { id: true, index: true },
+    orderBy: { index: "asc" },
+  });
+  if (sessions.length === 0) {
+    return { ok: false, error: "Ninguna sesión coincide con el rango." };
+  }
+
+  // Pre-compute the max(order) per session so we can append correctly.
+  const orderRows = await prisma.sessionExercise.groupBy({
+    by: ["sessionId"],
+    where: { sessionId: { in: sessions.map((s) => s.id) } },
+    _max: { order: true },
+  });
+  const maxOrderBySession = new Map(
+    orderRows.map((r) => [r.sessionId, r._max.order ?? 0])
+  );
+
+  // Build the createMany payload. Each session gets the full exercise
+  // list appended; we walk one session at a time so the running counter
+  // is per-session.
+  const toCreate: {
+    sessionId: string;
+    exerciseId: string;
+    order: number;
+    sets: number;
+    reps: number;
+  }[] = [];
+  let skipped = 0;
+  for (const s of sessions) {
+    let nextOrder = (maxOrderBySession.get(s.id) ?? 0) + 1;
+    for (const ex of allowed) {
+      toCreate.push({
+        sessionId: s.id,
+        exerciseId: ex.id,
+        order: nextOrder++,
+        sets: ex.defaultSets,
+        reps: ex.defaultReps,
+      });
+    }
+  }
+  skipped = (input.exerciseIds.length - allowed.length) * sessions.length;
+
+  await prisma.sessionExercise.createMany({ data: toCreate, skipDuplicates: true });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "sessionExercise.bulkCreate",
+    entity: "TreatmentProgram",
+    entityId: program.id,
+    payload: {
+      sessions: sessions.length,
+      exercises: allowed.length,
+      created: toCreate.length,
+      skipped,
+    },
+  });
+
+  revalidatePath(`/pacientes/${program.patientId}`);
+  return { ok: true, data: { created: toCreate.length, skipped } };
+}

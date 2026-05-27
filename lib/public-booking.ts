@@ -74,8 +74,11 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   };
 }
 
-const OPEN_HOUR = 8;
-const CLOSE_HOUR = 19;
+// Fallback defaults — used when the tenant lookup fails or returns
+// null. Each tenant's actual window comes from
+// `Tenant.businessHoursStart/End` (Sprint 17), read in `listPublicSlots`.
+const DEFAULT_OPEN_HOUR = 8;
+const DEFAULT_CLOSE_HOUR = 19;
 const SLOT_MIN = 45;
 
 export async function listPublicSlots(input: {
@@ -91,7 +94,14 @@ export async function listPublicSlots(input: {
   });
   if (!rl.ok) return [];
 
-  const tenant = await prisma.tenant.findUnique({ where: { slug: input.tenantSlug } });
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: input.tenantSlug },
+    select: {
+      id: true,
+      businessHoursStart: true,
+      businessHoursEnd: true,
+    },
+  });
   if (!tenant) return [];
 
   const service = await prisma.service.findFirst({
@@ -116,9 +126,11 @@ export async function listPublicSlots(input: {
     select: { scheduledFor: true, durationMin: true },
   });
 
+  const openHour = tenant.businessHoursStart ?? DEFAULT_OPEN_HOUR;
+  const closeHour = tenant.businessHoursEnd ?? DEFAULT_CLOSE_HOUR;
   const slots: PublicSlot[] = [];
   const total = service.durationMin;
-  for (let m = OPEN_HOUR * 60; m + total <= CLOSE_HOUR * 60; m += SLOT_MIN) {
+  for (let m = openHour * 60; m + total <= closeHour * 60; m += SLOT_MIN) {
     const slot = new Date(dayStart);
     slot.setHours(0, m, 0, 0);
     const slotEnd = new Date(slot.getTime() + total * 60_000);

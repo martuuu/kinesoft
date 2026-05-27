@@ -1,70 +1,212 @@
 /**
- * Multi-user visibility helpers.
+ * Multi-user visibility + per-patient sharing helpers (Sprint 16).
  *
- * The OWNER toggles `Tenant.sharedPatientView` from /configuracion:
+ * Access model:
  *
- *   - **shared (true)**  — every member of the tenant sees every Patient
- *     and Booking in the tenant. Useful for small consultorios where
- *     the kine is the only one writing into the HC.
- *   - **per-kine (false, default)** — each PRACTITIONER only sees the
- *     Patients they were assigned to (`Patient.assignedPractitionerId`)
- *     and their own Bookings. OWNER and ADMIN roles bypass this filter
- *     and always see everything (otherwise they couldn't audit).
+ *   1. **OWNER / ADMIN** of a tenant always have FULL access to every
+ *      patient (audit / oversight requirement).
+ *   2. **`Tenant.sharedPatientView = true`** is the legacy "everyone
+ *      sees everything" override — when on, every member of the
+ *      tenant gets FULL access regardless of ownership / shares.
+ *      Surfaced in /configuracion with a warning since it short-circuits
+ *      per-patient PatientShare grants.
+ *   3. **Owner** (`Patient.assignedPractitionerId == actor.practitionerId`)
+ *      → FULL access. Sprint 16 dropped the "null = consultorio común"
+ *      semantic; every patient now has exactly one owner.
+ *   4. **Explicit share** (`PatientShare` row with
+ *      `(patientId, practitionerId = actor.practitionerId)`) → FULL access.
+ *   5. **Otherwise** → BASIC access: the patient row appears in the
+ *      directory and on the agenda, but only first/last name + DNI
+ *      + next appointment time are exposed. Everything else (HC, plans,
+ *      sessions, contact info) is hidden until shared.
  *
- * Patients with `assignedPractitionerId == null` are "del consultorio
- * común" — visible to everyone regardless of mode. This is also the
- * legacy bucket for patients created before this field existed.
+ * Public surface:
+ *   - `visibilityForActor(actor)` → coarse Prisma where-fragment used for
+ *     LISTING patients/bookings. Lists return EVERY patient of the
+ *     tenant; per-row access is decided downstream via `bulkPatientAccess`.
+ *   - `patientAccessFor(actor, patientId)` → fine-grained `"full" |
+ *     "basic" | "none"` decision for a SINGLE patient. Detail pages and
+ *     mutations gate on this.
+ *   - `bulkPatientAccess(actor, ids[])` → batched version that returns
+ *     a `Map<patientId, AccessLevel>` in one round trip. Used by list /
+ *     agenda renderers to decide row-by-row.
  */
 import "server-only";
+import { cache } from "react";
 import { prisma } from "@/lib/db";
 import type { Actor } from "@/lib/session";
 import type { Prisma } from "@prisma/client";
 
+export type AccessLevel = "full" | "basic" | "none";
+
 export type Visibility = {
-  /** Whether the actor's role allows seeing every row in the tenant. */
+  /** Actor's role grants full access to every row in the tenant. */
   seesAll: boolean;
-  /** Tenant has shared view enabled. */
+  /** Tenant has shared-view mode enabled (overrides per-patient shares). */
   sharedView: boolean;
-  /** Prisma `where` fragment to scope patient queries by visibility. */
+  /**
+   * Prisma `where` fragment for **LISTING** patients. Sprint 16 broadens
+   * this from the per-kine restriction: every member can SEE every
+   * patient in the tenant (even basic-only ones). Access tier is decided
+   * downstream by `bulkPatientAccess`.
+   */
   patientWhere: Prisma.PatientWhereInput;
-  /** Prisma `where` fragment to scope booking queries by visibility. */
+  /**
+   * Prisma `where` fragment for **LISTING** bookings. Same idea: agenda
+   * shows every booking of the tenant; basic-only ones get a stripped
+   * card via UI logic.
+   */
   bookingWhere: Prisma.BookingWhereInput;
 };
 
-/**
- * Compute the visibility shape for an actor. The Membership lookup is
- * cheap; consider memoising via `cache()` if it becomes a hotspot.
- */
+const tenantSettings = cache(async (tenantId: string) => {
+  return prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { sharedPatientView: true },
+  });
+});
+
+const membershipRole = cache(async (userId: string, tenantId: string) => {
+  return prisma.membership.findUnique({
+    where: { userId_tenantId: { userId, tenantId } },
+    select: { role: true },
+  });
+});
+
 export async function visibilityForActor(actor: Actor): Promise<Visibility> {
   const [tenant, membership] = await Promise.all([
-    prisma.tenant.findUnique({
-      where: { id: actor.tenantId },
-      select: { sharedPatientView: true },
-    }),
-    prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-      select: { role: true },
-    }),
+    tenantSettings(actor.tenantId),
+    membershipRole(actor.userId, actor.tenantId),
   ]);
 
   const sharedView = tenant?.sharedPatientView ?? false;
   const role = membership?.role ?? "PRACTITIONER";
   const seesAll = role === "OWNER" || role === "ADMIN" || sharedView;
 
-  // Per-kine mode: practitioner sees patients assigned to them OR
-  // patients with no assignment ("consultorio común"). The booking
-  // filter is stricter — practitioners only see their own bookings.
-  const patientWhere: Prisma.PatientWhereInput = seesAll
-    ? {}
-    : {
-        OR: [
-          { assignedPractitionerId: actor.practitionerId },
-          { assignedPractitionerId: null },
-        ],
-      };
-  const bookingWhere: Prisma.BookingWhereInput = seesAll
-    ? {}
-    : { practitionerId: actor.practitionerId };
+  // Sprint 16: lists are NO LONGER filtered by ownership at the SQL
+  // layer. Every member sees every patient + booking; per-row access
+  // tier (full vs basic) is resolved by the renderer. The patientWhere /
+  // bookingWhere fragments are kept as `{}` so existing callsites that
+  // spread them don't break, but they no longer scope by practitioner.
+  return {
+    seesAll,
+    sharedView,
+    patientWhere: {},
+    bookingWhere: {},
+  };
+}
 
-  return { seesAll, sharedView, patientWhere, bookingWhere };
+/**
+ * Resolve a SINGLE patient's access level for the given actor.
+ *
+ * Resolves to "none" if the patient doesn't exist or is from another
+ * tenant. Used by `getPatientCore` and friends to decide whether to
+ * return the full payload or the basic projection.
+ *
+ * Cache: `react.cache` memoises per (actor, patientId) within the same
+ * request — pages that load several patient slices share the same
+ * lookup.
+ */
+export const patientAccessFor = cache(
+  async (actor: Actor, patientId: string): Promise<AccessLevel> => {
+    const [patient, tenant, membership] = await Promise.all([
+      prisma.patient.findUnique({
+        where: { id: patientId },
+        select: { tenantId: true, assignedPractitionerId: true },
+      }),
+      tenantSettings(actor.tenantId),
+      membershipRole(actor.userId, actor.tenantId),
+    ]);
+
+    if (!patient || patient.tenantId !== actor.tenantId) return "none";
+
+    const role = membership?.role ?? "PRACTITIONER";
+    if (role === "OWNER" || role === "ADMIN") return "full";
+    if (tenant?.sharedPatientView) return "full";
+    if (patient.assignedPractitionerId === actor.practitionerId) return "full";
+
+    const share = await prisma.patientShare.findUnique({
+      where: {
+        patientId_practitionerId: {
+          patientId,
+          practitionerId: actor.practitionerId,
+        },
+      },
+      select: { id: true },
+    });
+    return share ? "full" : "basic";
+  }
+);
+
+/**
+ * Batched access resolver. Issues ONE share-lookup query for the whole
+ * id list instead of N individual ones. Use this in directory listing
+ * + agenda renderers where many patients are rendered side-by-side.
+ *
+ * Returns a `Map` keyed by patientId. Missing keys = "none" (patient
+ * isn't in the actor's tenant); look those up with caller-side defaults.
+ */
+export async function bulkPatientAccess(
+  actor: Actor,
+  patientIds: readonly string[]
+): Promise<Map<string, AccessLevel>> {
+  const result = new Map<string, AccessLevel>();
+  if (patientIds.length === 0) return result;
+
+  const [patients, tenant, membership] = await Promise.all([
+    prisma.patient.findMany({
+      where: { id: { in: patientIds as string[] }, tenantId: actor.tenantId },
+      select: { id: true, assignedPractitionerId: true },
+    }),
+    tenantSettings(actor.tenantId),
+    membershipRole(actor.userId, actor.tenantId),
+  ]);
+
+  const role = membership?.role ?? "PRACTITIONER";
+  const seesAll = role === "OWNER" || role === "ADMIN" || !!tenant?.sharedPatientView;
+
+  if (seesAll) {
+    for (const p of patients) result.set(p.id, "full");
+    return result;
+  }
+
+  // Practitioner: full for owned + explicitly shared, basic otherwise.
+  const ownedIds = new Set(
+    patients
+      .filter((p) => p.assignedPractitionerId === actor.practitionerId)
+      .map((p) => p.id)
+  );
+  const otherIds = patients.filter((p) => !ownedIds.has(p.id)).map((p) => p.id);
+
+  const shareRows =
+    otherIds.length > 0
+      ? await prisma.patientShare.findMany({
+          where: {
+            patientId: { in: otherIds },
+            practitionerId: actor.practitionerId,
+          },
+          select: { patientId: true },
+        })
+      : [];
+  const sharedIds = new Set(shareRows.map((r) => r.patientId));
+
+  for (const p of patients) {
+    if (ownedIds.has(p.id)) result.set(p.id, "full");
+    else if (sharedIds.has(p.id)) result.set(p.id, "full");
+    else result.set(p.id, "basic");
+  }
+  return result;
+}
+
+/**
+ * List the practitioners who currently have an explicit share on the
+ * patient. Used by the SharePatientButton popover to render the
+ * checkbox state.
+ */
+export async function listPatientShares(patientId: string): Promise<string[]> {
+  const rows = await prisma.patientShare.findMany({
+    where: { patientId },
+    select: { practitionerId: true },
+  });
+  return rows.map((r) => r.practitionerId);
 }

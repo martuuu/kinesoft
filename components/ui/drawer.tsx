@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { ModalCloseButton } from "@/components/ui/modal-close";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 /**
  * Right-side sliding drawer.
@@ -26,6 +27,8 @@ export function Drawer({
   width?: number;
   children: ReactNode;
 }) {
+  const trapRef = useFocusTrap<HTMLElement>(open);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -59,6 +62,8 @@ export function Drawer({
       />
       {/* panel — slides in from the right */}
       <aside
+        ref={trapRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal
         aria-label={title}
@@ -77,6 +82,7 @@ export function Drawer({
           transform: open ? "translateX(0)" : `translateX(calc(${width}px + 24px))`,
           transition: "transform 220ms cubic-bezier(.2,.8,.2,1)",
           boxShadow: "0 32px 64px rgba(15,30,51,0.18)",
+          outline: "none",
         }}
       >
         <ModalCloseButton onClose={onClose} />

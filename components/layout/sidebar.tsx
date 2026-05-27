@@ -135,6 +135,7 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           <button
             type="submit"
             title={collapsed ? "Cerrar sesión" : undefined}
+            aria-label="Cerrar sesión"
             style={{
               all: "unset",
               boxSizing: "border-box",

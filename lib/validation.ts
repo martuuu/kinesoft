@@ -41,6 +41,15 @@ export type BookingCreateInput = z.input<typeof BookingCreate>;
 
 export const BookingUpdate = z.object({
   id: z.string().min(1),
+  // Sprint 18: `patientId` is mutable so the BookingDrawer edit flow
+  // can swap the patient of an existing booking. The empty string
+  // becomes `null` (server clears the link and turns the booking
+  // back into a guest slot). The server enforces tenant scope on the
+  // target patient before saving.
+  patientId: z
+    .string()
+    .optional()
+    .transform((v) => (v === "" ? null : v)),
   scheduledFor: z
     .string()
     .optional()

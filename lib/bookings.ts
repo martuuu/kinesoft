@@ -13,10 +13,11 @@ import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
-import { visibilityForActor } from "@/lib/visibility";
+import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
 
@@ -46,11 +47,12 @@ export async function listBookingsInRange(opts: {
   practitionerId?: string;
 }): Promise<BookingRow[]> {
   const actor = await getActor();
-  const v = await visibilityForActor(actor);
+  // Sprint 16: agenda shows every booking in the tenant; per-row access
+  // tier is resolved below. The diagnosis chip is hidden when the actor
+  // only has BASIC access to that booking's patient.
   const rows = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
-      ...v.bookingWhere,
       scheduledFor: { gte: opts.from, lt: opts.to },
       ...(opts.practitionerId ? { practitionerId: opts.practitionerId } : {}),
     },
@@ -68,13 +70,23 @@ export async function listBookingsInRange(opts: {
       },
     },
   });
+
+  const patientIds = rows
+    .map((b) => b.patientId)
+    .filter((id): id is string => !!id);
+  const accessMap = await bulkPatientAccess(actor, patientIds);
+
   return rows.map((b): BookingRow => {
+    const access: "full" | "basic" | "none" = b.patientId
+      ? (accessMap.get(b.patientId) ?? "basic")
+      : "none";
     const cond =
-      b.patient?.programs[0]?.case?.diagnoses[0]?.condition?.name ?? null;
-    const name =
-      b.patient
-        ? `${b.patient.firstName} ${b.patient.lastName}`
-        : b.guestName ?? "Sin asignar";
+      access === "full"
+        ? b.patient?.programs[0]?.case?.diagnoses[0]?.condition?.name ?? null
+        : null;
+    const name = b.patient
+      ? `${b.patient.firstName} ${b.patient.lastName}`
+      : b.guestName ?? "Sin asignar";
     return {
       id: b.id,
       scheduledFor: b.scheduledFor,
@@ -85,18 +97,20 @@ export async function listBookingsInRange(opts: {
       patientId: b.patientId,
       patientName: name,
       patientCondition: cond,
-      notes: b.notes,
+      // Notes can carry clinical context — hide on basic too.
+      notes: access === "full" ? b.notes : null,
+      patientAccess: access,
     };
   });
 }
 
 export async function getDayCounts(opts: { from: Date; to: Date }) {
   const actor = await getActor();
-  const v = await visibilityForActor(actor);
+  // Day-strip dots show every booking in the tenant — counts don't leak
+  // PHI so no access gating needed here.
   const rows = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
-      ...v.bookingWhere,
       scheduledFor: { gte: opts.from, lt: opts.to },
       status: { not: "CANCELLED" },
     },
@@ -142,8 +156,10 @@ export async function listPractitioners() {
 /**
  * Find the next slot of `durationMin` after `from` for `practitionerId`
  * that doesn't overlap with any non-cancelled booking. Walks in 15-min
- * steps within working hours (8-19) Mon-Sat, capped at 14 days lookahead.
- * Returns null if nothing free within the window.
+ * steps within the tenant's configured business hours, Mon-Sat, capped
+ * at 14 days lookahead. Returns null if nothing free within the window.
+ *
+ * Business hours come from `Tenant.businessHoursStart/End` (Sprint 17).
  */
 async function suggestNextFreeSlot(
   tenantId: string,
@@ -154,19 +170,28 @@ async function suggestNextFreeSlot(
   const STEP_MIN = 15;
   const HORIZON_MS = 14 * 86_400_000;
   const start = new Date(from.getTime() + STEP_MIN * 60_000);
-  // Pre-load all bookings in the window so we don't query inside the loop.
-  const bookings = await prisma.booking.findMany({
-    where: {
-      tenantId,
-      practitionerId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: {
-        gte: start,
-        lt: new Date(start.getTime() + HORIZON_MS),
+  // Resolve business hours alongside the bookings preload so we don't
+  // do two sequential roundtrips.
+  const [bookings, tenant] = await Promise.all([
+    prisma.booking.findMany({
+      where: {
+        tenantId,
+        practitionerId,
+        status: { notIn: ["CANCELLED"] },
+        scheduledFor: {
+          gte: start,
+          lt: new Date(start.getTime() + HORIZON_MS),
+        },
       },
-    },
-    select: { scheduledFor: true, durationMin: true },
-  });
+      select: { scheduledFor: true, durationMin: true },
+    }),
+    prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { businessHoursStart: true, businessHoursEnd: true },
+    }),
+  ]);
+  const openHour = tenant?.businessHoursStart ?? 8;
+  const closeHour = tenant?.businessHoursEnd ?? 19;
   const overlaps = (slot: Date, end: Date) =>
     bookings.some((b) => {
       const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
@@ -178,7 +203,10 @@ async function suggestNextFreeSlot(
   while (cursor.getTime() - from.getTime() < HORIZON_MS) {
     const dow = cursor.getDay(); // 0 Sun..6 Sat
     const hour = cursor.getHours();
-    if (dow !== 0 && hour >= 8 && hour <= 19) {
+    // Slot must fit entirely inside the business window — the end of
+    // the proposed booking is hour + minutes/60 + durationMin/60.
+    const endMinutes = hour * 60 + cursor.getMinutes() + durationMin;
+    if (dow !== 0 && hour >= openHour && endMinutes <= closeHour * 60) {
       const end = new Date(cursor.getTime() + durationMin * 60_000);
       if (!overlaps(cursor, end)) {
         return cursor.toISOString();
@@ -274,22 +302,29 @@ export async function createBooking(
       : data.notes;
 
   try {
-    const b = await prisma.booking.create({
-      data: {
-        tenantId: actor.tenantId,
-        practitionerId: data.practitionerId,
-        serviceId: service.id,
-        scheduledFor: data.scheduledFor,
-        durationMin: duration,
-        patientId: data.patientId,
-        guestName: data.guestName,
-        guestEmail: data.guestEmail,
-        guestPhone: data.guestPhone,
-        notes,
-        status: data.patientId ? "CONFIRMED" : "PENDING",
-        idempotencyKey: randomBytes(16).toString("hex"),
-      },
-    });
+    // RLS Etapa 2: the write itself runs under the GUC. The
+    // preceding ownership / conflict checks already filter by
+    // `tenantId` at the app layer (so they're safe outside the tx);
+    // wrapping the write is enough to enforce policies on the row
+    // that gets committed.
+    const b = await runWithRls(actor.tenantId, async (tx) =>
+      tx.booking.create({
+        data: {
+          tenantId: actor.tenantId,
+          practitionerId: data.practitionerId,
+          serviceId: service.id,
+          scheduledFor: data.scheduledFor,
+          durationMin: duration,
+          patientId: data.patientId,
+          guestName: data.guestName,
+          guestEmail: data.guestEmail,
+          guestPhone: data.guestPhone,
+          notes,
+          status: data.patientId ? "CONFIRMED" : "PENDING",
+          idempotencyKey: randomBytes(16).toString("hex"),
+        },
+      })
+    );
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
@@ -363,6 +398,18 @@ export async function updateBooking(
     },
   });
   if (!before) return { ok: false, error: "Turno no encontrado." };
+
+  // Validate the target patient (when changing) — tenant-scope check
+  // so a malicious client can't re-bind a booking to a patient from
+  // another consultorio. `null` means "clear the link" (back to a
+  // guest slot); only `undefined` means "leave it alone".
+  if (patch.patientId !== undefined && patch.patientId !== null) {
+    const owned = await prisma.patient.findFirst({
+      where: { id: patch.patientId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!owned) return { ok: false, error: "Paciente fuera del consultorio." };
+  }
 
   // Re-check conflicts only when scheduledFor or durationMin actually
   // change. Status-only updates don't touch the calendar slot.
@@ -467,12 +514,18 @@ export async function setBookingStatus(
 
 export async function deleteBooking(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.booking.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    select: { id: true, patientId: true },
+  // RLS Etapa 2: lookup + delete share the tx so policies guard the
+  // destructive side too.
+  const owned = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.booking.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: { id: true, patientId: true },
+    });
+    if (!row) return null;
+    await tx.booking.delete({ where: { id } });
+    return row;
   });
   if (!owned) return { ok: false, error: "Turno no encontrado." };
-  await prisma.booking.delete({ where: { id } });
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,

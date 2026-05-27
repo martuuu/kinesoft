@@ -921,11 +921,241 @@ porque tienen mejores alternativas:
     y la responsabilidad del recibo es del proveedor de pagos (Mercado
     Pago ya emite comprobantes).
 
+### Sprint 16 — Performance + Patient sharing + Auth closeout + Phase 7 medium + Hardening (this session)
+The big sprint. Full details in [docs/SPRINT_16.md](docs/SPRINT_16.md).
+
+**Performance foundation**:
+- [x] **A1 — `getTenantPrisma` memoizado** ([lib/db.ts](lib/db.ts)) —
+    `Map<tenantId, ExtendedClient>` montado en `globalThis` (HMR-safe).
+    Reusa la misma extensión por tenant en vez de instanciar una nueva
+    por request.
+- [x] **A2 — `getPatient` split en lazy fetchers** ([lib/patients.ts](lib/patients.ts))
+    + page parallel-fetch ([app/(app)/pacientes/[id]/page.tsx](app/%28app%29/pacientes/%5Bid%5D/page.tsx)).
+    Nuevas: `getPatientCore`, `getPatientProgramsLite/Full`,
+    `getPatientBookingsSummary/All`, `getPatientEvaScores`,
+    `getPatientBillableCount`. PlanView y SesionesView funcionan con
+    programsLite (sin exercises hidratadas); Facturación lazy-loadea
+    bookingsAll on tab-open con skeleton.
+- [x] **A3 — Cache layer con `unstable_cache` + tags**
+    ([lib/cache-tags.ts](lib/cache-tags.ts)) — wrappers en `listInsurers`,
+    `listServicesWithCounts`, `listServices`, `listPractitioners`,
+    `getMonthBookingDays`, `loadFilterFacets`, `getExercise`,
+    `loadCatalog`, `getDashboardData`. Helper
+    `invalidateBookingDerivedCaches` en bookings.ts. TTLs: micro (60s)
+    / short (5min) / long (1h) / day (24h).
+- [x] **A4 — Indexes nuevos** (migration
+    `20260523234642_sprint_16_perf_indexes`): `Booking [patientId,
+    scheduledFor]`, `TreatmentProgram [patientId, createdAt]`,
+    `Session [programId, index]`, `Session [completedAt]`.
+
+**Patient Sharing (feature flagship)** — migration
+`20260524002341_sprint_16_patient_share`:
+- [x] **B.1 Schema** — nuevo `PatientShare { tenantId, patientId,
+    practitionerId, sharedById, sharedAt }` + backfill SQL que asigna
+    nulls al primer OWNER del tenant y materializa shares para todos
+    los demás cuando el tenant tenía `sharedPatientView=true`.
+- [x] **B.2 Visibility v2** ([lib/visibility.ts](lib/visibility.ts)) —
+    `patientAccessFor(actor, id) → "full" | "basic" | "none"` (memoized
+    via React `cache`), `bulkPatientAccess(actor, ids[])` batch lookup,
+    `listPatientShares(id)`. Drop el filtro SQL por practitioner — todos
+    ven todos en listas, tier de acceso se decide per-row.
+- [x] **B.3 Reads access-gated** — `getPatientCore` ramifica entre full
+    payload y basic projection (nombre+DNI+next booking). Los lazy
+    fetchers retornan vacío si access != "full". `listPatients`
+    enmascara fields PHI cuando basic. `listBookingsInRange` agrega
+    `patientAccess` por booking; `patientCondition` y `notes` se ocultan.
+- [x] **B.4 Server actions** — `setPatientShares({ patientId,
+    practitionerIds })` con `requireShareAuthority` (owner del paciente
+    o OWNER/ADMIN), `getPatientShareList(patientId)` para el popover.
+- [x] **B.5 UI** ([components/patients/share-patient-button.tsx](components/patients/share-patient-button.tsx))
+    — popover (no modal) con checkboxes de practitioners del tenant,
+    click-outside + Escape close, lazy-load de share-set, feedback
+    sky/lime/amber.
+- [x] **B.6 List + Agenda gated UI** — pacientes basic con opacity
+    reducida, sin bulk-select, sin row actions, badge "Sin acceso".
+    Agenda link cambia a "Ver datos básicos" en basic. Nueva
+    [PatientBasicView](components/patients/patient-basic-view.tsx) para
+    `/pacientes/[id]` con nombre + DNI + próximo turno + "pedile al
+    responsable".
+- [x] **B.7 /configuracion warning** — banner ámbar cuando
+    `sharedPatientView=true` advierte que ignora los shares
+    individuales.
+
+**Auth closeout (Phase 4)**:
+- [x] **C.1 Signup** ([lib/auth.ts](lib/auth.ts) +
+    [app/(auth)/signup](app/%28auth%29/signup/page.tsx)) —
+    `signUpPractitioner` con rate-limit (3/10min/IP) + slug reservados
+    + admin `createUser` + tx que crea UserProfile + Tenant +
+    Practitioner + Membership(OWNER) + audit. Si Prisma falla,
+    `admin.deleteUser` cleanup. Auto-signIn → /dashboard.
+- [x] **C.2 Forgot/Reset** — `/forgot` con `sendPasswordReset`
+    (no-enumeration, redirect via /auth/callback?next=/reset) +
+    `/reset` con `updatePasswordWithRecoverySession`. Rate-limited.
+- [x] **C.3 Email copy** — los templates de Supabase por default
+    funcionan; custom se configura desde el dashboard.
+
+**Phase 7 medium**:
+- [x] **D.1 Bulk-assign exercises** ([lib/sessions.ts](lib/sessions.ts)
+    `bulkAddSessionExercises` + `listAssignablePrograms` +
+    [bulk-assign-modal.tsx](components/biblioteca/bulk-assign-modal.tsx))
+    — toggle "Seleccionar" en biblioteca, checkbox visual per-card,
+    floating action bar con count + "Asignar a plan", modal con program
+    picker (filter por nombre/paciente) + range picker (Todas / Desde N).
+    Plan-gated + tenant-scoped + cap 50 exercises.
+- [x] **D.2 Advanced filters** ([advanced-filters.tsx](components/patients/advanced-filters.tsx))
+    — bloque expandible con edad mínima/máxima, último diagnóstico,
+    última visita rango. Form GET (SSR + URL-shareable). Reusa
+    `loadFilterFacets` cacheado.
+- [x] **D.3 Conflict banner en BookingDrawer** — botón "Reprogramar"
+    abre form inline con datetime-local. `submitReschedule` wraps
+    `updateBooking` y maneja `r.conflict` con banner ámbar (Usar
+    próximo libre / Forzar sobreturno / Volver atrás).
+- [x] **D.4 Manual link guest booking** — cubierto por la feature de
+    sharing + `assignPatientToPractitioner` ya existente. No requirió
+    código nuevo.
+
+**Quality & Hardening**:
+- [x] **E.1 RLS adoption — Etapa 1** ([lib/rls.ts](lib/rls.ts) ya
+    existía) — `getPatientCore` full path y `deletePatient` wrappeados
+    en `runWithRls`. Resto de mutations + reads en cola para Etapa 2.
+- [x] **E.2 Request IDs + structured logging**
+    ([middleware.ts](middleware.ts) +
+    [lib/request-context.ts](lib/request-context.ts) +
+    [lib/logger.ts](lib/logger.ts)) — middleware mintea/preserva
+    `x-request-id` (UUID v4), valida regex contra injection, lo echo en
+    la response. `RequestContext` propaga via ALS. Logger auto-stampa
+    `requestId + tenantId + userId + practitionerId` en cada line.
+    `logger.withRequest(bind)` para background jobs.
+- [x] **E.3 Upstash docs** — `.env.example` con la sección "REQUIRED
+    FOR PRODUCTION" explicando por qué el limiter in-memory es
+    advisory en Vercel serverless y el setup paso a paso.
+- [x] **E.4 A11y pass** —
+    [hooks/use-focus-trap.ts](hooks/use-focus-trap.ts) nuevo (focus
+    trap con Tab cycling + restore on close), aplicado a Modal y
+    Drawer. aria-labels verificados en sidebar (Cerrar sesión), bell,
+    mini-calendar, recent-patients, patient-row-actions, profile-menu,
+    pin-kpi, command-palette.
+- [x] **E.6 Adopt primitives** — los componentes nuevos
+    (signup-screen, forgot-screen, reset-screen, auth-shell,
+    advanced-filters, share-patient-button, bulk-assign-modal,
+    patient-basic-view) ya usan `<Modal>`, `<FormField>`, `<Button>`,
+    `<Tag>` consistentemente.
+- [x] `tsc` + `next build` clean. **34 routes** (3 nuevas: `/signup`,
+    `/forgot`, `/reset`).
+
+### Sprint 16 — queued (para Sprint 17)
+- **E.1 RLS — Etapa 2**: migrar el resto de mutations + reads
+    (booking domain, sessions, programs, exercises) a `runWithRls`.
+    Etapa 1 sirve de smoke test del patrón.
+- **E.5 File splits** — `patient-profile.tsx` (2366 líneas),
+    `agenda-client.tsx` (1850 líneas), `diagnostico-screen.tsx` (1587
+    líneas). Dejado para un sprint dedicado de refactor; mezclar splits
+    con features aumenta el diff surface.
+- **`getDashboardData` further optimisation** — actualmente cached con
+    TTL 60s; si dashboard sigue lento, considerar split por widget
+    (`getDashboardKpis`, `getDashboardChart`, `getDashboardRecent`)
+    con TTLs independientes.
+
+### Sprint 17 — Custom conditions + Working hours + RLS Etapa 2 + Targeted file splits (this session)
+Full details in [docs/SPRINT_17.md](docs/SPRINT_17.md). Two Prisma
+migrations: business hours fields on `Tenant` + tenantId/createdById on
+`Condition`.
+
+**Configurable business hours**:
+- [x] **Schema** (migration `20260525000000_sprint_17_business_hours`)
+    — `Tenant.businessHoursStart` + `businessHoursEnd` (defaults 8/19
+    to match the pre-Sprint 17 hardcoded constants).
+- [x] **`setBusinessHours` action** ([lib/tenant-settings.ts](lib/tenant-settings.ts))
+    + constants in
+    [lib/tenant-settings-constants.ts](lib/tenant-settings-constants.ts)
+    (so the UI can import them — "use server" only exports async).
+    Allowed window 6..23. Validated start < end.
+- [x] **UI** ([components/configuracion/configuracion-client.tsx](components/configuracion/configuracion-client.tsx))
+    — "Horario del consultorio" card in the General tab with two
+    `<HourSelect>` inputs (apertura / cierre) + save button. Reveals
+    only the configured range in the agenda + public turnero.
+- [x] **Wire-up**: `suggestNextFreeSlot` and `listPublicSlots` read
+    the tenant's window; `TimelineView` + `WeekGridView` build their
+    HOUR rows from the new `businessHours` prop passed from the agenda
+    page.
+
+**Custom conditions (practitioner-authored diagnostics)**:
+- [x] **Schema** (migration `20260525001000_sprint_17_custom_conditions`)
+    — `Condition.tenantId` + `createdById` (null = global catalog,
+    non-null = tenant-scoped custom). Reuses the existing `Condition`
+    table so consumers don't need to handle two types.
+- [x] **CRUD actions** ([lib/conditions.ts](lib/conditions.ts)) —
+    `listCustomConditions`, `createCustomCondition`,
+    `updateCustomCondition`, `deleteCustomCondition`. Slug auto-
+    generated with tenant + timestamp suffix to avoid collisions.
+    Delete refuses when ClinicalCases reference the row.
+- [x] **UI** — new "Diagnósticos" tab in /configuracion with table +
+    modal CRUD. Available to every practitioner of the tenant
+    ("TODO lo que crea se va a una sola base de datos para el
+    Consultorio" — Sprint 17 brief).
+- [x] **Catalog integration** — `loadCatalog` includes own tenant's
+    custom conditions; `CatalogConditionDTO` gains an `isCustom` flag.
+- [x] **Diagnóstico screen badge** — custom conditions surfaced with a
+    lime `PERSONALIZADO` chip in the right-stack picker + a `Tag` in
+    the AssignPlanModal header.
+
+**Targeted file splits (E.5 from Sprint 16 queue)**:
+- [x] **patient-profile.tsx** 2443 → 1994 lines. Extracted:
+    [components/patients/activity-view.tsx](components/patients/activity-view.tsx)
+    (160) + [components/patients/archivos-view.tsx](components/patients/archivos-view.tsx)
+    (260). Removed unused `files` lib imports. `PlanView` (~800 lines)
+    queued for Sprint 18 — it has the heaviest sub-component graph and
+    deserves its own dedicated pass.
+- [x] **agenda-client.tsx** 1858 → 1610 lines. Extracted:
+    [components/agenda/booking-drawer.tsx](components/agenda/booking-drawer.tsx)
+    (~400 lines including the reschedule + conflict banner flow). The
+    `StatusTag` helper is kept as a small private copy in both files
+    (avoids a circular import between agenda-client → BookingDrawer →
+    StatusTag). `BookingModal` queued.
+- [x] **diagnostico-screen.tsx** — no split this sprint; added the
+    `isCustom` badge inline in the condition card + assign-plan
+    header. Full split queued for Sprint 18.
+
+**RLS Etapa 2**:
+- [x] **`createPatient` / `updatePatient` / `deletePatient` (already
+    Etapa 1)** ([lib/patients.ts](lib/patients.ts)) — wrapped in
+    `runWithRls(actor.tenantId, ...)`. Audit + notify calls stay
+    outside the tx (fire-and-forget, GUC not needed).
+- [x] **`createProgram` / `deleteProgram`** — owner check + nested
+    sessions create / cascade delete run under the GUC so Postgres
+    policies guard the multi-table writes.
+- [x] **`createBooking` / `deleteBooking`** ([lib/bookings.ts](lib/bookings.ts))
+    — destructive writes wrapped. Read-only conflict checks stay
+    outside (they already filter by `tenantId` at app layer).
+- [x] **Queued for Sprint 18**: `updateBooking`, `recordEvaScore`,
+    `completeSession`, `setPatientCoverage`,
+    `assignPatientToPractitioner`, `updateProgram`, `setProgramStatus`,
+    `deleteSession`, `bulkArchivePatients`, `setPatientShares`,
+    sessions.ts mutations (addSessionExercise, removeSessionExercise,
+    updateSessionExercise, reorderSessionExercises, rescheduleSession,
+    addCustomSession, bulkAddSessionExercises, substituteSessionExercise),
+    exercises.ts mutations.
+
+- [x] `tsc` + `next build` clean. 34 routes.
+
+### Sprint 17 — queued (para Sprint 18)
+- **PlanView split** out of patient-profile.tsx (~800 lines + nested
+    ProgramCard, EditProgramModal, ConfirmDeleteProgram, SessionCardRow,
+    EditSessionModal, AddCustomSessionButton).
+- **BookingModal split** out of agenda-client.tsx (~700 lines including
+    the PatientPicker, DayOfWeekPicker, conflict banner reused in the
+    create flow).
+- **diagnostico-screen.tsx full split** — RefinementPanel, RightStack,
+    AssignPlanModal each to their own file.
+- **RLS Etapa 3**: finish wrapping the remaining mutations listed
+    above so every PHI write is policy-guarded.
+- **Custom conditions surfaced in AssignPlanModal picker** — at the
+    moment custom conditions are pickable via the body-map ranking if
+    the practitioner navigates there, but a dedicated "Elegir
+    diagnóstico personalizado" affordance would make them easier to
+    discover (Sprint 18 polish).
+
 ### Next iterations (open)
-- [ ] Practitioner email/password auth (Supabase).
 - [ ] Playwright E2E (booking + diagnosis golden paths).
 - [ ] Sentry sender (DSN is wired in env).
 - [ ] Public booking → Mercado Pago end-to-end test once MP sandbox keys exist.
-- [ ] Bulk-assign exercises a un programa existente (Sprint 16).
-- [ ] Advanced filters de pacientes (edad, último Dx) (Sprint 16).
-- [ ] Practitioner override + custom condition en Diagnóstico (Sprint 17).

@@ -31,6 +31,8 @@ export type TenantSettings = {
   timezone: string;
   currency: string;
   sharedPatientView: boolean;
+  businessHoursStart: number;
+  businessHoursEnd: number;
 };
 
 export async function getTenantSettings(): Promise<TenantSettings> {
@@ -44,9 +46,53 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       timezone: true,
       currency: true,
       sharedPatientView: true,
+      businessHoursStart: true,
+      businessHoursEnd: true,
     },
   });
   return t;
+}
+
+export async function setBusinessHours(input: {
+  start: number;
+  end: number;
+}): Promise<ActionResult> {
+  const actor = await requireAdmin();
+  const start = Math.floor(input.start);
+  const end = Math.floor(input.end);
+  // Constants live in lib/tenant-settings-constants.ts so the UI can
+  // import them — "use server" files can only export async functions.
+  const MIN = 6;
+  const MAX = 23;
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < MIN ||
+    end > MAX ||
+    start >= end
+  ) {
+    return {
+      ok: false,
+      error: `Rango inválido. Inicio debe ser entre ${MIN}:00 y ${MAX - 1}:00, fin debe ser mayor que inicio y ≤ ${MAX}:00.`,
+    };
+  }
+  await prisma.tenant.update({
+    where: { id: actor.tenantId },
+    data: { businessHoursStart: start, businessHoursEnd: end },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId,
+    action: "tenant.business_hours",
+    entity: "Tenant",
+    entityId: actor.tenantId,
+    payload: { start, end },
+  });
+  // Wide blast radius — every booking surface re-reads the window.
+  revalidatePath("/configuracion");
+  revalidatePath("/agenda");
+  revalidatePath("/dashboard");
+  return { ok: true, data: undefined };
 }
 
 export async function setSharedPatientView(value: boolean): Promise<ActionResult> {

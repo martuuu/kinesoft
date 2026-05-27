@@ -5,6 +5,7 @@ import { getTenantSettings } from "@/lib/tenant-settings";
 import { listInsurers } from "@/lib/insurers";
 import { listServicesWithCounts } from "@/lib/services";
 import { listTeamMembers, listPendingInvitations } from "@/lib/invitations";
+import { listCustomConditions } from "@/lib/conditions";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 
 export const dynamic = "force-dynamic";
@@ -27,18 +28,20 @@ export default async function ConfiguracionPage() {
     redirect("/dashboard");
   }
 
-  const [tenant, insurers, services, team, pending, practitioners] = await Promise.all([
-    getTenantSettings(),
-    listInsurers(),
-    listServicesWithCounts(),
-    listTeamMembers(),
-    listPendingInvitations(),
-    prisma.practitioner.findMany({
-      where: { tenantId: actor.tenantId },
-      include: { user: { select: { fullName: true, email: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-  ]);
+  const [tenant, insurers, services, team, pending, practitioners, customConditions] =
+    await Promise.all([
+      getTenantSettings(),
+      listInsurers(),
+      listServicesWithCounts(),
+      listTeamMembers(),
+      listPendingInvitations(),
+      prisma.practitioner.findMany({
+        where: { tenantId: actor.tenantId },
+        include: { user: { select: { fullName: true, email: true } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      listCustomConditions(),
+    ]);
 
   return (
     <ConfiguracionClient
@@ -52,6 +55,7 @@ export default async function ConfiguracionPage() {
         id: p.id,
         name: p.user.fullName ?? p.user.email,
       }))}
+      customConditions={customConditions}
     />
   );
 }

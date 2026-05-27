@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Drawer } from "@/components/ui/drawer";
+import { BookingDrawer } from "@/components/agenda/booking-drawer";
 import { ModalCloseButton } from "@/components/ui/modal-close";
 import { FormField } from "@/components/ui/form-field";
 import type { BookingStatus } from "@prisma/client";
@@ -26,7 +27,8 @@ import {
   deleteBooking,
   setBookingStatus,
 } from "@/lib/bookings";
-import { searchPatientsForAssignment } from "@/lib/diagnosis";
+import { PatientPicker } from "@/components/patients/patient-picker";
+import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
 
 type BookingDTO = {
   id: string;
@@ -39,6 +41,12 @@ type BookingDTO = {
   patientName: string;
   patientCondition: string | null;
   notes: string | null;
+  /**
+   * Sprint 16: tells the agenda whether to expose the link-to-HC + the
+   * diagnosis chip. `"basic"` shows the booking + name only; `"none"`
+   * is a guest booking (no patient row yet).
+   */
+  patientAccess: "full" | "basic" | "none";
 };
 
 type Props = {
@@ -52,6 +60,14 @@ type Props = {
   services: { id: string; name: string; durationMin: number; priceCents: number }[];
   practitioners: { id: string; name: string }[];
   patients: { id: string; name: string }[];
+  /**
+   * Business-hours window from `Tenant.businessHoursStart/End`
+   * (Sprint 17). Controls the row range in TimelineView, the
+   * preset list in BookingModal time picker, and the slot grid.
+   * Default fallback 8..19 matches the pre-Sprint 17 hardcoded
+   * constants in case the server forgets to pass them.
+   */
+  businessHours?: { start: number; end: number };
 };
 
 const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
@@ -64,185 +80,9 @@ function fmtHour(d: Date) {
   });
 }
 
-function isoToLocalInput(iso: string) {
-  // Render an ISO timestamp into a value that `<input type=datetime-local>` accepts (no Z).
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// PatientPicker — debounced server-side search + dropdown.
-// Drop-in replacement for the previous `<Select label="Paciente">` that
-// scrolled through every patient (unusable past a few dozen).
-// ──────────────────────────────────────────────────────────────────────
-
-function PatientPicker({
-  name,
-  initialPatientId,
-  initialPatients,
-}: {
-  name: string;
-  initialPatientId?: string | null;
-  initialPatients: { id: string; name: string }[];
-}) {
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState(false);
-  const [hits, setHits] = useState<{ id: string; name: string; hc: string }[]>([]);
-  const [selected, setSelected] = useState<{ id: string; name: string } | null>(() => {
-    if (!initialPatientId) return null;
-    const found = initialPatients.find((p) => p.id === initialPatientId);
-    return found ? { id: found.id, name: found.name } : null;
-  });
-  const seqRef = useRef(0);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const term = q.trim();
-    const seq = ++seqRef.current;
-    const t = setTimeout(async () => {
-      const r = await searchPatientsForAssignment(term);
-      if (seq !== seqRef.current) return;
-      setHits(r.map((p) => ({ id: p.id, name: p.name, hc: p.hc ?? "" })));
-    }, 200);
-    return () => clearTimeout(t);
-  }, [q, open]);
-
-  const pick = (p: { id: string; name: string }) => {
-    setSelected(p);
-    setOpen(false);
-    setQ("");
-  };
-  const clear = () => {
-    setSelected(null);
-    setOpen(true);
-    setQ("");
-  };
-
-  return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
-      <label style={{ display: "block", fontSize: 12 }}>
-        <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Paciente</span>
-        <input type="hidden" name={name} value={selected?.id ?? ""} />
-        {selected ? (
-          <div
-            style={{
-              marginTop: 6,
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid rgba(15,30,51,0.08)",
-              background: "rgba(255,255,255,0.85)",
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-            }}
-          >
-            <Avatar name={selected.name} size={28} tone="sky" />
-            <span style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{selected.name}</span>
-            <button
-              type="button"
-              onClick={clear}
-              aria-label="Cambiar paciente"
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--navy-500)",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              Cambiar
-            </button>
-          </div>
-        ) : (
-          <input
-            type="text"
-            placeholder="Buscá por nombre, DNI o email…"
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setOpen(true);
-            }}
-            onFocus={() => setOpen(true)}
-            style={{
-              marginTop: 6,
-              padding: "10px 12px",
-              borderRadius: 12,
-              background: "rgba(255,255,255,0.7)",
-              border: "1px solid rgba(15,30,51,0.08)",
-              width: "100%",
-              fontSize: 14,
-              color: "var(--navy-900)",
-              outline: "none",
-            }}
-          />
-        )}
-      </label>
-      {open && !selected && (
-        <div
-          className="k-glass-strong k-scroll"
-          style={{
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            right: 0,
-            marginTop: 4,
-            maxHeight: 240,
-            overflowY: "auto",
-            borderRadius: 12,
-            padding: 4,
-            zIndex: 30,
-            boxShadow: "0 10px 32px rgba(15,30,51,0.18)",
-          }}
-        >
-          {hits.length === 0 ? (
-            <div style={{ padding: 14, fontSize: 12.5, color: "var(--navy-500)", textAlign: "center" }}>
-              {q.trim() ? "Sin resultados — vas a crear un turno de reserva externa." : "Empezá a tipear el nombre del paciente."}
-            </div>
-          ) : (
-            hits.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => pick(p)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  padding: "8px 10px",
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontSize: 13,
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(15,30,51,0.04)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <Avatar name={p.name} size={28} tone="sky" />
-                <span style={{ flex: 1, fontWeight: 600 }}>{p.name}</span>
-                {p.hc && <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>{p.hc}</span>}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// `isoToLocalInput` removed — use the AR-zoned `isoToARLocalInput`
+// helper from `lib/datetime-ar.ts` (also handles the form-side
+// AR-offset tagging via `localToARIso`).
 
 const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 
@@ -492,10 +332,16 @@ export function AgendaClient(props: Props) {
             onCreate={(iso) => setCreating({ defaultISO: iso })}
             onEdit={setEditing}
             density={density}
+            businessHours={props.businessHours ?? { start: 8, end: 19 }}
           />
         )}
         {props.view === "week" && (
-          <WeekGridView weekStart={weekStart} bookings={props.bookings} onEdit={setEditing} />
+          <WeekGridView
+            weekStart={weekStart}
+            bookings={props.bookings}
+            onEdit={setEditing}
+            businessHours={props.businessHours ?? { start: 8, end: 19 }}
+          />
         )}
         {props.view === "list" && (
           <ListView bookings={todayList} onEdit={setEditing} />
@@ -600,13 +446,20 @@ function TimelineView({
   onCreate,
   onEdit,
   density,
+  businessHours,
 }: {
   bookings: BookingDTO[];
   onCreate: (iso: string) => void;
   onEdit: (b: BookingDTO) => void;
   density: "comfortable" | "compact";
+  businessHours: { start: number; end: number };
 }) {
-  const HOURS = Array.from({ length: 12 }, (_, i) => i + 8); // 08..19
+  // Build the visible hour range from the tenant's business window.
+  // `end` is exclusive: businessHoursEnd=19 means the last row is 18:00.
+  const HOURS = Array.from(
+    { length: Math.max(1, businessHours.end - businessHours.start) },
+    (_, i) => i + businessHours.start
+  );
   const ROW = density === "compact" ? 40 : 56;
 
   return (
@@ -719,12 +572,19 @@ function WeekGridView({
   weekStart,
   bookings,
   onEdit,
+  businessHours,
 }: {
   weekStart: Date;
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
+  businessHours: { start: number; end: number };
 }) {
-  const HOURS = Array.from({ length: 11 }, (_, i) => i + 8); // 8..18
+  // `end` exclusive — matches the row semantics in TimelineView so
+  // both views render the same slots.
+  const HOURS = Array.from(
+    { length: Math.max(1, businessHours.end - businessHours.start) },
+    (_, i) => i + businessHours.start
+  );
   const ROW = 50;
   return (
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -1059,218 +919,17 @@ const menuLabel: React.CSSProperties = {
   padding: "0 4px 6px",
 };
 
-// ──────────────────────────────────────────────────────────────────────
-// Booking drawer — right-side panel; replaces the old edit modal
-// ──────────────────────────────────────────────────────────────────────
+const miniGhostBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(15,30,51,0.1)",
+  borderRadius: 999,
+  padding: "5px 12px",
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: "var(--navy-700)",
+  cursor: "pointer",
+};
 
-function BookingDrawer({
-  booking,
-  onClose,
-  onSaved,
-}: {
-  booking: BookingDTO | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  const setStatus = (status: BookingStatus) => {
-    if (!booking) return;
-    setError(null);
-    start(async () => {
-      const r = await setBookingStatus(booking.id, status);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      onSaved();
-    });
-  };
-
-  const remove = () => {
-    if (!booking) return;
-    if (!confirm("¿Eliminar este turno?")) return;
-    setError(null);
-    start(async () => {
-      const r = await deleteBooking(booking.id);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      onSaved();
-    });
-  };
-
-  return (
-    <Drawer open={!!booking} onClose={onClose} title={booking ? "Turno" : undefined}>
-      {booking && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 14,
-              background: "rgba(255,255,255,0.6)",
-              border: "1px solid rgba(15,30,51,0.06)",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-            }}
-          >
-            <Avatar name={booking.patientName} size={44} tone="sky" />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy-900)" }}>
-                {booking.patientName}
-              </div>
-              {booking.patientCondition && (
-                <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{booking.patientCondition}</div>
-              )}
-            </div>
-            <StatusTag s={booking.status} />
-          </div>
-
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 14,
-              background: "rgba(246,249,253,0.7)",
-              border: "1px solid rgba(15,30,51,0.06)",
-              display: "grid",
-              gap: 8,
-              fontSize: 12.5,
-            }}
-          >
-            <Row label="Cuándo">
-              {new Date(booking.scheduledFor).toLocaleString("es-AR", {
-                weekday: "long",
-                day: "2-digit",
-                month: "long",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </Row>
-            <Row label="Duración">{booking.durationMin} min</Row>
-            <Row label="Servicio">{booking.serviceName}</Row>
-            {booking.notes && <Row label="Notas">{booking.notes}</Row>}
-          </div>
-
-          {booking.patientId && (
-            <Link
-              href={`/pacientes/${booking.patientId}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 14px",
-                borderRadius: 12,
-                background: "var(--sky-700)",
-                color: "#fff",
-                fontWeight: 700,
-                textDecoration: "none",
-                fontSize: 13,
-              }}
-            >
-              Abrir historia clínica
-              <span aria-hidden>→</span>
-            </Link>
-          )}
-
-          <div>
-            <div style={menuLabel}>Cambiar estado</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-              <Button
-                variant="primary"
-                onClick={() => setStatus("CONFIRMED")}
-                disabled={pending}
-                style={{ justifyContent: "center" }}
-              >
-                Confirmar
-              </Button>
-              <Button
-                variant="lime"
-                onClick={() => setStatus("COMPLETED")}
-                disabled={pending}
-                style={{ justifyContent: "center" }}
-              >
-                <IconCheck size={12} stroke={3} /> Realizado
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setStatus("NO_SHOW")}
-                disabled={pending}
-                style={{ justifyContent: "center" }}
-              >
-                Ausente
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setStatus("CANCELLED")}
-                disabled={pending}
-                style={{ justifyContent: "center" }}
-              >
-                Cancelar
-              </Button>
-            </div>
-          </div>
-
-          {error && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={remove}
-            disabled={pending}
-            style={{
-              alignSelf: "flex-start",
-              background: "transparent",
-              border: "none",
-              color: "#9F1F1F",
-              cursor: "pointer",
-              fontSize: 12.5,
-              fontWeight: 700,
-              padding: 0,
-              marginTop: 4,
-            }}
-          >
-            Eliminar turno
-          </button>
-        </div>
-      )}
-    </Drawer>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", gap: 10 }}>
-      <div
-        style={{
-          width: 80,
-          fontSize: 10.5,
-          color: "var(--navy-300)",
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          paddingTop: 2,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ flex: 1, color: "var(--navy-900)", fontWeight: 500 }}>{children}</div>
-    </div>
-  );
-}
 
 function BookingModal({
   mode,
@@ -1340,7 +999,9 @@ function BookingModal({
             patientId,
             serviceId: String(formData.get("serviceId") ?? ""),
             practitionerId: String(formData.get("practitionerId") ?? ""),
-            startScheduledFor: String(formData.get("scheduledFor") ?? ""),
+            // AR-tagged so the server doesn't drift the slot 3 hours
+            // (see lib/datetime-ar.ts for the why).
+            startScheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
             durationMin: Number(formData.get("durationMin")) || 45,
             totalSessions: planSessions,
             daysOfWeek: planDows,
@@ -1359,7 +1020,8 @@ function BookingModal({
           patientId,
           serviceId: String(formData.get("serviceId") ?? ""),
           practitionerId: String(formData.get("practitionerId") ?? ""),
-          scheduledFor: String(formData.get("scheduledFor") ?? ""),
+          // AR-tagged: prevents the +3h shift to UTC on the server.
+          scheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
           durationMin: Number(formData.get("durationMin")) || 45,
           notes: String(formData.get("notes") ?? "") || undefined,
           guestName: String(formData.get("guestName") ?? "") || undefined,
@@ -1598,7 +1260,7 @@ function BookingModal({
                 name="scheduledFor"
                 type="datetime-local"
                 required
-                defaultValue={defaultISO ? isoToLocalInput(defaultISO) : ""}
+                defaultValue={defaultISO ? isoToARLocalInput(defaultISO) : ""}
               />
               <FormField label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
               {!planMode && (

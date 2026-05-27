@@ -138,6 +138,9 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
       practitionerId: actor.practitionerId,
       ip: h.get("x-forwarded-for")?.split(",")[0]?.trim(),
       userAgent: h.get("user-agent") ?? undefined,
+      // Minted by middleware; safe to trust because middleware strips
+      // any client-supplied value and re-mints if absent.
+      requestId: h.get("x-request-id") ?? undefined,
     });
   }
   return actor;

@@ -12,10 +12,15 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
-import { visibilityForActor } from "@/lib/visibility";
+import {
+  visibilityForActor,
+  patientAccessFor,
+  bulkPatientAccess,
+} from "@/lib/visibility";
 import { env } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { NotificationKind } from "@prisma/client";
@@ -34,14 +39,84 @@ export async function listPatients(opts: {
   filter?: "all" | "active" | "no-program" | "archived";
   sort?: PatientSort;
   insurer?: string;
+  /** Inclusive age bounds in years. Translated to dateOfBirth ranges. */
+  ageMin?: number;
+  ageMax?: number;
+  /** Last-diagnosis filter (Condition.slug) — patients whose active or
+   * most recent ClinicalCase resolved to this condition. */
+  diagnosisSlug?: string;
+  /** Inclusive last-visit (completed booking) date range, ISO yyyy-mm-dd. */
+  lastVisitFrom?: string;
+  lastVisitTo?: string;
 } = {}): Promise<PatientRow[]> {
   const actor = await getActor();
-  const v = await visibilityForActor(actor);
   const q = opts.q?.trim();
   const sort = opts.sort ?? "lastName.asc";
+  // Sprint 16: directory shows EVERY patient of the tenant; per-row
+  // access (full vs basic) is resolved below via `bulkPatientAccess`
+  // and PHI fields are masked accordingly for basic rows.
+
+  // Age bounds: a patient whose age is in [min, max] has dateOfBirth in
+  // [today - (max+1) years, today - min years]. Inclusive on both sides.
+  const now = new Date();
+  const dobMax =
+    opts.ageMin != null
+      ? new Date(now.getFullYear() - opts.ageMin, now.getMonth(), now.getDate())
+      : undefined;
+  const dobMin =
+    opts.ageMax != null
+      ? new Date(now.getFullYear() - opts.ageMax - 1, now.getMonth(), now.getDate() + 1)
+      : undefined;
+  const dobWhere: Prisma.PatientWhereInput = {};
+  if (dobMin || dobMax) {
+    dobWhere.dateOfBirth = {
+      ...(dobMin ? { gte: dobMin } : {}),
+      ...(dobMax ? { lte: dobMax } : {}),
+    };
+  }
+
+  // Last-visit range — patients with at least one COMPLETED booking
+  // whose scheduledFor falls in the window.
+  const lvFrom = opts.lastVisitFrom ? new Date(opts.lastVisitFrom + "T00:00:00") : undefined;
+  const lvTo = opts.lastVisitTo ? new Date(opts.lastVisitTo + "T23:59:59") : undefined;
+  const lastVisitWhere: Prisma.PatientWhereInput =
+    lvFrom || lvTo
+      ? {
+          bookings: {
+            some: {
+              status: "COMPLETED",
+              ...(lvFrom || lvTo
+                ? {
+                    scheduledFor: {
+                      ...(lvFrom ? { gte: lvFrom } : {}),
+                      ...(lvTo ? { lte: lvTo } : {}),
+                    },
+                  }
+                : {}),
+            },
+          },
+        }
+      : {};
+
+  // Diagnosis filter — patient has a clinical case whose top-rank
+  // diagnosis matches the given condition slug. We use `some` on the
+  // chain so the SQL stays one tractable subquery.
+  const diagnosisWhere: Prisma.PatientWhereInput = opts.diagnosisSlug
+    ? {
+        programs: {
+          some: {
+            case: {
+              diagnoses: {
+                some: { condition: { slug: opts.diagnosisSlug } },
+              },
+            },
+          },
+        },
+      }
+    : {};
+
   const where: Prisma.PatientWhereInput = {
     tenantId: actor.tenantId,
-    ...v.patientWhere,
     ...(opts.filter === "archived"
       ? { archivedAt: { not: null } }
       : { archivedAt: null }),
@@ -63,6 +138,9 @@ export async function listPatients(opts: {
     ...(opts.insurer
       ? { coverages: { some: { insurer: { contains: opts.insurer, mode: "insensitive" } } } }
       : {}),
+    ...dobWhere,
+    ...lastVisitWhere,
+    ...diagnosisWhere,
   };
 
   // Map sort directly when supported by Prisma; for upcoming/lastVisit we
@@ -96,30 +174,61 @@ export async function listPatients(opts: {
       },
     },
   });
-  return rows.map((p): PatientRow => {
-    const prog = p.programs[0];
-    const sessions = prog?.sessions ?? [];
-    const done = sessions.filter((s) => s.completedAt).length;
-    const lastDone = sessions
-      .filter((s) => s.completedAt)
-      .sort((a, b) => +b.completedAt! - +a.completedAt!)[0];
-    return {
-      id: p.id,
-      firstName: p.firstName,
-      lastName: p.lastName,
-      email: p.email,
-      phone: p.phone,
-      documentId: p.documentId,
-      dateOfBirth: p.dateOfBirth,
-      notes: p.notes,
-      createdAt: p.createdAt,
-      activeProgramTitle: prog?.title ?? null,
-      sessionsTotal: prog?.totalSessions ?? 0,
-      sessionsDone: done,
-      lastVisit: lastDone?.completedAt ?? null,
-      upcomingAt: p.bookings[0]?.scheduledFor ?? null,
-    };
-  })
+
+  // Resolve access per row in one batch — much cheaper than N share
+  // lookups when the directory has hundreds of patients.
+  const accessMap = await bulkPatientAccess(actor, rows.map((r) => r.id));
+
+  return rows
+    .map((p): PatientRow => {
+      const access = accessMap.get(p.id) ?? "basic";
+      const upcomingAt = p.bookings[0]?.scheduledFor ?? null;
+      // Basic rows expose ONLY name + DNI + next booking. Every other
+      // field is nulled out so a basic-access kine can't even infer
+      // medical history by glancing at the directory.
+      if (access === "basic") {
+        return {
+          id: p.id,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          email: null,
+          phone: null,
+          documentId: p.documentId,
+          dateOfBirth: null,
+          notes: null,
+          createdAt: p.createdAt,
+          activeProgramTitle: null,
+          sessionsTotal: 0,
+          sessionsDone: 0,
+          lastVisit: null,
+          upcomingAt,
+          access: "basic",
+        };
+      }
+      const prog = p.programs[0];
+      const sessions = prog?.sessions ?? [];
+      const done = sessions.filter((s) => s.completedAt).length;
+      const lastDone = sessions
+        .filter((s) => s.completedAt)
+        .sort((a, b) => +b.completedAt! - +a.completedAt!)[0];
+      return {
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        email: p.email,
+        phone: p.phone,
+        documentId: p.documentId,
+        dateOfBirth: p.dateOfBirth,
+        notes: p.notes,
+        createdAt: p.createdAt,
+        activeProgramTitle: prog?.title ?? null,
+        sessionsTotal: prog?.totalSessions ?? 0,
+        sessionsDone: done,
+        lastVisit: lastDone?.completedAt ?? null,
+        upcomingAt,
+        access: "full",
+      };
+    })
     .sort((a, b) => {
       // Secondary in-memory sort for fields that depend on joined data.
       if (sort === "upcoming.asc") {
@@ -217,24 +326,72 @@ function csv(s: string) {
 /**
  * Patient core — base patient + coverages + emergency contacts.
  *
- * **Hot path.** This is what the server component for `/pacientes/[id]`
- * loads on every page hit. Heavier slices (programs+sessions+exercises,
- * full bookings list, eva scores) are split into their own fetchers so
- * the initial paint isn't paying for tabs the user may never open.
+ * **Hot path + access-gated.** Returns the full payload when the actor
+ * has FULL access (owner / shared / OWNER+ADMIN / sharedView), or a
+ * minimal "basic" projection (name + DNI + next booking) otherwise.
+ * Pages branch on `result.access`.
  *
  * Audit log is written here — `patient.read` fires once per page load
- * regardless of which tabs the user navigates into afterwards.
+ * regardless of which tabs the user navigates into afterwards. Basic
+ * access still writes the audit row so OWNER/ADMIN can see who looked
+ * at whose name.
  */
 export async function getPatientCore(id: string) {
   const actor = await getActor();
-  const v = await visibilityForActor(actor);
-  const patient = await prisma.patient.findFirst({
-    where: { id, tenantId: actor.tenantId, ...v.patientWhere },
-    include: {
-      coverages: true,
-      emergency: true,
-    },
-  });
+  const access = await patientAccessFor(actor, id);
+  if (access === "none") return null;
+
+  if (access === "basic") {
+    // Minimal projection — name + DNI + next upcoming booking only.
+    const [patient, nextBooking] = await Promise.all([
+      prisma.patient.findFirst({
+        where: { id, tenantId: actor.tenantId },
+        select: { id: true, firstName: true, lastName: true, documentId: true },
+      }),
+      prisma.booking.findFirst({
+        where: {
+          patientId: id,
+          scheduledFor: { gte: new Date() },
+          status: { notIn: ["CANCELLED"] },
+        },
+        orderBy: { scheduledFor: "asc" },
+        select: { scheduledFor: true },
+      }),
+    ]);
+    if (!patient) return null;
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.read.basic",
+      entity: "Patient",
+      entityId: patient.id,
+    });
+    return {
+      id: patient.id,
+      firstName: patient.firstName,
+      lastName: patient.lastName,
+      documentId: patient.documentId,
+      nextBookingAt: nextBooking?.scheduledFor ?? null,
+      access: "basic" as const,
+    };
+  }
+
+  // RLS adoption (Sprint 16 — Etapa 1): the FULL HC fetch is the highest
+  // value target for defense-in-depth. App-layer guards (visibility +
+  // patientAccessFor) decide access; `runWithRls` sets
+  // `app.current_tenant_id` so the Postgres policies in
+  // `prisma/migrations/policies.sql` are also enforced. Audit write
+  // stays OUTSIDE the RLS tx — it's a fire-and-forget that doesn't need
+  // the GUC.
+  const patient = await runWithRls(actor.tenantId, async (tx) =>
+    tx.patient.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      include: {
+        coverages: true,
+        emergency: true,
+      },
+    })
+  );
   if (patient) {
     await audit({
       tenantId: actor.tenantId,
@@ -243,22 +400,27 @@ export async function getPatientCore(id: string) {
       entity: "Patient",
       entityId: patient.id,
     });
+    return { ...patient, access: "full" as const };
   }
-  return patient;
+  return null;
 }
 
 /**
- * Lite list of patient's programs — id + title + status + counters,
- * **without** sessions/exercises. Enough for the Resumen tab + tab
- * badges + "active program" detection.
+ * Lite list of patient's programs — programs + minimal session metadata
+ * (id, index, completedAt, scheduledFor, notes, exercise count) but
+ * **no** SessionExercise rows / Exercise joins. Enough for:
+ *
+ *   - Resumen tab (active program detection + done count)
+ *   - SesionesView (list rows with status + exercise count)
+ *   - Tab badges (programs.length, allSessionsCount)
+ *
+ * The heavy join (SessionExercise + Exercise) is only fetched by
+ * `getPatientProgramsFull` when the Plan tab opens.
  */
 export async function getPatientProgramsLite(patientId: string) {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return [];
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return [];
   return prisma.treatmentProgram.findMany({
     where: { patientId },
     select: {
@@ -269,7 +431,17 @@ export async function getPatientProgramsLite(patientId: string) {
       frequency: true,
       startDate: true,
       createdAt: true,
-      _count: { select: { sessions: true } },
+      sessions: {
+        orderBy: { index: "asc" },
+        select: {
+          id: true,
+          index: true,
+          scheduledFor: true,
+          completedAt: true,
+          notes: true,
+          _count: { select: { exercises: true } },
+        },
+      },
       case: {
         select: {
           diagnoses: {
@@ -285,17 +457,32 @@ export async function getPatientProgramsLite(patientId: string) {
 }
 
 /**
+ * Aggregate count of bookings worth showing on the Facturación tab
+ * badge — anything that isn't UNPAID counts as "billable". Cheap;
+ * keeps the tab count accurate without paying for the full bookings
+ * payload until the user actually opens that tab.
+ */
+export async function getPatientBillableCount(patientId: string) {
+  const actor = await getActor();
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return 0;
+  return prisma.booking.count({
+    where: {
+      patientId,
+      paymentStatus: { not: "UNPAID" },
+    },
+  });
+}
+
+/**
  * Full patient programs — all sessions + ordered exercises, with the
  * clinical case + diagnoses. Heavy. Only fetch when the user opens
  * the Sesiones or Plan tab.
  */
 export async function getPatientProgramsFull(patientId: string) {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return [];
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return [];
   return prisma.treatmentProgram.findMany({
     where: { patientId },
     include: {
@@ -316,11 +503,8 @@ export async function getPatientProgramsFull(patientId: string) {
  */
 export async function getPatientBookingsSummary(patientId: string, take = 5) {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return [];
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return [];
   return prisma.booking.findMany({
     where: { patientId },
     orderBy: { scheduledFor: "desc" },
@@ -344,11 +528,8 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
  */
 export async function getPatientBookingsAll(patientId: string, take = 100) {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return [];
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return [];
   return prisma.booking.findMany({
     where: { patientId },
     orderBy: { scheduledFor: "desc" },
@@ -361,11 +542,8 @@ export async function getPatientBookingsAll(patientId: string, take = 100) {
  */
 export async function getPatientEvaScores(patientId: string) {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return [];
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return [];
   return prisma.evaScore.findMany({
     where: { patientId },
     orderBy: { takenAt: "asc" },
@@ -441,16 +619,20 @@ export async function createPatient(
     };
   }
   try {
-    const p = await prisma.patient.create({
-      data: {
-        ...parsed.data,
-        tenantId: actor.tenantId,
-        // Auto-assign the new patient to the kine creating them, so the
-        // per-kine visibility mode works out of the box. OWNER/ADMIN can
-        // later re-assign or set null for "consultorio común".
-        assignedPractitionerId: actor.practitionerId,
-      },
-    });
+    // RLS Etapa 2: create runs under the tenant GUC. The notify+audit
+    // calls land outside the transaction since they're fire-and-forget.
+    const p = await runWithRls(actor.tenantId, async (tx) =>
+      tx.patient.create({
+        data: {
+          ...parsed.data,
+          tenantId: actor.tenantId,
+          // Auto-assign the new patient to the kine creating them, so the
+          // per-kine visibility mode works out of the box. OWNER/ADMIN can
+          // later re-assign or set null for "consultorio común".
+          assignedPractitionerId: actor.practitionerId,
+        },
+      })
+    );
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
@@ -491,12 +673,18 @@ export async function updatePatient(
     };
   }
   const { id, ...data } = parsed.data;
-  const owned = await prisma.patient.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    select: { id: true },
+  // RLS Etapa 2: the ownership check + update share the same tx so a
+  // race that flipped tenantId between them couldn't slip through.
+  const owned = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.patient.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!row) return null;
+    await tx.patient.update({ where: { id }, data });
+    return row;
   });
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  await prisma.patient.update({ where: { id }, data });
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -511,12 +699,20 @@ export async function updatePatient(
 
 export async function deletePatient(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    select: { id: true },
+  // RLS adoption (Sprint 16 — Etapa 1): destructive mutations are the
+  // second highest-value target. Cascade deletes traverse FKs the
+  // app-layer extension can't see; wrapping in `runWithRls` ensures
+  // Postgres policies guard every cascading row.
+  const owned = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.patient.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!row) return null;
+    await tx.patient.delete({ where: { id } });
+    return row;
   });
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  await prisma.patient.delete({ where: { id } });
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -536,30 +732,35 @@ export async function createProgram(input: {
   startDate: Date;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  const program = await prisma.treatmentProgram.create({
-    data: {
-      tenantId: actor.tenantId,
-      patientId: input.patientId,
-      title: input.title,
-      totalSessions: input.totalSessions,
-      frequency: input.frequency,
-      startDate: input.startDate,
-      sessions: {
-        create: Array.from({ length: input.totalSessions }).map((_, i) => ({
-          practitionerId: actor.practitionerId,
-          index: i + 1,
-          scheduledFor: new Date(
-            input.startDate.getTime() + Math.floor(i * (7 / input.frequency)) * 86_400_000
-          ),
-        })),
+  // RLS Etapa 2: owner check + program-with-nested-sessions create
+  // share the tx. Returns null if the patient isn't in this tenant.
+  const program = await runWithRls(actor.tenantId, async (tx) => {
+    const owned = await tx.patient.findFirst({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!owned) return null;
+    return tx.treatmentProgram.create({
+      data: {
+        tenantId: actor.tenantId,
+        patientId: input.patientId,
+        title: input.title,
+        totalSessions: input.totalSessions,
+        frequency: input.frequency,
+        startDate: input.startDate,
+        sessions: {
+          create: Array.from({ length: input.totalSessions }).map((_, i) => ({
+            practitionerId: actor.practitionerId,
+            index: i + 1,
+            scheduledFor: new Date(
+              input.startDate.getTime() + Math.floor(i * (7 / input.frequency)) * 86_400_000
+            ),
+          })),
+        },
       },
-    },
+    });
   });
+  if (!program) return { ok: false, error: "Paciente no encontrado." };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -846,12 +1047,19 @@ export async function setProgramStatus(input: {
  */
 export async function deleteProgram(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const program = await prisma.treatmentProgram.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    select: { id: true, patientId: true, title: true, totalSessions: true },
+  // RLS Etapa 2: cascade delete (sessions + sessionExercises) traverses
+  // FKs the app-layer extension can't reach. The GUC ensures Postgres
+  // policies guard every cascaded row.
+  const program = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.treatmentProgram.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: { id: true, patientId: true, title: true, totalSessions: true },
+    });
+    if (!row) return null;
+    await tx.treatmentProgram.delete({ where: { id } });
+    return row;
   });
   if (!program) return { ok: false, error: "Plan no encontrado." };
-  await prisma.treatmentProgram.delete({ where: { id } });
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1087,3 +1295,126 @@ export async function getPatientActivity(
     payload: (e.payload as Record<string, unknown> | null) ?? null,
   }));
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Patient sharing — Sprint 16
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Authorise a share mutation. Only the patient's OWNER (assigned
+ * practitioner) and tenant OWNER/ADMIN can change shares. Returns the
+ * patient row or an error.
+ */
+async function requireShareAuthority(patientId: string) {
+  const actor = await getActor();
+  const patient = await prisma.patient.findFirst({
+    where: { id: patientId, tenantId: actor.tenantId },
+    select: { id: true, assignedPractitionerId: true },
+  });
+  if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
+  const membership = await prisma.membership.findUnique({
+    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+    select: { role: true },
+  });
+  const isAdmin = membership?.role === "OWNER" || membership?.role === "ADMIN";
+  const isOwner = patient.assignedPractitionerId === actor.practitionerId;
+  if (!isAdmin && !isOwner) {
+    return {
+      ok: false as const,
+      error: "Solo el kinesiólogo asignado o un administrador puede compartir este paciente.",
+    };
+  }
+  return { ok: true as const, actor, patient };
+}
+
+/**
+ * Replace the share set for a patient atomically. Receives the full list
+ * of practitioner ids that should have access (excluding the owner —
+ * they always have it). Anything in the list that isn't already shared
+ * gets a new PatientShare; existing shares not in the list are removed.
+ *
+ * Idempotent — running with the same list twice is a no-op after the
+ * first call.
+ */
+export async function setPatientShares(input: {
+  patientId: string;
+  practitionerIds: string[];
+}): Promise<ActionResult> {
+  const auth = await requireShareAuthority(input.patientId);
+  if (!auth.ok) return auth;
+  const { actor, patient } = auth;
+
+  // Reject shares to the owner themselves (no-op anyway) and de-dupe.
+  const wantedRaw = Array.from(new Set(input.practitionerIds))
+    .filter((id) => id !== patient.assignedPractitionerId);
+
+  // Validate every requested practitioner belongs to this tenant — no
+  // cross-tenant grants.
+  const tenantPractitioners = await prisma.practitioner.findMany({
+    where: { tenantId: actor.tenantId, id: { in: wantedRaw } },
+    select: { id: true },
+  });
+  const wanted = new Set(tenantPractitioners.map((p) => p.id));
+
+  const existing = await prisma.patientShare.findMany({
+    where: { patientId: input.patientId },
+    select: { practitionerId: true },
+  });
+  const existingSet = new Set(existing.map((r) => r.practitionerId));
+
+  const toAdd = [...wanted].filter((id) => !existingSet.has(id));
+  const toRemove = [...existingSet].filter((id) => !wanted.has(id));
+
+  await prisma.$transaction(async (tx) => {
+    if (toRemove.length > 0) {
+      await tx.patientShare.deleteMany({
+        where: {
+          patientId: input.patientId,
+          practitionerId: { in: toRemove },
+        },
+      });
+    }
+    if (toAdd.length > 0) {
+      await tx.patientShare.createMany({
+        data: toAdd.map((practitionerId) => ({
+          tenantId: actor.tenantId,
+          patientId: input.patientId,
+          practitionerId,
+          sharedById: actor.userId,
+        })),
+      });
+    }
+  });
+
+  if (toAdd.length > 0 || toRemove.length > 0) {
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "patient.share.update",
+      entity: "Patient",
+      entityId: input.patientId,
+      payload: { added: toAdd, removed: toRemove },
+    });
+  }
+  revalidatePath(`/pacientes/${input.patientId}`);
+  revalidatePath(`/pacientes`);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Convenience: list the practitionerIds currently granted access.
+ * Used by the SharePatientButton popover to pre-check boxes.
+ */
+export async function getPatientShareList(patientId: string): Promise<string[]> {
+  const actor = await getActor();
+  const access = await patientAccessFor(actor, patientId);
+  // Only people with full access can SEE who else is shared into the HC.
+  if (access !== "full") return [];
+  const rows = await prisma.patientShare.findMany({
+    where: { patientId },
+    select: { practitionerId: true },
+  });
+  return rows.map((r) => r.practitionerId);
+}
+
+

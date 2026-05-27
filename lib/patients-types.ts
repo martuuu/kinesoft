@@ -15,6 +15,12 @@ export type PatientRow = {
   sessionsDone: number;
   lastVisit: Date | null;
   upcomingAt: Date | null;
+  /**
+   * Access tier for the current actor. `"basic"` rows have all PHI
+   * fields nulled out (email, phone, dateOfBirth, notes, plan info) —
+   * only firstName + lastName + documentId + upcomingAt are real.
+   */
+  access: "full" | "basic";
 };
 
 export type PatientSort =
@@ -51,7 +57,14 @@ export type PatientProgramLite = {
   frequency: number;
   startDate: Date;
   createdAt: Date;
-  _count: { sessions: number };
+  sessions: {
+    id: string;
+    index: number;
+    scheduledFor: Date;
+    completedAt: Date | null;
+    notes: string | null;
+    _count: { exercises: number };
+  }[];
   case: {
     diagnoses: { condition: { id: string; name: string; cie10: string | null } }[];
   } | null;
@@ -74,3 +87,27 @@ export type PatientBookingSummary = {
 };
 
 export type PatientBookingFull = Prisma.BookingGetPayload<object>;
+
+/**
+ * Basic-access projection — what we expose to practitioners who DON'T
+ * own this patient and haven't been explicitly shared into. They still
+ * need to see the patient row on the agenda and in the directory to
+ * coordinate (and to know who to ask for access), but PHI stays hidden.
+ *
+ * Owner / shared / OWNER+ADMIN get the full `PatientCore` shape instead.
+ */
+export type PatientBasic = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  documentId: string | null;
+  // Next upcoming booking time, ISO string for serialisability. null if
+  // there's no future booking.
+  nextBookingAt: Date | null;
+  // Hint for the UI to render the "ask for access" affordance.
+  access: "basic";
+};
+
+export type PatientCoreWithAccess =
+  | (PatientCore & { access: "full" })
+  | PatientBasic;

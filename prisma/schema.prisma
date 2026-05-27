@@ -32,12 +32,20 @@ model Tenant {
   // bookings. When `false` (default), each practitioner only sees the
   // patients assigned to them (via `Patient.assignedPractitionerId`).
   sharedPatientView Boolean @default(false)
+  // Working hours window for the agenda timeline + public booking
+  // slot generator. Hours are integers 6..23 inclusive on each side
+  // (start < end enforced at the action layer). Default 8..19 matches
+  // the pre-Sprint 17 hardcoded constants so existing tenants don't
+  // see their agenda change after the migration.
+  businessHoursStart Int @default(8)
+  businessHoursEnd   Int @default(19)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   memberships     Membership[]
   practitioners   Practitioner[]
   patients        Patient[]
+  patientShares   PatientShare[]
   patientLinks    PatientTenantLink[]
   services        Service[]
   bookings        Booking[]
@@ -49,6 +57,7 @@ model Tenant {
   favorites       Favorite[]
   insurers        Insurer[]
   invitations     Invitation[]
+  customConditions Condition[]
 
   @@index([slug])
 }
@@ -78,6 +87,7 @@ model UserProfile {
   memberships  Membership[]
   practitioner Practitioner?
   patient      Patient?
+  customConditionsCreated Condition[] @relation("CustomConditionAuthor")
 }
 
 model Membership {
@@ -123,6 +133,7 @@ model Practitioner {
   services      Service[]
   bookings      Booking[]
   assignedPatients Patient[] @relation("AssignedPatients")
+  sharedPatients PatientShare[]
   sessions      Session[]
   cases         ClinicalCase[]
   planTemplates PlanTemplate[]
@@ -134,11 +145,12 @@ model Patient {
   id            String   @id @default(cuid())
   tenantId      String   // home tenant (the first clinic to register them)
   userId        String?  @unique // optional Supabase identity for portal access
-  // The kine that "owns" this patient. When `Tenant.sharedPatientView` is
-  // false (default), each practitioner only sees patients where this id
-  // matches their own; OWNER/ADMIN always see all. Nullable for legacy
-  // patients created before this field existed — those count as
-  // "consultorio común" and are visible to everyone.
+  // The kine that "owns" this patient. Always set in Sprint 16+: every
+  // patient is owned by exactly one practitioner (the one that loaded
+  // them). Owners see the full HC by default; other kines see "basic"
+  // info (nombre / DNI / próximo turno) unless explicitly shared via
+  // `PatientShare`. `Tenant.sharedPatientView=true` overrides the
+  // restriction and grants every member full access.
   assignedPractitionerId String?
   firstName     String
   lastName      String
@@ -161,10 +173,36 @@ model Patient {
   evaScores    EvaScore[]
   emergency    EmergencyContact[]
   files        PatientFile[]
+  shares       PatientShare[]
 
   @@unique([tenantId, documentId])
   @@index([tenantId, lastName])
   @@index([tenantId, assignedPractitionerId])
+}
+
+// Explicit per-practitioner share of a patient HC. A row here grants
+// the named practitioner FULL access to the patient (same as owner)
+// for as long as the row exists. Combined with
+// Patient.assignedPractitionerId it forms the access-control matrix
+// consumed by patientAccessFor() in lib/visibility.ts.
+//
+// Audit trail lives in AuditEvent (action: patient.share / patient.unshare).
+// sharedById records who granted the access.
+model PatientShare {
+  id              String   @id @default(cuid())
+  tenantId        String
+  patientId       String
+  practitionerId  String   // the kine who gains access
+  sharedById      String?  // UserProfile id of the kine who granted access
+  sharedAt        DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, practitionerId])
+  @@index([tenantId, practitionerId])
+  @@index([patientId])
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -322,6 +360,10 @@ model Tag {
 model Condition {
   id               String   @id @default(cuid())
   cie10            String?
+  // Global rows have a stable slug — used for deep-linking + the
+  // matching engine. Custom (tenant-scoped) rows still have a slug
+  // but it's auto-generated from name and only unique within the
+  // owning tenant (enforced via `[tenantId, slug]` below).
   slug             String   @unique
   name             String
   summary          String?
@@ -331,12 +373,29 @@ model Condition {
   recoveryWeeksMax Int?
   mechanism        String?  // "Sobrecarga", "Trauma", "Repetitivo", "Postural"
   redFlags         String?  // when to refer urgently
+  // Sprint 17: tenant-scoped custom conditions.
+  // - `tenantId == null` → global catalog (seeded). Visible to every
+  //   tenant. Linked to anatomy / tag / exercise via the relations
+  //   below — drives the matching engine on the diagnostico screen.
+  // - `tenantId != null` → practitioner-created override. NOT linked
+  //   to anatomy or the matching engine; surfaced in `AssignPlanModal`
+  //   as a manual override and persisted on the ClinicalCase as the
+  //   confirmed diagnosis. Exercises are whatever the kine attaches
+  //   via the extras picker.
+  tenantId         String?
+  createdById      String?
   createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt @default(now())
+
+  tenant    Tenant?      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy UserProfile? @relation("CustomConditionAuthor", fields: [createdById], references: [id])
 
   tags      ConditionTag[]
   anatomy   ConditionAnatomy[]
   exercises ConditionExerciseLink[]
   diagnoses Diagnosis[]
+
+  @@index([tenantId])
 }
 
 enum Severity {

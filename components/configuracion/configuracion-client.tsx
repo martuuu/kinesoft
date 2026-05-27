@@ -32,9 +32,23 @@ import {
   changeMemberRole,
   removeMember,
 } from "@/lib/invitations";
-import { setSharedPatientView, updateTenantBasics } from "@/lib/tenant-settings";
+import {
+  setSharedPatientView,
+  updateTenantBasics,
+  setBusinessHours,
+} from "@/lib/tenant-settings";
+import {
+  createCustomCondition,
+  updateCustomCondition,
+  deleteCustomCondition,
+  type CustomConditionRow,
+} from "@/lib/conditions";
+import {
+  BUSINESS_HOUR_MIN,
+  BUSINESS_HOUR_MAX,
+} from "@/lib/tenant-settings-constants";
 
-type Tab = "general" | "servicios" | "obras-sociales" | "usuarios";
+type Tab = "general" | "servicios" | "obras-sociales" | "diagnosticos" | "usuarios";
 
 type Props = {
   role: Role;
@@ -44,6 +58,7 @@ type Props = {
   team: TeamMemberRow[];
   pending: InvitationRow[];
   practitioners: { id: string; name: string }[];
+  customConditions: import("@/lib/conditions").CustomConditionRow[];
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -64,6 +79,7 @@ export function ConfiguracionClient(props: Props) {
         <ServicesPanel services={props.services} practitioners={props.practitioners} />
       )}
       {tab === "obras-sociales" && <InsurersPanel insurers={props.insurers} />}
+      {tab === "diagnosticos" && <DiagnosticosPanel conditions={props.customConditions} />}
       {tab === "usuarios" && props.role === "OWNER" && (
         <UsersPanel team={props.team} pending={props.pending} />
       )}
@@ -76,6 +92,7 @@ function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => void; ro
     { key: "general", label: "General" },
     { key: "servicios", label: "Servicios" },
     { key: "obras-sociales", label: "Obras Sociales" },
+    { key: "diagnosticos", label: "Diagnósticos" },
     { key: "usuarios", label: "Usuarios", ownerOnly: true },
   ];
   return (
@@ -125,6 +142,24 @@ function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) 
   const [pending, start] = useTransition();
   const [shared, setShared] = useState(tenant.sharedPatientView);
   const [error, setError] = useState<string | null>(null);
+  const [hoursStart, setHoursStart] = useState(tenant.businessHoursStart);
+  const [hoursEnd, setHoursEnd] = useState(tenant.businessHoursEnd);
+  const [hoursMsg, setHoursMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const canAdmin = role === "OWNER" || role === "ADMIN";
+
+  const saveHours = () => {
+    setHoursMsg(null);
+    start(async () => {
+      const r = await setBusinessHours({ start: hoursStart, end: hoursEnd });
+      if (!r.ok) {
+        setHoursMsg({ tone: "err", text: r.error });
+      } else {
+        setHoursMsg({ tone: "ok", text: "Horario actualizado." });
+        router.refresh();
+      }
+    });
+  };
 
   const toggleShared = () => {
     setError(null);
@@ -180,17 +215,142 @@ function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) 
               Vista compartida del consultorio
             </div>
             <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
-              <strong>Activado</strong>: todos los kinesiólogos ven todos los pacientes y turnos
-              del consultorio. <strong>Desactivado</strong> (por defecto): cada kine ve solo sus
-              propios pacientes y turnos. OWNER/ADMIN siempre ven todo, independientemente del modo.
+              <strong>Activado</strong>: todos los kinesiólogos ven la historia clínica completa
+              de todos los pacientes del consultorio. <strong>Desactivado</strong> (por defecto):
+              cada kine sólo ve los pacientes que cargó. Para compartir un paciente puntual con
+              otro profesional, usá el botón <strong>Compartir</strong> en el perfil del paciente.
+              OWNER/ADMIN siempre ven todo independientemente del modo.
             </div>
           </div>
           <Switch on={shared} onChange={toggleShared} disabled={role !== "OWNER" && role !== "ADMIN"} />
         </div>
+        {shared && (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 10,
+              background: "rgba(255,176,32,0.12)",
+              border: "1px solid rgba(255,176,32,0.3)",
+              fontSize: 12.5,
+              color: "var(--navy-700)",
+              lineHeight: 1.45,
+            }}
+          >
+            <strong>Atención:</strong> con este modo activado se ignoran los permisos
+            individuales otorgados con el botón <em>Compartir</em>. Todos los kinesiólogos
+            del consultorio ven los datos completos de todos los pacientes.
+          </div>
+        )}
+      </Card>
+
+      <Card style={{ padding: 20 }}>
+        <EyebrowLabel>Horario del consultorio</EyebrowLabel>
+        <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
+          Define la franja horaria visible en la agenda y en el turnero público.
+          Permitido: <strong>{BUSINESS_HOUR_MIN}:00</strong> a <strong>{BUSINESS_HOUR_MAX}:00</strong>.
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+          <HourSelect
+            label="Apertura"
+            value={hoursStart}
+            onChange={(v) => {
+              setHoursStart(v);
+              if (v >= hoursEnd) setHoursEnd(Math.min(BUSINESS_HOUR_MAX, v + 1));
+            }}
+            min={BUSINESS_HOUR_MIN}
+            max={BUSINESS_HOUR_MAX - 1}
+            disabled={!canAdmin}
+          />
+          <HourSelect
+            label="Cierre"
+            value={hoursEnd}
+            onChange={setHoursEnd}
+            min={Math.max(BUSINESS_HOUR_MIN + 1, hoursStart + 1)}
+            max={BUSINESS_HOUR_MAX}
+            disabled={!canAdmin}
+          />
+          <Button
+            type="button"
+            variant="primary"
+            onClick={saveHours}
+            disabled={
+              pending ||
+              !canAdmin ||
+              (hoursStart === tenant.businessHoursStart && hoursEnd === tenant.businessHoursEnd)
+            }
+            style={{ marginLeft: "auto" }}
+          >
+            {pending ? "Guardando…" : "Guardar horario"}
+          </Button>
+        </div>
+        {hoursMsg && (
+          <div
+            role={hoursMsg.tone === "err" ? "alert" : "status"}
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 10,
+              background:
+                hoursMsg.tone === "ok"
+                  ? "rgba(200,245,100,0.18)"
+                  : "rgba(228,70,70,0.1)",
+              color: hoursMsg.tone === "ok" ? "var(--navy-900)" : "#9F1F1F",
+              fontSize: 12,
+            }}
+          >
+            {hoursMsg.text}
+          </div>
+        )}
       </Card>
 
       {error && <ErrorBox>{error}</ErrorBox>}
     </div>
+  );
+}
+
+function HourSelect({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  disabled,
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+  min: number;
+  max: number;
+  disabled?: boolean;
+}) {
+  const options = Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+      <span style={{ fontWeight: 600, color: "var(--navy-500)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        disabled={disabled}
+        style={{
+          padding: "8px 12px",
+          borderRadius: 10,
+          border: "1px solid rgba(15,30,51,0.1)",
+          background: disabled ? "rgba(15,30,51,0.04)" : "#fff",
+          fontSize: 14,
+          minWidth: 110,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {options.map((h) => (
+          <option key={h} value={h}>
+            {String(h).padStart(2, "0")}:00
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -1056,5 +1216,295 @@ function ErrorBox({ children }: { children: React.ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Diagnósticos panel — CRUD over custom (tenant-scoped) Condition rows
+// ──────────────────────────────────────────────────────────────────────
+
+function DiagnosticosPanel({ conditions }: { conditions: CustomConditionRow[] }) {
+  const router = useRouter();
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<CustomConditionRow | null>(null);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card style={{ padding: 20 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
+          <div>
+            <EyebrowLabel>Diagnósticos personalizados</EyebrowLabel>
+            <p style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 6, maxWidth: 640, lineHeight: 1.45 }}>
+              Crea diagnósticos propios cuando el catálogo CIE-10 base no alcanza.
+              Quedan disponibles para todo el consultorio y se pueden asignar como
+              diagnóstico confirmado desde la pantalla de Diagnóstico.
+            </p>
+          </div>
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            + Nuevo diagnóstico
+          </Button>
+        </div>
+      </Card>
+
+      {conditions.length === 0 ? (
+        <Card style={{ padding: 32, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
+          Todavía no creaste diagnósticos personalizados.
+        </Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div
+            style={{
+              padding: "12px 18px",
+              display: "grid",
+              gridTemplateColumns: "1.6fr 110px 1fr 90px 110px",
+              gap: 14,
+              fontSize: 10,
+              fontWeight: 700,
+              color: "var(--navy-300)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              borderBottom: "1px solid rgba(15,30,51,0.06)",
+            }}
+          >
+            <span>Nombre</span>
+            <span>CIE-10</span>
+            <span>Mecanismo</span>
+            <span>Severidad</span>
+            <span style={{ textAlign: "right" }}>Acciones</span>
+          </div>
+          {conditions.map((c) => (
+            <div
+              key={c.id}
+              style={{
+                padding: "14px 18px",
+                display: "grid",
+                gridTemplateColumns: "1.6fr 110px 1fr 90px 110px",
+                gap: 14,
+                alignItems: "center",
+                fontSize: 13,
+                borderBottom: "1px solid rgba(15,30,51,0.04)",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{c.name}</div>
+                {c.summary && (
+                  <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {c.summary}
+                  </div>
+                )}
+              </div>
+              <div className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+                {c.cie10 ?? "—"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{c.mechanism ?? "—"}</div>
+              <div>
+                {c.severity ? (
+                  <Tag
+                    tone={
+                      c.severity === "SEVERE"
+                        ? "soft"
+                        : c.severity === "MODERATE"
+                          ? "sky"
+                          : "lime"
+                    }
+                  >
+                    {c.severity === "MILD" ? "Leve" : c.severity === "MODERATE" ? "Mod." : "Severa"}
+                  </Tag>
+                ) : (
+                  <span style={{ fontSize: 12, color: "var(--navy-300)" }}>—</span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => setEditing(c)}
+                  style={miniBtn}
+                >
+                  Editar
+                </button>
+                <DeleteConditionButton id={c.id} name={c.name} onDone={() => router.refresh()} />
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {creating && (
+        <CustomConditionModal
+          onClose={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false);
+            router.refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <CustomConditionModal
+          existing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const miniBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(15,30,51,0.1)",
+  borderRadius: 999,
+  padding: "5px 12px",
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: "var(--navy-700)",
+  cursor: "pointer",
+};
+
+function DeleteConditionButton({
+  id,
+  name,
+  onDone,
+}: {
+  id: string;
+  name: string;
+  onDone: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const onClick = () => {
+    if (!confirm(`¿Eliminar "${name}"? Esta acción es definitiva.`)) return;
+    setError(null);
+    start(async () => {
+      const r = await deleteCustomCondition(id);
+      if (!r.ok) {
+        alert(r.error);
+        setError(r.error);
+        return;
+      }
+      onDone();
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={pending}
+      style={{ ...miniBtn, color: "#9F1F1F", borderColor: "rgba(159,31,31,0.25)" }}
+      title={error ?? undefined}
+    >
+      {pending ? "…" : "Eliminar"}
+    </button>
+  );
+}
+
+function CustomConditionModal({
+  existing,
+  onClose,
+  onSaved,
+}: {
+  existing?: CustomConditionRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const submit = (formData: FormData) => {
+    setError(null);
+    const payload = {
+      name: String(formData.get("name") ?? ""),
+      cie10: String(formData.get("cie10") ?? ""),
+      summary: String(formData.get("summary") ?? ""),
+      severity:
+        (formData.get("severity") as "MILD" | "MODERATE" | "SEVERE" | "") ||
+        undefined,
+      mechanism: String(formData.get("mechanism") ?? ""),
+      redFlags: String(formData.get("redFlags") ?? ""),
+    };
+    start(async () => {
+      const r = existing
+        ? await updateCustomCondition(existing.id, payload)
+        : await createCustomCondition(payload);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onSaved();
+    });
+  };
+  return (
+    <Modal
+      onClose={onClose}
+      title={existing ? "Editar diagnóstico" : "Nuevo diagnóstico personalizado"}
+      width={560}
+    >
+      <form action={submit} style={{ display: "grid", gap: 12 }}>
+        <FormField
+          label="Nombre"
+          name="name"
+          required
+          defaultValue={existing?.name ?? ""}
+          placeholder="Ej. Tendinopatía rotuliana posquirúrgica"
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <FormField
+            label="CIE-10 (opcional)"
+            name="cie10"
+            defaultValue={existing?.cie10 ?? ""}
+            placeholder="M76.5"
+          />
+          <FormField
+            as="select"
+            label="Severidad"
+            name="severity"
+            defaultValue={existing?.severity ?? ""}
+            options={[
+              { value: "", label: "—" },
+              { value: "MILD", label: "Leve" },
+              { value: "MODERATE", label: "Moderada" },
+              { value: "SEVERE", label: "Severa" },
+            ]}
+          />
+        </div>
+        <FormField
+          label="Mecanismo (opcional)"
+          name="mechanism"
+          defaultValue={existing?.mechanism ?? ""}
+          placeholder="Sobrecarga / Trauma / Repetitivo / Postural"
+        />
+        <FormField
+          as="textarea"
+          label="Resumen clínico (opcional)"
+          name="summary"
+          defaultValue={existing?.summary ?? ""}
+          placeholder="Breve descripción del cuadro y abordaje sugerido."
+        />
+        <FormField
+          as="textarea"
+          label="Red flags (opcional)"
+          name="redFlags"
+          defaultValue={existing?.redFlags ?? ""}
+          placeholder="Cuándo derivar al especialista."
+        />
+        {error && (
+          <div
+            role="alert"
+            style={{ padding: 10, borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 12 }}
+          >
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+            Cancelar
+          </Button>
+          <Button type="submit" variant="primary" disabled={pending}>
+            {pending ? "Guardando…" : existing ? "Guardar cambios" : "Crear diagnóstico"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
