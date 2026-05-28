@@ -199,76 +199,99 @@ function PatientHero({
   practitioners: PractitionerOption[];
   canReassign: boolean;
 }) {
+  // Modals lifted here — outside the <Card glass> — so backdrop-filter
+  // on the card doesn't create a stacking context that traps position:fixed.
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   return (
-    <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-      <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 240 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-          <span
-            className="k-mono"
-            style={{
-              padding: "2px 7px",
-              borderRadius: 6,
-              background: "var(--navy-900)",
-              color: "#fff",
-              fontSize: 10,
-              fontWeight: 700,
-            }}
-          >
-            HC-{patient.id.slice(-6).toUpperCase()}
-          </span>
-          {active ? (
-            <Tag tone="lime">Plan activo</Tag>
-          ) : (
-            <Tag tone="soft">Sin plan</Tag>
-          )}
+    <>
+      <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+        <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+            <span
+              className="k-mono"
+              style={{
+                padding: "2px 7px",
+                borderRadius: 6,
+                background: "var(--navy-900)",
+                color: "#fff",
+                fontSize: 10,
+                fontWeight: 700,
+              }}
+            >
+              HC-{patient.id.slice(-6).toUpperCase()}
+            </span>
+            {active ? (
+              <Tag tone="lime">Plan activo</Tag>
+            ) : (
+              <Tag tone="soft">Sin plan</Tag>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+            <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
+              {patient.firstName} {patient.lastName}
+            </h1>
+            <span style={{ fontSize: 13, color: "var(--navy-500)" }}>
+              {age != null ? `${age} años` : ""}
+              {patient.documentId ? ` · DNI ${patient.documentId}` : ""}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
+            <HeroFact label="Tel." value={patient.phone ?? "—"} />
+            <HeroFact label="Email" value={patient.email ?? "—"} />
+            <HeroFact label="Cobertura" value={coverageLabel} />
+            <HeroFact
+              label="Kine"
+              value={
+                patient.assignedPractitionerId
+                  ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
+                  : "Consultorio común"
+              }
+            />
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-          <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
-            {patient.firstName} {patient.lastName}
-          </h1>
-          <span style={{ fontSize: 13, color: "var(--navy-500)" }}>
-            {age != null ? `${age} años` : ""}
-            {patient.documentId ? ` · DNI ${patient.documentId}` : ""}
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
-          <HeroFact label="Tel." value={patient.phone ?? "—"} />
-          <HeroFact label="Email" value={patient.email ?? "—"} />
-          <HeroFact label="Cobertura" value={coverageLabel} />
-          <HeroFact
-            label="Kine"
-            value={
-              patient.assignedPractitionerId
-                ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
-                : "Consultorio común"
-            }
-          />
-        </div>
-      </div>
-      <PatientHeroActions
-        patient={patient}
-        insurers={insurers}
-        practitioners={practitioners}
-        canReassign={canReassign}
-      />
-    </Card>
+        <PatientHeroActions
+          patient={patient}
+          insurers={insurers}
+          practitioners={practitioners}
+          canReassign={canReassign}
+          onEdit={() => setEditing(true)}
+          onDelete={() => setDeleting(true)}
+        />
+      </Card>
+
+      {/* Modals rendered as siblings of the Card, not inside it.
+          This avoids backdrop-filter creating a new stacking context
+          that traps position:fixed inside the glass card. */}
+      {editing && (
+        <EditPatientModal
+          patient={patient}
+          insurers={insurers}
+          practitioners={practitioners}
+          canReassign={canReassign}
+          onClose={() => setEditing(false)}
+        />
+      )}
+      {deleting && <DeletePatientModal patient={patient} onClose={() => setDeleting(false)} />}
+    </>
   );
 }
 
 function PatientHeroActions({
   patient,
-  insurers,
   practitioners,
-  canReassign,
+  onEdit,
+  onDelete,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
   practitioners: PractitionerOption[];
   canReassign: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [portalSending, startPortal] = useTransition();
   const [portalResult, setPortalResult] = useState<
     | { ok: true; emailSent: boolean; portalUrl: string }
@@ -288,10 +311,7 @@ function PatientHeroActions({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <Link
-          href={`/agenda?new=1&patient=${patient.id}`}
-          style={{ textDecoration: "none" }}
-        >
+        <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
           <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
             <IconPlus size={12} /> Agregar turno
           </Button>
@@ -310,12 +330,12 @@ function PatientHeroActions({
         >
           {portalSending ? "Enviando…" : patient.userId ? "Reenviar portal" : "Enviar al portal"}
         </Button>
-        <Button variant="ghost" onClick={() => setEditing(true)} style={{ fontSize: 12, padding: "8px 14px" }}>
+        <Button variant="ghost" onClick={onEdit} style={{ fontSize: 12, padding: "8px 14px" }}>
           Editar
         </Button>
         <Button
           variant="ghost"
-          onClick={() => setDeleting(true)}
+          onClick={onDelete}
           style={{ fontSize: 12, padding: "8px 14px", color: "#9F1F1F" }}
         >
           Eliminar
@@ -348,16 +368,6 @@ function PatientHeroActions({
         Última actualización:{" "}
         {patient.updatedAt.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}
       </div>
-      {editing && (
-        <EditPatientModal
-          patient={patient}
-          insurers={insurers}
-          practitioners={practitioners}
-          canReassign={canReassign}
-          onClose={() => setEditing(false)}
-        />
-      )}
-      {deleting && <DeletePatientModal patient={patient} onClose={() => setDeleting(false)} />}
     </div>
   );
 }

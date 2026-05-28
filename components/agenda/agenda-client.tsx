@@ -784,7 +784,6 @@ function WeekGridView({
     (_, i) => i + businessHours.start
   );
   const ROW = 50;
-  const MAX_VISIBLE = 2;
 
   // overflow modal state: null = closed, otherwise the slot's bookings + label
   const [overflow, setOverflow] = useState<{ bookings: BookingDTO[]; label: string } | null>(null);
@@ -850,7 +849,7 @@ function WeekGridView({
             ))
           )}
 
-          {/* Render cells: deduplicated per (dayCol, rowStart) */}
+          {/* One chip per cell showing total count — click opens the list modal */}
           {Array.from(cellMap.entries()).map(([cellKey, cellBookings]) => {
             const [dayColStr, rowStartStr] = cellKey.split("-");
             const dayCol = Number(dayColStr);
@@ -858,61 +857,41 @@ function WeekGridView({
             const first = cellBookings[0];
             const date0 = new Date(first.scheduledFor);
             const span = Math.max(1, Math.round(first.durationMin / 60));
-            const visible = cellBookings.slice(0, MAX_VISIBLE);
-            const hiddenCount = cellBookings.length - MAX_VISIBLE;
+            const count = cellBookings.length;
 
             return (
-              <div
+              <button
                 key={cellKey}
+                onClick={() =>
+                  setOverflow({
+                    bookings: cellBookings,
+                    label: `${fmtHour(date0)} · ${count} ${count === 1 ? "turno" : "turnos"}`,
+                  })
+                }
                 style={{
                   gridColumn: dayCol + 2,
                   gridRow: `${rowStart} / span ${span}`,
+                  background: "var(--sky-700)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
                   gap: 2,
-                  padding: 2,
+                  padding: "4px 6px",
                   overflow: "hidden",
                 }}
               >
-                {visible.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => onEdit(b)}
-                    style={{
-                      flex: 1, minHeight: 0,
-                      background: b.status === "CANCELLED" ? "rgba(228,70,70,0.18)" : "var(--sky-700)",
-                      color: "#fff",
-                      padding: "3px 6px", borderRadius: 6, fontSize: 10, fontWeight: 600,
-                      border: "none", cursor: "pointer", textAlign: "left",
-                      overflow: "hidden",
-                      opacity: b.status === "CANCELLED" ? 0.5 : 1,
-                    }}
-                  >
-                    <div className="k-mono" style={{ fontSize: 9, opacity: 0.85 }}>{fmtHour(date0)}</div>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {b.patientName}
-                    </div>
-                  </button>
-                ))}
-                {hiddenCount > 0 && (
-                  <button
-                    onClick={() =>
-                      setOverflow({
-                        bookings: cellBookings,
-                        label: `${fmtHour(date0)} · ${hiddenCount + MAX_VISIBLE} turnos`,
-                      })
-                    }
-                    style={{
-                      background: "rgba(31,79,190,0.12)", color: "var(--sky-700)",
-                      border: "1px solid rgba(31,79,190,0.2)", borderRadius: 6,
-                      fontSize: 10, fontWeight: 700, padding: "2px 4px",
-                      cursor: "pointer", textAlign: "center",
-                    }}
-                  >
-                    +{hiddenCount} más
-                  </button>
-                )}
-              </div>
+                <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
+                  {count}
+                </span>
+                <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
+                  {count === 1 ? "turno" : "turnos"}
+                </span>
+              </button>
             );
           })}
         </div>
@@ -1500,7 +1479,7 @@ function BookingModal({
                     color: isGuest ? "var(--sky-700)" : "var(--navy-400)",
                   }}
                 >
-                  Invitado
+                  Externo - Sin registrar
                   <span
                     onClick={() => setIsGuest((v) => !v)}
                     role="switch"

@@ -146,6 +146,10 @@ function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) 
   const [hoursEnd, setHoursEnd] = useState(tenant.businessHoursEnd);
   const [hoursMsg, setHoursMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
+  // Sync when the server refreshes the tenant prop (after router.refresh()).
+  useEffect(() => { setHoursStart(tenant.businessHoursStart); }, [tenant.businessHoursStart]);
+  useEffect(() => { setHoursEnd(tenant.businessHoursEnd); }, [tenant.businessHoursEnd]);
+
   const canAdmin = role === "OWNER" || role === "ADMIN";
 
   const saveHours = () => {
