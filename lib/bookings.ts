@@ -543,9 +543,12 @@ export async function deleteBooking(id: string): Promise<ActionResult> {
  * Recurring booking helper — creates the same booking weekly for
  * `repeatWeeks` occurrences. Conflicts skip silently (returns the count
  * of created vs. skipped). Idempotency key derived per occurrence.
+ *
+ * If `daysOfWeek` is provided (0=Mon…6=Sun), each week generates one
+ * slot per matching day instead of repeating only the start day.
  */
 export async function createBookingSeries(
-  raw: BookingCreateInput & { repeatWeeks: number }
+  raw: BookingCreateInput & { repeatWeeks: number; daysOfWeek?: number[] }
 ): Promise<ActionResult<{ created: number; skipped: number }>> {
   const actor = await getActor();
   const parsed = BookingCreate.safeParse(raw);
@@ -561,10 +564,36 @@ export async function createBookingSeries(
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
 
+  // Build list of dates to create. When daysOfWeek is specified we expand
+  // each week into one slot per matching weekday (Mon=0…Sun=6 in AR local).
+  // Without daysOfWeek we keep the original behaviour: one slot per week
+  // on the same weekday as the start date.
+  const dates: Date[] = [];
+  if (raw.daysOfWeek && raw.daysOfWeek.length > 0) {
+    // Normalise to 0..6 and deduplicate.
+    const dowSet = new Set(raw.daysOfWeek.map((d) => ((d % 7) + 7) % 7));
+    // Iterate day-by-day for `weeks` weeks starting from scheduledFor.
+    const totalDays = weeks * 7;
+    const startH = data.scheduledFor.getUTCHours();
+    const startMin = data.scheduledFor.getUTCMinutes();
+    for (let day = 0; day < totalDays; day++) {
+      const candidate = new Date(data.scheduledFor);
+      candidate.setUTCDate(candidate.getUTCDate() + day);
+      candidate.setUTCHours(startH, startMin, 0, 0);
+      // Convert UTC weekday to Mon=0 convention used by AR DOW pickers.
+      const utcDow = candidate.getUTCDay(); // 0=Sun..6=Sat
+      const monDow = (utcDow + 6) % 7; // 0=Mon..6=Sun
+      if (dowSet.has(monDow)) dates.push(candidate);
+    }
+  } else {
+    for (let i = 0; i < weeks; i++) {
+      dates.push(new Date(data.scheduledFor.getTime() + i * 7 * 86_400_000));
+    }
+  }
+
   let created = 0;
   let skipped = 0;
-  for (let i = 0; i < weeks; i++) {
-    const when = new Date(data.scheduledFor.getTime() + i * 7 * 86_400_000);
+  for (const when of dates) {
     const end = new Date(when.getTime() + duration * 60_000);
     const clash = await prisma.booking.findFirst({
       where: {

@@ -28,7 +28,7 @@ import {
   setBookingStatus,
 } from "@/lib/bookings";
 import { PatientPicker } from "@/components/patients/patient-picker";
-import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
+import { localToARIso, isoToARLocalInput, toARDateKey, toARHour, toARDow } from "@/lib/datetime-ar";
 
 type BookingDTO = {
   id: string;
@@ -149,13 +149,13 @@ export function AgendaClient(props: Props) {
   const bookingsByDay = useMemo(() => {
     const map = new Map<string, BookingDTO[]>();
     for (const b of props.bookings) {
-      const k = new Date(b.scheduledFor).toISOString().slice(0, 10);
+      const k = toARDateKey(b.scheduledFor);
       map.set(k, [...(map.get(k) ?? []), b]);
     }
     return map;
   }, [props.bookings]);
 
-  const todayKey = anchor.toISOString().slice(0, 10);
+  const todayKey = toARDateKey(anchor);
   const todayList = (bookingsByDay.get(todayKey) ?? []).sort(
     (a, b) => +new Date(a.scheduledFor) - +new Date(b.scheduledFor)
   );
@@ -163,12 +163,12 @@ export function AgendaClient(props: Props) {
   const navigate = (deltaDays: number) => {
     const d = new Date(anchor);
     d.setDate(d.getDate() + deltaDays);
-    const next = d.toISOString().slice(0, 10);
+    const next = toARDateKey(d);
     router.push(`/agenda?view=${props.view}&date=${next}`);
   };
 
   const setView = (v: Props["view"]) => {
-    const next = anchor.toISOString().slice(0, 10);
+    const next = toARDateKey(anchor);
     router.push(`/agenda?view=${v}&date=${next}`);
   };
 
@@ -204,7 +204,7 @@ export function AgendaClient(props: Props) {
             <button
               onClick={() =>
                 router.push(
-                  `/agenda?view=${props.view}&date=${new Date().toISOString().slice(0, 10)}`
+                  `/agenda?view=${props.view}&date=${toARDateKey(new Date())}`
                 )
               }
               style={{
@@ -296,7 +296,7 @@ export function AgendaClient(props: Props) {
           <ViewOptionsMenu density={density} setDensity={setDensity} showWeekStrip={showWeekStrip} setShowWeekStrip={setShowWeekStrip} />
 
           <a
-            href={`/api/agenda/export?from=${weekStart.toISOString().slice(0, 10)}`}
+            href={`/api/agenda/export?from=${toARDateKey(weekStart)}`}
             target="_blank"
             rel="noopener noreferrer"
             title="Exportar semana a .ics"
@@ -321,7 +321,7 @@ export function AgendaClient(props: Props) {
           weekStart={weekStart}
           anchor={anchor}
           bookingsByDay={bookingsByDay}
-          onPick={(d) => router.push(`/agenda?view=${props.view}&date=${d.toISOString().slice(0, 10)}`)}
+          onPick={(d) => router.push(`/agenda?view=${props.view}&date=${toARDateKey(d)}`)}
         />
       )}
 
@@ -405,9 +405,9 @@ function WeekStrip({
       {DAYS.map((d, i) => {
         const day = new Date(weekStart);
         day.setDate(day.getDate() + i);
-        const key = day.toISOString().slice(0, 10);
+        const key = toARDateKey(day);
         const count = bookingsByDay.get(key)?.length ?? 0;
-        const on = day.toDateString() === anchor.toDateString();
+        const on = toARDateKey(day) === toARDateKey(anchor);
         return (
           <button
             key={key}
@@ -429,7 +429,7 @@ function WeekStrip({
               className="k-display"
               style={{ fontSize: 18, fontWeight: 700, color: on ? "#fff" : "var(--navy-900)", margin: "2px 0" }}
             >
-              {day.getDate()}
+              {Number(key.slice(8, 10))}
             </div>
             <div style={{ fontSize: 10, opacity: 0.8 }}>
               {count} {count === 1 ? "turno" : "turnos"}
@@ -439,6 +439,61 @@ function WeekStrip({
       })}
     </div>
   );
+}
+
+/** Max bookings shown per overlap group before a "+N more" pill appears. */
+const TIMELINE_PAGE = 5;
+
+type BookingLayout = BookingDTO & {
+  col: number;   // 0-based column within its collision group
+  cols: number;  // total columns in the group
+  groupKey: string;
+};
+
+/**
+ * Assign each booking a (col, cols) pair so overlapping bookings share
+ * the available width instead of stacking. Algorithm:
+ *   1. Sort by start time.
+ *   2. Sweep: build collision groups where any two bookings overlap.
+ *   3. Within each group assign columns greedily.
+ */
+type BItem = { b: BookingDTO; start: number; end: number };
+
+function layoutBookings(bookings: BookingDTO[]): BookingLayout[] {
+  if (!bookings.length) return [];
+
+  const items: BItem[] = bookings.map((b) => {
+    const start = new Date(b.scheduledFor).getTime();
+    const end = start + b.durationMin * 60_000;
+    return { b, start, end };
+  }).sort((a, b) => a.start - b.start);
+
+  // Build overlap groups via a sweep.
+  const groups: BItem[][] = [];
+  let current: BItem[] = [items[0]];
+  let groupEnd = items[0].end;
+
+  for (let i = 1; i < items.length; i++) {
+    if (items[i].start < groupEnd) {
+      current.push(items[i]);
+      groupEnd = Math.max(groupEnd, items[i].end);
+    } else {
+      groups.push(current);
+      current = [items[i]];
+      groupEnd = items[i].end;
+    }
+  }
+  groups.push(current);
+
+  const result: BookingLayout[] = [];
+  groups.forEach((group, gi) => {
+    const cols = group.length;
+    const key = `g${gi}`;
+    group.forEach((item, col) => {
+      result.push({ ...item.b, col, cols, groupKey: key });
+    });
+  });
+  return result;
 }
 
 function TimelineView({
@@ -454,13 +509,23 @@ function TimelineView({
   density: "comfortable" | "compact";
   businessHours: { start: number; end: number };
 }) {
-  // Build the visible hour range from the tenant's business window.
-  // `end` is exclusive: businessHoursEnd=19 means the last row is 18:00.
   const HOURS = Array.from(
     { length: Math.max(1, businessHours.end - businessHours.start) },
     (_, i) => i + businessHours.start
   );
   const ROW = density === "compact" ? 40 : 56;
+
+  // expanded[groupKey] = how many extra pages are showing (0 = only first page)
+  const [expanded, setExpanded] = useState<Record<string, number>>({});
+
+  const laid = useMemo(() => layoutBookings(bookings), [bookings]);
+
+  // Group laid items by groupKey to track pagination per group
+  const groupCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of laid) m.set(l.groupKey, (m.get(l.groupKey) ?? 0) + 1);
+    return m;
+  }, [laid]);
 
   return (
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
@@ -488,12 +553,7 @@ function TimelineView({
               >
                 <div
                   className="k-mono"
-                  style={{
-                    width: 56,
-                    paddingTop: 4,
-                    fontSize: 11,
-                    color: "var(--navy-300)",
-                  }}
+                  style={{ width: 56, paddingTop: 4, fontSize: 11, color: "var(--navy-300)" }}
                 >
                   {String(h).padStart(2, "0")}:00
                 </div>
@@ -501,70 +561,210 @@ function TimelineView({
             );
           })}
 
-          {bookings.map((b) => {
+          {laid.map((b) => {
             const date = new Date(b.scheduledFor);
-            const h = date.getHours() + date.getMinutes() / 60;
-            const top = (h - HOURS[0]) * ROW;
-            const height = (b.durationMin / 60) * ROW - 4;
+            const h = toARHour(date);
+            // 3 px top gap so cards don't kiss the hour-line border
+            const CARD_GAP = 3;
+            const top = (h - HOURS[0]) * ROW + CARD_GAP;
+            const height = (b.durationMin / 60) * ROW - CARD_GAP - 4;
             const isCancelled = b.status === "CANCELLED";
             const isDone = b.status === "COMPLETED";
+
+            const totalInGroup = groupCounts.get(b.groupKey) ?? 1;
+            const visiblePages = 1 + (expanded[b.groupKey] ?? 0);
+            const visibleCols = Math.min(totalInGroup, visiblePages * TIMELINE_PAGE);
+            const hiddenCount = totalInGroup - visibleCols;
+
+            if (b.col >= visibleCols) return null;
+
+            // The booking strip starts at 64 px (after the hour label).
+            // Cap it at 520 px max so cards never stretch across a very wide screen.
+            const STRIP_LEFT = 64;
+            const STRIP_GAP = 8;
+            const STRIP_MAX = 520; // px cap
+            // colWidth / colLeft are expressed with calc() so they respect both
+            // the max-width cap and the equal-column split.
+            const trackW = `min(${STRIP_MAX}px, calc(100% - ${STRIP_LEFT + STRIP_GAP}px))`;
+            const colWidth = `calc(${trackW} / ${visibleCols})`;
+            const colLeft = `calc(${STRIP_LEFT}px + ${trackW} / ${visibleCols} * ${b.col})`;
+
+            const isLastVisible = b.col === visibleCols - 1 && hiddenCount > 0;
+
             return (
-              <button
+              <div
                 key={b.id}
-                onClick={() => onEdit(b)}
                 style={{
                   position: "absolute",
-                  left: 64,
-                  right: 8,
                   top,
+                  left: colLeft,
+                  width: colWidth,
                   height,
-                  borderRadius: 12,
-                  padding: "8px 12px",
-                  background: isCancelled
-                    ? "rgba(228,70,70,0.1)"
-                    : isDone
-                      ? "rgba(246,249,253,0.9)"
-                      : "rgba(255,255,255,0.85)",
-                  border: "1px solid " + (isCancelled ? "rgba(228,70,70,0.3)" : isDone ? "rgba(15,30,51,0.06)" : "rgba(31,79,190,0.12)"),
-                  boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
-                  color: "var(--navy-900)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  opacity: isCancelled ? 0.6 : isDone ? 0.7 : 1,
-                  cursor: "pointer",
-                  textDecoration: isCancelled ? "line-through" : "none",
-                  textAlign: "left",
+                  padding: "0 2px",
+                  boxSizing: "border-box",
                 }}
               >
-                <div
+                <button
+                  onClick={() => onEdit(b)}
                   style={{
-                    width: 3,
-                    alignSelf: "stretch",
-                    borderRadius: 2,
-                    background: isCancelled ? "#9F1F1F" : isDone ? "var(--navy-100)" : "var(--sky-500)",
+                    width: "100%",
+                    height: "100%",
+                    borderRadius: 12,
+                    padding: "8px 10px",
+                    background: isCancelled
+                      ? "rgba(228,70,70,0.1)"
+                      : isDone
+                        ? "rgba(246,249,253,0.9)"
+                        : "rgba(255,255,255,0.85)",
+                    border: "1px solid " + (isCancelled ? "rgba(228,70,70,0.3)" : isDone ? "rgba(15,30,51,0.06)" : "rgba(31,79,190,0.12)"),
+                    boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
+                    color: "var(--navy-900)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    opacity: isCancelled ? 0.6 : isDone ? 0.7 : 1,
+                    cursor: "pointer",
+                    textDecoration: isCancelled ? "line-through" : "none",
+                    textAlign: "left",
+                    overflow: "hidden",
                   }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 600 }}>
-                      {fmtHour(date)}
-                    </span>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{b.patientName}</span>
-                    {isDone && <Tag tone="soft"><IconCheck size={10} stroke={3} /> Hecho</Tag>}
-                    {b.status === "PENDING" && <Tag tone="soft">Pendiente</Tag>}
+                >
+                  <div
+                    style={{
+                      width: 3,
+                      alignSelf: "stretch",
+                      borderRadius: 2,
+                      background: isCancelled ? "#9F1F1F" : isDone ? "var(--navy-100)" : "var(--sky-500)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+                      <span className="k-mono" style={{ fontSize: 10, color: "var(--sky-700)", fontWeight: 600, flexShrink: 0 }}>
+                        {fmtHour(date)}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {b.patientName}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.serviceName}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                    {b.serviceName} · {b.durationMin} min
-                  </div>
-                </div>
-                <Avatar name={b.patientName} size={28} tone="sky" />
-              </button>
+                </button>
+
+                {isLastVisible && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpanded((prev) => ({ ...prev, [b.groupKey]: (prev[b.groupKey] ?? 0) + 1 }));
+                    }}
+                    title={`Mostrar ${Math.min(hiddenCount, TIMELINE_PAGE)} más`}
+                    style={{
+                      position: "absolute",
+                      bottom: 6,
+                      right: 6,
+                      background: "var(--sky-700)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: "2px 6px",
+                      cursor: "pointer",
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    +{hiddenCount}
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
       </div>
     </Card>
+  );
+}
+
+/** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
+function WeekSlotModal({
+  bookings,
+  label,
+  onEdit,
+  onClose,
+}: {
+  bookings: BookingDTO[];
+  label: string;
+  onEdit: (b: BookingDTO) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,30,51,0.45)",
+        backdropFilter: "blur(4px)",
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        className="k-glass-strong"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(420px,100%)", borderRadius: 20, padding: 20 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>{label}</span>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none", background: "rgba(255,255,255,0.7)", width: 30, height: 30,
+              borderRadius: 8, cursor: "pointer", color: "var(--navy-700)",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <IconX size={13} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {bookings.map((b) => {
+            const date = new Date(b.scheduledFor);
+            const isCancelled = b.status === "CANCELLED";
+            const isDone = b.status === "COMPLETED";
+            return (
+              <button
+                key={b.id}
+                onClick={() => { onEdit(b); onClose(); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 12px", borderRadius: 12, border: "none",
+                  background: isCancelled ? "rgba(228,70,70,0.08)" : "rgba(255,255,255,0.7)",
+                  cursor: "pointer", textAlign: "left", width: "100%",
+                  opacity: isCancelled ? 0.6 : 1,
+                }}
+              >
+                <Avatar name={b.patientName} size={32} tone="sky" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
+                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
+                  </div>
+                </div>
+                <StatusTag s={b.status} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -579,110 +779,154 @@ function WeekGridView({
   onEdit: (b: BookingDTO) => void;
   businessHours: { start: number; end: number };
 }) {
-  // `end` exclusive — matches the row semantics in TimelineView so
-  // both views render the same slots.
   const HOURS = Array.from(
     { length: Math.max(1, businessHours.end - businessHours.start) },
     (_, i) => i + businessHours.start
   );
   const ROW = 50;
+  const MAX_VISIBLE = 2;
+
+  // overflow modal state: null = closed, otherwise the slot's bookings + label
+  const [overflow, setOverflow] = useState<{ bookings: BookingDTO[]; label: string } | null>(null);
+
+  // Index bookings by "dayCol-rowStart" for easy cell lookup
+  const cellMap = useMemo(() => {
+    const m = new Map<string, BookingDTO[]>();
+    for (const b of bookings) {
+      const date = new Date(b.scheduledFor);
+      const dayCol = (toARDow(date) + 6) % 7;
+      const h = toARHour(date);
+      const rowStart = Math.max(1, Math.round(h - HOURS[0]) + 1);
+      const key = `${dayCol}-${rowStart}`;
+      const list = m.get(key) ?? [];
+      list.push(b);
+      m.set(key, list);
+    }
+    return m;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings, HOURS[0]]);
+
   return (
-    <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "52px repeat(7, 1fr)", gap: 6, marginBottom: 6 }}>
-        <div />
-        {DAYS.map((d, i) => {
-          const day = new Date(weekStart);
-          day.setDate(day.getDate() + i);
-          return (
-            <div
-              key={i}
-              style={{
-                textAlign: "center",
-                fontSize: 11,
-                fontWeight: 600,
-                color: "var(--navy-500)",
-                padding: "6px 0",
-              }}
-            >
-              {d} {day.getDate()}
-            </div>
-          );
-        })}
-      </div>
-      <div
-        style={{
-          flex: 1,
-          display: "grid",
-          gridTemplateColumns: "52px repeat(7, 1fr)",
-          gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
-          gap: 6,
-          position: "relative",
-          overflow: "auto",
-        }}
-      >
-        {HOURS.map((h, i) => (
-          <div
-            key={"h" + h}
-            className="k-mono"
-            style={{
-              gridColumn: 1,
-              gridRow: i + 1,
-              fontSize: 10,
-              color: "var(--navy-300)",
-              paddingTop: 4,
-            }}
-          >
-            {String(h).padStart(2, "0")}:00
-          </div>
-        ))}
-        {HOURS.map((_, i) =>
-          DAYS.map((_, j) => (
-            <div
-              key={`cell${i}-${j}`}
-              style={{
-                gridColumn: j + 2,
-                gridRow: i + 1,
-                background: "rgba(255,255,255,0.5)",
-                borderRadius: 8,
-                border: "1px solid rgba(15,30,51,0.04)",
-              }}
-            />
-          ))
-        )}
-        {bookings.map((b) => {
-          const date = new Date(b.scheduledFor);
-          const dayCol = (date.getDay() + 6) % 7; // Monday = 0
-          const h = date.getHours() + date.getMinutes() / 60;
-          const rowStart = Math.max(1, Math.round(h - HOURS[0]) + 1);
-          const span = Math.max(1, Math.round(b.durationMin / 60));
-          return (
-            <button
-              key={b.id}
-              onClick={() => onEdit(b)}
-              style={{
-                gridColumn: dayCol + 2,
-                gridRow: `${rowStart} / span ${span}`,
-                background: "var(--sky-700)",
-                color: "#fff",
-                padding: "6px 8px",
-                borderRadius: 8,
-                fontSize: 11,
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-                textAlign: "left",
-                opacity: b.status === "CANCELLED" ? 0.4 : 1,
-              }}
-            >
-              <div className="k-mono" style={{ fontSize: 10, opacity: 0.85 }}>{fmtHour(date)}</div>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {b.patientName}
+    <>
+      <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "52px repeat(7, 1fr)", gap: 6, marginBottom: 6 }}>
+          <div />
+          {DAYS.map((d, i) => {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + i);
+            const arKey = toARDateKey(day);
+            return (
+              <div key={i} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--navy-500)", padding: "6px 0" }}>
+                {d} {Number(arKey.slice(8, 10))}
               </div>
-            </button>
-          );
-        })}
-      </div>
-    </Card>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: "52px repeat(7, 1fr)",
+            gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
+            gap: 6,
+            overflow: "auto",
+          }}
+        >
+          {HOURS.map((h, i) => (
+            <div key={"h" + h} className="k-mono" style={{ gridColumn: 1, gridRow: i + 1, fontSize: 10, color: "var(--navy-300)", paddingTop: 4 }}>
+              {String(h).padStart(2, "0")}:00
+            </div>
+          ))}
+          {HOURS.map((_, i) =>
+            DAYS.map((__, j) => (
+              <div
+                key={`cell${i}-${j}`}
+                style={{
+                  gridColumn: j + 2, gridRow: i + 1,
+                  background: "rgba(255,255,255,0.5)", borderRadius: 8,
+                  border: "1px solid rgba(15,30,51,0.04)",
+                }}
+              />
+            ))
+          )}
+
+          {/* Render cells: deduplicated per (dayCol, rowStart) */}
+          {Array.from(cellMap.entries()).map(([cellKey, cellBookings]) => {
+            const [dayColStr, rowStartStr] = cellKey.split("-");
+            const dayCol = Number(dayColStr);
+            const rowStart = Number(rowStartStr);
+            const first = cellBookings[0];
+            const date0 = new Date(first.scheduledFor);
+            const span = Math.max(1, Math.round(first.durationMin / 60));
+            const visible = cellBookings.slice(0, MAX_VISIBLE);
+            const hiddenCount = cellBookings.length - MAX_VISIBLE;
+
+            return (
+              <div
+                key={cellKey}
+                style={{
+                  gridColumn: dayCol + 2,
+                  gridRow: `${rowStart} / span ${span}`,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  padding: 2,
+                  overflow: "hidden",
+                }}
+              >
+                {visible.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => onEdit(b)}
+                    style={{
+                      flex: 1, minHeight: 0,
+                      background: b.status === "CANCELLED" ? "rgba(228,70,70,0.18)" : "var(--sky-700)",
+                      color: "#fff",
+                      padding: "3px 6px", borderRadius: 6, fontSize: 10, fontWeight: 600,
+                      border: "none", cursor: "pointer", textAlign: "left",
+                      overflow: "hidden",
+                      opacity: b.status === "CANCELLED" ? 0.5 : 1,
+                    }}
+                  >
+                    <div className="k-mono" style={{ fontSize: 9, opacity: 0.85 }}>{fmtHour(date0)}</div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.patientName}
+                    </div>
+                  </button>
+                ))}
+                {hiddenCount > 0 && (
+                  <button
+                    onClick={() =>
+                      setOverflow({
+                        bookings: cellBookings,
+                        label: `${fmtHour(date0)} · ${hiddenCount + MAX_VISIBLE} turnos`,
+                      })
+                    }
+                    style={{
+                      background: "rgba(31,79,190,0.12)", color: "var(--sky-700)",
+                      border: "1px solid rgba(31,79,190,0.2)", borderRadius: 6,
+                      fontSize: 10, fontWeight: 700, padding: "2px 4px",
+                      cursor: "pointer", textAlign: "center",
+                    }}
+                  >
+                    +{hiddenCount} más
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {overflow && (
+        <WeekSlotModal
+          bookings={overflow.bookings}
+          label={overflow.label}
+          onEdit={onEdit}
+          onClose={() => setOverflow(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -964,6 +1208,9 @@ function BookingModal({
   const [planMode, setPlanMode] = useState(false);
   const [planSessions, setPlanSessions] = useState(8);
   const [planDows, setPlanDows] = useState<number[]>([0, 2, 4]);
+  const [repeatWeeks, setRepeatWeeks] = useState(1);
+  const [seriesDows, setSeriesDows] = useState<number[]>([]);
+  const [isGuest, setIsGuest] = useState(false);
 
   const finalizeCreate = async (payload: Parameters<typeof createBooking>[0]) => {
     const result = await createBooking(payload);
@@ -1015,7 +1262,6 @@ function BookingModal({
           return;
         }
 
-        const repeatWeeks = Math.max(1, Number(formData.get("repeatWeeks")) || 1);
         const payload = {
           patientId,
           serviceId: String(formData.get("serviceId") ?? ""),
@@ -1029,7 +1275,11 @@ function BookingModal({
           guestPhone: String(formData.get("guestPhone") ?? "") || undefined,
         };
         if (repeatWeeks > 1) {
-          const result = await createBookingSeries({ ...payload, repeatWeeks });
+          const result = await createBookingSeries({
+            ...payload,
+            repeatWeeks,
+            daysOfWeek: seriesDows.length > 0 ? seriesDows : undefined,
+          });
           if (!result.ok) {
             setError(result.error);
             return;
@@ -1128,6 +1378,10 @@ function BookingModal({
               borderRadius: 10,
               cursor: "pointer",
               color: "var(--navy-700)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
             }}
           >
             <IconX size={14} />
@@ -1222,11 +1476,80 @@ function BookingModal({
                 </option>
               ))}
             </Select>
-            <PatientPicker
-              name="patientId"
-              initialPatientId={defaultPatientId ?? null}
-              initialPatients={patients}
-            />
+            {/* Patient / Guest selector */}
+            <div>
+              {/* Single row: "Paciente *" label on the left, toggle on the right */}
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 8,
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>Paciente</span>
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: isGuest ? "var(--sky-700)" : "var(--navy-400)",
+                  }}
+                >
+                  Invitado
+                  <span
+                    onClick={() => setIsGuest((v) => !v)}
+                    role="switch"
+                    aria-checked={isGuest}
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === " " && setIsGuest((v) => !v)}
+                    style={{
+                      display: "inline-flex",
+                      width: 36,
+                      height: 20,
+                      borderRadius: 10,
+                      background: isGuest ? "var(--sky-700)" : "rgba(15,30,51,0.15)",
+                      position: "relative",
+                      cursor: "pointer",
+                      transition: "background 0.15s",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 2,
+                        left: isGuest ? 18 : 2,
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        background: "#fff",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        transition: "left 0.15s",
+                      }}
+                    />
+                  </span>
+                </span>
+              </label>
+              {isGuest ? (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <FormField label="Nombre" name="guestName" />
+                  <FormField label="Email" name="guestEmail" type="email" />
+                  <FormField label="Teléfono" name="guestPhone" />
+                </div>
+              ) : (
+                <PatientPicker
+                  name="patientId"
+                  label={null}
+                  initialPatientId={defaultPatientId ?? null}
+                  initialPatients={patients}
+                />
+              )}
+            </div>
 
             {/* Plan-mode toggle */}
             <label
@@ -1270,10 +1593,25 @@ function BookingModal({
                   type="number"
                   min={1}
                   max={12}
-                  defaultValue={1}
+                  value={repeatWeeks}
+                  onChange={(v) => setRepeatWeeks(Math.max(1, Math.min(12, Number(v) || 1)))}
                 />
               )}
             </div>
+
+            {!planMode && repeatWeeks > 1 && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 6 }}>
+                  Días de la semana (opcional)
+                </div>
+                <DayOfWeekPicker value={seriesDows} onChange={setSeriesDows} />
+                <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 6 }}>
+                  {seriesDows.length > 0
+                    ? `${seriesDows.length}×/semana · ${repeatWeeks * seriesDows.length} turnos totales`
+                    : "Sin selección: se repite el mismo día de la semana"}
+                </div>
+              </div>
+            )}
 
             {planMode && (
               <div style={{ display: "grid", gap: 10 }}>
@@ -1298,13 +1636,6 @@ function BookingModal({
               </div>
             )}
 
-            {!planMode && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <FormField label="Nombre (guest)" name="guestName" />
-                <FormField label="Email (guest)" name="guestEmail" type="email" />
-                <FormField label="Tel (guest)" name="guestPhone" />
-              </div>
-            )}
             <FormField as="textarea" label="Notas" name="notes" />
             {error && (
               <div

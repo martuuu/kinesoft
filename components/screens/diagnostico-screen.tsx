@@ -1203,6 +1203,10 @@ function AssignPlanModal({
               borderRadius: 12,
               cursor: pending ? "not-allowed" : "pointer",
               color: "var(--navy-700)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
             }}
           >
             <IconX size={16} />

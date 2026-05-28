@@ -66,7 +66,8 @@ export function PatientPicker({
   /** Notification on selection change. Use this when consuming the
    *  selected id without a surrounding form (BookingDrawer edit). */
   onChange?: (patient: PickedPatient | null) => void;
-  label?: string;
+  /** Pass null to suppress the label entirely (when the parent renders its own). */
+  label?: string | null;
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -161,10 +162,12 @@ export function PatientPicker({
     pick({ id: r.data.id, name: `${first} ${last}` });
   };
 
+  const showLabel = label !== null;
+
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
       <label style={{ display: "block", fontSize: 12 }}>
-        <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>{label ?? "Paciente"}</span>
+        {showLabel && <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>{label ?? "Paciente"}</span>}
         {name && <input type="hidden" name={name} value={selected?.id ?? ""} />}
         {selected ? (
           <div

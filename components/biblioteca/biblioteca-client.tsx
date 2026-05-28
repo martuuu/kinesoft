@@ -740,6 +740,10 @@ function ExerciseDetail({ ex, onClose }: { ex: ExerciseRow; onClose: () => void 
               borderRadius: 12,
               cursor: "pointer",
               color: "var(--navy-700)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
             }}
           >
             <IconX size={16} />

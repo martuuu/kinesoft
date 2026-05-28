@@ -56,3 +56,42 @@ export function isoToARLocalInput(iso: string | Date): string {
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
+
+const AR_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Argentina/Buenos_Aires",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  weekday: "short",
+});
+
+function arParts(d: Date) {
+  const p = AR_FMT.formatToParts(d);
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    // Sun=0 Mon=1…Sat=6 → JS getDay() convention
+    dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday")),
+  };
+}
+
+/** "YYYY-MM-DD" in Argentina time, safe in any host timezone. */
+export function toARDateKey(d: Date | string): string {
+  return arParts(typeof d === "string" ? new Date(d) : d).date;
+}
+
+/** Fractional hour (e.g. 14.5 for 14:30) in Argentina time. */
+export function toARHour(d: Date | string): number {
+  const p = arParts(typeof d === "string" ? new Date(d) : d);
+  return p.hour + p.minute / 60;
+}
+
+/** Day-of-week (0=Sun…6=Sat) in Argentina time. */
+export function toARDow(d: Date | string): number {
+  return arParts(typeof d === "string" ? new Date(d) : d).dow;
+}
