@@ -2,6 +2,7 @@ import { listBookingsInRange, listPractitioners, listServices } from "@/lib/book
 import { listPatients } from "@/lib/patients";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { AgendaClient } from "@/components/agenda/agenda-client";
+import { localToARIso } from "@/lib/datetime-ar";
 
 export const metadata = { title: "Agenda · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -16,7 +17,13 @@ type SP = {
 
 function parseDate(v?: string) {
   if (!v) return new Date();
-  const d = new Date(v + "T00:00:00");
+  // Tag the YYYY-MM-DD as AR-local midnight (-03:00) before parsing.
+  // Without the offset, `new Date("2026-06-04T00:00:00")` is read in the
+  // host timezone: on UTC hosts (Vercel/Supabase) that instant is still
+  // 2026-06-03 21:00 in AR, so `toARDateKey(anchor)` downstream returns
+  // the *previous* day and the agenda shows the 3rd when you click the 4th.
+  // Localhost (AR tz) happened to parse it correctly, hiding the bug.
+  const d = new Date(localToARIso(`${v}T00:00:00`));
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
