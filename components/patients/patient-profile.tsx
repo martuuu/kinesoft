@@ -16,6 +16,7 @@ import {
   deletePatient,
   recordEvaScore,
   setPatientCoverage,
+  setPatientArchived,
   updatePatient,
   getPatientBookingsAll,
 } from "@/lib/patients";
@@ -486,10 +487,10 @@ function EditPatientModal({
           </Grid2>
         </Section>
 
-        <Section title="Cobertura">
+        <Section title="Cobertura - Obra social">
           <FormField
             as="select"
-            label="Obra social"
+            label=""
             value={coverageMode}
             onChange={(v) => setCoverageMode(v)}
             options={[
@@ -524,10 +525,10 @@ function EditPatientModal({
         </Section>
 
         {canReassign && (
-          <Section title="Asignación">
+          <Section title="Asignación - Kinesiólogo asignado">
             <FormField
               as="select"
-              label="Kinesiólogo asignado"
+              label=""
               hint="«Consultorio común» = visible para todos los kines del consultorio."
               value={assignedKine}
               onChange={(v) => setAssignedKine(v)}
@@ -540,7 +541,7 @@ function EditPatientModal({
         )}
 
         <Section title="Notas">
-          <FormField as="textarea" label="Notas internas" name="notes" defaultValue={patient.notes ?? ""} />
+          <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
         </Section>
 
         {error && (
@@ -624,6 +625,7 @@ function DeletePatientModal({
   const [confirmText, setConfirmText] = useState("");
   const phrase = `${patient.firstName} ${patient.lastName}`.toLowerCase();
   const canConfirm = confirmText.trim().toLowerCase() === phrase;
+  const isArchived = !!patient.archivedAt;
   const submit = () => {
     setError(null);
     start(async () => {
@@ -633,6 +635,21 @@ function DeletePatientModal({
         return;
       }
       router.push("/pacientes");
+    });
+  };
+  // Soft-delete alternative: archive keeps the ficha + history intact but
+  // hides the patient from the default listado. Reversible from the
+  // "archivados" filter. Sits between Cancelar and Eliminar.
+  const archive = () => {
+    setError(null);
+    start(async () => {
+      const r = await setPatientArchived({ id: patient.id, archived: !isArchived });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onClose();
+      router.refresh();
     });
   };
   return (
@@ -673,9 +690,26 @@ function DeletePatientModal({
           {error}
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
         <Button variant="ghost" onClick={onClose} disabled={pending}>
           Cancelar
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={archive}
+          disabled={pending}
+          title={
+            isArchived
+              ? "Volver a mostrar el paciente en el listado"
+              : "Ocultar del listado sin borrar la ficha ni el historial"
+          }
+          style={{
+            color: "#9A5B00",
+            borderColor: "rgba(255,176,32,0.5)",
+            background: "rgba(255,176,32,0.1)",
+          }}
+        >
+          {pending ? "Guardando…" : isArchived ? "Desarchivar" : "Archivar"}
         </Button>
         <Button
           variant="primary"

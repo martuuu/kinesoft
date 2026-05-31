@@ -81,10 +81,12 @@ export function FormField(props: FormFieldProps) {
 
   return (
     <label style={{ display: "block", fontSize: 12 }}>
-      <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
-        {label}
-        {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
-      </span>
+      {label !== "" && (
+        <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
+          {label}
+          {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
+        </span>
+      )}
       {props.as === "textarea" ? (
         <textarea
           name={name}

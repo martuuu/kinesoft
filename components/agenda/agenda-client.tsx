@@ -160,6 +160,17 @@ export function AgendaClient(props: Props) {
     (a, b) => +new Date(a.scheduledFor) - +new Date(b.scheduledFor)
   );
 
+  // Default datetime for the "Nuevo turno" button (no slot clicked):
+  // the anchor day at the start of business hours, in AR wall-clock.
+  // Previously this fell back to `anchor.toISOString()` (local midnight),
+  // which dropped new turnos at 00:00 — off-screen above the timeline and
+  // outside the visible hour range. See item: "Externos no se ven".
+  const defaultCreateISO = useMemo(() => {
+    const startHour = props.businessHours?.start ?? 8;
+    const hh = String(startHour).padStart(2, "0");
+    return localToARIso(`${todayKey}T${hh}:00`);
+  }, [todayKey, props.businessHours?.start]);
+
   const navigate = (deltaDays: number) => {
     const d = new Date(anchor);
     d.setDate(d.getDate() + deltaDays);
@@ -351,7 +362,7 @@ export function AgendaClient(props: Props) {
       {creating && (
         <BookingModal
           mode="create"
-          defaultISO={creating.defaultISO ?? anchor.toISOString()}
+          defaultISO={creating.defaultISO ?? defaultCreateISO}
           defaultPatientId={creating.defaultPatientId ?? null}
           services={props.services}
           practitioners={props.practitioners}
@@ -566,10 +577,15 @@ function TimelineView({
             const h = toARHour(date);
             // 3 px top gap so cards don't kiss the hour-line border
             const CARD_GAP = 3;
-            const top = (h - HOURS[0]) * ROW + CARD_GAP;
+            // Clamp to the visible range so turnos that fall outside the
+            // configured business hours (e.g. a legacy 00:00 guest booking)
+            // still render at the top edge instead of off-screen above it.
+            const rawTop = (h - HOURS[0]) * ROW + CARD_GAP;
+            const top = Math.max(CARD_GAP, rawTop);
             const height = (b.durationMin / 60) * ROW - CARD_GAP - 4;
             const isCancelled = b.status === "CANCELLED";
             const isDone = b.status === "COMPLETED";
+            const isNoShow = b.status === "NO_SHOW";
 
             const totalInGroup = groupCounts.get(b.groupKey) ?? 1;
             const visiblePages = 1 + (expanded[b.groupKey] ?? 0);
@@ -613,16 +629,26 @@ function TimelineView({
                     padding: "8px 10px",
                     background: isCancelled
                       ? "rgba(228,70,70,0.1)"
-                      : isDone
-                        ? "rgba(246,249,253,0.9)"
-                        : "rgba(255,255,255,0.85)",
-                    border: "1px solid " + (isCancelled ? "rgba(228,70,70,0.3)" : isDone ? "rgba(15,30,51,0.06)" : "rgba(31,79,190,0.12)"),
+                      : isNoShow
+                        ? "rgba(255,176,32,0.14)"
+                        : isDone
+                          ? "rgba(54,179,126,0.1)"
+                          : "rgba(255,255,255,0.85)",
+                    border:
+                      "1px solid " +
+                      (isCancelled
+                        ? "rgba(228,70,70,0.3)"
+                        : isNoShow
+                          ? "rgba(255,176,32,0.45)"
+                          : isDone
+                            ? "rgba(54,179,126,0.35)"
+                            : "rgba(31,79,190,0.12)"),
                     boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
                     color: "var(--navy-900)",
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
-                    opacity: isCancelled ? 0.6 : isDone ? 0.7 : 1,
+                    opacity: isCancelled ? 0.6 : isDone ? 0.85 : 1,
                     cursor: "pointer",
                     textDecoration: isCancelled ? "line-through" : "none",
                     textAlign: "left",
@@ -634,7 +660,13 @@ function TimelineView({
                       width: 3,
                       alignSelf: "stretch",
                       borderRadius: 2,
-                      background: isCancelled ? "#9F1F1F" : isDone ? "var(--navy-100)" : "var(--sky-500)",
+                      background: isCancelled
+                        ? "#9F1F1F"
+                        : isNoShow
+                          ? "#D98200"
+                          : isDone
+                            ? "#36B37E"
+                            : "var(--sky-500)",
                       flexShrink: 0,
                     }}
                   />
@@ -998,10 +1030,33 @@ function ListView({
 
 function StatusTag({ s }: { s: BookingStatus }) {
   if (s === "CONFIRMED") return <Tag tone="sky">Confirmado</Tag>;
-  if (s === "COMPLETED") return <Tag tone="soft"><IconCheck size={10} stroke={3} /> Hecho</Tag>;
+  if (s === "COMPLETED")
+    return (
+      <span style={statusPill("rgba(54,179,126,0.14)", "#1F7A52")}>
+        <IconCheck size={10} stroke={3} /> Hecho
+      </span>
+    );
   if (s === "CANCELLED") return <Tag tone="soft">Cancelado</Tag>;
-  if (s === "NO_SHOW") return <Tag tone="soft">Ausente</Tag>;
+  if (s === "NO_SHOW")
+    return <span style={statusPill("rgba(255,176,32,0.18)", "#9A5B00")}>Ausente</span>;
   return <Tag tone="lime">Pendiente</Tag>;
+}
+
+/** Inline pill matching the <Tag> footprint for statuses the Tag tones
+ *  don't cover (amber/green semantics for Ausente / Hecho). */
+function statusPill(bg: string, color: string): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 10.5,
+    fontWeight: 700,
+    padding: "3px 9px",
+    borderRadius: 999,
+    background: bg,
+    color,
+    whiteSpace: "nowrap",
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────
