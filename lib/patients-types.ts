@@ -16,6 +16,11 @@ export type PatientRow = {
   lastVisit: Date | null;
   upcomingAt: Date | null;
   /**
+   * Active obra social name ("Particular" when uninsured). `null` on
+   * basic-access rows (coverage is PHI-adjacent and stays hidden).
+   */
+  obraSocial: string | null;
+  /**
    * Access tier for the current actor. `"basic"` rows have all PHI
    * fields nulled out (email, phone, dateOfBirth, notes, plan info) —
    * only firstName + lastName + documentId + upcomingAt are real.
@@ -84,9 +89,19 @@ export type PatientBookingSummary = {
   status: string;
   paymentStatus: string;
   notes: string | null;
+  /** Service name for the booking ("Servicio" column / line). */
+  serviceName: string;
+  /** Obra social ("Particular" when uninsured). */
+  obraSocial: string;
+  /** Copago per session in cents (insurer copago or service price). */
+  copagoCents: number;
 };
 
-export type PatientBookingFull = Prisma.BookingGetPayload<object>;
+export type PatientBookingFull = Prisma.BookingGetPayload<object> & {
+  serviceName: string;
+  obraSocial: string;
+  copagoCents: number;
+};
 
 /**
  * Basic-access projection — what we expose to practitioners who DON'T

@@ -143,6 +143,7 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
+        hour12: false,
       }),
       href: `/agenda?date=${b.scheduledFor.toISOString().slice(0, 10)}`,
     });

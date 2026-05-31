@@ -27,6 +27,7 @@ import {
   updateBooking,
 } from "@/lib/bookings";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
+import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
 import type { BookingStatus } from "@prisma/client";
 
@@ -40,9 +41,27 @@ type BookingDTO = {
   patientId: string | null;
   patientName: string;
   patientCondition: string | null;
+  obraSocial: string;
+  copagoCents: number;
   notes: string | null;
   patientAccess: "full" | "basic" | "none";
 };
+
+/** Cents → "$1.234" (AR pesos, no decimals). */
+function fmtMoney(cents: number) {
+  return (cents / 100).toLocaleString("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
+/** Obra social name to show, or "" when particular (never prints the
+ *  literal "Particular" / "Obra social" words). */
+function osLabel(obraSocial: string): string {
+  return obraSocial && obraSocial.toLowerCase() !== "particular" ? obraSocial : "";
+}
 
 const menuLabel: React.CSSProperties = {
   fontSize: 10,
@@ -245,10 +264,19 @@ export function BookingDrawer({
                 month: "long",
                 hour: "2-digit",
                 minute: "2-digit",
+                hour12: false,
               })}
             </Row>
             <Row label="Duración">{booking.durationMin} min</Row>
             <Row label="Servicio">{booking.serviceName}</Row>
+            {osLabel(booking.obraSocial) && (
+              <Row label="Obra social">{osLabel(booking.obraSocial)}</Row>
+            )}
+            <Row label="Copago">
+              <span style={{ fontWeight: 700, color: "var(--navy-900)" }}>
+                {fmtMoney(booking.copagoCents)}
+              </span>
+            </Row>
             {booking.notes && <Row label="Notas">{booking.notes}</Row>}
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, gap: 6, flexWrap: "wrap" }}>
               {editingWhen ? (
@@ -397,19 +425,11 @@ export function BookingDrawer({
               <label style={{ display: "block", fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 Nueva fecha y hora
               </label>
-              <input
-                type="datetime-local"
+              <DateTime24Picker
                 value={newWhenLocal}
-                onChange={(e) => {
-                  setNewWhenLocal(e.target.value);
+                onChange={(v) => {
+                  setNewWhenLocal(v);
                   setReschConflict(null);
-                }}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(15,30,51,0.1)",
-                  background: "#fff",
-                  fontSize: 13,
                 }}
               />
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -464,6 +484,7 @@ export function BookingDrawer({
                           month: "short",
                           hour: "2-digit",
                           minute: "2-digit",
+                          hour12: false,
                         })}
                       </button>
                     )}

@@ -216,7 +216,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             style={{
               padding: "12px 18px",
               display: "grid",
-              gridTemplateColumns: "28px 1.6fr 1fr 1.2fr 100px 90px 40px",
+              gridTemplateColumns: "28px 1.6fr 1fr 1fr 1.2fr 100px 90px 40px",
               gap: 14,
               fontSize: 10,
               fontWeight: 700,
@@ -229,6 +229,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             <span />
             <span>Paciente</span>
             <span>Plan activo</span>
+            <span>Obra social</span>
             <span>Próx. turno</span>
             <span>Última visita</span>
             <span style={{ textAlign: "right" }}>Estado</span>
@@ -251,7 +252,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                 style={{
                   padding: "14px 18px",
                   display: "grid",
-                  gridTemplateColumns: "28px 1.6fr 1fr 1.2fr 100px 90px 40px",
+                  gridTemplateColumns: "28px 1.6fr 1fr 1fr 1.2fr 100px 90px 40px",
                   gap: 14,
                   alignItems: "center",
                   fontSize: 13,
@@ -299,6 +300,11 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                     </>
                   )}
                 </div>
+                <div style={{ color: isBasic ? "var(--navy-300)" : "var(--navy-700)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {isBasic || !p.obraSocial || p.obraSocial.toLowerCase() === "particular"
+                    ? "—"
+                    : p.obraSocial}
+                </div>
                 <div style={{ color: "var(--navy-500)" }}>
                   {p.upcomingAt
                     ? p.upcomingAt.toLocaleString("es-AR", {
@@ -306,6 +312,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                         month: "short",
                         hour: "2-digit",
                         minute: "2-digit",
+                        hour12: false,
                         timeZone: "America/Argentina/Buenos_Aires",
                       })
                     : "—"}

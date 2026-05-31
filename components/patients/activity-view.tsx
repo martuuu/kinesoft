@@ -120,6 +120,7 @@ export function ActivityView({ patientId }: { patientId: string }) {
                     {ev.createdAt.toLocaleTimeString("es-AR", {
                       hour: "2-digit",
                       minute: "2-digit",
+                      hour12: false,
                       timeZone: "America/Argentina/Buenos_Aires",
                     })}
                   </span>

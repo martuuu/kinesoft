@@ -172,6 +172,7 @@ export async function listPatients(opts: {
         orderBy: { scheduledFor: "asc" },
         take: 1,
       },
+      coverages: { include: { insurerRef: true }, take: 1 },
     },
   });
 
@@ -202,6 +203,7 @@ export async function listPatients(opts: {
           sessionsDone: 0,
           lastVisit: null,
           upcomingAt,
+          obraSocial: null,
           access: "basic",
         };
       }
@@ -211,6 +213,8 @@ export async function listPatients(opts: {
       const lastDone = sessions
         .filter((s) => s.completedAt)
         .sort((a, b) => +b.completedAt! - +a.completedAt!)[0];
+      const coverage = p.coverages[0];
+      const obraSocial = coverage?.insurerRef?.name ?? coverage?.insurer ?? "Particular";
       return {
         id: p.id,
         firstName: p.firstName,
@@ -226,6 +230,7 @@ export async function listPatients(opts: {
         sessionsDone: done,
         lastVisit: lastDone?.completedAt ?? null,
         upcomingAt,
+        obraSocial,
         access: "full",
       };
     })
@@ -499,42 +504,84 @@ export async function getPatientProgramsFull(patientId: string) {
 }
 
 /**
+ * Resolve a patient's active obra social → { name, copagoCents }. Used to
+ * stamp the billing line on each booking row. "Particular" + null copago
+ * when there's no coverage (the caller falls back to the service price).
+ */
+async function resolvePatientBilling(
+  patientId: string
+): Promise<{ obraSocial: string; insurerCopagoCents: number | null }> {
+  const coverage = await prisma.coverage.findFirst({
+    where: { patientId },
+    include: { insurerRef: true },
+  });
+  if (!coverage) return { obraSocial: "Particular", insurerCopagoCents: null };
+  return {
+    obraSocial: coverage.insurerRef?.name ?? coverage.insurer ?? "Particular",
+    insurerCopagoCents: coverage.insurerRef ? coverage.insurerRef.copagoCents : null,
+  };
+}
+
+/**
  * Recent bookings — capped at `take`. Used by the Resumen tab.
+ *
+ * Now carries the billing line (serviceName + obra social + copago) so
+ * the patient turnos list can show "Servicio - ObraSocial - $Copago".
+ * Copago = insurer copago when insured, else the service price.
  */
 export async function getPatientBookingsSummary(patientId: string, take = 5) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
-  return prisma.booking.findMany({
-    where: { patientId },
-    orderBy: { scheduledFor: "desc" },
-    take,
-    select: {
-      id: true,
-      scheduledFor: true,
-      durationMin: true,
-      status: true,
-      paymentStatus: true,
-      notes: true,
-    },
-  });
+  const [rows, billing] = await Promise.all([
+    prisma.booking.findMany({
+      where: { patientId },
+      orderBy: { scheduledFor: "desc" },
+      take,
+      select: {
+        id: true,
+        scheduledFor: true,
+        durationMin: true,
+        status: true,
+        paymentStatus: true,
+        notes: true,
+        service: { select: { name: true, priceCents: true } },
+      },
+    }),
+    resolvePatientBilling(patientId),
+  ]);
+  return rows.map(({ service, ...b }) => ({
+    ...b,
+    serviceName: service.name,
+    obraSocial: billing.obraSocial,
+    copagoCents: billing.insurerCopagoCents ?? service.priceCents,
+  }));
 }
 
 /**
  * Full bookings list for the Facturación tab. Capped at 100 so it
- * doesn't blow up for long-running patients. Returns scalar fields
- * only — neither `service` nor `payments` are consumed by the current
- * FacturacionView (it derives everything from `paymentStatus`).
+ * doesn't blow up for long-running patients. Carries the same billing
+ * line as `getPatientBookingsSummary` (service + obra social + copago).
  */
 export async function getPatientBookingsAll(patientId: string, take = 100) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
-  return prisma.booking.findMany({
-    where: { patientId },
-    orderBy: { scheduledFor: "desc" },
-    take,
-  });
+  const [rows, billing] = await Promise.all([
+    prisma.booking.findMany({
+      where: { patientId },
+      orderBy: { scheduledFor: "desc" },
+      take,
+      include: { service: { select: { name: true, priceCents: true } } },
+    }),
+    resolvePatientBilling(patientId),
+  ]);
+  return rows.map(({ service, ...b }) => ({
+    ...b,
+    serviceName: service.name,
+    obraSocial: billing.obraSocial,
+    copagoCents: billing.insurerCopagoCents ?? service.priceCents,
+  }));
 }
 
 /**

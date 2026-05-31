@@ -28,6 +28,7 @@ import {
   setBookingStatus,
 } from "@/lib/bookings";
 import { PatientPicker } from "@/components/patients/patient-picker";
+import { createPatient } from "@/lib/patients";
 import { localToARIso, isoToARLocalInput, toARDateKey, toARHour, toARDow } from "@/lib/datetime-ar";
 
 type BookingDTO = {
@@ -40,6 +41,10 @@ type BookingDTO = {
   patientId: string | null;
   patientName: string;
   patientCondition: string | null;
+  /** Obra social ("Particular" when uninsured/guest). */
+  obraSocial: string;
+  /** Copago per session in cents (insurer copago, or service price for particular). */
+  copagoCents: number;
   notes: string | null;
   /**
    * Sprint 16: tells the agenda whether to expose the link-to-HC + the
@@ -76,8 +81,38 @@ function fmtHour(d: Date) {
   return d.toLocaleTimeString("es-AR", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
     timeZone: "America/Argentina/Buenos_Aires",
   });
+}
+
+/** Cents → "$1.234" (AR pesos, no decimals). */
+function fmtMoney(cents: number) {
+  return (cents / 100).toLocaleString("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
+/**
+ * Obra social name to display, or "" when the patient is particular /
+ * uninsured. The literal words "Particular" / "Obra social" are never
+ * shown — only the actual insurer name (OSDE, Galeno…) appears.
+ */
+function osLabel(obraSocial: string): string {
+  return obraSocial && obraSocial.toLowerCase() !== "particular" ? obraSocial : "";
+}
+
+/**
+ * Compact billing line: "Servicio - OSDE - $Copago". The obra social
+ * segment is dropped entirely when particular, so it never prints the
+ * word "Particular" — just "Servicio - $Copago".
+ */
+function billingLine(b: { serviceName: string; obraSocial: string; copagoCents: number }) {
+  const os = osLabel(b.obraSocial);
+  return [b.serviceName, os, fmtMoney(b.copagoCents)].filter(Boolean).join(" - ");
 }
 
 // `isoToLocalInput` removed — use the AR-zoned `isoToARLocalInput`
@@ -680,7 +715,7 @@ function TimelineView({
                       </span>
                     </div>
                     <div style={{ fontSize: 10, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {b.serviceName}
+                      {billingLine(b)}
                     </div>
                   </div>
                 </button>
@@ -751,7 +786,7 @@ function WeekSlotModal({
       <div
         className="k-glass-strong"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: "min(420px,100%)", borderRadius: 20, padding: 20 }}
+        style={{ width: "min(560px,100%)", borderRadius: 20, padding: 20 }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>{label}</span>
@@ -788,6 +823,9 @@ function WeekSlotModal({
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
                   <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
                     {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--navy-400)", marginTop: 1 }}>
+                    {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
                   </div>
                 </div>
                 <StatusTag s={b.status} />
@@ -941,6 +979,11 @@ function WeekGridView({
   );
 }
 
+/** Shared column track for the Lista view header + rows (kept in one
+ *  place so the two grids never drift): Hora · Paciente · Servicio ·
+ *  Obra social · Copago · Duración · Estado. */
+const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
+
 function ListView({
   bookings,
   onEdit,
@@ -961,7 +1004,7 @@ function ListView({
         style={{
           padding: "12px 18px",
           display: "grid",
-          gridTemplateColumns: "70px 1fr 1.4fr 1fr 100px 90px",
+          gridTemplateColumns: LIST_COLS,
           gap: 14,
           fontSize: 10,
           fontWeight: 700,
@@ -974,7 +1017,8 @@ function ListView({
         <span>Hora</span>
         <span>Paciente</span>
         <span>Servicio</span>
-        <span>Notas</span>
+        <span>Obra social</span>
+        <span>Copago</span>
         <span>Duración</span>
         <span style={{ textAlign: "right" }}>Estado</span>
       </div>
@@ -988,7 +1032,7 @@ function ListView({
               padding: "14px 18px",
               display: "grid",
               gap: 14,
-              gridTemplateColumns: "70px 1fr 1.4fr 1fr 100px 90px",
+              gridTemplateColumns: LIST_COLS,
               alignItems: "center",
               fontSize: 13,
               width: "100%",
@@ -1011,9 +1055,12 @@ function ListView({
                 )}
               </div>
             </div>
-            <div style={{ color: "var(--navy-700)" }}>{b.serviceName}</div>
+            <div style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</div>
             <div style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {b.notes ?? "—"}
+              {osLabel(b.obraSocial) || "—"}
+            </div>
+            <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
+              {fmtMoney(b.copagoCents)}
             </div>
             <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {b.durationMin} min
@@ -1245,6 +1292,16 @@ function BookingModal({
   const [repeatWeeks, setRepeatWeeks] = useState(1);
   const [seriesDows, setSeriesDows] = useState<number[]>([]);
   const [isGuest, setIsGuest] = useState(false);
+  // Service-driven duration: picking a service copies its `durationMin`
+  // into the editable duration field. Default 45 only until a service is
+  // chosen (kine asked: Osteopatía 60' should auto-fill 60, not stay 45).
+  const [serviceId, setServiceId] = useState("");
+  const [durationMin, setDurationMin] = useState(45);
+  const onServiceChange = (id: string) => {
+    setServiceId(id);
+    const svc = services.find((s) => s.id === id);
+    if (svc) setDurationMin(svc.durationMin);
+  };
 
   const finalizeCreate = async (payload: Parameters<typeof createBooking>[0]) => {
     const result = await createBooking(payload);
@@ -1269,7 +1326,30 @@ function BookingModal({
     setConflict(null);
     start(async () => {
       if (mode === "create") {
-        const patientId = String(formData.get("patientId") ?? "") || undefined;
+        let patientId = String(formData.get("patientId") ?? "") || undefined;
+
+        // "Nuevo paciente" switch: register the patient first, then book
+        // the turno against the freshly-created id. Replaces the old
+        // guest/externo path — every booking now links a real Patient.
+        if (isGuest) {
+          const firstName = String(formData.get("newFirstName") ?? "").trim();
+          const lastName = String(formData.get("newLastName") ?? "").trim();
+          if (!firstName || !lastName) {
+            setError("Cargá nombre y apellido del nuevo paciente.");
+            return;
+          }
+          const created = await createPatient({
+            firstName,
+            lastName,
+            documentId: String(formData.get("newDocumentId") ?? "").trim() || undefined,
+            phone: String(formData.get("newPhone") ?? "").trim() || undefined,
+          });
+          if (!created.ok) {
+            setError(created.error);
+            return;
+          }
+          patientId = created.data.id;
+        }
 
         if (planMode) {
           if (!patientId) {
@@ -1296,6 +1376,11 @@ function BookingModal({
           return;
         }
 
+        if (!patientId) {
+          setError("Elegí un paciente o activá «Nuevo paciente» para registrarlo.");
+          return;
+        }
+
         const payload = {
           patientId,
           serviceId: String(formData.get("serviceId") ?? ""),
@@ -1304,9 +1389,6 @@ function BookingModal({
           scheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
           durationMin: Number(formData.get("durationMin")) || 45,
           notes: String(formData.get("notes") ?? "") || undefined,
-          guestName: String(formData.get("guestName") ?? "") || undefined,
-          guestEmail: String(formData.get("guestEmail") ?? "") || undefined,
-          guestPhone: String(formData.get("guestPhone") ?? "") || undefined,
         };
         if (repeatWeeks > 1) {
           const result = await createBookingSeries({
@@ -1436,6 +1518,7 @@ function BookingModal({
                       month: "long",
                       hour: "2-digit",
                       minute: "2-digit",
+                      hour12: false,
                     })}
                     {" · "}
                     {booking.durationMin} min · {booking.serviceName}
@@ -1502,7 +1585,13 @@ function BookingModal({
                 </option>
               ))}
             </Select>
-            <Select label="Servicio" name="serviceId" required defaultValue="">
+            <Select
+              label="Servicio"
+              name="serviceId"
+              required
+              value={serviceId}
+              onChange={onServiceChange}
+            >
               <option value="" disabled>— Seleccioná un servicio —</option>
               {services.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -1534,7 +1623,7 @@ function BookingModal({
                     color: isGuest ? "var(--sky-700)" : "var(--navy-400)",
                   }}
                 >
-                  Externo - Sin registrar
+                  Nuevo paciente
                   <span
                     onClick={() => setIsGuest((v) => !v)}
                     role="switch"
@@ -1570,10 +1659,11 @@ function BookingModal({
                 </span>
               </label>
               {isGuest ? (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                  <FormField label="Nombre" name="guestName" />
-                  <FormField label="Email" name="guestEmail" type="email" />
-                  <FormField label="Teléfono" name="guestPhone" />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <FormField label="Nombre" name="newFirstName" required />
+                  <FormField label="Apellido" name="newLastName" required />
+                  <FormField label="DNI" name="newDocumentId" />
+                  <FormField label="Teléfono" name="newPhone" />
                 </div>
               ) : (
                 <PatientPicker
@@ -1611,7 +1701,7 @@ function BookingModal({
               />
             </label>
 
-            <div style={{ display: "grid", gridTemplateColumns: planMode ? "2fr 1fr" : "2fr 1fr 1fr", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: planMode ? "1fr 86px" : "1fr 86px 86px", gap: 10, alignItems: "end" }}>
               <FormField
                 label={planMode ? "Inicio del plan" : "Fecha y hora"}
                 name="scheduledFor"
@@ -1619,10 +1709,20 @@ function BookingModal({
                 required
                 defaultValue={defaultISO ? isoToARLocalInput(defaultISO) : ""}
               />
-              <FormField label="Duración (min)" name="durationMin" type="number" min={15} max={240} defaultValue={45} />
+              <FormField
+                label="Duración"
+                tooltip="En minutos"
+                name="durationMin"
+                type="number"
+                min={15}
+                max={240}
+                value={durationMin}
+                onChange={(v) => setDurationMin(Math.max(15, Math.min(240, Number(v) || 45)))}
+              />
               {!planMode && (
                 <FormField
-                  label="Repetir (semanas)"
+                  label="Repetir"
+                  tooltip="Repetición semanal"
                   name="repeatWeeks"
                   type="number"
                   min={1}
@@ -1719,6 +1819,7 @@ function BookingModal({
                         month: "short",
                         hour: "2-digit",
                         minute: "2-digit",
+                        hour12: false,
                         timeZone: "America/Argentina/Buenos_Aires",
                       })}
                     </Button>
@@ -1768,21 +1869,35 @@ function Select({
   name,
   required,
   defaultValue = "",
+  value,
+  onChange,
   children,
 }: {
   label: string;
   name: string;
   required?: boolean;
   defaultValue?: string;
+  value?: string;
+  onChange?: (v: string) => void;
   children: React.ReactNode;
 }) {
+  // Controlled when `value` is provided; otherwise stays uncontrolled
+  // (defaultValue) so existing call sites keep working unchanged.
+  const controlled = value !== undefined;
   return (
     <label style={{ display: "block", fontSize: 12 }}>
       <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>
         {label}
         {required && <span style={{ color: "var(--sky-700)" }}> *</span>}
       </span>
-      <select name={name} required={required} style={inputStyle} defaultValue={defaultValue}>
+      <select
+        name={name}
+        required={required}
+        style={inputStyle}
+        {...(controlled
+          ? { value, onChange: (e) => onChange?.(e.target.value) }
+          : { defaultValue })}
+      >
         {children}
       </select>
     </label>

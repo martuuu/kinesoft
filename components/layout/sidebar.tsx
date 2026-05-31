@@ -45,6 +45,14 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
         gap: 4,
         margin: 14,
         marginRight: 0,
+        // Pin the sidebar to the viewport so it never grows past the
+        // screen with the page content. Without this the flex parent
+        // stretches it to the full document height and the footer links
+        // (Configuración / Cerrar sesión) scroll out of view. The nav
+        // list below owns the overflow; the footer stays anchored.
+        position: "sticky",
+        top: 14,
+        height: "calc(100vh - 28px)",
       }}
     >
       <div
@@ -63,6 +71,12 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           flexDirection: "column",
           gap: 2,
           flex: 1,
+          // Scroll the nav list (not the whole aside) when it overflows,
+          // so the footer below stays pinned and reachable. `minHeight: 0`
+          // lets this flex child actually shrink instead of pushing the
+          // footer off-screen.
+          minHeight: 0,
+          overflowY: "auto",
           alignItems: collapsed ? "center" : "stretch",
         }}
       >

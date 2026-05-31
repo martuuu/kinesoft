@@ -1068,6 +1068,7 @@ function SessionRow({
           month: "short",
           hour: "2-digit",
           minute: "2-digit",
+          hour12: false,
           timeZone: "America/Argentina/Buenos_Aires",
         })}
       </span>
@@ -1542,6 +1543,7 @@ function SessionCardRow({
             month: "short",
             hour: "2-digit",
             minute: "2-digit",
+            hour12: false,
             timeZone: "America/Argentina/Buenos_Aires",
           })}
         </div>
@@ -1895,6 +1897,20 @@ function CreateProgramModal({
 // Facturación tab
 // ──────────────────────────────────────────────────────────────────────
 
+/** Fact. table columns: Fecha · Servicio · Obra social · Copago ·
+ *  Duración · Estado pago · Estado turno. Shared by header + rows. */
+const FACT_COLS = "100px 1.2fr 1fr 90px 80px 110px 100px";
+
+/** Cents → "$1.234" (AR pesos, no decimals). */
+function fmtMoneyARS(cents: number) {
+  return (cents / 100).toLocaleString("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
 function FacturacionView({
   patient,
   loading,
@@ -1939,7 +1955,7 @@ function FacturacionView({
           style={{
             padding: "12px 18px",
             display: "grid",
-            gridTemplateColumns: "120px 1fr 100px 120px 110px",
+            gridTemplateColumns: FACT_COLS,
             gap: 14,
             fontSize: 10,
             fontWeight: 700,
@@ -1950,7 +1966,9 @@ function FacturacionView({
           }}
         >
           <span>Fecha</span>
-          <span>Concepto</span>
+          <span>Servicio</span>
+          <span>Obra social</span>
+          <span>Copago</span>
           <span>Duración</span>
           <span>Estado pago</span>
           <span style={{ textAlign: "right" }}>Estado turno</span>
@@ -1966,7 +1984,7 @@ function FacturacionView({
               style={{
                 padding: "12px 18px",
                 display: "grid",
-                gridTemplateColumns: "120px 1fr 100px 120px 110px",
+                gridTemplateColumns: FACT_COLS,
                 gap: 14,
                 alignItems: "center",
                 fontSize: 13,
@@ -1980,7 +1998,15 @@ function FacturacionView({
                   year: "2-digit",
                 })}
               </span>
-              <span style={{ color: "var(--navy-700)" }}>Sesión kinésica</span>
+              <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {"serviceName" in b ? b.serviceName : "Sesión kinésica"}
+              </span>
+              <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {"obraSocial" in b && b.obraSocial.toLowerCase() !== "particular" ? b.obraSocial : "—"}
+              </span>
+              <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
+                {"copagoCents" in b ? fmtMoneyARS(b.copagoCents) : "—"}
+              </span>
               <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
                 {b.durationMin} min
               </span>

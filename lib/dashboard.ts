@@ -211,7 +211,10 @@ const _loadDashboardCounts = unstable_cache(
         },
         orderBy: { scheduledFor: "asc" },
         take: 3,
-        include: { patient: true, service: true },
+        include: {
+          patient: { include: { coverages: { include: { insurerRef: true }, take: 1 } } },
+          service: true,
+        },
       }),
       prisma.payment.aggregate({
         where: {
@@ -294,12 +297,30 @@ const _loadDashboardCounts = unstable_cache(
         time: b.scheduledFor.toLocaleTimeString("es-AR", {
           hour: "2-digit",
           minute: "2-digit",
+          hour12: false,
           timeZone: "America/Argentina/Buenos_Aires",
         }),
         name: b.patient
           ? `${b.patient.firstName} ${b.patient.lastName}`
           : b.guestName ?? "Sin asignar",
-        tag: b.service.name,
+        // "Servicio - ObraSocial - $Copago" — same billing line as the
+        // agenda. Particular (no coverage/guest) uses the service price.
+        tag: (() => {
+          const coverage = b.patient?.coverages[0];
+          const insurer = coverage?.insurerRef;
+          // Only the real insurer name surfaces — particular/uninsured
+          // turnos drop the segment (never print the word "Particular").
+          const os = insurer?.name ?? coverage?.insurer ?? "";
+          const obraSocial = os.toLowerCase() === "particular" ? "" : os;
+          const copagoCents = insurer ? insurer.copagoCents : b.service.priceCents;
+          const copago = (copagoCents / 100).toLocaleString("es-AR", {
+            style: "currency",
+            currency: "ARS",
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+          });
+          return [b.service.name, obraSocial, copago].filter(Boolean).join(" - ");
+        })(),
       })),
       monthRevenueCents: monthCents,
       revenuePrevMonthCents: prevCents,

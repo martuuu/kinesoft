@@ -61,6 +61,13 @@ export async function listBookingsInRange(opts: {
       service: true,
       patient: {
         include: {
+          // Active coverage → insurer name + copago for the billing
+          // subtitle/columns. `take: 1` mirrors the single-coverage model
+          // (setPatientCoverage replaces rather than appends).
+          coverages: {
+            include: { insurerRef: true },
+            take: 1,
+          },
           programs: {
             where: { status: "ACTIVE" },
             include: { case: { include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } } } },
@@ -87,6 +94,23 @@ export async function listBookingsInRange(opts: {
     const name = b.patient
       ? `${b.patient.firstName} ${b.patient.lastName}`
       : b.guestName ?? "Sin asignar";
+    // Billing: resolve obra social + copago from the patient's active
+    // coverage. Particular (no insurer / no coverage / guest) falls back
+    // to "Particular" with the service price as the amount the patient
+    // pays out of pocket. Gated to full access — basic-access rows hide
+    // billing PHI (consistent with notes/condition above).
+    const coverage = access === "full" ? b.patient?.coverages[0] : undefined;
+    const insurer = coverage?.insurerRef;
+    const obraSocial =
+      access === "full"
+        ? insurer?.name ?? coverage?.insurer ?? "Particular"
+        : "Particular";
+    const copagoCents =
+      access === "full"
+        ? insurer
+          ? insurer.copagoCents
+          : b.service.priceCents
+        : b.service.priceCents;
     return {
       id: b.id,
       scheduledFor: b.scheduledFor,
@@ -97,6 +121,8 @@ export async function listBookingsInRange(opts: {
       patientId: b.patientId,
       patientName: name,
       patientCondition: cond,
+      obraSocial,
+      copagoCents,
       // Notes can carry clinical context — hide on basic too.
       notes: access === "full" ? b.notes : null,
       patientAccess: access,
@@ -354,6 +380,7 @@ export async function createBooking(
           month: "short",
           hour: "2-digit",
           minute: "2-digit",
+          hour12: false,
           timeZone: "America/Argentina/Buenos_Aires",
         }),
         link: `/agenda?date=${data.scheduledFor.toISOString().slice(0, 10)}`,
@@ -476,6 +503,7 @@ export async function updateBooking(
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
       timeZone: "America/Argentina/Buenos_Aires",
     });
     if (patch.status === "CANCELLED") {

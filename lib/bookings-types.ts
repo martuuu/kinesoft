@@ -15,6 +15,18 @@ export type BookingRow = {
    * has BASIC access to the patient (Sprint 16+ sharing model).
    */
   patientCondition: string | null;
+  /**
+   * Obra social shown on the agenda subtitle / billing column. Resolved
+   * from the patient's active Coverage → Insurer name. "Particular" when
+   * there's no coverage (or a guest booking with no patient row).
+   */
+  obraSocial: string;
+  /**
+   * Copago per session in cents. From the coverage's Insurer.copagoCents
+   * when insured, or the service price (priceCents) for particular/guest
+   * turnos (kine's rule). Always a number so the UI can format it.
+   */
+  copagoCents: number;
   notes: string | null;
   /**
    * Access tier the actor has on this booking's patient. `"basic"`
