@@ -1155,7 +1155,67 @@ migrations: business hours fields on `Tenant` + tenantId/createdById on
     diagnóstico personalizado" affordance would make them easier to
     discover (Sprint 18 polish).
 
+### Sprint 18 — Audit + targeted fixes (agenda · alta · perfil) (this session)
+Full audit of the three core flows (agenda, patient creation, patient
+profile) via a multi-agent review, then a two-stage fix pass. One migration
+(`20260614120000_sprint_18_audit_fixes`).
+
+**Audit highlights (findings carried forward / fixed):**
+- 🔴 TOCTOU race in `createBookingSeries`/`createBookingPlan` (advisory —
+    sobreturno is intentional, so left documented, not hard-constrained).
+- 🔴 `setPatientCoverage` ownership check ran outside the tx → wrapped in
+    `runWithRls`.
+- 🟠 `startOfWeek` computed the Monday in host TZ → week drift on UTC hosts.
+- 🟠 Patient email/phone had no uniqueness guard.
+- 🟡 `createBookingSeries` swallowed real errors as "conflictos".
+- Dead code: `ModalCloseButton` import, stale `isoToLocalInput` comment,
+    unused `completeSession`/`getPatientActivity` imports.
+
+**Stage 1 (no schema):**
+- [x] **FIX-5 — week-grid misalignment.** [startOfWeek](app/%28app%29/agenda/page.tsx)
+    now derives the Monday from the AR weekday + AR date key; the week
+    headers (grid + strip) derive each column's label from its real AR date
+    so name + number can never disagree. Also fixes the wrong `[from,to)`
+    range fed to `listBookingsInRange`.
+- [x] **FIX-1 — obra social on alta.** Insurer `<select>` added to the
+    inline "Nuevo paciente" form in the booking modal **and** the standalone
+    [NewPatientButton](components/patients/new-patient-button.tsx).
+    `createPatient` accepts `insurerId`/`insurerName` and seeds the
+    `Coverage` atomically inside its RLS tx.
+- [x] **FIX-3 — single turno.** Verified the single-booking path already
+    works (recurrence is opt-in); clarified the "Repetir" copy as optional.
+- [x] **Cleanups:** dead imports/comment removed; `setPatientCoverage`
+    wrapped in `runWithRls`; `createBookingSeries` logs real failures.
+
+**Stage 2 (migration `20260614120000_sprint_18_audit_fixes`):**
+- [x] **FIX-4 — uniqueness.** `@@unique([tenantId, email])` +
+    `@@unique([tenantId, phone])` (PostgreSQL treats NULLs as distinct →
+    "unique-when-present"). DNI now required on creation
+    (`PatientCreate`); `documentId` relaxes to optional on update.
+    `createPatient`/`updatePatient` map P2002 to field-specific messages.
+- [x] **FIX-6/7 — per-user agenda prefs.** `UserPreferences` gains
+    `agendaShowWeekHeader` / `agendaShowSaturday` / `agendaShowSunday`.
+    Seeded into the Tweaks context from the server `(app)/layout.tsx`,
+    toggled from the Tweaks panel **and** /configuracion → "Mi vista de
+    agenda" (single live client source via `useTweaks().setAgenda`,
+    persisted via `updateUserPreferences`). `WeekGridView` hides the
+    header + drops weekend columns accordingly.
+- [x] **FIX-2 — "Particular" as a real Insurer.** `Insurer.isParticular`
+    flag; the migration marks/creates exactly one Particular row per
+    tenant (and `signUpPractitioner` does the same for new tenants).
+    Billing (`resolvePatientBilling`, `listBookingsInRange`,
+    `getDashboardData`) uses the configured Particular copago for
+    uninsured patients via [lib/billing-internal.ts](lib/billing-internal.ts),
+    falling back to the service price while it's 0 (no revenue
+    regression before the price is set). The Particular row can be
+    repriced but not deleted; filtered out of the coverage dropdowns
+    (the "Particular (sin cobertura)" option represents it).
+- [x] `tsc` + `next build` clean (34 routes). **Apply with**
+    `npm run prisma:migrate` (or `prisma migrate deploy`) before running.
+
 ### Next iterations (open)
 - [ ] Playwright E2E (booking + diagnosis golden paths).
 - [ ] Sentry sender (DSN is wired in env).
 - [ ] Public booking → Mercado Pago end-to-end test once MP sandbox keys exist.
+- [ ] Optional: thread the configured Particular price into the patient
+    profile billing summary cards (currently the per-booking lines).

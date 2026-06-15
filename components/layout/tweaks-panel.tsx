@@ -10,7 +10,7 @@ import { IconChevR, IconSettings } from "@/components/ui/icons";
  * edge; clicking the tab restores the full panel.
  */
 export function TweaksPanel() {
-  const { t, set } = useTweaks();
+  const { t, set, agenda, setAgenda } = useTweaks();
 
   if (t.minimised) {
     return (
@@ -176,6 +176,24 @@ export function TweaksPanel() {
             { value: "clinical", label: "Clínica" },
           ]}
           onChange={(v) => set("patientCard", v as PatientCard)}
+        />
+      </Section>
+
+      <Section label="Vista semanal">
+        <Toggle
+          label="Encabezado de días"
+          value={agenda.agendaShowWeekHeader}
+          onChange={(v) => setAgenda("agendaShowWeekHeader", v)}
+        />
+        <Toggle
+          label="Mostrar sábado"
+          value={agenda.agendaShowSaturday}
+          onChange={(v) => setAgenda("agendaShowSaturday", v)}
+        />
+        <Toggle
+          label="Mostrar domingo"
+          value={agenda.agendaShowSunday}
+          onChange={(v) => setAgenda("agendaShowSunday", v)}
         />
       </Section>
     </aside>

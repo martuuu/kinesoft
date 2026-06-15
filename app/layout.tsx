@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { UIProviders } from "@/components/providers/ui-providers";
 
 export const metadata: Metadata = {
   title: "KineSoft — plataforma para kinesiólogos",
@@ -25,7 +26,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <UIProviders>{children}</UIProviders>
+      </body>
     </html>
   );
 }

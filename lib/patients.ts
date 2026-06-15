@@ -16,6 +16,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
+import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import {
   visibilityForActor,
   patientAccessFor,
@@ -508,17 +509,46 @@ export async function getPatientProgramsFull(patientId: string) {
  * stamp the billing line on each booking row. "Particular" + null copago
  * when there's no coverage (the caller falls back to the service price).
  */
+type PatientBilling = {
+  obraSocial: string;
+  coverageOverride: number | null; // per-patient copago override
+  hasCoverage: boolean;
+  insurerCopago: number | null;
+  particularCopago: number | null;
+  // What the obra social reimburses the kine per session (Insurer.fixedFeeCents).
+  // 0 for Particular / uninsured / free-form coverage (no OS pays).
+  insurerFixedFeeCents: number;
+};
+
 async function resolvePatientBilling(
-  patientId: string
-): Promise<{ obraSocial: string; insurerCopagoCents: number | null }> {
+  patientId: string,
+  tenantId: string
+): Promise<PatientBilling> {
   const coverage = await prisma.coverage.findFirst({
     where: { patientId },
     include: { insurerRef: true },
   });
-  if (!coverage) return { obraSocial: "Particular", insurerCopagoCents: null };
+  if (!coverage) {
+    // No obra social → Particular. Use the tenant's configured Particular
+    // copago exactly as set (incl. 0). `null` only when there's no
+    // Particular row, in which case callers fall back to the service price.
+    const particularCopago = await getParticularCopagoCents(tenantId);
+    return {
+      obraSocial: "Particular",
+      coverageOverride: null,
+      hasCoverage: false,
+      insurerCopago: null,
+      particularCopago,
+      insurerFixedFeeCents: 0,
+    };
+  }
   return {
     obraSocial: coverage.insurerRef?.name ?? coverage.insurer ?? "Particular",
-    insurerCopagoCents: coverage.insurerRef ? coverage.insurerRef.copagoCents : null,
+    coverageOverride: coverage.copagoCents,
+    hasCoverage: true,
+    insurerCopago: coverage.insurerRef ? coverage.insurerRef.copagoCents : null,
+    particularCopago: null,
+    insurerFixedFeeCents: coverage.insurerRef?.fixedFeeCents ?? 0,
   };
 }
 
@@ -545,16 +575,24 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
         status: true,
         paymentStatus: true,
         notes: true,
+        copagoCents: true,
         service: { select: { name: true, priceCents: true } },
       },
     }),
-    resolvePatientBilling(patientId),
+    resolvePatientBilling(patientId, actor.tenantId),
   ]);
-  return rows.map(({ service, ...b }) => ({
+  return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
     ...b,
     serviceName: service.name,
     obraSocial: billing.obraSocial,
-    copagoCents: billing.insurerCopagoCents ?? service.priceCents,
+    copagoCents: resolveBookingCopagoCents({
+      bookingOverride: bookingCopago,
+      coverageOverride: billing.coverageOverride,
+      hasCoverage: billing.hasCoverage,
+      insurerCopago: billing.insurerCopago,
+      particularCopago: billing.particularCopago,
+      servicePriceCents: service.priceCents,
+    }),
   }));
 }
 
@@ -574,13 +612,24 @@ export async function getPatientBookingsAll(patientId: string, take = 100) {
       take,
       include: { service: { select: { name: true, priceCents: true } } },
     }),
-    resolvePatientBilling(patientId),
+    resolvePatientBilling(patientId, actor.tenantId),
   ]);
-  return rows.map(({ service, ...b }) => ({
+  return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
     ...b,
     serviceName: service.name,
     obraSocial: billing.obraSocial,
-    copagoCents: billing.insurerCopagoCents ?? service.priceCents,
+    // What the patient pays (copago) and what the OS reimburses (osAmount),
+    // kept separate for the Facturación tab. `insurerPaidAt` rides along in
+    // `...b` (booking scalar) so the UI knows if the OS already paid.
+    copagoCents: resolveBookingCopagoCents({
+      bookingOverride: bookingCopago,
+      coverageOverride: billing.coverageOverride,
+      hasCoverage: billing.hasCoverage,
+      insurerCopago: billing.insurerCopago,
+      particularCopago: billing.particularCopago,
+      servicePriceCents: service.priceCents,
+    }),
+    osAmountCents: billing.insurerFixedFeeCents,
   }));
 }
 
@@ -653,6 +702,26 @@ export async function getPatientName(id: string) {
   });
 }
 
+/**
+ * Map a Prisma unique-constraint violation (P2002) on the Patient table to
+ * a field-specific, human-friendly error. Returns null when `e` isn't a
+ * P2002 so callers can fall through to a generic message. `e.meta.target`
+ * carries the offending column list (e.g. ["tenantId","email"]).
+ */
+function patientUniqueError(
+  e: unknown
+): { ok: false; error: string; fieldErrors?: Record<string, string[]> } | null {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") return null;
+  const target = Array.isArray(e.meta?.target) ? (e.meta!.target as string[]) : [];
+  if (target.includes("documentId"))
+    return { ok: false, error: "Ya existe un paciente con ese DNI en este consultorio.", fieldErrors: { documentId: ["DNI ya registrado"] } };
+  if (target.includes("email"))
+    return { ok: false, error: "Ya existe un paciente con ese email en este consultorio.", fieldErrors: { email: ["Email ya registrado"] } };
+  if (target.includes("phone"))
+    return { ok: false, error: "Ya existe un paciente con ese teléfono en este consultorio.", fieldErrors: { phone: ["Teléfono ya registrado"] } };
+  return { ok: false, error: "Ya existe un paciente con esos datos en este consultorio." };
+}
+
 export async function createPatient(
   raw: PatientCreateInput
 ): Promise<ActionResult<{ id: string }>> {
@@ -665,21 +734,44 @@ export async function createPatient(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
+  // Coverage fields aren't `Patient` columns — split them out before the
+  // create so Prisma doesn't choke, and use them to seed the primary
+  // Coverage inside the same transaction.
+  const { insurerId, insurerName, ...patientData } = parsed.data;
   try {
     // RLS Etapa 2: create runs under the tenant GUC. The notify+audit
     // calls land outside the transaction since they're fire-and-forget.
-    const p = await runWithRls(actor.tenantId, async (tx) =>
-      tx.patient.create({
+    const p = await runWithRls(actor.tenantId, async (tx) => {
+      const created = await tx.patient.create({
         data: {
-          ...parsed.data,
+          ...patientData,
           tenantId: actor.tenantId,
           // Auto-assign the new patient to the kine creating them, so the
           // per-kine visibility mode works out of the box. OWNER/ADMIN can
           // later re-assign or set null for "consultorio común".
           assignedPractitionerId: actor.practitionerId,
         },
-      })
-    );
+      });
+      // Seed coverage when an obra social was chosen at creation time.
+      let resolvedName = insurerName?.trim() || "";
+      let resolvedInsurerId: string | null = null;
+      if (insurerId) {
+        const ins = await tx.insurer.findFirst({
+          where: { id: insurerId, tenantId: actor.tenantId },
+          select: { id: true, name: true },
+        });
+        if (ins) {
+          resolvedInsurerId = ins.id;
+          resolvedName = ins.name;
+        }
+      }
+      if (resolvedName) {
+        await tx.coverage.create({
+          data: { patientId: created.id, insurer: resolvedName, insurerId: resolvedInsurerId },
+        });
+      }
+      return created;
+    });
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
@@ -700,9 +792,8 @@ export async function createPatient(
     revalidatePath("/pacientes");
     return { ok: true, data: { id: p.id } };
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      return { ok: false, error: "Ya existe un paciente con ese DNI en este consultorio." };
-    }
+    const dup = patientUniqueError(e);
+    if (dup) return dup;
     return { ok: false, error: "No pudimos crear el paciente." };
   }
 }
@@ -719,18 +810,30 @@ export async function updatePatient(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const { id, ...data } = parsed.data;
+  // `insurerId`/`insurerName` ride along on the shared schema but aren't
+  // `Patient` columns and coverage edits go through `setPatientCoverage`,
+  // so drop them here to avoid an unknown-field Prisma error.
+  const { id, insurerId: _insurerId, insurerName: _insurerName, ...data } = parsed.data;
   // RLS Etapa 2: the ownership check + update share the same tx so a
-  // race that flipped tenantId between them couldn't slip through.
-  const owned = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.patient.findFirst({
-      where: { id, tenantId: actor.tenantId },
-      select: { id: true },
+  // race that flipped tenantId between them couldn't slip through. The
+  // try/catch surfaces the new email/phone uniqueness violations with a
+  // field-specific message instead of crashing the action.
+  let owned: { id: string } | null;
+  try {
+    owned = await runWithRls(actor.tenantId, async (tx) => {
+      const row = await tx.patient.findFirst({
+        where: { id, tenantId: actor.tenantId },
+        select: { id: true },
+      });
+      if (!row) return null;
+      await tx.patient.update({ where: { id }, data });
+      return row;
     });
-    if (!row) return null;
-    await tx.patient.update({ where: { id }, data });
-    return row;
-  });
+  } catch (e) {
+    const dup = patientUniqueError(e);
+    if (dup) return dup;
+    throw e;
+  }
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
   await audit({
     tenantId: actor.tenantId,
@@ -904,42 +1007,54 @@ export async function setPatientCoverage(input: {
   memberId?: string;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  });
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
-  let resolvedName = input.insurerName?.trim() || "";
-  let resolvedInsurerId: string | null = null;
-  if (input.insurerId) {
-    const ins = await prisma.insurer.findFirst({
-      where: { id: input.insurerId, tenantId: actor.tenantId },
-      select: { id: true, name: true },
+  // RLS-guarded: the ownership check, the insurer lookup and the
+  // delete+create of the Coverage row all run inside the same tenant GUC
+  // transaction. Previously the ownership check sat OUTSIDE any tx, so a
+  // race that flipped the patient's tenantId between check and write could
+  // attach coverage to a foreign patient (audit finding: critical race).
+  const result = await runWithRls(actor.tenantId, async (tx) => {
+    const owned = await tx.patient.findFirst({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      select: { id: true },
     });
-    if (!ins) return { ok: false, error: "Obra social no encontrada." };
-    resolvedInsurerId = ins.id;
-    resolvedName = ins.name;
-  }
+    if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+
+    let resolvedName = input.insurerName?.trim() || "";
+    let resolvedInsurerId: string | null = null;
+    if (input.insurerId) {
+      const ins = await tx.insurer.findFirst({
+        where: { id: input.insurerId, tenantId: actor.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!ins) return { ok: false as const, error: "Obra social no encontrada." };
+      resolvedInsurerId = ins.id;
+      resolvedName = ins.name;
+    }
+
+    await tx.coverage.deleteMany({ where: { patientId: input.patientId } });
+    // Empty name → caller is clearing the coverage; leave it deleted.
+    if (resolvedName) {
+      await tx.coverage.create({
+        data: {
+          patientId: input.patientId,
+          insurer: resolvedName,
+          insurerId: resolvedInsurerId,
+          planName: input.planName?.trim() || null,
+          memberId: input.memberId?.trim() || null,
+        },
+      });
+    }
+    return { ok: true as const, resolvedName, resolvedInsurerId };
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+  const { resolvedName, resolvedInsurerId } = result;
   if (!resolvedName) {
-    // Clearing coverage — delete all rows.
-    await prisma.coverage.deleteMany({ where: { patientId: input.patientId } });
     revalidatePath(`/pacientes/${input.patientId}`);
     return { ok: true, data: undefined };
   }
 
-  await prisma.$transaction([
-    prisma.coverage.deleteMany({ where: { patientId: input.patientId } }),
-    prisma.coverage.create({
-      data: {
-        patientId: input.patientId,
-        insurer: resolvedName,
-        insurerId: resolvedInsurerId,
-        planName: input.planName?.trim() || null,
-        memberId: input.memberId?.trim() || null,
-      },
-    }),
-  ]);
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -949,6 +1064,83 @@ export async function setPatientCoverage(input: {
     payload: { insurer: resolvedName, insurerId: resolvedInsurerId },
   });
   revalidatePath(`/pacientes/${input.patientId}`);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Pre-established billing for the booking modal: the patient's obra social +
+ * their resolved default copago (per-patient override → insurer → Particular).
+ * Used to prefill the editable copago row when an existing patient is picked.
+ * Returns null when the actor lacks full access to the patient.
+ */
+export async function getPatientBillingPreview(
+  patientId: string
+): Promise<{ obraSocial: string; copagoCents: number } | null> {
+  const actor = await getActor();
+  const access = await patientAccessFor(actor, patientId);
+  if (access !== "full") return null;
+  const b = await resolvePatientBilling(patientId, actor.tenantId);
+  const copago = b.coverageOverride ?? b.insurerCopago ?? b.particularCopago ?? 0;
+  return { obraSocial: b.obraSocial, copagoCents: copago };
+}
+
+/**
+ * Update the patient's DEFAULT copago — a per-patient override stored on
+ * their Coverage row. Triggered by the "¿Actualizar el copago?" prompt in
+ * the booking modal ("ambas opciones": the turno keeps its own override, and
+ * this makes the new amount the patient's standing value going forward). If
+ * the patient has no coverage (Particular), attach a Particular row carrying
+ * the override.
+ */
+export async function setPatientDefaultCopago(input: {
+  patientId: string;
+  copagoCents: number;
+}): Promise<ActionResult> {
+  const actor = await getActor();
+  if (!Number.isFinite(input.copagoCents) || input.copagoCents < 0) {
+    return { ok: false, error: "Copago inválido." };
+  }
+  const copago = Math.round(input.copagoCents);
+  const result = await runWithRls(actor.tenantId, async (tx) => {
+    const owned = await tx.patient.findFirst({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+    const coverage = await tx.coverage.findFirst({
+      where: { patientId: input.patientId },
+      select: { id: true },
+    });
+    if (coverage) {
+      await tx.coverage.update({ where: { id: coverage.id }, data: { copagoCents: copago } });
+    } else {
+      // No coverage → Particular. Attach a Particular row with the override.
+      const particular = await tx.insurer.findFirst({
+        where: { tenantId: actor.tenantId, isParticular: true },
+        select: { id: true, name: true },
+      });
+      await tx.coverage.create({
+        data: {
+          patientId: input.patientId,
+          insurer: particular?.name ?? "Particular",
+          insurerId: particular?.id ?? null,
+          copagoCents: copago,
+        },
+      });
+    }
+    return { ok: true as const };
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patient.copago.update",
+    entity: "Patient",
+    entityId: input.patientId,
+    payload: { copagoCents: copago },
+  });
+  revalidatePath(`/pacientes/${input.patientId}`);
+  revalidatePath("/agenda");
   return { ok: true, data: undefined };
 }
 

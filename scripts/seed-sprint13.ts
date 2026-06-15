@@ -20,7 +20,7 @@ const STARTER_INSURERS = [
   { name: "Omint", copagoCents: 300_00, fixedFeeCents: 9_000_00 },
   { name: "IOMA", copagoCents: 500_00, fixedFeeCents: 7_500_00 },
   { name: "PAMI", copagoCents: 0, fixedFeeCents: 6_800_00 },
-  { name: "Particular", copagoCents: 0, fixedFeeCents: 0 },
+  { name: "Particular", copagoCents: 0, fixedFeeCents: 0, isParticular: true },
 ];
 
 // Curated set of manual-therapy maneuvers seeded as global catalogue

@@ -33,6 +33,9 @@ export async function getUserPreferences(): Promise<Preferences> {
     palette: (row.palette as Palette) ?? DEFAULT_PREFERENCES.palette,
     pinnedKpis: pinned.length ? pinned : DEFAULT_PREFERENCES.pinnedKpis,
     sidebarCollapsed: row.sidebarCollapsed ?? DEFAULT_PREFERENCES.sidebarCollapsed,
+    agendaShowWeekHeader: row.agendaShowWeekHeader ?? DEFAULT_PREFERENCES.agendaShowWeekHeader,
+    agendaShowSaturday: row.agendaShowSaturday ?? DEFAULT_PREFERENCES.agendaShowSaturday,
+    agendaShowSunday: row.agendaShowSunday ?? DEFAULT_PREFERENCES.agendaShowSunday,
   };
 }
 
@@ -54,21 +57,22 @@ export async function updateUserPreferences(
   }
   const current = await getUserPreferences();
   const merged: Preferences = { ...current, ...patch };
+  const writable = {
+    palette: merged.palette,
+    pinnedKpis: merged.pinnedKpis,
+    sidebarCollapsed: merged.sidebarCollapsed,
+    agendaShowWeekHeader: merged.agendaShowWeekHeader,
+    agendaShowSaturday: merged.agendaShowSaturday,
+    agendaShowSunday: merged.agendaShowSunday,
+  };
   await prisma.userPreferences.upsert({
     where: { userId: actor.userId },
-    create: {
-      userId: actor.userId,
-      tenantId: actor.tenantId,
-      palette: merged.palette,
-      pinnedKpis: merged.pinnedKpis,
-      sidebarCollapsed: merged.sidebarCollapsed,
-    },
-    update: {
-      palette: merged.palette,
-      pinnedKpis: merged.pinnedKpis,
-      sidebarCollapsed: merged.sidebarCollapsed,
-    },
+    create: { userId: actor.userId, tenantId: actor.tenantId, ...writable },
+    update: writable,
   });
+  // Only the dashboard reads preferences server-side (pinned KPIs / palette).
+  // Agenda prefs are applied live via the Tweaks context, so revalidating
+  // /agenda here would just force a wasteful refetch on every toggle.
   revalidatePath("/dashboard");
   return { ok: true, data: merged };
 }

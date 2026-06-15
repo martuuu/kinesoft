@@ -191,6 +191,19 @@ export async function signUpPractitioner(
           acceptedAt: new Date(),
         },
       });
+      // Every tenant gets a "Particular" insurer (out-of-pocket). It's the
+      // default obra social for patients without coverage; the OWNER sets
+      // its price in /configuracion → Obras Sociales.
+      await tx.insurer.create({
+        data: {
+          tenantId: tenant.id,
+          name: "Particular",
+          copagoCents: 0,
+          fixedFeeCents: 0,
+          isParticular: true,
+          active: true,
+        },
+      });
       await audit({
         tenantId: tenant.id,
         actorId: userId,

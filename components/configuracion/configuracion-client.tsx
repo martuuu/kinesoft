@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/modal";
 import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconCheck, IconPlus, IconX } from "@/components/ui/icons";
+import { useTweaks } from "@/components/layout/tweaks-context";
 import { formatARS } from "@/lib/format";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
@@ -139,6 +140,7 @@ function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => void; ro
 
 function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) {
   const router = useRouter();
+  const { agenda, setAgenda } = useTweaks();
   const [pending, start] = useTransition();
   const [shared, setShared] = useState(tenant.sharedPatientView);
   const [error, setError] = useState<string | null>(null);
@@ -308,6 +310,32 @@ function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) 
         )}
       </Card>
 
+      <Card style={{ padding: 20 }}>
+        <EyebrowLabel>Mi vista de agenda</EyebrowLabel>
+        <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 8, lineHeight: 1.45 }}>
+          Personalización por usuario. Cada profesional ajusta su propia vista semanal;
+          las preferencias se guardan en tu cuenta y también están en el panel de Tweaks.
+        </div>
+        <PrefRow
+          label="Encabezado de días"
+          hint="Muestra u oculta la tira de días (visible en todas las vistas) y el encabezado de la grilla semanal."
+          on={agenda.agendaShowWeekHeader}
+          onChange={(v) => setAgenda("agendaShowWeekHeader", v)}
+        />
+        <PrefRow
+          label="Mostrar sábado"
+          hint="Incluye la columna del sábado en la vista semanal."
+          on={agenda.agendaShowSaturday}
+          onChange={(v) => setAgenda("agendaShowSaturday", v)}
+        />
+        <PrefRow
+          label="Mostrar domingo"
+          hint="Incluye la columna del domingo en la vista semanal."
+          on={agenda.agendaShowSunday}
+          onChange={(v) => setAgenda("agendaShowSunday", v)}
+        />
+      </Card>
+
       {error && <ErrorBox>{error}</ErrorBox>}
     </div>
   );
@@ -393,6 +421,38 @@ function Switch({ on, onChange, disabled }: { on: boolean; onChange: () => void;
         }}
       />
     </button>
+  );
+}
+
+/** Label + hint on the left, a Switch on the right. Used for per-user prefs. */
+function PrefRow({
+  label,
+  hint,
+  on,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 16,
+        padding: "10px 0",
+        borderTop: "1px solid rgba(15,30,51,0.06)",
+      }}
+    >
+      <div style={{ maxWidth: 520 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{label}</div>
+        <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
+      </div>
+      <Switch on={on} onChange={() => onChange(!on)} />
+    </div>
   );
 }
 
@@ -661,9 +721,16 @@ function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
               }}
             >
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{i.name}</div>
-                {i.notes && (
-                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{i.notes}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                  {i.name}
+                  {i.isParticular && <Tag tone="soft">Por defecto</Tag>}
+                </div>
+                {i.isParticular ? (
+                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                    Pacientes sin obra social. Ajustá el copago = precio particular.
+                  </div>
+                ) : (
+                  i.notes && <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{i.notes}</div>
                 )}
               </div>
               <Money label="Copago" amount={i.copagoCents} />
@@ -781,12 +848,12 @@ function InsurerModal({ insurer, onClose }: { insurer?: InsurerRow; onClose: () 
         <div
           style={{
             display: "flex",
-            justifyContent: insurer ? "space-between" : "flex-end",
+            justifyContent: insurer && !insurer.isParticular ? "space-between" : "flex-end",
             alignItems: "center",
             marginTop: 6,
           }}
         >
-          {insurer && (
+          {insurer && !insurer.isParticular && (
             <button
               type="button"
               onClick={onDelete}

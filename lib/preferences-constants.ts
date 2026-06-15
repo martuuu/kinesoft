@@ -21,7 +21,17 @@ export type Preferences = {
   palette: Palette;
   pinnedKpis: KpiKey[];
   sidebarCollapsed: boolean;
+  // Per-user agenda personalisation (Sprint 18).
+  agendaShowWeekHeader: boolean;
+  agendaShowSaturday: boolean;
+  agendaShowSunday: boolean;
 };
+
+/** The agenda-only slice of preferences, used by the Tweaks panel + agenda. */
+export type AgendaPrefs = Pick<
+  Preferences,
+  "agendaShowWeekHeader" | "agendaShowSaturday" | "agendaShowSunday"
+>;
 
 export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] = [
   { key: "activePatients", label: "Pacientes activos", description: "Con plan en curso" },
@@ -38,4 +48,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   palette: "sky",
   pinnedKpis: ["activePatients", "weekSessions", "activePrograms"],
   sidebarCollapsed: false,
+  agendaShowWeekHeader: true,
+  agendaShowSaturday: true,
+  agendaShowSunday: true,
 };

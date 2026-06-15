@@ -9,12 +9,22 @@ export const PatientCreate = z.object({
   lastName: z.string().trim().min(1, "Apellido requerido").max(80),
   email: z.string().email("Email inválido").optional().or(z.literal("").transform(() => undefined)),
   phone: z.string().trim().min(6).max(30).optional().or(z.literal("").transform(() => undefined)),
-  documentId: z.string().trim().min(4).max(20).optional().or(z.literal("").transform(() => undefined)),
+  // DNI is required on creation (and unique per tenant). `PatientUpdate`
+  // relaxes it back to optional via `.partial()` so editing an existing
+  // patient never forces a re-entry.
+  documentId: z.string().trim().min(4, "DNI requerido (mín. 4 caracteres)").max(20),
   dateOfBirth: z
     .string()
     .optional()
     .transform((v) => (v ? new Date(v) : undefined)),
   notes: z.string().max(2000).optional().or(z.literal("").transform(() => undefined)),
+  // Optional coverage captured at creation time. `insurerId` resolves to a
+  // tenant Insurer row (incl. "Particular"); `insurerName` is the free-form
+  // fallback for "Otra". Both are stripped from the Patient row and used to
+  // seed the primary Coverage. Not part of the `Patient` model — handled
+  // explicitly in createPatient and ignored by updatePatient.
+  insurerId: z.string().trim().optional().or(z.literal("").transform(() => undefined)),
+  insurerName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
 });
 export type PatientCreateInput = z.input<typeof PatientCreate>;
 
@@ -32,6 +42,9 @@ export const BookingCreate = z.object({
     .min(1, "Fecha y hora requeridas")
     .transform((v) => new Date(v)),
   durationMin: z.coerce.number().int().min(15).max(240).default(45),
+  // Per-turno copago override in cents (defaults to the patient's resolved
+  // copago when omitted). Null/undefined = compute on read.
+  copagoCents: z.coerce.number().int().min(0).max(100_000_00).optional(),
   notes: z.string().max(1000).optional().or(z.literal("").transform(() => undefined)),
   guestName: z.string().max(120).optional().or(z.literal("").transform(() => undefined)),
   guestEmail: z.string().email().optional().or(z.literal("").transform(() => undefined)),

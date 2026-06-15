@@ -62,6 +62,7 @@ export async function listInsurers(opts: { onlyActive?: boolean } = {}): Promise
         name: r.name,
         copagoCents: r.copagoCents,
         fixedFeeCents: r.fixedFeeCents,
+        isParticular: r.isParticular,
         active: r.active,
         notes: r.notes,
         patientsCount: r._count.coverages,
@@ -169,6 +170,11 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
     include: { _count: { select: { coverages: true } } },
   });
   if (!owned) return { ok: false, error: "Obra social no encontrada." };
+  // "Particular" is the default out-of-pocket row every tenant needs — it
+  // can be renamed/repriced but never deleted.
+  if (owned.isParticular) {
+    return { ok: false, error: "«Particular» no se puede eliminar; podés ajustar su precio." };
+  }
   // Soft-delete when in use: deactivate but keep the row so historical
   // Coverages still resolve. Hard-delete only when zero references.
   if (owned._count.coverages > 0) {

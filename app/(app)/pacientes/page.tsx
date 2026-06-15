@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listPatients } from "@/lib/patients";
+import { listInsurers } from "@/lib/insurers";
 import { loadFilterFacets } from "@/lib/exercises";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
@@ -54,7 +55,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // Conditions list — reusing `loadFilterFacets` keeps the catalog
   // cached (1h TTL) so the page renders without an extra DB roundtrip
   // on warm cache hits.
-  const [patients, facets] = await Promise.all([
+  const [patients, facets, insurers] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -67,6 +68,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       lastVisitTo: lastVisitTo || undefined,
     }),
     loadFilterFacets(),
+    listInsurers({ onlyActive: true }),
   ]);
   const totals = {
     all: patients.length,
@@ -116,7 +118,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           <a href="/api/pacientes/export" target="_blank" rel="noopener noreferrer">
             <Button variant="ghost">Exportar CSV</Button>
           </a>
-          <NewPatientButton />
+          <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
         </div>
       </header>
 

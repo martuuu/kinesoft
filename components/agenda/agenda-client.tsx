@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Drawer } from "@/components/ui/drawer";
+import { AnimatePresence, motion } from "framer-motion";
+import { backdropVariants, modalVariants } from "@/lib/motion";
 import { BookingDrawer } from "@/components/agenda/booking-drawer";
-import { ModalCloseButton } from "@/components/ui/modal-close";
+import { useTweaks } from "@/components/layout/tweaks-context";
+import { useToast } from "@/components/ui/toast";
 import { FormField } from "@/components/ui/form-field";
 import type { BookingStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
@@ -28,7 +30,7 @@ import {
   setBookingStatus,
 } from "@/lib/bookings";
 import { PatientPicker } from "@/components/patients/patient-picker";
-import { createPatient } from "@/lib/patients";
+import { createPatient, getPatientBillingPreview, setPatientDefaultCopago } from "@/lib/patients";
 import { localToARIso, isoToARLocalInput, toARDateKey, toARHour, toARDow } from "@/lib/datetime-ar";
 
 type BookingDTO = {
@@ -65,6 +67,8 @@ type Props = {
   services: { id: string; name: string; durationMin: number; priceCents: number }[];
   practitioners: { id: string; name: string }[];
   patients: { id: string; name: string }[];
+  /** Active tenant insurers (Obras Sociales) for the inline new-patient coverage select. */
+  insurers: { id: string; name: string }[];
   /**
    * Business-hours window from `Tenant.businessHoursStart/End`
    * (Sprint 17). Controls the row range in TimelineView, the
@@ -115,10 +119,6 @@ function billingLine(b: { serviceName: string; obraSocial: string; copagoCents: 
   return [b.serviceName, os, fmtMoney(b.copagoCents)].filter(Boolean).join(" - ");
 }
 
-// `isoToLocalInput` removed — use the AR-zoned `isoToARLocalInput`
-// helper from `lib/datetime-ar.ts` (also handles the form-side
-// AR-offset tagging via `localToARIso`).
-
 const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 
 function DayOfWeekPicker({ value, onChange }: { value: number[]; onChange: (v: number[]) => void }) {
@@ -155,6 +155,136 @@ function DayOfWeekPicker({ value, onChange }: { value: number[]; onChange: (v: n
   );
 }
 
+/**
+ * Editable copago row for the booking modal. Shows the selected (existing)
+ * patient's obra social + pre-established copago; when the kine changes the
+ * amount, the row expands into a "¿Actualizar el copago?" prompt so the new
+ * value can become the patient's default ("ambas opciones") or stay scoped
+ * to this turno.
+ */
+function CopagoRow({
+  obraSocial,
+  original,
+  valueCents,
+  onValueCents,
+  updateDefault,
+  setUpdateDefault,
+  loading,
+}: {
+  obraSocial: string;
+  original: number;
+  valueCents: number;
+  onValueCents: (cents: number) => void;
+  updateDefault: boolean;
+  setUpdateDefault: (v: boolean) => void;
+  loading: boolean;
+}) {
+  const changed = valueCents !== original;
+  const [decided, setDecided] = useState(false);
+  // Re-arm the prompt whenever the amount returns to (or leaves) the original.
+  useEffect(() => {
+    if (!changed) setDecided(false);
+  }, [changed]);
+  const showPrompt = changed && !decided;
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 12,
+        background: "rgba(31,79,190,0.05)",
+        border: "1px solid rgba(31,79,190,0.16)",
+        display: "grid",
+        gap: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--navy-300)" }}>
+            Copago
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-700)" }}>{loading ? "Cargando…" : obraSocial}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 13, color: "var(--navy-500)" }}>$</span>
+          <input
+            type="number"
+            min={0}
+            step={100}
+            inputMode="numeric"
+            aria-label="Monto de copago"
+            value={loading ? "" : Math.round(valueCents / 100)}
+            disabled={loading}
+            onChange={(e) => onValueCents(Math.max(0, Math.round(Number(e.target.value) || 0)) * 100)}
+            style={{
+              width: 110,
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid rgba(15,30,51,0.12)",
+              background: "#fff",
+              fontSize: 14,
+              fontWeight: 600,
+              textAlign: "right",
+              color: "var(--navy-900)",
+            }}
+          />
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {showPrompt && (
+          <motion.div
+            key="copago-prompt"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            style={{ overflow: "hidden" }}
+          >
+            <div style={{ display: "grid", gap: 8, paddingTop: 8, borderTop: "1px dashed rgba(31,79,190,0.25)" }}>
+              <div style={{ fontSize: 12.5, color: "var(--navy-700)", lineHeight: 1.4 }}>
+                ¿Actualizar el copago a <strong>{fmtMoney(valueCents)}</strong> de{" "}
+                <strong>{obraSocial}</strong> para este paciente?
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => {
+                    setUpdateDefault(true);
+                    setDecided(true);
+                  }}
+                  style={{ height: 32, padding: "0 12px", fontSize: 12.5 }}
+                >
+                  Sí, actualizar
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setUpdateDefault(false);
+                    setDecided(true);
+                  }}
+                  style={{ height: 32, padding: "0 12px", fontSize: 12.5 }}
+                >
+                  Sólo este turno
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {decided && changed && (
+        <div style={{ fontSize: 11, fontWeight: 600, color: updateDefault ? "var(--sky-700)" : "var(--navy-400)" }}>
+          {updateDefault
+            ? `Se actualizará el copago de ${obraSocial} para este paciente`
+            : "Sólo para este turno"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgendaClient(props: Props) {
   const router = useRouter();
   const [creating, setCreating] = useState<null | {
@@ -163,7 +293,11 @@ export function AgendaClient(props: Props) {
   }>(null);
   const [editing, setEditing] = useState<BookingDTO | null>(null);
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
-  const [showWeekStrip, setShowWeekStrip] = useState(true);
+  // Server-backed per-user agenda preferences, controlled from the Tweaks
+  // panel + /configuracion. `agendaShowWeekHeader` drives the day-header
+  // chrome — the day strip (every view) AND the week-grid header row.
+  const { agenda } = useTweaks();
+  const showDayHeader = agenda.agendaShowWeekHeader;
 
   // Deep-link from "Nuevo turno" quick action: /agenda?new=1&patient=<id>
   // opens the create modal pre-filled with that patient. We clear the
@@ -339,7 +473,7 @@ export function AgendaClient(props: Props) {
             </select>
           )}
 
-          <ViewOptionsMenu density={density} setDensity={setDensity} showWeekStrip={showWeekStrip} setShowWeekStrip={setShowWeekStrip} />
+          <ViewOptionsMenu density={density} setDensity={setDensity} />
 
           <a
             href={`/api/agenda/export?from=${toARDateKey(weekStart)}`}
@@ -362,11 +496,13 @@ export function AgendaClient(props: Props) {
         </div>
       </header>
 
-      {showWeekStrip && (
+      {showDayHeader && (
         <WeekStrip
           weekStart={weekStart}
           anchor={anchor}
           bookingsByDay={bookingsByDay}
+          showSaturday={agenda.agendaShowSaturday}
+          showSunday={agenda.agendaShowSunday}
           onPick={(d) => router.push(`/agenda?view=${props.view}&date=${toARDateKey(d)}`)}
         />
       )}
@@ -387,6 +523,9 @@ export function AgendaClient(props: Props) {
             bookings={props.bookings}
             onEdit={setEditing}
             businessHours={props.businessHours ?? { start: 8, end: 19 }}
+            showHeader={agenda.agendaShowWeekHeader}
+            showSaturday={agenda.agendaShowSaturday}
+            showSunday={agenda.agendaShowSunday}
           />
         )}
         {props.view === "list" && (
@@ -394,21 +533,25 @@ export function AgendaClient(props: Props) {
         )}
       </div>
 
-      {creating && (
-        <BookingModal
-          mode="create"
-          defaultISO={creating.defaultISO ?? defaultCreateISO}
-          defaultPatientId={creating.defaultPatientId ?? null}
-          services={props.services}
-          practitioners={props.practitioners}
-          patients={props.patients}
-          onClose={() => setCreating(null)}
-          onSaved={() => {
-            setCreating(null);
-            router.refresh();
-          }}
-        />
-      )}
+      <AnimatePresence>
+        {creating && (
+          <BookingModal
+            key="booking-create"
+            mode="create"
+            defaultISO={creating.defaultISO ?? defaultCreateISO}
+            defaultPatientId={creating.defaultPatientId ?? null}
+            services={props.services}
+            practitioners={props.practitioners}
+            patients={props.patients}
+            insurers={props.insurers}
+            onClose={() => setCreating(null)}
+            onSaved={() => {
+              setCreating(null);
+              router.refresh();
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <BookingDrawer
         booking={editing}
@@ -439,19 +582,31 @@ function WeekStrip({
   weekStart,
   anchor,
   bookingsByDay,
+  showSaturday,
+  showSunday,
   onPick,
 }: {
   weekStart: Date;
   anchor: Date;
   bookingsByDay: Map<string, BookingDTO[]>;
+  showSaturday: boolean;
+  showSunday: boolean;
   onPick: (d: Date) => void;
 }) {
+  // Same weekend visibility as the week grid (0=Mon … 6=Sun) so the day
+  // strip reflects the user's "Mostrar sábado/domingo" choice in every view.
+  const visibleDays = [0, 1, 2, 3, 4];
+  if (showSaturday) visibleDays.push(5);
+  if (showSunday) visibleDays.push(6);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
-      {DAYS.map((d, i) => {
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${visibleDays.length}, 1fr)`, gap: 8 }}>
+      {visibleDays.map((i) => {
         const day = new Date(weekStart);
         day.setDate(day.getDate() + i);
         const key = toARDateKey(day);
+        // Label from the column's real AR weekday — keeps name + number in
+        // sync regardless of how weekStart was computed.
+        const label = DAYS[(toARDow(day) + 6) % 7];
         const count = bookingsByDay.get(key)?.length ?? 0;
         const on = toARDateKey(day) === toARDateKey(anchor);
         return (
@@ -470,7 +625,7 @@ function WeekStrip({
               boxShadow: on ? "0 8px 20px rgba(31,79,190,0.28)" : undefined,
             }}
           >
-            <div style={{ fontSize: 10, opacity: 0.7, textTransform: "uppercase", fontWeight: 600 }}>{d}</div>
+            <div style={{ fontSize: 10, opacity: 0.7, textTransform: "uppercase", fontWeight: 600 }}>{label}</div>
             <div
               className="k-display"
               style={{ fontSize: 18, fontWeight: 700, color: on ? "#fff" : "var(--navy-900)", margin: "2px 0" }}
@@ -843,17 +998,39 @@ function WeekGridView({
   bookings,
   onEdit,
   businessHours,
+  showHeader,
+  showSaturday,
+  showSunday,
 }: {
   weekStart: Date;
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
   businessHours: { start: number; end: number };
+  showHeader: boolean;
+  showSaturday: boolean;
+  showSunday: boolean;
 }) {
   const HOURS = Array.from(
     { length: Math.max(1, businessHours.end - businessHours.start) },
     (_, i) => i + businessHours.start
   );
   const ROW = 50;
+
+  // Which weekday columns to render (0=Mon … 6=Sun). Mon-Fri always show;
+  // Saturday/Sunday are per-user opt-in. `colOf` maps a day index to its
+  // visible grid column position so bookings on a hidden weekend day are
+  // simply skipped instead of landing in the wrong column.
+  const visibleDays = useMemo(() => {
+    const days = [0, 1, 2, 3, 4];
+    if (showSaturday) days.push(5);
+    if (showSunday) days.push(6);
+    return days;
+  }, [showSaturday, showSunday]);
+  const colOf = useMemo(
+    () => new Map(visibleDays.map((d, i) => [d, i])),
+    [visibleDays]
+  );
+  const gridCols = `52px repeat(${visibleDays.length}, 1fr)`;
 
   // overflow modal state: null = closed, otherwise the slot's bookings + label
   const [overflow, setOverflow] = useState<{ bookings: BookingDTO[]; label: string } | null>(null);
@@ -878,24 +1055,31 @@ function WeekGridView({
   return (
     <>
       <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "52px repeat(7, 1fr)", gap: 6, marginBottom: 6 }}>
-          <div />
-          {DAYS.map((d, i) => {
-            const day = new Date(weekStart);
-            day.setDate(day.getDate() + i);
-            const arKey = toARDateKey(day);
-            return (
-              <div key={i} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--navy-500)", padding: "6px 0" }}>
-                {d} {Number(arKey.slice(8, 10))}
-              </div>
-            );
-          })}
-        </div>
+        {showHeader && (
+          <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
+            <div />
+            {visibleDays.map((dayIdx) => {
+              const day = new Date(weekStart);
+              day.setDate(day.getDate() + dayIdx);
+              const arKey = toARDateKey(day);
+              // Derive the weekday label from the column's actual AR date so
+              // the name and the number can never disagree (defends against
+              // any future weekStart drift). With a correct AR Monday this
+              // equals DAYS[dayIdx].
+              const label = DAYS[(toARDow(day) + 6) % 7];
+              return (
+                <div key={dayIdx} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--navy-500)", padding: "6px 0" }}>
+                  {label} {Number(arKey.slice(8, 10))}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div
           style={{
             flex: 1,
             display: "grid",
-            gridTemplateColumns: "52px repeat(7, 1fr)",
+            gridTemplateColumns: gridCols,
             gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
             gap: 6,
             overflow: "auto",
@@ -907,7 +1091,7 @@ function WeekGridView({
             </div>
           ))}
           {HOURS.map((_, i) =>
-            DAYS.map((__, j) => (
+            visibleDays.map((__, j) => (
               <div
                 key={`cell${i}-${j}`}
                 style={{
@@ -923,6 +1107,9 @@ function WeekGridView({
           {Array.from(cellMap.entries()).map(([cellKey, cellBookings]) => {
             const [dayColStr, rowStartStr] = cellKey.split("-");
             const dayCol = Number(dayColStr);
+            // Skip bookings that fall on a hidden weekend day.
+            const colPos = colOf.get(dayCol);
+            if (colPos === undefined) return null;
             const rowStart = Number(rowStartStr);
             const first = cellBookings[0];
             const date0 = new Date(first.scheduledFor);
@@ -939,7 +1126,7 @@ function WeekGridView({
                   })
                 }
                 style={{
-                  gridColumn: dayCol + 2,
+                  gridColumn: colPos + 2,
                   gridRow: `${rowStart} / span ${span}`,
                   background: "var(--sky-700)",
                   color: "#fff",
@@ -1113,13 +1300,9 @@ function statusPill(bg: string, color: string): React.CSSProperties {
 function ViewOptionsMenu({
   density,
   setDensity,
-  showWeekStrip,
-  setShowWeekStrip,
 }: {
   density: "comfortable" | "compact";
   setDensity: (d: "comfortable" | "compact") => void;
-  showWeekStrip: boolean;
-  setShowWeekStrip: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -1211,24 +1394,9 @@ function ViewOptionsMenu({
               );
             })}
           </div>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "6px 4px",
-              fontSize: 13,
-              color: "var(--navy-700)",
-              cursor: "pointer",
-            }}
-          >
-            Mostrar tira de días
-            <input
-              type="checkbox"
-              checked={showWeekStrip}
-              onChange={(e) => setShowWeekStrip(e.target.checked)}
-            />
-          </label>
+          <div style={{ fontSize: 11.5, color: "var(--navy-300)", padding: "2px 4px", lineHeight: 1.4 }}>
+            El encabezado de días (tira + grilla) se controla desde Tweaks → «Vista semanal».
+          </div>
         </div>
       )}
     </div>
@@ -1264,6 +1432,7 @@ function BookingModal({
   services,
   practitioners,
   patients,
+  insurers,
   onClose,
   onSaved,
 }: {
@@ -1274,11 +1443,13 @@ function BookingModal({
   services: Props["services"];
   practitioners: Props["practitioners"];
   patients: Props["patients"];
+  insurers: Props["insurers"];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
   const [conflict, setConflict] = useState<{
     practitionerName: string;
     nextFreeISO: string | null;
@@ -1292,6 +1463,48 @@ function BookingModal({
   const [repeatWeeks, setRepeatWeeks] = useState(1);
   const [seriesDows, setSeriesDows] = useState<number[]>([]);
   const [isGuest, setIsGuest] = useState(false);
+  // Coverage (obra social) for the inline "Nuevo paciente" form.
+  //   "particular"  → no obra social (default)
+  //   "ins:<id>"    → a tenant Insurer row
+  //   "other"       → free-form name typed by the kine
+  const [newCoverage, setNewCoverage] = useState("particular");
+  const [newOtherInsurer, setNewOtherInsurer] = useState("");
+  // Existing-patient billing: when a registered patient is picked we load
+  // their obra social + pre-established copago and show an editable row.
+  const [selectedPatient, setSelectedPatient] = useState<{ id: string; name: string } | null>(null);
+  const [billing, setBilling] = useState<{ obraSocial: string; copagoCents: number } | null>(null);
+  const [copagoInput, setCopagoInput] = useState(0); // cents
+  const [copagoLoading, setCopagoLoading] = useState(false);
+  const [updateDefaultCopago, setUpdateDefaultCopago] = useState(false);
+  const billingSeq = useRef(0);
+
+  const loadPatientBilling = (p: { id: string; name: string } | null) => {
+    setSelectedPatient(p);
+    setBilling(null);
+    setUpdateDefaultCopago(false);
+    if (!p) return;
+    const seq = ++billingSeq.current;
+    setCopagoLoading(true);
+    getPatientBillingPreview(p.id)
+      .then((res) => {
+        if (seq !== billingSeq.current) return; // stale-response guard
+        if (res) {
+          setBilling(res);
+          setCopagoInput(res.copagoCents);
+        }
+      })
+      .finally(() => {
+        if (seq === billingSeq.current) setCopagoLoading(false);
+      });
+  };
+
+  // Deep-link / pre-selected patient: load their billing on mount.
+  useEffect(() => {
+    if (mode !== "create" || isGuest || !defaultPatientId) return;
+    const p = patients.find((x) => x.id === defaultPatientId);
+    if (p) loadPatientBilling(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Service-driven duration: picking a service copies its `durationMin`
   // into the editable duration field. Default 45 only until a service is
   // chosen (kine asked: Osteopatía 60' should auto-fill 60, not stay 45).
@@ -1316,8 +1529,15 @@ function BookingModal({
         return;
       }
       setError(result.error);
+      toast.error("No pudimos crear el turno", { description: result.error });
       return;
     }
+    // "Ambas opciones": the turno already carries its own copago override;
+    // if the kine confirmed the prompt, also make it the patient's default.
+    if (updateDefaultCopago && selectedPatient) {
+      await setPatientDefaultCopago({ patientId: selectedPatient.id, copagoCents: copagoInput });
+    }
+    toast.success("Turno creado");
     onSaved();
   };
 
@@ -1334,15 +1554,24 @@ function BookingModal({
         if (isGuest) {
           const firstName = String(formData.get("newFirstName") ?? "").trim();
           const lastName = String(formData.get("newLastName") ?? "").trim();
+          const documentId = String(formData.get("newDocumentId") ?? "").trim();
           if (!firstName || !lastName) {
             setError("Cargá nombre y apellido del nuevo paciente.");
+            return;
+          }
+          if (documentId.length < 4) {
+            setError("El DNI es obligatorio (mín. 4 caracteres).");
             return;
           }
           const created = await createPatient({
             firstName,
             lastName,
-            documentId: String(formData.get("newDocumentId") ?? "").trim() || undefined,
+            documentId,
             phone: String(formData.get("newPhone") ?? "").trim() || undefined,
+            // Obra social chosen in the inline form. "particular" → no
+            // coverage; "ins:<id>" → tenant insurer; "other" → free-form.
+            insurerId: newCoverage.startsWith("ins:") ? newCoverage.slice(4) : undefined,
+            insurerName: newCoverage === "other" ? newOtherInsurer.trim() || undefined : undefined,
           });
           if (!created.ok) {
             setError(created.error);
@@ -1370,8 +1599,12 @@ function BookingModal({
           });
           if (!r.ok) {
             setError(r.error);
+            toast.error("No pudimos crear el plan", { description: r.error });
             return;
           }
+          toast.success("Plan creado", {
+            description: `${r.data.created} turnos agendados${r.data.skipped ? ` · ${r.data.skipped} omitidos por conflicto` : ""}`,
+          });
           onSaved();
           return;
         }
@@ -1389,6 +1622,10 @@ function BookingModal({
           scheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
           durationMin: Number(formData.get("durationMin")) || 45,
           notes: String(formData.get("notes") ?? "") || undefined,
+          // Per-turno copago override — only when the kine actually changed
+          // it from the patient's pre-established value.
+          copagoCents:
+            !isGuest && billing && copagoInput !== billing.copagoCents ? copagoInput : undefined,
         };
         if (repeatWeeks > 1) {
           const result = await createBookingSeries({
@@ -1398,8 +1635,12 @@ function BookingModal({
           });
           if (!result.ok) {
             setError(result.error);
+            toast.error("No pudimos crear los turnos", { description: result.error });
             return;
           }
+          toast.success("Turnos recurrentes creados", {
+            description: `${result.data.created} turnos agendados${result.data.skipped ? ` · ${result.data.skipped} omitidos por conflicto` : ""}`,
+          });
           onSaved();
           return;
         }
@@ -1444,21 +1685,27 @@ function BookingModal({
 
   const remove = () => {
     if (!booking) return;
-    if (!confirm("¿Eliminar este turno?")) return;
     start(async () => {
       const result = await deleteBooking(booking.id);
       if (!result.ok) {
         setError(result.error);
+        toast.error("No pudimos eliminar el turno", { description: result.error });
         return;
       }
+      toast.success("Turno eliminado");
       onSaved();
     });
   };
 
   return (
-    <div
+    <motion.div
       role="dialog"
       aria-modal
+      onClick={onClose}
+      variants={backdropVariants}
+      initial="initial"
+      animate="animate"
+      exit="exit"
       style={{
         position: "fixed",
         inset: 0,
@@ -1471,7 +1718,12 @@ function BookingModal({
         padding: 20,
       }}
     >
-      <div className="k-glass-strong" style={{ width: "min(560px, 100%)", borderRadius: 24, padding: 22 }}>
+      <motion.div
+        className="k-glass-strong"
+        onClick={(e) => e.stopPropagation()}
+        variants={modalVariants}
+        style={{ width: "min(560px, 100%)", borderRadius: 24, padding: 22, maxHeight: "calc(100dvh - 40px)", overflowY: "auto" }}
+      >
         <header
           style={{
             display: "flex",
@@ -1662,8 +1914,31 @@ function BookingModal({
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <FormField label="Nombre" name="newFirstName" required />
                   <FormField label="Apellido" name="newLastName" required />
-                  <FormField label="DNI" name="newDocumentId" />
+                  <FormField label="DNI" name="newDocumentId" required />
                   <FormField label="Teléfono" name="newPhone" />
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <FormField
+                      as="select"
+                      label="Obra social"
+                      value={newCoverage}
+                      onChange={(v) => setNewCoverage(v)}
+                      options={[
+                        { value: "particular", label: "Particular (sin cobertura)" },
+                        ...insurers.map((i) => ({ value: `ins:${i.id}`, label: i.name })),
+                        { value: "other", label: "Otra (escribir manualmente)" },
+                      ]}
+                    />
+                  </div>
+                  {newCoverage === "other" && (
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <FormField
+                        label="Nombre de la obra social"
+                        value={newOtherInsurer}
+                        onChange={(v) => setNewOtherInsurer(v)}
+                        placeholder="Ej: PAMI, IOSFA…"
+                      />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <PatientPicker
@@ -1671,9 +1946,23 @@ function BookingModal({
                   label={null}
                   initialPatientId={defaultPatientId ?? null}
                   initialPatients={patients}
+                  onChange={loadPatientBilling}
                 />
               )}
             </div>
+
+            {/* Cobertura + copago del paciente seleccionado (editable). */}
+            {!isGuest && selectedPatient && (billing || copagoLoading) && (
+              <CopagoRow
+                obraSocial={billing?.obraSocial ?? "—"}
+                original={billing?.copagoCents ?? 0}
+                valueCents={copagoInput}
+                onValueCents={setCopagoInput}
+                updateDefault={updateDefaultCopago}
+                setUpdateDefault={setUpdateDefaultCopago}
+                loading={copagoLoading}
+              />
+            )}
 
             {/* Plan-mode toggle */}
             <label
@@ -1722,7 +2011,7 @@ function BookingModal({
               {!planMode && (
                 <FormField
                   label="Repetir"
-                  tooltip="Repetición semanal"
+                  tooltip="Opcional · cantidad de semanas. Dejalo en 1 para un turno único; con día y hora alcanza."
                   name="repeatWeeks"
                   type="number"
                   min={1}
@@ -1859,8 +2148,8 @@ function BookingModal({
             </div>
           </form>
         )}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

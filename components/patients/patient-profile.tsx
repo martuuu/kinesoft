@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, PhotoSlot } from "@/components/ui/card";
@@ -11,7 +11,6 @@ import { IconArrow, IconFile, IconPlus, IconX, IconCheck } from "@/components/ui
 import { Modal } from "@/components/ui/modal";
 import { FormField } from "@/components/ui/form-field";
 import {
-  completeSession,
   createProgram,
   deletePatient,
   recordEvaScore,
@@ -21,12 +20,18 @@ import {
   getPatientBookingsAll,
 } from "@/lib/patients";
 import { rescheduleSession } from "@/lib/sessions";
-import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
+import { localToARIso, isoToARLocalInput, toARDateKey } from "@/lib/datetime-ar";
+import {
+  setBookingStatus,
+  deleteBooking,
+  setBookingInsurerPaid,
+  setBookingCopagoPaid,
+} from "@/lib/bookings";
+import { useToast } from "@/components/ui/toast";
 import {
   assignPatientToPractitioner,
   deleteProgram,
   deleteSession,
-  getPatientActivity,
   sendPatientPortalInvite,
   setProgramStatus,
   updateProgram,
@@ -64,7 +69,7 @@ type PatientWithRelations = PatientCore & {
   evaScores: EvaScore[];
 };
 
-type Tab = "resumen" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact" | "actividad";
+type Tab = "resumen" | "turnos" | "sesiones" | "plan" | "archivos" | "antec" | "evol" | "fact" | "actividad";
 
 export function PatientProfile({
   patientCore,
@@ -94,22 +99,44 @@ export function PatientProfile({
   const [bookingsAll, setBookingsAll] = useState<PatientBookingFull[] | null>(null);
   const [loadingBookings, setLoadingBookings] = useState(false);
 
+  // Both the Facturación and Turnos tabs work off the same full bookings
+  // list — fetched once on the first open of either, cached for the session.
+  //
+  // NOTE: `loadingBookings` is deliberately NOT a dependency. Setting it
+  // inside the effect would re-run the effect, fire this cleanup
+  // (`cancelled = true`) before the fetch resolves, and silently drop the
+  // result → "Cargando" forever. We gate on `bookingsAll === null` instead.
+  const needsBookings = tab === "fact" || tab === "turnos";
   useEffect(() => {
-    if (tab === "fact" && bookingsAll === null && !loadingBookings) {
-      setLoadingBookings(true);
-      let cancelled = false;
-      getPatientBookingsAll(patientCore.id, 100)
-        .then((rows) => {
-          if (!cancelled) setBookingsAll(rows as PatientBookingFull[]);
-        })
-        .finally(() => {
-          if (!cancelled) setLoadingBookings(false);
-        });
-      return () => {
-        cancelled = true;
-      };
-    }
-  }, [tab, bookingsAll, loadingBookings, patientCore.id]);
+    if (!needsBookings || bookingsAll !== null) return;
+    let cancelled = false;
+    setLoadingBookings(true);
+    getPatientBookingsAll(patientCore.id, 100)
+      .then((rows) => {
+        if (!cancelled) setBookingsAll(rows as PatientBookingFull[]);
+      })
+      .catch((e) => {
+        console.error("getPatientBookingsAll failed", e);
+        // Fall back to an empty list so the tab shows "sin turnos" instead
+        // of hanging on the loading skeleton.
+        if (!cancelled) setBookingsAll([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBookings(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsBookings, bookingsAll, patientCore.id]);
+
+  // Optimistic in-place patch of a booking after a mutation (status change,
+  // payment confirmation) so both tabs reflect it instantly without a refetch.
+  const patchBooking = useCallback((id: string, partial: Partial<PatientBookingFull>) => {
+    setBookingsAll((prev) => (prev ? prev.map((b) => (b.id === id ? { ...b, ...partial } : b)) : prev));
+  }, []);
+  const dropBooking = useCallback((id: string) => {
+    setBookingsAll((prev) => (prev ? prev.filter((b) => b.id !== id) : prev));
+  }, []);
 
   // Synthesize the legacy composite shape used by sub-views. The
   // `bookings` field swaps between recent (initial) and full (after
@@ -154,6 +181,7 @@ export function PatientProfile({
         active={tab}
         onChange={setTab}
         counts={{
+          turnos: bookingsAll?.length,
           sesiones: allSessionsCount,
           plan: patient.programs.length,
           // Use the cheap aggregate count for the Facturación badge —
@@ -170,13 +198,25 @@ export function PatientProfile({
           done={done}
         />
       )}
+      {tab === "turnos" && (
+        <TurnosView
+          bookings={bookingsAll}
+          loading={loadingBookings}
+          patchBooking={patchBooking}
+          dropBooking={dropBooking}
+        />
+      )}
       {tab === "sesiones" && <SesionesView patient={patient} sessions={sessions} />}
       {tab === "plan" && <PlanView patient={patient} />}
       {tab === "archivos" && <ArchivosView patientId={patient.id} />}
       {tab === "antec" && <AntecedentesView patient={patient} />}
       {tab === "evol" && <EvolucionView patient={patient} />}
       {tab === "fact" && (
-        <FacturacionView patient={patient} loading={loadingBookings} loaded={bookingsAll !== null} />
+        <FacturacionView
+          bookings={bookingsAll}
+          loading={loadingBookings}
+          patchBooking={patchBooking}
+        />
       )}
       {tab === "actividad" && <ActivityView patientId={patient.id} />}
     </div>
@@ -367,7 +407,13 @@ function PatientHeroActions({
       )}
       <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
         Última actualización:{" "}
-        {patient.updatedAt.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}
+        {patient.updatedAt.toLocaleString("es-AR", {
+          dateStyle: "short",
+          timeStyle: "short",
+          // Fixed AR timezone so the server (UTC) and the client format the
+          // same string — otherwise it's a hydration mismatch.
+          timeZone: "America/Argentina/Buenos_Aires",
+        })}
       </div>
     </div>
   );
@@ -755,10 +801,11 @@ function TabsBar({
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
-  counts: { sesiones: number; plan: number; fact: number };
+  counts: { turnos?: number; sesiones: number; plan: number; fact: number };
 }) {
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: "resumen", label: "Resumen" },
+    { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
     { id: "plan", label: "Plan", count: counts.plan || undefined },
     { id: "archivos", label: "Archivos" },
@@ -1897,9 +1944,10 @@ function CreateProgramModal({
 // Facturación tab
 // ──────────────────────────────────────────────────────────────────────
 
-/** Fact. table columns: Fecha · Servicio · Obra social · Copago ·
- *  Duración · Estado pago · Estado turno. Shared by header + rows. */
-const FACT_COLS = "100px 1.2fr 1fr 90px 80px 110px 100px";
+/** Facturación columns: Fecha · Servicio · Obra social · OS · Copago · Turno. */
+const FACT_COLS = "92px 1fr 0.9fr 1.25fr 1.25fr 96px";
+/** Turnos tab columns: Fecha+hora · Servicio · Obra social · Copago · Duración · Estado · acciones. */
+const TURNOS_COLS = "120px 1.2fr 1fr 90px 72px 96px 40px";
 
 /** Cents → "$1.234" (AR pesos, no decimals). */
 function fmtMoneyARS(cents: number) {
@@ -1911,113 +1959,322 @@ function fmtMoneyARS(cents: number) {
   });
 }
 
-function FacturacionView({
-  patient,
-  loading,
-  loaded,
+/** Money + a "Confirmar / Cobrado" toggle for one billing side (OS or copago). */
+function PaidCell({
+  amountCents,
+  paid,
+  available,
+  pending,
+  onToggle,
 }: {
-  patient: PatientWithRelations;
-  loading: boolean;
-  loaded: boolean;
+  amountCents: number;
+  paid: boolean;
+  available: boolean;
+  pending: boolean;
+  onToggle: (next: boolean) => void;
 }) {
-  // While the full bookings list is in flight, render a lightweight
-  // skeleton instead of computing aggregates from the partial 5-row
-  // recent slice (which would show misleading numbers in the summary
-  // cards). Once loaded, the in-memory aggregates are authoritative.
-  if (loading || !loaded) {
+  if (!available) return <span style={{ fontSize: 12, color: "var(--navy-300)" }}>—</span>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+      <span className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>
+        {fmtMoneyARS(amountCents)}
+      </span>
+      {paid ? (
+        <button
+          type="button"
+          onClick={() => onToggle(false)}
+          disabled={pending}
+          title="Cobrado — click para deshacer"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "none", cursor: "pointer", background: "rgba(54,179,126,0.14)", color: "#1F7A52", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 }}
+        >
+          <IconCheck size={9} stroke={3} /> Cobrado
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onToggle(true)}
+          disabled={pending}
+          style={{ border: "1px solid var(--sky-700)", color: "var(--sky-700)", background: "rgba(31,79,190,0.06)", cursor: "pointer", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 }}
+        >
+          Confirmar
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FacturacionView({
+  bookings,
+  loading,
+  patchBooking,
+}: {
+  bookings: PatientBookingFull[] | null;
+  loading: boolean;
+  patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
+}) {
+  const toast = useToast();
+  const [pending, start] = useTransition();
+
+  if (loading || bookings === null) {
     return (
       <Card glass style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
         Cargando movimientos…
       </Card>
     );
   }
-  const totalPaid = patient.bookings
-    .filter((b) => b.paymentStatus === "PAID")
-    .length;
-  const billable = patient.bookings.filter((b) => b.paymentStatus !== "UNPAID");
+
+  // "Ya confirmado" → solo turnos que efectivamente facturan.
+  const billable = bookings.filter((b) => b.status === "CONFIRMED" || b.status === "COMPLETED");
+  const osPaid = billable.reduce((s, b) => s + (b.insurerPaidAt ? b.osAmountCents : 0), 0);
+  const copagoPaid = billable.reduce((s, b) => s + (b.paymentStatus === "PAID" ? b.copagoCents : 0), 0);
+  const pendingTotal = billable.reduce(
+    (s, b) => s + (b.insurerPaidAt ? 0 : b.osAmountCents) + (b.paymentStatus === "PAID" ? 0 : b.copagoCents),
+    0
+  );
+
+  const confirmOS = (b: PatientBookingFull, next: boolean) => {
+    patchBooking(b.id, { insurerPaidAt: next ? new Date() : null });
+    start(async () => {
+      const r = await setBookingInsurerPaid(b.id, next);
+      if (!r.ok) {
+        patchBooking(b.id, { insurerPaidAt: b.insurerPaidAt });
+        toast.error("No pudimos actualizar el pago de la obra social", { description: r.error });
+      }
+    });
+  };
+  const confirmCopago = (b: PatientBookingFull, next: boolean) => {
+    patchBooking(b.id, { paymentStatus: next ? "PAID" : "UNPAID" });
+    start(async () => {
+      const r = await setBookingCopagoPaid(b.id, next);
+      if (!r.ok) {
+        patchBooking(b.id, { paymentStatus: b.paymentStatus });
+        toast.error("No pudimos actualizar el copago", { description: r.error });
+      }
+    });
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card glass style={{ padding: 18, display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+        <Summary label="OS percibido" value={fmtMoneyARS(osPaid)} tone="lime" />
+        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+        <Summary label="Copago percibido" value={fmtMoneyARS(copagoPaid)} tone="lime" />
+        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+        <Summary label="Pendiente de cobro" value={fmtMoneyARS(pendingTotal)} tone="sky" />
+        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
         <Summary label="Turnos facturados" value={String(billable.length)} />
-        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
-        <Summary label="Pagados" value={String(totalPaid)} tone="lime" />
-        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
-        <Summary
-          label="Pendientes"
-          value={String(billable.length - totalPaid)}
-          tone="sky"
-        />
       </Card>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div
-          style={{
-            padding: "12px 18px",
-            display: "grid",
-            gridTemplateColumns: FACT_COLS,
-            gap: 14,
-            fontSize: 10,
-            fontWeight: 700,
-            color: "var(--navy-300)",
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            borderBottom: "1px solid rgba(15,30,51,0.06)",
-          }}
-        >
+        <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
           <span>Fecha</span>
           <span>Servicio</span>
           <span>Obra social</span>
-          <span>Copago</span>
-          <span>Duración</span>
-          <span>Estado pago</span>
-          <span style={{ textAlign: "right" }}>Estado turno</span>
+          <span>OS (prestadora)</span>
+          <span>Copago (paciente)</span>
+          <span style={{ textAlign: "right" }}>Turno</span>
         </div>
         {billable.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)", fontSize: 13 }}>
-            Sin movimientos facturables todavía.
+            Sin turnos confirmados para facturar todavía.
           </div>
         ) : (
-          billable.map((b) => (
-            <div
-              key={b.id}
-              style={{
-                padding: "12px 18px",
-                display: "grid",
-                gridTemplateColumns: FACT_COLS,
-                gap: 14,
-                alignItems: "center",
-                fontSize: 13,
-                borderBottom: "1px solid rgba(15,30,51,0.04)",
-              }}
-            >
-              <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
-                {b.scheduledFor.toLocaleDateString("es-AR", {
-                  day: "2-digit",
-                  month: "short",
-                  year: "2-digit",
-                })}
-              </span>
-              <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {"serviceName" in b ? b.serviceName : "Sesión kinésica"}
-              </span>
-              <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {"obraSocial" in b && b.obraSocial.toLowerCase() !== "particular" ? b.obraSocial : "—"}
-              </span>
-              <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
-                {"copagoCents" in b ? fmtMoneyARS(b.copagoCents) : "—"}
-              </span>
-              <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
-                {b.durationMin} min
-              </span>
-              <PaymentStatusTag status={b.paymentStatus} />
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <BookingStatusTag status={b.status} />
+          billable.map((b) => {
+            const hasOS = b.obraSocial.toLowerCase() !== "particular" && b.osAmountCents > 0;
+            return (
+              <div key={b.id} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)" }}>
+                <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
+                  {b.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit" })}
+                </span>
+                <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
+                <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {hasOS ? b.obraSocial : "Particular"}
+                </span>
+                <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
+                <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <BookingStatusTag status={b.status} />
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </Card>
+      <div style={{ fontSize: 11, color: "var(--navy-300)", paddingLeft: 4, lineHeight: 1.5 }}>
+        <strong>OS</strong> = monto que reintegra la obra social al consultorio · <strong>Copago</strong> = lo que abona el paciente. Tocá «Confirmar» en cada lado cuando lo cobres.
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Turnos tab — patient-scoped turnos list (like the agenda Lista view,
+// locked to this patient, nearest → farthest, with a per-row actions menu).
+// ──────────────────────────────────────────────────────────────────────
+
+function TurnosView({
+  bookings,
+  loading,
+  patchBooking,
+  dropBooking,
+}: {
+  bookings: PatientBookingFull[] | null;
+  loading: boolean;
+  patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
+  dropBooking: (id: string) => void;
+}) {
+  const toast = useToast();
+  const [pending, start] = useTransition();
+
+  if (loading || bookings === null) {
+    return (
+      <Card glass style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
+        Cargando turnos…
+      </Card>
+    );
+  }
+  if (bookings.length === 0) {
+    return (
+      <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
+        Este paciente no tiene turnos cargados.
+      </Card>
+    );
+  }
+
+  // Nearest → farthest: upcoming ascending (soonest first), then past
+  // descending (most recent first) so the next turno sits at the top.
+  const now = Date.now();
+  const sorted = [...bookings].sort((a, b) => {
+    const ta = +new Date(a.scheduledFor);
+    const tb = +new Date(b.scheduledFor);
+    const aUp = ta >= now;
+    const bUp = tb >= now;
+    if (aUp && bUp) return ta - tb;
+    if (!aUp && !bUp) return tb - ta;
+    return aUp ? -1 : 1;
+  });
+
+  const setStatus = (b: PatientBookingFull, status: PatientBookingFull["status"]) => {
+    const prev = b.status;
+    patchBooking(b.id, { status });
+    start(async () => {
+      const r = await setBookingStatus(b.id, status);
+      if (!r.ok) {
+        patchBooking(b.id, { status: prev });
+        toast.error("No pudimos actualizar el turno", { description: r.error });
+      }
+    });
+  };
+  const remove = (b: PatientBookingFull) => {
+    if (!window.confirm("¿Eliminar este turno? Esta acción es definitiva.")) return;
+    dropBooking(b.id);
+    start(async () => {
+      const r = await deleteBooking(b.id);
+      if (!r.ok) toast.error("No pudimos eliminar el turno", { description: r.error });
+      else toast.success("Turno eliminado");
+    });
+  };
+
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: TURNOS_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+        <span>Fecha y hora</span>
+        <span>Servicio</span>
+        <span>Obra social</span>
+        <span>Copago</span>
+        <span>Duración</span>
+        <span>Estado</span>
+        <span />
+      </div>
+      {sorted.map((b) => {
+        const d = new Date(b.scheduledFor);
+        const cancelled = b.status === "CANCELLED";
+        return (
+          <div
+            key={b.id}
+            style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: TURNOS_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
+          >
+            <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
+              {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Argentina/Buenos_Aires" })}
+            </span>
+            <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
+            <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {b.obraSocial.toLowerCase() === "particular" ? "—" : b.obraSocial}
+            </span>
+            <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>{fmtMoneyARS(b.copagoCents)}</span>
+            <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
+            <BookingStatusTag status={b.status} />
+            <TurnoActionsMenu booking={b} onStatus={(s) => setStatus(b, s)} onDelete={() => remove(b)} disabled={pending} />
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+function TurnoActionsMenu({
+  booking,
+  onStatus,
+  onDelete,
+  disabled,
+}: {
+  booking: PatientBookingFull;
+  onStatus: (s: PatientBookingFull["status"]) => void;
+  onDelete: () => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const dateKey = toARDateKey(new Date(booking.scheduledFor));
+  const itemStyle: React.CSSProperties = {
+    width: "100%", textAlign: "left", border: "none", background: "transparent", cursor: "pointer",
+    fontSize: 12.5, fontWeight: 600, color: "var(--navy-700)", padding: "8px 10px", borderRadius: 8, display: "block",
+  };
+  const Item = ({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) => (
+    <button type="button" disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "#9F1F1F" : "var(--navy-700)" }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div ref={ref} style={{ position: "relative", justifySelf: "end" }}>
+      <button
+        type="button"
+        aria-label="Acciones del turno"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{ width: 30, height: 30, borderRadius: 8, border: "none", background: open ? "rgba(15,30,51,0.06)" : "transparent", cursor: "pointer", color: "var(--navy-500)", fontSize: 18, lineHeight: 1, fontWeight: 700 }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div role="menu" className="k-glass-strong" style={{ position: "absolute", top: 32, right: 0, width: 190, borderRadius: 12, padding: 6, zIndex: 30, display: "grid", gap: 2 }}>
+          <Item label="Confirmar" onClick={() => onStatus("CONFIRMED")} />
+          <Item label="Marcar hecho" onClick={() => onStatus("COMPLETED")} />
+          <Item label="Marcar ausente" onClick={() => onStatus("NO_SHOW")} />
+          <Item label="Cancelar turno" onClick={() => onStatus("CANCELLED")} />
+          <Link href={`/agenda?view=timeline&date=${dateKey}`} style={itemStyle} onClick={() => setOpen(false)}>
+            Abrir en agenda
+          </Link>
+          <div style={{ height: 1, background: "rgba(15,30,51,0.08)", margin: "2px 0" }} />
+          <Item label="Eliminar" onClick={onDelete} danger />
+        </div>
+      )}
     </div>
   );
 }
@@ -2044,18 +2301,6 @@ function Summary({
       <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{label}</div>
     </div>
   );
-}
-
-function PaymentStatusTag({ status }: { status: PatientWithRelations["bookings"][number]["paymentStatus"] }) {
-  const map: Record<string, { tone: "lime" | "sky" | "soft"; label: string }> = {
-    PAID: { tone: "lime", label: "Pagado" },
-    AUTHORIZED: { tone: "sky", label: "Autorizado" },
-    REFUNDED: { tone: "soft", label: "Reintegrado" },
-    FAILED: { tone: "soft", label: "Falló" },
-    UNPAID: { tone: "soft", label: "Pendiente" },
-  };
-  const m = map[status] ?? { tone: "soft" as const, label: status };
-  return <Tag tone={m.tone}>{m.label}</Tag>;
 }
 
 function BookingStatusTag({ status }: { status: PatientWithRelations["bookings"][number]["status"] }) {

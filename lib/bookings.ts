@@ -16,7 +16,9 @@ import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
+import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
@@ -81,7 +83,10 @@ export async function listBookingsInRange(opts: {
   const patientIds = rows
     .map((b) => b.patientId)
     .filter((id): id is string => !!id);
-  const accessMap = await bulkPatientAccess(actor, patientIds);
+  const [accessMap, particularCopago] = await Promise.all([
+    bulkPatientAccess(actor, patientIds),
+    getParticularCopagoCents(actor.tenantId),
+  ]);
 
   return rows.map((b): BookingRow => {
     const access: "full" | "basic" | "none" = b.patientId
@@ -105,11 +110,19 @@ export async function listBookingsInRange(opts: {
       access === "full"
         ? insurer?.name ?? coverage?.insurer ?? "Particular"
         : "Particular";
+    // Copago precedence: per-turno override → per-patient override →
+    // insurer → Particular → service price. Basic-access rows hide billing
+    // and just show the service price.
     const copagoCents =
       access === "full"
-        ? insurer
-          ? insurer.copagoCents
-          : b.service.priceCents
+        ? resolveBookingCopagoCents({
+            bookingOverride: b.copagoCents,
+            coverageOverride: coverage?.copagoCents ?? null,
+            hasCoverage: !!coverage,
+            insurerCopago: insurer ? insurer.copagoCents : null,
+            particularCopago,
+            servicePriceCents: b.service.priceCents,
+          })
         : b.service.priceCents;
     return {
       id: b.id,
@@ -341,6 +354,7 @@ export async function createBooking(
           serviceId: service.id,
           scheduledFor: data.scheduledFor,
           durationMin: duration,
+          copagoCents: data.copagoCents ?? null,
           patientId: data.patientId,
           guestName: data.guestName,
           guestEmail: data.guestEmail,
@@ -568,6 +582,68 @@ export async function deleteBooking(id: string): Promise<ActionResult> {
 }
 
 /**
+ * Confirm / un-confirm that the obra social reimbursement for a turno was
+ * received. Backs the "Confirmar pago Obra social" action in the patient's
+ * Facturación tab. Tenant-scoped; `paid=false` clears the confirmation.
+ */
+export async function setBookingInsurerPaid(
+  id: string,
+  paid: boolean
+): Promise<ActionResult> {
+  const actor = await getActor();
+  const owned = await prisma.booking.findFirst({
+    where: { id, tenantId: actor.tenantId },
+    select: { id: true, patientId: true },
+  });
+  if (!owned) return { ok: false, error: "Turno no encontrado." };
+  await prisma.booking.update({
+    where: { id },
+    data: { insurerPaidAt: paid ? new Date() : null },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: paid ? "booking.insurer_paid" : "booking.insurer_unpaid",
+    entity: "Booking",
+    entityId: id,
+  });
+  if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
+  invalidateBookingDerivedCaches(actor.tenantId);
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Mark a turno's copago as collected / pending (in-person payments) by
+ * flipping `Booking.paymentStatus` between PAID and UNPAID. Complements the
+ * OS confirmation so the Facturación tab tracks both sides.
+ */
+export async function setBookingCopagoPaid(
+  id: string,
+  paid: boolean
+): Promise<ActionResult> {
+  const actor = await getActor();
+  const owned = await prisma.booking.findFirst({
+    where: { id, tenantId: actor.tenantId },
+    select: { id: true, patientId: true },
+  });
+  if (!owned) return { ok: false, error: "Turno no encontrado." };
+  await prisma.booking.update({
+    where: { id },
+    data: { paymentStatus: paid ? "PAID" : "UNPAID" },
+  });
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: paid ? "booking.copago_paid" : "booking.copago_unpaid",
+    entity: "Booking",
+    entityId: id,
+  });
+  if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
+  invalidateBookingDerivedCaches(actor.tenantId);
+  return { ok: true, data: undefined };
+}
+
+/**
  * Recurring booking helper — creates the same booking weekly for
  * `repeatWeeks` occurrences. Conflicts skip silently (returns the count
  * of created vs. skipped). Idempotency key derived per occurrence.
@@ -661,7 +737,17 @@ export async function createBookingSeries(
         },
       });
       created++;
-    } catch {
+    } catch (e) {
+      // Genuine conflicts are already filtered out by the overlap check
+      // above, so a failure here is unexpected (DB/RLS/transient). Don't
+      // silently fold it into the "omitido por conflicto" count — log it
+      // so it's diagnosable, then skip the slot to keep the series going.
+      logger.error("createBookingSeries: slot creation failed", {
+        tenantId: actor.tenantId,
+        practitionerId: data.practitionerId,
+        scheduledFor: when.toISOString(),
+        err: e instanceof Error ? e.message : String(e),
+      });
       skipped++;
     }
   }

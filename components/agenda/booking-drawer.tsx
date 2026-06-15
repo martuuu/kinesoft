@@ -28,6 +28,8 @@ import {
 } from "@/lib/bookings";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
 import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
+import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
 import type { BookingStatus } from "@prisma/client";
 
@@ -94,6 +96,8 @@ export function BookingDrawer({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const confirm = useConfirm();
   // Reschedule sub-flow — opens an inline form that lets the user pick
   // a new datetime. Wires the existing `updateBooking` conflict response
   // (same shape as create-flow) into a sticky amber banner with the
@@ -131,6 +135,13 @@ export function BookingDrawer({
     }
   }, [booking?.id]);
 
+  const STATUS_TOAST: Partial<Record<BookingStatus, string>> = {
+    CONFIRMED: "Turno confirmado",
+    COMPLETED: "Turno marcado como realizado",
+    NO_SHOW: "Turno marcado como ausente",
+    CANCELLED: "Turno cancelado",
+  };
+
   const setStatus = (status: BookingStatus) => {
     if (!booking) return;
     setError(null);
@@ -138,22 +149,32 @@ export function BookingDrawer({
       const r = await setBookingStatus(booking.id, status);
       if (!r.ok) {
         setError(r.error);
+        toast.error("No pudimos actualizar el turno", { description: r.error });
         return;
       }
+      toast.success(STATUS_TOAST[status] ?? "Turno actualizado");
       onSaved();
     });
   };
 
-  const remove = () => {
+  const remove = async () => {
     if (!booking) return;
-    if (!confirm("¿Eliminar este turno?")) return;
+    const ok = await confirm({
+      title: "¿Eliminar este turno?",
+      message: "Se quitará de la agenda de forma permanente. Esta acción no se puede deshacer.",
+      confirmLabel: "Eliminar",
+      tone: "danger",
+    });
+    if (!ok) return;
     setError(null);
     start(async () => {
       const r = await deleteBooking(booking.id);
       if (!r.ok) {
         setError(r.error);
+        toast.error("No pudimos eliminar el turno", { description: r.error });
         return;
       }
+      toast.success("Turno eliminado");
       onSaved();
     });
   };

@@ -175,7 +175,15 @@ model Patient {
   files        PatientFile[]
   shares       PatientShare[]
 
+  // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
+  // NULLs as distinct, so these enforce "no duplicate VALUE" while still
+  // allowing many patients with no email / phone / DNI:
+  //   - documentId (DNI): required at the form layer (Zod), unique here.
+  //   - email / phone: optional, but no two patients may share the same
+  //     non-null value in the same consultorio.
   @@unique([tenantId, documentId])
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
   @@index([tenantId, lastName])
   @@index([tenantId, assignedPractitionerId])
 }
@@ -263,6 +271,11 @@ model Coverage {
   insurerId    String?
   planName     String?
   memberId     String?
+  // Per-patient copago override (cents). When set, it takes precedence over
+  // the insurer's configured copago (or the Particular price) for THIS
+  // patient — set via the "¿Actualizar el copago?" prompt in the booking
+  // modal. Null = fall through to the insurer / Particular default.
+  copagoCents  Int?
   validUntil   DateTime?
 
   patient      Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -280,6 +293,13 @@ model Insurer {
   name          String   // "OSDE", "Swiss Medical", "IOMA", etc.
   copagoCents   Int      @default(0)   // patient pays per session
   fixedFeeCents Int      @default(0)   // insurer pays kine per session
+  // Marks the special "Particular" (out-of-pocket) row that every tenant
+  // has exactly one of. It behaves like any other insurer for pricing
+  // (the practitioner sets its copago = the particular price), but billing
+  // never prints its name and the dashboard counts it as PRIVATE revenue,
+  // not obra-social revenue. A patient "without obra social" simply has a
+  // Coverage pointing at this row.
+  isParticular  Boolean  @default(false)
   active        Boolean  @default(true)
   notes         String?
   createdAt     DateTime @default(now())
@@ -764,8 +784,16 @@ model Booking {
   serviceId       String
   scheduledFor    DateTime
   durationMin     Int
+  // Per-turno copago override (cents). Defaults to the patient's resolved
+  // copago at creation time but the practitioner can adjust it for this one
+  // turno. Null = compute from the patient's coverage on read.
+  copagoCents     Int?
   status          BookingStatus @default(PENDING)
   paymentStatus   PaymentStatus @default(UNPAID)
+  // When the obra social reimbursement for this turno was confirmed as
+  // received (manual confirmation from the Facturación tab). Null = the OS
+  // hasn't paid yet. The copago side is tracked via `paymentStatus`.
+  insurerPaidAt   DateTime?
   guestName       String?
   guestEmail      String?
   guestPhone      String?
@@ -872,6 +900,12 @@ model UserPreferences {
   palette      String   @default("sky")
   pinnedKpis   Json     @default("[\"activePatients\",\"weekSessions\",\"activePrograms\"]")
   sidebarCollapsed Boolean @default(false)
+  // Per-user agenda personalisation (Sprint 18). Each consultorio member
+  // tailors their own week view; choices persist server-side so they
+  // follow the user across devices and surface in /configuracion.
+  agendaShowWeekHeader Boolean @default(true)
+  agendaShowSaturday   Boolean @default(true)
+  agendaShowSunday     Boolean @default(true)
   updatedAt    DateTime @updatedAt
 }
 

@@ -100,7 +100,11 @@ export type PatientBookingSummary = {
 export type PatientBookingFull = Prisma.BookingGetPayload<object> & {
   serviceName: string;
   obraSocial: string;
+  /** What the patient pays per session (resolved copago). */
   copagoCents: number;
+  /** What the obra social reimburses the kine per session (0 for Particular). */
+  osAmountCents: number;
+  // `insurerPaidAt` (OS payment confirmation) comes from BookingGetPayload.
 };
 
 /**

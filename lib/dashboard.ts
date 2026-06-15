@@ -11,6 +11,7 @@ import { getActor } from "@/lib/session";
 import { visibilityForActor } from "@/lib/visibility";
 import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
+import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { KpiKey } from "@/lib/preferences-constants";
 
@@ -272,6 +273,8 @@ const _loadDashboardCounts = unstable_cache(
       ? Math.round((insurerCents / monthCents) * 100)
       : 0;
 
+    const particularCopago = await getParticularCopagoCents(tenantId);
+
     return {
       todayCount,
       weeklyBars: bars,
@@ -312,7 +315,14 @@ const _loadDashboardCounts = unstable_cache(
           // turnos drop the segment (never print the word "Particular").
           const os = insurer?.name ?? coverage?.insurer ?? "";
           const obraSocial = os.toLowerCase() === "particular" ? "" : os;
-          const copagoCents = insurer ? insurer.copagoCents : b.service.priceCents;
+          const copagoCents = resolveBookingCopagoCents({
+            bookingOverride: b.copagoCents,
+            coverageOverride: coverage?.copagoCents ?? null,
+            hasCoverage: !!coverage,
+            insurerCopago: insurer ? insurer.copagoCents : null,
+            particularCopago,
+            servicePriceCents: b.service.priceCents,
+          });
           const copago = (copagoCents / 100).toLocaleString("es-AR", {
             style: "currency",
             currency: "ARS",

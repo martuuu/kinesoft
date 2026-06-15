@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import { backdropVariants, modalVariants } from "@/lib/motion";
 import type { AnatomyRole, ExerciseRelation, ProgramPhase } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
@@ -1145,9 +1147,14 @@ function AssignPlanModal({
   for (const e of selectedExercises) byPhase[e.phase].push(e);
 
   return (
-    <div
+    <motion.div
       role="dialog"
       aria-modal
+      onClick={pending ? undefined : onClose}
+      variants={backdropVariants}
+      initial="initial"
+      animate="animate"
+      exit="exit"
       style={{
         position: "fixed",
         inset: 0,
@@ -1160,8 +1167,10 @@ function AssignPlanModal({
         padding: 24,
       }}
     >
-      <div
+      <motion.div
         className="k-glass-strong"
+        onClick={(e) => e.stopPropagation()}
+        variants={modalVariants}
         style={{
           width: "min(980px, 100%)",
           maxHeight: "90vh",
@@ -1433,8 +1442,8 @@ function AssignPlanModal({
             {pending ? "Guardando…" : (<>Asignar a paciente <IconArrow size={14} /></>)}
           </Button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
