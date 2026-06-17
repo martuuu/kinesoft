@@ -78,6 +78,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       bookings={bookings.map((b) => ({
         ...b,
         scheduledFor: b.scheduledFor.toISOString(),
+        updatedAt: b.updatedAt.toISOString(),
       }))}
       services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents }))}
       practitioners={practitioners.map((p) => ({

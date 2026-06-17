@@ -230,7 +230,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
                 {(f.sizeBytes / 1024).toFixed(0)} KB
               </span>
               <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                {f.createdAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })}
+                {f.createdAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: "America/Argentina/Buenos_Aires" })}
               </span>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
                 {f.hasDownload && (

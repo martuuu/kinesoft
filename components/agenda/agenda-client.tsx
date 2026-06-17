@@ -24,8 +24,7 @@ import {
 } from "@/components/ui/icons";
 import {
   createBooking,
-  createBookingSeries,
-  createBookingPlan,
+  createBookingsBatch,
   deleteBooking,
   setBookingStatus,
 } from "@/lib/bookings";
@@ -47,6 +46,8 @@ type BookingDTO = {
   obraSocial: string;
   /** Copago per session in cents (insurer copago, or service price for particular). */
   copagoCents: number;
+  /** Row version for optimistic concurrency (Booking.updatedAt, ISO). */
+  updatedAt: string;
   notes: string | null;
   /**
    * Sprint 16: tells the agenda whether to expose the link-to-HC + the
@@ -358,7 +359,7 @@ export function AgendaClient(props: Props) {
         <div>
           <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Agenda</div>
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-            {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long" })}
+            {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Argentina/Buenos_Aires" })}
           </h1>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -1455,13 +1456,11 @@ function BookingModal({
     nextFreeISO: string | null;
     payload: Parameters<typeof createBooking>[0];
   } | null>(null);
-  // "Crear como plan" toggle — when on, the modal switches the
-  // repeat-weeks input for a full plan layout (sessions + days of week).
-  const [planMode, setPlanMode] = useState(false);
-  const [planSessions, setPlanSessions] = useState(8);
-  const [planDows, setPlanDows] = useState<number[]>([0, 2, 4]);
-  const [repeatWeeks, setRepeatWeeks] = useState(1);
-  const [seriesDows, setSeriesDows] = useState<number[]>([]);
+  // "Múltiples turnos" toggle — when on, the modal creates `count` individual
+  // turnos on the chosen weekdays (NOT a plan/TreatmentProgram).
+  const [multiTurno, setMultiTurno] = useState(false);
+  const [count, setCount] = useState(2);
+  const [weekdays, setWeekdays] = useState<number[]>([]); // 0=Mon..6=Sun
   const [isGuest, setIsGuest] = useState(false);
   // Coverage (obra social) for the inline "Nuevo paciente" form.
   //   "particular"  → no obra social (default)
@@ -1580,35 +1579,6 @@ function BookingModal({
           patientId = created.data.id;
         }
 
-        if (planMode) {
-          if (!patientId) {
-            setError("Los planes requieren un paciente registrado.");
-            return;
-          }
-          const r = await createBookingPlan({
-            patientId,
-            serviceId: String(formData.get("serviceId") ?? ""),
-            practitionerId: String(formData.get("practitionerId") ?? ""),
-            // AR-tagged so the server doesn't drift the slot 3 hours
-            // (see lib/datetime-ar.ts for the why).
-            startScheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
-            durationMin: Number(formData.get("durationMin")) || 45,
-            totalSessions: planSessions,
-            daysOfWeek: planDows,
-            notes: String(formData.get("notes") ?? "") || undefined,
-          });
-          if (!r.ok) {
-            setError(r.error);
-            toast.error("No pudimos crear el plan", { description: r.error });
-            return;
-          }
-          toast.success("Plan creado", {
-            description: `${r.data.created} turnos agendados${r.data.skipped ? ` · ${r.data.skipped} omitidos por conflicto` : ""}`,
-          });
-          onSaved();
-          return;
-        }
-
         if (!patientId) {
           setError("Elegí un paciente o activá «Nuevo paciente» para registrarlo.");
           return;
@@ -1627,19 +1597,22 @@ function BookingModal({
           copagoCents:
             !isGuest && billing && copagoInput !== billing.copagoCents ? copagoInput : undefined,
         };
-        if (repeatWeeks > 1) {
-          const result = await createBookingSeries({
+        // Múltiples turnos: create `count` individual turnos on the chosen
+        // weekdays. No plan/TreatmentProgram. Single turno keeps the full
+        // conflict/sobreturno UX via finalizeCreate.
+        if (multiTurno && count > 1) {
+          const result = await createBookingsBatch({
             ...payload,
-            repeatWeeks,
-            daysOfWeek: seriesDows.length > 0 ? seriesDows : undefined,
+            count,
+            daysOfWeek: weekdays.length > 0 ? weekdays : undefined,
           });
           if (!result.ok) {
             setError(result.error);
             toast.error("No pudimos crear los turnos", { description: result.error });
             return;
           }
-          toast.success("Turnos recurrentes creados", {
-            description: `${result.data.created} turnos agendados${result.data.skipped ? ` · ${result.data.skipped} omitidos por conflicto` : ""}`,
+          toast.success("Turnos creados", {
+            description: `${result.data.created} de ${result.data.requested} turnos creados${result.data.skipped ? ` · ${result.data.skipped} omitidos por conflicto` : ""}`,
           });
           onSaved();
           return;
@@ -1771,6 +1744,7 @@ function BookingModal({
                       hour: "2-digit",
                       minute: "2-digit",
                       hour12: false,
+                      timeZone: "America/Argentina/Buenos_Aires",
                     })}
                     {" · "}
                     {booking.durationMin} min · {booking.serviceName}
@@ -1964,35 +1938,9 @@ function BookingModal({
               />
             )}
 
-            {/* Plan-mode toggle */}
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "10px 12px",
-                borderRadius: 12,
-                background: planMode ? "rgba(31,79,190,0.06)" : "rgba(15,30,51,0.03)",
-                border: "1px solid " + (planMode ? "rgba(31,79,190,0.2)" : "rgba(15,30,51,0.06)"),
-                cursor: "pointer",
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>Convertir en plan</div>
-                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                  Crea N sesiones consecutivas con sus turnos automáticos. Requiere paciente registrado.
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={planMode}
-                onChange={(e) => setPlanMode(e.target.checked)}
-              />
-            </label>
-
-            <div style={{ display: "grid", gridTemplateColumns: planMode ? "1fr 86px" : "1fr 86px 86px", gap: 10, alignItems: "end" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 10, alignItems: "end" }}>
               <FormField
-                label={planMode ? "Inicio del plan" : "Fecha y hora"}
+                label="Fecha y hora"
                 name="scheduledFor"
                 type="datetime-local"
                 required
@@ -2008,52 +1956,55 @@ function BookingModal({
                 value={durationMin}
                 onChange={(v) => setDurationMin(Math.max(15, Math.min(240, Number(v) || 45)))}
               />
-              {!planMode && (
-                <FormField
-                  label="Repetir"
-                  tooltip="Opcional · cantidad de semanas. Dejalo en 1 para un turno único; con día y hora alcanza."
-                  name="repeatWeeks"
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={repeatWeeks}
-                  onChange={(v) => setRepeatWeeks(Math.max(1, Math.min(12, Number(v) || 1)))}
-                />
-              )}
             </div>
 
-            {!planMode && repeatWeeks > 1 && (
+            {/* Múltiples turnos toggle — crea N turnos individuales en los
+                días elegidos (NO un plan). */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: multiTurno ? "rgba(31,79,190,0.06)" : "rgba(15,30,51,0.03)",
+                border: "1px solid " + (multiTurno ? "rgba(31,79,190,0.2)" : "rgba(15,30,51,0.06)"),
+                cursor: "pointer",
+              }}
+            >
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 6 }}>
-                  Días de la semana (opcional)
-                </div>
-                <DayOfWeekPicker value={seriesDows} onChange={setSeriesDows} />
-                <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 6 }}>
-                  {seriesDows.length > 0
-                    ? `${seriesDows.length}×/semana · ${repeatWeeks * seriesDows.length} turnos totales`
-                    : "Sin selección: se repite el mismo día de la semana"}
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Múltiples turnos</div>
+                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  Crea varios turnos sueltos en los días que elijas. Con un solo turno, dejalo apagado.
                 </div>
               </div>
-            )}
+              <input
+                type="checkbox"
+                checked={multiTurno}
+                onChange={(e) => setMultiTurno(e.target.checked)}
+              />
+            </label>
 
-            {planMode && (
+            {multiTurno && (
               <div style={{ display: "grid", gap: 10 }}>
                 <FormField
-                  label="Cantidad de sesiones"
-                  name="planSessions"
+                  label="Cantidad de turnos"
+                  name="count"
                   type="number"
                   min={1}
-                  max={64}
-                  value={planSessions}
-                  onChange={(v) => setPlanSessions(Math.max(1, Math.min(64, Number(v) || 1)))}
+                  max={60}
+                  value={count}
+                  onChange={(v) => setCount(Math.max(1, Math.min(60, Number(v) || 1)))}
                 />
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 6 }}>
                     Días de la semana
                   </div>
-                  <DayOfWeekPicker value={planDows} onChange={setPlanDows} />
+                  <DayOfWeekPicker value={weekdays} onChange={setWeekdays} />
                   <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 6 }}>
-                    Frecuencia derivada: {planDows.length}×/semana
+                    {weekdays.length > 0
+                      ? `${count} turnos en los próximos ${weekdays.length === 1 ? "" : weekdays.length + " "}día${weekdays.length === 1 ? "" : "s"} marcados, a partir de la fecha elegida`
+                      : "Sin selección: se repite el mismo día de la semana del turno"}
                   </div>
                 </div>
               </div>
@@ -2140,8 +2091,8 @@ function BookingModal({
               <Button type="submit" variant="primary" disabled={pending}>
                 {pending
                   ? "Creando…"
-                  : planMode
-                    ? `Crear plan (${planSessions} sesiones)`
+                  : multiTurno && count > 1
+                    ? `Crear ${count} turnos`
                     : "Crear turno"}{" "}
                 <IconArrow size={12} />
               </Button>

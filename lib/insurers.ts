@@ -17,6 +17,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { InsurerRow } from "@/lib/insurers-types";
@@ -121,6 +122,7 @@ export async function createInsurer(
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe una obra social con ese nombre." };
     }
+    logger.error("insurer.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear la obra social." };
   }
 }

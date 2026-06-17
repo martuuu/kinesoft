@@ -29,6 +29,12 @@ export type BookingRow = {
   copagoCents: number;
   notes: string | null;
   /**
+   * Row version for optimistic concurrency — echoed back as
+   * `expectedUpdatedAt` on mutations so the server rejects edits/deletes
+   * made against a stale view (`Booking.updatedAt`).
+   */
+  updatedAt: Date;
+  /**
    * Access tier the actor has on this booking's patient. `"basic"`
    * tells the agenda renderer to suppress diagnosis / hide the link to
    * the HC. Guest bookings (patientId === null) get `"none"`.

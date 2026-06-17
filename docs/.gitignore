@@ -1,2 +1,6 @@
+# Sprint logs stay local; planning docs are tracked.
 *
 !.gitignore
+!roadmap.md
+!mvp-planning.md
+!context.md

@@ -28,7 +28,7 @@ export async function findPatientByEmailForPrefill(
       email: { equals: trimmed, mode: "insensitive" },
       ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
     },
-    include: { coverages: true, emergency: true },
+    include: { coverages: { orderBy: { id: "desc" } }, emergency: true },
   });
   if (!row) return null;
   return {

@@ -1088,7 +1088,7 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
         </div>
         <Tag tone="soft">{invite.role}</Tag>
         <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-          Vence {invite.expiresAt.toLocaleDateString("es-AR")}
+          Vence {invite.expiresAt.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button

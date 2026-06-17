@@ -213,7 +213,7 @@ const _loadDashboardCounts = unstable_cache(
         orderBy: { scheduledFor: "asc" },
         take: 3,
         include: {
-          patient: { include: { coverages: { include: { insurerRef: true }, take: 1 } } },
+          patient: { include: { coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 } } },
           service: true,
         },
       }),

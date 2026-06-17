@@ -16,6 +16,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { ServiceRow } from "@/lib/services-types";
@@ -118,6 +119,7 @@ export async function createService(
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un servicio con ese nombre." };
     }
+    logger.error("service.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear el servicio." };
   }
 }

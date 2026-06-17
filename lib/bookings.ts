@@ -19,6 +19,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { toARDow } from "@/lib/datetime-ar";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
@@ -68,6 +69,7 @@ export async function listBookingsInRange(opts: {
           // (setPatientCoverage replaces rather than appends).
           coverages: {
             include: { insurerRef: true },
+            orderBy: { id: "desc" },
             take: 1,
           },
           programs: {
@@ -136,6 +138,7 @@ export async function listBookingsInRange(opts: {
       patientCondition: cond,
       obraSocial,
       copagoCents,
+      updatedAt: b.updatedAt,
       // Notes can carry clinical context — hide on basic too.
       notes: access === "full" ? b.notes : null,
       patientAccess: access,
@@ -409,12 +412,13 @@ export async function createBooking(
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Turno duplicado." };
     }
+    logger.error("booking.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear el turno." };
   }
 }
 
 export async function updateBooking(
-  raw: BookingUpdateInput & { allowOverbooking?: boolean }
+  raw: BookingUpdateInput & { allowOverbooking?: boolean; expectedUpdatedAt?: string }
 ): Promise<
   ActionResult & {
     conflict?: { practitionerName: string; nextFreeISO: string | null };
@@ -426,79 +430,94 @@ export async function updateBooking(
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const { id, ...patch } = parsed.data;
-  const before = await prisma.booking.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    select: {
-      id: true,
-      patientId: true,
-      status: true,
-      scheduledFor: true,
-      durationMin: true,
-      practitionerId: true,
-      patient: { select: { firstName: true, lastName: true } },
-    },
-  });
-  if (!before) return { ok: false, error: "Turno no encontrado." };
 
-  // Validate the target patient (when changing) — tenant-scope check
-  // so a malicious client can't re-bind a booking to a patient from
-  // another consultorio. `null` means "clear the link" (back to a
-  // guest slot); only `undefined` means "leave it alone".
-  if (patch.patientId !== undefined && patch.patientId !== null) {
-    const owned = await prisma.patient.findFirst({
-      where: { id: patch.patientId, tenantId: actor.tenantId },
-      select: { id: true },
-    });
-    if (!owned) return { ok: false, error: "Paciente fuera del consultorio." };
-  }
-
-  // Re-check conflicts only when scheduledFor or durationMin actually
-  // change. Status-only updates don't touch the calendar slot.
-  const newWhen = patch.scheduledFor ?? before.scheduledFor;
-  const newDuration = patch.durationMin ?? before.durationMin;
-  const slotChanged =
-    patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
-  if (slotChanged && patch.status !== "CANCELLED") {
-    const end = new Date(newWhen.getTime() + newDuration * 60_000);
-    const clash = await prisma.booking.findFirst({
-      where: {
-        tenantId: actor.tenantId,
-        practitionerId: before.practitionerId,
-        id: { not: id },
-        status: { notIn: ["CANCELLED"] },
-        scheduledFor: { lt: end },
-        AND: [
-          {
-            scheduledFor: { gte: new Date(newWhen.getTime() - 240 * 60_000) },
-          },
-        ],
+  // Ownership lookup + optimistic-concurrency check + patient re-bind
+  // validation + conflict re-check + the write, all under the tenant GUC in
+  // one transaction. The conflict here uses `tx`; the prac-name + next-free
+  // suggestion (read-only, advisory) are fetched outside on conflict.
+  const outcome = await runWithRls(actor.tenantId, async (tx) => {
+    const before = await tx.booking.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      select: {
+        id: true,
+        patientId: true,
+        status: true,
+        scheduledFor: true,
+        durationMin: true,
+        practitionerId: true,
+        updatedAt: true,
+        patient: { select: { firstName: true, lastName: true } },
       },
-      select: { id: true, scheduledFor: true, durationMin: true },
     });
-    const overlapping =
-      clash &&
-      clash.scheduledFor < end &&
-      new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > newWhen;
-    if (overlapping && !raw.allowOverbooking) {
-      const [prac, suggestion] = await Promise.all([
-        prisma.practitioner.findUnique({
-          where: { id: before.practitionerId },
-          include: { user: { select: { fullName: true, email: true } } },
-        }),
-        suggestNextFreeSlot(actor.tenantId, before.practitionerId, newWhen, newDuration),
-      ]);
-      return {
-        ok: false,
-        error: "El profesional ya tiene un turno en ese horario.",
-        conflict: {
-          practitionerName: prac?.user.fullName ?? prac?.user.email ?? "El profesional",
-          nextFreeISO: suggestion,
-        },
-      };
+    if (!before) return { kind: "notfound" as const };
+    // Optimistic concurrency: reject if the row changed since the client
+    // (e.g. the BookingDrawer) loaded it — prevents acting on a stale view.
+    if (raw.expectedUpdatedAt && +before.updatedAt !== +new Date(raw.expectedUpdatedAt)) {
+      return { kind: "stale" as const };
     }
+    // Tenant-scope check on the re-bound patient (`null` = clear to guest;
+    // `undefined` = leave alone) — atomic with the update.
+    if (patch.patientId !== undefined && patch.patientId !== null) {
+      const owned = await tx.patient.findFirst({
+        where: { id: patch.patientId, tenantId: actor.tenantId },
+        select: { id: true },
+      });
+      if (!owned) return { kind: "foreign-patient" as const };
+    }
+    // Re-check conflicts only when the slot actually moves.
+    const newWhen = patch.scheduledFor ?? before.scheduledFor;
+    const newDuration = patch.durationMin ?? before.durationMin;
+    const slotChanged =
+      patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
+    if (slotChanged && patch.status !== "CANCELLED") {
+      const end = new Date(newWhen.getTime() + newDuration * 60_000);
+      const clash = await tx.booking.findFirst({
+        where: {
+          tenantId: actor.tenantId,
+          practitionerId: before.practitionerId,
+          id: { not: id },
+          status: { notIn: ["CANCELLED"] },
+          scheduledFor: { lt: end },
+          AND: [{ scheduledFor: { gte: new Date(newWhen.getTime() - 240 * 60_000) } }],
+        },
+        select: { id: true, scheduledFor: true, durationMin: true },
+      });
+      const overlapping =
+        clash &&
+        clash.scheduledFor < end &&
+        new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > newWhen;
+      if (overlapping && !raw.allowOverbooking) {
+        return { kind: "conflict" as const, before, newWhen, newDuration };
+      }
+    }
+    await tx.booking.update({ where: { id }, data: patch });
+    return { kind: "ok" as const, before };
+  });
+
+  if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
+  if (outcome.kind === "stale") {
+    return { ok: false, error: "El turno cambió en otra sesión. Refrescá la agenda y reintentá." };
+  }
+  if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
+  if (outcome.kind === "conflict") {
+    const [prac, suggestion] = await Promise.all([
+      prisma.practitioner.findUnique({
+        where: { id: outcome.before.practitionerId },
+        include: { user: { select: { fullName: true, email: true } } },
+      }),
+      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration),
+    ]);
+    return {
+      ok: false,
+      error: "El profesional ya tiene un turno en ese horario.",
+      conflict: {
+        practitionerName: prac?.user.fullName ?? prac?.user.email ?? "El profesional",
+        nextFreeISO: suggestion,
+      },
+    };
   }
 
-  await prisma.booking.update({ where: { id }, data: patch });
+  const before = outcome.before;
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -549,25 +568,37 @@ export async function updateBooking(
 
 export async function setBookingStatus(
   id: string,
-  status: BookingStatus
+  status: BookingStatus,
+  expectedUpdatedAt?: string
 ): Promise<ActionResult> {
-  return updateBooking({ id, status });
+  return updateBooking({ id, status, expectedUpdatedAt });
 }
 
-export async function deleteBooking(id: string): Promise<ActionResult> {
+export async function deleteBooking(
+  id: string,
+  expectedUpdatedAt?: string
+): Promise<ActionResult> {
   const actor = await getActor();
   // RLS Etapa 2: lookup + delete share the tx so policies guard the
-  // destructive side too.
-  const owned = await runWithRls(actor.tenantId, async (tx) => {
+  // destructive side too. The optimistic-concurrency check rejects a delete
+  // when the row changed since the client loaded it.
+  const outcome = await runWithRls(actor.tenantId, async (tx) => {
     const row = await tx.booking.findFirst({
       where: { id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true },
+      select: { id: true, patientId: true, updatedAt: true },
     });
-    if (!row) return null;
+    if (!row) return { kind: "notfound" as const };
+    if (expectedUpdatedAt && +row.updatedAt !== +new Date(expectedUpdatedAt)) {
+      return { kind: "stale" as const };
+    }
     await tx.booking.delete({ where: { id } });
-    return row;
+    return { kind: "ok" as const, patientId: row.patientId };
   });
-  if (!owned) return { ok: false, error: "Turno no encontrado." };
+  if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
+  if (outcome.kind === "stale") {
+    return { ok: false, error: "El turno cambió en otra sesión. Refrescá la agenda y reintentá." };
+  }
+  const owned = { patientId: outcome.patientId };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -644,23 +675,32 @@ export async function setBookingCopagoPaid(
 }
 
 /**
- * Recurring booking helper — creates the same booking weekly for
- * `repeatWeeks` occurrences. Conflicts skip silently (returns the count
- * of created vs. skipped). Idempotency key derived per occurrence.
+ * Multi-turno batch — creates N INDIVIDUAL bookings (turnos) on the chosen
+ * weekdays, in Argentina time. NO TreatmentProgram/Session is created: these
+ * are plain turnos. A future "plan" entity can regroup a batch via the shared
+ * `seriesId` we stamp on every row.
  *
- * If `daysOfWeek` is provided (0=Mon…6=Sun), each week generates one
- * slot per matching day instead of repeating only the start day.
+ * Model: the practitioner picks an anchor date+time (the slot time + where to
+ * start), a set of weekdays (`daysOfWeek`, 0=Mon…6=Sun), and `count` (how many
+ * turnos). We walk forward day-by-day from the anchor and emit a turno on each
+ * matching weekday until we have `count` candidate dates. Example: anchor on a
+ * Wednesday, count=3, days={Thu,Fri,Tue} → next Thu, Fri, Tue (Wed excluded).
+ *
+ * Day-of-week is read with `toARDow` (AR-local, correct on any host); the
+ * +24h step preserves the AR wall-clock because Argentina has no DST. This
+ * replaces the old createBookingSeries, which used UTC weekday math and put
+ * turnos on the wrong days / next month.
  */
-export async function createBookingSeries(
-  raw: BookingCreateInput & { repeatWeeks: number; daysOfWeek?: number[] }
-): Promise<ActionResult<{ created: number; skipped: number }>> {
+export async function createBookingsBatch(
+  raw: BookingCreateInput & { count: number; daysOfWeek?: number[] }
+): Promise<ActionResult<{ created: number; skipped: number; requested: number }>> {
   const actor = await getActor();
   const parsed = BookingCreate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const data = parsed.data;
-  const weeks = Math.min(12, Math.max(1, Math.floor(raw.repeatWeeks ?? 1)));
+  const count = Math.min(60, Math.max(1, Math.floor(raw.count ?? 1)));
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
     select: { id: true, durationMin: true },
@@ -668,32 +708,24 @@ export async function createBookingSeries(
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
 
-  // Build list of dates to create. When daysOfWeek is specified we expand
-  // each week into one slot per matching weekday (Mon=0…Sun=6 in AR local).
-  // Without daysOfWeek we keep the original behaviour: one slot per week
-  // on the same weekday as the start date.
+  // AR-correct date expansion. `data.scheduledFor` is a real instant tagged
+  // -03:00 by `localToARIso` on the client. Empty weekday selection → repeat
+  // weekly on the anchor's own AR weekday.
+  const anchor = data.scheduledFor;
+  const dowSet = new Set((raw.daysOfWeek ?? []).map((d) => ((d % 7) + 7) % 7)); // 0=Mon..6=Sun
+  if (dowSet.size === 0) dowSet.add((toARDow(anchor) + 6) % 7);
+
   const dates: Date[] = [];
-  if (raw.daysOfWeek && raw.daysOfWeek.length > 0) {
-    // Normalise to 0..6 and deduplicate.
-    const dowSet = new Set(raw.daysOfWeek.map((d) => ((d % 7) + 7) % 7));
-    // Iterate day-by-day for `weeks` weeks starting from scheduledFor.
-    const totalDays = weeks * 7;
-    const startH = data.scheduledFor.getUTCHours();
-    const startMin = data.scheduledFor.getUTCMinutes();
-    for (let day = 0; day < totalDays; day++) {
-      const candidate = new Date(data.scheduledFor);
-      candidate.setUTCDate(candidate.getUTCDate() + day);
-      candidate.setUTCHours(startH, startMin, 0, 0);
-      // Convert UTC weekday to Mon=0 convention used by AR DOW pickers.
-      const utcDow = candidate.getUTCDay(); // 0=Sun..6=Sat
-      const monDow = (utcDow + 6) % 7; // 0=Mon..6=Sun
-      if (dowSet.has(monDow)) dates.push(candidate);
-    }
-  } else {
-    for (let i = 0; i < weeks; i++) {
-      dates.push(new Date(data.scheduledFor.getTime() + i * 7 * 86_400_000));
-    }
+  let cursor = new Date(anchor);
+  let guard = 0;
+  while (dates.length < count && guard++ < 400) {
+    const monDow = (toARDow(cursor) + 6) % 7; // 0=Mon..6=Sun in AR
+    if (dowSet.has(monDow)) dates.push(new Date(cursor));
+    cursor = new Date(cursor.getTime() + 86_400_000); // +1 AR day (DST-free)
   }
+
+  // Tag the batch so it can be regrouped into a "plan" later.
+  const seriesId = randomBytes(12).toString("hex");
 
   let created = 0;
   let skipped = 0;
@@ -727,22 +759,23 @@ export async function createBookingSeries(
           serviceId: service.id,
           scheduledFor: when,
           durationMin: duration,
+          copagoCents: data.copagoCents ?? null,
           patientId: data.patientId,
           guestName: data.guestName,
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
           notes: data.notes,
           status: data.patientId ? "CONFIRMED" : "PENDING",
+          seriesId,
           idempotencyKey: randomBytes(16).toString("hex"),
         },
       });
       created++;
     } catch (e) {
       // Genuine conflicts are already filtered out by the overlap check
-      // above, so a failure here is unexpected (DB/RLS/transient). Don't
-      // silently fold it into the "omitido por conflicto" count — log it
-      // so it's diagnosable, then skip the slot to keep the series going.
-      logger.error("createBookingSeries: slot creation failed", {
+      // above, so a failure here is unexpected (DB/RLS/transient). Log it
+      // so it's diagnosable, then skip the slot to keep the batch going.
+      logger.error("createBookingsBatch: slot creation failed", {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
         scheduledFor: when.toISOString(),
@@ -754,168 +787,14 @@ export async function createBookingSeries(
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
-    action: "booking.series.create",
+    action: "booking.batch.create",
     entity: "Booking",
-    payload: { created, skipped, weeks },
+    payload: { created, skipped, requested: count, seriesId },
   });
   revalidatePath("/agenda");
+  if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
   invalidateBookingDerivedCaches(actor.tenantId);
-  return { ok: true, data: { created, skipped } };
-}
-
-/**
- * Create a full TreatmentProgram from the agenda — one `Booking` per
- * scheduled `Session`, all linked to the same program. Used when the
- * practitioner wants to lay out a whole plan from the calendar without
- * going through Diagnóstico.
- *
- * `daysOfWeek` is a 0..6 array (Mon=0..Sun=6). The first session falls
- * on `startScheduledFor`; subsequent sessions advance to the next
- * matching weekday at the same time. Repeats until `totalSessions` is
- * filled (or until we hit the safety cap of 64).
- */
-export async function createBookingPlan(input: {
-  patientId: string;
-  serviceId: string;
-  practitionerId: string;
-  startScheduledFor: string; // ISO
-  durationMin?: number;
-  totalSessions: number;
-  daysOfWeek: number[]; // 0..6 (Mon..Sun)
-  title?: string;
-  notes?: string;
-}): Promise<ActionResult<{ programId: string; created: number; skipped: number }>> {
-  const actor = await getActor();
-  if (!input.patientId) return { ok: false, error: "Elegí un paciente." };
-  if (!input.daysOfWeek.length) return { ok: false, error: "Elegí al menos un día de la semana." };
-  const total = Math.min(64, Math.max(1, Math.floor(input.totalSessions)));
-
-  const [patient, service] = await Promise.all([
-    prisma.patient.findFirst({
-      where: { id: input.patientId, tenantId: actor.tenantId },
-      select: { id: true },
-    }),
-    prisma.service.findFirst({
-      where: { id: input.serviceId, tenantId: actor.tenantId },
-      select: { id: true, name: true, durationMin: true },
-    }),
-  ]);
-  if (!patient) return { ok: false, error: "Paciente fuera del tenant." };
-  if (!service) return { ok: false, error: "Servicio inválido." };
-
-  const start = new Date(input.startScheduledFor);
-  if (Number.isNaN(start.getTime())) return { ok: false, error: "Fecha de inicio inválida." };
-  const duration = input.durationMin ?? service.durationMin;
-  const dowSet = new Set(input.daysOfWeek.map((d) => ((d % 7) + 7) % 7));
-
-  // Generate dates: keep the time-of-day from `start`, walk forward day
-  // by day, emit a session whenever the day-of-week is in dowSet.
-  const dates: Date[] = [];
-  const cursor = new Date(start);
-  // Always include the start date even if its DOW isn't in the set, so
-  // the practitioner's chosen "first session" is honoured. After that,
-  // pick subsequent matching DOWs.
-  dates.push(new Date(cursor));
-  cursor.setDate(cursor.getDate() + 1);
-  while (dates.length < total) {
-    const dow = (cursor.getDay() + 6) % 7; // Mon=0..Sun=6
-    if (dowSet.has(dow)) {
-      const next = new Date(cursor);
-      next.setHours(start.getHours(), start.getMinutes(), 0, 0);
-      dates.push(next);
-    }
-    cursor.setDate(cursor.getDate() + 1);
-    // Safety net — at most 365 days lookahead.
-    if (cursor.getTime() - start.getTime() > 365 * 86_400_000) break;
-  }
-
-  // Per-session conflict check before write.
-  const frequency = Math.max(1, dowSet.size);
-  const programTitle =
-    input.title?.trim() || `Plan ${service.name} · ${total} sesiones`;
-
-  const result = await prisma.$transaction(async (tx) => {
-    const program = await tx.treatmentProgram.create({
-      data: {
-        tenantId: actor.tenantId,
-        patientId: input.patientId,
-        title: programTitle,
-        totalSessions: dates.length,
-        frequency,
-        startDate: dates[0],
-        status: "ACTIVE",
-        sessions: {
-          create: dates.map((d, i) => ({
-            practitionerId: input.practitionerId,
-            index: i + 1,
-            scheduledFor: d,
-          })),
-        },
-      },
-    });
-    // Create bookings 1:1 with sessions. Skip on conflict (don't break
-    // the whole plan — the practitioner can reschedule the skipped slot
-    // manually from the agenda).
-    let created = 0;
-    let skipped = 0;
-    for (const when of dates) {
-      const end = new Date(when.getTime() + duration * 60_000);
-      const clash = await tx.booking.findFirst({
-        where: {
-          tenantId: actor.tenantId,
-          practitionerId: input.practitionerId,
-          status: { notIn: ["CANCELLED"] },
-          scheduledFor: {
-            gte: new Date(when.getTime() - 240 * 60_000),
-            lt: end,
-          },
-        },
-        select: { id: true, scheduledFor: true, durationMin: true },
-      });
-      const overlap =
-        clash &&
-        clash.scheduledFor < end &&
-        new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > when;
-      if (overlap) {
-        skipped++;
-        continue;
-      }
-      try {
-        await tx.booking.create({
-          data: {
-            tenantId: actor.tenantId,
-            practitionerId: input.practitionerId,
-            serviceId: service.id,
-            scheduledFor: when,
-            durationMin: duration,
-            patientId: input.patientId,
-            notes: input.notes,
-            status: "CONFIRMED",
-            idempotencyKey: randomBytes(16).toString("hex"),
-          },
-        });
-        created++;
-      } catch {
-        skipped++;
-      }
-    }
-    return { programId: program.id, created, skipped };
-  });
-
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "booking.plan.create",
-    entity: "TreatmentProgram",
-    entityId: result.programId,
-    payload: { totalSessions: dates.length, created: result.created, skipped: result.skipped },
-  });
-
-  revalidatePath("/agenda");
-  revalidatePath("/dashboard");
-  revalidatePath(`/pacientes/${input.patientId}`);
-  invalidateBookingDerivedCaches(actor.tenantId);
-  return { ok: true, data: result };
+  return { ok: true, data: { created, skipped, requested: count } };
 }
 
 /**

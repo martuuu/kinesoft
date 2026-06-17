@@ -794,6 +794,11 @@ model Booking {
   // received (manual confirmation from the Facturación tab). Null = the OS
   // hasn't paid yet. The copago side is tracked via `paymentStatus`.
   insurerPaidAt   DateTime?
+  // Groups the turnos created together in one multi-turno batch (the agenda
+  // "Repetir / Múltiples turnos" flow). Null for single bookings. Lets a
+  // future "plan" entity regroup a batch indirectly without a destructive
+  // migration — the column is already populated.
+  seriesId        String?
   guestName       String?
   guestEmail      String?
   guestPhone      String?
@@ -814,6 +819,7 @@ model Booking {
   // orders by scheduledFor desc. The implicit FK index on patientId
   // alone wouldn't help the sort step.
   @@index([patientId, scheduledFor])
+  @@index([tenantId, seriesId])
 }
 
 enum BookingStatus {

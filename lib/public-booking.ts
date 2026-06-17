@@ -283,21 +283,18 @@ export async function submitPublicBooking(
     // First/last name are NEVER touched on existing patients.
   }
 
-  // Coverage + emergency contact — only when supplied AND not already on file.
-  if (data.patient.coverageInsurer) {
-    const exists = patient.coverages.find(
-      (c) =>
-        c.insurer.toLowerCase() === data.patient.coverageInsurer!.toLowerCase()
-    );
-    if (!exists) {
-      await prisma.coverage.create({
-        data: {
-          patientId: patient.id,
-          insurer: data.patient.coverageInsurer,
-          planName: data.patient.coveragePlan || null,
-        },
-      });
-    }
+  // Coverage — only seed one when the patient has NO coverage on file yet.
+  // The app treats coverage as single-active (setPatientCoverage replaces it),
+  // so we must NOT append a second row for a returning patient who self-reports
+  // a different obra social — the EHR coverage is the source of truth.
+  if (data.patient.coverageInsurer && patient.coverages.length === 0) {
+    await prisma.coverage.create({
+      data: {
+        patientId: patient.id,
+        insurer: data.patient.coverageInsurer.trim().replace(/\s+/g, " "),
+        planName: data.patient.coveragePlan || null,
+      },
+    });
   }
   if (data.patient.emergencyName && data.patient.emergencyPhone) {
     const exists = patient.emergency.find(

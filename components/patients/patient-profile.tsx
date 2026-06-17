@@ -200,6 +200,7 @@ export function PatientProfile({
       )}
       {tab === "turnos" && (
         <TurnosView
+          patientId={patient.id}
           bookings={bookingsAll}
           loading={loadingBookings}
           patchBooking={patchBooking}
@@ -1322,7 +1323,7 @@ function ProgramCard({
               {program.title}
             </div>
             <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-              Inicio {program.startDate.toLocaleDateString("es-AR")} ·{" "}
+              Inicio {program.startDate.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })} ·{" "}
               {program.frequency}×/semana
             </div>
           </div>
@@ -1806,7 +1807,7 @@ function AntecedentesView({ patient }: { patient: PatientWithRelations }) {
         </Detail>
         <Detail label="Alta del paciente">
           <span style={{ fontSize: 13 }}>
-            {patient.createdAt.toLocaleDateString("es-AR", { dateStyle: "long" })}
+            {patient.createdAt.toLocaleDateString("es-AR", { dateStyle: "long", timeZone: "America/Argentina/Buenos_Aires" })}
           </span>
         </Detail>
       </div>
@@ -1859,7 +1860,7 @@ function EvolucionView({ patient }: { patient: PatientWithRelations }) {
                 {s.value}
               </div>
               <div style={{ fontSize: 10, color: "var(--navy-500)" }}>
-                {s.takenAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })}
+                {s.takenAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: "America/Argentina/Buenos_Aires" })}
               </div>
               {s.source && (
                 <div style={{ fontSize: 9, color: "var(--navy-300)" }}>{s.source}</div>
@@ -2084,7 +2085,7 @@ function FacturacionView({
             return (
               <div key={b.id} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)" }}>
                 <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
-                  {b.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit" })}
+                  {b.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })}
                 </span>
                 <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
                 <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2113,11 +2114,13 @@ function FacturacionView({
 // ──────────────────────────────────────────────────────────────────────
 
 function TurnosView({
+  patientId,
   bookings,
   loading,
   patchBooking,
   dropBooking,
 }: {
+  patientId: string;
   bookings: PatientBookingFull[] | null;
   loading: boolean;
   patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
@@ -2126,18 +2129,36 @@ function TurnosView({
   const toast = useToast();
   const [pending, start] = useTransition();
 
+  // "Nuevo turno" opens the agenda's create flow pre-filled with this patient
+  // (the /agenda?new=1&patient= deep-link is already handled by AgendaClient).
+  const header = (
+    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <Link href={`/agenda?new=1&patient=${patientId}`} style={{ textDecoration: "none" }}>
+        <Button variant="primary">
+          <IconPlus size={14} /> Nuevo turno
+        </Button>
+      </Link>
+    </div>
+  );
+
   if (loading || bookings === null) {
     return (
-      <Card glass style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
-        Cargando turnos…
-      </Card>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {header}
+        <Card glass style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
+          Cargando turnos…
+        </Card>
+      </div>
     );
   }
   if (bookings.length === 0) {
     return (
-      <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
-        Este paciente no tiene turnos cargados.
-      </Card>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {header}
+        <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
+          Este paciente no tiene turnos cargados.
+        </Card>
+      </div>
     );
   }
 
@@ -2176,7 +2197,9 @@ function TurnosView({
   };
 
   return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {header}
+      <Card style={{ padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: TURNOS_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
         <span>Fecha y hora</span>
         <span>Servicio</span>
@@ -2208,7 +2231,8 @@ function TurnosView({
           </div>
         );
       })}
-    </Card>
+      </Card>
+    </div>
   );
 }
 

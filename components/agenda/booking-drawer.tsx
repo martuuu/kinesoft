@@ -45,6 +45,8 @@ type BookingDTO = {
   patientCondition: string | null;
   obraSocial: string;
   copagoCents: number;
+  /** Row version for optimistic concurrency (Booking.updatedAt, ISO). */
+  updatedAt: string;
   notes: string | null;
   patientAccess: "full" | "basic" | "none";
 };
@@ -146,7 +148,7 @@ export function BookingDrawer({
     if (!booking) return;
     setError(null);
     start(async () => {
-      const r = await setBookingStatus(booking.id, status);
+      const r = await setBookingStatus(booking.id, status, booking.updatedAt);
       if (!r.ok) {
         setError(r.error);
         toast.error("No pudimos actualizar el turno", { description: r.error });
@@ -168,7 +170,7 @@ export function BookingDrawer({
     if (!ok) return;
     setError(null);
     start(async () => {
-      const r = await deleteBooking(booking.id);
+      const r = await deleteBooking(booking.id, booking.updatedAt);
       if (!r.ok) {
         setError(r.error);
         toast.error("No pudimos eliminar el turno", { description: r.error });
@@ -198,6 +200,7 @@ export function BookingDrawer({
         id: booking.id,
         durationMin: dur,
         notes: editNotes,
+        expectedUpdatedAt: booking.updatedAt,
         ...(patientId !== undefined ? { patientId } : {}),
       });
       if (!r.ok) {
@@ -224,6 +227,7 @@ export function BookingDrawer({
         id: booking.id,
         scheduledFor: iso,
         allowOverbooking: opts.force ?? false,
+        expectedUpdatedAt: booking.updatedAt,
       });
       if (!r.ok) {
         if (r.conflict) {
@@ -286,6 +290,7 @@ export function BookingDrawer({
                 hour: "2-digit",
                 minute: "2-digit",
                 hour12: false,
+                timeZone: "America/Argentina/Buenos_Aires",
               })}
             </Row>
             <Row label="Duración">{booking.durationMin} min</Row>
@@ -506,6 +511,7 @@ export function BookingDrawer({
                           hour: "2-digit",
                           minute: "2-digit",
                           hour12: false,
+                          timeZone: "America/Argentina/Buenos_Aires",
                         })}
                       </button>
                     )}

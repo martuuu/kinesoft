@@ -15,8 +15,10 @@ import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { resolveInsurerName } from "@/lib/insurers-internal";
 import {
   visibilityForActor,
   patientAccessFor,
@@ -173,7 +175,7 @@ export async function listPatients(opts: {
         orderBy: { scheduledFor: "asc" },
         take: 1,
       },
-      coverages: { include: { insurerRef: true }, take: 1 },
+      coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 },
     },
   });
 
@@ -393,7 +395,10 @@ export async function getPatientCore(id: string) {
     tx.patient.findFirst({
       where: { id, tenantId: actor.tenantId },
       include: {
-        coverages: true,
+        // Deterministic order so `coverages[0]` is always the latest/active
+        // one (the app keeps a single active coverage; ordering is defence
+        // in depth in case 2+ rows ever exist). cuid `id` is time-sortable.
+        coverages: { orderBy: { id: "desc" } },
         emergency: true,
       },
     })
@@ -527,6 +532,7 @@ async function resolvePatientBilling(
   const coverage = await prisma.coverage.findFirst({
     where: { patientId },
     include: { insurerRef: true },
+    orderBy: { id: "desc" }, // deterministic: latest coverage = active
   });
   if (!coverage) {
     // No obra social → Particular. Use the tenant's configured Particular
@@ -660,7 +666,7 @@ export async function getPatient(id: string) {
   const patient = await prisma.patient.findFirst({
     where: { id, tenantId: actor.tenantId, ...v.patientWhere },
     include: {
-      coverages: true,
+      coverages: { orderBy: { id: "desc" } },
       emergency: true,
       programs: {
         include: {
@@ -753,7 +759,7 @@ export async function createPatient(
         },
       });
       // Seed coverage when an obra social was chosen at creation time.
-      let resolvedName = insurerName?.trim() || "";
+      let resolvedName = "";
       let resolvedInsurerId: string | null = null;
       if (insurerId) {
         const ins = await tx.insurer.findFirst({
@@ -764,6 +770,11 @@ export async function createPatient(
           resolvedInsurerId = ins.id;
           resolvedName = ins.name;
         }
+      } else if (insurerName) {
+        // Free-form ("Otra"): normalize + link to the catalogue if it matches.
+        const r = await resolveInsurerName(actor.tenantId, insurerName, tx);
+        resolvedInsurerId = r.insurerId;
+        resolvedName = r.name;
       }
       if (resolvedName) {
         await tx.coverage.create({
@@ -794,6 +805,7 @@ export async function createPatient(
   } catch (e) {
     const dup = patientUniqueError(e);
     if (dup) return dup;
+    logger.error("patient.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear el paciente." };
   }
 }
@@ -832,6 +844,7 @@ export async function updatePatient(
   } catch (e) {
     const dup = patientUniqueError(e);
     if (dup) return dup;
+    logger.error("patient.update.failed", { err: e instanceof Error ? e.message : String(e) });
     throw e;
   }
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
@@ -1020,7 +1033,7 @@ export async function setPatientCoverage(input: {
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
 
-    let resolvedName = input.insurerName?.trim() || "";
+    let resolvedName = "";
     let resolvedInsurerId: string | null = null;
     if (input.insurerId) {
       const ins = await tx.insurer.findFirst({
@@ -1030,6 +1043,11 @@ export async function setPatientCoverage(input: {
       if (!ins) return { ok: false as const, error: "Obra social no encontrada." };
       resolvedInsurerId = ins.id;
       resolvedName = ins.name;
+    } else if (input.insurerName) {
+      // Free-form ("Otra"): normalize + link to the catalogue if it matches.
+      const r = await resolveInsurerName(actor.tenantId, input.insurerName, tx);
+      resolvedInsurerId = r.insurerId;
+      resolvedName = r.name;
     }
 
     await tx.coverage.deleteMany({ where: { patientId: input.patientId } });
@@ -1394,8 +1412,9 @@ export async function sendPatientPortalInvite(input: {
           redirectTo: portalUrl,
         });
         return { ok: true, data: { emailSent: true, portalUrl } };
-      } catch {
-        /* fall through */
+      } catch (e) {
+        logger.warn("patient.portal_invite.resend_email_failed", { err: e instanceof Error ? e.message : String(e) });
+        /* fall through to manual URL */
       }
     }
     return { ok: true, data: { emailSent: false, portalUrl } };
@@ -1418,8 +1437,9 @@ export async function sendPatientPortalInvite(input: {
         }
       );
       if (!error) emailSent = true;
-    } catch {
-      /* swallow, fall back to manual URL */
+    } catch (e) {
+      logger.warn("patient.portal_invite.email_failed", { err: e instanceof Error ? e.message : String(e) });
+      /* fall back to manual URL */
     }
   }
 
