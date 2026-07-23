@@ -1,6 +1,4 @@
-# Sprint logs stay local; planning docs are tracked.
+# Only curated markdown docs are tracked; local junk stays ignored.
 *
 !.gitignore
-!roadmap.md
-!mvp-planning.md
-!context.md
+!*.md
