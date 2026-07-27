@@ -21,6 +21,7 @@ import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
 import { visibilityForActor } from "@/lib/visibility";
 import { tags as cacheTags, ttl } from "@/lib/cache-tags";
+import { localToARIso } from "@/lib/datetime-ar";
 import type { ActionResult } from "@/lib/validation";
 import { rankSelection } from "@/lib/diagnosis-engine";
 import type {
@@ -216,7 +217,11 @@ export async function assignDiagnosisAndCreateProgram(
     byPhase[phase].push(ex);
   }
 
-  const startDate = new Date(input.startDate);
+  // `input.startDate` is an AR calendar day ("YYYY-MM-DD"). Anchor it to AR
+  // midnight so session 1 lands on the intended AR day (parsing it bare
+  // yields UTC midnight = the previous day at 21:00 AR). Future-session
+  // arithmetic below stays as-is — AR has no DST.
+  const startDate = new Date(localToARIso(`${input.startDate}T00:00:00`));
   if (Number.isNaN(startDate.getTime())) return { ok: false, error: "Fecha inválida." };
 
   const N = input.totalSessions;

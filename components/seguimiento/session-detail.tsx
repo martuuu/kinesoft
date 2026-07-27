@@ -94,7 +94,11 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
                 </span>
                 <span style={{ flex: 1 }}>
                   {s.completedAt
-                    ? s.completedAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })
+                    ? s.completedAt.toLocaleDateString("es-AR", {
+                        day: "2-digit",
+                        month: "short",
+                        timeZone: "America/Argentina/Buenos_Aires",
+                      })
                     : "Programada"}
                 </span>
                 {s.completedAt && <IconCheck size={11} stroke={3} />}
@@ -124,6 +128,7 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
                 month: "long",
                 hour: "2-digit",
                 minute: "2-digit",
+                timeZone: "America/Argentina/Buenos_Aires",
               })}
               {diagnosis ? ` · ${diagnosis}` : ""}
             </div>

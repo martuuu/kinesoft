@@ -13,6 +13,7 @@
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 import type { SearchHit } from "@/lib/search-types";
 
@@ -144,8 +145,9 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
+        timeZone: "America/Argentina/Buenos_Aires",
       }),
-      href: `/agenda?date=${b.scheduledFor.toISOString().slice(0, 10)}`,
+      href: `/agenda?date=${toARDateKey(b.scheduledFor)}`,
     });
   }
 

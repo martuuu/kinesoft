@@ -13,6 +13,8 @@
  */
 import { prisma } from "@/lib/db";
 import { getRequestContext } from "@/lib/request-context";
+import { logger } from "@/lib/logger";
+import { captureException } from "@/lib/observability";
 
 const PHI_MODELS = new Set<string>([
   "Patient",
@@ -101,8 +103,16 @@ async function recordReadAudit(p: {
         payload: { operation: p.operation, rowCount: p.rowCount },
       },
     });
-  } catch {
-    /* swallow */
+  } catch (err) {
+    // Fire-and-forget: the read already succeeded and returned; the audit
+    // write must never block or fail the caller — but leave a trace.
+    logger.warn("audit-extension: read audit insert failed", {
+      tenantId: p.tenantId,
+      model: p.model,
+      operation: p.operation,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    captureException(err, { scope: "audit-extension", model: p.model, operation: p.operation });
   }
 }
 

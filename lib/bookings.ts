@@ -19,7 +19,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
-import { toARDow } from "@/lib/datetime-ar";
+import { toARDow, toARHour, toARDateKey } from "@/lib/datetime-ar";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
@@ -160,7 +160,9 @@ export async function getDayCounts(opts: { from: Date; to: Date }) {
   });
   const counts = new Map<string, number>();
   for (const r of rows) {
-    const k = r.scheduledFor.toISOString().slice(0, 10);
+    // Bucket by the AR calendar day, not the UTC slice — otherwise a late-night
+    // turno lands on the wrong day's dot on a UTC host (Vercel).
+    const k = toARDateKey(r.scheduledFor);
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   return counts;
@@ -243,12 +245,15 @@ async function suggestNextFreeSlot(
   // Round to next 15-min boundary.
   cursor.setMinutes(Math.ceil(cursor.getMinutes() / STEP_MIN) * STEP_MIN, 0, 0);
   while (cursor.getTime() - from.getTime() < HORIZON_MS) {
-    const dow = cursor.getDay(); // 0 Sun..6 Sat
-    const hour = cursor.getHours();
-    // Slot must fit entirely inside the business window — the end of
-    // the proposed booking is hour + minutes/60 + durationMin/60.
-    const endMinutes = hour * 60 + cursor.getMinutes() + durationMin;
-    if (dow !== 0 && hour >= openHour && endMinutes <= closeHour * 60) {
+    // Gate against the AR wall-clock, not the host's — openHour/closeHour are
+    // AR business hours, so on a UTC host `getDay()`/`getHours()` would be
+    // 3h off and could skip Saturday or include Sunday. The 15-min rounding
+    // above stays on host minutes (AR's offset is whole hours, so identical).
+    const dow = toARDow(cursor); // 0 Sun..6 Sat in AR
+    const arHour = toARHour(cursor); // fractional AR hour, e.g. 14.5
+    // Slot must fit entirely inside the business window.
+    const endMinutes = arHour * 60 + durationMin;
+    if (dow !== 0 && arHour >= openHour && endMinutes <= closeHour * 60) {
       const end = new Date(cursor.getTime() + durationMin * 60_000);
       if (!overlaps(cursor, end)) {
         return cursor.toISOString();
@@ -298,24 +303,26 @@ export async function createBooking(
 
   // Conflict check for the SAME practitioner (other kines in the same
   // hour are fine — multiple boxes / kines in the same consultorio).
-  const clash = await prisma.booking.findFirst({
+  // Fetch every candidate in the window (a turno starting up to 4h before
+  // could still overlap a long session) and test them all — a single
+  // unordered findFirst could return a non-overlapping row and miss the clash.
+  const candidates = await prisma.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       practitionerId: data.practitionerId,
       status: { notIn: ["CANCELLED"] },
-      scheduledFor: { lt: end },
-      AND: [
-        {
-          scheduledFor: { gte: new Date(data.scheduledFor.getTime() - 240 * 60_000) },
-        },
-      ],
+      scheduledFor: {
+        lt: end,
+        gte: new Date(data.scheduledFor.getTime() - 240 * 60_000),
+      },
     },
     select: { id: true, scheduledFor: true, durationMin: true },
   });
-  const overlapping =
-    clash &&
-    clash.scheduledFor < end &&
-    new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > data.scheduledFor;
+  const overlapping = candidates.some(
+    (c) =>
+      c.scheduledFor < end &&
+      new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > data.scheduledFor
+  );
   if (overlapping && !raw.allowOverbooking) {
     // Compute a suggestion + tell the UI it can re-call with
     // allowOverbooking=true to force a sobreturno.
@@ -343,15 +350,43 @@ export async function createBooking(
       ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
       : data.notes;
 
+  // Deterministic idempotency key so a double-click / network retry converges
+  // to ONE turno instead of two overlapping rows (the random key never
+  // collided, so the @unique column gave no protection). Keyed by the stable
+  // identity of the booking (patient, or the guest's email/phone). A real
+  // sobreturno is a *different* patient at the same slot → different key →
+  // still creates a separate row, so overbooking is preserved. A truly
+  // anonymous booking (no patient, no guest contact) can't be deduped, so it
+  // keeps a random key.
+  const identity = data.patientId ?? data.guestEmail ?? data.guestPhone ?? null;
+  const idempotencyKey = identity
+    ? `${actor.tenantId}:${data.practitionerId}:${data.scheduledFor.toISOString()}:${identity}`
+    : randomBytes(16).toString("hex");
+
   try {
     // RLS Etapa 2: the write itself runs under the GUC. The
     // preceding ownership / conflict checks already filter by
     // `tenantId` at the app layer (so they're safe outside the tx);
     // wrapping the write is enough to enforce policies on the row
     // that gets committed.
+    // upsert on the unique idempotencyKey is atomic (Postgres ON CONFLICT):
+    // concurrent submits collapse to one row. `update` resets the mutable
+    // fields so a re-book of the same patient+slot (e.g. after cancelling)
+    // converges to a single fresh active turno instead of returning a stale one.
     const b = await runWithRls(actor.tenantId, async (tx) =>
-      tx.booking.create({
-        data: {
+      tx.booking.upsert({
+        where: { idempotencyKey },
+        update: {
+          serviceId: service.id,
+          durationMin: duration,
+          copagoCents: data.copagoCents ?? null,
+          notes,
+          status: data.patientId ? "CONFIRMED" : "PENDING",
+          guestName: data.guestName,
+          guestEmail: data.guestEmail,
+          guestPhone: data.guestPhone,
+        },
+        create: {
           tenantId: actor.tenantId,
           practitionerId: data.practitionerId,
           serviceId: service.id,
@@ -364,7 +399,7 @@ export async function createBooking(
           guestPhone: data.guestPhone,
           notes,
           status: data.patientId ? "CONFIRMED" : "PENDING",
-          idempotencyKey: randomBytes(16).toString("hex"),
+          idempotencyKey,
         },
       })
     );
@@ -400,7 +435,7 @@ export async function createBooking(
           hour12: false,
           timeZone: "America/Argentina/Buenos_Aires",
         }),
-        link: `/agenda?date=${data.scheduledFor.toISOString().slice(0, 10)}`,
+        link: `/agenda?date=${toARDateKey(data.scheduledFor)}`,
       });
     }
     revalidatePath("/agenda");
@@ -471,21 +506,24 @@ export async function updateBooking(
       patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
     if (slotChanged && patch.status !== "CANCELLED") {
       const end = new Date(newWhen.getTime() + newDuration * 60_000);
-      const clash = await tx.booking.findFirst({
+      const candidates = await tx.booking.findMany({
         where: {
           tenantId: actor.tenantId,
           practitionerId: before.practitionerId,
           id: { not: id },
           status: { notIn: ["CANCELLED"] },
-          scheduledFor: { lt: end },
-          AND: [{ scheduledFor: { gte: new Date(newWhen.getTime() - 240 * 60_000) } }],
+          scheduledFor: {
+            lt: end,
+            gte: new Date(newWhen.getTime() - 240 * 60_000),
+          },
         },
         select: { id: true, scheduledFor: true, durationMin: true },
       });
-      const overlapping =
-        clash &&
-        clash.scheduledFor < end &&
-        new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > newWhen;
+      const overlapping = candidates.some(
+        (c) =>
+          c.scheduledFor < end &&
+          new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > newWhen
+      );
       if (overlapping && !raw.allowOverbooking) {
         return { kind: "conflict" as const, before, newWhen, newDuration };
       }
@@ -546,7 +584,7 @@ export async function updateBooking(
         kind: NotificationKind.BOOKING_CANCELLED,
         title: `Turno cancelado · ${who}`,
         body: niceWhen,
-        link: `/agenda?date=${before.scheduledFor.toISOString().slice(0, 10)}`,
+        link: `/agenda?date=${toARDateKey(before.scheduledFor)}`,
       });
     } else if (patch.status === "NO_SHOW") {
       await notify({
@@ -555,7 +593,7 @@ export async function updateBooking(
         kind: NotificationKind.BOOKING_CANCELLED,
         title: `Ausente · ${who}`,
         body: niceWhen,
-        link: `/agenda?date=${before.scheduledFor.toISOString().slice(0, 10)}`,
+        link: `/agenda?date=${toARDateKey(before.scheduledFor)}`,
       });
     }
   }
@@ -585,11 +623,27 @@ export async function deleteBooking(
   const outcome = await runWithRls(actor.tenantId, async (tx) => {
     const row = await tx.booking.findFirst({
       where: { id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, updatedAt: true },
+      select: {
+        id: true,
+        patientId: true,
+        updatedAt: true,
+        payment: { select: { status: true } },
+      },
     });
     if (!row) return { kind: "notfound" as const };
     if (expectedUpdatedAt && +row.updatedAt !== +new Date(expectedUpdatedAt)) {
       return { kind: "stale" as const };
+    }
+    // Payment FK is onDelete: Restrict, so a paid turno can't be silently
+    // wiped. Refuse the delete if a real payment is attached; for an
+    // abandoned checkout (UNPAID/FAILED) clean up the orphan payment first
+    // so the Restrict constraint is satisfied.
+    const pay = row.payment;
+    if (pay && (pay.status === "AUTHORIZED" || pay.status === "PAID" || pay.status === "REFUNDED")) {
+      return { kind: "has-payment" as const };
+    }
+    if (pay) {
+      await tx.payment.delete({ where: { bookingId: id } });
     }
     await tx.booking.delete({ where: { id } });
     return { kind: "ok" as const, patientId: row.patientId };
@@ -597,6 +651,12 @@ export async function deleteBooking(
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "stale") {
     return { ok: false, error: "El turno cambió en otra sesión. Refrescá la agenda y reintentá." };
+  }
+  if (outcome.kind === "has-payment") {
+    return {
+      ok: false,
+      error: "Este turno tiene un pago registrado. Cancelalo en vez de eliminarlo para conservar el comprobante.",
+    };
   }
   const owned = { patientId: outcome.patientId };
   await audit({
@@ -726,12 +786,16 @@ export async function createBookingsBatch(
 
   // Tag the batch so it can be regrouped into a "plan" later.
   const seriesId = randomBytes(12).toString("hex");
+  // Stable identity for the per-slot idempotency key (same rationale as
+  // createBooking): a double-submitted batch converges to the same turnos
+  // instead of duplicating them. Anonymous batches keep a random key.
+  const identity = data.patientId ?? data.guestEmail ?? data.guestPhone ?? null;
 
   let created = 0;
   let skipped = 0;
   for (const when of dates) {
     const end = new Date(when.getTime() + duration * 60_000);
-    const clash = await prisma.booking.findFirst({
+    const candidates = await prisma.booking.findMany({
       where: {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
@@ -743,17 +807,23 @@ export async function createBookingsBatch(
       },
       select: { id: true, scheduledFor: true, durationMin: true },
     });
-    const overlap =
-      clash &&
-      clash.scheduledFor < end &&
-      new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > when;
+    const overlap = candidates.some(
+      (c) =>
+        c.scheduledFor < end &&
+        new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > when
+    );
     if (overlap) {
       skipped++;
       continue;
     }
+    const idempotencyKey = identity
+      ? `${actor.tenantId}:${data.practitionerId}:${when.toISOString()}:${identity}`
+      : randomBytes(16).toString("hex");
     try {
-      await prisma.booking.create({
-        data: {
+      await prisma.booking.upsert({
+        where: { idempotencyKey },
+        update: {},
+        create: {
           tenantId: actor.tenantId,
           practitionerId: data.practitionerId,
           serviceId: service.id,
@@ -767,7 +837,7 @@ export async function createBookingsBatch(
           notes: data.notes,
           status: data.patientId ? "CONFIRMED" : "PENDING",
           seriesId,
-          idempotencyKey: randomBytes(16).toString("hex"),
+          idempotencyKey,
         },
       });
       created++;

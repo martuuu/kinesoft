@@ -15,6 +15,7 @@ import { ProgramStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { localToARIso } from "@/lib/datetime-ar";
 import { gatingForActor } from "@/lib/plan-gating";
 import type { ActionResult } from "@/lib/validation";
 
@@ -131,7 +132,11 @@ export async function applyPlanTemplate(input: {
   });
   if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
 
-  const startDate = new Date(input.startDate);
+  // `input.startDate` is "YYYY-MM-DD"; anchor to AR local midnight so
+  // session 1 doesn't roll back a day (a bare parse reads it as UTC
+  // midnight = 21:00 the previous day in AR). The `setDate` arithmetic
+  // below stays correct — Argentina has no DST.
+  const startDate = new Date(localToARIso(`${input.startDate}T00:00:00`));
   if (Number.isNaN(startDate.getTime())) return { ok: false, error: "Fecha inválida." };
 
   const ids = Array.isArray(tpl.exerciseIds) ? (tpl.exerciseIds as string[]) : [];

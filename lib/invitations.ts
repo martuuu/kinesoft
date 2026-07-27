@@ -29,6 +29,7 @@ import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { hashInviteToken } from "@/lib/invitations-tokens";
 import type { ActionResult } from "@/lib/validation";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
 
@@ -144,8 +145,13 @@ export async function createInvitation(
     },
   });
   if (live) {
-    // Existing invite — re-trigger the email send so the user gets a
-    // fresh prompt, but never mint a new token.
+    // Existing invite — rotate the token (the stored hash can't reproduce the
+    // old URL) and re-send, extending the TTL so the fresh prompt is valid.
+    const rawToken = randomBytes(24).toString("base64url");
+    await prisma.invitation.update({
+      where: { id: live.id },
+      data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+    });
     const emailSent = await sendInvitationEmail({
       email: live.email,
       firstName: live.firstName,
@@ -153,12 +159,12 @@ export async function createInvitation(
         where: { id: actor.tenantId },
         select: { name: true },
       }))?.name ?? "tu consultorio",
-      url: inviteUrl(live.token),
+      url: inviteUrl(rawToken),
     });
-    return { ok: true, data: { id: live.id, url: inviteUrl(live.token), emailSent } };
+    return { ok: true, data: { id: live.id, url: inviteUrl(rawToken), emailSent } };
   }
 
-  const token = randomBytes(24).toString("base64url");
+  const rawToken = randomBytes(24).toString("base64url");
   const row = await prisma.invitation.create({
     data: {
       tenantId: actor.tenantId,
@@ -167,7 +173,7 @@ export async function createInvitation(
       lastName: parsed.data.lastName,
       role: parsed.data.role as Role,
       specialty: parsed.data.specialty || null,
-      token,
+      token: hashInviteToken(rawToken),
       invitedById: actor.userId,
       expiresAt: new Date(Date.now() + INVITE_TTL_MS),
     },
@@ -182,7 +188,7 @@ export async function createInvitation(
     email: emailLc,
     firstName: parsed.data.firstName,
     tenantName,
-    url: inviteUrl(token),
+    url: inviteUrl(rawToken),
   });
 
   await audit({
@@ -194,7 +200,7 @@ export async function createInvitation(
     payload: { email: emailLc, role: parsed.data.role, emailSent },
   });
   revalidatePath("/configuracion");
-  return { ok: true, data: { id: row.id, url: inviteUrl(token), emailSent } };
+  return { ok: true, data: { id: row.id, url: inviteUrl(rawToken), emailSent } };
 }
 
 /**
@@ -279,15 +285,22 @@ export async function regenerateInvitationUrl(
   const actor = await requireOwner();
   const row = await prisma.invitation.findFirst({
     where: { id, tenantId: actor.tenantId, acceptedAt: null },
-    select: { id: true, token: true, email: true, firstName: true },
+    select: { id: true, email: true, firstName: true },
   });
   if (!row) return { ok: false, error: "Invitación no encontrada o ya aceptada." };
+  // Tokens are stored hashed, so the old URL is unrecoverable — mint a fresh
+  // token (rotating it) and extend the TTL for the re-share.
+  const rawToken = randomBytes(24).toString("base64url");
+  await prisma.invitation.update({
+    where: { id: row.id },
+    data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+  });
   const tenantName =
     (await prisma.tenant.findUnique({
       where: { id: actor.tenantId },
       select: { name: true },
     }))?.name ?? "tu consultorio";
-  const url = inviteUrl(row.token);
+  const url = inviteUrl(rawToken);
   const emailSent = await sendInvitationEmail({
     email: row.email,
     firstName: row.firstName,

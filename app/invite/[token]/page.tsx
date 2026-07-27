@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { KineLogo } from "@/components/ui/kine-logo";
+import { hashInviteToken } from "@/lib/invitations-tokens";
 import { acceptInvite } from "./accept-action";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export default async function InviteAcceptPage({
   params: { token: string };
 }) {
   const invite = await prisma.invitation.findUnique({
-    where: { token: params.token },
+    where: { token: hashInviteToken(params.token) },
     include: {
       tenant: { select: { name: true, slug: true } },
     },

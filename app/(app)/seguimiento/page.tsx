@@ -4,17 +4,17 @@ import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { IconActivity, IconCheck } from "@/components/ui/icons";
+import { toARDateKey, localToARIso } from "@/lib/datetime-ar";
 
 export const metadata = { title: "Seguimiento · KineSoft" };
 export const dynamic = "force-dynamic";
 
 export default async function SeguimientoPage() {
   const sessions = await listOpenSessions();
-  const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
+  // Anchor "today" to the AR business day, not the host tz (UTC on Vercel).
+  const todayKey = toARDateKey(new Date());
+  const todayStart = new Date(localToARIso(`${todayKey}T00:00:00`));
+  const todayEnd = new Date(todayStart.getTime() + 86_400_000);
 
   const today = sessions.filter(
     (s) => s.scheduledFor >= todayStart && s.scheduledFor < todayEnd && !s.completedAt
@@ -150,6 +150,7 @@ function SessionList({
                 hour: "2-digit",
                 minute: "2-digit",
                 hour12: false,
+                timeZone: "America/Argentina/Buenos_Aires",
               })}
             </span>
           </div>

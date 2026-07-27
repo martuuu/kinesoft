@@ -50,6 +50,14 @@ export async function POST(req: Request) {
   });
   if (!service) return NextResponse.json({ error: "service_not_found" }, { status: 404 });
 
+  // Validate the practitioner belongs to this tenant — otherwise a crafted
+  // request could attach a booking to a practitioner from another tenant.
+  const practitioner = await prisma.practitioner.findFirst({
+    where: { id: data.practitionerId, tenantId: tenant.id },
+    select: { id: true },
+  });
+  if (!practitioner) return NextResponse.json({ error: "practitioner_not_found" }, { status: 404 });
+
   // Idempotency key derived from tenant + slot + payer email (or a random nonce).
   const key = `${tenant.id}:${data.practitionerId}:${data.scheduledFor}:${data.guestEmail ?? ""}`;
 

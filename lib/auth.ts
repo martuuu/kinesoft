@@ -50,7 +50,12 @@ const SignupInput = z.object({
       "Solo minúsculas, números y guiones. No empieza ni termina con guión."
     ),
   email: z.string().trim().toLowerCase().email("Email inválido"),
-  password: z.string().min(8, "Mínimo 8 caracteres").max(72),
+  password: z
+    .string()
+    .min(8, "Mínimo 8 caracteres")
+    .max(72)
+    .regex(/[A-Za-z]/, "Incluí al menos una letra")
+    .regex(/[0-9]/, "Incluí al menos un número"),
   fullName: z.string().trim().min(2, "Nombre completo requerido").max(80),
   licenseNumber: z
     .string()
@@ -298,7 +303,12 @@ export async function sendPasswordReset(
 }
 
 const ResetInput = z.object({
-  password: z.string().min(8, "Mínimo 8 caracteres").max(72),
+  password: z
+    .string()
+    .min(8, "Mínimo 8 caracteres")
+    .max(72)
+    .regex(/[A-Za-z]/, "Incluí al menos una letra")
+    .regex(/[0-9]/, "Incluí al menos un número"),
 });
 
 /**

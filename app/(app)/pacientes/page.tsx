@@ -326,6 +326,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
                       ? p.lastVisit.toLocaleDateString("es-AR", {
                           day: "2-digit",
                           month: "short",
+                          timeZone: "America/Argentina/Buenos_Aires",
                         })
                       : "—"}
                 </div>

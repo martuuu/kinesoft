@@ -13,8 +13,9 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import { getActor, type Actor } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import { localToARIso } from "@/lib/datetime-ar";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
@@ -30,6 +31,7 @@ import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
   PatientUpdate,
+  CoverageSet,
   type ActionResult,
   type PatientCreateInput,
   type PatientUpdateInput,
@@ -860,8 +862,32 @@ export async function updatePatient(
   return { ok: true, data: { id } };
 }
 
+/**
+ * Gate a hard-delete (or other admin-only mutation) to OWNER/ADMIN.
+ * Returns an `ActionResult` error when the actor's membership role is
+ * anything else, or `null` when the actor may proceed. Mirrors the inline
+ * role check in `assignPatientToPractitioner`.
+ */
+async function requireAdminRole(
+  actor: Actor
+): Promise<{ ok: false; error: string } | null> {
+  const membership = await prisma.membership.findUnique({
+    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+    select: { role: true },
+  });
+  if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return {
+      ok: false,
+      error: "Solo el dueño o un administrador puede eliminar definitivamente.",
+    };
+  }
+  return null;
+}
+
 export async function deletePatient(id: string): Promise<ActionResult> {
   const actor = await getActor();
+  const denied = await requireAdminRole(actor);
+  if (denied) return denied;
   // RLS adoption (Sprint 16 — Etapa 1): destructive mutations are the
   // second highest-value target. Cascade deletes traverse FKs the
   // app-layer extension can't see; wrapping in `runWithRls` ensures
@@ -1021,6 +1047,16 @@ export async function setPatientCoverage(input: {
 }): Promise<ActionResult> {
   const actor = await getActor();
 
+  const parsed = CoverageSet.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "Datos de cobertura inválidos.",
+      fieldErrors: parsed.error.flatten().fieldErrors,
+    };
+  }
+  const { patientId, insurerId, insurerName, planName, memberId } = parsed.data;
+
   // RLS-guarded: the ownership check, the insurer lookup and the
   // delete+create of the Coverage row all run inside the same tenant GUC
   // transaction. Previously the ownership check sat OUTSIDE any tx, so a
@@ -1028,38 +1064,38 @@ export async function setPatientCoverage(input: {
   // attach coverage to a foreign patient (audit finding: critical race).
   const result = await runWithRls(actor.tenantId, async (tx) => {
     const owned = await tx.patient.findFirst({
-      where: { id: input.patientId, tenantId: actor.tenantId },
+      where: { id: patientId, tenantId: actor.tenantId },
       select: { id: true },
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
 
     let resolvedName = "";
     let resolvedInsurerId: string | null = null;
-    if (input.insurerId) {
+    if (insurerId) {
       const ins = await tx.insurer.findFirst({
-        where: { id: input.insurerId, tenantId: actor.tenantId },
+        where: { id: insurerId, tenantId: actor.tenantId },
         select: { id: true, name: true },
       });
       if (!ins) return { ok: false as const, error: "Obra social no encontrada." };
       resolvedInsurerId = ins.id;
       resolvedName = ins.name;
-    } else if (input.insurerName) {
+    } else if (insurerName) {
       // Free-form ("Otra"): normalize + link to the catalogue if it matches.
-      const r = await resolveInsurerName(actor.tenantId, input.insurerName, tx);
+      const r = await resolveInsurerName(actor.tenantId, insurerName, tx);
       resolvedInsurerId = r.insurerId;
       resolvedName = r.name;
     }
 
-    await tx.coverage.deleteMany({ where: { patientId: input.patientId } });
+    await tx.coverage.deleteMany({ where: { patientId } });
     // Empty name → caller is clearing the coverage; leave it deleted.
     if (resolvedName) {
       await tx.coverage.create({
         data: {
-          patientId: input.patientId,
+          patientId,
           insurer: resolvedName,
           insurerId: resolvedInsurerId,
-          planName: input.planName?.trim() || null,
-          memberId: input.memberId?.trim() || null,
+          planName: planName?.trim() || null,
+          memberId: memberId?.trim() || null,
         },
       });
     }
@@ -1069,7 +1105,7 @@ export async function setPatientCoverage(input: {
   if (!result.ok) return { ok: false, error: result.error };
   const { resolvedName, resolvedInsurerId } = result;
   if (!resolvedName) {
-    revalidatePath(`/pacientes/${input.patientId}`);
+    revalidatePath(`/pacientes/${patientId}`);
     return { ok: true, data: undefined };
   }
 
@@ -1078,10 +1114,10 @@ export async function setPatientCoverage(input: {
     actorId: actor.userId ?? undefined,
     action: "patient.coverage.update",
     entity: "Patient",
-    entityId: input.patientId,
+    entityId: patientId,
     payload: { insurer: resolvedName, insurerId: resolvedInsurerId },
   });
-  revalidatePath(`/pacientes/${input.patientId}`);
+  revalidatePath(`/pacientes/${patientId}`);
   return { ok: true, data: undefined };
 }
 
@@ -1252,7 +1288,11 @@ export async function updateProgram(input: {
     patch.frequency = f;
   }
   if (input.startDate !== undefined) {
-    const d = new Date(input.startDate);
+    // `input.startDate` is a "YYYY-MM-DD" value from an <input type="date">.
+    // Parsing it bare makes `new Date` read it as UTC midnight (= 21:00 the
+    // previous day in AR), rolling session 1 back a day. Anchor to AR local
+    // midnight instead.
+    const d = new Date(localToARIso(`${input.startDate}T00:00:00`));
     if (Number.isNaN(d.getTime())) return { ok: false, error: "Fecha inválida." };
     patch.startDate = d;
   }
@@ -1304,6 +1344,8 @@ export async function setProgramStatus(input: {
  */
 export async function deleteProgram(id: string): Promise<ActionResult> {
   const actor = await getActor();
+  const denied = await requireAdminRole(actor);
+  if (denied) return denied;
   // RLS Etapa 2: cascade delete (sessions + sessionExercises) traverses
   // FKs the app-layer extension can't reach. The GUC ensures Postgres
   // policies guard every cascaded row.
@@ -1331,6 +1373,8 @@ export async function deleteProgram(id: string): Promise<ActionResult> {
 
 export async function deleteSession(id: string): Promise<ActionResult> {
   const actor = await getActor();
+  const denied = await requireAdminRole(actor);
+  if (denied) return denied;
   const session = await prisma.session.findFirst({
     where: { id, program: { tenantId: actor.tenantId } },
     select: {
@@ -1343,11 +1387,13 @@ export async function deleteSession(id: string): Promise<ActionResult> {
 
   await prisma.$transaction(async (tx) => {
     await tx.session.delete({ where: { id } });
-    // Decrement totalSessions so progress bars stay accurate.
+    // Decrement totalSessions so progress bars stay accurate. Atomic
+    // decrement (vs. read-modify-write) avoids racing a concurrent edit.
+    // The `> 1` guard keeps the counter from ever reaching 0.
     if (session.program.totalSessions > 1) {
       await tx.treatmentProgram.update({
         where: { id: session.program.id },
-        data: { totalSessions: session.program.totalSessions - 1 },
+        data: { totalSessions: { decrement: 1 } },
       });
     }
   });

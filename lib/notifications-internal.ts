@@ -10,6 +10,8 @@
 import "server-only";
 import { NotificationKind } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { captureException } from "@/lib/observability";
 
 /**
  * Fire-and-forget enqueue helper called by domain mutations. Never throws
@@ -34,8 +36,15 @@ export async function notify(p: {
         link: p.link,
       },
     });
-  } catch {
-    /* swallow */
+  } catch (err) {
+    // Fire-and-forget: never block the caller — but leave a trace.
+    logger.warn("notify: insert failed", {
+      tenantId: p.tenantId,
+      userId: p.userId,
+      kind: p.kind,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    captureException(err, { scope: "notify", tenantId: p.tenantId, userId: p.userId, kind: p.kind });
   }
 }
 
@@ -79,7 +88,13 @@ export async function notifyTenantOwners(p: {
         link: p.link,
       })),
     });
-  } catch {
-    /* swallow */
+  } catch (err) {
+    // Fire-and-forget: never block the caller — but leave a trace.
+    logger.warn("notifyTenantOwners: insert failed", {
+      tenantId: p.tenantId,
+      kind: p.kind,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    captureException(err, { scope: "notifyTenantOwners", tenantId: p.tenantId, kind: p.kind });
   }
 }

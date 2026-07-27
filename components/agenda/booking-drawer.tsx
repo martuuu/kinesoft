@@ -677,7 +677,7 @@ function StatusTag({ s }: { s: BookingStatus }) {
   const map: Record<BookingStatus, { label: string; bg: string; color: string }> = {
     PENDING: { label: "Pendiente", bg: "rgba(15,30,51,0.06)", color: "var(--navy-700)" },
     CONFIRMED: { label: "Confirmado", bg: "rgba(31,79,190,0.12)", color: "var(--sky-700)" },
-    COMPLETED: { label: "Realizado", bg: "rgba(200,245,100,0.3)", color: "var(--navy-900)" },
+    COMPLETED: { label: "Hecho", bg: "rgba(200,245,100,0.3)", color: "var(--navy-900)" },
     NO_SHOW: { label: "Ausente", bg: "rgba(228,70,70,0.12)", color: "#9F1F1F" },
     CANCELLED: { label: "Cancelado", bg: "rgba(15,30,51,0.06)", color: "var(--navy-300)" },
   };

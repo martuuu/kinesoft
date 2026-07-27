@@ -83,6 +83,33 @@ export function formatARS(
 }
 
 /**
+ * Parse a user-typed ARS amount into integer **cents** — the inverse of
+ * `formatARS`. Accepts Argentine formatting: an optional "$", spaces and
+ * NBSP, "." as the thousands separator and "," as the decimal separator.
+ *
+ *   "1.500,50" → 150050   "1500" → 150000   "1.500" → 150000
+ *   "12,5" → 1250         "$ 2.000" → 200000
+ *   ""  / "abc" / null    → null
+ *
+ * A `number` input is assumed to already be in pesos → `round(n * 100)`.
+ * Anything that doesn't yield a finite value returns `null`, so callers
+ * can distinguish "empty/invalid" (null) from a real zero.
+ */
+export function parseARS(input: string | number | null | undefined): number | null {
+  if (input == null) return null;
+  if (typeof input === "number") {
+    return Number.isFinite(input) ? Math.round(input * 100) : null;
+  }
+  // Keep only digits, the decimal comma and a leading minus. Stripping
+  // everything else drops "$", spaces, NBSP and letters AND the "."
+  // thousands separator in one pass, so "1.500,50" → "1500,50". Then the
+  // comma becomes the JS decimal point for parseFloat.
+  const normalized = input.replace(/[^\d,-]/g, "").replace(/,/g, ".");
+  const value = parseFloat(normalized);
+  return Number.isNaN(value) ? null : Math.round(value * 100);
+}
+
+/**
  * Relative date (today / mañana / "en 3 días" / "hace 2 días"). Falls
  * back to `formatDateAR(d, "weekdayDayMonth")` past ±7 days.
  */

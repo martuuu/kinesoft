@@ -24,6 +24,7 @@ import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { IconArrow, IconCheck, IconChevL, IconChevR, IconClock } from "@/components/ui/icons";
 import { listPublicSlots, submitPublicBooking } from "@/lib/public-booking";
+import { toARDateKey } from "@/lib/datetime-ar";
 import type { PublicClinic, PublicSlot } from "@/lib/public-booking-types";
 
 type PatientHC = {
@@ -574,10 +575,13 @@ function SlotStep({
 }) {
   const [slots, setSlots] = useState<PublicSlot[]>([]);
   const [loading, setLoading] = useState(false);
+  // null = ok; "rate" = throttled ("esperá"), distinct from an empty day.
+  const [slotError, setSlotError] = useState<"rate" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSlotError(null);
     listPublicSlots({ tenantSlug, practitionerId, serviceId, date: dateISO })
       .then((rows) => {
         if (cancelled) return;
@@ -585,6 +589,11 @@ function SlotStep({
         if (slotISO && !rows.find((r) => r.iso === slotISO && r.available)) {
           setSlotISO(null);
         }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSlots([]);
+        setSlotError("rate");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -596,15 +605,18 @@ function SlotStep({
   }, [tenantSlug, practitionerId, serviceId, dateISO]);
 
   const shiftDate = (delta: number) => {
-    const d = new Date(dateISO + "T00:00:00");
-    d.setDate(d.getDate() + delta);
+    // Date-only arithmetic anchored at noon UTC so ±1 day never crosses a
+    // date boundary because of the browser's timezone.
+    const d = new Date(`${dateISO}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + delta);
     setDateISO(d.toISOString().slice(0, 10));
     setSlotISO(null);
   };
 
-  const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-  const selected = new Date(dateISO + "T00:00:00");
+  // "Today" in AR calendar terms — a late-night browser must not roll to
+  // tomorrow (toISOString would, once past 21:00 AR = 00:00 UTC).
+  const todayKey = toARDateKey(new Date());
+  const selected = new Date(`${dateISO}T12:00:00Z`);
   return (
     <>
       <StepHeader title="Elegí día y horario" subtitle="Mostramos sólo los slots disponibles." />
@@ -635,6 +647,7 @@ function SlotStep({
               weekday: "long",
               day: "2-digit",
               month: "long",
+              timeZone: "America/Argentina/Buenos_Aires",
             })}
           </div>
           <input
@@ -668,6 +681,19 @@ function SlotStep({
       {loading ? (
         <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)", fontSize: 13 }}>
           Buscando horarios…
+        </div>
+      ) : slotError === "rate" ? (
+        <div
+          style={{
+            padding: 24,
+            textAlign: "center",
+            color: "var(--navy-500)",
+            fontSize: 13,
+            border: "1px dashed rgba(15,30,51,0.12)",
+            borderRadius: 14,
+          }}
+        >
+          Demasiadas consultas seguidas. Esperá unos segundos y reintentá.
         </div>
       ) : slots.length === 0 ? (
         <div

@@ -23,6 +23,7 @@ import { createCheckoutPreference } from "@/lib/mercadopago";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
+import { localToARIso, toARDow } from "@/lib/datetime-ar";
 import type { ActionResult } from "@/lib/validation";
 import {
   SubmitSchema,
@@ -92,7 +93,10 @@ export async function listPublicSlots(input: {
     limit: 60,
     windowMs: 60_000,
   });
-  if (!rl.ok) return [];
+  // Signal the throttle distinctly instead of returning [] — otherwise the
+  // wizard renders "no atiende este día" when the real cause is "esperá un
+  // momento". Leaks no agenda density (no per-slot info in the message).
+  if (!rl.ok) throw new Error("RATE_LIMITED");
 
   const tenant = await prisma.tenant.findUnique({
     where: { slug: input.tenantSlug },
@@ -110,11 +114,14 @@ export async function listPublicSlots(input: {
   });
   if (!service) return [];
 
-  const dayStart = new Date(input.date + "T00:00:00");
+  // Anchor the day to AR wall-clock, not the host's. On a UTC host (Vercel),
+  // `new Date(date+"T00:00:00")` is 21:00 AR the day before, and building slots
+  // with `setHours` would persist e.g. an "08:00" pick as 08:00 UTC = 05:00 AR.
+  const dayStart = new Date(localToARIso(`${input.date}T00:00:00`));
   if (Number.isNaN(dayStart.getTime())) return [];
-  const dayEnd = new Date(dayStart);
-  dayEnd.setDate(dayEnd.getDate() + 1);
-  if (dayStart.getDay() === 0) return [];
+  // Argentina has no DST, so the next AR midnight is exactly +24h.
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+  if (toARDow(dayStart) === 0) return []; // Sundays closed
 
   const existing = await prisma.booking.findMany({
     where: {
@@ -131,8 +138,10 @@ export async function listPublicSlots(input: {
   const slots: PublicSlot[] = [];
   const total = service.durationMin;
   for (let m = openHour * 60; m + total <= closeHour * 60; m += SLOT_MIN) {
-    const slot = new Date(dayStart);
-    slot.setHours(0, m, 0, 0);
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    // Build the slot as the AR instant for this wall-clock time.
+    const slot = new Date(localToARIso(`${input.date}T${hh}:${mm}:00`));
     const slotEnd = new Date(slot.getTime() + total * 60_000);
     const inPast = slot.getTime() < Date.now() + 60 * 60_000;
     const clash = existing.some((b) => {
@@ -140,12 +149,9 @@ export async function listPublicSlots(input: {
       return b.scheduledFor < slotEnd && bEnd > slot;
     });
     slots.push({
+      // The label IS the AR wall-clock time we just built the slot from.
       iso: slot.toISOString(),
-      time: slot.toLocaleTimeString("es-AR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }),
+      time: `${hh}:${mm}`,
       available: !clash && !inPast,
     });
   }

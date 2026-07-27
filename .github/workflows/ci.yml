@@ -1,0 +1,45 @@
+name: CI
+
+# Fast → slow gate on every PR to main (and pushes to main). Ordered so a
+# cheap failure (typecheck) short-circuits before the expensive build.
+# See docs/TESTING.md §"Forma del pipeline de CI".
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` runs `postinstall` (prisma generate), which needs the schema
+      # but no database connection.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (capa 1)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          # Build-time env: real secrets are injected in Vercel, not here. These
+          # placeholders only need to be syntactically valid for the build.
+          DATABASE_URL: postgresql://user:pass@localhost:5432/db
+          DIRECT_URL: postgresql://user:pass@localhost:5432/db
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key

@@ -3,6 +3,17 @@
  * Keeping them in one place avoids drift between the two layers.
  */
 import { z } from "zod";
+import { localToARIso } from "@/lib/datetime-ar";
+
+/**
+ * A `<input type="date">` value is a bare "YYYY-MM-DD". Parsing it with
+ * `new Date(v)` reads it as UTC midnight, which on a UTC host is the previous
+ * AR day at 21:00 — so a plan created "on Monday" would schedule session 1 on
+ * Sunday. Anchor bare dates to AR midnight; leave values that already carry a
+ * time/offset (e.g. a datetime-local already tagged by the client) untouched.
+ */
+const toARDateOrInstant = (v: string): Date =>
+  /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(localToARIso(`${v}T00:00:00`)) : new Date(v);
 
 export const PatientCreate = z.object({
   firstName: z.string().trim().min(1, "Nombre requerido").max(80),
@@ -32,6 +43,21 @@ export const PatientUpdate = PatientCreate.partial().extend({
   id: z.string().min(1),
 });
 export type PatientUpdateInput = z.input<typeof PatientUpdate>;
+
+// Input for `setPatientCoverage` (replace the patient's single active
+// coverage). Either `insurerId` resolves to a tenant Insurer row, or
+// `insurerName` is the free-form ("Otra") fallback; both optional so the
+// caller can clear coverage by omitting them. String lengths are capped to
+// keep free-form values sane. Copago precedence is resolved separately
+// (see `resolveBookingCopagoCents`) and is intentionally not set here.
+export const CoverageSet = z.object({
+  patientId: z.string().min(1),
+  insurerId: z.string().trim().max(60).optional().or(z.literal("").transform(() => undefined)),
+  insurerName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
+  planName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
+  memberId: z.string().trim().max(40).optional().or(z.literal("").transform(() => undefined)),
+});
+export type CoverageSetInput = z.input<typeof CoverageSet>;
 
 export const BookingCreate = z.object({
   patientId: z.string().min(1).optional(),
@@ -100,7 +126,7 @@ export const ProgramCreate = z.object({
   startDate: z
     .string()
     .min(1)
-    .transform((v) => new Date(v)),
+    .transform(toARDateOrInstant),
 });
 export type ProgramCreateInput = z.input<typeof ProgramCreate>;
 

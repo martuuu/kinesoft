@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { IconChevL, IconChevR } from "@/components/ui/icons";
 import { getMonthBookingDays } from "@/lib/dashboard";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 /**
  * Interactive MiniCalendar — month nav + click-day → agenda.
@@ -14,19 +15,24 @@ import { getMonthBookingDays } from "@/lib/dashboard";
  */
 export function MiniCalendar({ initialBookingDays }: { initialBookingDays: number[] }) {
   const router = useRouter();
-  const today = new Date();
-  const [year, setYear] = useState(today.getFullYear());
-  const [month, setMonth] = useState(today.getMonth()); // 0-indexed
+  // "Today" resolved in the business timezone (AR), not the browser's — so
+  // the highlighted day and the initial month don't drift near midnight.
+  const [todayYear, todayMonth1, todayDay] = toARDateKey(new Date())
+    .split("-")
+    .map(Number);
+  const todayMonth = todayMonth1 - 1; // 0-indexed
+  const [year, setYear] = useState(todayYear);
+  const [month, setMonth] = useState(todayMonth); // 0-indexed
   const [bookingDays, setBookingDays] = useState<Set<number>>(new Set(initialBookingDays));
   const [pending, start] = useTransition();
-  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth();
+  const isCurrentMonth = year === todayYear && month === todayMonth;
 
   // Reload booking days when the month changes. Sequence-guarded so a
   // late response from a previous month can't overwrite the current view.
   useEffect(() => {
     // Skip the first fetch — we already received the initial booking days
     // from the server component for the current month.
-    if (year === today.getFullYear() && month === today.getMonth()) {
+    if (year === todayYear && month === todayMonth) {
       return;
     }
     let cancelled = false;
@@ -124,7 +130,7 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
         ))}
         {grid.map((n, i) => {
           if (n == null) return <div key={i} />;
-          const isToday = isCurrentMonth && n === today.getDate();
+          const isToday = isCurrentMonth && n === todayDay;
           const hasBooking = bookingDays.has(n);
           return (
             <button

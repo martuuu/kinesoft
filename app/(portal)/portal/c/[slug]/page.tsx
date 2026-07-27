@@ -194,6 +194,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                         day: "2-digit",
                         month: "short",
                         weekday: "short",
+                        timeZone: "America/Argentina/Buenos_Aires",
                       })}
                     </div>
                   </div>

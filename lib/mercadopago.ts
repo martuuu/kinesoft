@@ -68,6 +68,21 @@ export async function createCheckoutPreference(input: CreatePreferenceInput) {
       metadata: { bookingId: input.bookingId },
     },
   });
+  // Anchor the expected amount now, so the webhook validates the captured
+  // amount against what the patient agreed to pay at checkout (see
+  // consumeWebhook). Both checkout entry points funnel through here.
+  await prisma.payment.upsert({
+    where: { bookingId: input.bookingId },
+    create: {
+      bookingId: input.bookingId,
+      provider: "mercadopago",
+      status: "UNPAID",
+      expectedAmountCents: input.amountCents,
+      amountCents: 0,
+      currency: input.currency ?? "ARS",
+    },
+    update: { expectedAmountCents: input.amountCents },
+  });
   return {
     preferenceId: result.id!,
     initPoint: result.init_point!,
@@ -158,7 +173,7 @@ export async function consumeWebhook(paymentId: string) {
     include: {
       service: { select: { name: true, priceCents: true } },
       patient: { select: { firstName: true, lastName: true } },
-      payment: { select: { externalId: true, status: true, amountCents: true } },
+      payment: { select: { externalId: true, status: true, amountCents: true, expectedAmountCents: true } },
     },
   });
   if (!booking) {
@@ -176,15 +191,40 @@ export async function consumeWebhook(paymentId: string) {
   } as const;
   const mapped = statusMap[detail.status as keyof typeof statusMap] ?? "FAILED";
 
-  // Amount verification — refuse to mark a booking PAID if the captured
-  // amount doesn't match the configured Service price. Allow a 5-cent
-  // tolerance for rounding.
+  // Amount verification — refuse to mark a booking PAID unless the captured
+  // amount matches what the checkout preference was created for (anchored on
+  // `Payment.expectedAmountCents`), NOT the live `Service.priceCents`, which
+  // may have changed between checkout-start and settlement. Legacy rows
+  // without an anchored amount fall back to the service price. 5-cent
+  // rounding tolerance.
   const capturedCents = Math.round((detail.transaction_amount ?? 0) * 100);
-  if (mapped === "PAID" && Math.abs(capturedCents - booking.service.priceCents) > 5) {
+  const expectedCents = booking.payment?.expectedAmountCents ?? booking.service.priceCents;
+  if (mapped === "PAID" && Math.abs(capturedCents - expectedCents) > 5) {
     logger.warn("mp.webhook.amount_mismatch", {
       bookingId,
-      expected: booking.service.priceCents,
+      expected: expectedCents,
       captured: capturedCents,
+    });
+    // Persist a FAILED payment so the mismatch leaves an auditable trace
+    // instead of vanishing (the booking stays unpaid).
+    await prisma.payment.upsert({
+      where: { bookingId: String(bookingId) },
+      create: {
+        bookingId: String(bookingId),
+        provider: "mercadopago",
+        externalId: String(detail.id),
+        status: "FAILED",
+        expectedAmountCents: expectedCents,
+        amountCents: capturedCents,
+        currency: detail.currency_id ?? "ARS",
+        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
+      },
+      update: {
+        externalId: String(detail.id),
+        status: "FAILED",
+        amountCents: capturedCents,
+        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
+      },
     });
     return { ok: false, reason: "amount_mismatch" };
   }

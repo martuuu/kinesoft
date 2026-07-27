@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
+import { hashInviteToken } from "@/lib/invitations-tokens";
 import type { ActionResult } from "@/lib/validation";
 
 /**
@@ -32,7 +33,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
   }
 
   const invite = await prisma.invitation.findUnique({
-    where: { token },
+    where: { token: hashInviteToken(token) },
     include: { tenant: { select: { id: true, slug: true, name: true } } },
   });
   if (!invite) return { ok: false, error: "Invitación inválida." };

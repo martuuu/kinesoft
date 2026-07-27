@@ -17,6 +17,57 @@
 > (ver §Inventario de preservar). Los gaps de abajo son la distancia entre "anda para mi hermano"
 > y "SaaS vendible a consultorios".
 
+## Estado de ejecución
+
+**Ronda 1 — Ola 1 (2026-07-23):** cerrada la tanda de fixes de código sin migraciones (bugs QA de
+agenda + barrido de timezone + login + boundaries + CI capa-1). Gate: `tsc` ✅ · `next build` ✅ ·
+`vitest` 16/16 ✅. QA manual pendiente del dueño en [QA.md](QA.md).
+
+- 🟢 **Cerrados:** timeline-oncreate-wrong-day-hour, agenda-client-emptyslot-sethours,
+  turnos-fuera-de-horario-o-media-hora-no-visibles, statustag-no-exhaustivo, statustag-label-drift,
+  public-booking-slots-host-tz, public-booking-wizard-today-utc, public-slots-ratelimit-vacio,
+  suggest-next-free-slot-host-tz, getdaycounts-utc-slice, booking-overlap-race-no-cas-no-unique,
+  conflict-findfirst-sin-orderby, seguimiento-today-bucket-and-display, search-booking-toLocale-no-tz,
+  portal-session-date-no-tz, dashboard-buckets-utc, mini-calendar-days-getdate-utc,
+  dashboard-page-getmonth-utc, mini-calendar-today-browser-tz, notifications-bell-no-tz,
+  pacientes-lastvisit-no-tz, session-detail-no-tz, ics-export-week-window-host-tz,
+  login-sin-feedback-error, sin-error-loading-boundaries, sin-not-found-403-custom (404; 403 diferido),
+  no-ci-triple-gate.
+- 🟡 **Parcial:** no-test-suite / c2-no-tests-ci (solo capa-1 sobre datetime-ar+format; suite
+  completa = Ola 2.1) · formateadores-moneda-duplicados (solo agenda; resto = Ola 2.0) ·
+  batch-create-overlap-race-and-no-rls (idempotencia ✅; parte RLS = Ola 2.2) ·
+  plan-startdate-utc-midnight (diagnosis.ts ✅; plan-templates.ts + patients.ts = próxima ronda).
+**Ronda 2 — Olas A3+A4 (2026-07-23):** Fase A **completa**. Gate: `tsc` ✅ · `next build` ✅ ·
+`vitest` 19/19 ✅. Migración `payment_expected_amount_and_delete_restrict` aplicada al Docker local.
+QA manual pendiente del dueño en [QA.md](QA.md) (los de pago requieren sandbox de MP).
+
+- 🟢 **Cerrados:** c3-payment-amount, booking-hard-delete-payment-cascade (crítica),
+  mp-webhook-idempotency-check-outside-tx, checkout-practitionerid-sin-validar,
+  patient-hard-delete-cascades-hc (gate de rol), program-session-hard-delete (gate),
+  session-totalsessions-read-modify-write, coverage-sin-schema-zod, money-input-sin-parser-ar,
+  plan-startdate-utc-midnight (las 3 instancias: diagnosis, patients, plan-templates + ProgramCreate),
+  sin-headers-seguridad-csp (CSP en Report-Only), serveractions-allowedorigins-localhost,
+  m2-silent-catches, audit-fire-and-forget, password-sin-complejidad, invitation-token-en-claro.
+- 🟡 **Parcial / listo-para-activar:** m1-sentry-no-wired / sentry-no-cableado (shim no-op cableado en
+  `lib/observability.ts`; activación = instalar `@sentry/nextjs` + `SENTRY_DSN`, bucket C) · CSP
+  (Report-Only; activar como bloqueante tras 2 semanas sin violaciones propias).
+- 🔴 **Diferido menor:** booking-paid-toggles-no-optimistic-lock. **Próxima fase (B):** todo Etapa 2
+  (ver [ROADMAP.md](ROADMAP.md) + [FASE-B-PLAN.md](FASE-B-PLAN.md)).
+
+**Ronda 3 — Fase B, olas B0+B1 (2026-07-24):** splits + tests. Gate: `tsc` ✅ · `next build` ✅ ·
+`vitest` 35/35 ✅. Sin migración (cero-cambio conductual).
+
+- 🟢 **Cerrados:** h2-oversized-components + deuda-archivos-grandes (los 4 archivos gigantes troceados:
+  configuracion-client 1636→52, patient-profile 2341→181, agenda-client 2180→338, diagnostico-screen
+  1627→231; sub-componentes en módulos por feature) · formateadores-moneda-duplicados (consolidados en
+  `formatARS`; `Money`/`fmtMoney` que eran componentes se preservaron) · provider-value-inline-bulk-select
+  (no reapareció en el split). **B1:** `resolveBookingCopagoCents` extraído a `lib/copago.ts` puro +
+  test (cierra el test de copago diferido de Fase A); `agenda-utils.ts` puro + test de `layoutBookings`;
+  fábrica de tenant efímero en `tests/helpers/tenant-factory.ts` (lista para capa 3).
+- 🔴 **Próxima (gated en el rol sin BYPASSRLS que arma el dueño):** B2 RLS wholesale, B3 multi-profesional,
+  B4 realtime — ver [FASE-B-PLAN.md](FASE-B-PLAN.md). Diferido menor: test de `diagnosis-engine`
+  (puro, listo para cuando se retome Etapa 3).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |

@@ -13,20 +13,21 @@ import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
+import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
 import type { KpiKey } from "@/lib/preferences-constants";
 
 function startOfDay(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+  // AR midnight of the AR day containing `d`, anchored to the business tz
+  // so ranges don't drift on a UTC host.
+  return new Date(localToARIso(`${toARDateKey(d)}T00:00:00`));
 }
 
 function startOfWeek(d: Date) {
-  // Monday as week start (Argentina convention).
+  // Monday as week start (Argentina convention). AR has no DST, so stepping
+  // back whole days in ms keeps us on AR midnight.
   const x = startOfDay(d);
-  const day = (x.getDay() + 6) % 7; // 0 = Monday
-  x.setDate(x.getDate() - day);
-  return x;
+  const day = (toARDow(x) + 6) % 7; // 0 = Monday
+  return new Date(x.getTime() - day * 86_400_000);
 }
 
 export type DashboardData = {
@@ -93,15 +94,23 @@ const _loadDashboardCounts = unstable_cache(
     scope: "all" | string, // "all" or a practitionerId
     dayKey: string // ISO yyyy-mm-dd, anchors the date ranges
   ): Promise<DashboardCounts> => {
-    const now = new Date(`${dayKey}T12:00:00`);
-    const today = startOfDay(now);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const weekStart = startOfWeek(now);
-    const nextWeekStart = new Date(weekStart);
-    nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    // `dayKey` is the AR "YYYY-MM-DD"; anchor every period boundary to the
+    // AR wall-clock so ranges don't drift into the prev/next day on a UTC
+    // host. AR has no DST, so day math via fixed 24h steps is exact.
+    const DAY_MS = 86_400_000;
+    const today = new Date(localToARIso(`${dayKey}T00:00:00`));
+    const tomorrow = new Date(today.getTime() + DAY_MS);
+    // Mid-day AR anchor for "upcoming" lower bounds (stable within the day).
+    const now = new Date(localToARIso(`${dayKey}T12:00:00`));
+    const mondayOffset = (toARDow(today) + 6) % 7; // 0 = Monday
+    const weekStart = new Date(today.getTime() - mondayOffset * DAY_MS);
+    const nextWeekStart = new Date(weekStart.getTime() + 7 * DAY_MS);
+    const ym = dayKey.slice(0, 7); // "YYYY-MM" in AR
+    const [yNum, mNum] = ym.split("-").map(Number);
+    const monthStart = new Date(localToARIso(`${ym}-01T00:00:00`));
+    const prevYm =
+      mNum === 1 ? `${yNum - 1}-12` : `${yNum}-${String(mNum - 1).padStart(2, "0")}`;
+    const prevMonthStart = new Date(localToARIso(`${prevYm}-01T00:00:00`));
 
     const seesAll = scope === "all";
     const bookingWhere = seesAll ? {} : { practitionerId: scope };
@@ -244,10 +253,8 @@ const _loadDashboardCounts = unstable_cache(
     ]);
 
     const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
-      const dayStart = new Date(weekStart);
-      dayStart.setDate(dayStart.getDate() + i);
-      const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayEnd.getDate() + 1);
+      const dayStart = new Date(weekStart.getTime() + i * DAY_MS);
+      const dayEnd = new Date(dayStart.getTime() + DAY_MS);
       let c = 0;
       let a = 0;
       for (const b of weekBookings) {
@@ -368,7 +375,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   const actor = await getActor();
   const v = await visibilityForActor(actor);
   const now = new Date();
-  const dayKey = now.toISOString().slice(0, 10);
+  const dayKey = toARDateKey(now);
   const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId;
 
   // Per-tenant cache via dynamically tagged wrapper. The static
@@ -413,27 +420,30 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
   const actor = await getActor();
   const now = new Date();
 
+  const DAY_MS = 86_400_000;
+  const nowKey = toARDateKey(now); // "YYYY-MM-DD" in AR
+
   if (range === "week") {
-    const weekStart = startOfWeek(now);
-    const end = new Date(weekStart);
-    end.setDate(end.getDate() + 7);
+    const weekStart = startOfWeek(now); // AR Monday midnight
+    const end = new Date(weekStart.getTime() + 7 * DAY_MS);
     const rows = await prisma.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: weekStart, lt: end } },
       select: { scheduledFor: true, status: true },
     });
     const labels = ["L", "M", "M", "J", "V", "S", "D"];
     return labels.map((label, i) => {
-      const ds = new Date(weekStart);
-      ds.setDate(ds.getDate() + i);
-      const de = new Date(ds);
-      de.setDate(de.getDate() + 1);
+      const ds = new Date(weekStart.getTime() + i * DAY_MS);
+      const de = new Date(ds.getTime() + DAY_MS);
       return countBookings(rows, ds, de, label);
     });
   }
 
   if (range === "month") {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const ym = nowKey.slice(0, 7); // "YYYY-MM" in AR
+    const [my, mm] = ym.split("-").map(Number);
+    const start = new Date(localToARIso(`${ym}-01T00:00:00`));
+    const nextYm = mm === 12 ? `${my + 1}-01` : `${my}-${String(mm + 1).padStart(2, "0")}`;
+    const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
     const rows = await prisma.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
       select: { scheduledFor: true, status: true },
@@ -443,8 +453,7 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     let cur = new Date(start);
     let w = 1;
     while (cur < end) {
-      const next = new Date(cur);
-      next.setDate(next.getDate() + 7);
+      const next = new Date(cur.getTime() + 7 * DAY_MS);
       buckets.push(countBookings(rows, cur, next < end ? next : end, `S${w}`));
       cur = next;
       w++;
@@ -452,11 +461,18 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     return buckets;
   }
 
-  // 3m: bucket by calendar month for the last 3 months.
+  // 3m: bucket by AR calendar month for the last 3 months.
+  const [cy, cm] = nowKey.slice(0, 7).split("-").map(Number); // cm is 1-based
   const buckets: ChartBar[] = [];
   for (let i = 2; i >= 0; i--) {
-    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    // Absolute 0-based month index, normalised across year boundaries.
+    const abs = cy * 12 + (cm - 1) - i;
+    const sy = Math.floor(abs / 12);
+    const sm = abs % 12; // 0-based month
+    const startYm = `${sy}-${String(sm + 1).padStart(2, "0")}`;
+    const start = new Date(localToARIso(`${startYm}-01T00:00:00`));
+    const nextYm = sm === 11 ? `${sy + 1}-01` : `${sy}-${String(sm + 2).padStart(2, "0")}`;
+    const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
     const rows = await prisma.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
       select: { scheduledFor: true, status: true },
@@ -466,7 +482,10 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
         rows,
         start,
         end,
-        start.toLocaleDateString("es-AR", { month: "short" })
+        start.toLocaleDateString("es-AR", {
+          month: "short",
+          timeZone: "America/Argentina/Buenos_Aires",
+        })
       )
     );
   }
@@ -500,8 +519,14 @@ export async function getMonthBookingDays(
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string, y: number, m: number): Promise<number[]> => {
-      const start = new Date(y, m, 1);
-      const end = new Date(y, m + 1, 1);
+      // Anchor the month window to AR midnight so bookings in the AR
+      // 21:00–24:00 edge of the first/last day aren't pulled from the
+      // wrong calendar month (UTC host is +3h ahead of AR).
+      const mm = String(m + 1).padStart(2, "0");
+      const start = new Date(localToARIso(`${y}-${mm}-01T00:00:00`));
+      const nextY = m === 11 ? y + 1 : y;
+      const nextMM = String(m === 11 ? 1 : m + 2).padStart(2, "0");
+      const end = new Date(localToARIso(`${nextY}-${nextMM}-01T00:00:00`));
       const rows = await prisma.booking.findMany({
         where: {
           tenantId,
@@ -511,7 +536,8 @@ export async function getMonthBookingDays(
         select: { scheduledFor: true },
       });
       const days = new Set<number>();
-      for (const r of rows) days.add(r.scheduledFor.getDate());
+      // Derive the day-of-month in AR, not the host tz.
+      for (const r of rows) days.add(Number(toARDateKey(r.scheduledFor).slice(8, 10)));
       return Array.from(days).sort((a, b) => a - b);
     },
     ["booking-days", actor.tenantId, String(year), String(monthIndex0)],

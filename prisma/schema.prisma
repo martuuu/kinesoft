@@ -844,13 +844,22 @@ model Payment {
   provider        String   @default("mercadopago")
   externalId      String?  // MP preference/payment id
   status          PaymentStatus @default(UNPAID)
-  amountCents     Int
+  // What the checkout preference was created for (cents). Anchored at
+  // preference-creation time so the webhook validates the captured amount
+  // against the price the patient actually agreed to — not a live
+  // `Service.priceCents` that may have changed since. Null on legacy rows
+  // created before this column; the webhook falls back to the service price.
+  expectedAmountCents Int?
+  amountCents     Int      // captured amount (0 until the webhook settles)
   currency        String   @default("ARS")
   rawPayload      Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  // Restrict (not Cascade): deleting a Booking must NOT silently destroy its
+  // Payment record. `deleteBooking` guards paid turnos and cleans up an
+  // abandoned UNPAID/FAILED payment explicitly before deleting.
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
 
   @@index([externalId])
 }

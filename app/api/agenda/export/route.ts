@@ -1,6 +1,7 @@
 import { exportBookingsIcs } from "@/lib/bookings";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
+import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,11 +16,11 @@ export const dynamic = "force-dynamic";
  * Range cap: 90 days max to prevent unbounded scrapes.
  */
 function startOfWeek(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  const day = (x.getDay() + 6) % 7;
-  x.setDate(x.getDate() - day);
-  return x;
+  // AR Monday 00:00 of the AR week containing `d`. Anchored to the AR
+  // wall-clock so the default ICS window doesn't slide 3h on a UTC host.
+  const dayStart = new Date(localToARIso(`${toARDateKey(d)}T00:00:00`));
+  const mondayOffset = (toARDow(dayStart) + 6) % 7;
+  return new Date(dayStart.getTime() - mondayOffset * 86_400_000);
 }
 
 const MAX_RANGE_MS = 90 * 86_400_000;
@@ -41,11 +42,13 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const now = new Date();
+  // Interpret ?from / ?to as AR calendar days (they come from the AR agenda),
+  // anchoring each to the AR wall-clock so the window spans the right instants.
   const from = url.searchParams.get("from")
-    ? new Date(url.searchParams.get("from") + "T00:00:00")
+    ? new Date(localToARIso(`${url.searchParams.get("from")}T00:00:00`))
     : startOfWeek(now);
   const to = url.searchParams.get("to")
-    ? new Date(url.searchParams.get("to") + "T23:59:59")
+    ? new Date(localToARIso(`${url.searchParams.get("to")}T23:59:59`))
     : new Date(from.getTime() + 7 * 86_400_000);
 
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {

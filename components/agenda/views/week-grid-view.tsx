@@ -1,0 +1,272 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { Card } from "@/components/ui/card";
+import { Avatar } from "@/components/ui/avatar";
+import { IconX } from "@/components/ui/icons";
+import { toARDateKey, toARDow, toARHour } from "@/lib/datetime-ar";
+import { DAYS, fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
+import { StatusTag } from "./list-view";
+
+/** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
+function WeekSlotModal({
+  bookings,
+  label,
+  onEdit,
+  onClose,
+}: {
+  bookings: BookingDTO[];
+  label: string;
+  onEdit: (b: BookingDTO) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,30,51,0.45)",
+        backdropFilter: "blur(4px)",
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        className="k-glass-strong"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(560px,100%)", borderRadius: 20, padding: 20 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>{label}</span>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none", background: "rgba(255,255,255,0.7)", width: 30, height: 30,
+              borderRadius: 8, cursor: "pointer", color: "var(--navy-700)",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <IconX size={13} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {bookings.map((b) => {
+            const date = new Date(b.scheduledFor);
+            const isCancelled = b.status === "CANCELLED";
+            const isDone = b.status === "COMPLETED";
+            return (
+              <button
+                key={b.id}
+                onClick={() => { onEdit(b); onClose(); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 12px", borderRadius: 12, border: "none",
+                  background: isCancelled ? "rgba(228,70,70,0.08)" : "rgba(255,255,255,0.7)",
+                  cursor: "pointer", textAlign: "left", width: "100%",
+                  opacity: isCancelled ? 0.6 : 1,
+                }}
+              >
+                <Avatar name={b.patientName} size={32} tone="sky" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
+                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--navy-400)", marginTop: 1 }}>
+                    {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                <StatusTag s={b.status} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function WeekGridView({
+  weekStart,
+  bookings,
+  onEdit,
+  businessHours,
+  showHeader,
+  showSaturday,
+  showSunday,
+}: {
+  weekStart: Date;
+  bookings: BookingDTO[];
+  onEdit: (b: BookingDTO) => void;
+  businessHours: { start: number; end: number };
+  showHeader: boolean;
+  showSaturday: boolean;
+  showSunday: boolean;
+}) {
+  const HOURS = Array.from(
+    { length: Math.max(1, businessHours.end - businessHours.start) },
+    (_, i) => i + businessHours.start
+  );
+  const ROW = 50;
+
+  // Which weekday columns to render (0=Mon … 6=Sun). Mon-Fri always show;
+  // Saturday/Sunday are per-user opt-in. `colOf` maps a day index to its
+  // visible grid column position so bookings on a hidden weekend day are
+  // simply skipped instead of landing in the wrong column.
+  const visibleDays = useMemo(() => {
+    const days = [0, 1, 2, 3, 4];
+    if (showSaturday) days.push(5);
+    if (showSunday) days.push(6);
+    return days;
+  }, [showSaturday, showSunday]);
+  const colOf = useMemo(
+    () => new Map(visibleDays.map((d, i) => [d, i])),
+    [visibleDays]
+  );
+  const gridCols = `52px repeat(${visibleDays.length}, 1fr)`;
+
+  // overflow modal state: null = closed, otherwise the slot's bookings + label
+  const [overflow, setOverflow] = useState<{ bookings: BookingDTO[]; label: string } | null>(null);
+
+  // Index bookings by "dayCol-rowStart" for easy cell lookup
+  const cellMap = useMemo(() => {
+    const m = new Map<string, BookingDTO[]>();
+    for (const b of bookings) {
+      const date = new Date(b.scheduledFor);
+      const dayCol = (toARDow(date) + 6) % 7;
+      const h = toARHour(date);
+      // Clamp into the visible grid so a turno outside business hours (e.g.
+      // 21:30 when the window ends at 19:00) still lands in the last row and
+      // is reachable via the cell's overflow modal, instead of vanishing.
+      const rowStart = Math.min(
+        HOURS.length,
+        Math.max(1, Math.round(h - HOURS[0]) + 1)
+      );
+      const key = `${dayCol}-${rowStart}`;
+      const list = m.get(key) ?? [];
+      list.push(b);
+      m.set(key, list);
+    }
+    return m;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings, HOURS[0]]);
+
+  return (
+    <>
+      <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {showHeader && (
+          <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
+            <div />
+            {visibleDays.map((dayIdx) => {
+              const day = new Date(weekStart);
+              day.setDate(day.getDate() + dayIdx);
+              const arKey = toARDateKey(day);
+              // Derive the weekday label from the column's actual AR date so
+              // the name and the number can never disagree (defends against
+              // any future weekStart drift). With a correct AR Monday this
+              // equals DAYS[dayIdx].
+              const label = DAYS[(toARDow(day) + 6) % 7];
+              return (
+                <div key={dayIdx} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--navy-500)", padding: "6px 0" }}>
+                  {label} {Number(arKey.slice(8, 10))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div
+          style={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: gridCols,
+            gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
+            gap: 6,
+            overflow: "auto",
+          }}
+        >
+          {HOURS.map((h, i) => (
+            <div key={"h" + h} className="k-mono" style={{ gridColumn: 1, gridRow: i + 1, fontSize: 10, color: "var(--navy-300)", paddingTop: 4 }}>
+              {String(h).padStart(2, "0")}:00
+            </div>
+          ))}
+          {HOURS.map((_, i) =>
+            visibleDays.map((__, j) => (
+              <div
+                key={`cell${i}-${j}`}
+                style={{
+                  gridColumn: j + 2, gridRow: i + 1,
+                  background: "rgba(255,255,255,0.5)", borderRadius: 8,
+                  border: "1px solid rgba(15,30,51,0.04)",
+                }}
+              />
+            ))
+          )}
+
+          {/* One chip per cell showing total count — click opens the list modal */}
+          {Array.from(cellMap.entries()).map(([cellKey, cellBookings]) => {
+            const [dayColStr, rowStartStr] = cellKey.split("-");
+            const dayCol = Number(dayColStr);
+            // Skip bookings that fall on a hidden weekend day.
+            const colPos = colOf.get(dayCol);
+            if (colPos === undefined) return null;
+            const rowStart = Number(rowStartStr);
+            const first = cellBookings[0];
+            const date0 = new Date(first.scheduledFor);
+            const span = Math.max(1, Math.round(first.durationMin / 60));
+            const count = cellBookings.length;
+
+            return (
+              <button
+                key={cellKey}
+                onClick={() =>
+                  setOverflow({
+                    bookings: cellBookings,
+                    label: `${fmtHour(date0)} · ${count} ${count === 1 ? "turno" : "turnos"}`,
+                  })
+                }
+                style={{
+                  gridColumn: colPos + 2,
+                  gridRow: `${rowStart} / span ${span}`,
+                  background: "var(--sky-700)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 2,
+                  padding: "4px 6px",
+                  overflow: "hidden",
+                }}
+              >
+                <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
+                  {count}
+                </span>
+                <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
+                  {count === 1 ? "turno" : "turnos"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {overflow && (
+        <WeekSlotModal
+          bookings={overflow.bookings}
+          label={overflow.label}
+          onEdit={onEdit}
+          onClose={() => setOverflow(null)}
+        />
+      )}
+    </>
+  );
+}

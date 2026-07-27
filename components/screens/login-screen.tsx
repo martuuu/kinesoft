@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 
-export function LoginScreen() {
+export function LoginScreen({ error }: { error?: string } = {}) {
   return (
     <div
       className="k-app"
@@ -185,6 +185,22 @@ export function LoginScreen() {
           <h2 className="k-display" style={{ fontSize: 32, margin: "0 0 28px", lineHeight: 1.1 }}>
             Ingresá a tu consultorio
           </h2>
+
+          {error && (
+            <div
+              role="alert"
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                background: "rgba(228,70,70,0.1)",
+                color: "#9F1F1F",
+                fontSize: 12,
+                marginBottom: 16,
+              }}
+            >
+              {error}
+            </div>
+          )}
 
           <form action="/api/auth/sign-in" method="post" autoComplete="on">
             <Field label="Email profesional">
