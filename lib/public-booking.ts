@@ -18,7 +18,8 @@
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { prisma } from "@/lib/db";
+// No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import { createCheckoutPreference } from "@/lib/mercadopago";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";

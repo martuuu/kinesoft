@@ -1,6 +1,6 @@
 import "server-only";
 
-import { prisma } from "@/lib/db";
+import { withTenantDb, type DbClient } from "@/lib/rls";
 
 // Pure copago logic lives in a framework-free module so it can be unit-tested;
 // re-exported here so existing callers keep importing from billing-internal.
@@ -17,11 +17,16 @@ export { resolveBookingCopagoCents } from "@/lib/copago";
  * tenant has no Particular row at all; callers then fall back to the service
  * price.
  */
-export async function getParticularCopagoCents(tenantId: string): Promise<number | null> {
-  const ins = await prisma.insurer.findFirst({
-    where: { tenantId, isParticular: true },
-    select: { copagoCents: true },
-  });
+export async function getParticularCopagoCents(
+  tenantId: string,
+  db?: DbClient
+): Promise<number | null> {
+  const ins = await withTenantDb(tenantId, db, (c) =>
+    c.insurer.findFirst({
+      where: { tenantId, isParticular: true },
+      select: { copagoCents: true },
+    })
+  );
   return ins ? ins.copagoCents : null;
 }
 

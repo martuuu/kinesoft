@@ -16,7 +16,7 @@
  * one place without hunting through the codebase.
  */
 import type { Prisma, TenantPlan } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 
 export type ExerciseCapabilities = {
@@ -36,12 +36,14 @@ export type ExerciseCapabilities = {
 const FULL_CATALOG_PLANS: TenantPlan[] = ["PRO", "ENTERPRISE"];
 const TEMPLATES_PLANS: TenantPlan[] = ["STARTER", "PRO", "ENTERPRISE"];
 
-export async function gatingForActor(): Promise<ExerciseCapabilities> {
+export async function gatingForActor(db?: DbClient): Promise<ExerciseCapabilities> {
   const actor = await getActor();
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: actor.tenantId },
-    select: { plan: true },
-  });
+  const tenant = await withTenantDb(actor.tenantId, db, (c) =>
+    c.tenant.findUnique({
+      where: { id: actor.tenantId },
+      select: { plan: true },
+    })
+  );
   return resolveCapabilities(tenant?.plan ?? "FREE", actor.tenantId);
 }
 

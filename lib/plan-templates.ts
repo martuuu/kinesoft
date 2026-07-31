@@ -12,7 +12,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { ProgramStatus } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { localToARIso } from "@/lib/datetime-ar";
@@ -23,10 +23,10 @@ import type { PlanTemplateRow } from "@/lib/plan-templates-types";
 
 export async function listPlanTemplates(): Promise<PlanTemplateRow[]> {
   const actor = await getActor();
-  const rows = await prisma.planTemplate.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.findMany({
     where: { tenantId: actor.tenantId },
     orderBy: { updatedAt: "desc" },
-  });
+  }));
   return rows.map((r) => {
     const ids = Array.isArray(r.exerciseIds) ? (r.exerciseIds as string[]) : [];
     return {
@@ -59,17 +59,17 @@ export async function createPlanTemplate(input: {
     return { ok: false, error: "Agregá al menos un ejercicio." };
   }
   // Validate that every exercise is visible to this tenant.
-  const visible = await prisma.exercise.findMany({
+  const visible = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
     where: { AND: [{ id: { in: input.exerciseIds } }, gate.visibility] },
     select: { id: true },
-  });
+  }));
   const visibleIds = new Set(visible.map((e) => e.id));
   const orderedValid = input.exerciseIds.filter((id) => visibleIds.has(id));
   if (orderedValid.length === 0) {
     return { ok: false, error: "Ningún ejercicio es accesible en este plan." };
   }
 
-  const row = await prisma.planTemplate.create({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.create({
     data: {
       tenantId: actor.tenantId,
       authorId: actor.practitionerId,
@@ -79,7 +79,7 @@ export async function createPlanTemplate(input: {
       frequency: Math.min(7, Math.max(1, input.frequency)),
       exerciseIds: orderedValid,
     },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -93,12 +93,12 @@ export async function createPlanTemplate(input: {
 
 export async function deletePlanTemplate(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.planTemplate.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Plantilla no encontrada." };
-  await prisma.planTemplate.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.planTemplate.delete({ where: { id } }));
   revalidatePath("/biblioteca");
   return { ok: true, data: undefined };
 }
@@ -121,15 +121,15 @@ export async function applyPlanTemplate(input: {
     return { ok: false, error: "Mejorá tu plan para aplicar plantillas." };
   }
 
-  const tpl = await prisma.planTemplate.findFirst({
+  const tpl = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.findFirst({
     where: { id: input.templateId, tenantId: actor.tenantId },
-  });
+  }));
   if (!tpl) return { ok: false, error: "Plantilla no encontrada." };
 
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
 
   // `input.startDate` is "YYYY-MM-DD"; anchor to AR local midnight so
@@ -140,14 +140,14 @@ export async function applyPlanTemplate(input: {
   if (Number.isNaN(startDate.getTime())) return { ok: false, error: "Fecha inválida." };
 
   const ids = Array.isArray(tpl.exerciseIds) ? (tpl.exerciseIds as string[]) : [];
-  const exercises = await prisma.exercise.findMany({
+  const exercises = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
     where: { AND: [{ id: { in: ids } }, gate.visibility] },
     select: { id: true, defaultSets: true, defaultReps: true },
-  });
+  }));
   const byId = new Map(exercises.map((e) => [e.id, e]));
 
   // Build session schedule: every `7 / frequency` days from startDate.
-  const program = await prisma.treatmentProgram.create({
+  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.create({
     data: {
       tenantId: actor.tenantId,
       patientId: input.patientId,
@@ -185,7 +185,7 @@ export async function applyPlanTemplate(input: {
         }),
       },
     },
-  });
+  }));
 
   await audit({
     tenantId: actor.tenantId,

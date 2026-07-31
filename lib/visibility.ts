@@ -30,10 +30,18 @@
  *   - `bulkPatientAccess(actor, ids[])` → batched version that returns
  *     a `Map<patientId, AccessLevel>` in one round trip. Used by list /
  *     agenda renderers to decide row-by-row.
+ *
+ * RLS (Ola B2): these read Patient / Tenant / Membership / PatientShare —
+ * all RLS-governed. Each public function self-primes a tenant-scoped
+ * transaction via `withTenantDb`, so a caller can either invoke it
+ * standalone (a fresh `runWithRls` is opened) or, when already inside a
+ * `runWithRls`, pass its `tx` as the trailing `db` argument to avoid
+ * nesting. A silent empty read here would mis-authorize, so this is the
+ * highest-stakes module to get right.
  */
 import "server-only";
 import { cache } from "react";
-import { prisma } from "@/lib/db";
+import { withTenantDb, type DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 import type { Prisma } from "@prisma/client";
 
@@ -59,41 +67,49 @@ export type Visibility = {
   bookingWhere: Prisma.BookingWhereInput;
 };
 
-const tenantSettings = cache(async (tenantId: string) => {
-  return prisma.tenant.findUnique({
+// Internal reads take the primed client explicitly. No `react.cache` here:
+// memoisation lives on the public entry points, and these must run on the
+// same tenant-scoped transaction the caller opened.
+function readTenantSettings(db: DbClient, tenantId: string) {
+  return db.tenant.findUnique({
     where: { id: tenantId },
     select: { sharedPatientView: true },
   });
-});
+}
 
-const membershipRole = cache(async (userId: string, tenantId: string) => {
-  return prisma.membership.findUnique({
+function readMembershipRole(db: DbClient, userId: string, tenantId: string) {
+  return db.membership.findUnique({
     where: { userId_tenantId: { userId, tenantId } },
     select: { role: true },
   });
-});
+}
 
-export async function visibilityForActor(actor: Actor): Promise<Visibility> {
-  const [tenant, membership] = await Promise.all([
-    tenantSettings(actor.tenantId),
-    membershipRole(actor.userId, actor.tenantId),
-  ]);
+export async function visibilityForActor(
+  actor: Actor,
+  db?: DbClient
+): Promise<Visibility> {
+  return withTenantDb(actor.tenantId, db, async (c) => {
+    const [tenant, membership] = await Promise.all([
+      readTenantSettings(c, actor.tenantId),
+      readMembershipRole(c, actor.userId, actor.tenantId),
+    ]);
 
-  const sharedView = tenant?.sharedPatientView ?? false;
-  const role = membership?.role ?? "PRACTITIONER";
-  const seesAll = role === "OWNER" || role === "ADMIN" || sharedView;
+    const sharedView = tenant?.sharedPatientView ?? false;
+    const role = membership?.role ?? "PRACTITIONER";
+    const seesAll = role === "OWNER" || role === "ADMIN" || sharedView;
 
-  // Sprint 16: lists are NO LONGER filtered by ownership at the SQL
-  // layer. Every member sees every patient + booking; per-row access
-  // tier (full vs basic) is resolved by the renderer. The patientWhere /
-  // bookingWhere fragments are kept as `{}` so existing callsites that
-  // spread them don't break, but they no longer scope by practitioner.
-  return {
-    seesAll,
-    sharedView,
-    patientWhere: {},
-    bookingWhere: {},
-  };
+    // Sprint 16: lists are NO LONGER filtered by ownership at the SQL
+    // layer. Every member sees every patient + booking; per-row access
+    // tier (full vs basic) is resolved by the renderer. The patientWhere /
+    // bookingWhere fragments are kept as `{}` so existing callsites that
+    // spread them don't break, but they no longer scope by practitioner.
+    return {
+      seesAll,
+      sharedView,
+      patientWhere: {},
+      bookingWhere: {},
+    };
+  });
 }
 
 /**
@@ -104,38 +120,39 @@ export async function visibilityForActor(actor: Actor): Promise<Visibility> {
  * return the full payload or the basic projection.
  *
  * Cache: `react.cache` memoises per (actor, patientId) within the same
- * request — pages that load several patient slices share the same
- * lookup.
+ * request. Callers already inside a `runWithRls` should pass their `tx`
+ * as the third arg (that key variant is memoised separately).
  */
 export const patientAccessFor = cache(
-  async (actor: Actor, patientId: string): Promise<AccessLevel> => {
-    const [patient, tenant, membership] = await Promise.all([
-      prisma.patient.findUnique({
-        where: { id: patientId },
-        select: { tenantId: true, assignedPractitionerId: true },
-      }),
-      tenantSettings(actor.tenantId),
-      membershipRole(actor.userId, actor.tenantId),
-    ]);
+  async (actor: Actor, patientId: string, db?: DbClient): Promise<AccessLevel> =>
+    withTenantDb(actor.tenantId, db, async (c) => {
+      const [patient, tenant, membership] = await Promise.all([
+        c.patient.findUnique({
+          where: { id: patientId },
+          select: { tenantId: true, assignedPractitionerId: true },
+        }),
+        readTenantSettings(c, actor.tenantId),
+        readMembershipRole(c, actor.userId, actor.tenantId),
+      ]);
 
-    if (!patient || patient.tenantId !== actor.tenantId) return "none";
+      if (!patient || patient.tenantId !== actor.tenantId) return "none";
 
-    const role = membership?.role ?? "PRACTITIONER";
-    if (role === "OWNER" || role === "ADMIN") return "full";
-    if (tenant?.sharedPatientView) return "full";
-    if (patient.assignedPractitionerId === actor.practitionerId) return "full";
+      const role = membership?.role ?? "PRACTITIONER";
+      if (role === "OWNER" || role === "ADMIN") return "full";
+      if (tenant?.sharedPatientView) return "full";
+      if (patient.assignedPractitionerId === actor.practitionerId) return "full";
 
-    const share = await prisma.patientShare.findUnique({
-      where: {
-        patientId_practitionerId: {
-          patientId,
-          practitionerId: actor.practitionerId,
+      const share = await c.patientShare.findUnique({
+        where: {
+          patientId_practitionerId: {
+            patientId,
+            practitionerId: actor.practitionerId,
+          },
         },
-      },
-      select: { id: true },
-    });
-    return share ? "full" : "basic";
-  }
+        select: { id: true },
+      });
+      return share ? "full" : "basic";
+    })
 );
 
 /**
@@ -148,65 +165,74 @@ export const patientAccessFor = cache(
  */
 export async function bulkPatientAccess(
   actor: Actor,
-  patientIds: readonly string[]
+  patientIds: readonly string[],
+  db?: DbClient
 ): Promise<Map<string, AccessLevel>> {
   const result = new Map<string, AccessLevel>();
   if (patientIds.length === 0) return result;
 
-  const [patients, tenant, membership] = await Promise.all([
-    prisma.patient.findMany({
-      where: { id: { in: patientIds as string[] }, tenantId: actor.tenantId },
-      select: { id: true, assignedPractitionerId: true },
-    }),
-    tenantSettings(actor.tenantId),
-    membershipRole(actor.userId, actor.tenantId),
-  ]);
+  return withTenantDb(actor.tenantId, db, async (c) => {
+    const [patients, tenant, membership] = await Promise.all([
+      c.patient.findMany({
+        where: { id: { in: patientIds as string[] }, tenantId: actor.tenantId },
+        select: { id: true, assignedPractitionerId: true },
+      }),
+      readTenantSettings(c, actor.tenantId),
+      readMembershipRole(c, actor.userId, actor.tenantId),
+    ]);
 
-  const role = membership?.role ?? "PRACTITIONER";
-  const seesAll = role === "OWNER" || role === "ADMIN" || !!tenant?.sharedPatientView;
+    const role = membership?.role ?? "PRACTITIONER";
+    const seesAll = role === "OWNER" || role === "ADMIN" || !!tenant?.sharedPatientView;
 
-  if (seesAll) {
-    for (const p of patients) result.set(p.id, "full");
+    if (seesAll) {
+      for (const p of patients) result.set(p.id, "full");
+      return result;
+    }
+
+    // Practitioner: full for owned + explicitly shared, basic otherwise.
+    const ownedIds = new Set(
+      patients
+        .filter((p) => p.assignedPractitionerId === actor.practitionerId)
+        .map((p) => p.id)
+    );
+    const otherIds = patients.filter((p) => !ownedIds.has(p.id)).map((p) => p.id);
+
+    const shareRows =
+      otherIds.length > 0
+        ? await c.patientShare.findMany({
+            where: {
+              patientId: { in: otherIds },
+              practitionerId: actor.practitionerId,
+            },
+            select: { patientId: true },
+          })
+        : [];
+    const sharedIds = new Set(shareRows.map((r) => r.patientId));
+
+    for (const p of patients) {
+      if (ownedIds.has(p.id)) result.set(p.id, "full");
+      else if (sharedIds.has(p.id)) result.set(p.id, "full");
+      else result.set(p.id, "basic");
+    }
     return result;
-  }
-
-  // Practitioner: full for owned + explicitly shared, basic otherwise.
-  const ownedIds = new Set(
-    patients
-      .filter((p) => p.assignedPractitionerId === actor.practitionerId)
-      .map((p) => p.id)
-  );
-  const otherIds = patients.filter((p) => !ownedIds.has(p.id)).map((p) => p.id);
-
-  const shareRows =
-    otherIds.length > 0
-      ? await prisma.patientShare.findMany({
-          where: {
-            patientId: { in: otherIds },
-            practitionerId: actor.practitionerId,
-          },
-          select: { patientId: true },
-        })
-      : [];
-  const sharedIds = new Set(shareRows.map((r) => r.patientId));
-
-  for (const p of patients) {
-    if (ownedIds.has(p.id)) result.set(p.id, "full");
-    else if (sharedIds.has(p.id)) result.set(p.id, "full");
-    else result.set(p.id, "basic");
-  }
-  return result;
+  });
 }
 
 /**
  * List the practitioners who currently have an explicit share on the
  * patient. Used by the SharePatientButton popover to render the
- * checkbox state.
+ * checkbox state. `tenantId` is required to prime the RLS transaction.
  */
-export async function listPatientShares(patientId: string): Promise<string[]> {
-  const rows = await prisma.patientShare.findMany({
-    where: { patientId },
-    select: { practitionerId: true },
-  });
+export async function listPatientShares(
+  patientId: string,
+  tenantId: string,
+  db?: DbClient
+): Promise<string[]> {
+  const rows = await withTenantDb(tenantId, db, (c) =>
+    c.patientShare.findMany({
+      where: { patientId },
+      select: { practitionerId: true },
+    })
+  );
   return rows.map((r) => r.practitionerId);
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+// Anonymous public checkout (tenant resolved by slug, no Actor) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import { createCheckoutPreference } from "@/lib/mercadopago";
 import { audit } from "@/lib/audit";
 import { rateLimitHandler } from "@/lib/rate-limit";

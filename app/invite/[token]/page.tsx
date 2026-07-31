@@ -1,6 +1,9 @@
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
-import { prisma } from "@/lib/db";
+// Pre-auth invite landing: the visitor is NOT yet a member of the tenant, so
+// there's no Actor GUC to read the (RLS-governed) Invitation by token →
+// service channel (BYPASSRLS), same as accept-action.ts. See lib/db.ts.
+import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

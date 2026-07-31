@@ -12,7 +12,6 @@
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
-import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
@@ -53,7 +52,7 @@ export async function listBookingsInRange(opts: {
   // Sprint 16: agenda shows every booking in the tenant; per-row access
   // tier is resolved below. The diagnosis chip is hidden when the actor
   // only has BASIC access to that booking's patient.
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
@@ -80,7 +79,7 @@ export async function listBookingsInRange(opts: {
         },
       },
     },
-  });
+  }));
 
   const patientIds = rows
     .map((b) => b.patientId)
@@ -150,14 +149,14 @@ export async function getDayCounts(opts: { from: Date; to: Date }) {
   const actor = await getActor();
   // Day-strip dots show every booking in the tenant — counts don't leak
   // PHI so no access gating needed here.
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
       status: { not: "CANCELLED" },
     },
     select: { scheduledFor: true },
-  });
+  }));
   const counts = new Map<string, number>();
   for (const r of rows) {
     // Bucket by the AR calendar day, not the UTC slice — otherwise a late-night
@@ -172,10 +171,10 @@ export async function listServices() {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string) =>
-      prisma.service.findMany({
+      runWithRls(tenantId, (tx) => tx.service.findMany({
         where: { tenantId },
         orderBy: { name: "asc" },
-      }),
+      })),
     ["services:list", actor.tenantId],
     { tags: [tags.services(actor.tenantId)], revalidate: ttl.short }
   );
@@ -186,11 +185,11 @@ export async function listPractitioners() {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string) =>
-      prisma.practitioner.findMany({
+      runWithRls(tenantId, (tx) => tx.practitioner.findMany({
         where: { tenantId },
         include: { user: true },
         orderBy: { createdAt: "asc" },
-      }),
+      })),
     ["practitioners:list", actor.tenantId],
     { tags: [tags.practitioners(actor.tenantId)], revalidate: ttl.short }
   );
@@ -217,7 +216,7 @@ async function suggestNextFreeSlot(
   // Resolve business hours alongside the bookings preload so we don't
   // do two sequential roundtrips.
   const [bookings, tenant] = await Promise.all([
-    prisma.booking.findMany({
+    runWithRls(tenantId, (tx) => tx.booking.findMany({
       where: {
         tenantId,
         practitionerId,
@@ -228,11 +227,11 @@ async function suggestNextFreeSlot(
         },
       },
       select: { scheduledFor: true, durationMin: true },
-    }),
-    prisma.tenant.findUnique({
+    })),
+    runWithRls(tenantId, (tx) => tx.tenant.findUnique({
       where: { id: tenantId },
       select: { businessHoursStart: true, businessHoursEnd: true },
-    }),
+    })),
   ]);
   const openHour = tenant?.businessHoursStart ?? 8;
   const closeHour = tenant?.businessHoursEnd ?? 19;
@@ -286,16 +285,16 @@ export async function createBooking(
   const data = parsed.data;
 
   if (data.patientId) {
-    const owned = await prisma.patient.findFirst({
+    const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
       where: { id: data.patientId, tenantId: actor.tenantId },
       select: { id: true },
-    });
+    }));
     if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
   }
-  const service = await prisma.service.findFirst({
+  const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
     select: { id: true, durationMin: true, name: true },
-  });
+  }));
   if (!service) return { ok: false, error: "Servicio inválido." };
 
   const duration = data.durationMin ?? service.durationMin;
@@ -306,7 +305,7 @@ export async function createBooking(
   // Fetch every candidate in the window (a turno starting up to 4h before
   // could still overlap a long session) and test them all — a single
   // unordered findFirst could return a non-overlapping row and miss the clash.
-  const candidates = await prisma.booking.findMany({
+  const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       practitionerId: data.practitionerId,
@@ -317,7 +316,7 @@ export async function createBooking(
       },
     },
     select: { id: true, scheduledFor: true, durationMin: true },
-  });
+  }));
   const overlapping = candidates.some(
     (c) =>
       c.scheduledFor < end &&
@@ -327,10 +326,10 @@ export async function createBooking(
     // Compute a suggestion + tell the UI it can re-call with
     // allowOverbooking=true to force a sobreturno.
     const [prac, suggestion] = await Promise.all([
-      prisma.practitioner.findUnique({
+      runWithRls(actor.tenantId, (tx) => tx.practitioner.findUnique({
         where: { id: data.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
-      }),
+      })),
       suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration),
     ]);
     return {
@@ -413,10 +412,10 @@ export async function createBooking(
     if (actor.userId) {
       let who: string;
       if (data.patientId) {
-        const p = await prisma.patient.findUnique({
+        const p = await runWithRls(actor.tenantId, (tx) => tx.patient.findUnique({
           where: { id: data.patientId },
           select: { firstName: true, lastName: true },
-        });
+        }));
         who = p ? `${p.firstName} ${p.lastName}` : "Paciente";
       } else {
         who = data.guestName ?? "Reserva externa";
@@ -539,10 +538,10 @@ export async function updateBooking(
   if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
   if (outcome.kind === "conflict") {
     const [prac, suggestion] = await Promise.all([
-      prisma.practitioner.findUnique({
+      runWithRls(actor.tenantId, (tx) => tx.practitioner.findUnique({
         where: { id: outcome.before.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
-      }),
+      })),
       suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration),
     ]);
     return {
@@ -682,15 +681,15 @@ export async function setBookingInsurerPaid(
   paid: boolean
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.booking.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, patientId: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Turno no encontrado." };
-  await prisma.booking.update({
+  await runWithRls(actor.tenantId, (tx) => tx.booking.update({
     where: { id },
     data: { insurerPaidAt: paid ? new Date() : null },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -713,15 +712,15 @@ export async function setBookingCopagoPaid(
   paid: boolean
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.booking.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, patientId: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Turno no encontrado." };
-  await prisma.booking.update({
+  await runWithRls(actor.tenantId, (tx) => tx.booking.update({
     where: { id },
     data: { paymentStatus: paid ? "PAID" : "UNPAID" },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -761,10 +760,10 @@ export async function createBookingsBatch(
   }
   const data = parsed.data;
   const count = Math.min(60, Math.max(1, Math.floor(raw.count ?? 1)));
-  const service = await prisma.service.findFirst({
+  const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
     select: { id: true, durationMin: true },
-  });
+  }));
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
 
@@ -795,7 +794,7 @@ export async function createBookingsBatch(
   let skipped = 0;
   for (const when of dates) {
     const end = new Date(when.getTime() + duration * 60_000);
-    const candidates = await prisma.booking.findMany({
+    const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
@@ -806,7 +805,7 @@ export async function createBookingsBatch(
         },
       },
       select: { id: true, scheduledFor: true, durationMin: true },
-    });
+    }));
     const overlap = candidates.some(
       (c) =>
         c.scheduledFor < end &&
@@ -820,7 +819,7 @@ export async function createBookingsBatch(
       ? `${actor.tenantId}:${data.practitionerId}:${when.toISOString()}:${identity}`
       : randomBytes(16).toString("hex");
     try {
-      await prisma.booking.upsert({
+      await runWithRls(actor.tenantId, (tx) => tx.booking.upsert({
         where: { idempotencyKey },
         update: {},
         create: {
@@ -839,7 +838,7 @@ export async function createBookingsBatch(
           seriesId,
           idempotencyKey,
         },
-      });
+      }));
       created++;
     } catch (e) {
       // Genuine conflicts are already filtered out by the overlap check
@@ -873,7 +872,7 @@ export async function createBookingsBatch(
  */
 export async function exportBookingsIcs(opts: { from: Date; to: Date }): Promise<string> {
   const actor = await getActor();
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
@@ -881,7 +880,7 @@ export async function exportBookingsIcs(opts: { from: Date; to: Date }): Promise
     },
     include: { patient: true, service: true },
     orderBy: { scheduledFor: "asc" },
-  });
+  }));
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",

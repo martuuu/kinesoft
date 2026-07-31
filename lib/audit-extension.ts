@@ -11,7 +11,8 @@
  * not audited. Errors in the audit write are swallowed (never block
  * the caller).
  */
-import { prisma } from "@/lib/db";
+// AuditEvent writes must never be blocked by a missing tenant GUC → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import { getRequestContext } from "@/lib/request-context";
 import { logger } from "@/lib/logger";
 import { captureException } from "@/lib/observability";

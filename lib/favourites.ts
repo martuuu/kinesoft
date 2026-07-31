@@ -9,6 +9,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
 import type { ActionResult } from "@/lib/validation";
@@ -21,10 +22,10 @@ export async function toggleFavourite(exerciseId: string): Promise<ActionResult<
     return { ok: false, error: "Mejorá tu plan para guardar favoritos." };
   }
   // Ownership / visibility check.
-  const ex = await prisma.exercise.findFirst({
+  const ex = await runWithRls(actor.tenantId, (tx) => tx.exercise.findFirst({
     where: { AND: [{ id: exerciseId }, gate.visibility] },
     select: { id: true },
-  });
+  }));
   if (!ex) return { ok: false, error: "Ejercicio no disponible." };
 
   const existing = await prisma.favorite.findUnique({

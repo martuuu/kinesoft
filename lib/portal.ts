@@ -17,7 +17,11 @@
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { prisma } from "@/lib/db";
+// Patient-facing portal: no practitioner Actor; getPortalAuth reads Patient
+// ACROSS tenants by verified email and the rest resolves a tenant by slug.
+// Every query is explicitly scoped by the verified patient's id/tenant, so it
+// runs on the service channel (BYPASSRLS) — same trust model as public-booking.
+import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
 import type { ActionResult } from "@/lib/validation";

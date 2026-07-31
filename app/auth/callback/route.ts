@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/db";
+// OAuth callback, no Actor; tenant resolved by slug + Patient/PatientTenantLink
+// writes → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";

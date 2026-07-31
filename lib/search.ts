@@ -10,7 +10,7 @@
  * Each entry has an `id`, `label`, `sublabel`, `href` and `category` so
  * the palette can render them generically.
  */
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -36,7 +36,7 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
   const insensitive = "insensitive" as const;
 
   const [patients, exercises, conditions, bookings] = await Promise.all([
-    prisma.patient.findMany({
+    runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
       where: {
         tenantId: actor.tenantId,
         OR: [
@@ -49,8 +49,8 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       take: 6,
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
       select: { id: true, firstName: true, lastName: true, documentId: true, email: true },
-    }),
-    prisma.exercise.findMany({
+    })),
+    runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
       where: {
         AND: [
           gate.visibility,
@@ -66,8 +66,8 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       take: 6,
       orderBy: { name: "asc" },
       select: { id: true, slug: true, name: true, muscleGroups: true, difficulty: true },
-    }),
-    prisma.condition.findMany({
+    })),
+    runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
       where: {
         OR: [
           { name: { contains: term, mode: insensitive } },
@@ -78,8 +78,8 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       take: 6,
       orderBy: { name: "asc" },
       select: { id: true, slug: true, name: true, cie10: true },
-    }),
-    prisma.booking.findMany({
+    })),
+    runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: {
         tenantId: actor.tenantId,
         scheduledFor: {
@@ -96,7 +96,7 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       take: 4,
       orderBy: { scheduledFor: "asc" },
       include: { patient: { select: { firstName: true, lastName: true } } },
-    }),
+    })),
   ]);
 
   const out: SearchHit[] = [];

@@ -3,6 +3,9 @@ import { z } from "zod";
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DIRECT_URL: z.string().url().optional(),
+  // Service channel (BYPASSRLS) for surfaces without an Actor. Optional:
+  // when unset, lib/db.ts falls back to DIRECT_URL (the owner connection).
+  DATABASE_URL_SERVICE: z.string().url().optional(),
 
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
@@ -25,6 +28,7 @@ const schema = z.object({
 export const env = schema.parse({
   DATABASE_URL: process.env.DATABASE_URL,
   DIRECT_URL: process.env.DIRECT_URL,
+  DATABASE_URL_SERVICE: process.env.DATABASE_URL_SERVICE,
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
