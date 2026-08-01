@@ -18,6 +18,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { overlapBlocks } from "@/lib/booking-capacity";
 import { toARDow, toARHour, toARDateKey } from "@/lib/datetime-ar";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
@@ -208,7 +209,9 @@ async function suggestNextFreeSlot(
   tenantId: string,
   practitionerId: string,
   from: Date,
-  durationMin: number
+  durationMin: number,
+  serviceId: string,
+  maxConcurrent: number | null
 ): Promise<string | null> {
   const STEP_MIN = 15;
   const HORIZON_MS = 14 * 86_400_000;
@@ -220,6 +223,7 @@ async function suggestNextFreeSlot(
       where: {
         tenantId,
         practitionerId,
+        serviceId,
         status: { notIn: ["CANCELLED"] },
         scheduledFor: {
           gte: start,
@@ -235,11 +239,16 @@ async function suggestNextFreeSlot(
   ]);
   const openHour = tenant?.businessHoursStart ?? 8;
   const closeHour = tenant?.businessHoursEnd ?? 19;
-  const overlaps = (slot: Date, end: Date) =>
-    bookings.some((b) => {
-      const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
-      return b.scheduledFor < end && bEnd > slot;
-    });
+  // A slot is "free" when adding this turno wouldn't exceed the service's
+  // per-horario capacity — counting SAME-service overlaps only.
+  const atCapacity = (slot: Date, end: Date) =>
+    overlapBlocks(
+      bookings.filter((b) => {
+        const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
+        return b.scheduledFor < end && bEnd > slot;
+      }).length,
+      maxConcurrent
+    );
   const cursor = new Date(start);
   // Round to next 15-min boundary.
   cursor.setMinutes(Math.ceil(cursor.getMinutes() / STEP_MIN) * STEP_MIN, 0, 0);
@@ -254,7 +263,7 @@ async function suggestNextFreeSlot(
     const endMinutes = arHour * 60 + durationMin;
     if (dow !== 0 && arHour >= openHour && endMinutes <= closeHour * 60) {
       const end = new Date(cursor.getTime() + durationMin * 60_000);
-      if (!overlaps(cursor, end)) {
+      if (!atCapacity(cursor, end)) {
         return cursor.toISOString();
       }
     }
@@ -293,22 +302,23 @@ export async function createBooking(
   }
   const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
-    select: { id: true, durationMin: true, name: true },
+    select: { id: true, durationMin: true, name: true, maxConcurrent: true },
   }));
   if (!service) return { ok: false, error: "Servicio inválido." };
 
   const duration = data.durationMin ?? service.durationMin;
   const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
 
-  // Conflict check for the SAME practitioner (other kines in the same
-  // hour are fine — multiple boxes / kines in the same consultorio).
-  // Fetch every candidate in the window (a turno starting up to 4h before
-  // could still overlap a long session) and test them all — a single
-  // unordered findFirst could return a non-overlapping row and miss the clash.
+  // Overlap capacity check, scoped to the SAME practitioner + SAME service.
+  // Overlaps are allowed up to `Service.maxConcurrent` (null = ilimitado, el
+  // caso normal en kinesiología: varios pacientes en paralelo en la franja).
+  // Fetch every candidate in the 4h window (a long prior session could still
+  // overlap) and COUNT the real overlaps — a single findFirst could miss it.
   const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       practitionerId: data.practitionerId,
+      serviceId: data.serviceId,
       status: { notIn: ["CANCELLED"] },
       scheduledFor: {
         lt: end,
@@ -317,12 +327,13 @@ export async function createBooking(
     },
     select: { id: true, scheduledFor: true, durationMin: true },
   }));
-  const overlapping = candidates.some(
+  const overlapCount = candidates.filter(
     (c) =>
       c.scheduledFor < end &&
       new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > data.scheduledFor
-  );
-  if (overlapping && !raw.allowOverbooking) {
+  ).length;
+  const capacityReached = overlapBlocks(overlapCount, service.maxConcurrent);
+  if (capacityReached && !raw.allowOverbooking) {
     // Compute a suggestion + tell the UI it can re-call with
     // allowOverbooking=true to force a sobreturno.
     const [prac, suggestion] = await Promise.all([
@@ -330,7 +341,7 @@ export async function createBooking(
         where: { id: data.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
       })),
-      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration),
+      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration, data.serviceId, service.maxConcurrent),
     ]);
     return {
       ok: false,
@@ -345,7 +356,7 @@ export async function createBooking(
   // Tag overbooked rows so the UI / reports can distinguish them. Until
   // we add a column, we prepend "[SOBRETURNO]" to the notes field.
   const notes =
-    overlapping && raw.allowOverbooking
+    capacityReached && raw.allowOverbooking
       ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
       : data.notes;
 
@@ -479,6 +490,8 @@ export async function updateBooking(
         scheduledFor: true,
         durationMin: true,
         practitionerId: true,
+        serviceId: true,
+        service: { select: { maxConcurrent: true } },
         updatedAt: true,
         patient: { select: { firstName: true, lastName: true } },
       },
@@ -509,6 +522,7 @@ export async function updateBooking(
         where: {
           tenantId: actor.tenantId,
           practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
           id: { not: id },
           status: { notIn: ["CANCELLED"] },
           scheduledFor: {
@@ -518,12 +532,12 @@ export async function updateBooking(
         },
         select: { id: true, scheduledFor: true, durationMin: true },
       });
-      const overlapping = candidates.some(
+      const overlapCount = candidates.filter(
         (c) =>
           c.scheduledFor < end &&
           new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > newWhen
-      );
-      if (overlapping && !raw.allowOverbooking) {
+      ).length;
+      if (overlapBlocks(overlapCount, before.service?.maxConcurrent) && !raw.allowOverbooking) {
         return { kind: "conflict" as const, before, newWhen, newDuration };
       }
     }
@@ -542,7 +556,7 @@ export async function updateBooking(
         where: { id: outcome.before.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
       })),
-      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration),
+      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration, outcome.before.serviceId, outcome.before.service?.maxConcurrent ?? null),
     ]);
     return {
       ok: false,
@@ -762,7 +776,7 @@ export async function createBookingsBatch(
   const count = Math.min(60, Math.max(1, Math.floor(raw.count ?? 1)));
   const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
-    select: { id: true, durationMin: true },
+    select: { id: true, durationMin: true, maxConcurrent: true },
   }));
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
@@ -798,6 +812,7 @@ export async function createBookingsBatch(
       where: {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
+        serviceId: data.serviceId,
         status: { notIn: ["CANCELLED"] },
         scheduledFor: {
           gte: new Date(when.getTime() - 240 * 60_000),
@@ -806,12 +821,14 @@ export async function createBookingsBatch(
       },
       select: { id: true, scheduledFor: true, durationMin: true },
     }));
-    const overlap = candidates.some(
+    const overlapCount = candidates.filter(
       (c) =>
         c.scheduledFor < end &&
         new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > when
-    );
-    if (overlap) {
+    ).length;
+    // Skip a slot only when the service's capacity is actually reached
+    // (ilimitado → nunca se saltea; se crean todos los solapados).
+    if (overlapBlocks(overlapCount, service.maxConcurrent)) {
       skipped++;
       continue;
     }

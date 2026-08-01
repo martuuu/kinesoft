@@ -55,6 +55,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         practitionerName: s.practitioner
           ? (s.practitioner.user.fullName ?? s.practitioner.user.email)
           : null,
+        maxConcurrent: s.maxConcurrent,
         bookingsCount: s._count.bookings,
       }));
     },
@@ -70,6 +71,13 @@ const ServiceInput = z.object({
   durationMin: z.coerce.number().int().min(5).max(480).default(45),
   priceCents: z.coerce.number().int().min(0).max(100_000_000).default(0),
   practitionerId: z.string().optional().or(z.literal("")),
+  // Cupos simultáneos por horario. Vacío → null = ilimitado (kinesiología).
+  maxConcurrent: z
+    .preprocess(
+      (v) => (v === "" || v === undefined || v === null ? null : v),
+      z.coerce.number().int().min(1, "Mínimo 1").max(50).nullable()
+    )
+    .optional(),
 });
 
 export async function createService(
@@ -101,6 +109,7 @@ export async function createService(
         durationMin: parsed.data.durationMin,
         priceCents: parsed.data.priceCents,
         practitionerId: parsed.data.practitionerId || null,
+        maxConcurrent: parsed.data.maxConcurrent ?? null,
       },
     }));
     await audit({

@@ -6,5 +6,7 @@ export type ServiceRow = {
   priceCents: number;
   practitionerId: string | null;
   practitionerName: string | null;
+  /** Cupos simultáneos por horario; null = ilimitado. */
+  maxConcurrent: number | null;
   bookingsCount: number;
 };

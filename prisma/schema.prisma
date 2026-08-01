@@ -770,6 +770,10 @@ model Service {
   durationMin  Int      @default(45)
   priceCents   Int      @default(0)
   description  String?
+  // Cupos simultáneos por horario. null = ilimitado (kinesiología atiende
+  // varios pacientes en paralelo en la misma franja); 1 = un turno por horario
+  // (osteopatía); N = tope de N turnos solapados.
+  maxConcurrent Int?
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id])
   practitioner Practitioner? @relation(fields: [practitionerId], references: [id])
