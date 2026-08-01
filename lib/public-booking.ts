@@ -24,6 +24,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { localToARIso, toARDow } from "@/lib/datetime-ar";
+import { overlapBlocks } from "@/lib/booking-capacity";
 import type { ActionResult } from "@/lib/validation";
 import {
   SubmitSchema,
@@ -110,7 +111,7 @@ export async function listPublicSlots(input: {
 
   const service = await prisma.service.findFirst({
     where: { id: input.serviceId, tenantId: tenant.id },
-    select: { durationMin: true },
+    select: { durationMin: true, maxConcurrent: true },
   });
   if (!service) return [];
 
@@ -127,6 +128,7 @@ export async function listPublicSlots(input: {
     where: {
       tenantId: tenant.id,
       practitionerId: input.practitionerId,
+      serviceId: input.serviceId,
       status: { notIn: ["CANCELLED"] },
       scheduledFor: { gte: dayStart, lt: dayEnd },
     },
@@ -144,15 +146,16 @@ export async function listPublicSlots(input: {
     const slot = new Date(localToARIso(`${input.date}T${hh}:${mm}:00`));
     const slotEnd = new Date(slot.getTime() + total * 60_000);
     const inPast = slot.getTime() < Date.now() + 60 * 60_000;
-    const clash = existing.some((b) => {
+    const overlapCount = existing.filter((b) => {
       const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
       return b.scheduledFor < slotEnd && bEnd > slot;
-    });
+    }).length;
+    const full = overlapBlocks(overlapCount, service.maxConcurrent);
     slots.push({
       // The label IS the AR wall-clock time we just built the slot from.
       iso: slot.toISOString(),
       time: `${hh}:${mm}`,
-      available: !clash && !inPast,
+      available: !full && !inPast,
     });
   }
   return slots;
@@ -221,22 +224,25 @@ export async function submitPublicBooking(
     return { ok: false, error: "El horario ya pasó." };
   }
 
-  // Last-mile conflict check.
+  // Last-mile capacity check (same practitioner + same service). Overlaps are
+  // allowed up to Service.maxConcurrent (null = ilimitado).
   const end = new Date(scheduledFor.getTime() + service.durationMin * 60_000);
-  const clash = await prisma.booking.findFirst({
+  const clashes = await prisma.booking.findMany({
     where: {
       tenantId: tenant.id,
       practitionerId: data.practitionerId,
+      serviceId: service.id,
       status: { notIn: ["CANCELLED"] },
       scheduledFor: { lt: end, gte: new Date(scheduledFor.getTime() - 4 * 60 * 60_000) },
     },
     select: { scheduledFor: true, durationMin: true },
   });
-  if (
-    clash &&
-    clash.scheduledFor < end &&
-    new Date(clash.scheduledFor.getTime() + clash.durationMin * 60_000) > scheduledFor
-  ) {
+  const overlapCount = clashes.filter(
+    (c) =>
+      c.scheduledFor < end &&
+      new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > scheduledFor
+  ).length;
+  if (overlapBlocks(overlapCount, service.maxConcurrent)) {
     return { ok: false, error: "Ese horario se acaba de ocupar. Elegí otro." };
   }
 

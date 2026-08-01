@@ -5,8 +5,10 @@ import { Card } from "@/components/ui/card";
 import { localToARIso, toARHour } from "@/lib/datetime-ar";
 import { billingLine, fmtHour, layoutBookings, type BookingDTO } from "../agenda-utils";
 
-/** Max bookings shown per overlap group before a "+N more" pill appears. */
-const TIMELINE_PAGE = 5;
+/** Max bookings shown per overlap group before a "+N more" pill appears.
+ *  Kinesiología atiende varios pacientes en paralelo en una misma franja,
+ *  así que mostramos una cantidad generosa a ancho completo antes de paginar. */
+const TIMELINE_PAGE = 8;
 
 export function TimelineView({
   bookings,
@@ -102,16 +104,15 @@ export function TimelineView({
 
             if (b.col >= visibleCols) return null;
 
-            // The booking strip starts at 64 px (after the hour label).
-            // Cap it at 520 px max so cards never stretch across a very wide screen.
+            // The booking strip starts at 64 px (after the hour label) and uses
+            // the FULL remaining width. Overlapping patients split it evenly, so
+            // 6-7 turnos en paralelo (kinesiología) llenan toda la cuadrilla en
+            // vez de apretarse en la mitad izquierda (el viejo cap de 520 px).
             const STRIP_LEFT = 64;
             const STRIP_GAP = 8;
-            const STRIP_MAX = 520; // px cap
-            // colWidth / colLeft are expressed with calc() so they respect both
-            // the max-width cap and the equal-column split.
-            const trackW = `min(${STRIP_MAX}px, calc(100% - ${STRIP_LEFT + STRIP_GAP}px))`;
-            const colWidth = `calc(${trackW} / ${visibleCols})`;
-            const colLeft = `calc(${STRIP_LEFT}px + ${trackW} / ${visibleCols} * ${b.col})`;
+            const trackW = `calc(100% - ${STRIP_LEFT + STRIP_GAP}px)`;
+            const colWidth = `calc((${trackW}) / ${visibleCols})`;
+            const colLeft = `calc(${STRIP_LEFT}px + (${trackW}) / ${visibleCols} * ${b.col})`;
 
             const isLastVisible = b.col === visibleCols - 1 && hiddenCount > 0;
 
