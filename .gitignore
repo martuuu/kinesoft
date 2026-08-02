@@ -13,3 +13,4 @@ coverage
 prisma/migrations/dev.db
 design.tar.gz
 design_source/
+.docs
