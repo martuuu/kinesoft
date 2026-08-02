@@ -1,6 +1,8 @@
 "use server";
 
-import { prisma } from "@/lib/db";
+// Pre-membership provisioning: the user is NOT yet a member of the invite's
+// tenant, so no Actor GUC exists → service channel (BYPASSRLS). See lib/db.ts.
+import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";

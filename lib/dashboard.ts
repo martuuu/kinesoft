@@ -6,7 +6,7 @@
 "use server";
 
 import { unstable_cache } from "next/cache";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { visibilityForActor } from "@/lib/visibility";
 import { isReminderDismissed } from "@/lib/notifications";
@@ -131,52 +131,56 @@ const _loadDashboardCounts = unstable_cache(
       prevMonthPayments,
       insurerPayments,
     ] = await Promise.all([
-      prisma.booking.count({
+      // Each query is wrapped in its own runWithRls so they still run in
+      // parallel (one short tenant-scoped transaction / connection each) —
+      // preserving today's Promise.all fan-out instead of serialising on a
+      // single interactive transaction.
+      runWithRls(tenantId, (tx) => tx.booking.count({
         where: {
           tenantId,
           ...bookingWhere,
           scheduledFor: { gte: today, lt: tomorrow },
           status: { not: "CANCELLED" },
         },
-      }),
-      prisma.booking.findMany({
+      })),
+      runWithRls(tenantId, (tx) => tx.booking.findMany({
         where: {
           tenantId,
           ...bookingWhere,
           scheduledFor: { gte: weekStart, lt: nextWeekStart },
         },
         select: { scheduledFor: true, status: true },
-      }),
-      prisma.patient.count({
+      })),
+      runWithRls(tenantId, (tx) => tx.patient.count({
         where: {
           tenantId,
           ...patientWhere,
           programs: { some: { status: "ACTIVE" } },
         },
-      }),
-      prisma.treatmentProgram.count({
+      })),
+      runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
         where: {
           tenantId,
           status: "ACTIVE",
           ...(seesAll ? {} : { patient: patientWhere }),
         },
-      }),
-      prisma.treatmentProgram.count({
+      })),
+      runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
         where: {
           tenantId,
           status: "ACTIVE",
           sessions: { some: { completedAt: { not: null } } },
           ...(seesAll ? {} : { patient: patientWhere }),
         },
-      }),
-      prisma.patient.count({
+      })),
+      runWithRls(tenantId, (tx) => tx.patient.count({
         where: {
           tenantId,
           ...patientWhere,
           createdAt: { gte: monthStart },
         },
-      }),
-      prisma.session.findMany({
+      })),
+      runWithRls(tenantId, (tx) => tx.session.findMany({
         where: {
           program: { tenantId },
           completedAt: { not: null },
@@ -211,8 +215,8 @@ const _loadDashboardCounts = unstable_cache(
             },
           },
         },
-      }),
-      prisma.booking.findMany({
+      })),
+      runWithRls(tenantId, (tx) => tx.booking.findMany({
         where: {
           tenantId,
           ...bookingWhere,
@@ -225,31 +229,31 @@ const _loadDashboardCounts = unstable_cache(
           patient: { include: { coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 } } },
           service: true,
         },
-      }),
-      prisma.payment.aggregate({
+      })),
+      runWithRls(tenantId, (tx) => tx.payment.aggregate({
         where: {
           booking: { tenantId },
           status: "PAID",
           createdAt: { gte: monthStart },
         },
         _sum: { amountCents: true },
-      }),
-      prisma.payment.aggregate({
+      })),
+      runWithRls(tenantId, (tx) => tx.payment.aggregate({
         where: {
           booking: { tenantId },
           status: "PAID",
           createdAt: { gte: prevMonthStart, lt: monthStart },
         },
         _sum: { amountCents: true },
-      }),
-      prisma.payment.aggregate({
+      })),
+      runWithRls(tenantId, (tx) => tx.payment.aggregate({
         where: {
           booking: { tenantId, patient: { coverages: { some: {} } } },
           status: "PAID",
           createdAt: { gte: monthStart },
         },
         _sum: { amountCents: true },
-      }),
+      })),
     ]);
 
     const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
@@ -426,10 +430,10 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
   if (range === "week") {
     const weekStart = startOfWeek(now); // AR Monday midnight
     const end = new Date(weekStart.getTime() + 7 * DAY_MS);
-    const rows = await prisma.booking.findMany({
+    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: weekStart, lt: end } },
       select: { scheduledFor: true, status: true },
-    });
+    }));
     const labels = ["L", "M", "M", "J", "V", "S", "D"];
     return labels.map((label, i) => {
       const ds = new Date(weekStart.getTime() + i * DAY_MS);
@@ -444,10 +448,10 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     const start = new Date(localToARIso(`${ym}-01T00:00:00`));
     const nextYm = mm === 12 ? `${my + 1}-01` : `${my}-${String(mm + 1).padStart(2, "0")}`;
     const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
-    const rows = await prisma.booking.findMany({
+    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
       select: { scheduledFor: true, status: true },
-    });
+    }));
     // Bucket by ISO-week within the month.
     const buckets: ChartBar[] = [];
     let cur = new Date(start);
@@ -473,10 +477,10 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     const start = new Date(localToARIso(`${startYm}-01T00:00:00`));
     const nextYm = sm === 11 ? `${sy + 1}-01` : `${sy}-${String(sm + 2).padStart(2, "0")}`;
     const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
-    const rows = await prisma.booking.findMany({
+    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
       select: { scheduledFor: true, status: true },
-    });
+    }));
     buckets.push(
       countBookings(
         rows,
@@ -527,14 +531,14 @@ export async function getMonthBookingDays(
       const nextY = m === 11 ? y + 1 : y;
       const nextMM = String(m === 11 ? 1 : m + 2).padStart(2, "0");
       const end = new Date(localToARIso(`${nextY}-${nextMM}-01T00:00:00`));
-      const rows = await prisma.booking.findMany({
+      const rows = await runWithRls(tenantId, (tx) => tx.booking.findMany({
         where: {
           tenantId,
           scheduledFor: { gte: start, lt: end },
           status: { notIn: ["CANCELLED"] },
         },
         select: { scheduledFor: true },
-      });
+      }));
       const days = new Set<number>();
       // Derive the day-of-month in AR, not the host tz.
       for (const r of rows) days.add(Number(toARDateKey(r.scheduledFor).slice(8, 10)));

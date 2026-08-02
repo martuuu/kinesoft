@@ -29,7 +29,11 @@
  */
 import { cookies, headers } from "next/headers";
 import { cache } from "react";
-import { prisma } from "@/lib/db";
+// buildActor/buildDemoActor DISCOVER the tenant (unfiltered membership lookup)
+// before any Actor exists → no GUC can be set → they must use the BYPASSRLS
+// service channel, or the flip to the app role locks out every login.
+import { prismaService } from "@/lib/db";
+import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureRequestContext } from "@/lib/request-context";
 
@@ -57,7 +61,7 @@ async function buildActor(input: {
   userId: string;
   desiredTenantSlug?: string | null;
 }): Promise<Actor> {
-  const memberships = await prisma.membership.findMany({
+  const memberships = await prismaService.membership.findMany({
     where: { userId: input.userId, acceptedAt: { not: null } },
     include: { tenant: true },
     orderBy: { invitedAt: "desc" },
@@ -72,7 +76,7 @@ async function buildActor(input: {
     (desired && memberships.find((m) => m.tenant.slug === desired)) ||
     memberships[0];
 
-  const prac = await prisma.practitioner.findFirst({
+  const prac = await prismaService.practitioner.findFirst({
     where: { tenantId: chosen.tenantId, userId: input.userId },
     include: { user: true },
   });
@@ -91,9 +95,9 @@ async function buildActor(input: {
 }
 
 async function buildDemoActor(): Promise<Actor | null> {
-  const tenant = await prisma.tenant.findFirst({ where: { slug: "movare" } });
+  const tenant = await prismaService.tenant.findFirst({ where: { slug: "movare" } });
   if (!tenant) return null;
-  const prac = await prisma.practitioner.findFirst({
+  const prac = await prismaService.practitioner.findFirst({
     where: { tenantId: tenant.id },
     include: { user: true },
   });
@@ -210,35 +214,34 @@ type OwnedDelegates = {
 };
 type OwnedModel = keyof OwnedDelegates;
 
-const delegates: () => OwnedDelegates = () => ({
-  patient: _prisma.patient,
-  booking: _prisma.booking,
-  service: _prisma.service,
-  practitioner: _prisma.practitioner,
-  treatmentProgram: _prisma.treatmentProgram,
-  planTemplate: _prisma.planTemplate,
-  patientFile: _prisma.patientFile,
-});
-
 /**
  * Walks Prisma to a tenant-scoped row by `id`. Throws if not found in
  * the actor's tenant. Use this instead of hand-rolled findFirst boilerplate.
+ *
+ * RLS (Ola B2): the models it probes are all tenant-scoped, so the read
+ * self-primes a `runWithRls(actor.tenantId)` transaction. Callers already
+ * inside a `runWithRls` must pass their `tx` as `opts.db` to avoid nesting.
  */
 export async function requireOwned<M extends OwnedModel>(
   model: M,
   id: string,
   actor: Actor,
-  opts: { select?: Record<string, boolean> } = {}
+  opts: { select?: Record<string, boolean>; db?: DbClient } = {}
 ): Promise<{ id: string } & Record<string, unknown>> {
-  const delegate = delegates()[model] as unknown as {
-    findFirst: (args: {
-      where: { id: string; tenantId: string };
-      select?: Record<string, boolean>;
-    }) => Promise<({ id: string } & Record<string, unknown>) | null>;
-  };
-  const row = await delegate.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    ...(opts.select ? { select: { id: true, ...opts.select } } : {}),
+  const row = await withTenantDb(actor.tenantId, opts.db, (c) => {
+    const delegate = (c as unknown as Record<
+      string,
+      {
+        findFirst: (args: {
+          where: { id: string; tenantId: string };
+          select?: Record<string, boolean>;
+        }) => Promise<({ id: string } & Record<string, unknown>) | null>;
+      }
+    >)[model];
+    return delegate.findFirst({
+      where: { id, tenantId: actor.tenantId },
+      ...(opts.select ? { select: { id: true, ...opts.select } } : {}),
+    });
   });
   if (!row) throw new NotFoundError(model, id);
   return row;

@@ -7,17 +7,17 @@
  * needed (TZ override, currency, etc.).
  */
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import type { ActionResult } from "@/lib/validation";
 
 async function requireAdmin() {
   const actor = await getActor();
-  const m = await prisma.membership.findUnique({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!m || (m.role !== "OWNER" && m.role !== "ADMIN")) {
     throw new Error("Solo OWNER/ADMIN pueden cambiar la configuración del consultorio.");
   }
@@ -37,7 +37,7 @@ export type TenantSettings = {
 
 export async function getTenantSettings(): Promise<TenantSettings> {
   const actor = await getActor();
-  const t = await prisma.tenant.findUniqueOrThrow({
+  const t = await runWithRls(actor.tenantId, (tx) => tx.tenant.findUniqueOrThrow({
     where: { id: actor.tenantId },
     select: {
       name: true,
@@ -49,7 +49,7 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       businessHoursStart: true,
       businessHoursEnd: true,
     },
-  });
+  }));
   return t;
 }
 
@@ -76,10 +76,10 @@ export async function setBusinessHours(input: {
       error: `Rango inválido. Inicio debe ser entre ${MIN}:00 y ${MAX - 1}:00, fin debe ser mayor que inicio y ≤ ${MAX}:00.`,
     };
   }
-  await prisma.tenant.update({
+  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
     where: { id: actor.tenantId },
     data: { businessHoursStart: start, businessHoursEnd: end },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -97,10 +97,10 @@ export async function setBusinessHours(input: {
 
 export async function setSharedPatientView(value: boolean): Promise<ActionResult> {
   const actor = await requireAdmin();
-  await prisma.tenant.update({
+  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
     where: { id: actor.tenantId },
     data: { sharedPatientView: value },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -132,7 +132,7 @@ export async function updateTenantBasics(input: {
   if (input.taxId !== undefined) patch.taxId = input.taxId?.trim() || null;
   if (Object.keys(patch).length === 0) return { ok: true, data: undefined };
 
-  await prisma.tenant.update({ where: { id: actor.tenantId }, data: patch });
+  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({ where: { id: actor.tenantId }, data: patch }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

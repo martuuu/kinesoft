@@ -12,13 +12,13 @@
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
-import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
+import { overlapBlocks } from "@/lib/booking-capacity";
 import { toARDow, toARHour, toARDateKey } from "@/lib/datetime-ar";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
@@ -53,7 +53,7 @@ export async function listBookingsInRange(opts: {
   // Sprint 16: agenda shows every booking in the tenant; per-row access
   // tier is resolved below. The diagnosis chip is hidden when the actor
   // only has BASIC access to that booking's patient.
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
@@ -80,7 +80,7 @@ export async function listBookingsInRange(opts: {
         },
       },
     },
-  });
+  }));
 
   const patientIds = rows
     .map((b) => b.patientId)
@@ -150,14 +150,14 @@ export async function getDayCounts(opts: { from: Date; to: Date }) {
   const actor = await getActor();
   // Day-strip dots show every booking in the tenant — counts don't leak
   // PHI so no access gating needed here.
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
       status: { not: "CANCELLED" },
     },
     select: { scheduledFor: true },
-  });
+  }));
   const counts = new Map<string, number>();
   for (const r of rows) {
     // Bucket by the AR calendar day, not the UTC slice — otherwise a late-night
@@ -172,10 +172,10 @@ export async function listServices() {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string) =>
-      prisma.service.findMany({
+      runWithRls(tenantId, (tx) => tx.service.findMany({
         where: { tenantId },
         orderBy: { name: "asc" },
-      }),
+      })),
     ["services:list", actor.tenantId],
     { tags: [tags.services(actor.tenantId)], revalidate: ttl.short }
   );
@@ -186,11 +186,11 @@ export async function listPractitioners() {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string) =>
-      prisma.practitioner.findMany({
+      runWithRls(tenantId, (tx) => tx.practitioner.findMany({
         where: { tenantId },
         include: { user: true },
         orderBy: { createdAt: "asc" },
-      }),
+      })),
     ["practitioners:list", actor.tenantId],
     { tags: [tags.practitioners(actor.tenantId)], revalidate: ttl.short }
   );
@@ -209,7 +209,9 @@ async function suggestNextFreeSlot(
   tenantId: string,
   practitionerId: string,
   from: Date,
-  durationMin: number
+  durationMin: number,
+  serviceId: string,
+  maxConcurrent: number | null
 ): Promise<string | null> {
   const STEP_MIN = 15;
   const HORIZON_MS = 14 * 86_400_000;
@@ -217,10 +219,11 @@ async function suggestNextFreeSlot(
   // Resolve business hours alongside the bookings preload so we don't
   // do two sequential roundtrips.
   const [bookings, tenant] = await Promise.all([
-    prisma.booking.findMany({
+    runWithRls(tenantId, (tx) => tx.booking.findMany({
       where: {
         tenantId,
         practitionerId,
+        serviceId,
         status: { notIn: ["CANCELLED"] },
         scheduledFor: {
           gte: start,
@@ -228,19 +231,24 @@ async function suggestNextFreeSlot(
         },
       },
       select: { scheduledFor: true, durationMin: true },
-    }),
-    prisma.tenant.findUnique({
+    })),
+    runWithRls(tenantId, (tx) => tx.tenant.findUnique({
       where: { id: tenantId },
       select: { businessHoursStart: true, businessHoursEnd: true },
-    }),
+    })),
   ]);
   const openHour = tenant?.businessHoursStart ?? 8;
   const closeHour = tenant?.businessHoursEnd ?? 19;
-  const overlaps = (slot: Date, end: Date) =>
-    bookings.some((b) => {
-      const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
-      return b.scheduledFor < end && bEnd > slot;
-    });
+  // A slot is "free" when adding this turno wouldn't exceed the service's
+  // per-horario capacity — counting SAME-service overlaps only.
+  const atCapacity = (slot: Date, end: Date) =>
+    overlapBlocks(
+      bookings.filter((b) => {
+        const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
+        return b.scheduledFor < end && bEnd > slot;
+      }).length,
+      maxConcurrent
+    );
   const cursor = new Date(start);
   // Round to next 15-min boundary.
   cursor.setMinutes(Math.ceil(cursor.getMinutes() / STEP_MIN) * STEP_MIN, 0, 0);
@@ -255,7 +263,7 @@ async function suggestNextFreeSlot(
     const endMinutes = arHour * 60 + durationMin;
     if (dow !== 0 && arHour >= openHour && endMinutes <= closeHour * 60) {
       const end = new Date(cursor.getTime() + durationMin * 60_000);
-      if (!overlaps(cursor, end)) {
+      if (!atCapacity(cursor, end)) {
         return cursor.toISOString();
       }
     }
@@ -286,30 +294,31 @@ export async function createBooking(
   const data = parsed.data;
 
   if (data.patientId) {
-    const owned = await prisma.patient.findFirst({
+    const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
       where: { id: data.patientId, tenantId: actor.tenantId },
       select: { id: true },
-    });
+    }));
     if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
   }
-  const service = await prisma.service.findFirst({
+  const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
-    select: { id: true, durationMin: true, name: true },
-  });
+    select: { id: true, durationMin: true, name: true, maxConcurrent: true },
+  }));
   if (!service) return { ok: false, error: "Servicio inválido." };
 
   const duration = data.durationMin ?? service.durationMin;
   const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
 
-  // Conflict check for the SAME practitioner (other kines in the same
-  // hour are fine — multiple boxes / kines in the same consultorio).
-  // Fetch every candidate in the window (a turno starting up to 4h before
-  // could still overlap a long session) and test them all — a single
-  // unordered findFirst could return a non-overlapping row and miss the clash.
-  const candidates = await prisma.booking.findMany({
+  // Overlap capacity check, scoped to the SAME practitioner + SAME service.
+  // Overlaps are allowed up to `Service.maxConcurrent` (null = ilimitado, el
+  // caso normal en kinesiología: varios pacientes en paralelo en la franja).
+  // Fetch every candidate in the 4h window (a long prior session could still
+  // overlap) and COUNT the real overlaps — a single findFirst could miss it.
+  const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       practitionerId: data.practitionerId,
+      serviceId: data.serviceId,
       status: { notIn: ["CANCELLED"] },
       scheduledFor: {
         lt: end,
@@ -317,21 +326,22 @@ export async function createBooking(
       },
     },
     select: { id: true, scheduledFor: true, durationMin: true },
-  });
-  const overlapping = candidates.some(
+  }));
+  const overlapCount = candidates.filter(
     (c) =>
       c.scheduledFor < end &&
       new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > data.scheduledFor
-  );
-  if (overlapping && !raw.allowOverbooking) {
+  ).length;
+  const capacityReached = overlapBlocks(overlapCount, service.maxConcurrent);
+  if (capacityReached && !raw.allowOverbooking) {
     // Compute a suggestion + tell the UI it can re-call with
     // allowOverbooking=true to force a sobreturno.
     const [prac, suggestion] = await Promise.all([
-      prisma.practitioner.findUnique({
+      runWithRls(actor.tenantId, (tx) => tx.practitioner.findUnique({
         where: { id: data.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
-      }),
-      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration),
+      })),
+      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration, data.serviceId, service.maxConcurrent),
     ]);
     return {
       ok: false,
@@ -346,7 +356,7 @@ export async function createBooking(
   // Tag overbooked rows so the UI / reports can distinguish them. Until
   // we add a column, we prepend "[SOBRETURNO]" to the notes field.
   const notes =
-    overlapping && raw.allowOverbooking
+    capacityReached && raw.allowOverbooking
       ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
       : data.notes;
 
@@ -413,10 +423,10 @@ export async function createBooking(
     if (actor.userId) {
       let who: string;
       if (data.patientId) {
-        const p = await prisma.patient.findUnique({
+        const p = await runWithRls(actor.tenantId, (tx) => tx.patient.findUnique({
           where: { id: data.patientId },
           select: { firstName: true, lastName: true },
-        });
+        }));
         who = p ? `${p.firstName} ${p.lastName}` : "Paciente";
       } else {
         who = data.guestName ?? "Reserva externa";
@@ -480,6 +490,8 @@ export async function updateBooking(
         scheduledFor: true,
         durationMin: true,
         practitionerId: true,
+        serviceId: true,
+        service: { select: { maxConcurrent: true } },
         updatedAt: true,
         patient: { select: { firstName: true, lastName: true } },
       },
@@ -510,6 +522,7 @@ export async function updateBooking(
         where: {
           tenantId: actor.tenantId,
           practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
           id: { not: id },
           status: { notIn: ["CANCELLED"] },
           scheduledFor: {
@@ -519,12 +532,12 @@ export async function updateBooking(
         },
         select: { id: true, scheduledFor: true, durationMin: true },
       });
-      const overlapping = candidates.some(
+      const overlapCount = candidates.filter(
         (c) =>
           c.scheduledFor < end &&
           new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > newWhen
-      );
-      if (overlapping && !raw.allowOverbooking) {
+      ).length;
+      if (overlapBlocks(overlapCount, before.service?.maxConcurrent) && !raw.allowOverbooking) {
         return { kind: "conflict" as const, before, newWhen, newDuration };
       }
     }
@@ -539,11 +552,11 @@ export async function updateBooking(
   if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
   if (outcome.kind === "conflict") {
     const [prac, suggestion] = await Promise.all([
-      prisma.practitioner.findUnique({
+      runWithRls(actor.tenantId, (tx) => tx.practitioner.findUnique({
         where: { id: outcome.before.practitionerId },
         include: { user: { select: { fullName: true, email: true } } },
-      }),
-      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration),
+      })),
+      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration, outcome.before.serviceId, outcome.before.service?.maxConcurrent ?? null),
     ]);
     return {
       ok: false,
@@ -682,15 +695,15 @@ export async function setBookingInsurerPaid(
   paid: boolean
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.booking.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, patientId: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Turno no encontrado." };
-  await prisma.booking.update({
+  await runWithRls(actor.tenantId, (tx) => tx.booking.update({
     where: { id },
     data: { insurerPaidAt: paid ? new Date() : null },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -713,15 +726,15 @@ export async function setBookingCopagoPaid(
   paid: boolean
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.booking.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, patientId: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Turno no encontrado." };
-  await prisma.booking.update({
+  await runWithRls(actor.tenantId, (tx) => tx.booking.update({
     where: { id },
     data: { paymentStatus: paid ? "PAID" : "UNPAID" },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -761,10 +774,10 @@ export async function createBookingsBatch(
   }
   const data = parsed.data;
   const count = Math.min(60, Math.max(1, Math.floor(raw.count ?? 1)));
-  const service = await prisma.service.findFirst({
+  const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
-    select: { id: true, durationMin: true },
-  });
+    select: { id: true, durationMin: true, maxConcurrent: true },
+  }));
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
 
@@ -795,10 +808,11 @@ export async function createBookingsBatch(
   let skipped = 0;
   for (const when of dates) {
     const end = new Date(when.getTime() + duration * 60_000);
-    const candidates = await prisma.booking.findMany({
+    const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
+        serviceId: data.serviceId,
         status: { notIn: ["CANCELLED"] },
         scheduledFor: {
           gte: new Date(when.getTime() - 240 * 60_000),
@@ -806,13 +820,15 @@ export async function createBookingsBatch(
         },
       },
       select: { id: true, scheduledFor: true, durationMin: true },
-    });
-    const overlap = candidates.some(
+    }));
+    const overlapCount = candidates.filter(
       (c) =>
         c.scheduledFor < end &&
         new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > when
-    );
-    if (overlap) {
+    ).length;
+    // Skip a slot only when the service's capacity is actually reached
+    // (ilimitado → nunca se saltea; se crean todos los solapados).
+    if (overlapBlocks(overlapCount, service.maxConcurrent)) {
       skipped++;
       continue;
     }
@@ -820,7 +836,7 @@ export async function createBookingsBatch(
       ? `${actor.tenantId}:${data.practitionerId}:${when.toISOString()}:${identity}`
       : randomBytes(16).toString("hex");
     try {
-      await prisma.booking.upsert({
+      await runWithRls(actor.tenantId, (tx) => tx.booking.upsert({
         where: { idempotencyKey },
         update: {},
         create: {
@@ -839,7 +855,7 @@ export async function createBookingsBatch(
           seriesId,
           idempotencyKey,
         },
-      });
+      }));
       created++;
     } catch (e) {
       // Genuine conflicts are already filtered out by the overlap check
@@ -873,7 +889,7 @@ export async function createBookingsBatch(
  */
 export async function exportBookingsIcs(opts: { from: Date; to: Date }): Promise<string> {
   const actor = await getActor();
-  const rows = await prisma.booking.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
     where: {
       tenantId: actor.tenantId,
       scheduledFor: { gte: opts.from, lt: opts.to },
@@ -881,7 +897,7 @@ export async function exportBookingsIcs(opts: { from: Date; to: Date }): Promise
     },
     include: { patient: true, service: true },
     orderBy: { scheduledFor: "asc" },
-  });
+  }));
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",

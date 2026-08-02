@@ -16,7 +16,7 @@
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { PatientFileCategory } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
@@ -67,10 +67,10 @@ function storageEnabled() {
 
 export async function listPatientFiles(patientId: string): Promise<PatientFileRow[]> {
   const actor = await getActor();
-  const rows = await prisma.patientFile.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.patientFile.findMany({
     where: { patientId, tenantId: actor.tenantId },
     orderBy: { createdAt: "desc" },
-  });
+  }));
   const haveStorage = storageEnabled();
   return rows.map((r) => ({
     id: r.id,
@@ -94,10 +94,10 @@ export async function uploadPatientFile(
   formData: FormData
 ): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: patientId, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
   const file = formData.get("file");
@@ -137,7 +137,7 @@ export async function uploadPatientFile(
     if (error) return { ok: false, error: "No pudimos subir el archivo." };
   }
 
-  const row = await prisma.patientFile.create({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.patientFile.create({
     data: {
       tenantId: actor.tenantId,
       patientId,
@@ -149,7 +149,7 @@ export async function uploadPatientFile(
       category,
       description,
     },
-  });
+  }));
 
   await audit({
     tenantId: actor.tenantId,
@@ -166,9 +166,9 @@ export async function uploadPatientFile(
 
 export async function deletePatientFile(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const row = await prisma.patientFile.findFirst({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.patientFile.findFirst({
     where: { id, tenantId: actor.tenantId },
-  });
+  }));
   if (!row) return { ok: false, error: "Archivo no encontrado." };
 
   if (storageEnabled() && !row.storageKey.startsWith("stub:")) {
@@ -176,7 +176,7 @@ export async function deletePatientFile(id: string): Promise<ActionResult> {
     await supabase.storage.from(BUCKET).remove([row.storageKey]);
   }
 
-  await prisma.patientFile.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.patientFile.delete({ where: { id } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -191,9 +191,9 @@ export async function deletePatientFile(id: string): Promise<ActionResult> {
 /** Server-side signed download URL — short-lived (10 min). */
 export async function getDownloadUrl(id: string): Promise<ActionResult<{ url: string }>> {
   const actor = await getActor();
-  const row = await prisma.patientFile.findFirst({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.patientFile.findFirst({
     where: { id, tenantId: actor.tenantId },
-  });
+  }));
   if (!row) return { ok: false, error: "Archivo no encontrado." };
   if (!storageEnabled() || row.storageKey.startsWith("stub:")) {
     return { ok: false, error: "Storage no configurado en este entorno." };

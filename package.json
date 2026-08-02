@@ -16,7 +16,9 @@
     "prisma:seed": "dotenv -e .env.local -- tsx prisma/seed.ts",
     "prisma:studio": "dotenv -e .env.local -- prisma studio",
     "prisma:reset": "dotenv -e .env.local -- prisma migrate reset",
-    "db:deploy": "prisma migrate deploy"
+    "db:deploy": "prisma migrate deploy",
+    "guard:isolation": "node scripts/guard-tenant-isolation.mjs",
+    "test:integration": "RLS_IT=1 dotenv -e .env.local -- vitest run tests/integration"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

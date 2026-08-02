@@ -1,7 +1,6 @@
 import "server-only";
 
-import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { withTenantDb, type DbClient } from "@/lib/rls";
 
 /**
  * Normalize a free-form obra-social name and dedup it against the tenant
@@ -16,14 +15,17 @@ import { prisma } from "@/lib/db";
 export async function resolveInsurerName(
   tenantId: string,
   raw: string,
-  tx?: Prisma.TransactionClient
+  tx?: DbClient
 ): Promise<{ insurerId: string | null; name: string }> {
   const name = raw.trim().replace(/\s+/g, " ");
   if (!name) return { insurerId: null, name: "" };
-  const client = tx ?? prisma;
-  const match = await client.insurer.findFirst({
-    where: { tenantId, name: { equals: name, mode: "insensitive" } },
-    select: { id: true, name: true },
-  });
+  // Insurer is RLS-governed (Ola B2): self-prime a tenant tx when called
+  // standalone; reuse the caller's `tx` when threaded from a coverage write.
+  const match = await withTenantDb(tenantId, tx, (c) =>
+    c.insurer.findFirst({
+      where: { tenantId, name: { equals: name, mode: "insensitive" } },
+      select: { id: true, name: true },
+    })
+  );
   return match ? { insurerId: match.id, name: match.name } : { insurerId: null, name };
 }

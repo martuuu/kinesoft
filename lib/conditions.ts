@@ -19,7 +19,7 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
@@ -64,7 +64,7 @@ const ConditionInput = z.object({
  */
 export async function listCustomConditions(): Promise<CustomConditionRow[]> {
   const actor = await getActor();
-  const rows = await prisma.condition.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
     where: { tenantId: actor.tenantId },
     orderBy: { name: "asc" },
     select: {
@@ -80,7 +80,7 @@ export async function listCustomConditions(): Promise<CustomConditionRow[]> {
       createdAt: true,
       updatedAt: true,
     },
-  });
+  }));
   return rows;
 }
 
@@ -103,7 +103,7 @@ export async function createCustomCondition(
   const base = slugify(data.name) || "diagnostico";
   const slug = `t-${actor.tenantId.slice(-6)}-${base}-${Date.now().toString(36).slice(-4)}`;
   try {
-    const row = await prisma.condition.create({
+    const row = await runWithRls(actor.tenantId, (tx) => tx.condition.create({
       data: {
         slug,
         name: data.name,
@@ -116,7 +116,7 @@ export async function createCustomCondition(
         createdById: actor.userId,
       },
       select: { id: true, slug: true },
-    });
+    }));
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
@@ -142,10 +142,10 @@ export async function updateCustomCondition(
   raw: Partial<z.input<typeof ConditionInput>>
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.condition.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) {
     return {
       ok: false,
@@ -161,7 +161,7 @@ export async function updateCustomCondition(
     };
   }
   const data = parsed.data;
-  await prisma.condition.update({
+  await runWithRls(actor.tenantId, (tx) => tx.condition.update({
     where: { id },
     data: {
       ...data,
@@ -170,7 +170,7 @@ export async function updateCustomCondition(
       redFlags: data.redFlags === "" ? null : data.redFlags,
       mechanism: data.mechanism === "" ? null : data.mechanism,
     },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -186,10 +186,10 @@ export async function updateCustomCondition(
 
 export async function deleteCustomCondition(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.condition.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, _count: { select: { diagnoses: true } } },
-  });
+  }));
   if (!owned) {
     return {
       ok: false,
@@ -202,7 +202,7 @@ export async function deleteCustomCondition(id: string): Promise<ActionResult> {
       error: `No se puede borrar: hay ${owned._count.diagnoses} clínica${owned._count.diagnoses === 1 ? "" : "s"} usándolo. Editá el nombre si querés actualizarlo.`,
     };
   }
-  await prisma.condition.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.condition.delete({ where: { id } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

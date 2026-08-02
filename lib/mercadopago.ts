@@ -21,7 +21,8 @@ import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { MercadoPagoConfig, Preference, Payment as MpPayment } from "mercadopago";
 import { env } from "@/lib/env";
-import { prisma } from "@/lib/db";
+// Webhook + checkout preference run without an Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import { notifyTenantOwners } from "@/lib/notifications-internal";
 import { NotificationKind } from "@prisma/client";
 import { logger } from "@/lib/logger";

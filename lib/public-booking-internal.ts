@@ -8,7 +8,8 @@
  * against a verified Supabase session (`user.email_confirmed_at`).
  */
 import "server-only";
-import { prisma } from "@/lib/db";
+// Cross-tenant prefill lookup, no single-tenant Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 import type { PrefillPatient } from "@/lib/public-booking-types";
 
 /**

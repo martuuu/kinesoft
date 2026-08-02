@@ -13,7 +13,7 @@
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -23,10 +23,10 @@ import type { ServiceRow } from "@/lib/services-types";
 
 async function requireAdminActor() {
   const actor = await getActor();
-  const m = await prisma.membership.findUnique({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!m || (m.role !== "OWNER" && m.role !== "ADMIN")) {
     throw new Error("Solo OWNER/ADMIN pueden modificar el catálogo de servicios.");
   }
@@ -37,14 +37,14 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string): Promise<ServiceRow[]> => {
-      const rows = await prisma.service.findMany({
+      const rows = await runWithRls(tenantId, (tx) => tx.service.findMany({
         where: { tenantId },
         orderBy: { name: "asc" },
         include: {
           practitioner: { include: { user: { select: { fullName: true, email: true } } } },
           _count: { select: { bookings: true } },
         },
-      });
+      }));
       return rows.map((s) => ({
         id: s.id,
         name: s.name,
@@ -55,6 +55,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         practitionerName: s.practitioner
           ? (s.practitioner.user.fullName ?? s.practitioner.user.email)
           : null,
+        maxConcurrent: s.maxConcurrent,
         bookingsCount: s._count.bookings,
       }));
     },
@@ -70,6 +71,13 @@ const ServiceInput = z.object({
   durationMin: z.coerce.number().int().min(5).max(480).default(45),
   priceCents: z.coerce.number().int().min(0).max(100_000_000).default(0),
   practitionerId: z.string().optional().or(z.literal("")),
+  // Cupos simultáneos por horario. Vacío → null = ilimitado (kinesiología).
+  maxConcurrent: z
+    .preprocess(
+      (v) => (v === "" || v === undefined || v === null ? null : v),
+      z.coerce.number().int().min(1, "Mínimo 1").max(50).nullable()
+    )
+    .optional(),
 });
 
 export async function createService(
@@ -86,14 +94,14 @@ export async function createService(
   const actor = await requireAdminActor();
   // Validate practitioner belongs to the tenant if supplied.
   if (parsed.data.practitionerId) {
-    const owned = await prisma.practitioner.findFirst({
+    const owned = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
       where: { id: parsed.data.practitionerId, tenantId: actor.tenantId },
       select: { id: true },
-    });
+    }));
     if (!owned) return { ok: false, error: "Profesional fuera del tenant." };
   }
   try {
-    const row = await prisma.service.create({
+    const row = await runWithRls(actor.tenantId, (tx) => tx.service.create({
       data: {
         tenantId: actor.tenantId,
         name: parsed.data.name,
@@ -101,8 +109,9 @@ export async function createService(
         durationMin: parsed.data.durationMin,
         priceCents: parsed.data.priceCents,
         practitionerId: parsed.data.practitionerId || null,
+        maxConcurrent: parsed.data.maxConcurrent ?? null,
       },
-    });
+    }));
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
@@ -129,10 +138,10 @@ export async function updateService(
   raw: Partial<z.input<typeof ServiceInput>>
 ): Promise<ActionResult> {
   const actor = await requireAdminActor();
-  const owned = await prisma.service.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Servicio no encontrado." };
 
   const parsed = ServiceInput.partial().safeParse(raw);
@@ -144,13 +153,13 @@ export async function updateService(
     };
   }
   if (parsed.data.practitionerId) {
-    const ownedPrac = await prisma.practitioner.findFirst({
+    const ownedPrac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
       where: { id: parsed.data.practitionerId, tenantId: actor.tenantId },
       select: { id: true },
-    });
+    }));
     if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
   }
-  await prisma.service.update({
+  await runWithRls(actor.tenantId, (tx) => tx.service.update({
     where: { id },
     data: {
       ...parsed.data,
@@ -158,7 +167,7 @@ export async function updateService(
       practitionerId:
         parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
     },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -174,10 +183,10 @@ export async function updateService(
 
 export async function deleteService(id: string): Promise<ActionResult> {
   const actor = await requireAdminActor();
-  const owned = await prisma.service.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id, tenantId: actor.tenantId },
     include: { _count: { select: { bookings: true } } },
-  });
+  }));
   if (!owned) return { ok: false, error: "Servicio no encontrado." };
   if (owned._count.bookings > 0) {
     return {
@@ -185,7 +194,7 @@ export async function deleteService(id: string): Promise<ActionResult> {
       error: "No se puede borrar: hay turnos asociados. Editá el nombre/precio si querés actualizarlo.",
     };
   }
-  await prisma.service.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.service.delete({ where: { id } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

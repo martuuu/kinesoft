@@ -9,6 +9,7 @@
  */
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { Prisma, TagKind } from "@prisma/client";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
@@ -64,7 +65,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
     ],
   };
 
-  const rows = await prisma.exercise.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
     where,
     orderBy: [{ difficulty: "asc" }, { name: "asc" }],
     include: {
@@ -77,7 +78,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
         ? { where: { userId: actor.userId }, select: { id: true }, take: 1 }
         : false,
     },
-  });
+  }));
   return rows.map((e) => ({
     id: e.id,
     slug: e.slug,
@@ -109,7 +110,7 @@ export async function getExercise(slug: string) {
   const gate = await gatingForActor();
   const fetcher = unstable_cache(
     async (s: string) =>
-      prisma.exercise.findFirst({
+      runWithRls(actor.tenantId, (tx) => tx.exercise.findFirst({
         where: { AND: [{ slug: s }, gate.visibility] },
         include: {
           conditions: {
@@ -118,7 +119,7 @@ export async function getExercise(slug: string) {
           },
           tags: { include: { tag: true } },
         },
-      }),
+      })),
     ["exercise:slug", slug, actor.tenantId, gate.hasFullCatalog ? "full" : "basic"],
     {
       tags: [cacheTags.exercises(actor.tenantId), cacheTags.catalog()],
@@ -138,10 +139,10 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
   const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog });
   const fetcher = unstable_cache(
     async (): Promise<FilterFacets> => {
-      const exercises = await prisma.exercise.findMany({
+      const exercises = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
         where: gate.visibility,
         select: { difficulty: true, muscleGroups: true, equipment: true },
-      });
+      }));
       const muscle = new Set<string>();
       const equip = new Set<string>();
       const diff = new Set<number>();
@@ -160,10 +161,10 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
         }
         diff.add(e.difficulty);
       }
-      const conditions = await prisma.condition.findMany({
+      const conditions = await runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
         select: { slug: true, name: true },
         orderBy: { name: "asc" },
-      });
+      }));
       return {
         muscleGroups: Array.from(muscle).sort(),
         equipment: Array.from(equip).sort(),
@@ -254,13 +255,13 @@ export async function createExercise(input: {
   // Append a short suffix until unique.
   let slug = baseSlug;
   for (let i = 1; i < 50; i++) {
-    const taken = await prisma.exercise.findUnique({ where: { slug }, select: { id: true } });
+    const taken = await runWithRls(actor.tenantId, (tx) => tx.exercise.findUnique({ where: { slug }, select: { id: true } }));
     if (!taken) break;
     slug = `${baseSlug}-${i}`;
   }
 
   try {
-    const ex = await prisma.exercise.create({
+    const ex = await runWithRls(actor.tenantId, (tx) => tx.exercise.create({
       data: {
         slug,
         name,
@@ -285,7 +286,7 @@ export async function createExercise(input: {
             }
           : undefined,
       },
-    });
+    }));
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,

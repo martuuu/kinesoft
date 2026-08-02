@@ -10,7 +10,7 @@ import {
 } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { PatientProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
 
@@ -54,15 +54,19 @@ export default async function PatientPage({ params }: { params: { id: string } }
     getPatientBillableCount(params.id),
     getPatientEvaScores(params.id),
     listInsurers({ onlyActive: true }),
-    prisma.practitioner.findMany({
-      where: { tenantId: actor.tenantId },
-      include: { user: { select: { fullName: true, email: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.membership.findUnique({
-      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-      select: { role: true },
-    }),
+    runWithRls(actor.tenantId, (tx) =>
+      tx.practitioner.findMany({
+        where: { tenantId: actor.tenantId },
+        include: { user: { select: { fullName: true, email: true } } },
+        orderBy: { createdAt: "asc" },
+      })
+    ),
+    runWithRls(actor.tenantId, (tx) =>
+      tx.membership.findUnique({
+        where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+        select: { role: true },
+      })
+    ),
   ]);
   const canReassign = membership?.role === "OWNER" || membership?.role === "ADMIN";
 

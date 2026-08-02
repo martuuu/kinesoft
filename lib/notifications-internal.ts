@@ -9,7 +9,7 @@
  */
 import "server-only";
 import { NotificationKind } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { logger } from "@/lib/logger";
 import { captureException } from "@/lib/observability";
 
@@ -26,7 +26,7 @@ export async function notify(p: {
   link?: string;
 }) {
   try {
-    await prisma.notification.create({
+    await runWithRls(p.tenantId, (tx) => tx.notification.create({
       data: {
         tenantId: p.tenantId,
         userId: p.userId,
@@ -35,7 +35,7 @@ export async function notify(p: {
         body: p.body,
         link: p.link,
       },
-    });
+    }));
   } catch (err) {
     // Fire-and-forget: never block the caller — but leave a trace.
     logger.warn("notify: insert failed", {
@@ -65,20 +65,20 @@ export async function notifyTenantOwners(p: {
   try {
     const recipients = new Set<string>();
     if (p.alsoPractitionerId) {
-      const prac = await prisma.practitioner.findUnique({
+      const prac = await runWithRls(p.tenantId, (tx) => tx.practitioner.findUnique({
         where: { id: p.alsoPractitionerId },
         select: { userId: true },
-      });
+      }));
       if (prac?.userId) recipients.add(prac.userId);
     }
-    const memberships = await prisma.membership.findMany({
+    const memberships = await runWithRls(p.tenantId, (tx) => tx.membership.findMany({
       where: { tenantId: p.tenantId, role: { in: ["OWNER", "ADMIN"] } },
       select: { userId: true },
-    });
+    }));
     for (const m of memberships) recipients.add(m.userId);
 
     if (recipients.size === 0) return;
-    await prisma.notification.createMany({
+    await runWithRls(p.tenantId, (tx) => tx.notification.createMany({
       data: Array.from(recipients).map((userId) => ({
         tenantId: p.tenantId,
         userId,
@@ -87,7 +87,7 @@ export async function notifyTenantOwners(p: {
         body: p.body,
         link: p.link,
       })),
-    });
+    }));
   } catch (err) {
     // Fire-and-forget: never block the caller — but leave a trace.
     logger.warn("notifyTenantOwners: insert failed", {

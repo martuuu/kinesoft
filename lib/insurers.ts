@@ -14,7 +14,7 @@
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -24,10 +24,10 @@ import type { InsurerRow } from "@/lib/insurers-types";
 
 async function requireAdminActor() {
   const actor = await getActor();
-  const m = await prisma.membership.findUnique({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!m || (m.role !== "OWNER" && m.role !== "ADMIN")) {
     throw new Error("Solo OWNER/ADMIN pueden modificar el catálogo de obras sociales.");
   }
@@ -50,14 +50,14 @@ export async function listInsurers(opts: { onlyActive?: boolean } = {}): Promise
   const onlyActive = !!opts.onlyActive;
   const fetcher = unstable_cache(
     async (tenantId: string, active: boolean): Promise<InsurerRow[]> => {
-      const rows = await prisma.insurer.findMany({
+      const rows = await runWithRls(tenantId, (tx) => tx.insurer.findMany({
         where: {
           tenantId,
           ...(active ? { active: true } : {}),
         },
         orderBy: [{ active: "desc" }, { name: "asc" }],
         include: { _count: { select: { coverages: true } } },
-      });
+      }));
       return rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -97,7 +97,7 @@ export async function createInsurer(
   }
   const actor = await requireAdminActor();
   try {
-    const row = await prisma.insurer.create({
+    const row = await runWithRls(actor.tenantId, (tx) => tx.insurer.create({
       data: {
         tenantId: actor.tenantId,
         name: parsed.data.name,
@@ -106,7 +106,7 @@ export async function createInsurer(
         active: parsed.data.active ?? true,
         notes: parsed.data.notes || null,
       },
-    });
+    }));
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
@@ -132,10 +132,10 @@ export async function updateInsurer(
   raw: Partial<z.input<typeof InsurerInput>>
 ): Promise<ActionResult> {
   const actor = await requireAdminActor();
-  const owned = await prisma.insurer.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.insurer.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Obra social no encontrada." };
 
   const parsed = InsurerInput.partial().safeParse(raw);
@@ -146,13 +146,13 @@ export async function updateInsurer(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  await prisma.insurer.update({
+  await runWithRls(actor.tenantId, (tx) => tx.insurer.update({
     where: { id },
     data: {
       ...parsed.data,
       notes: parsed.data.notes ? parsed.data.notes : parsed.data.notes === "" ? null : undefined,
     },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -167,10 +167,10 @@ export async function updateInsurer(
 
 export async function deleteInsurer(id: string): Promise<ActionResult> {
   const actor = await requireAdminActor();
-  const owned = await prisma.insurer.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.insurer.findFirst({
     where: { id, tenantId: actor.tenantId },
     include: { _count: { select: { coverages: true } } },
-  });
+  }));
   if (!owned) return { ok: false, error: "Obra social no encontrada." };
   // "Particular" is the default out-of-pocket row every tenant needs — it
   // can be renamed/repriced but never deleted.
@@ -180,7 +180,7 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
   // Soft-delete when in use: deactivate but keep the row so historical
   // Coverages still resolve. Hard-delete only when zero references.
   if (owned._count.coverages > 0) {
-    await prisma.insurer.update({ where: { id }, data: { active: false } });
+    await runWithRls(actor.tenantId, (tx) => tx.insurer.update({ where: { id }, data: { active: false } }));
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
@@ -192,7 +192,7 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: undefined };
   }
-  await prisma.insurer.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.insurer.delete({ where: { id } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

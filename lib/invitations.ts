@@ -23,7 +23,7 @@ import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { Role } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
@@ -37,10 +37,10 @@ const INVITE_TTL_MS = 7 * 86_400_000;
 
 async function requireOwner() {
   const actor = await getActor();
-  const m = await prisma.membership.findUnique({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!m || m.role !== "OWNER") {
     throw new Error("Solo el OWNER puede gestionar usuarios.");
   }
@@ -53,7 +53,7 @@ function inviteUrl(token: string) {
 
 export async function listTeamMembers(): Promise<TeamMemberRow[]> {
   const actor = await getActor();
-  const rows = await prisma.membership.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.membership.findMany({
     where: { tenantId: actor.tenantId },
     include: {
       user: {
@@ -66,7 +66,7 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
       },
     },
     orderBy: { invitedAt: "asc" },
-  });
+  }));
   return rows.map((m) => ({
     membershipId: m.id,
     userId: m.userId,
@@ -81,10 +81,10 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
 
 export async function listPendingInvitations(): Promise<InvitationRow[]> {
   const actor = await getActor();
-  const rows = await prisma.invitation.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.invitation.findMany({
     where: { tenantId: actor.tenantId, acceptedAt: null },
     orderBy: { invitedAt: "desc" },
-  });
+  }));
   return rows.map((i) => ({
     id: i.id,
     email: i.email,
@@ -126,46 +126,46 @@ export async function createInvitation(
   const emailLc = parsed.data.email.toLowerCase();
 
   // Refuse if a user with this email is already a member of the tenant.
-  const existing = await prisma.membership.findFirst({
+  const existing = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { tenantId: actor.tenantId, user: { email: emailLc } },
     select: { id: true },
-  });
+  }));
   if (existing) {
     return { ok: false, error: "Ese email ya es miembro del consultorio." };
   }
 
   // If there's already a non-expired invitation for this email, return
   // the existing one rather than minting a new token.
-  const live = await prisma.invitation.findFirst({
+  const live = await runWithRls(actor.tenantId, (tx) => tx.invitation.findFirst({
     where: {
       tenantId: actor.tenantId,
       email: emailLc,
       acceptedAt: null,
       expiresAt: { gt: new Date() },
     },
-  });
+  }));
   if (live) {
     // Existing invite — rotate the token (the stored hash can't reproduce the
     // old URL) and re-send, extending the TTL so the fresh prompt is valid.
     const rawToken = randomBytes(24).toString("base64url");
-    await prisma.invitation.update({
+    await runWithRls(actor.tenantId, (tx) => tx.invitation.update({
       where: { id: live.id },
       data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
-    });
+    }));
     const emailSent = await sendInvitationEmail({
       email: live.email,
       firstName: live.firstName,
-      tenantName: (await prisma.tenant.findUnique({
+      tenantName: (await runWithRls(actor.tenantId, (tx) => tx.tenant.findUnique({
         where: { id: actor.tenantId },
         select: { name: true },
-      }))?.name ?? "tu consultorio",
+      })))?.name ?? "tu consultorio",
       url: inviteUrl(rawToken),
     });
     return { ok: true, data: { id: live.id, url: inviteUrl(rawToken), emailSent } };
   }
 
   const rawToken = randomBytes(24).toString("base64url");
-  const row = await prisma.invitation.create({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.invitation.create({
     data: {
       tenantId: actor.tenantId,
       email: emailLc,
@@ -177,12 +177,12 @@ export async function createInvitation(
       invitedById: actor.userId,
       expiresAt: new Date(Date.now() + INVITE_TTL_MS),
     },
-  });
+  }));
   const tenantName =
-    (await prisma.tenant.findUnique({
+    (await runWithRls(actor.tenantId, (tx) => tx.tenant.findUnique({
       where: { id: actor.tenantId },
       select: { name: true },
-    }))?.name ?? "tu consultorio";
+    })))?.name ?? "tu consultorio";
 
   const emailSent = await sendInvitationEmail({
     email: emailLc,
@@ -262,12 +262,12 @@ async function sendInvitationEmail(p: {
 
 export async function revokeInvitation(id: string): Promise<ActionResult> {
   const actor = await requireOwner();
-  const owned = await prisma.invitation.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.invitation.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Invitación no encontrada." };
-  await prisma.invitation.delete({ where: { id } });
+  await runWithRls(actor.tenantId, (tx) => tx.invitation.delete({ where: { id } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -283,23 +283,23 @@ export async function regenerateInvitationUrl(
   id: string
 ): Promise<ActionResult<{ url: string; emailSent: boolean }>> {
   const actor = await requireOwner();
-  const row = await prisma.invitation.findFirst({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.invitation.findFirst({
     where: { id, tenantId: actor.tenantId, acceptedAt: null },
     select: { id: true, email: true, firstName: true },
-  });
+  }));
   if (!row) return { ok: false, error: "Invitación no encontrada o ya aceptada." };
   // Tokens are stored hashed, so the old URL is unrecoverable — mint a fresh
   // token (rotating it) and extend the TTL for the re-share.
   const rawToken = randomBytes(24).toString("base64url");
-  await prisma.invitation.update({
+  await runWithRls(actor.tenantId, (tx) => tx.invitation.update({
     where: { id: row.id },
     data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
-  });
+  }));
   const tenantName =
-    (await prisma.tenant.findUnique({
+    (await runWithRls(actor.tenantId, (tx) => tx.tenant.findUnique({
       where: { id: actor.tenantId },
       select: { name: true },
-    }))?.name ?? "tu consultorio";
+    })))?.name ?? "tu consultorio";
   const url = inviteUrl(rawToken);
   const emailSent = await sendInvitationEmail({
     email: row.email,
@@ -315,31 +315,31 @@ export async function changeMemberRole(
   role: "OWNER" | "ADMIN" | "PRACTITIONER" | "ASSISTANT" | "BILLING"
 ): Promise<ActionResult> {
   const actor = await requireOwner();
-  const m = await prisma.membership.findFirst({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { id: membershipId, tenantId: actor.tenantId },
     select: { id: true, userId: true, role: true },
-  });
+  }));
   if (!m) return { ok: false, error: "Miembro no encontrado." };
   if (m.userId === actor.userId && role !== "OWNER") {
     return { ok: false, error: "No podés cambiar tu propio rol de OWNER." };
   }
   if (role === "OWNER" && m.userId !== actor.userId) {
     // Transferring OWNER role — downgrade self to ADMIN first.
-    await prisma.$transaction([
-      prisma.membership.update({
+    await runWithRls(actor.tenantId, async (tx) => {
+      await tx.membership.update({
         where: { id: membershipId },
         data: { role: "OWNER" },
-      }),
-      prisma.membership.updateMany({
+      });
+      await tx.membership.updateMany({
         where: { tenantId: actor.tenantId, userId: actor.userId },
         data: { role: "ADMIN" },
-      }),
-    ]);
+      });
+    });
   } else {
-    await prisma.membership.update({
+    await runWithRls(actor.tenantId, (tx) => tx.membership.update({
       where: { id: membershipId },
       data: { role },
-    });
+    }));
   }
   await audit({
     tenantId: actor.tenantId,
@@ -355,17 +355,17 @@ export async function changeMemberRole(
 
 export async function removeMember(membershipId: string): Promise<ActionResult> {
   const actor = await requireOwner();
-  const m = await prisma.membership.findFirst({
+  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { id: membershipId, tenantId: actor.tenantId },
     select: { id: true, userId: true },
-  });
+  }));
   if (!m) return { ok: false, error: "Miembro no encontrado." };
   if (m.userId === actor.userId) {
     return { ok: false, error: "No podés removerte a vos mismo. Transferí el OWNER primero." };
   }
   // Soft remove: delete the Membership but leave the UserProfile +
   // Practitioner intact (they may be members of other tenants).
-  await prisma.membership.delete({ where: { id: membershipId } });
+  await runWithRls(actor.tenantId, (tx) => tx.membership.delete({ where: { id: membershipId } }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

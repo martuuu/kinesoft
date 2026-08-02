@@ -9,7 +9,7 @@
  * endpoints (every async export in a "use server" file becomes one).
  */
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 import type { NotificationRow } from "@/lib/notifications-types";
@@ -20,14 +20,14 @@ export async function listNotifications(limit = 20): Promise<{
 }> {
   const actor = await getActor();
   const [rows, unread] = await Promise.all([
-    prisma.notification.findMany({
+    runWithRls(actor.tenantId, (tx) => tx.notification.findMany({
       where: { tenantId: actor.tenantId, userId: actor.userId },
       orderBy: { createdAt: "desc" },
       take: limit,
-    }),
-    prisma.notification.count({
+    })),
+    runWithRls(actor.tenantId, (tx) => tx.notification.count({
       where: { tenantId: actor.tenantId, userId: actor.userId, readAt: null },
-    }),
+    })),
   ]);
   return {
     unread,
@@ -45,22 +45,22 @@ export async function listNotifications(limit = 20): Promise<{
 
 export async function markNotificationRead(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const row = await prisma.notification.findFirst({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.notification.findFirst({
     where: { id, tenantId: actor.tenantId, userId: actor.userId },
     select: { id: true },
-  });
+  }));
   if (!row) return { ok: false, error: "Notificación no encontrada." };
-  await prisma.notification.update({ where: { id }, data: { readAt: new Date() } });
+  await runWithRls(actor.tenantId, (tx) => tx.notification.update({ where: { id }, data: { readAt: new Date() } }));
   revalidatePath("/dashboard");
   return { ok: true, data: undefined };
 }
 
 export async function markAllNotificationsRead(): Promise<ActionResult> {
   const actor = await getActor();
-  await prisma.notification.updateMany({
+  await runWithRls(actor.tenantId, (tx) => tx.notification.updateMany({
     where: { tenantId: actor.tenantId, userId: actor.userId, readAt: null },
     data: { readAt: new Date() },
-  });
+  }));
   revalidatePath("/dashboard");
   return { ok: true, data: undefined };
 }
@@ -73,7 +73,7 @@ export async function dismissReminder(input: {
 }): Promise<ActionResult> {
   const actor = await getActor();
   const dismissedUntil = new Date(Date.now() + (input.hours ?? 24) * 3_600_000);
-  await prisma.dismissedReminder.upsert({
+  await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.upsert({
     where: {
       tenantId_userId_reminderKey: {
         tenantId: actor.tenantId,
@@ -88,27 +88,27 @@ export async function dismissReminder(input: {
       dismissedUntil,
     },
     update: { dismissedUntil },
-  });
+  }));
   revalidatePath("/dashboard");
   return { ok: true, data: undefined };
 }
 
 export async function restoreReminder(key: string): Promise<ActionResult> {
   const actor = await getActor();
-  await prisma.dismissedReminder.deleteMany({
+  await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.deleteMany({
     where: {
       tenantId: actor.tenantId,
       userId: actor.userId,
       reminderKey: key,
     },
-  });
+  }));
   revalidatePath("/dashboard");
   return { ok: true, data: undefined };
 }
 
 export async function isReminderDismissed(key: string): Promise<boolean> {
   const actor = await getActor();
-  const row = await prisma.dismissedReminder.findUnique({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.dismissedReminder.findUnique({
     where: {
       tenantId_userId_reminderKey: {
         tenantId: actor.tenantId,
@@ -116,6 +116,6 @@ export async function isReminderDismissed(key: string): Promise<boolean> {
         reminderKey: key,
       },
     },
-  });
+  }));
   return !!row && row.dismissedUntil > new Date();
 }

@@ -16,6 +16,7 @@
 import { revalidatePath, unstable_cache } from "next/cache";
 import { ProgramPhase, ProgramStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
@@ -44,7 +45,7 @@ export async function loadCatalog(): Promise<CatalogDTO> {
         prisma.anatomicalRegion.findMany({
           orderBy: [{ view: "asc" }, { sortOrder: "asc" }],
         }),
-        prisma.condition.findMany({
+        runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
           // Sprint 17: include global rows + this tenant's custom
           // conditions. Custom rows have no anatomy/tag/exercise
           // links but still show up in the AssignPlanModal picker.
@@ -62,7 +63,7 @@ export async function loadCatalog(): Promise<CatalogDTO> {
               include: { exercise: true },
             },
           },
-        }),
+        })),
         prisma.tag.findMany({ where: { kind: "SYMPTOM" }, orderBy: { label: "asc" } }),
         prisma.tag.findMany({ where: { kind: "TRIGGER" }, orderBy: { label: "asc" } }),
         prisma.tag.findMany({ where: { kind: "PHASE" }, orderBy: { label: "asc" } }),
@@ -182,26 +183,26 @@ export async function assignDiagnosisAndCreateProgram(
   if (input.frequency < 1 || input.frequency > 7)
     return { ok: false, error: "La frecuencia debe estar entre 1 y 7 por semana." };
 
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
 
-  const condition = await prisma.condition.findUnique({
+  const condition = await runWithRls(actor.tenantId, (tx) => tx.condition.findUnique({
     where: { slug: input.conditionSlug },
     select: { id: true, name: true },
-  });
+  }));
   if (!condition) return { ok: false, error: "Diagnóstico desconocido." };
 
   // Re-rank server-side as the authoritative source for persisted scores.
   const catalog = await loadCatalog();
   const ranked = rankSelection(input.selection, catalog).slice(0, 4);
 
-  const exercises = await prisma.exercise.findMany({
+  const exercises = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
     where: { id: { in: input.exerciseIds } },
     include: { conditions: { where: { conditionId: condition.id } } },
-  });
+  }));
   if (exercises.length === 0) return { ok: false, error: "Ejercicios inválidos." };
 
   // Bucket by phase so we can ramp the program activation → progression.
@@ -240,7 +241,7 @@ export async function assignDiagnosisAndCreateProgram(
     return { unique, scheduledFor };
   });
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await runWithRls(actor.tenantId, async (tx) => {
     const c = await tx.clinicalCase.create({
       data: {
         tenantId: actor.tenantId,
@@ -344,7 +345,7 @@ export async function searchPatientsForAssignment(q: string) {
         }
       : {}),
   };
-  const rows = await prisma.patient.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
     where,
     take: 12,
     orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
@@ -356,7 +357,7 @@ export async function searchPatientsForAssignment(q: string) {
       documentId: true,
       programs: { where: { status: "ACTIVE" }, take: 1, select: { id: true } },
     },
-  });
+  }));
   return rows.map((p) => ({
     id: p.id,
     name: `${p.firstName} ${p.lastName}`,
@@ -385,7 +386,7 @@ export async function saveDiagnosisDraft(input: {
   notes?: string;
 }): Promise<ActionResult<{ caseId: string }>> {
   const actor = await getActor();
-  const caseRow = await prisma.clinicalCase.create({
+  const caseRow = await runWithRls(actor.tenantId, (tx) => tx.clinicalCase.create({
     data: {
       tenantId: actor.tenantId,
       authorId: actor.practitionerId,
@@ -407,7 +408,7 @@ export async function saveDiagnosisDraft(input: {
         })),
       },
     },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,

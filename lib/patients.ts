@@ -161,7 +161,7 @@ export async function listPatients(opts: {
             ? [{ createdAt: "asc" }]
             : [{ lastName: "asc" }];
 
-  const rows = await prisma.patient.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
     where,
     orderBy,
     include: {
@@ -179,7 +179,7 @@ export async function listPatients(opts: {
       },
       coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 },
     },
-  });
+  }));
 
   // Resolve access per row in one batch — much cheaper than N share
   // lookups when the directory has hundreds of patients.
@@ -260,15 +260,15 @@ export async function setPatientArchived(input: {
   archived: boolean;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.id, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  await prisma.patient.update({
+  await runWithRls(actor.tenantId, (tx) => tx.patient.update({
     where: { id: input.id },
     data: { archivedAt: input.archived ? new Date() : null },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -354,11 +354,11 @@ export async function getPatientCore(id: string) {
   if (access === "basic") {
     // Minimal projection — name + DNI + next upcoming booking only.
     const [patient, nextBooking] = await Promise.all([
-      prisma.patient.findFirst({
+      runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
         where: { id, tenantId: actor.tenantId },
         select: { id: true, firstName: true, lastName: true, documentId: true },
-      }),
-      prisma.booking.findFirst({
+      })),
+      runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
         where: {
           patientId: id,
           scheduledFor: { gte: new Date() },
@@ -366,7 +366,7 @@ export async function getPatientCore(id: string) {
         },
         orderBy: { scheduledFor: "asc" },
         select: { scheduledFor: true },
-      }),
+      })),
     ]);
     if (!patient) return null;
     await audit({
@@ -434,7 +434,7 @@ export async function getPatientProgramsLite(patientId: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
-  return prisma.treatmentProgram.findMany({
+  return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
     where: { patientId },
     select: {
       id: true,
@@ -466,7 +466,7 @@ export async function getPatientProgramsLite(patientId: string) {
       },
     },
     orderBy: { createdAt: "desc" },
-  });
+  }));
 }
 
 /**
@@ -479,12 +479,12 @@ export async function getPatientBillableCount(patientId: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return 0;
-  return prisma.booking.count({
+  return runWithRls(actor.tenantId, (tx) => tx.booking.count({
     where: {
       patientId,
       paymentStatus: { not: "UNPAID" },
     },
-  });
+  }));
 }
 
 /**
@@ -496,7 +496,7 @@ export async function getPatientProgramsFull(patientId: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
-  return prisma.treatmentProgram.findMany({
+  return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
     where: { patientId },
     include: {
       sessions: {
@@ -508,7 +508,7 @@ export async function getPatientProgramsFull(patientId: string) {
       case: { include: { diagnoses: { include: { condition: true } } } },
     },
     orderBy: { createdAt: "desc" },
-  });
+  }));
 }
 
 /**
@@ -531,11 +531,11 @@ async function resolvePatientBilling(
   patientId: string,
   tenantId: string
 ): Promise<PatientBilling> {
-  const coverage = await prisma.coverage.findFirst({
+  const coverage = await runWithRls(tenantId, (tx) => tx.coverage.findFirst({
     where: { patientId },
     include: { insurerRef: true },
     orderBy: { id: "desc" }, // deterministic: latest coverage = active
-  });
+  }));
   if (!coverage) {
     // No obra social → Particular. Use the tenant's configured Particular
     // copago exactly as set (incl. 0). `null` only when there's no
@@ -572,7 +572,7 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   const [rows, billing] = await Promise.all([
-    prisma.booking.findMany({
+    runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { patientId },
       orderBy: { scheduledFor: "desc" },
       take,
@@ -586,7 +586,7 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
         copagoCents: true,
         service: { select: { name: true, priceCents: true } },
       },
-    }),
+    })),
     resolvePatientBilling(patientId, actor.tenantId),
   ]);
   return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
@@ -614,12 +614,12 @@ export async function getPatientBookingsAll(patientId: string, take = 100) {
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   const [rows, billing] = await Promise.all([
-    prisma.booking.findMany({
+    runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { patientId },
       orderBy: { scheduledFor: "desc" },
       take,
       include: { service: { select: { name: true, priceCents: true } } },
-    }),
+    })),
     resolvePatientBilling(patientId, actor.tenantId),
   ]);
   return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
@@ -648,10 +648,10 @@ export async function getPatientEvaScores(patientId: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
-  return prisma.evaScore.findMany({
+  return runWithRls(actor.tenantId, (tx) => tx.evaScore.findMany({
     where: { patientId },
     orderBy: { takenAt: "asc" },
-  });
+  }));
 }
 
 /**
@@ -665,7 +665,7 @@ export async function getPatientEvaScores(patientId: string) {
 export async function getPatient(id: string) {
   const actor = await getActor();
   const v = await visibilityForActor(actor);
-  const patient = await prisma.patient.findFirst({
+  const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id, tenantId: actor.tenantId, ...v.patientWhere },
     include: {
       coverages: { orderBy: { id: "desc" } },
@@ -685,7 +685,7 @@ export async function getPatient(id: string) {
       bookings: { orderBy: { scheduledFor: "desc" }, take: 20 },
       evaScores: { orderBy: { takenAt: "asc" } },
     },
-  });
+  }));
   if (patient) {
     await audit({
       tenantId: actor.tenantId,
@@ -704,10 +704,10 @@ export async function getPatient(id: string) {
  */
 export async function getPatientName(id: string) {
   const actor = await getActor();
-  return prisma.patient.findFirst({
+  return runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { firstName: true, lastName: true },
-  });
+  }));
 }
 
 /**
@@ -871,10 +871,10 @@ export async function updatePatient(
 async function requireAdminRole(
   actor: Actor
 ): Promise<{ ok: false; error: string } | null> {
-  const membership = await prisma.membership.findUnique({
+  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
     return {
       ok: false,
@@ -967,14 +967,14 @@ export async function recordEvaScore(input: {
   source?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  const row = await prisma.evaScore.create({
+  const row = await runWithRls(actor.tenantId, (tx) => tx.evaScore.create({
     data: { patientId: input.patientId, value: input.value, source: input.source },
-  });
+  }));
   revalidatePath(`/pacientes/${input.patientId}`);
   return { ok: true, data: { id: row.id } };
 }
@@ -987,15 +987,15 @@ export async function completeSession(input: {
   rpe?: number;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const sess = await prisma.session.findFirst({
+  const sess = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
     where: {
       id: input.sessionId,
       program: { tenantId: actor.tenantId },
     },
     include: { program: true },
-  });
+  }));
   if (!sess) return { ok: false, error: "Sesión no encontrada." };
-  await prisma.session.update({
+  await runWithRls(actor.tenantId, (tx) => tx.session.update({
     where: { id: input.sessionId },
     data: {
       completedAt: new Date(),
@@ -1004,15 +1004,15 @@ export async function completeSession(input: {
       paInPost: input.paInPost,
       rpe: input.rpe,
     },
-  });
+  }));
   if (input.paInPost != null) {
-    await prisma.evaScore.create({
+    await runWithRls(actor.tenantId, (tx) => tx.evaScore.create({
       data: {
         patientId: sess.program.patientId,
-        value: input.paInPost,
+        value: input.paInPost!,
         source: `session-${sess.index}-post`,
       },
-    });
+    }));
   }
   await audit({
     tenantId: actor.tenantId,
@@ -1212,32 +1212,32 @@ export async function assignPatientToPractitioner(input: {
   practitionerId: string | null;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const membership = await prisma.membership.findUnique({
+  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
     return { ok: false, error: "Solo OWNER/ADMIN pueden re-asignar pacientes." };
   }
 
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: { id: true, assignedPractitionerId: true },
-  });
+  }));
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
   if (input.practitionerId) {
-    const prac = await prisma.practitioner.findFirst({
-      where: { id: input.practitionerId, tenantId: actor.tenantId },
+    const prac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
+      where: { id: input.practitionerId!, tenantId: actor.tenantId },
       select: { id: true },
-    });
+    }));
     if (!prac) return { ok: false, error: "Profesional fuera del tenant." };
   }
 
-  await prisma.patient.update({
+  await runWithRls(actor.tenantId, (tx) => tx.patient.update({
     where: { id: input.patientId },
     data: { assignedPractitionerId: input.practitionerId },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1266,10 +1266,10 @@ export async function updateProgram(input: {
   startDate?: string;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const program = await prisma.treatmentProgram.findFirst({
+  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findFirst({
     where: { id: input.id, tenantId: actor.tenantId },
     select: { id: true, patientId: true },
-  });
+  }));
   if (!program) return { ok: false, error: "Plan no encontrado." };
   const patch: Record<string, string | number | Date> = {};
   if (input.title !== undefined) {
@@ -1297,7 +1297,7 @@ export async function updateProgram(input: {
     patch.startDate = d;
   }
   if (Object.keys(patch).length === 0) return { ok: true, data: undefined };
-  await prisma.treatmentProgram.update({ where: { id: input.id }, data: patch });
+  await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({ where: { id: input.id }, data: patch }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1314,16 +1314,16 @@ export async function setProgramStatus(input: {
   status: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const program = await prisma.treatmentProgram.findFirst({
+  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findFirst({
     where: { id: input.id, tenantId: actor.tenantId },
     select: { id: true, patientId: true, status: true },
-  });
+  }));
   if (!program) return { ok: false, error: "Plan no encontrado." };
   if (program.status === input.status) return { ok: true, data: undefined };
-  await prisma.treatmentProgram.update({
+  await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({
     where: { id: input.id },
     data: { status: input.status },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1375,17 +1375,17 @@ export async function deleteSession(id: string): Promise<ActionResult> {
   const actor = await getActor();
   const denied = await requireAdminRole(actor);
   if (denied) return denied;
-  const session = await prisma.session.findFirst({
+  const session = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
     where: { id, program: { tenantId: actor.tenantId } },
     select: {
       id: true,
       index: true,
       program: { select: { id: true, patientId: true, totalSessions: true } },
     },
-  });
+  }));
   if (!session) return { ok: false, error: "Sesión no encontrada." };
 
-  await prisma.$transaction(async (tx) => {
+  await runWithRls(actor.tenantId, async (tx) => {
     await tx.session.delete({ where: { id } });
     // Decrement totalSessions so progress bars stay accurate. Atomic
     // decrement (vs. read-modify-write) avoids racing a concurrent edit.
@@ -1424,7 +1424,7 @@ export async function sendPatientPortalInvite(input: {
   patientId: string;
 }): Promise<ActionResult<{ emailSent: boolean; portalUrl: string }>> {
   const actor = await getActor();
-  const patient = await prisma.patient.findFirst({
+  const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: {
       id: true,
@@ -1434,7 +1434,7 @@ export async function sendPatientPortalInvite(input: {
       userId: true,
       tenant: { select: { slug: true, name: true } },
     },
-  });
+  }));
   if (!patient) return { ok: false, error: "Paciente no encontrado." };
   if (!patient.email) {
     return { ok: false, error: "El paciente no tiene email cargado." };
@@ -1514,15 +1514,15 @@ export async function bulkArchivePatients(input: {
   if (input.ids.length > 200) {
     return { ok: false, error: "Demasiados pacientes a la vez (máx 200)." };
   }
-  const owned = await prisma.patient.findMany({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
     where: { id: { in: input.ids }, tenantId: actor.tenantId },
     select: { id: true },
-  });
+  }));
   const ownedIds = owned.map((p) => p.id);
-  const result = await prisma.patient.updateMany({
+  const result = await runWithRls(actor.tenantId, (tx) => tx.patient.updateMany({
     where: { id: { in: ownedIds }, tenantId: actor.tenantId },
     data: { archivedAt: input.archived ? new Date() : null },
-  });
+  }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1544,7 +1544,7 @@ export async function getPatientActivity(
   opts: { limit?: number } = {}
 ): Promise<ActivityEvent[]> {
   const actor = await getActor();
-  const owned = await prisma.patient.findFirst({
+  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: patientId, tenantId: actor.tenantId },
     select: {
       id: true,
@@ -1554,7 +1554,7 @@ export async function getPatientActivity(
       },
       files: { select: { id: true } },
     },
-  });
+  }));
   if (!owned) return [];
 
   const childEntities: Record<string, string[]> = {
@@ -1571,11 +1571,11 @@ export async function getPatientActivity(
 
   if (orFragments.length === 0) return [];
 
-  const events = await prisma.auditEvent.findMany({
+  const events = await runWithRls(actor.tenantId, (tx) => tx.auditEvent.findMany({
     where: { tenantId: actor.tenantId, OR: orFragments },
     orderBy: { createdAt: "desc" },
     take: opts.limit ?? 60,
-  });
+  }));
 
   // Resolve actor names in a single round-trip.
   const userIds = Array.from(
@@ -1612,15 +1612,15 @@ export async function getPatientActivity(
  */
 async function requireShareAuthority(patientId: string) {
   const actor = await getActor();
-  const patient = await prisma.patient.findFirst({
+  const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: patientId, tenantId: actor.tenantId },
     select: { id: true, assignedPractitionerId: true },
-  });
+  }));
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
-  const membership = await prisma.membership.findUnique({
+  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
     select: { role: true },
-  });
+  }));
   const isAdmin = membership?.role === "OWNER" || membership?.role === "ADMIN";
   const isOwner = patient.assignedPractitionerId === actor.practitionerId;
   if (!isAdmin && !isOwner) {
@@ -1655,22 +1655,22 @@ export async function setPatientShares(input: {
 
   // Validate every requested practitioner belongs to this tenant — no
   // cross-tenant grants.
-  const tenantPractitioners = await prisma.practitioner.findMany({
+  const tenantPractitioners = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findMany({
     where: { tenantId: actor.tenantId, id: { in: wantedRaw } },
     select: { id: true },
-  });
+  }));
   const wanted = new Set(tenantPractitioners.map((p) => p.id));
 
-  const existing = await prisma.patientShare.findMany({
+  const existing = await runWithRls(actor.tenantId, (tx) => tx.patientShare.findMany({
     where: { patientId: input.patientId },
     select: { practitionerId: true },
-  });
+  }));
   const existingSet = new Set(existing.map((r) => r.practitionerId));
 
   const toAdd = [...wanted].filter((id) => !existingSet.has(id));
   const toRemove = [...existingSet].filter((id) => !wanted.has(id));
 
-  await prisma.$transaction(async (tx) => {
+  await runWithRls(actor.tenantId, async (tx) => {
     if (toRemove.length > 0) {
       await tx.patientShare.deleteMany({
         where: {
@@ -1715,10 +1715,10 @@ export async function getPatientShareList(patientId: string): Promise<string[]> 
   const access = await patientAccessFor(actor, patientId);
   // Only people with full access can SEE who else is shared into the HC.
   if (access !== "full") return [];
-  const rows = await prisma.patientShare.findMany({
+  const rows = await runWithRls(actor.tenantId, (tx) => tx.patientShare.findMany({
     where: { patientId },
     select: { practitionerId: true },
-  });
+  }));
   return rows.map((r) => r.practitionerId);
 }
 

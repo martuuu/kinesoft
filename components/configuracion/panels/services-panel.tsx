@@ -79,6 +79,9 @@ export function ServicesPanel({
               </div>
               <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)", textAlign: "right" }}>
                 {s.durationMin} min
+                {s.maxConcurrent != null && (
+                  <div style={{ fontSize: 10, color: "var(--navy-300)" }}>{s.maxConcurrent}/horario</div>
+                )}
               </div>
               <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, textAlign: "right" }}>
                 {s.priceCents > 0 ? formatARS(s.priceCents) : "—"}
@@ -122,6 +125,7 @@ function ServiceModal({
         durationMin: Number(formData.get("durationMin") ?? 45),
         priceCents: parseARS(String(formData.get("price") ?? "")) ?? 0,
         practitionerId: String(formData.get("practitionerId") ?? ""),
+        maxConcurrent: String(formData.get("maxConcurrent") ?? ""),
       };
       const r = service
         ? await updateService(service.id, payload)
@@ -182,6 +186,16 @@ function ServiceModal({
             defaultValue={service ? service.priceCents / 100 : 0}
           />
         </div>
+        <FormField
+          label="Cupos simultáneos por horario"
+          name="maxConcurrent"
+          type="number"
+          min={1}
+          max={50}
+          placeholder="Ilimitado"
+          defaultValue={service?.maxConcurrent ?? ""}
+          hint="Vacío = ilimitado (kinesiología: varios pacientes en paralelo). Poné 1 para osteopatía (un turno por horario)."
+        />
         <FormField
           as="select"
           label="Profesional asignado"

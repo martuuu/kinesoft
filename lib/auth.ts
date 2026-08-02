@@ -25,7 +25,9 @@
  *     **delete the orphan auth user** so the email can be retried.
  */
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+// signUpPractitioner provisions a NOT-YET-EXISTENT tenant (Tenant has only a
+// SELECT policy → INSERT aborts under the app role) → service channel. See lib/db.ts.
+import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";

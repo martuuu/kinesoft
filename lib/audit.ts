@@ -1,4 +1,5 @@
-import { prisma } from "@/lib/db";
+// Audit writes fire from webhooks/jobs without an Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { prismaService as prisma } from "@/lib/db";
 
 /**
  * Append-only audit log for PHI access and important domain events.

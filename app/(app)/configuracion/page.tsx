@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { listInsurers } from "@/lib/insurers";
@@ -20,10 +20,12 @@ export const metadata = { title: "Configuración · KineSoft" };
  */
 export default async function ConfiguracionPage() {
   const actor = await getActor();
-  const membership = await prisma.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  });
+  const membership = await runWithRls(actor.tenantId, (tx) =>
+    tx.membership.findUnique({
+      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+      select: { role: true },
+    })
+  );
   if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
     redirect("/dashboard");
   }
@@ -35,11 +37,13 @@ export default async function ConfiguracionPage() {
       listServicesWithCounts(),
       listTeamMembers(),
       listPendingInvitations(),
-      prisma.practitioner.findMany({
-        where: { tenantId: actor.tenantId },
-        include: { user: { select: { fullName: true, email: true } } },
-        orderBy: { createdAt: "asc" },
-      }),
+      runWithRls(actor.tenantId, (tx) =>
+        tx.practitioner.findMany({
+          where: { tenantId: actor.tenantId },
+          include: { user: { select: { fullName: true, email: true } } },
+          orderBy: { createdAt: "asc" },
+        })
+      ),
       listCustomConditions(),
     ]);
 
