@@ -23,6 +23,66 @@ import {
 } from "@/lib/validation";
 import { slugify, setExerciseTags, freeTextFromTags } from "@/lib/catalog-tags";
 
+export type GlobalExerciseAdminRow = {
+  id: string;
+  slug: string;
+  name: string;
+  kind: "EXERCISE" | "MANUAL_THERAPY";
+  difficulty: number;
+  isBasic: boolean;
+  archived: boolean;
+  defaultSets: number | null;
+  defaultReps: number | null;
+  durationSeconds: number | null;
+  tags: { slug: string; label: string; kind: string }[];
+  mediaCount: number;
+  hasArticle: boolean;
+};
+
+/** List the GLOBAL catalog for the Plataforma admin (all rows, incl. archived
+ *  when asked). Superadmin only. */
+export async function listGlobalExercisesForAdmin(opts?: {
+  includeArchived?: boolean;
+  kind?: "EXERCISE" | "MANUAL_THERAPY";
+}): Promise<GlobalExerciseAdminRow[]> {
+  await requireSuperAdmin();
+  const rows = await prismaService.exercise.findMany({
+    where: {
+      tenantId: null,
+      ...(opts?.kind ? { kind: opts.kind } : {}),
+      ...(opts?.includeArchived ? {} : { archivedAt: null }),
+    },
+    orderBy: [{ archivedAt: "asc" }, { kind: "asc" }, { name: "asc" }],
+    select: {
+      id: true, slug: true, name: true, kind: true, difficulty: true, isBasic: true,
+      archivedAt: true, defaultSets: true, defaultReps: true, durationSeconds: true,
+      tags: { select: { tag: { select: { slug: true, label: true, kind: true } } } },
+      _count: { select: { media: true } },
+      article: { select: { id: true } },
+    },
+  });
+  return rows.map((e) => ({
+    id: e.id, slug: e.slug, name: e.name, kind: e.kind, difficulty: e.difficulty,
+    isBasic: e.isBasic, archived: e.archivedAt != null,
+    defaultSets: e.defaultSets, defaultReps: e.defaultReps, durationSeconds: e.durationSeconds,
+    tags: e.tags.map((t) => ({ slug: t.tag.slug, label: t.tag.label, kind: t.tag.kind })),
+    mediaCount: e._count.media, hasArticle: e.article != null,
+  }));
+}
+
+/** Full global exercise (incl. tags, media, article) for the admin editor. */
+export async function getGlobalExerciseForAdmin(id: string) {
+  await requireSuperAdmin();
+  return prismaService.exercise.findFirst({
+    where: { id, tenantId: null },
+    include: {
+      tags: { include: { tag: true } },
+      media: { orderBy: { order: "asc" } },
+      article: true,
+    },
+  });
+}
+
 /** Invalidate every cached catalog read (getExercise + facets carry the global
  *  `catalog()` tag) and re-render the catalog surfaces. */
 function revalidateCatalog() {

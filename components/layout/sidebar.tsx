@@ -35,7 +35,13 @@ const NAV: NavItem[] = [
   { href: "/reportes", icon: IconChart, label: "Reportes" },
 ];
 
-export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
+export function Sidebar({
+  collapsed = false,
+  isPlatformAdmin = false,
+}: {
+  collapsed?: boolean;
+  isPlatformAdmin?: boolean;
+}) {
   const pathname = usePathname();
   const w = collapsed ? 64 : 232;
   return (
@@ -154,6 +160,29 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           alignItems: collapsed ? "center" : "stretch",
         }}
       >
+        {isPlatformAdmin && (
+          <Link
+            href="/plataforma/ejercicios"
+            title={collapsed ? "Plataforma" : undefined}
+            style={{
+              textDecoration: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: collapsed ? 0 : "11px 14px",
+              width: collapsed ? 44 : "auto",
+              height: collapsed ? 40 : "auto",
+              color: pathname?.startsWith("/plataforma") ? "var(--sky-700)" : "var(--navy-500)",
+              fontSize: 13.5,
+              fontWeight: pathname?.startsWith("/plataforma") ? 700 : 500,
+              justifyContent: collapsed ? "center" : "flex-start",
+              borderRadius: 12,
+            }}
+          >
+            <IconDumbbell size={18} />
+            {!collapsed && <span>Plataforma</span>}
+          </Link>
+        )}
         <Link
           href="/configuracion"
           title={collapsed ? "Configuración" : undefined}

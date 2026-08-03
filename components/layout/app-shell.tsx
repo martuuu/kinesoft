@@ -12,7 +12,13 @@ import { CommandPalette } from "@/components/global/command-palette";
  * on the live Tweaks context, applies the active palette via the root
  * effect inside TweaksProvider, and overlays the floating Tweaks panel.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({
+  children,
+  isPlatformAdmin = false,
+}: {
+  children: ReactNode;
+  isPlatformAdmin?: boolean;
+}) {
   const { t } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
 
@@ -25,7 +31,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         display: useSidebar ? "flex" : "block",
       }}
     >
-      {useSidebar && <Sidebar collapsed={t.sidebarCollapsed} />}
+      {useSidebar && <Sidebar collapsed={t.sidebarCollapsed} isPlatformAdmin={isPlatformAdmin} />}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         {!useSidebar && <TopBar />}
         <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>

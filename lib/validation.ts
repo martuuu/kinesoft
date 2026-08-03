@@ -154,8 +154,10 @@ export type ActionResult<T = void> =
  *  required). */
 const optionalCount = (max: number) =>
   z.preprocess(
-    (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
-    z.number().int().min(1).max(max).optional(),
+    // "" / undefined → undefined (field omitted); null → null (explicit clear,
+    // so an update can NULL a previously-set value); else coerce to number.
+    (v) => (v === "" || v === undefined ? undefined : v === null ? null : Number(v)),
+    z.number().int().min(1).max(max).nullable().optional(),
   );
 
 export const ExerciseKindEnum = z.enum(["EXERCISE", "MANUAL_THERAPY"]);

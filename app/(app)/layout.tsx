@@ -24,7 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         agendaShowSunday: prefs.agendaShowSunday,
       }}
     >
-      <AppShell>{children}</AppShell>
+      <AppShell isPlatformAdmin={actor.isPlatformAdmin}>{children}</AppShell>
     </TweaksProvider>
   );
 }

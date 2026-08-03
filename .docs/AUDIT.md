@@ -139,11 +139,22 @@ Gate del backend: `tsc` 0 · `next build` 0 · guard verde · prueba RLS OK. Loc
 - 🟢 **Tags estructurados:** backfill de 73 ejercicios (135 links; free-text→MUSCLE_GROUP/EQUIPMENT), seed
   actualizado, ambos paths de create linkean tags, facets/filtros de /biblioteca leen tags, columnas
   free-text conservadas (denormalizadas para las cards). Blindaje nullable de reps/sets en ~8 sitios.
-- 🔴 **PENDIENTE (próxima sesión, UI):** sección "Plataforma" en sidebar (solo superadmin), rutas
-  `app/(app)/plataforma/{layout,ejercicios,tags}`, componentes de edición (reusan patrón services-panel +
-  archivos-view + TagCombobox), lector `app/(app)/biblioteca/[slug]` (blogpost) + botón "Ejercicio completo".
-  Y el gate final + review adversarial. **Prod (dueño):** aplicar migraciones + `set-platform-admin` +
-  apuntar `prismaService` a `kinesoft_service` (BYPASSRLS).
+- 🟢 **UI (Fase D) COMPLETA:** sidebar "Plataforma" (solo superadmin, threadeado layout→app-shell→sidebar) +
+  guard `app/(app)/plataforma/layout.tsx`; `plataforma/ejercicios` (lista + drawer editor con Común/Pro,
+  reps/tiempo opcional, tags, media manager + article editor) y `plataforma/tags` (CRUD de categorías por
+  kind); lector `app/(app)/biblioteca/[slug]` (blogpost: header + media grid + markdown seguro
+  `components/ui/markdown.tsx`, sin HTML crudo) + botón "Ejercicio completo" y display reps/tiempo opcional
+  en biblioteca-client. Fan-out: 3 agentes (media/article, tag-admin, lector) con contratos exactos.
+- 🟢 **Review adversarial (Fase E):** 4 dimensiones × verify; **seguridad/RLS/authz LIMPIA** (sin holes).
+  5 hallazgos confirmados (0 refutados) **todos corregidos**: (HIGH) `updateGlobalExercise` no podía LIMPIAR
+  reps/tiempo — cliente ahora manda `null`, schema `optionalCount` preserva null (verificado con zod);
+  (MEDIUM) el drawer no refrescaba media/artículo tras mutar — callback `onChanged`→refetch de `full`;
+  (LOW×3) duración `<60s` mostraba "0 min" en lector + "×" pelado en el picker de sesión (guards de null +
+  fallback a segundos). Gate: `tsc` 0 · `next build` 0 · `vitest` 45/45 · guard verde.
+- 🔴 **PENDIENTE (dueño, prod, al cierre de sesiones):** aplicar migraciones + `set-platform-admin` (vos +
+  cliente) + confirmar `prismaService`→`kinesoft_service` (BYPASSRLS). QA manual del panel. Diferidos de la
+  wave: dropear columnas free-text; owner-panel completo (tickets/impersonación/multi-tenant); planes/
+  ejercicios-en-turno; billing.
 
 ## Cómo leer la severidad
 
