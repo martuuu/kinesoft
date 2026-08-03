@@ -44,12 +44,23 @@ export type Actor = {
   practitionerId: string;
   practitionerName: string;
   userId: string;
+  // Platform superadmin (cross-tenant): authors the global exercise catalog +
+  // the "Plataforma" owner panel. Orthogonal to the tenant-scoped Role.
+  isPlatformAdmin: boolean;
 };
 
 export class UnauthenticatedError extends Error {
   constructor(public reason: "no_session" | "no_membership" = "no_session") {
     super(reason);
     this.name = "UnauthenticatedError";
+  }
+}
+
+/** Thrown when an authenticated actor lacks the required privilege. */
+export class ForbiddenError extends Error {
+  constructor(public reason = "forbidden") {
+    super(reason);
+    this.name = "ForbiddenError";
   }
 }
 
@@ -91,6 +102,7 @@ async function buildActor(input: {
     practitionerId: prac.id,
     practitionerName: prac.user.fullName ?? prac.user.email,
     userId: input.userId,
+    isPlatformAdmin: prac.user.isPlatformAdmin,
   };
 }
 
@@ -109,6 +121,7 @@ async function buildDemoActor(): Promise<Actor | null> {
     practitionerId: prac.id,
     practitionerName: prac.user.fullName ?? prac.user.email,
     userId: prac.userId,
+    isPlatformAdmin: prac.user.isPlatformAdmin,
   };
 }
 
@@ -170,6 +183,20 @@ export async function tryGetActor(): Promise<Actor | null> {
 /** Backwards-compatible alias. */
 export async function requireActor(): Promise<Actor> {
   return getActor();
+}
+
+/**
+ * Gate for platform-superadmin surfaces (the "Plataforma" owner panel + global
+ * catalog authoring). Throws `UnauthenticatedError` if there's no session, or
+ * `ForbiddenError` if the actor isn't a platform admin. Superadmin writes to
+ * the global catalog go through `prismaService` (BYPASSRLS) — the app role
+ * physically can't touch `tenantId IS NULL` rows — so this app-layer check is
+ * the single enforcement chokepoint.
+ */
+export async function requireSuperAdmin(): Promise<Actor> {
+  const a = await getActor();
+  if (!a.isPlatformAdmin) throw new ForbiddenError("platform_admin_required");
+  return a;
 }
 
 /**

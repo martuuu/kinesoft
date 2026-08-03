@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import { getPatientBookingsAll } from "@/lib/patients";
 import type {
   PatientCore,
@@ -146,36 +148,49 @@ export function PatientProfile({
         }}
       />
 
-      {tab === "resumen" && (
-        <ResumenView
-          patient={patient}
-          activeProgram={activeProgram}
-          diagnosisName={diagnosis?.name ?? activeProgram?.title ?? null}
-          done={done}
-        />
-      )}
-      {tab === "turnos" && (
-        <TurnosView
-          patientId={patient.id}
-          bookings={bookingsAll}
-          loading={loadingBookings}
-          patchBooking={patchBooking}
-          dropBooking={dropBooking}
-        />
-      )}
-      {tab === "sesiones" && <SesionesView patient={patient} sessions={sessions} />}
-      {tab === "plan" && <PlanView patient={patient} />}
-      {tab === "archivos" && <ArchivosView patientId={patient.id} />}
-      {tab === "antec" && <AntecedentesView patient={patient} />}
-      {tab === "evol" && <EvolucionView patient={patient} />}
-      {tab === "fact" && (
-        <FacturacionView
-          bookings={bookingsAll}
-          loading={loadingBookings}
-          patchBooking={patchBooking}
-        />
-      )}
-      {tab === "actividad" && <ActivityView patientId={patient.id} />}
+      {/* Active view swaps with a sober fade + slight rise. `mode="wait"`
+          lets the outgoing view finish before the next enters so the
+          content never overlaps or jumps. Keyed by `tab`. */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: DUR.base, ease: EASE_OUT }}
+        >
+          {tab === "resumen" && (
+            <ResumenView
+              patient={patient}
+              activeProgram={activeProgram}
+              diagnosisName={diagnosis?.name ?? activeProgram?.title ?? null}
+              done={done}
+            />
+          )}
+          {tab === "turnos" && (
+            <TurnosView
+              patientId={patient.id}
+              bookings={bookingsAll}
+              loading={loadingBookings}
+              patchBooking={patchBooking}
+              dropBooking={dropBooking}
+            />
+          )}
+          {tab === "sesiones" && <SesionesView patient={patient} sessions={sessions} />}
+          {tab === "plan" && <PlanView patient={patient} />}
+          {tab === "archivos" && <ArchivosView patientId={patient.id} />}
+          {tab === "antec" && <AntecedentesView patient={patient} />}
+          {tab === "evol" && <EvolucionView patient={patient} />}
+          {tab === "fact" && (
+            <FacturacionView
+              bookings={bookingsAll}
+              loading={loadingBookings}
+              patchBooking={patchBooking}
+            />
+          )}
+          {tab === "actividad" && <ActivityView patientId={patient.id} />}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }

@@ -52,9 +52,10 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
             ],
           }
         : {},
+      { archivedAt: null },
       f.difficulty != null ? { difficulty: f.difficulty } : {},
-      f.muscleGroup ? { muscleGroups: { contains: f.muscleGroup, mode: "insensitive" } } : {},
-      f.equipment ? { equipment: { contains: f.equipment, mode: "insensitive" } } : {},
+      f.muscleGroup ? { tags: { some: { tag: { kind: "MUSCLE_GROUP", label: f.muscleGroup } } } } : {},
+      f.equipment ? { tags: { some: { tag: { kind: "EQUIPMENT", label: f.equipment } } } } : {},
       f.conditionSlug
         ? { conditions: { some: { condition: { slug: f.conditionSlug } } } }
         : {},
@@ -87,6 +88,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
     difficulty: e.difficulty,
     defaultSets: e.defaultSets,
     defaultReps: e.defaultReps,
+    durationSeconds: e.durationSeconds,
     equipment: e.equipment,
     muscleGroups: e.muscleGroups,
     cues: e.cues,
@@ -111,13 +113,15 @@ export async function getExercise(slug: string) {
   const fetcher = unstable_cache(
     async (s: string) =>
       runWithRls(actor.tenantId, (tx) => tx.exercise.findFirst({
-        where: { AND: [{ slug: s }, gate.visibility] },
+        where: { AND: [{ slug: s }, { archivedAt: null }, gate.visibility] },
         include: {
           conditions: {
             include: { condition: true },
             orderBy: { weight: "desc" },
           },
           tags: { include: { tag: true } },
+          media: { orderBy: { order: "asc" } },
+          article: true,
         },
       })),
     ["exercise:slug", slug, actor.tenantId, gate.hasFullCatalog ? "full" : "basic"],
@@ -139,25 +143,22 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
   const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog });
   const fetcher = unstable_cache(
     async (): Promise<FilterFacets> => {
+      // Facets come from the structured MUSCLE_GROUP / EQUIPMENT tags (the
+      // free-text columns are deprecated). Difficulty stays a bounded scale.
       const exercises = await runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
-        where: gate.visibility,
-        select: { difficulty: true, muscleGroups: true, equipment: true },
+        where: { AND: [gate.visibility, { archivedAt: null }] },
+        select: {
+          difficulty: true,
+          tags: { select: { tag: { select: { kind: true, label: true } } } },
+        },
       }));
       const muscle = new Set<string>();
       const equip = new Set<string>();
       const diff = new Set<number>();
       for (const e of exercises) {
-        if (e.muscleGroups) {
-          for (const m of e.muscleGroups.split(",")) {
-            const t = m.trim();
-            if (t) muscle.add(t);
-          }
-        }
-        if (e.equipment) {
-          for (const m of e.equipment.split(",")) {
-            const t = m.trim();
-            if (t) equip.add(t);
-          }
+        for (const link of e.tags) {
+          if (link.tag.kind === "MUSCLE_GROUP") muscle.add(link.tag.label);
+          else if (link.tag.kind === "EQUIPMENT") equip.add(link.tag.label);
         }
         diff.add(e.difficulty);
       }
@@ -260,6 +261,23 @@ export async function createExercise(input: {
     slug = `${baseSlug}-${i}`;
   }
 
+  // Auto-tag from the free-text muscle/equipment inputs so the new exercise
+  // shows up in the (tag-based) biblioteca facets. Tag is a global, non-RLS
+  // table, so the app-role client may upsert into it.
+  const autoTagSlugs: string[] = [];
+  for (const [text, kind] of [
+    [input.muscleGroups, "MUSCLE_GROUP"],
+    [input.equipment, "EQUIPMENT"],
+  ] as const) {
+    for (const label of (text ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      const s = slugify(label);
+      if (!s) continue;
+      await prisma.tag.upsert({ where: { slug: s }, create: { slug: s, label, kind }, update: {} });
+      if (!autoTagSlugs.includes(s)) autoTagSlugs.push(s);
+    }
+  }
+  const allTagSlugs = [...new Set([...(input.tagSlugs ?? []), ...autoTagSlugs])];
+
   try {
     const ex = await runWithRls(actor.tenantId, (tx) => tx.exercise.create({
       data: {
@@ -278,9 +296,9 @@ export async function createExercise(input: {
         // — the global catalog is curated centrally.
         tenantId: actor.tenantId,
         createdById: actor.userId ?? null,
-        tags: input.tagSlugs?.length
+        tags: allTagSlugs.length
           ? {
-              create: input.tagSlugs.map((slug) => ({
+              create: allTagSlugs.map((slug) => ({
                 tag: { connect: { slug } },
               })),
             }

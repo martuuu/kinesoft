@@ -1,5 +1,7 @@
 "use client";
 
+import { motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import type { Tab } from "./types";
 
 export function TabsBar({
@@ -69,7 +71,9 @@ export function TabsBar({
               </span>
             )}
             {on && (
-              <span
+              <motion.span
+                layoutId="patient-tab-underline"
+                transition={{ duration: DUR.base, ease: EASE_OUT }}
                 style={{
                   position: "absolute",
                   bottom: -1,

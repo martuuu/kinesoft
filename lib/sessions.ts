@@ -388,8 +388,11 @@ export async function addSessionExercise(input: {
       sessionId: input.sessionId,
       exerciseId: ex.id,
       order: nextOrder,
-      sets: input.sets ?? ex.defaultSets,
-      reps: input.reps ?? ex.defaultReps,
+      // Exercise defaults are now optional (time-based / read-only items) →
+      // fall back to 3×12 when the source has none, since SessionExercise
+      // requires sets/reps.
+      sets: input.sets ?? ex.defaultSets ?? 3,
+      reps: input.reps ?? ex.defaultReps ?? 12,
       notes: input.notes,
     },
   }));
@@ -505,8 +508,8 @@ export async function substituteSessionExercise(input: {
         sessionId: sx.sessionId,
         exerciseId: replacement.id,
         order,
-        sets: replacement.defaultSets,
-        reps: replacement.defaultReps,
+        sets: replacement.defaultSets ?? 3,
+        reps: replacement.defaultReps ?? 12,
       },
     });
     await tx.sessionExercise.delete({ where: { id: sx.id } });
@@ -680,8 +683,8 @@ export async function bulkAddSessionExercises(input: {
         sessionId: s.id,
         exerciseId: ex.id,
         order: nextOrder++,
-        sets: ex.defaultSets,
-        reps: ex.defaultReps,
+        sets: ex.defaultSets ?? 3,
+        reps: ex.defaultReps ?? 12,
       });
     }
   }

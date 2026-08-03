@@ -6,8 +6,11 @@ export type ExerciseRow = {
   name: string;
   description: string | null;
   difficulty: number;
-  defaultSets: number;
-  defaultReps: number;
+  // Series/reps/tiempo son opcionales (un ejercicio puede ser solo lectura o
+  // por tiempo). null = no aplica; el consumidor decide fallback/omisión.
+  defaultSets: number | null;
+  defaultReps: number | null;
+  durationSeconds: number | null;
   equipment: string | null;
   muscleGroups: string | null;
   cues: string | null;

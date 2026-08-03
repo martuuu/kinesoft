@@ -19,6 +19,7 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 // No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
+import { Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
 import { createCheckoutPreference } from "@/lib/mercadopago";
 import { audit } from "@/lib/audit";
@@ -325,20 +326,32 @@ export async function submitPublicBooking(
   }
 
   const idempotencyKey = `${tenant.id}:${data.practitionerId}:${scheduledFor.toISOString()}:${patient.id}`;
-  const booking = await prisma.booking.upsert({
-    where: { idempotencyKey },
-    update: {},
-    create: {
-      tenantId: tenant.id,
-      practitionerId: data.practitionerId,
-      serviceId: service.id,
-      patientId: patient.id,
-      scheduledFor,
-      durationMin: service.durationMin,
-      notes: data.patient.notes || null,
-      idempotencyKey,
-    },
-  });
+  const booking = await prisma.booking
+    .upsert({
+      where: { idempotencyKey },
+      update: {},
+      create: {
+        tenantId: tenant.id,
+        practitionerId: data.practitionerId,
+        serviceId: service.id,
+        patientId: patient.id,
+        scheduledFor,
+        durationMin: service.durationMin,
+        notes: data.patient.notes || null,
+        title: data.patient.title || null,
+        description: data.patient.description || null,
+        idempotencyKey,
+      },
+    })
+    // The patient already has an active turno at this exact slot (booked from
+    // the agenda with a different key) → partial unique index rejects the dup.
+    .catch((e) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return null;
+      throw e;
+    });
+  if (!booking) {
+    return { ok: false, error: "Ya tenés un turno reservado en ese horario." };
+  }
 
   const pref = await createCheckoutPreference({
     bookingId: booking.id,

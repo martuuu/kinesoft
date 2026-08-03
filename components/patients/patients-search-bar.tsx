@@ -41,6 +41,15 @@ export function PatientsSearchBar({
           }}
           placeholder="Buscar por nombre, email o DNI…"
           aria-label="Buscar paciente"
+          // DB search — suppress the browser's own name/email autofill (Chrome
+          // ignores autoComplete="off" here, so "new-password" is used).
+          autoComplete="new-password"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          data-1p-ignore
+          data-lpignore="true"
+          data-form-type="other"
           style={{
             flex: 1,
             border: "none",

@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { IconX } from "@/components/ui/icons";
 import { toARDateKey, toARDow, toARHour } from "@/lib/datetime-ar";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "./list-view";
 
@@ -72,6 +73,15 @@ function WeekSlotModal({
                   opacity: isCancelled ? 0.6 : 1,
                 }}
               >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: b.serviceColor ?? SERVICE_COLOR_FALLBACK,
+                    flexShrink: 0,
+                  }}
+                />
                 <Avatar name={b.patientName} size={32} tone="sky" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
@@ -100,6 +110,7 @@ export function WeekGridView({
   showHeader,
   showSaturday,
   showSunday,
+  highlightedServiceId,
 }: {
   weekStart: Date;
   bookings: BookingDTO[];
@@ -108,6 +119,8 @@ export function WeekGridView({
   showHeader: boolean;
   showSaturday: boolean;
   showSunday: boolean;
+  /** When set, cells containing this service lift; the rest dim. */
+  highlightedServiceId: string | null;
 }) {
   const HOURS = Array.from(
     { length: Math.max(1, businessHours.end - businessHours.start) },
@@ -220,6 +233,12 @@ export function WeekGridView({
             const date0 = new Date(first.scheduledFor);
             const span = Math.max(1, Math.round(first.durationMin / 60));
             const count = cellBookings.length;
+            // Legend "filter": lift cells that contain the highlighted service,
+            // dim the rest.
+            const hasMatch =
+              highlightedServiceId != null &&
+              cellBookings.some((b) => b.serviceId === highlightedServiceId);
+            const dimmed = highlightedServiceId != null && !hasMatch;
 
             return (
               <button
@@ -245,6 +264,12 @@ export function WeekGridView({
                   gap: 2,
                   padding: "4px 6px",
                   overflow: "hidden",
+                  position: "relative",
+                  zIndex: hasMatch ? 5 : undefined,
+                  transform: hasMatch ? "translateY(-2px)" : undefined,
+                  boxShadow: hasMatch ? "var(--shadow-card-lg)" : undefined,
+                  opacity: dimmed ? 0.45 : 1,
+                  transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
                 }}
               >
                 <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>

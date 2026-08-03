@@ -18,7 +18,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
-import { overlapBlocks } from "@/lib/booking-capacity";
+import { overlapBlocks, patientDayStatus } from "@/lib/booking-capacity";
 import { toARDow, toARHour, toARDateKey } from "@/lib/datetime-ar";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags, ttl } from "@/lib/cache-tags";
@@ -131,7 +131,9 @@ export async function listBookingsInRange(opts: {
       scheduledFor: b.scheduledFor,
       durationMin: b.durationMin,
       status: b.status,
+      serviceId: b.serviceId,
       serviceName: b.service.name,
+      serviceColor: b.service.color,
       practitionerId: b.practitionerId,
       patientId: b.patientId,
       patientName: name,
@@ -141,6 +143,8 @@ export async function listBookingsInRange(opts: {
       updatedAt: b.updatedAt,
       // Notes can carry clinical context — hide on basic too.
       notes: access === "full" ? b.notes : null,
+      title: b.title,
+      description: b.description,
       patientAccess: access,
     };
   });
@@ -273,13 +277,23 @@ async function suggestNextFreeSlot(
 }
 
 export async function createBooking(
-  raw: BookingCreateInput & { allowOverbooking?: boolean }
+  raw: BookingCreateInput & {
+    allowOverbooking?: boolean;
+    // Front-desk confirmed that a second turno the same day for this patient
+    // is intentional (they don't overlap). Skips the same-patient-day prompt.
+    allowSamePatientDay?: boolean;
+    // Stable per-attempt key from the client so a double-submit / retry
+    // collapses to one row, while a deliberate new turno gets its own.
+    idempotencyKey?: string;
+  }
 ): Promise<
   ActionResult<{ id: string }> & {
     conflict?: {
       practitionerName: string;
       nextFreeISO: string | null;
     };
+    // Soft prompt: the patient already has ≥1 non-overlapping turno today.
+    samePatientDay?: { count: number; existingISO: string };
   }
 > {
   const actor = await getActor();
@@ -293,12 +307,16 @@ export async function createBooking(
   }
   const data = parsed.data;
 
+  // Diagnóstico por defecto del paciente — auto-completa title/description del
+  // turno cuando el caller no los envía (overridable por turno).
+  let patientDiag: { diagnosisTitle: string | null; diagnosisNote: string | null } | null = null;
   if (data.patientId) {
     const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
       where: { id: data.patientId, tenantId: actor.tenantId },
-      select: { id: true },
+      select: { id: true, diagnosisTitle: true, diagnosisNote: true },
     }));
     if (!owned) return { ok: false, error: "Paciente fuera del tenant." };
+    patientDiag = { diagnosisTitle: owned.diagnosisTitle, diagnosisNote: owned.diagnosisNote };
   }
   const service = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id: data.serviceId, tenantId: actor.tenantId },
@@ -308,6 +326,68 @@ export async function createBooking(
 
   const duration = data.durationMin ?? service.durationMin;
   const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
+
+  // Stable idempotency key for THIS attempt (client-provided, else random).
+  // Resolved up-front so the patient-day guard can EXCLUDE this attempt's own
+  // row: an idempotent retry (lost response, same key) must not self-conflict.
+  const clientKey =
+    typeof raw.idempotencyKey === "string" &&
+    raw.idempotencyKey.length >= 8 &&
+    raw.idempotencyKey.length <= 64
+      ? raw.idempotencyKey
+      : null;
+
+  // Patient-level guard, orthogonal to the professional's capacity below: a
+  // patient can't be double-booked over their own turno, and a *second* turno
+  // the same day needs an explicit confirmation from the front desk (the kine
+  // asked for a confirm modal, NOT a hard error). Scoped to the patient across
+  // ALL professionals — a patient can only be in one place at a time.
+  if (data.patientId && !raw.allowSamePatientDay) {
+    // AR calendar-day bounds in UTC: AR midnight = 03:00 UTC (UTC-3, sin DST).
+    const dayKey = toARDateKey(data.scheduledFor);
+    const dayStart = new Date(`${dayKey}T03:00:00.000Z`);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+    // Window = the AR day UNION a 240-min look-back before the new turno, so a
+    // long prior session that overlaps ACROSS AR midnight is still caught (same
+    // look-back the capacity check uses). Exclude this attempt's own row so an
+    // idempotent retry (same idempotencyKey) doesn't see itself as a conflict.
+    const windowStart = new Date(
+      Math.min(dayStart.getTime(), data.scheduledFor.getTime() - 240 * 60_000)
+    );
+    const sameDay = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
+      where: {
+        tenantId: actor.tenantId,
+        patientId: data.patientId,
+        status: { notIn: ["CANCELLED"] },
+        scheduledFor: { gte: windowStart, lt: dayEnd },
+        ...(clientKey ? { idempotencyKey: { not: clientKey } } : {}),
+      },
+      select: { scheduledFor: true, durationMin: true },
+    }));
+    // Hard rule: never collide with the patient's own turno (any professional,
+    // even across midnight). Reuses the tested overlap math in patientDayStatus.
+    if (patientDayStatus(sameDay, data.scheduledFor, end) === "overlap") {
+      return { ok: false, error: "El paciente ya tiene un turno que se superpone con ese horario." };
+    }
+    // Soft confirm only for a genuine SAME-AR-DAY second turno; a non-overlapping
+    // prior-day carry-over pulled in by the look-back must not trigger it.
+    const sameDayRows = sameDay.filter(
+      (c) => c.scheduledFor >= dayStart && c.scheduledFor < dayEnd
+    );
+    if (sameDayRows.length > 0) {
+      return {
+        ok: false,
+        error: "El paciente ya tiene un turno hoy.",
+        samePatientDay: {
+          count: sameDayRows.length,
+          existingISO: sameDayRows
+            .map((c) => c.scheduledFor)
+            .sort((a, b) => a.getTime() - b.getTime())[0]
+            .toISOString(),
+        },
+      };
+    }
+  }
 
   // Overlap capacity check, scoped to the SAME practitioner + SAME service.
   // Overlaps are allowed up to `Service.maxConcurrent` (null = ilimitado, el
@@ -360,18 +440,23 @@ export async function createBooking(
       ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
       : data.notes;
 
-  // Deterministic idempotency key so a double-click / network retry converges
-  // to ONE turno instead of two overlapping rows (the random key never
-  // collided, so the @unique column gave no protection). Keyed by the stable
-  // identity of the booking (patient, or the guest's email/phone). A real
-  // sobreturno is a *different* patient at the same slot → different key →
-  // still creates a separate row, so overbooking is preserved. A truly
-  // anonymous booking (no patient, no guest contact) can't be deduped, so it
-  // keeps a random key.
-  const identity = data.patientId ?? data.guestEmail ?? data.guestPhone ?? null;
-  const idempotencyKey = identity
-    ? `${actor.tenantId}:${data.practitionerId}:${data.scheduledFor.toISOString()}:${identity}`
-    : randomBytes(16).toString("hex");
+  // Auto-fill the per-turno mini-diagnóstico from the patient's default when
+  // the caller didn't provide an explicit title/description.
+  const title = data.title ?? patientDiag?.diagnosisTitle ?? null;
+  const description = data.description ?? patientDiag?.diagnosisNote ?? null;
+
+  // Idempotency (clientKey resolved above): a double-submit / retry that shares
+  // the SAME key collapses to one row via the @unique column; a *deliberate*
+  // new turno (fresh modal → new key) gets its own row. This replaced the old
+  // deterministic patient+slot key, which silently OVERWROTE an existing turno
+  // when the same patient was re-booked at the same instant (the reported data
+  // loss — now hard-blocked earlier by the patient-day guard). No client key
+  // (or a malformed one) → random. NOTE: this dedups submits that share a key
+  // (retry / double-click of ONE modal); two genuinely-concurrent submits from
+  // DIFFERENT modal instances (two tabs / two users) carry different keys, so
+  // the exact-slot case is caught by the guard above (best-effort TOCTOU), not
+  // the @unique column — see AUDIT.md for the partial-unique-index backstop.
+  const idempotencyKey = clientKey ?? randomBytes(16).toString("hex");
 
   try {
     // RLS Etapa 2: the write itself runs under the GUC. The
@@ -380,7 +465,7 @@ export async function createBooking(
     // wrapping the write is enough to enforce policies on the row
     // that gets committed.
     // upsert on the unique idempotencyKey is atomic (Postgres ON CONFLICT):
-    // concurrent submits collapse to one row. `update` resets the mutable
+    // a same-key retry collapses to one row. `update` resets the mutable
     // fields so a re-book of the same patient+slot (e.g. after cancelling)
     // converges to a single fresh active turno instead of returning a stale one.
     const b = await runWithRls(actor.tenantId, async (tx) =>
@@ -408,6 +493,8 @@ export async function createBooking(
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
           notes,
+          title,
+          description,
           status: data.patientId ? "CONFIRMED" : "PENDING",
           idempotencyKey,
         },
@@ -455,6 +542,19 @@ export async function createBooking(
     return { ok: true, data: { id: b.id } };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      // The partial unique index (tenant+patient+slot, non-cancelled) is the
+      // race-free backstop for the patient-day guard: a genuinely-concurrent
+      // second create at the same slot loses the INSERT race here. Surface the
+      // same message the guard would have. Any other unique hit → generic.
+      const target = Array.isArray(e.meta?.target)
+        ? e.meta.target.join(",")
+        : String(e.meta?.target ?? "");
+      if (
+        target.includes("patient_slot") ||
+        (target.includes("patientId") && target.includes("scheduledFor"))
+      ) {
+        return { ok: false, error: "El paciente ya tiene un turno que se superpone con ese horario." };
+      }
       return { ok: false, error: "Turno duplicado." };
     }
     logger.error("booking.create.failed", { err: e instanceof Error ? e.message : String(e) });
@@ -543,9 +643,20 @@ export async function updateBooking(
     }
     await tx.booking.update({ where: { id }, data: patch });
     return { kind: "ok" as const, before };
+  }).catch((e) => {
+    // A reschedule that lands the turno on a slot the SAME patient already
+    // occupies trips the partial unique index (patient+slot, non-cancelled) —
+    // the only unique an update can hit (idempotencyKey is never patched).
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return { kind: "patient-slot" as const };
+    }
+    throw e;
   });
 
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
+  if (outcome.kind === "patient-slot") {
+    return { ok: false, error: "El paciente ya tiene un turno que se superpone con ese horario." };
+  }
   if (outcome.kind === "stale") {
     return { ok: false, error: "El turno cambió en otra sesión. Refrescá la agenda y reintentá." };
   }
@@ -765,7 +876,7 @@ export async function setBookingCopagoPaid(
  * turnos on the wrong days / next month.
  */
 export async function createBookingsBatch(
-  raw: BookingCreateInput & { count: number; daysOfWeek?: number[] }
+  raw: BookingCreateInput & { count: number; daysOfWeek?: number[]; idempotencyKey?: string }
 ): Promise<ActionResult<{ created: number; skipped: number; requested: number }>> {
   const actor = await getActor();
   const parsed = BookingCreate.safeParse(raw);
@@ -780,6 +891,18 @@ export async function createBookingsBatch(
   }));
   if (!service) return { ok: false, error: "Servicio inválido." };
   const duration = data.durationMin ?? service.durationMin;
+
+  // Diagnóstico por defecto del paciente para auto-completar title/description
+  // de cada turno del batch cuando el caller no los envía.
+  let patientDiag: { diagnosisTitle: string | null; diagnosisNote: string | null } | null = null;
+  if (data.patientId) {
+    patientDiag = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
+      where: { id: data.patientId, tenantId: actor.tenantId },
+      select: { diagnosisTitle: true, diagnosisNote: true },
+    }));
+  }
+  const title = data.title ?? patientDiag?.diagnosisTitle ?? null;
+  const description = data.description ?? patientDiag?.diagnosisNote ?? null;
 
   // AR-correct date expansion. `data.scheduledFor` is a real instant tagged
   // -03:00 by `localToARIso` on the client. Empty weekday selection → repeat
@@ -799,10 +922,17 @@ export async function createBookingsBatch(
 
   // Tag the batch so it can be regrouped into a "plan" later.
   const seriesId = randomBytes(12).toString("hex");
-  // Stable identity for the per-slot idempotency key (same rationale as
-  // createBooking): a double-submitted batch converges to the same turnos
-  // instead of duplicating them. Anonymous batches keep a random key.
-  const identity = data.patientId ?? data.guestEmail ?? data.guestPhone ?? null;
+  // Per-slot idempotency base. Prefer the client's stable key (so a
+  // double-submitted batch converges to the same turnos instead of
+  // duplicating), else the fresh seriesId. Either way it's SCOPED to this
+  // batch — it can never collide with a pre-existing single turno's key (the
+  // old `tenant:prof:slot:patient` shape did, silently mapping onto it).
+  const keyBase =
+    typeof raw.idempotencyKey === "string" &&
+    raw.idempotencyKey.length >= 8 &&
+    raw.idempotencyKey.length <= 64
+      ? raw.idempotencyKey
+      : seriesId;
 
   let created = 0;
   let skipped = 0;
@@ -832,9 +962,7 @@ export async function createBookingsBatch(
       skipped++;
       continue;
     }
-    const idempotencyKey = identity
-      ? `${actor.tenantId}:${data.practitionerId}:${when.toISOString()}:${identity}`
-      : randomBytes(16).toString("hex");
+    const idempotencyKey = `${keyBase}:${when.toISOString()}`;
     try {
       await runWithRls(actor.tenantId, (tx) => tx.booking.upsert({
         where: { idempotencyKey },
@@ -851,6 +979,8 @@ export async function createBookingsBatch(
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
           notes: data.notes,
+          title,
+          description,
           status: data.patientId ? "CONFIRMED" : "PENDING",
           seriesId,
           idempotencyKey,

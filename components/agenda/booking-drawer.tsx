@@ -26,11 +26,16 @@ import {
   setBookingStatus,
   updateBooking,
 } from "@/lib/bookings";
-import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
+import { getPatientBookingsSummary, setPatientDiagnosis } from "@/lib/patients";
+import type { PatientBookingSummary } from "@/lib/patients-types";
+import { formatDateAR } from "@/lib/format";
+import { localToARIso, isoToARLocalInput, toARDateKey } from "@/lib/datetime-ar";
 import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { recordatorioHtml } from "@/components/agenda/recordatorio-turno";
 import type { BookingStatus } from "@prisma/client";
 
 type BookingDTO = {
@@ -39,6 +44,7 @@ type BookingDTO = {
   durationMin: number;
   status: BookingStatus;
   serviceName: string;
+  serviceColor: string | null;
   practitionerId: string;
   patientId: string | null;
   patientName: string;
@@ -48,6 +54,8 @@ type BookingDTO = {
   /** Row version for optimistic concurrency (Booking.updatedAt, ISO). */
   updatedAt: string;
   notes: string | null;
+  title: string | null;
+  description: string | null;
   patientAccess: "full" | "basic" | "none";
 };
 
@@ -115,6 +123,11 @@ export function BookingDrawer({
   const [editingDetails, setEditingDetails] = useState(false);
   const [editDuration, setEditDuration] = useState<number>(45);
   const [editNotes, setEditNotes] = useState<string>("");
+  // Mini-diagnosis (Booking.title/.description) editable per turno.
+  const [editTitle, setEditTitle] = useState<string>("");
+  const [editDescription, setEditDescription] = useState<string>("");
+  // The patient's two most recent OTHER turnos, shown as a preview.
+  const [recent, setRecent] = useState<PatientBookingSummary[]>([]);
   // Tracks the picker's current selection. Initial state is derived
   // from the booking; `undefined` means "no change pending". `null`
   // means the user cleared the link (booking becomes a guest slot).
@@ -130,11 +143,27 @@ export function BookingDrawer({
     setReschConflict(null);
     setError(null);
     setEditPatient(undefined);
+    setRecent([]);
     if (booking) {
       setNewWhenLocal(isoToARLocalInput(booking.scheduledFor));
       setEditDuration(booking.durationMin);
       setEditNotes(booking.notes ?? "");
+      setEditTitle(booking.title ?? "");
+      setEditDescription(booking.description ?? "");
     }
+    // Preview: the patient's two most recent OTHER turnos.
+    let cancelled = false;
+    if (booking?.patientId) {
+      getPatientBookingsSummary(booking.patientId, 4)
+        .then((rows) => {
+          if (cancelled) return;
+          setRecent(rows.filter((r) => r.id !== booking.id).slice(0, 2));
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [booking?.id]);
 
   const STATUS_TOAST: Partial<Record<BookingStatus, string>> = {
@@ -200,6 +229,8 @@ export function BookingDrawer({
         id: booking.id,
         durationMin: dur,
         notes: editNotes,
+        title: editTitle,
+        description: editDescription,
         expectedUpdatedAt: booking.updatedAt,
         ...(patientId !== undefined ? { patientId } : {}),
       });
@@ -210,6 +241,22 @@ export function BookingDrawer({
       setEditingDetails(false);
       setEditPatient(undefined);
       onSaved();
+    });
+  };
+
+  // Write the current title/description as the patient's default diagnosis, so
+  // it auto-fills their future turnos.
+  const applyAsPatientDiagnosis = () => {
+    if (!booking?.patientId) return;
+    const pid = booking.patientId;
+    setError(null);
+    start(async () => {
+      const r = await setPatientDiagnosis(pid, editTitle, editDescription);
+      if (!r.ok) {
+        toast.error("No pudimos guardar el diagnóstico del paciente", { description: r.error });
+        return;
+      }
+      toast.success("Diagnóstico del paciente actualizado");
     });
   };
 
@@ -242,6 +289,21 @@ export function BookingDrawer({
       setEditingWhen(false);
       onSaved();
     });
+  };
+
+  // Recordatorio imprimible / PDF — abre una ventana nueva con el HTML
+  // autocontenido y dispara el diálogo de impresión del navegador (que
+  // ofrece "Guardar como PDF"). Evitamos `window.print()` sobre la página
+  // actual para no imprimir toda la app.
+  const printRecordatorio = () => {
+    if (!booking) return;
+    const w = window.open("", "_blank", "width=480,height=640");
+    if (w) {
+      w.document.write(recordatorioHtml(booking));
+      w.document.close();
+      w.focus();
+      w.print();
+    }
   };
 
   return (
@@ -294,7 +356,20 @@ export function BookingDrawer({
               })}
             </Row>
             <Row label="Duración">{booking.durationMin} min</Row>
-            <Row label="Servicio">{booking.serviceName}</Row>
+            <Row label="Servicio">
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: booking.serviceColor ?? SERVICE_COLOR_FALLBACK,
+                    flexShrink: 0,
+                  }}
+                />
+                {booking.serviceName}
+              </span>
+            </Row>
             {osLabel(booking.obraSocial) && (
               <Row label="Obra social">{osLabel(booking.obraSocial)}</Row>
             )}
@@ -303,6 +378,8 @@ export function BookingDrawer({
                 {fmtMoney(booking.copagoCents)}
               </span>
             </Row>
+            {booking.title && <Row label="Diagnóstico">{booking.title}</Row>}
+            {booking.description && <Row label="Descripción">{booking.description}</Row>}
             {booking.notes && <Row label="Notas">{booking.notes}</Row>}
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, gap: 6, flexWrap: "wrap" }}>
               {editingWhen ? (
@@ -361,6 +438,56 @@ export function BookingDrawer({
             </div>
           </div>
 
+          {recent.length > 0 && (
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 14,
+                background: "rgba(246,249,253,0.7)",
+                border: "1px solid rgba(15,30,51,0.06)",
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--navy-300)" }}>
+                Últimos turnos
+              </div>
+              {recent.map((r) => (
+                <Link
+                  key={r.id}
+                  href={`/agenda?view=timeline&date=${toARDateKey(r.scheduledFor)}`}
+                  style={{
+                    display: "block",
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    background: "#fff",
+                    border: "1px solid rgba(15,30,51,0.06)",
+                    textDecoration: "none",
+                    color: "var(--navy-900)",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    {formatDateAR(r.scheduledFor, "weekdayDayMonth")}
+                    <span style={{ color: "var(--navy-300)", fontWeight: 500 }}> · {r.serviceName}</span>
+                  </div>
+                  {(r.title || r.notes) && (
+                    <div style={{ fontSize: 11, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.title || r.notes}
+                    </div>
+                  )}
+                </Link>
+              ))}
+              {booking.patientId && (
+                <Link
+                  href={`/pacientes/${booking.patientId}`}
+                  style={{ fontSize: 11.5, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none" }}
+                >
+                  Ver historia clínica completa →
+                </Link>
+              )}
+            </div>
+          )}
+
           {editingDetails && (
             <div
               style={{
@@ -406,6 +533,52 @@ export function BookingDrawer({
                   width: 120,
                 }}
               />
+              <label style={{ display: "block", fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Título (diagnóstico)
+              </label>
+              <input
+                type="text"
+                maxLength={80}
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="ej: Lumbalgia — se autocompleta del paciente"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(15,30,51,0.1)",
+                  background: "#fff",
+                  fontSize: 13,
+                }}
+              />
+              <label style={{ display: "block", fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Descripción
+              </label>
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={2}
+                placeholder="Detalle del diagnóstico para este turno…"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(15,30,51,0.1)",
+                  background: "#fff",
+                  fontSize: 13,
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                }}
+              />
+              {booking.patientId && (
+                <button
+                  type="button"
+                  onClick={applyAsPatientDiagnosis}
+                  disabled={pending}
+                  style={{ ...miniGhostBtn, alignSelf: "flex-start" }}
+                  title="Guardar este título y descripción como el diagnóstico del paciente (se aplica a sus turnos futuros)"
+                >
+                  Usar como diagnóstico del paciente
+                </button>
+              )}
               <label style={{ display: "block", fontSize: 11, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 Notas
               </label>
@@ -575,6 +748,63 @@ export function BookingDrawer({
               <span aria-hidden>→</span>
             </Link>
           )}
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 14,
+              background: "rgba(246,249,253,0.7)",
+              border: "1px solid rgba(15,30,51,0.06)",
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "grid", gap: 2 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.06em",
+                  color: "var(--navy-300)",
+                }}
+              >
+                Compartir
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+                Enviale al paciente un recordatorio de este turno.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(
+                  `Hola ${booking.patientName}, te recordamos tu turno para ${booking.serviceName} el ${formatDateAR(
+                    booking.scheduledFor,
+                    "longDateTime"
+                  )} (duración ${booking.durationMin} min). ¡Te esperamos!`
+                )}`}
+                target="_blank"
+                rel="noopener"
+                style={{
+                  ...miniGhostBtn,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  textDecoration: "none",
+                }}
+              >
+                Compartir por WhatsApp
+              </a>
+              <button
+                type="button"
+                onClick={printRecordatorio}
+                style={{ ...miniGhostBtn, display: "inline-flex", alignItems: "center", gap: 6 }}
+                title="Abre el recordatorio en una ventana para imprimir o guardar como PDF"
+              >
+                Imprimir / Guardar PDF
+              </button>
+            </div>
+          </div>
 
           <div>
             <div style={menuLabel}>Cambiar estado</div>

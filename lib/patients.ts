@@ -583,6 +583,8 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
         status: true,
         paymentStatus: true,
         notes: true,
+        title: true,
+        description: true,
         copagoCents: true,
         service: { select: { name: true, priceCents: true } },
       },
@@ -753,6 +755,11 @@ export async function createPatient(
       const created = await tx.patient.create({
         data: {
           ...patientData,
+          // Patient-level active diagnosis (short title + long note). These
+          // ARE Patient columns (unlike insurerId/insurerName), so persist
+          // them explicitly — empty → null. Auto-fills new turnos.
+          diagnosisTitle: parsed.data.diagnosisTitle ?? null,
+          diagnosisNote: parsed.data.diagnosisNote ?? null,
           tenantId: actor.tenantId,
           // Auto-assign the new patient to the kine creating them, so the
           // per-kine visibility mode works out of the box. OWNER/ADMIN can
@@ -860,6 +867,50 @@ export async function updatePatient(
   revalidatePath("/pacientes");
   revalidatePath(`/pacientes/${id}`);
   return { ok: true, data: { id } };
+}
+
+/**
+ * Set the patient's active diagnosis (short title + long note). These
+ * fields auto-fill the title/description of every NEW turno created for
+ * the patient, so the booking-drawer calls this when the practitioner
+ * edits the diagnosis inline. Empty strings clear the field (→ null).
+ *
+ * Same RLS-guarded pattern as the other patient mutations: the ownership
+ * check + update share one tenant-GUC transaction; audit + revalidate
+ * fire outside it.
+ */
+export async function setPatientDiagnosis(
+  patientId: string,
+  title: string,
+  note: string
+): Promise<ActionResult> {
+  const actor = await getActor();
+  const result = await runWithRls(actor.tenantId, async (tx) => {
+    const owned = await tx.patient.findFirst({
+      where: { id: patientId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+    await tx.patient.update({
+      where: { id: patientId },
+      data: {
+        diagnosisTitle: title.trim() || null,
+        diagnosisNote: note.trim() || null,
+      },
+    });
+    return { ok: true as const };
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "patient.diagnosis.update",
+    entity: "Patient",
+    entityId: patientId,
+  });
+  revalidatePath(`/pacientes/${patientId}`);
+  revalidatePath("/agenda");
+  return { ok: true, data: undefined };
 }
 
 /**
@@ -1701,6 +1752,43 @@ export async function setPatientShares(input: {
       payload: { added: toAdd, removed: toRemove },
     });
   }
+
+  // Notify each NEWLY-added practitioner (not the ones already shared, and
+  // never the actor doing the sharing) that a patient was shared with them.
+  // Fire-and-forget — `notify` never throws and must not block the mutation.
+  if (toAdd.length > 0) {
+    const [addedPractitioners, patientRow] = await Promise.all([
+      runWithRls(actor.tenantId, (tx) => tx.practitioner.findMany({
+        where: { id: { in: toAdd }, tenantId: actor.tenantId },
+        select: { id: true, userId: true },
+      })),
+      // `patient` from requireShareAuthority only carries id +
+      // assignedPractitionerId, so pull the name with a minimal select.
+      runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
+        where: { id: input.patientId, tenantId: actor.tenantId },
+        select: { firstName: true, lastName: true },
+      })),
+    ]);
+    const patientName = patientRow
+      ? `${patientRow.firstName} ${patientRow.lastName}`.trim()
+      : undefined;
+    for (const prac of addedPractitioners) {
+      // Skip practitioners with no linked user account and never notify the
+      // actor who performed the share.
+      if (!prac.userId || prac.userId === actor.userId) continue;
+      await notify({
+        tenantId: actor.tenantId,
+        userId: prac.userId,
+        // String cast: the regenerated Prisma client isn't in place yet, so
+        // NotificationKind.PATIENT_SHARED would be undefined at runtime.
+        kind: "PATIENT_SHARED" as NotificationKind,
+        title: "Te compartieron un paciente",
+        body: patientName,
+        link: `/pacientes/${input.patientId}`,
+      });
+    }
+  }
+
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath(`/pacientes`);
   return { ok: true, data: undefined };

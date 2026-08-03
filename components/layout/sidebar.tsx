@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import { KineLogo } from "@/components/ui/kine-logo";
 import {
   IconHome,
@@ -17,6 +19,10 @@ import {
 import type { ComponentType } from "react";
 
 type NavItem = { href: string; icon: ComponentType<{ size?: number }>; label: string };
+
+// `next/link` wrapped in motion so nav items can carry a subtle press
+// micro-interaction (whileTap) without giving up client-side navigation.
+const MotionLink = motion(Link);
 
 const NAV: NavItem[] = [
   { href: "/dashboard", icon: IconHome, label: "Inicio" },
@@ -84,10 +90,12 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           const on = pathname?.startsWith(it.href);
           const I = it.icon;
           return (
-            <Link
+            <MotionLink
               key={it.href}
               href={it.href}
+              whileTap={{ scale: 0.97 }}
               style={{
+                position: "relative",
                 textDecoration: "none",
                 display: "flex",
                 alignItems: "center",
@@ -96,20 +104,43 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
                 width: collapsed ? 44 : "auto",
                 height: collapsed ? 40 : "auto",
                 borderRadius: 12,
-                background: on
-                  ? "linear-gradient(180deg, var(--sky-700), var(--sky-600))"
-                  : "transparent",
+                background: "transparent",
                 color: on ? "#fff" : "var(--navy-500)",
                 fontWeight: on ? 600 : 500,
                 fontSize: 13.5,
                 justifyContent: collapsed ? "center" : "flex-start",
-                boxShadow: on ? "0 6px 16px rgba(31,79,190,0.28)" : "none",
               }}
               title={collapsed ? it.label : undefined}
             >
-              <I size={18} />
-              {!collapsed && <span>{it.label}</span>}
-            </Link>
+              {/* Shared active highlight — slides between items on route
+                  change via layout animation. Sits behind the icon/label. */}
+              {on && (
+                <motion.span
+                  layoutId="sidebar-active"
+                  transition={{ duration: DUR.base, ease: EASE_OUT }}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: 12,
+                    background: "linear-gradient(180deg, var(--sky-700), var(--sky-600))",
+                    boxShadow: "0 6px 16px rgba(31,79,190,0.28)",
+                    zIndex: 0,
+                  }}
+                />
+              )}
+              <span
+                style={{
+                  position: "relative",
+                  zIndex: 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <I size={18} />
+                {!collapsed && <span>{it.label}</span>}
+              </span>
+            </MotionLink>
           );
         })}
       </div>

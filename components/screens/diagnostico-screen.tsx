@@ -215,8 +215,8 @@ export function DiagnosticoScreen({
                     : "Ejercicio agregado por el kinesiólogo.",
                 muscleGroups: ex.muscleGroups,
                 equipment: ex.equipment,
-                defaultSets: ex.defaultSets,
-                defaultReps: ex.defaultReps,
+                defaultSets: ex.defaultSets ?? 3,
+                defaultReps: ex.defaultReps ?? 12,
                 difficulty: ex.difficulty,
               })),
           ]}

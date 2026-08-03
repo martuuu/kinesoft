@@ -7,7 +7,9 @@ export type BookingDTO = {
   scheduledFor: string;
   durationMin: number;
   status: BookingStatus;
+  serviceId: string;
   serviceName: string;
+  serviceColor: string | null;
   practitionerId: string;
   patientId: string | null;
   patientName: string;
@@ -19,6 +21,10 @@ export type BookingDTO = {
   /** Row version for optimistic concurrency (Booking.updatedAt, ISO). */
   updatedAt: string;
   notes: string | null;
+  /** Per-turno mini-diagnosis title (agenda card). Null when unset. */
+  title: string | null;
+  /** Per-turno mini-diagnosis long description. Null when unset. */
+  description: string | null;
   /**
    * Sprint 16: tells the agenda whether to expose the link-to-HC + the
    * diagnosis chip. `"basic"` shows the booking + name only; `"none"`

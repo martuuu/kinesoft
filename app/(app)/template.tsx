@@ -11,14 +11,14 @@
  * MotionConfig.
  */
 import { motion } from "framer-motion";
-import { pageVariants } from "@/lib/motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 
 export default function WorkspaceTemplate({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
-      variants={pageVariants}
-      initial="initial"
-      animate="animate"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: DUR.base, ease: EASE_OUT }}
       style={{ height: "100%" }}
     >
       {children}

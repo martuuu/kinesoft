@@ -1021,6 +1021,36 @@ async function seedExercises() {
   ];
 
   for (const e of E) await exercise(e);
+
+  // Structured tags from the free-text muscle/equipment columns, so the
+  // tag-based biblioteca facets work on a fresh seed (mirrors
+  // prisma/backfill-exercise-tags.ts — idempotent).
+  const slugTag = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60);
+  const allEx = await prisma.exercise.findMany({
+    select: { id: true, muscleGroups: true, equipment: true },
+  });
+  for (const ex of allEx) {
+    for (const { text, kind } of [
+      { text: ex.muscleGroups, kind: "MUSCLE_GROUP" as TagKind },
+      { text: ex.equipment, kind: "EQUIPMENT" as TagKind },
+    ]) {
+      for (const label of (text ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+        const slug = slugTag(label);
+        if (!slug) continue;
+        const t = await prisma.tag.upsert({
+          where: { slug },
+          create: { slug, label, kind },
+          update: {},
+        });
+        await prisma.exerciseTag.createMany({
+          data: [{ exerciseId: ex.id, tagId: t.id }],
+          skipDuplicates: true,
+        });
+      }
+    }
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────

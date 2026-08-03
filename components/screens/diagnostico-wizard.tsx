@@ -447,6 +447,14 @@ function PatientStep({
         value={q}
         onChange={(e) => search(e.target.value)}
         placeholder="Buscar paciente por nombre o DNI…"
+        // DB typeahead — keep the browser's name autofill from covering it.
+        autoComplete="new-password"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        data-form-type="other"
         style={{
           padding: "12px 14px",
           borderRadius: 12,

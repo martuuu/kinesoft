@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
+import { motion, useReducedMotion } from "framer-motion";
+import { DUR, EASE_OUT, springSoft, staggerItem, staggerList } from "@/lib/motion";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
@@ -445,59 +447,108 @@ function PinnedRow({
         </div>
         <PinKpiButton currentPinned={pinnedKpis} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-        {items.map((it, i) => {
-          const I = it.ic;
-          return (
-            <div
-              key={i}
-              className="k-glass"
-              style={{
-                padding: "16px 18px",
-                borderRadius: "var(--r-lg)",
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 10,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background:
-                      it.tone === "lime"
-                        ? "var(--lime-300)"
-                        : it.tone === "sky"
-                          ? "var(--sky-100)"
-                          : "rgba(255,255,255,0.6)",
-                    color: it.tone === "lime" ? "var(--navy-900)" : "var(--sky-700)",
-                  }}
-                >
-                  <I size={16} />
-                </span>
-                <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 600 }}>{it.delta}</span>
-              </div>
-              <div
-                style={{
-                  fontSize: 28,
-                  fontWeight: 700,
-                  letterSpacing: "-0.02em",
-                  color: "var(--navy-900)",
-                }}
-              >
-                {it.n}
-              </div>
-              <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>{it.l}</div>
-            </div>
-          );
-        })}
-      </div>
+      <motion.div
+        variants={staggerList}
+        initial="initial"
+        animate="animate"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}
+      >
+        {items.map((it, i) => (
+          <KpiCard key={i} it={it} />
+        ))}
+      </motion.div>
     </div>
+  );
+}
+
+/**
+ * Smoothly counts a plain integer up from 0 on mount. Anything that isn't a
+ * bare integer string (currency, "85%", etc.) is returned verbatim so the
+ * formatters are never touched. Honours `prefers-reduced-motion`.
+ */
+function useCountUp(value: string): string {
+  const reduce = useReducedMotion();
+  const isPlainInt = /^\d+$/.test(value);
+  const target = isPlainInt ? parseInt(value, 10) : 0;
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    if (!isPlainInt) return;
+    if (reduce || target === 0) {
+      setDisplay(target);
+      return;
+    }
+    let raf = 0;
+    const duration = 600;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      setDisplay(Math.round(target * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, isPlainInt, reduce]);
+
+  return isPlainInt ? String(display) : value;
+}
+
+function KpiCard({
+  it,
+}: {
+  it: { ic: typeof IconUsers; n: string; l: string; delta: string; tone: "sky" | "lime" | "soft" };
+}) {
+  const I = it.ic;
+  const shownNumber = useCountUp(it.n);
+  return (
+    <motion.div
+      variants={staggerItem}
+      whileHover={{ y: -3, scale: 1.015 }}
+      transition={springSoft}
+      className="k-glass"
+      style={{
+        padding: "16px 18px",
+        borderRadius: "var(--r-lg)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 10,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background:
+              it.tone === "lime"
+                ? "var(--lime-300)"
+                : it.tone === "sky"
+                  ? "var(--sky-100)"
+                  : "rgba(255,255,255,0.6)",
+            color: it.tone === "lime" ? "var(--navy-900)" : "var(--sky-700)",
+          }}
+        >
+          <I size={16} />
+        </span>
+        <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 600 }}>{it.delta}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 28,
+          fontWeight: 700,
+          letterSpacing: "-0.02em",
+          color: "var(--navy-900)",
+        }}
+      >
+        {shownNumber}
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>{it.l}</div>
+    </motion.div>
   );
 }
 
@@ -628,8 +679,18 @@ function RevenueCard({
           background: "rgba(255,255,255,0.1)",
         }}
       >
-        <div style={{ width: `${privateShare}%`, background: "var(--lime-400)" }} />
-        <div style={{ width: `${insurerShare}%`, background: "var(--sky-500)" }} />
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${privateShare}%` }}
+          transition={{ duration: DUR.slow, ease: EASE_OUT }}
+          style={{ background: "var(--lime-400)" }}
+        />
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${insurerShare}%` }}
+          transition={{ duration: DUR.slow, ease: EASE_OUT, delay: 0.06 }}
+          style={{ background: "var(--sky-500)" }}
+        />
       </div>
       <div
         style={{

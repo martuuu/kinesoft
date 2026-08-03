@@ -3,12 +3,14 @@
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { localToARIso, toARHour } from "@/lib/datetime-ar";
-import { billingLine, fmtHour, layoutBookings, type BookingDTO } from "../agenda-utils";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { fmtHour, layoutBookings, type BookingDTO } from "../agenda-utils";
 
-/** Max bookings shown per overlap group before a "+N more" pill appears.
- *  Kinesiología atiende varios pacientes en paralelo en una misma franja,
- *  así que mostramos una cantidad generosa a ancho completo antes de paginar. */
-const TIMELINE_PAGE = 8;
+/** Turnos overlapping the same slot spread across up to MAX_COLS columns at
+ *  full width; extras wrap to rows below. DEFAULT_ROWS rows (= MAX_COLS*rows
+ *  turnos) show before a "+N" pill reveals more, expanding the hour block. */
+const MAX_COLS = 5;
+const DEFAULT_ROWS = 2;
 
 export function TimelineView({
   bookings,
@@ -17,17 +19,19 @@ export function TimelineView({
   onEdit,
   density,
   businessHours,
+  highlightedServiceId,
 }: {
   bookings: BookingDTO[];
   // AR date key ("YYYY-MM-DD") of the day this timeline is showing. Used to
   // build the create-slot instant in AR wall-clock, so clicking an empty
-  // hour opens the modal on the *viewed* day at the *viewed* hour — never
-  // "today" (the old `bookings[0] ?? new Date()` fallback) nor host-tz-shifted.
+  // hour opens the modal on the *viewed* day at the *viewed* hour.
   dayKey: string;
   onCreate: (iso: string) => void;
   onEdit: (b: BookingDTO) => void;
   density: "comfortable" | "compact";
   businessHours: { start: number; end: number };
+  /** When set, cards of this service lift above the rest (legend "filter"). */
+  highlightedServiceId: string | null;
 }) {
   const HOURS = Array.from(
     { length: Math.max(1, businessHours.end - businessHours.start) },
@@ -35,22 +39,58 @@ export function TimelineView({
   );
   const ROW = density === "compact" ? 40 : 56;
 
-  // expanded[groupKey] = how many extra pages are showing (0 = only first page)
+  // expanded[groupKey] = how many extra pages of rows are showing (0 = default)
   const [expanded, setExpanded] = useState<Record<string, number>>({});
 
   const laid = useMemo(() => layoutBookings(bookings), [bookings]);
 
-  // Group laid items by groupKey to track pagination per group
-  const groupCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const l of laid) m.set(l.groupKey, (m.get(l.groupKey) ?? 0) + 1);
+  // Per-group metadata: total columns + the earliest hour-row the group starts.
+  const groupMeta = useMemo(() => {
+    const m = new Map<string, { cols: number; firstIdx: number }>();
+    for (const b of laid) {
+      const idx = Math.max(
+        0,
+        Math.min(HOURS.length - 1, Math.floor(toARHour(new Date(b.scheduledFor)) - HOURS[0]))
+      );
+      const cur = m.get(b.groupKey);
+      if (!cur) m.set(b.groupKey, { cols: b.cols, firstIdx: idx });
+      else cur.firstIdx = Math.min(cur.firstIdx, idx);
+    }
     return m;
-  }, [laid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [laid, HOURS.length, HOURS[0]]);
+
+  const visibleRowsOf = (key: string, cols: number) => {
+    const totalRows = Math.ceil(cols / MAX_COLS);
+    const pages = 1 + (expanded[key] ?? 0);
+    return Math.min(totalRows, DEFAULT_ROWS * pages);
+  };
+
+  // Wrapped groups add extra rows below their first hour; accumulate a vertical
+  // offset so later hours (and their gridlines) push down and nothing overlaps.
+  const { offsetBeforeIdx, totalExtra } = useMemo(() => {
+    const extra = new Array(HOURS.length).fill(0);
+    for (const [key, meta] of groupMeta) {
+      const e = Math.max(0, visibleRowsOf(key, meta.cols) - 1);
+      if (e > 0) extra[meta.firstIdx] = Math.max(extra[meta.firstIdx], e);
+    }
+    const off = new Array(HOURS.length + 1).fill(0);
+    let acc = 0;
+    for (let i = 0; i < HOURS.length; i++) {
+      off[i] = acc;
+      acc += extra[i] * ROW;
+    }
+    off[HOURS.length] = acc;
+    return { offsetBeforeIdx: off, totalExtra: acc };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupMeta, expanded, HOURS.length, ROW]);
+
+  const canvasHeight = HOURS.length * ROW + totalExtra;
 
   return (
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        <div style={{ position: "relative", height: HOURS.length * ROW }}>
+        <div style={{ position: "relative", height: canvasHeight }}>
           {HOURS.map((h, i) => {
             // AR wall-clock instant for this slot on the viewed day.
             const baseIso = localToARIso(`${dayKey}T${String(h).padStart(2, "0")}:00`);
@@ -60,7 +100,7 @@ export function TimelineView({
                 onClick={() => onCreate(baseIso)}
                 style={{
                   position: "absolute",
-                  top: i * ROW,
+                  top: i * ROW + offsetBeforeIdx[i],
                   left: 0,
                   right: 0,
                   height: ROW,
@@ -82,39 +122,60 @@ export function TimelineView({
 
           {laid.map((b) => {
             const date = new Date(b.scheduledFor);
-            const h = toARHour(date);
-            // 3 px top gap so cards don't kiss the hour-line border
+            const hourFloat = toARHour(date) - HOURS[0];
+            const ownIdx = Math.max(0, Math.min(HOURS.length - 1, Math.floor(hourFloat)));
             const CARD_GAP = 3;
-            // Clamp to the visible range so turnos that fall outside the
-            // configured business hours (an early guest booking, or a late
-            // 21:30 turno when the window ends at 19:00) still render at the
-            // edge instead of off-screen above *or below* the scroll area.
-            const rawTop = (h - HOURS[0]) * ROW + CARD_GAP;
-            const maxTop = Math.max(CARD_GAP, HOURS.length * ROW - ROW);
+
+            const cols = b.cols;
+            const totalRows = Math.ceil(cols / MAX_COLS);
+            const visibleRows = visibleRowsOf(b.groupKey, cols);
+            const rowInGroup = Math.floor(b.col / MAX_COLS);
+            const colInRow = b.col % MAX_COLS;
+            if (rowInGroup >= visibleRows) return null;
+            const wrapped = totalRows > 1;
+
+            // Vertical: base by hour + accumulated offset + this card's wrap row.
+            const base = hourFloat * ROW + (offsetBeforeIdx[ownIdx] ?? 0);
+            const rawTop = base + rowInGroup * ROW + CARD_GAP;
+            const maxTop = Math.max(CARD_GAP, canvasHeight - ROW);
             const top = Math.min(maxTop, Math.max(CARD_GAP, rawTop));
-            const height = (b.durationMin / 60) * ROW - CARD_GAP - 4;
+            // Wrapped groups use a fixed row height so stacked rows never
+            // overlap; single-row turnos keep their duration-proportional height.
+            const height = wrapped
+              ? ROW - CARD_GAP - 4
+              : (b.durationMin / 60) * ROW - CARD_GAP - 4;
+
+            // Horizontal: split the FULL width by the cards in THIS row (the
+            // last row may be partial), so up to 5 columns fill the strip.
+            const colsInRow = Math.min(MAX_COLS, cols - rowInGroup * MAX_COLS);
+            const STRIP_LEFT = 64;
+            const STRIP_GAP = 8;
+            const trackW = `calc(100% - ${STRIP_LEFT + STRIP_GAP}px)`;
+            const colWidth = `calc((${trackW}) / ${colsInRow})`;
+            const colLeft = `calc(${STRIP_LEFT}px + (${trackW}) / ${colsInRow} * ${colInRow})`;
+
             const isCancelled = b.status === "CANCELLED";
             const isDone = b.status === "COMPLETED";
             const isNoShow = b.status === "NO_SHOW";
 
-            const totalInGroup = groupCounts.get(b.groupKey) ?? 1;
-            const visiblePages = 1 + (expanded[b.groupKey] ?? 0);
-            const visibleCols = Math.min(totalInGroup, visiblePages * TIMELINE_PAGE);
-            const hiddenCount = totalInGroup - visibleCols;
+            // Left bar = the service's colour (identity); state is conveyed by
+            // the card's tint / opacity / strike-through.
+            const barColor = b.serviceColor ?? SERVICE_COLOR_FALLBACK;
+            // Legend "filter": lift this card's service, dim the rest.
+            const isHighlighted =
+              highlightedServiceId != null && b.serviceId === highlightedServiceId;
+            const dimmed =
+              highlightedServiceId != null && b.serviceId !== highlightedServiceId;
+            // Card subtitle: the mini-diagnosis (title), falling back to the
+            // longer description — whichever the kine filled. Never the service.
+            const cardLabel = b.title || b.description;
 
-            if (b.col >= visibleCols) return null;
-
-            // The booking strip starts at 64 px (after the hour label) and uses
-            // the FULL remaining width. Overlapping patients split it evenly, so
-            // 6-7 turnos en paralelo (kinesiología) llenan toda la cuadrilla en
-            // vez de apretarse en la mitad izquierda (el viejo cap de 520 px).
-            const STRIP_LEFT = 64;
-            const STRIP_GAP = 8;
-            const trackW = `calc(100% - ${STRIP_LEFT + STRIP_GAP}px)`;
-            const colWidth = `calc((${trackW}) / ${visibleCols})`;
-            const colLeft = `calc(${STRIP_LEFT}px + (${trackW}) / ${visibleCols} * ${b.col})`;
-
-            const isLastVisible = b.col === visibleCols - 1 && hiddenCount > 0;
+            const hiddenCount = cols - visibleRows * MAX_COLS;
+            const isLastVisible =
+              rowInGroup === visibleRows - 1 &&
+              colInRow === colsInRow - 1 &&
+              visibleRows < totalRows &&
+              hiddenCount > 0;
 
             return (
               <div
@@ -127,6 +188,9 @@ export function TimelineView({
                   height,
                   padding: "0 2px",
                   boxSizing: "border-box",
+                  zIndex: isHighlighted ? 5 : undefined,
+                  transform: isHighlighted ? "translateY(-2px)" : undefined,
+                  transition: "transform 0.12s ease",
                 }}
               >
                 <button
@@ -152,16 +216,19 @@ export function TimelineView({
                           : isDone
                             ? "rgba(54,179,126,0.35)"
                             : "rgba(31,79,190,0.12)"),
-                    boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
+                    boxShadow: isHighlighted
+                      ? "var(--shadow-card-lg)"
+                      : "0 2px 6px rgba(15,30,51,0.04)",
                     color: "var(--navy-900)",
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
-                    opacity: isCancelled ? 0.6 : isDone ? 0.85 : 1,
+                    opacity: isCancelled ? 0.6 : dimmed ? 0.55 : isDone ? 0.85 : 1,
                     cursor: "pointer",
                     textDecoration: isCancelled ? "line-through" : "none",
                     textAlign: "left",
                     overflow: "hidden",
+                    transition: "box-shadow 0.12s ease, opacity 0.12s ease",
                   }}
                 >
                   <div
@@ -169,13 +236,7 @@ export function TimelineView({
                       width: 3,
                       alignSelf: "stretch",
                       borderRadius: 2,
-                      background: isCancelled
-                        ? "#9F1F1F"
-                        : isNoShow
-                          ? "#D98200"
-                          : isDone
-                            ? "#36B37E"
-                            : "var(--sky-500)",
+                      background: barColor,
                       flexShrink: 0,
                     }}
                   />
@@ -188,9 +249,11 @@ export function TimelineView({
                         {b.patientName}
                       </span>
                     </div>
-                    <div style={{ fontSize: 10, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {billingLine(b)}
-                    </div>
+                    {cardLabel ? (
+                      <div style={{ fontSize: 10, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {cardLabel}
+                      </div>
+                    ) : null}
                   </div>
                 </button>
 
@@ -200,7 +263,7 @@ export function TimelineView({
                       e.stopPropagation();
                       setExpanded((prev) => ({ ...prev, [b.groupKey]: (prev[b.groupKey] ?? 0) + 1 }));
                     }}
-                    title={`Mostrar ${Math.min(hiddenCount, TIMELINE_PAGE)} más`}
+                    title={`Mostrar ${hiddenCount} más`}
                     style={{
                       position: "absolute",
                       bottom: 6,

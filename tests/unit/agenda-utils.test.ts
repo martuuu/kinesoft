@@ -14,7 +14,9 @@ function mk(id: string, scheduledFor: string, durationMin: number): BookingDTO {
     scheduledFor,
     durationMin,
     status: "CONFIRMED",
+    serviceId: "svc1",
     serviceName: "Consulta",
+    serviceColor: null,
     practitionerId: "p1",
     patientId: "pat1",
     patientName: "Test",
@@ -23,6 +25,8 @@ function mk(id: string, scheduledFor: string, durationMin: number): BookingDTO {
     copagoCents: 5000,
     updatedAt: scheduledFor,
     notes: null,
+    title: null,
+    description: null,
     patientAccess: "full",
   };
 }

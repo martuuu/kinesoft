@@ -4,9 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { IconPlus } from "@/components/ui/icons";
-import { Modal } from "@/components/ui/modal";
+import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
+import { Section } from "@/components/patients/profile/ui";
 import { createPatient } from "@/lib/patients";
 
 type InsurerOption = { id: string; name: string };
@@ -44,6 +45,8 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
         documentId: String(formData.get("documentId") ?? ""),
         dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
         notes: String(formData.get("notes") ?? ""),
+        diagnosisTitle: String(formData.get("diagnosisTitle") ?? ""),
+        diagnosisNote: String(formData.get("diagnosisNote") ?? ""),
         insurerId: coverage.startsWith("ins:") ? coverage.slice(4) : undefined,
         insurerName: coverage === "other" ? otherInsurer.trim() || undefined : undefined,
       });
@@ -59,7 +62,7 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
   };
 
   return (
-    <Modal onClose={onClose} width={540}>
+    <Drawer open onClose={onClose} width={480}>
       <header style={{ marginBottom: 16, paddingRight: 40 }}>
         <EyebrowLabel tone="accent">Nuevo paciente</EyebrowLabel>
         <h2 className="k-display" style={{ fontSize: 22, margin: "6px 0 0", fontWeight: 700 }}>
@@ -67,15 +70,11 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
         </h2>
       </header>
 
-      <form action={submit} style={{ display: "grid", gap: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FormField label="Nombre" name="firstName" required error={fieldErrors.firstName?.[0]} />
-          <FormField label="Apellido" name="lastName" required error={fieldErrors.lastName?.[0]} />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FormField label="DNI" name="documentId" required error={fieldErrors.documentId?.[0]} />
-          <FormField label="Nacimiento" name="dateOfBirth" type="date" error={fieldErrors.dateOfBirth?.[0]} />
-        </div>
+      <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <FormField label="Nombre" name="firstName" required error={fieldErrors.firstName?.[0]} />
+        <FormField label="Apellido" name="lastName" required error={fieldErrors.lastName?.[0]} />
+        <FormField label="DNI" name="documentId" required error={fieldErrors.documentId?.[0]} />
+        <FormField label="Nacimiento" name="dateOfBirth" type="date" error={fieldErrors.dateOfBirth?.[0]} />
         <FormField label="Email" name="email" type="email" error={fieldErrors.email?.[0]} />
         <FormField label="Teléfono" name="phone" error={fieldErrors.phone?.[0]} />
         <FormField
@@ -97,6 +96,25 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
             placeholder="Ej: PAMI, IOSFA…"
           />
         )}
+
+        <Section title="Diagnóstico (opcional)">
+          <FormField
+            label="Título"
+            name="diagnosisTitle"
+            placeholder="ej: Lumbalgia"
+            error={fieldErrors.diagnosisTitle?.[0]}
+            hint="Máx. 80 caracteres."
+          />
+          <FormField
+            as="textarea"
+            label="Descripción"
+            name="diagnosisNote"
+            placeholder="Detalle del cuadro, objetivos, indicaciones…"
+            error={fieldErrors.diagnosisNote?.[0]}
+            hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
+          />
+        </Section>
+
         <FormField as="textarea" label="Notas" name="notes" error={fieldErrors.notes?.[0]} />
 
         {error && (
@@ -122,6 +140,6 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
           </Button>
         </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }

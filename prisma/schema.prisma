@@ -82,6 +82,9 @@ model UserProfile {
   fullName     String?
   avatarUrl    String?
   locale       String        @default("es-AR")
+  // Platform superadmin (cross-tenant): authors the global exercise catalog +
+  // the "Plataforma" owner panel. Orthogonal to the tenant-scoped Role enum.
+  isPlatformAdmin Boolean     @default(false)
   createdAt    DateTime      @default(now())
 
   memberships  Membership[]
@@ -159,6 +162,11 @@ model Patient {
   dateOfBirth   DateTime?
   documentId    String?  // DNI
   notes         String?
+  // Patient-level "active diagnosis" — a short mini-title + a longer note the
+  // kine sets once and that auto-fills every NEW turno (Booking.title /
+  // .description) so cards/history always carry it. Overridable per turno.
+  diagnosisTitle String?
+  diagnosisNote  String?
   archivedAt    DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -356,9 +364,11 @@ enum TagKind {
   SYMPTOM       // punzante, sordo, quemante
   TRIGGER       // reposo, escaleras, correr
   PHASE         // aguda, subaguda, crónica
-  EQUIPMENT     // banda, mancuernas, ninguno
+  EQUIPMENT     // banda, mancuernas, ninguno (a.k.a. "elementos" en la UI)
   GOAL          // movilidad, fuerza, estabilidad
   CHAIN         // marker for kinematic-chain relations (e.g. "glute-med", "core")
+  MUSCLE_GROUP  // grupo muscular: glúteo medio, cuádriceps, ...
+  DISCIPLINE    // rama de kinesiología: deportiva, respiratoria, neuro, osteopatía, ...
 }
 
 model Tag {
@@ -448,8 +458,11 @@ model Exercise {
   description  String?
   videoUrl     String?
   difficulty   Int     @default(1)        // 1..5
-  defaultSets  Int     @default(3)
-  defaultReps  Int     @default(12)
+  // Series/reps/tiempo son OPCIONALES: un ejercicio puede ser solo lectura o
+  // basarse en tiempo (isométricos). El picker de sesión cae a 3×12 cuando null.
+  defaultSets     Int?
+  defaultReps     Int?
+  durationSeconds Int?    // ejercicios por tiempo (planchas, isométricos)
   instructions String? // markdown bullets
   equipment    String? // comma-separated: "banda, foam roller"
   muscleGroups String? // "Glúteo medio, Cadera"
@@ -465,6 +478,9 @@ model Exercise {
   tenantId     String?
   createdById  String?  // UserProfile id of the practitioner who authored
   isBasic      Boolean  @default(false)
+  // Soft-delete: archived exercises drop out of catalog browse but stay
+  // referenceable by historical SessionExercise / ConditionExerciseLink rows.
+  archivedAt   DateTime?
   createdAt    DateTime @default(now())
 
   tenant      Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -472,10 +488,54 @@ model Exercise {
   conditions  ConditionExerciseLink[]
   sessions    SessionExercise[]
   favorites   Favorite[]
+  media       ExerciseMedia[]
+  article     ExerciseArticle?
 
   @@index([tenantId])
   @@index([isBasic])
   @@index([kind])
+  @@index([archivedAt])
+}
+
+// Media backing an exercise (several per exercise, ordered). Uploaded assets
+// (VIDEO/IMAGE/GIF) store a Supabase storage key in `url`; YOUTUBE stores the
+// raw watch URL (rendered as a youtube-nocookie iframe). Global catalog only
+// (no tenantId): visibility is inherited from the parent Exercise at read time.
+enum ExerciseMediaType {
+  VIDEO
+  IMAGE
+  GIF
+  YOUTUBE
+}
+
+model ExerciseMedia {
+  id         String            @id @default(cuid())
+  exerciseId String
+  type       ExerciseMediaType
+  url        String            // storage key (upload) or youtube url
+  caption    String?
+  order      Int               @default(0)
+  createdAt  DateTime          @default(now())
+
+  exercise   Exercise          @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  @@index([exerciseId, order])
+}
+
+// Long-form "Ejercicio completo" article (1:1, optional). Blogpost-style
+// reader content the kine fills over time. Global catalog only (no tenantId).
+model ExerciseArticle {
+  id             String   @id @default(cuid())
+  exerciseId     String   @unique
+  title          String?
+  subtitle       String?
+  focus          String?  // "enfoque": qué trabaja / para qué sirve
+  readingMinutes Int?
+  bodyMarkdown   String?  // safe-rendered server-side (no raw HTML)
+  references     String?  // quotes / citations (markdown or JSON)
+  updatedAt      DateTime @updatedAt @default(now())
+
+  exercise       Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
 }
 
 // Per-user starred exercises. Surfaced as a filter chip in the Biblioteca.
@@ -770,6 +830,10 @@ model Service {
   durationMin  Int      @default(45)
   priceCents   Int      @default(0)
   description  String?
+  // Colour that identifies this service in the agenda (the card's left bar).
+  // Stored as a fixed pastel HEX (not a palette key) so it stays stable
+  // regardless of the user's theme. Null = fall back to the status colour.
+  color        String?
   // Cupos simultáneos por horario. null = ilimitado (kinesiología atiende
   // varios pacientes en paralelo en la misma franja); 1 = un turno por horario
   // (osteopatía); N = tope de N turnos solapados.
@@ -808,6 +872,11 @@ model Booking {
   guestPhone      String?
   idempotencyKey  String        @unique
   notes           String?
+  // Per-turno mini-diagnosis: a short title (shown on the agenda card in place
+  // of the service name) + a longer description. Both optional; auto-filled
+  // from the patient's default diagnosis at creation, overridable per turno.
+  title           String?
+  description     String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -879,6 +948,7 @@ enum NotificationKind {
   PAYMENT_RECEIVED
   PROGRAM_NEARING_DISCHARGE
   PATIENT_NEW
+  PATIENT_SHARED
   SYSTEM
 }
 

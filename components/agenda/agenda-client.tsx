@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import { BookingDrawer } from "@/components/agenda/booking-drawer";
 import { useTweaks } from "@/components/layout/tweaks-context";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ export type Props = {
   autoCreatePatientId?: string | null;
   practitionerFilterId?: string | null;
   bookings: BookingDTO[];
-  services: { id: string; name: string; durationMin: number; priceCents: number }[];
+  services: { id: string; name: string; durationMin: number; priceCents: number; color: string | null }[];
   practitioners: { id: string; name: string }[];
   patients: { id: string; name: string }[];
   /** Active tenant insurers (Obras Sociales) for the inline new-patient coverage select. */
@@ -51,6 +52,9 @@ export function AgendaClient(props: Props) {
   }>(null);
   const [editing, setEditing] = useState<BookingDTO | null>(null);
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
+  // Color legend "filter": clicking a service highlights (lifts) all its cards.
+  // Single-select; clicking the active one clears. Purely visual (no filtering).
+  const [highlightedServiceId, setHighlightedServiceId] = useState<string | null>(null);
   // Server-backed per-user agenda preferences, controlled from the Tweaks
   // panel + /configuracion. `agendaShowWeekHeader` drives the day-header
   // chrome — the day strip (every view) AND the week-grid header row.
@@ -132,14 +136,16 @@ export function AgendaClient(props: Props) {
               height: 36,
             }}
           >
-            <button
+            <motion.button
+              whileTap={{ scale: 0.9 }}
               onClick={() => navigate(-7)}
               aria-label="Semana anterior"
               style={navPillBtn}
             >
               <IconChevL size={14} />
-            </button>
-            <button
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.94 }}
               onClick={() =>
                 router.push(
                   `/agenda?view=${props.view}&date=${toARDateKey(new Date())}`
@@ -154,14 +160,15 @@ export function AgendaClient(props: Props) {
               }}
             >
               Hoy
-            </button>
-            <button
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
               onClick={() => navigate(7)}
               aria-label="Semana siguiente"
               style={navPillBtn}
             >
               <IconChevR size={14} />
-            </button>
+            </motion.button>
           </div>
 
           {/* View switch */}
@@ -179,23 +186,38 @@ export function AgendaClient(props: Props) {
               const on = props.view === v;
               const label = v === "timeline" ? "Día" : v === "week" ? "Semana" : "Lista";
               return (
-                <button
+                <motion.button
                   key={v}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => setView(v)}
                   style={{
+                    position: "relative",
                     height: 30,
                     padding: "0 14px",
                     borderRadius: 999,
                     border: "none",
                     fontSize: 12.5,
                     fontWeight: 600,
-                    background: on ? "var(--navy-900)" : "transparent",
+                    background: "transparent",
                     color: on ? "#fff" : "var(--navy-500)",
                     cursor: "pointer",
                   }}
                 >
-                  {label}
-                </button>
+                  {on && (
+                    <motion.span
+                      layoutId="agenda-view-pill"
+                      transition={{ duration: DUR.base, ease: EASE_OUT }}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        borderRadius: 999,
+                        background: "var(--navy-900)",
+                        zIndex: 0,
+                      }}
+                    />
+                  )}
+                  <span style={{ position: "relative", zIndex: 1 }}>{label}</span>
+                </motion.button>
               );
             })}
           </div>
@@ -266,31 +288,109 @@ export function AgendaClient(props: Props) {
       )}
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        {props.view === "timeline" && (
-          <TimelineView
-            bookings={todayList}
-            dayKey={todayKey}
-            onCreate={(iso) => setCreating({ defaultISO: iso })}
-            onEdit={setEditing}
-            density={density}
-            businessHours={props.businessHours ?? { start: 8, end: 19 }}
-          />
-        )}
-        {props.view === "week" && (
-          <WeekGridView
-            weekStart={weekStart}
-            bookings={props.bookings}
-            onEdit={setEditing}
-            businessHours={props.businessHours ?? { start: 8, end: 19 }}
-            showHeader={agenda.agendaShowWeekHeader}
-            showSaturday={agenda.agendaShowSaturday}
-            showSunday={agenda.agendaShowSunday}
-          />
-        )}
-        {props.view === "list" && (
-          <ListView bookings={todayList} onEdit={setEditing} />
-        )}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={`${props.view}-${todayKey}`}
+            initial={{ opacity: 0, y: 6, scale: 0.995 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.995 }}
+            transition={{ duration: DUR.base, ease: EASE_OUT }}
+            style={{ height: "100%" }}
+          >
+            {props.view === "timeline" && (
+              <TimelineView
+                bookings={todayList}
+                dayKey={todayKey}
+                onCreate={(iso) => setCreating({ defaultISO: iso })}
+                onEdit={setEditing}
+                density={density}
+                businessHours={props.businessHours ?? { start: 8, end: 19 }}
+                highlightedServiceId={highlightedServiceId}
+              />
+            )}
+            {props.view === "week" && (
+              <WeekGridView
+                weekStart={weekStart}
+                bookings={props.bookings}
+                onEdit={setEditing}
+                businessHours={props.businessHours ?? { start: 8, end: 19 }}
+                showHeader={agenda.agendaShowWeekHeader}
+                showSaturday={agenda.agendaShowSaturday}
+                showSunday={agenda.agendaShowSunday}
+                highlightedServiceId={highlightedServiceId}
+              />
+            )}
+            {props.view === "list" && (
+              <ListView bookings={todayList} onEdit={setEditing} highlightedServiceId={highlightedServiceId} />
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
+
+      {props.services.some((s) => s.color) && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            padding: "10px 4px 2px",
+            alignItems: "center",
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--navy-300)",
+              marginRight: 4,
+            }}
+          >
+            Servicios
+          </span>
+          {props.services
+            .filter((s) => s.color)
+            .map((s) => {
+              const active = highlightedServiceId === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() =>
+                    setHighlightedServiceId((prev) => (prev === s.id ? null : s.id))
+                  }
+                  title={active ? "Quitar resaltado" : "Resaltar estos turnos"}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border:
+                      "1px solid " + (active ? "var(--navy-900)" : "rgba(15,30,51,0.12)"),
+                    background: active ? "rgba(15,30,51,0.06)" : "transparent",
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    color: "var(--navy-700)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: s.color ?? "rgba(15,30,51,0.2)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  {s.name}
+                </button>
+              );
+            })}
+        </div>
+      )}
 
       <AnimatePresence>
         {creating && (

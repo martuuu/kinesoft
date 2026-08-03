@@ -89,6 +89,10 @@ export type PatientBookingSummary = {
   status: string;
   paymentStatus: string;
   notes: string | null;
+  /** Per-turno mini-diagnosis title (auto-filled from the patient default). */
+  title: string | null;
+  /** Per-turno mini-diagnosis long description. */
+  description: string | null;
   /** Service name for the booking ("Servicio" column / line). */
   serviceName: string;
   /** Obra social ("Particular" when uninsured). */
