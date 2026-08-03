@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
@@ -14,6 +15,13 @@ import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
 import { toggleFavourite } from "@/lib/favourites";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { BulkAssignModal } from "@/components/biblioteca/bulk-assign-modal";
+
+// Superadmin-only editor: lazy so the ~everyone-is-not-an-admin case never
+// downloads the drawer + its media/article editors with the page bundle.
+const ExerciseDrawer = dynamic(
+  () => import("@/components/plataforma/exercise-drawer").then((m) => m.ExerciseDrawer),
+  { ssr: false },
+);
 
 type Active = {
   q?: string;
@@ -40,6 +48,7 @@ export function BibliotecaClient({
   tags,
   capabilities,
   mode = "exercises",
+  isPlatformAdmin = false,
 }: {
   items: ExerciseRow[];
   facets: FilterFacets;
@@ -47,10 +56,14 @@ export function BibliotecaClient({
   tags: TagOption[];
   capabilities: Capabilities;
   mode?: Mode;
+  /** Platform superadmin: clicking a CATALOG card opens the editor drawer
+   *  instead of the read-only detail (tenant-private items stay read-only). */
+  isPlatformAdmin?: boolean;
 }) {
   const router = useRouter();
   const [pendingNav, start] = useTransition();
   const [open, setOpen] = useState<ExerciseRow | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [q, setQ, flushQ] = useDebouncedSearchParam("q", 300);
 
@@ -344,6 +357,9 @@ export function BibliotecaClient({
                   ex={ex}
                   onOpen={() => {
                     if (bulkMode) toggleSelected(ex.id);
+                    // Superadmin + global catalog row → edit in place. Private
+                    // tenant exercises have no global row, so they stay read-only.
+                    else if (isPlatformAdmin && !ex.isPrivate) setEditingId(ex.id);
                     else setOpen(ex);
                   }}
                   canFavourite={capabilities.canFavourite}
@@ -357,6 +373,14 @@ export function BibliotecaClient({
       </div>
 
       {open && <ExerciseDetail ex={open} onClose={() => setOpen(null)} />}
+      {editingId && (
+        <ExerciseDrawer
+          mode="edit"
+          exerciseId={editingId}
+          tagOptions={tags}
+          onClose={() => setEditingId(null)}
+        />
+      )}
       {creating && (
         <CreateExerciseModal
           tags={tags}

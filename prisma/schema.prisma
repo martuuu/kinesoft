@@ -995,6 +995,10 @@ model UserPreferences {
   agendaShowWeekHeader Boolean @default(true)
   agendaShowSaturday   Boolean @default(true)
   agendaShowSunday     Boolean @default(true)
+  // Platform-catalog table state (page size, sort, active filters). A JSON blob
+  // — same pattern as `pinnedKpis` — so adding a filter never needs a migration.
+  // Validated defensively on read (see lib/preferences.ts).
+  catalogPrefs Json?
   updatedAt    DateTime @updatedAt
 }
 

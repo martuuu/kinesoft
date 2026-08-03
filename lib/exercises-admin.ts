@@ -22,6 +22,12 @@ import {
   type ActionResult,
 } from "@/lib/validation";
 import { slugify, setExerciseTags, freeTextFromTags } from "@/lib/catalog-tags";
+import {
+  DEFAULT_CATALOG_FILTERS,
+  type CatalogFilters,
+  type CatalogSortCol,
+  type CatalogSortDir,
+} from "@/lib/preferences-constants";
 
 export type GlobalExerciseAdminRow = {
   id: string;
@@ -37,37 +43,124 @@ export type GlobalExerciseAdminRow = {
   tags: { slug: string; label: string; kind: string }[];
   mediaCount: number;
   hasArticle: boolean;
+  createdAt: string;
 };
 
-/** List the GLOBAL catalog for the Plataforma admin (all rows, incl. archived
- *  when asked). Superadmin only. */
+export type CatalogPage = {
+  rows: GlobalExerciseAdminRow[];
+  /** Total matching the filters (not just this page) — drives the pager. */
+  total: number;
+};
+
+// Every entry ends in `id` so the ordering is a TOTAL order: without a unique
+// tiebreaker two rows sharing a name/difficulty could swap places between the
+// page-1 and page-2 queries, duplicating one and hiding the other.
+const SORT_ORDER: Record<
+  CatalogSortCol,
+  (dir: CatalogSortDir) => Prisma.ExerciseOrderByWithRelationInput[]
+> = {
+  // `tier` is stored as `isBasic` (true = Común). Postgres sorts false first,
+  // so invert to make "asc" mean Común→Pro (the order the UI lists them in).
+  tier: (dir) => [{ isBasic: dir === "asc" ? "desc" : "asc" }, { name: "asc" }, { id: "asc" }],
+  name: (dir) => [{ name: dir }, { id: "asc" }],
+  difficulty: (dir) => [{ difficulty: dir }, { name: "asc" }, { id: "asc" }],
+  kind: (dir) => [{ kind: dir }, { name: "asc" }, { id: "asc" }],
+  createdAt: (dir) => [{ createdAt: dir }, { id: "asc" }],
+};
+
+/**
+ * Paged + filtered + sorted view of the GLOBAL catalog for the Plataforma
+ * table. Superadmin only. Tag filters are AND-ed across kinds (muscle AND
+ * equipment AND discipline) and OR-ed within a kind, which is what the chip
+ * UI implies. Returns `{ rows, total }` so the pager knows the page count.
+ */
 export async function listGlobalExercisesForAdmin(opts?: {
-  includeArchived?: boolean;
-  kind?: "EXERCISE" | "MANUAL_THERAPY";
-}): Promise<GlobalExerciseAdminRow[]> {
+  filters?: Partial<CatalogFilters>;
+  sortCol?: CatalogSortCol;
+  sortDir?: CatalogSortDir;
+  skip?: number;
+  take?: number;
+}): Promise<CatalogPage> {
   await requireSuperAdmin();
-  const rows = await prismaService.exercise.findMany({
-    where: {
-      tenantId: null,
-      ...(opts?.kind ? { kind: opts.kind } : {}),
-      ...(opts?.includeArchived ? {} : { archivedAt: null }),
-    },
-    orderBy: [{ archivedAt: "asc" }, { kind: "asc" }, { name: "asc" }],
-    select: {
-      id: true, slug: true, name: true, kind: true, difficulty: true, isBasic: true,
-      archivedAt: true, defaultSets: true, defaultReps: true, durationSeconds: true,
-      tags: { select: { tag: { select: { slug: true, label: true, kind: true } } } },
-      _count: { select: { media: true } },
-      article: { select: { id: true } },
-    },
+  const f = { ...DEFAULT_CATALOG_FILTERS, ...(opts?.filters ?? {}) };
+  const q = f.q.trim();
+
+  const tagFilter = (kind: "MUSCLE_GROUP" | "EQUIPMENT" | "DISCIPLINE", slugs: string[]) =>
+    slugs.length ? [{ tags: { some: { tag: { kind, slug: { in: slugs } } } } }] : [];
+
+  const where: Prisma.ExerciseWhereInput = {
+    AND: [
+      { tenantId: null },
+      f.archived === "active"
+        ? { archivedAt: null }
+        : f.archived === "archived"
+          ? { archivedAt: { not: null } }
+          : {},
+      f.kind ? { kind: f.kind } : {},
+      f.tier ? { isBasic: f.tier === "comun" } : {},
+      f.difficulty != null ? { difficulty: f.difficulty } : {},
+      ...tagFilter("MUSCLE_GROUP", f.muscle),
+      ...tagFilter("EQUIPMENT", f.equipment),
+      ...tagFilter("DISCIPLINE", f.discipline),
+      q
+        ? {
+            OR: [
+              { name: { contains: q, mode: "insensitive" } },
+              { description: { contains: q, mode: "insensitive" } },
+              { tags: { some: { tag: { label: { contains: q, mode: "insensitive" } } } } },
+            ],
+          }
+        : {},
+    ],
+  };
+
+  const orderBy = SORT_ORDER[opts?.sortCol ?? "name"](opts?.sortDir ?? "asc");
+
+  const [rows, total] = await Promise.all([
+    prismaService.exercise.findMany({
+      where,
+      orderBy,
+      skip: opts?.skip ?? 0,
+      take: opts?.take ?? 30,
+      select: {
+        id: true, slug: true, name: true, kind: true, difficulty: true, isBasic: true,
+        archivedAt: true, defaultSets: true, defaultReps: true, durationSeconds: true,
+        createdAt: true,
+        tags: { select: { tag: { select: { slug: true, label: true, kind: true } } } },
+        _count: { select: { media: true } },
+        article: { select: { id: true } },
+      },
+    }),
+    prismaService.exercise.count({ where }),
+  ]);
+
+  return {
+    rows: rows.map((e) => ({
+      id: e.id, slug: e.slug, name: e.name, kind: e.kind, difficulty: e.difficulty,
+      isBasic: e.isBasic, archived: e.archivedAt != null,
+      defaultSets: e.defaultSets, defaultReps: e.defaultReps, durationSeconds: e.durationSeconds,
+      tags: e.tags.map((t) => ({ slug: t.tag.slug, label: t.tag.label, kind: t.tag.kind })),
+      mediaCount: e._count.media, hasArticle: e.article != null,
+      createdAt: e.createdAt.toISOString(),
+    })),
+    total,
+  };
+}
+
+/** Tag options grouped by the kinds the catalog table filters on. */
+export async function listCatalogTagOptions(): Promise<{
+  muscle: { slug: string; label: string }[];
+  equipment: { slug: string; label: string }[];
+  discipline: { slug: string; label: string }[];
+}> {
+  await requireSuperAdmin();
+  const rows = await prismaService.tag.findMany({
+    where: { kind: { in: ["MUSCLE_GROUP", "EQUIPMENT", "DISCIPLINE"] } },
+    orderBy: { label: "asc" },
+    select: { slug: true, label: true, kind: true },
   });
-  return rows.map((e) => ({
-    id: e.id, slug: e.slug, name: e.name, kind: e.kind, difficulty: e.difficulty,
-    isBasic: e.isBasic, archived: e.archivedAt != null,
-    defaultSets: e.defaultSets, defaultReps: e.defaultReps, durationSeconds: e.durationSeconds,
-    tags: e.tags.map((t) => ({ slug: t.tag.slug, label: t.tag.label, kind: t.tag.kind })),
-    mediaCount: e._count.media, hasArticle: e.article != null,
-  }));
+  const pick = (k: string) => rows.filter((r) => r.kind === k).map(({ slug, label }) => ({ slug, label }));
+  return { muscle: pick("MUSCLE_GROUP"), equipment: pick("EQUIPMENT"), discipline: pick("DISCIPLINE") };
 }
 
 /** Full global exercise (incl. tags, media, article) for the admin editor. */

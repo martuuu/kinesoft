@@ -14,6 +14,7 @@ import type { ActionResult } from "@/lib/validation";
 import {
   DEFAULT_PREFERENCES,
   KPI_OPTIONS,
+  sanitizeCatalogPrefs,
   type KpiKey,
   type Palette,
   type Preferences,
@@ -36,6 +37,8 @@ export async function getUserPreferences(): Promise<Preferences> {
     agendaShowWeekHeader: row.agendaShowWeekHeader ?? DEFAULT_PREFERENCES.agendaShowWeekHeader,
     agendaShowSaturday: row.agendaShowSaturday ?? DEFAULT_PREFERENCES.agendaShowSaturday,
     agendaShowSunday: row.agendaShowSunday ?? DEFAULT_PREFERENCES.agendaShowSunday,
+    // Untrusted JSON blob → coerced to a valid shape (never throws).
+    catalogPrefs: sanitizeCatalogPrefs(row.catalogPrefs),
   };
 }
 
@@ -64,6 +67,8 @@ export async function updateUserPreferences(
     agendaShowWeekHeader: merged.agendaShowWeekHeader,
     agendaShowSaturday: merged.agendaShowSaturday,
     agendaShowSunday: merged.agendaShowSunday,
+    // Re-sanitised on the way in too, so a malformed client patch can't persist.
+    catalogPrefs: sanitizeCatalogPrefs(merged.catalogPrefs),
   };
   await prisma.userPreferences.upsert({
     where: { userId: actor.userId },

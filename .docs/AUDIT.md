@@ -156,6 +156,35 @@ Gate del backend: `tsc` 0 · `next build` 0 · guard verde · prueba RLS OK. Loc
   wave: dropear columnas free-text; owner-panel completo (tickets/impersonación/multi-tenant); planes/
   ejercicios-en-turno; billing.
 
+**Ronda 8 — Tabla admin del catálogo + edit-in-place + fix de hidratación (2026-08-03):** Gate: `tsc` 0 ·
+`next build` 0 · `vitest` 45/45 · guard verde. Local Docker, prod la aplica el dueño al cierre.
+- 🟢 **Tabla de Plataforma → Ejercicios:** `listGlobalExercisesForAdmin` pasó de "traer todo" a
+  `{rows,total}` con search + filtros (tipo/plan/dificultad/archivados + tags por kind, AND entre kinds) +
+  sort por columna + `skip/take` (primer paginado offset del repo, `Promise.all(findMany,count)`).
+  Cliente: toolbar con búsqueda debounced y multiselects (`tag-filter-menu.tsx`), headers sortables, chips
+  agrupados, **acciones inline** (toggle Común↔Pro, archivar/restaurar) y pager con tamaño configurable.
+- 🟢 **Preferencias por usuario:** columna `UserPreferences.catalogPrefs Json?` (migración
+  `user_prefs_catalog`) + `sanitizeCatalogPrefs` (coerción total: blob hostil/viejo → defaults, verificado).
+  La URL manda; sin params se restaura la vista guardada. Round-trip verificado contra la DB.
+- 🟢 **Edit-in-place:** `ExerciseDrawer` extraído a `components/plataforma/exercise-drawer.tsx`; biblioteca
+  y terapia-manual pasan `isPlatformAdmin` (leído del actor en el Server Component) y un superadmin que
+  clickea una card **del catálogo global** edita ahí mismo (privadas del tenant → detalle read-only; el
+  drawer además tiene estado explícito "no pertenece al catálogo global"). Drawer cargado con
+  `next/dynamic` → `/biblioteca` bajó de 160 kB a **153 kB** para los no-admin.
+- 🟢 **Hidratación (Planes/seguimiento) CERRADO:** `session-detail.tsx` formateaba la fecha en el cliente
+  sin `hour12` → el "a. m." con espacio U+202F difería entre el ICU de Node y el del browser. Ahora se
+  formatea en el server (`scheduledLabel`) y el preset `longDateTime` de `lib/format.ts` fija `hour12:false`
+  (alineado con el resto de la app, que ya usaba 24h).
+- 🟢 **Review adversarial:** 16 hallazgos confirmados (6 distintos, el resto duplicados entre dimensiones),
+  **todos corregidos**: (HIGH) closure obsoleto en el debounce de búsqueda que resucitaba filtros recién
+  limpiados y los persistía; (MED) input de búsqueda desincronizado con Back/Forward; (MED) el multiselect
+  de tags perdía la selección previa al clickear rápido (ahora estado optimista local); (LOW) página fuera
+  de rango mostraba "catálogo vacío" (ahora auto-clamp al último page con filas); (LOW) `?muscle=a&muscle=b`
+  tiraba 500 (`csv` tolera arrays); (LOW) sort sin desempate único podía duplicar/ocultar filas homónimas al
+  paginar (ahora `{id:"asc"}` en todos los órdenes, verificado con dos ejercicios del mismo nombre).
+- 🟡 **Aceptado por diseño:** volver con el botón Back a la URL sin parámetros re-muestra la vista guardada
+  (es la persistencia pedida, no un bug).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
