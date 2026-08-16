@@ -35,14 +35,18 @@ export type Props = {
   /** Active tenant insurers (Obras Sociales) for the inline new-patient coverage select. */
   insurers: { id: string; name: string }[];
   /**
-   * Business-hours window from `Tenant.businessHoursStart/End`
-   * (Sprint 17). Controls the row range in TimelineView, the
-   * preset list in BookingModal time picker, and the slot grid.
-   * Default fallback 8..19 matches the pre-Sprint 17 hardcoded
-   * constants in case the server forgets to pass them.
+   * Business-hours window + row granularity from `Tenant`
+   * (businessHoursStart/End + agendaSlotMinutes). Controls the row range and
+   * how often a row is drawn in the day/week views. `AGENDA_HOURS_FALLBACK`
+   * covers the case where the server forgets to pass them.
    */
-  businessHours?: { start: number; end: number };
+  businessHours?: AgendaHours;
 };
+
+type AgendaHours = { start: number; end: number; slotMinutes: number };
+
+/** Single source of truth for the fallback window (was duplicated inline). */
+const AGENDA_HOURS_FALLBACK: AgendaHours = { start: 8, end: 19, slotMinutes: 60 };
 
 export function AgendaClient(props: Props) {
   const router = useRouter();
@@ -97,7 +101,7 @@ export function AgendaClient(props: Props) {
   // which dropped new turnos at 00:00 — off-screen above the timeline and
   // outside the visible hour range. See item: "Externos no se ven".
   const defaultCreateISO = useMemo(() => {
-    const startHour = props.businessHours?.start ?? 8;
+    const startHour = props.businessHours?.start ?? AGENDA_HOURS_FALLBACK.start;
     const hh = String(startHour).padStart(2, "0");
     return localToARIso(`${todayKey}T${hh}:00`);
   }, [todayKey, props.businessHours?.start]);
@@ -304,7 +308,7 @@ export function AgendaClient(props: Props) {
                 onCreate={(iso) => setCreating({ defaultISO: iso })}
                 onEdit={setEditing}
                 density={density}
-                businessHours={props.businessHours ?? { start: 8, end: 19 }}
+                businessHours={props.businessHours ?? AGENDA_HOURS_FALLBACK}
                 highlightedServiceId={highlightedServiceId}
               />
             )}
@@ -313,7 +317,7 @@ export function AgendaClient(props: Props) {
                 weekStart={weekStart}
                 bookings={props.bookings}
                 onEdit={setEditing}
-                businessHours={props.businessHours ?? { start: 8, end: 19 }}
+                businessHours={props.businessHours ?? AGENDA_HOURS_FALLBACK}
                 showHeader={agenda.agendaShowWeekHeader}
                 showSaturday={agenda.agendaShowSaturday}
                 showSunday={agenda.agendaShowSunday}

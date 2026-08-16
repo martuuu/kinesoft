@@ -5,15 +5,35 @@
 > necesita del dueño (migración/QA). **Ruta crítica: B2b → B2** (RLS) es el cuello de botella; B0 y
 > B1 pueden arrancar ya en paralelo.
 
-Estado confirmado por el audit: `runWithRls` (lib/rls.ts:19) es el único setter del GUC; solo lo
-usan patients.ts (11 wraps / 41 calls) y bookings.ts (4 wraps / 20 calls) — **ambos con calls planas
-sin envolver**. `getTenantPrisma` (lib/db.ts:76) es dead code. `Actor` no lleva `role`. Solo hay 2
-tests puros. RLS está inerte en local (rol `kinesoft` = superuser del Docker) y en prod (rol Supabase
-con BYPASSRLS).
+Estado confirmado por el audit **al momento de escribir el plan (2026-07-23)**: `runWithRls`
+(lib/rls.ts:19) es el único setter del GUC; solo lo usan patients.ts (11 wraps / 41 calls) y
+bookings.ts (4 wraps / 20 calls) — **ambos con calls planas sin envolver**. `getTenantPrisma`
+(lib/db.ts:76) es dead code. `Actor` no lleva `role`. Solo hay 2 tests puros. RLS está inerte en
+local (rol `kinesoft` = superuser del Docker) y en prod (rol Supabase con BYPASSRLS).
 
 ---
 
-## Ola B0 — Splits de archivos gigantes (independiente, cero-cambio conductual)
+## Estado de ejecución (actualizado 2026-08-15)
+
+Marcas: ✅ hecho · 🟡 parcial o pendiente de un paso del dueño · ⏳ pendiente.
+Fuente: [AUDIT.md §Estado de ejecución](AUDIT.md) (rondas 1-9) + verificación contra el código.
+
+| Ola | Estado | Evidencia / qué falta |
+|---|---|---|
+| **B0** splits | ✅ **hecho** (Ronda 3) | Los 4 archivos gigantes troceados: configuracion 1636→52, patient-profile 2341→181, agenda-client 2180→338, diagnostico-screen 1627→231. `components/{agenda,patients/profile,diagnostico,configuracion}/**` existen en el árbol. |
+| **B1** tests + extracción | 🟡 **parcial** (Ronda 3, ampliado en R6) | ✅ `lib/copago.ts` puro + test · `components/agenda/agenda-utils.ts` + test · `lib/booking-capacity.ts#patientDayStatus` + 6 tests (R6) · `tests/helpers/tenant-factory.ts`. ⏳ Falta el barrido de los módulos `"use server"` restantes (`sessions.ts`, `dashboard.ts`, `visibility.ts`), el E2E Playwright (no instalado) y el test automatizado de concurrencia. |
+| **B2b** rol app | 🟡 **local ✅ · prod ⏳** (Ronda 4) | ✅ `prisma/roles.local.sql` crea `kinesoft_app` (`NOSUPERUSER NOBYPASSRLS`) + GRANTs; `.env.local` apunta la app ahí y `DIRECT_URL` sigue como owner. ⏳ `prisma/roles.supabase.sql` está escrito pero **sin correr en prod** — el flip es del dueño (bucket C). |
+| **B2** RLS wholesale | 🟡 **código completo + verde en LOCAL · prod ⏳** (Ronda 4) | ✅ `runWithRls` como único setter + **canal dual** (`prisma` con RLS / `prismaService` BYPASSRLS para webhook MP, booking público y auditoría) en `lib/db.ts` · migración `20260725120000_rls_policies` con `ENABLE`+`FORCE` y policy `tenantId = app_current_tenant_id()` sobre PatientShare/PatientFile/Insurer/Invitation/PlanTemplate/Notification/DismissedReminder + clínicas · tripwire `tests/integration/rls-isolation.test.ts` **verde** (INSERT cross-tenant rechazado por WITH CHECK). **Decisión tomada:** `UserPreferences` y `Favorite` quedan **user-scoped** (el `where userId` es la frontera) en vez de policy por tenant — así se evita el problema del `tenantId` nullable. ⏳ **PROD sigue en BYPASSRLS.** |
+| **B3** multi-profesional | ⏳ **pendiente** | Verificado 2026-08-15: `Practitioner.userId` **sigue `@unique`** (schema:130), `Actor` no lleva `role`, y la cookie `kine_tenant` **solo se lee** (`lib/session.ts:136`) — nadie la escribe. Nada de B3 arrancó. |
+| **B4** realtime | ⏳ **pendiente** | Verificado: cero uso de Supabase Realtime/`supabase.channel` en el árbol. La invalidación sigue siendo server-side (`lib/cache-tags.ts` + `revalidateTag`). |
+
+> ⚠️ **El cuello de botella no se movió.** B2 está *code-complete y probado en local*, pero mientras
+> `DATABASE_URL` de prod no apunte a un rol sin BYPASSRLS, **RLS sigue inerte en producción** y el
+> `where tenantId` de la app es la única autoridad real ahí. B3 depende de que ese flip esté sólido.
+
+---
+
+## Ola B0 — Splits de archivos gigantes (independiente, cero-cambio conductual) · ✅ hecho (Ronda 3)
 
 Orden recomendado (menor→mayor acople de estado): **configuración → patient-profile → agenda →
 diagnóstico**. Gate de cada uno: `tsc` + `build` + QA visual de la pantalla (el comportamiento NO
@@ -37,6 +57,16 @@ osLabel, billingLine, layoutBookings, statusPill → habilita tests), luego `age
 timeline-view, week-grid-view, list-view) y controls. Borrar el `fmtMoney` local (97) — ya se importa
 `formatARS` (34).
 
+> 🗑️ **Actualización (Ronda 9, 2026-08-15) — `layoutBookings` ya no existe.** El plan lo listaba
+> como una de las extracciones puras que habilitaban tests, y así se entregó en la Ronda 3. En la
+> **Ronda 9 la función y sus tests fueron ELIMINADOS**: el timeline de día dejó el posicionamiento
+> absoluto por columnas (que hacía cruzarse cards de franjas contiguas) y pasó a **layout en flujo**
+> — las cards se bucketean por hora y se renderizan en un flex-wrap, así que ya no hace falta el
+> algoritmo de asignación de columnas. `agenda-utils.ts` conserva `fmtHour`, `fmtMoney`, `osLabel`,
+> `billingLine`, `statusPill` y el tipo `BookingDTO`, y su test cubre `osLabel` + `billingLine`.
+> *Se deja el registro histórico: el split de B0.3 se hizo tal cual está descrito arriba; lo que
+> cambió después fue el diseño del timeline, no la validez del split.*
+
 **B0.4 `diagnostico-screen.tsx` (1627)** — **mayor acople** (flujo tipo reducer: BodyMapPanel/
 RefinementPanel escriben el estado raíz, RightStack lee). Extraer primero lo autocontenido:
 `diagnostico/labels.ts` (puro) + `diagnostico/assign-plan-modal.tsx` (1055-1449); después los 3
@@ -44,7 +74,7 @@ paneles definiendo la interfaz state/dispatch de una vez (no romper el reducer).
 
 ---
 
-## Ola B1 — Tests + extracción de lógica pura (precondición 4.2)
+## Ola B1 — Tests + extracción de lógica pura (precondición 4.2) · 🟡 parcial (Ronda 3)
 
 Extraer a módulos puros y testear (capa 1). Candidatos concretos:
 - **Ya puros** (testeables directo): `lib/diagnosis-engine.ts` (0 prisma), `lib/plan-gating.ts`,
@@ -53,6 +83,12 @@ Extraer a módulos puros y testear (capa 1). Candidatos concretos:
   (bookings.ts:732+), progreso de sesiones (`sessions.ts` getProgramProgress ~618-690), transformación
   KPI post-query (`dashboard.ts`), decisión de acceso pura de `visibility.ts` (patientAccessFor), y
   `agenda-utils.ts` (una vez extraído en B0.3: layoutBookings/billingLine/statusPill).
+  > 🗑️ **`layoutBookings` quedó fuera:** se extrajo y testeó en la Ronda 3 como dice el plan, pero
+  > la **Ronda 9 lo borró junto con su test** al rehacer el timeline con layout en flujo (ya no hay
+  > algoritmo de columnas que testear). Los tests vivos de `agenda-utils` son `osLabel` y
+  > `billingLine`. Lo demás de esta lista (`sessions.ts`, `dashboard.ts`, `visibility.ts`,
+  > `createBookingsBatch`) **sigue pendiente**; lo que sí se sumó fuera de plan es
+  > `lib/booking-capacity.ts#patientDayStatus` (Ronda 6, 6 tests).
 - **Test de copago** (`resolveBookingCopagoCents`): hoy vive en un módulo `server-only` con import de
   prisma → extraer la función pura a un módulo sin I/O para poder testearla (esto desbloquea el test
   que quedó pendiente de la Fase A).
@@ -65,7 +101,7 @@ B2b para los tests de aislamiento con RLS real.
 
 ---
 
-## Ola B2b — Rol de conexión sin BYPASSRLS (habilita B2) · **necesita al dueño**
+## Ola B2b — Rol de conexión sin BYPASSRLS (habilita B2) · 🟡 local ✅ / prod ⏳ · **necesita al dueño**
 
 RLS es inerte hoy porque la app conecta como superuser (Docker) / rol Supabase con BYPASSRLS (prod).
 Para activarla:
@@ -80,7 +116,7 @@ Para activarla:
 
 ---
 
-## Ola B2 — RLS wholesale (SERIAL, todo-o-nada) · **el mayor riesgo**
+## Ola B2 — RLS wholesale (SERIAL, todo-o-nada) · 🟡 código completo, verde en local · **prod pendiente**
 
 Envolver en `runWithRls` (o el canal service-role) TODOS los módulos que hoy usan `prisma` plano y
 tocan tablas con RLS. **No forzar RLS hasta cubrir las superficies públicas/webhook.**
@@ -114,7 +150,7 @@ app. Dep: B2b (rol) + B1 (tests de no-regresión por módulo).
 
 ---
 
-## Ola B3 — Multi-profesional · **migración + backfill**
+## Ola B3 — Multi-profesional · ⏳ pendiente · **migración + backfill**
 
 Bug confirmado: `Practitioner.userId @unique` (schema:123) + `buildActor` (session.ts:75) que lanza
 `no_membership` si no hay Practitioner en el tenant elegido → **un kine invitado a un 2º consultorio
@@ -130,7 +166,7 @@ tenant deben estar sólidas). QA: invitar un user existente a un 2º tenant, swi
 
 ---
 
-## Ola B4 — Realtime (agenda compartida en vivo) · **greenfield**
+## Ola B4 — Realtime (agenda compartida en vivo) · ⏳ pendiente · **greenfield**
 
 Supabase Realtime NO se usa hoy (0 matches). La invalidación es server-side only
 (`invalidateBookingDerivedCaches` en bookings.ts:33 → revalidateTag) → un 2º profesional no ve el
@@ -146,15 +182,21 @@ sesiones del mismo tenant, ver el turno aparecer en vivo.
 
 ## Orden y dependencias
 
-| Ola | Depende de | Necesita del dueño |
-|---|---|---|
-| B0 splits | — (arranca ya) | QA visual de las 4 pantallas. Sin migración. |
-| B1 tests | B0 (agenda-utils) | aprobar el estándar; DB de test = Docker. |
-| B2b rol app | — (habilita B2) | **migración de rol + GRANTs**; decisión conexión dual. |
-| B2 RLS | B2b + B1 | **migración** (9 policies + UserPreferences + backfill); QA por módulo. |
-| B3 multi-prof | B2 | **migración schema + backfill**; QA login/switch 2 tenants. |
-| B4 realtime | B0 + B3 + B2 | habilitar Realtime; policy realtime.messages; QA multi-cliente. |
+| Ola | Depende de | Necesita del dueño | Estado |
+|---|---|---|---|
+| B0 splits | — (arranca ya) | QA visual de las 4 pantallas. Sin migración. | ✅ hecho (QA visual → [QA.md](QA.md) Ronda 3) |
+| B1 tests | B0 (agenda-utils) | aprobar el estándar; DB de test = Docker. | 🟡 parcial |
+| B2b rol app | — (habilita B2) | **migración de rol + GRANTs**; decisión conexión dual. | 🟡 local ✅ (`roles.local.sql`) · **prod ⏳** (`roles.supabase.sql` sin correr) |
+| B2 RLS | B2b + B1 | **migración** (9 policies + UserPreferences + backfill); QA por módulo. | 🟡 migración aplicada en local + tripwire verde · **flip de prod ⏳** |
+| B3 multi-prof | B2 | **migración schema + backfill**; QA login/switch 2 tenants. | ⏳ |
+| B4 realtime | B0 + B3 + B2 | habilitar Realtime; policy realtime.messages; QA multi-cliente. | ⏳ |
 
 **Recomendación de ejecución autónoma:** B0 y B1 son seguros y paralelizables con agentes ahora
 (cero-cambio conductual + tests). **B2b/B2/B3/B4 requieren decisiones y migraciones del dueño** (rol de
 DB, conexión dual, policies, backfills) y QA por módulo — se ejecutan staged, no en una corrida ciega.
+
+> **Dónde estamos (2026-08-15):** B0 ✅, B1 🟡, B2b/B2 hechos en **código y en local** pero
+> **inertes en producción** hasta el flip del rol, B3 y B4 sin arrancar. El próximo desbloqueo real
+> lo tiene el dueño: correr `prisma/roles.supabase.sql` en Supabase y apuntar `DATABASE_URL` al rol
+> app (dejando `DIRECT_URL` y el canal `prismaService` como owner/service). Recién con eso B3 puede
+> arrancar sobre policies que de verdad se aplican.

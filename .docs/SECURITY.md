@@ -18,9 +18,20 @@ open security items in [AUDIT.md](AUDIT.md).
 - **Generic action catches log** (`logger.error(e.message)`) instead of
   swallowing the cause (createBooking/Patient/Service/Insurer).
 
-**Open items** (tracked in AUDIT.md): distributed rate-limiting (Upstash, §8
-below), wholesale RLS adoption (§9), per-booking payment-amount validation,
-and GDPR export/retention.
+**Since closed** (post-baseline rondas):
+
+- **Per-booking payment-amount validation** — ✅ closed in **Ronda 2**
+  (`c3-payment-amount`): `Payment.expectedAmountCents` is anchored when the MP
+  preference is created, and the webhook compares against that anchored amount
+  instead of the live `Service.priceCents` (§4).
+- **Wholesale RLS adoption** — ✅ closed in **Ronda 4** (§9): every Actor-facing
+  module runs under `runWithRls`, the local app role is `kinesoft_app`
+  (NOBYPASSRLS) and the isolation test is green. The **prod connection-role
+  flip** remains an owner task.
+
+**Still open** (tracked in AUDIT.md): distributed rate-limiting (Upstash, §8
+below — owner/bucket C), the prod RLS role flip (§9), and GDPR
+export/retention.
 
 ## 1. Identity & tenancy
 
@@ -159,21 +170,102 @@ Rate limits currently in place:
 | `/api/pacientes/export` | 5 / min / user |
 | `/api/agenda/export` | 10 / min / user |
 
-## 9. Row-Level Security (RLS) — backstop, not gate
+## 9. Row-Level Security (RLS) — a real backstop (Ronda 4)
 
-> ⚠️ **Structurally inert today (see AUDIT.md §0).** The app connects with a role
-> that has BYPASSRLS (dev superuser / Supabase `postgres.<ref>`), so `FORCE RLS`
-> never actually evaluates and `runWithRls` sets a GUC no policy gets to read.
-> The real isolation gate today is the app-layer `where: { tenantId }` filter.
-> Making RLS real is a coupled, all-or-nothing workstream (role without BYPASSRLS
-> + GUC in every module + the 9 missing policies) — ROADMAP Ola 2.2.
+> ⚠️ **One residual, and it is the important one: PROD still connects with a
+> BYPASSRLS role.** Everything below is true and verified **locally**. Until the
+> owner runs `prisma/roles.supabase.sql` and flips prod's `DATABASE_URL` to
+> `kinesoft_app`, `FORCE RLS` does not evaluate in production and the app-layer
+> `where: { tenantId }` filter is the only isolation gate *there*. Tracked as a
+> bucket-C item in EXTERNAL-CONFIG.md §3.
 
-`prisma/migrations/policies.sql` enables RLS on every tenant-scoped
-table. `lib/rls.ts#runWithRls(tenantId, fn)` sets the
-`app.current_tenant_id` GUC inside a transaction so the policies fire.
+**Policies.** `prisma/migrations/20260725120000_rls_policies/migration.sql` is
+the single source of truth (`prisma/migrations/policies.sql` is now only a
+redirect stub, applied by nothing). It does `ENABLE` + `FORCE ROW LEVEL
+SECURITY` on **26 tables** (17 original + 7 added in Ola B2 + 2 catalog
+tables): a generated `tenantId = app_current_tenant_id()` policy for the
+direct-`tenantId` ones, `EXISTS`-subquery policies for the tables that reach
+tenancy through a parent (`Coverage`/`EmergencyContact` → `Patient`,
+`Payment` → `Booking`, `Session` → `TreatmentProgram`, `SessionExercise`,
+`EvaScore`), a self-scoped read/update policy on `Tenant` (INSERT/DELETE of
+tenants stay off-limits to the app role — they run on the service channel),
+and **split policies** on the catalog tables `Condition` / `Exercise`:
 
-**Current adoption**: opt-in. The primary access control is the
-application-layer `tenantId` filter applied in every server action via
-`getActor()`. RLS is available as defense-in-depth for raw-SQL paths and
-high-risk mutations; wholesale adoption is queued for a future sprint
-where every server action is migrated to `runWithRls`.
+```sql
+FOR SELECT USING ("tenantId" IS NULL OR "tenantId" = app_current_tenant_id())
+FOR ALL    USING ("tenantId" = app_current_tenant_id())
+           WITH CHECK ("tenantId" = app_current_tenant_id())
+```
+
+— i.e. everyone reads the global catalog, nobody but the owner tenant writes
+its own rows, and **no tenant can ever mutate global catalog rows**.
+`UserPreferences` and `Favorite` are intentionally left without RLS (they are
+userId-scoped, not tenant-owned).
+
+**Adoption is wholesale.** `lib/rls.ts#runWithRls(tenantId, fn)` sets the
+transaction-local `app.current_tenant_id` GUC (transaction-local is mandatory —
+prod pools through Supavisor in transaction mode), and `withTenantDb()` lets a
+shared helper either join the caller's transaction or open its own. ~23
+Actor-facing `lib/*` modules now read *and* write inside a wrap.
+`scripts/guard-tenant-isolation.mjs` fails the build when a model gains
+`tenantId` without a matching policy, and prints a soft report of `prisma.<model>`
+calls made outside a wrap.
+
+**Verified, not assumed.** Locally the app connects as `kinesoft_app`
+(`NOSUPERUSER NOBYPASSRLS`, created by `prisma/roles.local.sql`) while
+`DIRECT_URL` stays on the owner role for migrations and the service channel.
+`tests/integration/rls-isolation.test.ts` (gated on `RLS_IT=1`, run via
+`npm run test:integration`) is green: cross-tenant `INSERT` is rejected by
+`WITH CHECK`, and a read that lost its wrap comes back empty — which is exactly
+what makes a missed wrap fail loudly instead of leaking.
+
+**Defense in depth stands.** The app-layer `tenantId` filter (`getActor()` +
+`getTenantPrisma()`'s read injection) is still applied everywhere. RLS is the
+net under it, not a replacement for it.
+
+## 10. Platform superadmin (cross-tenant privilege tier)
+
+Rondas 7-8 introduced a privilege **above** tenancy: the platform superadmin,
+who authors the **global** exercise catalog (the `tenantId IS NULL` rows every
+tenant reads) and its tags.
+
+- **The flag.** `UserProfile.isPlatformAdmin` (boolean, default `false`),
+  orthogonal to the tenant-scoped `Role` enum. Surfaced on the session as
+  `Actor.isPlatformAdmin`.
+- **The gate.** `requireSuperAdmin()` (`lib/session.ts`) throws
+  `UnauthenticatedError` with no session and
+  `ForbiddenError("platform_admin_required")` for a non-admin. It is the first
+  line of every admin action in `lib/exercises-admin.ts`, `lib/tags-admin.ts`
+  and `lib/exercise-media.ts`, and it guards the route group via
+  `app/(app)/plataforma/layout.tsx` (non-admins are redirected to
+  `/dashboard`). The sidebar entry only renders for admins — but the layout
+  guard, not the hidden link, is the control.
+- **Why enforcement is an app-layer chokepoint, not an RLS policy.** Global
+  catalog writes go through `prismaService` (`lib/db.ts`), a second Prisma
+  client on a **BYPASSRLS** connection. That is not a hole — it is the
+  guarantee: under forced RLS the ordinary app role **physically cannot** write
+  a `tenantId IS NULL` row (`exercise_write` demands
+  `tenantId = app_current_tenant_id()`, and `NULL = <uuid>` is never true), so
+  there is exactly one code path into the global catalog and
+  `requireSuperAdmin()` sits at the top of it. An RLS policy could not express
+  "is a platform admin" anyway — the GUC carries a tenant, not a role.
+- **RLS posture of the new catalog tables.** `ExerciseMedia` and
+  `ExerciseArticle` carry **no `tenantId`** (they inherit visibility from the
+  parent `Exercise`, gated at the app layer in `getExercise`). Migration
+  `20260803022653_exercise_media_and_article` gives them `ENABLE` + `FORCE ROW
+  LEVEL SECURITY` with `FOR SELECT USING (true)` and **no write policy at
+  all** — the app role reads them under `runWithRls` and can never insert,
+  update or delete them; only the service channel writes. Verified: a global
+  `INSERT` as `kinesoft_app` is denied.
+- **Media uploads** (`lib/exercise-media.ts`) reuse the `lib/files.ts` posture:
+  private Supabase bucket `exercise-media`, MIME allow-list (`video/mp4`,
+  `video/webm`, `video/quicktime`, `image/png`, `image/jpeg`, `image/webp`,
+  `image/gif`), 50 MB cap, extension sanitised against `/^[a-z0-9]{1,5}$/`,
+  1-hour signed URLs on read. YouTube links are parsed to a video id and
+  re-emitted as a privacy-enhanced `youtube-nocookie` embed — the raw
+  user-supplied URL is never used as an embed src.
+- **Granting the flag** is deliberately out-of-band and DB-level:
+  `scripts/set-platform-admin.ts` (`<email>` to grant, `--revoke`, `--list`),
+  run by the owner against the owner/`DIRECT_URL` connection. There is **no
+  in-app path** to promote a user, no invitation flow, and no self-service —
+  which keeps the tier out of reach of any tenant-level compromise.

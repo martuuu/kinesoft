@@ -1,4 +1,0 @@
-# Only curated markdown docs are tracked; local junk stays ignored.
-*
-!.gitignore
-!*.md

@@ -317,7 +317,7 @@ function EditPatientModal({
   const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
 
   return (
-    <Drawer open onClose={onClose} title="Editar paciente" width={520}>
+    <Drawer open onClose={onClose} title="Editar paciente" width={560}>
       <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <Section title="Datos personales">
           <Grid2>

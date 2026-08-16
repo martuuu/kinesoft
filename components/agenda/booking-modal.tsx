@@ -15,6 +15,7 @@ import {
   deleteBooking,
   setBookingStatus,
 } from "@/lib/bookings";
+import type { BatchOutcome } from "@/lib/bookings";
 import { PatientPicker } from "@/components/patients/patient-picker";
 import { createPatient, getPatientBillingPreview, setPatientDefaultCopago } from "@/lib/patients";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
@@ -59,6 +60,24 @@ export function BookingModal({
     existingISO: string;
     payload: Parameters<typeof createBooking>[0];
   } | null>(null);
+  // Soft confirm when the new turno OVERLAPS one the patient already has.
+  const [patientOverlap, setPatientOverlap] = useState<{
+    existingISO: string;
+    payload: Parameters<typeof createBooking>[0];
+  } | null>(null);
+  // Multi-turno preflight: what the batch would do, awaiting the user's choice.
+  const [batchConflict, setBatchConflict] = useState<{
+    plan: BatchOutcome;
+    payload: Parameters<typeof createBookingsBatch>[0];
+  } | null>(null);
+  // Every prompt renders below the form fields inside a scrolling drawer, so
+  // bring whichever one appears into view instead of leaving it off-screen.
+  const promptRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (conflict || samePatient || patientOverlap || batchConflict) {
+      promptRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [conflict, samePatient, patientOverlap, batchConflict]);
   // Stable idempotency key for THIS create attempt (one per modal instance):
   // a double-submit / retry converges to one turno, while a deliberate new
   // turno opens a fresh modal → fresh key → its own row. Guards against the
@@ -142,6 +161,15 @@ export function BookingModal({
         setError(null);
         return;
       }
+      if (result.patientOverlap) {
+        // The new turno runs over one the patient already has. Confirmable —
+        // two services in parallel is normal in kinesiología.
+        setPatientOverlap({ existingISO: result.patientOverlap.existingISO, payload });
+        setConflict(null);
+        setSamePatient(null);
+        setError(null);
+        return;
+      }
       if (result.conflict) {
         setConflict({
           practitionerName: result.conflict.practitionerName,
@@ -149,6 +177,7 @@ export function BookingModal({
           payload,
         });
         setSamePatient(null);
+        setPatientOverlap(null);
         setError(null);
         return;
       }
@@ -157,6 +186,7 @@ export function BookingModal({
       return;
     }
     setSamePatient(null);
+    setPatientOverlap(null);
     // "Ambas opciones": the turno already carries its own copago override;
     // if the kine confirmed the prompt, also make it the patient's default.
     if (updateDefaultCopago && selectedPatient) {
@@ -166,10 +196,35 @@ export function BookingModal({
     onSaved();
   };
 
+  /** Execute the batch after the user picked what to do with the conflicts. */
+  const runBatch = async (
+    payload: Parameters<typeof createBookingsBatch>[0],
+    allowOverbooking: boolean
+  ) => {
+    const r = await createBookingsBatch({ ...payload, allowOverbooking });
+    if (!r.ok) {
+      setError(r.error);
+      toast.error("No pudimos crear los turnos", { description: r.error });
+      return;
+    }
+    const d = r.data;
+    const parts = [`${d.created} de ${d.requested} turnos creados`];
+    if (d.sobreturnos > 0) parts.push(`${d.sobreturnos} como sobreturno`);
+    if (d.omitted > 0) parts.push(`${d.omitted} omitidos`);
+    if (d.duplicates > 0) parts.push(`${d.duplicates} ya existían`);
+    toast.success(d.created > 0 ? "Turnos creados" : "No se creó ningún turno", {
+      description: parts.join(" · "),
+    });
+    setBatchConflict(null);
+    onSaved();
+  };
+
   const submit = (formData: FormData) => {
     setError(null);
     setConflict(null);
     setSamePatient(null);
+    setPatientOverlap(null);
+    setBatchConflict(null);
     start(async () => {
       if (mode === "create") {
         let patientId = String(formData.get("patientId") ?? "") || undefined;
@@ -230,24 +285,29 @@ export function BookingModal({
           copagoCents:
             !isGuest && billing && copagoInput !== billing.copagoCents ? copagoInput : undefined,
         };
-        // Múltiples turnos: create `count` individual turnos on the chosen
-        // weekdays. No plan/TreatmentProgram. Single turno keeps the full
-        // conflict/sobreturno UX via finalizeCreate.
+        // Múltiples turnos: preflight first so the user is TOLD about conflicts
+        // and chooses what to do, instead of slots being dropped silently.
         if (multiTurno && count > 1) {
-          const result = await createBookingsBatch({
+          const batchPayload = {
             ...payload,
             count,
             daysOfWeek: weekdays.length > 0 ? weekdays : undefined,
-          });
-          if (!result.ok) {
-            setError(result.error);
-            toast.error("No pudimos crear los turnos", { description: result.error });
+          };
+          const preview = await createBookingsBatch({ ...batchPayload, dryRun: true });
+          if (!preview.ok) {
+            setError(preview.error);
+            toast.error("No pudimos crear los turnos", { description: preview.error });
             return;
           }
-          toast.success("Turnos creados", {
-            description: `${result.data.created} de ${result.data.requested} turnos creados${result.data.skipped ? ` · ${result.data.skipped} omitidos por conflicto` : ""}`,
-          });
-          onSaved();
+          // Nothing in the way → just create.
+          if (preview.data.conflicted === 0 && preview.data.duplicates === 0) {
+            await runBatch(batchPayload, false);
+            return;
+          }
+          setBatchConflict({ plan: preview.data, payload: batchPayload });
+          setConflict(null);
+          setSamePatient(null);
+          setError(null);
           return;
         }
         await finalizeCreate(payload);
@@ -285,6 +345,20 @@ export function BookingModal({
     });
   };
 
+  const confirmPatientOverlap = () => {
+    if (!patientOverlap) return;
+    start(async () => {
+      // Confirming the overlap implies the weaker same-day confirmation too,
+      // so the user isn't asked twice for the same turno.
+      await finalizeCreate({
+        ...patientOverlap.payload,
+        allowPatientOverlap: true,
+        allowSamePatientDay: true,
+      });
+      setPatientOverlap(null);
+    });
+  };
+
   const setStatus = (status: BookingStatus) => {
     if (!booking) return;
     start(async () => {
@@ -316,7 +390,9 @@ export function BookingModal({
       open={true}
       onClose={onClose}
       title={mode === "create" ? "Nuevo turno" : "Turno"}
-      width={460}
+      // Wide enough that the form doesn't scroll sideways AND the
+      // sobreturno / mismo-día prompts land above the fold.
+      width={580}
     >
       {mode === "edit" && booking ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -627,8 +703,129 @@ export function BookingModal({
                 {error}
               </div>
             )}
+            {batchConflict && (
+              <div
+                ref={promptRef}
+                role="alert"
+                style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  background: "rgba(255,176,32,0.14)",
+                  border: "1px solid rgba(255,176,32,0.45)",
+                  display: "grid",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+                  {batchConflict.plan.conflicted > 0
+                    ? `${batchConflict.plan.conflicted} de ${batchConflict.plan.requested} turnos caen como sobreturno`
+                    : "Algunos turnos ya existen"}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
+                  {batchConflict.plan.free} se crean sin conflicto
+                  {batchConflict.plan.duplicates > 0 &&
+                    ` · ${batchConflict.plan.duplicates} ya existen y no se pueden duplicar`}
+                  .
+                </div>
+                <div
+                  className="k-mono"
+                  style={{
+                    fontSize: 11,
+                    color: "var(--navy-500)",
+                    maxHeight: 96,
+                    overflowY: "auto",
+                    display: "grid",
+                    gap: 2,
+                  }}
+                >
+                  {batchConflict.plan.dates
+                    .filter((d) => d.status !== "libre")
+                    .map((d) => (
+                      <div key={d.iso}>
+                        {new Date(d.iso).toLocaleString("es-AR", {
+                          weekday: "short",
+                          day: "2-digit",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: false,
+                          timeZone: "America/Argentina/Buenos_Aires",
+                        })}{" "}
+                        · {d.status === "duplicado" ? "ya existe" : "sobreturno"}
+                      </div>
+                    ))}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {batchConflict.plan.conflicted > 0 && (
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={pending}
+                      onClick={() => start(async () => { await runBatch(batchConflict.payload, true); })}
+                    >
+                      Crear todos ({batchConflict.plan.free + batchConflict.plan.conflicted})
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={pending || batchConflict.plan.free === 0}
+                    onClick={() => start(async () => { await runBatch(batchConflict.payload, false); })}
+                    style={{ color: "#7A4A00", borderColor: "rgba(122,74,0,0.3)" }}
+                  >
+                    Crear solo los libres ({batchConflict.plan.free})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setBatchConflict(null)}
+                    disabled={pending}
+                  >
+                    Volver atrás
+                  </Button>
+                </div>
+              </div>
+            )}
+            {patientOverlap && (
+              <div
+                ref={promptRef}
+                role="alert"
+                style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  background: "rgba(31,79,190,0.08)",
+                  border: "1px solid rgba(31,79,190,0.28)",
+                  display: "grid",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 13, color: "var(--sky-700)", fontWeight: 700 }}>
+                  Se superpone con otro turno del paciente
+                </div>
+                <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
+                  Ya tiene un turno a las{" "}
+                  {new Date(patientOverlap.existingISO).toLocaleString("es-AR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                    timeZone: "America/Argentina/Buenos_Aires",
+                  })}{" "}
+                  que se cruza con este horario. Puede ser intencional (dos servicios en
+                  paralelo). ¿Crear igual?
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <Button type="button" variant="primary" onClick={confirmPatientOverlap} disabled={pending}>
+                    Sí, crear superpuesto
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => setPatientOverlap(null)} disabled={pending}>
+                    Cancelar
+                  </Button>
+                </div>
+              </div>
+            )}
             {samePatient && (
               <div
+                ref={promptRef}
                 role="alert"
                 style={{
                   padding: 14,
@@ -664,6 +861,7 @@ export function BookingModal({
             )}
             {conflict && (
               <div
+                ref={promptRef}
                 role="alert"
                 style={{
                   padding: 14,

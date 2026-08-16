@@ -91,6 +91,17 @@ export function toARHour(d: Date | string): number {
   return p.hour + p.minute / 60;
 }
 
+/**
+ * Exact minutes-from-midnight in Argentina time (e.g. 810 for 13:30).
+ *
+ * Prefer this over `toARHour(d) * 60` for slot math: 1/60 isn't representable
+ * in binary, so 08:20 round-trips as 499.999… and floors to 499 instead of 500.
+ */
+export function toARMinutes(d: Date | string): number {
+  const p = arParts(typeof d === "string" ? new Date(d) : d);
+  return p.hour * 60 + p.minute;
+}
+
 /** Day-of-week (0=Sun…6=Sat) in Argentina time. */
 export function toARDow(d: Date | string): number {
   return arParts(typeof d === "string" ? new Date(d) : d).dow;

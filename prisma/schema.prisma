@@ -39,6 +39,10 @@ model Tenant {
   // see their agenda change after the migration.
   businessHoursStart Int @default(8)
   businessHoursEnd   Int @default(19)
+  // Agenda row granularity in minutes: 60 (one row per hour) or 30 (half-hour
+  // rows, so a 13:30 turno gets its own labelled row instead of being folded
+  // into 13:00). Display-only — bookings have always stored exact minutes.
+  agendaSlotMinutes  Int @default(60)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

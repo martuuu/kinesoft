@@ -62,7 +62,7 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
   };
 
   return (
-    <Drawer open onClose={onClose} width={480}>
+    <Drawer open onClose={onClose} width={560}>
       <header style={{ marginBottom: 16, paddingRight: 40 }}>
         <EyebrowLabel tone="accent">Nuevo paciente</EyebrowLabel>
         <h2 className="k-display" style={{ fontSize: 22, margin: "6px 0 0", fontWeight: 700 }}>

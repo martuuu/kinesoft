@@ -90,6 +90,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       businessHours={{
         start: settings.businessHoursStart,
         end: settings.businessHoursEnd,
+        slotMinutes: settings.agendaSlotMinutes,
       }}
     />
   );

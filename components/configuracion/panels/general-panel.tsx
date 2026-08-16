@@ -28,19 +28,21 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
   const [error, setError] = useState<string | null>(null);
   const [hoursStart, setHoursStart] = useState(tenant.businessHoursStart);
   const [hoursEnd, setHoursEnd] = useState(tenant.businessHoursEnd);
+  const [slotMinutes, setSlotMinutes] = useState(tenant.agendaSlotMinutes);
   const [hoursMsg, setHoursMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [basicsMsg, setBasicsMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
   // Sync when the server refreshes the tenant prop (after router.refresh()).
   useEffect(() => { setHoursStart(tenant.businessHoursStart); }, [tenant.businessHoursStart]);
   useEffect(() => { setHoursEnd(tenant.businessHoursEnd); }, [tenant.businessHoursEnd]);
+  useEffect(() => { setSlotMinutes(tenant.agendaSlotMinutes); }, [tenant.agendaSlotMinutes]);
 
   const canAdmin = role === "OWNER" || role === "ADMIN";
 
   const saveHours = () => {
     setHoursMsg(null);
     start(async () => {
-      const r = await setBusinessHours({ start: hoursStart, end: hoursEnd });
+      const r = await setBusinessHours({ start: hoursStart, end: hoursEnd, slotMinutes });
       if (!r.ok) {
         setHoursMsg({ tone: "err", text: r.error });
       } else {
@@ -154,7 +156,8 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Horario del consultorio</EyebrowLabel>
         <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
-          Define la franja horaria visible en la agenda y en el turnero público.
+          Define la franja horaria visible en la agenda y en el turnero público, y cada
+          cuánto se dibujan las filas de la agenda.
           Permitido: <strong>{BUSINESS_HOUR_MIN}:00</strong> a <strong>{BUSINESS_HOUR_MAX}:00</strong>.
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
@@ -177,6 +180,27 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
             max={BUSINESS_HOUR_MAX}
             disabled={!canAdmin}
           />
+          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+            <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Vista de agenda</span>
+            <select
+              value={slotMinutes}
+              onChange={(e) => setSlotMinutes(Number(e.target.value))}
+              disabled={!canAdmin}
+              style={{
+                padding: "9px 12px",
+                borderRadius: 12,
+                border: "1px solid rgba(15,30,51,0.1)",
+                background: "rgba(255,255,255,0.95)",
+                fontSize: 13.5,
+                color: "var(--navy-900)",
+                cursor: canAdmin ? "pointer" : "not-allowed",
+                outline: "none",
+              }}
+            >
+              <option value={60}>Cada 1 hora</option>
+              <option value={30}>Cada 30 minutos</option>
+            </select>
+          </label>
           <Button
             type="button"
             variant="primary"
@@ -184,7 +208,9 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
             disabled={
               pending ||
               !canAdmin ||
-              (hoursStart === tenant.businessHoursStart && hoursEnd === tenant.businessHoursEnd)
+              (hoursStart === tenant.businessHoursStart &&
+                hoursEnd === tenant.businessHoursEnd &&
+                slotMinutes === tenant.agendaSlotMinutes)
             }
             style={{ marginLeft: "auto" }}
           >

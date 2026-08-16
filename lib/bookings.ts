@@ -282,6 +282,10 @@ export async function createBooking(
     // Front-desk confirmed that a second turno the same day for this patient
     // is intentional (they don't overlap). Skips the same-patient-day prompt.
     allowSamePatientDay?: boolean;
+    // Front-desk confirmed the new turno may overlap one the patient already
+    // has (two services in parallel is normal in kinesiología). The exact same
+    // instant is still refused by the DB unique index.
+    allowPatientOverlap?: boolean;
     // Stable per-attempt key from the client so a double-submit / retry
     // collapses to one row, while a deliberate new turno gets its own.
     idempotencyKey?: string;
@@ -294,6 +298,8 @@ export async function createBooking(
     };
     // Soft prompt: the patient already has ≥1 non-overlapping turno today.
     samePatientDay?: { count: number; existingISO: string };
+    // Soft prompt: the new turno overlaps one the patient already has.
+    patientOverlap?: { existingISO: string };
   }
 > {
   const actor = await getActor();
@@ -337,12 +343,13 @@ export async function createBooking(
       ? raw.idempotencyKey
       : null;
 
-  // Patient-level guard, orthogonal to the professional's capacity below: a
-  // patient can't be double-booked over their own turno, and a *second* turno
-  // the same day needs an explicit confirmation from the front desk (the kine
-  // asked for a confirm modal, NOT a hard error). Scoped to the patient across
-  // ALL professionals — a patient can only be in one place at a time.
-  if (data.patientId && !raw.allowSamePatientDay) {
+  // Patient-level guard, orthogonal to the professional's capacity below. Two
+  // independent confirmations, each with its own flag: an OVERLAP with the
+  // patient's own turno, and a second turno the SAME DAY. Both are prompts, not
+  // hard errors (the kine asked for confirm modals). Scoped to the patient
+  // across ALL professionals. Skipping the query entirely when both are already
+  // confirmed keeps the retry path cheap.
+  if (data.patientId && !(raw.allowSamePatientDay && raw.allowPatientOverlap)) {
     // AR calendar-day bounds in UTC: AR midnight = 03:00 UTC (UTC-3, sin DST).
     const dayKey = toARDateKey(data.scheduledFor);
     const dayStart = new Date(`${dayKey}T03:00:00.000Z`);
@@ -364,17 +371,44 @@ export async function createBooking(
       },
       select: { scheduledFor: true, durationMin: true },
     }));
-    // Hard rule: never collide with the patient's own turno (any professional,
-    // even across midnight). Reuses the tested overlap math in patientDayStatus.
-    if (patientDayStatus(sameDay, data.scheduledFor, end) === "overlap") {
-      return { ok: false, error: "El paciente ya tiene un turno que se superpone con ese horario." };
+    // A turno at the EXACT same instant is structurally impossible — the
+    // partial unique index (tenant, patient, scheduledFor) rejects it. Say so
+    // up front instead of offering a confirmation that can never succeed
+    // (the batch path reports this same case as "duplicado").
+    const sameInstant = sameDay.find((c) => +c.scheduledFor === +data.scheduledFor);
+    if (sameInstant) {
+      return {
+        ok: false,
+        error:
+          "El paciente ya tiene un turno que arranca exactamente a esa hora. Movelo aunque sea unos minutos para poder cargarlo.",
+      };
+    }
+    // The patient already has a turno running over this window (any
+    // professional, even across midnight). Confirmable rather than fatal: two
+    // services in parallel is normal in kinesiología.
+    if (
+      !raw.allowPatientOverlap &&
+      patientDayStatus(sameDay, data.scheduledFor, end) === "overlap"
+    ) {
+      const overlapping = sameDay
+        .filter(
+          (c) =>
+            c.scheduledFor < end &&
+            new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > data.scheduledFor
+        )
+        .sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime())[0];
+      return {
+        ok: false,
+        error: "El paciente ya tiene un turno que se superpone con ese horario.",
+        patientOverlap: { existingISO: overlapping.scheduledFor.toISOString() },
+      };
     }
     // Soft confirm only for a genuine SAME-AR-DAY second turno; a non-overlapping
     // prior-day carry-over pulled in by the look-back must not trigger it.
     const sameDayRows = sameDay.filter(
       (c) => c.scheduledFor >= dayStart && c.scheduledFor < dayEnd
     );
-    if (sameDayRows.length > 0) {
+    if (!raw.allowSamePatientDay && sameDayRows.length > 0) {
       return {
         ok: false,
         error: "El paciente ya tiene un turno hoy.",
@@ -553,7 +587,13 @@ export async function createBooking(
         target.includes("patient_slot") ||
         (target.includes("patientId") && target.includes("scheduledFor"))
       ) {
-        return { ok: false, error: "El paciente ya tiene un turno que se superpone con ese horario." };
+        // The index only fires on an EXACT same-instant collision, so give the
+        // actionable wording rather than the generic "se superpone".
+        return {
+          ok: false,
+          error:
+            "El paciente ya tiene un turno que arranca exactamente a esa hora. Movelo aunque sea unos minutos para poder cargarlo.",
+        };
       }
       return { ok: false, error: "Turno duplicado." };
     }
@@ -875,9 +915,53 @@ export async function setBookingCopagoPaid(
  * replaces the old createBookingSeries, which used UTC weekday math and put
  * turnos on the wrong days / next month.
  */
+/** Per-date outcome of a multi-turno batch. */
+export type BatchSlotStatus =
+  /** Nothing in the way — creates cleanly. */
+  | "libre"
+  /** Capacity reached for the professional, or the patient already has an
+   *  overlapping turno. Creatable as an explicit sobreturno. */
+  | "sobreturno"
+  /** The patient already has an ACTIVE turno at this exact instant — the DB
+   *  unique index forbids a second one, so it can never be created. */
+  | "duplicado";
+
+export type BatchOutcome = {
+  /** True when nothing was written (preflight). */
+  dryRun: boolean;
+  requested: number;
+  dates: { iso: string; status: BatchSlotStatus }[];
+  free: number;
+  conflicted: number;
+  duplicates: number;
+  /** Rows actually written (0 on a dry run). */
+  created: number;
+  /** How many of `created` were forced through as sobreturno. */
+  sobreturnos: number;
+  /** Conflicting slots deliberately left out (allowOverbooking = false). */
+  omitted: number;
+};
+
+/**
+ * Multi-turno batch with a PREFLIGHT mode.
+ *
+ * `dryRun: true` classifies every date without writing, so the UI can warn
+ * ("3 de 10 caen como sobreturno") and let the user choose. Then:
+ *   · `allowOverbooking: true`  → creates everything, tagging the conflicting
+ *     rows `[SOBRETURNO]` like the single-create path does.
+ *   · `allowOverbooking: false` → creates only the free slots (an explicit
+ *     choice now, not the silent skip it used to be).
+ * `duplicado` slots are never creatable and are always reported separately.
+ */
 export async function createBookingsBatch(
-  raw: BookingCreateInput & { count: number; daysOfWeek?: number[]; idempotencyKey?: string }
-): Promise<ActionResult<{ created: number; skipped: number; requested: number }>> {
+  raw: BookingCreateInput & {
+    count: number;
+    daysOfWeek?: number[];
+    idempotencyKey?: string;
+    dryRun?: boolean;
+    allowOverbooking?: boolean;
+  }
+): Promise<ActionResult<BatchOutcome>> {
   const actor = await getActor();
   const parsed = BookingCreate.safeParse(raw);
   if (!parsed.success) {
@@ -934,34 +1018,95 @@ export async function createBookingsBatch(
       ? raw.idempotencyKey
       : seriesId;
 
-  let created = 0;
-  let skipped = 0;
-  for (const when of dates) {
+  // One query for the whole span instead of two per slot: everything that can
+  // conflict is either same practitioner+service (capacity) or same patient
+  // (own overlap / exact-instant duplicate).
+  const spanStart = new Date(dates[0].getTime() - 240 * 60_000);
+  const spanEnd = new Date(
+    dates[dates.length - 1].getTime() + duration * 60_000 + 240 * 60_000
+  );
+  const existing = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
+    where: {
+      tenantId: actor.tenantId,
+      status: { notIn: ["CANCELLED"] },
+      scheduledFor: { gte: spanStart, lt: spanEnd },
+      OR: [
+        { practitionerId: data.practitionerId, serviceId: data.serviceId },
+        ...(data.patientId ? [{ patientId: data.patientId }] : []),
+      ],
+    },
+    select: {
+      scheduledFor: true,
+      durationMin: true,
+      practitionerId: true,
+      serviceId: true,
+      patientId: true,
+    },
+  }));
+
+  const classify = (when: Date): BatchSlotStatus => {
     const end = new Date(when.getTime() + duration * 60_000);
-    const candidates = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: {
-        tenantId: actor.tenantId,
-        practitionerId: data.practitionerId,
-        serviceId: data.serviceId,
-        status: { notIn: ["CANCELLED"] },
-        scheduledFor: {
-          gte: new Date(when.getTime() - 240 * 60_000),
-          lt: end,
-        },
-      },
-      select: { id: true, scheduledFor: true, durationMin: true },
-    }));
-    const overlapCount = candidates.filter(
-      (c) =>
-        c.scheduledFor < end &&
-        new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > when
+    const overlaps = (e: { scheduledFor: Date; durationMin: number }) =>
+      e.scheduledFor < end && new Date(e.scheduledFor.getTime() + e.durationMin * 60_000) > when;
+
+    if (data.patientId) {
+      // Exact instant → the partial unique index makes this uncreatable.
+      if (existing.some((e) => e.patientId === data.patientId && +e.scheduledFor === +when)) {
+        return "duplicado";
+      }
+      // The patient is busy elsewhere in this window (any professional/service).
+      if (existing.some((e) => e.patientId === data.patientId && overlaps(e))) {
+        return "sobreturno";
+      }
+    }
+    const capacityCount = existing.filter(
+      (e) =>
+        e.practitionerId === data.practitionerId &&
+        e.serviceId === data.serviceId &&
+        overlaps(e)
     ).length;
-    // Skip a slot only when the service's capacity is actually reached
-    // (ilimitado → nunca se saltea; se crean todos los solapados).
-    if (overlapBlocks(overlapCount, service.maxConcurrent)) {
-      skipped++;
+    return overlapBlocks(capacityCount, service.maxConcurrent) ? "sobreturno" : "libre";
+  };
+
+  const plan = dates.map((when) => ({ when, status: classify(when) }));
+  const free = plan.filter((p) => p.status === "libre").length;
+  const conflicted = plan.filter((p) => p.status === "sobreturno").length;
+  const duplicates = plan.filter((p) => p.status === "duplicado").length;
+  const datesOut = plan.map((p) => ({ iso: p.when.toISOString(), status: p.status }));
+
+  if (raw.dryRun) {
+    return {
+      ok: true,
+      data: {
+        dryRun: true,
+        requested: count,
+        dates: datesOut,
+        free,
+        conflicted,
+        duplicates,
+        created: 0,
+        sobreturnos: 0,
+        omitted: 0,
+      },
+    };
+  }
+
+  let created = 0;
+  let sobreturnos = 0;
+  let omitted = 0;
+  let duplicatesHit = duplicates;
+
+  for (const { when, status } of plan) {
+    // Never creatable — the DB index would reject it anyway.
+    if (status === "duplicado") continue;
+    // Conflicting slot the caller chose NOT to force.
+    if (status === "sobreturno" && !raw.allowOverbooking) {
+      omitted++;
       continue;
     }
+    const isOverbook = status === "sobreturno";
+    // Same tagging the single-create path uses, so reports can tell them apart.
+    const notes = isOverbook ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
     const idempotencyKey = `${keyBase}:${when.toISOString()}`;
     try {
       await runWithRls(actor.tenantId, (tx) => tx.booking.upsert({
@@ -978,7 +1123,7 @@ export async function createBookingsBatch(
           guestName: data.guestName,
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
-          notes: data.notes,
+          notes,
           title,
           description,
           status: data.patientId ? "CONFIRMED" : "PENDING",
@@ -987,17 +1132,32 @@ export async function createBookingsBatch(
         },
       }));
       created++;
+      if (isOverbook) sobreturnos++;
     } catch (e) {
-      // Genuine conflicts are already filtered out by the overlap check
-      // above, so a failure here is unexpected (DB/RLS/transient). Log it
-      // so it's diagnosable, then skip the slot to keep the batch going.
+      // A patient+instant collision that the preflight missed (someone else
+      // booked it in between) is a DUPLICATE, not a mystery failure — the old
+      // catch-all lumped it into "omitidos por conflicto" with no explanation.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        // Same precise target match the single-create path uses, so an
+        // unrelated unique violation isn't silently reported as a duplicate.
+        const target = Array.isArray(e.meta?.target)
+          ? e.meta.target.join(",")
+          : String(e.meta?.target ?? "");
+        if (
+          target.includes("patient_slot") ||
+          (target.includes("patientId") && target.includes("scheduledFor"))
+        ) {
+          duplicatesHit++;
+          continue;
+        }
+      }
       logger.error("createBookingsBatch: slot creation failed", {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
         scheduledFor: when.toISOString(),
         err: e instanceof Error ? e.message : String(e),
       });
-      skipped++;
+      omitted++;
     }
   }
   await audit({
@@ -1005,12 +1165,32 @@ export async function createBookingsBatch(
     actorId: actor.userId ?? undefined,
     action: "booking.batch.create",
     entity: "Booking",
-    payload: { created, skipped, requested: count, seriesId },
+    payload: {
+      created,
+      sobreturnos,
+      omitted,
+      duplicates: duplicatesHit,
+      requested: count,
+      seriesId,
+    },
   });
   revalidatePath("/agenda");
   if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
   invalidateBookingDerivedCaches(actor.tenantId);
-  return { ok: true, data: { created, skipped, requested: count } };
+  return {
+    ok: true,
+    data: {
+      dryRun: false,
+      requested: count,
+      dates: datesOut,
+      free,
+      conflicted,
+      duplicates: duplicatesHit,
+      created,
+      sobreturnos,
+      omitted,
+    },
+  };
 }
 
 /**

@@ -161,7 +161,8 @@ export function ExerciseDrawer({
       open
       onClose={onClose}
       title={mode === "create" ? "Nuevo ejercicio" : "Editar ejercicio"}
-      width={480}
+      // Fits the 3-up Series/Reps/Tiempo row plus the media + article editors.
+      width={600}
     >
       {loading ? (
         <div style={{ padding: 20, color: "var(--navy-500)", fontSize: 13 }}>Cargando…</div>

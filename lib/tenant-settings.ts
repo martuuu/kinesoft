@@ -33,6 +33,8 @@ export type TenantSettings = {
   sharedPatientView: boolean;
   businessHoursStart: number;
   businessHoursEnd: number;
+  /** Agenda row granularity: 60 (per hour) or 30 (half-hour rows). */
+  agendaSlotMinutes: number;
 };
 
 export async function getTenantSettings(): Promise<TenantSettings> {
@@ -48,6 +50,7 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       sharedPatientView: true,
       businessHoursStart: true,
       businessHoursEnd: true,
+      agendaSlotMinutes: true,
     },
   }));
   return t;
@@ -56,10 +59,16 @@ export async function getTenantSettings(): Promise<TenantSettings> {
 export async function setBusinessHours(input: {
   start: number;
   end: number;
+  /** Optional so existing callers keep working; only 30 or 60 accepted. */
+  slotMinutes?: number;
 }): Promise<ActionResult> {
   const actor = await requireAdmin();
   const start = Math.floor(input.start);
   const end = Math.floor(input.end);
+  const slotMinutes = input.slotMinutes == null ? null : Math.floor(input.slotMinutes);
+  if (slotMinutes != null && slotMinutes !== 30 && slotMinutes !== 60) {
+    return { ok: false, error: "La vista de agenda solo admite 30 o 60 minutos." };
+  }
   // Constants live in lib/tenant-settings-constants.ts so the UI can
   // import them — "use server" files can only export async functions.
   const MIN = 6;
@@ -78,7 +87,11 @@ export async function setBusinessHours(input: {
   }
   await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
     where: { id: actor.tenantId },
-    data: { businessHoursStart: start, businessHoursEnd: end },
+    data: {
+      businessHoursStart: start,
+      businessHoursEnd: end,
+      ...(slotMinutes != null ? { agendaSlotMinutes: slotMinutes } : {}),
+    },
   }));
   await audit({
     tenantId: actor.tenantId,
@@ -86,7 +99,7 @@ export async function setBusinessHours(input: {
     action: "tenant.business_hours",
     entity: "Tenant",
     entityId: actor.tenantId,
-    payload: { start, end },
+    payload: { start, end, slotMinutes },
   });
   // Wide blast radius — every booking surface re-reads the window.
   revalidatePath("/configuracion");

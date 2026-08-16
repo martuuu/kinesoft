@@ -35,6 +35,74 @@ export type BookingDTO = {
 
 export const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Agenda slot grid (day + week views)
+//
+// A "slot" is minutes-from-midnight in AR wall-clock. `Tenant.agendaSlotMinutes`
+// picks the granularity: 60 → one row per hour, 30 → half-hour rows so a 13:30
+// turno gets its own labelled row instead of being folded into 13:00.
+// Pure + framework-free so the bucketing math is unit-testable (docs/TESTING.md
+// capa 1) — it replaced the old column-packing algorithm the timeline used.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rows of the grid, as minutes-from-midnight: [480, 510, 540…] for 8→19 @30. */
+export function buildSlots(startHour: number, endHour: number, slotMinutes: number): number[] {
+  const step = slotMinutes === 30 ? 30 : 60;
+  const from = Math.max(0, Math.floor(startHour)) * 60;
+  const to = Math.min(24, Math.floor(endHour)) * 60;
+  const out: number[] = [];
+  for (let m = from; m < to; m += step) out.push(m);
+  // Degenerate windows (start >= end) still render one row so the day isn't blank.
+  return out.length ? out : [from];
+}
+
+/** "13:30" for a slot expressed in minutes-from-midnight. */
+export function slotLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Which slot a turno belongs to: floor to the granularity, then clamp into the
+ * visible window. Returns the slot value (minutes-from-midnight) plus whether it
+ * had to be clamped, so the caller can surface out-of-window turnos separately
+ * instead of silently mixing them into the first/last row.
+ */
+export function slotOf(
+  arMinutes: number,
+  slots: number[],
+  slotMinutes: number
+): { slot: number; outOfRange: "before" | "after" | null } {
+  const step = slotMinutes === 30 ? 30 : 60;
+  const first = slots[0];
+  const last = slots[slots.length - 1];
+  const floored = Math.floor(arMinutes / step) * step;
+  if (floored < first) return { slot: first, outOfRange: "before" };
+  if (floored > last) return { slot: last, outOfRange: "after" };
+  return { slot: floored, outOfRange: null };
+}
+
+/**
+ * Slots covered by a turno AFTER its starting one — used to hint "continúa …"
+ * on the rows a long turno runs through, which would otherwise look free.
+ */
+export function coveredSlots(
+  startArMinutes: number,
+  durationMin: number,
+  slots: number[],
+  slotMinutes: number
+): number[] {
+  const step = slotMinutes === 30 ? 30 : 60;
+  const startSlot = Math.floor(startArMinutes / step) * step;
+  const end = startArMinutes + Math.max(0, durationMin);
+  const out: number[] = [];
+  for (let s = startSlot + step; s < end; s += step) {
+    if (s >= slots[0] && s <= slots[slots.length - 1]) out.push(s);
+  }
+  return out;
+}
+
 export function fmtHour(d: Date) {
   return d.toLocaleTimeString("es-AR", {
     hour: "2-digit",
@@ -67,58 +135,6 @@ export function osLabel(obraSocial: string): string {
 export function billingLine(b: { serviceName: string; obraSocial: string; copagoCents: number }) {
   const os = osLabel(b.obraSocial);
   return [b.serviceName, os, fmtMoney(b.copagoCents)].filter(Boolean).join(" - ");
-}
-
-export type BookingLayout = BookingDTO & {
-  col: number;   // 0-based column within its collision group
-  cols: number;  // total columns in the group
-  groupKey: string;
-};
-
-/**
- * Assign each booking a (col, cols) pair so overlapping bookings share
- * the available width instead of stacking. Algorithm:
- *   1. Sort by start time.
- *   2. Sweep: build collision groups where any two bookings overlap.
- *   3. Within each group assign columns greedily.
- */
-type BItem = { b: BookingDTO; start: number; end: number };
-
-export function layoutBookings(bookings: BookingDTO[]): BookingLayout[] {
-  if (!bookings.length) return [];
-
-  const items: BItem[] = bookings.map((b) => {
-    const start = new Date(b.scheduledFor).getTime();
-    const end = start + b.durationMin * 60_000;
-    return { b, start, end };
-  }).sort((a, b) => a.start - b.start);
-
-  // Build overlap groups via a sweep.
-  const groups: BItem[][] = [];
-  let current: BItem[] = [items[0]];
-  let groupEnd = items[0].end;
-
-  for (let i = 1; i < items.length; i++) {
-    if (items[i].start < groupEnd) {
-      current.push(items[i]);
-      groupEnd = Math.max(groupEnd, items[i].end);
-    } else {
-      groups.push(current);
-      current = [items[i]];
-      groupEnd = items[i].end;
-    }
-  }
-  groups.push(current);
-
-  const result: BookingLayout[] = [];
-  groups.forEach((group, gi) => {
-    const cols = group.length;
-    const key = `g${gi}`;
-    group.forEach((item, col) => {
-      result.push({ ...item.b, col, cols, groupKey: key });
-    });
-  });
-  return result;
 }
 
 /** Inline pill matching the <Tag> footprint for statuses the Tag tones

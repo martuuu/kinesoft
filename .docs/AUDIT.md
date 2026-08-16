@@ -62,7 +62,8 @@ QA manual pendiente del dueño en [QA.md](QA.md) (los de pago requieren sandbox 
   1627→231; sub-componentes en módulos por feature) · formateadores-moneda-duplicados (consolidados en
   `formatARS`; `Money`/`fmtMoney` que eran componentes se preservaron) · provider-value-inline-bulk-select
   (no reapareció en el split). **B1:** `resolveBookingCopagoCents` extraído a `lib/copago.ts` puro +
-  test (cierra el test de copago diferido de Fase A); `agenda-utils.ts` puro + test de `layoutBookings`;
+  test (cierra el test de copago diferido de Fase A); `agenda-utils.ts` puro + test de `layoutBookings`
+  (**helper y tests eliminados en la Ronda 9**, cuando el timeline dejó de calcular grupos de solape);
   fábrica de tenant efímero en `tests/helpers/tenant-factory.ts` (lista para capa 3).
 - 🔴 **Próxima (gated en el rol sin BYPASSRLS que arma el dueño):** B2 RLS wholesale, B3 multi-profesional,
   B4 realtime — ver [FASE-B-PLAN.md](FASE-B-PLAN.md). Diferido menor: test de `diagnosis-engine`
@@ -76,7 +77,8 @@ QA manual pendiente del dueño en [QA.md](QA.md) (los de pago requieren sandbox 
   hasta que el dueño corra `prisma/roles.supabase.sql` + flip de env en Supabase. `rls-bypassed-by-superuser-role`
   y `runwithrls-solo-en-2-modulos` → cerrados en código; el flip prod es bucket C.
 - 🟢 **Features:** color por servicio (16 pastel, `Service.color`, barra de la card de agenda);
-  agenda día = 5 columnas full-width + wrap (tope 10) + "+N" con expansión; mini-diagnóstico por turno
+  agenda día = 5 columnas full-width + wrap (tope 10) + "+N" con expansión (**reemplazado por el layout
+  en flujo de la Ronda 9**); mini-diagnóstico por turno
   (`Booking.title/description`, default a nivel paciente `Patient.diagnosisTitle/diagnosisNote` con
   propagación); modales de carga (paciente/turno/servicio/plan) → **drawers**; preview de últimos 2
   turnos en el drawer; animaciones framer-motion (sidebar, ruta, agenda vista/día, tabs del perfil,
@@ -124,7 +126,7 @@ QA manual pendiente del dueño en [QA.md](QA.md) (los de pago requieren sandbox 
   Prisma: el índice parcial no se expresa en el schema (5.22) y se maneja solo por la migración; probado
   que un `migrate dev` posterior NO lo dropea (genera migración vacía, sin drift).
 
-**Ronda 7 — Wave "Plataforma" (superadmin) + CRUD del catálogo de ejercicios · BACKEND (2026-08-02, en progreso):**
+**Ronda 7 — Wave "Plataforma" (superadmin) + CRUD del catálogo de ejercicios (2026-08-02):**
 Gate del backend: `tsc` 0 · `next build` 0 · guard verde · prueba RLS OK. Local Docker, prod intacta.
 - 🟢 **Fundación (4 migraciones aisladas):** `UserProfile.isPlatformAdmin`; `TagKind += MUSCLE_GROUP, DISCIPLINE`
   (aislada); `Exercise` reps/sets **opcionales** + `durationSeconds` + `archivedAt` (soft-delete);
@@ -184,6 +186,69 @@ Gate del backend: `tsc` 0 · `next build` 0 · guard verde · prueba RLS OK. Loc
   paginar (ahora `{id:"asc"}` en todos los órdenes, verificado con dos ejercicios del mismo nombre).
 - 🟡 **Aceptado por diseño:** volver con el botón Back a la URL sin parámetros re-muestra la vista guardada
   (es la persistencia pedida, no un bug).
+
+**Ronda 9 — Agenda: refactor del timeline a layout en flujo + anchos de drawers (2026-08-03):** Local
+Docker, sin migraciones.
+- 🟢 **Timeline reescrito:** `components/agenda/views/timeline-view.tsx` pasó de posicionamiento
+  **absoluto** (`top` = hora×56px, ancho = % del strip repartido por grupos de solape) a **layout en
+  flujo**: una fila por hora que **crece con su contenido**, cards en flex-wrap con
+  `flexBasis: calc((100% - 32px) / 5)`, `minWidth 186` / `maxWidth 280`, `flexGrow 0`. Cierra tres
+  síntomas de QA a la vez: cards que se cruzaban entre franjas horarias, filas que no crecían al
+  acumularse turnos, y cards estiradas a lo ancho cuando la hora tenía 1-2 turnos. Hasta 5 por fila; el
+  texto **trunca con ellipsis + tooltip** en vez de ensanchar la card. "+N más" por hora (límite 10).
+- 🟢 **Código muerto eliminado:** `layoutBookings` + el tipo `BookingLayout` borrados de
+  `components/agenda/agenda-utils.ts` (el nuevo timeline no calcula grupos de solape, así que ya no se
+  usan) junto con sus **3 tests** en `tests/unit/agenda-utils.test.ts`.
+- 🟢 **Anchos de drawers** (había scroll lateral): `components/ui/drawer.tsx` default 420→**480**;
+  `components/agenda/booking-modal.tsx` 460→**580** (para que los avisos de sobreturno / 2º turno el
+  mismo día entren sin scrollear); `components/plataforma/exercise-drawer.tsx` 480→**600**;
+  `components/patients/new-patient-button.tsx` 480→**560**; `components/patients/profile/hero.tsx`
+  520→**560**.
+- Gate: `tsc` 0 · `next build` 0 · `vitest` **42/42** (bajaron 3 por los tests borrados, no por
+  regresión) · guard verde.
+
+> **Nota — conteo de tests vigente (2026-08-03).** Las líneas de gate de las Rondas 4-8 (`39/39`,
+> `45/45`) eran correctas **en su momento**; no se reescriben. El conteo real de hoy es **42 unit + 4
+> integration (RLS)**: `booking-capacity` 10, `agenda-utils` 4, `copago` 9, `datetime-ar` 10, `format` 9.
+> La caída 45→42 es exactamente la eliminación de los 3 tests de `layoutBookings` en la Ronda 9 (código
+> borrado), no una pérdida de cobertura. El integration (`tests/integration/rls-isolation.test.ts`) corre
+> aparte con `npm run test:integration` (`RLS_IT=1`), por eso no entra en el `42/42` de `npm test`.
+
+**Ronda 10 — Feedback del cliente: agenda 30 min + batch con preflight + solape confirmable (2026-08-16):**
+Gate: `tsc` 0 · `next build` 0 · `vitest` 54/54 · guard verde. Local Docker; prod la aplica el dueño
+(ver [MIGRACIONES-RUNBOOK.md](MIGRACIONES-RUNBOOK.md)).
+- 🟢 **Agenda con granularidad configurable:** `Tenant.agendaSlotMinutes` (30|60, migración
+  `20260816014954`) editable en Configuración → "Horario del consultorio". Helpers puros nuevos en
+  `agenda-utils.ts` (`buildSlots`/`slotLabel`/`slotOf`/`coveredSlots`) + `toARMinutes` en `datetime-ar.ts`
+  (minutos exactos: `toARHour()*60` perdía precisión, 08:20 → 499.99…). **12 tests capa-1 nuevos**
+  (reemplazan a los de `layoutBookings` borrados en la Ronda 9). Día y Semana comparten el grid; se
+  corrigió que la Semana usaba `Math.round` (un 13:30 caía en la fila de las **14**, contradiciendo al Día).
+- 🟢 **5 hallazgos del review interrumpido de la Ronda 9, cerrados:** duración que el ellipsis se comía
+  (ahora va primero y en el tooltip), turnos largos que dejaban ver "libres" las franjas siguientes (hint
+  «· continúa X»), franja invisible de creación (acotada a `CARD_MAX`), gutter de la hora que era zona
+  muerta (ahora crea), y turnos fuera de banda que competían por el "+N" (ahora filas propias
+  "Antes/Después del horario").
+- 🟢 **Batch multi-turno con preflight:** `createBookingsBatch` gana `dryRun`/`allowOverbooking` y devuelve
+  `BatchOutcome` (por fecha: `libre`/`sobreturno`/`duplicado`). El modal avisa **antes** de crear y ofrece
+  «Crear todos» / «Crear solo los libres». Los forzados se tagean `[SOBRETURNO]` (paridad con el single) y
+  los P2002 del índice se reportan como "ya existían" en vez de "omitidos por conflicto" mudos. Una sola
+  query para todo el rango (antes 2 por slot). Ahora también mira el solape del **propio paciente**.
+- 🟢 **Solape del paciente confirmable:** el bloqueo duro pasa a prompt («dos servicios en paralelo es
+  normal»); el **instante exacto** queda como error terminal con texto accionable ("movelo unos minutos"),
+  porque el índice único lo rechaza siempre. Los dos flags (`allowPatientOverlap`/`allowSamePatientDay`) son
+  independientes — antes confirmar "mismo día" salteaba también la regla de solape. Todos los avisos hacen
+  `scrollIntoView` (renderean debajo del formulario en un drawer con scroll).
+- 🟢 **CI:** se agregó el paso `npm run guard:isolation` al workflow. El guard existía y se corría a mano —
+  cierra de verdad `no-static-security-guard`, que el checklist §2 daba por abierto con razón.
+- 🟢 **Docs unificados:** eliminado el árbol duplicado `docs/` (congelado en Ronda 3; recuperable del
+  historial) y `roadmap.md` → `ROADMAP.md` registrado con `git mv` (10 links lo esperaban; rompía en hosts
+  case-sensitive). Rondas 3-9 documentadas en QA.md, ROADMAP con marcadores de avance reales,
+  ARCHITECTURE/SECURITY al día (RLS ya no "inerte", tier superadmin), EXTERNAL-CONFIG con WhatsApp
+  (bucket C, **pendiente del dueño**) y el bucket `exercise-media`.
+- 🟢 **Review adversarial:** 2 hallazgos confirmados (5 refutados), ambos corregidos: (MED) el prompt de
+  solape se ofrecía también para el instante exacto, que la DB nunca acepta → la confirmación no "pegaba";
+  (LOW) en Semana a 30 min un turno de 45/60 min tapaba y robaba los clicks del chip de la media hora
+  siguiente → el span ahora se corta antes de la siguiente celda ocupada.
 
 ## Cómo leer la severidad
 
@@ -474,136 +539,156 @@ el ROADMAP.
 
 ## 2. Checklist maestro (todos los findings) — estado vivo
 
-Estado: 🔴 ABIERTO · 🟢 CERRADO · ⏸ DIFERIDO-CON-GATE. Todos abren en 🔴 salvo indicación.
-La columna **Sesión** referencia el [ROADMAP.md](ROADMAP.md).
+Estado: 🔴 ABIERTO · 🟡 PARCIAL · 🟢 CERRADO · ⏸ DIFERIDO-CON-GATE.
+La columna **Sesión** referencia el [ROADMAP.md](ROADMAP.md). Estado verificado contra las Rondas 1-9 y
+contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila queda en 🔴.
 
-### Confirmados (24)
+### Confirmados (24 + 2 hallazgos posteriores)
 
-| Slug | Sev | Bkt | Ubicación | Estado | Sesión |
+| Slug | Sev | Bkt | Ubicación | Estado | Sesión / cierre |
 |---|---|---|---|---|---|
-| booking-hard-delete-payment-cascade | crítica | B | lib/bookings.ts:594 | 🔴 | delete-guard-booking |
-| c3-payment-amount | alta | A | lib/mercadopago.ts:183 | 🔴 | payment-amount-anclado |
-| public-booking-slots-host-tz | alta | A | lib/public-booking.ts:113 | 🔴 | fix-public-booking-tz |
-| timeline-oncreate-wrong-day-hour | alta | A | agenda-client.tsx:738 | 🔴 | fix-timeline-oncreate |
-| suggest-next-free-slot-host-tz | alta | A | lib/bookings.ts:246 | 🔴 | fix-bookings-tz |
-| seguimiento-today-bucket-and-display | alta | A | seguimiento/page.tsx:15 | 🔴 | tz-vistas |
-| search-booking-toLocale-no-tz | alta | A | lib/search.ts:140 | 🔴 | tz-vistas |
-| portal-session-date-no-tz | media | A | portal/c/[slug]/page.tsx:193 | 🔴 | tz-vistas |
-| login-sin-feedback-error | alta | A | login-screen.tsx:189 | 🔴 | login-error-feedback |
-| practitioner-userid-unique-blocks-multitenant | alta | A | schema.prisma:123 | 🔴 | practitioner-multi-tenant |
-| tenant-tables-sin-rls-ni-filtro | media | B | policies.sql | 🔴 | policies-tablas-faltantes |
-| rls-bypassed-by-superuser-role | media | B | .env / docker-compose | 🔴 | rol-db-sin-bypassrls |
-| runwithrls-solo-en-2-modulos | media | B | lib/rls.ts:19 | 🔴 | cliente-tenant-unico-guc |
-| booking-overlap-race-no-cas-no-unique | media | B | lib/bookings.ts:301 | 🔴 | booking-concurrencia |
-| patient-hard-delete-cascades-hc | media | B | lib/patients.ts:875 | 🔴 | patients-integridad → soft-delete-wholesale |
-| sin-error-loading-boundaries | media | B | app/ | 🔴 | error-loading-boundaries |
-| h2-oversized-components | alta | B | components varios | 🔴 | split-* (Ola 2.0) |
-| no-test-suite | alta | B | package.json | 🔴 | ci-gate-minimo → suite-integracion |
-| no-ci-triple-gate | alta | B | package.json | 🔴 | ci-gate-minimo → ci-pipeline-completo-y-guard |
-| c2-no-tests-ci | alta | B | package.json | 🔴 | ci-gate-minimo |
-| no-static-security-guard | alta | B | lib/db.ts:29 | 🔴 | ci-pipeline-completo-y-guard |
-| no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook |
-| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements |
-| c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🔴 | (EXTERNAL-CONFIG: Upstash) |
+| booking-hard-delete-payment-cascade | crítica | B | lib/bookings.ts:594 | 🟢 | Ronda 2 — `Payment.onDelete: Restrict` + guard de pago en `deleteBooking` |
+| c3-payment-amount | alta | A | lib/mercadopago.ts:183 | 🟢 | Ronda 2 — `Payment.expectedAmountCents` anclado en ambos checkouts |
+| public-booking-slots-host-tz | alta | A | lib/public-booking.ts:113 | 🟢 | Ronda 1 (fix-public-booking-tz) |
+| timeline-oncreate-wrong-day-hour | alta | A | agenda-client.tsx:738 | 🟢 | Ronda 1 (fix-timeline-oncreate) |
+| suggest-next-free-slot-host-tz | alta | A | lib/bookings.ts:246 | 🟢 | Ronda 1 (fix-bookings-tz) |
+| seguimiento-today-bucket-and-display | alta | A | seguimiento/page.tsx:15 | 🟢 | Ronda 1 (tz-vistas) |
+| search-booking-toLocale-no-tz | alta | A | lib/search.ts:140 | 🟢 | Ronda 1 (tz-vistas) |
+| portal-session-date-no-tz | media | A | portal/c/[slug]/page.tsx:193 | 🟢 | Ronda 1 (tz-vistas) |
+| login-sin-feedback-error | alta | A | login-screen.tsx:189 | 🟢 | Ronda 1 (login-error-feedback) |
+| practitioner-userid-unique-blocks-multitenant | alta | A | schema.prisma:123 | 🔴 | practitioner-multi-tenant — `userId String @unique` global sigue en el schema |
+| tenant-tables-sin-rls-ni-filtro | media | B | policies.sql | 🔴 | policies-tablas-faltantes — `TENANT_SCOPED_MODELS` sigue en 9 modelos |
+| rls-bypassed-by-superuser-role | media | B | .env / docker-compose | 🟢 | Ronda 4 — **cerrado en código** (rol `kinesoft_app` sin BYPASSRLS en local + test de aislamiento). **El flip de PROD sigue pendiente del dueño** (bucket C) |
+| runwithrls-solo-en-2-modulos | media | B | lib/rls.ts:19 | 🟢 | Ronda 4 — **cerrado en código**: `runWithRls` cableado en ~22 módulos de `lib/` (verificado). Depende del mismo flip prod |
+| booking-overlap-race-no-cas-no-unique | media | B | lib/bookings.ts:301 | 🟢 | Ronda 1 (idempotencia + `orderBy`) → revisado en Ronda 6 (key del cliente + índice único parcial) |
+| patient-hard-delete-cascades-hc | media | B | lib/patients.ts:875 | 🟢 | Ronda 2 — `requireAdminRole` en `deletePatient`. Residual soft-delete wholesale = E2 |
+| sin-error-loading-boundaries | media | B | app/ | 🟢 | Ronda 1 — `global-error` + `error.tsx` por route-group + `loading.tsx` (verificado) |
+| h2-oversized-components | alta | B | components varios | 🟢 | Ronda 3 — los 4 archivos gigantes troceados |
+| no-test-suite | alta | B | package.json | 🟢 | Ronda 1 (capa-1) → Ronda 3 (copago/agenda-utils) → Ronda 4 (integration RLS) |
+| no-ci-triple-gate | alta | B | package.json | 🟢 | Ronda 1 — `.github/workflows/ci.yml`: typecheck → test → build |
+| c2-no-tests-ci | alta | B | package.json | 🟢 | Ronda 1 + Ronda 3 (mismo cierre que `no-test-suite`) |
+| no-static-security-guard | alta | B | lib/db.ts:29 | 🔴 | ci-pipeline-completo-y-guard — `scripts/guard-tenant-isolation.mjs` **existe** y las rondas lo corren a mano ("guard verde"), pero **no hay step en `ci.yml`** → sin gate mecánico |
+| no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook (Ola 2.4) |
+| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4) |
+| c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🔴 | (EXTERNAL-CONFIG: Upstash) — env del dueño, sin cambio de código |
+| booking-same-patient-slot-toctou | baja | B | lib/bookings.ts (create/update/batch) | 🟢 | Ronda 6 — guard de app + **backstop DB**: índice único parcial `("tenantId","patientId","scheduledFor") WHERE patientId IS NOT NULL AND status <> 'CANCELLED'`, `P2002` manejado en los 4 paths de escritura |
+| sin-panel-owner | alta | B | lib/session.ts / app/(app)/plataforma | 🟡 | Ronda 7 — **parcial**: entregados `UserProfile.isPlatformAdmin`, `requireSuperAdmin()`, guard + sidebar y el panel `plataforma/{ejercicios,tags}` con CRUD del catálogo global. **Faltan** tickets/feedback, formulario de contacto e impersonación cross-tenant |
 
 ### Menores (63) — agrupados por tema
 
 **Timezone (bucket A, sweep de fechas):**
 
-| Slug | Sev | Ubicación | Sesión |
-|---|---|---|---|
-| dashboard-buckets-utc | media | lib/dashboard.ts:371 | tz-dashboard |
-| mini-calendar-days-getdate-utc | media | lib/dashboard.ts:514 | tz-dashboard |
-| dashboard-page-getmonth-utc | baja | dashboard/page.tsx:13 | tz-dashboard |
-| mini-calendar-today-browser-tz | baja | mini-calendar.tsx:18 | tz-dashboard |
-| notifications-bell-no-tz | baja | notifications-bell.tsx:250 | tz-dashboard |
-| pacientes-lastvisit-no-tz | media | pacientes/page.tsx:326 | tz-vistas |
-| session-detail-no-tz | baja | session-detail.tsx:121 | tz-vistas |
-| public-booking-wizard-today-utc | baja | public-booking-wizard.tsx:606 | fix-public-booking-tz |
-| agenda-client-emptyslot-sethours | baja | agenda-client.tsx:738 | fix-timeline-oncreate |
-| getdaycounts-utc-slice | baja | lib/bookings.ts:163 | fix-bookings-tz |
-| plan-startdate-utc-midnight | media | lib/diagnosis.ts:219 | tz-server-exports |
-| ics-export-week-window-host-tz | media | agenda/export/route.ts:17 | tz-server-exports |
+| Slug | Sev | Ubicación | Estado | Sesión |
+|---|---|---|---|---|
+| dashboard-buckets-utc | media | lib/dashboard.ts:371 | 🟢 | tz-dashboard (Ronda 1) |
+| mini-calendar-days-getdate-utc | media | lib/dashboard.ts:514 | 🟢 | tz-dashboard (Ronda 1) |
+| dashboard-page-getmonth-utc | baja | dashboard/page.tsx:13 | 🟢 | tz-dashboard (Ronda 1) |
+| mini-calendar-today-browser-tz | baja | mini-calendar.tsx:18 | 🟢 | tz-dashboard (Ronda 1) |
+| notifications-bell-no-tz | baja | notifications-bell.tsx:250 | 🟢 | tz-dashboard (Ronda 1) |
+| pacientes-lastvisit-no-tz | media | pacientes/page.tsx:326 | 🟢 | tz-vistas (Ronda 1) |
+| session-detail-no-tz | baja | session-detail.tsx:121 | 🟢 | tz-vistas (Ronda 1) + hidratación en Ronda 8 |
+| public-booking-wizard-today-utc | baja | public-booking-wizard.tsx:606 | 🟢 | fix-public-booking-tz (Ronda 1) |
+| agenda-client-emptyslot-sethours | baja | agenda-client.tsx:738 | 🟢 | fix-timeline-oncreate (Ronda 1) |
+| getdaycounts-utc-slice | baja | lib/bookings.ts:163 | 🟢 | fix-bookings-tz (Ronda 1) |
+| plan-startdate-utc-midnight | media | lib/diagnosis.ts:219 | 🟢 | tz-server-exports — las 3 instancias (Ronda 1 parcial → Ronda 2) |
+| ics-export-week-window-host-tz | media | agenda/export/route.ts:17 | 🟢 | tz-server-exports (Ronda 1) |
 
 **Integridad / concurrencia (bucket A/B):**
 
-| Slug | Sev | Ubicación | Sesión |
-|---|---|---|---|
-| conflict-findfirst-sin-orderby | media | lib/bookings.ts:301 | booking-concurrencia |
-| batch-fuera-de-runwithrls | media | lib/bookings.ts:755 | cliente-tenant-unico-guc |
-| batch-create-overlap-race-and-no-rls | media | lib/bookings.ts:734 | booking-concurrencia + cliente-tenant-unico-guc |
-| booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:620 | booking-concurrencia |
-| mp-webhook-idempotency-check-outside-tx | baja | lib/mercadopago.ts:193 | payment-amount-anclado |
-| session-index-no-unique-constraint | baja | schema.prisma:715 | soft-delete-wholesale |
-| program-session-hard-delete | media | lib/patients.ts:1316 | patients-integridad → soft-delete-wholesale |
-| session-totalsessions-read-modify-write | baja | lib/patients.ts:1347 | patients-integridad |
-| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1053 | copago-snapshot |
-| coverage-sin-schema-zod | media | lib/patients.ts:1015 | patients-integridad |
+| Slug | Sev | Ubicación | Estado | Sesión |
+|---|---|---|---|---|
+| conflict-findfirst-sin-orderby | media | lib/bookings.ts:301 | 🟢 | booking-concurrencia (Ronda 1) |
+| batch-fuera-de-runwithrls | media | lib/bookings.ts:755 | 🟢 | Ronda 4 — `createBookingsBatch` corre bajo `runWithRls` (verificado) |
+| batch-create-overlap-race-and-no-rls | media | lib/bookings.ts:734 | 🟢 | idempotencia Ronda 1 + parte RLS Ronda 4 |
+| booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:620 | 🔴 | booking-concurrencia — diferido explícitamente en Ronda 2 |
+| mp-webhook-idempotency-check-outside-tx | baja | lib/mercadopago.ts:193 | 🟢 | payment-amount-anclado (Ronda 2) |
+| session-index-no-unique-constraint | baja | schema.prisma:715 | 🔴 | soft-delete-wholesale |
+| program-session-hard-delete | media | lib/patients.ts:1316 | 🟢 | patients-integridad — gate de rol (Ronda 2) |
+| session-totalsessions-read-modify-write | baja | lib/patients.ts:1347 | 🟢 | patients-integridad (Ronda 2) |
+| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1053 | 🔴 | copago-snapshot |
+| coverage-sin-schema-zod | media | lib/patients.ts:1015 | 🟢 | patients-integridad (Ronda 2) |
 
 **Seguridad / config / observabilidad:**
 
-| Slug | Sev | Ubicación | Sesión / Gate |
-|---|---|---|---|
-| sin-headers-seguridad-csp | media | next.config.mjs | headers-seguridad |
-| serveractions-allowedorigins-localhost | baja | next.config.mjs | headers-seguridad |
-| checkout-practitionerid-sin-validar | media | booking/checkout/route.ts:61 | payment-amount-anclado |
-| upload-sin-magic-bytes | media | lib/files.ts:118 | files-magic-bytes |
-| password-sin-complejidad | baja | lib/auth.ts:53 | password-policy (+ Supabase) |
-| rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts:32 | EXTERNAL-CONFIG: Upstash |
-| m1-sentry-no-wired | media | lib/logger.ts:6 | sentry-observabilidad |
-| sentry-no-cableado | media | lib/logger.ts:6 | sentry-observabilidad |
-| m2-silent-catches | media | notifications-internal.ts:37 | sentry-observabilidad |
-| audit-fire-and-forget | media | audit-extension.ts:74 | sentry-observabilidad |
-| m3-no-apm | media | — | ⏸ gate: ≥5 tenants o incidente p95 |
-| l2-no-virus-scan | baja | lib/files.ts:33 | ⏸ gate: antes de upload de pacientes |
-| public-slots-ratelimit-vacio | media | lib/public-booking.ts:95 | fix-public-booking-tz |
-| gettenantprisma-dead-code | media | lib/db.ts:76 | cliente-tenant-unico-guc |
-| rls-coverage-gaps | media | policies.sql:32 | policies-tablas-faltantes |
-| sin-test-tripwire-aislamiento | media | schema.prisma:19 | suite-integracion |
+| Slug | Sev | Ubicación | Estado | Sesión / Gate |
+|---|---|---|---|---|
+| sin-headers-seguridad-csp | media | next.config.mjs | 🟡 | headers-seguridad — CSP en **Report-Only** (Ronda 2); falta activarla como bloqueante |
+| serveractions-allowedorigins-localhost | baja | next.config.mjs | 🟢 | headers-seguridad (Ronda 2) |
+| checkout-practitionerid-sin-validar | media | booking/checkout/route.ts:61 | 🟢 | payment-amount-anclado (Ronda 2) |
+| upload-sin-magic-bytes | media | lib/files.ts:118 | 🔴 | files-magic-bytes — sin sniffing de firma en el código |
+| password-sin-complejidad | baja | lib/auth.ts:53 | 🟢 | password-policy (Ronda 2; el lado Supabase es del dueño) |
+| rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts:32 | 🔴 | EXTERNAL-CONFIG: Upstash (bucket C) |
+| m1-sentry-no-wired | media | lib/logger.ts:6 | 🟡 | sentry-observabilidad — shim no-op cableado en `lib/observability.ts` (Ronda 2); `@sentry/nextjs` **no instalado** |
+| sentry-no-cableado | media | lib/logger.ts:6 | 🟡 | sentry-observabilidad — mismo estado que `m1-sentry-no-wired` |
+| m2-silent-catches | media | notifications-internal.ts:37 | 🟢 | sentry-observabilidad (Ronda 2) |
+| audit-fire-and-forget | media | audit-extension.ts:74 | 🟢 | sentry-observabilidad (Ronda 2) |
+| m3-no-apm | media | — | ⏸ | gate: ≥5 tenants o incidente p95 |
+| l2-no-virus-scan | baja | lib/files.ts:33 | ⏸ | gate: antes de upload de pacientes |
+| public-slots-ratelimit-vacio | media | lib/public-booking.ts:95 | 🟢 | fix-public-booking-tz (Ronda 1) |
+| gettenantprisma-dead-code | media | lib/db.ts:76 | 🔴 | cliente-tenant-unico-guc — `getTenantPrisma` sigue definido (lib/db.ts:108) y sin ningún call site |
+| rls-coverage-gaps | media | policies.sql:32 | 🔴 | policies-tablas-faltantes (mismo gap que `tenant-tables-sin-rls-ni-filtro`) |
+| sin-test-tripwire-aislamiento | media | schema.prisma:19 | 🟢 | Ronda 4 — `tests/integration/rls-isolation.test.ts` (4 casos, cross-tenant INSERT rechazado) |
 
 **UX / forms / calidad de código:**
 
-| Slug | Sev | Ubicación | Sesión |
-|---|---|---|---|
-| native-confirm-alert | media | configuracion-client.tsx:1449 | configuracion-ux |
-| basics-sin-feedback-exito | media | configuracion-client.tsx:185 | configuracion-ux |
-| statustag-no-exhaustivo | media | agenda-client.tsx:1266 | agenda-visibilidad-statustag |
-| statustag-label-drift | baja | agenda-client.tsx:1271 | agenda-visibilidad-statustag |
-| turnos-fuera-de-horario-o-media-hora-no-visibles | media | agenda-client.tsx:1046 | agenda-visibilidad-statustag |
-| formateadores-moneda-duplicados | media | agenda-client.tsx:95 | agenda-visibilidad-statustag + split-patient-profile |
-| export-type-en-use-server | baja | lib/dashboard.ts:32 | extraccion-logica-pura |
-| logica-en-use-server-y-cliente | media | lib/public-booking.ts:149 | extraccion-logica-pura |
+| Slug | Sev | Ubicación | Estado | Sesión |
+|---|---|---|---|---|
+| native-confirm-alert | media | configuracion-client.tsx:1449 | 🔴 | configuracion-ux |
+| basics-sin-feedback-exito | media | configuracion-client.tsx:185 | 🔴 | configuracion-ux |
+| statustag-no-exhaustivo | media | agenda-client.tsx:1266 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
+| statustag-label-drift | baja | agenda-client.tsx:1271 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
+| turnos-fuera-de-horario-o-media-hora-no-visibles | media | agenda-client.tsx:1046 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
+| formateadores-moneda-duplicados | media | agenda-client.tsx:95 | 🟢 | consolidados en `formatARS` (Ronda 1 parcial → Ronda 3) |
+| export-type-en-use-server | baja | lib/dashboard.ts:32 | 🔴 | extraccion-logica-pura |
+| logica-en-use-server-y-cliente | media | lib/public-booking.ts:149 | 🔴 | extraccion-logica-pura |
 
 **Deuda estructural / SaaS / docs:**
 
-| Slug | Sev | Ubicación | Sesión / Gate |
-|---|---|---|---|
-| deuda-archivos-grandes | media | components varios | split-* (Ola 2.0) |
-| role-gating-disperso-sin-matriz-central | media | lib/services.ts:30 | capabilities-matrix |
-| roles-assistant-billing-cosmeticos | media | schema.prisma:108 | roles-assistant-billing |
-| no-seat-usage-limits | media | lib/plan-gating.ts:36 | seats-limits |
-| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | realtime-agenda |
-| portal-auth-por-email-no-userid | media | lib/portal.ts:52 | portal-userid-link |
-| patient-tenancy-single-home-row | baja | schema.prisma:250 | ⏸ gate: 1er paciente en 2 tenants |
-| l1-portal-minimo | baja | lib/portal.ts:1 | Portal v2 (Ola 2.6) |
-| scripts-adhoc-como-tests | baja | scripts/create-tenant.ts:1 | suite-integracion |
-| no-qa-checklist-versionado | baja | — | ✅ esta pasada (TESTING.md) |
-| roadmap-vacio | media | docs/roadmap.md | ✅ esta pasada (ROADMAP.md) |
-| doc-memory-inexistente | baja | CLAUDE_CODE_SKILLS.md:61 | docs-baseline |
-| doc-rls-adopcion-stale | baja | AUDIT.md:44 | ✅ esta pasada |
-| doc-falta-checklist-seguridad | media | SECURITY.md | ✅ este AUDIT.md |
-| doc-falta-catalogo-bugs | baja | — | ⏸ gate: catálogo propio post-Etapa 1 |
-| doc-falta-qa-conv-testing | baja | — | ✅ TESTING.md (parcial: convenciones diferidas) |
+| Slug | Sev | Ubicación | Estado | Sesión / Gate |
+|---|---|---|---|---|
+| deuda-archivos-grandes | media | components varios | 🟢 | split-* (Ronda 3) |
+| role-gating-disperso-sin-matriz-central | media | lib/services.ts:30 | 🔴 | capabilities-matrix |
+| roles-assistant-billing-cosmeticos | media | schema.prisma:108 | 🔴 | roles-assistant-billing |
+| no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
+| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | realtime-agenda (B4) |
+| portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | portal-userid-link |
+| patient-tenancy-single-home-row | baja | schema.prisma:250 | ⏸ | gate: 1er paciente en 2 tenants |
+| l1-portal-minimo | baja | lib/portal.ts:1 | 🔴 | Portal v2 (Ola 2.6) |
+| scripts-adhoc-como-tests | baja | scripts/create-tenant.ts:1 | 🔴 | suite-integracion |
+| no-qa-checklist-versionado | baja | — | 🟢 | TESTING.md |
+| roadmap-vacio | media | docs/roadmap.md | 🟢 | ROADMAP.md |
+| doc-memory-inexistente | baja | CLAUDE_CODE_SKILLS.md:61 | 🔴 | docs-baseline |
+| doc-rls-adopcion-stale | baja | AUDIT.md:44 | 🟢 | reescrito en §0 |
+| doc-falta-checklist-seguridad | media | SECURITY.md | 🟢 | este AUDIT.md |
+| doc-falta-catalogo-bugs | baja | — | ⏸ | gate: catálogo propio post-Etapa 1 |
+| doc-falta-qa-conv-testing | baja | — | 🟡 | TESTING.md (convenciones aún diferidas) |
 
 ### Ítems nuevos de esta pasada (features + hallazgos incidentales)
 
-| Slug | Sev | Ubicación | Sesión |
-|---|---|---|---|
-| invitation-token-en-claro | media | lib/invitations.ts:161 | invitation-token-hash |
-| money-input-sin-parser-ar | media | configuracion-client.tsx:565, agenda-client.tsx:218 | money-input-parser |
-| dicom-fuera-de-allowlist | baja | lib/files.ts:33 | booking-adjuntos |
-| sin-not-found-403-custom | baja | app/ | error-loading-boundaries |
-| sin-sitemap-robots | baja | app/ | seo-analytics |
+| Slug | Sev | Ubicación | Estado | Sesión |
+|---|---|---|---|---|
+| invitation-token-en-claro | media | lib/invitations.ts:161 | 🟢 | invitation-token-hash — `hashInviteToken` en `lib/invitations-tokens.ts` (Ronda 2, verificado) |
+| money-input-sin-parser-ar | media | configuracion-client.tsx:565, agenda-client.tsx:218 | 🟢 | money-input-parser — `parseARS` en `lib/format.ts` + call sites migrados (Ronda 2) |
+| dicom-fuera-de-allowlist | baja | lib/files.ts:33 | 🔴 | booking-adjuntos |
+| sin-not-found-403-custom | baja | app/ | 🟡 | error-loading-boundaries — `app/not-found.tsx` ✅ (Ronda 1); **403 custom sigue diferido** |
+| sin-sitemap-robots | baja | app/ | 🔴 | seo-analytics |
+
+### Resumen del checklist (al 2026-08-03)
+
+93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos):
+
+| Estado | Confirmados | Menores | Nuevos | **Total** |
+|---|---|---|---|---|
+| 🟢 CERRADO | 19 | 35 | 2 | **56** |
+| 🟡 PARCIAL | 1 | 4 | 1 | **6** |
+| ⏸ DIFERIDO-CON-GATE | 0 | 4 | 0 | **4** |
+| 🔴 ABIERTO | 6 | 19 | 2 | **27** |
+
+Los 6 confirmados que siguen 🔴: `practitioner-userid-unique-blocks-multitenant`,
+`tenant-tables-sin-rls-ni-filtro`, `no-static-security-guard`, `no-saas-billing-charge-clinic`,
+`plan-fields-inert-no-upgrade-no-enforcement`, `c1-ratelimit-inmemory`. Dos de ellos (`c1-ratelimit`,
+y el **flip prod** de `rls-bypassed-by-superuser-role` que está 🟢 solo en código) son **bucket C**:
+dependen de config del dueño, no de código.
 
 ---
 
@@ -694,11 +779,13 @@ era intencional.
 
 Inventario factual (EXISTE-COMPLETO / EXISTE-PARCIAL / NO-EXISTE) de lo que ya hay para las 5
 features grandes que el dueño sumó. Alimenta las olas 2.6-2.8 del ROADMAP.
+**Revisado al 2026-08-03** contra las Rondas 1-9 (lo cerrado quedó marcado 🟢 en línea).
 
 **A · Cuentas de paciente + Portal — EXISTE-PARCIAL**
 - Invitación de **profesional** (Membership): completa (`lib/invitations.ts`, `app/invite/[token]`).
-  Token válido 7 días, un solo uso (`acceptedAt`), email debe coincidir. ⚠️ **token en claro**
-  (`randomBytes(24).base64url`, buscado literal) → finding `invitation-token-en-claro`.
+  Token válido 7 días, un solo uso (`acceptedAt`), email debe coincidir. 🟢 **Token hasheado**
+  (`hashInviteToken` en `lib/invitations-tokens.ts`; la fila guarda el hash y el raw solo viaja en la
+  URL — rotar el invite mintea uno nuevo porque el original es irrecuperable) — cerrado en Ronda 2.
 - Invitación de **paciente** al portal: existe pero por otro mecanismo (`sendPatientPortalInvite` →
   `supabase.auth.admin.inviteUserByEmail`, sin fila `Invitation`); vínculo por email en el callback.
 - **Signup self-serve de paciente: NO-EXISTE** (solo entra por Google + email pre-cargado por el kine).
@@ -707,7 +794,10 @@ features grandes que el dueño sumó. Alimenta las olas 2.6-2.8 del ROADMAP.
 - Portal actual (mobile-first, <150kB): home con próximos turnos, `/me` solo-lectura, `/c/[slug]` con
   plan activo + check-in EVA + timeline de sesiones. Auth **por email match, no por `Patient.userId`**.
   NO existe: confirmar/cancelar/reagendar, cambio de contraseña, HC visible, datos personales
-  editables, historial de planes, ejercicios/guías.
+  editables, historial de planes.
+- **Ejercicios/guías — matiz (Ronda 7):** el **lector** existe *app-side* (`app/(app)/biblioteca/[slug]`:
+  header + grid de media + markdown seguro), pero **el portal del paciente sigue sin esa sección**: no hay
+  ruta equivalente bajo `(portal)` ni link desde `/c/[slug]`. Sigue siendo el diferido 2(b) de la Ronda 5.
 
 **B · Adjuntos en booking — EXISTE-PARCIAL**
 - Mensaje descriptivo: **existe** (`Booking.notes`, textarea "Motivo de consulta" en el wizard,
@@ -721,19 +811,29 @@ features grandes que el dueño sumó. Alimenta las olas 2.6-2.8 del ROADMAP.
 - Notas clínicas: campo libre `Patient.notes` (no hay modelo de nota por evento). EVA: `EvaScore`.
   El único timeline cronológico vive en el **portal**, no en el perfil profesional.
 
-**D · Tickets / owner panel / contacto — mayormente NO-EXISTE**
+**D · Tickets / owner panel / contacto — EXISTE-PARCIAL** (era "mayormente NO-EXISTE" antes de la Ronda 7)
 - Sin formulario de contacto en la landing (`landing-screen.tsx` tiene copy pero ningún `<form>`).
-- Sin `not-found.tsx`/error/403 custom (caen al default de Next).
-- **Sin panel de owner/superadmin de plataforma** (el enum `Role` es tenant-scoped; no hay concepto
-  cross-tenant). Sin modelo `Ticket`/`Report`/`Feedback`. Sin analytics (GA/Vercel). SEO parcial
-  (`metadata` sí; sin `sitemap.ts`/`robots.ts`/`manifest`).
+- 🟢 **Boundaries: cerrado en Ronda 1.** Existen `app/global-error.tsx`, `app/not-found.tsx`, `error.tsx`
+  por route-group (`(app)`, `(booking)`, `(portal)`) y `loading.tsx` en agenda/dashboard/pacientes. El
+  residual es la **403 custom**, que quedó explícitamente diferida.
+- 🟢 **Panel de plataforma: EXISTE (parcial), entregado en Rondas 7-8.** La identidad de superadmin ya no
+  es tenant-scoped: `UserProfile.isPlatformAdmin` (`prisma/schema.prisma:87`) + `Actor.isPlatformAdmin` y
+  `requireSuperAdmin()`/`ForbiddenError` (`lib/session.ts:196`) + `scripts/set-platform-admin.ts`. Rutas
+  entregadas: `app/(app)/plataforma/layout.tsx` (guard), `plataforma/ejercicios` (tabla paginada con
+  search/filtros/sort + drawer editor + media/artículo) y `plataforma/tags` (CRUD de categorías), con la
+  entrada "Plataforma" del sidebar visible solo para superadmin. Las escrituras van por el canal
+  `prismaService` (BYPASSRLS) detrás de `requireSuperAdmin`.
+- **Lo que del bloque D sigue faltando:** modelo `Ticket`/`Report`/`Feedback` y su bandeja, formulario de
+  contacto, **impersonación / vistas cross-tenant** (el panel administra el *catálogo global*, no los
+  tenants), métricas de plataforma. Sin analytics (GA/Vercel). SEO parcial (`metadata` sí; sin
+  `sitemap.ts`/`robots.ts`/`manifest`).
 
 **E · Dinero — EXISTE-PARCIAL**
 - Schema 100% `*Cents Int` (sin `Float`/`Decimal`). ✅
-- **Inputs sin parser AR:** `Number(...) * 100` en `configuracion-client.tsx:565,778,779` y
-  `agenda-client.tsx:218`. `"1.500,50"` (formato AR) daría `NaN`/valor incorrecto. `lib/format.ts`
-  solo formatea salida (`formatARS`), **no hay `parseARS`/normalizador de entrada** → finding
-  `money-input-sin-parser-ar`. Precondición del módulo contable de Etapa 3.
+- 🟢 **Inputs con parser AR: cerrado en Ronda 2.** `parseARS` vive en `lib/format.ts:102` y los call
+  sites que hacían `Number(...) * 100` ya lo usan (`configuracion/panels/services-panel.tsx`,
+  `configuracion/panels/insurers-panel.tsx`, `agenda/controls.tsx`), así que `"1.500,50"` ya no produce
+  `NaN`. Queda como precondición **satisfecha** del módulo contable de Etapa 3.
 
 ---
 
@@ -744,3 +844,8 @@ arquitectónica (RLS inerte, §0), no una lista de bugs sueltos. **Antes de abri
 pagan:** cerrar los bugs QA de agenda (F-A2/A3/A4), anclar el pago (F-A1/F-B1), rate-limit real
 (F-C1), CI + tests capa-1 (F-B9), y el checklist de corte a producción del [ROADMAP.md](ROADMAP.md).
 Todo lo demás escala incrementalmente por olas.
+
+> **Estado al 2026-08-03 (Rondas 1-9).** De esa lista de corte ya están cerrados **en código** los bugs
+> QA de agenda (F-A2/A3/A4), el anclaje del pago (F-A1/F-B1) y CI + tests (F-B9). Lo que falta para el
+> corte es **bucket C (config del dueño)**: env de Upstash en Vercel (F-C1) y el flip del rol de DB sin
+> BYPASSRLS en Supabase (F-B3, ya listo en local). Ver §2 para el desglose fila por fila.
