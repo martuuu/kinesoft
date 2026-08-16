@@ -34,6 +34,12 @@ jobs:
       - name: Unit tests (capa 1)
         run: npm test
 
+      # Static tenant-isolation guard: fails if a tenantId model loses its RLS
+      # policy or an Actor-facing module calls prisma directly without runWithRls.
+      # It was only ever run by hand — a green local run proved nothing about PRs.
+      - name: Guard de aislamiento por tenant
+        run: npm run guard:isolation
+
       - name: Build
         run: npm run build
         env:

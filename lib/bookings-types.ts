@@ -5,7 +5,9 @@ export type BookingRow = {
   scheduledFor: Date;
   durationMin: number;
   status: BookingStatus;
+  serviceId: string;
   serviceName: string;
+  serviceColor: string | null;
   practitionerId: string;
   patientId: string | null;
   patientName: string;
@@ -28,6 +30,10 @@ export type BookingRow = {
    */
   copagoCents: number;
   notes: string | null;
+  /** Per-turno mini-diagnosis title (agenda card). Null when unset. */
+  title: string | null;
+  /** Per-turno mini-diagnosis long description. Null when unset. */
+  description: string | null;
   /**
    * Row version for optimistic concurrency — echoed back as
    * `expectedUpdatedAt` on mutations so the server rejects edits/deletes

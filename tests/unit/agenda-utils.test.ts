@@ -1,61 +1,80 @@
 import { describe, it, expect } from "vitest";
 import {
-  layoutBookings,
   osLabel,
   billingLine,
-  type BookingDTO,
+  buildSlots,
+  slotLabel,
+  slotOf,
+  coveredSlots,
 } from "@/components/agenda/agenda-utils";
 
-// Minimal BookingDTO factory — only scheduledFor/durationMin matter to the
-// layout algorithm; the rest are filled with harmless defaults.
-function mk(id: string, scheduledFor: string, durationMin: number): BookingDTO {
-  return {
-    id,
-    scheduledFor,
-    durationMin,
-    status: "CONFIRMED",
-    serviceName: "Consulta",
-    practitionerId: "p1",
-    patientId: "pat1",
-    patientName: "Test",
-    patientCondition: null,
-    obraSocial: "Particular",
-    copagoCents: 5000,
-    updatedAt: scheduledFor,
-    notes: null,
-    patientAccess: "full",
-  };
-}
+/** 13:30 AR → minutes-from-midnight. */
+const min = (h: number, m = 0) => h * 60 + m;
 
-describe("layoutBookings", () => {
-  it("returns [] for no bookings", () => {
-    expect(layoutBookings([])).toEqual([]);
+describe("buildSlots", () => {
+  it("one row per hour at 60-minute granularity", () => {
+    expect(buildSlots(8, 12, 60)).toEqual([480, 540, 600, 660]);
   });
 
-  it("puts non-overlapping turnos in their own single-column groups", () => {
-    const out = layoutBookings([
-      mk("a", "2026-05-26T13:00:00.000Z", 60), // 13-14
-      mk("d", "2026-05-26T14:00:00.000Z", 30), // 14-14:30 (touches, not overlaps)
-    ]);
-    const a = out.find((x) => x.id === "a")!;
-    const d = out.find((x) => x.id === "d")!;
-    expect(a.cols).toBe(1);
-    expect(d.cols).toBe(1);
-    expect(a.groupKey).not.toBe(d.groupKey);
+  it("doubles the rows at 30-minute granularity", () => {
+    expect(buildSlots(8, 10, 30)).toEqual([480, 510, 540, 570]);
   });
 
-  it("shares columns among overlapping turnos, transitively via the sweep", () => {
-    // A 13:00-14:00, B 13:30-14:30 (overlaps A), C 14:15-14:45 (overlaps B, not A).
-    // The sweep chains them into ONE group of 3 columns.
-    const out = layoutBookings([
-      mk("a", "2026-05-26T13:00:00.000Z", 60),
-      mk("b", "2026-05-26T13:30:00.000Z", 60),
-      mk("c", "2026-05-26T14:15:00.000Z", 30),
-    ]);
-    expect(out.every((x) => x.cols === 3)).toBe(true);
-    expect(new Set(out.map((x) => x.groupKey)).size).toBe(1);
-    // Columns are distinct 0,1,2 within the group.
-    expect(new Set(out.map((x) => x.col))).toEqual(new Set([0, 1, 2]));
+  it("excludes the closing hour itself (8→19 ends at 18:30)", () => {
+    const s = buildSlots(8, 19, 30);
+    expect(s[s.length - 1]).toBe(min(18, 30));
+    expect(s).toHaveLength(22);
+  });
+
+  it("never renders a blank day for a degenerate window", () => {
+    expect(buildSlots(10, 10, 60)).toEqual([600]);
+  });
+});
+
+describe("slotLabel", () => {
+  it("prints the half-hour so a 13:30 row is labelled", () => {
+    expect(slotLabel(min(13, 30))).toBe("13:30");
+    expect(slotLabel(min(8))).toBe("08:00");
+  });
+});
+
+describe("slotOf", () => {
+  const slots30 = buildSlots(8, 19, 30);
+  const slots60 = buildSlots(8, 19, 60);
+
+  it("keeps 13:30 in its own row at 30-min granularity", () => {
+    expect(slotOf(min(13, 30), slots30, 30)).toEqual({ slot: min(13, 30), outOfRange: null });
+  });
+
+  it("folds 13:30 into 13:00 at 60-min granularity", () => {
+    expect(slotOf(min(13, 30), slots60, 60)).toEqual({ slot: min(13), outOfRange: null });
+  });
+
+  it("floors within the slot (13:59 → 13:30, not 14:00)", () => {
+    expect(slotOf(min(13, 59), slots30, 30).slot).toBe(min(13, 30));
+    expect(slotOf(min(13, 29), slots30, 30).slot).toBe(min(13));
+  });
+
+  it("flags turnos outside the window instead of silently folding them", () => {
+    expect(slotOf(min(7), slots30, 30)).toEqual({ slot: min(8), outOfRange: "before" });
+    expect(slotOf(min(21), slots30, 30)).toEqual({ slot: min(18, 30), outOfRange: "after" });
+  });
+});
+
+describe("coveredSlots", () => {
+  it("lists the later rows a long turno runs through", () => {
+    // 13:00 + 45min at 30-min rows → covers 13:30 (not 14:00).
+    expect(coveredSlots(min(13), 45, buildSlots(8, 19, 30), 30)).toEqual([min(13, 30)]);
+  });
+
+  it("returns nothing when the turno fits inside its own slot", () => {
+    expect(coveredSlots(min(13), 30, buildSlots(8, 19, 30), 30)).toEqual([]);
+    expect(coveredSlots(min(13), 45, buildSlots(8, 19, 60), 60)).toEqual([]);
+  });
+
+  it("stops at the end of the window", () => {
+    // 18:30 + 240min would run past closing; nothing beyond the last row.
+    expect(coveredSlots(min(18, 30), 240, buildSlots(8, 19, 30), 30)).toEqual([]);
   });
 });
 

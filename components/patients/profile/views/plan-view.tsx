@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
-import { Modal } from "@/components/ui/modal";
+import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
 import { IconArrow, IconPlus, IconCheck } from "@/components/ui/icons";
 import { PlanTemplateApplyButton } from "@/components/patients/plan-template-apply";
@@ -343,7 +343,7 @@ function EditProgramModal({
   };
   const startDateIso = program.startDate.toISOString().slice(0, 10);
   return (
-    <Modal onClose={onClose} title="Editar plan" width={480}>
+    <Drawer open onClose={onClose} title="Editar plan" width={480}>
       <form action={submit} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre del plan" name="title" required defaultValue={program.title} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -370,16 +370,27 @@ function EditProgramModal({
             {error}
           </div>
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancelar
-          </Button>
-          <Button type="submit" variant="primary" disabled={pending}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
             {pending ? "Guardando…" : "Guardar"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
+            Cancelar
           </Button>
         </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -395,7 +406,7 @@ function ConfirmDeleteProgram({
   onClose: () => void;
 }) {
   return (
-    <Modal onClose={onClose} title="Eliminar plan" width={440}>
+    <Drawer open onClose={onClose} title="Eliminar plan" width={440}>
       <p style={{ fontSize: 13, color: "var(--navy-700)", margin: "0 0 8px" }}>
         Vas a eliminar <strong>{program.title}</strong> con sus {program.totalSessions} sesiones cargadas.
         Esta acción no se puede deshacer.
@@ -403,21 +414,27 @@ function ConfirmDeleteProgram({
       <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "0 0 14px" }}>
         Los turnos creados desde este plan permanecen en la agenda — eliminalos manualmente si querés.
       </p>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-          Cancelar
-        </Button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <Button
           type="button"
           variant="primary"
           onClick={onConfirm}
           disabled={pending}
-          style={{ background: "#9F1F1F" }}
+          style={{ background: "#9F1F1F", width: "100%", justifyContent: "center" }}
         >
           {pending ? "Eliminando…" : "Eliminar definitivamente"}
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onClose}
+          disabled={pending}
+          style={{ width: "100%", justifyContent: "center" }}
+        >
+          Cancelar
+        </Button>
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -528,17 +545,13 @@ function EditSessionModal({
   };
 
   return (
-    <Modal
-      onClose={onClose}
-      title={`Sesión ${session.index}`}
-      description={
-        session.completedAt
-          ? "Esta sesión ya fue realizada. Solo podés revisar su detalle."
-          : "Cambiá la fecha/hora si el paciente necesita reprogramar. El turno asociado se mueve automáticamente."
-      }
-      width={460}
-    >
+    <Drawer open onClose={onClose} title={`Sesión ${session.index}`} width={460}>
       <div style={{ display: "grid", gap: 12 }}>
+        <p style={{ marginTop: 0, marginBottom: 2, fontSize: 13, color: "var(--navy-500)" }}>
+          {session.completedAt
+            ? "Esta sesión ya fue realizada. Solo podés revisar su detalle."
+            : "Cambiá la fecha/hora si el paciente necesita reprogramar. El turno asociado se mueve automáticamente."}
+        </p>
         <FormField
           label="Fecha y hora"
           name="scheduledFor"
@@ -563,13 +576,51 @@ function EditSessionModal({
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
+            flexDirection: "column",
             gap: 8,
             marginTop: 4,
-            flexWrap: "wrap",
           }}
         >
+          {!session.completedAt && (
+            <Button
+              type="button"
+              variant="primary"
+              onClick={save}
+              disabled={pending}
+              style={{ width: "100%", justifyContent: "center" }}
+            >
+              {pending ? "Guardando…" : "Guardar"}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
+            Cancelar
+          </Button>
+          {!session.completedAt && (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={pending}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#9F1F1F",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                width: "100%",
+                textAlign: "center",
+                padding: "6px 0",
+              }}
+            >
+              Eliminar
+            </button>
+          )}
           <Link
             href={`/seguimiento/${session.id}`}
             style={{
@@ -577,40 +628,15 @@ function EditSessionModal({
               color: "var(--sky-700)",
               textDecoration: "none",
               fontWeight: 700,
+              textAlign: "center",
+              marginTop: 4,
             }}
           >
             Abrir sesión completa →
           </Link>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {!session.completedAt && (
-              <button
-                type="button"
-                onClick={remove}
-                disabled={pending}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#9F1F1F",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                Eliminar
-              </button>
-            )}
-            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-              Cancelar
-            </Button>
-            {!session.completedAt && (
-              <Button type="button" variant="primary" onClick={save} disabled={pending}>
-                {pending ? "Guardando…" : "Guardar"}
-              </Button>
-            )}
-          </div>
         </div>
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -667,7 +693,7 @@ export function CreateProgramModal({
   };
 
   return (
-    <Modal onClose={onClose} title="Crear plan de tratamiento">
+    <Drawer open onClose={onClose} title="Crear plan de tratamiento" width={480}>
       <form action={submit} style={{ display: "grid", gap: 10 }}>
         <FormField label="Nombre" name="title" required defaultValue="Plan kinésico" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -688,15 +714,26 @@ export function CreateProgramModal({
             {error}
           </div>
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancelar
-          </Button>
-          <Button type="submit" variant="primary" disabled={pending}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
             {pending ? "Creando…" : "Crear plan"} <IconArrow size={12} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
+            Cancelar
           </Button>
         </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }

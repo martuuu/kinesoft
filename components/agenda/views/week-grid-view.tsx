@@ -4,8 +4,9 @@ import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { IconX } from "@/components/ui/icons";
-import { toARDateKey, toARDow, toARHour } from "@/lib/datetime-ar";
-import { DAYS, fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
+import { toARDateKey, toARDow, toARMinutes } from "@/lib/datetime-ar";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "./list-view";
 
 /** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
@@ -72,6 +73,15 @@ function WeekSlotModal({
                   opacity: isCancelled ? 0.6 : 1,
                 }}
               >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: b.serviceColor ?? SERVICE_COLOR_FALLBACK,
+                    flexShrink: 0,
+                  }}
+                />
                 <Avatar name={b.patientName} size={32} tone="sky" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
@@ -100,20 +110,27 @@ export function WeekGridView({
   showHeader,
   showSaturday,
   showSunday,
+  highlightedServiceId,
 }: {
   weekStart: Date;
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
-  businessHours: { start: number; end: number };
+  businessHours: { start: number; end: number; slotMinutes: number };
   showHeader: boolean;
   showSaturday: boolean;
   showSunday: boolean;
+  /** When set, cells containing this service lift; the rest dim. */
+  highlightedServiceId: string | null;
 }) {
-  const HOURS = Array.from(
-    { length: Math.max(1, businessHours.end - businessHours.start) },
-    (_, i) => i + businessHours.start
+  // Same slot grid as the day view (60 or 30 minutes per row). Half-hour rows
+  // double the row count, so they get a shorter height to keep the week from
+  // growing twice as tall.
+  const slotMinutes = businessHours.slotMinutes === 30 ? 30 : 60;
+  const SLOTS = useMemo(
+    () => buildSlots(businessHours.start, businessHours.end, slotMinutes),
+    [businessHours.start, businessHours.end, slotMinutes]
   );
-  const ROW = 50;
+  const ROW = slotMinutes === 30 ? 34 : 50;
 
   // Which weekday columns to render (0=Mon … 6=Sun). Mon-Fri always show;
   // Saturday/Sunday are per-user opt-in. `colOf` maps a day index to its
@@ -140,22 +157,19 @@ export function WeekGridView({
     for (const b of bookings) {
       const date = new Date(b.scheduledFor);
       const dayCol = (toARDow(date) + 6) % 7;
-      const h = toARHour(date);
-      // Clamp into the visible grid so a turno outside business hours (e.g.
-      // 21:30 when the window ends at 19:00) still lands in the last row and
-      // is reachable via the cell's overflow modal, instead of vanishing.
-      const rowStart = Math.min(
-        HOURS.length,
-        Math.max(1, Math.round(h - HOURS[0]) + 1)
-      );
+      // FLOOR to the slot (a 13:30 turno belongs to 13:30 at half-hour rows and
+      // to 13:00 at hourly ones) — rounding used to push it into the NEXT row,
+      // disagreeing with the day view. `slotOf` also clamps out-of-window turnos
+      // into the first/last row so they stay reachable via the overflow modal.
+      const { slot } = slotOf(toARMinutes(date), SLOTS, slotMinutes);
+      const rowStart = SLOTS.indexOf(slot) + 1;
       const key = `${dayCol}-${rowStart}`;
       const list = m.get(key) ?? [];
       list.push(b);
       m.set(key, list);
     }
     return m;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookings, HOURS[0]]);
+  }, [bookings, SLOTS, slotMinutes]);
 
   return (
     <>
@@ -185,17 +199,28 @@ export function WeekGridView({
             flex: 1,
             display: "grid",
             gridTemplateColumns: gridCols,
-            gridTemplateRows: `repeat(${HOURS.length}, ${ROW}px)`,
+            gridTemplateRows: `repeat(${SLOTS.length}, ${ROW}px)`,
             gap: 6,
             overflow: "auto",
           }}
         >
-          {HOURS.map((h, i) => (
-            <div key={"h" + h} className="k-mono" style={{ gridColumn: 1, gridRow: i + 1, fontSize: 10, color: "var(--navy-300)", paddingTop: 4 }}>
-              {String(h).padStart(2, "0")}:00
+          {SLOTS.map((s, i) => (
+            <div
+              key={"h" + s}
+              className="k-mono"
+              style={{
+                gridColumn: 1,
+                gridRow: i + 1,
+                fontSize: 10,
+                // The :30 labels are muted so the hour still anchors the eye.
+                color: s % 60 === 0 ? "var(--navy-300)" : "rgba(15,30,51,0.28)",
+                paddingTop: 4,
+              }}
+            >
+              {slotLabel(s)}
             </div>
           ))}
-          {HOURS.map((_, i) =>
+          {SLOTS.map((_, i) =>
             visibleDays.map((__, j) => (
               <div
                 key={`cell${i}-${j}`}
@@ -218,8 +243,30 @@ export function WeekGridView({
             const rowStart = Number(rowStartStr);
             const first = cellBookings[0];
             const date0 = new Date(first.scheduledFor);
-            const span = Math.max(1, Math.round(first.durationMin / 60));
+            // Span in SLOTS (not hours), clamped so it neither overflows the
+            // grid NOR paints over the next occupied cell in this column — at
+            // 30-min granularity a 45/60-min turno spans 2 rows and would
+            // otherwise cover (and swallow the clicks of) the :30 chip below.
+            const gridRoom = SLOTS.length - rowStart + 1;
+            let freeRows = gridRoom;
+            for (let r = rowStart + 1; r <= SLOTS.length; r++) {
+              if (cellMap.has(`${dayCol}-${r}`)) {
+                freeRows = r - rowStart;
+                break;
+              }
+            }
+            const span = Math.min(
+              Math.max(1, Math.round(first.durationMin / slotMinutes)),
+              gridRoom,
+              freeRows
+            );
             const count = cellBookings.length;
+            // Legend "filter": lift cells that contain the highlighted service,
+            // dim the rest.
+            const hasMatch =
+              highlightedServiceId != null &&
+              cellBookings.some((b) => b.serviceId === highlightedServiceId);
+            const dimmed = highlightedServiceId != null && !hasMatch;
 
             return (
               <button
@@ -245,6 +292,12 @@ export function WeekGridView({
                   gap: 2,
                   padding: "4px 6px",
                   overflow: "hidden",
+                  position: "relative",
+                  zIndex: hasMatch ? 5 : undefined,
+                  transform: hasMatch ? "translateY(-2px)" : undefined,
+                  boxShadow: hasMatch ? "var(--shadow-card-lg)" : undefined,
+                  opacity: dimmed ? 0.45 : 1,
+                  transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
                 }}
               >
                 <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>

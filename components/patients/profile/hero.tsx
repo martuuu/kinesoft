@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { Modal } from "@/components/ui/modal";
+import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
 import {
   assignPatientToPractitioner,
@@ -259,6 +260,8 @@ function EditPatientModal({
         documentId: String(formData.get("documentId") ?? ""),
         dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
         notes: String(formData.get("notes") ?? ""),
+        diagnosisTitle: String(formData.get("diagnosisTitle") ?? ""),
+        diagnosisNote: String(formData.get("diagnosisNote") ?? ""),
       });
       if (!updateResult.ok) {
         setError(updateResult.error);
@@ -314,7 +317,7 @@ function EditPatientModal({
   const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
 
   return (
-    <Modal onClose={onClose} title="Editar paciente" width={620}>
+    <Drawer open onClose={onClose} title="Editar paciente" width={560}>
       <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <Section title="Datos personales">
           <Grid2>
@@ -384,6 +387,24 @@ function EditPatientModal({
           </Section>
         )}
 
+        <Section title="Diagnóstico (opcional)">
+          <FormField
+            label="Título"
+            name="diagnosisTitle"
+            placeholder="ej: Lumbalgia"
+            defaultValue={patient.diagnosisTitle ?? ""}
+            hint="Máx. 80 caracteres."
+          />
+          <FormField
+            as="textarea"
+            label="Descripción"
+            name="diagnosisNote"
+            placeholder="Detalle del cuadro, objetivos, indicaciones…"
+            defaultValue={patient.diagnosisNote ?? ""}
+            hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
+          />
+        </Section>
+
         <Section title="Notas">
           <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
         </Section>
@@ -411,7 +432,7 @@ function EditPatientModal({
           </Button>
         </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }
 

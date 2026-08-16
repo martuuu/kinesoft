@@ -124,6 +124,22 @@ export function PatientPicker({
             type="text"
             placeholder="Buscá por nombre, DNI o email…"
             value={q}
+            // Kill the browser's own autofill so it doesn't cover our DB
+            // typeahead. Chrome IGNORES autoComplete="off" on fields it heuristically
+            // reads as name/email (the placeholder says "email"), so we mark it
+            // "new-password" — the one token Chrome reliably won't autofill (and on a
+            // text input it never triggers the save-password UI). ARIA combobox +
+            // the password-manager opt-outs cover 1Password/LastPass/Dashlane too.
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={open}
+            autoComplete="new-password"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-form-type="other"
             onChange={(e) => {
               setQ(e.target.value);
               setOpen(true);

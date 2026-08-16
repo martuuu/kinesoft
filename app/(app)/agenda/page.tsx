@@ -80,7 +80,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
         scheduledFor: b.scheduledFor.toISOString(),
         updatedAt: b.updatedAt.toISOString(),
       }))}
-      services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents }))}
+      services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color }))}
       practitioners={practitioners.map((p) => ({
         id: p.id,
         name: p.user.fullName ?? p.user.email,
@@ -90,6 +90,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       businessHours={{
         start: settings.businessHoursStart,
         end: settings.businessHoursEnd,
+        slotMinutes: settings.agendaSlotMinutes,
       }}
     />
   );

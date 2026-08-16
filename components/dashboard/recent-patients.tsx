@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { IconArrow, IconCheck, IconPlus } from "@/components/ui/icons";
@@ -139,9 +141,11 @@ function RecentRow({ p }: { p: DashboardData["recent"][number] }) {
         ⋯
       </button>
 
-      {menuOpen && (
-        <QuickMenu patient={p} onClose={() => setMenuOpen(false)} />
-      )}
+      <AnimatePresence>
+        {menuOpen && (
+          <QuickMenu patient={p} onClose={() => setMenuOpen(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -172,9 +176,13 @@ function QuickMenu({
   };
 
   return (
-    <div
+    <motion.div
       role="menu"
       className="k-glass-strong"
+      initial={{ opacity: 0, scale: 0.96, y: -6 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.97, y: -4 }}
+      transition={{ duration: DUR.fast, ease: EASE_OUT }}
       style={{
         position: "absolute",
         top: 44,
@@ -183,6 +191,7 @@ function QuickMenu({
         borderRadius: 12,
         padding: 6,
         zIndex: 25,
+        transformOrigin: "top right",
       }}
     >
       <MenuLink
@@ -242,7 +251,7 @@ function QuickMenu({
           {error}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 

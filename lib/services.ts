@@ -49,6 +49,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         id: s.id,
         name: s.name,
         description: s.description,
+        color: s.color,
         durationMin: s.durationMin,
         priceCents: s.priceCents,
         practitionerId: s.practitionerId,
@@ -68,6 +69,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
 const ServiceInput = z.object({
   name: z.string().trim().min(1, "Nombre requerido").max(80),
   description: z.string().trim().max(500).optional().or(z.literal("")),
+  color: z.string().max(9).optional().or(z.literal("")),
   durationMin: z.coerce.number().int().min(5).max(480).default(45),
   priceCents: z.coerce.number().int().min(0).max(100_000_000).default(0),
   practitionerId: z.string().optional().or(z.literal("")),
@@ -106,6 +108,7 @@ export async function createService(
         tenantId: actor.tenantId,
         name: parsed.data.name,
         description: parsed.data.description || null,
+        color: parsed.data.color || null,
         durationMin: parsed.data.durationMin,
         priceCents: parsed.data.priceCents,
         practitionerId: parsed.data.practitionerId || null,
@@ -164,6 +167,7 @@ export async function updateService(
     data: {
       ...parsed.data,
       description: parsed.data.description === "" ? null : parsed.data.description,
+      color: parsed.data.color === "" ? null : parsed.data.color,
       practitionerId:
         parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
     },

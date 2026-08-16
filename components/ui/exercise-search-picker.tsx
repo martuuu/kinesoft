@@ -153,11 +153,15 @@ export function ExerciseSearchPicker({
                     {ex.muscleGroups ?? "—"} · Nivel {ex.difficulty}
                   </div>
                 </div>
-                {!manual && (
+                {!manual && (ex.defaultSets != null && ex.defaultReps != null ? (
                   <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
                     {ex.defaultSets}×{ex.defaultReps}
                   </div>
-                )}
+                ) : ex.durationSeconds != null ? (
+                  <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+                    {ex.durationSeconds >= 60 ? `${Math.round(ex.durationSeconds / 60)} min` : `${ex.durationSeconds}s`}
+                  </div>
+                ) : null)}
                 <span style={{ color: taken ? "var(--navy-300)" : "var(--navy-900)", fontWeight: 700 }}>
                   {taken ? "✓" : "+"}
                 </span>

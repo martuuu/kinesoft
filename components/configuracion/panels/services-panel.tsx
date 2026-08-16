@@ -4,12 +4,13 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Modal } from "@/components/ui/modal";
+import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatARS, parseARS } from "@/lib/format";
+import { SERVICE_COLORS } from "@/lib/service-colors";
 import type { ServiceRow } from "@/lib/services-types";
 import {
   createService,
@@ -69,7 +70,18 @@ export function ServicesPanel({
               }}
             >
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: s.color ?? "rgba(15,30,51,0.12)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  {s.name}
+                </div>
                 {s.description && (
                   <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{s.description}</div>
                 )}
@@ -115,6 +127,7 @@ function ServiceModal({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [color, setColor] = useState<string | null>(service?.color ?? null);
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -126,6 +139,7 @@ function ServiceModal({
         priceCents: parseARS(String(formData.get("price") ?? "")) ?? 0,
         practitionerId: String(formData.get("practitionerId") ?? ""),
         maxConcurrent: String(formData.get("maxConcurrent") ?? ""),
+        color: String(formData.get("color") ?? ""),
       };
       const r = service
         ? await updateService(service.id, payload)
@@ -158,7 +172,7 @@ function ServiceModal({
   };
 
   return (
-    <Modal onClose={onClose} title={service ? "Editar servicio" : "Nuevo servicio"} width={520}>
+    <Drawer open onClose={onClose} title={service ? "Editar servicio" : "Nuevo servicio"} width={480}>
       <form action={submit} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre" name="name" required defaultValue={service?.name ?? ""} />
         <FormField
@@ -207,17 +221,64 @@ function ServiceModal({
           ]}
         />
 
+        <div style={{ fontSize: 12, minWidth: 0 }}>
+          <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Color</span>
+          <input type="hidden" name="color" value={color ?? ""} />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+            {SERVICE_COLORS.map((c) => {
+              const selected = color === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(selected ? null : c)}
+                  aria-pressed={selected}
+                  aria-label={selected ? "Quitar color" : `Elegir color ${c}`}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 999,
+                    background: c,
+                    cursor: "pointer",
+                    padding: 0,
+                    border: selected
+                      ? "2px solid var(--navy-900)"
+                      : "1px solid rgba(15,30,51,0.12)",
+                    boxShadow: selected ? "0 0 0 2px #fff inset" : undefined,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+
         {error && <ErrorBox>{error}</ErrorBox>}
 
         <div
           style={{
             display: "flex",
-            justifyContent: service ? "space-between" : "flex-end",
-            alignItems: "center",
+            flexDirection: "column",
             gap: 8,
             marginTop: 6,
           }}
         >
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
+            {pending ? "Guardando…" : "Guardar"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={pending}
+            style={{ width: "100%", justifyContent: "center" }}
+          >
+            Cancelar
+          </Button>
           {service && (
             <button
               type="button"
@@ -230,21 +291,16 @@ function ServiceModal({
                 cursor: "pointer",
                 fontSize: 12.5,
                 fontWeight: 700,
+                width: "100%",
+                textAlign: "center",
+                padding: "6px 0",
               }}
             >
               Eliminar
             </button>
           )}
-          <div style={{ display: "flex", gap: 8 }}>
-            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-              Cancelar
-            </Button>
-            <Button type="submit" variant="primary" disabled={pending}>
-              {pending ? "Guardando…" : "Guardar"}
-            </Button>
-          </div>
         </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }

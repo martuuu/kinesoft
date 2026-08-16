@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
+import { DUR, EASE_OUT, springSoft } from "@/lib/motion";
 import { getSessionsChart, type ChartBar, type ChartRange } from "@/lib/dashboard";
 
 const RANGES: { value: ChartRange; label: string }[] = [
@@ -68,18 +70,32 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
                 type="button"
                 onClick={() => setRangeAndFetch(r.value)}
                 style={{
+                  position: "relative",
                   padding: "5px 12px",
                   borderRadius: 999,
                   border: "none",
                   fontSize: 11,
                   fontWeight: 600,
-                  background: on ? "#fff" : "transparent",
+                  background: "transparent",
                   color: on ? "var(--navy-900)" : "var(--navy-500)",
-                  boxShadow: on ? "0 2px 6px rgba(15,30,51,0.08)" : "none",
                   cursor: "pointer",
                 }}
               >
-                {r.label}
+                {on && (
+                  <motion.span
+                    layoutId="sessions-range-indicator"
+                    transition={springSoft}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      borderRadius: 999,
+                      background: "#fff",
+                      boxShadow: "0 2px 6px rgba(15,30,51,0.08)",
+                      zIndex: 0,
+                    }}
+                  />
+                )}
+                <span style={{ position: "relative", zIndex: 1 }}>{r.label}</span>
               </button>
             );
           })}
@@ -105,6 +121,7 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
       </div>
 
       <div
+        key={`${bars.length}-${totalDone}-${totalMissed}`}
         style={{
           display: "grid",
           gridTemplateColumns: `repeat(${Math.max(1, bars.length)}, 1fr)`,
@@ -136,25 +153,31 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
                 gap: 4,
               }}
             >
-              <div
+              <motion.div
+                initial={{ scaleY: 0 }}
+                animate={{ scaleY: 1 }}
+                transition={{ duration: DUR.slow, ease: EASE_OUT, delay: i * 0.03 }}
                 style={{
                   width: 18,
                   height: `${(b.done / max) * 130}px`,
                   background: "linear-gradient(180deg, var(--sky-500), var(--sky-700))",
                   borderRadius: "6px 6px 2px 2px",
                   minHeight: 2,
-                  transition: "height 0.2s ease",
+                  transformOrigin: "bottom",
                 }}
                 aria-label={`${b.label}: ${b.done} realizadas`}
               />
               {b.missed > 0 && (
-                <div
+                <motion.div
+                  initial={{ scaleY: 0 }}
+                  animate={{ scaleY: 1 }}
+                  transition={{ duration: DUR.slow, ease: EASE_OUT, delay: i * 0.03 + 0.04 }}
                   style={{
                     width: 8,
                     height: `${(b.missed / max) * 130}px`,
                     background: "var(--lime-400)",
                     borderRadius: "4px 4px 2px 2px",
-                    transition: "height 0.2s ease",
+                    transformOrigin: "bottom",
                   }}
                   aria-label={`${b.label}: ${b.missed} ausentes`}
                 />

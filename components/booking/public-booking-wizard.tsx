@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { IconArrow, IconCheck, IconChevL, IconChevR, IconClock } from "@/components/ui/icons";
 import { listPublicSlots, submitPublicBooking } from "@/lib/public-booking";
 import { toARDateKey } from "@/lib/datetime-ar";
-import type { PublicClinic, PublicSlot } from "@/lib/public-booking-types";
+import type { PublicClinic, PublicSlot, PrefillPatient } from "@/lib/public-booking-types";
 
 type PatientHC = {
   firstName: string;
@@ -39,6 +39,8 @@ type PatientHC = {
   emergencyName: string;
   emergencyPhone: string;
   notes: string;
+  title: string;
+  description: string;
 };
 
 const EMPTY_HC: PatientHC = {
@@ -53,6 +55,8 @@ const EMPTY_HC: PatientHC = {
   emergencyName: "",
   emergencyPhone: "",
   notes: "",
+  title: "",
+  description: "",
 };
 
 const STEPS = ["Profesional", "Servicio", "Fecha y hora", "Tus datos"] as const;
@@ -65,7 +69,7 @@ export function PublicBookingWizard({
 }: {
   clinic: PublicClinic;
   session: { email: string; fullName: string | null } | null;
-  prefill: PatientHC | null;
+  prefill: PrefillPatient | null;
 }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(clinic.practitioners.length === 1 ? 1 : 0);
@@ -76,7 +80,7 @@ export function PublicBookingWizard({
   const [dateISO, setDateISO] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [slotISO, setSlotISO] = useState<string | null>(null);
   const [hc, setHc] = useState<PatientHC>(() => {
-    if (prefill) return prefill;
+    if (prefill) return { ...EMPTY_HC, ...prefill };
     if (session) {
       const [first, ...rest] = (session.fullName ?? "").split(" ");
       return {
@@ -870,6 +874,21 @@ function DataStep({
         onChange={(v) => upd("notes", v)}
         textarea
         placeholder="Contanos brevemente qué te trae (zona, desde cuándo, qué actividad sentís limitada)."
+      />
+
+      <Field
+        label="Diagnóstico (opcional)"
+        value={hc.title}
+        onChange={(v) => upd("title", v)}
+        placeholder="Ej. Lumbalgia, esguince de tobillo…"
+      />
+
+      <Field
+        label="Descripción (opcional)"
+        value={hc.description}
+        onChange={(v) => upd("description", v)}
+        textarea
+        placeholder="Detalles adicionales que quieras que el profesional conozca."
       />
 
       {error && (

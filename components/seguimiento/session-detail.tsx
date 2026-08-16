@@ -40,7 +40,14 @@ type SessionDTO = Prisma.SessionGetPayload<{
   };
 }>;
 
-export function SessionDetail({ session }: { session: SessionDTO }) {
+export function SessionDetail({
+  session,
+  scheduledLabel,
+}: {
+  session: SessionDTO;
+  /** Pre-formatted on the server — see the note in the page component. */
+  scheduledLabel: string;
+}) {
   const router = useRouter();
   const completed = !!session.completedAt;
   const diagnosis = session.program.case?.diagnoses?.[0]?.condition?.name ?? null;
@@ -122,14 +129,7 @@ export function SessionDetail({ session }: { session: SessionDTO }) {
               {session.index}
             </div>
             <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-              {session.scheduledFor.toLocaleString("es-AR", {
-                weekday: "long",
-                day: "2-digit",
-                month: "long",
-                hour: "2-digit",
-                minute: "2-digit",
-                timeZone: "America/Argentina/Buenos_Aires",
-              })}
+              {scheduledLabel}
               {diagnosis ? ` · ${diagnosis}` : ""}
             </div>
           </div>

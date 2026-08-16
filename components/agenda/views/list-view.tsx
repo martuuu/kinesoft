@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { IconCheck } from "@/components/ui/icons";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { fmtHour, fmtMoney, osLabel, statusPill, type BookingDTO } from "../agenda-utils";
 
 /** Shared column track for the Lista view header + rows (kept in one
@@ -15,9 +16,12 @@ const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
 export function ListView({
   bookings,
   onEdit,
+  highlightedServiceId,
 }: {
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
+  /** When set, rows of this service lift above the rest (legend "filter"). */
+  highlightedServiceId: string | null;
 }) {
   if (!bookings.length) {
     return (
@@ -52,6 +56,13 @@ export function ListView({
       </div>
       {bookings.map((b) => {
         const date = new Date(b.scheduledFor);
+        const isHighlighted =
+          highlightedServiceId != null && b.serviceId === highlightedServiceId;
+        const dimmed =
+          highlightedServiceId != null && b.serviceId !== highlightedServiceId;
+        // Per-turno diagnosis (title → description), falling back to the
+        // program condition — surfaced under the patient name for consistency.
+        const sub = b.title || b.description || b.patientCondition;
         return (
           <button
             key={b.id}
@@ -65,10 +76,15 @@ export function ListView({
               fontSize: 13,
               width: "100%",
               border: "none",
-              background: "transparent",
+              background: isHighlighted ? "rgba(31,79,190,0.05)" : "transparent",
               borderBottom: "1px solid rgba(15,30,51,0.04)",
               cursor: "pointer",
               textAlign: "left",
+              position: "relative",
+              zIndex: isHighlighted ? 2 : undefined,
+              boxShadow: isHighlighted ? "var(--shadow-card-lg)" : undefined,
+              opacity: dimmed ? 0.5 : 1,
+              transition: "box-shadow 0.12s ease, opacity 0.12s ease, background 0.12s ease",
             }}
           >
             <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>
@@ -78,12 +94,23 @@ export function ListView({
               <Avatar name={b.patientName} size={32} tone="sky" />
               <div>
                 <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
-                {b.patientCondition && (
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>{b.patientCondition}</div>
+                {sub && (
+                  <div style={{ fontSize: 11, color: "var(--navy-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{sub}</div>
                 )}
               </div>
             </div>
-            <div style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--navy-700)", minWidth: 0 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: b.serviceColor ?? SERVICE_COLOR_FALLBACK,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
+            </div>
             <div style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {osLabel(b.obraSocial) || "—"}
             </div>

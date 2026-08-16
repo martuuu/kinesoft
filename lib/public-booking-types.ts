@@ -81,6 +81,8 @@ export const PatientHCSchema = z.object({
   emergencyName: z.string().trim().max(80).optional().or(z.literal("")),
   emergencyPhone: z.string().trim().max(30).optional().or(z.literal("")),
   notes: z.string().trim().max(1000).optional().or(z.literal("")),
+  title: z.string().trim().max(80).optional().or(z.literal("")),
+  description: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
 export const SubmitSchema = z.object({

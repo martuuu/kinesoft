@@ -147,6 +147,14 @@ export function CommandPalette() {
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onInputKey}
             placeholder="Buscar paciente, ejercicio, diagnóstico, turno…"
+            // Global search — suppress the browser's own autofill dropdown.
+            autoComplete="new-password"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-form-type="other"
             style={{
               flex: 1,
               border: "none",

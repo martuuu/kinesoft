@@ -1,5 +1,6 @@
 import { listAllTags, listExercises, loadFilterFacets } from "@/lib/exercises";
 import { gatingForActor } from "@/lib/plan-gating";
+import { getActor } from "@/lib/session";
 import { BibliotecaClient } from "@/components/biblioteca/biblioteca-client";
 
 export const metadata = { title: "Terapia Manual · KineSoft" };
@@ -33,11 +34,12 @@ export default async function TerapiaManualPage({ searchParams }: { searchParams
     privateOnly: searchParams.priv === "1",
     kind: "MANUAL_THERAPY" as const,
   };
-  const [items, facets, tags, gate] = await Promise.all([
+  const [items, facets, tags, gate, actor] = await Promise.all([
     listExercises(filters),
     loadFilterFacets(),
     listAllTags(),
     gatingForActor(),
+    getActor(),
   ]);
   return (
     <BibliotecaClient
@@ -46,6 +48,8 @@ export default async function TerapiaManualPage({ searchParams }: { searchParams
       facets={facets}
       active={filters}
       tags={tags}
+      // Superadmins edit catalog items in place (same drawer as Plataforma).
+      isPlatformAdmin={actor.isPlatformAdmin}
       capabilities={{
         plan: gate.plan,
         canFavourite: gate.canFavourite,

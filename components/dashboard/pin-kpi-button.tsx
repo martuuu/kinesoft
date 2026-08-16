@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { IconCheck, IconPlus, IconX } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/modal";
+import { IconCheck, IconPlus } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import { KPI_OPTIONS, type KpiKey } from "@/lib/preferences-constants";
 
@@ -37,17 +38,17 @@ export function PinKpiButton({ currentPinned }: { currentPinned: KpiKey[] }) {
       >
         <IconPlus size={12} /> Agregar
       </button>
-      {open && (
-        <PinKpiModal currentPinned={currentPinned} onClose={() => setOpen(false)} />
-      )}
+      <PinKpiModal open={open} currentPinned={currentPinned} onClose={() => setOpen(false)} />
     </>
   );
 }
 
 function PinKpiModal({
+  open,
   currentPinned,
   onClose,
 }: {
+  open: boolean;
   currentPinned: KpiKey[];
   onClose: () => void;
 }) {
@@ -55,6 +56,17 @@ function PinKpiModal({
   const [pinned, setPinned] = useState<KpiKey[]>(currentPinned);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+
+  // Reset the draft selection each time the picker opens so a prior
+  // cancelled edit doesn't linger (the component stays mounted for the
+  // exit animation).
+  useEffect(() => {
+    if (open) {
+      setPinned(currentPinned);
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const toggle = (key: KpiKey) =>
     setPinned((s) => (s.includes(key) ? s.filter((k) => k !== key) : [...s, key]));
@@ -73,62 +85,14 @@ function PinKpiModal({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 60,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      width={520}
+      title="Indicadores fijados"
+      description="Elegí hasta 6. El orden de selección define el orden en la grilla."
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="k-glass-strong"
-        style={{ width: "min(520px, 100%)", borderRadius: 22, padding: 22 }}
-      >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 12,
-          }}
-        >
-          <div>
-            <h2 className="k-display" style={{ fontSize: 20, margin: 0, fontWeight: 700 }}>
-              Indicadores fijados
-            </h2>
-            <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "2px 0 0" }}>
-              Elegí hasta 6. El orden de selección define el orden en la grilla.
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="Cerrar"
-            onClick={onClose}
-            style={{
-              border: "none",
-              background: "rgba(255,255,255,0.7)",
-              width: 32,
-              height: 32,
-              borderRadius: 10,
-              cursor: "pointer",
-              color: "var(--navy-700)",
-            }}
-          >
-            <IconX size={14} />
-          </button>
-        </header>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
           {KPI_OPTIONS.map((opt) => {
             const on = pinned.includes(opt.key);
             const idx = pinned.indexOf(opt.key);
@@ -218,7 +182,6 @@ function PinKpiModal({
             </Button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

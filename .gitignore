@@ -13,4 +13,7 @@ coverage
 prisma/migrations/dev.db
 design.tar.gz
 design_source/
-.docs
+# NOTA: `.docs` NO se ignora — es la documentación canónica del proyecto y está
+# versionada (reemplazó al árbol `docs/`, que era un duplicado desactualizado).
+# Estuvo ignorado por error desde el "pre-production commit"; con la regla activa,
+# cualquier documento NUEVO en .docs/ quedaba fuera de git sin aviso.

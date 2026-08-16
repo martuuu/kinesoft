@@ -21,7 +21,9 @@ export function Drawer({
   open,
   onClose,
   title,
-  width = 420,
+  // Default sized so a two-column form fits without sideways scrolling
+  // (22px padding each side eats 44px of it).
+  width = 480,
   children,
 }: {
   open: boolean;

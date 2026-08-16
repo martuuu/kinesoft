@@ -213,6 +213,14 @@ export function AssignPlanModal({
               value={search}
               onChange={(e) => onSearch(e.target.value)}
               placeholder="Buscar paciente por nombre o DNI…"
+              // DB typeahead — suppress the browser's own name autofill.
+              autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-form-type="other"
               style={{
                 flex: 1,
                 border: "none",

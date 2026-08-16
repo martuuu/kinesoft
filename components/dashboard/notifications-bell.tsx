@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { DUR, EASE_OUT } from "@/lib/motion";
 import {
   listNotifications,
   markAllNotificationsRead,
@@ -163,12 +165,17 @@ export function NotificationsBell() {
         )}
       </button>
 
-      {open && (
-        <div
+      <AnimatePresence>
+        {open && (
+        <motion.div
           ref={popRef}
           role="dialog"
           aria-label="Notificaciones"
           className="k-glass-strong"
+          initial={{ opacity: 0, scale: 0.96, y: -6 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.97, y: -4 }}
+          transition={{ duration: DUR.fast, ease: EASE_OUT }}
           style={{
             position: "absolute",
             top: 44,
@@ -179,6 +186,7 @@ export function NotificationsBell() {
             borderRadius: 16,
             padding: 12,
             zIndex: 30,
+            transformOrigin: "top right",
           }}
         >
           <header
@@ -214,7 +222,7 @@ export function NotificationsBell() {
                   cursor: "pointer",
                 }}
               >
-                Marcar todas
+                Marcar todas como leídas
               </button>
             )}
           </header>
@@ -234,8 +242,9 @@ export function NotificationsBell() {
               ))}
             </div>
           )}
-        </div>
-      )}
+        </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSessionDetail } from "@/lib/sessions";
+import { formatDateAR } from "@/lib/format";
 import { SessionDetail } from "@/components/seguimiento/session-detail";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,13 @@ export default async function Page({ params }: { params: { sessionId: string } }
         patientName={`${session.program.patient.firstName} ${session.program.patient.lastName}`}
         sessionIndex={session.index}
       />
-      <SessionDetail session={session} />
+      {/* Format the date HERE (server) and pass a plain string: doing it in the
+          client component made Node's ICU and the browser's disagree on the
+          time separator → hydration mismatch. */}
+      <SessionDetail
+        session={session}
+        scheduledLabel={formatDateAR(session.scheduledFor, "longDateTime")}
+      />
     </div>
   );
 }

@@ -33,6 +33,10 @@ const PRESETS: Record<DatePreset, Intl.DateTimeFormatOptions> = {
     month: "long",
     hour: "2-digit",
     minute: "2-digit",
+    // 24h like every other surface. Without this the locale default emits
+    // "10:00 a. m." with a narrow-no-break-space, whose width differs between
+    // Node's ICU and the browser's → React hydration mismatch.
+    hour12: false,
   },
   weekdayDayMonth: {
     weekday: "short",

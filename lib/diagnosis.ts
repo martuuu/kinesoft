@@ -148,8 +148,10 @@ function buildCatalogDTO(
         rationale: l.rationale,
         muscleGroups: l.exercise.muscleGroups,
         equipment: l.exercise.equipment,
-        defaultSets: l.exercise.defaultSets,
-        defaultReps: l.exercise.defaultReps,
+        // Defaults are now optional on Exercise; the diagnosis engine seeds a
+        // starting plan, so fall back to 3×12 when the source has none.
+        defaultSets: l.exercise.defaultSets ?? 3,
+        defaultReps: l.exercise.defaultReps ?? 12,
         difficulty: l.exercise.difficulty,
       })),
     })),
@@ -289,8 +291,8 @@ export async function assignDiagnosisAndCreateProgram(
               create: s.unique.map((ex, order) => ({
                 exerciseId: ex.id,
                 order: order + 1,
-                sets: ex.defaultSets,
-                reps: ex.defaultReps,
+                sets: ex.defaultSets ?? 3,
+                reps: ex.defaultReps ?? 12,
               })),
             },
           })),
