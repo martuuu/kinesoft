@@ -10,15 +10,48 @@
 > - **Unit (capa 1):** 70 tests en 7 archivos (`tests/unit/*`: datetime-ar, format, copago,
 >   booking-capacity, agenda-utils, assert-safe-target, env), sin DB ni red. Corren en CI y deben
 >   pasar con `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`.
-> - **Integración (capa 3):** solo el tripwire RLS (`tests/integration/rls-isolation.test.ts`, 4
->   casos, gateado por `RLS_IT=1`, **no corre en CI**). No hay tests de los write-paths de turnos,
->   pacientes ni planes → **Bloque A1.1** (`test-infra-turnos`): harness con mocks de cookie/red/
->   `next/cache` (nunca de la función bajo test), fábrica de tenant con limpieza real, suite de
->   caracterización con los bugs conocidos como `it.fails("[sesión] …")`, y job de CI con Postgres
->   corriendo con **los dos roles** (`kinesoft_app` con RLS y owner BYPASSRLS = prod).
+> - **Integración (capa 3, A1.1):** 37 tests en 4 archivos (`tests/integration/`): tripwire RLS, write-paths
+>   de turnos, paciente/cobertura/copago y matriz de autorización cross-tenant. Corre las **server actions
+>   reales** con `getActor()` real; solo se mockean la cookie/headers, la red de Supabase (+ el admin client,
+>   para que ningún test mande mails reales) y el runtime de cache de Next
+>   (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
 > - **E2E (capa 4):** Playwright no está instalado (Bloque B, S26).
-> - **CI:** typecheck → unit → guard de aislamiento → build, en todas las PR y ramas de trabajo.
-> - **Performance:** sin mediciones → **A1.2** (`perf-baseline`).
+> - **CI:** typecheck → unit (TZ=UTC y TZ=AR) → guard → build → reporte de bundle; y el job `integration`
+>   (Postgres efímero, migraciones desde cero, rol app + owner). En todas las PR y ramas de trabajo.
+> - **Performance (A1.2):** baseline medido en [PERF.md](PERF.md) (`npm run test:perf`, solo local).
+
+### Cómo correr la integración (A1.1)
+
+```bash
+docker compose up -d db                      # Docker :5433 con las migraciones aplicadas
+npm run test:integration                     # rol kinesoft_app (RLS aplicada)
+npm run test:integration:owner               # owner BYPASSRLS (= prod hoy); el tripwire RLS se saltea avisando
+npm run test:integration -- <archivo|patrón> # uno solo
+```
+
+- La fábrica (`tests/helpers/tenant-factory.ts`) crea tenants efímeros con el cliente owner y los borra en orden
+  explícito. La limpieza vieja fallaba siempre en silencio y dejaba tenants huérfanos.
+- Identidad del actor por test: `asUser(userId)` (`tests/helpers/actor.ts`).
+- Algunos comportamientos difieren según el rol: `appRoleBypassesRls()` (`tests/helpers/db-role.ts`).
+
+### Contrato A2: bugs conocidos escritos como `it.fails`
+
+Cada uno tiene la expectativa **correcta** y hoy falla. La sesión indicada lo da vuelta a `it(...)` como parte de
+su gate. Verificado el 2026-09-30: cada uno falla por la aserción esperada, no por errores de setup.
+
+| Sesión | Test | Archivo |
+|---|---|---|
+| A2-S06 · H1 | `deleteBooking` de un turno con copago cobrado a mano → rechaza | bookings-write |
+| A2-S06 · H1 | `deleteBooking` de un turno con la OS confirmada → rechaza | bookings-write |
+| A2-S06 | toggle de cobro con `expectedUpdatedAt` viejo → rechaza | bookings-write |
+| A2-S06 | reactivar un CANCELLED sobre cupo lleno → pide sobreturno | bookings-write |
+| A2-S06 | alargar la duración sobre cupo lleno → pide sobreturno | bookings-write |
+| A2-S06 | `createBookingsBatch` con paciente de otro tenant → rechaza sin escribir | bookings-write + authz-matrix |
+| A2-S06 | `createBooking` con profesional de otro tenant → rechaza sin escribir | bookings-write + authz-matrix |
+| A2-S06 · **nuevo** | bajo RLS, el P2002 del índice único llega con `target: null` → mensaje genérico en vez del accionable (solo falla con `kinesoft_app`) | bookings-write |
+| A2-S08 · H2 | re-guardar la misma obra social conserva `Coverage.copagoCents` | patient-coverage |
+| A2-S08 | `updatePatient` con email vacío lo borra | patient-coverage |
+| A2-S08 | preview de copago del modal = lo que cobra el turno (OS libre) | patient-coverage |
 
 ## Regla de oro: los fixes de timezone van ANTES que la suite de integración
 

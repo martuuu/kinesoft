@@ -32,8 +32,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (capa 1)
+      - name: Unit tests (capa 1) — TZ=UTC
         run: npm test
+
+      - name: Unit tests (capa 1) — TZ=AR (detecta dependencias del host)
+        run: npm run test:tz-ar
 
       # Static tenant-isolation guard: fails if a tenantId model loses its RLS
       # policy or an Actor-facing module calls prisma directly without runWithRls.
@@ -50,3 +53,57 @@ jobs:
           DIRECT_URL: postgresql://user:pass@localhost:5432/db
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+
+      # A1.2: reporte de first-load JS por ruta contra scripts/bundle-baseline.json.
+      # Solo informa (exit 0); pasa a bloquear en C1 con los fixes de perf.
+      - name: Presupuesto de bundle (reporte)
+        run: node scripts/check-bundle-budget.mjs
+
+  # Capa 3 (A1.1): integración contra Postgres real, con las server actions
+  # REALES y dos corridas: el rol app `kinesoft_app` (RLS aplicada) y el owner
+  # con BYPASSRLS, que es como corre producción hasta el flip de RLS.
+  # Solo credenciales del Postgres efímero del runner: nada de secretos.
+  integration:
+    runs-on: ubuntu-latest
+    needs: verify
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kinesoft
+          POSTGRES_PASSWORD: kinesoft
+          POSTGRES_DB: kinesoft
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kinesoft -d kinesoft"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      OWNER_URL: postgresql://kinesoft:kinesoft@localhost:5432/kinesoft?schema=public
+      APP_URL_DB: postgresql://kinesoft_app:kinesoft_app@localhost:5432/kinesoft?schema=public
+      TZ: UTC
+      INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Migraciones (owner)
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ env.OWNER_URL }}
+          DIRECT_URL: ${{ env.OWNER_URL }}
+      - name: Rol de app sin BYPASSRLS
+        run: psql "postgresql://kinesoft:kinesoft@localhost:5432/kinesoft" -v ON_ERROR_STOP=1 -f prisma/roles.local.sql
+      - name: Integración con RLS (kinesoft_app)
+        run: npx vitest run -c vitest.integration.config.ts
+        env:
+          DATABASE_URL: ${{ env.APP_URL_DB }}
+          DIRECT_URL: ${{ env.OWNER_URL }}
+      - name: Integración como prod hoy (owner BYPASSRLS)
+        run: npx vitest run -c vitest.integration.config.ts
+        env:
+          DATABASE_URL: ${{ env.OWNER_URL }}
+          DIRECT_URL: ${{ env.OWNER_URL }}

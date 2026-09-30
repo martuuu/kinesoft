@@ -1,20 +1,17 @@
 /**
- * RLS isolation tripwire (Ola B2, docs/TESTING.md capa 3).
+ * RLS isolation tripwire (Ola B2, .docs/TESTING.md capa 3).
  *
  * Proves that Postgres RLS actually isolates tenants once the app connects
  * as a role WITHOUT BYPASSRLS. This is the net that catches a MISSED wrap:
  * a lost `runWithRls` returns an empty result set silently, so the
  * intra-tenant assertions below fail loudly when a read isn't primed.
  *
- * GATED: runs only when `RLS_IT=1`, AND only makes sense once the app role
- * is flipped. Run it in Phase 4 like so:
- *
- *   1. docker compose up -d db
- *   2. npx prisma migrate deploy        # applies 20260725120000_rls_policies
- *   3. npx tsx prisma/seed.ts           # (optional) as owner
- *   4. psql ... < prisma/roles.local.sql   # create kinesoft_app
- *   5. In .env.local set DATABASE_URL → kinesoft_app, keep DIRECT_URL → owner
- *   6. RLS_IT=1 npm test
+ * GATED (A1.1): runs with `npm run test:integration` (INTEGRATION=1), and
+ * SKIPS VISIBLY when the app connection has BYPASSRLS — i.e. under
+ * `test:integration:owner`, which reproduces prod's current role. There the
+ * tripwire cannot prove anything, so it must not report a false green.
+ * Local setup: `docker compose up -d db`, migrations applied, and
+ * `prisma/roles.local.sql` run once (creates `kinesoft_app`).
  *
  * `runWithRls` uses the default client (DATABASE_URL = kinesoft_app → RLS
  * enforced). `prismaOwner` uses DIRECT_URL (owner → BYPASSRLS) purely to
@@ -29,9 +26,25 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 
-const RUN = process.env.RLS_IT === "1";
+const RUN = process.env.INTEGRATION === "1" || process.env.RLS_IT === "1";
 
-describe.skipIf(!RUN)("RLS tenant isolation (app role)", () => {
+// Does the APP connection (DATABASE_URL) bypass RLS? Checked once, up front.
+async function appRoleBypassesRls(): Promise<boolean> {
+  const app = new PrismaClient();
+  try {
+    const rows = await app.$queryRaw<{ bypass: boolean }[]>`
+      SELECT (rolsuper OR rolbypassrls) AS bypass FROM pg_roles WHERE rolname = current_user`;
+    return rows[0]?.bypass ?? true;
+  } finally {
+    await app.$disconnect();
+  }
+}
+const BYPASS = RUN ? await appRoleBypassesRls() : true;
+if (RUN && BYPASS) {
+  console.warn("[rls-isolation] SKIP: la conexión de la app tiene BYPASSRLS (modo owner = prod hoy).");
+}
+
+describe.skipIf(!RUN || BYPASS)("RLS tenant isolation (app role)", () => {
   const prismaOwner = new PrismaClient({
     datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
   });

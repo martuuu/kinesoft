@@ -1,19 +1,20 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Role } from "@prisma/client";
 
 /**
- * Ephemeral-tenant factory for integration tests (docs/TESTING.md capa 3).
+ * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
  *
- * Each integration test creates its own isolated tenant with real rows
- * (tenant → userProfile → practitioner → membership → service) against the
- * local Docker Postgres, and cleans up after itself. This is the shared
- * factory the manual (4.3) calls for — extracted from the `seedDemoTenant`
- * pattern so suites don't copy-paste tenant creation.
+ * Each suite creates its own isolated tenant with real rows against the local
+ * Docker Postgres and removes it afterwards. All fixture writes go through the
+ * OWNER client (`DIRECT_URL`, bypasses RLS) — the app role could never create
+ * cross-tenant fixtures, and the code under test must not be the one seeding.
  *
- * NOTE: this helper is NOT a `.test.ts`, so the capa-1 `npm test` run (pure,
- * no DB) never imports or executes it. It's consumed by the gated integration
- * suite, whose aislamiento-tripwire only becomes meaningful once the app
- * connects as a role WITHOUT BYPASSRLS (ROADMAP Ola B2b). Until then it still
- * works as a fixture; it just can't prove RLS isolation yet.
+ * A1.1 (2026-09-29) rewrote the cleanup: `Service`, `Patient`, `Booking`,
+ * `TreatmentProgram`, `ClinicalCase` and `AuditEvent` do NOT cascade from
+ * `Tenant`, so the old `tenant.delete().catch(() => {})` failed EVERY time a
+ * service existed and silently leaked every ephemeral tenant. Deletion is now
+ * explicit and ordered by FK dependencies, and a failure throws.
+ *
+ * NOT a `.test.ts`: the unit run never imports it.
  */
 
 let seq = 0;
@@ -23,27 +24,65 @@ export function uniqueSuffix(): string {
   return `${Date.now().toString(36)}-${seq}`;
 }
 
-export type TenantRole = "OWNER" | "ADMIN" | "PRACTITIONER" | "ASSISTANT" | "BILLING";
+/** Owner connection (BYPASSRLS) for fixtures and teardown. */
+export function ownerClient(): PrismaClient {
+  return new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+}
+
+export type TenantRole = Role;
 
 export interface EphemeralTenant {
   tenantId: string;
   slug: string;
+  /** OWNER user (UserProfile id = the Supabase user id the actor mock returns). */
   userId: string;
   practitionerId: string;
+  /** Default service: 45 min, $50, maxConcurrent null (ilimitado, kinesio). */
   serviceId: string;
-  /** Removes the tenant and its user; safe to call in afterEach. */
+  particularInsurerId: string;
+  /** Removes the tenant and every row hanging from it; throws on failure. */
   cleanup: () => Promise<void>;
+}
+
+/** Ordered teardown of everything that references the tenant (see header). */
+export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Promise<void> {
+  const users = await db.membership.findMany({ where: { tenantId }, select: { userId: true } });
+  await db.payment.deleteMany({ where: { booking: { tenantId } } });
+  await db.booking.deleteMany({ where: { tenantId } });
+  // Session → TreatmentProgram cascades; SessionExercise → Session cascades.
+  await db.treatmentProgram.deleteMany({ where: { tenantId } });
+  // Diagnosis → ClinicalCase cascades.
+  await db.clinicalCase.deleteMany({ where: { tenantId } });
+  // Coverage, EmergencyContact, EvaScore, PatientFile/Share/TenantLink cascade.
+  await db.patient.deleteMany({ where: { tenantId } });
+  await db.service.deleteMany({ where: { tenantId } });
+  await db.auditEvent.deleteMany({ where: { tenantId } });
+  await db.notification.deleteMany({ where: { tenantId } });
+  await db.dismissedReminder.deleteMany({ where: { tenantId } });
+  await db.userPreferences.deleteMany({ where: { tenantId } });
+  // Membership, Practitioner, Insurer, Invitation, custom Condition/Exercise,
+  // Favorite and PlanTemplate cascade from Tenant.
+  await db.tenant.delete({ where: { id: tenantId } });
+  const ids = users.map((u) => u.userId).filter((id) => id.startsWith("test-user-"));
+  if (ids.length) {
+    await db.userPreferences.deleteMany({ where: { userId: { in: ids } } });
+    await db.userProfile.deleteMany({ where: { id: { in: ids } } });
+  }
 }
 
 export async function createEphemeralTenant(
   prisma: PrismaClient,
-  opts: { role?: TenantRole } = {}
+  opts: { role?: TenantRole; sharedPatientView?: boolean } = {}
 ): Promise<EphemeralTenant> {
   const s = uniqueSuffix();
   const slug = `test-${s}`;
   const userId = `test-user-${s}`;
 
-  const tenant = await prisma.tenant.create({ data: { slug, name: `Test ${s}` } });
+  const tenant = await prisma.tenant.create({
+    data: { slug, name: `Test ${s}`, sharedPatientView: opts.sharedPatientView ?? false },
+  });
   await prisma.userProfile.create({
     data: { id: userId, email: `${userId}@test.local`, fullName: `Test ${s}` },
   });
@@ -62,14 +101,10 @@ export async function createEphemeralTenant(
       priceCents: 5000,
     },
   });
-
-  const cleanup = async () => {
-    // Payment→Booking is onDelete: Restrict, so clear payments before the
-    // tenant cascade would try to remove their bookings.
-    await prisma.payment.deleteMany({ where: { booking: { tenantId: tenant.id } } });
-    await prisma.tenant.delete({ where: { id: tenant.id } }).catch(() => {});
-    await prisma.userProfile.delete({ where: { id: userId } }).catch(() => {});
-  };
+  // Same shape the signup creates: one Particular insurer per tenant.
+  const particular = await prisma.insurer.create({
+    data: { tenantId: tenant.id, name: "Particular", isParticular: true },
+  });
 
   return {
     tenantId: tenant.id,
@@ -77,8 +112,87 @@ export async function createEphemeralTenant(
     userId,
     practitionerId: practitioner.id,
     serviceId: service.id,
-    cleanup,
+    particularInsurerId: particular.id,
+    cleanup: () => deleteTenantDeep(prisma, tenant.id),
   };
+}
+
+/** Second professional in the same tenant (for basic/full access cases). */
+export async function addPractitioner(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  role: TenantRole = "PRACTITIONER"
+): Promise<{ userId: string; practitionerId: string }> {
+  const s = uniqueSuffix();
+  const userId = `test-user-${s}`;
+  await prisma.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: `Kine ${s}` } });
+  const p = await prisma.practitioner.create({ data: { tenantId: t.tenantId, userId, specialty: "Test" } });
+  await prisma.membership.create({ data: { userId, tenantId: t.tenantId, role, acceptedAt: new Date() } });
+  return { userId, practitionerId: p.id };
+}
+
+export async function addPatient(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  data: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
+    documentId?: string;
+    assignedPractitionerId?: string | null;
+    notes?: string;
+  } = {}
+): Promise<string> {
+  const s = uniqueSuffix();
+  const p = await prisma.patient.create({
+    data: {
+      tenantId: t.tenantId,
+      firstName: data.firstName ?? "Paciente",
+      lastName: data.lastName ?? `Test ${s}`,
+      email: data.email,
+      phone: data.phone,
+      documentId: data.documentId ?? `DNI-${s}`,
+      notes: data.notes,
+      assignedPractitionerId:
+        data.assignedPractitionerId === undefined ? t.practitionerId : data.assignedPractitionerId,
+    },
+  });
+  return p.id;
+}
+
+export async function addService(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  data: { name?: string; durationMin?: number; priceCents?: number; maxConcurrent?: number | null } = {}
+): Promise<string> {
+  const svc = await prisma.service.create({
+    data: {
+      tenantId: t.tenantId,
+      practitionerId: t.practitionerId,
+      name: data.name ?? "Osteopatía",
+      durationMin: data.durationMin ?? 60,
+      priceCents: data.priceCents ?? 8000,
+      maxConcurrent: data.maxConcurrent ?? null,
+    },
+  });
+  return svc.id;
+}
+
+export async function addInsurer(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  data: { name?: string; copagoCents?: number; fixedFeeCents?: number } = {}
+): Promise<string> {
+  const ins = await prisma.insurer.create({
+    data: {
+      tenantId: t.tenantId,
+      name: data.name ?? `OS ${uniqueSuffix()}`,
+      copagoCents: data.copagoCents ?? 0,
+      fixedFeeCents: data.fixedFeeCents ?? 0,
+    },
+  });
+  return ins.id;
 }
 
 /**
@@ -90,9 +204,9 @@ export async function sweepOrphanTestTenants(prisma: PrismaClient): Promise<numb
     where: { slug: { startsWith: "test-" } },
     select: { id: true },
   });
-  for (const t of orphans) {
-    await prisma.payment.deleteMany({ where: { booking: { tenantId: t.id } } });
-    await prisma.tenant.delete({ where: { id: t.id } }).catch(() => {});
-  }
+  for (const t of orphans) await deleteTenantDeep(prisma, t.id);
+  await prisma.userProfile.deleteMany({
+    where: { id: { startsWith: "test-user-" }, memberships: { none: {} } },
+  });
   return orphans.length;
 }

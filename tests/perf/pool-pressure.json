@@ -1,0 +1,7 @@
+{
+  "measuredAt": "2026-09-30T03:13:33.935Z",
+  "requests": 20,
+  "p95Ms": 1118,
+  "maxMs": 1119,
+  "errors": []
+}

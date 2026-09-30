@@ -514,3 +514,17 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   `-v app_password=… -v service_password=…` crea/rota los roles.
 - [ ] **Env de Production incompleta:** si falta una variable obligatoria, el build de Production falla con
   `[env] configuración inválida — <VAR>` (no hace falta forzarlo; revisar el log si pasa).
+
+---
+
+## Ronda 11 — Bloque A1: red de tests + baseline de performance (2026-09-30)
+
+> Todo lo de A1 lo verifica el gate automático. Lo que necesita mano del dueño:
+
+- [ ] **CI en GitHub:** en la próxima PR aparecen los jobs `verify` y `integration`. `integration` corre dos
+  veces la suite: con RLS y como owner.
+- [ ] **Local:** con el Docker arriba, `npm run test:integration` da 37/37 y `npm run test:integration:owner`
+  da 33 más 4 saltados, con el aviso "SKIP: … BYPASSRLS".
+- [ ] **Sin basura:** después de correr la integración, no quedan tenants `test-%`. En Adminer (:8080) o psql:
+  `SELECT count(*) FROM "Tenant" WHERE slug LIKE 'test-%'` → 0.
+- [ ] **Perf (opcional):** `npm run test:perf` imprime la tabla de .docs/PERF.md con números del mismo orden.

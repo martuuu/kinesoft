@@ -286,6 +286,31 @@ diseño de Planes) está en el plan del 23-sep, referenciado desde el ROADMAP.
     Upstash o Sentry (+7 tests).
   - Eliminada la ruta huérfana `app/api/booking/checkout/route.ts`.
   - Gate: `tsc` 0 · `next build` 0 · `vitest` 70/70 (+16) en TZ=UTC y TZ=AR · guard verde.
+- 🟢 **A1 red de tests + baseline de performance (2026-09-30):**
+  - **A1.1:**
+    - Harness de integración con las server actions reales y `getActor()` real; solo se mockean la
+      cookie/headers, la red de Supabase (y el admin client: ningún test manda mails reales) y el runtime de
+      cache de Next.
+    - Fábrica de tenant con limpieza ordenada. **Cierra `test-infra-factory-cleanup`**: `Service`, `Patient`,
+      `Booking` y `TreatmentProgram` no cascadean desde `Tenant`, así que la limpieza vieja fallaba siempre en
+      silencio y dejaba tenants huérfanos.
+    - 37 tests de integración: turnos, paciente/cobertura/copago, matriz cross-tenant y el tripwire RLS. Los
+      bugs conocidos quedan como `it.fails` con la sesión de A2 que los cierra (contrato en TESTING.md).
+    - Job `integration` en CI: Postgres efímero, migraciones desde cero, rol app **y** owner. Simulado en local:
+      las 24 migraciones aplican limpias en una base vacía. Unit también en TZ=AR.
+  - **A1.2:** baseline en [PERF.md](PERF.md), con contador de queries/tx sobre loaders reales, fixture de volumen
+    efímero, `EXPLAIN` automático, presión de pool y reporte de bundle en CI. Solo medición.
+  - **Hallazgos nuevos de A1:**
+    - (MED, A2-S06) **`p2002-target-null-bajo-rls`**: con RLS aplicada, Postgres no expone qué índice violó un
+      INSERT (`meta.target === null`), así que `createBooking` y el batch caen al mensaje genérico en vez del
+      accionable. Latente en prod hasta el flip de RLS.
+    - (MED, C1) **`session-exercise-count-full-scan`**: el `_count` de ejercicios del perfil agrega la tabla
+      `SessionExercise` entera (todos los tenants) con RLS fila por fila: 250-380 ms con 24k filas, y crece con la
+      plataforma.
+    - Con datos, `runwithrls-interactive-tx-per-read` pasa de (P) a **confirmado**, y el "dashboard ~1 s" se
+      **refuta** (era un artefacto de estadísticas vacías).
+  - Gate: `tsc` 0 · unit 70/70 (UTC y AR) · integración 37/37 (app) y 33 + 4 skip (owner) · guard ✓ ·
+    `next build` ✓.
 - ⚠️ **Nota operativa:** `@prisma/client` carga el `.env` del proyecto al importarse, antes de que corra
   cualquier script. Por eso los guards de A0b leen el destino **real** y lo imprimen, en vez de confiar en la
   intención de quien corre el comando.

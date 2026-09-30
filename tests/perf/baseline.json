@@ -1,0 +1,312 @@
+{
+  "measuredAt": "2026-09-30T03:13:27.875Z",
+  "role": "app",
+  "rows": [
+    {
+      "scenario": "agenda",
+      "runs": 3,
+      "statements": 48,
+      "transactions": 9,
+      "dbMs": 45,
+      "wallMs": 126,
+      "byClient": {
+        "app": 24,
+        "service": 24
+      },
+      "slowest": [
+        {
+          "ms": 14,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 6,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"programId\", \"public\".\"Session\".\"practitionerId\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"notes\", \"public\".\"Sess"
+        },
+        {
+          "ms": 4,
+          "sql": "SELECT \"public\".\"Patient\".\"id\", \"public\".\"Patient\".\"tenantId\", \"public\".\"Patient\".\"userId\", \"public\".\"Patient\".\"assignedPractitionerId\", \"public\".\"Patient\".\"firstName\", \"public\".\"Patient\".\"lastName\", \"public\".\"Patient\".\"email\", \"public\".\"Pa"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Booking"
+        ],
+        "execMs": 7
+      }
+    },
+    {
+      "scenario": "agenda.bookings",
+      "runs": 3,
+      "statements": 14,
+      "transactions": 3,
+      "dbMs": 13,
+      "wallMs": 69,
+      "byClient": {
+        "app": 10,
+        "service": 4
+      },
+      "slowest": [
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Patient\".\"id\", \"public\".\"Patient\".\"tenantId\", \"public\".\"Patient\".\"userId\", \"public\".\"Patient\".\"assignedPractitionerId\", \"public\".\"Patient\".\"firstName\", \"public\".\"Patient\".\"lastName\", \"public\".\"Patient\".\"email\", \"public\".\"Pa"
+        },
+        {
+          "ms": 2,
+          "sql": "SELECT \"public\".\"Coverage\".\"id\", \"public\".\"Coverage\".\"patientId\", \"public\".\"Coverage\".\"insurer\", \"public\".\"Coverage\".\"insurerId\", \"public\".\"Coverage\".\"planName\", \"public\".\"Coverage\".\"memberId\", \"public\".\"Coverage\".\"copagoCents\", \"public\".\"C"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 1
+      }
+    },
+    {
+      "scenario": "agenda.listPatients",
+      "runs": 3,
+      "statements": 13,
+      "transactions": 2,
+      "dbMs": 47,
+      "wallMs": 135,
+      "byClient": {
+        "app": 9,
+        "service": 4
+      },
+      "slowest": [
+        {
+          "ms": 27,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 11,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"programId\", \"public\".\"Session\".\"practitionerId\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"notes\", \"public\".\"Sess"
+        },
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Patient\".\"id\", \"public\".\"Patient\".\"tenantId\", \"public\".\"Patient\".\"userId\", \"public\".\"Patient\".\"assignedPractitionerId\", \"public\".\"Patient\".\"firstName\", \"public\".\"Patient\".\"lastName\", \"public\".\"Patient\".\"email\", \"public\".\"Pa"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Booking"
+        ],
+        "execMs": 8
+      }
+    },
+    {
+      "scenario": "dashboard",
+      "runs": 3,
+      "statements": 45,
+      "transactions": 15,
+      "dbMs": 74,
+      "wallMs": 43,
+      "byClient": {
+        "app": 25,
+        "service": 20
+      },
+      "slowest": [
+        {
+          "ms": 7,
+          "sql": "SELECT SUM(\"amountCents\") FROM (SELECT \"public\".\"Payment\".\"amountCents\" FROM \"public\".\"Payment\" LEFT JOIN \"public\".\"Booking\" AS \"j1\" ON (\"j1\".\"id\") = (\"public\".\"Payment\".\"bookingId\") WHERE ((\"j1\".\"tenantId\" = $1 AND (\"j1\".\"id\" IS NOT NULL))"
+        },
+        {
+          "ms": 6,
+          "sql": "SELECT SUM(\"amountCents\") FROM (SELECT \"public\".\"Payment\".\"amountCents\" FROM \"public\".\"Payment\" LEFT JOIN \"public\".\"Booking\" AS \"j1\" ON (\"j1\".\"id\") = (\"public\".\"Payment\".\"bookingId\") LEFT JOIN \"public\".\"Patient\" AS \"j2\" ON (\"j2\".\"id\") = (\"j"
+        },
+        {
+          "ms": 6,
+          "sql": "SELECT SUM(\"amountCents\") FROM (SELECT \"public\".\"Payment\".\"amountCents\" FROM \"public\".\"Payment\" LEFT JOIN \"public\".\"Booking\" AS \"j1\" ON (\"j1\".\"id\") = (\"public\".\"Payment\".\"bookingId\") WHERE ((\"j1\".\"tenantId\" = $1 AND (\"j1\".\"id\" IS NOT NULL))"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 4
+      }
+    },
+    {
+      "scenario": "paciente",
+      "runs": 3,
+      "statements": 63,
+      "transactions": 14,
+      "dbMs": 254,
+      "wallMs": 411,
+      "byClient": {
+        "app": 30,
+        "service": 33
+      },
+      "slowest": [
+        {
+          "ms": 250,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"notes\", \"public\".\"Session\".\"programId\", COALESCE(\"aggr_selection_0_SessionExercise\".\"_aggr_"
+        },
+        {
+          "ms": 1,
+          "sql": "INSERT INTO \"public\".\"AuditEvent\" (\"id\",\"tenantId\",\"actorId\",\"action\",\"entity\",\"entityId\",\"createdAt\") VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING \"public\".\"AuditEvent\".\"id\", \"public\".\"AuditEvent\".\"tenantId\", \"public\".\"AuditEvent\".\"actorId\", \"p"
+        },
+        {
+          "ms": 1,
+          "sql": "SELECT \"public\".\"Practitioner\".\"id\", \"public\".\"Practitioner\".\"tenantId\", \"public\".\"Practitioner\".\"userId\", \"public\".\"Practitioner\".\"licenseNumber\", \"public\".\"Practitioner\".\"specialty\", \"public\".\"Practitioner\".\"bio\", \"public\".\"Practitioner\"."
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "SessionExercise"
+        ],
+        "execMs": 64
+      }
+    },
+    {
+      "scenario": "seguimiento",
+      "runs": 3,
+      "statements": 8,
+      "transactions": 1,
+      "dbMs": 5,
+      "wallMs": 15,
+      "byClient": {
+        "app": 4,
+        "service": 4
+      },
+      "slowest": [
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"SessionExercise\".\"id\", \"public\".\"SessionExercise\".\"status\"::text, \"public\".\"SessionExercise\".\"sessionId\" FROM \"public\".\"SessionExercise\" WHERE \"public\".\"SessionExercise\".\"sessionId\" IN ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$1"
+        },
+        {
+          "ms": 2,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"programId\", \"public\".\"Session\".\"practitionerId\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"notes\", \"public\".\"Sess"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "biblioteca",
+      "runs": 3,
+      "statements": 40,
+      "transactions": 6,
+      "dbMs": 0,
+      "wallMs": 13,
+      "byClient": {
+        "app": 12,
+        "service": 28
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 1
+      }
+    },
+    {
+      "scenario": "createBooking",
+      "runs": 3,
+      "statements": 12,
+      "transactions": 7,
+      "dbMs": 0,
+      "wallMs": 16,
+      "byClient": {
+        "app": 7,
+        "service": 5
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Tenant\".\"id\", \"public\".\"Tenant\".\"slug\", \"public\".\"Tenant\".\"name\", \"public\".\"Tenant\".\"legalName\", \"public\".\"Tenant\".\"taxId\", \"public\".\"Tenant\".\"timezone\", \"public\".\"Tenant\".\"currency\", \"public\".\"Tenant\".\"palette\", \"public\".\""
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Practitioner\".\"id\", \"public\".\"Practitioner\".\"tenantId\", \"public\".\"Practitioner\".\"userId\", \"public\".\"Practitioner\".\"licenseNumber\", \"public\".\"Practitioner\".\"specialty\", \"public\".\"Practitioner\".\"bio\", \"public\".\"Practitioner\"."
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "createBookingsBatch.20",
+      "runs": 3,
+      "statements": 68,
+      "transactions": 23,
+      "dbMs": 2,
+      "wallMs": 74,
+      "byClient": {
+        "app": 63,
+        "service": 5
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Tenant\".\"id\", \"public\".\"Tenant\".\"slug\", \"public\".\"Tenant\".\"name\", \"public\".\"Tenant\".\"legalName\", \"public\".\"Tenant\".\"taxId\", \"public\".\"Tenant\".\"timezone\", \"public\".\"Tenant\".\"currency\", \"public\".\"Tenant\".\"palette\", \"public\".\""
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Practitioner\".\"id\", \"public\".\"Practitioner\".\"tenantId\", \"public\".\"Practitioner\".\"userId\", \"public\".\"Practitioner\".\"licenseNumber\", \"public\".\"Practitioner\".\"specialty\", \"public\".\"Practitioner\".\"bio\", \"public\".\"Practitioner\"."
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "createProgram.16",
+      "runs": 3,
+      "statements": 9,
+      "transactions": 1,
+      "dbMs": 5,
+      "wallMs": 9,
+      "byClient": {
+        "app": 4,
+        "service": 5
+      },
+      "slowest": [
+        {
+          "ms": 3,
+          "sql": "INSERT INTO \"public\".\"Session\" (\"practitionerId\",\"index\",\"scheduledFor\",\"id\",\"programId\") VALUES ($1,$2,$3,$4,$5), ($6,$7,$8,$9,$10), ($11,$12,$13,$14,$15), ($16,$17,$18,$19,$20), ($21,$22,$23,$24,$25), ($26,$27,$28,$29,$30), ($31,$32,$33,$"
+        },
+        {
+          "ms": 1,
+          "sql": "INSERT INTO \"public\".\"AuditEvent\" (\"id\",\"tenantId\",\"actorId\",\"action\",\"entity\",\"entityId\",\"createdAt\") VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING \"public\".\"AuditEvent\".\"id\", \"public\".\"AuditEvent\".\"tenantId\", \"public\".\"AuditEvent\".\"actorId\", \"p"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Membership\".\"id\", \"public\".\"Membership\".\"userId\", \"public\".\"Membership\".\"tenantId\", \"public\".\"Membership\".\"role\"::text, \"public\".\"Membership\".\"invitedAt\", \"public\".\"Membership\".\"acceptedAt\" FROM \"public\".\"Membership\" WHERE "
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    }
+  ]
+}
