@@ -6,8 +6,19 @@
 > checklist de QA manual. La implementación se ejecuta en las sesiones `ci-gate-minimo` (capa 1) y
 > `suite-integracion` / `ci-pipeline-completo-y-guard` (capas 3-4 + guards) del [ROADMAP.md](ROADMAP.md).
 >
-> **Estado actual: cero tests, cero CI** (findings `no-test-suite`, `no-ci-triple-gate` en
-> [AUDIT.md](AUDIT.md)). La única verificación hoy es `tsc --noEmit` + `next build` a mano.
+> **Estado actual (2026-09-29):**
+> - **Unit (capa 1):** 70 tests en 7 archivos (`tests/unit/*`: datetime-ar, format, copago,
+>   booking-capacity, agenda-utils, assert-safe-target, env), sin DB ni red. Corren en CI y deben
+>   pasar con `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`.
+> - **Integración (capa 3):** solo el tripwire RLS (`tests/integration/rls-isolation.test.ts`, 4
+>   casos, gateado por `RLS_IT=1`, **no corre en CI**). No hay tests de los write-paths de turnos,
+>   pacientes ni planes → **Bloque A1.1** (`test-infra-turnos`): harness con mocks de cookie/red/
+>   `next/cache` (nunca de la función bajo test), fábrica de tenant con limpieza real, suite de
+>   caracterización con los bugs conocidos como `it.fails("[sesión] …")`, y job de CI con Postgres
+>   corriendo con **los dos roles** (`kinesoft_app` con RLS y owner BYPASSRLS = prod).
+> - **E2E (capa 4):** Playwright no está instalado (Bloque B, S26).
+> - **CI:** typecheck → unit → guard de aislamiento → build, en todas las PR y ramas de trabajo.
+> - **Performance:** sin mediciones → **A1.2** (`perf-baseline`).
 
 ## Regla de oro: los fixes de timezone van ANTES que la suite de integración
 

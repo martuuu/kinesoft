@@ -1,8 +1,13 @@
 import { PrismaClient, Role, TenantPlan } from "@prisma/client";
 
+import { assertSafeTarget } from "./lib/assert-safe-target";
+
 const prisma = new PrismaClient();
 
 async function main() {
+  // Local-only (AUDIT 2026-09-23): this seed rewrites/wipes tenant data; it
+  // must never reach production, whatever `.env` currently points to.
+  assertSafeTarget({ url: process.env.DATABASE_URL, allowRemote: false, scriptName: "seed-santiago" });
   const userId = "5485a113-128f-4038-8243-8161174ce3de";
   const email = "santiago@kinesoft.com";
 
@@ -84,7 +89,7 @@ async function main() {
   }
   console.log("✅ Servicios creados: " + SERVICIOS.map((s) => s.name).join(", "));
 
-  console.log("🎉 ¡Listo! Ya podés iniciar sesión con 'olimpo' u otra clave que hayas puesto.");
+  console.log("🎉 ¡Listo! Ya podés iniciar sesión con la clave que tenga ese usuario en Supabase Auth.");
 }
 
 main()

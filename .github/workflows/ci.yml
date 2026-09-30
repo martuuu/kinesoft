@@ -1,13 +1,14 @@
 name: CI
 
-# Fast → slow gate on every PR to main (and pushes to main). Ordered so a
-# cheap failure (typecheck) short-circuits before the expensive build.
-# See docs/TESTING.md §"Forma del pipeline de CI".
+# Fast → slow gate on every PR and on pushes to main/develop and work branches.
+# Ordered so a cheap failure (typecheck) short-circuits before the expensive
+# build. It used to run only for main, so develop/feat branches reached a
+# Vercel Preview without typecheck/tests/guard (AUDIT H6).
+# See .docs/TESTING.md §"Forma del pipeline de CI".
 on:
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    branches: [main, develop, "feat/**", "fix/**"]
 
 concurrency:
   group: ci-${{ github.ref }}

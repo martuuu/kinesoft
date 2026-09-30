@@ -250,6 +250,46 @@ Gate: `tsc` 0 · `next build` 0 · `vitest` 54/54 · guard verde. Local Docker; 
   (LOW) en Semana a 30 min un turno de 45/60 min tapaba y robaba los clicks del chip de la media hora
   siguiente → el span ahora se corta antes de la siguiente celda ocupada.
 
+**Ronda 11 — Auditoría pre-producción + Bloque A0 (2026-09-23 / 2026-09-29):**
+Auditoría completa de solo lectura (14 auditores + 181 votos de verificación adversarial + crítico de
+completitud + 3 áreas extra): 161 hallazgos, deduplicados en ~45 grupos. El trabajo pendiente se reorganizó en
+**bloques por urgencia** (ver [ROADMAP.md §Plan vigente](ROADMAP.md)). El detalle completo (file:line, votos,
+diseño de Planes) está en el plan del 23-sep, referenciado desde el ROADMAP.
+
+- 🔴 **Altos abiertos (Bloque A):**
+  - **H1** `deleteBooking` borra en duro turnos con copago cobrado a mano u OS confirmada (el guard solo mira
+    el `Payment` de MP) — `lib/bookings.ts:788-812`.
+  - **H2** editar paciente descarta Plan / N° de afiliado y, con OS "Otra", borra `Coverage.copagoCents` en
+    cada guardado — `hero.tsx:272` + `setPatientCoverage` (deleteMany+create).
+  - **H3** "Cerrar sesión" en Seguimiento descarta EVA/notas no guardadas — `session-detail.tsx:57`.
+  - **H4** reserva pública con DNI ajeno escribe el email del atacante en la ficha (takeover del portal) —
+    `lib/public-booking.ts:256-296`.
+  - **H5** el signup auto-confirma cualquier email y rompe el gate `email_confirmed_at` del portal —
+    `lib/auth.ts:154-159`.
+  - **H6** los Preview de Vercel aplicaban migraciones en la DB de prod — **cerrado en código en A0b** (ver
+    abajo); falta el staging aislado (A0d, dueño).
+- 🟢 **A0b `ops-hardening` (2026-09-29):**
+  - `vercel.json` → `node scripts/vercel-build.mjs`: `prisma migrate deploy` **solo** con
+    `VERCEL_ENV=production` (verificado: en Preview no migra; en Production migra y corta el build si falla).
+  - CI (`ci.yml`) en todas las PR y en push a `main`/`develop`/`feat/**`/`fix/**`.
+  - `scripts/lib/assert-safe-target.ts` (+9 tests): `prisma/seed.ts`, `seed-santiago` y `seed-sprint13` son
+    **solo locales** (abortan contra un destino remoto); `set-platform-admin`, `backfill-exercise-tags` y
+    `create-tenant` exigen `DATABASE_URL` explícita (sin fallback a localhost) y
+    `KINESOFT_CONFIRM_PROD=<project ref>` para prod. `create-tenant` normaliza el email y ya no imprime el
+    password; `seed-santiago` ya no imprime la pista del password.
+  - `prisma/roles.supabase.sql` sin passwords literales: se pasan con `psql -v`, y re-correrlo **rota** los
+    passwords (verificado en un Postgres descartable).
+  - `package.json`: `db:deploy` (leía el `.env` ambiente) → `db:prod:status|deploy|backup`, que leen solo
+    `.env.prod.local` (gitignored).
+  - `lib/env.ts`: fail-fast **solo en Production** (`VERCEL_ENV`) para DB/Supabase/`NEXT_PUBLIC_APP_URL` no
+    localhost y `MP_WEBHOOK_SECRET` si hay token de MP; aviso por consola si faltan `DATABASE_URL_SERVICE`,
+    Upstash o Sentry (+7 tests).
+  - Eliminada la ruta huérfana `app/api/booking/checkout/route.ts`.
+  - Gate: `tsc` 0 · `next build` 0 · `vitest` 70/70 (+16) en TZ=UTC y TZ=AR · guard verde.
+- ⚠️ **Nota operativa:** `@prisma/client` carga el `.env` del proyecto al importarse, antes de que corra
+  cualquier script. Por eso los guards de A0b leen el destino **real** y lo imprimen, en vez de confiar en la
+  intención de quien corre el comando.
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -265,6 +305,13 @@ Bucket (quién resuelve): **A** código directo · **B** hardening con decisión
 ---
 
 ## 0. Causa raíz arquitectónica (el hallazgo que orienta todo el plan)
+
+> **Actualización 2026-09-29:** esta sección describe el estado del 2026-07-22. Desde la Ronda 4 RLS está
+> **completa en código** (`runWithRls` en ~22 módulos, canal dual `prisma`/`prismaService`, policies en
+> `20260725120000_rls_policies`) y **aplicada en local** con el rol `kinesoft_app`. **En PROD sigue sin
+> aplicarse** hasta que el dueño haga el flip del rol: allí el `where tenantId` a mano sigue siendo la única
+> barrera, y los chequeos de FK saltean RLS (los ids de entrada se validan contra el tenant). Se conserva el
+> texto original como historia.
 
 **La segunda capa de aislamiento multi-tenant (RLS) es estructuralmente inerte.** No es un bug
 suelto: es una condición de fondo que explica varios findings a la vez.
@@ -540,8 +587,10 @@ el ROADMAP.
 ## 2. Checklist maestro (todos los findings) — estado vivo
 
 Estado: 🔴 ABIERTO · 🟡 PARCIAL · 🟢 CERRADO · ⏸ DIFERIDO-CON-GATE.
-La columna **Sesión** referencia el [ROADMAP.md](ROADMAP.md). Estado verificado contra las Rondas 1-9 y
-contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila queda en 🔴.
+La columna **Sesión** referencia el [ROADMAP.md](ROADMAP.md). Estado re-verificado contra el código al
+**2026-09-29** (Ronda 11): sin evidencia clara de cierre, la fila queda en 🔴. Los hallazgos NUEVOS de la
+auditoría del 23-sep (H1-H6 y ~45 grupos) están en §Ronda 11 y se incorporan a esta tabla sesión por sesión
+de A2/A3.
 
 ### Confirmados (24 + 2 hallazgos posteriores)
 
@@ -557,7 +606,7 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 | portal-session-date-no-tz | media | A | portal/c/[slug]/page.tsx:193 | 🟢 | Ronda 1 (tz-vistas) |
 | login-sin-feedback-error | alta | A | login-screen.tsx:189 | 🟢 | Ronda 1 (login-error-feedback) |
 | practitioner-userid-unique-blocks-multitenant | alta | A | schema.prisma:123 | 🔴 | practitioner-multi-tenant — `userId String @unique` global sigue en el schema |
-| tenant-tables-sin-rls-ni-filtro | media | B | policies.sql | 🔴 | policies-tablas-faltantes — `TENANT_SCOPED_MODELS` sigue en 9 modelos |
+| tenant-tables-sin-rls-ni-filtro | media | B | prisma/migrations/20260725120000_rls_policies | 🟢 | Ronda 4 — la migración cubre PatientShare/PatientFile/Insurer/Invitation/PlanTemplate/Notification/DismissedReminder; Favorite/UserPreferences quedan user-scoped a propósito (allowlist del guard). Re-verificado 2026-09-29 con `npm run guard:isolation` ✓ |
 | rls-bypassed-by-superuser-role | media | B | .env / docker-compose | 🟢 | Ronda 4 — **cerrado en código** (rol `kinesoft_app` sin BYPASSRLS en local + test de aislamiento). **El flip de PROD sigue pendiente del dueño** (bucket C) |
 | runwithrls-solo-en-2-modulos | media | B | lib/rls.ts:19 | 🟢 | Ronda 4 — **cerrado en código**: `runWithRls` cableado en ~22 módulos de `lib/` (verificado). Depende del mismo flip prod |
 | booking-overlap-race-no-cas-no-unique | media | B | lib/bookings.ts:301 | 🟢 | Ronda 1 (idempotencia + `orderBy`) → revisado en Ronda 6 (key del cliente + índice único parcial) |
@@ -567,7 +616,7 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 | no-test-suite | alta | B | package.json | 🟢 | Ronda 1 (capa-1) → Ronda 3 (copago/agenda-utils) → Ronda 4 (integration RLS) |
 | no-ci-triple-gate | alta | B | package.json | 🟢 | Ronda 1 — `.github/workflows/ci.yml`: typecheck → test → build |
 | c2-no-tests-ci | alta | B | package.json | 🟢 | Ronda 1 + Ronda 3 (mismo cierre que `no-test-suite`) |
-| no-static-security-guard | alta | B | lib/db.ts:29 | 🔴 | ci-pipeline-completo-y-guard — `scripts/guard-tenant-isolation.mjs` **existe** y las rondas lo corren a mano ("guard verde"), pero **no hay step en `ci.yml`** → sin gate mecánico |
+| no-static-security-guard | alta | B | .github/workflows/ci.yml | 🟢 | Ronda 10 — step `npm run guard:isolation` en CI; desde A0b (Ronda 11) el CI corre en todas las ramas, no solo `main` |
 | no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook (Ola 2.4) |
 | plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4) |
 | c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🔴 | (EXTERNAL-CONFIG: Upstash) — env del dueño, sin cambio de código |
@@ -590,7 +639,7 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 | public-booking-wizard-today-utc | baja | public-booking-wizard.tsx:606 | 🟢 | fix-public-booking-tz (Ronda 1) |
 | agenda-client-emptyslot-sethours | baja | agenda-client.tsx:738 | 🟢 | fix-timeline-oncreate (Ronda 1) |
 | getdaycounts-utc-slice | baja | lib/bookings.ts:163 | 🟢 | fix-bookings-tz (Ronda 1) |
-| plan-startdate-utc-midnight | media | lib/diagnosis.ts:219 | 🟢 | tz-server-exports — las 3 instancias (Ronda 1 parcial → Ronda 2) |
+| plan-startdate-utc-midnight | media | plan-view.tsx:685 · lib/patients.ts:967 | 🔴 | **REABIERTO (Ronda 11)**: diagnosis/plan-templates OK, pero la Tab Plan manda `new Date("YYYY-MM-DD")` (medianoche UTC = 21:00 AR del día anterior) y `createProgram` no usa el zod `ProgramCreate`. Destino: B0-S02 |
 | ics-export-week-window-host-tz | media | agenda/export/route.ts:17 | 🟢 | tz-server-exports (Ronda 1) |
 
 **Integridad / concurrencia (bucket A/B):**
@@ -614,7 +663,7 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 |---|---|---|---|---|
 | sin-headers-seguridad-csp | media | next.config.mjs | 🟡 | headers-seguridad — CSP en **Report-Only** (Ronda 2); falta activarla como bloqueante |
 | serveractions-allowedorigins-localhost | baja | next.config.mjs | 🟢 | headers-seguridad (Ronda 2) |
-| checkout-practitionerid-sin-validar | media | booking/checkout/route.ts:61 | 🟢 | payment-amount-anclado (Ronda 2) |
+| checkout-practitionerid-sin-validar | media | ~~booking/checkout/route.ts~~ | 🟢 | Ronda 2; la ruta huérfana `/api/booking/checkout` se **eliminó** en A0b (Ronda 11): sin callers, creaba turnos sin validar |
 | upload-sin-magic-bytes | media | lib/files.ts:118 | 🔴 | files-magic-bytes — sin sniffing de firma en el código |
 | password-sin-complejidad | baja | lib/auth.ts:53 | 🟢 | password-policy (Ronda 2; el lado Supabase es del dueño) |
 | rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts:32 | 🔴 | EXTERNAL-CONFIG: Upstash (bucket C) |
@@ -626,15 +675,15 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 | l2-no-virus-scan | baja | lib/files.ts:33 | ⏸ | gate: antes de upload de pacientes |
 | public-slots-ratelimit-vacio | media | lib/public-booking.ts:95 | 🟢 | fix-public-booking-tz (Ronda 1) |
 | gettenantprisma-dead-code | media | lib/db.ts:76 | 🔴 | cliente-tenant-unico-guc — `getTenantPrisma` sigue definido (lib/db.ts:108) y sin ningún call site |
-| rls-coverage-gaps | media | policies.sql:32 | 🔴 | policies-tablas-faltantes (mismo gap que `tenant-tables-sin-rls-ni-filtro`) |
+| rls-coverage-gaps | media | policies.sql:32 | 🟢 | cerrado junto con `tenant-tables-sin-rls-ni-filtro` (Ronda 4, re-verificado 2026-09-29) |
 | sin-test-tripwire-aislamiento | media | schema.prisma:19 | 🟢 | Ronda 4 — `tests/integration/rls-isolation.test.ts` (4 casos, cross-tenant INSERT rechazado) |
 
 **UX / forms / calidad de código:**
 
 | Slug | Sev | Ubicación | Estado | Sesión |
 |---|---|---|---|---|
-| native-confirm-alert | media | configuracion-client.tsx:1449 | 🔴 | configuracion-ux |
-| basics-sin-feedback-exito | media | configuracion-client.tsx:185 | 🔴 | configuracion-ux |
+| native-confirm-alert | media | turnos-view.tsx:92 · plan-view.tsx:534 · archivos-view.tsx:72 · session-detail.tsx:59,224 | 🟡 | Configuración ya usa `useConfirm` (Ronda 2); quedan `confirm()` nativos en HC y Seguimiento → A2 (S-ui) |
+| basics-sin-feedback-exito | media | general-panel.tsx:83 | 🟢 | configuracion-ux ("Guardado ✓", verificado 2026-09-29) |
 | statustag-no-exhaustivo | media | agenda-client.tsx:1266 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
 | statustag-label-drift | baja | agenda-client.tsx:1271 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
 | turnos-fuera-de-horario-o-media-hora-no-visibles | media | agenda-client.tsx:1046 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
@@ -673,22 +722,22 @@ contra el código al **2026-08-03**: sin evidencia clara de cierre, la fila qued
 | sin-not-found-403-custom | baja | app/ | 🟡 | error-loading-boundaries — `app/not-found.tsx` ✅ (Ronda 1); **403 custom sigue diferido** |
 | sin-sitemap-robots | baja | app/ | 🔴 | seo-analytics |
 
-### Resumen del checklist (al 2026-08-03)
+### Resumen del checklist (al 2026-09-29)
 
-93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos):
+93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
+auditoría del 23-sep (ver §Ronda 11), que se suman fila por fila a medida que A2/A3 los cierran.
 
 | Estado | Confirmados | Menores | Nuevos | **Total** |
 |---|---|---|---|---|
-| 🟢 CERRADO | 19 | 35 | 2 | **56** |
-| 🟡 PARCIAL | 1 | 4 | 1 | **6** |
+| 🟢 CERRADO | 21 | 36 | 2 | **59** |
+| 🟡 PARCIAL | 1 | 5 | 1 | **7** |
 | ⏸ DIFERIDO-CON-GATE | 0 | 4 | 0 | **4** |
-| 🔴 ABIERTO | 6 | 19 | 2 | **27** |
+| 🔴 ABIERTO | 4 | 17 | 2 | **23** |
 
-Los 6 confirmados que siguen 🔴: `practitioner-userid-unique-blocks-multitenant`,
-`tenant-tables-sin-rls-ni-filtro`, `no-static-security-guard`, `no-saas-billing-charge-clinic`,
-`plan-fields-inert-no-upgrade-no-enforcement`, `c1-ratelimit-inmemory`. Dos de ellos (`c1-ratelimit`,
-y el **flip prod** de `rls-bypassed-by-superuser-role` que está 🟢 solo en código) son **bucket C**:
-dependen de config del dueño, no de código.
+Los 4 confirmados que siguen 🔴: `practitioner-userid-unique-blocks-multitenant` (C0),
+`no-saas-billing-charge-clinic` y `plan-fields-inert-no-upgrade-no-enforcement` (C2) y
+`c1-ratelimit-inmemory` (bucket C: Upstash, más el endurecimiento de código en A3). El **flip prod** de
+`rls-bypassed-by-superuser-role` (🟢 solo en código) sigue siendo del dueño.
 
 ---
 
@@ -741,7 +790,7 @@ era intencional.
 4. **`lib/mercadopago.ts`** — firma HMAC-SHA256 con `timingSafeEqual`, ventana de replay 5 min,
    `consumeWebhook` idempotente por `(externalId, status)`, `redactPayload` allow-list; prod 503 sin
    `MP_WEBHOOK_SECRET`. No reintroducir carve-out por `NODE_ENV` en la firma.
-5. **`lib/billing-internal.ts`** — `resolveBookingCopagoCents` con precedencia estricta nullable
+5. **`lib/copago.ts`** (re-exportado por `lib/billing-internal.ts`) — `resolveBookingCopagoCents` con precedencia estricta nullable
    (`Booking.copagoCents` → `Coverage.copagoCents` → insurer → Particular → service); 0 es
    intencional. Fuente única de copago. No duplicar el cálculo.
 6. **`lib/visibility.ts`** — `patientAccessFor`/`bulkPatientAccess`; PHI **nulificado en la
@@ -761,13 +810,18 @@ era intencional.
 12. **`lib/*-internal.ts`** — billing/insurers/public-booking/notifications con `import "server-only"`;
     no exponerlos como RPC (`"use server"`).
 13. **`lib/rate-limit.ts`** — ruta Upstash con `INCR`+`PEXPIRE NX` correcta; solo cae a `memory()` sin
-    config o ante error de transporte. La tabla de límites de SECURITY.md §8 coincide 1:1 con el código.
+    config. *(Corrección 2026-09-29: la ruta Upstash no tiene try/catch ni timeout, y la tabla de SECURITY §8
+no coincidía con el código → A3 S-rl.)*
 14. **`lib/audit-extension.ts`** — extensión Prisma que audita reads sobre `PHI_MODELS` tras resolver
-    la query. Preservar (aunque su catch debe loguear → `m2-silent-catches`).
-15. **`vercel.json`** — `buildCommand` con `prisma migrate deploy && prisma generate && next build` +
-    region `gru1`; `directUrl=env("DIRECT_URL")`. Auto-migración en deploy correcta.
+    la query. ⚠️ **Corrección 2026-09-29: NO está cableada.** `getAuditedPrisma` (`lib/db.ts:53`) no tiene
+    callers, así que hoy no se audita ninguna lectura automáticamente. Activarla o no es una decisión de
+    C0/C1 (costo: un INSERT por lectura de PHI).
+15. **`vercel.json` + `scripts/vercel-build.mjs`** — auto-migración en deploy **solo en Production**
+    (`VERCEL_ENV=production`, desde A0b) + región `gru1`; `directUrl=env("DIRECT_URL")`. No volver a
+    migrar en Preview.
 16. **`package.json`** — scripts `prisma:*` envueltos con `dotenv -e .env.local` (evitan el footgun de
-    pegarle a Supabase prod); `db:deploy` separado. `tsconfig` strict sin `noUnusedLocals`, excluye
+    pegarle a Supabase prod); la operación de prod va por `db:prod:*`, que lee solo `.env.prod.local`.
+    Seeds/scripts con `assertSafeTarget` (A0b). `tsconfig` strict sin `noUnusedLocals`, excluye
     `scripts`.
 17. **Anticipos de diseño ya presentes** — `Booking.seriesId` poblado para regrupar series sin
     migración destructiva; enum `Role` con ASSISTANT/BILLING/ENTERPRISE mirando al futuro; schema

@@ -14,6 +14,24 @@
 > 3. **Etapa 3 — Productiva final.** Guía de diagnóstico completa, planes, IA local, módulo
 >    contable, features Pro.
 
+## ⭐ Plan vigente (2026-09-29): bloques por urgencia
+
+> **Esta sección manda sobre las olas de abajo.** La auditoría pre-producción del 23-sep
+> ([AUDIT.md §Ronda 11](AUDIT.md)) y el benchmark de drapp.com.ar (29-sep) reordenaron todo el trabajo
+> pendiente en **bloques**. Las olas/etapas de más abajo quedan como historial y como catálogo de sesiones;
+> su orden de ejecución ya no es el vigente. El detalle completo (file:line de cada hallazgo, diseño de
+> Planes, benchmark, planning de A0/A1) vive en el plan de la auditoría
+> (`~/.claude/plans/necesito-que-asumas-el-piped-engelbart.md`) hasta que cada bloque se planifique acá.
+> Reglas de ejecución: [AGENTS.md](../AGENTS.md).
+
+| Bloque | Qué | Estado |
+|---|---|---|
+| **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | 🟡 A0b/A0c ✅ (Ronda 11) · A0a/A0d del dueño · A1 → sigue · A2/A3 con planning pendiente |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | ⏳ |
+| **C · Diferido** | **C0** roles/capabilities, rol Secretaria completo, multi-profesional + selector de consultorio, stepper de alta, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
+| **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
+| **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
+
 ## Estado de ejecución — cómo leer las marcas
 
 Cada ola/sesión lleva una marca, verificada contra
@@ -29,7 +47,7 @@ Cada ola/sesión lleva una marca, verificada contra
 > dueño** y vive en [QA.md](QA.md) (una sección por ronda). Una sesión puede estar ✅ en código y
 > todavía tener su checklist de QA sin tildar.
 
-*Última pasada de marcado: **2026-08-15**, sobre las rondas 1-9.*
+*Última pasada de marcado: **2026-09-29**, sobre las rondas 1-11.*
 
 ## Cómo se pilotea una sesión
 
@@ -172,7 +190,7 @@ anclado y persiste `Payment FAILED` en mismatch (no perder traza); mover el cheq
 dentro de la tx; validar `practitionerId ∈ tenant` en checkout.
 - Cierra: `c3-payment-amount`, `mp-webhook-idempotency-check-outside-tx`, `checkout-practitionerid-sin-validar`.
 - Own: `prisma/schema.prisma`, `prisma/migrations/**`, `lib/mercadopago.ts`,
-  `app/api/booking/checkout/route.ts`, `lib/public-booking.ts` (solo bloque payment).
+  `app/api/booking/checkout/route.ts` (eliminada en A0b), `lib/public-booking.ts` (solo bloque payment).
 - Gate: QA sandbox MP — pago OK → PAID; edición de precio en vuelo → `Payment FAILED` registrado.
   **Preservar** firma HMAC/replay/redact.
 - Dep: `fix-public-booking-tz` (public-booking.ts, ola previa), Upstash/MP sandbox (EXTERNAL-CONFIG).
@@ -478,12 +496,12 @@ paralelo a Etapa 2. Se registran acá para que el roadmap no mienta por omisión
 | **Ronda 4** (2026-08-02) | ✅ Color por servicio (`Service.color`, 16 pastel) · mini-diagnóstico por turno (`Booking.title/description` con default desde `Patient.diagnosisTitle/Note`) · modales de carga → **drawers** · agenda día full-width · animaciones framer-motion + pulido del dashboard. *(Además de B2b/RLS en local, que sí es Ola 2.2.)* |
 | **Ronda 5** (2026-08-02) | ✅ Leyenda de colores de servicio en la agenda usada como **filtro de resaltado** · diagnóstico + descripción visibles en el **portal público** de turnos · notificación al profesional cuando le **comparten un paciente** (`PATIENT_SHARED`) · **"Compartir turno"** por link `wa.me` + recordatorio imprimible (`components/agenda/recordatorio-turno.tsx`) · fixes de QA (autocomplete del patient-picker, card con `title \|\| description`). |
 | **Ronda 6** (2026-08-02/03) | ✅ **Pérdida de datos cerrada (crítico funcional):** la `idempotencyKey` determinística pisaba turnos → reemplazada por key del cliente · **guard de paciente** (bloqueo de solape propio + confirmación suave para un 2º turno el mismo día, helper puro `patientDayStatus` testeado) · **backstop en DB**: índice único parcial `(tenantId,patientId,scheduledFor) WHERE patientId IS NOT NULL AND status <> 'CANCELLED'`, con `P2002` manejado en los 4 paths de escritura · fix del autofill de Chrome en 5 typeaheads. |
-| **Ronda 7** (2026-08-02) | ✅ **Plataforma superadmin** (ver Ola 2.8) + **catálogo global de ejercicios**: CRUD con soft-delete, reps/sets opcionales + `durationSeconds`, `ExerciseMedia` (upload Supabase + YouTube nocookie) y `ExerciseArticle`, tags estructurados `MUSCLE_GROUP`/`DISCIPLINE` con backfill de 73 ejercicios, lector `/biblioteca/[slug]` con markdown seguro. |
+| **Ronda 7** (2026-08-02) | ✅ **Plataforma superadmin** (ver Ola 2.8) + **catálogo global de ejercicios**: CRUD con soft-delete, reps/sets opcionales + `durationSeconds`, `ExerciseMedia` (upload Supabase + YouTube nocookie) y `ExerciseArticle`, tags estructurados `MUSCLE_GROUP`/`DISCIPLINE` (backfill de 73 ejercicios en MUSCLE_GROUP/EQUIPMENT; **DISCIPLINE existe como kind pero no está sembrado**), lector `/biblioteca/[slug]` con markdown seguro. |
 | **Ronda 8** (2026-08-03) | ✅ **Tabla admin del catálogo**: `listGlobalExercisesForAdmin` → `{rows,total}` con search debounced, filtros por tipo/plan/dificultad/archivados + tags, sort por columna y paginado offset · **preferencias por usuario** (`UserPreferences.catalogPrefs` + `sanitizeCatalogPrefs`) · **edit-in-place** del catálogo desde `/biblioteca` y `/terapia-manual` (`ExerciseDrawer` con `next/dynamic`) · **fix de hidratación** en `/seguimiento/[id]` (fecha formateada en server + `hour12:false`). |
-| **Ronda 9** (2026-08-15, en curso) | ✅ **Refactor del timeline de agenda**: se eliminó el layout absoluto por columnas (`layoutBookings` y sus tests **borrados**) y se pasó a **layout en flujo** — cards bucketeadas por hora en un flex-wrap, hasta 5 por fila con ancho acotado (`CARD_MIN 186` / `CARD_MAX 280`), truncado con ellipsis + `title` como tooltip, y "+N" para expandir. Motivo: el posicionamiento absoluto hacía que cards de franjas contiguas se cruzaran. · **Anchos de drawers** subidos para que los formularios no scrolleen de costado (base 420→**480**; nuevo turno 460→**580**, nuevo paciente 480→**560**, editar paciente 520→**560**, ejercicio 480→**600**). |
+| **Ronda 9** (2026-08-15) | ✅ **Refactor del timeline de agenda**: se eliminó el layout absoluto por columnas (`layoutBookings` y sus tests **borrados**) y se pasó a **layout en flujo** — cards bucketeadas por hora en un flex-wrap, hasta 5 por fila con ancho acotado (`CARD_MIN 186` / `CARD_MAX 280`), truncado con ellipsis + `title` como tooltip, y "+N" para expandir. Motivo: el posicionamiento absoluto hacía que cards de franjas contiguas se cruzaran. · **Anchos de drawers** subidos para que los formularios no scrolleen de costado (base 420→**480**; nuevo turno 460→**580**, nuevo paciente 480→**560**, editar paciente 520→**560**, ejercicio 480→**600**). |
 
-> La wave **en curso** (agenda de 30 min + batch preflight) sumará su propia fila acá y su sección en
-> [QA.md](QA.md) al cerrar.
+| **Ronda 10** (2026-08-16) | ✅ Agenda con granularidad 30/60 min (`Tenant.agendaSlotMinutes`) y grilla compartida Día/Semana con filas Antes/Después · batch multi-turno con preflight (`dryRun`, «Crear todos / solo los libres», `BatchOutcome`) · solape del paciente confirmable · guard de aislamiento en CI · docs unificados en `.docs/`. |
+| **Ronda 11** (2026-09-23/29) | ✅ Auditoría pre-producción completa → plan por bloques (arriba) · **A0b** operación segura (Preview no migra prod, guards en seeds/scripts, roles sin passwords, env fail-fast, ruta huérfana eliminada) · **A0c** docs al día. Ver [AUDIT.md §Ronda 11](AUDIT.md). |
 
 ---
 
@@ -494,7 +512,7 @@ Grueso, no sesiones. Se detallan cuando el dueño baje la visión de cada una.
 - **`definicion-ejercicios-maniobras`** — 🟡 **la mitad de EJERCICIOS ya se entregó (Rondas 7-8) —
   el gate quedó LEVANTADO para ejercicios.** Entregado y verificado en código: CRUD global del
   catálogo con soft-delete (`lib/exercises-admin.ts`), tags estructurados
-  `MUSCLE_GROUP`/`DISCIPLINE` (+ backfill de 73 ejercicios), `ExerciseMedia` (upload Supabase +
+  `MUSCLE_GROUP`/`DISCIPLINE` (backfill de 73 ejercicios en músculo/equipamiento; DISCIPLINE sin sembrar → B0-S09), `ExerciseMedia` (upload Supabase +
   YouTube nocookie + signed URLs) y `ExerciseArticle`, lector `/biblioteca/[slug]` con markdown
   seguro, tabla admin con búsqueda/filtros/orden/paginado y edit-in-place desde `/biblioteca` y
   `/terapia-manual`, gating de plan (FREE/STARTER = solo `isBasic`; PRO/ENTERPRISE = catálogo
@@ -505,7 +523,9 @@ Grueso, no sesiones. Se detallan cuando el dueño baje la visión de cada una.
 - ⏳ **`guia-diagnostico-completa`** — Residual real de `h3-etapa2-stub`: UI de autoría
   `ConditionExerciseLink`, matching para custom conditions, templates condicionados, biblioteca de
   maniobras ampliada. Dep: la mitad **no** entregada de la épica anterior (maniobras + visión).
-- ⏳ **`planes-v2`** — Entidad "plan" que regrupa turnos vía `Booking.seriesId` (ya poblado).
+- ➡️ **`planes-v2`** — **Movido al Bloque B (2026-09-23)**, construido completo sobre B-pre: FK
+  `Booking.programId/sessionId` (ADR-001 en ARCHITECTURE.md), `seriesId` pasa a ser id de tanda. Ya no es
+  Etapa 3.
 - ⏳ **`ia-local-clinica`** — IA local privada como asistente clínico sobre HC/EVA. Dep: Etapa 2
   completa (RLS real + tests, porque toca PHI). El schema se construyó como ground-truth para esto.
 - ⏳ **`modulo-contable`** — Gastos/ingresos/métricas/beneficios sobre la base de `money-input-parser` +

@@ -13,6 +13,39 @@ Estado: 🔴 pendiente · 🟡 en progreso · 🟢 hecho.
 
 ---
 
+### 0. Bloque A0 — chequeos y tareas del dueño (2026-09-29) 🔴
+
+Antes de cualquier migración nueva. Anotá acá los resultados (sin valores secretos).
+
+**A0a · chequeos (solo lectura, salvo el backup):**
+1. **Backup:** crear `.env.prod.local` (ver MIGRACIONES-RUNBOOK §0) y `npm run db:prod:backup`. En Supabase →
+   Database → Backups: plan, backups diarios, PITR.
+2. **Migraciones:** `npm run db:prod:status` + la query de `_prisma_migrations` (RUNBOOK §2) + el último build de
+   Production en Vercel.
+3. **Vercel → Environment Variables:** qué scopes tienen `DATABASE_URL`, `DIRECT_URL`, `DATABASE_URL_SERVICE`,
+   `SUPABASE_SERVICE_ROLE_KEY`, `MP_*`, `NEXT_PUBLIC_APP_URL`. **¿El scope Preview apunta a la DB de prod?**
+   Settings → Git (¿se buildean previews de `develop`/`feat/*`?) y Deployment Protection de los previews.
+4. **Roles:** `SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname LIKE 'kinesoft%';` — si existen, rotarlos
+   ya con `prisma/roles.supabase.sql` (se habrían creado con el password placeholder del repo).
+5. **Tenant vivo:** `SELECT slug, name, plan FROM "Tenant" ORDER BY "createdAt";` — ¿existe `movare`,
+   `demo-kinesoft` o `test-%`?
+6. **Servicios:** `SELECT name, "durationMin", "maxConcurrent" FROM "Service" WHERE "tenantId" = '<vivo>';` — si
+   Osteopatía está en `NULL` (ilimitado), pasarla a 1 desde Configuración.
+7. **Turnero público:** ¿está en uso? ¿hay reservas PENDING viejas?
+8. **Supabase Auth:** JWT expiry y reuse interval, ¿Custom SMTP?, Site URL + Redirect URLs, plantillas; policies de
+   `storage.objects` para `patient-files`/`exercise-media` (¿existen los buckets? ¿privados?).
+9. **Screenshot borrado** (en el historial desde `eb0ee8b`): si tiene PHI del cliente, decidir purgar el historial.
+10. ¿Alguna vez se corrieron `prisma/seed.ts`, `seed-sprint13` o `seed-santiago` contra prod?
+
+**A0d · Staging aislado:**
+1. Proyecto Supabase **staging** (o Branching): DB + Auth + Storage propios, buckets privados.
+2. Vercel → env del scope **Preview** → staging (DB, Supabase URL/keys) y MP en **sandbox**.
+3. Deployment Protection (Vercel Authentication) en los Previews.
+4. `.env.local` (dev) → Auth/Storage de **staging** (hoy dev crea usuarios y gasta la cuota de SMTP de prod).
+5. En staging: `migrate deploy` + `roles.supabase.sql` con passwords propios. Catálogo sí; **nunca** el seed demo.
+6. Verificar: el log de un Preview dice `[vercel-build] skip migrate (VERCEL_ENV=preview)` y la app conecta a
+   staging.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`

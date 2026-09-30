@@ -10,6 +10,8 @@
  */
 import { PrismaClient } from "@prisma/client";
 
+import { assertSafeTarget } from "./lib/assert-safe-target";
+
 const prisma = new PrismaClient();
 
 const STARTER_INSURERS = [
@@ -150,6 +152,9 @@ const MANUAL_THERAPY_SEED = [
 ];
 
 async function main() {
+  // Local-only (AUDIT 2026-09-23): this seed rewrites/wipes tenant data; it
+  // must never reach production, whatever `.env` currently points to.
+  assertSafeTarget({ url: process.env.DATABASE_URL, allowRemote: false, scriptName: "seed-sprint13" });
   const tenants = await prisma.tenant.findMany({ select: { id: true, slug: true } });
   console.log(`Found ${tenants.length} tenants.`);
 

@@ -41,6 +41,8 @@ import {
   ProgramStatus,
 } from "@prisma/client";
 
+import { assertSafeTarget } from "../scripts/lib/assert-safe-target";
+
 const prisma = new PrismaClient();
 
 // ──────────────────────────────────────────────────────────────────────
@@ -1572,6 +1574,9 @@ async function seedDemoTenant() {
 }
 
 async function main() {
+  // Local-only (AUDIT 2026-09-23): this seed rewrites/wipes tenant data; it
+  // must never reach production, whatever `.env` currently points to.
+  assertSafeTarget({ url: process.env.DATABASE_URL, allowRemote: false, scriptName: "prisma/seed.ts" });
   await seedTags();
   await seedRegions();
   await seedConditions();

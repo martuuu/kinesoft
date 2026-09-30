@@ -1,7 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["gru1"],
-  "buildCommand": "prisma migrate deploy && prisma generate && next build",
+  "regions": [
+    "gru1"
+  ],
+  "buildCommand": "node scripts/vercel-build.mjs",
   "functions": {
     "app/**/*": {
       "maxDuration": 30

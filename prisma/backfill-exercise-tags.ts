@@ -13,11 +13,13 @@
  *     npx tsx prisma/backfill-exercise-tags.ts
  */
 import { PrismaClient, type TagKind } from "@prisma/client";
+import { assertSafeTarget } from "../scripts/lib/assert-safe-target";
 
-const url =
-  process.env.BACKFILL_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  "postgresql://kinesoft:kinesoft@localhost:5433/kinesoft?schema=public";
+// Explicit URL required (no silent localhost fallback). It is a one-time prod
+// task after Ronda 7 (see MIGRACIONES-RUNBOOK), so remote is allowed but must
+// be confirmed with KINESOFT_CONFIRM_PROD=<project ref>.
+const url = process.env.BACKFILL_DATABASE_URL ?? process.env.DATABASE_URL;
+assertSafeTarget({ url, allowRemote: true, confirm: process.env.KINESOFT_CONFIRM_PROD, scriptName: "backfill-exercise-tags" });
 const db = new PrismaClient({ datasources: { db: { url } } });
 
 function slugify(s: string): string {

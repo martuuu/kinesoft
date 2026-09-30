@@ -119,7 +119,6 @@ const SERVICE_FILES = new Set([
   "lib/portal.ts",
   "lib/auth.ts",
   "lib/session.ts",
-  "app/api/booking/checkout/route.ts",
   "app/auth/callback/route.ts",
   "app/invite/[token]/accept-action.ts",
   "app/invite/[token]/page.tsx",

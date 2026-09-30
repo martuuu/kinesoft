@@ -6,11 +6,35 @@
 -- policies no aíslan nada aunque estén con FORCE. Estos roles NO tienen
 -- SUPERUSER ni BYPASSRLS (el `_app`), así que la RLS se aplica de verdad.
 --
--- Cómo aplicarlo: pegar en el SQL Editor de Supabase (corre como `postgres`,
--- que tiene CREATEROLE), DESPUÉS de `prisma migrate deploy` y de aplicar
--- policies.sql. Reemplazá los passwords por secretos largos y guardalos en el
--- secret manager / env de Vercel. NO commitees los passwords reales.
--- Idempotente.
+-- Cómo aplicarlo (A0b, 2026-09-29): con psql y la conexión owner (`postgres`,
+-- que tiene CREATEROLE), DESPUÉS de `prisma migrate deploy`. Los passwords se
+-- pasan como variables de psql — NUNCA van escritos en este archivo:
+--
+--   psql "$OWNER_URL" \
+--     -v app_password="$(openssl rand -base64 32)" \
+--     -v service_password="$(openssl rand -base64 32)" \
+--     -f prisma/roles.supabase.sql
+--
+-- (guardá los dos secretos generados en el secret manager / env de Vercel).
+--
+-- Por qué cambió: antes el archivo creaba los roles con passwords placeholder
+-- literales y el `IF NOT EXISTS` impedía rotarlos al re-correr: seguir el
+-- RUNBOOK al pie de la letra dejaba `kinesoft_service` (BYPASSRLS) con un
+-- password público del repo. Ahora el DO crea el rol SIN password y el
+-- ALTER ROLE de abajo lo setea SIEMPRE → re-correr el archivo = rotar.
+-- No se puede pegar en el SQL Editor (usa variables de psql). Idempotente.
+
+\set ON_ERROR_STOP on
+\if :{?app_password}
+\else
+  \echo 'Falta -v app_password=... (ver cabecera). Abortado sin cambios.'
+  \quit
+\endif
+\if :{?service_password}
+\else
+  \echo 'Falta -v service_password=... (ver cabecera). Abortado sin cambios.'
+  \quit
+\endif
 
 BEGIN;
 
@@ -20,10 +44,11 @@ BEGIN;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kinesoft_app') THEN
-    CREATE ROLE kinesoft_app LOGIN PASSWORD 'REEMPLAZAR_SECRETO_APP'
-      NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+    CREATE ROLE kinesoft_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
   END IF;
 END $$;
+-- Password siempre desde la variable de psql (crear o rotar).
+SELECT format('ALTER ROLE kinesoft_app WITH PASSWORD %L', :'app_password') \gexec
 
 GRANT USAGE ON SCHEMA public TO kinesoft_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES    IN SCHEMA public TO kinesoft_app;
@@ -43,10 +68,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kinesoft_service') THEN
-    CREATE ROLE kinesoft_service LOGIN PASSWORD 'REEMPLAZAR_SECRETO_SERVICE'
-      NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE;
+    CREATE ROLE kinesoft_service LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE;
   END IF;
 END $$;
+SELECT format('ALTER ROLE kinesoft_service WITH PASSWORD %L', :'service_password') \gexec
 
 GRANT USAGE ON SCHEMA public TO kinesoft_service;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES    IN SCHEMA public TO kinesoft_service;

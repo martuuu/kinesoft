@@ -35,6 +35,7 @@
  * SUPABASE_SERVICE_ROLE_KEY env vars must be set (same as the app).
  */
 import { PrismaClient, Role } from "@prisma/client";
+import { assertSafeTarget } from "./lib/assert-safe-target";
 import { createClient } from "@supabase/supabase-js";
 
 type Args = {
@@ -63,7 +64,9 @@ function parseArgs(): Args {
   }
   const env = process.env;
   const merged: Args = {
-    email: (out["email"] as string) ?? env.TENANT_EMAIL ?? "",
+    // Lower-cased: every email comparison in the app (portal, set-platform-admin,
+    // invitations) is on the normalized form; a mixed-case owner email broke them.
+    email: ((out["email"] as string) ?? env.TENANT_EMAIL ?? "").trim().toLowerCase(),
     password: (out["password"] as string) ?? env.TENANT_PASSWORD ?? "",
     clinic: (out["clinic"] as string) ?? env.TENANT_CLINIC ?? "",
     slug: (out["slug"] as string) ?? env.TENANT_SLUG ?? "",
@@ -116,6 +119,14 @@ async function main() {
     );
   }
 
+  // Prisma reads DATABASE_URL and the Supabase admin client the Auth project of
+  // the same env: state the target and require confirmation when remote.
+  assertSafeTarget({
+    url: process.env.DATABASE_URL,
+    allowRemote: true,
+    confirm: process.env.KINESOFT_CONFIRM_PROD,
+    scriptName: "create-tenant",
+  });
   const prisma = new PrismaClient();
   const admin = createClient(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -256,7 +267,7 @@ async function main() {
   console.log("");
   console.log("🎉 Listo. El OWNER puede iniciar sesión en /login con:");
   console.log(`     Email:    ${args.email}`);
-  console.log(`     Password: ${args.password}`);
+  console.log(`     Password: (la que pasaste por --password; no se imprime)`);
   console.log(`     URL:      /c/${slug}/booking  (turnero público)`);
   console.log("");
 

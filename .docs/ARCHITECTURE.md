@@ -97,7 +97,9 @@ NOT get AR tz, or the day shifts back.
 `seriesId` (groups a multi-turno batch), `title` / `description` (per-turno
 mini-diagnosis, defaulted from `Patient.diagnosisTitle` / `diagnosisNote`),
 `idempotencyKey`, `updatedAt` (optimistic-concurrency token). Bookings have
-**no FK** to `Session`/`TreatmentProgram` — they live in parallel.
+**no FK** to `Session`/`TreatmentProgram` — they live in parallel. ⚠️ **Superseded
+by ADR-001 (proposed, 2026-09-23)** — see §Architecture decisions: plans must
+generate their bookings, so the FK is coming in Bloque B.
 
 - **Single turno**: `createBooking` (conflict/sobreturno UX + next-free-slot).
 - **Multi-turno**: `createBookingsBatch` (count + weekdays, AR-correct days,
@@ -242,10 +244,61 @@ platform tier**:
   `scripts/set-platform-admin.ts` (`<email>`, `--revoke`, `--list`). There is
   no in-app way to promote a user.
 
+## Architecture decisions (ADR)
+
+### ADR-001 — Booking ↔ plan/session FK (status: PROPOSED, 2026-09-23)
+
+- **Context.** The owner requires that *every plan generates its bookings* and
+  that, for the same patient, in-plan vs out-of-plan bookings are
+  distinguishable. Today the three plan entry points (`createProgram`,
+  `assignDiagnosisAndCreateProgram`, `applyPlanTemplate`) create `Session`s at
+  midnight with no `Booking`; the only bridge is a ±2h heuristic in
+  `rescheduleSession` that moves unrelated bookings (audit 2026-09-23).
+- **Decision.** Add nullable `Booking.programId` and `Booking.sessionId`
+  (`ON DELETE RESTRICT`), with a partial unique index "one active booking per
+  session" and CHECKs for coherence; `TreatmentProgram` gains schedule, price,
+  discipline, practitioner practice and location. `seriesId` stays, now meaning
+  "generation batch". Bookings without `programId` are standalone ("fuera de
+  plan"). Built **after B-pre** (per-practitioner availability engine), in one
+  complete version — no "Plans v1".
+- **Consequences.** Nothing linked is hard-deleted (archive instead); the copago
+  precedence (`lib/copago.ts`) is untouched — a plan price is stamped on
+  `Booking.copagoCents` with `pricedByPlan`. Pending the owner's approval (D25).
+
+## Cache & cookies (what is implemented — 2026-09-29)
+
+**Data cache** — `unstable_cache` in 9 loaders, **every key carries the
+`tenantId`** (no cross-tenant leakage by key), tags from `lib/cache-tags.ts`:
+catalog/facets/diagnosis 1 h · services, insurers, practitioners 5 min ·
+dashboard counts and month booking-days 60 s. React `cache()` only for
+`getActor` and the visibility helpers (it does NOT dedupe inside Server
+Actions). Invalidation: ~120 `revalidatePath`, tag helpers (e.g.
+`invalidateBookingDerivedCaches`) and ~60 client `router.refresh()`.
+Agenda, patients, clinical history and sessions are **not** cached (correct).
+
+**HTTP** — every page in `(app)`, `(portal)` and booking is dynamic
+(`force-dynamic`/cookies) → `Cache-Control: private, no-store`: the CDN never
+stores PHI. Exports and `/api/booking/[id]/status` set `no-store` explicitly.
+
+**Cookies** — `sb-<ref>-auth-token` (Supabase session, chunked) and the PKCE
+code-verifier, with `@supabase/ssr` defaults (httpOnly **false**, no `Secure`,
+400 days); `kine_tenant` is read and validated against memberships but no code
+writes it (no tenant switcher yet). No tracking/analytics cookies → no banner
+needed (list them in the privacy policy). Browser storage: only
+`localStorage['kinesoft:tweaks']`.
+
+**Known gaps** (Bloque A3 / C1): the middleware does not refresh the Supabase
+session and RSCs drop the refreshed cookie; cookie hardening + HSTS; the
+`practitioners` tag is never invalidated; public booking / patient creation /
+MP webhook don't invalidate dashboard caches; Dates come back as strings on
+cache hits; dashboard PHI lives in the Vercel Data Cache (owner decision).
+
 ## Build / verify
 
 - `npm run dev` — local Next.js against Docker Postgres (`.env.local`).
-- `npm run build` = `prisma generate && next build`.
+- `npm run build` = `prisma generate && next build`. Vercel runs
+  `node scripts/vercel-build.mjs`: `prisma migrate deploy` **only** when
+  `VERCEL_ENV=production` (A0b), then generate + build.
 - Verify: `npx tsc --noEmit` + `npx next build` (clear `.next` on stale
   "Cannot find module for page" cache errors). `scripts/` is excluded from tsc.
 - Migrations + env split: see [DEPLOYMENT.md](DEPLOYMENT.md).

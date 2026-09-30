@@ -112,9 +112,13 @@ environments. The new model (`lib/mercadopago.ts` +
   of falling through.
 - `consumeWebhook` is idempotent: a re-fire with the same
   `(externalId, status)` short-circuits without firing notifications.
-- The captured MP `transaction_amount` is compared against the
-  configured `Service.priceCents` before flipping the booking to PAID
-  (±5 cent tolerance for rounding). Mismatches are logged and rejected.
+- The captured MP `transaction_amount` is compared against the amount
+  **anchored when the preference was created** (`Payment.expectedAmountCents`,
+  Ronda 2) — not the live `Service.priceCents` — before flipping the booking to
+  PAID. A mismatch persists `Payment FAILED` instead of losing the trace.
+- ⚠️ Open (audit 2026-09-23, A2): another payment attempt (different
+  `externalId`) can overwrite a PAID with FAILED/AUTHORIZED, and a late PAID
+  revives a CANCELLED booking.
 - `rawPayload` is redacted to a known-safe subset before persistence —
   no cardholder name, document, or device fingerprint.
 
@@ -165,10 +169,20 @@ Rate limits currently in place:
 | `getPublicBookingStatus` | 120 / min / IP |
 | `submitCheckIn` | 4 / min / IP |
 | Mercado Pago webhook | 60 / min / IP |
-| `/api/booking/checkout` | 8 / min / IP |
+| `/api/auth/sign-in` (login) | 10 / min / IP |
 | `/api/auth/google` | 10 / min / IP |
+| signup (`signUpPractitioner`) | 3 / 10 min / IP |
+| forgot password | 5 / 10 min / IP |
+| reset password | 5 / 10 min / IP |
 | `/api/pacientes/export` | 5 / min / user |
 | `/api/agenda/export` | 10 / min / user |
+
+**Known gaps (audit 2026-09-23 → A3 `S-rl`):** no limit on the actions that
+send email (`createInvitation`, `regenerateInvitationUrl`,
+`sendPatientPortalInvite`) nor on `acceptInvite`; keys are IP-only (no
+email/tenant composite); the Upstash path has no try/catch/timeout (a network
+error breaks login instead of falling back). The orphan `/api/booking/checkout`
+was deleted in A0b.
 
 ## 9. Row-Level Security (RLS) — a real backstop (Ronda 4)
 
@@ -220,8 +234,16 @@ calls made outside a wrap.
 what makes a missed wrap fail loudly instead of leaking.
 
 **Defense in depth stands.** The app-layer `tenantId` filter (`getActor()` +
-`getTenantPrisma()`'s read injection) is still applied everywhere. RLS is the
-net under it, not a replacement for it.
+a hand-written `where: { tenantId }` in every query) is applied everywhere.
+(`getTenantPrisma()` is dead code — no call sites.) RLS is the net under it,
+not a replacement for it. Note that **FK checks bypass RLS**: an input id from
+another tenant (e.g. `patientId` in `createBookingsBatch`) is persisted unless
+the action validates it against the tenant first (audit 2026-09-23, A2).
+
+**Staff ≠ patient rule:** documented as "enforced" in the roadmap, but **not
+implemented** in code (audit 2026-09-23). Combined with the signup
+auto-confirming emails (H5) and the portal matching patients by email, it is a
+PHI exposure path → A3 (`S-auth`).
 
 ## 10. Platform superadmin (cross-tenant privilege tier)
 

@@ -7,6 +7,11 @@
 >
 > Marcá cada ítem ✅/❌. Los ítems 🔴 **críticos** son los que pueden generar problemas grandes:
 > priorizalos.
+>
+> ⚠️ **Dónde se corre (desde 2026-09-29):** en **local** (`TZ=UTC npm run dev` contra el Docker :5433) o
+> en un **Preview de Vercel apuntado a staging** — nunca en un Preview que comparta la DB de producción
+> (hallazgo H6; ver EXTERNAL-CONFIG §Staging). Ítems marcados ~~tachados~~ = obsoletos por un cambio
+> posterior; no se corren.
 
 ---
 
@@ -32,10 +37,9 @@ Lo de abajo es lo que **necesita ojos humanos** (comportamiento observable o cam
   Después creá otro para el Paciente **B** a las 10:00 con el mismo profesional y forzá el
   sobreturno cuando lo pida. Debe crear el **segundo** turno (no fusionarse). *(La idempotencia es
   por identidad del paciente, así que dos pacientes distintos = dos turnos.)*
-- [ ] **Re-reserva tras cancelar (comportamiento nuevo — validar criterio).** Cancelá un turno del
-  Paciente A a las 10:00 y volvé a crear uno para A a las 10:00. Hoy el turno **revive/re-crea** como
-  activo en ese slot (en vez de devolver el cancelado). Confirmá que ese comportamiento es el que
-  querés; si preferís que sea siempre un turno nuevo distinto, avisame y lo ajusto.
+- [ ] ~~**Re-reserva tras cancelar.**~~ *Obsoleto: la idempotencia determinística se revirtió en la
+  Ronda 6 (hoy la agenda usa una key por modal y re-reservar crea un turno nuevo). La reserva pública
+  todavía conserva el patrón viejo — bug abierto en A2 (S-pub), se prueba ahí.*
 
 ### Visibilidad y estados de la agenda
 
@@ -420,7 +424,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   11:30) y mirá la vista día: **ninguna card** debe invadir la fila de otra hora ni montarse sobre
   una línea de la grilla. Probá también con turnos a la media hora y con turnos **fuera del horario
   comercial** (ej. 21:30) — tienen que verse igual, no desaparecer.
-- [ ] **Hasta 5 por fila, de ancho parejo.** Poné 5 turnos en la misma hora: se acomodan en una fila,
+- [ ] ~~**Hasta 5 por fila, de ancho parejo.**~~ *(Ronda 10: reemplazado por la grilla por slots de
+  30/60 min — ver sección Ronda 10.)* Poné 5 turnos en la misma hora: se acomodan en una fila,
   todos del **mismo ancho**. Con 6 o más, los extras bajan a una segunda fila (misma hora).
 - [ ] **Un turno solo no se estira.** Con **un** único turno en una hora, la card debe mantener un
   ancho razonable — **no** convertirse en una banda de punta a punta.
@@ -433,7 +438,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   anterior sigue valiendo.
 - [ ] **Click en hueco vacío.** Sigue precargando **ese** día y **esa** hora en el drawer de nuevo
   turno (regresión de la Ronda 1 — verificar que no volvió).
-- [ ] **Semana y lista intactas.** Las otras vistas no cambiaron: confirmá que se ven igual que antes.
+- [ ] ~~**Semana y lista intactas.**~~ *(Ronda 10: Día y Semana comparten la grilla nueva — ver
+  sección Ronda 10.)*
 
 ### Paneles laterales (drawers) — sin scroll horizontal
 
@@ -448,8 +454,63 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ---
 
-## Wave en curso — agenda de 30 min + batch preflight
+## Ronda 10 — Agenda de 30/60 min + batch con preflight + solape confirmable (2026-08-16)
 
-⏳ **Sin sección todavía.** La wave que está en ejecución (turnos de 30 minutos en la agenda +
-preflight de la carga múltiple de turnos) **agregará su propia sección de QA acá al terminar**,
-siguiendo el mismo formato. Hasta entonces, no hay nada nuevo que tildar en ese frente.
+> Todo con `TZ=UTC`. Qué cambió: la agenda tiene granularidad configurable (Configuración → "Horario del
+> consultorio": 30 o 60 min) y Día/Semana comparten la misma grilla; "Múltiples turnos" avisa **antes** de
+> crear qué fechas chocan; el solape con otro turno del mismo paciente pasó de bloqueo a confirmación.
+
+### Grilla de 30/60 minutos
+
+- [ ] 🔴 **Un turno a las 13:30 cae en la fila de las 13:30** (con slots de 30) en **Día y en Semana** —
+  antes la Semana lo mostraba en las 14:00.
+- [ ] **Cambiar a 60 min** en Configuración: la agenda se redibuja con filas de una hora y el turno de
+  las 13:30 queda dentro de la fila de las 13, sin perderse.
+- [ ] **Turno de 45/60 min con slots de 30:** se ve el hint «· continúa X» en la franja siguiente y esa
+  franja **no** aparece como libre. En Semana, el chip de la media hora siguiente sigue clickeable.
+- [ ] **Turnos fuera del horario del consultorio** (ej. 07:00 o 21:30): aparecen en las filas
+  **"Antes del horario" / "Después del horario"**, no se pierden ni compiten por el "+N".
+- [ ] **Click en el gutter de la hora** (la columna con la hora) crea un turno en esa franja.
+- [ ] **Duración visible:** en cards angostas la duración no la tapa el ellipsis (va primero y en el
+  tooltip).
+
+### Múltiples turnos con preflight
+
+- [ ] 🔴 **Preflight antes de crear:** cargá 4 turnos semanales donde uno choca con otro paciente (servicio
+  con cupo 1) y otro ya existe para el mismo paciente. El modal muestra, por fecha, **libre / sobreturno /
+  duplicado** antes de escribir nada.
+- [ ] **«Crear solo los libres»** crea solo los libres; **«Crear todos»** crea también los sobreturnos
+  (marcados `[SOBRETURNO]`) y reporta los duplicados como "ya existían", no como error mudo.
+- [ ] **Contar en la base/agenda** que la cantidad de turnos creados coincide con lo que dijo el
+  preflight.
+
+### Solape del mismo paciente
+
+- [ ] **Dos servicios en paralelo** para el mismo paciente con horarios que se superponen (no el mismo
+  instante): el modal **pide confirmación** («dos servicios en paralelo es normal») y, al confirmar, crea
+  el turno.
+- [ ] 🔴 **Mismo instante exacto** para el mismo paciente: error terminal con texto accionable ("movelo
+  unos minutos"); **no** ofrece confirmar.
+- [ ] **"Mismo día" y "solape" son independientes:** confirmar uno no saltea el otro.
+- [ ] Todos los avisos hacen scroll hasta quedar visibles en el drawer.
+
+---
+
+## Ronda 11 — Bloque A0: operación segura (2026-09-29)
+
+> La mayoría de A0 es infraestructura (lo verifica el gate automático). Lo que requiere mano del dueño:
+
+- [ ] 🔴 **Preview no migra:** en el próximo Preview de Vercel, el log de build muestra
+  `[vercel-build] skip migrate (VERCEL_ENV=preview)`. En el próximo deploy de Production, el log muestra
+  `$ npx prisma migrate deploy`.
+- [ ] 🔴 **Seeds bloqueados contra prod:** con `.env` apuntando a prod (o pasando la URL a mano),
+  `npx tsx prisma/seed.ts` aborta con "es solo LOCAL". **No lo pruebes con una base real si dudás:** el
+  guard imprime el destino antes de hacer nada.
+- [ ] **Scripts de soporte:** `DATABASE_URL=<prod> npx tsx scripts/set-platform-admin.ts --list` pide
+  `KINESOFT_CONFIRM_PROD=<project ref>`; con la confirmación exacta lista los superadmin.
+- [ ] **`npm run db:prod:status`** (con `.env.prod.local` creado) muestra el datasource de Supabase y las
+  migraciones pendientes, sin tocar el `.env`.
+- [ ] **Roles:** `psql "$OWNER_URL" -f prisma/roles.supabase.sql` **sin** `-v` aborta sin cambios; con
+  `-v app_password=… -v service_password=…` crea/rota los roles.
+- [ ] **Env de Production incompleta:** si falta una variable obligatoria, el build de Production falla con
+  `[env] configuración inválida — <VAR>` (no hace falta forzarlo; revisar el log si pasa).

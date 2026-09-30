@@ -1,35 +1,31 @@
 # Runbook de migraciones — dev (local Docker) y prod (Supabase)
 
 > Guía operativa para el dueño. Los comandos están listos para copiar/pegar.
-> El agente **solo** aplica migraciones en LOCAL; producción la ejecuta el dueño.
+> El agente **solo** aplica migraciones en LOCAL; producción la ejecuta el dueño,
+> en el orden que el agente deja escrito al cerrar cada bloque.
+> Reescrito en A0b/A0c (2026-09-29): **ya no se comenta/descomenta el `.env`**.
 
 ---
 
 ## 0. Cómo está armado (leer una vez)
 
-**Ya no hace falta pegar ninguna URL a mano.** El archivo `.env` tiene dos bloques
-y se cambia de entorno **comentando / descomentando**:
+| Archivo | Apunta a | Lo usan |
+|---|---|---|
+| `.env` | **Solo DEV** (Docker :5433). Borrá el bloque PROD comentado si todavía lo tenés | Prisma CLI y `@prisma/client` (lo cargan solos) |
+| `.env.local` | Docker :5433, rol app `kinesoft_app` (RLS activa) | `npm run dev`, scripts `prisma:*`, tests |
+| `.env.prod.local` | **Supabase PROD** (owner): `DIRECT_URL` + `DATABASE_URL` | **solo** los scripts `db:prod:*` |
+
+`.env.prod.local` lo creás vos (está en `.gitignore` por `.env*.local`) con dos líneas:
 
 ```
-# ─── DEV · Docker local ───   ✅ ACTIVO
-DATABASE_URL="postgresql://kinesoft:…@localhost:5433/kinesoft?schema=public"
-DIRECT_URL="postgresql://kinesoft:…@localhost:5433/kinesoft?schema=public"
-
-# ─── PROD · Supabase ───   🔒 COMENTADO
-# DATABASE_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
-# DIRECT_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
+DIRECT_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
+DATABASE_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
 ```
 
-Quién lee qué — **esto es lo importante**:
-
-| | Lee | Rol | Efecto |
-|---|---|---|---|
-| **App corriendo** (`npm run dev`) | `.env.local` (gana sobre `.env`) | `kinesoft_app` | RLS **activa**. No la afecta el switch. |
-| **CLI de Prisma** (`migrate`, `studio`, `seed`) | **`.env`** (NO lee `.env.local`) | owner | Necesita DDL. **Este es el switch.** |
-
-> ⚠️ Antes el `.env` apuntaba **siempre a producción**, así que cualquier
-> `npx prisma migrate` sin variables inline pegaba en prod. Por eso ahora arranca
-> en DEV y prod está comentado.
+> ⚠️ Por qué cambió: con el switch manual, olvidarse de volver el `.env` a DEV
+> hacía que el próximo `migrate reset` o seed del §1 pegara en producción.
+> Además todos los seeds/scripts ahora imprimen su destino y se niegan a ir a
+> una base remota sin confirmación (`assertSafeTarget`).
 
 | Variable | Para qué |
 |---|---|
@@ -41,8 +37,6 @@ Quién lee qué — **esto es lo importante**:
 
 ## 1. Local (Docker) — desarrollo
 
-Con el bloque **DEV activo** (que es como quedó), los comandos son directos:
-
 ```bash
 cd ~/Documents/kinesoft
 
@@ -50,80 +44,76 @@ cd ~/Documents/kinesoft
 docker compose up -d db
 docker compose ps                 # kinesoft-db … Up (healthy)
 
-# 1) Aplicar migraciones pendientes + regenerar el client
-npx prisma migrate dev
+# 1) Aplicar migraciones pendientes (NO usa migrate dev: detecta drift y propone
+#    resetear, y puede proponer borrar los índices parciales hechos a mano)
+npx dotenv -e .env.local -- npx prisma migrate deploy
+npx prisma generate
 
 # 2) Verificar
-npx prisma migrate status         # → "Database schema is up to date!"
+npx dotenv -e .env.local -- npx prisma migrate status   # → "Database schema is up to date!"
 ```
 
-**Crear una migración nueva** (cuando cambia `schema.prisma`):
+**Crear una migración nueva:** a mano, en `prisma/migrations/<YYYYMMDDHHMMSS>_<nombre>/migration.sql`
+(aditiva, con el porqué en la cabecera), editar `schema.prisma` en paralelo, y aplicarla con el paso 1.
+Verificar objeto por objeto (columnas, índices, policies) y correr `npm run guard:isolation`.
+
+**Resetear la base local** (destructivo, solo el dueño; el agente no lo corre):
 
 ```bash
-npx prisma migrate dev --name descripcion_corta_en_snake_case
-```
-
-**Resetear la base local** (destructivo: borra datos locales y re-siembra):
-
-```bash
-npx prisma migrate reset
+npm run prisma:reset     # re-migra y re-siembra el Docker (el seed se niega a ir a una base remota)
 # Después del reset: re-crear el rol de app y re-marcar el superadmin
 psql "postgresql://kinesoft:kinesoft@localhost:5433/kinesoft?schema=public" -f prisma/roles.local.sql
-npx tsx scripts/set-platform-admin.ts tu-email@dominio.com
+DATABASE_URL="postgresql://kinesoft:kinesoft@localhost:5433/kinesoft?schema=public" \
+  npx tsx scripts/set-platform-admin.ts tu-email@dominio.com
 ```
 
 ---
 
 ## 2. Producción (Supabase + Vercel)
 
-> **Orden recomendado:** aplicar migraciones **primero**, esperar unos segundos,
-> y recién ahí mergear a `main` para que Vercel buildee con el schema ya migrado.
-> Las migraciones pendientes son **aditivas** (columnas/tablas nuevas con default),
-> así que el código viejo sigue andando entre ambos pasos.
+> Desde A0b **solo el deploy de Production migra** (`scripts/vercel-build.mjs`); los Preview no.
+> Las migraciones son aditivas, así que el código viejo sigue andando si se aplican antes del deploy.
 
-### Paso a paso
+### Paso a paso (para cada bloque con migraciones)
 
-**1) Cambiar el `.env` a PROD** — comentá las 2 líneas del bloque DEV y descomentá
-las 2 del bloque PROD. Debe quedar así:
-
-```
-# DATABASE_URL="postgresql://kinesoft:…@localhost:5433/…"   ← comentada
-# DIRECT_URL="postgresql://kinesoft:…@localhost:5433/…"     ← comentada
-DATABASE_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
-DIRECT_URL="postgresql://…@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
-```
-
-**2) Confirmar a dónde apunta** (no escribe nada — el output dice el host):
+**1) Estado** (lee, no escribe; tiene que decir `…supabase.com`):
 
 ```bash
-npx prisma migrate status
+npm run db:prod:status
 ```
 
-Tiene que decir `…supabase.com` y listar las migraciones pendientes.
-Si dice `localhost:5433`, el switch quedó mal hecho: revisá el paso 1.
+**2) Prechecks de solo lectura** que deja el agente para ese bloque (en el SQL Editor o con psql).
+Los fijos, antes de cualquier migración:
 
-**3) Aplicar** (`deploy` solo aplica las pendientes; nunca genera ni resetea):
+```sql
+-- Migraciones registradas, fallidas o de ramas descartadas
+SELECT migration_name, finished_at, rolled_back_at, logs IS NOT NULL AS con_error
+FROM _prisma_migrations ORDER BY started_at;
+-- Roles (si existen y se crearon con el placeholder viejo, rotalos con roles.supabase.sql)
+SELECT rolname, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname LIKE 'kinesoft%';
+```
+
+**3) Backup:**
 
 ```bash
-npx prisma migrate deploy
+npm run db:prod:backup      # pg_dump -Fc → ~/kinesoft-backups/prod-<fecha>.dump
 ```
 
-**4) Confirmar** que quedó en sync:
+**4) Staging primero:** con el Preview apuntado a staging, aplicar ahí y hacer el QA del bloque.
+
+**5) Aplicar en prod:** o mergeás a `main` y el build de Production las aplica, o las aplicás antes:
 
 ```bash
-npx prisma migrate status         # → "Database schema is up to date!"
+npm run db:prod:deploy
+npm run db:prod:status      # → "Database schema is up to date!"
 ```
-
-**5) VOLVER EL `.env` A DEV** (descomentá DEV, comentá PROD). Si te olvidás,
-el próximo `prisma migrate dev` local te pega en producción.
-
-> 💡 Verificación rápida de en qué modo estás:
-> ```bash
-> npx prisma migrate status 2>&1 | grep Datasource
-> ```
-> `localhost:5433` = DEV · `supabase.com` = PROD.
 
 ### Migraciones pendientes en prod (bloque reciente)
+
+> ⚠️ **Estado real sin verificar (auditoría 2026-09-23):** hasta A0b, `vercel.json` corría `migrate deploy` en
+> cada build y `main` ya contiene estas migraciones, así que **puede que ya estén aplicadas** — o que un
+> deploy haya fallado (por ejemplo la #3, si había duplicados). Antes de nada: `npm run db:prod:status` y la
+> query de `_prisma_migrations` del paso 2.
 
 En orden. Todas aplicadas y verificadas en local:
 
@@ -154,27 +144,32 @@ GROUP BY 1,2,3 HAVING count(*) > 1;
 
 ### Tareas de prod que van una sola vez (además de migrar)
 
-Estas se corren **con el bloque PROD descomentado** (mismo switch del `.env`), así
-los scripts toman la conexión de producción sin pegar nada a mano:
-
 ```bash
-# a) Rol de app sin BYPASSRLS + rol de servicio con BYPASSRLS.
-#    psql necesita la URL explícita: copiala del bloque PROD del .env.
-psql "$(grep -m1 '^DIRECT_URL=' .env | cut -d= -f2- | tr -d '"')" -f prisma/roles.supabase.sql
+# a) Roles: app sin BYPASSRLS + service con BYPASSRLS. Passwords por variable
+#    (nunca en el archivo); re-correrlo ROTA los passwords.
+set -a; . ./.env.prod.local; set +a
+psql "$DIRECT_URL" -v app_password="$(openssl rand -base64 32)" \
+  -v service_password="$(openssl rand -base64 32)" -f prisma/roles.supabase.sql
 #    → después, en Vercel: DATABASE_URL apunta al rol app (pooler 6543)
-#      y DATABASE_URL_SERVICE al rol kinesoft_service.
+#      y DATABASE_URL_SERVICE al rol kinesoft_service (cargala ANTES del flip).
 
-# b) Marcar a los superadmin de plataforma (vos + tu cliente).
-#    El script usa DATABASE_URL del .env → con PROD descomentado, va a prod.
-npx tsx scripts/set-platform-admin.ts tu-email@dominio.com
-npx tsx scripts/set-platform-admin.ts email-del-cliente@dominio.com
-npx tsx scripts/set-platform-admin.ts --list          # verificar
+# b) Superadmin de plataforma (vos + tu cliente). Pide confirmar el project ref.
+DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
+  npx tsx scripts/set-platform-admin.ts tu-email@dominio.com
+DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
+  npx tsx scripts/set-platform-admin.ts --list
 
-# c) Bucket de Supabase Storage para la media de ejercicios
+# c) Backfill de tags estructurados (Ronda 7; sin esto los filtros de
+#    músculo/equipamiento de /biblioteca quedan vacíos en prod). Idempotente.
+DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
+  npx tsx prisma/backfill-exercise-tags.ts
+
+# d) Bucket de Supabase Storage para la media de ejercicios
 #    Crear "exercise-media" PRIVADO en el proyecto de prod (la app usa signed URLs).
 ```
 
-> Al terminar, **volvé el `.env` a DEV** (paso 5 de arriba).
+> Nunca corras `prisma/seed.ts` contra prod: es demo (borra los turnos del tenant `movare`) y
+> se niega a ejecutarse contra una base remota.
 
 ### Variables de entorno en Vercel (chequeo)
 

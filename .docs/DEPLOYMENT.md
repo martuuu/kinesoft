@@ -7,21 +7,27 @@ that bite if you get them wrong.
 
 | File | Points at | Used by |
 | --- | --- | --- |
-| `.env` | **Supabase prod** (pooler `DATABASE_URL` :6543 + direct `DIRECT_URL` :5432 + service key) | Prisma CLI, `npm run build`, prod runtime |
-| `.env.local` | **Local Docker** (`postgresql://kinesoft:kinesoft@localhost:5433/kinesoft`) | `next dev`, the `prisma:*` scripts |
+| `.env` | Historically a **hand-toggled DEV/PROD** file. **Target (A0b, 2026-09-29): DEV only** — delete the commented PROD block | Prisma CLI and `@prisma/client` (both auto-load it) |
+| `.env.local` | **Local Docker** (`localhost:5433`, app role `kinesoft_app`) | `next dev`, the `prisma:*` scripts, tests |
+| `.env.prod.local` | **Supabase prod** (owner `DIRECT_URL` + `DATABASE_URL`) — gitignored, created by the owner | only the `db:prod:*` scripts |
 
 **The footgun:** Next.js loads `.env.local` over `.env`, but the **Prisma CLI
-loads only `.env`** (= prod). So a bare `prisma migrate dev` from your machine
-hits **Supabase prod**. That's why the local scripts are wrapped with
-`dotenv -e .env.local`. Never run a bare `prisma migrate …`; use the npm
-scripts below.
+and `@prisma/client` load `.env`**. Whatever `.env` points to is what a bare
+`prisma …` or a script hits. That's why: local scripts are wrapped with
+`dotenv -e .env.local`; prod operations go ONLY through `db:prod:*`
+(`.env.prod.local`); and every seed/script calls `assertSafeTarget`
+(`scripts/lib/assert-safe-target.ts`), which prints the real target, refuses a
+remote DB for local-only seeds, and requires `KINESOFT_CONFIRM_PROD=<project
+ref>` for the few scripts allowed against prod.
 
 ```bash
 npm run prisma:migrate   # dotenv -e .env.local -- prisma migrate dev   → local Docker
 npm run prisma:seed      #                                              → local Docker
 npm run prisma:studio    #                                              → local Docker
 npm run prisma:reset     # prisma migrate reset                          → local Docker (wipes!)
-npm run db:deploy        # prisma migrate deploy (ambient .env)          → Supabase PROD
+npm run db:prod:status   # prisma migrate status  (.env.prod.local)     → Supabase PROD (read)
+npm run db:prod:backup   # pg_dump -Fc → ~/kinesoft-backups/            → Supabase PROD (read)
+npm run db:prod:deploy   # prisma migrate deploy  (.env.prod.local)     → Supabase PROD (owner only)
 ```
 
 ## Local dev setup
@@ -54,17 +60,27 @@ Hand-authored SQL under `prisma/migrations/<timestamp>_<name>/migration.sql`
 4. `npm run prisma:migrate` → applies to **local** and lets you test it.
 5. Commit + push.
 
-### Migrations on deploy (automatic since this pass)
+### Migrations on deploy (Production only, since A0b)
 
-`vercel.json` `buildCommand`:
+`vercel.json` → `node scripts/vercel-build.mjs`:
 
 ```
-prisma migrate deploy && prisma generate && next build
+VERCEL_ENV=production → prisma migrate deploy && prisma generate && next build
+anything else         →                          prisma generate && next build
 ```
 
-So **every Vercel deploy applies pending migrations to Supabase** before
-building (idempotent — applied ones are skipped). If a migration fails, the
-deploy fails (fail-fast — don't ship a code/schema mismatch).
+So **only Production deploys apply pending migrations** (idempotent — applied
+ones are skipped; a failing migration fails the deploy). Until A0b every
+Preview build migrated too, and Previews shared the prod DB: any pushed branch
+with a migration hit prod before review (AUDIT H6). Previews must point at
+**staging** (EXTERNAL-CONFIG §Staging).
+
+**Order for a block with migrations** (the agent writes the exact list):
+1. read-only prechecks against prod (queries in MIGRACIONES-RUNBOOK);
+2. `npm run db:prod:backup`;
+3. apply + QA on **staging**;
+4. merge to `main` → the Production build applies them (or `npm run
+   db:prod:deploy` beforehand, then deploy).
 
 > ⚠️ **Vercel env must include `DIRECT_URL`** (not just `DATABASE_URL`) —
 > `migrate deploy` uses the direct connection. Without it, the build step
@@ -73,7 +89,7 @@ deploy fails (fail-fast — don't ship a code/schema mismatch).
 **History:** the symptom that prompted this — a deploy threw a server-side
 exception because `Booking.seriesId` existed in the Prisma client but not in
 Supabase (the migration was only applied locally). The auto-migrate closes
-that gap. If you ever need to apply manually: `npm run db:deploy`.
+that gap. If you ever need to apply manually: `npm run db:prod:deploy`.
 
 ### Migraciones pendientes de aplicar en producción
 
@@ -124,8 +140,8 @@ untouched. The full history in `prisma/migrations/`, in order:
 idempotent and skips what's already applied):
 
 ```bash
-# Preferred: just deploy — vercel.json's buildCommand runs this for you.
-npm run db:deploy                        # = prisma migrate deploy, ambient .env
+# Preferred: just deploy — the Production build runs this for you.
+npm run db:prod:status && npm run db:prod:backup && npm run db:prod:deploy
 
 # Manual / out-of-band, explicit owner connection:
 DATABASE_URL="<owner conn>" DIRECT_URL="<owner direct conn>" \
@@ -162,9 +178,17 @@ owner action; see EXTERNAL-CONFIG.md for the ownership/gate framing.
 
 ### 1. Provision the DB roles (unblocks real RLS)
 
-Paste `prisma/roles.supabase.sql` into the Supabase SQL editor (it runs as
-`postgres`, which has CREATEROLE) **after** `prisma migrate deploy`. It creates
-two roles, idempotently, with placeholder passwords you must replace:
+Run `prisma/roles.supabase.sql` with **psql** and the owner connection
+(`postgres` has CREATEROLE), **after** `prisma migrate deploy`, passing the
+passwords as psql variables — they are never written in the file, and
+re-running it **rotates** them (A0b):
+
+```bash
+psql "$OWNER_URL" -v app_password="$(openssl rand -base64 32)" \
+  -v service_password="$(openssl rand -base64 32)" -f prisma/roles.supabase.sql
+```
+
+It creates two roles, idempotently:
 
 - `kinesoft_app` — `NOSUPERUSER NOBYPASSRLS` → goes in **`DATABASE_URL`**.
   This flip is what makes RLS stop being inert in prod.
@@ -192,18 +216,18 @@ link, not a file).
 
 `UserProfile.isPlatformAdmin` has no in-app grant path — it is set at the DB
 level with `scripts/set-platform-admin.ts`, run with the **owner** connection
-(the script defaults to the local Docker URL if `DATABASE_URL` is unset, so
-always pass it explicitly for prod):
+(`DATABASE_URL` is required — no localhost fallback since A0b — and prod also
+needs `KINESOFT_CONFIRM_PROD=<project ref>`; the script prints its target):
 
 ```bash
 # grant (the user must already exist as a UserProfile — i.e. have signed in once)
-DATABASE_URL="<owner conn>" npx tsx scripts/set-platform-admin.ts you@example.com
+DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts you@example.com
 
 # revoke
-DATABASE_URL="<owner conn>" npx tsx scripts/set-platform-admin.ts someone@x.com --revoke
+DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts someone@x.com --revoke
 
 # list current admins
-DATABASE_URL="<owner conn>" npx tsx scripts/set-platform-admin.ts --list
+DATABASE_URL="<owner conn>" KINESOFT_CONFIRM_PROD=<ref> npx tsx scripts/set-platform-admin.ts --list
 ```
 
 The email is lower-cased and must match an existing `UserProfile.email`; the
@@ -220,16 +244,18 @@ On the table once the product is validated for selling. **Destructive.**
   1. Announce downtime; take a Supabase backup/snapshot first.
   2. In the Supabase SQL editor, drop the schema or truncate domain tables
      (keep `_prisma_migrations` or re-baseline).
-  3. Re-apply: `npm run db:deploy` (recreates schema from migrations).
-  4. Re-seed the tenant(s) as needed.
+  3. Re-apply: `npm run db:prod:deploy` (recreates schema from migrations).
+  4. Re-seed the tenant(s) as needed — **never with `prisma/seed.ts`** (demo
+     data; it is local-only and aborts against a remote DB).
   5. Re-create the Particular insurer + base catalog per tenant.
 
 ## Deploy flow (summary)
 
 ```
-local Docker (.env.local)  →  test  →  git push  →  Vercel:
-    prisma migrate deploy (Supabase)  →  prisma generate  →  next build  →  live
+local Docker (.env.local)  →  test  →  commit (owner)  →  staging (Preview)  →  QA
+  →  prod precheck + backup  →  merge to main  →  Vercel Production:
+     prisma migrate deploy  →  prisma generate  →  next build  →  live
 ```
 
-One Supabase DB backs prod. Preview deploys share it — keep migrations
-additive/backward-compatible so a preview build doesn't break prod data.
+Preview deploys must use **staging**, not the prod DB (A0d, owner). Keep
+migrations additive/backward-compatible (expand/contract) anyway.
