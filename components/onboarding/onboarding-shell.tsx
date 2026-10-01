@@ -3,7 +3,7 @@
  * del paso. Mismo fondo que las pantallas de auth (gradientes sky/lime sobre
  * `--bg-app`) para que el alta se sienta continuación del signup.
  *
- * Mobile: el riel vertical pasa a una barra de progreso + "Paso N de 7" arriba
+ * Mobile: el riel vertical pasa a una barra de progreso + "Paso N de 9" arriba
  * de la tarjeta (clases `onb-*` abajo; sin CSS global nuevo).
  */
 import Link from "next/link";
@@ -16,7 +16,7 @@ export function OnboardingShell({
   maxReachable,
   children,
 }: {
-  /** Paso actual (1-7). null = pantallas previas al stepper (invitaciones, sin verificar). */
+  /** Paso actual (1-9, `STEP`). null = pantallas previas al stepper (invitaciones, sin verificar). */
   current: number | null;
   /** Último paso al que se puede saltar desde el riel (los anteriores ya tienen datos). */
   maxReachable?: number;

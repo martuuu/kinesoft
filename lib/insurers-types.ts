@@ -7,6 +7,9 @@ export type InsurerRow = {
   isParticular: boolean;
   active: boolean;
   notes: string | null;
+  /** Prestadora del catálogo global a la que está vinculada (B1.4); null = sin vincular. */
+  payerId: string | null;
+  payerName: string | null;
   patientsCount: number;
   createdAt: Date;
 };

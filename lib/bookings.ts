@@ -19,9 +19,36 @@ import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { isHoldingCapacity, isPublicReservation, overlapBlocks, patientDayStatus } from "@/lib/booking-capacity";
-import { toARDow, toARHour, toARDateKey } from "@/lib/datetime-ar";
+import { toARDateKey } from "@/lib/datetime-ar";
+import type { BatchSlotStatus } from "@/lib/booking-schedule";
+import {
+  addDays,
+  arWallOf,
+  classifyBatchInstant,
+  classifyInstant,
+  dayKeyOf,
+  dayWindow,
+  expandDates,
+  fitsInRanges,
+  nextFreeSlot,
+  resolvePractitionerService,
+  scheduledRanges,
+  NEXT_FREE_HORIZON_DAYS,
+  NO_LOCATION_ID,
+  type AvailabilityInput,
+  type InstantClassification,
+  type RangesFor,
+  type ResolvedPractitionerService,
+} from "@/lib/availability";
+import { loadAvailabilityInputs } from "@/lib/availability-loader";
+import { lockTenantLocationsShared } from "@/lib/location-lock";
+import { lockCapacityWindow } from "@/lib/booking-cap-lock";
 import { bulkPatientAccess, patientAccessFor } from "@/lib/visibility";
-import type { Actor } from "@/lib/session";
+import { ForbiddenError, type Actor } from "@/lib/session";
+import { getMembershipRole, requireCapability } from "@/lib/authz";
+import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
+import type { ForceFlags } from "@/lib/booking-force-flags";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
 
@@ -36,14 +63,27 @@ function invalidateBookingDerivedCaches(tenantId: string) {
   revalidateTag(tags.dashboard(tenantId));
 }
 import {
+  BookingBatchCreate,
   BookingCreate,
   BookingUpdate,
   type ActionResult,
+  type BookingBatchCreateInput,
   type BookingCreateInput,
   type BookingUpdateInput,
 } from "@/lib/validation";
 
-import type { BookingRow } from "@/lib/bookings-types";
+import {
+  AgendaBookingsQuery,
+  ReceptionActionInput,
+  type AgendaBookingRow,
+  type AgendaBookingsQueryInput,
+  type BatchDateOutcome,
+  type BookingBlockedPrompt,
+  type BookingOutOfHoursPrompt,
+  type BookingRow,
+  type ReceptionActionResult,
+} from "@/lib/bookings-types";
+import type { ReceptionAction } from "@/lib/reception-state";
 
 type Tx = Prisma.TransactionClient;
 
@@ -173,10 +213,10 @@ async function checkPatientOverlap(
     excludeKey?: string | null;
   }
 ): Promise<{ sameInstant: boolean; overlapISO: string | null; sameDayStarts: Date[] }> {
-  // AR calendar-day bounds in UTC: AR midnight = 03:00 UTC (UTC-3, sin DST).
-  const dayKey = toARDateKey(o.start);
-  const dayStart = new Date(`${dayKey}T03:00:00.000Z`);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+  // Día AR del turno como instantes. B3.1: antes era el literal
+  // `${dayKey}T03:00:00Z` (medianoche AR a mano); ahora el único puente día ↔
+  // instante del motor (`dayWindow`, sobre `lib/datetime-ar.ts`).
+  const { start: dayStart, end: dayEnd } = dayWindow(dayKeyOf(o.start));
   const windowStart = new Date(Math.min(dayStart.getTime(), o.start.getTime() - 240 * 60_000));
   // Hasta el fin del día AR o del turno nuevo (un turno de 23:30 que cruza la
   // medianoche también puede pisar uno del día siguiente).
@@ -257,6 +297,229 @@ async function resolveUniqueViolation(
     return { kind: "patient-slot" };
   }
   return { kind: "other" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Motor de disponibilidad (B3.1 AV-bookings). La lógica es pura
+// (`lib/availability/*`); acá solo la carga (`loadAvailabilityInputs` con el tx
+// de runWithRls) y la traducción a los avisos blandos del alta/edición.
+// Lo que NO se movió al motor, a propósito: el cupo del write
+// (`countCapacityOverlaps`) y el guard del paciente (`checkPatientOverlap`)
+// siguen con sus queries propias — son el contrato de AUDIT §5 (preservar) y
+// los cubre la caracterización de bookings-write; el motor aporta franjas,
+// bloqueos, la regla por profesional y la sugerencia.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SERVICE_DISABLED_ERROR = (serviceName: string) =>
+  `Este profesional no tiene habilitado el servicio «${serviceName}». Elegí otro profesional o habilitalo en Configuración → Profesionales.`;
+const BAD_LOCATION_ERROR = "Sede inválida o archivada. Elegí otra sede.";
+const OUT_OF_HOURS_ERROR =
+  "Ese horario está fuera del horario de atención del profesional. Podés elegir el próximo libre o cargarlo igual.";
+const BLOCKED_ERROR = (reason: string | null) =>
+  `La agenda del profesional está bloqueada en ese horario${reason ? ` (${reason})` : ""}. Podés elegir el próximo libre o cargarlo igual como sobreturno.`;
+
+type ServiceForRule = { id: string; durationMin: number; maxConcurrent: number | null; practitionerId: string | null };
+
+/**
+ * Regla efectiva del profesional para el servicio (`PractitionerService`):
+ * habilitado, duración propia y cupo (override). Sin fila, el default de
+ * Configuración: habilitado si el servicio es del consultorio o de ese
+ * profesional (`resolvePractitionerService`). Tenant-scoped a mano.
+ */
+async function practitionerServiceRule(
+  tx: Tx,
+  tenantId: string,
+  practitionerId: string,
+  service: ServiceForRule
+): Promise<ResolvedPractitionerService> {
+  const row = await tx.practitionerService.findFirst({
+    where: { tenantId, practitionerId, serviceId: service.id },
+    select: {
+      practitionerId: true,
+      serviceId: true,
+      enabled: true,
+      visibility: true,
+      durationMin: true,
+      minLeadMinutes: true,
+      maxLeadDays: true,
+      concurrencyOverride: true,
+      maxConcurrent: true,
+    },
+  });
+  return resolvePractitionerService(row ?? undefined, service, practitionerId);
+}
+
+/** Franjas SIN restar bloqueos (contrato de `classify`: si recibiera
+ *  `workingRanges`, un instante bloqueado saldría además fuera de horario). */
+const rangesForInput = (input: AvailabilityInput): RangesFor => (pid, dayKey) => scheduledRanges(pid, dayKey, input);
+
+/** Lo que el motor necesita para clasificar [start, end) de un profesional:
+ *  el día AR del inicio (y el siguiente si el turno cruza la medianoche). */
+function loadInstantAvailability(
+  tx: Tx,
+  o: { tenantId: string; practitionerId: string; serviceId: string; start: Date; end: Date }
+) {
+  const from = dayKeyOf(o.start);
+  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
+  return loadAvailabilityInputs(tx, {
+    tenantId: o.tenantId,
+    practitionerIds: [o.practitionerId],
+    serviceId: o.serviceId,
+    from,
+    to,
+  });
+}
+
+/** Franjas/bloqueos del instante. `locationId` null = cualquier sede (la
+ *  deciden las franjas). Patient = null: el guard del paciente es aparte. */
+function classifyForWrite(
+  input: AvailabilityInput,
+  o: {
+    when: Date;
+    durationMin: number;
+    practitionerId: string;
+    serviceId: string;
+    locationId: string | null;
+    cap: number | null;
+    now: Date;
+    excludeBookingId?: string;
+  }
+): InstantClassification & { blockReason: string | null } {
+  const c = classifyInstant({
+    ...o,
+    patientId: null,
+    rangesFor: rangesForInput(input),
+    blocks: input.blocks,
+    bookings: input.bookings,
+  });
+  const blockReason = input.blocks.find((b) => c.blockIds.includes(b.id) && b.reason)?.reason ?? null;
+  return { ...c, blockReason };
+}
+
+/**
+ * Bloqueos vivos que pueden pisar [start, end) del profesional, leídos DENTRO
+ * del tx de escritura (integrador final de B-pre, handoff de B4.4).
+ *
+ * El bug: el alta y el batch clasificaban el bloqueo en un tx PREVIO (y la
+ * edición, antes del lock de cupo), así que un `applyDayLock` que commiteaba
+ * en el medio dejaba entrar el turno como normal: sin aviso `blocked` y sin
+ * marcarlo sobreturno. `applyDayLock` toma los locks de cupo
+ * (`lib/booking-cap-lock.ts`) de cada (profesional, servicio) del día; el
+ * write-path toma el mismo lock y RECIÉN DESPUÉS llama a esto: en READ
+ * COMMITTED la sentencia ve el bloqueo ya commiteado (o el candado espera a
+ * que commiteemos y su recálculo de afectados ve nuestro turno → `changed`).
+ *
+ * Mismo filtro y ventana que `loadAvailabilityInputs` sin sede (los días AR
+ * que toca el turno), para que la re-clasificación sea idéntica a la del
+ * motor salvo por los bloqueos nuevos. Una sola query: no se recarga todo.
+ */
+async function liveBlocksInTx(
+  tx: Tx,
+  o: { tenantId: string; practitionerId: string; start: Date; end: Date }
+): Promise<AvailabilityInput["blocks"]> {
+  const from = dayKeyOf(o.start);
+  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
+  return tx.timeBlock.findMany({
+    where: {
+      tenantId: o.tenantId,
+      deletedAt: null,
+      startsAt: { lt: dayWindow(to).end },
+      endsAt: { gt: dayWindow(from).start },
+      OR: [{ practitionerId: null }, { practitionerId: o.practitionerId }],
+    },
+    select: {
+      id: true,
+      practitionerId: true,
+      locationId: true,
+      startsAt: true,
+      endsAt: true,
+      allDay: true,
+      reason: true,
+      groupId: true,
+    },
+    orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+  });
+}
+
+/**
+ * Sede por defecto de un turno sin sede elegida: la de la franja del
+ * profesional donde entra el turno (o la que contiene el inicio); si no cae en
+ * ninguna, la principal. null = sin sede principal (tenant sin Location: el
+ * turno queda con null = "principal" como hasta ahora).
+ */
+function defaultLocationFor(input: AvailabilityInput, practitionerId: string, when: Date, durationMin: number): string | null {
+  const { dayKey, startMin } = arWallOf(when);
+  const ranges = scheduledRanges(practitionerId, dayKey, input);
+  const hit =
+    ranges.find((r) => fitsInRanges(ranges, startMin, durationMin, r.locationId)) ??
+    ranges.find((r) => r.startMin <= startMin && startMin < r.endMin);
+  const loc = hit?.locationId ?? input.primaryLocationId;
+  return loc && loc !== NO_LOCATION_ID ? loc : null;
+}
+
+/**
+ * Lock COMPARTIDO de las sedes del tenant y RECIÉN DESPUÉS la validación (patrón
+ * de `lib/location-lock.ts`): así `archiveLocation` no puede intercalarse
+ * entre "la sede está activa" y la fila que la referencia. Dentro del tx.
+ */
+async function lockActiveLocation(tx: Tx, tenantId: string, locationId: string): Promise<boolean> {
+  await lockTenantLocationsShared(tx, tenantId);
+  const loc = await tx.location.findFirst({
+    where: { id: locationId, tenantId, active: true },
+    select: { id: true },
+  });
+  return !!loc;
+}
+
+/**
+ * Próximo hueco libre para la sugerencia de los avisos (`conflict`,
+ * `outOfHours`, `blocked`). B3.1: `nextFreeSlot` del motor en vez de
+ * `findNextFreeSlot` (lun-sáb + businessHours del tenant). Ahora respeta las
+ * franjas del profesional, excepciones y bloqueos, y ve los turnos EN CURSO
+ * (el loader trae desde `from − BOOKING_LOOKBACK_MIN`; el suggest viejo
+ * cargaba desde `from + 15` y podía proponer un hueco ocupado, hallazgo de
+ * B1.6). Con `patientId` tampoco propone un horario donde el paciente ya está.
+ * Lectura consultiva: su propio runWithRls, fuera del tx del write.
+ */
+async function suggestNextFreeSlot(
+  tenantId: string,
+  o: {
+    practitionerId: string;
+    serviceId: string;
+    from: Date;
+    durationMin: number;
+    cap: number | null;
+    patientId?: string | null;
+    locationId?: string | null;
+    excludeBookingId?: string;
+  }
+): Promise<string | null> {
+  const fromKey = dayKeyOf(o.from);
+  const input = await runWithRls(tenantId, (tx) =>
+    loadAvailabilityInputs(tx, {
+      tenantId,
+      practitionerIds: [o.practitionerId],
+      serviceId: o.serviceId,
+      patientId: o.patientId ?? undefined,
+      from: fromKey,
+      // +1: el horizonte (14 días) corre desde `from + 15 min`.
+      to: addDays(fromKey, NEXT_FREE_HORIZON_DAYS + 1),
+    })
+  );
+  return nextFreeSlot({
+    from: o.from,
+    durationMin: o.durationMin,
+    patientId: o.patientId ?? null,
+    practitionerId: o.practitionerId,
+    serviceId: o.serviceId,
+    locationId: o.locationId ?? null,
+    cap: o.cap,
+    rangesFor: rangesForInput(input),
+    blocks: input.blocks,
+    bookings: input.bookings,
+    now: new Date(),
+    excludeBookingId: o.excludeBookingId ?? null,
+  });
 }
 
 export async function listBookingsInRange(opts: {
@@ -375,6 +638,184 @@ export async function listBookingsInRange(opts: {
   });
 }
 
+/**
+ * Proyección LIVIANA de la agenda (B4.1 AV-bookings-2). La consume la agenda
+ * multi-profesional (B4.3 la adopta en `app/(app)/agenda/page.tsx`; hasta
+ * entonces `listBookingsInRange` sigue igual para quien la usa hoy) y la vista
+ * Recepción (B4.5).
+ *
+ * Por qué una función nueva y no un flag en `listBookingsInRange`: la completa
+ * incluye, POR FILA, paciente → coberturas → programas → caso → diagnósticos
+ * (hecho 6 de bpre-design: el cuello de botella con 5+ profesionales en una
+ * semana). Acá:
+ *   - sin programa/caso/diagnóstico: `patientCondition` siempre null (el chip
+ *     de la card lo cubre `title`, el mini-diagnóstico del turno);
+ *   - la cobertura NO va por fila: UNA query plana para los pacientes
+ *     distintos con acceso `full` (los únicos a los que se les muestra
+ *     billing), con la misma precedencia de copago (`resolveBookingCopagoCents`,
+ *     AUDIT §5.5) — `obraSocial`/`copagoCents` dan igual que en la completa
+ *     (lo afirma bookings-reception.test.ts);
+ *   - service/patient con `select` de lo que se muestra, no `include` entero.
+ *
+ * Gate `clinical.read` (lib/capabilities.ts): sin ella (ASSISTANT, BILLING)
+ * title/description van null y `notes` solo queda en turnos SIN paciente (la
+ * carga el staff: es administrativa, p. ej. el teléfono de una reserva
+ * externa). Se suma al gate por paciente de siempre (acceso `basic` →
+ * title/description/notes null). `clinicalHidden` lo informa por fila.
+ * `agenda.viewAll` (hoy la tienen todos los roles): sin ella, solo la agenda
+ * propia — falla cerrado si C0 crea un rol sin esa capability.
+ *
+ * Filtros: `practitionerIds[]` (vacío = todos) y `locationId` (la principal
+ * incluye los turnos con `locationId` null, contrato de M-agenda; una sede que
+ * no es del tenant → []). Rango ≤ 62 días; input inválido → tira ZodError
+ * (server action de lectura, como `listBookingsInRange`).
+ */
+export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise<AgendaBookingRow[]> {
+  const actor = await getActor();
+  const q = AgendaBookingsQuery.parse(raw);
+  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const clinical = caps.has("clinical.read");
+  let practitionerIds = q.practitionerIds?.length ? [...new Set(q.practitionerIds)] : undefined;
+  if (!caps.has("agenda.viewAll")) {
+    practitionerIds = (practitionerIds ?? [actor.practitionerId]).filter((id) => id === actor.practitionerId);
+  }
+  const tenantId = actor.tenantId;
+
+  const loaded = await runWithRls(tenantId, async (tx) => {
+    // Las sedes del tenant son pocas: una query sirve para el filtro (¿es la
+    // principal?) y para `locationName` (null = principal).
+    const locations = await tx.location.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, isPrimary: true },
+    });
+    let locationWhere: Prisma.BookingWhereInput = {};
+    if (q.locationId) {
+      const loc = locations.find((l) => l.id === q.locationId);
+      if (!loc) return null;
+      locationWhere = loc.isPrimary
+        ? { OR: [{ locationId: loc.id }, { locationId: null }] }
+        : { locationId: loc.id };
+    }
+    const rows = await tx.booking.findMany({
+      where: {
+        tenantId,
+        scheduledFor: { gte: q.from, lt: q.to },
+        ...(practitionerIds ? { practitionerId: { in: practitionerIds } } : {}),
+        ...(q.includeCancelled === false ? { status: { not: "CANCELLED" as const } } : {}),
+        ...locationWhere,
+      },
+      orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        scheduledFor: true,
+        durationMin: true,
+        status: true,
+        serviceId: true,
+        practitionerId: true,
+        patientId: true,
+        guestName: true,
+        copagoCents: true,
+        notes: true,
+        title: true,
+        description: true,
+        updatedAt: true,
+        paymentStatus: true,
+        createdAt: true,
+        idempotencyKey: true,
+        isOverbooked: true,
+        locationId: true,
+        isTelemedicine: true,
+        telemedicineUrl: true,
+        arrivedAt: true,
+        attendingAt: true,
+        service: { select: { name: true, color: true, priceCents: true } },
+        patient: { select: { firstName: true, lastName: true } },
+      },
+    });
+    const patientIds = [...new Set(rows.map((b) => b.patientId).filter((id): id is string => !!id))];
+    const access = await bulkPatientAccess(actor, patientIds, tx);
+    const fullIds = patientIds.filter((id) => access.get(id) === "full");
+    const [coverages, particularCopago] = await Promise.all([
+      fullIds.length
+        ? tx.coverage.findMany({
+            where: { patientId: { in: fullIds }, patient: { tenantId } },
+            // = `orderBy id desc, take 1` por paciente de la proyección completa.
+            orderBy: { id: "desc" },
+            select: {
+              patientId: true,
+              insurer: true,
+              copagoCents: true,
+              insurerRef: { select: { name: true, copagoCents: true } },
+            },
+          })
+        : Promise.resolve([]),
+      getParticularCopagoCents(tenantId, tx),
+    ]);
+    return { locations, rows, access, coverages, particularCopago };
+  });
+  if (!loaded) return [];
+
+  const coverageOf = new Map<string, (typeof loaded.coverages)[number]>();
+  for (const c of loaded.coverages) if (!coverageOf.has(c.patientId)) coverageOf.set(c.patientId, c);
+  const locationName = new Map(loaded.locations.map((l) => [l.id, l.name]));
+  const primaryName = loaded.locations.find((l) => l.isPrimary)?.name ?? null;
+
+  return loaded.rows.map((b): AgendaBookingRow => {
+    const access: "full" | "basic" | "none" = b.patientId ? (loaded.access.get(b.patientId) ?? "basic") : "none";
+    const coverage = access === "full" && b.patientId ? coverageOf.get(b.patientId) : undefined;
+    const insurer = coverage?.insurerRef;
+    // Mismo cálculo que `listBookingsInRange` (precedencia §5.5; basic → precio).
+    const obraSocial = access === "full" ? insurer?.name ?? coverage?.insurer ?? "Particular" : "Particular";
+    const copagoCents =
+      access === "full"
+        ? resolveBookingCopagoCents({
+            bookingOverride: b.copagoCents,
+            coverageOverride: coverage?.copagoCents ?? null,
+            hasCoverage: !!coverage,
+            insurerCopago: insurer ? insurer.copagoCents : null,
+            particularCopago: loaded.particularCopago,
+            servicePriceCents: b.service.priceCents,
+          })
+        : b.service.priceCents;
+    const showClinical = clinical && access !== "basic";
+    // Sin clinical.read la nota de un turno con paciente puede ser clínica (la
+    // del turnero trae el texto libre del paciente); la de un turno sin
+    // paciente la escribió el staff.
+    const showNotes = access !== "basic" && (clinical || !b.patientId);
+    return {
+      id: b.id,
+      scheduledFor: b.scheduledFor,
+      durationMin: b.durationMin,
+      status: b.status,
+      serviceId: b.serviceId,
+      serviceName: b.service.name,
+      serviceColor: b.service.color,
+      practitionerId: b.practitionerId,
+      patientId: b.patientId,
+      patientName: b.patient ? `${b.patient.firstName} ${b.patient.lastName}` : b.guestName ?? "Sin asignar",
+      patientCondition: null,
+      obraSocial,
+      copagoCents,
+      notes: showNotes ? b.notes : null,
+      title: showClinical ? b.title : null,
+      description: showClinical ? b.description : null,
+      updatedAt: b.updatedAt,
+      patientAccess: access,
+      paymentStatus: b.paymentStatus,
+      createdAt: b.createdAt,
+      publicReservation: isPublicReservation(b),
+      isOverbooked: b.isOverbooked,
+      locationId: b.locationId,
+      locationName: b.locationId ? locationName.get(b.locationId) ?? null : primaryName,
+      isTelemedicine: b.isTelemedicine,
+      telemedicineUrl: b.telemedicineUrl,
+      arrivedAt: b.arrivedAt,
+      attendingAt: b.attendingAt,
+      clinicalHidden: !showClinical,
+    };
+  });
+}
+
 export async function getDayCounts(opts: { from: Date; to: Date }) {
   const actor = await getActor();
   // Day-strip dots show every booking in the tenant — counts don't leak
@@ -436,93 +877,6 @@ export async function listPractitioners() {
   return fetcher(actor.tenantId);
 }
 
-/**
- * Find the next slot of `durationMin` after `from` for `practitionerId`
- * that doesn't overlap with any non-cancelled booking. Walks in 15-min
- * steps within the tenant's configured business hours, Mon-Sat, capped
- * at 14 days lookahead. Returns null if nothing free within the window.
- *
- * Business hours come from `Tenant.businessHoursStart/End` (Sprint 17).
- */
-async function suggestNextFreeSlot(
-  tenantId: string,
-  practitionerId: string,
-  from: Date,
-  durationMin: number,
-  serviceId: string,
-  maxConcurrent: number | null
-): Promise<string | null> {
-  const STEP_MIN = 15;
-  const HORIZON_MS = 14 * 86_400_000;
-  const start = new Date(from.getTime() + STEP_MIN * 60_000);
-  // Resolve business hours alongside the bookings preload so we don't
-  // do two sequential roundtrips.
-  const [bookings, tenant] = await Promise.all([
-    runWithRls(tenantId, (tx) => tx.booking.findMany({
-      where: {
-        tenantId,
-        practitionerId,
-        serviceId,
-        status: { notIn: ["CANCELLED"] },
-        scheduledFor: {
-          gte: start,
-          lt: new Date(start.getTime() + HORIZON_MS),
-        },
-      },
-      select: {
-        scheduledFor: true,
-        durationMin: true,
-        status: true,
-        paymentStatus: true,
-        createdAt: true,
-        patientId: true,
-        idempotencyKey: true,
-      },
-    })),
-    runWithRls(tenantId, (tx) => tx.tenant.findUnique({
-      where: { id: tenantId },
-      select: { businessHoursStart: true, businessHoursEnd: true },
-    })),
-  ]);
-  // Same predicate as the capacity checks: an expired unpaid public pending
-  // no longer holds the slot, so it mustn't push the suggestion further out.
-  const now = new Date();
-  const holding = bookings.filter((b) => isHoldingCapacity(b, now));
-  const openHour = tenant?.businessHoursStart ?? 8;
-  const closeHour = tenant?.businessHoursEnd ?? 19;
-  // A slot is "free" when adding this turno wouldn't exceed the service's
-  // per-horario capacity — counting SAME-service overlaps only.
-  const atCapacity = (slot: Date, end: Date) =>
-    overlapBlocks(
-      holding.filter((b) => {
-        const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
-        return b.scheduledFor < end && bEnd > slot;
-      }).length,
-      maxConcurrent
-    );
-  const cursor = new Date(start);
-  // Round to next 15-min boundary.
-  cursor.setMinutes(Math.ceil(cursor.getMinutes() / STEP_MIN) * STEP_MIN, 0, 0);
-  while (cursor.getTime() - from.getTime() < HORIZON_MS) {
-    // Gate against the AR wall-clock, not the host's — openHour/closeHour are
-    // AR business hours, so on a UTC host `getDay()`/`getHours()` would be
-    // 3h off and could skip Saturday or include Sunday. The 15-min rounding
-    // above stays on host minutes (AR's offset is whole hours, so identical).
-    const dow = toARDow(cursor); // 0 Sun..6 Sat in AR
-    const arHour = toARHour(cursor); // fractional AR hour, e.g. 14.5
-    // Slot must fit entirely inside the business window.
-    const endMinutes = arHour * 60 + durationMin;
-    if (dow !== 0 && arHour >= openHour && endMinutes <= closeHour * 60) {
-      const end = new Date(cursor.getTime() + durationMin * 60_000);
-      if (!atCapacity(cursor, end)) {
-        return cursor.toISOString();
-      }
-    }
-    cursor.setTime(cursor.getTime() + STEP_MIN * 60_000);
-  }
-  return null;
-}
-
 export async function createBooking(
   raw: BookingCreateInput & {
     allowOverbooking?: boolean;
@@ -533,6 +887,13 @@ export async function createBooking(
     // has (two services in parallel is normal in kinesiología). The exact same
     // instant is still refused by the DB unique index.
     allowPatientOverlap?: boolean;
+    // B3.1 (decisión 2): el staff confirmó cargarlo fuera de la franja del
+    // profesional (o un día que no atiende). Solo aviso, no sobreturno.
+    allowOutOfHours?: boolean;
+    // B3.1 (decisión 1): el staff confirmó cargarlo sobre un bloqueo de agenda.
+    // Queda como sobreturno (`isOverbooked` + prefijo). El turnero y Planes no
+    // lo pueden forzar (bloqueo duro allá).
+    allowBlocked?: boolean;
     // Stable per-attempt key from the client so a double-submit / retry
     // collapses to one row, while a deliberate new turno gets its own.
     idempotencyKey?: string;
@@ -547,6 +908,10 @@ export async function createBooking(
     samePatientDay?: { count: number; existingISO: string };
     // Soft prompt: the new turno overlaps one the patient already has.
     patientOverlap?: { existingISO: string };
+    // B3.1: fuera del horario del profesional (re-llamar con allowOutOfHours).
+    outOfHours?: BookingOutOfHoursPrompt;
+    // B3.1: sobre un bloqueo de agenda (re-llamar con allowBlocked).
+    blocked?: BookingBlockedPrompt;
   }
 > {
   const actor = await getActor();
@@ -559,6 +924,7 @@ export async function createBooking(
     };
   }
   const data = parsed.data;
+  const now = new Date();
 
   // Ids de entrada validados contra el tenant ANTES de escribir: las FK
   // saltean RLS y en prod la conexión tiene BYPASSRLS, así que un
@@ -566,8 +932,12 @@ export async function createBooking(
   // El paciente además tiene que ser de acceso `full` (acceso básico = solo ver).
   // El diagnóstico por defecto del paciente auto-completa title/description
   // del turno cuando el caller no los envía (overridable por turno).
+  // B3.1: en el mismo tx, la sede elegida (del tenant y activa; se re-valida
+  // con lock al escribir), la regla del profesional para el servicio
+  // (`PractitionerService`: habilitado + duración + cupo) y las entradas del
+  // motor de disponibilidad para clasificar el horario.
   const pre = await runWithRls(actor.tenantId, async (tx) => {
-    const [patient, service, prac] = await Promise.all([
+    const [patient, service, prac, location] = await Promise.all([
       data.patientId
         ? tx.patient.findFirst({
             where: { id: data.patientId, tenantId: actor.tenantId },
@@ -576,31 +946,79 @@ export async function createBooking(
         : Promise.resolve(null),
       tx.service.findFirst({
         where: { id: data.serviceId, tenantId: actor.tenantId },
-        select: { id: true, durationMin: true, name: true, maxConcurrent: true },
+        select: { id: true, durationMin: true, name: true, maxConcurrent: true, practitionerId: true },
       }),
       tx.practitioner.findFirst({
         where: { id: data.practitionerId, tenantId: actor.tenantId },
         select: { id: true },
       }),
+      data.locationId
+        ? tx.location.findFirst({
+            where: { id: data.locationId, tenantId: actor.tenantId, active: true },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
     ]);
     if (data.patientId && !patient) return { kind: "foreign-patient" as const };
     if (!prac) return { kind: "foreign-practitioner" as const };
     if (!service) return { kind: "bad-service" as const };
+    if (data.locationId && !location) return { kind: "bad-location" as const };
     if (patient && !(await hasFullAccess(actor, patient.id, tx))) {
       return { kind: "basic" as const };
     }
-    return { kind: "ok" as const, patient, service };
+    // Decisión de B3.1: servicio deshabilitado para ESE profesional → rechazo
+    // simple, también para OWNER/ADMIN (se habilita en Configuración). Sin un
+    // `allowDisabledService`: el cupo, la duración y el turnero ya leen esta
+    // regla, y un turno "por afuera" quedaría inconsistente con todos ellos.
+    const rule = await practitionerServiceRule(tx, actor.tenantId, prac.id, service);
+    if (!rule.enabled) return { kind: "service-disabled" as const, serviceName: service.name };
+    // Duración: la explícita del caller gana; si no, la del profesional para
+    // ese servicio (`PractitionerService.durationMin`) o la del servicio.
+    const duration = data.durationMin ?? rule.durationMin;
+    const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
+    const input = await loadInstantAvailability(tx, {
+      tenantId: actor.tenantId,
+      practitionerId: prac.id,
+      serviceId: service.id,
+      start: data.scheduledFor,
+      end,
+    });
+    return { kind: "ok" as const, patient, service, rule, duration, end, input };
   });
   if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
   if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
   if (pre.kind === "bad-service") return { ok: false, error: "Servicio inválido." };
+  if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
   if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
-  const { service } = pre;
+  if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
+  const { service, rule, duration, end, input } = pre;
   const patientDiag = pre.patient;
 
-  const duration = data.durationMin ?? service.durationMin;
-  const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
-  const now = new Date();
+  // Franjas y bloqueos del profesional en ese horario (motor puro). Con una
+  // sede elegida se clasifica contra ESA sede; sin elegir, contra cualquiera
+  // de sus franjas del día.
+  const clsArgs = {
+    when: data.scheduledFor,
+    durationMin: duration,
+    practitionerId: data.practitionerId,
+    serviceId: service.id,
+    locationId: data.locationId ?? null,
+    cap: rule.cap,
+    now,
+  };
+  const cls = classifyForWrite(input, clsArgs);
+  const locationId = data.locationId ?? defaultLocationFor(input, data.practitionerId, data.scheduledFor, duration);
+  const suggest = () =>
+    suggestNextFreeSlot(actor.tenantId, {
+      practitionerId: data.practitionerId,
+      serviceId: service.id,
+      from: data.scheduledFor,
+      durationMin: duration,
+      cap: rule.cap,
+      patientId: data.patientId ?? null,
+      locationId: data.locationId ?? null,
+    });
+  const nameOf = () => runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, data.practitionerId));
 
   // Stable idempotency key for THIS attempt (client-provided, else random).
   // Resolved up-front so the patient-day guard can EXCLUDE this attempt's own
@@ -614,21 +1032,41 @@ export async function createBooking(
   // across ALL professionals. Skipping the query entirely when both are already
   // confirmed keeps the retry path cheap (the unique index still backstops the
   // exact instant — see resolveUniqueViolation).
-  if (data.patientId && !(raw.allowSamePatientDay && raw.allowPatientOverlap)) {
-    const pat = await runWithRls(actor.tenantId, (tx) =>
-      checkPatientOverlap(tx, {
-        tenantId: actor.tenantId,
-        patientId: data.patientId!,
-        start: data.scheduledFor,
-        end,
-        excludeKey: clientKey,
-      })
-    );
-    // A turno at the EXACT same instant is structurally impossible — the
-    // partial unique index (tenant, patient, scheduledFor) rejects it. Say so
-    // up front instead of offering a confirmation that can never succeed
-    // (the batch path reports this same case as "duplicado").
-    if (pat.sameInstant) return { ok: false, error: SAME_INSTANT_ERROR };
+  const pat =
+    data.patientId && !(raw.allowSamePatientDay && raw.allowPatientOverlap)
+      ? await runWithRls(actor.tenantId, (tx) =>
+          checkPatientOverlap(tx, {
+            tenantId: actor.tenantId,
+            patientId: data.patientId!,
+            start: data.scheduledFor,
+            end,
+            excludeKey: clientKey,
+          })
+        )
+      : null;
+  // A turno at the EXACT same instant is structurally impossible — the
+  // partial unique index (tenant, patient, scheduledFor) rejects it. Say so
+  // up front instead of offering a confirmation that can never succeed
+  // (the batch path reports this same case as "duplicado").
+  if (pat?.sameInstant) return { ok: false, error: SAME_INSTANT_ERROR };
+
+  // B3.1: avisos blandos de agenda, en la precedencia del motor (bloqueado >
+  // fuera de horario) y ANTES de los del paciente/cupo: si el horario no se va
+  // a usar, preguntar por el paciente o el cupo es ruido.
+  if (cls.blocked && !raw.allowBlocked) {
+    const [practitionerName, nextFreeISO] = await Promise.all([nameOf(), suggest()]);
+    return {
+      ok: false,
+      error: BLOCKED_ERROR(cls.blockReason),
+      blocked: { practitionerName, reason: cls.blockReason, nextFreeISO },
+    };
+  }
+  if (cls.outOfHours && !raw.allowOutOfHours) {
+    const [practitionerName, nextFreeISO] = await Promise.all([nameOf(), suggest()]);
+    return { ok: false, error: OUT_OF_HOURS_ERROR, outOfHours: { practitionerName, nextFreeISO } };
+  }
+
+  if (pat) {
     if (!raw.allowPatientOverlap && pat.overlapISO) {
       return {
         ok: false,
@@ -648,42 +1086,9 @@ export async function createBooking(
     }
   }
 
-  // Overlap capacity check, scoped to the SAME practitioner + SAME service.
-  // Overlaps are allowed up to `Service.maxConcurrent` (null = ilimitado, el
-  // caso normal en kinesiología: varios pacientes en paralelo en la franja).
-  // An expired unpaid public reservation no longer holds the slot.
-  const overlapCount = await runWithRls(actor.tenantId, (tx) =>
-    countCapacityOverlaps(tx, {
-      tenantId: actor.tenantId,
-      practitionerId: data.practitionerId,
-      serviceId: data.serviceId,
-      start: data.scheduledFor,
-      end,
-      now,
-      excludeKey: clientKey,
-    })
-  );
-  const capacityReached = overlapBlocks(overlapCount, service.maxConcurrent);
-  if (capacityReached && !raw.allowOverbooking) {
-    // Compute a suggestion + tell the UI it can re-call with
-    // allowOverbooking=true to force a sobreturno.
-    const [practitionerName, suggestion] = await Promise.all([
-      runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, data.practitionerId)),
-      suggestNextFreeSlot(actor.tenantId, data.practitionerId, data.scheduledFor, duration, data.serviceId, service.maxConcurrent),
-    ]);
-    return {
-      ok: false,
-      error: "El profesional ya tiene un turno en ese horario. Podés elegir el próximo libre o forzar un sobreturno.",
-      conflict: { practitionerName, nextFreeISO: suggestion },
-    };
-  }
-
-  // Tag overbooked rows so the UI / reports can distinguish them. Until
-  // we add a column, we prepend "[SOBRETURNO]" to the notes field.
-  const notes =
-    capacityReached && raw.allowOverbooking
-      ? `[SOBRETURNO] ${data.notes ?? ""}`.trim()
-      : data.notes;
+  // Telemedicina (decisión 9): la URL solo se guarda con el flag.
+  const isTelemedicine = data.isTelemedicine ?? false;
+  const telemedicineUrl = isTelemedicine ? (data.telemedicineUrl ?? null) : null;
 
   // Auto-fill the per-turno mini-diagnóstico from the patient's default when
   // the caller didn't provide an explicit title/description.
@@ -708,7 +1113,7 @@ export async function createBooking(
     // a same-key retry collapses to one row. `update` resets the mutable
     // fields so a re-book of the same patient+slot (e.g. after cancelling)
     // converges to a single fresh active turno instead of returning a stale one.
-    const b = await runWithRls(actor.tenantId, async (tx) => {
+    const w = await runWithRls(actor.tenantId, async (tx) => {
       // The key is CLIENT-supplied and globally @unique: with BYPASSRLS (prod)
       // a key that belongs to ANOTHER tenant's row would make the upsert's
       // `update` branch overwrite that row. Refuse it. (Under RLS the row is
@@ -717,14 +1122,80 @@ export async function createBooking(
         where: { idempotencyKey },
         select: { tenantId: true },
       });
-      if (holder && holder.tenantId !== actor.tenantId) return null;
-      return tx.booking.upsert({
+      if (holder && holder.tenantId !== actor.tenantId) return { kind: "foreign-key" as const };
+
+      // Overlap capacity check, scoped to the SAME practitioner + SAME service.
+      // Overlaps are allowed up to the cupo (null = ilimitado, el caso normal
+      // en kinesiología: varios pacientes en paralelo en la franja). An expired
+      // unpaid public reservation no longer holds the slot. B3.1: el cupo es el
+      // efectivo del profesional (`PractitionerService.concurrencyOverride`) o
+      // `Service.maxConcurrent` — con el backfill, el mismo de antes.
+      // B3.1 (TOCTOU): el conteo y el upsert van en ESTE tx, detrás del lock de
+      // cupo del día. Antes el conteo corría en otro tx y dos altas
+      // simultáneas de pacientes distintos en un cupo 1 pasaban las dos.
+      await lockCapacityWindow(tx, {
+        tenantId: actor.tenantId,
+        practitionerId: data.practitionerId,
+        serviceId: service.id,
+        start: data.scheduledFor,
+        end,
+      });
+      // Integrador final de B-pre: re-chequeo de bloqueos con el lock de cupo
+      // ya tomado (`liveBlocksInTx`). `cls` se calculó en otro tx: un candado
+      // commiteado en el medio solo se ve acá. Bloqueado y sin forzar → el
+      // mismo aviso `blocked` de antes; forzado → sobreturno (decisión 1).
+      const live = classifyForWrite(
+        {
+          ...input,
+          blocks: await liveBlocksInTx(tx, {
+            tenantId: actor.tenantId,
+            practitionerId: data.practitionerId,
+            start: data.scheduledFor,
+            end,
+          }),
+        },
+        clsArgs
+      );
+      if (live.blocked && !raw.allowBlocked) return { kind: "blocked" as const, reason: live.blockReason };
+      const overlapCount = await countCapacityOverlaps(tx, {
+        tenantId: actor.tenantId,
+        practitionerId: data.practitionerId,
+        serviceId: service.id,
+        start: data.scheduledFor,
+        end,
+        now,
+        excludeKey: clientKey,
+      });
+      const capacityReached = overlapBlocks(overlapCount, rule.cap);
+      // Sin escribir: la UI ofrece el próximo libre o re-llamar con
+      // allowOverbooking=true para forzar el sobreturno.
+      if (capacityReached && !raw.allowOverbooking) return { kind: "conflict" as const };
+
+      // Sobreturno = cupo lleno forzado o bloqueo forzado (decisión 1). B3.1:
+      // `isOverbooked` (M-agenda) es la fuente; el prefijo "[SOBRETURNO]" en
+      // notes se sigue escribiendo hasta el contract posterior a B-pre.
+      const overbooked = capacityReached || live.blocked;
+      const notes = overbooked ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
+
+      // Sede: lock compartido + activa, en el MISMO tx que el upsert (carrera
+      // con archiveLocation). Elegida y ya archivada → rechazo; la de por
+      // defecto archivada en el medio → null (= principal).
+      let loc = locationId;
+      if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
+        if (data.locationId) return { kind: "bad-location" as const };
+        loc = null;
+      }
+      const row = await tx.booking.upsert({
         where: { idempotencyKey },
         update: {
           serviceId: service.id,
           durationMin: duration,
           copagoCents: data.copagoCents ?? null,
           notes,
+          isOverbooked: overbooked,
+          locationId: loc,
+          isTelemedicine,
+          telemedicineUrl,
           status: data.patientId ? "CONFIRMED" : "PENDING",
           guestName: data.guestName,
           guestEmail: data.guestEmail,
@@ -742,14 +1213,37 @@ export async function createBooking(
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
           notes,
+          isOverbooked: overbooked,
+          locationId: loc,
+          isTelemedicine,
+          telemedicineUrl,
           title,
           description,
           status: data.patientId ? "CONFIRMED" : "PENDING",
           idempotencyKey,
         },
       });
+      return { kind: "ok" as const, row };
     });
-    if (!b) return { ok: false, error: "No pudimos crear el turno." };
+    if (w.kind === "conflict") {
+      const [practitionerName, suggestion] = await Promise.all([nameOf(), suggest()]);
+      return {
+        ok: false,
+        error: "El profesional ya tiene un turno en ese horario. Podés elegir el próximo libre o forzar un sobreturno.",
+        conflict: { practitionerName, nextFreeISO: suggestion },
+      };
+    }
+    if (w.kind === "blocked") {
+      const [practitionerName, nextFreeISO] = await Promise.all([nameOf(), suggest()]);
+      return {
+        ok: false,
+        error: BLOCKED_ERROR(w.reason),
+        blocked: { practitionerName, reason: w.reason, nextFreeISO },
+      };
+    }
+    if (w.kind === "foreign-key") return { ok: false, error: "No pudimos crear el turno." };
+    if (w.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
+    const b = w.row;
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
@@ -813,6 +1307,9 @@ export async function createBooking(
 type UpdateBookingResult = ActionResult<{ updatedAt: Date }> & {
   conflict?: { practitionerName: string; nextFreeISO: string | null };
   patientOverlap?: { existingISO: string };
+  // B3.1: mismos avisos blandos que createBooking (re-llamar con el flag).
+  outOfHours?: BookingOutOfHoursPrompt;
+  blocked?: BookingBlockedPrompt;
 };
 
 export async function updateBooking(
@@ -821,6 +1318,9 @@ export async function updateBooking(
     // Same flag as createBooking: the front desk confirmed the patient may
     // have two turnos overlapping (two services in parallel).
     allowPatientOverlap?: boolean;
+    // B3.1: mismos flags que createBooking (decisiones 1 y 2).
+    allowOutOfHours?: boolean;
+    allowBlocked?: boolean;
     expectedUpdatedAt?: string;
   }
 ): Promise<UpdateBookingResult> {
@@ -829,7 +1329,8 @@ export async function updateBooking(
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
-  const { id, ...patch } = parsed.data;
+  const { id, locationId: patchLocationId, isTelemedicine: patchTele, telemedicineUrl: patchTeleUrl, ...patch } =
+    parsed.data;
   const now = new Date();
 
   // Ownership lookup + optimistic-concurrency check + access + patient re-bind
@@ -847,7 +1348,9 @@ export async function updateBooking(
         durationMin: true,
         practitionerId: true,
         serviceId: true,
-        service: { select: { maxConcurrent: true } },
+        locationId: true,
+        isTelemedicine: true,
+        service: { select: { id: true, durationMin: true, maxConcurrent: true, practitionerId: true } },
         updatedAt: true,
         patient: { select: { firstName: true, lastName: true } },
       },
@@ -891,21 +1394,86 @@ export async function updateBooking(
     const durationChanged = patch.durationMin != null && patch.durationMin !== before.durationMin;
     const reactivating = before.status === "CANCELLED" && finalStatus !== "CANCELLED";
     const windowChanged = slotChanged || durationChanged || reactivating;
+    const locationChanged = patchLocationId !== undefined && patchLocationId !== before.locationId;
+
+    // B3.1: lo que la edición escribe además del patch. `undefined` = no se toca.
+    let newLocationId: string | null | undefined = undefined;
+    let isOverbooked: boolean | undefined = undefined;
+    let cap: number | null = before.service.maxConcurrent;
+
     if (finalStatus !== "CANCELLED") {
-      if (finalPatientId && (windowChanged || patientChanged)) {
-        const pat = await checkPatientOverlap(tx, {
+      const pat =
+        finalPatientId && (windowChanged || patientChanged)
+          ? await checkPatientOverlap(tx, {
+              tenantId: actor.tenantId,
+              patientId: finalPatientId,
+              start: newWhen,
+              end,
+              excludeId: id,
+            })
+          : null;
+      if (pat?.sameInstant) return { kind: "patient-slot" as const };
+
+      // B3.1: franjas y bloqueos (motor), solo si cambia el horario o la sede
+      // — editar notas de un turno ya cargado fuera de horario no re-pregunta.
+      // Reactivar un CANCELLED también re-pregunta (p. ej. lo canceló un
+      // candado de día). Sede de la clasificación: la elegida; si se mueve de
+      // horario sin elegir, cualquiera (y se recalcula la de por defecto); si
+      // no, la que ya tenía.
+      let blocked = false;
+      if (windowChanged || locationChanged) {
+        // Integrador final de B-pre: el lock de cupo de los días del horario
+        // NUEVO se toma ANTES de cargar franjas/bloqueos (antes se tomaba recién
+        // para contar el cupo): así la carga de bloqueos de abajo ya ve un
+        // `applyDayLock` commiteado en el medio, que toma el mismo lock (ver
+        // `liveBlocksInTx`). También con solo cambio de sede: un bloqueo de la
+        // sede nueva entra por el mismo camino. Mismo orden de locks: cupo →
+        // sedes (`lockActiveLocation` más abajo).
+        await lockCapacityWindow(tx, {
           tenantId: actor.tenantId,
-          patientId: finalPatientId,
+          practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
           start: newWhen,
           end,
-          excludeId: id,
         });
-        if (pat.sameInstant) return { kind: "patient-slot" as const };
-        if (pat.overlapISO && !raw.allowPatientOverlap) {
-          return { kind: "patient-overlap" as const, existingISO: pat.overlapISO };
+        const rule = await practitionerServiceRule(tx, actor.tenantId, before.practitionerId, before.service);
+        cap = rule.cap;
+        const input = await loadInstantAvailability(tx, {
+          tenantId: actor.tenantId,
+          practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
+          start: newWhen,
+          end,
+        });
+        const cls = classifyForWrite(input, {
+          when: newWhen,
+          durationMin: newDuration,
+          practitionerId: before.practitionerId,
+          serviceId: before.serviceId,
+          locationId: patchLocationId ?? (slotChanged ? null : before.locationId),
+          cap,
+          now,
+          excludeBookingId: id,
+        });
+        const prompt = { before, newWhen, newDuration, cap, finalPatientId };
+        if (cls.blocked && !raw.allowBlocked) {
+          return { kind: "blocked" as const, reason: cls.blockReason, ...prompt };
+        }
+        if (cls.outOfHours && !raw.allowOutOfHours) return { kind: "out-of-hours" as const, ...prompt };
+        blocked = cls.blocked;
+        if (patchLocationId === undefined && slotChanged) {
+          newLocationId = defaultLocationFor(input, before.practitionerId, newWhen, newDuration);
         }
       }
+
+      if (pat?.overlapISO && !raw.allowPatientOverlap) {
+        return { kind: "patient-overlap" as const, existingISO: pat.overlapISO };
+      }
+      let capacityReached = false;
       if (windowChanged) {
+        // B3.1 (TOCTOU): el lock de cupo de los días del horario NUEVO ya se
+        // tomó arriba (antes de clasificar); el conteo y el update van en este
+        // mismo tx.
         const overlapCount = await countCapacityOverlaps(tx, {
           tenantId: actor.tenantId,
           practitionerId: before.practitionerId,
@@ -915,17 +1483,56 @@ export async function updateBooking(
           now,
           excludeId: id,
         });
-        if (overlapBlocks(overlapCount, before.service?.maxConcurrent) && !raw.allowOverbooking) {
-          return { kind: "conflict" as const, before, newWhen, newDuration };
+        capacityReached = overlapBlocks(overlapCount, cap);
+        if (capacityReached && !raw.allowOverbooking) {
+          return { kind: "conflict" as const, before, newWhen, newDuration, cap, finalPatientId };
         }
       }
+      // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo o
+      // bloqueo) → true; movido a un hueco libre → false. Sin cambio de
+      // horario no se toca (salvo que un cambio de sede lo deje sobre un
+      // bloqueo forzado). El prefijo "[SOBRETURNO]" de notes no se toca acá
+      // (como antes: el update nunca lo escribió).
+      if (windowChanged) isOverbooked = capacityReached || blocked;
+      else if (blocked) isOverbooked = true;
     }
+
+    // Sede elegida: lock compartido + activa en este tx (carrera con
+    // archiveLocation); siempre, aunque el turno esté cancelado — la FK saltea
+    // RLS. La de por defecto (reprogramación) archivada en el medio → no se toca.
+    if (patchLocationId !== undefined) {
+      if (!(await lockActiveLocation(tx, actor.tenantId, patchLocationId))) return { kind: "bad-location" as const };
+      newLocationId = patchLocationId;
+    } else if (newLocationId) {
+      if (!(await lockActiveLocation(tx, actor.tenantId, newLocationId))) newLocationId = undefined;
+    }
+
+    // Telemedicina: `isTelemedicine: false` borra la URL; la URL solo se
+    // guarda si el turno queda como telemedicina.
+    const finalTele = patchTele ?? before.isTelemedicine;
+    const tele: Prisma.BookingUncheckedUpdateInput = {
+      ...(patchTele !== undefined ? { isTelemedicine: patchTele } : {}),
+      ...(!finalTele
+        ? patchTele === false
+          ? { telemedicineUrl: null }
+          : {}
+        : patchTeleUrl !== undefined
+          ? { telemedicineUrl: patchTeleUrl }
+          : {}),
+    };
+
     // `updatedAt` in the where makes the optimistic lock atomic: a concurrent
     // write between the read above and here → P2025 → "stale" (below), instead
     // of last-write-wins.
     const after = await tx.booking.update({
       where: { id, tenantId: actor.tenantId, updatedAt: before.updatedAt },
-      data: promoteGuest ? { ...patch, status: "CONFIRMED" } : patch,
+      data: {
+        ...patch,
+        ...(promoteGuest ? { status: "CONFIRMED" as const } : {}),
+        ...(newLocationId !== undefined ? { locationId: newLocationId } : {}),
+        ...(isOverbooked !== undefined ? { isOverbooked } : {}),
+        ...tele,
+      },
       select: { updatedAt: true },
     });
     return { kind: "ok" as const, before, updatedAt: after.updatedAt };
@@ -961,15 +1568,35 @@ export async function updateBooking(
   }
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
-  if (outcome.kind === "conflict") {
-    const [practitionerName, suggestion] = await Promise.all([
+  if (outcome.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
+  if (outcome.kind === "conflict" || outcome.kind === "blocked" || outcome.kind === "out-of-hours") {
+    const [practitionerName, nextFreeISO] = await Promise.all([
       runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, outcome.before.practitionerId)),
-      suggestNextFreeSlot(actor.tenantId, outcome.before.practitionerId, outcome.newWhen, outcome.newDuration, outcome.before.serviceId, outcome.before.service?.maxConcurrent ?? null),
+      suggestNextFreeSlot(actor.tenantId, {
+        practitionerId: outcome.before.practitionerId,
+        serviceId: outcome.before.serviceId,
+        from: outcome.newWhen,
+        durationMin: outcome.newDuration,
+        cap: outcome.cap,
+        patientId: outcome.finalPatientId,
+        locationId: patchLocationId ?? null,
+        excludeBookingId: id,
+      }),
     ]);
+    if (outcome.kind === "blocked") {
+      return {
+        ok: false,
+        error: BLOCKED_ERROR(outcome.reason),
+        blocked: { practitionerName, reason: outcome.reason, nextFreeISO },
+      };
+    }
+    if (outcome.kind === "out-of-hours") {
+      return { ok: false, error: OUT_OF_HOURS_ERROR, outOfHours: { practitionerName, nextFreeISO } };
+    }
     return {
       ok: false,
       error: "El profesional ya tiene un turno en ese horario.",
-      conflict: { practitionerName, nextFreeISO: suggestion },
+      conflict: { practitionerName, nextFreeISO },
     };
   }
 
@@ -1035,12 +1662,160 @@ export async function setBookingStatus(
   id: string,
   status: BookingStatus,
   expectedUpdatedAt?: string,
-  force?: { allowOverbooking?: boolean; allowPatientOverlap?: boolean }
+  // B5.7: `ForceFlags` (incluye allowOutOfHours / allowBlocked de B3.1, que ya
+  // se esparcían a updateBooking pero el tipo no lo decía).
+  force?: ForceFlags
 ): Promise<UpdateBookingResult> {
   // Revisión A2: volver a PENDING no es una transición de la agenda (ver
   // BookingUpdate). La firma sigue aceptando `BookingStatus` por los callers.
   if (status === "PENDING") return { ok: false, error: "Datos inválidos" };
   return updateBooking({ id, status, expectedUpdatedAt, ...force });
+}
+
+const RECEPTION_FORBIDDEN_ERROR = "No tenés permiso para operar la recepción.";
+const RECEPTION_OTHER_PRACTITIONER_ERROR =
+  "Solo podés marcar la recepción de tus turnos o de pacientes que tenés a cargo.";
+
+/**
+ * Recepción (B4.1; decisión 3 de B-pre: timestamps, no BookingStatus nuevos).
+ * Una sola action para las cinco acciones de la sala de espera — llegó, en
+ * atención, atendido, ausente, deshacer — porque la transición válida depende
+ * del estado ACTUAL de la fila, no del botón: `applyReceptionAction`
+ * (lib/reception-state.ts, puro) la valida y arma el patch, y acá se escribe
+ * en una tx con el lock optimista atómico (`where { id, tenantId, updatedAt }`
+ * → P2025 = stale), así dos personas marcando el mismo turno no pisan una a la
+ * otra ("Llegó" y "Ausente" con la misma versión: gana una).
+ *
+ * Autorización: capability `agenda.reception` (OWNER, ADMIN, PRACTITIONER,
+ * ASSISTANT; no BILLING). DECISIÓN B4.1: la recepción es ADMINISTRATIVA, así
+ * que NO exige acceso `full` al paciente (a diferencia de `setBookingStatus`):
+ * la Secretaria (ASSISTANT) tiene acceso básico a casi todos los pacientes y
+ * su trabajo es justamente marcar llegadas y ausentes. No expone ni toca
+ * contenido clínico; el turno tiene que ser del tenant (IDOR) y guest ok.
+ * Revisión de B-pre: sin `agenda.manageBlocks` (= PRACTITIONER, el rol que no
+ * opera la agenda de todos) solo sus turnos o los de pacientes con acceso
+ * `full` (guest ok): si no, un profesional podía marcar ausente a pacientes
+ * de un colega que ni ve. La Secretaria y el admin siguen operando todo.
+ * "Atendido"/"Ausente" escriben `status` (COMPLETED / NO_SHOW) igual que el
+ * drawer; deshacer vuelve al status de origen (`undoStatus`: PENDING para
+ * guest y reserva pública impaga, CONFIRMED el resto). `expectedUpdatedAt`
+ * es obligatorio.
+ *
+ * Devuelve el `updatedAt` nuevo (ISO) para el próximo click sin refetch.
+ */
+export async function markReceptionAction(
+  bookingId: string,
+  action: ReceptionAction,
+  expectedUpdatedAt: string
+): Promise<ActionResult<ReceptionActionResult>> {
+  let actor: Actor;
+  let caps: ReadonlySet<Capability>;
+  try {
+    ({ actor, caps } = await requireCapability("agenda.reception", RECEPTION_FORBIDDEN_ERROR));
+  } catch (e) {
+    if (e instanceof ForbiddenError) return { ok: false, error: e.message };
+    throw e;
+  }
+  const parsed = ReceptionActionInput.safeParse({ bookingId, action, expectedUpdatedAt });
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  const input = parsed.data;
+  const expected = new Date(input.expectedUpdatedAt);
+  const now = new Date();
+
+  const outcome = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.booking.findFirst({
+      where: { id: input.bookingId, tenantId: actor.tenantId },
+      select: {
+        id: true,
+        scheduledFor: true,
+        durationMin: true,
+        status: true,
+        arrivedAt: true,
+        attendingAt: true,
+        updatedAt: true,
+        patientId: true,
+        practitionerId: true,
+        // `undoStatus`: guest / reserva pública impaga vuelven a PENDING.
+        paymentStatus: true,
+        idempotencyKey: true,
+        patient: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (!row) return { kind: "notfound" as const };
+    if (
+      !caps.has("agenda.manageBlocks") &&
+      row.practitionerId !== actor.practitionerId &&
+      !(await hasFullAccess(actor, row.patientId, tx))
+    ) {
+      return { kind: "forbidden" as const };
+    }
+    if (+row.updatedAt !== +expected) return { kind: "stale" as const };
+    const t = applyReceptionAction(row, input.action, now);
+    if (!t.ok) return { kind: "invalid" as const, error: t.error };
+    const after = await tx.booking.update({
+      where: { id: row.id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
+      data: t.patch,
+      select: { updatedAt: true, status: true, arrivedAt: true, attendingAt: true },
+    });
+    return { kind: "ok" as const, row, transition: t, after };
+  }).catch((e) => {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
+      return { kind: "stale" as const };
+    }
+    throw e;
+  });
+
+  if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
+  if (outcome.kind === "forbidden") return { ok: false, error: RECEPTION_OTHER_PRACTITIONER_ERROR };
+  if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
+  if (outcome.kind === "invalid") return { ok: false, error: outcome.error };
+
+  const { row, transition, after } = outcome;
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: `booking.reception.${input.action}`,
+    entity: "Booking",
+    entityId: row.id,
+    payload: { from: transition.from, to: transition.to, label: RECEPTION_ACTION_LABEL[input.action] },
+  });
+  // Paridad con el drawer (`updateBooking`): un "Ausente" sale en la campana.
+  if (transition.patch.status === "NO_SHOW" && actor.userId) {
+    await notify({
+      tenantId: actor.tenantId,
+      userId: actor.userId,
+      kind: NotificationKind.BOOKING_CANCELLED,
+      title: `Ausente · ${row.patient ? `${row.patient.firstName} ${row.patient.lastName}` : "Reserva externa"}`,
+      body: row.scheduledFor.toLocaleString("es-AR", {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Argentina/Buenos_Aires",
+      }),
+      link: `/agenda?date=${toARDateKey(row.scheduledFor)}`,
+    });
+  }
+  revalidatePath("/agenda");
+  if (transition.patch.status) {
+    // El estado (atendido/ausente) cuenta en el dashboard y en la ficha.
+    revalidatePath("/dashboard");
+    if (row.patientId) revalidatePath(`/pacientes/${row.patientId}`);
+    invalidateBookingDerivedCaches(actor.tenantId);
+  }
+  return {
+    ok: true,
+    data: {
+      updatedAt: after.updatedAt.toISOString(),
+      status: after.status,
+      arrivedAt: after.arrivedAt?.toISOString() ?? null,
+      attendingAt: after.attendingAt?.toISOString() ?? null,
+      state: transition.to,
+    },
+  };
 }
 
 export async function deleteBooking(
@@ -1237,22 +2012,19 @@ export async function setBookingCopagoPaid(
  * replaces the old createBookingSeries, which used UTC weekday math and put
  * turnos on the wrong days / next month.
  */
-/** Per-date outcome of a multi-turno batch. */
-export type BatchSlotStatus =
-  /** Nothing in the way — creates cleanly. */
-  | "libre"
-  /** Capacity reached for the professional, or the patient already has an
-   *  overlapping turno. Creatable as an explicit sobreturno. */
-  | "sobreturno"
-  /** The patient already has an ACTIVE turno at this exact instant — the DB
-   *  unique index forbids a second one, so it can never be created. */
-  | "duplicado";
+// `BatchSlotStatus` vive en lib/booking-schedule.ts (B1.6 S07); se re-exporta
+// acá para no romper `import type { … } from "@/lib/bookings"` (solo tipo: un
+// archivo "use server" no puede exportar valores que no sean funciones async).
+export type { BatchSlotStatus } from "@/lib/booking-schedule";
 
 export type BatchOutcome = {
   /** True when nothing was written (preflight). */
   dryRun: boolean;
   requested: number;
-  dates: { iso: string; status: BatchSlotStatus }[];
+  /** B3.1: cada fecha trae además `outOfHours` / `blocked` (flags, no
+   *  cambian `status` ni los conteos; un bloqueo ya sube el status a
+   *  "sobreturno"). */
+  dates: BatchDateOutcome[];
   free: number;
   conflicted: number;
   duplicates: number;
@@ -1270,35 +2042,41 @@ export type BatchOutcome = {
  * `dryRun: true` classifies every date without writing, so the UI can warn
  * ("3 de 10 caen como sobreturno") and let the user choose. Then:
  *   · `allowOverbooking: true`  → creates everything, tagging the conflicting
- *     rows `[SOBRETURNO]` like the single-create path does.
+ *     rows `[SOBRETURNO]` + `isOverbooked` like the single-create path does.
  *   · `allowOverbooking: false` → creates only the free slots (an explicit
  *     choice now, not the silent skip it used to be).
  * `duplicado` slots are never creatable and are always reported separately.
+ *
+ * B3.1: fechas con `expandDates` del motor (`frequency` weekly — default,
+ * paridad exacta con la expansión de antes, tope de 58 incluido — biweekly o
+ * monthly) y clasificación con `classifyBatchInstant` (mismo status que
+ * `classifyBatchSlot` sin bloqueos; un bloqueo lo sube a "sobreturno";
+ * fuera de horario es solo el flag `outOfHours`, decisión 2). `count` validado
+ * con zod (antes un NaN reventaba).
  */
 export async function createBookingsBatch(
-  raw: BookingCreateInput & {
-    count: number;
-    daysOfWeek?: number[];
+  raw: BookingBatchCreateInput & {
     idempotencyKey?: string;
     dryRun?: boolean;
     allowOverbooking?: boolean;
   }
 ): Promise<ActionResult<BatchOutcome>> {
   const actor = await getActor();
-  const parsed = BookingCreate.safeParse(raw);
+  const parsed = BookingBatchCreate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const data = parsed.data;
-  const count = Math.min(60, Math.max(1, Math.floor(raw.count ?? 1)));
+  const { count } = data;
   // Ids de entrada validados contra el tenant ANTES de escribir (A2a-S06): el
   // paciente solo se usaba para leer el diagnóstico — si era de otro tenant la
   // lectura daba null y el batch creaba igual N turnos apuntando a él (las FK
   // saltean RLS). Mismo contrato que createBooking: profesional del tenant y
   // paciente con acceso `full`. Un dryRun también se rechaza: el preflight
-  // expone la ocupación del paciente.
+  // expone la ocupación del paciente. B3.1: + sede elegida y servicio
+  // habilitado para el profesional (mismo rechazo que createBooking).
   const pre = await runWithRls(actor.tenantId, async (tx) => {
-    const [patient, service, prac] = await Promise.all([
+    const [patient, service, prac, location] = await Promise.all([
       data.patientId
         ? tx.patient.findFirst({
             where: { id: data.patientId, tenantId: actor.tenantId },
@@ -1307,49 +2085,56 @@ export async function createBookingsBatch(
         : Promise.resolve(null),
       tx.service.findFirst({
         where: { id: data.serviceId, tenantId: actor.tenantId },
-        select: { id: true, durationMin: true, maxConcurrent: true },
+        select: { id: true, name: true, durationMin: true, maxConcurrent: true, practitionerId: true },
       }),
       tx.practitioner.findFirst({
         where: { id: data.practitionerId, tenantId: actor.tenantId },
         select: { id: true },
       }),
+      data.locationId
+        ? tx.location.findFirst({
+            where: { id: data.locationId, tenantId: actor.tenantId, active: true },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
     ]);
     if (data.patientId && !patient) return { kind: "foreign-patient" as const };
     if (!prac) return { kind: "foreign-practitioner" as const };
     if (!service) return { kind: "bad-service" as const };
+    if (data.locationId && !location) return { kind: "bad-location" as const };
     if (patient && !(await hasFullAccess(actor, patient.id, tx))) {
       return { kind: "basic" as const };
     }
-    return { kind: "ok" as const, patient, service };
+    const rule = await practitionerServiceRule(tx, actor.tenantId, prac.id, service);
+    if (!rule.enabled) return { kind: "service-disabled" as const, serviceName: service.name };
+    return { kind: "ok" as const, patient, service, rule };
   });
   if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
   if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
   if (pre.kind === "bad-service") return { ok: false, error: "Servicio inválido." };
+  if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
   if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
-  const { service } = pre;
-  const duration = data.durationMin ?? service.durationMin;
+  if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
+  const { service, rule } = pre;
+  const duration = data.durationMin ?? rule.durationMin;
 
   // Diagnóstico por defecto del paciente para auto-completar title/description
   // de cada turno del batch cuando el caller no los envía.
   const patientDiag = pre.patient;
   const title = data.title ?? patientDiag?.diagnosisTitle ?? null;
   const description = data.description ?? patientDiag?.diagnosisNote ?? null;
+  const isTelemedicine = data.isTelemedicine ?? false;
+  const telemedicineUrl = isTelemedicine ? (data.telemedicineUrl ?? null) : null;
 
   // AR-correct date expansion. `data.scheduledFor` is a real instant tagged
   // -03:00 by `localToARIso` on the client. Empty weekday selection → repeat
-  // weekly on the anchor's own AR weekday.
-  const anchor = data.scheduledFor;
-  const dowSet = new Set((raw.daysOfWeek ?? []).map((d) => ((d % 7) + 7) % 7)); // 0=Mon..6=Sun
-  if (dowSet.size === 0) dowSet.add((toARDow(anchor) + 6) % 7);
-
-  const dates: Date[] = [];
-  let cursor = new Date(anchor);
-  let guard = 0;
-  while (dates.length < count && guard++ < 400) {
-    const monDow = (toARDow(cursor) + 6) % 7; // 0=Mon..6=Sun in AR
-    if (dowSet.has(monDow)) dates.push(new Date(cursor));
-    cursor = new Date(cursor.getTime() + 86_400_000); // +1 AR day (DST-free)
-  }
+  // on the anchor's own AR weekday. count ≥ 1 (zod) → al menos una fecha.
+  const dates = expandDates({
+    anchor: data.scheduledFor,
+    count,
+    daysOfWeek: data.daysOfWeek,
+    frequency: data.frequency,
+  });
 
   // Tag the batch so it can be regrouped into a "plan" later.
   const seriesId = randomBytes(12).toString("hex");
@@ -1360,70 +2145,54 @@ export async function createBookingsBatch(
   // old `tenant:prof:slot:patient` shape did, silently mapping onto it).
   const keyBase = acceptClientKey(raw.idempotencyKey) ?? seriesId;
 
-  // One query for the whole span instead of two per slot: everything that can
-  // conflict is either same practitioner+service (capacity) or same patient
-  // (own overlap / exact-instant duplicate).
-  const spanStart = new Date(dates[0].getTime() - 240 * 60_000);
-  const spanEnd = new Date(
-    dates[dates.length - 1].getTime() + duration * 60_000 + 240 * 60_000
-  );
-  const existing = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-    where: {
+  // Una carga para todo el rango (loader del motor): franjas, excepciones,
+  // bloqueos y los turnos que pueden chocar — del profesional (cupo) o del
+  // paciente (solape propio / duplicado), con 240 min hacia atrás.
+  const last = dates[dates.length - 1];
+  const input = await runWithRls(actor.tenantId, (tx) =>
+    loadAvailabilityInputs(tx, {
       tenantId: actor.tenantId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { gte: spanStart, lt: spanEnd },
-      OR: [
-        { practitionerId: data.practitionerId, serviceId: data.serviceId },
-        ...(data.patientId ? [{ patientId: data.patientId }] : []),
-      ],
-    },
-    select: {
-      scheduledFor: true,
-      durationMin: true,
-      practitionerId: true,
-      serviceId: true,
-      patientId: true,
-      status: true,
-      paymentStatus: true,
-      createdAt: true,
-      idempotencyKey: true,
-    },
-  }));
+      practitionerIds: [data.practitionerId],
+      serviceId: service.id,
+      patientId: data.patientId,
+      from: dayKeyOf(dates[0]),
+      to: dayKeyOf(new Date(last.getTime() + duration * 60_000 - 1)),
+    })
+  );
   const now = new Date();
+  const rangesFor = rangesForInput(input);
 
-  const classify = (when: Date): BatchSlotStatus => {
-    const end = new Date(when.getTime() + duration * 60_000);
-    const overlaps = (e: { scheduledFor: Date; durationMin: number }) =>
-      e.scheduledFor < end && new Date(e.scheduledFor.getTime() + e.durationMin * 60_000) > when;
-
-    if (data.patientId) {
-      // Exact instant → the partial unique index makes this uncreatable.
-      if (existing.some((e) => e.patientId === data.patientId && +e.scheduledFor === +when)) {
-        return "duplicado";
-      }
-      // The patient is busy elsewhere in this window (any professional/service).
-      if (existing.some((e) => e.patientId === data.patientId && overlaps(e))) {
-        return "sobreturno";
-      }
-    }
-    // Capacity only: an expired unpaid public pending no longer holds the cupo
-    // (isHoldingCapacity). The patient checks above use every row — the unique
-    // index still rejects the exact instant of a PENDING row.
-    const capacityCount = existing.filter(
-      (e) =>
-        e.practitionerId === data.practitionerId &&
-        e.serviceId === data.serviceId &&
-        isHoldingCapacity(e, now) &&
-        overlaps(e)
-    ).length;
-    return overlapBlocks(capacityCount, service.maxConcurrent) ? "sobreturno" : "libre";
-  };
-
-  const plan = dates.map((when) => ({ when, status: classify(when) }));
+  const plan = dates.map((when) => {
+    const c = classifyBatchInstant({
+      when,
+      durationMin: duration,
+      patientId: data.patientId ?? null,
+      practitionerId: data.practitionerId,
+      serviceId: service.id,
+      locationId: data.locationId ?? null,
+      cap: rule.cap,
+      rangesFor,
+      blocks: input.blocks,
+      bookings: input.bookings,
+      now,
+    });
+    return {
+      when,
+      status: c.status,
+      outOfHours: c.outOfHours,
+      blocked: c.blocked,
+      locationId: data.locationId ?? defaultLocationFor(input, data.practitionerId, when, duration),
+    };
+  });
   const free = plan.filter((p) => p.status === "libre").length;
   const conflicted = plan.filter((p) => p.status === "sobreturno").length;
   const duplicates = plan.filter((p) => p.status === "duplicado").length;
-  const datesOut = plan.map((p) => ({ iso: p.when.toISOString(), status: p.status }));
+  const datesOut: BatchDateOutcome[] = plan.map((p) => ({
+    iso: p.when.toISOString(),
+    status: p.status,
+    outOfHours: p.outOfHours,
+    blocked: p.blocked,
+  }));
 
   if (raw.dryRun) {
     return {
@@ -1447,43 +2216,107 @@ export async function createBookingsBatch(
   let omitted = 0;
   let duplicatesHit = duplicates;
 
-  for (const { when, status } of plan) {
+  for (const slot of plan) {
+    const { when } = slot;
     // Never creatable — the DB index would reject it anyway.
-    if (status === "duplicado") continue;
+    if (slot.status === "duplicado") continue;
     // Conflicting slot the caller chose NOT to force.
-    if (status === "sobreturno" && !raw.allowOverbooking) {
+    if (slot.status === "sobreturno" && !raw.allowOverbooking) {
       omitted++;
       continue;
     }
-    const isOverbook = status === "sobreturno";
-    // Same tagging the single-create path uses, so reports can tell them apart.
-    const notes = isOverbook ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
     const idempotencyKey = `${keyBase}:${when.toISOString()}`;
+    const end = new Date(when.getTime() + duration * 60_000);
     try {
-      await runWithRls(actor.tenantId, (tx) => tx.booking.upsert({
-        where: { idempotencyKey },
-        update: {},
-        create: {
+      // Una tx por fecha (un P2002 aborta la tx entera; así cada fecha se
+      // resuelve sola, como antes). B3.1 (TOCTOU): dentro, lock de cupo de los
+      // días de ESTA fecha (en orden) y re-conteo: si entre el preflight y acá
+      // alguien llenó el cupo, la fecha pasa a sobreturno (forzada solo con
+      // allowOverbooking; si no, se omite).
+      const w = await runWithRls(actor.tenantId, async (tx) => {
+        await lockCapacityWindow(tx, {
           tenantId: actor.tenantId,
           practitionerId: data.practitionerId,
           serviceId: service.id,
-          scheduledFor: when,
+          start: when,
+          end,
+        });
+        // Integrador final de B-pre: re-chequeo de bloqueos con el lock tomado
+        // (`liveBlocksInTx`): un candado commiteado después del preflight
+        // vuelve la fecha sobreturno (= omitida sin allowOverbooking), igual
+        // que si el preflight la hubiera visto bloqueada.
+        const liveBlocked = classifyBatchInstant({
+          when,
           durationMin: duration,
-          copagoCents: data.copagoCents ?? null,
-          patientId: data.patientId,
-          guestName: data.guestName,
-          guestEmail: data.guestEmail,
-          guestPhone: data.guestPhone,
-          notes,
-          title,
-          description,
-          status: data.patientId ? "CONFIRMED" : "PENDING",
-          seriesId,
-          idempotencyKey,
-        },
-      }));
+          patientId: null,
+          practitionerId: data.practitionerId,
+          serviceId: service.id,
+          locationId: data.locationId ?? null,
+          cap: rule.cap,
+          rangesFor,
+          blocks: await liveBlocksInTx(tx, {
+            tenantId: actor.tenantId,
+            practitionerId: data.practitionerId,
+            start: when,
+            end,
+          }),
+          bookings: [],
+          now,
+        }).blocked;
+        const used = await countCapacityOverlaps(tx, {
+          tenantId: actor.tenantId,
+          practitionerId: data.practitionerId,
+          serviceId: service.id,
+          start: when,
+          end,
+          now,
+          excludeKey: idempotencyKey,
+        });
+        const isOverbook = slot.status === "sobreturno" || liveBlocked || overlapBlocks(used, rule.cap);
+        if (isOverbook && !raw.allowOverbooking) return { kind: "omitted" as const };
+        // Sede: elegida o la de la franja de ese día; archivada en el medio →
+        // la elegida omite la fecha, la de por defecto cae a null (= principal).
+        let loc = slot.locationId;
+        if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
+          if (data.locationId) return { kind: "omitted" as const };
+          loc = null;
+        }
+        // Same tagging the single-create path uses, so reports can tell them apart.
+        const notes = isOverbook ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
+        await tx.booking.upsert({
+          where: { idempotencyKey },
+          update: {},
+          create: {
+            tenantId: actor.tenantId,
+            practitionerId: data.practitionerId,
+            serviceId: service.id,
+            scheduledFor: when,
+            durationMin: duration,
+            copagoCents: data.copagoCents ?? null,
+            patientId: data.patientId,
+            guestName: data.guestName,
+            guestEmail: data.guestEmail,
+            guestPhone: data.guestPhone,
+            notes,
+            isOverbooked: isOverbook,
+            locationId: loc,
+            isTelemedicine,
+            telemedicineUrl,
+            title,
+            description,
+            status: data.patientId ? "CONFIRMED" : "PENDING",
+            seriesId,
+            idempotencyKey,
+          },
+        });
+        return { kind: "ok" as const, isOverbook };
+      });
+      if (w.kind === "omitted") {
+        omitted++;
+        continue;
+      }
       created++;
-      if (isOverbook) sobreturnos++;
+      if (w.isOverbook) sobreturnos++;
     } catch (e) {
       // A patient+instant collision that the preflight missed (someone else
       // booked it in between) is a DUPLICATE, not a mystery failure — the old
@@ -1494,7 +2327,7 @@ export async function createBookingsBatch(
       const r = await resolveUniqueViolation(actor.tenantId, e, idempotencyKey);
       if (r.kind === "existing") {
         created++;
-        if (isOverbook) sobreturnos++;
+        if (slot.status === "sobreturno") sobreturnos++;
         continue;
       }
       if (r.kind === "patient-slot") {
@@ -1521,6 +2354,7 @@ export async function createBookingsBatch(
       omitted,
       duplicates: duplicatesHit,
       requested: count,
+      frequency: data.frequency,
       seriesId,
     },
   });

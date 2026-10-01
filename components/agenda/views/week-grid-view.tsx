@@ -1,14 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { IconX } from "@/components/ui/icons";
-import { toARDateKey, toARDow, toARMinutes } from "@/lib/datetime-ar";
+import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
+import { dowOfDayKey } from "@/lib/availability/day";
+import { splitCountByPractitioner, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "./list-view";
 import { paymentHoldState } from "@/lib/agenda-filters";
+import { PractitionerBadge } from "../grid/practitioner-badge";
+import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
+
+/** Profesional visible con sus iniciales (orden de columnas/chips). */
+type WeekPractitioner = { id: string; initials: string; name: string };
 
 /** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
 function WeekSlotModal({
@@ -16,11 +23,13 @@ function WeekSlotModal({
   label,
   onEdit,
   onClose,
+  practitionerById,
 }: {
   bookings: BookingDTO[];
   label: string;
   onEdit: (b: BookingDTO) => void;
   onClose: () => void;
+  practitionerById: ReadonlyMap<string, WeekPractitioner> | null;
 }) {
   return (
     <div
@@ -62,6 +71,7 @@ function WeekSlotModal({
             const date = new Date(b.scheduledFor);
             const isCancelled = b.status === "CANCELLED";
             const isDone = b.status === "COMPLETED";
+            const prac = practitionerById?.get(b.practitionerId) ?? null;
             return (
               <button
                 key={b.id}
@@ -85,7 +95,14 @@ function WeekSlotModal({
                 />
                 <Avatar name={b.patientName} size={32} tone="sky" />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {b.patientName}
+                    {b.isOverbooked && (
+                      <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", color: "#9A5B00", background: "rgba(255,176,32,0.22)", borderRadius: 999, padding: "0 6px" }}>
+                        Sobreturno
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
                     {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
                   </div>
@@ -93,6 +110,7 @@ function WeekSlotModal({
                     {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
                   </div>
                 </div>
+                {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={24} />}
                 <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
               </button>
             );
@@ -103,8 +121,20 @@ function WeekSlotModal({
   );
 }
 
+/**
+ * B4.3:
+ * - `weekDays`: los 7 DayKeys AR lun-dom (antes un `Date` + `setDate` del
+ *   host para cada columna; hallazgo de B1.5b).
+ * - `practitioners`: con más de un profesional en pantalla, el chip de cada
+ *   celda parte el conteo por profesional (iniciales, canal no cromático) y
+ *   el modal muestra el badge de cada turno. null = uno solo (como siempre).
+ * - `dayLocks` / `blockedByDay`: día bloqueado → columna rayada; bloqueo
+ *   parcial → solo las filas bloqueadas para todos los visibles.
+ * - `renderDayLock(dayKey)`: el candado del header de cada día (lo arma
+ *   `agenda-client` con el `DayLockButton` de B4.4 según capability).
+ */
 export function WeekGridView({
-  weekStart,
+  weekDays,
   bookings,
   onEdit,
   businessHours,
@@ -112,8 +142,12 @@ export function WeekGridView({
   showSaturday,
   showSunday,
   highlightedServiceId,
+  practitioners = null,
+  dayLocks,
+  blockedByDay,
+  renderDayLock,
 }: {
-  weekStart: Date;
+  weekDays: ReadonlyArray<string>;
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
   businessHours: { start: number; end: number; slotMinutes: number };
@@ -122,7 +156,15 @@ export function WeekGridView({
   showSunday: boolean;
   /** When set, cells containing this service lift; the rest dim. */
   highlightedServiceId: string | null;
+  practitioners?: ReadonlyArray<WeekPractitioner> | null;
+  dayLocks?: Readonly<Record<string, AggregatedDayLock | undefined>>;
+  blockedByDay?: Readonly<Record<string, ReadonlyMap<number, string | null> | undefined>>;
+  renderDayLock?: (dayKey: string) => ReactNode;
 }) {
+  const practitionerById = useMemo(
+    () => (practitioners && practitioners.length > 1 ? new Map(practitioners.map((p) => [p.id, p])) : null),
+    [practitioners]
+  );
   // Same slot grid as the day view (60 or 30 minutes per row). Half-hour rows
   // double the row count, so they get a shorter height to keep the week from
   // growing twice as tall.
@@ -155,9 +197,12 @@ export function WeekGridView({
   // Index bookings by "dayCol-rowStart" for easy cell lookup
   const cellMap = useMemo(() => {
     const m = new Map<string, BookingDTO[]>();
+    const colOfDay = new Map(weekDays.map((k, i) => [k, i]));
     for (const b of bookings) {
       const date = new Date(b.scheduledFor);
-      const dayCol = (toARDow(date) + 6) % 7;
+      // Columna por DayKey AR del turno (0=Lun … 6=Dom); fuera de la semana → no va.
+      const dayCol = colOfDay.get(toARDateKey(date));
+      if (dayCol === undefined) continue;
       // FLOOR to the slot (a 13:30 turno belongs to 13:30 at half-hour rows and
       // to 13:00 at hourly ones) — rounding used to push it into the NEXT row,
       // disagreeing with the day view. `slotOf` also clamps out-of-window turnos
@@ -170,7 +215,16 @@ export function WeekGridView({
       m.set(key, list);
     }
     return m;
-  }, [bookings, SLOTS, slotMinutes]);
+  }, [bookings, SLOTS, slotMinutes, weekDays]);
+
+  const isBlocked = (dayIdx: number, slot: number): string | null | false => {
+    const key = weekDays[dayIdx];
+    if (!key) return false;
+    const lock = dayLocks?.[key];
+    if (lock?.status === "locked") return lock.detail;
+    const rows = blockedByDay?.[key];
+    return rows?.has(slot) ? rows.get(slot) ?? null : false;
+  };
 
   return (
     <>
@@ -179,17 +233,33 @@ export function WeekGridView({
           <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
             <div />
             {visibleDays.map((dayIdx) => {
-              const day = new Date(weekStart);
-              day.setDate(day.getDate() + dayIdx);
-              const arKey = toARDateKey(day);
+              const arKey = weekDays[dayIdx];
               // Derive the weekday label from the column's actual AR date so
-              // the name and the number can never disagree (defends against
-              // any future weekStart drift). With a correct AR Monday this
-              // equals DAYS[dayIdx].
-              const label = DAYS[(toARDow(day) + 6) % 7];
+              // the name and the number can never disagree. With a correct AR
+              // Monday this equals DAYS[dayIdx].
+              const label = DAYS[(dowOfDayKey(arKey) + 6) % 7];
+              const lock = dayLocks?.[arKey];
               return (
-                <div key={dayIdx} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, color: "var(--navy-500)", padding: "6px 0" }}>
-                  {label} {Number(arKey.slice(8, 10))}
+                <div
+                  key={dayIdx}
+                  data-day-status={lock?.status}
+                  title={lock && lock.status !== "open" && lock.detail ? lock.detail : undefined}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "var(--navy-500)",
+                    padding: "6px 0",
+                    minWidth: 0,
+                  }}
+                >
+                  <span>
+                    {label} {Number(arKey.slice(8, 10))}
+                  </span>
+                  {renderDayLock?.(arKey)}
                 </div>
               );
             })}
@@ -221,17 +291,22 @@ export function WeekGridView({
               {slotLabel(s)}
             </div>
           ))}
-          {SLOTS.map((_, i) =>
-            visibleDays.map((__, j) => (
-              <div
-                key={`cell${i}-${j}`}
-                style={{
-                  gridColumn: j + 2, gridRow: i + 1,
-                  background: "rgba(255,255,255,0.5)", borderRadius: 8,
-                  border: "1px solid rgba(15,30,51,0.04)",
-                }}
-              />
-            ))
+          {SLOTS.map((slot, i) =>
+            visibleDays.map((dayIdx, j) => {
+              const blocked = isBlocked(dayIdx, slot);
+              return (
+                <div
+                  key={`cell${i}-${j}`}
+                  data-blocked={blocked !== false || undefined}
+                  title={blocked !== false ? `Bloqueado${blocked ? `: ${blocked}` : ""}` : undefined}
+                  style={{
+                    gridColumn: j + 2, gridRow: i + 1,
+                    background: blocked !== false ? BLOCKED_STRIPES : "rgba(255,255,255,0.5)", borderRadius: 8,
+                    border: "1px solid rgba(15,30,51,0.04)",
+                  }}
+                />
+              );
+            })
           )}
 
           {/* One chip per cell showing total count — click opens the list modal */}
@@ -262,6 +337,8 @@ export function WeekGridView({
               freeRows
             );
             const count = cellBookings.length;
+            // Varios profesionales en pantalla: el conteo se parte por iniciales.
+            const split = practitionerById ? splitCountByPractitioner(cellBookings, practitioners ?? []) : null;
             // Legend "filter": lift cells that contain the highlighted service,
             // dim the rest.
             const hasMatch =
@@ -304,9 +381,22 @@ export function WeekGridView({
                 <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
                   {count}
                 </span>
-                <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
-                  {count === 1 ? "turno" : "turnos"}
-                </span>
+                {split && split.length > 1 ? (
+                  <span
+                    aria-label={split.map((x) => `${practitionerById?.get(x.id)?.name ?? x.initials}: ${x.count}`).join(", ")}
+                    style={{ fontSize: 9, opacity: 0.9, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
+                  >
+                    {split.map((x) => `${x.initials} ${x.count}`).join(" · ")}
+                  </span>
+                ) : split && split.length === 1 ? (
+                  <span style={{ fontSize: 9, opacity: 0.9, fontWeight: 600 }}>
+                    {split[0].initials} · {count === 1 ? "turno" : "turnos"}
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
+                    {count === 1 ? "turno" : "turnos"}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -319,6 +409,7 @@ export function WeekGridView({
           label={overflow.label}
           onEdit={onEdit}
           onClose={() => setOverflow(null)}
+          practitionerById={practitionerById}
         />
       )}
     </>

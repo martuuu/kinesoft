@@ -1,0 +1,2602 @@
+{
+ "110015": {
+  "code": "110015",
+  "disp": "1-1001-5",
+  "name": "GALENO CONSULTING GROUP S. A."
+ },
+ "110022": {
+  "code": "110022",
+  "disp": "1-1002-2",
+  "name": "GERMED S.A."
+ },
+ "110046": {
+  "code": "110046",
+  "disp": "1-1004-6",
+  "name": "MEDICAL CORPORATIVE TRADE"
+ },
+ "110053": {
+  "code": "110053",
+  "disp": "1-1005-3",
+  "name": "FAMYL S.A. SALUD PARA LA FAMILIA"
+ },
+ "110060": {
+  "code": "110060",
+  "disp": "1-1006-0",
+  "name": "COBERTURA INTEGRAL DE MEDICINA ASISTENCIAL S.A."
+ },
+ "110077": {
+  "code": "110077",
+  "disp": "1-1007-7",
+  "name": "MEDICINA ESENCIAL S.A."
+ },
+ "110183": {
+  "code": "110183",
+  "disp": "1-1018-3",
+  "name": "VS GROUP S.A."
+ },
+ "110251": {
+  "code": "110251",
+  "disp": "1-1025-1",
+  "name": "DELTA SALUD S.A."
+ },
+ "110282": {
+  "code": "110282",
+  "disp": "1-1028-2",
+  "name": "CRUZ AZUL SALUD"
+ },
+ "110299": {
+  "code": "110299",
+  "disp": "1-1029-9",
+  "name": "CEN SALUD S.R.L."
+ },
+ "110343": {
+  "code": "110343",
+  "disp": "1-1034-3",
+  "name": "CLINICAS MARPLATENSES UNIDAS S.A."
+ },
+ "110381": {
+  "code": "110381",
+  "disp": "1-1038-1",
+  "name": "SALUD PLUS S.A."
+ },
+ "110442": {
+  "code": "110442",
+  "disp": "1-1044-2",
+  "name": "GILSA"
+ },
+ "110626": {
+  "code": "110626",
+  "disp": "1-1062-6",
+  "name": "SANTA SALUD S.A."
+ },
+ "110633": {
+  "code": "110633",
+  "disp": "1-1063-3",
+  "name": "GRUPO SAN NICOLAS S.R.L."
+ },
+ "110640": {
+  "code": "110640",
+  "disp": "1-1064-0",
+  "name": "SALUD ROSARIO S.A."
+ },
+ "110657": {
+  "code": "110657",
+  "disp": "1-1065-7",
+  "name": "PRIMED SA"
+ },
+ "110756": {
+  "code": "110756",
+  "disp": "1-1075-6",
+  "name": "GENESEN S.,A."
+ },
+ "110824": {
+  "code": "110824",
+  "disp": "1-1082-4",
+  "name": "MEDI-CARDIO S.R.L."
+ },
+ "110848": {
+  "code": "110848",
+  "disp": "1-1084-8",
+  "name": "PARQUE SALUD S.A."
+ },
+ "110916": {
+  "code": "110916",
+  "disp": "1-1091-6",
+  "name": "ASISTENCIA SANITARIA INTEGRAL S.A."
+ },
+ "110961": {
+  "code": "110961",
+  "disp": "1-1096-1",
+  "name": "ASKHA"
+ },
+ "111025": {
+  "code": "111025",
+  "disp": "1-1102-5",
+  "name": "UNO SALUD"
+ },
+ "111049": {
+  "code": "111049",
+  "disp": "1-1104-9",
+  "name": "NORTE SALUD SA"
+ },
+ "111131": {
+  "code": "111131",
+  "disp": "1-1113-1",
+  "name": "CRUZ BLANCA DEL SUR (LANUS)"
+ },
+ "111162": {
+  "code": "111162",
+  "disp": "1-1116-2",
+  "name": "CENTROMEDICA"
+ },
+ "111186": {
+  "code": "111186",
+  "disp": "1-1118-6",
+  "name": "MEDICAL´S ORGANIZACION DE PRESTACIONES MEDICAS PRIVADAS S.A."
+ },
+ "111421": {
+  "code": "111421",
+  "disp": "1-1142-1",
+  "name": "CENTRO MÉDICO SAN BLAS S.A."
+ },
+ "111438": {
+  "code": "111438",
+  "disp": "1-1143-8",
+  "name": "MEDICINA PREPAGA HOMINIS S.A."
+ },
+ "111476": {
+  "code": "111476",
+  "disp": "1-1147-6",
+  "name": "GEA"
+ },
+ "111520": {
+  "code": "111520",
+  "disp": "1-1152-0",
+  "name": "CORPORACION ASISTENCIAL S.A."
+ },
+ "111551": {
+  "code": "111551",
+  "disp": "1-1155-1",
+  "name": "PRESTADORES SANATORIALES SA"
+ },
+ "111612": {
+  "code": "111612",
+  "disp": "1-1161-2",
+  "name": "APRES S.A."
+ },
+ "111650": {
+  "code": "111650",
+  "disp": "1-1165-0",
+  "name": "COBERTURA DE SALUD S.A."
+ },
+ "111674": {
+  "code": "111674",
+  "disp": "1-1167-4",
+  "name": "SU MEDICINA ASISTENCIA S.A."
+ },
+ "111681": {
+  "code": "111681",
+  "disp": "1-1168-1",
+  "name": "PROGRAMA DE SALUD S.A."
+ },
+ "111698": {
+  "code": "111698",
+  "disp": "1-1169-8",
+  "name": "EMEDIC S.A."
+ },
+ "111728": {
+  "code": "111728",
+  "disp": "1-1172-8",
+  "name": "MEDIN S.A.S.M.A"
+ },
+ "111742": {
+  "code": "111742",
+  "disp": "1-1174-2",
+  "name": "SISTEMA DE SALUD DEL COLEGIO MEDICO S.A."
+ },
+ "111797": {
+  "code": "111797",
+  "disp": "1-1179-7",
+  "name": "INSTITUTO DE INVESTIGACIONES DEL CORAZON INICOR"
+ },
+ "111834": {
+  "code": "111834",
+  "disp": "1-1183-4",
+  "name": "MEDICUS SOCIEDAD ANONIMA DE ASISTENCIA MEDICA Y CIENTIFICA"
+ },
+ "111858": {
+  "code": "111858",
+  "disp": "1-1185-8",
+  "name": "GAM SALUD"
+ },
+ "111872": {
+  "code": "111872",
+  "disp": "1-1187-2",
+  "name": "EMECA"
+ },
+ "111896": {
+  "code": "111896",
+  "disp": "1-1189-6",
+  "name": "UNIDAD CORONARIA MOVIL QUILMES"
+ },
+ "111933": {
+  "code": "111933",
+  "disp": "1-1193-3",
+  "name": "COBERTURA DE SALUD BELL VILLE PRIVADA S.R.L."
+ },
+ "111957": {
+  "code": "111957",
+  "disp": "1-1195-7",
+  "name": "INSTITUTO MATERNO INFANTIL SA"
+ },
+ "112028": {
+  "code": "112028",
+  "disp": "1-1202-8",
+  "name": "SALUD INTEGRAL"
+ },
+ "112110": {
+  "code": "112110",
+  "disp": "1-1211-0",
+  "name": "VITA`S S.A."
+ },
+ "112141": {
+  "code": "112141",
+  "disp": "1-1214-1",
+  "name": "CUIDAR SALUD ASISTENCIA MEDICA DOMICILIARIA"
+ },
+ "112158": {
+  "code": "112158",
+  "disp": "1-1215-8",
+  "name": "GERDANNA SA"
+ },
+ "112172": {
+  "code": "112172",
+  "disp": "1-1217-2",
+  "name": "GRUPO DDM SA"
+ },
+ "112196": {
+  "code": "112196",
+  "disp": "1-1219-6",
+  "name": "BOEDO SALUD SA"
+ },
+ "112325": {
+  "code": "112325",
+  "disp": "1-1232-5",
+  "name": "BRAMED S.R.L."
+ },
+ "112349": {
+  "code": "112349",
+  "disp": "1-1234-9",
+  "name": "SOCORRO MEDICO PRIVADO CORDOBA S.A."
+ },
+ "112363": {
+  "code": "112363",
+  "disp": "1-1236-3",
+  "name": "CLINICA DE LA UNION SA."
+ },
+ "112370": {
+  "code": "112370",
+  "disp": "1-1237-0",
+  "name": "SOCORRO MEDICO SAN MARTIN S.A."
+ },
+ "112424": {
+  "code": "112424",
+  "disp": "1-1242-4",
+  "name": "HEALTH MEDICAL"
+ },
+ "112431": {
+  "code": "112431",
+  "disp": "1-1243-1",
+  "name": "INTERNATIONAL HEALTH SERVICES ARGENTINA S.A"
+ },
+ "112486": {
+  "code": "112486",
+  "disp": "1-1248-6",
+  "name": "EMERGENCIA CARDIO ASISTENCIAL S.A."
+ },
+ "112530": {
+  "code": "112530",
+  "disp": "1-1253-0",
+  "name": "AMC SALUD S.A"
+ },
+ "112578": {
+  "code": "112578",
+  "disp": "1-1257-8",
+  "name": "INSTITUTO PRIVADO DE CLINICA Y CIRUGIA DE LOBOS SA"
+ },
+ "112646": {
+  "code": "112646",
+  "disp": "1-1264-6",
+  "name": "SAIMQ SANATORIO PLAZA"
+ },
+ "112660": {
+  "code": "112660",
+  "disp": "1-1266-0",
+  "name": "SABER S.A."
+ },
+ "112684": {
+  "code": "112684",
+  "disp": "1-1268-4",
+  "name": "REYLES S.A."
+ },
+ "112745": {
+  "code": "112745",
+  "disp": "1-1274-5",
+  "name": "SIMARA S.A."
+ },
+ "112851": {
+  "code": "112851",
+  "disp": "1-1285-1",
+  "name": "GALENO ARGENTINA S.A."
+ },
+ "112868": {
+  "code": "112868",
+  "disp": "1-1286-8",
+  "name": "CENTRO DE EMERGENCIA MEDICA INTEGRAL"
+ },
+ "112929": {
+  "code": "112929",
+  "disp": "1-1292-9",
+  "name": "EMME S.A."
+ },
+ "112950": {
+  "code": "112950",
+  "disp": "1-1295-0",
+  "name": "C.R.S. PRESTADORES DE SALUD S.A."
+ },
+ "112974": {
+  "code": "112974",
+  "disp": "1-1297-4",
+  "name": "SISTEMA DE URGENCIAS DEL ROSAFE S.A.U"
+ },
+ "112981": {
+  "code": "112981",
+  "disp": "1-1298-1",
+  "name": "MPE S.A."
+ },
+ "113038": {
+  "code": "113038",
+  "disp": "1-1303-8",
+  "name": "SEREM SA"
+ },
+ "113052": {
+  "code": "113052",
+  "disp": "1-1305-2",
+  "name": "SOCORRO MEDICO PRIVADO S.A."
+ },
+ "113090": {
+  "code": "113090",
+  "disp": "1-1309-0",
+  "name": "UNIFE S.A."
+ },
+ "113120": {
+  "code": "113120",
+  "disp": "1-1312-0",
+  "name": "SISTEMAS PRIVADOS DE SALUD S. A."
+ },
+ "113151": {
+  "code": "113151",
+  "disp": "1-1315-1",
+  "name": "CENTRO MEDICO MONDE GRAN SA"
+ },
+ "113168": {
+  "code": "113168",
+  "disp": "1-1316-8",
+  "name": "AMECA SA"
+ },
+ "113212": {
+  "code": "113212",
+  "disp": "1-1321-2",
+  "name": "MET CORDOBA S.A"
+ },
+ "113229": {
+  "code": "113229",
+  "disp": "1-1322-9",
+  "name": "ASSI SA"
+ },
+ "113236": {
+  "code": "113236",
+  "disp": "1-1323-6",
+  "name": "D.I.M.SA. S.A."
+ },
+ "113274": {
+  "code": "113274",
+  "disp": "1-1327-4",
+  "name": "CLINICA MEDICO QUIRURGICA SANATORIO JUNIN S.A"
+ },
+ "113328": {
+  "code": "113328",
+  "disp": "1-1332-8",
+  "name": "SWISS MEDICAL S.A."
+ },
+ "113359": {
+  "code": "113359",
+  "disp": "1-1335-9",
+  "name": "EMERGENCIA MEDICA INTEGRAL S.A."
+ },
+ "113366": {
+  "code": "113366",
+  "disp": "1-1336-6",
+  "name": "OMINT S.A. DE SERVICIOS"
+ },
+ "113397": {
+  "code": "113397",
+  "disp": "1-1339-7",
+  "name": "AMCE S.A."
+ },
+ "113458": {
+  "code": "113458",
+  "disp": "1-1345-8",
+  "name": "PLENA SALUD S.A."
+ },
+ "113465": {
+  "code": "113465",
+  "disp": "1-1346-5",
+  "name": "PREVINCA SALUD S.A."
+ },
+ "113472": {
+  "code": "113472",
+  "disp": "1-1347-2",
+  "name": "ECCO S.A."
+ },
+ "113489": {
+  "code": "113489",
+  "disp": "1-1348-9",
+  "name": "ORDEM SUR S.A."
+ },
+ "113496": {
+  "code": "113496",
+  "disp": "1-1349-6",
+  "name": "ADMINISTRAR SALUD S.A."
+ },
+ "113557": {
+  "code": "113557",
+  "disp": "1-1355-7",
+  "name": "UNIDEM S.A."
+ },
+ "113687": {
+  "code": "113687",
+  "disp": "1-1368-7",
+  "name": "SANATORIO MEDICO QUIRURGICO SANTA FE S.A"
+ },
+ "113724": {
+  "code": "113724",
+  "disp": "1-1372-4",
+  "name": "INCOR EMERGENCIAS SRL"
+ },
+ "113755": {
+  "code": "113755",
+  "disp": "1-1375-5",
+  "name": "PREMEDICA S.A."
+ },
+ "113892": {
+  "code": "113892",
+  "disp": "1-1389-2",
+  "name": "SOREMER S.A."
+ },
+ "113922": {
+  "code": "113922",
+  "disp": "1-1392-2",
+  "name": "UNIMED SA"
+ },
+ "113946": {
+  "code": "113946",
+  "disp": "1-1394-6",
+  "name": "FAMILY EMERGENCIAS MEDICAS SRL"
+ },
+ "113960": {
+  "code": "113960",
+  "disp": "1-1396-0",
+  "name": "CORSAL SA"
+ },
+ "114055": {
+  "code": "114055",
+  "disp": "1-1405-5",
+  "name": "SERVICIOS EMSYS S.A."
+ },
+ "114093": {
+  "code": "114093",
+  "disp": "1-1409-3",
+  "name": "EME SALUD SA"
+ },
+ "114253": {
+  "code": "114253",
+  "disp": "1-1425-3",
+  "name": "HEALTHNES S.A."
+ },
+ "114291": {
+  "code": "114291",
+  "disp": "1-1429-1",
+  "name": "AMPARAS S.A."
+ },
+ "114383": {
+  "code": "114383",
+  "disp": "1-1438-3",
+  "name": "GRUPO MEDICO INCAS S.A."
+ },
+ "114451": {
+  "code": "114451",
+  "disp": "1-1445-1",
+  "name": "SANATORIO GARAY S.A."
+ },
+ "114567": {
+  "code": "114567",
+  "disp": "1-1456-7",
+  "name": "CALIDAD MÉDICA S.A."
+ },
+ "114680": {
+  "code": "114680",
+  "disp": "1-1468-0",
+  "name": "LO-MAR S.A."
+ },
+ "114697": {
+  "code": "114697",
+  "disp": "1-1469-7",
+  "name": "SUM S.A."
+ },
+ "114710": {
+  "code": "114710",
+  "disp": "1-1471-0",
+  "name": "SISTEMA ODONTOLÓGICO PREPAGO PAMPEANO"
+ },
+ "114772": {
+  "code": "114772",
+  "disp": "1-1477-2",
+  "name": "CLINICA ROCA S.A."
+ },
+ "114819": {
+  "code": "114819",
+  "disp": "1-1481-9",
+  "name": "ASISTIR SA"
+ },
+ "114895": {
+  "code": "114895",
+  "disp": "1-1489-5",
+  "name": "CYNTHIOS SALUD SA"
+ },
+ "115065": {
+  "code": "115065",
+  "disp": "1-1506-5",
+  "name": "PRIVAMED S.A"
+ },
+ "115126": {
+  "code": "115126",
+  "disp": "1-1512-6",
+  "name": "MANO SALUD"
+ },
+ "115140": {
+  "code": "115140",
+  "disp": "1-1514-0",
+  "name": "EMERGENCIAS MEDICAS OLAVARRIA SRL"
+ },
+ "115164": {
+  "code": "115164",
+  "disp": "1-1516-4",
+  "name": "ENTRE RIOS EMERGENCIAS S.R.L."
+ },
+ "115171": {
+  "code": "115171",
+  "disp": "1-1517-1",
+  "name": "IMEDICAL S.A."
+ },
+ "115188": {
+  "code": "115188",
+  "disp": "1-1518-8",
+  "name": "VEM SA"
+ },
+ "115232": {
+  "code": "115232",
+  "disp": "1-1523-2",
+  "name": "EMERGENCIAS MEDICAS ENTRE RIOS SRL"
+ },
+ "115249": {
+  "code": "115249",
+  "disp": "1-1524-9",
+  "name": "ECA"
+ },
+ "115393": {
+  "code": "115393",
+  "disp": "1-1539-3",
+  "name": "MEDOM S.A."
+ },
+ "115416": {
+  "code": "115416",
+  "disp": "1-1541-6",
+  "name": "MEMED S.A."
+ },
+ "115430": {
+  "code": "115430",
+  "disp": "1-1543-0",
+  "name": "IMPLATEL S.A."
+ },
+ "115454": {
+  "code": "115454",
+  "disp": "1-1545-4",
+  "name": "ACZEP S.A."
+ },
+ "115485": {
+  "code": "115485",
+  "disp": "1-1548-5",
+  "name": "LPSM S.A."
+ },
+ "115492": {
+  "code": "115492",
+  "disp": "1-1549-2",
+  "name": "EQUIPO MEDICO DE EMERGENCIAS"
+ },
+ "115553": {
+  "code": "115553",
+  "disp": "1-1555-3",
+  "name": "ORGANIZACION GALVEZ S.A."
+ },
+ "115591": {
+  "code": "115591",
+  "disp": "1-1559-1",
+  "name": "MEDICAR S.R.L."
+ },
+ "115843": {
+  "code": "115843",
+  "disp": "1-1584-3",
+  "name": "NATIVUS SRL"
+ },
+ "115935": {
+  "code": "115935",
+  "disp": "1-1593-5",
+  "name": "ELAREYNA"
+ },
+ "116266": {
+  "code": "116266",
+  "disp": "1-1626-6",
+  "name": "SALTMED ORGANIZACION MEDICA INTEGRAL SRL"
+ },
+ "116341": {
+  "code": "116341",
+  "disp": "1-1634-1",
+  "name": "Nordica Salud s.r.l."
+ },
+ "116358": {
+  "code": "116358",
+  "disp": "1-1635-8",
+  "name": "FAMILY SALUD"
+ },
+ "116491": {
+  "code": "116491",
+  "disp": "1-1649-1",
+  "name": "PROTECCION EMERALD SALUD SA"
+ },
+ "116594": {
+  "code": "116594",
+  "disp": "1-1659-4",
+  "name": "SIALNOR"
+ },
+ "116608": {
+  "code": "116608",
+  "disp": "1-1660-8",
+  "name": "FISHERTON SALUD S.R.L."
+ },
+ "116662": {
+  "code": "116662",
+  "disp": "1-1666-2",
+  "name": "And the Yellow Too S.A."
+ },
+ "116686": {
+  "code": "116686",
+  "disp": "1-1668-6",
+  "name": "MEDIPAR SA"
+ },
+ "116693": {
+  "code": "116693",
+  "disp": "1-1669-3",
+  "name": "ROI SA"
+ },
+ "116716": {
+  "code": "116716",
+  "disp": "1-1671-6",
+  "name": "SALUD DEL NUEVO ROSARIO SA"
+ },
+ "116729": {
+  "code": "116729",
+  "disp": "1-1672-9",
+  "name": "ASISTENCIA MODELO VICENTE LOPEZ SA"
+ },
+ "116792": {
+  "code": "116792",
+  "disp": "1-1679-2",
+  "name": "Prevención Salud S.A."
+ },
+ "116846": {
+  "code": "116846",
+  "disp": "1-1684-6",
+  "name": "MEDVISUR SALUD S.A."
+ },
+ "116891": {
+  "code": "116891",
+  "disp": "1-1689-1",
+  "name": "Hospital Privado Regional del Sur SA"
+ },
+ "117019": {
+  "code": "117019",
+  "disp": "1-1701-9",
+  "name": "PLUS SALUD"
+ },
+ "117115": {
+  "code": "117115",
+  "disp": "1-1711-5",
+  "name": "ENSALUD"
+ },
+ "117146": {
+  "code": "117146",
+  "disp": "1-1714-6",
+  "name": "SOCIEDAD DE SEERVICIOS DE SALUD DE SALTA S.A."
+ },
+ "117191": {
+  "code": "117191",
+  "disp": "1-1719-1",
+  "name": "TACCHI JULIO ALFREDO Y TACCHI JUAN CARLOS SOCIEDAD DE HECHO"
+ },
+ "117252": {
+  "code": "117252",
+  "disp": "1-1725-2",
+  "name": "BIENESTAR SALUD SA"
+ },
+ "117351": {
+  "code": "117351",
+  "disp": "1-1735-1",
+  "name": "Conciencia Medica S.A"
+ },
+ "117415": {
+  "code": "117415",
+  "disp": "1-1741-5",
+  "name": "RED SALUD"
+ },
+ "117535": {
+  "code": "117535",
+  "disp": "1-1753-5",
+  "name": "OSCOSALUD"
+ },
+ "117559": {
+  "code": "117559",
+  "disp": "1-1755-9",
+  "name": "DIAGNOSTICO BOULOGNE"
+ },
+ "117627": {
+  "code": "117627",
+  "disp": "1-1762-7",
+  "name": "ASIPSALUD"
+ },
+ "117658": {
+  "code": "117658",
+  "disp": "1-1765-8",
+  "name": "AMSTERDAM SALUD SA"
+ },
+ "117665": {
+  "code": "117665",
+  "disp": "1-1766-5",
+  "name": "SANATORIO MAPACI S.A."
+ },
+ "117696": {
+  "code": "117696",
+  "disp": "1-1769-6",
+  "name": "La Casa del Medico Mutual"
+ },
+ "117719": {
+  "code": "117719",
+  "disp": "1-1771-9",
+  "name": "SANTE MEDICAL SRL"
+ },
+ "117726": {
+  "code": "117726",
+  "disp": "1-1772-6",
+  "name": "PLENIMEDICAL S.A."
+ },
+ "117757": {
+  "code": "117757",
+  "disp": "1-1775-7",
+  "name": "EMERGENCIAS DEL SUR S.R.L."
+ },
+ "117771": {
+  "code": "117771",
+  "disp": "1-1777-1",
+  "name": "MARCOS Y HUGO LIBEDISNKY S.A (CRISOLMED )"
+ },
+ "117887": {
+  "code": "117887",
+  "disp": "1-1788-7",
+  "name": "UNION A.F. MENDOZA SALUD SA"
+ },
+ "117962": {
+  "code": "117962",
+  "disp": "1-1796-2",
+  "name": "salud uteplim"
+ },
+ "118071": {
+  "code": "118071",
+  "disp": "1-1807-1",
+  "name": "SP HEALTH GROUP"
+ },
+ "118484": {
+  "code": "118484",
+  "disp": "1-1848-4",
+  "name": "MEDYCIN ARGENTINO S.A."
+ },
+ "118491": {
+  "code": "118491",
+  "disp": "1-1849-1",
+  "name": "AGRUPACIÓN SANATORIAL SUR S.A."
+ },
+ "118514": {
+  "code": "118514",
+  "disp": "1-1851-4",
+  "name": "SANITAS SALUD S.R.L."
+ },
+ "118521": {
+  "code": "118521",
+  "disp": "1-1852-1",
+  "name": "ANDESALUD S.A."
+ },
+ "118538": {
+  "code": "118538",
+  "disp": "1-1853-8",
+  "name": "BONMED S.A."
+ },
+ "120016": {
+  "code": "120016",
+  "disp": "1-2001-6",
+  "name": "CONURBANO SALUD"
+ },
+ "120023": {
+  "code": "120023",
+  "disp": "1-2002-3",
+  "name": "A.M.R. SALUD S.A.S."
+ },
+ "120030": {
+  "code": "120030",
+  "disp": "1-2003-0",
+  "name": "SISTEMA INTEGRADO DE PRESTADORES DE SALUD SA"
+ },
+ "120054": {
+  "code": "120054",
+  "disp": "1-2005-4",
+  "name": "YOUR HEALTH S.A."
+ },
+ "120061": {
+  "code": "120061",
+  "disp": "1-2006-1",
+  "name": "CENTRO MEDICO IPAM S.A."
+ },
+ "120078": {
+  "code": "120078",
+  "disp": "1-2007-8",
+  "name": "SISTEMA INTEGRAL DE SALUD DEL SANATORIO CHIVILCOY S.A."
+ },
+ "120085": {
+  "code": "120085",
+  "disp": "1-2008-5",
+  "name": "MEDICINA PRIVADA S.A."
+ },
+ "120115": {
+  "code": "120115",
+  "disp": "1-2011-5",
+  "name": "GALENO S.R.L."
+ },
+ "120139": {
+  "code": "120139",
+  "disp": "1-2013-9",
+  "name": "UNION EMERGENCIAS REGIONALES S.A."
+ },
+ "120153": {
+  "code": "120153",
+  "disp": "1-2015-3",
+  "name": "ASISMED"
+ },
+ "120160": {
+  "code": "120160",
+  "disp": "1-2016-0",
+  "name": "ADMINISTRACION RECURSOS PARA SALUD.S.A"
+ },
+ "120177": {
+  "code": "120177",
+  "disp": "1-2017-7",
+  "name": "NOBIS SA"
+ },
+ "120689": {
+  "code": "120689",
+  "disp": "1-2068-9",
+  "name": "EMINENTE MEDICINAL S.A."
+ },
+ "120696": {
+  "code": "120696",
+  "disp": "1-2069-6",
+  "name": "MEDICAL SERVICIOS DE SALUD S.R.L."
+ },
+ "120719": {
+  "code": "120719",
+  "disp": "1-2071-9",
+  "name": "SAJU S.R.L."
+ },
+ "120757": {
+  "code": "120757",
+  "disp": "1-2075-7",
+  "name": "SANTA CLARA SALUD S.A."
+ },
+ "120764": {
+  "code": "120764",
+  "disp": "1-2076-4",
+  "name": "MC SALUD S.A."
+ },
+ "120771": {
+  "code": "120771",
+  "disp": "1-2077-1",
+  "name": "CARE SALUD S.A."
+ },
+ "120788": {
+  "code": "120788",
+  "disp": "1-2078-8",
+  "name": "SALUD PROFESIONAL Y TECNOLOGICA S.A."
+ },
+ "120795": {
+  "code": "120795",
+  "disp": "1-2079-5",
+  "name": "ASSISTENCIAL SALUD S.A."
+ },
+ "120818": {
+  "code": "120818",
+  "disp": "1-2081-8",
+  "name": "MEDICINA PRIVADA SRL"
+ },
+ "120825": {
+  "code": "120825",
+  "disp": "1-2082-5",
+  "name": "GRUPO MPSALUD S.A."
+ },
+ "210081": {
+  "code": "210081",
+  "disp": "2-1008-1",
+  "name": "COOPERATIVA DE TRABAJO DE SERVICIOS MEDICO ASISTENCIALES NECOCHEA LTDA."
+ },
+ "211947": {
+  "code": "211947",
+  "disp": "2-1194-7",
+  "name": "AVALIAN SALUD Y BIENESTAR COOPERATIVA LIMITADA EX ACA SALUD COOPERATIVA DE PRESTACION DE SERVICIOS MEDICO ASISTENCIALES LTDA"
+ },
+ "212056": {
+  "code": "212056",
+  "disp": "2-1205-6",
+  "name": "COOP DE TRABAJO MEDICO URUGUAY LTDA"
+ },
+ "214076": {
+  "code": "214076",
+  "disp": "2-1407-6",
+  "name": "COOPERATIVA DE ENERGIA ELECTRICA Y O.S.P.LAS VARILLAS LTDA"
+ },
+ "214397": {
+  "code": "214397",
+  "disp": "2-1439-7",
+  "name": "COOPERATIVA DE PREVISIÓN DE SERVICIOS PÚBLICOS, ASISTENCIALES,VIVIENDA Y CRÉDITO LTDA."
+ },
+ "214427": {
+  "code": "214427",
+  "disp": "2-1442-7",
+  "name": "COOPERATIVA DE TRABAJO DE ATENCION MEDICA INTEGRAL DEL SUR DE DE LA PROVINCIA DE CORDOBA (AMICOR) LTDA."
+ },
+ "214915": {
+  "code": "214915",
+  "disp": "2-1491-5",
+  "name": "COOP.DE PROV.DE OBRAS Y SERV.PCOS DE GDOR.CRESPO LTDA."
+ },
+ "215468": {
+  "code": "215468",
+  "disp": "2-1546-8",
+  "name": "COOPERATIVA DE PROVISION DE SERVICO ELECTRICO Y OTROS SERVICIOS PUBLICOS LIMITADA DE PIGUE"
+ },
+ "215710": {
+  "code": "215710",
+  "disp": "2-1571-0",
+  "name": "COOPERATIVA DE CREDITO DE SERVICIOS PUBLICOS Y SOCIALES CRUZ DEL EJE LTDA."
+ },
+ "310095": {
+  "code": "310095",
+  "disp": "3-1009-5",
+  "name": "MUTUAL DE LA INDUSTRIA CURTIDORA ARGENTINA"
+ },
+ "310125": {
+  "code": "310125",
+  "disp": "3-1012-5",
+  "name": "ASOCIACION SOCORROS MUTUOS FUERZAS ARMADAS"
+ },
+ "310149": {
+  "code": "310149",
+  "disp": "3-1014-9",
+  "name": "ASOCIACION MUTUAL DEL PERSONAL JERARQUICO DE BANCOS OFICIALES NACIONALES"
+ },
+ "310163": {
+  "code": "310163",
+  "disp": "3-1016-3",
+  "name": "ASOCIACION MUTUAL DE EMPLEADOS PROVINCIALES DE LA PROVINCIA DE BUENOS AIRES."
+ },
+ "310170": {
+  "code": "310170",
+  "disp": "3-1017-0",
+  "name": "MUTUAL AGUA Y ENERGIA ELECTRICA DE CAPITAL FEDERAL"
+ },
+ "310231": {
+  "code": "310231",
+  "disp": "3-1023-1",
+  "name": "ASOCIACION MUTUAL DE SALUD DE CIUDADELA"
+ },
+ "310262": {
+  "code": "310262",
+  "disp": "3-1026-2",
+  "name": "ASOCIACION MUTUAL PERSONAL SANCOR"
+ },
+ "310453": {
+  "code": "310453",
+  "disp": "3-1045-3",
+  "name": "ASOCIACION MUTUAL 12 DE ENERO TRABAJADORES PASTELEROS, CONFITEROS, PIZZEROS, HELADEROS, ALFAJOREROS Y SERVICIOS RAPIDOS."
+ },
+ "310460": {
+  "code": "310460",
+  "disp": "3-1046-0",
+  "name": "ASOCIACION DE PROTECCION RECIPROCA ENTRE PRODUCTORES AGROPECUARIOS"
+ },
+ "310477": {
+  "code": "310477",
+  "disp": "3-1047-7",
+  "name": "ASOC MUTUAL TRABAJADORES EMPLEADOS DE COMERCIO"
+ },
+ "310491": {
+  "code": "310491",
+  "disp": "3-1049-1",
+  "name": "ASOCIACION MUTUAL DR. ESTEBAN LAUREANO MARADONA SALUD"
+ },
+ "310521": {
+  "code": "310521",
+  "disp": "3-1052-1",
+  "name": "AMUVAC"
+ },
+ "310545": {
+  "code": "310545",
+  "disp": "3-1054-5",
+  "name": "ASOCIACION MUTUALISTA DE EMPLEADOS DEL BANCO DE LA PROVINCIA DE BUENOS AIRES"
+ },
+ "310668": {
+  "code": "310668",
+  "disp": "3-1066-8",
+  "name": "ASOCIACIÓN MUTUALISTA DE EMPLEADOS DEL MINISTERIO DE OBRAS PÚBLICAS"
+ },
+ "310712": {
+  "code": "310712",
+  "disp": "3-1071-2",
+  "name": "ASOCIACION MUTUAL SINDICATO DE CAMIONEROS"
+ },
+ "310743": {
+  "code": "310743",
+  "disp": "3-1074-3",
+  "name": "ASOCIACION MUTUAL ARGUS SALUD"
+ },
+ "310767": {
+  "code": "310767",
+  "disp": "3-1076-7",
+  "name": "MUTUAL COSECHA SALUD"
+ },
+ "310873": {
+  "code": "310873",
+  "disp": "3-1087-3",
+  "name": "ASOCIACION MUTUAL DE CHOFERES DE CAMIONES, OBREROS Y EMPLEADOS DEL TRANSPORTE AUTOMOTOR DE CARGAS GENERALES DE MISIONES"
+ },
+ "310897": {
+  "code": "310897",
+  "disp": "3-1089-7",
+  "name": "ASOCIACION MUTUAL PREMIUM"
+ },
+ "310927": {
+  "code": "310927",
+  "disp": "3-1092-7",
+  "name": "ASOCIACIÓN MUTUAL DEL PERSONAL DE TRANSPORTE AUTOMOTOR PLAZA"
+ },
+ "310934": {
+  "code": "310934",
+  "disp": "3-1093-4",
+  "name": "PROGRAMAS MEDICOS SOCIEDAD ARGENTINA DE CONSULTORIA MUTUAL"
+ },
+ "310989": {
+  "code": "310989",
+  "disp": "3-1098-9",
+  "name": "ASOCIACION MUTUAL MUNICIPALES DEL DEPARTAMENTO GENERAL LOPEZ"
+ },
+ "311036": {
+  "code": "311036",
+  "disp": "3-1103-6",
+  "name": "ASOCIACION MUTUAL RURALISTA"
+ },
+ "311050": {
+  "code": "311050",
+  "disp": "3-1105-0",
+  "name": "MUTUAL DE AYUDA ENTRE ASOC. DE LA ASOC. DEP.EVERTON-OLIMPIA"
+ },
+ "311142": {
+  "code": "311142",
+  "disp": "3-1114-2",
+  "name": "OBRA ASISTENCIAL MUTUAL PARA AGENTES MUNICIPALES OAM"
+ },
+ "311159": {
+  "code": "311159",
+  "disp": "3-1115-9",
+  "name": "ASOCIACIÓN MUTUAL CON-SER CONFIANZA Y SERVICIO"
+ },
+ "311227": {
+  "code": "311227",
+  "disp": "3-1122-7",
+  "name": "MUTUAL GREMIAL MEDICA"
+ },
+ "311234": {
+  "code": "311234",
+  "disp": "3-1123-4",
+  "name": "ASOCIACION MUTUAL TRABAJADORES ACTIVIDAD REPOSTERIA"
+ },
+ "311241": {
+  "code": "311241",
+  "disp": "3-1124-1",
+  "name": "MUTUAL MEDICA RIO CUARTO"
+ },
+ "311319": {
+  "code": "311319",
+  "disp": "3-1131-9",
+  "name": "SOCIEDAD ESPAÑOLA DE SOCORROS MUTUOS DE TRES ARROYOS"
+ },
+ "311333": {
+  "code": "311333",
+  "disp": "3-1133-3",
+  "name": "MUTUAL MEDICA CONCORDIA"
+ },
+ "311340": {
+  "code": "311340",
+  "disp": "3-1134-0",
+  "name": "ASOC MUTUAL SEGURIDAD SOCIAL 13 DE MAYO"
+ },
+ "311357": {
+  "code": "311357",
+  "disp": "3-1135-7",
+  "name": "PRENAPA ASOC.MUTUAL COMPENSADORA SANITARIA"
+ },
+ "311364": {
+  "code": "311364",
+  "disp": "3-1136-4",
+  "name": "ASOCIACIÓN MUTUAL DEL PERSONAL DE FUTURA NORTE S.A."
+ },
+ "311371": {
+  "code": "311371",
+  "disp": "3-1137-1",
+  "name": "ASOCIACION MUTUAL SANCOR SALUD"
+ },
+ "311388": {
+  "code": "311388",
+  "disp": "3-1138-8",
+  "name": "A.I.S.M. UNIONE E BENEVOLENZA"
+ },
+ "311579": {
+  "code": "311579",
+  "disp": "3-1157-9",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES ARGENTINOS ESTATALES (AMTAE)"
+ },
+ "311586": {
+  "code": "311586",
+  "disp": "3-1158-6",
+  "name": "MUTUAL FEDERADA 25 DE JUNIO SOCIEDAD DE PROTECCION RECIPROCA."
+ },
+ "311647": {
+  "code": "311647",
+  "disp": "3-1164-7",
+  "name": "ASOCIACION MUTUAL DE ASOCIADOS Y EMPLEADOS DE LA COOPERATIVA MARPLATENSE DE PESCA E INDUSTRIALIZACION LIMITADA (COOMARPES)"
+ },
+ "311739": {
+  "code": "311739",
+  "disp": "3-1173-9",
+  "name": "CENTRO UNION DEPENDIENTES ASOCIACION DE PROTECCION MUTUA"
+ },
+ "311777": {
+  "code": "311777",
+  "disp": "3-1177-7",
+  "name": "ASOCIACION MUTUAL Y PROTECCION RECIPROCA UNISOL SALUD"
+ },
+ "311814": {
+  "code": "311814",
+  "disp": "3-1181-4",
+  "name": "ASOCIACIÓN MUTUAL ARGENTINA DEL TURISMO"
+ },
+ "311845": {
+  "code": "311845",
+  "disp": "3-1184-5",
+  "name": "ASOCIACION MUTUAL METALMECANICA ENTRE OBREROS Y TECNICOS AFILIADOS AL SINDICATO DE MECANICOS Y AFINES DEL TRANSPORTE AUTOMOTOR"
+ },
+ "311920": {
+  "code": "311920",
+  "disp": "3-1192-0",
+  "name": "MUTUAL MERCANTIL EMPRESARIA"
+ },
+ "311982": {
+  "code": "311982",
+  "disp": "3-1198-2",
+  "name": "HOSPITAL ESPAÑOL DEL SUR MENDOCINO SOCIEDAD DE BENEFICIENCIA Y MUTUALIDAD"
+ },
+ "312015": {
+  "code": "312015",
+  "disp": "3-1201-5",
+  "name": "ASOCIACIÓN MUTUAL MÉDICA VILLA MARÍA"
+ },
+ "312039": {
+  "code": "312039",
+  "disp": "3-1203-9",
+  "name": "ASOCIACION MUTUAL MERCANTIL BAHIENSE"
+ },
+ "312046": {
+  "code": "312046",
+  "disp": "3-1204-6",
+  "name": "ASOCIACION MUTUAL 10 DE ABRIL"
+ },
+ "312084": {
+  "code": "312084",
+  "disp": "3-1208-4",
+  "name": "ASOCIACIÓN MUTUAL CENTRO MÉDICO DE SAN FRANCISCO"
+ },
+ "312091": {
+  "code": "312091",
+  "disp": "3-1209-1",
+  "name": "SOCIEDAD ITALIANA DE SOCORROS MUTUOS CAMPANA"
+ },
+ "312121": {
+  "code": "312121",
+  "disp": "3-1212-1",
+  "name": "MUTUAL DE EX EMPLEADOS DE AGUA, LA ENERGIA ELECTRICA Y OTRAS ACTIVIDADES - JUJUY"
+ },
+ "312138": {
+  "code": "312138",
+  "disp": "3-1213-8",
+  "name": "ASOCIACION MUTUAL FERROVIARIA"
+ },
+ "312183": {
+  "code": "312183",
+  "disp": "3-1218-3",
+  "name": "ASOCIACION MUTUAL DE PROFESIONALES"
+ },
+ "312244": {
+  "code": "312244",
+  "disp": "3-1224-4",
+  "name": "A.M.PARA LA AYUDA RECIPROCA DE ASOCIADOS REGIONALES"
+ },
+ "312398": {
+  "code": "312398",
+  "disp": "3-1239-8",
+  "name": "ASOCIACION MUTUAL DE PROTECCION FAMILIAR"
+ },
+ "312497": {
+  "code": "312497",
+  "disp": "3-1249-7",
+  "name": "ASOCIACION MUTUAL DE EMPLEADOS DE COMERCIO DEL SUDESTE BONAERENSE"
+ },
+ "312589": {
+  "code": "312589",
+  "disp": "3-1258-9",
+  "name": "MUTUAL DEL PERSONAL DEL CENTRO INDUSTRIAL ACINDAR"
+ },
+ "312657": {
+  "code": "312657",
+  "disp": "3-1265-7",
+  "name": "ASOCIACION MUTUAL INTERIOR DEFENSA Y JUSTICIA"
+ },
+ "312671": {
+  "code": "312671",
+  "disp": "3-1267-1",
+  "name": "MUTUAL DE SERVICIOS ASISTENCIALES DE MEDICINA INTERDISCIPLINARIA-SAMI"
+ },
+ "312695": {
+  "code": "312695",
+  "disp": "3-1269-5",
+  "name": "SOCIEDAD ESPAÑOLA DE BENEFICENCIA Y MUTUALIDAD"
+ },
+ "312718": {
+  "code": "312718",
+  "disp": "3-1271-8",
+  "name": "ASOCIACION MUTUAL DE FARMACEUTICOS DE MENDOZA A.M.F.A.R."
+ },
+ "312763": {
+  "code": "312763",
+  "disp": "3-1276-3",
+  "name": "ASOCIACIÓN MUTUAL C Y D DE TRABAJADORES DEL ESTADO"
+ },
+ "312794": {
+  "code": "312794",
+  "disp": "3-1279-4",
+  "name": "ASOCIACIÓN MUTUAL 22 DE DICIEMBRE DEL DEPARTAMENTO IRIONDO"
+ },
+ "312831": {
+  "code": "312831",
+  "disp": "3-1283-1",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES PORTUARIOS DE LA REPUBLICA ARGENTINA"
+ },
+ "312886": {
+  "code": "312886",
+  "disp": "3-1288-6",
+  "name": "ASOCIACIÓN DE EMPLEADOS MUNICIPALES-MUTUALIDAD"
+ },
+ "313018": {
+  "code": "313018",
+  "disp": "3-1301-8",
+  "name": "LA RECIPROCA A.A.M.E.B.P.B.A."
+ },
+ "313087": {
+  "code": "313087",
+  "disp": "3-1308-7",
+  "name": "ASOCIACION MUTUAL DE PENSIONADOS SOCIALES LEY 5110"
+ },
+ "313179": {
+  "code": "313179",
+  "disp": "3-1317-9",
+  "name": "ASOCIACION MUTUAL MEDICOS ASOCIACION MEDICA DEL DEPARTAMENTO DIAMANTE"
+ },
+ "313261": {
+  "code": "313261",
+  "disp": "3-1326-1",
+  "name": "PROTECCIÓN INTEGRAL PARA LA FAMILIA ASOCIACIÓN MUTUAL"
+ },
+ "313339": {
+  "code": "313339",
+  "disp": "3-1333-9",
+  "name": "MUTUAL SM SALUD DE SOCIEDAD MEDICA DEL DEPARTAMENTO LAS COLONIAS"
+ },
+ "313414": {
+  "code": "313414",
+  "disp": "3-1341-4",
+  "name": "MUTUAL DE INTEGRANTES DEL PODER JUDICIAL"
+ },
+ "313582": {
+  "code": "313582",
+  "disp": "3-1358-2",
+  "name": "MUTUAL BIENESTAR Y PROGRESO"
+ },
+ "313650": {
+  "code": "313650",
+  "disp": "3-1365-0",
+  "name": "ASOCIACIÓN MUTUAL MÉDICA DEL OESTE"
+ },
+ "313766": {
+  "code": "313766",
+  "disp": "3-1376-6",
+  "name": "ASOC. ESPAÑOLA DE SOCORROS MUTUOS Y BENEFICIENCIA DE LA PLATA"
+ },
+ "313773": {
+  "code": "313773",
+  "disp": "3-1377-3",
+  "name": "HOSPITAL ITALIANO DE LA PLATA - ASOCIACIÓN DE SOCORROS MUTUOS Y BENEFICENCIA"
+ },
+ "313780": {
+  "code": "313780",
+  "disp": "3-1378-0",
+  "name": "ASOCIACION MUTUAL ENTRERRIANA DE SERVICIOS"
+ },
+ "313827": {
+  "code": "313827",
+  "disp": "3-1382-7",
+  "name": "ASOCIACION MUTUAL DE LA COSTA SUDESTE"
+ },
+ "313872": {
+  "code": "313872",
+  "disp": "3-1387-2",
+  "name": "ASOCIACION MUTUAL DE CONTROL INTEGRAL"
+ },
+ "313933": {
+  "code": "313933",
+  "disp": "3-1393-3",
+  "name": "OLIMPIA ASOCIACIÓN MUTUAL"
+ },
+ "313971": {
+  "code": "313971",
+  "disp": "3-1397-1",
+  "name": "SOCIEDAD MUTUAL DE VILLA LA EMILIA"
+ },
+ "314011": {
+  "code": "314011",
+  "disp": "3-1401-1",
+  "name": "ASOCIACION MUTUAL DOC ( EX ASOCIACION MUTUAL EMPLEADOS Y FUNCIONARIOS DEL GRUPO CORDOBA SALUD)"
+ },
+ "314035": {
+  "code": "314035",
+  "disp": "3-1403-5",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES MUNICIPALES DE ROSARIO"
+ },
+ "314110": {
+  "code": "314110",
+  "disp": "3-1411-0",
+  "name": "ASOCIACION MUTUAL DEL PERSONAL DE LA AFIP"
+ },
+ "314134": {
+  "code": "314134",
+  "disp": "3-1413-4",
+  "name": "ASOC. MUTUAL INTERCOOOP. SOLID.PROV. DE CBA. (AMICOS)"
+ },
+ "314141": {
+  "code": "314141",
+  "disp": "3-1414-1",
+  "name": "ASOCIACION MUTUAL METALURGICA VILLA CONSTITUCION"
+ },
+ "314363": {
+  "code": "314363",
+  "disp": "3-1436-3",
+  "name": "MUTUAL DE AGRICULTURA Y GANADERIA"
+ },
+ "314417": {
+  "code": "314417",
+  "disp": "3-1441-7",
+  "name": "ASOCIACION MUTUAL SOCIOS CIRCULO MEDICO DE NOGOYA"
+ },
+ "314493": {
+  "code": "314493",
+  "disp": "3-1449-3",
+  "name": "CIRCULO MUTUAL DE SUBOFICIALES RETIRADOS DE LA POLICIA FEDERAL ARGENTINA"
+ },
+ "314578": {
+  "code": "314578",
+  "disp": "3-1457-8",
+  "name": "ASOCIACION MUTUAL CAPITAL DE SANTIAGO DEL ESTERO"
+ },
+ "314585": {
+  "code": "314585",
+  "disp": "3-1458-5",
+  "name": "ASOCIACION MUTUAL SOCIOS CIRCULO MEDICO DE VICTORIA"
+ },
+ "314622": {
+  "code": "314622",
+  "disp": "3-1462-2",
+  "name": "MUTUAL LICEANA"
+ },
+ "314721": {
+  "code": "314721",
+  "disp": "3-1472-1",
+  "name": "ASOCIACIÓN MUTUAL DE EMPLEADOS DE COMERCIO DE NOGOYÁ"
+ },
+ "314752": {
+  "code": "314752",
+  "disp": "3-1475-2",
+  "name": "ASISTENCIA MUTUAL AERONAVEGANTE"
+ },
+ "314769": {
+  "code": "314769",
+  "disp": "3-1476-9",
+  "name": "ASOC. MUTUAL AYUDA EMPL. PREVINCA SERV. SOCIALES"
+ },
+ "314783": {
+  "code": "314783",
+  "disp": "3-1478-3",
+  "name": "ASOCIACION MUTUAL DE EMPLEADOS DE FARMACIA 22 DE DICIEMBRE"
+ },
+ "314837": {
+  "code": "314837",
+  "disp": "3-1483-7",
+  "name": "ASOCIACION MUTUAL PROVINCIAL MARIANO MORENO"
+ },
+ "314844": {
+  "code": "314844",
+  "disp": "3-1484-4",
+  "name": "MUTUAL SISTEMA PREVENTIVO SOCIAL"
+ },
+ "314882": {
+  "code": "314882",
+  "disp": "3-1488-2",
+  "name": "ASOCIACION MUTUAL MERCANTIL ARGENTINA DE LOS EMPLEADOS DE COMERCIO DEL CHACO"
+ },
+ "314929": {
+  "code": "314929",
+  "disp": "3-1492-9",
+  "name": "ASOCIACION MUTUAL DE SERVICIOS PARA INTERNACIONES Y OPERACIONES"
+ },
+ "314950": {
+  "code": "314950",
+  "disp": "3-1495-0",
+  "name": "ASOCIACION MUTUAL DE PROFESIONALES DEL HOSPITAL ITALIANO DE CORDOBA"
+ },
+ "315076": {
+  "code": "315076",
+  "disp": "3-1507-6",
+  "name": "ASOC MUTUAL DE LA UNION KIOSQUEROS DE LA REP ARGENTINA"
+ },
+ "315090": {
+  "code": "315090",
+  "disp": "3-1509-0",
+  "name": "ASOCIACIÓN MUTUAL DE TRABAJADORES DEL TRANSPORTE AUTOMOTOR DE CARGAS"
+ },
+ "315229": {
+  "code": "315229",
+  "disp": "3-1522-9",
+  "name": "ASOCIACION ESPAÑOLA DE SOCORROS MUTUOS DE CORDOBA"
+ },
+ "315281": {
+  "code": "315281",
+  "disp": "3-1528-1",
+  "name": "MUTUAL DE EMPLEADOS DE SISTEMAS MEDICOS DE EMERGENCIAS DE LA REPUBLICA ARGENTINA"
+ },
+ "315359": {
+  "code": "315359",
+  "disp": "3-1535-9",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES MUNICIPALES DE LA MATANZA"
+ },
+ "315649": {
+  "code": "315649",
+  "disp": "3-1564-9",
+  "name": "CENTRO DE ATENCION MEDICA ASOCIACION MUTUAL DE SALUD"
+ },
+ "315687": {
+  "code": "315687",
+  "disp": "3-1568-7",
+  "name": "AMEPORT MUTUAL DEL PERSONAL DEL ESTADO NACIONA PROVINCIAL MUNICIPAL Y AFINES"
+ },
+ "315731": {
+  "code": "315731",
+  "disp": "3-1573-1",
+  "name": "ASOCIACION MUTUAL 24 DE DICIEMBRE"
+ },
+ "315786": {
+  "code": "315786",
+  "disp": "3-1578-6",
+  "name": "ASOCIACION MUTUAL VALLE INFERIOR .-AMVI"
+ },
+ "315830": {
+  "code": "315830",
+  "disp": "3-1583-0",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES CULTURALES Y SOCIALES"
+ },
+ "315861": {
+  "code": "315861",
+  "disp": "3-1586-1",
+  "name": "ASOCIACION MUTUAL DE EMPLEADOS DE POLICIA DE LA PROVINCIA DE CORDOBA"
+ },
+ "315885": {
+  "code": "315885",
+  "disp": "3-1588-5",
+  "name": "ASOCIACION MUTUAL GRAN ROSARIO"
+ },
+ "315915": {
+  "code": "315915",
+  "disp": "3-1591-5",
+  "name": "ASOCIACIÓN MUTUAL AMAR DE AYUDA RECIPROCA"
+ },
+ "315922": {
+  "code": "315922",
+  "disp": "3-1592-2",
+  "name": "UNION OBRERA ASOCIACION DE SOCORROS MUTUOS"
+ },
+ "315977": {
+  "code": "315977",
+  "disp": "3-1597-7",
+  "name": "MUTUAL SIDERURGICA GENERAL SAVIO"
+ },
+ "316062": {
+  "code": "316062",
+  "disp": "3-1606-2",
+  "name": "SOCIEDAD ITALIANA DE SOCORROS MUTUOS"
+ },
+ "316116": {
+  "code": "316116",
+  "disp": "3-1611-6",
+  "name": "ASOC. ESPAÑOLA DE SOCORROS MUTUOS"
+ },
+ "316130": {
+  "code": "316130",
+  "disp": "3-1613-0",
+  "name": "MUTUAL DEL TRABAJADOR VIAL SANTA FE"
+ },
+ "316147": {
+  "code": "316147",
+  "disp": "3-1614-7",
+  "name": "ASOCIACION MUTUAL DE SUBOFICIALES Y PENSIONADAS FEDERALES DEL INTERIOR"
+ },
+ "316185": {
+  "code": "316185",
+  "disp": "3-1618-5",
+  "name": "MUTUAL MERCANTIL 26 DE SEPTIEMBRE"
+ },
+ "316239": {
+  "code": "316239",
+  "disp": "3-1623-9",
+  "name": "ASOCIACION MUTUAL ROSARIO METALMECANICA Y AFINES"
+ },
+ "316253": {
+  "code": "316253",
+  "disp": "3-1625-3",
+  "name": "ASOCIACION MUTUAL SEGURIDAD SOCIAL"
+ },
+ "316291": {
+  "code": "316291",
+  "disp": "3-1629-1",
+  "name": "Asociacion Mutual Mutualtax"
+ },
+ "316338": {
+  "code": "316338",
+  "disp": "3-1633-8",
+  "name": "ASOCIACION MUTUAL PREVINOR"
+ },
+ "316611": {
+  "code": "316611",
+  "disp": "3-1661-1",
+  "name": "ASOCIACION MUTUAL MEDICA DE ENTRE RIOS"
+ },
+ "316659": {
+  "code": "316659",
+  "disp": "3-1665-9",
+  "name": "ASOCIACION MUTUAL SENDEROS"
+ },
+ "316819": {
+  "code": "316819",
+  "disp": "3-1681-9",
+  "name": "ASOCIACION MUTUAL DE LOS OBREROS CATOLICOS PADRE FEDERICO GROTE"
+ },
+ "316826": {
+  "code": "316826",
+  "disp": "3-1682-6",
+  "name": "Mutual Provincial de Luz y Fuerza de Santa Fe"
+ },
+ "316871": {
+  "code": "316871",
+  "disp": "3-1687-1",
+  "name": "ASOCIACION MUTUAL GARDENIA"
+ },
+ "316932": {
+  "code": "316932",
+  "disp": "3-1693-2",
+  "name": "ASOCIACION MUTUAL ENTRE SOCIOS DE ASOR"
+ },
+ "317058": {
+  "code": "317058",
+  "disp": "3-1705-8",
+  "name": "MUTUAL DE LOS INMIGRANTES ESPANOLES Y SUS DESCENDIENTES EN LA ARGENTINA"
+ },
+ "317089": {
+  "code": "317089",
+  "disp": "3-1708-9",
+  "name": "ASOCIACION MUTUAL DE LA ASOCIACION MEDICA DE PERGAMINO"
+ },
+ "317096": {
+  "code": "317096",
+  "disp": "3-1709-6",
+  "name": "Asociacion Mutual de Participantes de Economias Solidarias AMPES"
+ },
+ "317478": {
+  "code": "317478",
+  "disp": "3-1747-8",
+  "name": "ASOCIACION MUTUAL TRANSPORTE AUTOMOTOR"
+ },
+ "317515": {
+  "code": "317515",
+  "disp": "3-1751-5",
+  "name": "ASOCIACION MUTUAL MECANICA ENTRE OBREROS, EMPLEADOS, TECNICOS Y PROFESIONALES AFILIADOS AL SINDICATO DE MECANICOS Y AFINES DEL TRANSPORTE AUTOMOTOR (SMATA)"
+ },
+ "317716": {
+  "code": "317716",
+  "disp": "3-1771-6",
+  "name": "ASOCIACION MUTUAL DE TRABAJADORES AERONAUTICOS"
+ },
+ "318037": {
+  "code": "318037",
+  "disp": "3-1803-7",
+  "name": "ASOCIACION MUTUAL DEL PERSONAL, ASESORES Y DIRECTIVOS DE GRUPO SAN NICOLAS SRL"
+ },
+ "318082": {
+  "code": "318082",
+  "disp": "3-1808-2",
+  "name": "Mutual de Salud del Personal de Entidades del Grupo Sancor Seguros"
+ },
+ "318457": {
+  "code": "318457",
+  "disp": "3-1845-7",
+  "name": "ASOCIACION MUTUAL FRANCO ANDINA REGIONAL MENDOZA"
+ },
+ "320232": {
+  "code": "320232",
+  "disp": "3-2023-2",
+  "name": "MUTUAL DEL PERSONAL DE AGUA Y ENERGÍA ELÉCTRICA DE SANTA FE"
+ },
+ "320249": {
+  "code": "320249",
+  "disp": "3-2024-9",
+  "name": "ASOCIACION MUTUAL COMUNIDAD ABIERTA"
+ },
+ "320256": {
+  "code": "320256",
+  "disp": "3-2025-6",
+  "name": "ASOCIACION MUTUAL ARGENTINA DE AZUL - SASMA"
+ },
+ "320263": {
+  "code": "320263",
+  "disp": "3-2026-3",
+  "name": "ASOCIACION MUTUAL DE CHOFERES DE TAXI DE LA CIUDAD DE VILLA CARLOS PAZ Y VALLE DE PUNILLA"
+ },
+ "320270": {
+  "code": "320270",
+  "disp": "3-2027-0",
+  "name": "COORDINAR ASOCIACION MUTUAL"
+ },
+ "320287": {
+  "code": "320287",
+  "disp": "3-2028-7",
+  "name": "ASOCIACION MUTUAL DE FARMACEUTICOS FLORENTINO AMEGHINO"
+ },
+ "320317": {
+  "code": "320317",
+  "disp": "3-2031-7",
+  "name": "ASOCIACIÓN MUTUAL DE AYUDA ENTRE ASOCIADOS Y ADHERENTES DEL CLUB SPORTIVO BEN HUR"
+ },
+ "320324": {
+  "code": "320324",
+  "disp": "3-2032-4",
+  "name": "ASOCIACION MUTUAL DE DIRIGENTES DE EMPRESAS DEL CIGARRILLO"
+ },
+ "320331": {
+  "code": "320331",
+  "disp": "3-2033-1",
+  "name": "ASOCIACION MUTUAL ARGENTINA"
+ },
+ "320348": {
+  "code": "320348",
+  "disp": "3-2034-8",
+  "name": "CIRCULO OFICIALES DE MAR PROFESIONAL Y MUTUAL"
+ },
+ "320355": {
+  "code": "320355",
+  "disp": "3-2035-5",
+  "name": "ASOCIACIÓN POETA LUGONES MUTUAL C Y D"
+ },
+ "320362": {
+  "code": "320362",
+  "disp": "3-2036-2",
+  "name": "ASOCIACION MUTUAL CLINICA SANTA ROSA"
+ },
+ "320386": {
+  "code": "320386",
+  "disp": "3-2038-6",
+  "name": "ASOC. MUTUAL EXCONSCRIPTOS DEL CANAL DE BEAGLE"
+ },
+ "320393": {
+  "code": "320393",
+  "disp": "3-2039-3",
+  "name": "ASOCIACIÓN MUTUAL SAN LUCAS 23"
+ },
+ "320430": {
+  "code": "320430",
+  "disp": "3-2043-0",
+  "name": "ASOCIACION MUTUAL DARDO ROCHA"
+ },
+ "320447": {
+  "code": "320447",
+  "disp": "3-2044-7",
+  "name": "ASOCIACION MUTUALISTA DEL BAÑADO"
+ },
+ "320454": {
+  "code": "320454",
+  "disp": "3-2045-4",
+  "name": "MUTUAL DEL PERSONAL DEL AGUA Y ENERGIA DE CORRIENTES"
+ },
+ "320461": {
+  "code": "320461",
+  "disp": "3-2046-1",
+  "name": "ASOCIACIÓN ESPAÑOLA DE SOCORROS MUTUOS"
+ },
+ "320478": {
+  "code": "320478",
+  "disp": "3-2047-8",
+  "name": "SOCIEDAD FRANCESA DE SOCORRO MUTUO"
+ },
+ "320485": {
+  "code": "320485",
+  "disp": "3-2048-5",
+  "name": "SOCIEDAD ITALIANA DE SOCORROS MUTUOS"
+ },
+ "320492": {
+  "code": "320492",
+  "disp": "3-2049-2",
+  "name": "ASOCIACION MUTUAL PARTICIPACION Y SERVICIOS DE CHAJARI"
+ },
+ "320515": {
+  "code": "320515",
+  "disp": "3-2051-5",
+  "name": "MUTUALIDAD PROVINCIAL TUCUMÁN"
+ },
+ "410368": {
+  "code": "410368",
+  "disp": "4-1036-8",
+  "name": "FEDERACION DE CIRCULOS CATOLICOS DE OBREROS"
+ },
+ "410375": {
+  "code": "410375",
+  "disp": "4-1037-5",
+  "name": "ASOCIACIÓN DE BENEFICENCIA HOSPITAL SIRIO LIBANES"
+ },
+ "410573": {
+  "code": "410573",
+  "disp": "4-1057-3",
+  "name": "COLEGIO MEDICO DE LA PAMPA"
+ },
+ "410597": {
+  "code": "410597",
+  "disp": "4-1059-7",
+  "name": "CIRCULO MEDICO DE TRENQUE LAUQUEN"
+ },
+ "410818": {
+  "code": "410818",
+  "disp": "4-1081-8",
+  "name": "CIRCULO MEDICO DE SAN LUIS"
+ },
+ "410863": {
+  "code": "410863",
+  "disp": "4-1086-3",
+  "name": "HOSPITAL ALEMAN ASOCIACION CIVIL"
+ },
+ "410955": {
+  "code": "410955",
+  "disp": "4-1095-5",
+  "name": "ASOCIACION CIVIL DE ESTUDIOS SUPERIORES"
+ },
+ "411019": {
+  "code": "411019",
+  "disp": "4-1101-9",
+  "name": "CIRCULO MEDICO DE BRAGADO"
+ },
+ "411194": {
+  "code": "411194",
+  "disp": "4-1119-4",
+  "name": "ASOCIACIÓN ESPAÑOLA DE SOCORROS MUTUOS DE LUJÁN"
+ },
+ "411255": {
+  "code": "411255",
+  "disp": "4-1125-5",
+  "name": "ASOCIACION MEDICA DPTO CASTELLANOS"
+ },
+ "411446": {
+  "code": "411446",
+  "disp": "4-1144-6",
+  "name": "CIRCULO MEDICO DE LOMAS DE ZAMORA"
+ },
+ "411514": {
+  "code": "411514",
+  "disp": "4-1151-4",
+  "name": "ASOCIACION TRABAJADORES DE LA SALUD PUBLICA DE LA REPUBLICA ARGENTINA"
+ },
+ "411637": {
+  "code": "411637",
+  "disp": "4-1163-7",
+  "name": "OBRA SOCIAL PARA DIRECTIVOS, TÉCNICOS Y EMPLEADOS DE JOHN DEERE ARG."
+ },
+ "411866": {
+  "code": "411866",
+  "disp": "4-1186-6",
+  "name": "CIRCULO MEDICO DE ESTEBAN ECHEVERRIA"
+ },
+ "412258": {
+  "code": "412258",
+  "disp": "4-1225-8",
+  "name": "MEDIFÉ ASOCIACIÓN CIVIL"
+ },
+ "412272": {
+  "code": "412272",
+  "disp": "4-1227-2",
+  "name": "ASOCIACIÓN MÉDICA DE ALMIERANTE BROWN"
+ },
+ "412388": {
+  "code": "412388",
+  "disp": "4-1238-8",
+  "name": "CENTRO MÉDICO DE MAR DEL PLATA ASOCIACIÓN CIVIL"
+ },
+ "412555": {
+  "code": "412555",
+  "disp": "4-1255-5",
+  "name": "ASOCIACIÓN HOSPITAL BRITÁNICO DE BUENOS AIRES"
+ },
+ "412593": {
+  "code": "412593",
+  "disp": "4-1259-3",
+  "name": "CENTRO DE EDUCACIÓN MÉDICA E INVESTIGACIONES CLÍNICAS"
+ },
+ "412630": {
+  "code": "412630",
+  "disp": "4-1263-0",
+  "name": "SOCIEDAD DE BENEFICENCIA HOSPITAL ITALIANO -CORDOBA-"
+ },
+ "412722": {
+  "code": "412722",
+  "disp": "4-1272-2",
+  "name": "CIRCULO MEDICO SAN RAFAEL"
+ },
+ "413145": {
+  "code": "413145",
+  "disp": "4-1314-5",
+  "name": "SOCIEDAD ITALIANA DE BENEFICENCIA EN BUENOS AIRES"
+ },
+ "413343": {
+  "code": "413343",
+  "disp": "4-1334-3",
+  "name": "DEPARTAMENTO EMPRESARIO DE MEDICINA INTEGRAL"
+ },
+ "413718": {
+  "code": "413718",
+  "disp": "4-1371-8",
+  "name": "CIRCULO MEDICO DE TANDIL"
+ },
+ "413855": {
+  "code": "413855",
+  "disp": "4-1385-5",
+  "name": "SOCIEDAD DE BENEFICENCIA HOSPITAL ITALIANO GARIBALDI"
+ },
+ "414063": {
+  "code": "414063",
+  "disp": "4-1406-3",
+  "name": "CIRCULO MEDICO DE MATANZA"
+ },
+ "414193": {
+  "code": "414193",
+  "disp": "4-1419-3",
+  "name": "ASOCIACIÓN MÉDICA DE PERGAMINO"
+ },
+ "414216": {
+  "code": "414216",
+  "disp": "4-1421-6",
+  "name": "AGREMIACION MEDICA DE LANUS"
+ },
+ "415615": {
+  "code": "415615",
+  "disp": "4-1561-5",
+  "name": "FEDERACION MEDICA DEL CHACO"
+ },
+ "415691": {
+  "code": "415691",
+  "disp": "4-1569-1",
+  "name": "CIRCULO MEDICO DE FLORENCIO VARELA"
+ },
+ "417062": {
+  "code": "417062",
+  "disp": "4-1706-2",
+  "name": "ASOCIACION ARGENTINA DE LOS ADVENTISTAS DEL 7mo DIA"
+ },
+ "417178": {
+  "code": "417178",
+  "disp": "4-1717-8",
+  "name": "SOCIEDAD ARGENTINA DE AUTORES Y COMPOSITORES DE MUSICA (SADAIC)"
+ },
+ "420536": {
+  "code": "420536",
+  "disp": "4-2053-6",
+  "name": "COLEGIO MEDICO DE SAN JUAN"
+ },
+ "420550": {
+  "code": "420550",
+  "disp": "4-2055-0",
+  "name": "CÍRCULO MÉDICO DE MENDOZA"
+ },
+ "420567": {
+  "code": "420567",
+  "disp": "4-2056-7",
+  "name": "COLEGIO MEDICO DE JUJUY-COSALUD"
+ },
+ "510334": {
+  "code": "510334",
+  "disp": "5-1033-4",
+  "name": "FUNDACION SERVICIOS SOCIALES TECHINT"
+ },
+ "512446": {
+  "code": "512446",
+  "disp": "5-1244-6",
+  "name": "FUNDACION OBRAS Y SERVICIOS PARA DIRECTIVOS DE LA INDUSTRIA DE LA CONSTRUCCION"
+ },
+ "513074": {
+  "code": "513074",
+  "disp": "5-1307-4",
+  "name": "FUNDACIÓN MÉDICA DE MAR DEL PLATA"
+ },
+ "520588": {
+  "code": "520588",
+  "disp": "5-2058-8",
+  "name": "FUNDACION CIRCULO MEDICO ZONA SUR"
+ },
+ "520595": {
+  "code": "520595",
+  "disp": "5-2059-5",
+  "name": "FUNDACION EMPRESARIA MADERERA"
+ },
+ "610034": {
+  "code": "610034",
+  "disp": "6-1003-4",
+  "name": "OBRA SOCIAL ACEROS PARANA S.A. Y EMPRESAS ANTECESORAS"
+ },
+ "610133": {
+  "code": "610133",
+  "disp": "6-1013-3",
+  "name": "OBRA SOCIAL DEL PRESONAL DE DIRECCION DE SANIDAD LUIS PASTEUR"
+ },
+ "610195": {
+  "code": "610195",
+  "disp": "6-1019-5",
+  "name": "OBRA SOCIAL UNION PERSONAL DE LA UNION PERSONAL CIVIL DE LA NACION"
+ },
+ "610270": {
+  "code": "610270",
+  "disp": "6-1027-0",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LAS TELECOMUNICACIONES DE LA REPUBLICA ARGENTINA"
+ },
+ "610393": {
+  "code": "610393",
+  "disp": "6-1039-3",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA INDUSTRIA DEL NEUMATICO"
+ },
+ "610416": {
+  "code": "610416",
+  "disp": "6-1041-6",
+  "name": "OBRA SOCIAL COOPERATIVA LTDA. DE ASISTENCIA MEDICA, FARMACEUTICA, CREDITO Y CONSUMO DEL PERSONAL SUPERIOR DE LA INDUSTRIA DEL CAUCHO Y OTRAS ACTIVIDADES INDUSTRIALES - CAMPSIC -"
+ },
+ "610430": {
+  "code": "610430",
+  "disp": "6-1043-0",
+  "name": "OBRA SOCIAL DE JEFES Y OFICIALES MAQUINISTAS NAVALES"
+ },
+ "610553": {
+  "code": "610553",
+  "disp": "6-1055-3",
+  "name": "OBRA SOCIAL DEL PERSONAL JERARQUICO DE LA REPUBLICA ARGENTINA PARA EL PERSONAL JERARQUICO DE LA INDUSTRIA GRAFICA Y EL PERSONAL JERARQUICO DEL AGUA Y LA ENERGIA"
+ },
+ "610720": {
+  "code": "610720",
+  "disp": "6-1072-0",
+  "name": "OBRA SOCIAL ASOCIACION MUTUAL DEL PERSONAL DE PHILIPS ARGENTINA (AMPAR)"
+ },
+ "610737": {
+  "code": "610737",
+  "disp": "6-1073-7",
+  "name": "OBRA SOCIAL DE AGENTES DE PROPAGANDA MEDICA DE CORDOBA"
+ },
+ "610836": {
+  "code": "610836",
+  "disp": "6-1083-6",
+  "name": "OBRA SOCIAL DEL PERSONAL AERONAUTICO"
+ },
+ "610850": {
+  "code": "610850",
+  "disp": "6-1085-0",
+  "name": "OBRA SOCIAL DE TALLERISTAS A DOMICILIO"
+ },
+ "610942": {
+  "code": "610942",
+  "disp": "6-1094-2",
+  "name": "OBRA SOCIAL DEL PERSONAL DE PRENSA DE MAR DEL PLATA"
+ },
+ "611174": {
+  "code": "611174",
+  "disp": "6-1117-4",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LAS EMPRESAS DE LA ALIMENTACION Y DEMAS ACTIVIDADES EPRESARIAS"
+ },
+ "611297": {
+  "code": "611297",
+  "disp": "6-1129-7",
+  "name": "OBRA SOCIAL DE PATRONES DE CABOTAJE DE RIOS Y PUERTOS"
+ },
+ "611327": {
+  "code": "611327",
+  "disp": "6-1132-7",
+  "name": "MUTUAL DEL PERSONAL DEL AGUA Y LA ENERGIA ELECTRICA DE MENDOZA"
+ },
+ "611488": {
+  "code": "611488",
+  "disp": "6-1148-8",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE PERFUMERIA E.W. HOPE"
+ },
+ "611549": {
+  "code": "611549",
+  "disp": "6-1154-9",
+  "name": "OBRA SOCIAL YPF"
+ },
+ "611662": {
+  "code": "611662",
+  "disp": "6-1166-2",
+  "name": "OBRA SOCIAL DE TECNICOS DE FUTBOL"
+ },
+ "611716": {
+  "code": "611716",
+  "disp": "6-1171-6",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LA INDUSTRIA METALURGICA Y DEMAS ACTIVIDADES EMPRESARIAS"
+ },
+ "611976": {
+  "code": "611976",
+  "disp": "6-1197-6",
+  "name": "OBRA SOCIAL DEL PERSONAL TECNICO AERONAUTICO"
+ },
+ "612238": {
+  "code": "612238",
+  "disp": "6-1223-8",
+  "name": "OBRA SOCIAL CERAS JOHNSON"
+ },
+ "612290": {
+  "code": "612290",
+  "disp": "6-1229-0",
+  "name": "OBRA SOCIAL PARA EL PERSONAL DE DIRECCION DE LA INDUSTRIA MADERERA"
+ },
+ "612351": {
+  "code": "612351",
+  "disp": "6-1235-1",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LA INDUSTRIA AUTOMOTRIZ ARGENTINA"
+ },
+ "612474": {
+  "code": "612474",
+  "disp": "6-1247-4",
+  "name": "OBRA SOCIAL PARA PILOTOS DE LINEAS AEREAS COMERCIALES Y REGULARES"
+ },
+ "612511": {
+  "code": "612511",
+  "disp": "6-1251-1",
+  "name": "OBRA SOCIAL MUTUALIDAD INDUSTRIAL TEXTIL ARGENTINA"
+ },
+ "612528": {
+  "code": "612528",
+  "disp": "6-1252-8",
+  "name": "OBRA SOCIAL DE VIAJANTES VENDEDORES DE LA REPUBLICA ARGENTINA."
+ },
+ "612771": {
+  "code": "612771",
+  "disp": "6-1277-1",
+  "name": "OBRA SOCIAL PARA EL PERSONAL DE DIRECCION DE LA INDUSTRIA VITIVINICOLA Y AFINES"
+ },
+ "612849": {
+  "code": "612849",
+  "disp": "6-1284-9",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA ACTIVIDAD DEL TURF"
+ },
+ "612870": {
+  "code": "612870",
+  "disp": "6-1287-0",
+  "name": "OBRA SOCIAL DE LOS LEGISLADORES DE LA REPUBLICA ARGENTINA"
+ },
+ "612948": {
+  "code": "612948",
+  "disp": "6-1294-8",
+  "name": "OBRA SOCIAL DE FOTOGRAFOS"
+ },
+ "612993": {
+  "code": "612993",
+  "disp": "6-1299-3",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA CONSTRUCCION"
+ },
+ "613064": {
+  "code": "613064",
+  "disp": "6-1306-4",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LA INDUSTRIA PRIVADA DEL PETROLEO"
+ },
+ "613132": {
+  "code": "613132",
+  "disp": "6-1313-2",
+  "name": "OBRA SOCIAL DE CAPITANES DE ULTRAMAR Y OFICIALES DE LA MARINA MERCANTE"
+ },
+ "613743": {
+  "code": "613743",
+  "disp": "6-1374-3",
+  "name": "OBRA SOCIAL DEL PERSONAL SUPERIOR Y PROFESIONAL DE EMPRESAS AEROCOMERCIALES"
+ },
+ "613842": {
+  "code": "613842",
+  "disp": "6-1384-2",
+  "name": "OBRA SOCIAL DEL PERSONAL DEL ORGANISMO DE CONTROL EXTERNO"
+ },
+ "613958": {
+  "code": "613958",
+  "disp": "6-1395-8",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA INDUSTRIA LECHERA"
+ },
+ "613989": {
+  "code": "613989",
+  "disp": "6-1398-9",
+  "name": "OBRA SOCIAL DE DOCENTES PARTICULARES"
+ },
+ "613996": {
+  "code": "613996",
+  "disp": "6-1399-6",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LA EMPRESA SUBTERRANEOS DE BUENOS AIRES"
+ },
+ "614043": {
+  "code": "614043",
+  "disp": "6-1404-3",
+  "name": "OBRA SOCIAL DE EMPLEADOS DE PRENSA DE CORDOBA"
+ },
+ "614081": {
+  "code": "614081",
+  "disp": "6-1408-1",
+  "name": "OSDE ORGANIZACION DE SERVICIOS DIRECTOS EMPRESARIOS"
+ },
+ "614166": {
+  "code": "614166",
+  "disp": "6-1416-6",
+  "name": "OBRA SOCIAL DE LA FEDERACION ARGENTINA DE TRABAJADORES DE LUZ Y FUERZA"
+ },
+ "614173": {
+  "code": "614173",
+  "disp": "6-1417-3",
+  "name": "OBRA SOCIAL DE AGENTES DE PROPAGANDA MEDICA DE LA REPUBLICA ARGENTINA"
+ },
+ "614234": {
+  "code": "614234",
+  "disp": "6-1423-4",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LA INDUSTRIA CERVECERA Y MALTERA"
+ },
+ "614326": {
+  "code": "614326",
+  "disp": "6-1432-6",
+  "name": "OSDIC OBRA SOCIAL DEL PERSONAL DIRECTIVO DE LA INDUSTRIA DE LA CONSTRUCCION"
+ },
+ "614357": {
+  "code": "614357",
+  "disp": "6-1435-7",
+  "name": "OBRA SOCIAL DE TRABAJADORES VIALES Y AFINES DE LA REPUBLICA ARGENTINA"
+ },
+ "614487": {
+  "code": "614487",
+  "disp": "6-1448-7",
+  "name": "OBRA SOCIAL PARA EL PERSONAL DE EMPRESAS DE LIMPIEZA, SERVICIOS Y MAESTRANZA DE MENDOZA"
+ },
+ "614524": {
+  "code": "614524",
+  "disp": "6-1452-4",
+  "name": "OBRA SOCIAL DE AGENTES DE PROPAGANDA MEDICA DE ENTRE RIOS"
+ },
+ "614548": {
+  "code": "614548",
+  "disp": "6-1454-8",
+  "name": "ADOS COMODORO RIVADAVIA ASOCIACION DE OBRAS SOCIALES"
+ },
+ "614630": {
+  "code": "614630",
+  "disp": "6-1463-0",
+  "name": "OBRA SOCIAL DEL PERSONAL DE SUPERVISION DE LA EMPRESA SUBTERRANEOS DE BUENOS AIRES"
+ },
+ "614746": {
+  "code": "614746",
+  "disp": "6-1474-6",
+  "name": "OBRA SOCIAL FERROVIARIA"
+ },
+ "614869": {
+  "code": "614869",
+  "disp": "6-1486-9",
+  "name": "OBRA SOCIAL DE EMPRESARIOS PROFESIONALES Y MONOTRIBUTISTAS"
+ },
+ "614937": {
+  "code": "614937",
+  "disp": "6-1493-7",
+  "name": "OBRA SOCIAL DEL PERSONAL MUNICIPAL DE TRES DE FEBRERO"
+ },
+ "614982": {
+  "code": "614982",
+  "disp": "6-1498-2",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA INDUSTRIA DEL FIBROCEMENTO"
+ },
+ "615039": {
+  "code": "615039",
+  "disp": "6-1503-9",
+  "name": "OBRA SOCIAL DE LOS MEDICOS DE LA CIUDAD DE BUENOS AIRES"
+ },
+ "615046": {
+  "code": "615046",
+  "disp": "6-1504-6",
+  "name": "OBRA SOCIAL ASOCIACION DEL PERSONAL DE DIRECCION DE LA INDUSTRIA SIDERURGICA"
+ },
+ "615114": {
+  "code": "615114",
+  "disp": "6-1511-4",
+  "name": "OBRA SOCIAL DE LA ACTIVIDAD DE SEGUROS, REASEGUROS, CAPITALIZACION Y AHORRO Y PRESTAMO PARA LA VIVIENDA"
+ },
+ "615329": {
+  "code": "615329",
+  "disp": "6-1532-9",
+  "name": "OBRA SOCIAL DE LOS EMPLEADOS DE COMERCIO Y ACTIVIDADES CIVILES"
+ },
+ "615336": {
+  "code": "615336",
+  "disp": "6-1533-6",
+  "name": "OBRA SOCIAL DEL PERSONAL DEL AUTOMOVIL CLUB ARGENTINO"
+ },
+ "615473": {
+  "code": "615473",
+  "disp": "6-1547-3",
+  "name": "OBRA SOCIAL DEL PERSONAL DE AERONAVEGACION DE ENTES PRIVADOS"
+ },
+ "615510": {
+  "code": "615510",
+  "disp": "6-1551-0",
+  "name": "OBRA SOCIAL DE DIRECCION DE LA ACTIVIDAD AEROCOMERCIAL PRIVADA"
+ },
+ "615527": {
+  "code": "615527",
+  "disp": "6-1552-7",
+  "name": "OBRA SOCIAL DE AGENTES DE PROPAGANDA MEDICA DE ROSARIO"
+ },
+ "615954": {
+  "code": "615954",
+  "disp": "6-1595-4",
+  "name": "OBRA SOCIAL DE EMPLEADOS DE DESPACHANTES DE ADUANA"
+ },
+ "615961": {
+  "code": "615961",
+  "disp": "6-1596-1",
+  "name": "OBRA SOCIAL DE ACTORES"
+ },
+ "616162": {
+  "code": "616162",
+  "disp": "6-1616-2",
+  "name": "OBRA SOCIAL DE LA FEDERACION ARGENTINA DEL TRABAJADOR DE LAS UNIVERSIDADES NACIONALES"
+ },
+ "616411": {
+  "code": "616411",
+  "disp": "6-1641-1",
+  "name": "OBRA SOCIAL DE MUSICOS"
+ },
+ "616469": {
+  "code": "616469",
+  "disp": "6-1646-9",
+  "name": "OBRA SOCIAL DE EMPLEADOS Y PERSONAL JERARQUICO DE LA ACTIVIDAD DEL NEUMATICO ARGENTINO DE NEUMATICOS GOOD YEAR SRL"
+ },
+ "616513": {
+  "code": "616513",
+  "disp": "6-1651-3",
+  "name": "OBRA SOCIAL DE TECNICOS DE VUELO DE LINEAS AEREAS"
+ },
+ "616575": {
+  "code": "616575",
+  "disp": "6-1657-5",
+  "name": "OBRA SOCIAL DE AERONAVEGANTES"
+ },
+ "616742": {
+  "code": "616742",
+  "disp": "6-1674-2",
+  "name": "OBRA SOCIAL ASOCIACION MUTUAL METALURGICA VILLA CONSTITUCION"
+ },
+ "616912": {
+  "code": "616912",
+  "disp": "6-1691-2",
+  "name": "OBRA SOCIAL DEL PERSONAL DE TELECOMUNICACIONES SINDICATO BUENOS AIRES"
+ },
+ "616942": {
+  "code": "616942",
+  "disp": "6-1694-2",
+  "name": "OBRA SOCIAL ARBITROS DEPORTIVOS DE LA REPUBLICA ARGENTINA"
+ },
+ "617241": {
+  "code": "617241",
+  "disp": "6-1724-1",
+  "name": "OBRA SOCIAL DEL SINDICATO UNICO DE RECOLECTORES DE RESIDUOS Y BARRIDO DE CORDOBA"
+ },
+ "617486": {
+  "code": "617486",
+  "disp": "6-1748-6",
+  "name": "OSPIFSE OBRA SOCIAL PERSONAL DE LA INDUSTRIA FORESTAL DE STGO DEL ESTERO"
+ },
+ "617523": {
+  "code": "617523",
+  "disp": "6-1752-3",
+  "name": "OBRA SOCIAL DE LA CAMARA DE LA INDUSTRIA CURTIDORA ARGENTINA"
+ },
+ "617547": {
+  "code": "617547",
+  "disp": "6-1754-7",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LOS HIPODROMOS DE BUENOS AIRES Y SAN ISIDRO"
+ },
+ "617745": {
+  "code": "617745",
+  "disp": "6-1774-5",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA INDUSTRIA PETROQUIMICA"
+ },
+ "617783": {
+  "code": "617783",
+  "disp": "6-1778-3",
+  "name": "OBRA SOCIAL DEL PERSONAL MUNICIPAL DE AVELLANEDA"
+ },
+ "617998": {
+  "code": "617998",
+  "disp": "6-1799-8",
+  "name": "OBRA SOCIAL DE LA FEDERACION DE CAMARAS Y CENTROS COMERCIALES ZONALES DE LA REPUBLICA ARGENTINA (FEDECAMARAS)"
+ },
+ "619611": {
+  "code": "619611",
+  "disp": "6-1961-1",
+  "name": "OBRA SOCIAL DEL PERSONAL DE LA PUBLICIDAD"
+ },
+ "620615": {
+  "code": "620615",
+  "disp": "6-2061-5",
+  "name": "OBRA SOCIAL DEL PERSONAL DE TELEVISION"
+ },
+ "620622": {
+  "code": "620622",
+  "disp": "6-2062-2",
+  "name": "OBRA SOCIAL DEL PERSONAL DE DIRECCION DE LAS EMPRESAS QUE ACTUAN EN FRUTOS DEL PAIS"
+ },
+ "620639": {
+  "code": "620639",
+  "disp": "6-2063-9",
+  "name": "OBRA SOCIAL DE RELOJEROS Y JOYEROS"
+ },
+ "620646": {
+  "code": "620646",
+  "disp": "6-2064-6",
+  "name": "OBRA SOCIAL DE PETROLEROS"
+ },
+ "620653": {
+  "code": "620653",
+  "disp": "6-2065-3",
+  "name": "OBRA SOCIAL ASOCIACION DE SERVICIOS SOCIALES PARA EMPRESARIOS Y PERSONAL DE DIRECCION DE EMPRESAS DEL COMERCIO, SERVICIOS, PRODUCCION, INDUSTRIA Y CIVIL (ASSPE )"
+ },
+ "620721": {
+  "code": "620721",
+  "disp": "6-2072-1",
+  "name": "OBRA SOCIAL DE LA CÁMARA DE EMPRESARIOS DE AGENCIAS DE REMISES DE ARGENTINA"
+ },
+ "620738": {
+  "code": "620738",
+  "disp": "6-2073-8",
+  "name": "OBRA SOCIAL DE DIRECCION OSDO"
+ },
+ "620745": {
+  "code": "620745",
+  "disp": "6-2074-5",
+  "name": "OBRA SOCIAL DE COMISARIOS NAVALES"
+ },
+ "620806": {
+  "code": "620806",
+  "disp": "6-2080-6",
+  "name": "OBRA SOCIAL DE LA UNION DE TRABAJADORES DEL INSTITUTO NACIONAL DE SERVICIOS SOCIALES PARA JUBILADOS Y PENSIONADOS DE LA REPUBLICA ARGENTINA"
+ },
+ "717491": {
+  "code": "717491",
+  "disp": "7-1749-1",
+  "name": "PRONTO SALUD MEDICINA PRIVADA"
+ },
+ "812212": {
+  "code": "812212",
+  "disp": "8-1221-2",
+  "name": "FEDERACION MEDICA GREMIAL DE LA CAPITAL FEDERAL"
+ },
+ "813383": {
+  "code": "813383",
+  "disp": "8-1338-3",
+  "name": "AGRUPACIÓN DE COLABORACIÓN GRUPO PARAMEDIC"
+ },
+ "813833": {
+  "code": "813833",
+  "disp": "8-1383-3",
+  "name": "CONSEJO PROFESIONAL DE CIENCIAS ECONOMICAS DE LA CABA"
+ },
+ "815662": {
+  "code": "815662",
+  "disp": "8-1566-2",
+  "name": "MERLI ELVA ANA"
+ },
+ "815941": {
+  "code": "815941",
+  "disp": "8-1594-1",
+  "name": "SANARTE- FIDEICOMISO DE ADMINISTRACIÓN Y GARANTÍA"
+ },
+ "816191": {
+  "code": "816191",
+  "disp": "8-1619-1",
+  "name": "SINDICATO DE EMPLEADOS Y OBREROS DE COMERCIO Y AFINES DE BRAGADO"
+ },
+ "816241": {
+  "code": "816241",
+  "disp": "8-1624-1",
+  "name": "Bincage Salud S.A"
+ },
+ "816425": {
+  "code": "816425",
+  "disp": "8-1642-5",
+  "name": "CAJA DE JUBILACIONES Y PENSIONES DE ABOGADOS Y PROCURADORES DE MENDOZA"
+ },
+ "816487": {
+  "code": "816487",
+  "disp": "8-1648-7",
+  "name": "Cosarinsky Estela y Alfaro Liliana"
+ },
+ "816753": {
+  "code": "816753",
+  "disp": "8-1675-3",
+  "name": "COLEGIO DE ABOGADOS DEL SUR"
+ },
+ "817367": {
+  "code": "817367",
+  "disp": "8-1736-7",
+  "name": "Fideicomiso de Administracion Medica Grupo Hipocrates"
+ },
+ "817893": {
+  "code": "817893",
+  "disp": "8-1789-3",
+  "name": "FINAMED S.A"
+ },
+ "110312": {
+  "code": "110312",
+  "disp": "1-1031-2",
+  "name": "RED DE SEGURO MEDICO SRL"
+ },
+ "110510": {
+  "code": "110510",
+  "disp": "1-1051-0",
+  "name": "BRISTOL MEDICINE"
+ },
+ "110565": {
+  "code": "110565",
+  "disp": "1-1056-5",
+  "name": "CENTRO MEDICO PUEYRREDON"
+ },
+ "111537": {
+  "code": "111537",
+  "disp": "1-1153-7",
+  "name": "COBENSIL"
+ },
+ "111766": {
+  "code": "111766",
+  "disp": "1-1176-6",
+  "name": "UNIMED"
+ },
+ "115133": {
+  "code": "115133",
+  "disp": "1-1513-3",
+  "name": "UDEM SRL"
+ },
+ "117581": {
+  "code": "117581",
+  "disp": "1-1758-1",
+  "name": "DOS LEONES GROUP S.R.L."
+ },
+ "117634": {
+  "code": "117634",
+  "disp": "1-1763-4",
+  "name": "KOOLDENT"
+ },
+ "117924": {
+  "code": "117924",
+  "disp": "1-1792-4",
+  "name": "consult rent srl"
+ },
+ "120122": {
+  "code": "120122",
+  "disp": "1-2012-2",
+  "name": "UDEC"
+ },
+ "320645": {
+  "code": "320645",
+  "disp": "3-2064-5",
+  "name": "MU.SE.PE.BO."
+ },
+ "414124": {
+  "code": "414124",
+  "disp": "4-1412-4",
+  "name": "CIRCULO MEDICO DE QUILMES"
+ },
+ "110428": {
+  "code": "110428",
+  "disp": "1-1042-8",
+  "name": "PROFINT S.R.L."
+ },
+ "111094": {
+  "code": "111094",
+  "disp": "1-1109-4",
+  "name": "SCIS"
+ },
+ "112318": {
+  "code": "112318",
+  "disp": "1-1231-8",
+  "name": "DOMIN SRL"
+ },
+ "117825": {
+  "code": "117825",
+  "disp": "1-1782-5",
+  "name": "IMMYN"
+ },
+ "114598": {
+  "code": "114598",
+  "disp": "1-1459-8",
+  "name": "ODONTO"
+ },
+ "116976": {
+  "code": "116976",
+  "disp": "1-1697-6",
+  "name": "sd"
+ }
+}

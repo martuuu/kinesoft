@@ -1,0 +1,6 @@
+slug,name,legalName,kind,registryCode,cuit,province,aliases,source,sourceRef,sourceDate,sourceUrl
+test-cat-osde,Test Cat OSDE,Test Cat Organización de Servicios Directos Empresarios,PREPAGA,999901,30-00000000-1,,Test Cat O.S.D.E.|Test Cat Binario,RNEMP,999901,2026-09-30,https://example.test/rnemp
+test-cat-union,Obra Social Test Cat Unión Personal,,OBRA_SOCIAL,999902,,,Test Cat UP,RNOS,999902,2026-09-30,
+test-cat-choque-a,Test Cat Choque A,,MUTUAL,,,,Test Cat Compartido,RNEMP,,2026-09-30,
+test-cat-choque-b,Test Cat Choque B,,MUTUAL,,,,Test Cat Compartido,RNEMP,,2026-09-30,
+test-cat-invalida,Test Cat Inválida,,NO_EXISTE,,,,,RNOS,,2026-09-30,

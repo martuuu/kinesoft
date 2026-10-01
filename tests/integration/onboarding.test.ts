@@ -8,7 +8,11 @@
  *   (tampoco con dos pedidos simultáneos);
  * - staff ≠ paciente: una identidad de portal no crea consultorio;
  * - el paso 7 exige al menos un servicio y es idempotente;
- * - la invitación pendiente se reabre solo para el email invitado.
+ * - la invitación pendiente se reabre solo para el email invitado;
+ * - B5.5 ONB: flujo completo con Sede, Tu horario, práctica y prestadora del
+ *   catálogo; el retome (`deriveResumeStep`) sale de datos reales; la sede es
+ *   idempotente y se crea si falta; un tenant con el alta cerrada no ve el
+ *   stepper.
  *
  * Actions REALES contra Postgres (lib/onboarding.ts, lib/services.ts); solo se
  * mockea el cliente de Supabase (quién es el usuario y si verificó el email).
@@ -16,8 +20,19 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { saveOnboardingClinic, completeOnboarding, openPendingInvitation } from "@/lib/onboarding";
+import {
+  saveOnboardingClinic,
+  saveOnboardingLocation,
+  completeOnboarding,
+  openPendingInvitation,
+} from "@/lib/onboarding";
+import { loadOnboardingContext, type SessionUser } from "@/lib/onboarding-internal";
+import { deriveResumeStep, STEP } from "@/lib/onboarding-logic";
+import { agendaDefaultIds } from "@/lib/agenda-defaults";
 import { createService } from "@/lib/services";
+import { addInsurerFromCatalog, updateInsurer } from "@/lib/insurers";
+import { setBusinessHours } from "@/lib/tenant-settings";
+import { savePractitionerWeek } from "@/lib/practitioner-schedule";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import {
@@ -49,6 +64,8 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   let A: EphemeralTenant;
   const createdTenants: string[] = [];
   const extraUsers: string[] = [];
+  const catalogPayers: string[] = [];
+  const catalogPractices: string[] = [];
 
   beforeAll(async () => {
     db = ownerClient();
@@ -69,6 +86,9 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     // Practitioner de un OWNER cuyo tenant ya se borró cascadea con el tenant.
     await db.userProfile.deleteMany({ where: { id: { startsWith: "test-user-onb-" } } });
     await A?.cleanup();
+    // Catálogo global creado por estos tests (Service/Insurer → SET NULL, ya borrados arriba).
+    if (catalogPayers.length) await db?.payer.deleteMany({ where: { id: { in: catalogPayers } } });
+    if (catalogPractices.length) await db?.practice.deleteMany({ where: { id: { in: catalogPractices } } });
     if (extraUsers.length) {
       await db?.patient.updateMany({ where: { userId: { in: extraUsers } }, data: { userId: null } });
       await db?.userProfile.deleteMany({ where: { id: { in: extraUsers } } });
@@ -255,5 +275,204 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     const other = await openPendingInvitation(inv.id);
     expect(other.ok).toBe(false);
     expect((await db.invitation.findUniqueOrThrow({ where: { id: inv.id } })).token).toBe(row.token);
+  });
+
+  // ── B5.5 ONB: pasos de agenda ──────────────────────────────────────
+
+  const sessionUser = (): SessionUser => ({
+    id: sb.user!.id,
+    email: sb.user!.email,
+    emailVerified: true,
+    fullName: null,
+  });
+
+  const stepperCtx = async () => {
+    const ctx = await loadOnboardingContext(sessionUser());
+    if (ctx.kind !== "stepper") throw new Error(`esperaba stepper, vino ${ctx.kind}`);
+    return ctx;
+  };
+
+  it("flujo completo: sede → horario → tu horario → servicio con práctica → OS del catálogo → listo", async () => {
+    newIdentity();
+    const sfx = uniqueSuffix();
+    const practice = await db.practice.create({
+      data: {
+        slug: `onb-practica-${sfx}`,
+        name: `Fisiokinesioterapia ONB ${sfx}`,
+        matchKey: `fisiokinesioterapia onb ${sfx}`,
+        aliases: [],
+        defaultDurationMin: 40,
+        source: "CURATED",
+        sourceDate: new Date("2026-09-01T00:00:00Z"),
+      },
+    });
+    catalogPractices.push(practice.id);
+    const payer = await db.payer.create({
+      data: {
+        slug: `onb-prestadora-${sfx}`,
+        name: `Prestadora ONB ${sfx}`,
+        kind: "PREPAGA",
+        matchKey: `prestadora onb ${sfx}`,
+        aliases: [],
+        source: "CURATED",
+        sourceDate: new Date("2026-09-01T00:00:00Z"),
+      },
+    });
+    catalogPayers.push(payer.id);
+
+    // Consultorio: el bootstrap deja sede "Principal" sin dirección y la plantilla.
+    const r = await saveOnboardingClinic({ name: "Agenda Onboarding" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const tenantId = r.data.tenantId;
+    createdTenants.push(tenantId);
+    let ctx = await stepperCtx();
+    expect(ctx.location).toMatchObject({ name: "Principal", address: null });
+    expect(ctx.schedule?.custom).toBe(false);
+    expect(ctx.progress).toMatchObject({ locationReady: false, ownScheduleSaved: false });
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.location);
+
+    // Sede: edita LA principal (no crea otra), y es idempotente.
+    const loc = await saveOnboardingLocation({
+      name: "Palermo",
+      address: "Av. Santa Fe 1234",
+      city: "CABA",
+      province: "Buenos Aires",
+      phone: "",
+    });
+    expect(loc.ok).toBe(true);
+    const again = await saveOnboardingLocation({ name: "Palermo", address: "Av. Santa Fe 1234, 3° B", city: "CABA" });
+    expect(again.ok).toBe(true);
+    const locs = await db.location.findMany({ where: { tenantId } });
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatchObject({
+      id: agendaDefaultIds.location(tenantId),
+      isPrimary: true,
+      name: "Palermo",
+      address: "Av. Santa Fe 1234, 3° B",
+      city: "CABA",
+      // Campo omitido en el segundo guardado: no se toca.
+      province: "Buenos Aires",
+      phone: null,
+    });
+    ctx = await stepperCtx();
+    expect(ctx.progress.locationReady).toBe(true);
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.hours);
+
+    // Horario del consultorio: arrastra la plantilla del OWNER (sigue siendo plantilla).
+    expect((await setBusinessHours({ start: 9, end: 18, slotMinutes: 30 })).ok).toBe(true);
+    ctx = await stepperCtx();
+    const sched = ctx.schedule!;
+    expect(sched.custom).toBe(false);
+    expect(sched.view.ranges).toHaveLength(6);
+    expect(sched.view.ranges.every((x) => x.startMin === 540 && x.endMin === 1080)).toBe(true);
+    expect(sched.view.tenantHours).toEqual({ startMin: 540, endMin: 1080 });
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.hours);
+
+    // Tu horario: lun-vie partido, sábado libre. Reemplazo atómico con lock.
+    const week = [1, 2, 3, 4, 5].flatMap((dow) => [
+      { dow, startMin: 540, endMin: 780, locationId: locs[0].id },
+      { dow, startMin: 840, endMin: 1080, locationId: locs[0].id },
+    ]);
+    const saved = await savePractitionerWeek(sched.practitionerId, week, sched.view.version);
+    expect(saved.ok).toBe(true);
+    const rows = await db.practitionerSchedule.findMany({
+      where: { tenantId, practitionerId: sched.practitionerId },
+      orderBy: [{ dow: "asc" }, { startMin: "asc" }],
+    });
+    expect(rows.map((x) => [x.dow, x.startMin, x.endMin])).toEqual(week.map((w) => [w.dow, w.startMin, w.endMin]));
+    ctx = await stepperCtx();
+    expect(ctx.schedule?.custom).toBe(true);
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.services);
+
+    // Servicio con práctica del catálogo: queda vinculado y habilitado para el OWNER.
+    const svc = await createService({
+      name: "Sesión de kinesio",
+      durationMin: practice.defaultDurationMin!,
+      priceCents: 2_000_000,
+      maxConcurrent: 3,
+      practiceId: practice.id,
+    });
+    expect(svc.ok).toBe(true);
+    if (!svc.ok) return;
+    expect(await db.service.findUniqueOrThrow({ where: { id: svc.data.id } })).toMatchObject({
+      practiceId: practice.id,
+      durationMin: 40,
+    });
+    expect(
+      await db.practitionerService.count({ where: { tenantId, serviceId: svc.data.id, practitionerId: sched.practitionerId } })
+    ).toBe(1);
+    ctx = await stepperCtx();
+    expect(ctx.services[0]).toMatchObject({ practiceName: practice.name });
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.insurers);
+
+    // Obra social del catálogo + copago (dos actions, como la UI).
+    const ins = await addInsurerFromCatalog(payer.id);
+    expect(ins.ok).toBe(true);
+    if (!ins.ok || ins.data.status !== "created") throw new Error("esperaba created");
+    expect((await updateInsurer(ins.data.insurerId, { copagoCents: 350_000 })).ok).toBe(true);
+    expect(await db.insurer.findUniqueOrThrow({ where: { id: ins.data.insurerId } })).toMatchObject({
+      tenantId,
+      name: payer.name,
+      payerId: payer.id,
+      copagoCents: 350_000,
+      active: true,
+    });
+    expect(
+      await db.practitionerPayer.count({ where: { tenantId, insurerId: ins.data.insurerId, practitionerId: sched.practitionerId } })
+    ).toBe(1);
+    // Elegirla dos veces no duplica.
+    const dup = await addInsurerFromCatalog(payer.id);
+    expect(dup.ok && dup.data.status).toBe("exists");
+    expect(await db.insurer.count({ where: { tenantId, payerId: payer.id } })).toBe(1);
+    ctx = await stepperCtx();
+    expect(deriveResumeStep(ctx.progress)).toBe(STEP.team);
+
+    // Listo: cierra el alta y el stepper ya no se muestra.
+    expect((await completeOnboarding()).ok).toBe(true);
+    expect((await loadOnboardingContext(sessionUser())).kind).toBe("done");
+    // Lo cargado en el alta sigue intacto.
+    expect(await db.practitionerSchedule.count({ where: { tenantId } })).toBe(10);
+  });
+
+  it("sede: sin dirección no escribe; si falta la principal, la crea (mismo id que el alta)", async () => {
+    newIdentity();
+    const r = await saveOnboardingClinic({ name: "Sede Faltante" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const tenantId = r.data.tenantId;
+    createdTenants.push(tenantId);
+
+    const bad = await saveOnboardingLocation({ name: "Principal", address: "   " });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.fieldErrors?.address?.[0]).toBeTruthy();
+    expect((await db.location.findFirstOrThrow({ where: { tenantId } })).address).toBeNull();
+
+    // Alta abierta antes de B2.3: sin sede (y por ende sin franjas).
+    await db.practitionerSchedule.deleteMany({ where: { tenantId } });
+    await db.location.deleteMany({ where: { tenantId } });
+    let ctx = await stepperCtx();
+    expect(ctx.location).toBeNull();
+    expect(ctx.schedule?.view.isFallback).toBe(true);
+
+    const ok = await saveOnboardingLocation({ name: "Centro", address: "Calle 7 nro 800", city: "La Plata" });
+    expect(ok.ok).toBe(true);
+    const locs = await db.location.findMany({ where: { tenantId } });
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatchObject({
+      id: agendaDefaultIds.location(tenantId),
+      isPrimary: true,
+      active: true,
+      name: "Centro",
+      address: "Calle 7 nro 800",
+    });
+    ctx = await stepperCtx();
+    expect(ctx.progress.locationReady).toBe(true);
+  });
+
+  it("un tenant con el alta cerrada nunca ve el stepper", async () => {
+    sb.user = { id: A.userId, email: `${A.userId}@test.local`, email_confirmed_at: new Date(0).toISOString(), user_metadata: {} };
+    const ctx = await loadOnboardingContext({ id: A.userId, email: `${A.userId}@test.local`, emailVerified: true, fullName: null });
+    expect(ctx.kind).toBe("done");
   });
 });

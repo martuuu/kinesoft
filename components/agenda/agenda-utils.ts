@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import { formatARS } from "@/lib/format";
+import type { AgendaBookingRow, BookingRow } from "@/lib/bookings-types";
 
 export type BookingDTO = {
   id: string;
@@ -41,7 +42,71 @@ export type BookingDTO = {
   createdAt?: string;
   /** Revisión A2: reserva del turnero público (`isPublicReservation`). */
   publicReservation?: boolean;
+  /**
+   * B4.1 (proyección liviana `listAgendaBookings`). Opcionales: la proyección
+   * completa (`listBookingsInRange`) no los trae y los componentes tienen que
+   * verse como antes sin ellos.
+   */
+  /** Sobreturno (reemplaza el prefijo "[SOBRETURNO]" de notes). */
+  isOverbooked?: boolean;
+  /** Recepción: llegó a la sala / pasó a atención (ISO). */
+  arrivedAt?: string | null;
+  attendingAt?: string | null;
+  /** null = sede principal. */
+  locationId?: string | null;
+  /** Nombre de la sede (con `locationId` null, el de la principal). */
+  locationName?: string | null;
+  isTelemedicine?: boolean;
+  telemedicineUrl?: string | null;
+  /** Sin `clinical.read` o acceso básico: title/description/notas vienen null a propósito. */
+  clinicalHidden?: boolean;
 };
+
+const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
+
+/**
+ * Fila del server → DTO del cliente (fechas a ISO). Acepta las dos
+ * proyecciones; los campos de B4.1 solo aparecen si la fila los trae (con la
+ * completa quedan ausentes, no en null/false, para no afirmar "no llegó" o
+ * "sede principal" sin saberlo).
+ */
+export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
+  const base: BookingDTO = {
+    id: row.id,
+    scheduledFor: row.scheduledFor.toISOString(),
+    durationMin: row.durationMin,
+    status: row.status,
+    serviceId: row.serviceId,
+    serviceName: row.serviceName,
+    serviceColor: row.serviceColor,
+    practitionerId: row.practitionerId,
+    patientId: row.patientId,
+    patientName: row.patientName,
+    patientCondition: row.patientCondition,
+    obraSocial: row.obraSocial,
+    copagoCents: row.copagoCents,
+    updatedAt: row.updatedAt.toISOString(),
+    notes: row.notes,
+    title: row.title,
+    description: row.description,
+    patientAccess: row.patientAccess,
+    paymentStatus: row.paymentStatus,
+    createdAt: row.createdAt.toISOString(),
+    publicReservation: row.publicReservation,
+  };
+  if (!("isOverbooked" in row)) return base;
+  return {
+    ...base,
+    isOverbooked: row.isOverbooked,
+    arrivedAt: iso(row.arrivedAt),
+    attendingAt: iso(row.attendingAt),
+    locationId: row.locationId,
+    locationName: row.locationName,
+    isTelemedicine: row.isTelemedicine,
+    telemedicineUrl: row.telemedicineUrl,
+    clinicalHidden: row.clinicalHidden,
+  };
+}
 
 export const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
 

@@ -129,6 +129,8 @@ En orden. Todas aplicadas y verificadas en local:
 | 8 | `20260803183019_user_prefs_catalog` | `UserPreferences.catalogPrefs` (JSON) | 8 |
 | 9 | `20260816014954_tenant_agenda_slot_minutes` | `Tenant.agendaSlotMinutes` (vista 30/60 min) | 10 |
 | 10 | `20260930120000_tenant_onboarding` | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` + backfill | A3c — **ver §2.1** |
+| 11 | `20260930200000_catalog_global` | catálogo global + punteros nullable + RLS de solo lectura | B-pre — **ver §2.2** |
+| 12 | `20261001090000_agenda_foundations` | sedes, franjas, excepciones, bloqueos, PS/PP, Booking expand + **backfill** | B-pre — **ver §2.2** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
@@ -282,6 +284,170 @@ La URL tiene que ser la **owner** (BYPASSRLS): con el rol de la app RLS devuelve
 
 **6) Verificación final en prod:** login del cliente vivo sin stepper; `curl -I` con HSTS; en Sentry (si hay
 DSN) llega un evento de prueba; en Upstash aparecen claves `rl:production:`.
+
+## 2.2 Deploy de B-pre (agenda y catálogo) — orden exacto (01-oct-2026)
+
+> ⚠️ **Hay DOS migraciones nuevas en esta tanda**, en este orden:
+> 1. `20260930200000_catalog_global` — catálogo global (Specialty, Practice, PracticeSpecialty, Payer, PayerPlan,
+>    CatalogImportRun + enums `CatalogSource`/`PayerKind`), punteros nullable `Insurer.payerId`,
+>    `Coverage.payerPlanId`, `Service.practiceId` (FK SET NULL), RLS global de solo lectura y PayerPlan split,
+>    índices parciales de PayerPlan. Sin backfill.
+> 2. `20261001090000_agenda_foundations` — Location, PractitionerSchedule, ScheduleException, TimeBlock,
+>    PractitionerService, PractitionerPayer, PractitionerSpecialty; Booking + `locationId` (RESTRICT),
+>    `isOverbooked`, `arrivedAt`, `attendingAt`, `isTelemedicine`, `telemedicineUrl`; `UserPreferences.agendaPrefs`;
+>    RLS + CHECKs + índices parciales; **backfill idempotente** con `SET LOCAL row_security = off`.
+>
+> Las dos son aditivas (expand): ningún DROP ni SET NOT NULL; el código viejo convive con el schema nuevo. Por eso
+> van **antes o junto con** el código, nunca después. Lo normal es que las aplique el build de Production al
+> mergear a `main`.
+>
+> **Relación con el Bloque A:** el Bloque A ya está commiteado (`ef3281f`). B-pre puede desplegarse **solo** (si A
+> ya está en prod) o **en el mismo deploy** que A. Las reglas de A no cambian: **A3 sigue requiriendo el SMTP
+> propio** (EXTERNAL-CONFIG §0.1) y A3b no va sin A3c. Si A no está en prod, este deploy lleva también
+> `20260930120000_tenant_onboarding` (§2.1): aplicar los prechecks de las dos secciones y el orden de migraciones
+> es por timestamp (onboarding → catalog_global → agenda_foundations), que es lo que hace `migrate deploy`.
+
+**1) Prechecks de solo lectura** (SQL Editor de prod o `psql "$DIRECT_URL"` con `.env.prod.local`). Además de los
+fijos de §2 paso 2. Anotá cada resultado: los conteos esperados del paso 5 salen de acá.
+
+```sql
+-- (a) Rol con el que migra el build (DIRECT_URL). TIENE que ser rolsuper o rolbypassrls:
+--     el backfill corre con row_security = off y, sin BYPASSRLS, la migración FALLA a propósito.
+SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+
+-- (b) Las tablas nuevas no existen todavía (todas null). Si alguna existe, frenar y revisar _prisma_migrations.
+SELECT to_regclass('"Specialty"'), to_regclass('"Practice"'), to_regclass('"Payer"'), to_regclass('"PayerPlan"'),
+       to_regclass('"CatalogImportRun"'), to_regclass('"Location"'), to_regclass('"PractitionerSchedule"'),
+       to_regclass('"PractitionerService"'), to_regclass('"TimeBlock"');
+
+-- (c) catalog_global: lo que hoy se tipea a mano (informativo; la migración no lo toca).
+SELECT COUNT(*) FROM "Insurer";
+SELECT "tenantId", COUNT(*) FROM "Insurer" GROUP BY 1;
+SELECT COUNT(*) FILTER (WHERE "planName" IS NOT NULL) FROM "Coverage";
+SELECT COUNT(*) FROM "Service";
+
+-- (d) agenda_foundations: base de los conteos esperados.
+SELECT COUNT(*) AS tenants FROM "Tenant";
+SELECT id, "businessHoursStart", "businessHoursEnd" FROM "Tenant";
+--     tenants con horario inválido: quedan SIN franjas (el motor usa el horario del tenant como fallback)
+SELECT id FROM "Tenant"
+WHERE NOT ("businessHoursStart" >= 0 AND "businessHoursStart" < "businessHoursEnd" AND "businessHoursEnd" <= 24);
+--     profesionales con membresía aceptada, por tenant
+SELECT p."tenantId", COUNT(*) FROM "Practitioner" p
+JOIN "Membership" m ON m."userId"=p."userId" AND m."tenantId"=p."tenantId" AND m."acceptedAt" IS NOT NULL
+GROUP BY 1;
+--     turnos futuros de profesionales SIN membresía aceptada (no reciben franjas: revisar a mano)
+SELECT b."practitionerId", COUNT(*) FROM "Booking" b
+WHERE b."scheduledFor" > now() AND b.status <> 'CANCELLED' AND NOT EXISTS (
+  SELECT 1 FROM "Practitioner" p
+  JOIN "Membership" m ON m."userId"=p."userId" AND m."tenantId"=p."tenantId" AND m."acceptedAt" IS NOT NULL
+  WHERE p.id=b."practitionerId")
+GROUP BY 1;
+SELECT "practitionerId" IS NULL AS compartido, COUNT(*) FROM "Service" GROUP BY 1;
+SELECT COUNT(*) FROM "Insurer" WHERE active;
+--     turnos de un servicio "propio" de OTRO profesional: el paso 3b del backfill los habilita como PRIVATE
+SELECT COUNT(*) FROM "Booking" b JOIN "Service" s ON s.id=b."serviceId"
+WHERE s."practitionerId" IS NOT NULL AND s."practitionerId"<>b."practitionerId" AND b.status<>'CANCELLED';
+--     sobreturnos marcados por prefijo (= isOverbooked esperado)
+SELECT COUNT(*) FROM "Booking" WHERE notes LIKE '[SOBRETURNO]%';
+--     turnos futuros fuera del horario del tenant o en domingo: siguen en la agenda; desde B-pre reprogramarlos
+--     o reactivarlos da el aviso blando "fuera de horario" (se fuerza, no se rechaza). Informativo.
+SELECT COUNT(*) FROM "Booking" b JOIN "Tenant" t ON t.id=b."tenantId"
+WHERE b."scheduledFor" > now() AND b.status <> 'CANCELLED' AND (
+  EXTRACT(DOW FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires')=0
+  OR EXTRACT(HOUR FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires') < t."businessHoursStart"
+  OR EXTRACT(HOUR FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires') >= t."businessHoursEnd");
+SELECT COUNT(*) FROM "Booking";
+```
+
+Qué hacer si:
+- **(a)** no tiene `rolsuper` ni `rolbypassrls` → **frenar**: corregir `DIRECT_URL` en Vercel al owner antes del
+  merge (si no, el deploy falla en la migración 2 y no queda nada a medias, pero no sale).
+- **(b)** alguna no es null → frenar, revisar `_prisma_migrations` (§2 paso 2).
+- **turnos de profesionales sin membresía aceptada > 0** → no rompen nada (el motor les aplica el horario del
+  tenant), pero conviene reasignarlos o re-aceptar la membresía.
+
+**2) Backup:** `npm run db:prod:backup`.
+
+**3) Staging primero (antes del merge a `main`):** `migrate deploy` contra la DB de staging (el Preview no migra
+solo) → correr los mismos prechecks y los conteos del paso 5 → QA de [QA.md §B-pre](QA.md) con `TZ=UTC` → import
+del catálogo en staging (paso 6). Recién con eso verde se mergea.
+
+**4) Aplicar en prod:** merge a `main` (el build de Production aplica las dos), o antes a mano:
+
+```bash
+npm run db:prod:deploy
+npm run db:prod:status      # → "Database schema is up to date!"
+```
+
+Si se aplican a mano **antes** del deploy del código, en el hueco el código viejo sigue andando (todo es nullable
+o con default). Lo único que queda desfasado se corrige en el paso 5.
+
+**5) Post-deploy (inmediatamente después de que el código nuevo esté vivo):**
+
+```sql
+-- (a) Sobreturnos que el código VIEJO cargó entre la migración y el deploy (solo escribía el prefijo):
+UPDATE "Booking" SET "isOverbooked" = true WHERE notes LIKE '[SOBRETURNO]%' AND NOT "isOverbooked";
+
+-- (b) Conteos esperados
+SELECT COUNT(*) FROM "Location";                       -- = #tenants (una "Principal" por tenant)
+SELECT COUNT(*) FROM "Location" WHERE "isPrimary";     -- = #tenants
+SELECT COUNT(*) FROM "PractitionerSchedule";           -- = 6 × profesionales aceptados (de tenants con horario válido)
+SELECT COUNT(*) FROM "Booking" WHERE "locationId" IS NULL;                  -- = 0
+SELECT COUNT(*) FROM "Booking" WHERE "isOverbooked";   -- = conteo de '[SOBRETURNO]%' del precheck (+ los nuevos)
+SELECT visibility, COUNT(*) FROM "PractitionerService" GROUP BY 1;          -- PRIVATE = pares del paso 3b
+SELECT COUNT(*) FROM "PractitionerPayer";              -- = aceptados × insurers activos, por tenant
+-- (c) RLS del catálogo: solo SELECT
+SELECT tablename, policyname, cmd FROM pg_policies
+WHERE tablename IN ('Specialty','Practice','PracticeSpecialty','Payer','CatalogImportRun','PayerPlan')
+ORDER BY 1, 2;
+```
+
+- **(d) Re-correr el backfill** si entre la migración y el deploy del código se creó un tenant, se aceptó una
+  invitación o se cargó un servicio/obra social (esas altas nacen sin sede/franjas/PS/PP con el código viejo; el
+  código nuevo ya las crea con `lib/agenda-defaults.ts`). Es idempotente: re-correrlo no cambia lo ya hecho.
+  Owner connection:
+
+  ```bash
+  set -a; . ./.env.prod.local; set +a
+  M=prisma/migrations/20261001090000_agenda_foundations/migration.sql
+  { echo 'BEGIN;'
+    sed -n '/>>> BACKFILL agenda_foundations BEGIN/,/<<< BACKFILL agenda_foundations END/p' "$M"
+    echo 'COMMIT;'; } | psql "$DIRECT_URL" -v ON_ERROR_STOP=1
+  # Para acotarlo a ciertos tenants: agregar, después de BEGIN,
+  #   SET LOCAL kinesoft.backfill_tenants = '<id1>,<id2>';
+  ```
+
+  Después, repetir los conteos de (b). Con el deploy por merge (migración y código juntos) el hueco es de
+  segundos y normalmente no hace falta.
+
+**6) Import del catálogo** (lo corre Martin; no es migración; **staging primero**, después prod):
+
+```bash
+npm run db:prod:backup                     # backup antes (en staging, el suyo)
+# dry-run (default): imprime el diff y los conflictos, no escribe. Lee prod → pide el project ref.
+KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/catalog-import.ts
+# revisar conflictos (siglas ambiguas, referencias desconocidas): esas filas no se escriben, el resto sí
+KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/catalog-import.ts --apply
+# verificación: otro dry-run tiene que dar 0 cambios
+KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/catalog-import.ts
+```
+
+- Usa `DIRECT_URL` (owner) y aborta si la conexión no tiene BYPASSRLS: el catálogo es de solo lectura para el rol
+  de la app. Escribe todo en **una** tx (o entra completo o nada) y deja un `CatalogImportRun` por archivo.
+- Nunca pisa una fila curada en Plataforma (`curatedAt`), no desarchiva y los `*.seed-*.csv` solo crean.
+- El script corre fuera de Next y no puede invalidar el cache: **Plataforma → Catálogo → Importaciones →
+  "Refrescar catálogo"**. Sin eso, los consultorios ven el catálogo viejo hasta que expire el cache (1 h).
+- Después de un import grande, `ANALYZE` (lección de PERF.md: sin estadísticas el planner elige mal).
+- Local: `npm run catalog:import` (dry-run) y `npm run catalog:import -- --apply`.
+
+**7) Verificación final en prod:** el cliente vivo entra a `/agenda` y ve lo mismo que antes (sus turnos, su
+horario); en Configuración → Profesionales tiene franjas lun-sáb con el horario del consultorio; el turnero
+público ofrece los mismos horarios que antes; un sobreturno viejo muestra el badge.
+
+**Rollback:** volver el deploy de Vercel al commit anterior. El schema nuevo es compatible con el código viejo
+(columnas nullable o con default, tablas nuevas sin uso). Las filas que cargue el código nuevo (sedes, franjas,
+bloqueos) quedan y se reusan al volver a desplegar.
 
 ## 3. Rollback
 

@@ -206,13 +206,18 @@ export async function addInsurer(
  * the start of an integration suite. Matches the `test-` slug prefix only.
  */
 export async function sweepOrphanTestTenants(prisma: PrismaClient): Promise<number> {
+  // Solo huérfanos VIEJOS (>30 min): con varias corridas de integración en
+  // paralelo contra el mismo Docker (agentes de una ola), barrer todos los
+  // `test-*` borraba los tenants de la corrida vecina a mitad de sus tests
+  // (FK de Booking que desaparecen, datos que se esfuman — B-pre B1.0).
+  const cutoff = new Date(Date.now() - 30 * 60_000);
   const orphans = await prisma.tenant.findMany({
-    where: { slug: { startsWith: "test-" } },
+    where: { slug: { startsWith: "test-" }, createdAt: { lt: cutoff } },
     select: { id: true },
   });
   for (const t of orphans) await deleteTenantDeep(prisma, t.id);
   await prisma.userProfile.deleteMany({
-    where: { id: { startsWith: "test-user-" }, memberships: { none: {} } },
+    where: { id: { startsWith: "test-user-" }, memberships: { none: {} }, createdAt: { lt: cutoff } },
   });
   return orphans.length;
 }

@@ -13,9 +13,14 @@ export function useStepNav() {
   };
 }
 
-/** Pie de cada paso: "Volver" + acción principal (+ "Saltear" opcional). */
+/**
+ * Pie de cada paso: "Volver" + acción principal (+ "Saltear" opcional).
+ * `onBack` reemplaza a `back` cuando "Volver" tiene que pasar por el
+ * dirty-guard del paso (formularios con cambios sin guardar).
+ */
 export function StepFooter({
   back,
+  onBack,
   primaryLabel,
   onPrimary,
   primaryType = "button",
@@ -24,6 +29,7 @@ export function StepFooter({
   skip,
 }: {
   back?: number;
+  onBack?: () => void;
   primaryLabel: string;
   onPrimary?: () => void;
   primaryType?: "button" | "submit";
@@ -44,8 +50,8 @@ export function StepFooter({
         flexWrap: "wrap",
       }}
     >
-      {back != null && (
-        <Button type="button" variant="ghost" onClick={() => go(back)} disabled={pending}>
+      {(back != null || onBack) && (
+        <Button type="button" variant="ghost" onClick={onBack ?? (() => go(back!))} disabled={pending}>
           <IconChevL size={14} /> Volver
         </Button>
       )}

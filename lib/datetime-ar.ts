@@ -54,7 +54,10 @@ export function isoToARLocalInput(iso: string | Date): string {
     hour12: false,
   }).formatToParts(d);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+  // Medianoche: `hour12:false` formatea "24" (ver `arHour`) → "T24:00", que un
+  // <input type="datetime-local"> rechaza.
+  const hour = String(arHour(get("hour"))).padStart(2, "0");
+  return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
 }
 
 const AR_FMT = new Intl.DateTimeFormat("en-CA", {
@@ -68,12 +71,24 @@ const AR_FMT = new Intl.DateTimeFormat("en-CA", {
   weekday: "short",
 });
 
+/**
+ * Hora de un `formatToParts` con `hour12:false`, normalizada a 0..23. Con
+ * `hour12:false` Intl (V8/ICU, medido en Node 20) formatea la medianoche como
+ * "24" — el día sí sale bien —, así que `toARMinutes` devolvía 1440 y
+ * `toARHour` 24 a las 00:00 AR (hallazgo de B2.1a; `lib/availability/day.ts`
+ * lo parchaba con `% 1440`). `hourCycle: "h23"` no alcanza: `hour12` lo pisa,
+ * y sacar `hour12` cambia el default por locale. El `% 24` es lo robusto.
+ */
+function arHour(raw: string): number {
+  return Number(raw) % 24;
+}
+
 function arParts(d: Date) {
   const p = AR_FMT.formatToParts(d);
   const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
   return {
     date: `${get("year")}-${get("month")}-${get("day")}`,
-    hour: Number(get("hour")),
+    hour: arHour(get("hour")),
     minute: Number(get("minute")),
     // Sun=0 Mon=1…Sat=6 → JS getDay() convention
     dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday")),

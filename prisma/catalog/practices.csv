@@ -1,0 +1,71 @@
+slug,name,code,nomenclador,defaultDurationMin,aliases,source,sourceRef,sourceDate,sourceUrl
+fisioterapia,Fisioterapia por sesión (agentes físicos),250101,Nomenclador Nacional,30,Fisioterapia|Agentes físicos|25.01.01|Onda corta|Microondas|Ultravioleta|Iontoforesis|Tracción cervical o pelviana,PMO,"Res. MS 201/2002, Anexo II, 25.01.01",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+kinesioterapia,Kinesioterapia por sesión,250102,Nomenclador Nacional,45,Sesión de kinesiología|Kinesiología|Kinesioterapia|25.01.02|Terapia física|Movilización pasiva o activa|Reeducación|Fortalecimiento muscular,PMO,"Res. MS 201/2002, Anexo II, 25.01.02",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+terapia-ocupacional,Terapia ocupacional por sesión,250103,Nomenclador Nacional,45,Sesión de terapia ocupacional|25.01.03|PAMI 123004,PMO,"Res. MS 201/2002, Anexo II, 25.01.03",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+rehabilitacion-del-lenguaje,Rehabilitación del lenguaje por sesión,250104,Nomenclador Nacional,45,Sesión de fonoaudiología|Terapia del lenguaje|25.01.04,PMO,"Res. MS 201/2002, Anexo II, 25.01.04",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+pilones-para-amputados,Pilones para amputados (alineación),250105,Nomenclador Nacional,30,25.01.05,PMO,"Res. MS 201/2002, Anexo II, 25.01.05",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+kinesioterapia-a-domicilio,Kinesioterapia o fisiatría a domicilio,250106,Nomenclador Nacional,60,Kinesiología a domicilio|Atención kinésica domiciliaria|25.01.06|PAMI 250121,PMO,"Res. MS 201/2002, Anexo II, 25.01.06",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+consulta-medica-consultorio,Consulta médica en consultorio,420101,Nomenclador Nacional,20,Consulta|Consulta en consultorio|42.01.01,PMO,"Res. MS 201/2002, Anexo II, 42.01.01",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+consulta-medica-domicilio,Consulta médica en domicilio,420201,Nomenclador Nacional,30,Consulta a domicilio|42.02.01,PMO,"Res. MS 201/2002, Anexo II, 42.02.01",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+psicoterapia-individual,Psicoterapia individual (niños o adultos),330101,Nomenclador Nacional,50,Sesión de psicoterapia|Sesión de psicología|33.01.01,PMO,"Res. MS 201/2002, Anexo II, 33.01.01",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+psicoterapia-grupal,Psicoterapia grupal o colectiva (niños o adultos),330102,Nomenclador Nacional,90,Terapia grupal|33.01.02,PMO,"Res. MS 201/2002, Anexo II, 33.01.02",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+psicoterapia-pareja-familia,Psicoterapia de pareja o familia,330103,Nomenclador Nacional,60,Terapia de pareja|Terapia familiar|33.01.03,PMO,"Res. MS 201/2002, Anexo II, 33.01.03",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+audiometria,Audiometría,310102,Nomenclador Nacional,30,31.01.02,PMO,"Res. MS 201/2002, Anexo II, 31.01.02",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+logoaudiometria,Logoaudiometría,310103,Nomenclador Nacional,30,31.01.03,PMO,"Res. MS 201/2002, Anexo II, 31.01.03",2026-09-30,https://www.argentina.gob.ar/normativa/recurso/73649/texactres201-2002MS-anexoII/htm
+drenaje-linfatico-manual,Drenaje linfático manual (sesión),,,45,Drenaje linfático|DLM|Sesión de drenaje linfático|PAMI 250120,CURATED,PAMI 250120,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+rpg,Reeducación Postural Global (RPG),,,60,RPG|Reeducación postural|Rehabilitación postural global|PAMI 124001|OSEP 03-250116-00,CURATED,PAMI 124001; OSEP 03-250116-00,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+rehabilitacion-vestibular,Rehabilitación vestibular y/o laberíntica (sesión),,,45,Rehabilitación vestibular|Rehabilitación del vértigo|PAMI 250114,CURATED,PAMI 250114,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+rehabilitacion-cardiopulmonar,Rehabilitación cardiopulmonar (sesión de kinesioterapia),,,60,Rehabilitación cardíaca|Rehabilitación cardiovascular|PAMI 126002,CURATED,PAMI 126002,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+hidroterapia,Hidroterapia (sesión),,,45,Hidrokinesioterapia|Kinesiología acuática|Rehabilitación en pileta|OSEP 10502-00,CURATED,OSEP 10502-00,2026-09-30,https://osepmendoza.com.ar/web/wp-content/uploads/2020/04/RS-HD-2022-1237-.pdf
+rehabilitacion-venolinfatica,Rehabilitación kinésica venolinfática,,,45,Rehabilitación veno-linfática|Linfedema|OSEP 10507-00,CURATED,OSEP 10507-00,2026-09-30,https://osepmendoza.com.ar/web/wp-content/uploads/2020/04/RS-HD-2022-1237-.pdf
+rehabilitacion-dermatofuncional,Rehabilitación kinésica dermatofuncional (sesión),,,45,Kinesiología dermatofuncional|Rehabilitación postquirúrgica estética|Tratamiento de cicatrices,CURATED,,2026-09-30,https://osepmendoza.com.ar/web/wp-content/uploads/2020/04/RS-HD-2022-1237-.pdf
+neurorrehabilitacion-kinesica,Neurorrehabilitación kinésica (sesión),,,45,Kinesiología neurológica|Neurorrehabilitación|OSEP 03-251002-00,CURATED,OSEP 03-251002-00,2026-09-30,https://osepmendoza.com.ar/web/wp-content/uploads/2020/04/RS-HD-2022-1237-.pdf
+fisiokinesioterapia,Fisiokinesioterapia (sesión combinada: agentes físicos + kinesioterapia),,,45,Fisiokinesioterapia|FKT|Fisio-kinesioterapia|OSEP 01-250101-00 / 10501-00,CURATED,OSEP 01-250101-00 / 10501-00,2026-09-30,https://osepmendoza.com.ar/web/wp-content/uploads/2020/04/RS-HD-2022-1237-.pdf
+rehabilitacion-neurocognitiva,Rehabilitación neurocognitiva (sesión),,,45,Estimulación cognitiva|PAMI 125001,CURATED,PAMI 125001,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+fono-deglucion-afasia,Fonoaudiología: rehabilitación deglutoria y afasiología (sesión),,,45,Terapia de deglución|Afasia|PAMI 123005,CURATED,PAMI 123005,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+consulta-fisiatria,Consulta con especialista en Fisiatría,,,30,Consulta fisiátrica|PAMI 820135,CURATED,PAMI 820135,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+consulta-fonoaudiologia,Consulta / evaluación fonoaudiológica,,,45,Evaluación fonoaudiológica|PAMI 820137,CURATED,PAMI 820137,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+consulta-nutricion,Consulta de nutrición (primera vez),,,45,Consulta nutricional|Evaluación nutricional|PAMI 820159,CURATED,PAMI 820159,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+consulta-nutricion-seguimiento,Consulta de seguimiento con Lic. en Nutrición,,,30,Control nutricional|PAMI 820153,CURATED,PAMI 820153,2026-09-30,https://www.pami.org.ar/pdf/manual_nomenclador.pdf
+evaluacion-kinesica-inicial,Evaluación kinésica inicial,,,60,Primera consulta kinésica|Evaluación funcional|Admisión kinésica,CURATED,,2026-09-30,
+reevaluacion-kinesica,Reevaluación kinésica,,,30,Control kinésico|Evaluación de seguimiento,CURATED,,2026-09-30,
+rehabilitacion-postquirurgica,Rehabilitación postquirúrgica (sesión),,,45,Rehabilitación post operatoria|Postquirúrgico|Rehabilitación traumatológica,CURATED,,2026-09-30,
+kinesiologia-respiratoria,Kinesiología respiratoria (sesión),,,45,Kinesioterapia respiratoria|Rehabilitación respiratoria|KTR,CURATED,,2026-09-30,
+kinesiologia-deportiva,Kinesiología deportiva (sesión),,,45,Rehabilitación deportiva|Readaptación deportiva,CURATED,,2026-09-30,
+piso-pelvico,Rehabilitación de piso pélvico (sesión),,,45,Kinesiología uroginecológica|Reeducación perineal|Incontinencia,CURATED,,2026-09-30,
+gimnasia-terapeutica,Gimnasia terapéutica / ejercicio terapéutico,,,45,Ejercicio terapéutico|Gimnasia médica|Gimnasia correctiva,CURATED,,2026-09-30,
+pilates-terapeutico,Pilates terapéutico,,,50,Pilates clínico|Pilates reformer terapéutico,CURATED,,2026-09-30,
+terapia-manual,Terapia manual (sesión),,,45,Terapia manual ortopédica|Movilización articular|Manipulación,CURATED,,2026-09-30,
+masoterapia,Masoterapia / masaje terapéutico,,,30,Masaje terapéutico|Masaje descontracturante|Masaje,CURATED,,2026-09-30,
+magnetoterapia,Magnetoterapia,,,30,Magneto|Campos magnéticos pulsados,CURATED,,2026-09-30,
+electroestimulacion,Electroestimulación (TENS / EMS),,,30,TENS|EMS|Electroterapia|Corrientes interferenciales|Electroanalgesia,CURATED,,2026-09-30,
+ultrasonido-terapeutico,Ultrasonido terapéutico,,,20,Ultrasonido|US terapéutico|Ultrasonoterapia,CURATED,,2026-09-30,
+laserterapia,Laserterapia,,,20,Láser|Láser terapéutico|Laser de alta potencia,CURATED,,2026-09-30,
+ondas-de-choque,Ondas de choque,,,20,Ondas de choque radiales|ESWT|Terapia de ondas de choque,CURATED,,2026-09-30,
+puncion-seca,Punción seca,,,30,Dry needling|Punción seca de puntos gatillo,CURATED,,2026-09-30,
+vendaje-neuromuscular,Vendaje neuromuscular (kinesiotaping),,,20,Kinesiotaping|Kinesio tape|Taping,CURATED,,2026-09-30,
+crioterapia,Crioterapia,,,15,Frío terapéutico|Hielo,CURATED,,2026-09-30,
+termoterapia,Termoterapia / fomentación,,,15,Calor terapéutico|Compresas calientes|Infrarrojo,CURATED,,2026-09-30,
+traccion-vertebral,Tracción cervical / lumbar,,,20,Tracción cervical|Tracción lumbar|Tracción vertebral,CURATED,,2026-09-30,
+presoterapia,Presoterapia,,,30,Pressoterapia|Compresión neumática,CURATED,,2026-09-30,
+radiofrecuencia,Radiofrecuencia / diatermia,,,20,Diatermia|Tecarterapia|Radiofrecuencia capacitiva-resistiva,CURATED,,2026-09-30,
+atm-kinesiologia,Rehabilitación de ATM (articulación temporomandibular),,,45,ATM|Bruxismo|Disfunción temporomandibular,CURATED,,2026-09-30,
+kinesiologia-pediatrica,Kinesiología pediátrica (sesión),,,45,Kinesiología infantil|Estimulación motora,CURATED,,2026-09-30,
+kinesiologia-neurologica-adulto,Kinesiología neurológica adultos (sesión),,,45,ACV|Parkinson|Rehabilitación neurológica,CURATED,,2026-09-30,
+rehabilitacion-escoliosis,Rehabilitación de escoliosis (método específico),,,60,Schroth|Escoliosis,CURATED,,2026-09-30,
+evaluacion-osteopatica-inicial,Evaluación osteopática inicial,,,60,Primera consulta osteopática,CURATED,,2026-09-30,
+sesion-osteopatia,Sesión de osteopatía,,,45,Osteopatía|Tratamiento osteopático,CURATED,,2026-09-30,
+osteopatia-estructural,Osteopatía estructural,,,45,Manipulación osteopática|Técnicas estructurales|OMT,CURATED,,2026-09-30,
+osteopatia-visceral,Osteopatía visceral,,,45,Técnicas viscerales,CURATED,,2026-09-30,
+osteopatia-craneal,Osteopatía craneal / craneosacral,,,45,Terapia craneosacral|Osteopatía craneosacral,CURATED,,2026-09-30,
+osteopatia-atm,Osteopatía para ATM,,,45,ATM osteopática|Tratamiento osteopático de ATM,CURATED,,2026-09-30,
+osteopatia-pediatrica,Osteopatía pediátrica,,,45,Osteopatía en bebés|Osteopatía infantil,CURATED,,2026-09-30,
+consulta-traumatologia,Consulta de traumatología,,,20,Consulta traumatológica|Consulta ortopédica,CURATED,factura como NN 42.01.01,2026-09-30,
+consulta-medicina-deporte,Consulta de medicina del deporte,,,30,Consulta deportológica,CURATED,factura como NN 42.01.01,2026-09-30,
+apto-fisico-deportivo,Apto físico deportivo,,,30,Certificado de aptitud física|Apto médico,CURATED,,2026-09-30,
+consulta-reumatologia,Consulta de reumatología,,,30,Consulta reumatológica,CURATED,factura como NN 42.01.01,2026-09-30,
+consulta-neurologia,Consulta de neurología,,,30,Consulta neurológica,CURATED,factura como NN 42.01.01,2026-09-30,
+evaluacion-terapia-ocupacional,Evaluación de terapia ocupacional,,,60,Admisión TO|Evaluación funcional TO,CURATED,,2026-09-30,
+evaluacion-psicologica,Evaluación psicológica / psicodiagnóstico (sesión),,,50,Psicodiagnóstico|Admisión psicológica,CURATED,,2026-09-30,
+consulta-podologia,Consulta podológica,,,30,Atención podológica|Pedicuría,CURATED,,2026-09-30,
+tratamiento-podologico,Tratamiento podológico (uñas / callosidades),,,45,Onicocriptosis|Quiropodia,CURATED,,2026-09-30,

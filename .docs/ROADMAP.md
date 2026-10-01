@@ -27,8 +27,8 @@
 | Bloque | Qué | Estado |
 |---|---|---|
 | **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo; **próximo**): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | ⏳ |
-| **C · Diferido** | **C0** roles/capabilities, rol Secretaria completo, multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅ código completo** (01-oct, Ronda 13; pendiente commit/deploy/QA del dueño + import del catálogo) · **Planes ⏳** — ver "Bloque B — estado" abajo |
+| **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
 
@@ -51,21 +51,16 @@ no se despliega sin A3c.**
 Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard ✓ · integración 175/175
 (`kinesoft_app`) y 171 + 4 skip (owner) · `next build` ✓ · perf sin regresiones graves ([PERF.md](PERF.md)).
 
-**Próximos pasos:**
-1. Commit del dueño del Bloque A (A2 + A3, con la migración `20260930120000_tenant_onboarding`).
-2. ~~Fix `signup-confirm-doble-salto`~~ ✅ hecho el 30-sep (el link de confirmación ya aterriza en el destino).
-3. Dueño: prerrequisitos de EXTERNAL-CONFIG §0.1 (SMTP, plantillas, Redirect URLs, "Confirm email", Upstash,
+**Próximos pasos del Bloque A** (commiteado en `ef3281f`):
+1. Dueño: prerrequisitos de EXTERNAL-CONFIG §0.1 (SMTP, plantillas, Redirect URLs, "Confirm email", Upstash,
    `SENTRY_DSN`, System Env Vars) → staging → QA → prod según el runbook. Después, el flip de RLS en prod (su
-   prerrequisito de código ya está).
-4. **B-pre** (catálogo, agenda por profesional × sede, motor de disponibilidad, agenda de Secretaria): planning
-   detallado para aprobar antes de arrancar. El stepper de alta v1 ya existe (A3c: consultorio, horarios,
-   servicios, OS, equipo); B-pre le suma sedes, horarios por profesional, prácticas del catálogo y coberturas.
+   prerrequisito de código ya está). Puede ir solo o junto con B-pre (MIGRACIONES-RUNBOOK §2.2).
 
 **Hallazgos nuevos de A2/A3, ya clasificados** (filas en [AUDIT.md §2](AUDIT.md)):
 - **C0:** los write-paths (turnos, reasignar paciente, servicios, sesión a medida) validan practitioner ∈ tenant
   pero no membresía aceptada.
-- **C:** el batch no rechaza una `idempotencyKey` de otro tenant (no escribe nada ajeno); TOCTOU de cupo 1 entre
-  chequeo e INSERT, y el pago tardío sobre una reserva vencida confirma sin revalidar el cupo.
+- **C:** el batch no rechaza una `idempotencyKey` de otro tenant (no escribe nada ajeno); el pago tardío sobre una
+  reserva vencida confirma sin revalidar el cupo. (El TOCTOU de cupo 1 en agenda y turnero se cerró en B-pre.)
 - **C0 (A3c):** `phone`/`whatsapp`/`publicEmail` del consultorio solo se editan en el stepper (falta en
   Configuración).
 - **C (A3c):** OWNER con alta sin terminar que acepta la invitación de otro tenant: en los pasos 3-6 `getActor`
@@ -75,6 +70,61 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
   expone `Session.notes` del kine al paciente; destildar el copago de una reserva pública la puede dejar vencida
   (aceptado).
 - **ops:** `.env.local` con `NODE_ENV` rompe el `next build` local (comando en TESTING.md).
+
+### Bloque B — estado (01-oct-2026)
+
+| Ola | Qué | Estado |
+|---|---|---|
+| **B1** | M-cat `20260930200000_catalog_global` → import + datos oficiales + Plataforma → Catálogo + adopción en el consultorio ∥ capabilities/authz ∥ S07 `lib/booking-schedule.ts` ∥ split de modal y drawer | ✅ |
+| **B2** | M-agenda `20261001090000_agenda_foundations` (con backfill) → motor `lib/availability/*` + loader ∥ altas con sede/franjas/PS/PP ∥ APIs de sedes, horarios, servicios y coberturas por profesional, bloqueos | ✅ |
+| **B3** | `lib/bookings.ts` sobre el motor (avisos blandos, batch mensual, lock de cupo) ∥ turnero sobre el motor ∥ actions de disponibilidad ∥ Configuración Sedes/Profesionales ∥ layout y recepción puros | ✅ |
+| **B4** | proyección liviana + recepción ∥ vista Por profesional ∥ integración de la agenda ∥ candado por día ∥ Recepción ∥ perf multi-profesional | ✅ |
+| **B5** | modal (Turno / Varias sesiones / Bloquear horario, slot picker, telemedicina) ∥ onboarding (Sede, Tu horario) ∥ turnero (sede, cobertura, primer turno) | ✅ |
+| **Cierre** | integrador → revisor → fixer → docs → gate | ✅ código (fixes de la revisión en AUDIT §Ronda 13) |
+| **B0-B4 (Planes)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor | ⏳ planning a aprobar |
+
+> ⚠️ **IDs que chocan:** las olas internas de B-pre se llamaron B1-B5 (y así las citan los comentarios del código:
+> "B1.7", "B3.1", "B4.6"…); no son las olas **B0-B4 de Planes**. Tampoco son las "Ola B2 (RLS)" de la Fase B vieja.
+
+Detalle y evidencia en [AUDIT.md §Ronda 13](AUDIT.md); arquitectura en [ARCHITECTURE.md §Agenda profesional y
+catálogo](ARCHITECTURE.md); QA en [QA.md §B-pre](QA.md); deploy en [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md).
+⚠️ **Dos migraciones nuevas** (`catalog_global`, `agenda_foundations`).
+
+Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · guard ✓ · integración 395/395
+(`kinesoft_app`) y 379 + 16 skip (owner) · `next build` ✓ · perf B4.6 ([PERF.md](PERF.md)).
+
+**Próximos pasos:**
+1. Dueño: commit de B-pre → staging (migraciones + prechecks + conteos) → QA de [QA.md §B-pre](QA.md) con
+   `TZ=UTC` → import del catálogo en staging → prod según MIGRACIONES-RUNBOOK §2.2 → import en prod + "Refrescar
+   catálogo".
+2. **Planes (B0-B4)** sobre el motor: el batch de Planes usa `expandDates` + `classifyBatchInstant`, bloqueos
+   duros, `(practitionerId, serviceId)` + `locationId` (ADR-003). Planning detallado para aprobar antes de arrancar.
+3. **C1 perf** (en paralelo cuando haya lugar): payload de /agenda (~1 MB/semana), batch y `createBooking` en una
+   tx, `weekOccupancy`, bundles sobre presupuesto, harness de EXPLAIN con literales (PERF.md §B4.6).
+4. Contract posterior a B-pre (migración propia, después de que B-pre esté en prod): `Service.practitionerId`,
+   prefijo `[SOBRETURNO]`, `Tenant.businessHours*`, `lib/booking-schedule.ts`.
+
+**Decisiones para Martin** (con recomendación):
+- `patientCondition` ya no se ve en el drawer ni en Lista con la proyección liviana → **aceptar** (es clínico y
+  pesaba en la carga de la semana).
+- (C0) El profesional de un usuario BILLING aparece en "cualquier profesional" y en la agenda → recomendado
+  excluirlo en C0 junto con el login de Secretaria.
+- `billing.manage` no está en PRACTITIONER → decidir antes de exigirlo en cobros si el profesional cobra en el
+  consultorio (hoy ninguna action lo exige: no cambia nada).
+- Zoom por usuario (`agendaPrefs.zoom`) vs `Tenant.agendaSlotMinutes` para Día/Semana → C1; recomendado: el del
+  usuario manda, el del tenant es el default.
+- Las 14 decisiones tomadas por el dev senior en B-pre (bloqueo blando para el staff y duro en turnero/Planes;
+  fuera de horario solo avisa; recepción con timestamps; mensual = mismo día ajustado; cupo profesional +
+  servicio; PS sobre Service; insurer/servicio nuevo habilitado para todos; candado "todos" = una fila null;
+  telemedicina por turno; sin feriados automáticos; precio por plan → D; seed del benchmark solo nombres; vista
+  Por profesional para todos; prototipo no bloqueante) quedan revisables. Lo que Martin apruebe o cambie se asienta en
+  el §9 del plan vigente.
+
+**Hallazgos nuevos de B-pre** (filas en [AUDIT.md §2 "Hallazgos de B-pre"](AUDIT.md)): C1 perf (payload, batch,
+`createBooking`, `previewRecurrence` mensual, `weekOccupancy`, bundles, harness EXPLAIN, `Coverage.patientId`),
+C1 (zoom en Día/Semana, `StatusTag`/`fmtMoney` duplicados), C (`.booking-body`, texto fijo del turnero,
+`PUBLIC_OVERLAP_LOOKBACK_MS`), C0 (login de Secretaria sin Practitioner), curado del catálogo (37 siglas ambiguas,
+Sancor 1000/1500, especialidades de Mendoza). `cupo-1-toctou` quedó cerrado en agenda y turnero.
 
 ## Estado de ejecución — cómo leer las marcas
 
@@ -91,7 +141,7 @@ Cada ola/sesión lleva una marca, verificada contra
 > dueño** y vive en [QA.md](QA.md) (una sección por ronda). Una sesión puede estar ✅ en código y
 > todavía tener su checklist de QA sin tildar.
 
-*Última pasada de marcado: **2026-09-30**, sobre las rondas 1-12 (Bloque A2/A3).*
+*Última pasada de marcado: **2026-10-01**, sobre las rondas 1-13 (Bloque A2/A3 y B-pre).*
 
 ## Cómo se pilotea una sesión
 
@@ -402,7 +452,7 @@ cambio de comportamiento** (QA visual + tsc).
 > `rol-db-sin-bypassrls` sin `cliente-tenant-unico-guc`, "Múltiples turnos" pasa a fallar en
 > silencio. Serializar estricto.
 
-### Ola 2.3 — Multi-profesional completo · ⏳ pendiente
+### Ola 2.3 — Multi-profesional completo · ⏳ pendiente (absorbida por C0; la matriz de capabilities y la agenda multi-profesional salieron en B-pre)
 
 > **Verificado 2026-08-15:** `Practitioner.userId` **sigue `@unique`** (schema:130), `Actor` no
 > lleva `role` (`lib/session.ts:40-50`), la cookie `kine_tenant` **solo se lee** (`session.ts:136`,
@@ -411,8 +461,10 @@ cambio de comportamiento** (QA visual + tsc).
 - ⏳ **`practitioner-multi-tenant`** *(migración)* — `@@unique([tenantId,userId])`,
   `UserProfile.practitioner` → array, accept-action crea siempre `Practitioner`, fix
   `scripts/create-tenant.ts`. Cierra `practitioner-userid-unique-blocks-multitenant`. Dep: Ola 2.2.
-- ⏳ **`capabilities-matrix`** — Matriz central de capabilities por rol (extender `lib/plan-gating.ts`;
-  `Actor` lleva `role`). Cierra `role-gating-disperso-sin-matriz-central`. *Foundation de S13/S18.*
+- 🟡 **`capabilities-matrix`** — ✅ hecha en B-pre B1.7 (`lib/capabilities.ts` + `lib/authz.ts`, adoptada en
+  settings/servicios/OS/pacientes/configuración y en la agenda). Falta en C0: que `Actor` lleve el rol (hoy se
+  resuelve con `getMembershipRole`) y los gates de cobros (`billing.manage`). Cierra en parte
+  `role-gating-disperso-sin-matriz-central`.
 - ⏳ **`roles-assistant-billing`** — Capabilities reales para ASSISTANT (recepcionista) / BILLING; no
   crear `Practitioner` bookeable para roles no clínicos. Cierra `roles-assistant-billing-cosmeticos`.
   Dep: `capabilities-matrix`, `practitioner-multi-tenant`.

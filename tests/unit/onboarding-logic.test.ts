@@ -1,11 +1,16 @@
 /**
  * A3c-S-signup — lógica pura del guard de la app, del stepper y del slug.
+ * B5.5 ONB — pasos Sede y Tu horario: retome, saltos y "semana propia".
  */
 import { describe, it, expect } from "vitest";
 import {
   decideAppGate,
   deriveResumeStep,
+  isCustomSchedule,
   isValidSlug,
+  maxReachableStep,
+  ONBOARDING_STEPS,
+  STEP,
   pickFreeSlug,
   resolveStep,
   slugify,
@@ -45,39 +50,117 @@ describe("decideAppGate", () => {
 
 const prog = (p: Partial<OnboardingProgress>): OnboardingProgress => ({
   hasTenant: true,
+  locationReady: false,
+  ownScheduleSaved: false,
   servicesCount: 0,
   insurersCount: 0,
   invitationsCount: 0,
   ...p,
 });
 
+describe("ONBOARDING_STEPS / STEP", () => {
+  it("orden del alta: cuenta, consultorio, sede, horario, tu horario, servicios, OS, equipo, listo", () => {
+    expect(ONBOARDING_STEPS.map((s) => s.key)).toEqual([
+      "account", "clinic", "location", "hours", "myHours", "services", "insurers", "team", "done",
+    ]);
+    // Numeración contigua desde 1 (el riel y "Paso N de M" dependen de eso).
+    ONBOARDING_STEPS.forEach((s, i) => expect(s.n).toBe(i + 1));
+  });
+
+  it("STEP mapea cada clave a su número y el último es Listo", () => {
+    expect(STEP).toEqual({ clinic: 2, location: 3, hours: 4, myHours: 5, services: 6, insurers: 7, team: 8, done: 9 });
+    expect(ONBOARDING_STEPS[ONBOARDING_STEPS.length - 1].key).toBe("done");
+  });
+});
+
 describe("deriveResumeStep / resolveStep", () => {
-  it("retoma según lo cargado", () => {
-    expect(deriveResumeStep(prog({ hasTenant: false }))).toBe(2);
-    expect(deriveResumeStep(prog({}))).toBe(3);
-    expect(deriveResumeStep(prog({ servicesCount: 2 }))).toBe(5);
-    expect(deriveResumeStep(prog({ servicesCount: 2, insurersCount: 1 }))).toBe(6);
-    expect(deriveResumeStep(prog({ servicesCount: 2, invitationsCount: 1 }))).toBe(7);
+  it("retoma en el paso siguiente a lo último cargado", () => {
+    expect(deriveResumeStep(prog({ hasTenant: false }))).toBe(STEP.clinic);
+    expect(deriveResumeStep(prog({}))).toBe(STEP.location);
+    expect(deriveResumeStep(prog({ locationReady: true }))).toBe(STEP.hours);
+    expect(deriveResumeStep(prog({ locationReady: true, ownScheduleSaved: true }))).toBe(STEP.services);
+    expect(deriveResumeStep(prog({ locationReady: true, ownScheduleSaved: true, servicesCount: 2 }))).toBe(STEP.insurers);
+    expect(
+      deriveResumeStep(prog({ locationReady: true, ownScheduleSaved: true, servicesCount: 2, insurersCount: 1 }))
+    ).toBe(STEP.team);
+    expect(deriveResumeStep(prog({ servicesCount: 2, invitationsCount: 1 }))).toBe(STEP.done);
   });
 
-  it("sin tenant solo existe el paso 2", () => {
-    for (const s of ["3", "5", "7"]) expect(resolveStep(s, prog({ hasTenant: false }))).toBe(2);
+  it("es monótona: un dato más adelante nunca hace retroceder el retome", () => {
+    // Alta abierta antes de B-pre: servicios cargados, sede sin dirección y
+    // la plantilla del alta → no vuelve a Sede (queda en el riel y el resumen).
+    expect(deriveResumeStep(prog({ servicesCount: 1 }))).toBe(STEP.insurers);
+    // Semana guardada sin haber puesto la dirección (saltó desde el riel).
+    expect(deriveResumeStep(prog({ ownScheduleSaved: true }))).toBe(STEP.services);
+    const flags: Array<Partial<OnboardingProgress>> = [
+      {},
+      { locationReady: true },
+      { ownScheduleSaved: true },
+      { servicesCount: 1 },
+      { insurersCount: 1, servicesCount: 1 },
+      { invitationsCount: 1, servicesCount: 1 },
+    ];
+    for (const base of flags) {
+      for (const extra of flags) {
+        const a = deriveResumeStep(prog(base));
+        const b = deriveResumeStep(prog({ ...base, ...extra }));
+        expect(b, JSON.stringify({ base, extra })).toBeGreaterThanOrEqual(a);
+      }
+    }
   });
 
-  it("sin servicios no se pasa del 4", () => {
-    expect(resolveStep("7", prog({}))).toBe(4);
-    expect(resolveStep("4", prog({}))).toBe(4);
-    expect(resolveStep("2", prog({}))).toBe(2);
+  it("sin tenant solo existe Consultorio", () => {
+    for (const s of ["3", "5", "7", "9"]) expect(resolveStep(s, prog({ hasTenant: false }))).toBe(STEP.clinic);
+  });
+
+  it("sin servicios no se pasa de Servicios, pero Sede y Tu horario se pueden abrir", () => {
+    expect(resolveStep(String(STEP.done), prog({}))).toBe(STEP.services);
+    expect(resolveStep(String(STEP.insurers), prog({}))).toBe(STEP.services);
+    expect(resolveStep(String(STEP.services), prog({}))).toBe(STEP.services);
+    expect(resolveStep(String(STEP.location), prog({}))).toBe(STEP.location);
+    expect(resolveStep(String(STEP.myHours), prog({}))).toBe(STEP.myHours);
+    expect(resolveStep(String(STEP.clinic), prog({}))).toBe(STEP.clinic);
   });
 
   it("step inválido o fuera de rango → el paso derivado", () => {
-    for (const s of [undefined, null, "", "abc", "1", "8", "2.5"]) {
-      expect(resolveStep(s, prog({ servicesCount: 1 }))).toBe(5);
+    for (const s of [undefined, null, "", "abc", "1", "10", "2.5"]) {
+      expect(resolveStep(s, prog({ servicesCount: 1 }))).toBe(STEP.insurers);
     }
   });
 
   it("con servicios se puede volver a cualquier paso", () => {
-    for (const n of [2, 3, 4, 5, 6, 7]) expect(resolveStep(String(n), prog({ servicesCount: 1 }))).toBe(n);
+    for (const n of [2, 3, 4, 5, 6, 7, 8, 9]) expect(resolveStep(String(n), prog({ servicesCount: 1 }))).toBe(n);
+  });
+});
+
+describe("maxReachableStep (riel)", () => {
+  it("sin tenant: solo Consultorio; sin servicios: hasta Servicios; con servicios: todo", () => {
+    expect(maxReachableStep(prog({ hasTenant: false }))).toBe(STEP.clinic);
+    expect(maxReachableStep(prog({}))).toBe(STEP.services);
+    expect(maxReachableStep(prog({ locationReady: true, ownScheduleSaved: true }))).toBe(STEP.services);
+    expect(maxReachableStep(prog({ servicesCount: 1 }))).toBe(STEP.done);
+  });
+});
+
+describe("isCustomSchedule", () => {
+  const def = (dow: number) => `psch_default_${dow}`;
+
+  it("la plantilla del alta (ids determinísticos) no cuenta como semana propia", () => {
+    const rows = [1, 2, 3, 4, 5, 6].map((dow) => ({ id: def(dow), dow }));
+    expect(isCustomSchedule(rows, def)).toBe(false);
+  });
+
+  it("sin franjas (horario heredado del consultorio) tampoco", () => {
+    expect(isCustomSchedule([], def)).toBe(false);
+  });
+
+  it("una fila con otro id = guardada a mano (savePractitionerWeek reemplaza con cuids)", () => {
+    expect(isCustomSchedule([{ id: "ckabc123", dow: 1 }], def)).toBe(true);
+    expect(isCustomSchedule([{ id: def(1), dow: 1 }, { id: "ckxyz", dow: 1 }], def)).toBe(true);
+  });
+
+  it("el id determinístico de OTRO día no se confunde (dow 1 con el id del dow 2)", () => {
+    expect(isCustomSchedule([{ id: def(2), dow: 1 }], def)).toBe(true);
   });
 });
 

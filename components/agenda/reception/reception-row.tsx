@@ -1,0 +1,185 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { IconActivity, IconCheck, IconClock, IconUsers, IconX } from "@/components/ui/icons";
+import { PractitionerBadge } from "@/components/agenda/grid/practitioner-badge";
+import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import {
+  RECEPTION_ACTION_LABEL,
+  RECEPTION_STATE_LABEL,
+  type ReceptionAction,
+  type ReceptionEntry,
+  type ReceptionState,
+} from "@/lib/reception-state";
+import { stateTagText, waitText } from "@/lib/reception-view-state";
+import { fmtHour, type BookingDTO } from "../agenda-utils";
+
+/**
+ * Una fila del modo Recepción (B4.5). Es un `<tr>` de la tabla de
+ * `ReceptionView`; debajo de 640 px el CSS de la vista la convierte en card
+ * (cada celda con su `data-label` como rótulo).
+ *
+ * Color nunca es el único canal (AGENTS §5): el estado lleva ícono + texto,
+ * el profesional va con iniciales + nombre, y el servicio con su punto de
+ * color + nombre escrito.
+ */
+
+type StateStyle = { icon: ReactNode; bg: string; fg: string; border?: string };
+
+// Fondo = estado, igual que en la grilla. Los tonos salen de los pills de
+// `statusPill` (list-view): ámbar para lo que requiere atención, verde para
+// lo terminado, gris para lo que ya no cuenta.
+const STATE_STYLE: Record<ReceptionState, StateStyle> = {
+  "por-llegar": { icon: <IconClock size={11} stroke={2.4} />, bg: "rgba(31,79,190,0.08)", fg: "var(--sky-700)" },
+  demorado: { icon: <IconClock size={11} stroke={2.6} />, bg: "rgba(255,176,32,0.2)", fg: "#9A5B00", border: "1px solid rgba(154,91,0,0.35)" },
+  "en-sala": { icon: <IconUsers size={11} stroke={2.4} />, bg: "rgba(200,245,100,0.45)", fg: "var(--navy-900)" },
+  "en-atencion": { icon: <IconActivity size={11} stroke={2.4} />, bg: "var(--navy-900)", fg: "#fff" },
+  atendido: { icon: <IconCheck size={11} stroke={3} />, bg: "rgba(54,179,126,0.14)", fg: "#1F7A52" },
+  ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "rgba(255,176,32,0.12)", fg: "#9A5B00", border: "1px dashed rgba(154,91,0,0.4)" },
+  cancelado: { icon: <IconX size={11} stroke={2.6} />, bg: "rgba(15,30,51,0.05)", fg: "var(--navy-500)" },
+};
+
+export function ReceptionStateTag({ entry }: { entry: Pick<ReceptionEntry<BookingDTO>, "state" | "waitingMinutes" | "lateMinutes"> }) {
+  const s = STATE_STYLE[entry.state];
+  return (
+    <span
+      className="rcp-tag"
+      data-state={entry.state}
+      title={RECEPTION_STATE_LABEL[entry.state]}
+      style={{ background: s.bg, color: s.fg, border: s.border ?? "1px solid transparent" }}
+    >
+      <span aria-hidden>{s.icon}</span>
+      {stateTagText(entry)}
+    </span>
+  );
+}
+
+/** Qué pasa con el estado tras "Deshacer", para el aria-label del botón. */
+const UNDO_HINT: Partial<Record<ReceptionState, string>> = {
+  "en-sala": "vuelve a Por llegar",
+  "en-atencion": "vuelve a En sala",
+  atendido: "vuelve al estado anterior",
+  ausente: "vuelve al estado anterior",
+};
+
+export function ReceptionRow({
+  entry,
+  actions,
+  practitioner,
+  now,
+  canOperate,
+  pending,
+  onAction,
+  onOpen,
+}: {
+  entry: ReceptionEntry<BookingDTO>;
+  /** Acciones a mostrar (ya filtradas por día con `visibleActions`). */
+  actions: ReceptionAction[];
+  practitioner: { name: string; initials: string } | null;
+  now: Date;
+  /** false → sin columna de acciones (la vista muestra el aviso de solo lectura). */
+  canOperate: boolean;
+  /** Hay una action en vuelo para esta fila: botones deshabilitados. */
+  pending: boolean;
+  onAction: (b: BookingDTO, action: ReceptionAction) => void;
+  onOpen: (b: BookingDTO) => void;
+}) {
+  const b = entry.row;
+  const time = fmtHour(new Date(b.scheduledFor));
+  const guest = b.patientId == null;
+  const who = `${b.patientName}, ${time}`;
+  const wait = waitText(b, entry.state, now);
+  const cancelled = entry.state === "cancelado";
+
+  return (
+    <tr
+      className="rcp-row"
+      data-state={entry.state}
+      data-highlight={entry.highlight || undefined}
+      aria-busy={pending || undefined}
+      style={{ opacity: cancelled ? 0.55 : pending ? 0.75 : 1 }}
+    >
+      <td data-label="Hora" className="rcp-time k-mono">
+        {time}
+      </td>
+      <th scope="row" data-label="Paciente" className="rcp-patient">
+        <button
+          type="button"
+          className="rcp-link"
+          onClick={() => onOpen(b)}
+          aria-label={`Abrir el turno de ${who}`}
+        >
+          {b.patientName}
+        </button>
+        {guest && <span className="rcp-guest">Invitado</span>}
+        {b.isOverbooked && <span className="rcp-guest">Sobreturno</span>}
+      </th>
+      <td data-label="Servicio">
+        <span className="rcp-service">
+          <span
+            aria-hidden
+            className="rcp-dot"
+            style={{ background: b.serviceColor ?? SERVICE_COLOR_FALLBACK }}
+          />
+          <span className="rcp-ellipsis">{b.serviceName}</span>
+        </span>
+      </td>
+      <td data-label="Profesional">
+        {practitioner ? (
+          <span className="rcp-service">
+            <PractitionerBadge initials={practitioner.initials} name={practitioner.name} size={24} decorative />
+            <span className="rcp-ellipsis">{practitioner.name}</span>
+          </span>
+        ) : (
+          <span style={{ color: "var(--navy-300)" }}>—</span>
+        )}
+      </td>
+      <td data-label="Estado">
+        <ReceptionStateTag entry={entry} />
+      </td>
+      <td data-label="Espera" className="k-mono rcp-wait">
+        {wait ?? <span style={{ color: "var(--navy-300)" }}>—</span>}
+      </td>
+      {canOperate && (
+      <td data-label="Acciones" className="rcp-actions-cell">
+        {!cancelled ? (
+          <div className="rcp-actions">
+            {actions.map((a) => (
+              <button
+                key={a}
+                type="button"
+                className={a === "deshacer" ? "rcp-btn rcp-btn-ghost" : a === "llego" || a === "atendido" ? "rcp-btn rcp-btn-primary" : "rcp-btn"}
+                disabled={pending}
+                onClick={() => onAction(b, a)}
+                aria-label={
+                  a === "deshacer"
+                    ? `Deshacer (${UNDO_HINT[entry.state] ?? "vuelve un paso"}): ${who}`
+                    : `Marcar ${RECEPTION_ACTION_LABEL[a]}: ${who}`
+                }
+              >
+                {RECEPTION_ACTION_LABEL[a]}
+              </button>
+            ))}
+            {/* Cobro desde recepción: C0 (Secretaria). Visible para que se sepa
+                que viene; aria-disabled en vez de disabled para que el tooltip
+                se vea al pasar el mouse. */}
+            <button
+              type="button"
+              className="rcp-btn rcp-btn-ghost"
+              aria-disabled="true"
+              title="Próximamente"
+              aria-label={`Cobrar (próximamente): ${who}`}
+              onClick={(e) => e.preventDefault()}
+              style={{ cursor: "not-allowed", opacity: 0.55 }}
+            >
+              Cobrar
+            </button>
+          </div>
+        ) : (
+          <span style={{ color: "var(--navy-300)" }}>—</span>
+        )}
+      </td>
+      )}
+    </tr>
+  );
+}

@@ -12,9 +12,13 @@ import { prisma } from "@/lib/db";
 import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 import {
+  AgendaViewPrefsPatchSchema,
   DEFAULT_PREFERENCES,
   KPI_OPTIONS,
+  mergeAgendaViewPrefs,
+  sanitizeAgendaViewPrefs,
   sanitizeCatalogPrefs,
+  type AgendaViewPrefs,
   type KpiKey,
   type Palette,
   type Preferences,
@@ -39,6 +43,8 @@ export async function getUserPreferences(): Promise<Preferences> {
     agendaShowSunday: row.agendaShowSunday ?? DEFAULT_PREFERENCES.agendaShowSunday,
     // Untrusted JSON blob → coerced to a valid shape (never throws).
     catalogPrefs: sanitizeCatalogPrefs(row.catalogPrefs),
+    // B4.2: estado de la agenda multi-profesional; mismo trato (total, por campo).
+    agendaView: sanitizeAgendaViewPrefs(row.agendaPrefs),
   };
 }
 
@@ -58,8 +64,20 @@ export async function updateUserPreferences(
       return { ok: false, error: "KPI inválido." };
     }
   }
+  // B4.2: `agendaView` se valida estricto y se escribe SOLO si vino en el patch
+  // (ver abajo); el resto del flujo no cambia.
+  let agendaPatch: ReturnType<typeof AgendaViewPrefsPatchSchema.parse> | null = null;
+  if (patch.agendaView !== undefined) {
+    const parsed = AgendaViewPrefsPatchSchema.safeParse(patch.agendaView);
+    if (!parsed.success) return { ok: false, error: "Preferencias de agenda inválidas." };
+    agendaPatch = parsed.data;
+  }
   const current = await getUserPreferences();
-  const merged: Preferences = { ...current, ...patch };
+  const merged: Preferences = {
+    ...current,
+    ...patch,
+    agendaView: agendaPatch ? mergeAgendaViewPrefs(current.agendaView, agendaPatch) : current.agendaView,
+  };
   const writable = {
     palette: merged.palette,
     pinnedKpis: merged.pinnedKpis,
@@ -69,6 +87,10 @@ export async function updateUserPreferences(
     agendaShowSunday: merged.agendaShowSunday,
     // Re-sanitised on the way in too, so a malformed client patch can't persist.
     catalogPrefs: sanitizeCatalogPrefs(merged.catalogPrefs),
+    // Solo si el patch lo trajo: este flujo lee-y-reescribe todas las columnas,
+    // y no queremos pisar un `updateAgendaViewPrefs` concurrente (toggle de
+    // favorito mientras el panel de Tweaks guarda otra cosa).
+    ...(agendaPatch ? { agendaPrefs: merged.agendaView } : {}),
   };
   await prisma.userPreferences.upsert({
     where: { userId: actor.userId },
@@ -80,4 +102,38 @@ export async function updateUserPreferences(
   // /agenda here would just force a wasteful refetch on every toggle.
   revalidatePath("/dashboard");
   return { ok: true, data: merged };
+}
+
+/**
+ * B4.2 AG-resource: guarda un patch de `UserPreferences.agendaPrefs` (modo
+ * Por día ↔ Por profesional, zoom 15/30/60, densidad, favoritos, sede).
+ *
+ * Escribe SOLO esa columna (no el lee-y-reescribe de `updateUserPreferences`),
+ * porque la agenda dispara varios toggles seguidos y no debe pisar la paleta o
+ * los KPIs. El merge es contra lo guardado en la fila, no contra el estado del
+ * cliente. Sin `revalidatePath`: la agenda aplica el cambio en vivo; un
+ * refetch de /agenda por cada toggle sería puro costo (mismo criterio que los
+ * toggles de la semana).
+ *
+ * `UserPreferences` es por usuario (PK `userId`), no por tenant: la escritura
+ * va con `where: { userId }` del Actor, igual que `updateUserPreferences`.
+ */
+export async function updateAgendaViewPrefs(
+  patch: unknown
+): Promise<ActionResult<AgendaViewPrefs>> {
+  const actor = await getActor();
+  if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  const parsed = AgendaViewPrefsPatchSchema.safeParse(patch);
+  if (!parsed.success) return { ok: false, error: "Preferencias de agenda inválidas." };
+  const row = await prisma.userPreferences.findUnique({
+    where: { userId: actor.userId },
+    select: { agendaPrefs: true },
+  });
+  const next = mergeAgendaViewPrefs(sanitizeAgendaViewPrefs(row?.agendaPrefs), parsed.data);
+  await prisma.userPreferences.upsert({
+    where: { userId: actor.userId },
+    create: { userId: actor.userId, tenantId: actor.tenantId, agendaPrefs: next },
+    update: { agendaPrefs: next },
+  });
+  return { ok: true, data: next };
 }

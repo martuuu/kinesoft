@@ -4,8 +4,9 @@ import { OnboardingShell, StepHeader } from "@/components/onboarding/onboarding-
 import { StepClinic, StepDone, StepHours } from "@/components/onboarding/steps-basic";
 import { StepInsurers, StepServices } from "@/components/onboarding/steps-catalog";
 import { PendingInvites, StepTeam } from "@/components/onboarding/step-team";
+import { StepLocation, StepMyHours } from "@/components/onboarding/steps-agenda";
 import { getSessionUser, loadOnboardingContext } from "@/lib/onboarding-internal";
-import { deriveResumeStep, resolveStep } from "@/lib/onboarding-logic";
+import { maxReachableStep, resolveStep, STEP } from "@/lib/onboarding-logic";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Alta del consultorio · KineSoft" };
@@ -16,7 +17,9 @@ export const metadata = { title: "Alta del consultorio · KineSoft" };
  * lo tiene sin terminar), y este árbol no puede depender de un Actor.
  *
  * El paso se toma de `?step=` y se acota con lo que ya existe
- * (`resolveStep`): sin tenant solo hay paso 2; sin servicios no se pasa del 4.
+ * (`resolveStep`): sin tenant solo hay Consultorio; sin servicios no se pasa
+ * de Servicios. Un tenant con el alta cerrada nunca llega acá
+ * (`loadOnboardingContext` → "done" → /dashboard).
  */
 export default async function OnboardingPage({
   searchParams,
@@ -57,28 +60,32 @@ export default async function OnboardingPage({
   }
 
   const step = resolveStep(searchParams.step, ctx.progress);
-  // Hasta dónde se puede saltar desde el riel: lo ya recorrido según el estado.
-  const maxReachable = ctx.progress.hasTenant
-    ? ctx.progress.servicesCount > 0
-      ? 7
-      : Math.max(4, deriveResumeStep(ctx.progress))
-    : 2;
 
   return (
-    <OnboardingShell current={step} maxReachable={maxReachable}>
-      {step === 2 || !ctx.tenant ? (
+    // Hasta dónde se puede saltar desde el riel: lo ya recorrido según el estado.
+    <OnboardingShell current={step} maxReachable={maxReachableStep(ctx.progress)}>
+      {step === STEP.clinic || !ctx.tenant ? (
         <StepClinic tenant={ctx.tenant} patientIdentity={ctx.patientIdentity} />
-      ) : step === 3 ? (
+      ) : step === STEP.location ? (
+        <StepLocation location={ctx.location} />
+      ) : step === STEP.hours ? (
         <StepHours tenant={ctx.tenant} />
-      ) : step === 4 ? (
+      ) : step === STEP.myHours && ctx.schedule ? (
+        // key = versión: si la semana cambió (otra pestaña, conflicto), el
+        // refresh remonta el editor con lo guardado en vez de mostrar el borrador viejo.
+        <StepMyHours key={ctx.schedule.view.version ?? "plantilla"} schedule={ctx.schedule} locations={ctx.locations} />
+      ) : step === STEP.services || step === STEP.myHours ? (
+        // (Tu horario sin practitioner propio no debería pasar: el bootstrap lo crea.)
         <StepServices services={ctx.services} />
-      ) : step === 5 ? (
+      ) : step === STEP.insurers ? (
         <StepInsurers insurers={ctx.insurers} />
-      ) : step === 6 ? (
+      ) : step === STEP.team ? (
         <StepTeam invitations={ctx.invitations} />
       ) : (
         <StepDone
           tenant={ctx.tenant}
+          location={ctx.location}
+          schedule={ctx.schedule}
           servicesCount={ctx.services.length}
           insurers={ctx.insurers}
           invitationsCount={ctx.invitations.length}

@@ -10,6 +10,7 @@
 |---|---|---|
 | Cargas de página + write-paths | `npm run test:perf -- tests/perf/loaders.perf.test.ts` | Docker local (:5433). Nunca prod |
 | Presión de pool | `npm run test:perf -- tests/perf/pool-pressure.perf.test.ts` | Docker local |
+| Agenda multi-profesional (B4.6) | `npm run test:perf -- tests/perf/agenda-multi.perf.test.ts` | Docker local |
 | Bundle por ruta | `npx next build && npm run perf:bundle` (`-- --write-baseline` para regrabar) | local y CI (paso "Presupuesto de bundle", solo reporte) |
 
 - **Harness** (`tests/helpers/query-counter.ts`): instrumenta los clientes `prisma` y `prismaService` de `lib/db` con
@@ -84,6 +85,77 @@ Parte del aumento general (~2 kB por ruta) es el upgrade de Next 14.2.18 → 14.
 ~7 kB y quedó por encima de los 180 kB (en A1 estaba debajo): el reporte de CI es solo informativo, así que no
 rompe el build; el recorte va a C1 (presupuesto de bundle; framer-motion en el root layout ya estaba anotado).
 
+## B4.6 — agenda multi-profesional (B-pre, 01-oct-2026)
+
+`tests/perf/agenda-multi.perf.test.ts` → `tests/perf/agenda-multi.json`. Rol `kinesoft_app` (RLS), Docker local,
+mediana de 3 corridas. Fixture efímera de **volumen de Secretaria**: 6 profesionales (3 de gimnasio con cupo, 3 de
+osteopatía), 2 sedes, 1.000 pacientes, 6.885 turnos, **1.365 en la semana medida** (28-sep-2026).
+
+| Escenario | Statements | Tx | DB ms | Wall ms | A1 (st/tx/wall) | Resultado |
+|---|---|---|---|---|---|---|
+| `listBookingsInRange` (vieja), semana, 6 prof. | 14 | 3 | 11 | 78 | 14/3/69 | 1.365 filas, 786 kB |
+| `listAgendaBookings` (nueva), semana, 6 prof. | 15 | 2 | 17 | 60 | — | 1.365 filas, **1.036 kB** |
+| · solo sede principal | 15 | 2 | 12 | 57 | — | 1.275 filas, 967 kB |
+| · 2 profesionales | 15 | 2 | 6 | 34 | — | 455 filas, 345 kB |
+| GET /agenda con la proyección vieja | 84 | 14 | 94 | 109 | 48/9/126 | |
+| GET /agenda como queda (11 loaders) | 85 | 13 | 100 | 81 | 48/9/126 | |
+| `getAgendaAvailability`, semana | 17 | 2 | 4 | 31 | — | 6 prof. × 7 días, 3 bloqueos |
+| `listAvailableSlots` "cualquier profesional" | 21-22 | 2 | 3-4 | 29-32 | — | 3 elegibles, primer libre |
+| `listAvailableSlots` un profesional | 20 | 2 | 0 | 12 | — | 38 slots |
+| `previewRecurrence` semanal × 20 | 22 | 2 | 2 | 47 | — | |
+| `previewRecurrence` **mensual × 20** | **106** | 2 | 0 | 52 | — | → C1 |
+| `createBooking` | **34** | 5 | 0 | 20 | 12/7/16 | → C1 |
+| `createBooking` con conflicto | 44 | 5 | 0 | 27 | — | aviso de sobreturno |
+| `createBookingsBatch` × 20 | **166** | **22** | 0-2 | 95-113 | 68/23/74 | → C1 |
+
+CPU del layout (`lib/agenda-layout.ts`, presupuesto de frame 16 ms):
+
+| Escenario | Turnos | Celdas | Mediana | p95 | Máx |
+|---|---|---|---|---|---|
+| `buildPractitionerColumns` día, zoom 30 | 273 | 144 | 1,36 ms | 1,63 | 1,9 |
+| ídem zoom 15 | 273 | 288 | 1,45 ms | 1,8 | 2,15 |
+| ídem ×2 turnos | 546 | 288 | 2,37 ms | 2,77 | 3,26 |
+| ídem ×4 turnos | 1.092 | 288 | 5,14 ms | 5,66 | 5,83 |
+| `weekOccupancy` semana, zoom 30 | 1.365 | 168 | **9,32 ms** | 9,74 | 9,75 |
+
+Lectura:
+- **Lecturas de 12 a 60 ms y layout < 2 ms por día cargado: no hace falta virtualizar** la vista Por profesional.
+- La proyección nueva evita el grafo paciente → coberturas → programas (60 vs 78 ms), pero el **payload de la
+  semana es ~1 MB** (suma sede, recepción y telemedicina por fila) → C1 (`perf-agenda-payload-1mb`).
+- GET /agenda pasó de 48 a 85 statements (11 loaders: sedes, franjas, disponibilidad, prefs) con menos wall-clock
+  que la proyección vieja en el mismo fixture.
+- `createBooking` 12 → 34 statements y el batch 68 → 166: el motor carga franjas/bloqueos/PS y el lock de cupo, más
+  el re-chequeo de bloqueos dentro de la tx. Siguen < 120 ms; juntar en una tx es C1 (`perf-batch-una-tx`,
+  `perf-create-booking-34-statements`). `previewRecurrence` mensual (106) carga por mes → C1.
+- `weekOccupancy` es O(turnos + filas) (~10 ms/semana): dentro del frame pero el más caro → C1.
+- ⚠️ **Falso positivo de EXPLAIN en el harness de A1.** `loaders.perf.test.ts` pasa los parámetros como `$n`
+  tipados: un `Date` viaja como `timestamptz` y Postgres castea la **columna** `timestamp(3)`, así que el índice
+  `(tenantId, scheduledFor)` deja de servir y el EXPLAIN muestra un Seq Scan que la query real de Prisma no hace.
+  El harness de B4.6 inlinea literales sin tipo (`tests/perf/agenda-multi.perf.test.ts:275-283`). **Los Seq Scan
+  de Booking del baseline de A1 pueden ser este artefacto**; pasar `loaders.perf.test.ts` a literales es C1
+  (`perf-harness-explain-params-tipados`). Los Seq Scan que todavía muestra B4.6 sobre Booking devuelven 1.365 de
+  6.885 filas del tenant (~20 %): ahí es elección legítima del planner, no el artefacto.
+- `Coverage.patientId` sin índice se re-confirmó → C1 (`missing-fk-indexes`).
+
+**Bundle al cierre de B-pre** (`next build` + `perf:bundle`, first-load gzip):
+
+| Ruta | Cierre A | B-pre | Presupuesto |
+|---|---|---|---|
+| `/agenda` | 183,8 kB | **195,3 kB** (238,4 antes de la carga diferida) | ≤ 180 → excedido |
+| `/configuracion` | — | **209,3 kB** | ≤ 180 → excedido |
+| `/pacientes/[id]` | — | 193,9 kB | ≤ 180 → excedido |
+| `/onboarding` | — | 185,1 kB | ≤ 180 → excedido |
+| `/plataforma/ejercicios` | — | 183,7 kB | ≤ 180 → excedido |
+| `/diagnostico` | — | 180,3 kB | ≤ 180 → al borde |
+| `/plataforma/catalogo/*` | — | 163,5-179,3 kB | ≤ 180 |
+| `/c/[slug]/booking` | 149,7 kB | **153,2 kB** | ≤ 150 → excedido |
+| `/signup` | — | 146,4 kB | ≤ 150 |
+| `/login` | 141,5 kB | 141,7 kB | ≤ 150 |
+
+El layout compartido creció 10-16 % (columna "vs baseline" del reporte: casi todas las rutas de la app +10-12 %).
+La carga diferida de modal, drawer, candado, Recepción y Por profesional bajó `/agenda` de 238 a 195 kB. El reporte
+de CI sigue siendo informativo; el recorte va a C1 (`bundle-sobre-presupuesto-bpre`).
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |
@@ -98,7 +170,8 @@ rompe el build; el recorte va a C1 (presupuesto de bundle; framer-motion en el r
 
 ## Bundle (first-load JS gzip, raíz + layouts + página)
 
-Baseline en `scripts/bundle-baseline.json`. Las más pesadas: `/agenda` 176,6 kB · `/pacientes/[id]` 174 kB ·
+Baseline de A1 en `scripts/bundle-baseline.json` (no se regrabó; el estado al cierre de B-pre está en §B4.6). Las
+más pesadas en A1: `/agenda` 176,6 kB · `/pacientes/[id]` 174 kB ·
 `/plataforma/ejercicios` 167 kB. Presupuesto del workspace: ≤ 180 kB. Las públicas quedan **al borde** de su
 presupuesto de 150 kB: `/c/[slug]/booking` 147,3 kB · `/signup` 143,8 kB · `/portal/*` 139-141 kB. framer-motion
 (~35 kB gz) viaja en el root layout a todas las rutas → C1.

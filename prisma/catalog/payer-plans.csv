@@ -1,0 +1,72 @@
+payerSlug,slug,name,source,sourceDate,sourceUrl
+avalian,plan-unico,Plan Único,CURATED,2026-09-30,
+avalian,clasica-plan-2,Clásica Plan 2,CURATED,2026-09-30,
+avalian,pmo,PMO,CURATED,2026-09-30,
+avalian,prepago,Prepago,CURATED,2026-09-30,
+avalian,selecta,Selecta,CURATED,2026-09-30,
+avalian,superior,Superior,CURATED,2026-09-30,
+boreal,a2,A2,CURATED,2026-09-30,
+boreal,magnun,Magnun,CURATED,2026-09-30,
+federada-salud,7,7,CURATED,2026-09-30,
+federada-salud,plan-unico,Plan Único,CURATED,2026-09-30,
+grupo-alianza-medica,todos-los-planes,Todos los planes,CURATED,2026-09-30,
+iapos,plan-unico,Plan Único,CURATED,2026-09-30,
+ioma,io-plan-a,IO Plan A,CURATED,2026-09-30,
+ioma,io-plan-b,IO Plan B,CURATED,2026-09-30,
+ioma,plan-056,Plan 056,CURATED,2026-09-30,
+osam,no-mineros,No Mineros,CURATED,2026-09-30,
+osam,plan-unico,Plan Único,CURATED,2026-09-30,
+oschoca,plan-unico,Plan Único,CURATED,2026-09-30,
+osdepym,pyme-1000,Pyme 1000,CURATED,2026-09-30,
+osdepym,pyme-2000,Pyme 2000,CURATED,2026-09-30,
+osdepym,pyme-4000,Pyme 4000,CURATED,2026-09-30,
+osdepym,visitar,Visitar,CURATED,2026-09-30,
+osdop,plan-unico,Plan Único,CURATED,2026-09-30,
+osecac,azul,Azul,CURATED,2026-09-30,
+osecac,carhue,Carhue,CURATED,2026-09-30,
+osde,210,210,CURATED,2026-09-30,https://www.osde.com.ar/novedades/te-gustaria-conocer-los-precios-de-cada-plan-de-osde
+osde,310,310,CURATED,2026-09-30,https://www.osde.com.ar/novedades/te-gustaria-conocer-los-precios-de-cada-plan-de-osde
+osde,410,410,CURATED,2026-09-30,https://www.osde.com.ar/novedades/te-gustaria-conocer-los-precios-de-cada-plan-de-osde
+osde,450,450,CURATED,2026-09-30,https://www.osde.com.ar/novedades/te-gustaria-conocer-los-precios-de-cada-plan-de-osde
+osde,510,510,CURATED,2026-09-30,https://www.osde.com.ar/novedades/te-gustaria-conocer-los-precios-de-cada-plan-de-osde
+osde,flux,Flux,CURATED,2026-09-30,https://www.osde.com.ar/planes/flux
+swiss-medical,smg02,SMG02,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG02.pdf
+swiss-medical,smg20,SMG20,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG20.pdf
+swiss-medical,smg30,SMG30,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG30.pdf
+swiss-medical,smg40,SMG40,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG40.pdf
+swiss-medical,smg50,SMG50,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG50.pdf
+swiss-medical,smg60,SMG60,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG60.pdf
+swiss-medical,smg70,SMG70,CURATED,2026-09-30,https://www.swissmedical.com.ar/smgnewsite/pag_internas/pdf/planes/SMG70.pdf
+galeno,220,220,CURATED,2026-09-30,https://www.galeno.com.ar/blog/planes-galeno-cual-es-el-plan-de-salud-ideal-para-tu-familia/
+galeno,330,330,CURATED,2026-09-30,https://www.galeno.com.ar/blog/planes-galeno-cual-es-el-plan-de-salud-ideal-para-tu-familia/
+galeno,440,440,CURATED,2026-09-30,https://www.galeno.com.ar/blog/planes-galeno-cual-es-el-plan-de-salud-ideal-para-tu-familia/
+galeno,550,550,CURATED,2026-09-30,https://www.galeno.com.ar/blog/planes-galeno-cual-es-el-plan-de-salud-ideal-para-tu-familia/
+galeno,plan-joven-18-25,Plan Joven 18-25,CURATED,2026-09-30,https://www.galeno.com.ar/blog/planes-galeno-cual-es-el-plan-de-salud-ideal-para-tu-familia/
+medife,medife-plus,Medifé+,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,bronce-classic,Bronce Classic,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,bronce,Bronce,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,plata,Plata,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,oro,Oro,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,platinum,Platinum,CURATED,2026-09-30,https://www.medife.com.ar/planes
+medife,indie,Indie,CURATED,2026-09-30,https://www.medife.com.ar/planes
+omint,omint-vos,Omint Vos,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+omint,genesis,Génesis,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+omint,clasico,Clásico,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+omint,global,Global,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+omint,premium,Premium,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+omint,comunidad,Comunidad,CURATED,2026-09-30,https://www.omint.com.ar/PlanDeSalud/PlanesOmint
+sancor-salud,1000,1000,CURATED,2026-09-30,https://sancorsalud.com.ar/planes
+sancor-salud,1500,1500,CURATED,2026-09-30,https://sancorsalud.com.ar/planes
+sancor-salud,2500,2500,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webinstitucional/assets/pdf/condiciones-supra-salud.pdf
+sancor-salud,2000,2000,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,3000,3000,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,3500,3500,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,4000,4000,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,4500,4500,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,5000,5000,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+sancor-salud,6000,6000,CURATED,2026-09-30,https://repo.sancorsalud.com.ar/webgen/assets/pdf/supra-salud/SCS-DR05232-SUF.pdf
+prevencion-salud,a1,A1,CURATED,2026-09-30,https://www.prevencionsalud.com.ar/blog/como-elegir-el-plan-de-prevencion-salud-que-mejor-se-adapte-a-vos
+prevencion-salud,a2,A2,CURATED,2026-09-30,https://www.prevencionsalud.com.ar/planes/a2
+prevencion-salud,a4,A4,CURATED,2026-09-30,https://www.prevencionsalud.com.ar/planes/a4
+prevencion-salud,a5,A5,CURATED,2026-09-30,https://www.prevencionsalud.com.ar/planes/a5
+prevencion-salud,a6,A6,CURATED,2026-09-30,https://www.prevencionsalud.com.ar/planes/a6

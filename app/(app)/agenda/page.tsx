@@ -1,94 +1,149 @@
-import { listBookingsInRange, listPractitioners, listServices } from "@/lib/bookings";
+import { listAgendaBookings, listPractitioners, listServices } from "@/lib/bookings";
 import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { AgendaClient } from "@/components/agenda/agenda-client";
+import { toBookingDTO } from "@/components/agenda/agenda-utils";
 import { getActor } from "@/lib/session";
-import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
+import { getCapabilities } from "@/lib/authz";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { listLocations } from "@/lib/locations";
+import { getAgendaAvailability } from "@/lib/availability-actions";
+import { getUserPreferences } from "@/lib/preferences";
+import { DEFAULT_AGENDA_VIEW_PREFS } from "@/lib/preferences-constants";
+import { addDays, dayWindow } from "@/lib/availability/day";
+import { practitionerInitials, practitionerOrder } from "@/lib/agenda-layout";
+import {
+  parseDayKeyParam,
+  parseSelectedPractitioners,
+  resolveAgendaView,
+  weekStartKey,
+} from "@/lib/agenda-client-state";
+import { logger } from "@/lib/logger";
 
 export const metadata = { title: "Agenda · KineSoft" };
 export const dynamic = "force-dynamic";
 
 type SP = {
   date?: string;
-  view?: "timeline" | "week" | "list";
+  view?: string;
   new?: string;
   patient?: string;
+  /** Filtro viejo de un profesional (links guardados); hoy siembra los chips. */
   practitioner?: string;
+  /** B4.3: profesionales elegidos en los chips, separados por coma (vacío = todos). */
+  pros?: string;
 };
 
-function parseDate(v?: string) {
-  if (!v) return new Date();
-  // Tag the YYYY-MM-DD as AR-local midnight (-03:00) before parsing.
-  // Without the offset, `new Date("2026-06-04T00:00:00")` is read in the
-  // host timezone: on UTC hosts (Vercel/Supabase) that instant is still
-  // 2026-06-03 21:00 in AR, so `toARDateKey(anchor)` downstream returns
-  // the *previous* day and the agenda shows the 3rd when you click the 4th.
-  // Localhost (AR tz) happened to parse it correctly, hiding the bug.
-  const d = new Date(localToARIso(`${v}T00:00:00`));
-  return Number.isNaN(d.getTime()) ? new Date() : d;
-}
-
-function startOfWeek(anchor: Date) {
-  // Compute the Monday of `anchor`'s week IN ARGENTINA TIME. Doing the
-  // math in host-local time (`setHours`/`getDay`) drifts the week start
-  // by up to a full day on UTC hosts (Vercel/Docker) — the exact trap
-  // `parseDate()` above warns about, which never got applied here. That
-  // drift was corrupting both the week-grid header (day names vs. dates)
-  // and the [from,to) range handed to `listBookingsInRange`.
-  //
-  // We derive the Monday from the AR weekday + AR date key, then build an
-  // AR-midnight instant. Subtracting whole days via `setDate` is timezone-
-  // safe because both AR and UTC are DST-free (24h per day, no wall-clock
-  // drift).
-  const mondayOffset = (toARDow(anchor) + 6) % 7; // days since Monday, AR
-  const monday = new Date(localToARIso(`${toARDateKey(anchor)}T00:00:00`));
-  monday.setDate(monday.getDate() - mondayOffset);
-  return monday;
-}
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default async function AgendaPage({ searchParams }: { searchParams: SP }) {
-  const anchor = parseDate(searchParams.date);
-  const view = searchParams.view ?? "timeline";
-  const weekStart = startOfWeek(anchor);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 7);
+  // B4.3: el día y la semana se calculan como DayKeys AR (`lib/availability/day`),
+  // no con `setDate`/`getDay` del host. `?date=` inválido → hoy AR (antes un
+  // `new Date()` del host, que en Vercel a las 22:00 AR ya es "mañana" UTC; el
+  // `toARDateKey` lo corregía, acá queda explícito).
+  const dayKey = parseDayKeyParam(searchParams.date, toARDateKey(new Date()));
+  const monday = weekStartKey(dayKey);
+  const sunday = addDays(monday, 6);
+  const weekStart = dayWindow(monday).start;
+  const weekEnd = dayWindow(sunday).end;
 
-  const practitionerFilter = searchParams.practitioner ?? null;
+  // Las cargas nuevas de B-pre (sedes, prefs de agenda, disponibilidad,
+  // capabilities) fallan SUELTAS (catch → vacío/default/null): la agenda de hoy
+  // no depende de ellas y no puede dejar de abrir porque, p. ej., un tenant
+  // viejo no tenga sede principal.
+  const locationsP = listLocations().catch((e) => {
+    logger.warn("agenda.bootstrap.listLocations_failed", { err: errMsg(e) });
+    return [];
+  });
+  const prefsP = getUserPreferences()
+    .then((p) => p.agendaView)
+    .catch((e) => {
+      logger.warn("agenda.bootstrap.getUserPreferences_failed", { err: errMsg(e) });
+      return { ...DEFAULT_AGENDA_VIEW_PREFS };
+    });
+  const capsP = getCapabilities()
+    .then((c) => [...c] as string[])
+    .catch((e) => {
+      logger.warn("agenda.bootstrap.getCapabilities_failed", { err: errMsg(e) });
+      return [] as string[];
+    });
+  // La disponibilidad depende de la sede guardada: arranca apenas están las
+  // prefs y las sedes, en paralelo con los turnos. Sede guardada que ya no
+  // existe (archivada) → todas.
+  const availabilityP = Promise.all([prefsP, locationsP]).then(async ([prefs, locations]) => {
+    const locationId = locations.some((l) => l.id === prefs.locationId) ? prefs.locationId : null;
+    try {
+      const res = await getAgendaAvailability({ from: monday, to: sunday, locationId });
+      if (!res.ok) {
+        logger.warn("agenda.bootstrap.getAgendaAvailability_failed", { err: res.error });
+        return null;
+      }
+      return res.data;
+    } catch (e) {
+      logger.warn("agenda.bootstrap.getAgendaAvailability_failed", { err: errMsg(e) });
+      return null;
+    }
+  });
+
   const [actor, bookings, services, practitioners, patients, insurers, settings] = await Promise.all([
     getActor(),
-    listBookingsInRange({
-      from: weekStart,
-      to: weekEnd,
-      practitionerId: practitionerFilter ?? undefined,
-    }),
+    // Proyección liviana (B4.1): todos los profesionales y sedes de la semana.
+    // Los chips y la sede filtran en el cliente: cambiar de profesional no
+    // vuelve al server y los chips muestran el conteo de todos.
+    listAgendaBookings({ from: weekStart, to: weekEnd }),
     listServices(),
     listPractitioners(),
     listPatients(),
     listInsurers({ onlyActive: true }),
     getTenantSettings(),
   ]);
+  const [locations, rawPrefs, capabilities, availability] = await Promise.all([
+    locationsP,
+    prefsP,
+    capsP,
+    availabilityP,
+  ]);
+
+  // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
+  // archivada no se arrastran (el JSON se guardó en otro momento).
+  const practitionerIds = practitioners.map((p) => p.id);
+  const agendaPrefs = {
+    ...rawPrefs,
+    favoritePractitionerIds: rawPrefs.favoritePractitionerIds.filter((id) => practitionerIds.includes(id)),
+    locationId: locations.some((l) => l.id === rawPrefs.locationId) ? rawPrefs.locationId : null,
+  };
+  const view = resolveAgendaView(searchParams.view, {
+    mode: agendaPrefs.mode,
+    practitionerCount: practitioners.length,
+    canReception: capabilities.includes("agenda.reception"),
+  });
 
   return (
     <AgendaClient
       view={view}
-      anchorISO={anchor.toISOString()}
-      weekStartISO={weekStart.toISOString()}
+      dayKey={dayKey}
+      weekStartKey={monday}
       autoCreate={searchParams.new === "1"}
       autoCreatePatientId={searchParams.patient ?? null}
-      practitionerFilterId={practitionerFilter}
+      initialSelectedIds={parseSelectedPractitioners(
+        { pros: searchParams.pros, practitioner: searchParams.practitioner },
+        practitionerIds
+      )}
       viewer={{ userId: actor.userId, practitionerId: actor.practitionerId }}
-      bookings={bookings.map((b) => ({
-        ...b,
-        scheduledFor: b.scheduledFor.toISOString(),
-        updatedAt: b.updatedAt.toISOString(),
-        createdAt: b.createdAt.toISOString(),
-      }))}
+      bookings={bookings.map(toBookingDTO)}
       services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color }))}
       practitioners={practitioners.map((p) => ({
         id: p.id,
         name: p.user.fullName ?? p.user.email,
       }))}
+      practitionerBadges={practitionerOrder(
+        practitioners.map((p) => {
+          const name = p.user.fullName ?? p.user.email;
+          return { id: p.id, name, initials: practitionerInitials(name) };
+        }),
+        agendaPrefs
+      )}
       patients={patients.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }))}
       insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))}
       businessHours={{
@@ -96,6 +151,10 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
         end: settings.businessHoursEnd,
         slotMinutes: settings.agendaSlotMinutes,
       }}
+      locations={locations.map((l) => ({ id: l.id, name: l.name, isPrimary: l.isPrimary }))}
+      agendaPrefs={agendaPrefs}
+      initialAvailability={availability}
+      capabilities={capabilities}
     />
   );
 }

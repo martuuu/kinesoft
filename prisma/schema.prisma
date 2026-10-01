@@ -70,6 +70,15 @@ model Tenant {
   insurers        Insurer[]
   invitations     Invitation[]
   customConditions Condition[]
+  payerPlans              PayerPlan[]
+  // B-pre M-agenda (agenda_foundations)
+  locations               Location[]
+  practitionerSchedules   PractitionerSchedule[]
+  scheduleExceptions      ScheduleException[]
+  timeBlocks              TimeBlock[]
+  practitionerServices    PractitionerService[]
+  practitionerPayers      PractitionerPayer[]
+  practitionerSpecialties PractitionerSpecialty[]
 
   @@index([slug])
 }
@@ -152,6 +161,13 @@ model Practitioner {
   sessions      Session[]
   cases         ClinicalCase[]
   planTemplates PlanTemplate[]
+  // B-pre M-agenda (agenda_foundations)
+  schedules            PractitionerSchedule[]
+  scheduleExceptions   ScheduleException[]
+  timeBlocks           TimeBlock[]
+  practitionerServices PractitionerService[]
+  payers               PractitionerPayer[]
+  specialties          PractitionerSpecialty[]
 
   @@index([tenantId])
 }
@@ -289,6 +305,10 @@ model Coverage {
   // `insurerId` stays null and the booking falls back to "particular".
   insurer      String
   insurerId    String?
+  // B-pre M-cat (expand): plan del catálogo global de prestadoras. `planName`
+  // sigue siendo el texto libre/cache de display; null = sin vincular. Sin
+  // auto-link en la migración: lo vincula el usuario desde la UI.
+  payerPlanId String?
   planName     String?
   memberId     String?
   // Per-patient copago override (cents). When set, it takes precedence over
@@ -300,8 +320,10 @@ model Coverage {
 
   patient      Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
   insurerRef   Insurer?  @relation(fields: [insurerId], references: [id])
+  payerPlan  PayerPlan? @relation(fields: [payerPlanId], references: [id], onDelete: SetNull)
 
   @@index([insurerId])
+  @@index([payerPlanId])
 }
 
 // Per-tenant insurer catalogue (Obras Sociales / Prepagas). Each row
@@ -322,14 +344,21 @@ model Insurer {
   isParticular  Boolean  @default(false)
   active        Boolean  @default(true)
   notes         String?
+  // B-pre M-cat (expand): vínculo opcional a la prestadora del catálogo global.
+  // El Insurer sigue siendo del tenant (precio/copago propios); `payerId` solo
+  // dice "es esta obra social". Null = sin vincular (no hay auto-link).
+  payerId       String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payer              Payer?              @relation(fields: [payerId], references: [id], onDelete: SetNull)
   coverages Coverage[]
+  practitionerPayers PractitionerPayer[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
+  @@index([tenantId, payerId])
 }
 
 // Pending invitations. The OWNER (Subscriber) issues these; the invitee
@@ -850,10 +879,17 @@ model Service {
   // varios pacientes en paralelo en la misma franja); 1 = un turno por horario
   // (osteopatía); N = tope de N turnos solapados.
   maxConcurrent Int?
+  // B-pre M-cat (expand): práctica del catálogo global que este servicio
+  // factura/representa. Null = servicio libre del consultorio.
+  practiceId     String?
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id])
   practitioner Practitioner? @relation(fields: [practitionerId], references: [id])
+  practice             Practice?             @relation(fields: [practiceId], references: [id], onDelete: SetNull)
   bookings     Booking[]
+  practitionerServices PractitionerService[]
+
+  @@index([practiceId])
 }
 
 model Booking {
@@ -889,6 +925,19 @@ model Booking {
   // from the patient's default diagnosis at creation, overridable per turno.
   title           String?
   description     String?
+  // B-pre M-agenda (expand). `locationId` null = sede principal del tenant (la
+  // migración backfillea todos con la principal; el loader trata null igual).
+  // RESTRICT: una sede con turnos no se borra (se desactiva con `active`).
+  locationId      String?
+  // Reemplaza al prefijo "[SOBRETURNO]" de `notes` (backfilleado desde ahí); el
+  // prefijo se sigue escribiendo hasta el contract posterior a B-pre.
+  isOverbooked    Boolean       @default(false)
+  // Recepción (decisión 3 de B-pre): timestamps, no BookingStatus nuevos.
+  arrivedAt       DateTime?
+  attendingAt     DateTime?
+  // Telemedicina (decisión 9): URL por turno.
+  isTelemedicine  Boolean       @default(false)
+  telemedicineUrl String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -896,6 +945,7 @@ model Booking {
   patient      Patient?      @relation(fields: [patientId], references: [id])
   practitioner Practitioner  @relation(fields: [practitionerId], references: [id])
   service      Service       @relation(fields: [serviceId], references: [id])
+  location     Location?    @relation(fields: [locationId], references: [id], onDelete: Restrict)
   payment      Payment?
 
   @@index([tenantId, scheduledFor])
@@ -905,6 +955,7 @@ model Booking {
   // alone wouldn't help the sort step.
   @@index([patientId, scheduledFor])
   @@index([tenantId, seriesId])
+  @@index([tenantId, locationId, scheduledFor])
 }
 
 enum BookingStatus {
@@ -1011,6 +1062,10 @@ model UserPreferences {
   // — same pattern as `pinnedKpis` — so adding a filter never needs a migration.
   // Validated defensively on read (see lib/preferences.ts).
   catalogPrefs Json?
+  // B-pre M-agenda: estado de la agenda multi-profesional por usuario
+  // ({mode, zoom 15|30|60, density, favoritePractitionerIds, locationId}).
+  // Mismo patrón que `catalogPrefs`: blob validado al leer (lib/preferences.ts).
+  agendaPrefs          Json?
   updatedAt    DateTime @updatedAt
 }
 
@@ -1034,4 +1089,349 @@ model AuditEvent {
 
   @@index([tenantId, createdAt])
   @@index([entity, entityId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Catálogo global (B-pre M-cat): especialidades, prácticas, prestadoras
+// ═════════════════════════════════════════════════════════════════════
+// Datos de referencia compartidos por todos los tenants. Los importa Martin
+// (scripts/catalog-import.ts) y los cura Plataforma, siempre por el canal
+// `prismaService` (BYPASSRLS). El rol de la app solo LEE: RLS con una única
+// policy `FOR SELECT USING (true)` y sin policy de escritura (default-deny).
+// Excepción: PayerPlan, que admite planes propuestos por un consultorio
+// (policy split como Exercise). Ver migración 20260930200000_catalog_global.
+//
+// Trazabilidad: cada fila guarda de qué fuente salió (`source`, `sourceRef`,
+// `sourceDate`); `curatedAt` != null = editada a mano en Plataforma → el import
+// nunca la pisa. `matchKey` = nombre normalizado (lib/catalog/normalize.ts)
+// para deduplicar y sugerir vínculos.
+
+enum CatalogSource {
+  REFEPS
+  NOMENCLADOR_NACIONAL
+  PMO
+  RNOS
+  RNEMP
+  PROVINCIAL
+  CURATED
+  TENANT
+}
+
+enum PayerKind {
+  OBRA_SOCIAL
+  PREPAGA
+  MUTUAL
+  OTRA
+}
+
+model Specialty {
+  id         String        @id @default(cuid())
+  slug       String        @unique
+  name       String
+  matchKey   String        @unique
+  aliases    String[]
+  source     CatalogSource
+  sourceRef  String?
+  sourceDate DateTime
+  curatedAt  DateTime?
+  archivedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  practices     PracticeSpecialty[]
+  practitioners PractitionerSpecialty[]
+}
+
+model Practice {
+  id                 String        @id @default(cuid())
+  slug               String        @unique
+  name               String
+  matchKey           String        @unique
+  aliases            String[]
+  code               String? // código de la práctica en su nomenclador
+  nomenclador        String? // "Nacional", "IOMA", …
+  defaultDurationMin Int?
+  source             CatalogSource
+  sourceRef          String?
+  sourceDate         DateTime
+  curatedAt          DateTime?
+  archivedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  specialties PracticeSpecialty[]
+  services    Service[]
+}
+
+model PracticeSpecialty {
+  practiceId  String
+  specialtyId String
+
+  practice  Practice  @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  specialty Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@id([practiceId, specialtyId])
+  @@index([specialtyId])
+}
+
+model Payer {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  name         String
+  legalName    String?
+  kind         PayerKind
+  registryCode String? // RNOS / RNEMP
+  cuit         String?
+  province     String?
+  matchKey     String        @unique
+  aliases      String[]
+  source       CatalogSource
+  sourceRef    String?
+  sourceDate   DateTime
+  curatedAt    DateTime?
+  archivedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  plans    PayerPlan[]
+  insurers Insurer[]
+}
+
+// Plan de una prestadora ("OSDE 210"). tenantId NULL = plan global del
+// catálogo; tenantId set = propuesto por un consultorio (visible solo para él
+// hasta que Plataforma lo promueva: `promotedAt`). Unicidad por SQL a mano
+// (índices parciales, no expresables en Prisma): (payerId, slug) entre los
+// globales y (payerId, tenantId, slug) entre los de tenant.
+model PayerPlan {
+  id         String        @id @default(cuid())
+  payerId    String
+  tenantId   String?
+  name       String
+  slug       String
+  source     CatalogSource
+  sourceDate DateTime
+  promotedAt DateTime?
+  archivedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  // Restrict: una prestadora con planes no se borra por accidente; el merge
+  // de Plataforma repunta los planes antes de borrar la prestadora origen.
+  payer     Payer      @relation(fields: [payerId], references: [id], onDelete: Restrict)
+  tenant    Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  coverages Coverage[]
+
+  @@index([payerId])
+  @@index([tenantId])
+}
+
+// Bitácora de cada corrida de scripts/catalog-import.ts --apply.
+model CatalogImportRun {
+  id        String   @id @default(cuid())
+  file      String
+  sha256    String
+  kind      String // "specialties" | "practices" | "payers" | …
+  created   Int
+  updated   Int
+  skipped   Int
+  conflicts Json
+  ranAt     DateTime @default(now())
+  ranBy     String?
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// B-pre M-agenda (20261001090000_agenda_foundations): sedes, horario por
+// profesional, excepciones, bloqueos y qué atiende/acepta cada profesional.
+// Todas llevan tenantId + RLS (ENABLE + FORCE + tenantId = GUC) en la misma
+// migración. CHECKs e índices parciales viven en el SQL (Prisma no los
+// expresa): NO BORRARLOS si `prisma migrate dev` los propone como drift.
+// FKs: CASCADE desde Tenant y desde Practitioner (config que no tiene sentido
+// sin su dueño). En ScheduleException/TimeBlock `practitionerId` null significa
+// "todo el consultorio": por eso CASCADE y NO SetNull — un SetNull convertiría
+// el bloqueo de un profesional borrado en un bloqueo de todos.
+// ═════════════════════════════════════════════════════════════════════
+
+// Sede del consultorio. Cada tenant tiene exactamente una `isPrimary` (índice
+// único parcial en SQL); `Booking.locationId` null = la principal.
+model Location {
+  id           String   @id @default(cuid())
+  tenantId     String
+  name         String
+  address      String?
+  addressLine2 String?
+  city         String?
+  province     String?
+  postalCode   String?
+  lat          Float?
+  lng          Float?
+  phone        String?
+  isPrimary    Boolean  @default(false)
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  schedules  PractitionerSchedule[]
+  timeBlocks TimeBlock[]
+  bookings   Booking[]
+
+  @@index([tenantId])
+}
+
+// Franja semanal de atención de un profesional en una sede. Varias franjas por
+// día (mañana/tarde, o sedes distintas) = varias filas.
+//   dow: 0=Dom … 6=Sáb (convención de `toARDow` en lib/datetime-ar.ts, = JS
+//        getDay). OJO: `expandBatchDates` de lib/booking-schedule.ts usa
+//        0=Lun..6=Dom para su input; no mezclar.
+//   startMin/endMin: minutos AR desde 00:00, [startMin, endMin).
+//   validFrom/validUntil: vigencia opcional (día AR, inclusive).
+// CHECKs en SQL: dow 0..6, 0 <= startMin < endMin <= 1440, validFrom <= validUntil.
+model PractitionerSchedule {
+  id             String    @id @default(cuid())
+  tenantId       String
+  practitionerId String
+  locationId     String
+  dow            Int
+  startMin       Int
+  endMin         Int
+  validFrom      DateTime? @db.Date
+  validUntil     DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  // Cascade: la franja no existe sin su sede (las sedes se desactivan, no se
+  // borran; un borrado real ya lo frena el RESTRICT de Booking.locationId).
+  location     Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, practitionerId, dow])
+}
+
+enum ScheduleExceptionKind {
+  CLOSED // ese día no se atiende
+  CUSTOM_HOURS // ese día reemplaza la plantilla por `ranges`
+}
+
+// Excepción de un día puntual. `practitionerId` null = todo el consultorio.
+// `ranges` = [{startMin,endMin,locationId}] (validado con zod al escribir;
+// CHECK en SQL: CUSTOM_HOURS exige ranges). Únicos parciales en SQL: uno por
+// (practitionerId, date) y uno por (tenantId, date) entre las de consultorio.
+model ScheduleException {
+  id             String                @id @default(cuid())
+  tenantId       String
+  practitionerId String?
+  date           DateTime              @db.Date
+  kind           ScheduleExceptionKind
+  ranges         Json?
+  reason         String?
+  // UserProfile.id de quien la cargó. Sin FK a propósito: es autoría, no
+  // pertenencia (no debe impedir borrar un usuario ni cascadear).
+  createdById    String
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, date])
+}
+
+// Bloqueo de agenda (candado del día, vacaciones, reunión). `practitionerId`
+// null = todos los profesionales, incluidos los futuros (decisión 8); un
+// subconjunto = N filas con el mismo `groupId`. `locationId` null = todas las
+// sedes. Soft delete con `deletedAt`. CHECK en SQL: startsAt < endsAt.
+model TimeBlock {
+  id             String    @id @default(cuid())
+  tenantId       String
+  practitionerId String?
+  locationId     String?
+  startsAt       DateTime
+  endsAt         DateTime
+  allDay         Boolean   @default(false)
+  reason         String?
+  groupId        String?
+  createdById    String // UserProfile.id, sin FK (ver ScheduleException)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  // Cascade y no SetNull: null = "todas las sedes", ampliaría el bloqueo.
+  location     Location?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, startsAt])
+  @@index([practitionerId, startsAt])
+}
+
+enum PracticeVisibility {
+  PUBLIC // se ofrece en el turnero público
+  PRIVATE // solo la agenda interna
+}
+
+// Qué servicios atiende cada profesional y con qué reglas propias (ADR B-pre:
+// sobre Service y no sobre la Practice del catálogo, porque Booking.serviceId,
+// cupo, copago §5.5, facturación y webhook giran alrededor de Service). Los
+// null heredan de Service (durationMin, maxConcurrent) o del tenant.
+// `concurrencyOverride` = usar `maxConcurrent` de esta fila en vez del de
+// Service (null con override = ilimitado).
+model PractitionerService {
+  id                  String             @id @default(cuid())
+  tenantId            String
+  practitionerId      String
+  serviceId           String
+  enabled             Boolean            @default(true)
+  durationMin         Int?
+  visibility          PracticeVisibility @default(PUBLIC)
+  minLeadMinutes      Int?
+  maxLeadDays         Int?
+  concurrencyOverride Boolean            @default(false)
+  maxConcurrent       Int?
+  notifyOnBooking     Boolean            @default(false)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  service      Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([practitionerId, serviceId])
+  @@index([tenantId, serviceId])
+}
+
+// Qué coberturas (Insurer del tenant, incl. Particular) acepta cada profesional.
+model PractitionerPayer {
+  id             String   @id @default(cuid())
+  tenantId       String
+  practitionerId String
+  insurerId      String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  insurer      Insurer      @relation(fields: [insurerId], references: [id], onDelete: Cascade)
+
+  @@unique([practitionerId, insurerId])
+  @@index([tenantId, insurerId])
+}
+
+// Especialidades (catálogo global) de cada profesional. RESTRICT hacia
+// Specialty: el catálogo se archiva, no se borra; un borrado real tiene que
+// repuntar antes (no perder datos del tenant en silencio).
+model PractitionerSpecialty {
+  id             String @id @default(cuid())
+  tenantId       String
+  practitionerId String
+  specialtyId    String
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  specialty    Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
+
+  @@unique([practitionerId, specialtyId])
+  @@index([tenantId])
+  @@index([specialtyId])
 }

@@ -90,7 +90,9 @@ export default async function PatientPage({ params }: { params: { id: string } }
         recentBookings={recentBookings}
         billableCount={billableCount}
         evaScores={evaScores}
-        insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))}
+        insurers={insurers
+          .filter((i) => !i.isParticular)
+          .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}
         practitioners={practitioners.map((p) => ({
           id: p.id,
           name: p.user.fullName ?? p.user.email,

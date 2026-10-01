@@ -12,6 +12,7 @@ import { hashInviteToken } from "@/lib/invitations-tokens";
 import { tags } from "@/lib/cache-tags";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
 import type { ActionResult } from "@/lib/validation";
 
 /**
@@ -25,6 +26,11 @@ import type { ActionResult } from "@/lib/validation";
  *     practitioner somewhere, that's their row — we just attach a
  *     membership to this tenant).
  *   - Upsert `Membership` with the invited role.
+ *   - B-pre B2.3: if the user is (now) a Practitioner OF THIS tenant, give
+ *     them the default agenda, same rules/ids as the agenda_foundations
+ *     backfill: primary Location (created if missing), Mon-Sat slots with the
+ *     tenant hours, PractitionerService for shared services (and their own),
+ *     PractitionerPayer for every active Insurer. Idempotent.
  *   - Stamp `Invitation.acceptedAt`.
  */
 export async function acceptInvite(token: string): Promise<ActionResult> {
@@ -106,14 +112,18 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
         where: { userId: user.id },
         select: { id: true, tenantId: true },
       });
+      let practitionerId: string | null =
+        existingPrac?.tenantId === invite.tenant.id ? existingPrac.id : null;
       if (!existingPrac) {
-        await tx.practitioner.create({
+        const created = await tx.practitioner.create({
           data: {
             userId: user.id,
             tenantId: invite.tenant.id,
             specialty: invite.specialty,
           },
+          select: { id: true },
         });
+        practitionerId = created.id;
       }
 
       await tx.membership.upsert({
@@ -128,6 +138,15 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
         },
         update: { acceptedAt: new Date(), role: invite.role },
       });
+
+      // B2.3: después de la membresía aceptada (la regla del backfill es
+      // "profesional con membresía aceptada"). Solo si el Practitioner es de
+      // ESTE tenant: el de otro consultorio no atiende acá (no hay qué
+      // configurar). Idempotente: una segunda invitación aceptada por la
+      // misma persona no duplica ni pisa franjas ya cargadas.
+      if (practitionerId) {
+        await provisionPractitionerAgenda(tx, { tenantId: invite.tenant.id, practitionerId });
+      }
 
       await tx.invitation.update({
         where: { id: invite.id },

@@ -116,6 +116,10 @@ export const CoverageSet = z.object({
   insurerId: z.string().trim().max(60).optional().or(z.literal("").transform(() => undefined)),
   insurerName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
   planName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
+  // B1 (catálogo): plan de la prestadora (`PayerPlan`) vinculada al Insurer.
+  // Se valida contra el tenant en `setPatientCoverage` (la FK saltea RLS);
+  // `planName` queda como cache de display (= nombre del plan si viene id).
+  payerPlanId: z.string().trim().max(64).optional().or(z.literal("").transform(() => undefined)),
   memberId: z.string().trim().max(40).optional().or(z.literal("").transform(() => undefined)),
   // H2 (A2a-S08): si la OS CAMBIA, el copago propio del paciente
   // (`Coverage.copagoCents`) se borra solo con `resetCopago: true` (la UI lo
@@ -125,6 +129,30 @@ export const CoverageSet = z.object({
 });
 export type CoverageSetInput = z.input<typeof CoverageSet>;
 
+// B3.1: rechaza un `scheduledFor` que no parsea. Antes un string roto llegaba
+// como `Invalid Date` y explotaba recién en Prisma (o, ahora, en el motor de
+// disponibilidad, que pasa el instante por `Intl`).
+const isValidDate = (d: Date | undefined) => d === undefined || !Number.isNaN(d.getTime());
+
+/**
+ * Sede del turno (B3.1). Opcional: sin pasarla, el servidor usa la sede de la
+ * franja del profesional en ese horario o la principal. Se valida contra el
+ * tenant y activa al escribir (las FK saltean RLS).
+ */
+const bookingLocationId = z.string().trim().min(1).max(64).optional().or(z.literal("").transform(() => undefined));
+
+/**
+ * Link de la videollamada (B3.1, decisión 9: URL por turno). Solo https: el
+ * link se muestra como `<a href>` y un `javascript:` / `http:` no puede entrar.
+ * Se guarda solo con `isTelemedicine: true` (sin el flag se ignora).
+ */
+const telemedicineUrl = z
+  .string()
+  .trim()
+  .max(500)
+  .url("Ingresá un link válido")
+  .refine((u) => /^https:\/\//i.test(u), "El link tiene que empezar con https://");
+
 export const BookingCreate = z.object({
   patientId: z.string().min(1).optional(),
   serviceId: z.string().min(1),
@@ -132,8 +160,12 @@ export const BookingCreate = z.object({
   scheduledFor: z
     .string()
     .min(1, "Fecha y hora requeridas")
-    .transform((v) => new Date(v)),
-  durationMin: z.coerce.number().int().min(15).max(240).default(45),
+    .transform((v) => new Date(v))
+    .refine(isValidDate, "Fecha y hora inválidas"),
+  // B3.1: sin default. Antes `.default(45)` pisaba la duración del servicio
+  // cuando el caller no la mandaba; ahora el servidor usa la del profesional
+  // para ese servicio (`PractitionerService.durationMin`) o la del servicio.
+  durationMin: z.coerce.number().int().min(15).max(240).optional(),
   // Per-turno copago override in cents (defaults to the patient's resolved
   // copago when omitted). Null/undefined = compute on read.
   copagoCents: z.coerce.number().int().min(0).max(100_000_00).optional(),
@@ -143,6 +175,9 @@ export const BookingCreate = z.object({
   guestName: z.string().max(120).optional().or(z.literal("").transform(() => undefined)),
   guestEmail: z.string().email().optional().or(z.literal("").transform(() => undefined)),
   guestPhone: z.string().max(30).optional().or(z.literal("").transform(() => undefined)),
+  locationId: bookingLocationId,
+  isTelemedicine: z.boolean().optional(),
+  telemedicineUrl: telemedicineUrl.optional().or(z.literal("").transform(() => undefined)),
 });
 export type BookingCreateInput = z.input<typeof BookingCreate>;
 
@@ -158,7 +193,8 @@ export const BookingUpdate = z.object({
   scheduledFor: z
     .string()
     .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+    .transform((v) => (v ? new Date(v) : undefined))
+    .refine(isValidDate, "Fecha y hora inválidas"),
   durationMin: z.coerce.number().int().min(15).max(240).optional(),
   // Revisión A2: sin "PENDING". Ningún caller de la UI lo manda, y por RPC
   // cualquier turno podía volver a PENDING/UNPAID: con paciente quedaba igual
@@ -168,8 +204,28 @@ export const BookingUpdate = z.object({
   notes: z.string().max(1000).optional(),
   title: z.string().max(80).optional(),
   description: z.string().max(2000).optional(),
+  // B3.1: sede y telemedicina editables. Ausente = no se toca. `telemedicineUrl`
+  // "" = borrar el link; `isTelemedicine: false` también lo borra.
+  locationId: z.string().trim().min(1).max(64).optional(),
+  isTelemedicine: z.boolean().optional(),
+  telemedicineUrl: telemedicineUrl.optional().or(z.literal("").transform(() => null)),
 });
 export type BookingUpdateInput = z.input<typeof BookingUpdate>;
+
+/**
+ * Multi-turno (`createBookingsBatch`, B3.1). Antes `count` se acotaba con
+ * `Math.min(60, Math.max(1, Math.floor(count)))` sin validar: un `NaN` (input
+ * vacío) pasaba el clamp como NaN y reventaba la expansión (hallazgo de B1.6).
+ * `frequency` ausente = semanal, el comportamiento de siempre (paridad exacta
+ * con la expansión vieja). `daysOfWeek` en 0=Lun … 6=Dom (convención del
+ * batch, NO el 0=Dom de `getDay`).
+ */
+export const BookingBatchCreate = BookingCreate.extend({
+  count: z.number({ invalid_type_error: "Cantidad inválida" }).int("Cantidad inválida").min(1).max(60),
+  daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  frequency: z.enum(["weekly", "biweekly", "monthly"]).default("weekly"),
+});
+export type BookingBatchCreateInput = z.input<typeof BookingBatchCreate>;
 
 export const SessionNoteCreate = z.object({
   programId: z.string().min(1),

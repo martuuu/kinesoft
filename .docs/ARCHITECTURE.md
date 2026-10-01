@@ -33,7 +33,10 @@ Every domain table carries `tenantId`. Two layers of isolation:
    `prisma/migrations/20260725120000_rls_policies/migration.sql` is the single
    source of truth (`prisma/migrations/policies.sql` is now just a redirect
    stub): ENABLE + FORCE ROW LEVEL SECURITY on **26 tables** (17 original + 7
-   added in Ola B2 + the 2 split-policy catalog tables). Direct-`tenantId`
+   added in Ola B2 + the 2 split-policy catalog tables). Later migrations carry
+   their own policies in the same file (e.g. B-pre's `catalog_global` and
+   `agenda_foundations`); since B-pre the guard parses **every**
+   `migrations/*/migration.sql`, not just this one. Direct-`tenantId`
    tables get a generated `tenantId = app_current_tenant_id()` policy; tables
    that reach tenancy through a parent get `EXISTS`-subquery policies
    (`Coverage`/`EmergencyContact` → `Patient`, `Payment` → `Booking`,
@@ -94,8 +97,8 @@ Pure logic lives outside `"use server"` files so it can be unit-tested
 
 | Module | What it owns |
 | --- | --- |
-| `lib/booking-capacity.ts` | **Capacity contract.** `isHoldingCapacity(b, now)`: every non-cancelled booking holds its slot except a public reservation that is PENDING + UNPAID/FAILED and older than 30 min (`PENDING_PUBLIC_HOLD_MS`). `isPublicReservation({idempotencyKey, patientId})` decides "public" **by the key** (`pub:<tenant>:<uuid>` or the pre-A2 `<tenant>:<prof>:<ISO>:<patientId>`); when in doubt it holds. Also `overlapBlocks`, `patientDayStatus`. Pure, `now` injected. Used by create/update/batch/`suggestNextFreeSlot`, the public booking and the MP webhook. AUDIT §5.18 |
-| `lib/public-booking-slots.ts` | `buildPublicSlots` / `checkPublicSlot`: the public grid (hours, Sunday closed, 1 h lead time, 45-min step) — the same check on list and on submit |
+| `lib/booking-capacity.ts` | **Capacity contract.** `isHoldingCapacity(b, now)`: every non-cancelled booking holds its slot except a public reservation that is PENDING + UNPAID/FAILED and older than 30 min (`PENDING_PUBLIC_HOLD_MS`). `isPublicReservation({idempotencyKey, patientId})` decides "public" **by the key** (`pub:<tenant>:<uuid>` or the pre-A2 `<tenant>:<prof>:<ISO>:<patientId>`); when in doubt it holds. Also `overlapBlocks`, `patientDayStatus`. Pure, `now` injected. Used by the availability engine (`lib/availability/*`, B-pre), create/update/batch, the public booking and the MP webhook. AUDIT §5.18 |
+| `lib/public-booking-slots.ts` | `buildPublicSlots` / `checkPublicSlot`: the public grid — the same check on list and on submit. Since B-pre a stable-signature wrapper over the engine (`buildSlots` + `workingRanges`: per-practitioner ranges, exceptions, blocks; 45-min step, lead `minLeadMinutes ?? 60`, only PUBLIC + enabled services) |
 | `lib/bookings-export-internal.ts` · `lib/patients-export-internal.ts` | ICS and CSV exports (`server-only`, basic rows masked, CSV audited) |
 | `lib/csv.ts` | `csvCell`/`csvRow` + `neutralizeFormula` (`= + - @`, TAB/CR) against CSV injection |
 | `lib/client-ip.ts` | `clientIp(headers)`: the single place that reads the client IP (replaced 8 copies) |
@@ -119,6 +122,10 @@ wrong-days multi-turno bug. Client `toLocaleString` on DB instants MUST pass
 `timeZone: "America/Argentina/Buenos_Aires"` (else hydration mismatch + wrong
 date). **Exception**: a `<input type="date">` value (parsed UTC-midnight) must
 NOT get AR tz, or the day shifts back.
+B-pre fixed `toARMinutes`/`toARHour` at AR midnight (Intl with `hour12:false`
+returns "24" → 1440/24; now `% 24`, `lib/datetime-ar.ts:77-83`). The engine
+works in **dayKeys** (`YYYY-MM-DD` AR) and AR minutes; `@db.Date` columns go
+through `dbDateToDayKey`/`dayKeyToDbDate` (`lib/availability/day.ts`).
 
 ## Domain model (key entities)
 
@@ -132,19 +139,28 @@ mini-diagnosis, defaulted from `Patient.diagnosisTitle` / `diagnosisNote`),
 by ADR-001 (proposed, 2026-09-23)** — see §Architecture decisions: plans must
 generate their bookings, so the FK is coming in Bloque B.
 
-- **Single turno**: `createBooking` (conflict/sobreturno UX + next-free-slot).
+- **Single turno**: `createBooking` (conflict/sobreturno UX + next-free-slot;
+  since B-pre also soft warnings `blocked` / `outOfHours`, forced with
+  `allowBlocked` / `allowOutOfHours` — see §Agenda profesional y catálogo).
 - **Multi-turno**: `createBookingsBatch` (count + weekdays, AR-correct days,
-  shared `seriesId`, individual `Booking` rows — **not** a plan).
+  `frequency` weekly/biweekly/monthly since B-pre, shared `seriesId`, individual
+  `Booking` rows — **not** a plan).
+- **Sobreturno** is `Booking.isOverbooked` since B-pre (backfilled from the
+  `[SOBRETURNO]` notes prefix, which writers keep adding until the contract).
 - **Edit/delete**: `updateBooking` / `deleteBooking` / `setBookingStatus`,
   all under `runWithRls`, all guarded by `expectedUpdatedAt`
   (optimistic concurrency) so a stale drawer can't mutate a changed row.
 
 **Capacity + anti-duplicate — four layers** (Rondas 4 and 6):
 
-1. **Professional capacity.** `Service.maxConcurrent` (`null` = unlimited, the
-   default — overlapping turnos are normal in kinesiología) caps how many
-   patients may share a window. Pure helper `overlapBlocks()` in
+1. **Professional capacity.** The effective cupo is per practitioner +
+   service: `PractitionerService.maxConcurrent` when `concurrencyOverride`,
+   else `Service.maxConcurrent` (`null` = unlimited, the default — overlapping
+   turnos are normal in kinesiología). Pure helper `overlapBlocks()` in
    `lib/booking-capacity.ts`: blocked when `overlapCount >= maxConcurrent`.
+   Since B-pre the count and the write run in the same tx behind the
+   capacity advisory lock (`lib/booking-cap-lock.ts`), closing the cupo-1
+   TOCTOU in the agenda and the public booking.
 2. **Patient guard.** `patientDayStatus()` (same file, pure + unit-tested)
    looks at the patient's other non-cancelled turnos on the same **AR day**,
    across all professionals: an overlap is a **hard stop**; a second turno the
@@ -152,7 +168,7 @@ generate their bookings, so the FK is coming in Bloque B.
    it with a 240-min look-back for AR-midnight crossings and excludes its own
    row by `idempotencyKey` so an idempotent retry can't self-block.
 3. **`idempotencyKey` is CLIENT-generated.** One `crypto.randomUUID()` per
-   modal instance (`components/agenda/booking-modal.tsx`), with a server
+   modal instance (`components/agenda/booking-modal/index.tsx`), with a server
    `randomBytes(16)` fallback when the client sends none; batch turnos derive
    `<key>:<iso>` per row. It dedupes retries of the *same* submit and nothing
    more. **Before Ronda 6** the key was derived (`tenant:prof:slot:patient`)
@@ -171,7 +187,8 @@ generate their bookings, so the FK is coming in Bloque B.
    Prisma schema (5.22) — this index is migration-managed only; if a future
    `migrate dev` proposes to drop it, keep it.
 
-**Agenda day view** (Ronda 9). `components/agenda/views/timeline-view.tsx`
+**Agenda day view** (Ronda 9; B-pre added the "Por profesional" and
+"Recepción" modes — see §Agenda profesional y catálogo). `components/agenda/views/timeline-view.tsx`
 lays turnos out **in flow**, not absolutely positioned. Each business hour is
 one row that grows with its content; turnos are bucketed into their start hour
 and rendered in a wrapping flex row (`flexBasis: calc((100% - gaps) / 5)`,
@@ -242,6 +259,222 @@ defensively on read (`sanitizeCatalogPrefs` in `lib/preferences.ts`): a hostile
 or stale blob degrades to defaults. The URL wins; with no params the saved
 view is restored.
 
+## Agenda profesional y catálogo (B-pre, 01-oct-2026)
+
+B-pre lays the foundations Planes (Bloque B, ADR-001) builds on: a global
+reference catalog, the agenda per practitioner × location, **one**
+availability engine, capabilities, and the multi-practitioner agenda of the
+Secretaria. Two migrations, both additive (expand): `20260930200000_catalog_global`
+and `20261001090000_agenda_foundations` (deploy order in
+[MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md)).
+
+### Model
+
+```
+Specialty ─┐                       Payer ──< PayerPlan (tenantId null = global,
+Practice ──┴─< PracticeSpecialty      │                 set = proposed by a tenant)
+   ▲                                  ▲                    ▲
+   │ Service.practiceId?              │ Insurer.payerId?   │ Coverage.payerPlanId?
+Service ──< PractitionerService >── Practitioner ──< PractitionerSchedule >── Location
+Insurer ──< PractitionerPayer   >──┘     │  ├──< ScheduleException (null = whole clinic)
+                                         │  └──< TimeBlock        (null = everyone)
+Booking.locationId? ──► Location (RESTRICT; null = primary)
+```
+
+- **Global catalog (no `tenantId`)**: `Specialty`, `Practice`,
+  `PracticeSpecialty`, `Payer`, `CatalogImportRun`; `PayerPlan` is global
+  (`tenantId` null) or a tenant's proposal. Every row carries
+  `source`/`sourceRef`/`sourceDate`, `curatedAt`, `archivedAt`, `matchKey`
+  (unique) and raw `aliases`. Tenant tables point at it through **nullable**
+  FKs with `SET NULL`: `Insurer.payerId`, `Coverage.payerPlanId`
+  (`Coverage.planName` stays as display cache) and `Service.practiceId`. No
+  auto-link in the migration: the user links from the UI.
+- **Agenda (tenant tables, RLS like the rest)**: `Location` (one `isPrimary`
+  per tenant, partial unique index), `PractitionerSchedule` (dow 0=Sun..6=Sat as
+  `toARDow`, `startMin`/`endMin` = AR minutes, optional validity, CHECKs),
+  `ScheduleException` (`CLOSED` | `CUSTOM_HOURS` with ranges per location),
+  `TimeBlock` (soft-deleted, `groupId` for a partial-team lock),
+  `PractitionerService` (enabled, own duration, `PUBLIC`/`PRIVATE`, lead
+  times, cupo override), `PractitionerPayer`, `PractitionerSpecialty`.
+- **Booking (expand)**: `locationId` (RESTRICT), `isOverbooked`, `arrivedAt`,
+  `attendingAt`, `isTelemedicine`, `telemedicineUrl` (https). `UserPreferences.agendaPrefs`.
+- **Backfill** in the same migration (idempotent, deterministic md5 ids):
+  primary location per tenant; Mon-Sat ranges = `businessHours` per accepted
+  practitioner; PractitionerService as today (own service → its practitioner,
+  shared → everyone accepted) plus **step 3b**: every (practitioner, service)
+  pair with a non-cancelled booking stays enabled as `PRIVATE` (so the new
+  "service not enabled" rejection doesn't cut what a practitioner already did);
+  PractitionerPayer = accepted × active insurers; `isOverbooked` from the
+  `[SOBRETURNO]` prefix; `Booking.locationId` = primary. The Booking UPDATEs do
+  **not** touch `updatedAt` (it's the optimistic lock). Runs with
+  `SET LOCAL row_security = off`, so a migrating role without BYPASSRLS fails
+  loudly instead of backfilling 0 rows.
+- **Contract (after B-pre, not now)**: `Service.practitionerId`, the
+  `[SOBRETURNO]` prefix, `Tenant.businessHours*`, `lib/booking-schedule.ts`.
+
+### ADR-003 — `PractitionerService` over `Service` (status: ACCEPTED, 30-sep-2026)
+
+- **Context.** The plan (§11.3) called it `PractitionerPractice`: the
+  practice a practitioner is enabled for, with duration, visibility, lead
+  times and cupo.
+- **Decision.** Key it on `Service`, not on the catalog `Practice`:
+  `@@unique([practitionerId, serviceId])`. `Booking.serviceId`, the cupo, the
+  copago precedence (AUDIT §5.5), billing and the MP webhook all revolve around
+  `Service`; the catalog practice enters through `Service.practiceId`. Planes
+  will reference `(practitionerId, serviceId)` + `locationId`.
+- **Consequences.** Adjusts the letter of the plan's §11.3, not its intent.
+  **Defaults without a row** (preserve, AUDIT §5.33): a service with no PS row
+  is enabled/PUBLIC if `Service.practitionerId` is null or that practitioner,
+  disabled if it belongs to another; an insurer with no PP row is accepted.
+  New practitioners/services/insurers are born with their rows
+  (`lib/agenda-defaults.ts`, same ids as the backfill). When a shared service
+  is assigned to one practitioner, the other practitioners' PS rows become
+  `PRIVATE` (agenda unchanged, the public booking stops offering them) —
+  `lib/services.ts` (fixer).
+
+### Availability engine
+
+- **Pure core** `lib/availability/*` (no DB, `now` injected, all wall-clock on
+  `lib/datetime-ar.ts`): `types.ts` (the contract), `day.ts` (dayKey ↔
+  instants, `@db.Date` helpers), `ranges.ts` (`scheduledRanges` = template ±
+  exception, **without** subtracting blocks; `workingRanges` = minus
+  TimeBlocks; `dayLockState`), `slots.ts` (`buildSlots`, grid anchored at each
+  range's start), `classify.ts` (`classifyInstant`: duplicate > blocked >
+  out-of-hours > overbook/patient-overlap > free, reusing `isHoldingCapacity` /
+  `overlapBlocks`), `next-free.ts` (`nextFreeSlot` step 15 / 14 days,
+  `firstFreeAcrossPractitioners` by service + insurer), `recurrence.ts`
+  (`expandDates` weekly/biweekly/monthly — monthly = same day, clamped to the
+  month's last day; `RECURRENCE_MAX_COUNT=60`). Barrel `index.ts`.
+- **Contract rule**: `classify` / `nextFreeSlot` receive `scheduledRanges`
+  (with `workingRanges` an instant inside hours but blocked would read as
+  out-of-hours). `RecurrenceInput.daysOfWeek` is 0=Mon (inherited from the
+  batch) while `dow` is 0=Sun.
+- **Loader** `lib/availability-loader.ts` (`server-only`) is the **only** DB
+  entry: `loadAvailabilityInputs(db, {tenantId, practitionerIds, …})` with
+  `db` injected — **two channels**: the `tx` of `runWithRls` (agenda, modal,
+  batch, Planes) or `prismaService` (public booking, no Actor). Every query
+  carries `where: { tenantId }` by hand. Loads ranges, exceptions, blocks,
+  non-cancelled bookings from 240 min back, PS/PP rules, services and the
+  tenant hours.
+- **Fallback (permanent safety net)**: a practitioner without ranges (or
+  absent from the templates) works the tenant hours Mon-Sat at the primary
+  location; `Booking.locationId` null = primary; a tenant without a primary
+  location uses `NO_LOCATION_ID = ""` (`lib/availability/types.ts:64`): a
+  block of a concrete location doesn't subtract from it, a global one does.
+- **Parity**: the old paths were characterised first (`tests/unit/booking-schedule.test.ts`
+  freezes the ef3281f code as **oracle** in `lib/booking-schedule.ts` — no new
+  callers) and the engine is proven equal on a matrix + seeded random sets:
+  `nextFreeSlot` ↔ old suggest, `buildPublicSlots` old ↔ new; with the
+  backfill applied, the output is identical for today's client.
+- **Consumers**: `lib/bookings.ts` (suggest, soft warnings, batch),
+  `lib/public-booking.ts` (`listPublicSlots`, `findFirstPublicSlot`, submit),
+  `lib/availability-actions.ts` (`getAgendaAvailability`, `listAvailableSlots`,
+  `classifyBookingInstant`, `previewRecurrence` — read-only,
+  `agenda.viewAll`, **no PHI**, **no cache** on purpose: a stale "free" slot is
+  a surprise overbooking).
+
+### Write paths on the engine (`lib/bookings.ts`)
+
+- Soft warnings: `blocked` (forced with `allowBlocked` → stored as
+  sobreturno) and `outOfHours` (`allowOutOfHours`, only a warning, D12). Public
+  booking and Planes treat blocks as **hard**.
+- A disabled PS for that practitioner → rejection (`SERVICE_DISABLED_ERROR`,
+  `lib/bookings.ts:313`); duration = PS → Service.
+- Blocks are re-checked **inside** the write tx after the capacity lock
+  (`lib/bookings.ts:1136-1159`): a day lock committed between classification and
+  write is seen.
+- **Lock order** (preserve, AUDIT §5.28), same in create/update/batch
+  (`createBooking` `lib/bookings.ts:1136,1184`, `updateBooking` `:1432,1504`, batch `~:2237,~2280`), public submit
+  (`lib/public-booking.ts:516,546`) and `applyDayLock`
+  (`lib/time-blocks.ts:468,608-617`):
+  1. **capacity** — `pg_advisory_xact_lock` per (tenant, practitioner,
+     service, **AR day**), every day the turno touches, ascending
+     (`lib/booking-cap-lock.ts`); the batch uses one tx per date; the day lock
+     takes the keys of its scope sorted by practitioner, service;
+  2. **locations, shared** — `lockTenantLocationsShared` then validate
+     `where {id, tenantId, active}` (`lib/location-lock.ts`; archiving takes
+     it exclusive);
+  3. **rows** — count, upsert, block rows.
+
+### Capabilities / authz
+
+`lib/capabilities.ts` (pure matrix) + `lib/authz.ts` (`getMembershipRole`,
+`getCapabilities` with React `cache`, `requireCapability`,
+`requireTenantAdmin`). OWNER/ADMIN: everything. PRACTITIONER:
+`agenda.viewAll`, `agenda.reception`, `agenda.manageOwnBlocks`,
+`clinical.read`. ASSISTANT (the future Secretaria, C0): `agenda.viewAll`,
+`agenda.reception`, `agenda.manageBlocks`, `agenda.manageOwnBlocks` — **no**
+`clinical.read`. BILLING: `agenda.viewAll`, `billing.manage`.
+`schedule.configure` and `tenant.admin` are admin-only. Replaces the six copied
+`role === OWNER|ADMIN` checks (tenant-settings, services, insurers,
+patients ×3, configuración). Unknown role → empty set (fails closed). UI only
+hides; the action is the barrier. Details in SECURITY.md §13.
+
+### Global catalog: RLS, import, curation
+
+- **RLS GLOBAL_READONLY**: Specialty/Practice/PracticeSpecialty/Payer/
+  CatalogImportRun have ENABLE + FORCE and **only** `FOR SELECT USING (true)`:
+  the app role reads, cannot write. PayerPlan is split (read global + own,
+  write own). Writers: the import script (owner connection, checks
+  `rolbypassrls`) and Plataforma (`prismaService` behind `requireSuperAdmin`).
+  The guard enforces it (`scripts/guard-tenant-isolation.mjs:52,188-209`).
+- **Import** `scripts/catalog-import.ts` + pure `lib/catalog/{normalize,csv,import-core}.ts`:
+  data in `prisma/catalog/*.csv` (SSS RNOS/RNEMP/COSSPRA payers, plans, REFEPS
+  specialties, PMO/curated practices, plus the benchmark seed
+  `*.seed-2026-09.csv`, `SOURCES.md` CC BY 4.0). Dry-run by default, `--apply`
+  in **one** tx, upsert by slug, **never** overwrites a row with `curatedAt`
+  (only adds aliases) nor un-archives, seed files create-only, one
+  `CatalogImportRun` per file, second run = 0 changes. The script can't call
+  `revalidateTag` → Plataforma → Catálogo → Importaciones → **"Refrescar
+  catálogo"** (`refreshCatalogCache`, `lib/catalog-admin.ts:494`).
+- **Curation** `lib/catalog-admin.ts` (`/plataforma/catalogo/*`): search,
+  edit (sets `curatedAt`), archive, `mergePayer`/`mergePractice` (repoint FKs),
+  promote proposed plans, import runs. Every write revalidates `tags.catalog()`.
+- **Tenant adoption** `lib/catalog.ts` + `lib/catalog-validate.ts`: Obras
+  sociales "Agregar del catálogo" / link / matchKey suggestion; practice on a
+  service; patient plan picker + "Otro plan…" (`proposePayerPlan`). Ids are
+  validated: global or own, not archived, plan of that payer (FKs skip RLS).
+
+### Agenda multi-practitioner, reception, day lock
+
+- `listAgendaBookings` (`lib/bookings.ts:673`): light projection for the
+  agenda (no patient → coverages → programs graph) + `clinical.read` gate
+  (`title`/`description`/notes null, `clinicalHidden` per row) on top of the
+  per-patient basic gate. Filters `practitionerIds[]`, `locationId`.
+- Modes Día / Semana / Lista / **Por profesional** (`views/practitioner-day-view.tsx`:
+  one column per practitioner, occupancy "2/3" / "4/∞", overbooking, out of
+  hours, blocked hatch, now-line, keyboard) / **Recepción**; layout math is pure
+  in `lib/agenda-layout.ts`. Practitioner chips with favourites, location
+  filter, mode toggle.
+- **Reception** (`lib/reception-state.ts` pure + `markReceptionAction`,
+  `lib/bookings.ts:~1706`): timestamps `arrivedAt`/`attendingAt`, not new
+  `BookingStatus` values; optimistic lock; capability `agenda.reception`. It is
+  administrative but scoped: a PRACTITIONER without `agenda.manageBlocks`
+  operates only own bookings or patients with full access (guest ok); "Deshacer"
+  goes back to PENDING for a guest or an unpaid public reservation, CONFIRMED
+  otherwise (fixer).
+- **Day lock** (`lib/time-blocks.ts`: `previewDayLock` → `applyDayLock` →
+  `removeDayLock`): "everyone" = one TimeBlock with `practitionerId` null
+  (reaches future practitioners); a subset = N rows with `groupId`. Apply runs
+  in one tx: locks → recompute affected → if they differ from what the user saw
+  → `changed`, nothing applied → create blocks → optionally
+  `cancelBookingsInTx` (`lib/bookings-cancel-internal.ts`; bookings with a
+  recorded payment are **skipped**, H1).
+- **Agenda prefs**: `UserPreferences.agendaPrefs` (`mode`, `zoom`, density,
+  `favoritePractitionerIds`, `locationId`), sanitised on read
+  (`sanitizeAgendaViewPrefs`, `lib/preferences.ts:47`).
+- **Lazy loading in /agenda** (`components/agenda/agenda-client.tsx:89-95`):
+  `next/dynamic` for the modal, drawer, day-lock dialog, Recepción and Por
+  profesional. First load 238 → 195 kB (PERF.md §B4.6).
+- **Render tests** `tests/unit/render/*.test.tsx` (`renderToStaticMarkup`, no
+  DOM): agenda-client, practitioner-day-view, day-lock, reception-view,
+  public-booking-wizard.
+- **UI splits**: `components/agenda/booking-modal/*` (modes Turno / Varias
+  sesiones / Bloquear horario, slot picker, telemedicine),
+  `booking-drawer/*`, `agenda-toolbar.tsx`, `grid/*`; Configuración tabs
+  Sedes and Profesionales (`panels/locations-panel.tsx`,
+  `panels/practitioners/*`); onboarding steps Sede and Tu horario (9 steps).
+
 ## Platform superadmin tier
 
 Orthogonal to the tenant-scoped `Role` enum, there is a **cross-tenant
@@ -257,7 +490,8 @@ platform tier**:
   for superadmins. Surfaces: `plataforma/ejercicios` (catalog table + drawer
   editor + media manager + article editor) and `plataforma/tags` (tag CRUD per
   kind). A superadmin browsing `/biblioteca` can also edit a global card
-  in place.
+  in place. Since B-pre also `plataforma/catalogo/*` (prestadoras, prácticas,
+  especialidades, propuestas, importaciones) over `lib/catalog-admin.ts`.
 - **Global-catalog writes go through `prismaService`** (`lib/db.ts`), the
   BYPASSRLS channel — because the RLS-forced app role *physically cannot*
   write `tenantId IS NULL` rows (`exercise_write` requires
@@ -313,6 +547,10 @@ platform tier**:
   browser to `report-uri`, no SDK needed). Revisit in C1 together with the
   bundle work on `/agenda`.
 
+### ADR-003 — `PractitionerService` over `Service` (status: ACCEPTED, 30-sep-2026)
+
+See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the
@@ -323,6 +561,10 @@ dashboard counts and month booking-days 60 s. React `cache()` only for
 Actions). Invalidation: ~120 `revalidatePath`, tag helpers (e.g.
 `invalidateBookingDerivedCaches`) and ~60 client `router.refresh()`.
 Agenda, patients, clinical history and sessions are **not** cached (correct).
+Neither is availability (B-pre, `lib/availability-actions.ts`): no
+`availability` tag on purpose. The global catalog (B-pre) reads under
+`tags.catalog()`; Plataforma writes revalidate it and the import is followed
+by "Refrescar catálogo".
 
 **HTTP** — every page in `(app)`, `(portal)` and booking is dynamic
 (`force-dynamic`/cookies) → `Cache-Control: private, no-store`: the CDN never
@@ -345,7 +587,8 @@ recovery. `kine_tenant` is read and validated against memberships but no code
 writes it (no tenant switcher yet). No tracking/analytics cookies → no banner
 needed (list them in the privacy policy). Browser storage:
 `localStorage['kinesoft:tweaks']` and `kinesoft:agenda-visibility:<userId>`
-(agenda toggles).
+(agenda toggles). Agenda mode/zoom/favourites/location live server-side in
+`UserPreferences.agendaPrefs` (B-pre).
 
 **Closed in A2/A3:** the `practitioners` tag is invalidated on accept / remove /
 role change; the dashboard resolves patient access **outside** the

@@ -2,9 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AgendaVisibility } from "@/lib/agenda-filters";
+import type { AgendaViewZoom } from "@/lib/preferences-constants";
+
+const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 
 // ──────────────────────────────────────────────────────────────────────
 // View Options dropdown — small menu next to the day/week/list switch
+//
+// B4.3: la densidad ahora se guarda por usuario (`agendaPrefs.density`) y se
+// suma el ZOOM de franja 15/30/60 (`agendaPrefs.zoom`, plan §11.3 punto 6).
+// El zoom solo se ofrece donde aplica (`zoom` presente = vista Por
+// profesional): Día y Semana siguen con `Tenant.agendaSlotMinutes` para no
+// cambiarle la grilla a quien no eligió nada.
 // ──────────────────────────────────────────────────────────────────────
 
 export function ViewOptionsMenu({
@@ -12,12 +21,17 @@ export function ViewOptionsMenu({
   setDensity,
   visibility,
   setVisibility,
+  zoom,
+  setZoom,
 }: {
   density: "comfortable" | "compact";
   setDensity: (d: "comfortable" | "compact") => void;
   /** A2b-S-ui: "Mostrar cancelados" / "Mostrar ausentes" (por defecto prendidos). */
   visibility: AgendaVisibility;
   setVisibility: (v: AgendaVisibility) => void;
+  /** Franja de la grilla en minutos; sin valor no se muestra el control. */
+  zoom?: AgendaViewZoom | null;
+  setZoom?: (z: AgendaViewZoom) => void;
 }) {
   const filtering = !visibility.showCancelled || !visibility.showNoShow;
   const [open, setOpen] = useState(false);
@@ -117,6 +131,48 @@ export function ViewOptionsMenu({
               );
             })}
           </div>
+          {zoom != null && setZoom && (
+            <>
+              <div style={menuLabel}>Franja</div>
+              <div
+                role="radiogroup"
+                aria-label="Duración de cada fila"
+                style={{
+                  display: "flex",
+                  padding: 3,
+                  borderRadius: 999,
+                  background: "rgba(15,30,51,0.04)",
+                  marginBottom: 10,
+                }}
+              >
+                {ZOOMS.map((z) => {
+                  const on = zoom === z;
+                  return (
+                    <button
+                      key={z}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setZoom(z)}
+                      style={{
+                        flex: 1,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "none",
+                        fontSize: 11.5,
+                        fontWeight: 600,
+                        background: on ? "#fff" : "transparent",
+                        color: on ? "var(--navy-900)" : "var(--navy-500)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {z} min
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
           <div style={menuLabel}>Mostrar</div>
           <div style={{ display: "grid", gap: 2, marginBottom: 10 }}>
             <ToggleRow

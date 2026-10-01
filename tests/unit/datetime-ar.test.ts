@@ -3,6 +3,7 @@ import {
   localToARIso,
   toARDateKey,
   toARHour,
+  toARMinutes,
   toARDow,
   isoToARLocalInput,
 } from "@/lib/datetime-ar";
@@ -58,5 +59,28 @@ describe("isoToARLocalInput", () => {
   });
   it("returns empty string for an invalid date", () => {
     expect(isoToARLocalInput("not-a-date")).toBe("");
+  });
+});
+
+// Integrador B2 (hallazgo de B2.1a): con `hour12:false`, Intl formatea la
+// medianoche como hora "24" → `toARMinutes` daba 1440 y `toARHour` 24 a las
+// 00:00 AR. Corre en TZ=UTC (`npm test`) y TZ=AR (`npm run test:tz-ar`).
+describe("medianoche AR (00:00 = 03:00 UTC)", () => {
+  const midnight = new Date("2026-05-27T03:00:00Z"); // 00:00 AR del 27
+  it("toARMinutes / toARHour devuelven 0, no 1440 / 24", () => {
+    expect(toARMinutes(midnight)).toBe(0);
+    expect(toARHour(midnight)).toBe(0);
+    expect(toARMinutes(new Date("2026-05-27T03:30:00Z"))).toBe(30);
+    expect(toARHour(new Date("2026-05-27T03:30:00Z"))).toBe(0.5);
+  });
+  it("el día y el dow siguen siendo los del día nuevo", () => {
+    expect(toARDateKey(midnight)).toBe("2026-05-27");
+    expect(toARDow(midnight)).toBe(3); // miércoles
+  });
+  it("23:59 AR sigue siendo 1439", () => {
+    expect(toARMinutes(new Date("2026-05-27T02:59:00Z"))).toBe(1439);
+  });
+  it("isoToARLocalInput a medianoche → T00:00 (no T24:00)", () => {
+    expect(isoToARLocalInput(midnight)).toBe("2026-05-27T00:00");
   });
 });

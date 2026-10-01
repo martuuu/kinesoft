@@ -37,18 +37,23 @@ vi.mock("@/lib/rate-limit", () => ({
 
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { submitPublicBooking, listPublicSlots } from "@/lib/public-booking";
+import { submitPublicBooking, listPublicSlots, getPublicClinic, findFirstPublicSlot } from "@/lib/public-booking";
+import { createBooking } from "@/lib/bookings";
+import { asUser } from "@/tests/helpers/actor";
 import {
   PUBLIC_CONTACT_MISMATCH_NOTE,
   PUBLIC_SHARED_CONTACT_NOTE,
 } from "@/lib/public-booking-internal";
 import type { SubmitPublicBookingInput } from "@/lib/public-booking-types";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
+import { addDays } from "@/lib/availability/day";
 import {
   ownerClient,
   createEphemeralTenant,
   addPatient,
   addService,
+  addPractitioner,
+  addInsurer,
   sweepOrphanTestTenants,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
@@ -314,6 +319,54 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     expect(r2.ok).toBe(false);
   });
 
+  // B4.1 (TOCTOU de cupo, handoff de B3.2): el chequeo de la grilla corría
+  // FUERA de la tx del INSERT, y entre los dos está `resolvePublicPatient`
+  // (alta de ficha): dos pacientes DISTINTOS en un slot de cupo 1 leían "libre"
+  // los dos y escribían los dos (el índice único parcial solo frena al mismo
+  // paciente). Ahora la tx toma `lockCapacityWindow` y re-chequea la grilla.
+  it("[B4.1] cupo 1: tres submits concurrentes de pacientes distintos al mismo slot → exactamente uno ok", async () => {
+    const day = futureWeekday(3);
+    const slot = at(day, "10:15");
+    const results = await Promise.all(
+      ["53100001", "53100002", "53100003"].map((dni) =>
+        submitPublicBooking(input({ documentId: dni }, { slot, serviceId: osteoId }))
+      )
+    );
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    for (const r of results.filter((x) => !x.ok)) {
+      expect(r.ok ? "" : r.error).toMatch(/se acaba de ocupar/);
+    }
+    const live = await db.booking.count({
+      where: { tenantId: T.tenantId, serviceId: osteoId, scheduledFor: new Date(slot), status: { not: "CANCELLED" } },
+    });
+    expect(live).toBe(1);
+  });
+
+  it("[B4.1] cupo 1: la agenda y el turnero compiten por el mismo slot a la vez → un solo turno vivo", async () => {
+    // Misma clave de lock (`kinesoft:cap:<tenant>:<prof>:<servicio>:<día AR>`)
+    // en `createBooking` y en el submit público: se serializan entre canales.
+    const day = futureWeekday(3);
+    const slot = at(day, "13:15");
+    const deskPatient = await addPatient(db, T, { documentId: "53200001" });
+    asUser(T.userId);
+    const [desk, pub] = await Promise.all([
+      createBooking({
+        patientId: deskPatient,
+        serviceId: osteoId,
+        practitionerId: T.practitionerId,
+        scheduledFor: slot,
+        durationMin: 60,
+        idempotencyKey: randomUUID(),
+      }),
+      submitPublicBooking(input({ documentId: "53200002" }, { slot, serviceId: osteoId })),
+    ]);
+    expect([desk.ok, pub.ok].filter(Boolean)).toHaveLength(1);
+    const live = await db.booking.count({
+      where: { tenantId: T.tenantId, serviceId: osteoId, scheduledFor: new Date(slot), status: { not: "CANCELLED" } },
+    });
+    expect(live).toBe(1);
+  });
+
   it("el paciente ya tiene un turno activo en ese instante (agenda) → mensaje de solape, no error genérico", async () => {
     const pid = await addPatient(db, T, { documentId: "51222333", email: "solape@test.local", phone: "1140005000" });
     const slot = at(DAY, "14:45");
@@ -390,5 +443,246 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     const pay = await db.payment.findUniqueOrThrow({ where: { bookingId: r.data.bookingId } });
     expect(pay.expectedAmountCents).toBe(5000);
     expect(pay.status).toBe("UNPAID");
+  });
+});
+
+/** Próximo día AR con ese dow (0=Dom) a partir de 7 días adelante. */
+function futureDow(dow: number, offsetDays = 7): string {
+  for (let d = offsetDays; ; d++) {
+    const key = toARDateKey(new Date(Date.now() + d * 86_400_000));
+    if (toARDow(new Date(localToARIso(`${key}T12:00:00`))) === dow) return key;
+  }
+}
+/** `@db.Date` de un día AR (medianoche UTC, como lo guarda Prisma). */
+const dbDate = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+describe.skipIf(!RUN)("reserva pública · motor de disponibilidad (B3.2 AV-public)", () => {
+  let db: PrismaClient;
+  let T: EphemeralTenant;
+  /** Segundo profesional: franja propia lunes 14:00-17:00 en la sede B. */
+  let P2: string;
+  let locA: string;
+  let locB: string;
+  /** Compartido (sin dueño): PRIVATE para P1. */
+  let privateSvc: string;
+  /** Compartido: deshabilitado para P2, habilitado para P1. */
+  let partialSvc: string;
+  let osdeId: string;
+  const MON = futureDow(1);
+  const MON2 = futureDow(1, 14);
+  const SUN = futureDow(0);
+
+  function req(
+    o: { practitionerId: string; serviceId: string; slot: string; documentId: string; key?: string }
+  ): SubmitPublicBookingInput {
+    return {
+      tenantSlug: T.slug,
+      idempotencyKey: o.key ?? randomUUID(),
+      practitionerId: o.practitionerId,
+      serviceId: o.serviceId,
+      scheduledFor: o.slot,
+      patient: {
+        firstName: "Bea",
+        lastName: "Motor",
+        email: `bea-${randomUUID().slice(0, 8)}@test.local`,
+        phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
+        documentId: o.documentId,
+        dateOfBirth: "1985-03-02",
+      },
+    };
+  }
+  const slots = (practitionerId: string, serviceId: string, date: string, locationId?: string) =>
+    listPublicSlots({ tenantSlug: T.slug, practitionerId, serviceId, date, ...(locationId ? { locationId } : {}) });
+
+  beforeAll(async () => {
+    db = ownerClient();
+    T = await createEphemeralTenant(db);
+    P2 = (await addPractitioner(db, T)).practitionerId;
+    locA = (await db.location.create({ data: { tenantId: T.tenantId, name: "Centro", address: "Av. 1 123", isPrimary: true } })).id;
+    locB = (await db.location.create({ data: { tenantId: T.tenantId, name: "Norte", address: "Calle 2 456" } })).id;
+    // P1 sin franjas → red de seguridad (horario del tenant lun-sáb en la principal).
+    await db.practitionerSchedule.create({
+      data: { tenantId: T.tenantId, practitionerId: P2, locationId: locB, dow: 1, startMin: 14 * 60, endMin: 17 * 60 },
+    });
+    const mk = async (name: string) =>
+      (await db.service.create({ data: { tenantId: T.tenantId, name, durationMin: 45, priceCents: 7000, maxConcurrent: 1 } })).id;
+    privateSvc = await mk("Evaluación interna");
+    partialSvc = await mk("Drenaje");
+    await db.practitionerService.createMany({
+      data: [
+        { tenantId: T.tenantId, practitionerId: T.practitionerId, serviceId: privateSvc, visibility: "PRIVATE" },
+        { tenantId: T.tenantId, practitionerId: P2, serviceId: privateSvc, visibility: "PRIVATE" },
+        { tenantId: T.tenantId, practitionerId: P2, serviceId: partialSvc, enabled: false },
+        // Override de duración de P1 para el servicio compartido.
+        { tenantId: T.tenantId, practitionerId: T.practitionerId, serviceId: partialSvc, durationMin: 60 },
+      ],
+    });
+    osdeId = await addInsurer(db, T, { name: "OSDE" });
+    await db.practitionerPayer.create({ data: { tenantId: T.tenantId, practitionerId: P2, insurerId: osdeId, active: false } });
+  });
+  afterAll(async () => {
+    await T?.cleanup();
+    await db?.$disconnect();
+  });
+
+  it("getPublicClinic: sin servicios PRIVATE; servicio deshabilitado para un profesional no aparece para él; sedes y coberturas", async () => {
+    const c = (await getPublicClinic(T.slug))!;
+    const ids = c.services.map((s) => s.id);
+    expect(ids).not.toContain(privateSvc);
+    const partial = c.services.find((s) => s.id === partialSvc)!;
+    expect(partial.practitionerIds).toEqual([T.practitionerId]);
+    // Un solo profesional lo ofrece → el filtro del wizard actual lo ata a él, con su duración.
+    expect(partial.practitionerId).toBe(T.practitionerId);
+    expect(partial.durationMin).toBe(60);
+    // El servicio default (de P1) no lo ofrece P2.
+    expect(c.services.find((s) => s.id === T.serviceId)!.practitionerIds).toEqual([T.practitionerId]);
+    expect(c.locations!.map((l) => l.id)).toEqual([locA, locB]);
+    expect(c.locations![0]).toMatchObject({ name: "Centro", address: "Av. 1 123", isPrimary: true });
+    // P2 no ofrece ningún servicio online → no aparece.
+    expect(c.practitioners.map((p) => p.id)).toEqual([T.practitionerId]);
+    expect(c.practitioners[0].locationIds).toEqual([locA]);
+    expect(c.practitioners[0].acceptedInsurerIds!.sort()).toEqual([T.particularInsurerId, osdeId].sort());
+    expect(c.insurers!.map((i) => i.name)).toEqual(["Particular", "OSDE"]);
+  });
+
+  it("servicio PRIVATE: sin horarios y el submit armado a mano se rechaza", async () => {
+    expect(await slots(T.practitionerId, privateSvc, MON)).toEqual([]);
+    const r = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: privateSvc, slot: at(MON, "08:00"), documentId: "60100100" })
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("Servicio no encontrado.");
+  });
+
+  it("servicio deshabilitado para un profesional: sin horarios ni submit para él; con el otro sí (override de duración)", async () => {
+    expect(await slots(P2, partialSvc, MON)).toEqual([]);
+    const no = await submitPublicBooking(req({ practitionerId: P2, serviceId: partialSvc, slot: at(MON, "14:00"), documentId: "60100101" }));
+    expect(no.ok).toBe(false);
+    const ok = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: partialSvc, slot: at(MON, "17:00"), documentId: "60100102" })
+    );
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    const b = await db.booking.findUniqueOrThrow({ where: { id: ok.data.bookingId } });
+    expect(b.durationMin).toBe(60);
+  });
+
+  it("franja propia del profesional distinta del horario del tenant (y sede asignada al turno)", async () => {
+    // P2 ofrece online un servicio propio.
+    const own = await db.service.create({
+      data: { tenantId: T.tenantId, practitionerId: P2, name: "Osteo P2", durationMin: 45, priceCents: 9000, maxConcurrent: 1 },
+    });
+    const list = await slots(P2, own.id, MON);
+    expect(list.map((s) => s.time)).toEqual(["14:00", "14:45", "15:30", "16:15"]);
+    expect(list.every((s) => s.locationId === locB)).toBe(true);
+    // Filtro por sede: P2 no atiende en la principal.
+    expect(await slots(P2, own.id, MON, locA)).toEqual([]);
+    // 08:00 está dentro del horario del tenant pero fuera de la franja de P2.
+    const out = await submitPublicBooking(req({ practitionerId: P2, serviceId: own.id, slot: at(MON, "08:00"), documentId: "60100103" }));
+    expect(out.ok).toBe(false);
+    const r = await submitPublicBooking(req({ practitionerId: P2, serviceId: own.id, slot: at(MON, "14:45"), documentId: "60100104" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const b = await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId } });
+    expect(b.locationId).toBe(locB);
+    expect(b.idempotencyKey.startsWith(`pub:${T.tenantId}:`)).toBe(true);
+    // getPublicClinic ahora lista a P2 con su sede y sin OSDE (PractitionerPayer inactivo).
+    const c = (await getPublicClinic(T.slug))!;
+    const p2 = c.practitioners.find((p) => p.id === P2)!;
+    expect(p2.locationIds).toEqual([locB]);
+    expect(p2.acceptedInsurerIds).toEqual([T.particularInsurerId]);
+  });
+
+  it("profesional sin franjas → sede principal en el turno", async () => {
+    const r = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: T.serviceId, slot: at(MON, "08:45"), documentId: "60100105" })
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId } })).locationId).toBe(locA);
+  });
+
+  it("día bloqueado: no ofrece horarios ni acepta el submit; un bloqueo parcial saca solo lo que pisa", async () => {
+    const day = futureDow(2); // martes
+    await db.timeBlock.create({
+      data: {
+        tenantId: T.tenantId,
+        practitionerId: null,
+        locationId: null,
+        startsAt: new Date(at(day, "00:00")),
+        endsAt: new Date(at(addDays(day, 1), "00:00")),
+        allDay: true,
+        reason: "Feriado",
+        createdById: T.userId,
+      },
+    });
+    expect(await slots(T.practitionerId, T.serviceId, day)).toEqual([]);
+    const r = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: T.serviceId, slot: at(day, "10:15"), documentId: "60100106" })
+    );
+    expect(r.ok).toBe(false);
+    expect(await db.booking.count({ where: { tenantId: T.tenantId, scheduledFor: new Date(at(day, "10:15")) } })).toBe(0);
+
+    // Parcial 09:00-10:00 el miércoles: 08:00 sí; 08:45 (pisa) no; la grilla sigue a las 10:00.
+    const wed = addDays(day, 1);
+    await db.timeBlock.create({
+      data: {
+        tenantId: T.tenantId,
+        practitionerId: T.practitionerId,
+        startsAt: new Date(at(wed, "09:00")),
+        endsAt: new Date(at(wed, "10:00")),
+        createdById: T.userId,
+      },
+    });
+    const times = (await slots(T.practitionerId, T.serviceId, wed)).map((s) => s.time);
+    expect(times.slice(0, 3)).toEqual(["08:00", "10:00", "10:45"]);
+    const hit = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: T.serviceId, slot: at(wed, "08:45"), documentId: "60100107" })
+    );
+    expect(hit.ok).toBe(false);
+  });
+
+  it("excepción CUSTOM_HOURS abre un domingo (slots + submit, con la sede de la excepción)", async () => {
+    expect(await slots(T.practitionerId, T.serviceId, SUN)).toEqual([]);
+    await db.scheduleException.create({
+      data: {
+        tenantId: T.tenantId,
+        practitionerId: T.practitionerId,
+        date: dbDate(SUN),
+        kind: "CUSTOM_HOURS",
+        ranges: [{ startMin: 10 * 60, endMin: 12 * 60, locationId: locB }],
+        reason: "Jornada de domingo",
+        createdById: T.userId,
+      },
+    });
+    const list = await slots(T.practitionerId, T.serviceId, SUN);
+    expect(list.map((s) => s.time)).toEqual(["10:00", "10:45"]);
+    const r = await submitPublicBooking(
+      req({ practitionerId: T.practitionerId, serviceId: T.serviceId, slot: at(SUN, "10:45"), documentId: "60100108" })
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId } })).locationId).toBe(locB);
+  });
+
+  it("cualquier profesional: primer hueco de la grilla pública, filtrado por cobertura; reservable", async () => {
+    const svc = await db.service.create({
+      data: { tenantId: T.tenantId, name: "Masaje", durationMin: 45, priceCents: 6000, maxConcurrent: 1 },
+    });
+    // P1 cerrado ese lunes → el primero es P2 a las 14:00 (franja propia).
+    await db.scheduleException.create({
+      data: { tenantId: T.tenantId, practitionerId: T.practitionerId, date: dbDate(MON2), kind: "CLOSED", createdById: T.userId },
+    });
+    const first = await findFirstPublicSlot({ tenantSlug: T.slug, serviceId: svc.id, fromDate: MON2 });
+    expect(first).toMatchObject({ practitionerId: P2, date: MON2, time: "14:00", locationId: locB, durationMin: 45 });
+    // Con OSDE (P2 no la acepta) → P1, el martes siguiente a las 08:00.
+    const osde = await findFirstPublicSlot({ tenantSlug: T.slug, serviceId: svc.id, fromDate: MON2, insurerId: osdeId });
+    expect(osde!.practitionerId).toBe(T.practitionerId);
+    expect(osde!.time).toBe("08:00");
+    // Cobertura de otro consultorio → null (no se ofrece a ciegas).
+    expect(await findFirstPublicSlot({ tenantSlug: T.slug, serviceId: svc.id, insurerId: "nope" })).toBeNull();
+    // Lo devuelto se reserva con el submit (misma grilla).
+    const r = await submitPublicBooking(req({ practitionerId: first!.practitionerId, serviceId: svc.id, slot: first!.iso, documentId: "60100109" }));
+    expect(r.ok).toBe(true);
   });
 });

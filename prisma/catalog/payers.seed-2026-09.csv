@@ -1,0 +1,14 @@
+slug,name,legalName,kind,registryCode,cuit,province,aliases,source,sourceRef,sourceDate,sourceUrl
+avalian,Avalian,Avalian Salud y Bienestar Cooperativa Limitada,PREPAGA,903101,,,ACA Salud|ACA Salud Cooperativa|Avalian Salud y Bienestar Cooperativa Limitada,CURATED,RNOS 903101; RNEMP 2-1194-7,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+boreal,Boreal,,OTRA,,,,,CURATED,benchmark 2026-09 (sin registro SSS identificable),2026-09-30,
+confianza,Confianza,,OTRA,,,,,CURATED,benchmark 2026-09 (sin registro SSS identificable),2026-09-30,
+federada-salud,Federada Salud,"Mutual Federada ""25 de Junio"" Sociedad de Protección Recíproca",MUTUAL,903200,,,"Federada|Mutual Federada 25 de Junio|Mutual Federada ""25 de Junio"" Sociedad de Protección Recíproca",CURATED,RNOS 903200; RNEMP 3-1158-6,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+gma-salud,GMA Salud,,OTRA,,,,,CURATED,benchmark 2026-09 (sin registro SSS identificable),2026-09-30,
+grupo-alianza-medica,Grupo Alianza Médica,,OTRA,,,,,CURATED,benchmark 2026-09 (sin registro SSS identificable),2026-09-30,
+iapos,Instituto Autárquico Provincial de Obra Social (Santa Fe),Instituto Autárquico Provincial de Obra Social,OBRA_SOCIAL,,,Santa Fe,IAPOS|Instituto Autárquico Provincial de Obra Social,CURATED,COSSPRA,2026-09-30,https://cosspra.com.ar/nosotros/
+ioma,Instituto de Obra Médico Asistencial (Buenos Aires),Instituto de Obra Médico Asistencial,OBRA_SOCIAL,,,Buenos Aires,IOMA|Instituto de Obra Médico Asistencial|Instituto de Obra Médica Asistencial,CURATED,COSSPRA,2026-09-30,https://cosspra.com.ar/nosotros/
+osam,Obra Social de la Actividad Minera,Obra Social de la Actividad Minera,OBRA_SOCIAL,112400,,,OSAM|OSAM Salud|O.S.A.M,CURATED,RNOS 112400,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+oschoca,Obra Social de Choferes de Camiones,Obra Social de Choferes de Camiones,OBRA_SOCIAL,105804,,,OSCHOCA,CURATED,RNOS 105804,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+osdepym,"Obra Social de Empresarios, Profesionales y Monotributistas","Obra Social de Empresarios, Profesionales y Monotributistas",OBRA_SOCIAL,401704,,,Osdepym,CURATED,RNOS 401704; RNEMP 6-1486-9,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+osdop,Obra Social de Docentes Particulares,Obra Social de Docentes Particulares,OBRA_SOCIAL,106302,,,Osdop,CURATED,RNOS 106302; RNEMP 6-1398-9,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100
+osecac,Obra Social de los Empleados de Comercio y Actividades Civiles,Obra Social de los Empleados de Comercio y Actividades Civiles,OBRA_SOCIAL,126205,,,OSECAC,CURATED,RNOS 126205; RNEMP 6-1532-9,2026-09-30,https://www.sssalud.gob.ar/?page=listRnosc&tipo=100

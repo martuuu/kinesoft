@@ -92,6 +92,21 @@ mails de verificación del signup no llegan a externos y nadie puede darse de al
 8. *(Opcional)* Registrar el dominio en **hstspreload.org** si se quiere el preload real (el header ya lo
    declara; salir de la lista tarda meses: hacerlo solo con el dominio definitivo).
 
+### 0.2 B-pre — tareas del dueño (01-oct-2026) 🔴
+
+B-pre **no suma servicios externos, env vars ni configuración de consola**. Lo único del dueño, además del deploy
+(MIGRACIONES-RUNBOOK §2.2):
+
+1. **Confirmar que `DIRECT_URL` en Vercel (Production) es el owner** (`rolsuper` o `rolbypassrls`): el backfill de
+   `agenda_foundations` corre con `row_security = off` y, sin BYPASSRLS, la migración falla a propósito.
+2. **Import del catálogo global** (staging primero, después prod): backup → dry-run → `--apply` → dry-run = 0
+   cambios → Plataforma → Catálogo → Importaciones → "Refrescar catálogo". Comandos en MIGRACIONES-RUNBOOK §2.2
+   paso 6. Usa `.env.prod.local` (owner) y `KINESOFT_CONFIRM_PROD=<project-ref>`.
+3. **Curado inicial en Plataforma** (cuando quiera, no bloquea): las 37 siglas ambiguas sin alias, los planes
+   Sancor 1000/1500 y las especialidades de Mendoza (AUDIT §2 "Hallazgos de B-pre").
+
+Las reglas de A3 no cambian: **A3 no se despliega sin el SMTP propio** (§0.1).
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -242,7 +257,7 @@ mails de verificación del signup no llegan a externos y nadie puede darse de al
   Meta las revisa una por una y todo mensaje iniciado por el negocio fuera de la ventana de 24 h
   tiene que ser una plantilla aprobada.
 - **Contexto (qué hay hoy):** en la **Ronda 5** se entregó "Compartir turno" en el booking-drawer
-  con un link **`wa.me`** (`components/agenda/booking-drawer.tsx`) + recordatorio imprimible/PDF
+  con un link **`wa.me`** (`components/agenda/booking-drawer/share-actions.tsx`) + recordatorio imprimible/PDF
   client-side. Ese camino **no requiere ninguna configuración ni costo**: abre WhatsApp con el
   texto pre-cargado y el profesional aprieta enviar. Cubre el caso real de hoy (1 cliente,
   volumen bajo). La API oficial es lo que hace falta **solo** para envíos **automáticos** (cron de

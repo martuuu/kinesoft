@@ -8,7 +8,12 @@ import type { EvaScore } from "@prisma/client";
 
 export type PractitionerOption = { id: string; name: string };
 
-export type InsurerOption = { id: string; name: string };
+/**
+ * `payerId` (B1, catálogo): prestadora del catálogo global vinculada a la OS
+ * del consultorio. Con prestadora, el plan de la ficha se elige de sus planes
+ * (`listPayerPlans`); sin ella, el plan sigue siendo texto libre.
+ */
+export type InsurerOption = { id: string; name: string; payerId?: string | null };
 
 /**
  * Composite patient prop shape consumed by the views. Built from the

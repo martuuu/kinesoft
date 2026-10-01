@@ -1,22 +1,33 @@
 "use client";
 
-import { toARDateKey, toARDow } from "@/lib/datetime-ar";
+import type { DayKey } from "@/lib/availability/types";
 import { DAYS, type BookingDTO } from "../agenda-utils";
 
+/**
+ * Tira de días de la semana sobre la vista Día/Lista.
+ *
+ * Handoff de B4.3 (integrador final): recibe los 7 DayKeys AR de la semana
+ * (`weekDayKeys(weekStartKey)`, lunes primero) en vez de un `Date` que se
+ * avanzaba con `setDate(getDate()+i)` del reloj del host. Con DayKeys no hay
+ * aritmética de fechas acá: la etiqueta sale del índice (0=Lun … 6=Dom) y el
+ * número del propio DayKey, así que no depende de la zona del navegador.
+ */
 export function WeekStrip({
-  weekStart,
-  anchor,
+  weekDays,
+  dayKey,
   bookingsByDay,
   showSaturday,
   showSunday,
   onPick,
 }: {
-  weekStart: Date;
-  anchor: Date;
+  /** Los 7 días AR de la semana, lunes primero. */
+  weekDays: readonly DayKey[];
+  /** Día elegido (resaltado). */
+  dayKey: DayKey;
   bookingsByDay: Map<string, BookingDTO[]>;
   showSaturday: boolean;
   showSunday: boolean;
-  onPick: (d: Date) => void;
+  onPick: (dayKey: DayKey) => void;
 }) {
   // Same weekend visibility as the week grid (0=Mon … 6=Sun) so the day
   // strip reflects the user's "Mostrar sábado/domingo" choice in every view.
@@ -26,18 +37,15 @@ export function WeekStrip({
   return (
     <div style={{ display: "grid", gridTemplateColumns: `repeat(${visibleDays.length}, 1fr)`, gap: 8 }}>
       {visibleDays.map((i) => {
-        const day = new Date(weekStart);
-        day.setDate(day.getDate() + i);
-        const key = toARDateKey(day);
-        // Label from the column's real AR weekday — keeps name + number in
-        // sync regardless of how weekStart was computed.
-        const label = DAYS[(toARDow(day) + 6) % 7];
+        const key = weekDays[i];
+        if (!key) return null;
+        const label = DAYS[i];
         const count = bookingsByDay.get(key)?.length ?? 0;
-        const on = toARDateKey(day) === toARDateKey(anchor);
+        const on = key === dayKey;
         return (
           <button
             key={key}
-            onClick={() => onPick(day)}
+            onClick={() => onPick(key)}
             className={on ? undefined : "k-glass"}
             style={{
               padding: "10px 6px",

@@ -14,6 +14,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
+import { getMembershipRole } from "@/lib/authz";
+import { isTenantAdminRole } from "@/lib/capabilities";
+import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { audit } from "@/lib/audit";
 import { localToARIso } from "@/lib/datetime-ar";
 import { logger } from "@/lib/logger";
@@ -980,11 +983,9 @@ async function hcAccessError(
 async function requireAdminRole(
   actor: Actor
 ): Promise<{ ok: false; error: string } | null> {
-  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  }));
-  if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+  // B1.7: el rol sale de `lib/authz` (una query por request, cacheada) y el
+  // criterio OWNER/ADMIN de `lib/capabilities` (un solo lugar para C0).
+  if (!isTenantAdminRole(await getMembershipRole(actor))) {
     return {
       ok: false,
       error: "Solo el dueño o un administrador puede eliminar definitivamente.",
@@ -1093,6 +1094,8 @@ export async function setPatientCoverage(input: {
   insurerId?: string;
   insurerName?: string;
   planName?: string;
+  /** Plan del catálogo (`PayerPlan`) de la prestadora vinculada al Insurer. */
+  payerPlanId?: string;
   memberId?: string;
   resetCopago?: boolean;
 }): Promise<ActionResult> {
@@ -1106,7 +1109,7 @@ export async function setPatientCoverage(input: {
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const { patientId, insurerId, insurerName, planName, memberId, resetCopago } = parsed.data;
+  const { patientId, insurerId, insurerName, planName, payerPlanId, memberId, resetCopago } = parsed.data;
 
   // RLS-guarded: the ownership check, the insurer lookup and the write of the
   // Coverage row all run inside the same tenant GUC transaction. Previously
@@ -1126,20 +1129,37 @@ export async function setPatientCoverage(input: {
     let resolvedName = "";
     let resolvedInsurerId: string | null = null;
     let resolvedIsParticular = false;
+    let insurerPayerId: string | null = null;
     if (insurerId) {
       const ins = await tx.insurer.findFirst({
         where: { id: insurerId, tenantId: actor.tenantId },
-        select: { id: true, name: true, isParticular: true },
+        select: { id: true, name: true, isParticular: true, payerId: true },
       });
       if (!ins) return { ok: false as const, error: "Obra social no encontrada." };
       resolvedInsurerId = ins.id;
       resolvedName = ins.name;
       resolvedIsParticular = ins.isParticular;
+      insurerPayerId = ins.payerId;
     } else if (insurerName) {
       // Free-form ("Otra"): normalize + link to the catalogue if it matches.
       const r = await resolveInsurerName(actor.tenantId, insurerName, tx);
       resolvedInsurerId = r.insurerId;
       resolvedName = r.name;
+    }
+
+    // B1 (catálogo): plan de la prestadora. La FK `Coverage.payerPlanId`
+    // saltea RLS (y en prod la conexión tiene BYPASSRLS), así que el plan se
+    // valida acá, en la misma tx: global o propuesto por ESTE consultorio, no
+    // archivado, y de la prestadora vinculada a la OS elegida. Sin OS
+    // vinculada al catálogo no hay plan posible (si no, `payerId` vacío
+    // aceptaría el plan de cualquier prestadora). Particular nunca lleva plan.
+    let resolvedPlan: { id: string; name: string } | null = null;
+    if (payerPlanId) {
+      if (!resolvedInsurerId || resolvedIsParticular || !insurerPayerId) {
+        return { ok: false as const, error: "Plan no encontrado para esta obra social." };
+      }
+      resolvedPlan = await findUsablePayerPlan(tx, actor.tenantId, payerPlanId, insurerPayerId);
+      if (!resolvedPlan) return { ok: false as const, error: "Plan no encontrado para esta obra social." };
     }
 
     const existing = await tx.coverage.findFirst({
@@ -1188,6 +1208,7 @@ export async function setPatientCoverage(input: {
               insurer: particular?.name ?? "Particular",
               insurerId: particular?.id ?? null,
               planName: null,
+              payerPlanId: null,
               memberId: null,
               validUntil: null,
               copagoCents: keptCopago,
@@ -1203,7 +1224,9 @@ export async function setPatientCoverage(input: {
         data: {
           insurer: resolvedName,
           insurerId: resolvedInsurerId,
-          planName: planName?.trim() || null,
+          // `planName` = cache de display: con plan del catálogo, su nombre.
+          payerPlanId: resolvedPlan?.id ?? null,
+          planName: resolvedPlan?.name ?? (planName?.trim() || null),
           memberId: memberId?.trim() || null,
           copagoCents: keptCopago,
           // La vigencia es de la credencial: se conserva solo con la misma OS.
@@ -1216,12 +1239,20 @@ export async function setPatientCoverage(input: {
           patientId,
           insurer: resolvedName,
           insurerId: resolvedInsurerId,
-          planName: planName?.trim() || null,
+          payerPlanId: resolvedPlan?.id ?? null,
+          planName: resolvedPlan?.name ?? (planName?.trim() || null),
           memberId: memberId?.trim() || null,
         },
       });
     }
-    return { ok: true as const, resolvedName, resolvedInsurerId, osChanged: !sameOs, copagoReset };
+    return {
+      ok: true as const,
+      resolvedName,
+      resolvedInsurerId,
+      payerPlanId: resolvedPlan?.id ?? null,
+      osChanged: !sameOs,
+      copagoReset,
+    };
   });
 
   if (!result.ok) return { ok: false, error: result.error };
@@ -1233,7 +1264,13 @@ export async function setPatientCoverage(input: {
     action: "patient.coverage.update",
     entity: "Patient",
     entityId: patientId,
-    payload: { insurer: resolvedName || "Particular", insurerId: resolvedInsurerId, osChanged, copagoReset },
+    payload: {
+      insurer: resolvedName || "Particular",
+      insurerId: resolvedInsurerId,
+      payerPlanId: result.payerPlanId,
+      osChanged,
+      copagoReset,
+    },
   });
   revalidatePath(`/pacientes/${patientId}`);
   revalidatePath("/agenda");
@@ -1380,11 +1417,7 @@ export async function assignPatientToPractitioner(input: {
   practitionerId: string | null;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  }));
-  if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+  if (!isTenantAdminRole(await getMembershipRole(actor))) {
     return { ok: false, error: "Solo OWNER/ADMIN pueden re-asignar pacientes." };
   }
 
@@ -1848,11 +1881,7 @@ async function requireShareAuthority(patientId: string) {
     select: { id: true, assignedPractitionerId: true },
   }));
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
-  const membership = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  }));
-  const isAdmin = membership?.role === "OWNER" || membership?.role === "ADMIN";
+  const isAdmin = isTenantAdminRole(await getMembershipRole(actor));
   const isOwner = patient.assignedPractitionerId === actor.practitionerId;
   if (!isAdmin && !isOwner) {
     return {

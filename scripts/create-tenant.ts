@@ -38,6 +38,7 @@
  */
 import { PrismaClient } from "@prisma/client";
 import { bootstrapTenant, PractitionerElsewhereError } from "../lib/tenant-bootstrap";
+import { enableServiceForPractitioners } from "../lib/agenda-defaults";
 import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
 import { assertSafeTarget } from "./lib/assert-safe-target";
 import { createClient } from "@supabase/supabase-js";
@@ -224,9 +225,15 @@ async function main() {
         where: { tenantId, name: s.name },
         select: { id: true },
       });
-      if (!exists) {
-        await prisma.service.create({ data: { ...s, tenantId } });
-      }
+      // B-pre (B2.3 → integrador B2): el servicio nace habilitado para los
+      // profesionales (PractitionerService), igual que `createService` y el
+      // backfill de `agenda_foundations`. Idempotente (skipDuplicates): si el
+      // servicio ya existía, re-correr el script repara las filas que falten.
+      await prisma.$transaction(async (tx) => {
+        const svc =
+          exists ?? (await tx.service.create({ data: { ...s, tenantId }, select: { id: true } }));
+        await enableServiceForPractitioners(tx, { tenantId, serviceId: svc.id, practitionerId: null });
+      });
     }
     console.log(`    Seeded ${starter.length} services (skip with --skip-services).`);
   } else {

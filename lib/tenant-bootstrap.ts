@@ -1,6 +1,9 @@
 /**
  * Alta de un consultorio: Tenant + UserProfile + Practitioner + Membership
- * OWNER (aceptada) + Insurer "Particular", en UNA transacción (A3c-S-signup).
+ * OWNER (aceptada) + Insurer "Particular" + agenda por defecto del OWNER
+ * (sede "Principal", franjas lun-sáb con el horario del tenant y
+ * PractitionerPayer de Particular; B-pre B2.3), en UNA transacción
+ * (A3c-S-signup). Único camino de alta de tenant (AUDIT §5.26).
  *
  * Antes esta lógica estaba copiada en `lib/auth.ts#signUpPractitioner` y en
  * `scripts/create-tenant.ts`, y ya habían divergido: el script no creaba
@@ -16,6 +19,7 @@
  */
 import type { Prisma } from "@prisma/client";
 import { pickFreeSlug, slugify } from "./onboarding-logic"; // relativo: el script lo corre tsx
+import { provisionPractitionerAgenda } from "./agenda-defaults";
 
 type Tx = Prisma.TransactionClient;
 
@@ -64,7 +68,13 @@ export async function freeSlugFor(tx: Tx, clinicName: string): Promise<string> {
 export async function bootstrapTenant(
   tx: Tx,
   input: BootstrapTenantInput
-): Promise<{ tenantId: string; slug: string; practitionerId: string; particularInsurerId: string }> {
+): Promise<{
+  tenantId: string;
+  slug: string;
+  practitionerId: string;
+  particularInsurerId: string;
+  locationId: string;
+}> {
   const email = input.email.trim().toLowerCase();
 
   const existingPrac = await tx.practitioner.findUnique({
@@ -109,6 +119,17 @@ export async function bootstrapTenant(
       active: true,
     },
   });
+  // B2.3: el tenant nace con la agenda configurada, igual que lo dejaría el
+  // backfill de agenda_foundations (mismas reglas y mismos ids): sede
+  // principal, franjas lun-sáb con el horario del tenant recién creado (los
+  // defaults del schema; el paso 3 del onboarding lo cambia después y
+  // `setBusinessHours` arrastra esta plantilla mientras siga sin editar) y
+  // PractitionerPayer de Particular. Servicios todavía no hay: los que se
+  // creen después se habilitan en `createService`.
+  const agenda = await provisionPractitionerAgenda(tx, {
+    tenantId: tenant.id,
+    practitionerId: practitioner.id,
+  });
   // En la misma transacción (no `audit()`, que escribe por otra conexión):
   // si el alta se revierte, no queda un audit de un tenant que no existe.
   await tx.auditEvent.create({
@@ -121,5 +142,11 @@ export async function bootstrapTenant(
       payload: { slug, source: input.source, practitionerId: practitioner.id },
     },
   });
-  return { tenantId: tenant.id, slug, practitionerId: practitioner.id, particularInsurerId: particular.id };
+  return {
+    tenantId: tenant.id,
+    slug,
+    practitionerId: practitioner.id,
+    particularInsurerId: particular.id,
+    locationId: agenda.locationId,
+  };
 }

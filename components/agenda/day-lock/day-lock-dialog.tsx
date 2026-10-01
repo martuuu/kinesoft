@@ -1,0 +1,799 @@
+"use client";
+
+/**
+ * Diálogo del candado de día (B4.4 AG-lock, plan §11.3).
+ *
+ * Pasos:
+ *   1. «form»: alcance (todo el día / una franja), profesionales (por defecto
+ *      los filtrados en la agenda; "Todo el equipo" solo con
+ *      `agenda.manageBlocks`), sede (si hay más de una) y motivo con chips.
+ *      Si el día ya tiene bloqueos, arriba se pueden quitar (desbloquear).
+ *   2. «affected» (solo si hay turnos debajo): lista hora · profesional ·
+ *      paciente y la decisión: Mantenerlos / Cancelarlos / Volver.
+ *   3. «done» / «unlocked»: resultado (cancelados, los que no se pudieron
+ *      cancelar por tener cobro, lo que queda bloqueado).
+ *
+ * Contrato con el server (`lib/time-blocks.ts`): `applyDayLock` recibe los ids
+ * que el usuario VIO; si la agenda cambió en el medio devuelve `changed` y acá
+ * se re-muestra la lista nueva sin aplicar nada (carrera bloqueo vs alta).
+ *
+ * Dirty-guard: cerrar con algo cargado (o con la decisión pendiente) pide
+ * confirmación con `useConfirm`. Después de aplicar no hay nada que perder.
+ * La lógica (estado inicial, validación, copy) vive en `lib/day-lock-state.ts`.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Modal } from "@/components/ui/modal";
+import { Button } from "@/components/ui/button";
+import { FormField } from "@/components/ui/form-field";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { applyDayLock, previewDayLock, removeDayLock } from "@/lib/time-blocks";
+import type {
+  DayLockApplyData,
+  DayLockPreview,
+  DayLockPreviewInput,
+  RemoveDayLockData,
+} from "@/lib/time-blocks-schemas";
+import {
+  DAY_LOCK_REASONS,
+  DAY_LOCK_REASON_MAX,
+  DAY_LOCK_STEP_MIN,
+  SKIP_REASON_LABEL,
+  affectedHeadline,
+  affectedLines,
+  applySummary,
+  buildDayLockScope,
+  dayKeyLongLabel,
+  dayLockThrownMessage,
+  initialDayLockForm,
+  isDayLockFormDirty,
+  minutesLabel,
+  removableBlocks,
+  removeScopeFor,
+  removeSummary,
+  type DayLockFormErrors,
+  type DayLockFormState,
+  type ExistingDayBlock,
+} from "@/lib/day-lock-state";
+
+type Step = "form" | "affected" | "done" | "unlocked";
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--navy-500)",
+  marginBottom: 6,
+};
+const errorStyle: React.CSSProperties = { fontSize: 11, color: "#9F1F1F", marginTop: 4 };
+const selectStyle: React.CSSProperties = {
+  padding: "8px 6px",
+  borderRadius: 10,
+  border: "1px solid rgba(15,30,51,0.1)",
+  background: "#fff",
+  fontSize: 13,
+  color: "var(--navy-900)",
+};
+const noteStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--navy-700)",
+  padding: "8px 10px",
+  borderRadius: 10,
+  background: "rgba(31,79,190,0.06)",
+  border: "1px solid rgba(31,79,190,0.15)",
+};
+const warnStyle: React.CSSProperties = {
+  ...noteStyle,
+  background: "rgba(180,110,20,0.08)",
+  border: "1px solid rgba(180,110,20,0.25)",
+};
+const listStyle: React.CSSProperties = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "grid",
+  gap: 4,
+  maxHeight: 240,
+  overflowY: "auto",
+};
+const rowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "baseline",
+  fontSize: 13,
+  padding: "6px 10px",
+  borderRadius: 10,
+  background: "rgba(15,30,51,0.03)",
+};
+
+function chipStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    height: 30,
+    padding: "0 12px",
+    borderRadius: 999,
+    fontSize: 12.5,
+    fontWeight: 600,
+    border: `1px solid ${active ? "var(--navy-900)" : "rgba(15,30,51,0.12)"}`,
+    background: active ? "var(--navy-900)" : "rgba(255,255,255,0.7)",
+    color: active ? "#fff" : "var(--navy-700)",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+}
+
+/** Opciones de hora en pasos de 15' ("24:00" solo para el "hasta"). */
+const TIME_OPTIONS = Array.from({ length: 1440 / DAY_LOCK_STEP_MIN + 1 }, (_, i) => i * DAY_LOCK_STEP_MIN);
+
+function TimeSelect({
+  id,
+  label,
+  value,
+  onChange,
+  allowDayEnd,
+  disabled,
+  error,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  onChange: (min: number) => void;
+  allowDayEnd?: boolean;
+  disabled?: boolean;
+  error?: string;
+}) {
+  const opts = allowDayEnd ? TIME_OPTIONS.slice(1) : TIME_OPTIONS.slice(0, -1);
+  return (
+    <div>
+      <label htmlFor={id} style={{ ...labelStyle, display: "block" }}>
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={selectStyle}
+        aria-invalid={error ? true : undefined}
+      >
+        {opts.map((m) => (
+          <option key={m} value={m}>
+            {minutesLabel(m)}
+          </option>
+        ))}
+      </select>
+      {error && <div style={errorStyle}>{error}</div>}
+    </div>
+  );
+}
+
+export function DayLockDialog({
+  open,
+  dayKey,
+  practitioners,
+  initialPractitionerIds,
+  locations,
+  canBlockAll,
+  ownPractitionerId,
+  existingBlocks,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  dayKey: string;
+  practitioners: { id: string; name: string }[];
+  initialPractitionerIds: string[] | null /*null = todos*/;
+  locations?: { id: string; name: string }[];
+  canBlockAll: boolean;
+  ownPractitionerId?: string | null;
+  existingBlocks?: ExistingDayBlock[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const confirm = useConfirm();
+  const ctx = useMemo(
+    () => ({ practitioners, canBlockAll, ownPractitionerId: ownPractitionerId ?? null }),
+    [practitioners, canBlockAll, ownPractitionerId]
+  );
+  // Inicial por apertura: los ids filtrados se comparan por valor (un array
+  // nuevo del padre en cada render no debe resetear lo que se está cargando).
+  const initialKey = initialPractitionerIds === null ? "*" : [...initialPractitionerIds].sort().join(",");
+  const initial = useMemo(
+    () => initialDayLockForm(initialPractitionerIds, ctx),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [initialKey, ctx, dayKey]
+  );
+
+  const [step, setStep] = useState<Step>("form");
+  const [form, setForm] = useState<DayLockFormState>(initial);
+  const [errors, setErrors] = useState<DayLockFormErrors>({});
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DayLockPreview | null>(null);
+  const [scope, setScope] = useState<{ input: DayLockPreviewInput; reason: string | null } | null>(null);
+  const [changedNotice, setChangedNotice] = useState<string | null>(null);
+  const [applied, setApplied] = useState<DayLockApplyData | null>(null);
+  const [removed, setRemoved] = useState<RemoveDayLockData | null>(null);
+  const [toRemove, setToRemove] = useState<Set<string>>(new Set());
+  const [pending, start] = useTransition();
+  // Algo se escribió (bloqueo o desbloqueo): al cerrar se avisa al padre para refrescar.
+  const wrote = useRef(false);
+
+  const blocks = useMemo(
+    () => removableBlocks(existingBlocks ?? [], dayKey, ctx),
+    [existingBlocks, dayKey, ctx]
+  );
+
+  // Reset en cada apertura / cambio de día.
+  useEffect(() => {
+    if (!open) return;
+    setStep("form");
+    setForm(initial);
+    setErrors({});
+    setError(null);
+    setPreview(null);
+    setScope(null);
+    setChangedNotice(null);
+    setApplied(null);
+    setRemoved(null);
+    setToRemove(new Set(blocks.filter((b) => b.removable).map((b) => b.block.id)));
+    wrote.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial]);
+
+  const dirty = (step === "form" && isDayLockFormDirty(initial, form)) || step === "affected";
+
+  const finish = useCallback(() => {
+    if (wrote.current) onDone();
+    else onClose();
+  }, [onClose, onDone]);
+
+  const requestClose = useCallback(async () => {
+    if (pending) return;
+    if (dirty) {
+      const ok = await confirm({
+        title: "¿Descartar el bloqueo?",
+        message:
+          step === "affected"
+            ? "Todavía no se bloqueó el día. Si cerrás, no se aplica nada."
+            : "Tenés cambios sin guardar. Si cerrás, se pierden.",
+        confirmLabel: "Descartar",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    finish();
+  }, [pending, dirty, confirm, step, finish]);
+
+  const set = <K extends keyof DayLockFormState>(k: K, v: DayLockFormState[K]) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    setErrors((e) => (k in e ? { ...e, [k]: undefined } : e));
+    setError(null);
+  };
+
+  const togglePractitioner = (id: string) => {
+    setForm((f) => {
+      const has = f.practitionerIds.includes(id);
+      return {
+        ...f,
+        who: "some",
+        practitionerIds: has ? f.practitionerIds.filter((x) => x !== id) : [...f.practitionerIds, id],
+      };
+    });
+    setErrors((e) => ({ ...e, practitionerIds: undefined }));
+    setError(null);
+  };
+
+  const apply = (
+    s: { input: DayLockPreviewInput; reason: string | null },
+    decision: "keep" | "cancel",
+    expected: string[]
+  ) => {
+    start(async () => {
+      try {
+        const r = await applyDayLock({
+          ...s.input,
+          reason: s.reason,
+          bookingsDecision: decision,
+          expectedAffectedIds: expected,
+        });
+        if (r.ok) {
+          wrote.current = true;
+          setApplied(r.data);
+          setStep("done");
+          return;
+        }
+        if ("changed" in r && r.changed) {
+          // La agenda cambió entre el preview y el apply: nada se aplicó.
+          setPreview(r.affected);
+          setChangedNotice(r.error);
+          setStep("affected");
+          return;
+        }
+        setError(r.error);
+      } catch (e) {
+        setError(dayLockThrownMessage(e));
+      }
+    });
+  };
+
+  const submitForm = () => {
+    const built = buildDayLockScope(dayKey, form, ctx);
+    if (!built.ok) {
+      setErrors(built.errors);
+      setError("Revisá los datos marcados.");
+      return;
+    }
+    const s = { input: built.scope, reason: built.reason };
+    setScope(s);
+    setError(null);
+    start(async () => {
+      try {
+        const p = await previewDayLock(s.input);
+        if (!p.ok) {
+          setError(p.error);
+          return;
+        }
+        if (p.data.affected.length === 0) {
+          // Sin turnos debajo: no hay nada que decidir, se aplica directo.
+          const r = await applyDayLock({
+            ...s.input,
+            reason: s.reason,
+            bookingsDecision: "keep",
+            expectedAffectedIds: [],
+          });
+          if (r.ok) {
+            wrote.current = true;
+            setApplied(r.data);
+            setStep("done");
+          } else if ("changed" in r && r.changed) {
+            setPreview(r.affected);
+            setChangedNotice(r.error);
+            setStep("affected");
+          } else {
+            setError(r.error);
+          }
+          return;
+        }
+        setPreview(p.data);
+        setChangedNotice(null);
+        setStep("affected");
+      } catch (e) {
+        setError(dayLockThrownMessage(e));
+      }
+    });
+  };
+
+  const decide = async (decision: "keep" | "cancel") => {
+    if (!scope || !preview) return;
+    const ids = preview.affected.map((a) => a.id);
+    if (decision === "cancel") {
+      const cancellable = preview.affected.filter((a) => !a.hasPayment).length;
+      const ok = await confirm({
+        title: cancellable === 1 ? "¿Cancelar 1 turno?" : `¿Cancelar ${cancellable} turnos?`,
+        message:
+          "Se bloquea el día y se cancelan los turnos de la lista. El paciente todavía no recibe aviso: avisale vos.",
+        confirmLabel: "Cancelar turnos y bloquear",
+        cancelLabel: "Volver",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setError(null);
+    apply(scope, decision, ids);
+  };
+
+  const submitRemove = () => {
+    const ids = blocks.filter((b) => b.removable && toRemove.has(b.block.id)).map((b) => b.block.id);
+    if (ids.length === 0) {
+      setError("Elegí qué bloqueo querés quitar.");
+      return;
+    }
+    setError(null);
+    start(async () => {
+      try {
+        const r = await removeDayLock({ dayKey, practitionerId: removeScopeFor(ctx), blockIds: ids });
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        wrote.current = true;
+        setRemoved(r.data);
+        setStep("unlocked");
+      } catch (e) {
+        setError(dayLockThrownMessage(e));
+      }
+    });
+  };
+
+  const dayLabel = dayKeyLongLabel(dayKey);
+  const practitionerLine = (ids: string[] | null) =>
+    ids === null
+      ? "Todo el equipo"
+      : ids.map((id) => practitioners.find((p) => p.id === id)?.name ?? "Profesional").join(", ");
+  const multiLocation = (locations?.length ?? 0) > 1;
+  const removable = blocks.filter((b) => b.removable);
+
+  const title =
+    step === "affected"
+      ? "Hay turnos en ese horario"
+      : step === "done"
+        ? "Día bloqueado"
+        : step === "unlocked"
+          ? "Día desbloqueado"
+          : "Bloquear el día";
+
+  return (
+    <Modal open={open} onClose={() => void requestClose()} title={title} description={dayLabel} width={560}>
+      {step === "form" && (
+        <div style={{ display: "grid", gap: 16 }}>
+          {blocks.length > 0 && (
+            <section aria-labelledby="day-lock-existing" style={{ display: "grid", gap: 8 }}>
+              <div id="day-lock-existing" style={labelStyle}>
+                Bloqueos de este día
+              </div>
+              <ul style={listStyle}>
+                {blocks.map((b) => (
+                  <li key={b.block.id} style={rowStyle}>
+                    <label
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        cursor: b.removable ? "pointer" : "default",
+                        flex: 1,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={b.removable && toRemove.has(b.block.id)}
+                        disabled={!b.removable || pending}
+                        onChange={(e) =>
+                          setToRemove((s) => {
+                            const n = new Set(s);
+                            if (e.target.checked) n.add(b.block.id);
+                            else n.delete(b.block.id);
+                            return n;
+                          })
+                        }
+                      />
+                      <span style={{ color: "var(--navy-900)" }}>{b.label}</span>
+                    </label>
+                    {b.why && <span style={{ fontSize: 11, color: "var(--navy-500)" }}>{b.why}</span>}
+                  </li>
+                ))}
+              </ul>
+              {removable.length > 0 && (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <Button type="button" variant="ghost" onClick={submitRemove} disabled={pending}>
+                    {pending ? "Desbloqueando…" : "Desbloquear lo marcado"}
+                  </Button>
+                </div>
+              )}
+              <hr style={{ border: 0, borderTop: "1px solid rgba(15,30,51,0.08)", margin: "4px 0 0" }} />
+              <div style={{ ...labelStyle, marginBottom: 0 }}>Sumar otro bloqueo</div>
+            </section>
+          )}
+
+          {/* Alcance */}
+          <div role="group" aria-labelledby="day-lock-span">
+            <div id="day-lock-span" style={labelStyle}>
+              Qué se bloquea
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                aria-pressed={form.span === "allDay"}
+                style={chipStyle(form.span === "allDay")}
+                onClick={() => set("span", "allDay")}
+                disabled={pending}
+              >
+                Todo el día
+              </button>
+              <button
+                type="button"
+                aria-pressed={form.span === "range"}
+                style={chipStyle(form.span === "range")}
+                onClick={() => set("span", "range")}
+                disabled={pending}
+              >
+                Una franja
+              </button>
+            </div>
+            {form.span === "range" && (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 10 }}>
+                <TimeSelect
+                  id="day-lock-from"
+                  label="Desde"
+                  value={form.startMin}
+                  onChange={(v) => set("startMin", v)}
+                  error={errors.startMin}
+                  disabled={pending}
+                />
+                <TimeSelect
+                  id="day-lock-to"
+                  label="Hasta"
+                  value={form.endMin}
+                  onChange={(v) => set("endMin", v)}
+                  allowDayEnd
+                  error={errors.endMin}
+                  disabled={pending}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Profesionales */}
+          <div role="group" aria-labelledby="day-lock-who">
+            <div id="day-lock-who" style={labelStyle}>
+              A quién aplica
+            </div>
+            {canBlockAll ? (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  aria-pressed={form.who === "all"}
+                  style={chipStyle(form.who === "all")}
+                  onClick={() => set("who", form.who === "all" ? "some" : "all")}
+                  disabled={pending}
+                >
+                  Todo el equipo
+                </button>
+                {practitioners.map((p) => {
+                  const on = form.who === "some" && form.practitionerIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      aria-pressed={on}
+                      style={chipStyle(on)}
+                      onClick={() => togglePractitioner(p.id)}
+                      disabled={pending}
+                    >
+                      {p.name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: "var(--navy-900)" }}>
+                Tu agenda ({practitionerLine(form.practitionerIds)})
+              </div>
+            )}
+            {form.who === "all" && (
+              <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
+                Alcanza también a los profesionales que se sumen después.
+              </div>
+            )}
+            {errors.practitionerIds && <div style={errorStyle}>{errors.practitionerIds}</div>}
+          </div>
+
+          {/* Sede */}
+          {multiLocation && (
+            <div>
+              <label htmlFor="day-lock-location" style={{ ...labelStyle, display: "block" }}>
+                Sede
+              </label>
+              <select
+                id="day-lock-location"
+                value={form.locationId ?? ""}
+                onChange={(e) => set("locationId", e.target.value || null)}
+                disabled={pending}
+                style={{ ...selectStyle, minWidth: 200 }}
+              >
+                <option value="">Todas las sedes</option>
+                {locations!.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Motivo */}
+          <div>
+            <div style={labelStyle} id="day-lock-reason-chips">
+              Motivo (opcional)
+            </div>
+            <div
+              role="group"
+              aria-labelledby="day-lock-reason-chips"
+              style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}
+            >
+              {DAY_LOCK_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  aria-pressed={form.reason.trim() === r}
+                  style={chipStyle(form.reason.trim() === r)}
+                  onClick={() => set("reason", form.reason.trim() === r ? "" : r)}
+                  disabled={pending}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+            <FormField
+              label="Otro motivo"
+              name="dayLockReason"
+              value={form.reason}
+              onChange={(v) => set("reason", v.slice(0, DAY_LOCK_REASON_MAX))}
+              placeholder="Ej.: jornada de capacitación, mudanza"
+              error={errors.reason}
+              disabled={pending}
+            />
+          </div>
+
+          <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+            Antes de bloquear te mostramos los turnos que haya en ese horario para que decidas qué hacer.
+          </div>
+
+          {error && (
+            <div role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+            <Button type="button" variant="ghost" onClick={() => void requestClose()} disabled={pending}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={submitForm} disabled={pending}>
+              {pending ? "Revisando…" : form.span === "allDay" ? "Bloquear el día" : "Bloquear la franja"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "affected" && preview && scope && (
+        <div style={{ display: "grid", gap: 12 }}>
+          {changedNotice && (
+            <div role="alert" style={warnStyle}>
+              {changedNotice}
+            </div>
+          )}
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>
+            {affectedHeadline(preview.affected.length, preview.allDay)}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            {practitionerLine(scope.input.practitionerIds)}
+            {preview.allDay
+              ? " · todo el día"
+              : ` · de ${minutesLabel(scope.input.startMin ?? 0)} a ${minutesLabel(scope.input.endMin ?? 0)}`}
+          </div>
+          {preview.affected.length > 0 && (
+            <ul style={listStyle} aria-label="Turnos en ese horario">
+              {affectedLines(preview.affected, practitioners).map((l) => (
+                <li key={l.id} style={rowStyle}>
+                  <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
+                  <span style={{ color: "var(--navy-500)", minWidth: 0, flex: "0 1 34%" }}>{l.practitioner}</span>
+                  <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
+                  {l.hasPayment && (
+                    <span
+                      className="k-tag k-tag-soft"
+                      title="Tiene un cobro registrado: no se cancela desde acá."
+                      style={{ fontSize: 11 }}
+                    >
+                      Con cobro
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {preview.affected.length > 0 && (
+            <div style={noteStyle}>
+              Si los cancelás, <strong>el paciente no recibe aviso todavía</strong> (el aviso por email llega
+              más adelante): avisale vos.
+              {preview.affected.some((a) => a.hasPayment) &&
+                " Los que tienen un cobro registrado no se cancelan: quedan en la agenda para que los reprogrames o devuelvas el pago."}
+            </div>
+          )}
+
+          {error && (
+            <div role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setStep("form");
+                setChangedNotice(null);
+                setError(null);
+              }}
+              disabled={pending}
+            >
+              Volver
+            </Button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Button type="button" variant="ghost" onClick={() => void decide("keep")} disabled={pending}>
+                {preview.affected.length === 0 ? "Bloquear" : "Mantenerlos y bloquear"}
+              </Button>
+              {preview.affected.length > 0 && (
+                <Button type="button" onClick={() => void decide("cancel")} disabled={pending}>
+                  {pending ? "Aplicando…" : "Cancelarlos y bloquear"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step === "done" && applied && (
+        <div style={{ display: "grid", gap: 12 }} role="status">
+          {(() => {
+            const s = applySummary(applied);
+            return (
+              <>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>{s.headline}</div>
+                {s.detail && <div style={{ fontSize: 13, color: "var(--navy-700)" }}>{s.detail}</div>}
+              </>
+            );
+          })()}
+          {applied.cancelled.length > 0 && (
+            <div>
+              <div style={labelStyle}>Cancelados</div>
+              <ul style={listStyle}>
+                {affectedLines(applied.cancelled, practitioners).map((l) => (
+                  <li key={l.id} style={rowStyle}>
+                    <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
+                    <span style={{ color: "var(--navy-500)" }}>{l.practitioner}</span>
+                    <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {applied.skipped.length > 0 && (
+            <div>
+              <div style={labelStyle}>No se pudieron cancelar</div>
+              <ul style={listStyle}>
+                {applied.skipped.map((s) => {
+                  const [l] = affectedLines([s.booking], practitioners);
+                  return (
+                    <li key={l.id} style={{ ...rowStyle, flexWrap: "wrap" }}>
+                      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>
+                        {l.time}
+                      </span>
+                      <span style={{ color: "var(--navy-900)" }}>{l.patient}</span>
+                      <span style={{ fontSize: 12, color: "#8A5A00", flexBasis: "100%" }}>
+                        {SKIP_REASON_LABEL[s.reason]}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button type="button" onClick={finish}>
+              Listo
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === "unlocked" && removed && (
+        <div style={{ display: "grid", gap: 12 }} role="status">
+          {(() => {
+            const s = removeSummary(removed.deleted, removed.remaining);
+            return (
+              <>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>{s.headline}</div>
+                {s.detail && <div style={warnStyle}>{s.detail}</div>}
+              </>
+            );
+          })()}
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button type="button" onClick={finish}>
+              Listo
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}

@@ -6,23 +6,31 @@
 > checklist de QA manual. La implementación se ejecuta en las sesiones `ci-gate-minimo` (capa 1) y
 > `suite-integracion` / `ci-pipeline-completo-y-guard` (capas 3-4 + guards) del [ROADMAP.md](ROADMAP.md).
 >
-> **Estado actual (30-sep-2026, cierre del Bloque A):**
-> - **Unit (capa 1):** 252 tests en 19 archivos (`tests/unit/*`), sin DB ni red. Corren en CI y deben pasar con
->   `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`. Nuevos en A2/A3: `booking-capacity-hold`,
->   `public-slots`, `money-input`, `csv`, `agenda-filters`, `form-dirty`, `rate-limit`, `safe-next`,
->   `recovery-cookie`, `logger-redact`, `observability` y (A3c) `onboarding-logic` (13: slug, `decideAppGate`,
->   paso de retome).
-> - **Integración (capa 3):** 13 archivos en `tests/integration/`, 175 tests (rol `kinesoft_app`; con owner
->   BYPASSRLS, 171 + 4 skip). A1.1 dejó `rls-isolation`, `bookings-write`, `patient-coverage` y `authz-matrix`;
->   A2/A3 sumaron `sessions`, `public-booking`, `mp-webhook`, `team`, `visibility`, `portal`, `invitations` y
->   (A3c) `signup` (10: signup verificado, anti-oráculo, invitación, forgot/reset con y sin `ks_recovery`) y
->   `onboarding` (8: bootstrap del tenant, paso 2 idempotente, paso 7 exige servicio). Corre las **server actions reales** con `getActor()` real; solo se
+> **Estado actual (01-oct-2026, cierre de B-pre):**
+> - **Unit (capa 1):** **1156 tests en 51 archivos** (`tests/unit/*`), sin DB ni red. Corren en CI y deben pasar
+>   con `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`. Al cierre del Bloque A eran 252/19. B-pre sumó el
+>   motor (`availability-{day,ranges,slots,classify,next-free,recurrence}`), `public-booking-engine`,
+>   `booking-schedule` (caracterización), `capabilities`, `catalog-{normalize,import-core,data}`, `agenda-layout`,
+>   `reception-state`, `schedule-validate` y los estados puros de la UI (`*-state.test.ts`).
+> - **Render tests (capa 2 liviana):** `tests/unit/render/*.test.tsx` (agenda-client, practitioner-day-view,
+>   day-lock, reception-view, public-booking-wizard) con `renderToStaticMarkup` en entorno node, sin jsdom ni
+>   testing-library (`vitest.config.ts`: `esbuild: { jsx: "automatic" }` + include de `*.test.tsx`). Afirman el
+>   markup visible (columnas, ocupación, badges, estados), no la interacción.
+> - **Integración (capa 3):** **28 archivos en `tests/integration/`, 395 tests** (rol `kinesoft_app`; con owner
+>   BYPASSRLS, 379 + 16 skip). Al cierre del Bloque A eran 13/175. B-pre sumó `agenda-backfill`, `agenda-defaults`,
+>   `authz`, `availability-actions`, `availability-loader`, `bookings-availability`, `bookings-reception`,
+>   `catalog-admin`, `catalog-import`, `catalog-tenant`, `day-lock`, `locations-schedule`, `practitioner-config`,
+>   `tenant-business-hours` y `time-blocks`. Corre las **server actions reales** con `getActor()` real; solo se
 >   mockean la cookie/headers, la red de Supabase (+ el admin client, para que ningún test mande mails reales) y
 >   el runtime de cache de Next (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
 > - **E2E (capa 4):** Playwright no está instalado (Bloque B, S26).
 > - **CI:** typecheck → unit (TZ=UTC y TZ=AR) → guard → build → reporte de bundle; y el job `integration`
 >   (Postgres efímero, migraciones desde cero, rol app + owner). En todas las PR y ramas de trabajo.
-> - **Performance (A1.2):** baseline medido en [PERF.md](PERF.md) (`npm run test:perf`, solo local).
+> - **Performance:** baseline de A1 y multi-profesional de B4.6 en [PERF.md](PERF.md) (`npm run test:perf`, solo
+>   local). Agenda multi: `npm run test:perf -- tests/perf/agenda-multi.perf.test.ts`.
+> - **Catálogo:** `npm run catalog:import` (dry-run contra el Docker local; `-- --apply` escribe). Los tests de
+>   integración corren el import solo contra local. tsc de `scripts/`: `npx tsc -p scripts/tsconfig.json --noEmit`
+>   (el tsconfig raíz excluye `scripts/`).
 
 ### Cómo correr la integración (A1.1)
 
@@ -70,6 +78,28 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   mockea `fetch` para Upstash (error de red → fallback, timeout, respuesta inválida, purga, claves compuestas).
 - **Reloj explícito:** `isHoldingCapacity`, `buildPublicSlots`, `paymentHoldState` y `listOpenSessions` reciben
   `now`; los tests lo fijan en TZ=UTC en vez de mockear `Date`.
+
+### Patrones nuevos de B-pre
+
+- **Oráculo literal + paridad.** Antes de reemplazar un camino viejo se lo congela como oráculo
+  (`lib/booking-schedule.ts` = el código de ef3281f, caracterizado en `tests/unit/booking-schedule.test.ts`) y el
+  nuevo se compara contra él sobre una **matriz** (horarios × duraciones × cupos × sets de turnos) y una **semilla**
+  aleatoria fija: `nextFreeSlot` ↔ suggest viejo, `buildPublicSlots` viejo ↔ nuevo, barrido optimizado ↔
+  `classifyInstant` paso a paso. `tests/unit/public-slots.test.ts` quedó **sin cambios**. El oráculo no recibe
+  callers nuevos: se borra en el contract.
+- **Carrera determinística con `pg_locks`.** Para probar un lock sin `sleep`: la tx A toma el lock y queda abierta;
+  la B se lanza y el test espera (polling) a ver una fila `pg_locks` con `locktype = 'advisory' AND NOT granted`;
+  recién ahí A commitea y se afirma que B vio la fila de A (`tests/integration/bookings-availability.test.ts:441`).
+  Sin el lock, el test falla siempre, no a veces.
+- **Test que lee el SQL de la migración.** `tests/integration/agenda-backfill.test.ts` extrae del archivo de la
+  migración el bloque entre `>>> BACKFILL agenda_foundations BEGIN` y `<<< … END`, lo parte por `;` y lo ejecuta
+  contra tenants efímeros (acotado con el GUC `kinesoft.backfill_tenants`): prueba el SQL literal que corre en prod,
+  la idempotencia (segunda corrida = 0 cambios) y que `updatedAt` no se toca. Regla del bloque: sin `;` dentro de
+  una sentencia.
+- **Barrido de tenants de test** solo de más de 30 min (`sweepOrphanTestTenants`, `tests/helpers/tenant-factory.ts:208`):
+  con varias corridas a la vez, un barrido más agresivo borraba el tenant de otra corrida en curso.
+- **Gate de integración en solitario:** el gate de ola corre la integración sin otras sesiones usando el mismo
+  Docker (comparten la base: tests de carrera y de conteo se contaminan con la corrida vecina).
 
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
@@ -161,12 +191,12 @@ Corre gateado (rama principal / pre-corte), porque es lo más lento y ruidoso.
 
 Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipeline-completo-y-guard`.
 
-- **`scripts/guard-tenant-isolation.mjs`** — parsea las **3 fuentes** que hoy divergen a mano
-  (finding `no-static-security-guard`): modelos con `tenantId` en `prisma/schema.prisma` (20),
-  `TENANT_SCOPED_MODELS` en `lib/db.ts` (9), y los arrays de `ENABLE/FORCE RLS` + policy directa de
-  `prisma/migrations/policies.sql` (17). **Falla el build** si un modelo con `tenantId` directo no
-  está en RLS forzada, o si a un modelo indirecto le falta su policy por subquery. Baseline tolerado
-  hasta que la Ola 2.2 cierre las 9 tablas faltantes; después, cero tolerancia.
+- **`scripts/guard-tenant-isolation.mjs`** (`npm run guard:isolation`) — parsea `prisma/schema.prisma` y
+  **todas** las `prisma/migrations/*/migration.sql` en orden (desde B-pre; antes solo la de
+  `20260725120000_rls_policies`). **Falla** si un modelo con `tenantId` no tiene ENABLE + FORCE + policy, o si una
+  tabla de `GLOBAL_READONLY` (Specialty, Practice, PracticeSpecialty, Payer, CatalogImportRun) pierde ENABLE/FORCE
+  o gana una policy de escritura. Reporta (suave) llamadas `prisma.<model>` sin wrap; las lecturas de las tablas
+  GLOBAL_READONLY quedan afuera de ese reporte a propósito.
 - **Allowlist del admin client** — falla si `getSupabaseAdminClient` (service-role, bypassa RLS)
   aparece importado fuera de un allowlist estático documentado.
 
@@ -205,7 +235,7 @@ finding `no-qa-checklist-versionado`. Marcar ✅/❌ por ítem, con captura si a
 - [ ] Estados (PENDING/CONFIRMED/COMPLETED/NO_SHOW/CANCELLED) → label correcto en el StatusTag.
 - [ ] Doble-click en "Crear turno" → **un** solo turno.
 - [ ] Editar un turno con un drawer viejo (movido en otra pestaña) → rechazo por optimistic concurrency.
-- [ ] Sugerencia de "próximo turno libre" → dentro del horario comercial AR, respeta sáb/dom.
+- [ ] Sugerencia de "próximo turno libre" → dentro de las franjas del profesional (o del horario del consultorio si no tiene), saltea bloqueos y domingos sin excepción.
 
 **Reserva pública (preview UTC):**
 - [ ] Elegir slot "08:00" → aparece **08:00** en la agenda del kine (no 05:00).

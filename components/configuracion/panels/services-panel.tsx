@@ -19,6 +19,7 @@ import {
   deleteService,
 } from "@/lib/services";
 import { ErrorBox } from "../controls";
+import { PracticePicker, type PickedPractice } from "../catalog/practice-picker";
 
 export function ServicesPanel({
   services,
@@ -86,6 +87,9 @@ export function ServicesPanel({
                 {s.description && (
                   <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{s.description}</div>
                 )}
+                {s.practiceName && (
+                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>Práctica: {s.practiceName}</div>
+                )}
               </div>
               <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
                 {s.practitionerName ?? "Todos los kinesiólogos"}
@@ -135,6 +139,17 @@ function ServiceModal({
   const [priceCents, setPriceCents] = useState<number | null>(service?.priceCents ?? 0);
   const [priceInvalid, setPriceInvalid] = useState(false);
   const priceChanged = !!service && (priceCents ?? 0) !== service.priceCents;
+  // Práctica del catálogo (B1.4) y duración controlada: al CREAR, elegir una
+  // práctica con `defaultDurationMin` la aplica si el usuario todavía no tocó
+  // la duración; si la tocó (o al editar), solo se ofrece como sugerencia.
+  const [practice, setPractice] = useState<PickedPractice | null>(
+    service?.practiceId ? { id: service.practiceId, name: service.practiceName ?? "Práctica" } : null
+  );
+  const [durationMin, setDurationMin] = useState<string>(String(service?.durationMin ?? 45));
+  const [durationTouched, setDurationTouched] = useState(false);
+  const suggestedDuration = practice?.defaultDurationMin ?? null;
+  const showDurationSuggestion =
+    suggestedDuration != null && String(suggestedDuration) !== durationMin;
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -147,6 +162,7 @@ function ServiceModal({
         name: String(formData.get("name") ?? ""),
         description: String(formData.get("description") ?? ""),
         durationMin: Number(formData.get("durationMin") ?? 45),
+        practiceId: String(formData.get("practiceId") ?? ""),
         priceCents: priceCents ?? 0,
         practitionerId: String(formData.get("practitionerId") ?? ""),
         maxConcurrent: String(formData.get("maxConcurrent") ?? ""),
@@ -199,7 +215,11 @@ function ServiceModal({
             type="number"
             min={5}
             max={480}
-            defaultValue={service?.durationMin ?? 45}
+            value={durationMin}
+            onChange={(v) => {
+              setDurationMin(v);
+              setDurationTouched(true);
+            }}
             required
           />
           <MoneyInput
@@ -214,6 +234,35 @@ function ServiceModal({
             }
           />
         </div>
+        <PracticePicker
+          value={practice}
+          onChange={(p) => {
+            setPractice(p);
+            if (!service && !durationTouched && p?.defaultDurationMin != null) {
+              setDurationMin(String(p.defaultDurationMin));
+            }
+          }}
+        />
+        {showDurationSuggestion && (
+          <div style={{ fontSize: 12, color: "var(--navy-500)", marginTop: -4 }}>
+            Duración sugerida para esta práctica: {suggestedDuration} min.{" "}
+            <button
+              type="button"
+              onClick={() => setDurationMin(String(suggestedDuration))}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--sky-700)",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                padding: 0,
+              }}
+            >
+              Usar {suggestedDuration} min
+            </button>
+          </div>
+        )}
         <FormField
           label="Cupos simultáneos por horario"
           name="maxConcurrent"

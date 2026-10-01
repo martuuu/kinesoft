@@ -480,6 +480,99 @@ Gate final del Bloque A: `tsc` 0 · unit 252/252 en 19 archivos (TZ=UTC y TZ=AR)
   - [C] (A3c) un OWNER con el alta sin terminar que además acepta la invitación de otro tenant: en los pasos
     3-6 `getActor` puede elegir el otro tenant. Caso raro.
 
+**Ronda 13 — B-pre: fundaciones de agenda y catálogo (30-sep / 01-oct-2026):** catálogo global, agenda por
+profesional × sede, motor de disponibilidad único, capabilities, agenda multi-profesional de Secretaria
+(Por profesional, Recepción, candado por día) y modal de turno nuevo. **Código completo; pendiente commit,
+deploy y QA de Martin, más el import del catálogo.** ⚠️ **DOS migraciones nuevas:**
+`20260930200000_catalog_global` y `20261001090000_agenda_foundations` (orden de prod en
+[MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md)). Arquitectura en
+[ARCHITECTURE.md §Agenda profesional y catálogo](ARCHITECTURE.md) (ADR-003). QA en [QA.md §B-pre](QA.md).
+
+Gate de cierre (01-oct): `tsc` 0 · unit **1156/1156 en 51 archivos** (TZ=UTC y TZ=AR, incluye render tests) ·
+guard ✓ · integración **395/395 en 28 archivos** (`kinesoft_app`) y 379 + 16 skip (owner) · `next build` ✓ ·
+perf B4.6 en [PERF.md](PERF.md). Las líneas de `lib/bookings.ts` de abajo son del 01-oct; el fixer final seguía
+editando el archivo (las marcadas `~`).
+
+- 🟢 **B1 · catálogo global:**
+  - Migración `catalog_global`: 6 tablas + 2 enums, punteros nullable `Insurer.payerId`, `Coverage.payerPlanId`,
+    `Service.practiceId` (FK SET NULL), RLS **GLOBAL_READONLY** (solo policy SELECT) y PayerPlan split, índices
+    parciales de PayerPlan con comentario (`prisma/migrations/20260930200000_catalog_global/migration.sql:1-40`).
+  - Guard de aislamiento: parsea **todas** las migraciones y exige el contrato GLOBAL_READONLY
+    (`scripts/guard-tenant-isolation.mjs:37,52,84,188-209`). Antes leía solo `20260725120000_rls_policies`.
+  - Import `scripts/catalog-import.ts` + `lib/catalog/{normalize,csv,import-core}.ts`: dry-run por defecto, una tx,
+    no pisa curado (`lib/catalog/import-core.ts:590`) ni desarchiva, seed create-only, `CatalogImportRun`,
+    exige BYPASSRLS. Datos oficiales en `prisma/catalog/` (780 prestadoras SSS RNOS/RNEMP/COSSPRA, 71 planes,
+    91 especialidades REFEPS, 70 prácticas PMO/curadas + seed del benchmark; `SOURCES.md` CC BY 4.0).
+  - Plataforma → Catálogo (`lib/catalog-admin.ts`): buscar, editar (`curatedAt`), archivar, merge de
+    prestadoras/prácticas, promover planes propuestos, importaciones y "Refrescar catálogo" (`:494`).
+  - Adopción en el consultorio (`lib/catalog.ts`, `lib/catalog-validate.ts`): Obras sociales del catálogo,
+    práctica en el servicio, plan del paciente con "Otro plan…". Ids validados (global o propio, no archivado).
+  - **Capabilities** `lib/capabilities.ts:56` + `lib/authz.ts` reemplazan los 6 chequeos de admin copiados.
+  - Refactors sin cambio de comportamiento: `lib/booking-schedule.ts` (S07, hoy oráculo congelado), modal y
+    drawer partidos en carpetas, `agenda-toolbar`, `grid/booking-card`.
+- 🟢 **B2 · M-agenda + motor + APIs de configuración:**
+  - Migración `agenda_foundations`: Location, PractitionerSchedule, ScheduleException, TimeBlock,
+    PractitionerService, PractitionerPayer, PractitionerSpecialty, Booking expand, `UserPreferences.agendaPrefs`,
+    RLS + CHECKs + índices parciales, **backfill idempotente** con `SET LOCAL row_security = off`
+    (`prisma/migrations/20261001090000_agenda_foundations/migration.sql:353-487`), incluido el paso 3b
+    (`:427-449`).
+  - Motor puro `lib/availability/*` con paridad contra el turnero y el suggest viejos; loader único
+    `lib/availability-loader.ts` (dos canales, `where tenantId`, fallback, `NO_LOCATION_ID`).
+  - APIs `lib/locations.ts`, `lib/practitioner-schedule.ts` (+ `lib/schedule-validate.ts`),
+    `lib/practitioner-services.ts`, `lib/practitioner-payers.ts`, `lib/time-blocks.ts`; altas que nacen con sede,
+    franjas, PS y PP (`lib/agenda-defaults.ts`); `setBusinessHours` sincroniza la plantilla por defecto.
+  - **Bug de reloj cerrado:** `toARMinutes`/`toARHour` devolvían 1440/24 a la medianoche AR
+    (`lib/datetime-ar.ts:77-83`, `% 24`).
+- 🟢 **B3 · motor conectado:**
+  - `lib/bookings.ts` sobre el motor: el suggest ve turnos en curso (240 min atrás) y bloqueos; avisos blandos
+    `blocked`/`outOfHours` forzables; batch con `frequency` y `count` validado con zod (antes NaN reventaba);
+    escribe `isOverbooked` (+ prefijo), `locationId`, telemedicina; PS deshabilitado → rechazo
+    (`SERVICE_DISABLED_ERROR`, `:313`).
+  - **`cupo-1-toctou` cerrado en agenda y turnero:** lock de cupo por (profesional, servicio, día AR) dentro de
+    la tx que cuenta y escribe (`lib/booking-cap-lock.ts`; `lib/bookings.ts:1136,1432,~2237`;
+    `lib/public-booking.ts:516`). Test de carrera determinístico con `pg_locks`
+    (`tests/integration/bookings-availability.test.ts:441`). Queda abierto el pago tardío del webhook (ver §2).
+  - Turnero público sobre el motor: franjas por profesional, excepciones, bloqueos duros, solo PS PUBLIC y
+    habilitado, solo profesionales con membresía aceptada (`lib/public-booking.ts:74-108`), sede,
+    `findFirstPublicSlot`.
+  - `lib/availability-actions.ts`: lecturas sin PHI y sin cache. Configuración: pestañas Sedes y Profesionales.
+- 🟢 **B4 · agenda multi-profesional:**
+  - `listAgendaBookings` (`lib/bookings.ts:673`): proyección sin el grafo paciente → coberturas → programas +
+    gate `clinical.read`. Medido en B4.6: 60 ms vs 78 ms de la vieja, pero el payload de la semana de 6
+    profesionales es ~1 MB (1.036 kB vs 786 kB: suma sede, recepción y telemedicina por fila) → C1.
+  - Recepción (`markReceptionAction`, `lib/bookings.ts:~1706`), candado por día con preview, mantener/cancelar
+    y carrera detectada (`lib/time-blocks.ts:567`, `cancelBookingsInTx` respeta H1), vista Por profesional,
+    chips con favoritos, filtro de sede, prefs `agendaPrefs`, badges en las cards.
+  - Re-chequeo de bloqueos **dentro** de la tx de alta/edición/batch, después del lock de cupo
+    (`lib/bookings.ts:1136-1159`).
+  - Carga diferida en /agenda (`components/agenda/agenda-client.tsx:89-95`): bundle 238 → 195 kB.
+- 🟢 **B5 · modal y superficies:** modos Turno / Varias sesiones / Bloquear horario, slot picker con "cualquier
+  profesional", estado en vivo, sede y telemedicina; drawer, turnos del paciente y dashboard manejan los avisos
+  nuevos; turnero con filtros de sede y cobertura y fix mobile 375 px; onboarding de 9 pasos (Sede, Tu horario,
+  práctica, OS del catálogo).
+- 🟢 **Fixes de la revisión de B-pre** (los marcados *fixer* ya están en el código al 01-oct; el fixer todavía podía
+  ajustar líneas):
+  1. [MEDIA] rechazo "servicio no habilitado" = regresión para el cliente vivo con 2 profesionales → paso 3b
+     del backfill (PRIVATE para todo par con turnos no cancelados) y copy del slot picker "No atiende este
+     servicio — habilitalo en Configuración → Profesionales" (`components/agenda/booking-modal/slot-picker.tsx:341`).
+  2. [MEDIA-BAJA] al asignar un servicio compartido a un profesional, los demás quedan PRIVATE
+     (`lib/services.ts:229-241`, *fixer*).
+  3. [MEDIA-BAJA] `markReceptionAction`: un PRACTITIONER (sin `agenda.manageBlocks`) solo opera turnos propios o
+     de pacientes con acceso completo; guest ok (`lib/bookings.ts:~1748-1750`, *fixer*).
+  4. [BAJA-MEDIA] "Deshacer" de recepción vuelve a PENDING para guest o reserva pública impaga, no a CONFIRMED
+     (`lib/reception-state.ts:40-49`, *fixer*).
+  5. Runbook: UPDATE post-deploy de `isOverbooked` y precheck del rol de `DIRECT_URL` (MIGRACIONES-RUNBOOK §2.2).
+- **Hallazgos nuevos de B-pre** (clasificados; filas en §2 "Hallazgos de B-pre"):
+  - [C1 perf] `weekOccupancy` O(n+filas); batch en 1 tx; `createBooking` 34 statements; `previewRecurrence`
+    mensual 106; payload /agenda ~1 MB/semana; harness de EXPLAIN de A1 con params tipados; índice
+    `Coverage.patientId`; bundles por encima del presupuesto.
+  - [C1] zoom 15/30/60 en Día/Semana; `StatusTag`/`fmtMoney` duplicados (`formatARS` sin centavos ya estaba).
+  - [C] regla `.booking-body` de `globals.css`; texto fijo "lun-sáb 8 a 19hs" del turnero;
+    `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso.
+  - [C0] login de Secretaria sin fila Practitioner (`lib/session.ts:91-97`).
+  - [catálogo] 37 siglas ambiguas sin alias (OSPA no se busca por sigla); Sancor 1000/1500 y especialidades de
+    Mendoza por verificar.
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -886,8 +979,8 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | Slug | Sev | Ubicación | Estado | Sesión / Gate |
 |---|---|---|---|---|
 | deuda-archivos-grandes | media | components varios | 🟢 | split-* (Ronda 3) |
-| role-gating-disperso-sin-matriz-central | media | lib/services.ts:30 | 🔴 | capabilities-matrix |
-| roles-assistant-billing-cosmeticos | media | schema.prisma:108 | 🔴 | roles-assistant-billing |
+| role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
+| roles-assistant-billing-cosmeticos | media | schema.prisma:108 · lib/capabilities.ts | 🟡 | roles-assistant-billing — B-pre les dio capabilities reales (ASSISTANT opera la agenda sin `clinical.read`); falta en C0 que puedan loguearse sin fila Practitioner (`secretaria-sin-practitioner`) |
 | no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
 | no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | realtime-agenda (B4) |
 | portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | portal-userid-link |
@@ -946,7 +1039,7 @@ Evidencia de cada cierre en §Ronda 12.
 | logs-y-sentry-con-pii | media | A | lib/redact.ts | 🟢 | A3b-S-obs |
 | write-paths-sin-membresia-aceptada | media | C0 | lib/bookings.ts (create/batch) · lib/patients.ts (reasignar) · lib/services.ts · lib/sessions.ts (sesión a medida) | 🔴 | C0 — validan practitioner ∈ tenant pero no membresía aceptada; los pickers ya no ofrecen removidos |
 | batch-key-otro-tenant-no-rechaza | baja | C | lib/bookings.ts:1465 | 🔴 | C — usa `update: {}` (no escribe nada ajeno), pero debería rechazar como `createBooking` |
-| cupo-1-toctou | media | C | lib/bookings.ts · lib/public-booking.ts · lib/mercadopago.ts | 🔴 | C — TOCTOU entre chequeo e INSERT; el pago tardío sobre reserva vencida confirma y avisa sin revalidar cupo |
+| cupo-1-toctou | media | C | lib/booking-cap-lock.ts · lib/bookings.ts · lib/public-booking.ts · lib/mercadopago.ts | 🟡 | **B-pre cerró agenda y turnero** (lock de cupo por profesional+servicio+día AR dentro de la tx; test con `pg_locks`). Sigue 🔴 en C: el pago tardío del webhook sobre una reserva vencida confirma y avisa sin revalidar el cupo |
 | formatars-sin-centavos-en-listados | baja | C1 | lib/format.ts | 🔴 | C1 — $1.500,50 se ve "$1.501" |
 | destildar-copago-publica-la-vence | baja | C1 | components/agenda | ⏸ | aceptado: vuelve UNPAID y puede quedar vencida |
 | seguimiento-7-queries | baja | C1 | app/(app)/seguimiento/page.tsx | 🔴 | C1 perf — medido al cierre de A: 8→28 statements en 1 tx, 15→47 ms (PERF.md) |
@@ -955,6 +1048,36 @@ Evidencia de cada cierre en §Ronda 12.
 | tenant-contacto-solo-en-stepper | baja | C0 | lib/onboarding.ts · Configuración | 🔴 | C0 — `phone`/`whatsapp`/`publicEmail` no se editan en `updateTenantBasics` |
 | onboarding-actor-otro-tenant | baja | C | lib/onboarding.ts (pasos 3-6) | 🔴 | C — OWNER con alta sin terminar que acepta invitación de otro tenant: `getActor` puede elegir el otro |
 | env-local-node-env-rompe-build | baja | ops | .env.local | 🟡 | documentado en TESTING.md (build con `-v NODE_ENV=production`) |
+
+### Hallazgos de B-pre (01-oct-2026)
+
+Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Destino |
+|---|---|---|---|---|---|
+| servicio-deshabilitado-regresion-multi-pro | media | B-pre | lib/bookings.ts:313 · migración agenda_foundations paso 3b | 🟢 | fix de la revisión: backfill 3b (PRIVATE) + copy del slot picker |
+| servicio-asignado-sigue-publico-para-otros | media-baja | B-pre | lib/services.ts | 🟢 | fixer — los demás profesionales quedan PRIVATE (`lib/services.ts:229-241`) |
+| recepcion-practitioner-sobre-ajenos | media-baja | B-pre | lib/bookings.ts `markReceptionAction` | 🟢 | fixer — propio o acceso completo (`lib/bookings.ts:~1748-1750`) |
+| recepcion-deshacer-confirma-guest-impago | baja-media | B-pre | lib/reception-state.ts | 🟢 | fixer — vuelve a PENDING (`lib/reception-state.ts:40-49`) |
+| toarminutes-medianoche-1440 | media | B-pre | lib/datetime-ar.ts:77-83 | 🟢 | `% 24` + test |
+| batch-count-sin-zod | baja | B-pre | lib/validation.ts:216 | 🟢 | zod 1..60 |
+| perf-week-occupancy-on | baja | C1 | lib/agenda-layout.ts `weekOccupancy` | 🔴 | C1 perf — ~10 ms por semana de 6 profesionales (presupuesto de frame 16 ms) |
+| perf-batch-una-tx | baja | C1 | lib/bookings.ts `createBookingsBatch` | 🔴 | C1 perf — 166 statements / 22 tx para 20 turnos |
+| perf-create-booking-34-statements | baja | C1 | lib/bookings.ts `createBooking` | 🔴 | C1 perf — 34 statements / 5 tx (A1: 12/7) |
+| perf-preview-recurrence-mensual | baja | C1 | lib/availability-actions.ts `previewRecurrence` | 🔴 | C1 perf — 106 statements para 20 fechas mensuales |
+| perf-agenda-payload-1mb | media | C1 | lib/bookings.ts `listAgendaBookings` · app/(app)/agenda/page.tsx | 🔴 | C1 perf — ~1 MB por semana con 6 profesionales |
+| perf-harness-explain-params-tipados | baja | C1 | tests/perf/loaders.perf.test.ts | 🔴 | C1 — pasar a literales como `agenda-multi.perf.test.ts`; los Seq Scan del baseline de A1 pueden ser falsos positivos |
+| missing-fk-indexes (`Coverage.patientId`) | baja | C1 | prisma/schema.prisma | 🔴 | C1 (ya anotado en A1; se re-confirmó) |
+| bundle-sobre-presupuesto-bpre | media | C1 | /agenda 195 · /configuracion 209 · /pacientes/[id] 194 · /onboarding 185 · /plataforma/ejercicios 184 · /diagnostico 180 · /c/[slug]/booking 153 kB | 🔴 | C1 — el layout compartido creció 10-16% |
+| zoom-dia-semana | baja | C1 | lib/preferences.ts · components/agenda/agenda-utils.ts | 🔴 | C1 — el zoom 15/30/60 solo aplica a Por profesional; decidir zoom por usuario vs `Tenant.agendaSlotMinutes` |
+| statustag-fmtmoney-duplicados | baja | C1 | components/agenda | 🔴 | C1 — dos `StatusTag` y dos `fmtMoney` |
+| booking-body-css-regla-muerta | baja | C | app/globals.css | 🔴 | C — regla `.booking-body` (≤1024 px) |
+| turnero-texto-fijo-lun-sab | baja | C | nav del turnero público | 🔴 | C — "lun-sáb 8 a 19hs" fijo; derivar de las franjas reales |
+| public-overlap-lookback-sin-uso | baja | C | lib/public-booking* | 🔴 | C — `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso |
+| agenda-listpatients-in-1000 | baja | C1 | app/(app)/agenda/page.tsx | 🔴 | C1 — conocido (`agenda-loads-full-patient-directory`) |
+| secretaria-sin-practitioner | media | C0 | lib/session.ts:91-97 | 🔴 | C0 — `buildActor` exige fila Practitioner: una Secretaria (ASSISTANT) no puede loguearse sin una |
+| catalogo-siglas-ambiguas | baja | catálogo | prisma/catalog/payers.csv (`aliases`) · lib/catalog/normalize.ts `matchKey` | 🔴 | curado en Plataforma — 37 siglas ambiguas sin alias (p. ej. OSPA no se encuentra por sigla) |
+| catalogo-datos-por-verificar | baja | catálogo | prisma/catalog/payer-plans.csv · specialties.csv | 🔴 | curado — planes Sancor 1000/1500 y especialidades de Mendoza |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -1077,8 +1200,9 @@ era intencional.
 18. **`lib/booking-capacity.ts` — contrato de `isHoldingCapacity` (A2, 30-sep).** Puro, sin reloj propio
     (`now` lo pasa el caller). Deja de contar para el cupo **solo** la reserva pública impaga y vencida:
     `isPublicReservation` && `status = PENDING` && `paymentStatus ∈ {UNPAID, FAILED}` && `now - createdAt > 30 min`
-    (exactamente 30 min todavía retiene). El filtro de CANCELLED es del caller. Lo consumen create/update/batch
-    y `suggestNextFreeSlot` de `lib/bookings.ts`, el turnero público y el webhook. **El discriminante es la
+    (exactamente 30 min todavía retiene). El filtro de CANCELLED es del caller. Lo consumen el motor de
+    disponibilidad (`lib/availability/classify.ts`, `next-free.ts`, `slots.ts`; B-pre), create/update/batch de
+    `lib/bookings.ts`, el turnero público y el webhook. **El discriminante es la
     key, no `patientId != null`:** `isPublicReservation({idempotencyKey, patientId})` (`:97`) reconoce
     `pub:<tenantId>:<uuid>` y el formato pre-A2 `<tenant>:<prof>:<ISO>:<patientId>` (último segmento = el
     `patientId` de la fila); ante la duda **retiene**. Por eso `createBooking` descarta toda key de cliente
@@ -1115,6 +1239,59 @@ era intencional.
     nombre, y rechaza un Practitioner de otro tenant. Lo usan `/onboarding` (paso 2) y
     `scripts/create-tenant.ts`. El signup **no** crea tenant: no volver a crearlo ahí ni con
     `admin.createUser({ email_confirm: true })` (era H5).
+
+27. **Motor de disponibilidad y su paridad (B-pre).** `lib/availability/*` es puro (sin DB, `now` inyectado,
+    reloj por `lib/datetime-ar.ts`); el único punto de DB es `lib/availability-loader.ts`, con `db` inyectado (tx
+    de `runWithRls` o `prismaService` en el turnero) y `where: { tenantId }` a mano en cada query. El contrato es
+    `lib/availability/types.ts`: `classifyInstant`/`nextFreeSlot` reciben **`scheduledRanges`** (no
+    `workingRanges`); `RecurrenceInput.daysOfWeek` es 0=Lun y `dow` es 0=Dom; mensual = mismo día ajustado al
+    último del mes; paso 15 / 14 días; turnos cargados desde 240 min atrás. **Paridad:** con el backfill aplicado
+    la salida es idéntica a la de ef3281f (`tests/unit/availability-*.test.ts` contra el oráculo congelado
+    `lib/booking-schedule.ts`, más `tests/unit/public-slots.test.ts` sin cambios). Un cambio de comportamiento
+    va al motor con su propio test de paridad, nunca editando el oráculo. **Fallback permanente:** profesional
+    sin franjas = horario del tenant lun-sáb en la sede principal; `Booking.locationId` null = principal. Sin
+    cache de disponibilidad a propósito.
+28. **Orden de locks en escrituras de agenda (B-pre).** Siempre **cupo → sedes (compartido) → filas**: (1)
+    `lockCapacityWindow` (`lib/booking-cap-lock.ts`: `pg_advisory_xact_lock` por tenant + profesional + servicio
+    + **día AR**, todos los días que toca el turno, en orden ascendente), (2) `lockTenantLocationsShared` y
+    **recién después** validar la sede `where {id, tenantId, active}` (`lib/location-lock.ts`), (3) contar,
+    re-chequear bloqueos y escribir, todo en la misma tx. Lo cumplen create/update/batch (`lib/bookings.ts`), el
+    submit del turnero (`lib/public-booking.ts:516,546`) y `applyDayLock` (`lib/time-blocks.ts:468,608-617`,
+    claves ordenadas por profesional, servicio). El batch usa una tx por fecha. No invertir el orden ni contar
+    fuera de la tx (reabre el TOCTOU de cupo y abre deadlocks).
+29. **`Booking.isOverbooked` + prefijo `[SOBRETURNO]` hasta el contract.** `isOverbooked` es la fuente; los
+    write-paths **siguen escribiendo** el prefijo en `notes` (el código viejo que convive durante el deploy y las
+    notas que ve el usuario lo usan) hasta la migración contract posterior a B-pre. No dejar de escribirlo ni borrarlo de las notas existentes.
+30. **Backfill de `agenda_foundations` idempotente y re-ejecutable.** Bloque entre `>>> BACKFILL
+    agenda_foundations BEGIN` y `<<< … END`: `WHERE NOT EXISTS` + ids md5 determinísticos (`agenda_foundations:…`,
+    los mismos que usa `lib/agenda-defaults.ts`) + `ON CONFLICT DO NOTHING`; los UPDATE de Booking filtran lo ya
+    hecho y **no tocan `updatedAt`** (es el optimistic lock); `SET LOCAL row_security = off` para que un rol sin
+    BYPASSRLS falle en vez de backfillear 0 filas; GUC `kinesoft.backfill_tenants` acota el alcance; sin `;`
+    dentro de una sentencia (`tests/integration/agenda-backfill.test.ts` lee el bloque literal del archivo y lo
+    parte por `;`). El paso 3b va **después** del 3 para no pisar PUBLIC. No editar el bloque sin re-correr ese
+    test, y no cambiar los ids.
+31. **Catálogo GLOBAL_READONLY.** Specialty, Practice, PracticeSpecialty, Payer y CatalogImportRun: ENABLE +
+    FORCE + **solo** `FOR SELECT USING (true)`, ninguna policy de escritura (`scripts/guard-tenant-isolation.mjs`
+    lo exige). PayerPlan: split (lectura global + propia, escritura propia). Escriben solo el import (conexión
+    owner, verifica `rolbypassrls`) y Plataforma (`prismaService` detrás de `requireSuperAdmin`). Las actions del
+    consultorio validan `payerId`/`practiceId`/`payerPlanId` (global o propio, no archivado, plan de esa
+    prestadora): las FK saltean RLS. No agregar una policy de escritura "para simplificar".
+32. **`curatedAt` protegido por el import.** `scripts/catalog-import.ts` / `lib/catalog/import-core.ts` nunca
+    pisan una fila con `curatedAt` (solo le suman alias), no desarchivan, los `*.seed-*.csv` son create-only y
+    la segunda corrida da 0 cambios. Toda edición de Plataforma marca `curatedAt`. El import no revalida el cache
+    de Next: después va "Refrescar catálogo".
+33. **Defaults sin fila PS/PP.** Servicio sin `PractitionerService` = habilitado y PUBLIC si
+    `Service.practitionerId` es null o es ese profesional; deshabilitado si es de otro. Cobertura sin
+    `PractitionerPayer` = aceptada. "Particular" siempre activa (no destildable). Las altas nuevas nacen con sus
+    filas (`lib/agenda-defaults.ts`). Mismo criterio en loader, `listPractitionerServices`, turnero y
+    `eligiblePractitioners`: no divergir.
+34. **`NO_LOCATION_ID = ""`** (`lib/availability/types.ts:64`): id sintético de un tenant sin sede principal.
+    Un TimeBlock de una sede concreta no le resta; uno global (`locationId` null) sí. Los write-paths lo
+    traducen a `locationId` null. No reemplazarlo por null en el motor (las claves por sede lo necesitan).
+35. **Capabilities fallan cerrado.** `capabilitiesFor` (`lib/capabilities.ts`) con rol desconocido o sin
+    membresía devuelve el set vacío; la UI solo esconde y la barrera es `requireCapability` /
+    `requireTenantAdmin` en cada action. ASSISTANT no tiene `clinical.read` (`listAgendaBookings` anula
+    title/description/notes). No volver a chequear `role === "OWNER"` a mano.
 
 ---
 

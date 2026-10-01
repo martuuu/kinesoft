@@ -4,11 +4,23 @@
  *
  * Reconciles the two lists that must never diverge:
  *   1. Prisma models that carry a `tenantId` column (schema.prisma).
- *   2. Tables covered by the RLS policies migration.
+ *   2. Tables with RLS ENABLED and at least one policy, parsed from EVERY
+ *      `prisma/migrations/<ts>_<name>/migration.sql`, in timestamp order.
  *
- * FAILS (exit 1) if a model has `tenantId` but no RLS policy and is NOT on
- * the documented exclusion allowlist. This is what stops a future tenant
- * table from silently shipping without isolation.
+ * FAILS (exit 1) if:
+ *   • a model has `tenantId` but no RLS (ENABLE + policy) and is NOT on the
+ *     documented exclusion allowlist. This is what stops a future tenant
+ *     table from silently shipping without isolation;
+ *   • a GLOBAL_READONLY catalog table (B-pre M-cat) is missing ENABLE/FORCE,
+ *     has no SELECT policy, or has ANY write policy (ALL/INSERT/UPDATE/DELETE):
+ *     the app role must only read the global catalog.
+ *
+ * B1.0 (M-cat): before this, the guard only read 20260725120000_rls_policies
+ * and counted a table as "policied" if its name merely appeared quoted there.
+ * Now it parses ENABLE/FORCE/DISABLE, CREATE/DROP POLICY (with its FOR <cmd>)
+ * and the `FOREACH t IN ARRAY ARRAY[...]` loop of the B2 migration, across all
+ * migrations. `prisma/migrations/policies.sql` is a redirect stub that nothing
+ * applies, so it is deliberately NOT read.
  *
  * Also prints a SOFT report of Actor-facing modules that still call
  * `prisma.<rlsModel>.<op>` outside a runWithRls wrap (potential wrap-miss).
@@ -22,13 +34,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCHEMA = join(ROOT, "prisma", "schema.prisma");
-const MIGRATION = join(
-  ROOT,
-  "prisma",
-  "migrations",
-  "20260725120000_rls_policies",
-  "migration.sql"
-);
+const MIGRATIONS_DIR = join(ROOT, "prisma", "migrations");
 
 // Models intentionally excluded from tenant-RLS. Keep this list tiny and
 // documented — every entry is a deliberate design decision.
@@ -36,6 +42,21 @@ const ALLOWLIST = new Set([
   "UserPreferences", // userId-scoped: one row per user, `tenantId` is a mutable "active tenant" pointer, not ownership.
   "Favorite", // userId-scoped: keyed (userId, exerciseId); tenantId is a denormalised filter.
 ]);
+
+// Global reference catalog (B-pre M-cat, 20260930200000_catalog_global): no
+// tenantId, shared by every tenant, written ONLY by the import script and
+// Plataforma over `prismaService` (BYPASSRLS). Contract: ENABLE + FORCE, a
+// SELECT policy, and NO write policy → RLS default-deny blocks INSERT/UPDATE/
+// DELETE for `kinesoft_app` even though its default GRANTs include them.
+// (PayerPlan is NOT here: it has tenantId and a split policy like Exercise.)
+const GLOBAL_READONLY = new Set([
+  "Specialty",
+  "Practice",
+  "PracticeSpecialty",
+  "Payer",
+  "CatalogImportRun",
+]);
+const WRITE_CMDS = new Set(["ALL", "INSERT", "UPDATE", "DELETE"]);
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`;
 const GREEN = (s) => `\x1b[32m${s}\x1b[0m`;
@@ -60,19 +81,81 @@ const tenantIdModels = new Set();
   }
 }
 
-// ── 2. Parse migration: which model tables get a policy ───────────────
-const migration = readFileSync(MIGRATION, "utf8");
+// ── 2. Parse ALL migrations: RLS state per table ──────────────────────
+// Replayed in timestamp order so a later DROP POLICY / DISABLE wins.
+/** @type {Map<string, {enabled: boolean, forced: boolean, policies: Map<string, string>}>} */
+const rls = new Map();
+const rlsOf = (t) => {
+  if (!rls.has(t)) rls.set(t, { enabled: false, forced: false, policies: new Map() });
+  return rls.get(t);
+};
+const migrationDirs = readdirSync(MIGRATIONS_DIR)
+  .filter((d) => /^\d{14}_/.test(d) && statSync(join(MIGRATIONS_DIR, d)).isDirectory())
+  .sort();
+let migrationFiles = 0;
+for (const dir of migrationDirs) {
+  const file = join(MIGRATIONS_DIR, dir, "migration.sql");
+  let sql;
+  try {
+    sql = readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  migrationFiles++;
+  // Strip `-- …` comments so prose mentioning a table never counts.
+  sql = sql.replace(/--[^\n]*/g, "");
+
+  // a) Loop form (B2): FOREACH t IN ARRAY ARRAY['A','B',…] LOOP … END LOOP,
+  //    whose body ENABLEs/FORCEs RLS or EXECUTEs a `CREATE POLICY %I ON %I …`
+  //    (the per-table `<t>_tenant_isolation` policy) for each name.
+  const loopRe = /FOREACH\s+\w+\s+IN\s+ARRAY\s+ARRAY\s*\[([\s\S]*?)\]\s*LOOP([\s\S]*?)END\s+LOOP/gi;
+  let lm;
+  while ((lm = loopRe.exec(sql))) {
+    const names = [...lm[1].matchAll(/'(\w+)'/g)].map((x) => x[1]);
+    const body = lm[2];
+    for (const n of names) {
+      if (/ENABLE\s+ROW\s+LEVEL\s+SECURITY/i.test(body)) rlsOf(n).enabled = true;
+      if (/FORCE\s+ROW\s+LEVEL\s+SECURITY/i.test(body)) rlsOf(n).forced = true;
+      const cp = body.match(/CREATE\s+POLICY\s+%I\s+ON\s+%I([^']*)'/i);
+      if (cp) {
+        const cmd = (cp[1].match(/\bFOR\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\b/i)?.[1] ?? "ALL").toUpperCase();
+        rlsOf(n).policies.set(`${n}_tenant_isolation`, cmd);
+      }
+    }
+  }
+
+  // b) Statement form, in file order.
+  const stmtRe =
+    /ALTER\s+TABLE\s+(?:ONLY\s+)?"?(\w+)"?\s+(ENABLE|FORCE|DISABLE|NO\s+FORCE)\s+ROW\s+LEVEL\s+SECURITY|CREATE\s+POLICY\s+"?(\w+)"?\s+ON\s+"?(\w+)"?([^;]*);|DROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?\s+ON\s+"?(\w+)"?/gi;
+  let sm;
+  while ((sm = stmtRe.exec(sql))) {
+    if (sm[1]) {
+      const st = rlsOf(sm[1]);
+      const op = sm[2].toUpperCase().replace(/\s+/g, " ");
+      if (op === "ENABLE") st.enabled = true;
+      else if (op === "FORCE") st.forced = true;
+      else if (op === "DISABLE") st.enabled = false;
+      else if (op === "NO FORCE") st.forced = false;
+    } else if (sm[3]) {
+      // Postgres default for CREATE POLICY without FOR is ALL.
+      const cmd = (sm[5].match(/\bFOR\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\b/i)?.[1] ?? "ALL").toUpperCase();
+      rlsOf(sm[4]).policies.set(sm[3], cmd);
+    } else if (sm[6]) {
+      rlsOf(sm[7]).policies.delete(sm[6]);
+    }
+  }
+}
+
 const policied = new Set();
 for (const name of allModels) {
-  // Model appears quoted in the migration (in the ENABLE array or a
-  // CREATE POLICY ... ON "Name"), as 'Name' or "Name".
-  const re = new RegExp(`['"]${name}['"]`);
-  if (re.test(migration)) policied.add(name);
+  const st = rls.get(name);
+  if (st && st.enabled && st.policies.size > 0) policied.add(name);
 }
 
 // ── 3. Reconcile ──────────────────────────────────────────────────────
 console.log(`Models with tenantId: ${tenantIdModels.size}`);
-console.log(`Models with RLS policy in migration: ${policied.size}`);
+console.log(`Migrations parsed: ${migrationFiles}`);
+console.log(`Models with RLS enabled + policy: ${policied.size}`);
 
 const missing = [];
 for (const name of tenantIdModels) {
@@ -85,7 +168,7 @@ if (missing.length) {
   fail(
     `These models carry tenantId but have NO RLS policy and are NOT allowlisted:\n    ${missing.join(
       ", "
-    )}\n  → add them to the policies migration, or (if userId-scoped) to the ALLOWLIST in this script.`
+    )}\n  → ENABLE + FORCE RLS and add a policy in a migration, or (if userId-scoped) add them to the ALLOWLIST in this script.`
   );
 } else {
   console.log(GREEN("✓ Every tenantId model is policied or explicitly allowlisted."));
@@ -102,11 +185,40 @@ for (const name of ALLOWLIST) {
   }
 }
 
+// ── 3b. GLOBAL_READONLY: read-only global catalog ────────────────────
+{
+  const bad = [];
+  for (const name of GLOBAL_READONLY) {
+    if (!allModels.has(name)) {
+      bad.push(`${name}: not a model in schema.prisma (stale GLOBAL_READONLY entry?)`);
+      continue;
+    }
+    if (tenantIdModels.has(name)) bad.push(`${name}: carries tenantId — it is not a global catalog table`);
+    const st = rls.get(name);
+    if (!st || !st.enabled) bad.push(`${name}: RLS not ENABLEd`);
+    if (!st || !st.forced) bad.push(`${name}: RLS not FORCEd`);
+    const cmds = st ? [...st.policies.entries()] : [];
+    if (!cmds.some(([, c]) => c === "SELECT")) bad.push(`${name}: no FOR SELECT policy (the app role could not read it)`);
+    for (const [pol, c] of cmds) {
+      if (WRITE_CMDS.has(c)) bad.push(`${name}: write policy "${pol}" (FOR ${c}) — the app role must not write the global catalog`);
+    }
+  }
+  if (bad.length) {
+    fail(`GLOBAL_READONLY catalog contract broken:\n    ${bad.join("\n    ")}`);
+  } else {
+    console.log(GREEN(`✓ GLOBAL_READONLY (${GLOBAL_READONLY.size}): ENABLE + FORCE, SELECT-only policies.`));
+  }
+}
+
 // ── 4. SOFT report: unwrapped prisma.<rlsModel> in Actor-facing code ──
 // Advisory only. RLS models as lowercase Prisma delegate names.
+// GLOBAL_READONLY queda afuera: su policy es `FOR SELECT USING (true)` (igual
+// para todos los tenants), así que leer Payer/Practice/Specialty con `prisma`
+// pelado y cache global (`lib/catalog.ts`) es intencional, no una fuga
+// (handoff de B1.4). PayerPlan NO está en el set: tiene filas por tenant.
 const rlsDelegates = new Set(
   [...tenantIdModels, ...policied]
-    .filter((n) => !ALLOWLIST.has(n))
+    .filter((n) => !ALLOWLIST.has(n) && !GLOBAL_READONLY.has(n))
     .map((n) => n[0].toLowerCase() + n.slice(1))
 );
 // Files that legitimately use the BYPASSRLS channel — skip them.

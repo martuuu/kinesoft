@@ -8,10 +8,14 @@
  *      "Particular" en UNA transacción (`lib/tenant-bootstrap.ts`, la misma
  *      lógica que usa `scripts/create-tenant.ts`). Re-ejecutarlo EDITA el
  *      consultorio en alta: nunca duplica tenant, membresía ni Particular.
- *   3-6. Horario, servicios, obras sociales y equipo reusan las actions de
- *      siempre (`setBusinessHours`, `createService`, `createInsurer`,
- *      `createInvitation`): el OWNER ya tiene Actor desde el paso 2.
- *   7. `completeOnboarding` — marca `Tenant.onboardingCompletedAt`.
+ *   3. Sede — `saveOnboardingLocation` (B5.5 ONB): confirma/edita la sede
+ *      principal que dejó el bootstrap (la crea si falta).
+ *   4-8. Horario, tu horario, servicios (+ práctica del catálogo), obras
+ *      sociales (+ prestadora del catálogo) y equipo reusan las actions de
+ *      siempre (`setBusinessHours`, `savePractitionerWeek`, `createService`,
+ *      `createInsurer`/`addInsurerFromCatalog`, `createInvitation`): el OWNER
+ *      ya tiene Actor desde el paso 2.
+ *   9. `completeOnboarding` — marca `Tenant.onboardingCompletedAt`.
  *
  * El paso actual no se guarda: se deriva del estado (`deriveResumeStep`).
  */
@@ -25,6 +29,10 @@ import { logger } from "@/lib/logger";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
+import { ensurePrimaryLocation } from "@/lib/agenda-defaults";
+import { lockTenantLocations } from "@/lib/location-lock";
+import { LocationInput } from "@/lib/locations-schemas";
 import { bootstrapTenant, PractitionerElsewhereError } from "@/lib/tenant-bootstrap";
 import { getSessionUser, isPortalPatientIdentity, loadMemberships } from "@/lib/onboarding-internal";
 import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputType } from "@/lib/validation";
@@ -157,7 +165,60 @@ async function requireOnboardingOwner() {
   return { actor, completedAt: row.completedAt };
 }
 
-/** Paso 7: cierra el alta. Idempotente (no pisa la fecha de un alta ya cerrada). */
+/**
+ * Paso "Sede" (B5.5 ONB): datos de la sede principal. En el alta la
+ * dirección es obligatoria (es lo que marca el paso como hecho para el
+ * retome, `deriveResumeStep`); en Configuración → Sedes sigue opcional.
+ *
+ * Idempotente: siempre escribe sobre LA principal. El bootstrap ya la crea
+ * ("Principal", ids del backfill); si falta (alta abierta antes de B2.3) se
+ * crea acá con `ensurePrimaryLocation`, el mismo helper del alta, así no hay
+ * dos caminos que produzcan sedes distintas (AUDIT §5.26). Lock exclusivo de
+ * sedes como `createLocation`: crear/cambiar la principal no se intercala
+ * con un archivado ni con otra alta.
+ */
+const OnboardingLocationInput = LocationInput.pick({ name: true, city: true, province: true, phone: true }).extend({
+  address: z.string().trim().min(1, "Poné la dirección.").max(160, "Máximo 160 caracteres"),
+});
+
+export async function saveOnboardingLocation(
+  raw: z.input<typeof OnboardingLocationInput>
+): Promise<ActionResult<{ locationId: string }>> {
+  const { actor } = await requireOnboardingOwner();
+  const parsed = OnboardingLocationInput.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "Revisá los datos de la sede.", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  // Como `updateLocation`: un campo omitido no se toca ("" sí lo borra; el
+  // transform de `optText` convierte undefined en null y lo pisaría).
+  const data = Object.fromEntries(Object.entries(parsed.data).filter(([k]) => k in raw)) as Prisma.LocationUpdateManyMutationInput;
+  try {
+    const locationId = await runWithRls(actor.tenantId, async (tx) => {
+      await lockTenantLocations(tx, actor.tenantId);
+      const id = await ensurePrimaryLocation(tx, actor.tenantId);
+      // updateMany con tenantId: la barrera explícita también en la escritura
+      // (BYPASSRLS en prod).
+      await tx.location.updateMany({ where: { id, tenantId: actor.tenantId }, data });
+      return id;
+    });
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "location.update",
+      entity: "Location",
+      entityId: locationId,
+      payload: { fields: Object.keys(data), source: "onboarding" },
+    });
+    revalidatePath("/configuracion");
+    revalidatePath("/agenda");
+    return { ok: true, data: { locationId } };
+  } catch (e) {
+    logger.error("onboarding.location_failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos guardar la sede. Probá de nuevo." };
+  }
+}
+
+/** Paso 9: cierra el alta. Idempotente (no pisa la fecha de un alta ya cerrada). */
 export async function completeOnboarding(): Promise<ActionResult> {
   const { actor, completedAt } = await requireOnboardingOwner();
   if (completedAt) return { ok: true, data: undefined };

@@ -13,7 +13,10 @@ import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { hashInviteToken } from "@/lib/invitations-tokens";
-import type { OnboardingProgress } from "@/lib/onboarding-logic";
+import { isCustomSchedule, type OnboardingProgress } from "@/lib/onboarding-logic";
+import { agendaDefaultIds } from "@/lib/agenda-defaults";
+import type { LocationRow } from "@/lib/locations-schemas";
+import type { PractitionerScheduleView } from "@/lib/practitioner-schedule-schemas";
 
 export type SessionUser = {
   id: string;
@@ -96,6 +99,26 @@ export type OnboardingService = {
   durationMin: number;
   priceCents: number;
   maxConcurrent: number | null;
+  /** Práctica del catálogo (B5.5): solo el nombre, para el listado. */
+  practiceName: string | null;
+};
+
+/** Sede principal (paso "Sede"). */
+export type OnboardingLocation = {
+  id: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  province: string | null;
+  phone: string | null;
+};
+
+/** Semana del OWNER (paso "Tu horario"): misma forma que `getPractitionerSchedule`. */
+export type OnboardingSchedule = {
+  practitionerId: string;
+  view: PractitionerScheduleView;
+  /** `isCustomSchedule`: false = la plantilla del alta, sin tocar. */
+  custom: boolean;
 };
 export type OnboardingInsurer = { id: string; name: string; isParticular: boolean; copagoCents: number };
 export type OnboardingInvitation = { id: string; email: string; firstName: string; lastName: string; role: string };
@@ -111,6 +134,11 @@ export type OnboardingContext =
       patientIdentity: boolean;
       user: SessionUser;
       tenant: OnboardingTenant | null;
+      /** Sede principal; null sin tenant (o en un tenant viejo sin sede: el paso la crea). */
+      location: OnboardingLocation | null;
+      /** Todas las sedes (el editor de franjas rotula una franja de otra sede). */
+      locations: LocationRow[];
+      schedule: OnboardingSchedule | null;
       services: OnboardingService[];
       insurers: OnboardingInsurer[];
       invitations: OnboardingInvitation[];
@@ -166,16 +194,26 @@ export async function loadOnboardingContext(
       patientIdentity: await isPortalPatientIdentity(user),
       user,
       tenant: null,
+      location: null,
+      locations: [],
+      schedule: null,
       services: [],
       insurers: [],
       invitations: [],
-      progress: { hasTenant: false, servicesCount: 0, insurersCount: 0, invitationsCount: 0 },
+      progress: {
+        hasTenant: false,
+        locationReady: false,
+        ownScheduleSaved: false,
+        servicesCount: 0,
+        insurersCount: 0,
+        invitationsCount: 0,
+      },
     };
   }
 
   const tenantId = inProgress.tenantId;
-  const { tenant, services, insurers, invitations } = await runWithRls(tenantId, async (tx) => {
-    const [tenant, services, insurers, invitations] = await Promise.all([
+  const data = await runWithRls(tenantId, async (tx) => {
+    const [tenant, services, insurers, invitations, locations, practitioner] = await Promise.all([
       tx.tenant.findUniqueOrThrow({
         where: { id: tenantId },
         select: {
@@ -192,7 +230,14 @@ export async function loadOnboardingContext(
       }),
       tx.service.findMany({
         where: { tenantId },
-        select: { id: true, name: true, durationMin: true, priceCents: true, maxConcurrent: true },
+        select: {
+          id: true,
+          name: true,
+          durationMin: true,
+          priceCents: true,
+          maxConcurrent: true,
+          practice: { select: { name: true } },
+        },
         orderBy: { name: "asc" },
       }),
       tx.insurer.findMany({
@@ -205,20 +250,109 @@ export async function loadOnboardingContext(
         select: { id: true, email: true, firstName: true, lastName: true, role: true },
         orderBy: { invitedAt: "asc" },
       }),
+      tx.location.findMany({
+        where: { tenantId },
+        orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          address: true,
+          addressLine2: true,
+          city: true,
+          province: true,
+          postalCode: true,
+          phone: true,
+          isPrimary: true,
+          active: true,
+          sortOrder: true,
+          _count: { select: { schedules: true } },
+        },
+      }),
+      // El OWNER es el practitioner de este usuario en este tenant (bootstrap).
+      tx.practitioner.findFirst({ where: { tenantId, userId: user.id }, select: { id: true } }),
     ]);
-    return { tenant, services, insurers, invitations };
+    const scheduleRows = practitioner
+      ? await tx.practitionerSchedule.findMany({
+          where: { tenantId, practitionerId: practitioner.id },
+          orderBy: [{ dow: "asc" }, { startMin: "asc" }],
+          select: {
+            id: true,
+            dow: true,
+            startMin: true,
+            endMin: true,
+            locationId: true,
+            validFrom: true,
+            validUntil: true,
+            updatedAt: true,
+          },
+        })
+      : [];
+    return { tenant, services, insurers, invitations, locations, practitioner, scheduleRows };
   });
+  const { tenant, insurers, invitations, practitioner, scheduleRows } = data;
+
+  const locations: LocationRow[] = data.locations.map(({ _count, ...l }) => ({
+    ...l,
+    scheduleCount: _count.schedules,
+  }));
+  const primary = locations.find((l) => l.isPrimary && l.active) ?? null;
+
+  // Misma forma que `getPractitionerSchedule` (el editor de Configuración usa
+  // `draftFromView` sobre esto). La vigencia no se edita en el alta: las
+  // franjas del alta nunca la llevan, se pasa null.
+  const schedule: OnboardingSchedule | null = practitioner
+    ? {
+        practitionerId: practitioner.id,
+        view: {
+          practitionerId: practitioner.id,
+          ranges: scheduleRows.map((r) => ({
+            id: r.id,
+            dow: r.dow,
+            startMin: r.startMin,
+            endMin: r.endMin,
+            locationId: r.locationId,
+            validFrom: null,
+            validUntil: null,
+          })),
+          version: scheduleRows.length
+            ? new Date(Math.max(...scheduleRows.map((r) => r.updatedAt.getTime()))).toISOString()
+            : null,
+          isFallback: scheduleRows.length === 0,
+          tenantHours: { startMin: tenant.businessHoursStart * 60, endMin: tenant.businessHoursEnd * 60 },
+        },
+        custom: isCustomSchedule(scheduleRows, (dow) => agendaDefaultIds.schedule(practitioner.id, dow)),
+      }
+    : null;
+
+  const services: OnboardingService[] = data.services.map(({ practice, ...s }) => ({
+    ...s,
+    practiceName: practice?.name ?? null,
+  }));
 
   return {
     kind: "stepper",
     patientIdentity: false,
     user,
     tenant,
+    location: primary
+      ? {
+          id: primary.id,
+          name: primary.name,
+          address: primary.address,
+          city: primary.city,
+          province: primary.province,
+          phone: primary.phone,
+        }
+      : null,
+    locations,
+    schedule,
     services,
     insurers,
     invitations,
     progress: {
       hasTenant: true,
+      locationReady: !!primary?.address?.trim(),
+      ownScheduleSaved: schedule?.custom ?? false,
       servicesCount: services.length,
       insurersCount: insurers.filter((i) => !i.isParticular).length,
       invitationsCount: invitations.length,

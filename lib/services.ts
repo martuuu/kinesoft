@@ -15,23 +15,17 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { requireTenantAdmin } from "@/lib/authz";
+import { findActivePractice } from "@/lib/catalog-validate";
+import { enableServiceForPractitioners } from "@/lib/agenda-defaults";
+import { CatalogId } from "@/lib/catalog-schemas";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 import type { ServiceRow } from "@/lib/services-types";
 
-async function requireAdminActor() {
-  const actor = await getActor();
-  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  }));
-  if (!m || (m.role !== "OWNER" && m.role !== "ADMIN")) {
-    throw new Error("Solo OWNER/ADMIN pueden modificar el catálogo de servicios.");
-  }
-  return actor;
-}
+const ADMIN_MSG = "Solo OWNER/ADMIN pueden modificar el catálogo de servicios.";
 
 export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   const actor = await getActor();
@@ -42,6 +36,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         orderBy: { name: "asc" },
         include: {
           practitioner: { include: { user: { select: { fullName: true, email: true } } } },
+          practice: { select: { name: true } },
           _count: { select: { bookings: true } },
         },
       }));
@@ -58,6 +53,8 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
           : null,
         maxConcurrent: s.maxConcurrent,
         bookingsCount: s._count.bookings,
+        practiceId: s.practiceId,
+        practiceName: s.practice?.name ?? null,
       }));
     },
     ["services:list-counts", actor.tenantId],
@@ -80,6 +77,12 @@ const ServiceInput = z.object({
       z.coerce.number().int().min(1, "Mínimo 1").max(50).nullable()
     )
     .optional(),
+  // Práctica del catálogo global (opcional). "" = sin práctica. Se valida
+  // contra la DB dentro de la tx de escritura (la FK saltea RLS).
+  practiceId: z
+    .union([CatalogId, z.literal(""), z.null()])
+    .transform((v) => (v ? v : null))
+    .optional(),
 });
 
 export async function createService(
@@ -93,7 +96,7 @@ export async function createService(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const actor = await requireAdminActor();
+  const actor = await requireTenantAdmin(ADMIN_MSG);
   // Validate practitioner belongs to the tenant if supplied.
   if (parsed.data.practitionerId) {
     const owned = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
@@ -103,18 +106,35 @@ export async function createService(
     if (!owned) return { ok: false, error: "Profesional fuera del tenant." };
   }
   try {
-    const row = await runWithRls(actor.tenantId, (tx) => tx.service.create({
-      data: {
+    const row = await runWithRls(actor.tenantId, async (tx) => {
+      // La FK practiceId saltea RLS: práctica existente y no archivada, acá.
+      if (parsed.data.practiceId && !(await findActivePractice(tx, parsed.data.practiceId))) {
+        return null;
+      }
+      const created = await tx.service.create({
+        data: {
+          tenantId: actor.tenantId,
+          name: parsed.data.name,
+          description: parsed.data.description || null,
+          color: parsed.data.color || null,
+          durationMin: parsed.data.durationMin,
+          priceCents: parsed.data.priceCents,
+          practitionerId: parsed.data.practitionerId || null,
+          maxConcurrent: parsed.data.maxConcurrent ?? null,
+          practiceId: parsed.data.practiceId ?? null,
+        },
+      });
+      // B2.3 (decisión 7, = backfill (3)): con profesional → solo ese; sin
+      // profesional (compartido) → todos los aceptados. Misma tx; el
+      // practitionerId ya se validó contra el tenant arriba.
+      await enableServiceForPractitioners(tx, {
         tenantId: actor.tenantId,
-        name: parsed.data.name,
-        description: parsed.data.description || null,
-        color: parsed.data.color || null,
-        durationMin: parsed.data.durationMin,
-        priceCents: parsed.data.priceCents,
-        practitionerId: parsed.data.practitionerId || null,
-        maxConcurrent: parsed.data.maxConcurrent ?? null,
-      },
-    }));
+        serviceId: created.id,
+        practitionerId: created.practitionerId,
+      });
+      return created;
+    });
+    if (!row) return { ok: false, error: "Práctica no encontrada en el catálogo." };
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
@@ -140,7 +160,7 @@ export async function updateService(
   id: string,
   raw: Partial<z.input<typeof ServiceInput>>
 ): Promise<ActionResult> {
-  const actor = await requireAdminActor();
+  const actor = await requireTenantAdmin(ADMIN_MSG);
   const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
@@ -168,11 +188,21 @@ export async function updateService(
     // antes/después (A2b-S-cfg) tiene que describir exactamente lo que
     // pisó este update, no lo que otro guardado dejó un instante antes.
     changes = await runWithRls(actor.tenantId, async (tx) => {
-      const before = await tx.service.findFirstOrThrow({
+      const { practitionerId: ownerBefore, ...before } = await tx.service.findFirstOrThrow({
         where: { id, tenantId: actor.tenantId },
-        select: { name: true, priceCents: true },
+        select: { name: true, priceCents: true, practiceId: true, practitionerId: true },
       });
-      const after = await tx.service.update({
+      // La FK practiceId saltea RLS: práctica existente y no archivada, acá.
+      // Solo si CAMBIA: si Plataforma archiva la práctica que el servicio ya
+      // tenía, editar el precio no puede empezar a fallar por eso.
+      if (
+        parsed.data.practiceId &&
+        parsed.data.practiceId !== before.practiceId &&
+        !(await findActivePractice(tx, parsed.data.practiceId))
+      ) {
+        throw new PracticeNotFound("Práctica no encontrada en el catálogo.");
+      }
+      const { practitionerId: ownerAfter, ...after } = await tx.service.update({
         where: { id },
         data: {
           ...parsed.data,
@@ -181,11 +211,41 @@ export async function updateService(
           practitionerId:
             parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
         },
-        select: { name: true, priceCents: true },
+        select: { name: true, priceCents: true, practiceId: true, practitionerId: true },
       });
+      // B2.3: si el pedido trae el profesional (asignarlo o pasarlo a
+      // compartido), el nuevo dueño / todos los aceptados quedan habilitados.
+      // Solo AGREGA filas: a quien lo atendía antes no se le quita (eso es el
+      // editor por profesional, `enabled`), así un cambio de dueño no deja
+      // turnos futuros de otro profesional fuera de lo que "atiende".
+      if (parsed.data.practitionerId !== undefined) {
+        await enableServiceForPractitioners(tx, {
+          tenantId: actor.tenantId,
+          serviceId: id,
+          practitionerId: ownerAfter,
+        });
+        // Revisión de B-pre: pasar el servicio a un dueño (de compartido, o de
+        // P1 a P2) = antes el turnero lo ofrecía solo con el dueño. Los demás
+        // profesionales quedan PRIVATE: la agenda del staff les sigue
+        // permitiendo dar el turno (no se toca `enabled`, ver arriba), pero el
+        // turnero vuelve al comportamiento de antes. Volver a compartido NO
+        // republica: la visibilidad de cada uno es del editor por profesional.
+        if (ownerAfter && ownerAfter !== ownerBefore) {
+          await tx.practitionerService.updateMany({
+            where: {
+              tenantId: actor.tenantId,
+              serviceId: id,
+              practitionerId: { not: ownerAfter },
+              visibility: "PUBLIC",
+            },
+            data: { visibility: "PRIVATE" },
+          });
+        }
+      }
       return auditDiff(before, after);
     });
   } catch (e) {
+    if (e instanceof PracticeNotFound) return { ok: false, error: e.message };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un servicio con ese nombre." };
     }
@@ -198,7 +258,7 @@ export async function updateService(
     action: "service.update",
     entity: "Service",
     entityId: id,
-    // Solo nombre y monto, y solo si cambiaron: el precio es plata (entra en
+    // Solo nombre, monto y práctica, y solo si cambiaron: el precio es plata (entra en
     // el fallback del copago) y hasta A2 el audit no decía de cuánto a cuánto.
     ...(changes ? { payload: changes } : {}),
   });
@@ -207,6 +267,9 @@ export async function updateService(
   revalidateTag(tags.services(actor.tenantId));
   return { ok: true, data: undefined };
 }
+
+/** Corta (y revierte) la tx de update cuando el `practiceId` pedido no es utilizable. */
+class PracticeNotFound extends Error {}
 
 type AuditDiff = { before: Record<string, unknown>; after: Record<string, unknown> } | null;
 
@@ -224,7 +287,7 @@ function auditDiff<T extends Record<string, unknown>>(before: T, after: T): Audi
 }
 
 export async function deleteService(id: string): Promise<ActionResult> {
-  const actor = await requireAdminActor();
+  const actor = await requireTenantAdmin(ADMIN_MSG);
   const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
     where: { id, tenantId: actor.tenantId },
     include: { _count: { select: { bookings: true } } },

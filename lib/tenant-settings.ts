@@ -1,7 +1,8 @@
 "use server";
 
 /**
- * Tenant-level settings — OWNER/ADMIN only.
+ * Tenant-level settings — OWNER/ADMIN only (`requireTenantAdmin`, lib/authz.ts;
+ * B1.7 sacó de acá la copia local del chequeo de rol).
  *
  * For now the only setting is `sharedPatientView`. Add more here when
  * needed (TZ override, currency, etc.).
@@ -9,20 +10,10 @@
 import { revalidatePath } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { requireTenantAdmin } from "@/lib/authz";
 import { audit } from "@/lib/audit";
+import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import type { ActionResult } from "@/lib/validation";
-
-async function requireAdmin() {
-  const actor = await getActor();
-  const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  }));
-  if (!m || (m.role !== "OWNER" && m.role !== "ADMIN")) {
-    throw new Error("Solo OWNER/ADMIN pueden cambiar la configuración del consultorio.");
-  }
-  return actor;
-}
 
 export type TenantSettings = {
   name: string;
@@ -62,7 +53,7 @@ export async function setBusinessHours(input: {
   /** Optional so existing callers keep working; only 30 or 60 accepted. */
   slotMinutes?: number;
 }): Promise<ActionResult> {
-  const actor = await requireAdmin();
+  const actor = await requireTenantAdmin();
   const start = Math.floor(input.start);
   const end = Math.floor(input.end);
   const slotMinutes = input.slotMinutes == null ? null : Math.floor(input.slotMinutes);
@@ -85,21 +76,39 @@ export async function setBusinessHours(input: {
       error: `Rango inválido. Inicio debe ser entre ${MIN}:00 y ${MAX - 1}:00, fin debe ser mayor que inicio y ≤ ${MAX}:00.`,
     };
   }
-  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
-    where: { id: actor.tenantId },
-    data: {
-      businessHoursStart: start,
-      businessHoursEnd: end,
-      ...(slotMinutes != null ? { agendaSlotMinutes: slotMinutes } : {}),
-    },
-  }));
+  // La plantilla POR DEFECTO de cada profesional (lun-sáb, sede principal, el
+  // horario viejo del tenant) sigue al horario del consultorio; una editada no
+  // se toca (`syncDefaultSchedulesToTenantHours`, B2.3 → integrador B2). Todo
+  // en la misma tx: si el update del tenant falla, las franjas no se mueven.
+  const synced = await runWithRls(actor.tenantId, async (tx) => {
+    // FOR UPDATE: dos cambios de horario simultáneos se serializan; si no, el
+    // segundo leería el horario "viejo" ya pisado y no reconocería la plantilla.
+    const [prev] = await tx.$queryRaw<{ businessHoursStart: number; businessHoursEnd: number }[]>`
+      SELECT "businessHoursStart", "businessHoursEnd" FROM "Tenant" WHERE "id" = ${actor.tenantId} FOR UPDATE`;
+    const syncedIds = prev
+      ? await syncDefaultSchedulesToTenantHours(tx, {
+          tenantId: actor.tenantId,
+          from: { start: prev.businessHoursStart, end: prev.businessHoursEnd },
+          to: { start, end },
+        })
+      : [];
+    await tx.tenant.update({
+      where: { id: actor.tenantId },
+      data: {
+        businessHoursStart: start,
+        businessHoursEnd: end,
+        ...(slotMinutes != null ? { agendaSlotMinutes: slotMinutes } : {}),
+      },
+    });
+    return syncedIds;
+  });
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
     action: "tenant.business_hours",
     entity: "Tenant",
     entityId: actor.tenantId,
-    payload: { start, end, slotMinutes },
+    payload: { start, end, slotMinutes, syncedPractitioners: synced.length },
   });
   // Wide blast radius — every booking surface re-reads the window.
   revalidatePath("/configuracion");
@@ -109,7 +118,7 @@ export async function setBusinessHours(input: {
 }
 
 export async function setSharedPatientView(value: boolean): Promise<ActionResult> {
-  const actor = await requireAdmin();
+  const actor = await requireTenantAdmin();
   await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
     where: { id: actor.tenantId },
     data: { sharedPatientView: value },
@@ -134,7 +143,7 @@ export async function updateTenantBasics(input: {
   legalName?: string | null;
   taxId?: string | null;
 }): Promise<ActionResult> {
-  const actor = await requireAdmin();
+  const actor = await requireTenantAdmin();
   const patch: Record<string, string | null> = {};
   if (input.name !== undefined) {
     const v = input.name.trim();

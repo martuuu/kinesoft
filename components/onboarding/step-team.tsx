@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Paso 6 (equipo, opcional) del alta y la pantalla de "tenés una invitación
+ * Paso Equipo (opcional) del alta y la pantalla de "tenés una invitación
  * pendiente" (A3c-S-signup). Invitar reusa `createInvitation` (mismo mail,
  * mismo rate-limit y misma regla staff ≠ paciente que Configuración).
  */
@@ -16,6 +16,7 @@ import { useToast } from "@/components/ui/toast";
 import { createInvitation, revokeInvitation } from "@/lib/invitations";
 import { openPendingInvitation } from "@/lib/onboarding";
 import { formatDateAR } from "@/lib/format";
+import { STEP } from "@/lib/onboarding-logic";
 import type { OnboardingInvitation, PendingInvite } from "@/lib/onboarding-internal";
 import { StepHeader } from "./onboarding-shell";
 import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
@@ -71,7 +72,7 @@ export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] 
   return (
     <>
       <StepHeader
-        eyebrow="Paso 6 · Equipo (opcional)"
+        eyebrow={`Paso ${STEP.team} · Equipo (opcional)`}
         title="¿Trabajás con más gente?"
         blurb="Invitá a otros profesionales o a quien te ayuda con la agenda. Les llega un mail para crear su cuenta y sumarse. Podés hacerlo después desde Configuración."
       />
@@ -121,11 +122,11 @@ export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] 
       </form>
       {error && <InlineError>{error}</InlineError>}
       <StepFooter
-        back={5}
+        back={STEP.insurers}
         primaryLabel="Seguir"
-        onPrimary={() => go(7)}
+        onPrimary={() => go(STEP.done)}
         pending={pending}
-        skip={invitations.length === 0 ? { label: "Ahora no", onClick: () => go(7) } : undefined}
+        skip={invitations.length === 0 ? { label: "Ahora no", onClick: () => go(STEP.done) } : undefined}
       />
     </>
   );

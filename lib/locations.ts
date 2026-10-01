@@ -1,0 +1,362 @@
+"use server";
+
+/**
+ * Sedes del consultorio (B2.4a CFG-api-1, B-pre). `Location` la crea la
+ * migración `agenda_foundations` (backfill: una "Principal" por tenant).
+ *
+ * Authz: leer = `agenda.viewAll` (la agenda filtra por sede); escribir =
+ * `schedule.configure` (solo admin hoy: la sede define dónde hay
+ * disponibilidad en el turnero). Ver `lib/capabilities.ts`.
+ *
+ * Tenant: TODA query lleva `where: { tenantId }` a mano dentro de
+ * `runWithRls` — en prod la conexión tiene BYPASSRLS y ese filtro es la única
+ * barrera. Un id de sede de otro tenant se responde igual que uno inexistente.
+ *
+ * Concurrencia: las escrituras que cambian QUÉ sedes están activas o cuál es
+ * la principal toman un advisory lock exclusivo por tenant; las que USAN una
+ * sede (franjas, excepciones en `lib/practitioner-schedule.ts`) lo toman
+ * compartido. Así "archivar" no puede intercalarse entre el conteo de
+ * franjas y una franja nueva en esa sede (el conteo quedaría viejo).
+ *
+ * Archivar = `active = false` (nunca DELETE): `Booking.locationId` es
+ * RESTRICT y el historial de turnos tiene que seguir diciendo dónde fue.
+ */
+import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
+import { runWithRls, type DbClient } from "@/lib/rls";
+import { requireCapability } from "@/lib/authz";
+import { audit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { dayKeyToDbDate } from "@/lib/schedule-validate";
+// Lock exclusivo de sedes (ver cabecera); módulo único desde el integrador B2.
+import { lockTenantLocations } from "@/lib/location-lock";
+import {
+  LocationId,
+  LocationInput,
+  type ArchiveLocationResult,
+  type LocationArchiveBlockers,
+  type LocationInputRaw,
+  type LocationRow,
+} from "@/lib/locations-schemas";
+import type { ActionResult } from "@/lib/validation";
+
+const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
+const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
+const NOT_FOUND = "Sede no encontrada.";
+
+function revalidateAll() {
+  revalidatePath("/configuracion");
+  revalidatePath("/agenda");
+}
+
+const ROW_SELECT = {
+  id: true,
+  name: true,
+  address: true,
+  addressLine2: true,
+  city: true,
+  province: true,
+  postalCode: true,
+  phone: true,
+  isPrimary: true,
+  active: true,
+  sortOrder: true,
+  _count: { select: { schedules: true } },
+} satisfies Prisma.LocationSelect;
+
+function toRow(l: Prisma.LocationGetPayload<{ select: typeof ROW_SELECT }>): LocationRow {
+  const { _count, ...rest } = l;
+  return { ...rest, scheduleCount: _count.schedules };
+}
+
+/** Sedes del tenant: principal primero, después `sortOrder` y nombre. */
+export async function listLocations(
+  opts: { includeArchived?: boolean } = {}
+): Promise<LocationRow[]> {
+  const { actor } = await requireCapability("agenda.viewAll", READ_MSG);
+  const rows = await runWithRls(actor.tenantId, (tx) =>
+    tx.location.findMany({
+      where: { tenantId: actor.tenantId, ...(opts.includeArchived ? {} : { active: true }) },
+      orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
+      select: ROW_SELECT,
+    })
+  );
+  return rows.map(toRow);
+}
+
+/**
+ * Alta de sede. Si el tenant no tiene principal (tenant creado entre el
+ * deploy de la migración y B2.3, o datos viejos), la nueva nace principal:
+ * el motor necesita una (`Booking.locationId` null = principal).
+ */
+export async function createLocation(raw: LocationInputRaw): Promise<ActionResult<{ id: string }>> {
+  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const parsed = LocationInput.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  try {
+    const row = await runWithRls(actor.tenantId, async (tx) => {
+      await lockTenantLocations(tx, actor.tenantId);
+      const hasPrimary = await tx.location.count({
+        where: { tenantId: actor.tenantId, isPrimary: true },
+      });
+      return tx.location.create({
+        data: { tenantId: actor.tenantId, ...parsed.data, isPrimary: hasPrimary === 0 },
+        select: { id: true, name: true, isPrimary: true },
+      });
+    });
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "location.create",
+      entity: "Location",
+      entityId: row.id,
+      payload: { name: row.name, isPrimary: row.isPrimary },
+    });
+    revalidateAll();
+    return { ok: true, data: { id: row.id } };
+  } catch (e) {
+    logger.error("location.create.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos crear la sede." };
+  }
+}
+
+/** Edición de datos de la sede (no toca `isPrimary` ni `active`: tienen su action). */
+export async function updateLocation(
+  id: string,
+  raw: Partial<LocationInputRaw>
+): Promise<ActionResult> {
+  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const idOk = LocationId.safeParse(id);
+  if (!idOk.success) return { ok: false, error: NOT_FOUND };
+  // `.partial()` sobre el objeto con transforms: un campo omitido queda
+  // `undefined` (no se toca) y "" queda null (se borra).
+  const parsed = LocationInput.partial().safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  const data = Object.fromEntries(
+    Object.entries(parsed.data).filter(([k]) => k in raw)
+  ) as Prisma.LocationUpdateInput;
+  try {
+    const changed = await runWithRls(actor.tenantId, async (tx) => {
+      const before = await tx.location.findFirst({
+        where: { id: idOk.data, tenantId: actor.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!before) return null;
+      // updateMany con tenantId: la barrera explícita también en la escritura.
+      await tx.location.updateMany({ where: { id: before.id, tenantId: actor.tenantId }, data });
+      return before;
+    });
+    if (!changed) return { ok: false, error: NOT_FOUND };
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "location.update",
+      entity: "Location",
+      entityId: changed.id,
+      payload: { fields: Object.keys(data) },
+    });
+    revalidateAll();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    logger.error("location.update.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos guardar la sede." };
+  }
+}
+
+/**
+ * Marca la sede principal. En una tx con lock exclusivo: primero baja la
+ * anterior y después sube la nueva (el índice único parcial
+ * `Location_tenantId_primary_key` exige ese orden). La sede tiene que estar
+ * activa: la principal no se puede archivar.
+ *
+ * Efecto a saber: `Booking.locationId` null se lee como "la principal", así
+ * que los turnos sin sede pasan a mostrarse en la nueva (el backfill de
+ * `agenda_foundations` les puso sede a todos los existentes).
+ */
+export async function setPrimaryLocation(id: string): Promise<ActionResult> {
+  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const idOk = LocationId.safeParse(id);
+  if (!idOk.success) return { ok: false, error: NOT_FOUND };
+  try {
+    const res = await runWithRls(actor.tenantId, async (tx) => {
+      await lockTenantLocations(tx, actor.tenantId);
+      const target = await tx.location.findFirst({
+        where: { id: idOk.data, tenantId: actor.tenantId },
+        select: { id: true, active: true, isPrimary: true },
+      });
+      if (!target) return { error: NOT_FOUND };
+      if (!target.active) return { error: "No se puede marcar como principal una sede archivada." };
+      if (target.isPrimary) return { previous: target.id };
+      const prev = await tx.location.findFirst({
+        where: { tenantId: actor.tenantId, isPrimary: true },
+        select: { id: true },
+      });
+      await tx.location.updateMany({
+        where: { tenantId: actor.tenantId, isPrimary: true },
+        data: { isPrimary: false },
+      });
+      await tx.location.updateMany({
+        where: { id: target.id, tenantId: actor.tenantId },
+        data: { isPrimary: true },
+      });
+      return { previous: prev?.id ?? null };
+    });
+    if ("error" in res) return { ok: false, error: res.error as string };
+    if (res.previous !== idOk.data) {
+      await audit({
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "location.setPrimary",
+        entity: "Location",
+        entityId: idOk.data,
+        payload: { previousPrimaryId: res.previous },
+      });
+    }
+    revalidateAll();
+    return { ok: true, data: undefined };
+  } catch (e) {
+    // P2002 = el índice parcial único frenó una carrera que el lock no cubrió
+    // (no debería pasar: está para fallar cerrado, no para pisar).
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return { ok: false, error: "Otro cambio de sede principal se cruzó con este. Probá de nuevo." };
+    }
+    logger.error("location.setPrimary.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos cambiar la sede principal." };
+  }
+}
+
+/**
+ * Archiva (desactiva) una sede. Se niega, devolviendo conteos para que la UI
+ * diga qué falta mover, si: es la principal, tiene franjas vigentes, turnos
+ * futuros no cancelados o excepciones de horario futuras que la usan.
+ * Conteos y archivado en la misma tx con lock exclusivo (ver cabecera).
+ */
+export async function archiveLocation(id: string): Promise<ArchiveLocationResult> {
+  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const idOk = LocationId.safeParse(id);
+  if (!idOk.success) return { ok: false, error: NOT_FOUND };
+  const now = new Date();
+  const today = dayKeyToDbDate(toARDateKey(now));
+  try {
+    const res = await runWithRls(actor.tenantId, async (tx) => {
+      await lockTenantLocations(tx, actor.tenantId);
+      const loc = await tx.location.findFirst({
+        where: { id: idOk.data, tenantId: actor.tenantId },
+        select: { id: true, name: true, isPrimary: true, active: true },
+      });
+      if (!loc) return { kind: "notFound" as const };
+      if (!loc.active) return { kind: "done" as const, name: loc.name, already: true };
+      if (loc.isPrimary) return { kind: "primary" as const };
+      const [activeSchedules, futureBookings, futureExceptions] = await Promise.all([
+        tx.practitionerSchedule.count({
+          where: {
+            tenantId: actor.tenantId,
+            locationId: loc.id,
+            OR: [{ validUntil: null }, { validUntil: { gte: today } }],
+          },
+        }),
+        tx.booking.count({
+          where: {
+            tenantId: actor.tenantId,
+            locationId: loc.id,
+            scheduledFor: { gte: now },
+            status: { not: "CANCELLED" },
+          },
+        }),
+        tx.scheduleException.count({
+          where: {
+            tenantId: actor.tenantId,
+            kind: "CUSTOM_HOURS",
+            date: { gte: today },
+            ranges: { array_contains: [{ locationId: loc.id }] },
+          },
+        }),
+      ]);
+      const blockers: LocationArchiveBlockers = { activeSchedules, futureBookings, futureExceptions };
+      if (activeSchedules + futureBookings + futureExceptions > 0) {
+        return { kind: "blocked" as const, blockers };
+      }
+      await tx.location.updateMany({
+        where: { id: loc.id, tenantId: actor.tenantId },
+        data: { active: false },
+      });
+      return { kind: "done" as const, name: loc.name, already: false };
+    });
+    switch (res.kind) {
+      case "notFound":
+        return { ok: false, error: NOT_FOUND };
+      case "primary":
+        return {
+          ok: false,
+          error: "No se puede archivar la sede principal. Marcá otra como principal primero.",
+        };
+      case "blocked": {
+        const b = res.blockers;
+        const parts = [
+          b.activeSchedules ? `${b.activeSchedules} franja${b.activeSchedules === 1 ? "" : "s"} de horario` : null,
+          b.futureBookings ? `${b.futureBookings} turno${b.futureBookings === 1 ? "" : "s"} a futuro` : null,
+          b.futureExceptions
+            ? `${b.futureExceptions} día${b.futureExceptions === 1 ? "" : "s"} con horario especial`
+            : null,
+        ].filter(Boolean);
+        return {
+          ok: false,
+          error: `No se puede archivar: la sede todavía tiene ${parts.join(", ")}. Movelos a otra sede primero.`,
+          blockers: b,
+        };
+      }
+      case "done":
+        if (!res.already) {
+          await audit({
+            tenantId: actor.tenantId,
+            actorId: actor.userId,
+            action: "location.archive",
+            entity: "Location",
+            entityId: idOk.data,
+            payload: { name: res.name },
+          });
+        }
+        revalidateAll();
+        return { ok: true, data: undefined };
+    }
+  } catch (e) {
+    logger.error("location.archive.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos archivar la sede." };
+  }
+}
+
+/** Reactiva una sede archivada (sin esto, archivar por error no tiene vuelta). */
+export async function restoreLocation(id: string): Promise<ActionResult> {
+  const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  const idOk = LocationId.safeParse(id);
+  if (!idOk.success) return { ok: false, error: NOT_FOUND };
+  const n = await runWithRls(actor.tenantId, async (tx) => {
+    await lockTenantLocations(tx, actor.tenantId);
+    const r = await tx.location.updateMany({
+      where: { id: idOk.data, tenantId: actor.tenantId, active: false },
+      data: { active: true },
+    });
+    return r.count;
+  });
+  if (n === 0) {
+    // Inexistente / de otro tenant / ya activa: no se distingue hacia afuera.
+    const exists = await runWithRls(actor.tenantId, (tx) =>
+      tx.location.count({ where: { id: idOk.data, tenantId: actor.tenantId } })
+    );
+    return exists ? { ok: true, data: undefined } : { ok: false, error: NOT_FOUND };
+  }
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId,
+    action: "location.restore",
+    entity: "Location",
+    entityId: idOk.data,
+  });
+  revalidateAll();
+  return { ok: true, data: undefined };
+}

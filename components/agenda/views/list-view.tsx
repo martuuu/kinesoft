@@ -7,23 +7,36 @@ import { Tag } from "@/components/ui/tag";
 import { IconCheck } from "@/components/ui/icons";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { PAYMENT_HOLD_LABEL, paymentHoldState, type PaymentHoldState } from "@/lib/agenda-filters";
+import { receptionCardBadge } from "@/lib/agenda-client-state";
 import { fmtHour, fmtMoney, osLabel, statusPill, type BookingDTO } from "../agenda-utils";
+import { PractitionerBadge } from "../grid/practitioner-badge";
 
 /** Shared column track for the Lista view header + rows (kept in one
  *  place so the two grids never drift): Hora · Paciente · Servicio ·
  *  Obra social · Copago · Duración · Estado. */
 const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
 
+/**
+ * B4.3: con más de un profesional en pantalla (`practitionerById`), la hora
+ * lleva las iniciales del profesional (canal no cromático). Debajo del
+ * paciente: "Sobreturno", recepción ("En sala 12′") y telemedicina, en texto.
+ * Sin `clinical.read` (`clinicalHidden`) no hay subtítulo clínico.
+ */
 export function ListView({
   bookings,
   onEdit,
   highlightedServiceId,
+  practitionerById = null,
+  now,
 }: {
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
   /** When set, rows of this service lift above the rest (legend "filter"). */
   highlightedServiceId: string | null;
+  practitionerById?: Readonly<Record<string, { initials: string; name: string }>> | null;
+  now?: Date;
 }) {
+  const clock = now ?? new Date();
   if (!bookings.length) {
     return (
       <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
@@ -63,7 +76,14 @@ export function ListView({
           highlightedServiceId != null && b.serviceId !== highlightedServiceId;
         // Per-turno diagnosis (title → description), falling back to the
         // program condition — surfaced under the patient name for consistency.
-        const sub = b.title || b.description || b.patientCondition;
+        const sub = b.clinicalHidden ? null : b.title || b.description || b.patientCondition;
+        const prac = practitionerById?.[b.practitionerId] ?? null;
+        const reception = receptionCardBadge(b, clock);
+        const marks = [
+          b.isOverbooked ? "Sobreturno" : null,
+          reception?.label ?? null,
+          b.isTelemedicine ? "Telemedicina" : null,
+        ].filter(Boolean);
         return (
           <button
             key={b.id}
@@ -88,8 +108,9 @@ export function ListView({
               transition: "box-shadow 0.12s ease, opacity 0.12s ease, background 0.12s ease",
             }}
           >
-            <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>
+            <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)", display: "flex", alignItems: "center", gap: 6 }}>
               {fmtHour(date)}
+              {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={20} />}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Avatar name={b.patientName} size={32} tone="sky" />
@@ -97,6 +118,11 @@ export function ListView({
                 <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
                 {sub && (
                   <div style={{ fontSize: 11, color: "var(--navy-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{sub}</div>
+                )}
+                {marks.length > 0 && (
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: b.isOverbooked ? "#9A5B00" : "var(--navy-500)" }}>
+                    {marks.join(" · ")}
+                  </div>
                 )}
               </div>
             </div>
@@ -122,7 +148,7 @@ export function ListView({
               {b.durationMin} min
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
+              <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />
             </div>
           </button>
         );

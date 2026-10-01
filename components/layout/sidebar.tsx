@@ -15,6 +15,7 @@ import {
   IconChart,
   IconSettings,
   IconLogout,
+  IconBookmark,
 } from "@/components/ui/icons";
 import type { ComponentType } from "react";
 
@@ -43,6 +44,10 @@ export function Sidebar({
   isPlatformAdmin?: boolean;
 }) {
   const pathname = usePathname();
+  // El catálogo global vive bajo /plataforma pero tiene su propia entrada: que
+  // no se iluminen las dos a la vez.
+  const catalogActive = pathname?.startsWith("/plataforma/catalogo") ?? false;
+  const platformActive = (pathname?.startsWith("/plataforma") ?? false) && !catalogActive;
   const w = collapsed ? 64 : 232;
   return (
     <aside
@@ -172,15 +177,39 @@ export function Sidebar({
               padding: collapsed ? 0 : "11px 14px",
               width: collapsed ? 44 : "auto",
               height: collapsed ? 40 : "auto",
-              color: pathname?.startsWith("/plataforma") ? "var(--sky-700)" : "var(--navy-500)",
+              color: platformActive ? "var(--sky-700)" : "var(--navy-500)",
               fontSize: 13.5,
-              fontWeight: pathname?.startsWith("/plataforma") ? 700 : 500,
+              fontWeight: platformActive ? 700 : 500,
               justifyContent: collapsed ? "center" : "flex-start",
               borderRadius: 12,
             }}
           >
             <IconDumbbell size={18} />
             {!collapsed && <span>Plataforma</span>}
+          </Link>
+        )}
+        {isPlatformAdmin && (
+          // B1.3: curado del catálogo global (prestadoras, prácticas, especialidades).
+          <Link
+            href="/plataforma/catalogo/prestadoras"
+            title={collapsed ? "Catálogo global" : undefined}
+            style={{
+              textDecoration: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: collapsed ? 0 : "11px 14px",
+              width: collapsed ? 44 : "auto",
+              height: collapsed ? 40 : "auto",
+              color: catalogActive ? "var(--sky-700)" : "var(--navy-500)",
+              fontSize: 13.5,
+              fontWeight: catalogActive ? 700 : 500,
+              justifyContent: collapsed ? "center" : "flex-start",
+              borderRadius: 12,
+            }}
+          >
+            <IconBookmark size={18} />
+            {!collapsed && <span>Catálogo global</span>}
           </Link>
         )}
         <Link

@@ -10,6 +10,12 @@ import { Avatar } from "@/components/ui/avatar";
 import { IconArrow, IconCheck, IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { setBookingStatus } from "@/lib/bookings";
+import {
+  forcePromptConfirm,
+  nextForcePrompt,
+  withForce,
+  type ForceFlags,
+} from "@/lib/booking-force-flags";
 import type { DashboardData } from "@/lib/dashboard";
 
 /**
@@ -23,8 +29,8 @@ import type { DashboardData } from "@/lib/dashboard";
  *  - Cambios de estado con optimistic lock (`nextBookingUpdatedAt`): si el
  *    turno cambió desde que se cargó el dashboard, el server devuelve
  *    "stale" y refrescamos en vez de pisar el cambio ajeno.
- *  - `conflict` / `patientOverlap` se confirman con `useConfirm` y se
- *    re-llama con el override, igual que el BookingDrawer.
+ *  - `conflict` / `patientOverlap` / `blocked` / `outOfHours` se confirman
+ *    con `useConfirm` y se re-llama con el override, igual que el BookingDrawer.
  */
 export function RecentPatients({ items }: { items: DashboardData["recent"] }) {
   return (
@@ -180,7 +186,7 @@ function QuickMenu({
 
   const setStatus = (
     status: "CONFIRMED" | "COMPLETED" | "NO_SHOW",
-    force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {}
+    force: ForceFlags = {}
   ) => {
     if (!canEdit) return;
     setError(null);
@@ -192,20 +198,12 @@ function QuickMenu({
         force
       );
       if (!r.ok) {
-        if (r.conflict || r.patientOverlap) {
-          const ok = await confirm({
-            title: r.conflict ? "Cupo completo en ese horario" : "El paciente ya tiene un turno superpuesto",
-            message: r.conflict
-              ? `${r.conflict.practitionerName} ya tiene un turno en ese horario. ¿Guardarlo igual como sobreturno?`
-              : "Este turno se superpone con otro del mismo paciente. ¿Guardarlo igual?",
-            confirmLabel: "Guardar igual",
-          });
-          if (ok) {
-            setStatus(status, {
-              ...force,
-              ...(r.conflict ? { allowOverbooking: true } : { allowPatientOverlap: true }),
-            });
-          }
+        // Cupo, superposición y (B5.7) bloqueo / fuera de horario: se confirma
+        // y se re-llama acumulando el flag (`lib/booking-force-flags.ts`).
+        const prompt = nextForcePrompt(r, force);
+        if (prompt) {
+          const ok = await confirm(forcePromptConfirm(prompt, "edit"));
+          if (ok) setStatus(status, withForce(force, prompt));
           return;
         }
         setError(r.error);

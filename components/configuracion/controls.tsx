@@ -2,25 +2,39 @@
 
 import type { Role } from "@prisma/client";
 
-export type Tab = "general" | "servicios" | "obras-sociales" | "diagnosticos" | "usuarios";
+export type Tab =
+  | "general"
+  | "sedes"
+  | "profesionales"
+  | "servicios"
+  | "obras-sociales"
+  | "diagnosticos"
+  | "usuarios";
 
 export function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => void; role: Role }) {
   const tabs: { key: Tab; label: string; ownerOnly?: boolean }[] = [
     { key: "general", label: "General" },
+    { key: "sedes", label: "Sedes" },
+    { key: "profesionales", label: "Profesionales" },
     { key: "servicios", label: "Servicios" },
     { key: "obras-sociales", label: "Obras Sociales" },
     { key: "diagnosticos", label: "Diagnósticos" },
     { key: "usuarios", label: "Usuarios", ownerOnly: true },
   ];
+  // B3.4: con 7 pestañas la píldora no entra en un celular; scrollea en
+  // horizontal en vez de desbordar la página (`maxWidth: 100%`).
   return (
     <div
-      className="k-glass"
+      className="k-glass k-scroll"
+      role="tablist"
       style={{
         display: "inline-flex",
         padding: 4,
         borderRadius: 999,
         gap: 2,
         alignSelf: "flex-start",
+        maxWidth: "100%",
+        overflowX: "auto",
       }}
     >
       {tabs.map((t) => {
@@ -30,9 +44,13 @@ export function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => v
           <button
             key={t.key}
             type="button"
+            role="tab"
+            aria-selected={on}
             onClick={() => setTab(t.key)}
             style={{
               padding: "8px 16px",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
               borderRadius: 999,
               border: "none",
               fontSize: 13,

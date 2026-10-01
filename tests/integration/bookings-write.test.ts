@@ -209,7 +209,10 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect("conflict" in blocked && blocked.conflict).toBeTruthy();
     const forced = await createBooking({ ...osteo(p2), idempotencyKey: key(), allowOverbooking: true });
     if (!forced.ok) throw new Error(forced.error);
-    expect((await db.booking.findUnique({ where: { id: forced.data.id } }))?.notes).toMatch(/^\[SOBRETURNO\]/);
+    const row = await db.booking.findUnique({ where: { id: forced.data.id } });
+    expect(row?.notes).toMatch(/^\[SOBRETURNO\]/);
+    // B3.1: la columna (M-agenda) se escribe junto con el prefijo hasta el contract.
+    expect(row?.isOverbooked).toBe(true);
   });
 
   it("[A2-S06] reactivar un CANCELLED sobre cupo lleno → pide confirmar sobreturno", async () => {
@@ -251,7 +254,7 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
 
   it("[A2-S06] el conflicto nombra al profesional del tenant y nunca su email", async () => {
     const [p1, p2] = [await addPatient(db, A), await addPatient(db, A)];
-    const when = ar("2027-03-14", "10:00");
+    const when = ar("2027-03-18", "10:00"); // B3.1: era domingo 14 → hoy avisa fuera de horario
     const osteo = (p: string) => ({ ...base(p, when), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
     expect((await createBooking(osteo(p1))).ok).toBe(true);
     const blocked = await createBooking(osteo(p2));
@@ -450,7 +453,9 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
   // ── Lecturas de agenda en reloj AR ──────────────────────────────────────
   it("un turno 22:30 AR cae en el día AR correcto de la agenda", async () => {
     const p = await addPatient(db, A);
-    const r = await createBooking({ ...base(p, ar("2027-06-07", "22:30")), idempotencyKey: key() });
+    // B3.1: 22:30 está fuera del horario del consultorio (fallback 8-19) → se
+    // confirma el aviso; el caso es la cubeta del día AR, no el horario.
+    const r = await createBooking({ ...base(p, ar("2027-06-07", "22:30")), idempotencyKey: key(), allowOutOfHours: true });
     if (!r.ok) throw new Error(r.error);
     const day = (k: string) => ({ from: new Date(`${k}T03:00:00.000Z`), to: new Date(new Date(`${k}T03:00:00.000Z`).getTime() + 86_400_000) });
     const on7 = await listBookingsInRange(day("2027-06-07"));

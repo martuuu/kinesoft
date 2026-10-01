@@ -5,6 +5,8 @@
  * client components can import the types and the KPI option list without
  * dragging in the server-only Prisma path.
  */
+import { z } from "zod";
+
 export type Palette = "sky" | "mint" | "coral" | "violet";
 
 export type KpiKey =
@@ -27,6 +29,8 @@ export type Preferences = {
   agendaShowSunday: boolean;
   // Platform-catalog table state (Plataforma → Ejercicios).
   catalogPrefs: CatalogPrefs;
+  // B4.2: estado de la agenda multi-profesional (`UserPreferences.agendaPrefs`).
+  agendaView: AgendaViewPrefs;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +141,127 @@ export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] 
   { key: "newPatientsMonth", label: "Pacientes nuevos", description: "Altas este mes" },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Agenda multi-profesional (B4.2 AG-resource) — `UserPreferences.agendaPrefs`
+//
+// Blob JSON por usuario (mismo patrón que `catalogPrefs`: agregar un campo no
+// pide migración). Se llama `AgendaViewPrefs` porque `AgendaPrefs` ya es el
+// slice de los toggles de la semana (Sprint 18) que usa el panel de Tweaks.
+//
+// Dos caminos con zod, a propósito distintos:
+//   • LECTURA (`sanitizeAgendaViewPrefs`): total, nunca tira. Cada campo cae a
+//     su default por separado (`.catch`), así un blob viejo o editado a mano
+//     con un zoom inválido no le borra los favoritos a la secretaria.
+//   • ESCRITURA (`AgendaViewPrefsPatchSchema`): estricta. Un patch con un
+//     valor fuera de dominio se rechaza con error; no se "corrige" en silencio.
+// Los ids (favoritos, sede) son preferencia de pantalla, no FKs: no se validan
+// contra el tenant al guardar porque no escriben datos de dominio; al leer, la
+// UI los cruza con la lista visible (`practitionerOrder` ignora los ajenos y
+// un `locationId` que no está en las sedes del tenant se trata como "todas").
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "Por día" (vistas de siempre) ↔ "Por profesional" (columnas = profesionales). */
+export type AgendaMode = "day" | "practitioner";
+export const AGENDA_MODES: ReadonlyArray<AgendaMode> = ["day", "practitioner"];
+/** Mismo dominio que `AgendaZoom` de `lib/agenda-layout.ts` (no se importa para no
+ *  arrastrar el motor al bundle de cada pantalla que lee preferencias). */
+export type AgendaViewZoom = 15 | 30 | 60;
+export const AGENDA_VIEW_ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
+export type AgendaViewDensity = "comfortable" | "compact";
+/** Tope de favoritos guardados (un consultorio grande ronda los 10-15). */
+export const AGENDA_MAX_FAVORITES = 50;
+const ID_MAX = 64;
+
+export type AgendaViewPrefs = {
+  mode: AgendaMode;
+  zoom: AgendaViewZoom;
+  density: AgendaViewDensity;
+  /** En orden: los favoritos van primero en columnas y chips. */
+  favoritePractitionerIds: string[];
+  /** Filtro de sede; null = todas. */
+  locationId: string | null;
+};
+
+export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
+  mode: "day",
+  zoom: 30,
+  density: "comfortable",
+  favoritePractitionerIds: [],
+  locationId: null,
+};
+
+const zoomSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
+const idSchema = z.string().trim().min(1).max(ID_MAX);
+
+/** Lista de ids → strings válidos, sin duplicados, en orden, con tope. */
+function cleanIds(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    const r = idSchema.safeParse(x);
+    if (r.success && !out.includes(r.data)) out.push(r.data);
+    if (out.length >= AGENDA_MAX_FAVORITES) break;
+  }
+  return out;
+}
+
+/**
+ * Lectura: blob no confiable (DB) → `AgendaViewPrefs` válido. Total y por
+ * campo. `defaults` permite que el caller ponga su propio default (p. ej. el
+ * zoom = `Tenant.agendaSlotMinutes` cuando el usuario nunca eligió uno).
+ */
+export function sanitizeAgendaViewPrefs(
+  raw: unknown,
+  defaults: AgendaViewPrefs = DEFAULT_AGENDA_VIEW_PREFS
+): AgendaViewPrefs {
+  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const schema = z.object({
+    mode: z.enum(["day", "practitioner"]).catch(defaults.mode),
+    zoom: zoomSchema.catch(defaults.zoom),
+    density: z.enum(["comfortable", "compact"]).catch(defaults.density),
+    favoritePractitionerIds: z.unknown().transform(cleanIds),
+    locationId: idSchema.nullable().catch(defaults.locationId),
+  });
+  const parsed = schema.parse({
+    ...o,
+    // Campo ausente = default del caller (no `[]`/null forzado).
+    favoritePractitionerIds: "favoritePractitionerIds" in o ? o.favoritePractitionerIds : defaults.favoritePractitionerIds,
+    locationId: "locationId" in o ? o.locationId : defaults.locationId,
+  });
+  return parsed;
+}
+
+/** Escritura: patch parcial, estricto (campos desconocidos o fuera de dominio → error). */
+export const AgendaViewPrefsPatchSchema = z
+  .object({
+    mode: z.enum(["day", "practitioner"]),
+    zoom: zoomSchema,
+    density: z.enum(["comfortable", "compact"]),
+    favoritePractitionerIds: z
+      .array(idSchema)
+      .max(AGENDA_MAX_FAVORITES)
+      .transform((ids) => Array.from(new Set(ids))),
+    locationId: idSchema.nullable(),
+  })
+  .partial()
+  .strict();
+export type AgendaViewPrefsPatch = z.input<typeof AgendaViewPrefsPatchSchema>;
+
+/** Merge puro de un patch YA validado sobre las prefs actuales. */
+export function mergeAgendaViewPrefs(
+  current: AgendaViewPrefs,
+  patch: z.output<typeof AgendaViewPrefsPatchSchema>
+): AgendaViewPrefs {
+  return sanitizeAgendaViewPrefs({ ...current, ...patch });
+}
+
+/** Marca/desmarca un profesional como favorito (puro; el nuevo va al final). */
+export function toggleFavoritePractitioner(ids: ReadonlyArray<string>, practitionerId: string): string[] {
+  return ids.includes(practitionerId)
+    ? ids.filter((id) => id !== practitionerId)
+    : [...ids, practitionerId].slice(0, AGENDA_MAX_FAVORITES);
+}
+
 export const DEFAULT_PREFERENCES: Preferences = {
   palette: "sky",
   pinnedKpis: ["activePatients", "weekSessions", "activePrograms"],
@@ -145,4 +270,5 @@ export const DEFAULT_PREFERENCES: Preferences = {
   agendaShowSaturday: true,
   agendaShowSunday: true,
   catalogPrefs: DEFAULT_CATALOG_PREFS,
+  agendaView: DEFAULT_AGENDA_VIEW_PREFS,
 };

@@ -116,25 +116,44 @@ export function decideAppGate(i: AppGateInput): string | null {
 
 /**
  * El paso 1 fue la cuenta (signup + verificación); el stepper arranca en el 2.
- * B-pre suma sedes, horarios por profesional, prácticas y coberturas de
- * catálogo: se agregan acá y en `components/onboarding/`.
+ * B5.5 ONB (B-pre) sumó "Sede" y "Tu horario" (la agenda por profesional los
+ * necesita) y metió prácticas y coberturas del catálogo dentro de Servicios y
+ * Obras sociales. Los componentes usan `STEP.*`, nunca el número pelado: así
+ * insertar un paso no obliga a renumerar a mano cada `go(n)`.
  */
 export const ONBOARDING_STEPS = [
   { n: 1, key: "account", label: "Tu cuenta" },
   { n: 2, key: "clinic", label: "Consultorio" },
-  { n: 3, key: "hours", label: "Horario" },
-  { n: 4, key: "services", label: "Servicios" },
-  { n: 5, key: "insurers", label: "Obras sociales" },
-  { n: 6, key: "team", label: "Equipo" },
-  { n: 7, key: "done", label: "Listo" },
+  { n: 3, key: "location", label: "Sede" },
+  { n: 4, key: "hours", label: "Horario" },
+  { n: 5, key: "myHours", label: "Tu horario" },
+  { n: 6, key: "services", label: "Servicios" },
+  { n: 7, key: "insurers", label: "Obras sociales" },
+  { n: 8, key: "team", label: "Equipo" },
+  { n: 9, key: "done", label: "Listo" },
 ] as const;
 
-export type OnboardingStepNumber = 2 | 3 | 4 | 5 | 6 | 7;
-export const FIRST_STEP: OnboardingStepNumber = 2;
-export const LAST_STEP: OnboardingStepNumber = 7;
+export type OnboardingStepKey = Exclude<(typeof ONBOARDING_STEPS)[number]["key"], "account">;
+export type OnboardingStepNumber = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+/** Número de cada paso por clave. */
+export const STEP = Object.fromEntries(
+  ONBOARDING_STEPS.filter((s) => s.key !== "account").map((s) => [s.key, s.n])
+) as { readonly [K in OnboardingStepKey]: OnboardingStepNumber };
+
+export const FIRST_STEP: OnboardingStepNumber = STEP.clinic;
+export const LAST_STEP: OnboardingStepNumber = STEP.done;
 
 export type OnboardingProgress = {
   hasTenant: boolean;
+  /** La sede principal (activa) tiene la dirección cargada. */
+  locationReady: boolean;
+  /**
+   * El OWNER guardó su semana (paso "Tu horario"). La plantilla que deja el
+   * alta (lun-sáb con el horario del consultorio) NO cuenta: ver
+   * `isCustomSchedule`.
+   */
+  ownScheduleSaved: boolean;
   servicesCount: number;
   /** Obras sociales además de "Particular". */
   insurersCount: number;
@@ -143,28 +162,75 @@ export type OnboardingProgress = {
 
 /**
  * Paso en el que se retoma el alta, derivado del estado (sin columna "paso
- * actual": lo que ya se cargó ES el progreso). Horario y servicios van juntos
- * porque el horario tiene default (8-19) y no deja rastro propio: si todavía
- * no hay servicios, se retoma en el horario para que lo vea.
+ * actual": lo que ya se cargó ES el progreso).
+ *
+ * Regla: el paso SIGUIENTE a la evidencia más avanzada. Los pasos se recorren
+ * en orden, así que el último dato real dice hasta dónde llegó el usuario; se
+ * mira de atrás para adelante para que la regla sea monótona (cargar algo
+ * nunca hace retroceder el punto de retome). Un alta abierta antes de B-pre
+ * que ya tenía servicios retoma en Obras sociales aunque su sede no tenga
+ * dirección: Sede y Tu horario quedan a un click en el riel y en el resumen.
+ *
+ *   sin tenant                 → Consultorio
+ *   invitaciones               → Listo
+ *   obras sociales             → Equipo
+ *   servicios                  → Obras sociales
+ *   semana propia guardada     → Servicios
+ *   sede con dirección         → Horario (el del consultorio no deja rastro
+ *                                propio: tiene default 8-19, así que se
+ *                                retoma ahí para que lo vea)
+ *   nada más                   → Sede
  */
 export function deriveResumeStep(p: OnboardingProgress): OnboardingStepNumber {
-  if (!p.hasTenant) return 2;
-  if (p.servicesCount === 0) return 3;
-  if (p.insurersCount === 0 && p.invitationsCount === 0) return 5;
-  if (p.invitationsCount === 0) return 6;
-  return 7;
+  if (!p.hasTenant) return STEP.clinic;
+  if (p.invitationsCount > 0) return STEP.done;
+  if (p.insurersCount > 0) return STEP.team;
+  if (p.servicesCount > 0) return STEP.insurers;
+  if (p.ownScheduleSaved) return STEP.services;
+  if (p.locationReady) return STEP.hours;
+  return STEP.location;
 }
 
 /**
- * Paso a mostrar dado el `?step=` de la URL. Sin tenant solo existe el 2 (los
- * demás escriben sobre el tenant). Sin servicios no se pasa del 4: la agenda
- * y el turnero necesitan al menos uno.
+ * Paso a mostrar dado el `?step=` de la URL. Sin tenant solo existe
+ * Consultorio (los demás escriben sobre el tenant). Sin servicios no se pasa
+ * de Servicios: la agenda y el turnero necesitan al menos uno.
  */
 export function resolveStep(requested: string | null | undefined, p: OnboardingProgress): OnboardingStepNumber {
   const resume = deriveResumeStep(p);
   const n = Number(requested);
   if (!requested || !Number.isInteger(n) || n < FIRST_STEP || n > LAST_STEP) return resume;
-  if (!p.hasTenant) return 2;
-  if (p.servicesCount === 0 && n > 4) return 4;
+  if (!p.hasTenant) return STEP.clinic;
+  if (p.servicesCount === 0 && n > STEP.services) return STEP.services;
   return n as OnboardingStepNumber;
+}
+
+/**
+ * Último paso al que se puede saltar desde el riel. Con servicios, todos;
+ * sin servicios, hasta Servicios (o más, si el retome ya está más adelante,
+ * cosa que hoy no pasa: sin servicios el retome es a lo sumo Servicios).
+ */
+export function maxReachableStep(p: OnboardingProgress): OnboardingStepNumber {
+  if (!p.hasTenant) return STEP.clinic;
+  if (p.servicesCount > 0) return LAST_STEP;
+  return Math.max(STEP.services, deriveResumeStep(p)) as OnboardingStepNumber;
+}
+
+/**
+ * ¿La semana del profesional es "suya" (guardada a mano) o la plantilla que
+ * dejó el alta? La plantilla (`provisionPractitionerAgenda`, mismo criterio
+ * que el backfill de `agenda_foundations`) nace con ids DETERMINÍSTICOS por
+ * (profesional, dow) y `setBusinessHours` la actualiza en el lugar (mismos
+ * ids). `savePractitionerWeek` reemplaza la semana con filas nuevas (cuid):
+ * una sola fila con otro id = el usuario guardó. Sin columna nueva ni
+ * migración, y guardar la semana tal cual vino también cuenta (confirmó).
+ *
+ * `defaultIdFor(dow)` = `agendaDefaultIds.schedule(practitionerId, dow)`: se
+ * inyecta porque usa `node:crypto` y este módulo lo importa el cliente.
+ */
+export function isCustomSchedule(
+  rows: ReadonlyArray<{ id: string; dow: number }>,
+  defaultIdFor: (dow: number) => string
+): boolean {
+  return rows.some((r) => r.id !== defaultIdFor(r.dow));
 }

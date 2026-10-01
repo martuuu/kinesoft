@@ -1,18 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { Role } from "@prisma/client";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
 import type { TenantSettings } from "@/lib/tenant-settings";
+import type { LocationRow } from "@/lib/locations-schemas";
+import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
 import { TabsBar, type Tab } from "./controls";
 import { GeneralPanel } from "./panels/general-panel";
 import { ServicesPanel } from "./panels/services-panel";
 import { InsurersPanel } from "./panels/insurers-panel";
 import { DiagnosticosPanel } from "./panels/diagnosticos-panel";
 import { UsersPanel } from "./panels/users-panel";
+import { LocationsPanel } from "./panels/locations-panel";
+import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
 
 type Props = {
   role: Role;
@@ -23,10 +28,35 @@ type Props = {
   pending: InvitationRow[];
   practitioners: { id: string; name: string }[];
   customConditions: import("@/lib/conditions").CustomConditionRow[];
+  /** Todas las sedes, archivadas incluidas (B3.4). */
+  locations: LocationRow[];
+  scheduleSummary: PractitionerScheduleSummaryRow[];
 };
 
 export function ConfiguracionClient(props: Props) {
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTabRaw] = useState<Tab>("general");
+  // B3.4: Servicios/Coberturas de un profesional se editan en línea (no en
+  // Drawer); cambiar de pestaña desmonta el editor y perdía lo cargado.
+  const [practitionerDirty, setPractitionerDirty] = useState(false);
+  const confirm = useConfirm();
+  const setTab = useCallback(
+    async (t: Tab) => {
+      if (t === tab) return;
+      if (practitionerDirty) {
+        const ok = await confirm({
+          title: "¿Descartar los cambios sin guardar?",
+          message: "Tenés cambios sin guardar en Profesionales. Si cambiás de pestaña, se pierden.",
+          tone: "danger",
+          confirmLabel: "Descartar",
+          cancelLabel: "Seguir editando",
+        });
+        if (!ok) return;
+        setPractitionerDirty(false);
+      }
+      setTabRaw(t);
+    },
+    [tab, practitionerDirty, confirm]
+  );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <header>
@@ -36,9 +66,17 @@ export function ConfiguracionClient(props: Props) {
         </h1>
       </header>
 
-      <TabsBar tab={tab} setTab={setTab} role={props.role} />
+      <TabsBar tab={tab} setTab={(t) => void setTab(t)} role={props.role} />
 
       {tab === "general" && <GeneralPanel tenant={props.tenant} role={props.role} />}
+      {tab === "sedes" && <LocationsPanel locations={props.locations} />}
+      {tab === "profesionales" && (
+        <PractitionerPanel
+          summary={props.scheduleSummary}
+          locations={props.locations}
+          onDirtyChange={setPractitionerDirty}
+        />
+      )}
       {tab === "servicios" && (
         <ServicesPanel services={props.services} practitioners={props.practitioners} />
       )}

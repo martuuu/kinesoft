@@ -57,8 +57,10 @@ Hand-authored SQL under `prisma/migrations/<timestamp>_<name>/migration.sql`
 1. Edit `prisma/schema.prisma`.
 2. `npx prisma generate` (refreshes the client + typecheck; no DB needed).
 3. Write the migration SQL.
-4. `npm run prisma:migrate` → applies to **local** and lets you test it.
-5. Commit + push.
+4. `npx dotenv -e .env.local -- npx prisma migrate deploy` → applies to **local**; verify object by object and
+   run the integration suite. **Not** `npm run prisma:migrate` (= `migrate dev`): it detects drift, proposes a
+   reset and can drop the hand-written partial indexes (Booking, Location, ScheduleException, PayerPlan…).
+5. Commit (the owner; agents never commit or push).
 
 ### Migrations on deploy (Production only, since A0b)
 
@@ -129,6 +131,17 @@ untouched. The full history in `prisma/migrations/`, in order:
 | 23 | `20260803183019_user_prefs_catalog` | 8 | `UserPreferences.catalogPrefs Json?` |
 | 24 | `20260816014954_tenant_agenda_slot_minutes` | post-9 (in flight, 2026-08-16) | `Tenant.agendaSlotMinutes INTEGER NOT NULL DEFAULT 60` (configurable agenda slot granularity; additive, safe default) |
 | 25 | `20260930120000_tenant_onboarding` | Bloque A3c (30-sep-2026) | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` (nullable) + backfill `onboardingCompletedAt = createdAt`. **Exact order, prechecks and post-check in [MIGRACIONES-RUNBOOK.md §2.1](MIGRACIONES-RUNBOOK.md)** (A3 needs the owner's SMTP first; A3b never ships without A3c) |
+| 26 | `20260930200000_catalog_global` | B-pre (30-sep-2026) | Global catalog (Specialty, Practice, PracticeSpecialty, Payer, PayerPlan, CatalogImportRun) + nullable `Insurer.payerId`, `Coverage.payerPlanId`, `Service.practiceId` + **global read-only RLS** (SELECT-only policies) and split PayerPlan. No backfill |
+| 27 | `20261001090000_agenda_foundations` | B-pre (01-oct-2026) | Location, PractitionerSchedule, ScheduleException, TimeBlock, PractitionerService/Payer/Specialty, Booking expand (`locationId`, `isOverbooked`, reception, telemedicine), `UserPreferences.agendaPrefs`, RLS + **idempotent backfill** that needs a BYPASSRLS migrating role. **Order, prechecks, expected counts and post-deploy in [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md)** |
+
+> ⚠️ **B-pre ships TWO new migrations (#26, #27).** Both are additive: apply
+> them **before or together with** the code, never after. #27 runs its
+> backfill with `SET LOCAL row_security = off` — `DIRECT_URL` must be the owner
+> (`rolsuper` or `rolbypassrls`) or the migration fails on purpose. After the
+> code is live: the `isOverbooked` UPDATE for the deploy gap, re-run the
+> backfill if tenants/practitioners were created in between, then the catalog
+> import (owner) + "Refrescar catálogo". B-pre can ship alone or in the same
+> deploy as the (already committed) Bloque A; **A3 still needs the owner's SMTP**.
 
 > ⚠️ **#22 also creates RLS policies.** It runs `ENABLE`/`FORCE ROW LEVEL
 > SECURITY` on `ExerciseMedia` + `ExerciseArticle` with a read-only policy
@@ -250,6 +263,25 @@ On the table once the product is validated for selling. **Destructive.**
   4. Re-seed the tenant(s) as needed — **never with `prisma/seed.ts`** (demo
      data; it is local-only and aborts against a remote DB).
   5. Re-create the Particular insurer + base catalog per tenant.
+
+## Deploy de B-pre (agenda y catálogo, 01-oct-2026)
+
+Exact runbook: [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md). Summary:
+
+1. Read-only prechecks (migrating role has BYPASSRLS; new tables absent; tenants/practitioners/insurers/
+   `[SOBRETURNO]` counts; bookings of a service owned by another practitioner).
+2. `npm run db:prod:backup`.
+3. **Staging**: `migrate deploy` (#26, #27) → compare expected counts → QA ([QA.md §B-pre](QA.md), `TZ=UTC`) →
+   catalog import in staging.
+4. Merge to `main` (the Production build migrates) — or `npm run db:prod:deploy` beforehand.
+5. Post-deploy: `UPDATE "Booking" SET "isOverbooked"=true WHERE notes LIKE '[SOBRETURNO]%' AND NOT "isOverbooked";`,
+   expected counts (Location = #tenants; PractitionerSchedule = 6 × accepted practitioners;
+   `Booking.locationId IS NULL` = 0), re-run the backfill block if needed (idempotent, GUC
+   `kinesoft.backfill_tenants`).
+6. Catalog import (owner): backup → dry-run → `--apply` → dry-run = 0 changes → Plataforma → Catálogo →
+   Importaciones → **"Refrescar catálogo"**. Local: `npm run catalog:import`.
+
+No new environment variables. No new console tasks besides the import.
 
 ## Deploy flow (summary)
 

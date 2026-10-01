@@ -3,16 +3,18 @@
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { localToARIso, toARMinutes } from "@/lib/datetime-ar";
-import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
-import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import {
-  fmtHour,
   buildSlots,
   slotLabel,
   slotOf,
   coveredSlots,
   type BookingDTO,
 } from "../agenda-utils";
+import { BookingCard, type BookingCardSizing } from "../grid/booking-card";
+import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
+
+/** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
+export type PractitionerInitialsMap = Readonly<Record<string, { initials: string; name: string }>>;
 
 /**
  * Day timeline — one row per SLOT (60 or 30 minutes, per `Tenant.agendaSlotMinutes`),
@@ -26,6 +28,13 @@ import {
  *
  * Width: up to MAX_PER_ROW across, each capped at CARD_MAX so one or two
  * turnos don't stretch into unreadable banners; text truncates instead.
+ *
+ * B4.3: filas bloqueadas (candado / bloqueo de horario) con fondo rayado,
+ * candado y motivo, igual que la vista Por profesional. Como el Día mezcla a
+ * todos los profesionales visibles, una fila se raya solo si está bloqueada
+ * para TODOS (`blockedRows` de `lib/agenda-client-state`); `dayLocked` raya el
+ * día entero. El click en una fila rayada igual abre el alta: el modal avisa y
+ * pide confirmarlo como sobreturno (decisión 1 de B-pre), como hacía antes.
  */
 const MAX_PER_ROW = 5;
 const CARD_MIN = 186;
@@ -33,6 +42,15 @@ const CARD_MAX = 280;
 const CARD_GAP = 8;
 /** Cards shown per slot before the "+N" reveal (2 full rows). */
 const COLLAPSED_LIMIT = MAX_PER_ROW * 2;
+/** Up to 5 per row, but never wider than CARD_MAX — a lone turno keeps a sane
+ *  width instead of stretching across the whole agenda. */
+const timelineCardSizing: BookingCardSizing = {
+  flexBasis: `calc((100% - ${(MAX_PER_ROW - 1) * CARD_GAP}px) / ${MAX_PER_ROW})`,
+  flexGrow: 0,
+  flexShrink: 1,
+  minWidth: CARD_MIN,
+  maxWidth: CARD_MAX,
+};
 
 export function TimelineView({
   bookings,
@@ -42,6 +60,10 @@ export function TimelineView({
   density,
   businessHours,
   highlightedServiceId,
+  practitionerById = null,
+  now,
+  blockedRows = null,
+  dayLocked = null,
 }: {
   bookings: BookingDTO[];
   // AR date key ("YYYY-MM-DD") of the day this timeline is showing. Used to
@@ -54,8 +76,17 @@ export function TimelineView({
   businessHours: { start: number; end: number; slotMinutes: number };
   /** When set, cards of this service lift above the rest (legend "filter"). */
   highlightedServiceId: string | null;
+  /** B4.3: iniciales en las cards (null = un solo profesional en pantalla). */
+  practitionerById?: PractitionerInitialsMap | null;
+  /** B4.3: reloj de la agenda (se refresca cada minuto). */
+  now?: Date;
+  /** B4.3: minuto de inicio de fila → motivo, para las filas bloqueadas para todos. */
+  blockedRows?: ReadonlyMap<number, string | null> | null;
+  /** B4.3: día entero bloqueado (motivo en `detail`). */
+  dayLocked?: { detail: string | null } | null;
 }) {
   const { start, end, slotMinutes } = businessHours;
+  const cardExtras = { practitionerById, now };
   const half = slotMinutes === 30;
   // Half-hour rows double the row count, so they get a shorter minimum height
   // to keep the day scannable without doubling the page length.
@@ -95,13 +126,23 @@ export function TimelineView({
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
       <div className="k-scroll" style={{ flex: 1, overflowY: "auto" }}>
         {before.length > 0 && (
-          <OutOfRangeRow label="Antes del horario" items={before} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} />
+          <OutOfRangeRow label="Antes del horario" items={before} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} {...cardExtras} />
         )}
 
-        {slots.map((slot) => (
+        {slots.map((slot, i) => {
+          const blocked = !!dayLocked || (blockedRows?.has(slot) ?? false);
+          const prevBlocked = i > 0 && (!!dayLocked || (blockedRows?.has(slots[i - 1]) ?? false));
+          return (
           <SlotRow
             key={slot}
             slot={slot}
+            blocked={blocked}
+            blockLabel={
+              blocked && !prevBlocked
+                ? (dayLocked ? dayLocked.detail : blockedRows?.get(slot) ?? null) || "Bloqueado"
+                : null
+            }
+            {...cardExtras}
             items={bySlot.get(slot) ?? []}
             ongoingNames={ongoing.get(slot) ?? []}
             dayKey={dayKey}
@@ -112,10 +153,11 @@ export function TimelineView({
             rowMin={ROW_MIN}
             half={half}
           />
-        ))}
+          );
+        })}
 
         {after.length > 0 && (
-          <OutOfRangeRow label="Después del horario" items={after} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} />
+          <OutOfRangeRow label="Después del horario" items={after} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} {...cardExtras} />
         )}
       </div>
     </Card>
@@ -133,6 +175,10 @@ function SlotRow({
   compact,
   rowMin,
   half,
+  blocked = false,
+  blockLabel = null,
+  practitionerById = null,
+  now,
 }: {
   slot: number;
   items: BookingDTO[];
@@ -144,6 +190,11 @@ function SlotRow({
   compact: boolean;
   rowMin: number;
   half: boolean;
+  blocked?: boolean;
+  /** Texto del motivo, solo en la primera fila de un tramo bloqueado. */
+  blockLabel?: string | null;
+  practitionerById?: PractitionerInitialsMap | null;
+  now?: Date;
 }) {
   const [expanded, setExpanded] = useState(false);
   const label = slotLabel(slot);
@@ -164,7 +215,10 @@ function SlotRow({
         minHeight: rowMin,
         borderTop: isHalfLabel ? "1px dashed rgba(15,30,51,0.05)" : "1px solid rgba(15,30,51,0.07)",
         padding: "5px 0",
+        background: blocked ? BLOCKED_STRIPES : undefined,
       }}
+      data-blocked={blocked || undefined}
+      title={blocked ? `Bloqueado${blockLabel && blockLabel !== "Bloqueado" ? `: ${blockLabel}` : ""}` : undefined}
     >
       {/* The label itself creates at this slot — it used to be a dead strip. */}
       <button
@@ -203,10 +257,12 @@ function SlotRow({
             paddingLeft: 4,
           }}
         >
+          {blockLabel && <BlockedHint label={blockLabel} />}
           {ongoingNames.length > 0 && <OngoingHint names={ongoingNames} />}
         </button>
       ) : (
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", gap: CARD_GAP, alignItems: "flex-start" }}>
+          {blockLabel && <BlockedHint label={blockLabel} />}
           {shown.map((b) => (
             <BookingCard
               key={b.id}
@@ -214,6 +270,9 @@ function SlotRow({
               onEdit={onEdit}
               highlightedServiceId={highlightedServiceId}
               compact={compact}
+              sizing={timelineCardSizing}
+              practitioner={practitionerById?.[b.practitionerId] ?? null}
+              now={now}
             />
           ))}
 
@@ -275,6 +334,34 @@ function SlotRow({
   );
 }
 
+/** Candado + motivo al inicio de un tramo bloqueado. */
+function BlockedHint({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        alignSelf: "center",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 10.5,
+        fontWeight: 600,
+        color: "var(--navy-500)",
+        background: "rgba(255,255,255,0.85)",
+        borderRadius: 6,
+        padding: "1px 6px",
+        whiteSpace: "nowrap",
+        maxWidth: 220,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        pointerEvents: "none",
+      }}
+    >
+      <LockIcon locked size={10} />
+      {label}
+    </span>
+  );
+}
+
 /** Turnos that started in an earlier slot and still run through this one. */
 function OngoingHint({ names }: { names: string[] }) {
   const label =
@@ -307,12 +394,16 @@ function OutOfRangeRow({
   onEdit,
   highlightedServiceId,
   compact,
+  practitionerById = null,
+  now,
 }: {
   label: string;
   items: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
   highlightedServiceId: string | null;
   compact: boolean;
+  practitionerById?: PractitionerInitialsMap | null;
+  now?: Date;
 }) {
   return (
     <div
@@ -346,154 +437,12 @@ function OutOfRangeRow({
             onEdit={onEdit}
             highlightedServiceId={highlightedServiceId}
             compact={compact}
+            sizing={timelineCardSizing}
+            practitioner={practitionerById?.[b.practitionerId] ?? null}
+            now={now}
           />
         ))}
       </div>
     </div>
-  );
-}
-
-function BookingCard({
-  b,
-  onEdit,
-  highlightedServiceId,
-  compact,
-}: {
-  b: BookingDTO;
-  onEdit: (b: BookingDTO) => void;
-  highlightedServiceId: string | null;
-  compact: boolean;
-}) {
-  const date = new Date(b.scheduledFor);
-  const isCancelled = b.status === "CANCELLED";
-  const isDone = b.status === "COMPLETED";
-  const isNoShow = b.status === "NO_SHOW";
-  // Reserva pública impaga (A2b-S-ui): vencida a los 30 min → ya no retiene el
-  // horario. Se ve lavada y con borde punteado (fondo = estado) y con el texto
-  // explícito, para que la recepción sepa que puede dar ese horario.
-  const hold = paymentHoldState(b, new Date());
-  const isExpiredHold = hold === "vencida";
-
-  // Left bar = the service's colour (identity); state is conveyed by the
-  // card's tint / opacity / strike-through.
-  const barColor = b.serviceColor ?? SERVICE_COLOR_FALLBACK;
-  // Legend "filter": lift this card's service, dim the rest.
-  const isHighlighted = highlightedServiceId != null && b.serviceId === highlightedServiceId;
-  const dimmed = highlightedServiceId != null && b.serviceId !== highlightedServiceId;
-  // Card subtitle: the mini-diagnosis (title), falling back to the longer
-  // description — whichever the kine filled. Never the service name.
-  const cardLabel = b.title || b.description;
-
-  return (
-    <button
-      onClick={() => onEdit(b)}
-      title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${hold ? ` · ${PAYMENT_HOLD_LABEL[hold]}` : ""}${cardLabel ? ` · ${cardLabel}` : ""}`}
-      style={{
-        // Up to 5 per row, but never wider than CARD_MAX — a lone turno keeps
-        // a sane width instead of stretching across the whole agenda.
-        flexBasis: `calc((100% - ${(MAX_PER_ROW - 1) * CARD_GAP}px) / ${MAX_PER_ROW})`,
-        flexGrow: 0,
-        flexShrink: 1,
-        minWidth: CARD_MIN,
-        maxWidth: CARD_MAX,
-        borderRadius: 12,
-        padding: compact ? "6px 9px" : "8px 10px",
-        background: isCancelled
-          ? "rgba(228,70,70,0.1)"
-          : isNoShow
-            ? "rgba(255,176,32,0.14)"
-            : isDone
-              ? "rgba(54,179,126,0.1)"
-              : isExpiredHold
-                ? "rgba(15,30,51,0.03)"
-                : "rgba(255,255,255,0.85)",
-        border:
-          (isExpiredHold ? "1px dashed " : "1px solid ") +
-          (isExpiredHold
-            ? "rgba(15,30,51,0.3)"
-            : isCancelled
-            ? "rgba(228,70,70,0.3)"
-            : isNoShow
-              ? "rgba(255,176,32,0.45)"
-              : isDone
-                ? "rgba(54,179,126,0.35)"
-                : "rgba(31,79,190,0.12)"),
-        boxShadow: isHighlighted ? "var(--shadow-card-lg)" : "0 2px 6px rgba(15,30,51,0.04)",
-        color: "var(--navy-900)",
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        opacity: isCancelled ? 0.6 : dimmed ? 0.55 : isDone || isExpiredHold ? 0.85 : 1,
-        cursor: "pointer",
-        textDecoration: isCancelled ? "line-through" : "none",
-        textAlign: "left",
-        overflow: "hidden",
-        transform: isHighlighted ? "translateY(-2px)" : undefined,
-        transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
-      }}
-    >
-      <div
-        style={{
-          width: 3,
-          alignSelf: "stretch",
-          minHeight: 26,
-          borderRadius: 2,
-          background: barColor,
-          flexShrink: 0,
-        }}
-      />
-      <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
-          <span
-            className="k-mono"
-            style={{ fontSize: 10, color: "var(--sky-700)", fontWeight: 600, flexShrink: 0 }}
-          >
-            {fmtHour(date)}
-          </span>
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {b.patientName}
-          </span>
-        </div>
-        <div
-          style={{
-            fontSize: 10,
-            color: "var(--navy-500)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            display: "flex",
-            gap: 4,
-          }}
-        >
-          {/* Duration FIRST and unshrinkable: card height is no longer
-              proportional to it, and putting it last let the ellipsis eat it. */}
-          <span className="k-mono" style={{ flexShrink: 0 }}>{b.durationMin}′</span>
-          {hold && (
-            <span
-              style={{
-                flexShrink: 0,
-                fontWeight: 700,
-                color: isExpiredHold ? "var(--navy-500)" : "#9A5B00",
-              }}
-            >
-              · {PAYMENT_HOLD_LABEL[hold]}
-            </span>
-          )}
-          {cardLabel && (
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              · {cardLabel}
-            </span>
-          )}
-        </div>
-      </div>
-    </button>
   );
 }

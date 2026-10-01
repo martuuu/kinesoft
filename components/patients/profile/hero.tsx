@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, PhotoSlot } from "@/components/ui/card";
@@ -19,6 +19,8 @@ import {
   setPatientCoverage,
   updatePatient,
 } from "@/lib/patients";
+import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
+import type { PayerPlanOption } from "@/lib/catalog-schemas";
 import { SharePatientButton } from "@/components/patients/share-patient-button";
 import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
@@ -301,6 +303,63 @@ function EditPatientModal({
     patient.assignedPractitionerId ?? ""
   );
 
+  // ── Plan del catálogo (B1) ────────────────────────────────────────────
+  // Si la OS elegida está vinculada a una prestadora del catálogo, el plan
+  // se elige de sus planes (globales + propuestos por este consultorio) y se
+  // guarda como `payerPlanId`; "Otro plan…" lo propone (`proposePayerPlan`,
+  // idempotente: si ya existe con ese nombre devuelve el mismo). Sin
+  // prestadora queda el texto libre de siempre.
+  const selectedInsurer = coverageMode.startsWith("ins:")
+    ? insurers.find((i) => `ins:${i.id}` === coverageMode)
+    : undefined;
+  const payerId = selectedInsurer?.payerId ?? null;
+  const initialPayerId = insurers.find((i) => `ins:${i.id}` === initialCoverageMode)?.payerId ?? null;
+  // Estado inicial del picker, solo con prestadora: plan vinculado → su id;
+  // plan escrito a mano antes del catálogo → "Otro plan…" con ese texto (al
+  // guardar se propone y queda vinculado); sin plan → "".
+  const initialPlanChoice = !initialPayerId
+    ? ""
+    : currentCoverage?.payerPlanId
+      ? currentCoverage.payerPlanId
+      : currentCoverage?.planName
+        ? OTHER_PLAN
+        : "";
+  const initialNewPlanName =
+    initialPlanChoice === OTHER_PLAN ? (currentCoverage?.planName ?? "") : "";
+  const [planChoice, setPlanChoice] = useState(initialPlanChoice);
+  const [newPlanName, setNewPlanName] = useState(initialNewPlanName);
+  const [plans, setPlans] = useState<PayerPlanOption[] | null>(null);
+  useEffect(() => {
+    if (!payerId) {
+      setPlans(null);
+      return;
+    }
+    let alive = true;
+    setPlans(null);
+    listPayerPlans(payerId)
+      .then((rows) => {
+        if (alive) setPlans(rows);
+      })
+      .catch(() => {
+        if (alive) setPlans([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [payerId]);
+
+  const changeCoverageMode = (v: string) => {
+    setCoverageMode(v);
+    // Volver a la OS original recupera su plan; otra OS arranca sin plan.
+    if (v === initialCoverageMode) {
+      setPlanChoice(initialPlanChoice);
+      setNewPlanName(initialNewPlanName);
+    } else {
+      setPlanChoice("");
+      setNewPlanName("");
+    }
+  };
+
   // Optimistic lock (A2a-S08): el `updatedAt` que vio este formulario. Se
   // actualiza tras un guardado OK, así un reintento (p. ej. si falló la
   // cobertura después de guardar los datos) no choca contra sí mismo.
@@ -311,6 +370,8 @@ function EditPatientModal({
     coverageMode,
     otherInsurerName,
     assignedKine,
+    planChoice,
+    newPlanName,
   });
   const initialPlan = currentCoverage?.planName ?? "";
   const initialMember = currentCoverage?.memberId ?? "";
@@ -327,9 +388,16 @@ function EditPatientModal({
     const osChanged =
       coverageMode !== initialCoverageMode ||
       (coverageMode === "other" && norm(otherInsurerName) !== norm(initialOther));
+    const planDirty = payerId
+      ? planChoice !== initialPlanChoice ||
+        (planChoice === OTHER_PLAN && newPlanName.trim() !== initialNewPlanName.trim())
+      : planName !== initialPlan;
     const coverageDirty =
-      osChanged ||
-      (coverageMode !== "particular" && (planName !== initialPlan || memberId !== initialMember));
+      osChanged || (coverageMode !== "particular" && (planDirty || memberId !== initialMember));
+    if (payerId && coverageDirty && planChoice === OTHER_PLAN && !newPlanName.trim()) {
+      setError("Escribí el nombre del plan o elegí uno de la lista.");
+      return;
+    }
     const ownCopago = currentCoverage?.copagoCents ?? null;
     let resetCopago = false;
     if (osChanged && ownCopago != null) {
@@ -378,10 +446,31 @@ function EditPatientModal({
           });
         } else {
           const insurerId = coverageMode.replace("ins:", "");
+          let payerPlanId: string | undefined;
+          let planText = planName;
+          if (payerId) {
+            planText = "";
+            if (planChoice === OTHER_PLAN) {
+              const proposed = await proposePayerPlan(payerId, newPlanName.trim());
+              if (!proposed.ok) {
+                setError(proposed.error);
+                return;
+              }
+              payerPlanId = proposed.data.id;
+            } else if (planChoice && (plans === null || plans.some((p) => p.id === planChoice))) {
+              // `plans === null` = todavía cargando: se manda el id y lo valida el server.
+              payerPlanId = planChoice;
+            } else if (planChoice) {
+              // El plan vinculado ya no está en el catálogo (Plataforma lo
+              // archivó): se conserva como texto en vez de rechazar el guardado.
+              planText = currentCoverage?.planName ?? "";
+            }
+          }
           cov = await setPatientCoverage({
             patientId: patient.id,
             insurerId,
-            planName,
+            planName: planText,
+            payerPlanId,
             memberId,
             resetCopago,
           });
@@ -440,7 +529,7 @@ function EditPatientModal({
             as="select"
             label=""
             value={coverageMode}
-            onChange={(v) => setCoverageMode(v)}
+            onChange={changeCoverageMode}
             options={[
               { value: "particular", label: "Particular (sin cobertura)" },
               ...insurers.map((i) => ({ value: `ins:${i.id}`, label: i.name })),
@@ -457,18 +546,42 @@ function EditPatientModal({
           )}
           {coverageMode !== "particular" && (
             <Grid2>
-              <FormField
-                label="Plan"
-                name="coveragePlan"
-                defaultValue={currentCoverage?.planName ?? ""}
-                placeholder="210, Black, …"
-              />
+              {payerId ? (
+                <FormField
+                  as="select"
+                  label="Plan"
+                  value={planChoice}
+                  onChange={setPlanChoice}
+                  disabled={plans === null}
+                  options={planOptions({
+                    plans,
+                    planChoice,
+                    fallbackName: currentCoverage?.planName ?? null,
+                  })}
+                />
+              ) : (
+                <FormField
+                  label="Plan"
+                  name="coveragePlan"
+                  defaultValue={currentCoverage?.planName ?? ""}
+                  placeholder="210, Black, …"
+                />
+              )}
               <FormField
                 label="N° de afiliado"
                 name="coverageMember"
                 defaultValue={currentCoverage?.memberId ?? ""}
               />
             </Grid2>
+          )}
+          {coverageMode !== "particular" && payerId && planChoice === OTHER_PLAN && (
+            <FormField
+              label="Nombre del plan"
+              value={newPlanName}
+              onChange={setNewPlanName}
+              placeholder="Ej: 310, Plan Joven…"
+              hint="Si no está en la lista, lo sumamos para este consultorio."
+            />
           )}
         </Section>
 
@@ -538,6 +651,37 @@ function EditPatientModal({
       </form>
     </Drawer>
   );
+}
+
+/** Valor del select de plan que abre el campo "Nombre del plan". */
+const OTHER_PLAN = "__other";
+
+/**
+ * Opciones del select de plan. Mientras cargan, el plan ya vinculado se
+ * muestra igual (su nombre está en `Coverage.planName`) para que el select
+ * no salte; si después no aparece en la lista (archivado por Plataforma), se
+ * mantiene como opción con su nombre.
+ */
+function planOptions({
+  plans,
+  planChoice,
+  fallbackName,
+}: {
+  plans: PayerPlanOption[] | null;
+  planChoice: string;
+  fallbackName: string | null;
+}): { value: string; label: string }[] {
+  const opts: { value: string; label: string }[] = [
+    { value: "", label: plans === null ? "Cargando planes…" : "Sin plan" },
+  ];
+  for (const p of plans ?? []) {
+    opts.push({ value: p.id, label: p.proposed ? `${p.name} (cargado por el consultorio)` : p.name });
+  }
+  if (planChoice && planChoice !== OTHER_PLAN && !(plans ?? []).some((p) => p.id === planChoice)) {
+    opts.push({ value: planChoice, label: fallbackName ?? "Plan actual" });
+  }
+  opts.push({ value: OTHER_PLAN, label: "Otro plan…" });
+  return opts;
 }
 
 function HeroFact({ label, value }: { label: string; value: string }) {

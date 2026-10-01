@@ -666,10 +666,10 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 - [ ] 🔴 ✉️ Landing → "Probar gratis" → signup → llega el mail → abrirlo **en el celular** → cae en
   `/onboarding` paso 2.
-- [ ] 🔴 Completar los pasos 2 a 7 → termina en `/agenda`. Recargar a mitad del stepper → retoma en el paso
+- [ ] 🔴 Completar los pasos 2 a 9 (desde B-pre: Sede y Tu horario suman dos) → termina en `/agenda`. Recargar a mitad del stepper → retoma en el paso
   donde estaba.
 - [ ] Volver al paso 2 y guardar de nuevo → edita el consultorio, no duplica tenant ni slug.
-- [ ] Paso 7 sin ningún servicio cargado → bloqueado con el aviso.
+- [ ] Último paso ("Listo") sin ningún servicio cargado → bloqueado con el aviso.
 - [ ] 🔴 ✉️ Signup con un email ya registrado (o de un paciente con portal) → el mismo mensaje de "te mandamos
   un mail", y no llega ningún mail.
 - [ ] ✉️ Invitación → "Crear mi cuenta para unirme" → el email viene fijo → confirmar → `/invite/<token>` →
@@ -681,3 +681,79 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] 🔴 El cliente vivo (tenant existente) entra y **no** ve el stepper.
 - [ ] Entrar sin sesión a una ruta protegida (p. ej. `/pacientes/<id>`) → `/login?next=…` y, tras loguearse,
   vuelve a esa ruta.
+
+---
+
+## B-pre — agenda profesional y catálogo (01-oct-2026)
+
+> Gate automático: `tsc` 0 · unit 1155/1155 en 51 archivos (TZ=UTC y TZ=AR, con render tests) · guard ✓ ·
+> integración 389/389 (`kinesoft_app`) y 373 + 16 skip (owner) · `next build` ✓. **Todo en staging (o local) con
+> `TZ=UTC`**, después de aplicar las DOS migraciones de B-pre y el import del catálogo en staging
+> (MIGRACIONES-RUNBOOK §2.2). Para los casos multi-profesional: un consultorio de prueba con 6 profesionales y 2
+> sedes; para "cliente vivo", una copia con 1 profesional.
+
+### Catálogo
+- [ ] Plataforma → Catálogo: buscar una prestadora por nombre y por alias; editarla → queda "curada"; re-correr el
+  import en dry-run → esa fila no aparece como cambio.
+- [ ] Archivar una práctica → deja de ofrecerse en el picker de Servicios; los servicios que ya la tenían siguen
+  andando.
+- [ ] Merge de dos prestadoras → las obras sociales de los consultorios y sus planes apuntan a la que queda.
+- [ ] Un consultorio propone "Otro plan…" → aparece en Propuestas → promoverlo → queda global y el paciente sigue
+  con su plan.
+- [ ] Importaciones: se ve la corrida con conteos; "Refrescar catálogo" → un consultorio ve el cambio sin esperar.
+- [ ] Configuración → Obras sociales → "Agregar del catálogo"; una OS tipeada a mano muestra la sugerencia
+  "vincular al catálogo".
+- [ ] Servicio con práctica del catálogo; plan de cobertura del paciente con el picker (y texto libre si la OS no
+  está vinculada).
+
+### Configuración (Sedes y Profesionales)
+- [ ] Sedes: la "Principal" existe; crear otra, marcarla principal; archivar una con franjas/turnos → muestra los
+  conteos y pide confirmación.
+- [ ] Profesionales → Horarios: franjas por día (dos franjas el mismo día), "copiar a otros días", solape en el
+  mismo día o entre sedes → error claro.
+- [ ] Editar el mismo horario en dos pestañas → la segunda en guardar recibe el aviso de conflicto.
+- [ ] Excepciones: día cerrado y horario especial (abrir un domingo).
+- [ ] Servicios por profesional (habilitado, duración propia, público/privado, cupo) y coberturas (Particular no
+  se puede destildar).
+- [ ] 🔴 Cliente vivo: sus franjas son lun-sáb con el horario del consultorio; cambiar el horario del consultorio
+  mueve también la plantilla por defecto.
+
+### Agenda
+- [ ] 🔴 Cliente de **1 profesional**: la agenda se ve y se comporta igual que antes (turnos, horas, sobreturnos
+  viejos con badge).
+- [ ] Secretaria con 6 profesionales: chips con favoritos, `?pros=` en la URL, "Todos".
+- [ ] Modo "Por profesional": una columna por profesional, ocupación "2/3" y "4/∞", celda llena "1/1",
+  sobreturno marcado, fuera de horario y bloqueado rayado, línea de ahora, navegación con teclado.
+- [ ] 🔴 Candado de **todo el equipo** con "cancelar turnos" → los turnos con cobro registrado **quedan** (aviso);
+  el resto se cancela. Candado parcial (algunos profesionales). Desbloquear.
+- [ ] Candado mientras otra pestaña carga un turno en ese día → el candado avisa "cambió" y re-muestra afectados.
+- [ ] Recepción: Llegó → En atención → Atendido; "Deshacer"; un guest o una reserva pública impaga vuelve a
+  pendiente. Dos pestañas marcando el mismo turno → la segunda recibe el aviso de conflicto.
+- [ ] Un PRACTITIONER no puede marcar la recepción de un turno de otro profesional cuyo paciente no ve completo.
+- [ ] Filtro de sede; vista en 375 px.
+
+### Modal de turno
+- [ ] Solo se ofrecen los servicios habilitados del profesional, con su duración.
+- [ ] Slot picker: días, chips de horario, "cualquier profesional" → elige el primer libre.
+- [ ] Horario bloqueado → aviso con "Cargar como sobreturno" y "Usar próximo libre"; fuera de horario → "Cargar
+  igual".
+- [ ] Profesional que no atiende el servicio → "No atiende este servicio — habilitalo en Configuración →
+  Profesionales" y no deja guardar.
+- [ ] Varias sesiones: semanal, cada 2 semanas y mensual desde un 31 (cae el último día de los meses cortos);
+  preview por fecha con duplicados/bloqueados/fuera de horario.
+- [ ] Bloquear horario: un PRACTITIONER solo puede bloquear lo propio; admin/recepción puede "todos".
+- [ ] Telemedicina: exige URL `https://`; el badge aparece en la card.
+
+### Drawer, turnos del paciente y dashboard
+- [ ] Reprogramar o reactivar un turno sobre un bloqueo / fuera de horario → mismo aviso forzable.
+
+### Turnero público
+- [ ] Filtros de sede y cobertura; servicios según el profesional; "primer turno disponible".
+- [ ] Día bloqueado → sin horarios; domingo con excepción "horario especial" → ofrece ese domingo.
+- [ ] Servicio PRIVATE de un profesional → no se ofrece con ese profesional.
+- [ ] 🔴 Dos reservas simultáneas en un cupo 1 → entra una sola.
+- [ ] Mobile 375 px.
+
+### Onboarding
+- [ ] Alta nueva: 9 pasos; Sede con dirección, Tu horario, práctica en servicios, obras sociales del catálogo.
+- [ ] 🔴 El cliente vivo no ve el stepper.

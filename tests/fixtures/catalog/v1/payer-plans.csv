@@ -1,0 +1,4 @@
+payerSlug,slug,name,source,sourceDate,sourceUrl
+test-cat-osde,test-cat-210,Test Cat 210,CURATED,2026-09-30,
+test-cat-osde,test-cat-310,Test Cat 310,CURATED,2026-09-30,
+test-cat-nope,test-cat-x,Test Cat X,CURATED,2026-09-30,

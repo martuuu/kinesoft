@@ -1,0 +1,3 @@
+slug,name,code,nomenclador,defaultDurationMin,aliases,source,sourceRef,sourceDate,sourceUrl
+test-cat-kinesioterapia,"Test Cat Kinesioterapia, por sesión",250102,Nacional,45,Test Cat Sesión de kinesio,PMO,Res. 201/2002,2026-09-30,https://example.test/pmo
+test-cat-rpg,Test Cat RPG,,,60,,CURATED,,2026-09-30,

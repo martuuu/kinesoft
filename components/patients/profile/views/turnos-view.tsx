@@ -8,6 +8,12 @@ import { IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { setBookingStatus, deleteBooking } from "@/lib/bookings";
+import {
+  forcePromptConfirm,
+  nextForcePrompt,
+  withForce,
+  type ForceFlags,
+} from "@/lib/booking-force-flags";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
 import { BookingStatusTag } from "../ui";
@@ -107,32 +113,21 @@ export function TurnosView({
     const expected = versionOf(b);
     patchBooking(b.id, { status });
     start(async () => {
-      let force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {};
-      // Como mucho dos confirmaciones (cupo del profesional + paciente superpuesto).
-      for (let attempt = 0; attempt < 3; attempt++) {
+      let force: ForceFlags = {};
+      // Como mucho cuatro confirmaciones (bloqueo, fuera de horario, cupo y
+      // paciente superpuesto; B5.7 sumó las dos primeras). Un aviso ya
+      // aceptado que vuelve es un error real: `nextForcePrompt` no lo repite.
+      for (let attempt = 0; attempt < 5; attempt++) {
         const r = await setBookingStatus(b.id, status, expected, force);
         if (r.ok) {
           patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
           return;
         }
-        if (r.conflict && !force.allowOverbooking) {
-          const ok = await confirm({
-            title: `${r.conflict.practitionerName} ya tiene un turno en ese horario`,
-            message: "Si lo reactivás, queda como sobreturno.",
-            confirmLabel: "Reactivar como sobreturno",
-          });
+        const prompt = nextForcePrompt(r, force);
+        if (prompt) {
+          const ok = await confirm(forcePromptConfirm(prompt, "reactivate"));
           if (!ok) break;
-          force = { ...force, allowOverbooking: true };
-          continue;
-        }
-        if (r.patientOverlap && !force.allowPatientOverlap) {
-          const ok = await confirm({
-            title: "Se superpone con otro turno del paciente",
-            message: "El paciente ya tiene un turno que se cruza con este horario. ¿Reactivarlo igual?",
-            confirmLabel: "Reactivar igual",
-          });
-          if (!ok) break;
-          force = { ...force, allowPatientOverlap: true };
+          force = withForce(force, prompt);
           continue;
         }
         toast.error("No pudimos actualizar el turno", { description: r.error });

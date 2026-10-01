@@ -40,6 +40,11 @@ open security items in [AUDIT.md](AUDIT.md).
   `/onboarding` (step 2, `lib/tenant-bootstrap.ts`) by a verified identity.
   Requires "Confirm email" ON in Supabase (EXTERNAL-CONFIG §0.1).
 
+- **B-pre (01-oct-2026)** — capabilities per role (§13), global catalog
+  read-only under RLS (§9, §10), public booking filtered by PUBLIC practices and
+  accepted memberships (§2), cupo-1 TOCTOU closed with an advisory lock in the
+  agenda and the public booking, availability responses without PHI.
+
 **Still open** (tracked in AUDIT.md): the
 Upstash env (§8 — owner); the
 prod RLS role flip (§9, its code prerequisite `p2002-target-null-bajo-rls` is
@@ -86,7 +91,7 @@ have full access; the tenant flag `sharedPatientView` grants full to everyone.
 
 | Action | full | basic |
 | --- | --- | --- |
-| See the booking (name, time, service) | ✅ | ✅ (notes, `title`, `description` nulled — `lib/bookings.ts:366-372`) |
+| See the booking (name, time, service) | ✅ | ✅ (notes, `title`, `description` nulled — `lib/bookings.ts:633-635`; in the agenda's `listAgendaBookings` also for any role without `clinical.read`, §13) |
 | Edit / reschedule / change status / delete a booking, toggle copago or OS paid | ✅ | ❌ `BASIC_ACCESS_ERROR` (`lib/bookings.ts:64`) |
 | Create a booking (single or batch) for that patient | ✅ | ❌ |
 | Guest bookings (no patient) | ✅ | ✅ operable |
@@ -128,8 +133,17 @@ pages, the MP webhook):
   stranger's DNI + the attacker's email took over the patient's portal.
 - The wizard sends a per-instance key `pub:<tenantId>:<uuid>`; a reused key with
   different data is rejected and a CANCELLED booking is never revived. The slot
-  must belong to the day's grid (`checkPublicSlot`, hours, Sunday, 1 h lead
-  time), checked again on submit.
+  must belong to the day's grid (`checkPublicSlot`, checked again on submit).
+  Since B-pre the grid comes from the availability engine: the
+  practitioner's own ranges, exceptions and blocks (blocks are **hard** here),
+  lead `minLeadMinutes ?? 60`. The public clinic only exposes practitioners
+  with an **accepted** membership and, per practitioner, services whose
+  `PractitionerService` is enabled and **PUBLIC** (`lib/public-booking.ts:74-108`);
+  a PRIVATE practice is bookable only by staff. The submit takes the capacity
+  lock and the shared locations lock inside its tx (`:516,546`), so two
+  simultaneous reservations can't both fill a cupo 1. The engine's loader runs
+  on `prismaService` here (no Actor) with a hand-written `where: { tenantId }`
+  in every query.
 - `lib/public-booking.ts#getPublicBookingStatus` returns only initials +
   non-PHI fields. The booking id (25-char CUID) is sufficiently random
   for the polling endpoint, but the payload is minimised regardless.
@@ -285,7 +299,9 @@ recovery flow still work).
 the single source of truth (`prisma/migrations/policies.sql` is now only a
 redirect stub, applied by nothing). It does `ENABLE` + `FORCE ROW LEVEL
 SECURITY` on **26 tables** (17 original + 7 added in Ola B2 + 2 catalog
-tables): a generated `tenantId = app_current_tenant_id()` policy for the
+tables; later migrations add their own policies — B-pre's
+`agenda_foundations` covers Location, PractitionerSchedule, ScheduleException,
+TimeBlock, PractitionerService/Payer/Specialty the same way): a generated `tenantId = app_current_tenant_id()` policy for the
 direct-`tenantId` ones, `EXISTS`-subquery policies for the tables that reach
 tenancy through a parent (`Coverage`/`EmergencyContact` → `Patient`,
 `Payment` → `Booking`, `Session` → `TreatmentProgram`, `SessionExercise`,
@@ -304,14 +320,25 @@ its own rows, and **no tenant can ever mutate global catalog rows**.
 `UserPreferences` and `Favorite` are intentionally left without RLS (they are
 userId-scoped, not tenant-owned).
 
+**Global read-only catalog (B-pre).** `Specialty`, `Practice`,
+`PracticeSpecialty`, `Payer` and `CatalogImportRun` carry no `tenantId`; they
+get `ENABLE` + `FORCE` and **only** `FOR SELECT USING (true)` — no write policy,
+so the app role reads and can never insert/update/delete (a GRANT enables the
+command, RLS filters the rows). `PayerPlan` is split like `Exercise` (global +
+own read, own write: a tenant can propose a plan, never touch a global one).
+The guard enforces the `GLOBAL_READONLY` set. Tenant actions that store
+`Insurer.payerId`, `Service.practiceId` or `Coverage.payerPlanId` validate the
+id (global or own, not archived, plan of that payer) because FKs skip RLS.
+
 **Adoption is wholesale.** `lib/rls.ts#runWithRls(tenantId, fn)` sets the
 transaction-local `app.current_tenant_id` GUC (transaction-local is mandatory —
 prod pools through Supavisor in transaction mode), and `withTenantDb()` lets a
 shared helper either join the caller's transaction or open its own. ~23
 Actor-facing `lib/*` modules now read *and* write inside a wrap.
-`scripts/guard-tenant-isolation.mjs` fails the build when a model gains
-`tenantId` without a matching policy, and prints a soft report of `prisma.<model>`
-calls made outside a wrap.
+`scripts/guard-tenant-isolation.mjs` (parsing **every** migration since
+B-pre) fails the build when a model gains `tenantId` without a matching policy
+or a GLOBAL_READONLY table gains a write policy, and prints a soft report of
+`prisma.<model>` calls made outside a wrap.
 
 **Verified, not assumed.** Locally the app connects as `kinesoft_app`
 (`NOSUPERUSER NOBYPASSRLS`, created by `prisma/roles.local.sql`) while
@@ -390,6 +417,15 @@ tenant reads) and its tags.
   1-hour signed URLs on read. YouTube links are parsed to a video id and
   re-emitted as a privacy-enhanced `youtube-nocookie` embed — the raw
   user-supplied URL is never used as an embed src.
+- **Global reference catalog (B-pre).** `plataforma/catalogo/*` over
+  `lib/catalog-admin.ts`: same shape — `requireSuperAdmin()` first,
+  `prismaService` after (the app role physically can't write the
+  GLOBAL_READONLY tables, §9). Edit (marks `curatedAt`), archive, merge
+  payers/practices (repoints tenant FKs), promote a tenant-proposed plan,
+  import runs, "Refrescar catálogo". The CSV import (`scripts/catalog-import.ts`)
+  is an owner-run script: `assertSafeTarget` (`KINESOFT_CONFIRM_PROD=<ref>` for
+  a remote DB, also for the dry-run), aborts without BYPASSRLS, dry-run by
+  default, one transaction.
 - **Granting the flag** is deliberately out-of-band and DB-level:
   `scripts/set-platform-admin.ts` (`<email>` to grant, `--revoke`, `--list`),
   run by the owner against the owner/`DIRECT_URL` connection. There is **no
@@ -454,3 +490,58 @@ tenant reads) and its tags.
   `VERCEL_ENV=production`; server-action `allowedOrigins` drop `localhost` in
   Production. Both are computed at build time, so Vercel must expose System
   Environment Variables to the build.
+
+## 13. Capabilities and the agenda surfaces (B-pre, 01-oct-2026)
+
+**Matrix** (`lib/capabilities.ts`, pure; `lib/authz.ts` resolves the role from
+the Membership — `Actor` still doesn't carry it):
+
+| Capability | OWNER/ADMIN | PRACTITIONER | ASSISTANT | BILLING |
+| --- | --- | --- | --- | --- |
+| `agenda.viewAll` | ✅ | ✅ | ✅ | ✅ |
+| `agenda.reception` | ✅ | ✅ | ✅ | — |
+| `agenda.manageBlocks` (anyone, incl. "everyone") | ✅ | — | ✅ | — |
+| `agenda.manageOwnBlocks` | ✅ | ✅ | ✅ | — |
+| `clinical.read` | ✅ | ✅ | — | — |
+| `schedule.configure` | ✅ | — | — | — |
+| `billing.manage` | ✅ | — | — | ✅ |
+| `tenant.admin` | ✅ | — | — | — |
+
+- **Fails closed**: unknown role or no membership → empty set. The UI only
+  hides; every action calls `requireCapability(...)` / `requireTenantAdmin(...)`
+  (`ForbiddenError`). The six copied `role === OWNER|ADMIN` checks are gone.
+- **`clinical.read`** gates `title`/`description`/notes in
+  `listAgendaBookings` (null + `clinicalHidden`) on top of the per-patient
+  basic gate (§1.1): ASSISTANT and BILLING operate the agenda without clinical
+  content.
+- **`billing.manage`** is not yet required by any charge action; before
+  enforcing it the owner decides whether the practitioner charges (ROADMAP).
+- Known gap (C0): `buildActor` requires a `Practitioner` row
+  (`lib/session.ts:91-97`), so a Secretaria (ASSISTANT) can't log in without one.
+
+**Availability reads** (`lib/availability-actions.ts`): `agenda.viewAll`, zod,
+every input id (practitioner, service, location, patient, insurer) validated
+against the tenant **with an explicit error** (an IDOR doesn't look like "no
+availability"), loader with `where: { tenantId }` by hand. Responses carry **no
+PHI** (BILLING sees them). No cache.
+
+**Reception** (`markReceptionAction`): administrative action with
+`agenda.reception` + optimistic lock (`expectedUpdatedAt`) + audit
+`booking.reception.<action>`. Access rule: a role with `agenda.manageBlocks`
+(admin, Secretaria) operates any booking; a PRACTITIONER only own bookings or
+bookings of patients he has **full** access to (guests ok). Undo returns a guest
+or an unpaid public reservation to PENDING, not CONFIRMED, so reception can't
+confirm an unpaid public slot by accident.(Access rule `lib/bookings.ts:~1748-1750`;
+undo `lib/reception-state.ts:40-49` — both from the B-pre review fixer.)
+
+**Day lock / blocks** (`lib/time-blocks.ts`): own agenda with
+`agenda.manageOwnBlocks`; another practitioner or "everyone" (a row with
+`practitionerId` null) needs `agenda.manageBlocks`. Cancelling affected
+bookings goes through `cancelBookingsInTx`, which **skips** bookings with a
+recorded payment (H1); the apply aborts with `changed` if the affected set
+moved since the preview.
+
+**Schedule / locations / PS / PP writes**: `schedule.configure`, ids validated
+against the tenant, location writes behind the locations advisory lock (shared
+to use a location, exclusive to archive or change the primary).
+

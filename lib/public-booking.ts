@@ -28,18 +28,28 @@ import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { loadAvailabilityInputs } from "@/lib/availability-loader";
+import { lockTenantLocationsShared } from "@/lib/location-lock";
+import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import { acceptsInsurer, addDays, eligiblePractitioners, isDayKey, resolvePractitionerService } from "@/lib/availability";
 import {
-  PUBLIC_OVERLAP_LOOKBACK_MS,
-  arDayWindow,
-  buildPublicSlots,
+  PUBLIC_FIRST_FREE_HORIZON_DAYS,
   checkPublicSlot,
+  firstPublicSlotAcross,
+  publicDaySlots,
+  resolvePublicOffer,
 } from "@/lib/public-booking-slots";
 import { releaseOwnExpiredPublicHold, resolvePublicPatient } from "@/lib/public-booking-internal";
 import type { ActionResult } from "@/lib/validation";
 import {
+  FirstPublicSlotSchema,
+  ListPublicSlotsSchema,
   SubmitSchema,
   normalizeDocumentId,
+  type FirstPublicSlotInput,
+  type ListPublicSlotsInput,
   type PublicClinic,
+  type PublicFirstSlot,
   type PublicSlot,
   type PublicBookingStatus,
   type SubmitPublicBookingInput,
@@ -54,78 +64,174 @@ function callerIp(): string {
 // Public reads
 // ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Profesionales que el público puede ver/reservar: membresía ACEPTADA (mismo
+ * criterio que `listPractitioners` y el loader). Antes `getPublicClinic`
+ * listaba toda fila Practitioner, incluso la de un miembro dado de baja
+ * (`removeMember` deja la fila por historial) y se le podía reservar.
+ */
+function publicPractitionerWhere(tenantId: string) {
+  return { tenantId, user: { memberships: { some: { tenantId, acceptedAt: { not: null } } } } };
+}
+
+/**
+ * Datos del wizard público. Desde B3.2 solo lo que se ofrece ONLINE (motor de
+ * disponibilidad, `eligiblePractitioners` con `publicOnly`):
+ *   • servicios que al menos un profesional tiene habilitados y PUBLIC
+ *     (`PractitionerService`; sin fila = default de Configuración);
+ *   • profesionales con membresía aceptada que ofrecen al menos uno;
+ *   • nuevos opcionales para B5.6: sedes activas, coberturas activas (sin
+ *     montos), sedes y coberturas aceptadas por profesional, quién ofrece cada
+ *     servicio y con qué duración. Ver `PublicClinic` (public-booking-types).
+ */
 export async function getPublicClinic(slug: string): Promise<PublicClinic | null> {
   const tenant = await prisma.tenant.findUnique({
     where: { slug },
-    include: {
-      practitioners: { include: { user: true }, orderBy: { createdAt: "asc" } },
-      services: { orderBy: { name: "asc" } },
-    },
+    select: { id: true, slug: true, name: true, legalName: true, palette: true },
   });
   if (!tenant) return null;
+  const tenantId = tenant.id;
+
+  const [practitioners, services, psRows, insurers, ppRows, locations, schedules] = await Promise.all([
+    prisma.practitioner.findMany({
+      where: publicPractitionerWhere(tenantId),
+      include: { user: { select: { fullName: true, email: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.service.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+    prisma.practitionerService.findMany({
+      where: { tenantId },
+      select: {
+        practitionerId: true,
+        serviceId: true,
+        enabled: true,
+        visibility: true,
+        durationMin: true,
+        minLeadMinutes: true,
+        maxLeadDays: true,
+        concurrencyOverride: true,
+        maxConcurrent: true,
+      },
+    }),
+    prisma.insurer.findMany({
+      where: { tenantId, active: true },
+      select: { id: true, name: true, isParticular: true },
+      orderBy: [{ isParticular: "desc" }, { name: "asc" }],
+    }),
+    prisma.practitionerPayer.findMany({
+      where: { tenantId },
+      select: { practitionerId: true, insurerId: true, active: true },
+    }),
+    prisma.location.findMany({
+      where: { tenantId, active: true },
+      select: {
+        id: true,
+        name: true,
+        address: true,
+        addressLine2: true,
+        city: true,
+        province: true,
+        isPrimary: true,
+      },
+      orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
+    }),
+    prisma.practitionerSchedule.findMany({
+      where: { tenantId, location: { active: true } },
+      select: { practitionerId: true, locationId: true },
+    }),
+  ]);
+
+  const pracIds = practitioners.map((p) => p.id);
+  const serviceInfos = services.map((s) => ({
+    id: s.id,
+    durationMin: s.durationMin,
+    maxConcurrent: s.maxConcurrent,
+    practitionerId: s.practitionerId,
+  }));
+
+  const offered = services
+    .map((s, i) => {
+      const offeredBy = eligiblePractitioners({
+        practitionerIds: pracIds,
+        serviceId: s.id,
+        practitionerServices: psRows,
+        services: serviceInfos,
+        publicOnly: true,
+      });
+      const durationByPractitioner: Record<string, number> = {};
+      for (const pid of offeredBy) {
+        const rule = psRows.find((r) => r.practitionerId === pid && r.serviceId === s.id);
+        durationByPractitioner[pid] = resolvePractitionerService(rule, serviceInfos[i], pid).durationMin;
+      }
+      return { s, offeredBy, durationByPractitioner };
+    })
+    .filter((o) => o.offeredBy.length > 0);
+
+  const offering = new Set(offered.flatMap((o) => o.offeredBy));
+  const primary = locations.find((l) => l.isPrimary) ?? null;
+  const locationOrder = locations.map((l) => l.id);
+
   return {
     slug: tenant.slug,
     name: tenant.name,
     legalName: tenant.legalName,
     palette: tenant.palette,
-    practitioners: tenant.practitioners.map((p) => ({
-      id: p.id,
-      name: p.user.fullName ?? p.user.email,
-      specialty: p.specialty,
-      licenseNumber: p.licenseNumber,
-      yearsExp: p.yearsExp,
-      rating: p.rating,
-    })),
-    services: tenant.services.map((s) => ({
+    practitioners: practitioners
+      .filter((p) => offering.has(p.id))
+      .map((p) => {
+        const own = new Set(schedules.filter((r) => r.practitionerId === p.id).map((r) => r.locationId));
+        // Sin franjas = red de seguridad del motor (horario del tenant en la principal).
+        const locationIds = own.size > 0 ? locationOrder.filter((id) => own.has(id)) : primary ? [primary.id] : [];
+        return {
+          id: p.id,
+          name: p.user.fullName ?? p.user.email,
+          specialty: p.specialty,
+          licenseNumber: p.licenseNumber,
+          yearsExp: p.yearsExp,
+          rating: p.rating,
+          locationIds,
+          acceptedInsurerIds: insurers
+            .filter((ins) => ins.isParticular || acceptsInsurer(ppRows, p.id, ins.id))
+            .map((ins) => ins.id),
+        };
+      }),
+    services: offered.map(({ s, offeredBy, durationByPractitioner }) => ({
       id: s.id,
       name: s.name,
       description: s.description,
-      durationMin: s.durationMin,
+      durationMin: offeredBy.length === 1 ? durationByPractitioner[offeredBy[0]] : s.durationMin,
       priceCents: s.priceCents,
-      practitionerId: s.practitionerId,
+      // Compat con el filtro del wizard actual (ver `PublicClinic.services`).
+      practitionerId: offeredBy.length === 1 ? offeredBy[0] : null,
+      practitionerIds: offeredBy,
+      durationByPractitioner,
     })),
+    locations,
+    insurers,
   };
 }
 
-/**
- * Turnos existentes que cuentan para la grilla de un día: mismo profesional +
- * servicio, no cancelados, con look-back para los que arrancaron antes de la
- * medianoche AR. Trae lo que pide `isHoldingCapacity` (S06): la reserva
- * pública impaga de más de 30 min deja de bloquear.
- */
-async function loadDayBookings(
-  tenantId: string,
-  practitionerId: string,
-  serviceId: string,
-  dayStart: Date,
-  dayEnd: Date
-) {
-  return prisma.booking.findMany({
-    where: {
-      tenantId,
-      practitionerId,
-      serviceId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { gte: new Date(dayStart.getTime() - PUBLIC_OVERLAP_LOOKBACK_MS), lt: dayEnd },
-    },
-    select: {
-      scheduledFor: true,
-      durationMin: true,
-      status: true,
-      paymentStatus: true,
-      createdAt: true,
-      patientId: true,
-      idempotencyKey: true,
-    },
-  });
+/** Tenant por slug + profesional con membresía aceptada (o null). */
+async function resolvePublicTarget(tenantSlug: string, practitionerId: string | null) {
+  const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+  if (!tenant) return null;
+  if (practitionerId) {
+    const p = await prisma.practitioner.findFirst({
+      where: { id: practitionerId, ...publicPractitionerWhere(tenant.id) },
+      select: { id: true },
+    });
+    if (!p) return null;
+  }
+  return tenant;
 }
 
-export async function listPublicSlots(input: {
-  tenantSlug: string;
-  practitionerId: string;
-  serviceId: string;
-  date: string;
-}): Promise<PublicSlot[]> {
+/**
+ * Horarios de un día AR para (profesional, servicio[, sede]). Motor de B3.2:
+ * franjas del profesional, excepciones, bloqueos (duros), PractitionerService
+ * (solo habilitado + PUBLIC; duración, cupo, anticipación y horizonte propios).
+ * Misma función que valida el submit (`publicDaySlots`).
+ */
+export async function listPublicSlots(raw: ListPublicSlotsInput): Promise<PublicSlot[]> {
   // Rate-limit slot polling so an attacker can't enumerate booking density.
   const rl = await rateLimit(`pub:slots:${callerIp()}`, {
     limit: 60,
@@ -136,37 +242,80 @@ export async function listPublicSlots(input: {
   // momento". Leaks no agenda density (no per-slot info in the message).
   if (!rl.ok) throw new Error("RATE_LIMITED");
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { slug: input.tenantSlug },
-    select: { id: true, businessHoursStart: true, businessHoursEnd: true },
-  });
+  const parsed = ListPublicSlotsSchema.safeParse(raw);
+  if (!parsed.success || !isDayKey(parsed.data.date)) return [];
+  const input = parsed.data;
+
+  const tenant = await resolvePublicTarget(input.tenantSlug, input.practitionerId);
   if (!tenant) return [];
 
-  const service = await prisma.service.findFirst({
-    where: { id: input.serviceId, tenantId: tenant.id },
-    select: { durationMin: true, maxConcurrent: true },
+  // Día anclado a la pared AR (no al host: en Vercel es UTC). Ids ajenos al
+  // tenant (servicio, sede) el loader los descarta → lista vacía.
+  const availability = await loadAvailabilityInputs(prisma, {
+    tenantId: tenant.id,
+    practitionerIds: [input.practitionerId],
+    serviceId: input.serviceId,
+    locationId: input.locationId,
+    from: input.date,
+    to: input.date,
   });
-  if (!service) return [];
-
-  // Día anclado a la pared AR (no al host: en Vercel es UTC). La grilla la
-  // arma `buildPublicSlots`, la misma que valida el submit.
-  const win = arDayWindow(input.date);
-  if (!win) return [];
-  const existing = await loadDayBookings(
-    tenant.id,
-    input.practitionerId,
-    input.serviceId,
-    win.dayStart,
-    win.dayEnd
-  );
-  return buildPublicSlots({
-    date: input.date,
-    openHour: tenant.businessHoursStart,
-    closeHour: tenant.businessHoursEnd,
-    durationMin: service.durationMin,
-    maxConcurrent: service.maxConcurrent,
-    existing,
+  return publicDaySlots(availability, {
+    practitionerId: input.practitionerId,
+    serviceId: input.serviceId,
+    dayKey: input.date,
+    locationId: input.locationId ?? null,
     now: new Date(),
+  });
+}
+
+/**
+ * "Cualquier profesional" (B3.2): el primer horario libre de la grilla
+ * pública entre quienes ofrecen el servicio online (y aceptan la cobertura,
+ * si viene), desde `fromDate` (default hoy AR) por
+ * `PUBLIC_FIRST_FREE_HORIZON_DAYS` días. null = nadie tiene lugar (o el
+ * servicio/cobertura no es del consultorio). El wizard actual NO la usa; es
+ * para B5.6. Lo devuelto se reserva con `submitPublicBooking` usando el
+ * `practitionerId` y el `iso` (mismo motor: no puede salir "off-grid").
+ */
+export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<PublicFirstSlot | null> {
+  // Mismo bucket que la lista: es otra forma de leer densidad de agenda.
+  const rl = await rateLimit(`pub:slots:${callerIp()}`, { limit: 60, windowMs: 60_000 });
+  if (!rl.ok) throw new Error("RATE_LIMITED");
+
+  const parsed = FirstPublicSlotSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const input = parsed.data;
+  const now = new Date();
+  const today = toARDateKey(now);
+  const fromDay = input.fromDate && isDayKey(input.fromDate) && input.fromDate > today ? input.fromDate : today;
+
+  const tenant = await resolvePublicTarget(input.tenantSlug, null);
+  if (!tenant) return null;
+  if (input.insurerId) {
+    // Una cobertura ajena/inactiva no filtra nada en el motor (sin fila =
+    // aceptada): mejor no ofrecer que ofrecer a quien no la acepta.
+    const ins = await prisma.insurer.findFirst({
+      where: { id: input.insurerId, tenantId: tenant.id, active: true },
+      select: { id: true },
+    });
+    if (!ins) return null;
+  }
+
+  // Sin `practitionerIds`: el loader trae los de membresía aceptada (= los públicos).
+  const availability = await loadAvailabilityInputs(prisma, {
+    tenantId: tenant.id,
+    serviceId: input.serviceId,
+    locationId: input.locationId,
+    from: fromDay,
+    to: addDays(fromDay, PUBLIC_FIRST_FREE_HORIZON_DAYS - 1),
+  });
+  return firstPublicSlotAcross(availability, {
+    serviceId: input.serviceId,
+    practitionerIds: availability.templates.map((t) => t.practitionerId),
+    insurerId: input.insurerId ?? null,
+    locationId: input.locationId ?? null,
+    fromDay,
+    now,
   });
 }
 
@@ -178,6 +327,11 @@ const SLOT_UNAVAILABLE_ERROR = "Ese horario se acaba de ocupar o ya no se puede 
 const SAME_SLOT_ERROR = "Ya tenés un turno reservado en ese horario.";
 const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo en unos minutos.";
 
+/** La sede de la franja se archivó entre la validación y el INSERT (B3.2). */
+class PublicLocationGoneError extends Error {}
+/** El slot se ocupó (o se bloqueó) entre la lista/pre-chequeo y el INSERT (B4.1). */
+class PublicSlotGoneError extends Error {}
+
 /**
  * Crea (o reencuentra, si es un reintento) el turno público + la preferencia
  * de Mercado Pago.
@@ -187,9 +341,16 @@ const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo e
  *     ni de otro tenant. Mismo intento (doble click, reintento tras un error
  *     de MP) → el mismo turno. Un turno CANCELLED nunca se revive: una reserva
  *     nueva trae otra key y crea otro turno.
- *   - Horario: tiene que ser un slot de la grilla del día (`buildPublicSlots`:
- *     horario del consultorio, domingo, anticipación de 1 h) y tener cupo
- *     contando solo lo que sigue reteniendo (`isHoldingCapacity`).
+ *   - Horario (B3.2, motor de disponibilidad): tiene que ser un slot de
+ *     `publicDaySlots`, la MISMA grilla que lista el wizard: franjas del
+ *     profesional (o el horario del tenant si no tiene), excepción del día,
+ *     bloqueos duros (un slot bloqueado no se ofrece ni se acepta),
+ *     anticipación `minLeadMinutes ?? 60`, tope `maxLeadDays` y cupo
+ *     profesional + servicio contando solo lo que sigue reteniendo
+ *     (`isHoldingCapacity`). Solo servicios habilitados y PUBLIC para ese
+ *     profesional; la duración es la de su PractitionerService.
+ *   - Sede: la de la franja del slot (el cliente no la elige ni la manda);
+ *     se valida activa bajo el lock compartido de sedes dentro de la tx.
  *   - Re-reserva del propio slot vencido: si el paciente ya tenía en ese
  *     instante SU reserva pública impaga vencida, se cancela y se crea la nueva
  *     en la misma tx (`releaseOwnExpiredPublicHold`, revisión A2).
@@ -231,14 +392,14 @@ export async function submitPublicBooking(
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, tenantId: tenant.id },
   });
-  // Un servicio atado a otro profesional no se reserva con este (el wizard ya
-  // los filtra; esto cierra el request armado a mano).
-  if (!service || (service.practitionerId && service.practitionerId !== data.practitionerId)) {
-    return { ok: false, error: "Servicio no encontrado." };
-  }
+  // Si ESTE profesional lo ofrece online lo decide el motor más abajo
+  // (`resolvePublicOffer`): reemplaza el viejo "servicio atado a otro
+  // profesional", que no veía PractitionerService (un servicio compartido
+  // deshabilitado o PRIVATE para él se podía reservar armando el request).
+  if (!service) return { ok: false, error: "Servicio no encontrado." };
 
   const practitioner = await prisma.practitioner.findFirst({
-    where: { id: data.practitionerId, tenantId: tenant.id },
+    where: { id: data.practitionerId, ...publicPractitionerWhere(tenant.id) },
     select: { id: true },
   });
   if (!practitioner) return { ok: false, error: "Profesional no encontrado." };
@@ -285,22 +446,20 @@ export async function submitPublicBooking(
     // ── Horario: tiene que ser de la grilla y tener cupo (misma función que
     // la lista del wizard). Antes se aceptaba cualquier instante futuro.
     const dateKey = toARDateKey(scheduledFor);
-    const win = arDayWindow(dateKey);
-    if (!win) return { ok: false, error: "Horario inválido." };
-    const existing = await loadDayBookings(
-      tenant.id,
-      data.practitionerId,
-      service.id,
-      win.dayStart,
-      win.dayEnd
-    );
-    const slots = buildPublicSlots({
-      date: dateKey,
-      openHour: tenant.businessHoursStart,
-      closeHour: tenant.businessHoursEnd,
-      durationMin: service.durationMin,
-      maxConcurrent: service.maxConcurrent,
-      existing,
+    if (!isDayKey(dateKey)) return { ok: false, error: "Horario inválido." };
+    const availability = await loadAvailabilityInputs(prisma, {
+      tenantId: tenant.id,
+      practitionerIds: [data.practitionerId],
+      serviceId: service.id,
+      from: dateKey,
+      to: dateKey,
+    });
+    const offer = resolvePublicOffer(availability, data.practitionerId, service.id);
+    if (!offer) return { ok: false, error: "Servicio no encontrado." };
+    const slots = publicDaySlots(availability, {
+      practitionerId: data.practitionerId,
+      serviceId: service.id,
+      dayKey: dateKey,
       now: new Date(),
     });
     const verdict = checkPublicSlot(scheduledFor, slots);
@@ -308,6 +467,7 @@ export async function submitPublicBooking(
       return { ok: false, error: "Ese horario no está disponible para reservar online. Elegí otro." };
     }
     if (verdict === "unavailable") return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
+    const slotLocationId = slots.find((s) => s.iso === scheduledFor.toISOString())?.locationId ?? null;
 
     let resolution: Awaited<ReturnType<typeof resolvePublicPatient>>;
     try {
@@ -343,6 +503,53 @@ export async function submitPublicBooking(
       // cancela en la misma tx (ver `releaseOwnExpiredPublicHold`): si no, el
       // índice único parcial rechazaba su propio re-intento.
       const created = await prisma.$transaction(async (tx) => {
+        // B4.1 (TOCTOU de cupo, handoff de B3.2): el veredicto de arriba se
+        // calculó FUERA de esta tx y antes de `resolvePublicPatient`; dos
+        // pacientes distintos en un slot de cupo 1 lo leían "libre" los dos y
+        // escribían los dos (test "[B4.1] cupo 1: tres submits concurrentes").
+        // Primero el lock de cupo de (profesional, servicio, días AR) — la MISMA
+        // clave que toman create/update/batch de la agenda, así que el turnero
+        // y la agenda también se serializan entre sí — y recién después se
+        // recarga y re-chequea la grilla con este tx: en READ COMMITTED la
+        // recarga ya ve la fila del que entró antes. Orden de locks igual que
+        // en lib/bookings.ts (cupo → sedes): sin ciclos.
+        await lockCapacityWindow(tx, {
+          tenantId: tenant.id,
+          practitionerId: data.practitionerId,
+          serviceId: service.id,
+          start: scheduledFor,
+          end: new Date(scheduledFor.getTime() + offer.durationMin * 60_000),
+        });
+        const fresh = await loadAvailabilityInputs(tx, {
+          tenantId: tenant.id,
+          practitionerIds: [data.practitionerId],
+          serviceId: service.id,
+          from: dateKey,
+          to: dateKey,
+        });
+        const freshVerdict = checkPublicSlot(
+          scheduledFor,
+          publicDaySlots(fresh, {
+            practitionerId: data.practitionerId,
+            serviceId: service.id,
+            dayKey: dateKey,
+            now: new Date(),
+          })
+        );
+        // "ok" es el único veredicto aceptable (PublicSlotVerdict = "ok" |
+        // "off-grid" | "unavailable"): un bloqueo o un cambio de franja en el
+        // medio también sacan el slot de la grilla.
+        if (freshVerdict !== "ok") throw new PublicSlotGoneError();
+        if (slotLocationId) {
+          // Lock compartido de sedes y RECIÉN DESPUÉS validar (lib/location-lock.ts):
+          // un archivado no puede intercalarse entre el chequeo y el INSERT.
+          await lockTenantLocationsShared(tx, tenant.id);
+          const loc = await tx.location.findFirst({
+            where: { id: slotLocationId, tenantId: tenant.id, active: true },
+            select: { id: true },
+          });
+          if (!loc) throw new PublicLocationGoneError();
+        }
         const released = await releaseOwnExpiredPublicHold(tx, {
           tenantId: tenant.id,
           patientId: resolution.patientId,
@@ -356,7 +563,9 @@ export async function submitPublicBooking(
             serviceId: service.id,
             patientId: resolution.patientId,
             scheduledFor,
-            durationMin: service.durationMin,
+            // Override del profesional (PractitionerService.durationMin) o la del servicio.
+            durationMin: offer.durationMin,
+            locationId: slotLocationId,
             notes: notes || null,
             title: data.patient.title || null,
             description: data.patient.description || null,
@@ -383,6 +592,9 @@ export async function submitPublicBooking(
         });
       }
     } catch (e) {
+      if (e instanceof PublicLocationGoneError || e instanceof PublicSlotGoneError) {
+        return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
+      }
       // P2002 distinguido por los DATOS, no por `meta.target` (que llega null
       // bajo RLS, ver `resolveUniqueViolation` en lib/bookings.ts):
       //   - hay una fila viva con ESTA key → dos submits del mismo intento se

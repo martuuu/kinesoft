@@ -10,4 +10,7 @@ export type ServiceRow = {
   /** Cupos simultáneos por horario; null = ilimitado. */
   maxConcurrent: number | null;
   bookingsCount: number;
+  /** Práctica del catálogo global que representa (B1.4); null = servicio libre. */
+  practiceId: string | null;
+  practiceName: string | null;
 };
