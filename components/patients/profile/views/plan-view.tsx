@@ -19,6 +19,8 @@ import {
 } from "@/lib/patients";
 import { addCustomSession, rescheduleSession } from "@/lib/sessions";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import type { RescheduleSessionResult } from "@/lib/sessions-types";
 import type { PatientWithRelations } from "../types";
 
 export function PlanView({ patient }: { patient: PatientWithRelations }) {
@@ -412,7 +414,7 @@ function ConfirmDeleteProgram({
         Esta acción no se puede deshacer.
       </p>
       <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "0 0 14px" }}>
-        Los turnos creados desde este plan permanecen en la agenda — eliminalos manualmente si querés.
+        Los turnos de la agenda no se tocan: si había turnos para este plan, cancelalos desde la agenda.
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <Button
@@ -500,8 +502,12 @@ function EditSessionModal({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Tras reprogramar, si el paciente tiene un turno ese día se muestra acá
+  // (con link a la agenda) en vez de cerrar el drawer: el turno NO se mueve.
+  const [moved, setMoved] = useState<RescheduleSessionResult | null>(null);
   // AR wall-clock formatting via Intl — works the same on the
   // server (SSR snapshot) and the browser. The old `getFullYear` /
   // `getHours` path read the runtime's local tz, which on a UTC
@@ -525,13 +531,20 @@ function EditSessionModal({
         setError(r.error);
         return;
       }
-      onClose();
       router.refresh();
+      if (r.data.bookingOnDay) setMoved(r.data);
+      else onClose();
     });
   };
 
-  const remove = () => {
-    if (!confirm(`¿Eliminar sesión ${session.index}? Esta acción es definitiva.`)) return;
+  const remove = async () => {
+    const ok = await confirm({
+      title: `¿Eliminar la sesión ${session.index}?`,
+      message: "Se borra la sesión con sus ejercicios. Esta acción es definitiva.",
+      confirmLabel: "Eliminar",
+      tone: "danger",
+    });
+    if (!ok) return;
     setError(null);
     start(async () => {
       const r = await deleteSession(session.id);
@@ -550,7 +563,7 @@ function EditSessionModal({
         <p style={{ marginTop: 0, marginBottom: 2, fontSize: 13, color: "var(--navy-500)" }}>
           {session.completedAt
             ? "Esta sesión ya fue realizada. Solo podés revisar su detalle."
-            : "Cambiá la fecha/hora si el paciente necesita reprogramar. El turno asociado se mueve automáticamente."}
+            : "Cambiá la fecha/hora si el paciente necesita reprogramar. Solo se mueve la sesión del plan: los turnos de la agenda se manejan desde la agenda."}
         </p>
         <FormField
           label="Fecha y hora"
@@ -558,8 +571,42 @@ function EditSessionModal({
           type="datetime-local"
           value={when}
           onChange={(v) => setWhen(v)}
-          disabled={!!session.completedAt}
+          disabled={!!session.completedAt || !!moved}
         />
+        {moved?.bookingOnDay && (
+          <div
+            role="status"
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              background: "rgba(246,249,253,0.9)",
+              border: "1px solid rgba(15,30,51,0.08)",
+              color: "var(--navy-700)",
+              fontSize: 12.5,
+              display: "grid",
+              gap: 6,
+            }}
+          >
+            <span>
+              Sesión reprogramada. El paciente tiene un turno ese día a las{" "}
+              <strong>
+                {new Date(moved.bookingOnDay.scheduledFor).toLocaleTimeString("es-AR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                  timeZone: "America/Argentina/Buenos_Aires",
+                })}
+              </strong>
+              : el turno no se movió. Si hace falta, ajustalo en la agenda.
+            </span>
+            <Link
+              href={`/agenda?view=timeline&date=${moved.bookingOnDay.dateKey}`}
+              style={{ color: "var(--sky-700)", fontWeight: 700, textDecoration: "none" }}
+            >
+              Ver ese día en la agenda →
+            </Link>
+          </div>
+        )}
         {error && (
           <div
             style={{
@@ -581,7 +628,7 @@ function EditSessionModal({
             marginTop: 4,
           }}
         >
-          {!session.completedAt && (
+          {!session.completedAt && !moved && (
             <Button
               type="button"
               variant="primary"
@@ -599,9 +646,9 @@ function EditSessionModal({
             disabled={pending}
             style={{ width: "100%", justifyContent: "center" }}
           >
-            Cancelar
+            {moved ? "Cerrar" : "Cancelar"}
           </Button>
-          {!session.completedAt && (
+          {!session.completedAt && !moved && (
             <button
               type="button"
               onClick={remove}
@@ -640,26 +687,93 @@ function EditSessionModal({
   );
 }
 
+/**
+ * "Sesión a medida". Antes usaba `prompt()`: Cancelar devolvía `null`, el
+ * `?? undefined` lo convertía en "sin título" y la sesión se creaba igual
+ * (A2a-S03 ítem 7). Ahora es un Drawer: Cancelar/Esc no crean nada.
+ */
 function AddCustomSessionButton({ programId }: { programId: string }) {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const close = () => {
+    if (pending) return;
+    setOpen(false);
+    setTitle("");
+    setError(null);
+  };
   const add = () => {
-    const title = prompt("Título o nota corta de la sesión a medida (opcional):") ?? undefined;
     setError(null);
     start(async () => {
-      const r = await addCustomSession({ programId, title });
-      if (!r.ok) setError(r.error);
-      else router.refresh();
+      const r = await addCustomSession({ programId, title: title.trim() || undefined });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setOpen(false);
+      setTitle("");
+      router.refresh();
     });
   };
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
-      <Button variant="ghost" onClick={add} disabled={pending}>
-        <IconPlus size={12} /> {pending ? "Agregando…" : "Sesión a medida"}
+    <>
+      <Button variant="ghost" onClick={() => setOpen(true)} disabled={pending}>
+        <IconPlus size={12} /> Sesión a medida
       </Button>
-      {error && <span style={{ fontSize: 11, color: "#9F1F1F" }}>{error}</span>}
-    </div>
+      {open && (
+        <Drawer open onClose={close} title="Sesión a medida" width={440}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              add();
+            }}
+            style={{ display: "grid", gap: 10 }}
+          >
+            <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>
+              Se agrega al final del plan, con la fecha siguiente según la frecuencia. Después la podés
+              reprogramar.
+            </p>
+            <FormField
+              label="Título o nota corta (opcional)"
+              name="title"
+              value={title}
+              onChange={(v) => setTitle(v.slice(0, 200))}
+              autoFocus
+            />
+            {error && (
+              <div
+                role="alert"
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  background: "rgba(228,70,70,0.1)",
+                  color: "#9F1F1F",
+                  fontSize: 12,
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <Button type="submit" variant="primary" disabled={pending} style={{ width: "100%", justifyContent: "center" }}>
+                {pending ? "Agregando…" : "Agregar sesión"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={close}
+                disabled={pending}
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        </Drawer>
+      )}
+    </>
   );
 }
 

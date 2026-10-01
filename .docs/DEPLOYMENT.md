@@ -128,6 +128,7 @@ untouched. The full history in `prisma/migrations/`, in order:
 | 22 | `20260803022653_exercise_media_and_article` | 7 | `ExerciseMediaType` enum, `ExerciseMedia` + `ExerciseArticle` tables, FKs, indexes — **and RLS policies** |
 | 23 | `20260803183019_user_prefs_catalog` | 8 | `UserPreferences.catalogPrefs Json?` |
 | 24 | `20260816014954_tenant_agenda_slot_minutes` | post-9 (in flight, 2026-08-16) | `Tenant.agendaSlotMinutes INTEGER NOT NULL DEFAULT 60` (configurable agenda slot granularity; additive, safe default) |
+| 25 | `20260930120000_tenant_onboarding` | Bloque A3c (30-sep-2026) | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` (nullable) + backfill `onboardingCompletedAt = createdAt`. **Exact order, prechecks and post-check in [MIGRACIONES-RUNBOOK.md §2.1](MIGRACIONES-RUNBOOK.md)** (A3 needs the owner's SMTP first; A3b never ships without A3c) |
 
 > ⚠️ **#22 also creates RLS policies.** It runs `ENABLE`/`FORCE ROW LEVEL
 > SECURITY` on `ExerciseMedia` + `ExerciseArticle` with a read-only policy
@@ -167,8 +168,9 @@ From `lib/env.ts` (all optional in the schema, but prod needs the real ones):
 | `MP_ACCESS_TOKEN` / `MP_PUBLIC_KEY` | Mercado Pago checkout | ✅ required for payments |
 | `MP_WEBHOOK_SECRET` | Webhook signature verification | ✅ required (prod refuses 503 without it) |
 | `NEXT_PUBLIC_APP_URL` | Absolute URLs (emails, redirects) | ✅ set to the prod domain |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Distributed rate limiting | ⚠️ **NOT set — see EXTERNAL-CONFIG.md (Upstash) / AUDIT.md `c1-ratelimit-inmemory`** |
-| `SENTRY_DSN` | Error reporting | ⚠️ not wired yet |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | Distributed rate limiting (sa-east-1; separate DB for staging). Since A3a a failing Upstash falls back to memory with a log | ⚠️ **NOT set — see EXTERNAL-CONFIG.md §0.1/§4** |
+| `SENTRY_DSN` | Error reporting + CSP reports (build **and** runtime). No-op when absent. Optional: `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (sourcemaps), `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG` | ⚠️ code ready since A3b (30-sep-2026); DSN not set |
+| System Environment Variables (`VERCEL_ENV`) | CSP/HSTS/`allowedOrigins` are computed at build time from `VERCEL_ENV` | ⚠️ "Automatically expose System Environment Variables" must be ON |
 | `LOG_LEVEL` | `debug`/`info`/`warn`/`error` | optional (default `info`) |
 
 ## Prod one-time setup (owner)

@@ -8,12 +8,23 @@ import { DUR, EASE_OUT } from "@/lib/motion";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { IconArrow, IconCheck, IconPlus } from "@/components/ui/icons";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { setBookingStatus } from "@/lib/bookings";
 import type { DashboardData } from "@/lib/dashboard";
 
 /**
  * Recent patients widget with a per-row quick-action menu (open HC,
  * confirmar próximo turno, marcar ausente, agendar nuevo turno).
+ *
+ * A2b-S-vis:
+ *  - Filas `access: "basic"` (paciente de otro profesional, sin share): sin
+ *    diagnóstico ni progreso, y el menú es de solo lectura (ver ficha + hora
+ *    del próximo turno). El servidor igual rechaza cualquier mutación.
+ *  - Cambios de estado con optimistic lock (`nextBookingUpdatedAt`): si el
+ *    turno cambió desde que se cargó el dashboard, el server devuelve
+ *    "stale" y refrescamos en vez de pisar el cambio ajeno.
+ *  - `conflict` / `patientOverlap` se confirman con `useConfirm` y se
+ *    re-llama con el override, igual que el BookingDrawer.
  */
 export function RecentPatients({ items }: { items: DashboardData["recent"] }) {
   return (
@@ -104,19 +115,23 @@ function RecentRow({ p }: { p: DashboardData["recent"][number] }) {
         <Avatar name={p.name} size={36} tone="sky" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{p.name}</div>
-          <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{p.cond}</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
-            Sesión
-          </div>
-          <div
-            className="k-mono"
-            style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}
-          >
-            {p.sessionsDone} / {p.sessionsTotal}
+          <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+            {p.access === "basic" ? "Acceso básico" : p.cond}
           </div>
         </div>
+        {p.access === "full" && (
+          <div style={{ textAlign: "right" }}>
+            <div className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>
+              Sesión
+            </div>
+            <div
+              className="k-mono"
+              style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}
+            >
+              {p.sessionsDone} / {p.sessionsTotal}
+            </div>
+          </div>
+        )}
       </Link>
 
       <button
@@ -158,16 +173,45 @@ function QuickMenu({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const canEdit = patient.access === "full" && !!patient.nextBookingId;
 
-  const setStatus = (status: "CONFIRMED" | "COMPLETED" | "NO_SHOW") => {
-    if (!patient.nextBookingId) return;
+  const setStatus = (
+    status: "CONFIRMED" | "COMPLETED" | "NO_SHOW",
+    force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {}
+  ) => {
+    if (!canEdit) return;
     setError(null);
     start(async () => {
-      const r = await setBookingStatus(patient.nextBookingId!, status);
+      const r = await setBookingStatus(
+        patient.nextBookingId!,
+        status,
+        patient.nextBookingUpdatedAt ? new Date(patient.nextBookingUpdatedAt).toISOString() : undefined,
+        force
+      );
       if (!r.ok) {
+        if (r.conflict || r.patientOverlap) {
+          const ok = await confirm({
+            title: r.conflict ? "Cupo completo en ese horario" : "El paciente ya tiene un turno superpuesto",
+            message: r.conflict
+              ? `${r.conflict.practitionerName} ya tiene un turno en ese horario. ¿Guardarlo igual como sobreturno?`
+              : "Este turno se superpone con otro del mismo paciente. ¿Guardarlo igual?",
+            confirmLabel: "Guardar igual",
+          });
+          if (ok) {
+            setStatus(status, {
+              ...force,
+              ...(r.conflict ? { allowOverbooking: true } : { allowPatientOverlap: true }),
+            });
+          }
+          return;
+        }
         setError(r.error);
+        // Un rechazo por lock ("stale") deja el `updatedAt` viejo en pantalla:
+        // refrescamos para que el próximo intento use el valor actual.
+        router.refresh();
         return;
       }
       onClose();
@@ -197,7 +241,7 @@ function QuickMenu({
       <MenuLink
         href={`/pacientes/${patient.id}`}
         icon={<IconArrow size={12} />}
-        label="Abrir historia clínica"
+        label={patient.access === "full" ? "Abrir historia clínica" : "Ver ficha"}
       />
       {patient.nextBookingAt && (
         <>
@@ -212,7 +256,7 @@ function QuickMenu({
               textTransform: "uppercase",
             }}
           >
-            Próximo turno · {patient.nextBookingAt.toLocaleString("es-AR", {
+            Próximo turno · {new Date(patient.nextBookingAt).toLocaleString("es-AR", {
               day: "2-digit",
               month: "short",
               hour: "2-digit",
@@ -220,26 +264,38 @@ function QuickMenu({
               timeZone: "America/Argentina/Buenos_Aires",
             })}
           </div>
-          <MenuButton
-            disabled={pending}
-            icon={<IconCheck size={12} stroke={3} />}
-            label="Marcar realizado"
-            onClick={() => setStatus("COMPLETED")}
-          />
-          <MenuButton
-            disabled={pending}
-            icon={<span style={{ color: "#9F1F1F", fontWeight: 700 }}>✕</span>}
-            label="Marcar ausente"
-            onClick={() => setStatus("NO_SHOW")}
-          />
+          {canEdit && (
+            <>
+              <MenuButton
+                disabled={pending}
+                icon={<IconCheck size={12} stroke={3} />}
+                label="Marcar realizado"
+                onClick={() => setStatus("COMPLETED")}
+              />
+              <MenuButton
+                disabled={pending}
+                icon={<span style={{ color: "#9F1F1F", fontWeight: 700 }}>✕</span>}
+                label="Marcar ausente"
+                onClick={() => setStatus("NO_SHOW")}
+              />
+            </>
+          )}
         </>
       )}
-      <Divider />
-      <MenuLink
-        href={`/agenda?new=1&patient=${patient.id}`}
-        icon={<IconPlus size={12} />}
-        label="Nuevo turno"
-      />
+      {patient.access === "full" ? (
+        <>
+          <Divider />
+          <MenuLink
+            href={`/agenda?new=1&patient=${patient.id}`}
+            icon={<IconPlus size={12} />}
+            label="Nuevo turno"
+          />
+        </>
+      ) : (
+        <div style={{ padding: "6px 12px 8px", fontSize: 11, color: "var(--navy-300)" }}>
+          Paciente de otro profesional: solo lectura.
+        </div>
+      )}
       {error && (
         <div
           style={{

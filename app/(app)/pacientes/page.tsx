@@ -112,7 +112,12 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           </h1>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <a href="/api/pacientes/export" target="_blank" rel="noopener noreferrer">
+          {/* En "Archivados" exporta los archivados (la ruta excluye por default). */}
+          <a
+            href={`/api/pacientes/export${filter === "archived" ? "?archived=only" : ""}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             <Button variant="ghost">Exportar CSV</Button>
           </a>
           <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />

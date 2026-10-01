@@ -10,6 +10,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IconFile, IconX } from "@/components/ui/icons";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   deletePatientFile,
   getDownloadUrl,
@@ -27,12 +28,25 @@ const FILE_CATEGORIES: { value: string; label: string }[] = [
   { value: "OTHER", label: "Otro" },
 ];
 
-export function ArchivosView({ patientId }: { patientId: string }) {
+export function ArchivosView({
+  patientId,
+  readOnly = false,
+}: {
+  patientId: string;
+  /**
+   * Acceso ≠ `full` = solo ver la lista: sin subir, borrar ni descargar (las
+   * actions de lib/files.ts ya lo rechazan en el server; esto evita ofrecer
+   * botones que fallan). Hoy el perfil solo se monta con acceso `full`, así
+   * que el default es editable, igual que `TurnosView`.
+   */
+  readOnly?: boolean;
+}) {
   const [files, setFiles] = useState<PatientFileRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
+  const confirm = useConfirm();
 
   // Sequence-guarded fetch: a rapid patientId switch can't have a stale
   // response from the previous patient overwrite the current one.
@@ -68,8 +82,15 @@ export function ArchivosView({ patientId }: { patientId: string }) {
     });
   };
 
-  const onDelete = (id: string) => {
-    if (!confirm("¿Eliminar este archivo?")) return;
+  // A2b-S-ui: `useConfirm` en vez del `window.confirm` nativo (AGENTS §5).
+  const onDelete = async (id: string) => {
+    const ok = await confirm({
+      title: "¿Eliminar este archivo?",
+      message: "Se borra de la historia clínica del paciente. Esta acción no se puede deshacer.",
+      confirmLabel: "Eliminar",
+      tone: "danger",
+    });
+    if (!ok) return;
     start(async () => {
       const r = await deletePatientFile(id);
       if (!r.ok) {
@@ -92,7 +113,8 @@ export function ArchivosView({ patientId }: { patientId: string }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 14 }}>
+    <div style={{ display: "grid", gridTemplateColumns: readOnly ? "1fr" : "280px 1fr", gap: 14 }}>
+      {!readOnly && (
       <Card glass style={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
           Subir archivo
@@ -173,6 +195,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
           </Button>
         </form>
       </Card>
+      )}
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
         <div
@@ -193,7 +216,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
           <span>Categoría</span>
           <span>Tamaño</span>
           <span>Subido</span>
-          <span style={{ textAlign: "right" }}>Acción</span>
+          <span style={{ textAlign: "right" }}>{readOnly ? "" : "Acción"}</span>
         </div>
         {loading ? (
           <div style={{ padding: 24, color: "var(--navy-300)", textAlign: "center", fontSize: 13 }}>
@@ -233,7 +256,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
                 {f.createdAt.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: "America/Argentina/Buenos_Aires" })}
               </span>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
-                {f.hasDownload && (
+                {!readOnly && f.hasDownload && (
                   <button
                     onClick={() => onDownload(f.id)}
                     style={{
@@ -250,6 +273,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
                     Descargar
                   </button>
                 )}
+                {!readOnly && (
                 <button
                   onClick={() => onDelete(f.id)}
                   style={{
@@ -265,6 +289,7 @@ export function ArchivosView({ patientId }: { patientId: string }) {
                 >
                   <IconX size={11} />
                 </button>
+                )}
               </div>
             </div>
           ))

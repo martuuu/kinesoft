@@ -10,7 +10,8 @@ import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatARS, parseARS } from "@/lib/format";
+import { MoneyInput } from "@/components/ui/money-input";
+import { formatARS } from "@/lib/format";
 import type { InsurerRow } from "@/lib/insurers-types";
 import {
   createInsurer,
@@ -113,14 +114,24 @@ function InsurerModal({ insurer, onClose }: { insurer?: InsurerRow; onClose: () 
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(insurer?.active ?? true);
+  // Montos controlados en centavos (MoneyInput, A2b-S-cfg). Antes eran
+  // `type=number step=50` + `parseARS`, con el error ×100 del punto decimal.
+  const [copagoCents, setCopagoCents] = useState<number | null>(insurer?.copagoCents ?? 0);
+  const [fixedFeeCents, setFixedFeeCents] = useState<number | null>(insurer?.fixedFeeCents ?? 0);
+  const [invalid, setInvalid] = useState({ copago: false, fixedFee: false });
+  const copagoChanged = !!insurer && (copagoCents ?? 0) !== insurer.copagoCents;
 
   const submit = (formData: FormData) => {
     setError(null);
+    if (invalid.copago || invalid.fixedFee) {
+      setError("Revisá los montos: hay uno que no es válido.");
+      return;
+    }
     start(async () => {
       const payload = {
         name: String(formData.get("name") ?? ""),
-        copagoCents: parseARS(String(formData.get("copago") ?? "")) ?? 0,
-        fixedFeeCents: parseARS(String(formData.get("fixedFee") ?? "")) ?? 0,
+        copagoCents: copagoCents ?? 0,
+        fixedFeeCents: fixedFeeCents ?? 0,
         active,
         notes: String(formData.get("notes") ?? ""),
       };
@@ -164,22 +175,22 @@ function InsurerModal({ insurer, onClose }: { insurer?: InsurerRow; onClose: () 
       <form action={submit} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre" name="name" required defaultValue={insurer?.name ?? ""} placeholder="OSDE, Swiss Medical…" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FormField
+          <MoneyInput
             label="Copago (paciente, ARS)"
-            name="copago"
-            type="number"
-            min={0}
-            step={50}
-            defaultValue={insurer ? insurer.copagoCents / 100 : 0}
-            hint="Lo que paga el paciente por sesión"
+            value={copagoCents}
+            onChange={setCopagoCents}
+            onInvalidChange={(v) => setInvalid((p) => ({ ...p, copago: v }))}
+            hint={
+              copagoChanged
+                ? "Afecta los turnos no cobrados sin copago propio."
+                : "Lo que paga el paciente por sesión"
+            }
           />
-          <FormField
+          <MoneyInput
             label="Monto fijo (prestadora, ARS)"
-            name="fixedFee"
-            type="number"
-            min={0}
-            step={50}
-            defaultValue={insurer ? insurer.fixedFeeCents / 100 : 0}
+            value={fixedFeeCents}
+            onChange={setFixedFeeCents}
+            onInvalidChange={(v) => setInvalid((p) => ({ ...p, fixedFee: v }))}
             hint="Lo que abona la prestadora al kine"
           />
         </div>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { verifyWebhookSignature, consumeWebhook } from "@/lib/mercadopago";
 import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
 
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
  *     MP's API on every replayed call).
  */
 export async function POST(req: Request) {
-  const ip = headers().get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = clientIp(headers());
   const rl = await rateLimit(`mp:webhook:${ip}`, { limit: 60, windowMs: 60_000 });
   if (!rl.ok) {
     return new NextResponse("rate limited", {

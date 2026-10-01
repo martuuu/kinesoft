@@ -9,14 +9,15 @@ diagnosis guide → local AI).
 
 | Layer | Choice |
 | --- | --- |
-| Framework | Next.js 14 (App Router, RSC + server actions) |
+| Framework | Next.js 14.2.35 (App Router, RSC + server actions) — patched from 14.2.18 in A3b (CVE-2025-29927 and later) |
 | Language | TypeScript (`strict`, **not** `noUnusedLocals`) |
 | ORM / DB | Prisma 5.22 · PostgreSQL |
 | Hosting | Vercel (region `gru1`) · Supabase (Postgres + Auth + Storage) |
 | Auth | Supabase Auth (email/password + Google OAuth) |
 | Payments | Mercado Pago (checkout + webhook) |
 | Styling | Tailwind + CSS variables · framer-motion |
-| Rate limit | Upstash Redis (prod) / in-memory (dev) — `lib/rate-limit.ts` |
+| Rate limit | Upstash Redis (prod) / in-memory (dev and fallback) — `lib/rate-limit.ts` |
+| Errors | Sentry `@sentry/nextjs` 11.1.0 — server/edge only, no-op without `SENTRY_DSN` (ADR-002) |
 
 ## Multi-tenancy (the spine)
 
@@ -64,6 +65,10 @@ or an explicit `PatientShare` → `full` access; everyone else → `basic` (name
 DNI, next appointment only; PHI nulled at the projection, not just hidden in
 UI). `bulkPatientAccess()` resolves N patients in one share lookup.
 Tenant-wide `sharedPatientView` flag grants everyone full access.
+**Basic = view only** (owner decision, 30-sep-2026): every write on a patient
+(bookings, coverage, sessions, files, clinical history, archive) requires
+`full`, enforced server-side; guest bookings stay operable. Matrix in
+SECURITY.md §1.1.
 
 ## Server-side conventions
 
@@ -73,10 +78,36 @@ Tenant-wide `sharedPatientView` flag grants everyone full access.
   without dragging the server module.
 - **`server-only` helpers** (`lib/billing-internal.ts`,
   `lib/insurers-internal.ts`, `lib/public-booking-internal.ts`,
-  `lib/notifications-internal.ts`): internal functions that must NOT be
-  exposed as RPC. Marked with `import "server-only"`.
+  `lib/notifications-internal.ts`, `lib/bookings-export-internal.ts`,
+  `lib/patients-export-internal.ts`): internal functions that must NOT be
+  exposed as RPC. Marked with `import "server-only"`. The two exports moved
+  here in A2 because, as `"use server"` exports, they were callable as RPC and
+  skipped their route's rate-limit and range cap; the route is now the only
+  door.
 - **Audit**: every PHI read/write writes an `AuditEvent` (`lib/audit.ts` +
   the read-audit extension). File-download URL minting is audited too.
+
+## Modules added in Bloque A2/A3 (30-sep-2026)
+
+Pure logic lives outside `"use server"` files so it can be unit-tested
+(AGENTS.md §3). The ones other code must reuse instead of re-implementing:
+
+| Module | What it owns |
+| --- | --- |
+| `lib/booking-capacity.ts` | **Capacity contract.** `isHoldingCapacity(b, now)`: every non-cancelled booking holds its slot except a public reservation that is PENDING + UNPAID/FAILED and older than 30 min (`PENDING_PUBLIC_HOLD_MS`). `isPublicReservation({idempotencyKey, patientId})` decides "public" **by the key** (`pub:<tenant>:<uuid>` or the pre-A2 `<tenant>:<prof>:<ISO>:<patientId>`); when in doubt it holds. Also `overlapBlocks`, `patientDayStatus`. Pure, `now` injected. Used by create/update/batch/`suggestNextFreeSlot`, the public booking and the MP webhook. AUDIT §5.18 |
+| `lib/public-booking-slots.ts` | `buildPublicSlots` / `checkPublicSlot`: the public grid (hours, Sunday closed, 1 h lead time, 45-min step) — the same check on list and on submit |
+| `lib/bookings-export-internal.ts` · `lib/patients-export-internal.ts` | ICS and CSV exports (`server-only`, basic rows masked, CSV audited) |
+| `lib/csv.ts` | `csvCell`/`csvRow` + `neutralizeFormula` (`= + - @`, TAB/CR) against CSV injection |
+| `lib/client-ip.ts` | `clientIp(headers)`: the single place that reads the client IP (replaced 8 copies) |
+| `lib/safe-next.ts` | `safeNext` / `safeNextFromUrl` (own paths only) + `isAllowedOrigin` for auth POSTs. Pure, edge-safe |
+| `lib/recovery-cookie.ts` | signed `ks_recovery` cookie (`<userId>.<exp>.<hmac>`, 15 min) set by `/auth/confirm` and required by the reset |
+| `lib/supabase/cookie-options.ts` | Supabase cookie flags (httpOnly, secure in prod, lax) |
+| `lib/redact.ts` | PII/secret redaction by key and by value; used by `lib/logger.ts` and Sentry's `beforeSend*` |
+| `lib/observability-config.ts` | Sentry options (env, sample rate, redaction hooks); `null` without DSN |
+| `lib/agenda-filters.ts` | agenda visibility toggles (cancelled / no-show), hidden counts, localStorage key per user, "Pendiente de pago · vencida" state |
+| `lib/form-dirty.ts` + `components/ui/use-form-dirty.ts` | dirty-check of uncontrolled forms (snapshot vs current) for the Drawer guard |
+| `components/ui/money-input.tsx` + `parseMoneyInput`/`formatMoneyInput` (`lib/format.ts`) | **the** control for typed ARS amounts: text + `inputMode="decimal"`, integer cents, string math (no float), invalid text blocks submit. Replaced every `type=number` money input |
+| `Drawer` `dirty` / `dirtyMessage` (`components/ui/drawer.tsx`) | Esc / backdrop / X ask for confirmation when the form is dirty; `ConfirmDialog` stops Esc in the capture phase so it doesn't close the drawer below |
 
 ## Timezone (a core invariant)
 
@@ -252,8 +283,10 @@ platform tier**:
   that, for the same patient, in-plan vs out-of-plan bookings are
   distinguishable. Today the three plan entry points (`createProgram`,
   `assignDiagnosisAndCreateProgram`, `applyPlanTemplate`) create `Session`s at
-  midnight with no `Booking`; the only bridge is a ±2h heuristic in
-  `rescheduleSession` that moves unrelated bookings (audit 2026-09-23).
+  midnight with no `Booking`. The only bridge was a ±2h heuristic in
+  `rescheduleSession` that moved unrelated bookings (audit 2026-09-23); A2a
+  removed it (30-sep-2026): rescheduling moves only the session and reports a
+  same-day booking with a link to the agenda.
 - **Decision.** Add nullable `Booking.programId` and `Booking.sessionId`
   (`ON DELETE RESTRICT`), with a partial unique index "one active booking per
   session" and CHECKs for coherence; `TreatmentProgram` gains schedule, price,
@@ -265,7 +298,22 @@ platform tier**:
   precedence (`lib/copago.ts`) is untouched — a plan price is stamped on
   `Booking.copagoCents` with `pricedByPlan`. Pending the owner's approval (D25).
 
-## Cache & cookies (what is implemented — 2026-09-29)
+### ADR-002 — Sentry on server/edge only, no client SDK (status: ACCEPTED, 30-sep-2026)
+
+- **Context.** A3b wires `@sentry/nextjs`. The public booking route
+  `/c/[slug]/booking` sits at 149.7 kB First Load (budget 150 kB) and `/agenda`
+  at 184 kB (already over its 180 kB budget before A3); the client SDK would add
+  tens of kB to every route.
+- **Decision.** Only `instrumentation.ts` + `sentry.server.config.ts` /
+  `sentry.edge.config.ts`. No `sentry.client.config`. Without `SENTRY_DSN`
+  nothing is loaded (`next.config.mjs` is not wrapped, `register()` returns).
+  All events pass through `redact()`, `sendDefaultPii: false`.
+- **Consequences.** Browser errors are not captured (the boundaries still show
+  the Spanish error screen); CSP reports do reach Sentry (they are sent by the
+  browser to `report-uri`, no SDK needed). Revisit in C1 together with the
+  bundle work on `/agenda`.
+
+## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the
 `tenantId`** (no cross-tenant leakage by key), tags from `lib/cache-tags.ts`:
@@ -280,18 +328,32 @@ Agenda, patients, clinical history and sessions are **not** cached (correct).
 (`force-dynamic`/cookies) → `Cache-Control: private, no-store`: the CDN never
 stores PHI. Exports and `/api/booking/[id]/status` set `no-store` explicitly.
 
-**Cookies** — `sb-<ref>-auth-token` (Supabase session, chunked) and the PKCE
-code-verifier, with `@supabase/ssr` defaults (httpOnly **false**, no `Secure`,
-400 days); `kine_tenant` is read and validated against memberships but no code
-writes it (no tenant switcher yet). No tracking/analytics cookies → no banner
-needed (list them in the privacy policy). Browser storage: only
-`localStorage['kinesoft:tweaks']`.
+**Session refresh (A3b).** `middleware.ts` refreshes the Supabase session on
+every request (`createServerClient` with `getAll`/`setAll`, then
+`getSession()` — no authorisation decision is taken there). Refreshed cookies
+are written to the request (so the RSC render sees them) and to the response;
+if a `Set-Cookie` was written the response is marked `private, no-store`.
+`/_next` and `/api/webhooks` bypass it; the `x-tenant-*` strip and
+`x-request-id` run on every path. Before A3b the middleware didn't refresh and
+RSCs dropped the refreshed cookie, so long sessions logged out.
 
-**Known gaps** (Bloque A3 / C1): the middleware does not refresh the Supabase
-session and RSCs drop the refreshed cookie; cookie hardening + HSTS; the
-`practitioners` tag is never invalidated; public booking / patient creation /
-MP webhook don't invalidate dashboard caches; Dates come back as strings on
-cache hits; dashboard PHI lives in the Vercel Data Cache (owner decision).
+**Cookies** — `sb-<ref>-auth-token` (Supabase session, chunked) and the PKCE
+code-verifier, now **httpOnly**, `Secure` in production and `SameSite=Lax`
+(`lib/supabase/cookie-options.ts`; the `@supabase/ssr` default was httpOnly
+false). `ks_recovery` (httpOnly, 15 min, HMAC-signed) only during a password
+recovery. `kine_tenant` is read and validated against memberships but no code
+writes it (no tenant switcher yet). No tracking/analytics cookies → no banner
+needed (list them in the privacy policy). Browser storage:
+`localStorage['kinesoft:tweaks']` and `kinesoft:agenda-visibility:<userId>`
+(agenda toggles).
+
+**Closed in A2/A3:** the `practitioners` tag is invalidated on accept / remove /
+role change; the dashboard resolves patient access **outside** the
+`unstable_cache` and re-hydrates `Date`s after a cache hit.
+
+**Known gaps** (C1): public booking / patient creation / MP webhook don't
+invalidate dashboard caches; dashboard PHI lives in the Vercel Data Cache
+(owner decision); CSP still Report-Only.
 
 ## Build / verify
 
@@ -301,4 +363,7 @@ cache hits; dashboard PHI lives in the Vercel Data Cache (owner decision).
   `VERCEL_ENV=production` (A0b), then generate + build.
 - Verify: `npx tsc --noEmit` + `npx next build` (clear `.next` on stale
   "Cannot find module for page" cache errors). `scripts/` is excluded from tsc.
+  Locally, `.env.local` defines `NODE_ENV`, which breaks the prerender: build
+  with `npx dotenv -e .env.local -v NODE_ENV=production -- npx next build`
+  (TESTING.md).
 - Migrations + env split: see [DEPLOYMENT.md](DEPLOYMENT.md).

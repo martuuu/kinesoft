@@ -6,6 +6,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { IconCheck } from "@/components/ui/icons";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { PAYMENT_HOLD_LABEL, paymentHoldState, type PaymentHoldState } from "@/lib/agenda-filters";
 import { fmtHour, fmtMoney, osLabel, statusPill, type BookingDTO } from "../agenda-utils";
 
 /** Shared column track for the Lista view header + rows (kept in one
@@ -121,7 +122,7 @@ export function ListView({
               {b.durationMin} min
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <StatusTag s={b.status} />
+              <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
             </div>
           </button>
         );
@@ -130,7 +131,32 @@ export function ListView({
   );
 }
 
-export function StatusTag({ s }: { s: BookingStatus }) {
+/**
+ * `hold`: reserva pública impaga (A2b-S-ui). Mientras sostiene el cupo se lee
+ * "Pendiente de pago"; pasados los 30 min, "Pendiente de pago · vencida" en
+ * gris punteado (ya no ocupa el horario: se puede dar a otro paciente).
+ */
+export function StatusTag({ s, hold = null }: { s: BookingStatus; hold?: PaymentHoldState }) {
+  if (s === "PENDING" && hold) {
+    return hold === "vencida" ? (
+      <span
+        title="La reserva online no se pagó en 30 minutos: ya no retiene el horario."
+        style={{
+          ...statusPill("rgba(15,30,51,0.04)", "var(--navy-500)"),
+          border: "1px dashed rgba(15,30,51,0.3)",
+        }}
+      >
+        {PAYMENT_HOLD_LABEL.vencida}
+      </span>
+    ) : (
+      <span
+        title="Reserva online esperando el pago (retiene el horario 30 minutos)."
+        style={statusPill("rgba(255,176,32,0.18)", "#9A5B00")}
+      >
+        {PAYMENT_HOLD_LABEL.pendiente}
+      </span>
+    );
+  }
   switch (s) {
     case "CONFIRMED":
       return <Tag tone="sky">Confirmado</Tag>;

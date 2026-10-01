@@ -1,4 +1,4 @@
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 // Pre-auth invite landing: the visitor is NOT yet a member of the tenant, so
 // there's no Actor GUC to read the (RLS-governed) Invitation by token →
@@ -11,15 +11,22 @@ import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { hashInviteToken } from "@/lib/invitations-tokens";
-import { acceptInvite } from "./accept-action";
+import { AcceptInviteButton } from "./accept-button";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Aceptar invitación · KineSoft" };
 
 /**
  * Invite landing page. Three scenarios:
- *   1. Visitor not signed in → show CTA to sign up / sign in. The
- *      signup flow needs to round-trip back here once authenticated.
+ *   1. Visitor not signed in → two CTAs (A3b-S-auth):
+ *        - "Crear mi cuenta para unirme" → `/signup?invite=<token crudo>`.
+ *          Contrato con el signup de unión (A3c-S-signup): `invite` es el
+ *          token CRUDO de la URL; el signup lo busca por
+ *          `hashInviteToken(invite)`, precarga y fija el email de la
+ *          invitación, NO crea tenant, y manda el mail de verificación con
+ *          `emailRedirectTo = <APP_URL>/invite/<token>` (destino final; la plantilla pasa por /auth/confirm); al
+ *          verificar vuelve acá y cae en el escenario 3.
+ *        - "Ya tengo cuenta" → `/login?next=/invite/<token>`.
  *   2. Visitor signed in with a DIFFERENT email than the invitation →
  *      show a notice asking them to sign out and use the invited email.
  *   3. Visitor signed in with the matching email → button "Aceptar
@@ -88,18 +95,25 @@ export default async function InviteAcceptPage({
           </Notice>
         ) : expired ? (
           <Notice tone="error">
-            La invitación venció el {invite.expiresAt.toLocaleDateString("es-AR")}. Pedile al
+            La invitación venció el {invite.expiresAt.toLocaleDateString("es-AR", {
+              timeZone: "America/Argentina/Buenos_Aires",
+            })}. Pedile al
             administrador del consultorio que te envíe una nueva.
           </Notice>
         ) : !user ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <Notice tone="info">
-              Para aceptar la invitación, ingresá o creá una cuenta con el email{" "}
+              Para aceptar la invitación, creá tu cuenta o ingresá con el email{" "}
               <strong>{invite.email}</strong>.
             </Notice>
-            <Link href={`/login?next=/invite/${params.token}`}>
+            <Link href={`/signup?invite=${encodeURIComponent(params.token)}`}>
               <Button variant="primary" style={{ width: "100%", justifyContent: "center" }}>
-                Iniciar sesión / Registrarse
+                Crear mi cuenta para unirme
+              </Button>
+            </Link>
+            <Link href={`/login?next=${encodeURIComponent(`/invite/${params.token}`)}`}>
+              <Button variant="ghost" style={{ width: "100%", justifyContent: "center" }}>
+                Ya tengo cuenta: iniciar sesión
               </Button>
             </Link>
           </div>
@@ -108,7 +122,10 @@ export default async function InviteAcceptPage({
             Estás logueado como <strong>{userEmail}</strong>, pero esta invitación es para{" "}
             <strong>{invite.email}</strong>. Cerrá sesión y volvé con el email correcto.
             <div style={{ marginTop: 12 }}>
-              <form action="/api/auth/sign-out" method="post">
+              <form
+                action={`/api/auth/sign-out?next=${encodeURIComponent(`/invite/${params.token}`)}`}
+                method="post"
+              >
                 <Button type="submit" variant="ghost" style={{ width: "100%", justifyContent: "center" }}>
                   Cerrar sesión
                 </Button>
@@ -116,21 +133,12 @@ export default async function InviteAcceptPage({
             </div>
           </Notice>
         ) : (
-          <form
-            action={async () => {
-              "use server";
-              const r = await acceptInvite(params.token);
-              if (r.ok) redirect("/dashboard");
-            }}
-            style={{ display: "flex", flexDirection: "column", gap: 10 }}
-          >
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Notice tone="success">
               ¡Listo! Confirmás que vas a unirte como <strong>{invite.role}</strong>.
             </Notice>
-            <Button type="submit" variant="primary" style={{ width: "100%", justifyContent: "center" }}>
-              Aceptar invitación
-            </Button>
-          </form>
+            <AcceptInviteButton token={params.token} />
+          </div>
         )}
 
         <p

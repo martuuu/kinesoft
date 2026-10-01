@@ -8,18 +8,22 @@ import { AuthShell } from "@/components/screens/auth-shell";
 import { updatePasswordWithRecoverySession } from "@/lib/auth";
 
 /**
- * Landed-on after the user clicks the recovery link from their email.
- * Supabase has already set a `recovery`-type session cookie via the
- * /auth/callback route. We just collect the new password and submit.
+ * /reset (A3c-S-signup). `mode` lo decide el server (ver app/(auth)/reset):
+ *   - "recovery": llegó por el link del mail (cookie `ks_recovery`) → solo la
+ *     clave nueva;
+ *   - "change": sesión común → además la contraseña actual;
+ *   - "expired": sin sesión → link vencido, pedir otro.
  */
-export function ResetScreen() {
+export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
 
   const onSubmit = (formData: FormData) => {
     setError(null);
+    setFieldErrors({});
     const password = String(formData.get("password") ?? "");
     const confirm = String(formData.get("confirm") ?? "");
     if (password !== confirm) {
@@ -27,9 +31,13 @@ export function ResetScreen() {
       return;
     }
     start(async () => {
-      const r = await updatePasswordWithRecoverySession({ password });
+      const r = await updatePasswordWithRecoverySession({
+        password,
+        currentPassword: mode === "change" ? String(formData.get("currentPassword") ?? "") : "",
+      });
       if (!r.ok) {
         setError(r.error);
+        setFieldErrors(r.fieldErrors ?? {});
         return;
       }
       setDone(true);
@@ -61,7 +69,19 @@ export function ResetScreen() {
         Nueva contraseña
       </h2>
 
-      {done ? (
+      {mode === "expired" ? (
+        <div style={{ display: "grid", gap: 14 }}>
+          <div
+            role="alert"
+            style={{ padding: 14, borderRadius: 12, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 13, lineHeight: 1.5 }}
+          >
+            El link expiró o ya fue usado. Pedí uno nuevo y abrilo dentro de los 15 minutos.
+          </div>
+          <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+            Pedir un link nuevo
+          </Link>
+        </div>
+      ) : done ? (
         <div
           role="status"
           style={{
@@ -77,6 +97,24 @@ export function ResetScreen() {
         </div>
       ) : (
         <form action={onSubmit} style={{ display: "grid", gap: 14 }}>
+          {mode === "change" && (
+            <label style={{ display: "block" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>
+                Contraseña actual
+              </span>
+              <input
+                type="password"
+                name="currentPassword"
+                required
+                placeholder="La que usás hoy"
+                autoComplete="current-password"
+                style={inputStyle}
+              />
+              <span style={{ fontSize: 11, color: fieldErrors.currentPassword ? "#9F1F1F" : "var(--navy-300)", marginTop: 4, display: "block" }}>
+                {fieldErrors.currentPassword?.[0] ?? "¿No la recordás? Pedí un link desde “Olvidé mi contraseña”."}
+              </span>
+            </label>
+          )}
           <label style={{ display: "block" }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>
               Nueva contraseña

@@ -10,6 +10,9 @@
  *   - `consumeWebhook` is idempotent: if the linked `Payment` row already
  *     stores the same `externalId` AND status, side effects (notifications,
  *     transitions) are skipped.
+ *   - A2b-S-pub: never downgrades a PAID (only → REFUNDED), keeps every
+ *     event in `rawPayload.attempts`, never reactivates a CANCELLED /
+ *     NO_SHOW / COMPLETED turno, and serializes concurrent webhooks.
  *   - The MP `transaction_amount` is compared against the linked
  *     `Service.priceCents` before flipping the booking to PAID — an
  *     adversary cannot pay $1 and have the system mark a $50 session
@@ -26,6 +29,8 @@ import { prismaService as prisma } from "@/lib/db";
 import { notifyTenantOwners } from "@/lib/notifications-internal";
 import { NotificationKind } from "@prisma/client";
 import { logger } from "@/lib/logger";
+import { formatARS } from "@/lib/format";
+import { isHoldingCapacity } from "@/lib/booking-capacity";
 
 function client() {
   if (!env.MP_ACCESS_TOKEN) throw new Error("MP_ACCESS_TOKEN not configured");
@@ -162,6 +167,83 @@ function redactPayload(detail: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
+type PayStatus = "UNPAID" | "AUTHORIZED" | "PAID" | "REFUNDED" | "FAILED";
+
+/**
+ * Transición del estado de cobro ante un evento del webhook (A2b-S-pub). Pura.
+ *
+ * MP manda eventos fuera de orden y de varios intentos del mismo checkout
+ * (tarjeta rechazada → otra aprobada; un `pending` de Rapipago que llega
+ * después del `approved`). Antes el último evento ganaba siempre: un
+ * `rejected` tardío bajaba un turno PAID a FAILED y la agenda lo mostraba
+ * impago con la plata ya cobrada.
+ *   - PAID solo sale hacia REFUNDED (o se queda PAID);
+ *   - REFUNDED no vuelve a FAILED/AUTHORIZED;
+ *   - todo lo demás toma el estado entrante.
+ */
+export function nextPaymentStatus(current: PayStatus | null, incoming: PayStatus): PayStatus {
+  if (current === "PAID" && incoming !== "PAID" && incoming !== "REFUNDED") return "PAID";
+  if (current === "REFUNDED" && (incoming === "FAILED" || incoming === "AUTHORIZED")) return "REFUNDED";
+  return incoming;
+}
+
+/** Tope del historial de intentos guardado en `Payment.rawPayload.attempts`. */
+const MAX_ATTEMPTS_KEPT = 20;
+
+type Attempt = Record<string, unknown> & { receivedAt: string; applied: boolean };
+
+function priorAttempts(raw: Prisma.JsonValue | null | undefined): Attempt[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const a = (raw as Record<string, unknown>).attempts;
+  return Array.isArray(a) ? (a as Attempt[]) : [];
+}
+
+/** Top-level de `rawPayload` sin el historial (el último detalle APLICADO). */
+function priorTopLevel(raw: Prisma.JsonValue | null | undefined): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const { attempts: _drop, ...rest } = raw as Record<string, unknown>;
+  return rest;
+}
+
+type WebhookOutcome =
+  | { kind: "replay"; status: PayStatus }
+  | {
+      kind: "done";
+      status: PayStatus;
+      incoming: PayStatus;
+      applied: boolean;
+      amountMismatch: boolean;
+      duplicatePaid: boolean;
+      bookingStatus: string;
+      holdExpired: boolean;
+    };
+
+function isP2002(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
+}
+
+/**
+ * Procesa una notificación de pago de MP.
+ *
+ * Contratos que se PRESERVAN (AUDIT §5.4): la firma HMAC + ventana anti-replay
+ * las valida la ruta con `verifyWebhookSignature` antes de llegar acá; el
+ * consumo es idempotente por `(externalId, status)` (un reenvío no re-dispara
+ * efectos ni notificaciones); `rawPayload` guarda solo la allow-list de
+ * `redactPayload`; el monto se valida contra el anclado en el checkout.
+ *
+ * A2b-S-pub:
+ *   - nunca baja un PAID (ver `nextPaymentStatus`); un segundo pago aprobado
+ *     de un turno ya pagado no pisa el primero: se registra y se avisa;
+ *   - cada evento queda en `rawPayload.attempts` (redactado, últimos 20),
+ *     aplicado o no, como historial para soporte;
+ *   - un turno CANCELLED / NO_SHOW / COMPLETED no se reactiva: se registra el
+ *     pago y se notifica para que el consultorio revise el reembolso. Solo un
+ *     PENDING pasa a CONFIRMED;
+ *   - todo corre en una tx con `FOR UPDATE` sobre el turno (dos webhooks del
+ *     mismo turno se serializan) y el chequeo de idempotencia va ADENTRO;
+ *     un P2002 del create concurrente de `Payment` se reintenta (la segunda
+ *     vuelta ve la fila y actualiza).
+ */
 export async function consumeWebhook(paymentId: string) {
   const pay = new MpPayment(client());
   const detail = await pay.get({ id: paymentId });
@@ -174,7 +256,6 @@ export async function consumeWebhook(paymentId: string) {
     include: {
       service: { select: { name: true, priceCents: true } },
       patient: { select: { firstName: true, lastName: true } },
-      payment: { select: { externalId: true, status: true, amountCents: true, expectedAmountCents: true } },
     },
   });
   if (!booking) {
@@ -190,102 +271,168 @@ export async function consumeWebhook(paymentId: string) {
     refunded: "REFUNDED",
     cancelled: "FAILED",
   } as const;
-  const mapped = statusMap[detail.status as keyof typeof statusMap] ?? "FAILED";
-
-  // Amount verification — refuse to mark a booking PAID unless the captured
-  // amount matches what the checkout preference was created for (anchored on
-  // `Payment.expectedAmountCents`), NOT the live `Service.priceCents`, which
-  // may have changed between checkout-start and settlement. Legacy rows
-  // without an anchored amount fall back to the service price. 5-cent
-  // rounding tolerance.
-  const capturedCents = Math.round((detail.transaction_amount ?? 0) * 100);
-  const expectedCents = booking.payment?.expectedAmountCents ?? booking.service.priceCents;
-  if (mapped === "PAID" && Math.abs(capturedCents - expectedCents) > 5) {
-    logger.warn("mp.webhook.amount_mismatch", {
-      bookingId,
-      expected: expectedCents,
-      captured: capturedCents,
-    });
-    // Persist a FAILED payment so the mismatch leaves an auditable trace
-    // instead of vanishing (the booking stays unpaid).
-    await prisma.payment.upsert({
-      where: { bookingId: String(bookingId) },
-      create: {
-        bookingId: String(bookingId),
-        provider: "mercadopago",
-        externalId: String(detail.id),
-        status: "FAILED",
-        expectedAmountCents: expectedCents,
-        amountCents: capturedCents,
-        currency: detail.currency_id ?? "ARS",
-        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
-      },
-      update: {
-        externalId: String(detail.id),
-        status: "FAILED",
-        amountCents: capturedCents,
-        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
-      },
-    });
-    return { ok: false, reason: "amount_mismatch" };
-  }
-
+  const mapped: PayStatus = statusMap[detail.status as keyof typeof statusMap] ?? "FAILED";
   const externalId = String(detail.id);
-  const alreadyProcessed =
-    booking.payment?.externalId === externalId &&
-    booking.payment?.status === mapped;
+  const capturedCents = Math.round((detail.transaction_amount ?? 0) * 100);
+  const redacted = redactPayload(detail as unknown as Record<string, unknown>);
+  const id = String(bookingId);
 
-  if (alreadyProcessed) {
-    // Idempotent replay — short-circuit without re-firing notifications.
-    return { ok: true, bookingId, status: mapped, replay: true };
+  const apply = () =>
+    prisma.$transaction(async (tx): Promise<WebhookOutcome> => {
+      // Serializa webhooks concurrentes del mismo turno.
+      await tx.$queryRaw`SELECT "id" FROM "Booking" WHERE "id" = ${id} FOR UPDATE`;
+      const cur = await tx.payment.findUnique({
+        where: { bookingId: id },
+        select: { externalId: true, status: true, expectedAmountCents: true, rawPayload: true },
+      });
+      const bk = await tx.booking.findUniqueOrThrow({
+        where: { id },
+        select: { status: true, paymentStatus: true, createdAt: true, patientId: true, idempotencyKey: true },
+      });
+      const attempts = priorAttempts(cur?.rawPayload);
+
+      // Idempotencia por (externalId, status), dentro de la tx: el mismo
+      // evento reenviado no escribe ni notifica. También cuenta un evento ya
+      // registrado en el historial sin aplicarse (p. ej. un rejected tardío).
+      const seen =
+        (cur?.externalId === externalId && cur?.status === mapped) ||
+        attempts.some((a) => String(a.id) === externalId && a.status === detail.status);
+      if (seen) return { kind: "replay", status: (cur?.status ?? mapped) as PayStatus };
+
+      // Amount verification — refuse to mark a booking PAID unless the captured
+      // amount matches what the checkout preference was created for (anchored on
+      // `Payment.expectedAmountCents`), NOT the live `Service.priceCents`, which
+      // may have changed between checkout-start and settlement. Legacy rows
+      // without an anchored amount fall back to the service price. 5-cent
+      // rounding tolerance. A mismatch is recorded as FAILED (auditable trace).
+      const expectedCents = cur?.expectedAmountCents ?? booking.service.priceCents;
+      const amountMismatch = mapped === "PAID" && Math.abs(capturedCents - expectedCents) > 5;
+      const incoming: PayStatus = amountMismatch ? "FAILED" : mapped;
+      if (amountMismatch) {
+        logger.warn("mp.webhook.amount_mismatch", {
+          bookingId: id,
+          expected: expectedCents,
+          captured: capturedCents,
+        });
+      }
+
+      // "Ya pagado" mira las dos puntas: el Payment de MP y el cobro a mano
+      // que el kine marca en la agenda (Booking.paymentStatus).
+      const current: PayStatus | null =
+        cur?.status === "PAID" || bk.paymentStatus === "PAID"
+          ? "PAID"
+          : cur?.status === "REFUNDED" || bk.paymentStatus === "REFUNDED"
+            ? "REFUNDED"
+            : ((cur?.status as PayStatus | undefined) ?? null);
+      const next = nextPaymentStatus(current, incoming);
+      const duplicatePaid = incoming === "PAID" && current === "PAID" && cur?.externalId !== externalId;
+      // Otro pago de MP ya liquidó este turno: no se pisa su externalId/monto.
+      const keepsOtherMpPayment =
+        cur?.status === "PAID" && !!cur.externalId && cur.externalId !== externalId;
+      const applied = next === incoming && !keepsOtherMpPayment;
+
+      const history: Attempt[] = [
+        ...attempts,
+        { ...redacted, receivedAt: new Date().toISOString(), applied },
+      ].slice(-MAX_ATTEMPTS_KEPT);
+      const rawPayload = {
+        ...(applied ? redacted : priorTopLevel(cur?.rawPayload)),
+        attempts: history,
+      } as Prisma.InputJsonValue;
+
+      if (!cur) {
+        await tx.payment.create({
+          data: {
+            bookingId: id,
+            provider: "mercadopago",
+            externalId: applied ? externalId : null,
+            status: applied ? next : "UNPAID",
+            expectedAmountCents: expectedCents,
+            amountCents: applied ? capturedCents : 0,
+            currency: detail.currency_id ?? "ARS",
+            rawPayload,
+          },
+        });
+      } else if (applied) {
+        await tx.payment.update({
+          where: { bookingId: id },
+          data: { externalId, status: next, amountCents: capturedCents, rawPayload },
+        });
+      } else {
+        await tx.payment.update({ where: { bookingId: id }, data: { rawPayload } });
+      }
+
+      if (applied && next !== bk.paymentStatus) {
+        await tx.booking.update({
+          where: { id },
+          data: {
+            paymentStatus: next,
+            // Solo un PENDING se confirma al pagarse. Un turno CANCELLED /
+            // NO_SHOW / COMPLETED no se reactiva (antes volvía a CONFIRMED y
+            // ocupaba un cupo que la agenda ya había liberado).
+            status: next === "PAID" && bk.status === "PENDING" ? "CONFIRMED" : undefined,
+          },
+        });
+      }
+
+      return {
+        kind: "done",
+        status: next,
+        incoming,
+        applied,
+        amountMismatch,
+        duplicatePaid,
+        bookingStatus: bk.status,
+        holdExpired: bk.status === "PENDING" && !isHoldingCapacity(bk, new Date()),
+      };
+    });
+
+  let outcome: WebhookOutcome;
+  try {
+    outcome = await apply();
+  } catch (e) {
+    if (!isP2002(e)) throw e;
+    // Dos webhooks crearon el Payment a la vez: la segunda vuelta lo ve y actualiza.
+    outcome = await apply();
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.payment.upsert({
-      where: { bookingId: String(bookingId) },
-      create: {
-        bookingId: String(bookingId),
-        provider: "mercadopago",
-        externalId,
-        status: mapped,
-        amountCents: capturedCents,
-        currency: detail.currency_id ?? "ARS",
-        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
-      },
-      update: {
-        externalId,
-        status: mapped,
-        amountCents: capturedCents,
-        rawPayload: redactPayload(detail as unknown as Record<string, unknown>) as Prisma.InputJsonValue,
-      },
-    });
-    await tx.booking.update({
-      where: { id: String(bookingId) },
-      data: {
-        paymentStatus: mapped,
-        status: mapped === "PAID" ? "CONFIRMED" : undefined,
-      },
-    });
-  });
+  if (outcome.kind === "replay") {
+    // Idempotent replay — short-circuit without re-firing notifications.
+    return { ok: true, bookingId, status: outcome.status, replay: true };
+  }
+  if (outcome.amountMismatch) return { ok: false, reason: "amount_mismatch" };
 
-  if (mapped === "PAID") {
-    const amountArs = new Intl.NumberFormat("es-AR", {
-      style: "currency",
-      currency: "ARS",
-      maximumFractionDigits: 0,
-    }).format(capturedCents / 100);
+  if (outcome.incoming === "PAID") {
+    const amount = formatARS(capturedCents);
     const who = booking.patient
       ? `${booking.patient.firstName} ${booking.patient.lastName}`
       : booking.guestName ?? "Reserva externa";
+    const inactiveLabel: Record<string, string> = {
+      CANCELLED: "cancelado",
+      NO_SHOW: "con ausencia",
+      COMPLETED: "ya atendido",
+    };
+    let title = `Pago recibido · ${amount}`;
+    let body = `${booking.service.name} · ${who}`;
+    if (outcome.duplicatePaid) {
+      title = `Pago duplicado · ${amount}`;
+      body = `${booking.service.name} · ${who}. El turno ya estaba pagado: revisá el reembolso.`;
+    } else if (inactiveLabel[outcome.bookingStatus]) {
+      title = `Pago de un turno ${inactiveLabel[outcome.bookingStatus]} · ${amount}`;
+      body = `${booking.service.name} · ${who}. El turno no se reactivó: revisá si corresponde reembolsar.`;
+    } else if (outcome.holdExpired) {
+      title = `Pago recibido (reserva vencida) · ${amount}`;
+      body = `${booking.service.name} · ${who}. Pagó pasados los 30 min de la reserva: revisá que el horario siga libre.`;
+    }
     await notifyTenantOwners({
       tenantId: booking.tenantId,
       kind: NotificationKind.PAYMENT_RECEIVED,
-      title: `Pago recibido · ${amountArs}`,
-      body: `${booking.service.name} · ${who}`,
+      title,
+      body,
       link: `/pacientes/${booking.patientId ?? ""}`,
       alsoPractitionerId: booking.practitionerId,
     });
   }
 
-  return { ok: true, bookingId, status: mapped };
+  return { ok: true, bookingId, status: outcome.status, applied: outcome.applied };
 }

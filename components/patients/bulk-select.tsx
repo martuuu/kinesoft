@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import { bulkArchivePatients } from "@/lib/patients";
 
 /**
@@ -59,6 +60,7 @@ export function BulkActionBar({ archivedView = false }: { archivedView?: boolean
   const router = useRouter();
   const ctx = useContext(BulkCtx);
   const [pending, start] = useTransition();
+  const toast = useToast();
   if (!ctx) return null;
   const ids = Array.from(ctx.selected);
   if (ids.length === 0) return null;
@@ -66,10 +68,15 @@ export function BulkActionBar({ archivedView = false }: { archivedView?: boolean
   const archive = (archived: boolean) => {
     start(async () => {
       const r = await bulkArchivePatients({ ids, archived });
-      if (r.ok) {
-        ctx.clear();
-        router.refresh();
+      // Todo-o-nada (A2b): si un paciente de la selección no se puede tocar
+      // (acceso básico, de otro tenant), no se archiva ninguno. Antes el
+      // rechazo era silencioso y la barra quedaba como si nada.
+      if (!r.ok) {
+        toast.error(archived ? "No pudimos archivar" : "No pudimos reactivar", { description: r.error });
+        return;
       }
+      ctx.clear();
+      router.refresh();
     });
   };
 

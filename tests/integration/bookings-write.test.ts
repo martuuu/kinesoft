@@ -25,11 +25,14 @@ import {
   setBookingInsurerPaid,
   listBookingsInRange,
 } from "@/lib/bookings";
+import { exportBookingsIcs } from "@/lib/bookings-export-internal";
+import { getActor } from "@/lib/session";
 import { localToARIso } from "@/lib/datetime-ar";
 import {
   ownerClient,
   createEphemeralTenant,
   addPatient,
+  addPractitioner,
   addService,
   sweepOrphanTestTenants,
   type EphemeralTenant,
@@ -87,9 +90,9 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
   });
 
   // Bajo RLS Postgres no expone qué índice violó el INSERT (P2002 con
-  // `meta.target === null`), y el catch de createBooking cae al genérico
-  // "Turno duplicado." — hallazgo de A1.1, latente en prod hasta el flip de RLS.
-  (BYPASS ? it : it.fails)("[A2-S06 · p2002-target-null-bajo-rls] keys distintas, mismo paciente e instante → error accionable, no un segundo turno", async () => {
+  // `meta.target === null`); el catch caía al genérico "Turno duplicado."
+  // (hallazgo A1.1). A2a-S06: resolveUniqueViolation decide por los datos.
+  it("[A2-S06 · p2002-target-null-bajo-rls] keys distintas, mismo paciente e instante → error accionable, no un segundo turno", async () => {
     const p = await addPatient(db, A);
     await createBooking({ ...base(p, ar("2027-03-02", "10:00")), idempotencyKey: key() });
     const r = await createBooking({
@@ -111,6 +114,16 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     const r2 = await createBooking({ ...base(p, ar("2027-03-03", "10:00")), idempotencyKey: key() });
     expect(r2.ok).toBe(true);
     expect(await db.booking.count({ where: { patientId: p, status: { not: "CANCELLED" } } })).toBe(1);
+  });
+
+  it("[A2-S06] dos upserts concurrentes con la MISMA key → una fila y las dos respuestas ok", async () => {
+    const p = await addPatient(db, A);
+    const k = key();
+    const payload = { ...base(p, ar("2027-03-04", "16:00")), idempotencyKey: k };
+    const [r1, r2] = await Promise.all([createBooking(payload), createBooking(payload)]);
+    expect(r1.ok && r2.ok).toBe(true);
+    if (r1.ok && r2.ok) expect(r1.data.id).toBe(r2.data.id);
+    expect(await db.booking.count({ where: { patientId: p } })).toBe(1);
   });
 
   it("dos creates concurrentes (keys distintas) al mismo instante → exactamente un turno", async () => {
@@ -136,15 +149,31 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect((await db.booking.findUnique({ where: { id: r.data.id } }))?.notes).not.toBe("pisado");
   });
 
-  it.fails("[A2-S06] toggle de cobro con expectedUpdatedAt viejo → rechaza (hoy no acepta lock)", async () => {
+  it("[A2-S06] toggle de cobro con expectedUpdatedAt viejo → rechaza sin escribir", async () => {
     const p = await addPatient(db, A);
     const r = await createBooking({ ...base(p, ar("2027-03-06", "10:00")), idempotencyKey: key() });
     if (!r.ok) throw new Error(r.error);
     const stale = new Date(0).toISOString();
-    // Contrato de A2: los toggles de cobro reciben expectedUpdatedAt como el resto.
-    const toggle = setBookingCopagoPaid as unknown as (id: string, paid: boolean, expected?: string) => Promise<{ ok: boolean }>;
-    const res = await toggle(r.data.id, true, stale);
+    const res = await setBookingCopagoPaid(r.data.id, true, stale);
     expect(res.ok).toBe(false);
+    expect(res.ok ? "" : res.error).toMatch(/cambió en otra sesión/);
+    expect((await db.booking.findUnique({ where: { id: r.data.id } }))?.paymentStatus).toBe("UNPAID");
+  });
+
+  it("[A2-S06] dos toggles seguidos encadenando el updatedAt devuelto → ambos pasan", async () => {
+    const p = await addPatient(db, A);
+    const r = await createBooking({ ...base(p, ar("2027-03-06", "15:00")), idempotencyKey: key() });
+    if (!r.ok) throw new Error(r.error);
+    const row = await db.booking.findUniqueOrThrow({ where: { id: r.data.id } });
+    const t1 = await setBookingInsurerPaid(r.data.id, true, row.updatedAt.toISOString());
+    if (!t1.ok) throw new Error(t1.error);
+    // Con la versión VIEJA el segundo rebota (es lo que parchea facturacion-view).
+    expect((await setBookingCopagoPaid(r.data.id, true, row.updatedAt.toISOString())).ok).toBe(false);
+    const t2 = await setBookingCopagoPaid(r.data.id, true, new Date(t1.data.updatedAt).toISOString());
+    expect(t2.ok).toBe(true);
+    const after = await db.booking.findUniqueOrThrow({ where: { id: r.data.id } });
+    expect(after.paymentStatus).toBe("PAID");
+    expect(after.insurerPaidAt).not.toBeNull();
   });
 
   // ── Reprogramar ─────────────────────────────────────────────────────────
@@ -183,7 +212,7 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect((await db.booking.findUnique({ where: { id: forced.data.id } }))?.notes).toMatch(/^\[SOBRETURNO\]/);
   });
 
-  it.fails("[A2-S06] reactivar un CANCELLED sobre cupo lleno → pide confirmar sobreturno", async () => {
+  it("[A2-S06] reactivar un CANCELLED sobre cupo lleno → pide confirmar sobreturno", async () => {
     const [p1, p2] = [await addPatient(db, A), await addPatient(db, A)];
     const when = ar("2027-03-11", "10:00");
     const osteo = (p: string) => ({ ...base(p, when), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
@@ -195,13 +224,143 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect(reactivate.ok).toBe(false);
   });
 
-  it.fails("[A2-S06] alargar la duración sobre cupo lleno → pide confirmar sobreturno", async () => {
+  it("[A2-S06] alargar la duración sobre cupo lleno → pide confirmar sobreturno", async () => {
     const [p1, p2] = [await addPatient(db, A), await addPatient(db, A)];
     const x = await createBooking({ ...base(p1, ar("2027-03-12", "10:00")), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
     if (!x.ok) throw new Error(x.error);
     expect((await createBooking({ ...base(p2, ar("2027-03-12", "11:00")), serviceId: osteoId, durationMin: 60, idempotencyKey: key() })).ok).toBe(true);
     const longer = await updateBooking({ id: x.data.id, durationMin: 120 });
     expect(longer.ok).toBe(false);
+    expect("conflict" in longer && longer.conflict).toBeTruthy();
+    expect((await db.booking.findUnique({ where: { id: x.data.id } }))?.durationMin).toBe(60);
+    // Forzado (mismo flag que createBooking) → pasa.
+    expect((await updateBooking({ id: x.data.id, durationMin: 120, allowOverbooking: true })).ok).toBe(true);
+  });
+
+  it("[A2-S06] reprogramar encima de otro turno del paciente (sin mismo instante) → pide confirmar; forzado pasa", async () => {
+    const p = await addPatient(db, A);
+    await createBooking({ ...base(p, ar("2027-03-13", "10:00")), idempotencyKey: key() });
+    const second = await createBooking({ ...base(p, ar("2027-03-13", "15:00")), idempotencyKey: key(), allowSamePatientDay: true });
+    if (!second.ok) throw new Error(second.error);
+    const u = await updateBooking({ id: second.data.id, scheduledFor: ar("2027-03-13", "10:30") });
+    expect(u.ok).toBe(false);
+    expect("patientOverlap" in u && u.patientOverlap).toBeTruthy();
+    const forced = await updateBooking({ id: second.data.id, scheduledFor: ar("2027-03-13", "10:30"), allowPatientOverlap: true });
+    expect(forced.ok).toBe(true);
+  });
+
+  it("[A2-S06] el conflicto nombra al profesional del tenant y nunca su email", async () => {
+    const [p1, p2] = [await addPatient(db, A), await addPatient(db, A)];
+    const when = ar("2027-03-14", "10:00");
+    const osteo = (p: string) => ({ ...base(p, when), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
+    expect((await createBooking(osteo(p1))).ok).toBe(true);
+    const blocked = await createBooking(osteo(p2));
+    const name = "conflict" in blocked ? blocked.conflict?.practitionerName : undefined;
+    expect(name).toBeTruthy();
+    expect(name).not.toMatch(/@/);
+  });
+
+  it("[A2-S06] pendiente pública impaga vencida (>30 min) no bloquea el cupo; una fresca sí", async () => {
+    const [pub, pubFresh, p] = [await addPatient(db, A), await addPatient(db, A), await addPatient(db, A)];
+    const when = new Date(ar("2027-03-19", "10:00"));
+    const pending = (patientId: string, createdAt: Date) =>
+      db.booking.create({
+        data: {
+          tenantId: A.tenantId,
+          patientId,
+          practitionerId: A.practitionerId,
+          serviceId: osteoId,
+          scheduledFor: when,
+          durationMin: 60,
+          status: "PENDING",
+          paymentStatus: "UNPAID",
+          // Formato del turnero público: el discriminante de isHoldingCapacity.
+          idempotencyKey: `pub:${A.tenantId}:${key()}`,
+          createdAt,
+        },
+      });
+    const expired = await pending(pub, new Date(Date.now() - 31 * 60_000));
+    const ok = await createBooking({ ...base(p, when.toISOString()), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
+    expect(ok.ok).toBe(true);
+    // Una pendiente fresca (recién creada) sí sostiene el cupo.
+    await db.booking.delete({ where: { id: expired.id } });
+    if (ok.ok) await db.booking.delete({ where: { id: ok.data.id } });
+    await pending(pubFresh, new Date());
+    const blocked = await createBooking({ ...base(p, when.toISOString()), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
+    expect(blocked.ok).toBe(false);
+    expect("conflict" in blocked && blocked.conflict).toBeTruthy();
+  });
+
+  it("[revisión A2] guest de la agenda al que se le asigna paciente → CONFIRMED y sigue reteniendo el cupo", async () => {
+    const [p, other] = [await addPatient(db, A), await addPatient(db, A)];
+    const when = ar("2027-03-22", "10:00");
+    const g = await createBooking({
+      patientId: undefined,
+      guestName: "Invitado",
+      serviceId: osteoId,
+      practitionerId: A.practitionerId,
+      scheduledFor: when,
+      durationMin: 60,
+      idempotencyKey: key(),
+    });
+    if (!g.ok) throw new Error(g.error);
+    // El guest nace PENDING/UNPAID; se envejece para que, si se confundiera con
+    // una reserva pública, ya estuviera "vencido".
+    await db.booking.update({ where: { id: g.data.id }, data: { createdAt: new Date(Date.now() - 2 * 3600_000) } });
+    const u = await updateBooking({ id: g.data.id, patientId: p });
+    expect(u.ok).toBe(true);
+    const row = await db.booking.findUniqueOrThrow({ where: { id: g.data.id } });
+    expect(row.patientId).toBe(p);
+    expect(row.status).toBe("CONFIRMED");
+    // Cupo 1: otro paciente en el mismo horario choca.
+    const blocked = await createBooking({ ...base(other, when), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
+    expect(blocked.ok).toBe(false);
+    expect("conflict" in blocked && blocked.conflict).toBeTruthy();
+    // Y la agenda no lo rotula como reserva pública.
+    const [listed] = (await listBookingsInRange({
+      from: new Date(when),
+      to: new Date(new Date(when).getTime() + 60_000),
+    })).filter((b) => b.id === g.data.id);
+    expect(listed.publicReservation).toBe(false);
+  });
+
+  it("[revisión A2] aunque quede PENDING/UNPAID con paciente (fila vieja), un turno de la agenda no vence", async () => {
+    const [p, other] = [await addPatient(db, A), await addPatient(db, A)];
+    const when = ar("2027-03-23", "10:00");
+    await db.booking.create({
+      data: {
+        tenantId: A.tenantId,
+        patientId: p,
+        practitionerId: A.practitionerId,
+        serviceId: osteoId,
+        scheduledFor: new Date(when),
+        durationMin: 60,
+        status: "PENDING",
+        paymentStatus: "UNPAID",
+        idempotencyKey: key(), // UUID de modal de la agenda
+        createdAt: new Date(Date.now() - 2 * 3600_000),
+      },
+    });
+    const blocked = await createBooking({ ...base(other, when), serviceId: osteoId, durationMin: 60, idempotencyKey: key() });
+    expect(blocked.ok).toBe(false);
+  });
+
+  it("[revisión A2] updateBooking ya no acepta volver un turno a PENDING", async () => {
+    const p = await addPatient(db, A);
+    const r = await createBooking({ ...base(p, ar("2027-03-24", "10:00")), idempotencyKey: key() });
+    if (!r.ok) throw new Error(r.error);
+    const u = await updateBooking({ id: r.data.id, status: "PENDING" as never });
+    expect(u.ok).toBe(false);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r.data.id } })).status).toBe("CONFIRMED");
+  });
+
+  it("[revisión A2] una key de cliente con prefijo pub: no se usa (el turno de la agenda no puede parecer público)", async () => {
+    const p = await addPatient(db, A);
+    const k = `pub:${A.tenantId}:x`;
+    const r = await createBooking({ ...base(p, ar("2027-03-25", "10:00")), idempotencyKey: k });
+    if (!r.ok) throw new Error(r.error);
+    const row = await db.booking.findUniqueOrThrow({ where: { id: r.data.id } });
+    expect(row.idempotencyKey.startsWith("pub:")).toBe(false);
   });
 
   // ── Borrado y cobros ───────────────────────────────────────────────────
@@ -219,17 +378,18 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect(await db.payment.count({ where: { bookingId: failed.data.id } })).toBe(0);
   });
 
-  it.fails("[A2-S06 · H1] deleteBooking de un turno con copago cobrado a mano → rechaza", async () => {
+  it("[A2-S06 · H1] deleteBooking de un turno con copago cobrado a mano → rechaza", async () => {
     const p = await addPatient(db, A);
     const r = await createBooking({ ...base(p, ar("2027-03-16", "10:00")), idempotencyKey: key() });
     if (!r.ok) throw new Error(r.error);
     await setBookingCopagoPaid(r.data.id, true); // paymentStatus=PAID, sin fila Payment
     const d = await deleteBooking(r.data.id);
     expect(d.ok).toBe(false);
+    expect(d.ok ? "" : d.error).toMatch(/cobro registrado \(copago u OS\)/);
     expect(await db.booking.count({ where: { id: r.data.id } })).toBe(1);
   });
 
-  it.fails("[A2-S06 · H1] deleteBooking de un turno con la OS confirmada → rechaza", async () => {
+  it("[A2-S06 · H1] deleteBooking de un turno con la OS confirmada → rechaza", async () => {
     const p = await addPatient(db, A);
     const r = await createBooking({ ...base(p, ar("2027-03-17", "10:00")), idempotencyKey: key() });
     if (!r.ok) throw new Error(r.error);
@@ -307,17 +467,132 @@ describe.skipIf(!RUN)("turnos · write-paths (caracterización)", () => {
     expect(await db.booking.count({ where: { patientId: foreign } })).toBe(0);
   });
 
-  it.fails("[A2-S06] createBookingsBatch con un paciente de OTRO tenant → rechaza sin escribir", async () => {
+  it("[A2-S06] createBookingsBatch con un paciente de OTRO tenant → rechaza sin escribir", async () => {
     const foreign = await addPatient(db, B);
     const r = await createBookingsBatch({ ...base(foreign, ar("2027-07-05", "10:00")), count: 1, idempotencyKey: key() });
     expect(r.ok).toBe(false);
     expect(await db.booking.count({ where: { patientId: foreign } })).toBe(0);
   });
 
-  it.fails("[A2-S06] createBooking con un profesional de OTRO tenant → rechaza sin escribir", async () => {
+  it("[A2-S06] createBooking con un profesional de OTRO tenant → rechaza sin escribir", async () => {
     const p = await addPatient(db, A);
     const r = await createBooking({ ...base(p, ar("2027-07-06", "10:00")), practitionerId: B.practitionerId, idempotencyKey: key() });
     expect(r.ok).toBe(false);
     expect(await db.booking.count({ where: { patientId: p } })).toBe(0);
+  });
+});
+
+// ── Acceso básico = solo ver (decisión del dueño 30-sep, A2a-S06) ───────────
+// Un PRACTITIONER sin acceso completo al paciente (no asignado ni compartido)
+// VE el turno y no puede modificar nada; lo hace cumplir el servidor.
+describe.skipIf(!RUN)("turnos · actor con acceso básico al paciente", () => {
+  let db: PrismaClient;
+  let A: EphemeralTenant;
+  let kine: { userId: string; practitionerId: string };
+  let patient: string;
+  let bookingId: string;
+  let guestBookingId: string;
+
+  beforeAll(async () => {
+    db = ownerClient();
+    A = await createEphemeralTenant(db);
+    kine = await addPractitioner(db, A, "PRACTITIONER");
+    // Asignado al OWNER → el kine nuevo lo ve en modo basic.
+    patient = await addPatient(db, A);
+    const mk = (extra: Record<string, unknown>) =>
+      db.booking.create({
+        data: {
+          tenantId: A.tenantId,
+          practitionerId: A.practitionerId,
+          serviceId: A.serviceId,
+          scheduledFor: new Date(ar("2027-08-02", "10:00")),
+          durationMin: 45,
+          status: "CONFIRMED",
+          idempotencyKey: key(),
+          notes: "nota clínica",
+          title: "Lumbalgia",
+          description: "detalle clínico",
+          ...extra,
+        },
+      });
+    bookingId = (await mk({ patientId: patient })).id;
+    guestBookingId = (await mk({ patientId: null, guestName: "Invitado", status: "PENDING", notes: null, title: null, description: null })).id;
+    asUser(kine.userId);
+  });
+
+  afterAll(async () => {
+    await A?.cleanup();
+    await db?.$disconnect();
+  });
+
+  const snapshot = () => db.booking.findUniqueOrThrow({ where: { id: bookingId } });
+
+  it("update / estado / delete / toggles → rechazan sin escribir", async () => {
+    const before = await snapshot();
+    const v = before.updatedAt.toISOString();
+    const results = [
+      await updateBooking({ id: bookingId, notes: "pisado", expectedUpdatedAt: v }),
+      await setBookingStatus(bookingId, "CANCELLED", v),
+      await deleteBooking(bookingId, v),
+      await setBookingCopagoPaid(bookingId, true, v),
+      await setBookingInsurerPaid(bookingId, true, v),
+    ];
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      expect(r.ok ? "" : r.error).toMatch(/acceso básico/);
+    }
+    const after = await snapshot();
+    expect(after).toEqual(before);
+  });
+
+  it("createBooking y createBookingsBatch para ese paciente → rechazan sin escribir", async () => {
+    const base = {
+      patientId: patient,
+      serviceId: A.serviceId,
+      practitionerId: kine.practitionerId,
+      scheduledFor: ar("2027-08-03", "10:00"),
+      idempotencyKey: key(),
+    };
+    const c = await createBooking(base);
+    const b = await createBookingsBatch({ ...base, count: 2, idempotencyKey: key() });
+    expect(c.ok).toBe(false);
+    expect(b.ok).toBe(false);
+    expect(await db.booking.count({ where: { patientId: patient } })).toBe(1);
+  });
+
+  it("un turno guest (sin paciente) sí se opera", async () => {
+    const r = await updateBooking({ id: guestBookingId, notes: "ok" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("la agenda enmascara notas, título y descripción de la fila básica", async () => {
+    const rows = await listBookingsInRange({
+      from: new Date(ar("2027-08-02", "00:00")),
+      to: new Date(ar("2027-08-03", "00:00")),
+    });
+    const row = rows.find((r) => r.id === bookingId);
+    expect(row).toMatchObject({ patientAccess: "basic", notes: null, title: null, description: null });
+    const guest = rows.find((r) => r.id === guestBookingId);
+    expect(guest?.notes).toBe("ok");
+  });
+
+  it("el ICS enmascara las filas básicas (nombre/hora/servicio sí, clínica no)", async () => {
+    const actor = await getActor();
+    const out = await exportBookingsIcs(actor, {
+      from: new Date(ar("2027-08-02", "00:00")),
+      to: new Date(ar("2027-08-03", "00:00")),
+    });
+    expect(out).toContain(`UID:${bookingId}@kinesoft`);
+    expect(out).toContain("SUMMARY:Consulta · Paciente");
+    expect(out).not.toMatch(/nota clínica|Lumbalgia|detalle clínico/);
+    // El OWNER (acceso full) sí ve el detalle.
+    asUser(A.userId);
+    const full = await exportBookingsIcs(await getActor(), {
+      from: new Date(ar("2027-08-02", "00:00")),
+      to: new Date(ar("2027-08-03", "00:00")),
+    });
+    asUser(kine.userId);
+    expect(full).toMatch(/Lumbalgia/);
+    expect(full).toMatch(/nota clínica/);
   });
 });

@@ -36,6 +36,7 @@ import { prismaService } from "@/lib/db";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureRequestContext } from "@/lib/request-context";
+import { clientIp } from "@/lib/client-ip";
 
 export type Actor = {
   tenantId: string;
@@ -153,7 +154,7 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
       tenantId: actor.tenantId,
       userId: actor.userId,
       practitionerId: actor.practitionerId,
-      ip: h.get("x-forwarded-for")?.split(",")[0]?.trim(),
+      ip: clientIp(h, null) ?? undefined,
       userAgent: h.get("user-agent") ?? undefined,
       // Minted by middleware; safe to trust because middleware strips
       // any client-supplied value and re-mints if absent.

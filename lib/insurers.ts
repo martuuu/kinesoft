@@ -146,23 +146,61 @@ export async function updateInsurer(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  await runWithRls(actor.tenantId, (tx) => tx.insurer.update({
-    where: { id },
-    data: {
-      ...parsed.data,
-      notes: parsed.data.notes ? parsed.data.notes : parsed.data.notes === "" ? null : undefined,
-    },
-  }));
+  let changes: AuditDiff;
+  try {
+    // "Antes" y update en la misma transacción para que el audit
+    // antes/después (A2b-S-cfg) describa exactamente lo que pisó este update.
+    changes = await runWithRls(actor.tenantId, async (tx) => {
+      const before = await tx.insurer.findFirstOrThrow({
+        where: { id, tenantId: actor.tenantId },
+        select: { name: true, copagoCents: true, fixedFeeCents: true },
+      });
+      const after = await tx.insurer.update({
+        where: { id },
+        data: {
+          ...parsed.data,
+          notes: parsed.data.notes ? parsed.data.notes : parsed.data.notes === "" ? null : undefined,
+        },
+        select: { name: true, copagoCents: true, fixedFeeCents: true },
+      });
+      return auditDiff(before, after);
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return { ok: false, error: "Ya existe una obra social con ese nombre." };
+    }
+    logger.error("insurer.update.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos guardar la obra social." };
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
     action: "insurer.update",
     entity: "Insurer",
     entityId: id,
+    // Solo nombre y montos, y solo si cambiaron: el copago de la OS entra en
+    // la precedencia de lib/copago.ts de todos los turnos no cobrados sin
+    // copago propio, así que "de cuánto a cuánto" tiene que quedar asentado.
+    ...(changes ? { payload: changes } : {}),
   });
   revalidatePath("/configuracion");
   revalidateTag(tags.insurers(actor.tenantId));
   return { ok: true, data: undefined };
+}
+
+type AuditDiff = { before: Record<string, unknown>; after: Record<string, unknown> } | null;
+
+/** `{ before, after }` con solo los campos que cambiaron; null si ninguno. */
+function auditDiff<T extends Record<string, unknown>>(before: T, after: T): AuditDiff {
+  const b: Record<string, unknown> = {};
+  const a: Record<string, unknown> = {};
+  for (const k of Object.keys(before)) {
+    if (before[k] !== after[k]) {
+      b[k] = before[k];
+      a[k] = after[k];
+    }
+  }
+  return Object.keys(b).length ? { before: b, after: a } : null;
 }
 
 export async function deleteInsurer(id: string): Promise<ActionResult> {

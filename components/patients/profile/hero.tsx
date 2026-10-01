@@ -1,18 +1,19 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
-import { Modal } from "@/components/ui/modal";
 import { Drawer } from "@/components/ui/drawer";
+import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { FormField } from "@/components/ui/form-field";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { formatARS } from "@/lib/format";
 import {
   assignPatientToPractitioner,
-  deletePatient,
   sendPatientPortalInvite,
   setPatientArchived,
   setPatientCoverage,
@@ -42,7 +43,6 @@ export function PatientHero({
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
   const [editing, setEditing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   return (
     <>
@@ -98,7 +98,6 @@ export function PatientHero({
           practitioners={practitioners}
           canReassign={canReassign}
           onEdit={() => setEditing(true)}
-          onDelete={() => setDeleting(true)}
         />
       </Card>
 
@@ -114,7 +113,6 @@ export function PatientHero({
           onClose={() => setEditing(false)}
         />
       )}
-      {deleting && <DeletePatientModal patient={patient} onClose={() => setDeleting(false)} />}
     </>
   );
 }
@@ -123,15 +121,48 @@ function PatientHeroActions({
   patient,
   practitioners,
   onEdit,
-  onDelete,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
   practitioners: PractitionerOption[];
   canReassign: boolean;
   onEdit: () => void;
-  onDelete: () => void;
 }) {
+  const router = useRouter();
+  const confirm = useConfirm();
+  const [archiving, startArchive] = useTransition();
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const isArchived = !!patient.archivedAt;
+
+  // A2a-S08 (decisión del dueño 30-sep): se quitó "Eliminar definitivamente"
+  // — borraba en cascada turnos, cobros, planes y archivos sin retorno. Queda
+  // Archivar: oculta la ficha del listado y se revierte desde "archivados".
+  const toggleArchive = async () => {
+    const ok = await confirm(
+      isArchived
+        ? {
+            title: "Desarchivar paciente",
+            message: `${patient.firstName} ${patient.lastName} vuelve a aparecer en el listado de pacientes.`,
+            confirmLabel: "Desarchivar",
+          }
+        : {
+            title: "Archivar paciente",
+            message: `${patient.firstName} ${patient.lastName} deja de aparecer en el listado. La ficha, los turnos y el historial se conservan, y lo podés desarchivar cuando quieras.`,
+            confirmLabel: "Archivar",
+          }
+    );
+    if (!ok) return;
+    setArchiveError(null);
+    startArchive(async () => {
+      const r = await setPatientArchived({ id: patient.id, archived: !isArchived });
+      if (!r.ok) {
+        setArchiveError(r.error);
+        return;
+      }
+      router.refresh();
+    });
+  };
+
   const [portalSending, startPortal] = useTransition();
   const [portalResult, setPortalResult] = useState<
     | { ok: true; emailSent: boolean; portalUrl: string }
@@ -175,12 +206,33 @@ function PatientHeroActions({
         </Button>
         <Button
           variant="ghost"
-          onClick={onDelete}
-          style={{ fontSize: 12, padding: "8px 14px", color: "#9F1F1F" }}
+          onClick={toggleArchive}
+          disabled={archiving}
+          title={
+            isArchived
+              ? "Volver a mostrar el paciente en el listado"
+              : "Ocultar del listado sin borrar la ficha ni el historial"
+          }
+          style={{ fontSize: 12, padding: "8px 14px", color: "#9A5B00" }}
         >
-          Eliminar
+          {archiving ? "Guardando…" : isArchived ? "Desarchivar" : "Archivar"}
         </Button>
       </div>
+      {archiveError && (
+        <div
+          style={{
+            maxWidth: 320,
+            padding: 8,
+            borderRadius: 8,
+            fontSize: 11.5,
+            background: "rgba(228,70,70,0.1)",
+            color: "#9F1F1F",
+            textAlign: "right",
+          }}
+        >
+          {archiveError}
+        </div>
+      )}
       {portalResult && (
         <div
           style={{
@@ -232,6 +284,7 @@ function EditPatientModal({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const currentCoverage = patient.coverages[0];
@@ -248,11 +301,52 @@ function EditPatientModal({
     patient.assignedPractitionerId ?? ""
   );
 
-  const submit = (formData: FormData) => {
+  // Optimistic lock (A2a-S08): el `updatedAt` que vio este formulario. Se
+  // actualiza tras un guardado OK, así un reintento (p. ej. si falló la
+  // cobertura después de guardar los datos) no choca contra sí mismo.
+  const expectedUpdatedAt = useRef(patient.updatedAt.toISOString());
+  // Dirty-guard (A2b-S-ui): Esc / fondo / X piden confirmación si hay cambios.
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const { dirty, onFormInput } = useFormDirty(formRef, {
+    coverageMode,
+    otherInsurerName,
+    assignedKine,
+  });
+  const initialPlan = currentCoverage?.planName ?? "";
+  const initialMember = currentCoverage?.memberId ?? "";
+  const initialOther = currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : "";
+
+  const submit = async (formData: FormData) => {
     setError(null);
+    const planName = String(formData.get("coveragePlan") ?? "").trim();
+    const memberId = String(formData.get("coverageMember") ?? "").trim();
+    // H2 (A2a-S08): dirty-check de la cobertura. Antes se re-guardaba siempre
+    // con OS "Otra" (y el server hacía delete+create), borrando el copago
+    // propio del paciente sin avisar.
+    const norm = (v: string) => v.trim().toLowerCase();
+    const osChanged =
+      coverageMode !== initialCoverageMode ||
+      (coverageMode === "other" && norm(otherInsurerName) !== norm(initialOther));
+    const coverageDirty =
+      osChanged ||
+      (coverageMode !== "particular" && (planName !== initialPlan || memberId !== initialMember));
+    const ownCopago = currentCoverage?.copagoCents ?? null;
+    let resetCopago = false;
+    if (osChanged && ownCopago != null) {
+      const ok = await confirm({
+        title: "Cambiar la obra social",
+        message: `Este paciente tiene un copago propio de ${formatARS(ownCopago)}. Al cambiar la cobertura, el copago propio se va a borrar y los próximos turnos van a cobrar el de la nueva cobertura.`,
+        confirmLabel: "Cambiar y borrar el copago",
+        tone: "danger",
+      });
+      if (!ok) return;
+      resetCopago = true;
+    }
+
     start(async () => {
       const updateResult = await updatePatient({
         id: patient.id,
+        expectedUpdatedAt: expectedUpdatedAt.current,
         firstName: String(formData.get("firstName") ?? ""),
         lastName: String(formData.get("lastName") ?? ""),
         email: String(formData.get("email") ?? ""),
@@ -267,20 +361,20 @@ function EditPatientModal({
         setError(updateResult.error);
         return;
       }
+      expectedUpdatedAt.current = updateResult.data.updatedAt;
 
-      // Coverage update — only when changed.
-      if (coverageMode !== initialCoverageMode || coverageMode === "other") {
-        const planName = String(formData.get("coveragePlan") ?? "") || undefined;
-        const memberId = String(formData.get("coverageMember") ?? "") || undefined;
+      // Coverage update — only when something actually changed.
+      if (coverageDirty) {
         let cov;
         if (coverageMode === "particular") {
-          cov = await setPatientCoverage({ patientId: patient.id });
+          cov = await setPatientCoverage({ patientId: patient.id, resetCopago });
         } else if (coverageMode === "other") {
           cov = await setPatientCoverage({
             patientId: patient.id,
             insurerName: otherInsurerName,
             planName,
             memberId,
+            resetCopago,
           });
         } else {
           const insurerId = coverageMode.replace("ins:", "");
@@ -289,6 +383,7 @@ function EditPatientModal({
             insurerId,
             planName,
             memberId,
+            resetCopago,
           });
         }
         if (!cov.ok) {
@@ -317,8 +412,14 @@ function EditPatientModal({
   const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
 
   return (
-    <Drawer open onClose={onClose} title="Editar paciente" width={560}>
-      <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <Drawer open onClose={onClose} title="Editar paciente" width={560} dirty={dirty}>
+      <form
+        ref={formRef}
+        action={submit}
+        onInput={onFormInput}
+        onChange={onFormInput}
+        style={{ display: "flex", flexDirection: "column", gap: 14 }}
+      >
         <Section title="Datos personales">
           <Grid2>
             <FormField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
@@ -376,7 +477,10 @@ function EditPatientModal({
             <FormField
               as="select"
               label=""
-              hint="«Consultorio común» = visible para todos los kines del consultorio."
+              // A2b: el hint anterior ("visible para todos los kines") era falso —
+              // sin asignación, la HC completa la ven OWNER/ADMIN y los demás
+              // profesionales solo ven datos básicos (salvo que se la compartan).
+              hint="«Consultorio común» = visible para OWNER/ADMIN; los profesionales ven datos básicos."
               value={assignedKine}
               onChange={(v) => setAssignedKine(v)}
               options={[
@@ -433,121 +537,6 @@ function EditPatientModal({
         </div>
       </form>
     </Drawer>
-  );
-}
-
-function DeletePatientModal({
-  patient,
-  onClose,
-}: {
-  patient: PatientWithRelations;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [confirmText, setConfirmText] = useState("");
-  const phrase = `${patient.firstName} ${patient.lastName}`.toLowerCase();
-  const canConfirm = confirmText.trim().toLowerCase() === phrase;
-  const isArchived = !!patient.archivedAt;
-  const submit = () => {
-    setError(null);
-    start(async () => {
-      const r = await deletePatient(patient.id);
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      router.push("/pacientes");
-    });
-  };
-  // Soft-delete alternative: archive keeps the ficha + history intact but
-  // hides the patient from the default listado. Reversible from the
-  // "archivados" filter. Sits between Cancelar and Eliminar.
-  const archive = () => {
-    setError(null);
-    start(async () => {
-      const r = await setPatientArchived({ id: patient.id, archived: !isArchived });
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      onClose();
-      router.refresh();
-    });
-  };
-  return (
-    <Modal onClose={onClose} title="Eliminar paciente">
-      <p style={{ fontSize: 13, color: "var(--navy-700)", margin: 0, lineHeight: 1.5 }}>
-        Esta acción elimina la ficha, todas sus sesiones, planes, archivos y registros
-        clínicos. <strong>No se puede deshacer.</strong>
-      </p>
-      <p style={{ fontSize: 12, color: "var(--navy-500)", marginTop: 6 }}>
-        Escribí <code style={{ background: "rgba(15,30,51,0.06)", padding: "1px 6px", borderRadius: 6 }}>{phrase}</code> para confirmar.
-      </p>
-      <input
-        type="text"
-        value={confirmText}
-        onChange={(e) => setConfirmText(e.target.value)}
-        autoFocus
-        style={{
-          marginTop: 8,
-          padding: "10px 12px",
-          borderRadius: 12,
-          background: "rgba(255,255,255,0.7)",
-          border: "1px solid rgba(15,30,51,0.08)",
-          width: "100%",
-          fontSize: 14,
-        }}
-      />
-      {error && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: 10,
-            borderRadius: 10,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
-            fontSize: 12,
-          }}
-        >
-          {error}
-        </div>
-      )}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-        <Button variant="ghost" onClick={onClose} disabled={pending}>
-          Cancelar
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={archive}
-          disabled={pending}
-          title={
-            isArchived
-              ? "Volver a mostrar el paciente en el listado"
-              : "Ocultar del listado sin borrar la ficha ni el historial"
-          }
-          style={{
-            color: "#9A5B00",
-            borderColor: "rgba(255,176,32,0.5)",
-            background: "rgba(255,176,32,0.1)",
-          }}
-        >
-          {pending ? "Guardando…" : isArchived ? "Desarchivar" : "Archivar"}
-        </Button>
-        <Button
-          variant="primary"
-          onClick={submit}
-          disabled={pending || !canConfirm}
-          style={{
-            background: canConfirm ? "#9F1F1F" : undefined,
-            boxShadow: canConfirm ? "0 4px 14px rgba(159,31,31,0.3)" : undefined,
-          }}
-        >
-          {pending ? "Eliminando…" : "Eliminar definitivamente"}
-        </Button>
-      </div>
-    </Modal>
   );
 }
 

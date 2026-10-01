@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { AgendaVisibility } from "@/lib/agenda-filters";
 
 // ──────────────────────────────────────────────────────────────────────
 // View Options dropdown — small menu next to the day/week/list switch
@@ -9,10 +10,16 @@ import { useEffect, useRef, useState } from "react";
 export function ViewOptionsMenu({
   density,
   setDensity,
+  visibility,
+  setVisibility,
 }: {
   density: "comfortable" | "compact";
   setDensity: (d: "comfortable" | "compact") => void;
+  /** A2b-S-ui: "Mostrar cancelados" / "Mostrar ausentes" (por defecto prendidos). */
+  visibility: AgendaVisibility;
+  setVisibility: (v: AgendaVisibility) => void;
 }) {
+  const filtering = !visibility.showCancelled || !visibility.showNoShow;
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -53,6 +60,13 @@ export function ViewOptionsMenu({
         }}
       >
         Vista
+        {/* Punto = hay turnos filtrados: que el filtro no quede "olvidado". */}
+        {filtering && (
+          <span
+            aria-label="Hay filtros activos"
+            style={{ width: 6, height: 6, borderRadius: 999, background: "var(--sky-700)" }}
+          />
+        )}
         <span style={{ fontSize: 9, color: "var(--navy-300)" }}>▾</span>
       </button>
       {open && (
@@ -103,12 +117,57 @@ export function ViewOptionsMenu({
               );
             })}
           </div>
+          <div style={menuLabel}>Mostrar</div>
+          <div style={{ display: "grid", gap: 2, marginBottom: 10 }}>
+            <ToggleRow
+              label="Mostrar cancelados"
+              checked={visibility.showCancelled}
+              onChange={(v) => setVisibility({ ...visibility, showCancelled: v })}
+            />
+            <ToggleRow
+              label="Mostrar ausentes"
+              checked={visibility.showNoShow}
+              onChange={(v) => setVisibility({ ...visibility, showNoShow: v })}
+            />
+          </div>
           <div style={{ fontSize: 11.5, color: "var(--navy-300)", padding: "2px 4px", lineHeight: 1.4 }}>
             El encabezado de días (tira + grilla) se controla desde Tweaks → «Vista semanal».
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+        padding: "6px 4px",
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: "var(--navy-700)",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    </label>
   );
 }
 

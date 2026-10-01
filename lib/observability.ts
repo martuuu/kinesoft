@@ -1,32 +1,48 @@
 /**
- * Observability shim — ready-to-activate error capture.
+ * Observabilidad — `captureException()` estable para todo el código server.
  *
- * `@sentry/nextjs` is intentionally NOT a dependency yet (heavy install). This
- * module gives the rest of the codebase a stable `captureException()` surface
- * so error-reporting call-sites can be wired in now and the transport swapped
- * later without touching callers. For now it delegates to `logger.error` so
- * the error is never silently lost.
+ * A3b-S-obs: `@sentry/nextjs` ya es dependencia. El transporte real se activa
+ * SOLO con `SENTRY_DSN`:
+ *   - sin DSN: `instrumentation.ts` no inicializa Sentry y acá no se lo llama;
+ *     el error queda en `logger.error` (redactado) como antes. No-op total.
+ *   - con DSN: además del log, `Sentry.captureException` con el contexto
+ *     redactado como `extra` (el `beforeSend` vuelve a redactar el evento
+ *     entero: emails/tokens pueden venir en el mensaje del error).
+ *
+ * El log se mantiene siempre: los logs de Vercel son la fuente cuando Sentry
+ * descarta por cuota o sampling.
  */
+import * as Sentry from "@sentry/nextjs";
 import { logger } from "@/lib/logger";
+import { redact } from "@/lib/redact";
+
+/** Se evalúa en cada llamada (no al importar) para que los tests puedan togglearlo. */
+export function isObservabilityEnabled(): boolean {
+  return !!process.env.SENTRY_DSN;
+}
 
 /**
- * Activation gate for the ready-to-activate pattern. True when a Sentry DSN is
- * configured. Lets callers branch on observability without importing Sentry.
+ * Compat: gate de activación leído al cargar el módulo. Preferí
+ * `isObservabilityEnabled()`.
  */
-export const observabilityEnabled = !!process.env.SENTRY_DSN;
+export const observabilityEnabled = isObservabilityEnabled();
 
 /**
- * Report a captured error with optional structured context.
+ * Reporta un error capturado con contexto estructurado opcional.
  *
- * @param err     the thrown value (Error or otherwise)
- * @param context extra structured fields to attach to the report
+ * @param err     el valor lanzado (Error u otro)
+ * @param context campos extra; se redactan antes de salir
  */
 export function captureException(err: unknown, context?: Record<string, unknown>): void {
-  // TODO(bucket-C): cuando SENTRY_DSN esté provisto, instalar @sentry/nextjs y
-  // reemplazar este cuerpo por Sentry.captureException. Gate de activación = SENTRY_DSN.
   logger.error("captureException", {
     ...context,
     error: err instanceof Error ? err.message : String(err),
     stack: err instanceof Error ? err.stack : undefined,
   });
+  if (!isObservabilityEnabled()) return;
+  try {
+    Sentry.captureException(err, context ? { extra: redact(context) } : undefined);
+  } catch {
+    // Reportar nunca puede romper el flujo que ya estaba fallando.
+  }
 }

@@ -256,17 +256,18 @@ completitud + 3 áreas extra): 161 hallazgos, deduplicados en ~45 grupos. El tra
 **bloques por urgencia** (ver [ROADMAP.md §Plan vigente](ROADMAP.md)). El detalle completo (file:line, votos,
 diseño de Planes) está en el plan del 23-sep, referenciado desde el ROADMAP.
 
-- 🔴 **Altos abiertos (Bloque A):**
-  - **H1** `deleteBooking` borra en duro turnos con copago cobrado a mano u OS confirmada (el guard solo mira
-    el `Payment` de MP) — `lib/bookings.ts:788-812`.
-  - **H2** editar paciente descarta Plan / N° de afiliado y, con OS "Otra", borra `Coverage.copagoCents` en
-    cada guardado — `hero.tsx:272` + `setPatientCoverage` (deleteMany+create).
-  - **H3** "Cerrar sesión" en Seguimiento descarta EVA/notas no guardadas — `session-detail.tsx:57`.
-  - **H4** reserva pública con DNI ajeno escribe el email del atacante en la ficha (takeover del portal) —
-    `lib/public-booking.ts:256-296`.
-  - **H5** el signup auto-confirma cualquier email y rompe el gate `email_confirmed_at` del portal —
-    `lib/auth.ts:154-159`.
-  - **H6** los Preview de Vercel aplicaban migraciones en la DB de prod — **cerrado en código en A0b** (ver
+- **Altos de la auditoría (Bloque A)** — estado al 30-sep-2026 (detalle y evidencia en §Ronda 12):
+  - 🟢 **H1** `deleteBooking` borraba en duro turnos con copago cobrado a mano u OS confirmada (el guard solo
+    miraba el `Payment` de MP). Cerrado en A2a-S06.
+  - 🟢 **H2** editar paciente descartaba Plan / N° de afiliado y, con OS "Otra", borraba `Coverage.copagoCents`
+    en cada guardado. Cerrado en A2a-S08.
+  - 🟢 **H3** "Cerrar sesión" en Seguimiento descartaba EVA/notas no guardadas. Cerrado en A2a-S03.
+  - 🟢 **H4** la reserva pública con DNI ajeno escribía el email del atacante en la ficha (takeover del
+    portal). Cerrado en A2b-S-pub.
+  - 🟢 **H5** el signup auto-confirmaba cualquier email (`admin.createUser({ email_confirm: true })`) y rompía
+    el gate `email_confirmed_at` del portal. Cerrado en A3c-S-signup: `auth.signUp` con email verificado
+    (`lib/auth.ts:49-137`) y el tenant se crea recién en `/onboarding`. Evidencia en §Ronda 12.
+  - 🟢 **H6** los Preview de Vercel aplicaban migraciones en la DB de prod: cerrado en código en A0b (ver
     abajo); falta el staging aislado (A0d, dueño).
 - 🟢 **A0b `ops-hardening` (2026-09-29):**
   - `vercel.json` → `node scripts/vercel-build.mjs`: `prisma migrate deploy` **solo** con
@@ -314,6 +315,170 @@ diseño de Planes) está en el plan del 23-sep, referenciado desde el ROADMAP.
 - ⚠️ **Nota operativa:** `@prisma/client` carga el `.env` del proyecto al importarse, antes de que corra
   cualquier script. Por eso los guards de A0b leen el destino **real** y lo imprimen, en vez de confiar en la
   intención de quien corre el comando.
+
+**Ronda 12 — Bloque A2 + A3a + A3b + A3c (30-sep-2026):** cero pérdida de datos, reserva pública, paridad de
+UI, visibilidad, montos, rate-limit, sesión/cookies/identidad, observabilidad, signup verificado y stepper de
+alta. **Cierra el Bloque A (A0-A3).** La única migración del bloque es la de A3c
+(`20260930120000_tenant_onboarding`); A2, A3a y A3b no tienen. Orden de prod:
+[MIGRACIONES-RUNBOOK.md §Deploy del Bloque A](MIGRACIONES-RUNBOOK.md). QA manual:
+[QA.md §Bloque A — A2/A3](QA.md). Todos los `it.fails` del contrato A2 dados vuelta (ver
+[TESTING.md](TESTING.md)).
+
+Gate final del Bloque A: `tsc` 0 · unit 252/252 en 19 archivos (TZ=UTC y TZ=AR) · guard ✓ · integración
+175/175 en 13 archivos (`kinesoft_app`) y 171 + 4 skip (owner) · `next build` ✓ · perf sin regresiones graves
+(re-medición en [PERF.md](PERF.md)).
+
+- 🟢 **A2a-S06 · turnos:**
+  - **H1:** `deleteBooking` rechaza si `paymentStatus ∈ {PAID, AUTHORIZED, REFUNDED}` o `insurerPaidAt ≠ null`
+    ("tiene un cobro registrado (copago u OS): cancelalo…") — `lib/bookings.ts:1046`, mensaje en `:1115`.
+  - Toggles de cobro (`setBookingInsurerPaid` `:1191`, `setBookingCopagoPaid` `:1210`) con lock atómico
+    (`updatedAt` en el WHERE) y devuelven el `updatedAt` nuevo. Cierra `booking-paid-toggles-no-optimistic-lock`.
+  - Paridad de `updateBooking` (`:818`): capacidad al cambiar horario/duración o reactivar un CANCELLED,
+    solape del paciente y los mismos flags que `createBooking`.
+  - **IDOR de turnos:** `practitionerId ∈ tenant` en create (`:565-595`) y batch (`:1295-1317`); `patientId ∈
+    tenant` también en el batch (incluido `dryRun`). El conflicto nombra al profesional del tenant, nunca su
+    email (`:82-86`).
+  - **Filtración cerrada (encontrada en la sesión):** la `idempotencyKey` es `@unique` global; bajo BYPASSRLS
+    una key de OTRO tenant hacía que el upsert pisara el turno ajeno. `createBooking` la rechaza (`:712-720`).
+  - **P2002 bajo RLS (`p2002-target-null-bajo-rls`):** `resolveUniqueViolation` (`:234`) resuelve en una tx
+    nueva: éxito idempotente si la key existe viva; si no, el mensaje de "exactamente a esa hora". **Era
+    prerrequisito del flip de RLS en prod: cerrado.**
+  - **Acceso básico = solo ver** en servidor: update/estado/delete/toggles/create/batch rechazan
+    (`BASIC_ACCESS_ERROR` `:64`); los guest se operan; `listBookingsInRange` oculta `title`/`description` a
+    basic (`:366-372`).
+  - **ICS:** `exportBookingsIcs` salió del `"use server"` a `lib/bookings-export-internal.ts:19` (`server-only`);
+    la única puerta es `app/api/agenda/export/route.ts:64` (rate-limit + tope de 90 días), y enmascara basic.
+  - Drawer de turno: solo lectura para basic, manda solo los campos cambiados, "Cambiar" paciente exige
+    elegir, "Cancelar edición" resetea.
+- 🟢 **A2a-S08 · paciente/cobertura/copago:**
+  - **H2:** `setPatientCoverage` (`lib/patients.ts:1091`) actualiza en el lugar si la OS no cambia; con OS
+    distinta el copago propio se borra solo con `resetCopago: true` (`:1168-1169`), que la UI pide con
+    `useConfirm` mostrando el monto (`hero.tsx:334-343`).
+  - `updatePatient` (`:823`): vaciar opcionales, `notes` ≤ 4000, optimistic lock, audit solo con los nombres de
+    los campos (sin PHI). Email normalizado (trim + lowercase) en alta y edición (`lib/validation.ts:25`).
+  - Script `scripts/normalize-patient-emails.ts` (dry-run por defecto, `--apply`, `assertSafeTarget`, aborta sin
+    BYPASSRLS, reporta colisiones): lo corre el dueño en prod después del deploy.
+  - `getPatientBillingPreview(patientId, serviceId?)` (`:1258`) = el resolver real, con la fuente.
+  - `sendPatientPortalInvite` (`:1609`) chequea `{ error }` en las dos ramas y exige `full`.
+  - **`deletePatient` eliminado** (`lib/patients.ts:996`): solo Archivar.
+  - `getPatientBookingsAll` (`:584`) paginado con cursor; "Ver más" en el perfil (antes cortaba en 100 sin aviso).
+- 🟢 **A2a-S03 · Seguimiento:**
+  - **H3:** `completeSessionFromSeguimiento` (`lib/sessions.ts:462`) en una tx, idempotente (`updateMany … WHERE
+    completedAt IS NULL`, `:481`), con EVA/notas del cierre y autocompletado del plan **por conteo**
+    (solo ACTIVE/PAUSED → COMPLETED). Notificación post-commit.
+  - `session-detail`: borrador subido al padre, `useConfirm`, guard de cambios sin guardar
+    (`components/seguimiento/use-unsaved-guard.ts`), errores visibles, notas vaciables.
+  - **Heurística ±2 h eliminada:** `rescheduleSession` (`:319`) mueve solo la sesión e informa `bookingOnDay`
+    con link a la agenda; rechaza reprogramar una sesión realizada.
+  - `listOpenSessions` (`:157`): buckets Vencidas sin cerrar / Hoy / Próximas / Realizadas, día AR, solo ACTIVE y
+    solo pacientes `full`. `getSessionDetail` → 404 a basic. `completeSession` muerto de `lib/patients.ts`
+    (tenía el bug H3) eliminado.
+- 🟢 **A2b-S-pub · reserva pública + webhook MP:**
+  - **H4:** `resolvePublicPatient` (`lib/public-booking-internal.ts:122`) matchea solo por DNI normalizado y
+    **nunca** modifica una ficha existente (ni completa vacíos); contacto distinto → snapshot
+    `guestName/guestEmail/guestPhone` + nota "Reserva online · datos de contacto distintos a la ficha" (`:62`).
+  - P2002 familiar (teléfono/email compartido): ficha nueva sin el campo que choca, retry ×2.
+  - Key por instancia del wizard `pub:<tenantId>:<uuid>`; key reusada con otros datos → rechazo; un CANCELLED ya
+    no revive. `releaseOwnExpiredPublicHold` (`:260`) deja re-reservar el propio slot vencido.
+  - Grilla pura en `lib/public-booking-slots.ts` (`buildPublicSlots` `:68`, `checkPublicSlot` `:114`): horario,
+    domingo y 1 h de anticipación también en el submit. Cierra en parte `logica-en-use-server-y-cliente`.
+  - **Webhook:** `nextPaymentStatus` (`lib/mercadopago.ts:184`: un PAID solo baja a REFUNDED), historial
+    `rawPayload.attempts` (redactado, 20), `FOR UPDATE` sobre el turno (`:283`) + retry de P2002, solo
+    PENDING → CONFIRMED; un CANCELLED/NO_SHOW/COMPLETED registra el pago y avisa "revisá el reembolso" (`:419-425`).
+- 🟢 **A2b-S-ui · paridad de UI:** alta inline sin duplicar ficha; profesional por defecto = filtro → usuario →
+  primero; Múltiples turnos aplica "actualizar copago"; preview por servicio con fuente; rama muerta
+  `mode="edit"` borrada; turnos-view con lock, rollback del borrado y solo lectura; `Drawer.dirty` +
+  `ConfirmDialog` que frena el Esc; toggles "Mostrar cancelados/ausentes" con conteo (`lib/agenda-filters.ts`);
+  rótulo "Pendiente de pago" / "· vencida". Cierra `native-confirm-alert`.
+- 🟢 **A2b-S-vis · visibilidad de HC + export:** gates `full` en archivos (audit **antes** de firmar), actividad
+  y 9 mutaciones de HC; dashboard con acceso resuelto fuera del `unstable_cache` y `Date` rehidratadas; export
+  CSV con `archived: exclude|include|only`, audit `patient.export`, escape de fórmulas (`lib/csv.ts:24`) y basic
+  enmascarado, movido a `lib/patients-export-internal.ts:33` (`server-only`; única puerta
+  `app/api/pacientes/export/route.ts:49`). Decisión: archivar exige `full`.
+- 🟢 **A2b-S-cfg · montos + equipo:** `MoneyInput` (`components/ui/money-input.tsx`, string math sin float)
+  cierra el copago de $50 bloqueado y el error ×100; audit antes/después en servicios y OS; `removeMember`
+  rechaza con conteo si hay turnos futuros o pacientes asignados; `listPractitioners` (`lib/bookings.ts:421`)
+  solo membresías aceptadas; tag `practitioners` invalidado.
+- 🟢 **Fixes de la revisión de A2:** discriminante de reserva pública **por key** (`isPublicReservation`,
+  `lib/booking-capacity.ts:97`: reconoce `pub:<tenant>:<uuid>` y el formato pre-A2; ante la duda retiene);
+  `isHoldingCapacity` (`:132`) vence UNPAID **y** FAILED; un guest al que se le asigna paciente pasa a CONFIRMED
+  y `BookingUpdate` ya no acepta PENDING.
+- 🟢 **A3a-S-rl · rate-limit:** Upstash con try/catch + `AbortSignal.timeout(1500)` (`lib/rate-limit.ts:177`) +
+  validación de respuesta + fallback a memoria con log `rate_limit.upstash_fallback` (`:145`) + prefijo
+  `rl:<VERCEL_ENV|dev>:` (`:58`) + purga del `Map` (10k claves, `:45`). `clientIp` único (`lib/client-ip.ts`),
+  `rateLimitAll`, `hashKeyPart`; límites nuevos en invitaciones, portal invite, `acceptInvite` y login/forgot por
+  hash de email; 429 uniforme. Tabla en [SECURITY.md §8](SECURITY.md).
+- 🟢 **A3b-S-auth · sesión, cookies, identidad:**
+  - El middleware refresca la sesión (`getAll`/`setAll` + `getSession()`, `middleware.ts:69-87`) y marca
+    `private, no-store` si hubo Set-Cookie (`:129`); el strip de `x-tenant-*` y el `x-request-id` siguen
+    (`:109-119`).
+  - Cookies de Supabase httpOnly + secure (prod) + lax (`lib/supabase/cookie-options.ts:23-27`).
+  - **Open redirects cerrados:** `safeNext`/`safeNextFromUrl` (`lib/safe-next.ts:29,91`) en sign-in, sign-out,
+    google, callback y login (`next=@evil.com` en callback/sign-out era explotable). `isAllowedOrigin` en los 3
+    POST de auth (`app/api/auth/sign-in/route.ts:31`).
+  - Login con mapa cerrado de códigos de error; Google sin `prompt=consent`/`access_type=offline`; wizard y
+    portal por form POST (antes 405).
+  - `/auth/confirm` (`verifyOtp`) y cookie `ks_recovery` httpOnly de 15 min firmada HMAC
+    (`lib/recovery-cookie.ts:28-49`).
+  - **Staff ≠ paciente:** portal (`lib/portal.ts:61-63`), callback (`app/auth/callback/route.ts:62`),
+    `createInvitation` (`lib/invitations.ts:148`, solo el propio tenant) y `acceptInvite`
+    (`app/invite/[token]/accept-action.ts:64`).
+  - **Check-in que pisaba notas:** `submitCheckIn` (`lib/portal.ts:196`) ya no escribe `Patient.notes`: EvaScore +
+    notificación al asignado (u OWNER/ADMIN) + audit `portal.checkin`. Portal con email case-insensitive.
+  - Invitaciones: re-invitar actualiza datos; el token no se loguea; "Crear mi cuenta para unirme".
+- 🟢 **A3b-S-obs · Sentry, CSP, headers, Next:** Next 14.2.18 → **14.2.35** (CVE-2025-29927 bypass de
+  middleware, y 56332, 32421, 57822, 55183/55184/67779); `@sentry/nextjs` 11.1.0, **no-op sin `SENTRY_DSN`**
+  (`instrumentation.ts:10`), `sendDefaultPii:false` + `beforeSend*` por `redact()`
+  (`lib/observability-config.ts:42-51`), sin SDK de cliente; `lib/redact.ts` en logger y Sentry; CSP (sigue
+  Report-Only) con report-uri/report-to → Sentry, Google Fonts, youtube-nocookie, form-action Supabase +
+  Google (`next.config.mjs:77-96`); HSTS con preload solo en Production (`:113`); `allowedOrigins` sin
+  localhost en Production.
+- 🟢 **A3c · signup verificado + stepper de alta (cierra H5):**
+  - **Signup** (`signUpPractitioner`, `lib/auth.ts:49`): `auth.signUp` con
+    `emailRedirectTo=<APP_URL>/auth/confirm?next=/onboarding` (`:108-112`). Se eliminaron
+    `admin.createUser({ email_confirm: true })` y la creación de tenant en el signup. Rate-limit 3/10 min por IP
+    + 3/h por hash del email (`:82-85`). Un email de paciente con portal recibe la **misma respuesta** sin mail
+    ni tenant (anti-oráculo, `:98-104`). Si Supabase devuelve sesión (Confirm email OFF) se loguea
+    `signup.confirm_email_disabled` (`:131-133`).
+  - **Gate de la app** (`app/(app)/layout.tsx` → `decideAppGate`, `lib/onboarding-logic.ts:100`): sin sesión →
+    `/login?next=` (el path sale de `x-pathname`, que setea el middleware en `middleware.ts:123-124`, y pasa por
+    `safeNext`); sin membresía → `/onboarding`; OWNER con `Tenant.onboardingCompletedAt == null` → `/onboarding`.
+  - **Stepper `/onboarding`, pasos 2-7** (`lib/onboarding.ts`, `lib/onboarding-internal.ts`,
+    `components/onboarding/**`): el paso 2 (`saveOnboardingClinic`, `:35`) crea Tenant + Practitioner + OWNER +
+    Insurer "Particular" + audit en una tx vía `bootstrapTenant` (`lib/tenant-bootstrap.ts:64`), con slug
+    derivado del nombre y estable al re-editar; repetir el paso 2 edita sin duplicar. Los pasos 3-6 reusan
+    `setBusinessHours`, servicios, OS e invitaciones. El paso 7 (`completeOnboarding`, `:161`) exige ≥1 servicio
+    y es idempotente (`updateMany … onboardingCompletedAt: null`). Una invitación pendiente se ofrece en
+    `/onboarding` (`openPendingInvitation`, `:195`).
+  - **Unión por invitación:** `/signup?invite=<token>` fija el email de la invitación, no crea tenant y usa
+    `emailRedirectTo=/auth/confirm?next=/invite/<token>` (`lib/auth.ts:62-78`).
+  - **Reset** (`updatePasswordWithRecoverySession`, `lib/auth.ts:206`): con cookie `ks_recovery` válida del mismo
+    usuario no pide la contraseña actual (cookie de un solo uso: se borra tras el éxito); sin cookie exige la
+    actual, con 5/10 min por usuario. `sendPasswordReset` (`:145`) usa
+    `redirectTo=<APP_URL>/auth/confirm?type=recovery&next=/reset` (`:183`).
+  - `scripts/create-tenant.ts` usa `bootstrapTenant`: ahora crea "Particular" y rechaza un Practitioner de otro
+    tenant (`PractitionerElsewhereError`).
+  - Tests: unit `onboarding-logic` (13), integración `signup` (10) y `onboarding` (8).
+- **Hallazgos nuevos de A2/A3** (clasificados; filas en §2 "Hallazgos 23-sep y A2/A3"):
+  - [C0] los write-paths validan practitioner ∈ tenant pero **no membresía aceptada**.
+  - [C] el batch no rechaza una `idempotencyKey` de otro tenant (usa `update: {}`, no escribe).
+  - [C] TOCTOU de cupo 1 entre chequeo e INSERT (agenda y pública); el pago tardío sobre una reserva vencida
+    confirma y avisa sin revalidar el cupo.
+  - [C1] `formatARS` no muestra centavos en listados; destildar el copago de una reserva pública la vuelve
+    UNPAID y puede quedar vencida (aceptado); /seguimiento pasó de 1 a ~7 queries en 1 tx.
+  - [C1 · portal v2] `getPortalPlan` expone `Session.notes` del kine al paciente.
+  - [ops] `.env.local` define `NODE_ENV` → `next build` local falla en el prerender (ver TESTING.md).
+  - **[A · cerrado 30-sep]** **`signup-confirm-doble-salto`** (hallado al documentar el cierre de A3c): el
+    `emailRedirectTo` era `<APP_URL>/auth/confirm?next=/onboarding` y la plantilla pone `next={{ .RedirectTo }}`,
+    así que `/auth/confirm` redirigía a sí mismo sin `token_hash` → "link inválido" con la cuenta ya verificada
+    (igual en unión por invitación). Fix: `emailRedirectTo = <APP_URL><destino>` y `redirectTo = <APP_URL>/reset`
+    (`lib/auth.ts`), más `unwrapConfirmNext` en `/auth/confirm` para links viejos (`lib/safe-next.ts`,
+    `app/auth/confirm/route.ts`). Test: `tests/unit/safe-next.test.ts` "unwrapConfirmNext" recorre el link de la
+    plantilla.
+  - [C0] (A3c) `phone`/`whatsapp`/`publicEmail` del tenant solo se editan en el stepper: faltan en Configuración
+    (`updateTenantBasics`).
+  - [C] (A3c) un OWNER con el alta sin terminar que además acepta la invitación de otro tenant: en los pasos
+    3-6 `getActor` puede elegir el otro tenant. Caso raro.
 
 ## Cómo leer la severidad
 
@@ -613,9 +778,9 @@ el ROADMAP.
 
 Estado: 🔴 ABIERTO · 🟡 PARCIAL · 🟢 CERRADO · ⏸ DIFERIDO-CON-GATE.
 La columna **Sesión** referencia el [ROADMAP.md](ROADMAP.md). Estado re-verificado contra el código al
-**2026-09-29** (Ronda 11): sin evidencia clara de cierre, la fila queda en 🔴. Los hallazgos NUEVOS de la
-auditoría del 23-sep (H1-H6 y ~45 grupos) están en §Ronda 11 y se incorporan a esta tabla sesión por sesión
-de A2/A3.
+**2026-09-29** (Ronda 11), con los cierres de A2/A3 del **30-sep-2026** marcados en línea: sin evidencia
+clara de cierre, la fila queda en 🔴. Los hallazgos de la auditoría del 23-sep que tocó el Bloque A y los
+nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3", más abajo.
 
 ### Confirmados (24 + 2 hallazgos posteriores)
 
@@ -635,7 +800,7 @@ de A2/A3.
 | rls-bypassed-by-superuser-role | media | B | .env / docker-compose | 🟢 | Ronda 4 — **cerrado en código** (rol `kinesoft_app` sin BYPASSRLS en local + test de aislamiento). **El flip de PROD sigue pendiente del dueño** (bucket C) |
 | runwithrls-solo-en-2-modulos | media | B | lib/rls.ts:19 | 🟢 | Ronda 4 — **cerrado en código**: `runWithRls` cableado en ~22 módulos de `lib/` (verificado). Depende del mismo flip prod |
 | booking-overlap-race-no-cas-no-unique | media | B | lib/bookings.ts:301 | 🟢 | Ronda 1 (idempotencia + `orderBy`) → revisado en Ronda 6 (key del cliente + índice único parcial) |
-| patient-hard-delete-cascades-hc | media | B | lib/patients.ts:875 | 🟢 | Ronda 2 — `requireAdminRole` en `deletePatient`. Residual soft-delete wholesale = E2 |
+| patient-hard-delete-cascades-hc | media | B | lib/patients.ts:996 | 🟢 | Ronda 2 (gate de rol) → A2a-S08 (30-sep): **`deletePatient` eliminado**, solo Archivar (decisión del dueño) |
 | sin-error-loading-boundaries | media | B | app/ | 🟢 | Ronda 1 — `global-error` + `error.tsx` por route-group + `loading.tsx` (verificado) |
 | h2-oversized-components | alta | B | components varios | 🟢 | Ronda 3 — los 4 archivos gigantes troceados |
 | no-test-suite | alta | B | package.json | 🟢 | Ronda 1 (capa-1) → Ronda 3 (copago/agenda-utils) → Ronda 4 (integration RLS) |
@@ -644,7 +809,7 @@ de A2/A3.
 | no-static-security-guard | alta | B | .github/workflows/ci.yml | 🟢 | Ronda 10 — step `npm run guard:isolation` en CI; desde A0b (Ronda 11) el CI corre en todas las ramas, no solo `main` |
 | no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook (Ola 2.4) |
 | plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4) |
-| c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🔴 | (EXTERNAL-CONFIG: Upstash) — env del dueño, sin cambio de código |
+| c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🟡 | Código endurecido en A3a (30-sep: timeout, fallback con log, prefijo por entorno, purga). **Falta la env de Upstash** (EXTERNAL-CONFIG §4, dueño) |
 | booking-same-patient-slot-toctou | baja | B | lib/bookings.ts (create/update/batch) | 🟢 | Ronda 6 — guard de app + **backstop DB**: índice único parcial `("tenantId","patientId","scheduledFor") WHERE patientId IS NOT NULL AND status <> 'CANCELLED'`, `P2002` manejado en los 4 paths de escritura |
 | sin-panel-owner | alta | B | lib/session.ts / app/(app)/plataforma | 🟡 | Ronda 7 — **parcial**: entregados `UserProfile.isPlatformAdmin`, `requireSuperAdmin()`, guard + sidebar y el panel `plataforma/{ejercicios,tags}` con CRUD del catálogo global. **Faltan** tickets/feedback, formulario de contacto e impersonación cross-tenant |
 
@@ -674,26 +839,26 @@ de A2/A3.
 | conflict-findfirst-sin-orderby | media | lib/bookings.ts:301 | 🟢 | booking-concurrencia (Ronda 1) |
 | batch-fuera-de-runwithrls | media | lib/bookings.ts:755 | 🟢 | Ronda 4 — `createBookingsBatch` corre bajo `runWithRls` (verificado) |
 | batch-create-overlap-race-and-no-rls | media | lib/bookings.ts:734 | 🟢 | idempotencia Ronda 1 + parte RLS Ronda 4 |
-| booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:620 | 🔴 | booking-concurrencia — diferido explícitamente en Ronda 2 |
+| booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:1191,1210 | 🟢 | A2a-S06 (30-sep) — lock atómico con `updatedAt` en el WHERE; devuelven el `updatedAt` nuevo |
 | mp-webhook-idempotency-check-outside-tx | baja | lib/mercadopago.ts:193 | 🟢 | payment-amount-anclado (Ronda 2) |
 | session-index-no-unique-constraint | baja | schema.prisma:715 | 🔴 | soft-delete-wholesale |
 | program-session-hard-delete | media | lib/patients.ts:1316 | 🟢 | patients-integridad — gate de rol (Ronda 2) |
 | session-totalsessions-read-modify-write | baja | lib/patients.ts:1347 | 🟢 | patients-integridad (Ronda 2) |
-| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1053 | 🔴 | copago-snapshot |
+| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1091 | 🔴 | copago-snapshot (B, con Planes). A2a-S08 cortó la parte de pérdida: misma OS actualiza en el lugar y el copago propio solo se borra con `resetCopago` confirmado |
 | coverage-sin-schema-zod | media | lib/patients.ts:1015 | 🟢 | patients-integridad (Ronda 2) |
 
 **Seguridad / config / observabilidad:**
 
 | Slug | Sev | Ubicación | Estado | Sesión / Gate |
 |---|---|---|---|---|
-| sin-headers-seguridad-csp | media | next.config.mjs | 🟡 | headers-seguridad — CSP en **Report-Only** (Ronda 2); falta activarla como bloqueante |
+| sin-headers-seguridad-csp | media | next.config.mjs | 🟡 | headers-seguridad — CSP en **Report-Only** (Ronda 2), con reportes a Sentry y HSTS solo en Production desde A3b (30-sep); falta activarla como bloqueante (C1) |
 | serveractions-allowedorigins-localhost | baja | next.config.mjs | 🟢 | headers-seguridad (Ronda 2) |
 | checkout-practitionerid-sin-validar | media | ~~booking/checkout/route.ts~~ | 🟢 | Ronda 2; la ruta huérfana `/api/booking/checkout` se **eliminó** en A0b (Ronda 11): sin callers, creaba turnos sin validar |
 | upload-sin-magic-bytes | media | lib/files.ts:118 | 🔴 | files-magic-bytes — sin sniffing de firma en el código |
 | password-sin-complejidad | baja | lib/auth.ts:53 | 🟢 | password-policy (Ronda 2; el lado Supabase es del dueño) |
-| rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts:32 | 🔴 | EXTERNAL-CONFIG: Upstash (bucket C) |
-| m1-sentry-no-wired | media | lib/logger.ts:6 | 🟡 | sentry-observabilidad — shim no-op cableado en `lib/observability.ts` (Ronda 2); `@sentry/nextjs` **no instalado** |
-| sentry-no-cableado | media | lib/logger.ts:6 | 🟡 | sentry-observabilidad — mismo estado que `m1-sentry-no-wired` |
+| rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts | 🟡 | Código listo (A3a, 30-sep); EXTERNAL-CONFIG: Upstash (dueño) |
+| m1-sentry-no-wired | media | instrumentation.ts | 🟡 | A3b-S-obs (30-sep): `@sentry/nextjs` 11.1.0 instalado, no-op sin DSN, PII redactada. **Falta `SENTRY_DSN`** (dueño). Sin SDK de cliente hasta C1 |
+| sentry-no-cableado | media | instrumentation.ts | 🟡 | mismo estado que `m1-sentry-no-wired` |
 | m2-silent-catches | media | notifications-internal.ts:37 | 🟢 | sentry-observabilidad (Ronda 2) |
 | audit-fire-and-forget | media | audit-extension.ts:74 | 🟢 | sentry-observabilidad (Ronda 2) |
 | m3-no-apm | media | — | ⏸ | gate: ≥5 tenants o incidente p95 |
@@ -707,14 +872,14 @@ de A2/A3.
 
 | Slug | Sev | Ubicación | Estado | Sesión |
 |---|---|---|---|---|
-| native-confirm-alert | media | turnos-view.tsx:92 · plan-view.tsx:534 · archivos-view.tsx:72 · session-detail.tsx:59,224 | 🟡 | Configuración ya usa `useConfirm` (Ronda 2); quedan `confirm()` nativos en HC y Seguimiento → A2 (S-ui) |
+| native-confirm-alert | media | turnos-view · plan-view · archivos-view · session-detail | 🟢 | A2 (30-sep): todo `useConfirm`; el `prompt()` de «Sesión a medida» pasó a Drawer. Re-verificado sin `confirm/alert/prompt` nativos en `components/` y `app/` |
 | basics-sin-feedback-exito | media | general-panel.tsx:83 | 🟢 | configuracion-ux ("Guardado ✓", verificado 2026-09-29) |
 | statustag-no-exhaustivo | media | agenda-client.tsx:1266 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
 | statustag-label-drift | baja | agenda-client.tsx:1271 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
 | turnos-fuera-de-horario-o-media-hora-no-visibles | media | agenda-client.tsx:1046 | 🟢 | agenda-visibilidad-statustag (Ronda 1) |
 | formateadores-moneda-duplicados | media | agenda-client.tsx:95 | 🟢 | consolidados en `formatARS` (Ronda 1 parcial → Ronda 3) |
 | export-type-en-use-server | baja | lib/dashboard.ts:32 | 🔴 | extraccion-logica-pura |
-| logica-en-use-server-y-cliente | media | lib/public-booking.ts:149 | 🔴 | extraccion-logica-pura |
+| logica-en-use-server-y-cliente | media | lib/public-booking.ts | 🟡 | A2b-S-pub extrajo la grilla pública a `lib/public-booking-slots.ts` (puro + test); el resto sigue en extraccion-logica-pura |
 
 **Deuda estructural / SaaS / docs:**
 
@@ -747,10 +912,56 @@ de A2/A3.
 | sin-not-found-403-custom | baja | app/ | 🟡 | error-loading-boundaries — `app/not-found.tsx` ✅ (Ronda 1); **403 custom sigue diferido** |
 | sin-sitemap-robots | baja | app/ | 🔴 | seo-analytics |
 
+### Hallazgos de la auditoría 23-sep y de A2/A3 (30-sep-2026)
+
+Solo los grupos que tocó el Bloque A (el resto de los ~45 grupos vive en el plan vigente, con su bloque).
+Evidencia de cada cierre en §Ronda 12.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| H1 delete-booking-con-cobro-manual | alta | A | lib/bookings.ts:1046 | 🟢 | A2a-S06 |
+| H2 editar-paciente-borra-cobertura-copago | alta | A | lib/patients.ts:1091 · hero.tsx:334 | 🟢 | A2a-S08 |
+| H3 cerrar-sesion-descarta-eva-notas | alta | A | lib/sessions.ts:462 | 🟢 | A2a-S03 |
+| H4 reserva-publica-takeover-por-dni | alta | A | lib/public-booking-internal.ts:122 | 🟢 | A2b-S-pub |
+| H5 signup-autoconfirma-email | alta | A | lib/auth.ts:49-137 | 🟢 | A3c-S-signup — `auth.signUp` verificado; el tenant se crea en `/onboarding` |
+| H6 preview-migra-prod | alta | A | scripts/vercel-build.mjs | 🟢 | A0b (staging aislado: A0d, dueño) |
+| booking-idor-practitioner-patient | alta | A | lib/bookings.ts:565-595,1295-1317 | 🟢 | A2a-S06 |
+| booking-idempotency-key-cross-tenant | alta | A | lib/bookings.ts:712-720 | 🟢 | A2a-S06 (hallado en la sesión) |
+| p2002-target-null-bajo-rls | media | A | lib/bookings.ts:234 | 🟢 | A2a-S06 — prerrequisito del flip de RLS cerrado |
+| basic-access-puede-escribir | alta | A | lib/bookings.ts:64 · lib/sessions.ts · lib/files.ts | 🟢 | A2a-S06/S03/S08, A2b-S-vis (acceso básico = solo ver) |
+| ics-export-invocable-como-rpc | media | A | lib/bookings-export-internal.ts:19 | 🟢 | A2a-S06 |
+| csv-export-invocable-como-rpc | media | A | lib/patients-export-internal.ts:33 | 🟢 | A2 (revisión) + escape de fórmulas y audit |
+| reschedule-heuristica-2h | alta | A | lib/sessions.ts:319 | 🟢 | A2a-S03 — mueve solo la sesión |
+| mp-webhook-downgrade-y-revive | alta | A | lib/mercadopago.ts:184,247 | 🟢 | A2b-S-pub |
+| public-booking-fuera-de-grilla | media | A | lib/public-booking-slots.ts:114 | 🟢 | A2b-S-pub |
+| public-pending-retiene-cupo-para-siempre | media | A | lib/booking-capacity.ts:132 | 🟢 | A2 — vence a los 30 min (UNPAID y FAILED) |
+| money-input-step-100-y-x100 | media | A | components/ui/money-input.tsx | 🟢 | A2b-S-cfg |
+| remove-member-con-turnos | media | A | lib/invitations.ts | 🟢 | A2b-S-cfg |
+| rate-limit-sin-timeout-y-gaps | alta | A | lib/rate-limit.ts:177 | 🟢 | A3a-S-rl (falta la env de Upstash, dueño) |
+| open-redirect-next | alta | A | lib/safe-next.ts:29 | 🟢 | A3b-S-auth |
+| session-sin-refresh-y-cookies-no-httponly | media | A | middleware.ts:69-87 · lib/supabase/cookie-options.ts | 🟢 | A3b-S-auth |
+| staff-igual-paciente | alta | A | lib/portal.ts:61 · lib/invitations.ts:148 | 🟢 | A3b-S-auth (solo propio tenant en `createInvitation`; ver SECURITY §9) |
+| checkin-trunca-notas-del-kine | media | A | lib/portal.ts:196 | 🟢 | A3b-S-auth |
+| next-cves-14.2.18 | alta | A | package.json | 🟢 | A3b-S-obs → 14.2.35 |
+| logs-y-sentry-con-pii | media | A | lib/redact.ts | 🟢 | A3b-S-obs |
+| write-paths-sin-membresia-aceptada | media | C0 | lib/bookings.ts (create/batch) · lib/patients.ts (reasignar) · lib/services.ts · lib/sessions.ts (sesión a medida) | 🔴 | C0 — validan practitioner ∈ tenant pero no membresía aceptada; los pickers ya no ofrecen removidos |
+| batch-key-otro-tenant-no-rechaza | baja | C | lib/bookings.ts:1465 | 🔴 | C — usa `update: {}` (no escribe nada ajeno), pero debería rechazar como `createBooking` |
+| cupo-1-toctou | media | C | lib/bookings.ts · lib/public-booking.ts · lib/mercadopago.ts | 🔴 | C — TOCTOU entre chequeo e INSERT; el pago tardío sobre reserva vencida confirma y avisa sin revalidar cupo |
+| formatars-sin-centavos-en-listados | baja | C1 | lib/format.ts | 🔴 | C1 — $1.500,50 se ve "$1.501" |
+| destildar-copago-publica-la-vence | baja | C1 | components/agenda | ⏸ | aceptado: vuelve UNPAID y puede quedar vencida |
+| seguimiento-7-queries | baja | C1 | app/(app)/seguimiento/page.tsx | 🔴 | C1 perf — medido al cierre de A: 8→28 statements en 1 tx, 15→47 ms (PERF.md) |
+| portal-plan-expone-notas-de-sesion | media | C1 | lib/portal.ts:148,156,179 | 🔴 | C1 · portal v2 — `getPortalPlan` devuelve `Session.notes` del kine al paciente |
+| signup-confirm-doble-salto | alta | A | lib/auth.ts · lib/safe-next.ts `unwrapConfirmNext` · app/auth/confirm/route.ts | 🟢 | cerrado 30-sep: `emailRedirectTo` = destino final + unwrap de `next` autorreferente; test en safe-next.test.ts |
+| tenant-contacto-solo-en-stepper | baja | C0 | lib/onboarding.ts · Configuración | 🔴 | C0 — `phone`/`whatsapp`/`publicEmail` no se editan en `updateTenantBasics` |
+| onboarding-actor-otro-tenant | baja | C | lib/onboarding.ts (pasos 3-6) | 🔴 | C — OWNER con alta sin terminar que acepta invitación de otro tenant: `getActor` puede elegir el otro |
+| env-local-node-env-rompe-build | baja | ops | .env.local | 🟡 | documentado en TESTING.md (build con `-v NODE_ENV=production`) |
+
 ### Resumen del checklist (al 2026-09-29)
 
 93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
-auditoría del 23-sep (ver §Ronda 11), que se suman fila por fila a medida que A2/A3 los cierran.
+auditoría del 23-sep ni los de A2/A3 (tabla de arriba). *Los conteos de abajo son del 29-sep; los cierres
+del 30-sep (toggles de cobro, `native-confirm-alert`, y los 🟡 de rate-limit/Sentry/`logica-en-use-server`) no
+se recontaron.*
 
 | Estado | Confirmados | Menores | Nuevos | **Total** |
 |---|---|---|---|---|
@@ -759,10 +970,11 @@ auditoría del 23-sep (ver §Ronda 11), que se suman fila por fila a medida que 
 | ⏸ DIFERIDO-CON-GATE | 0 | 4 | 0 | **4** |
 | 🔴 ABIERTO | 4 | 17 | 2 | **23** |
 
-Los 4 confirmados que siguen 🔴: `practitioner-userid-unique-blocks-multitenant` (C0),
-`no-saas-billing-charge-clinic` y `plan-fields-inert-no-upgrade-no-enforcement` (C2) y
-`c1-ratelimit-inmemory` (bucket C: Upstash, más el endurecimiento de código en A3). El **flip prod** de
-`rls-bypassed-by-superuser-role` (🟢 solo en código) sigue siendo del dueño.
+Confirmados que siguen 🔴 al 30-sep: `practitioner-userid-unique-blocks-multitenant` (C0),
+`no-saas-billing-charge-clinic` y `plan-fields-inert-no-upgrade-no-enforcement` (C2).
+`c1-ratelimit-inmemory` pasó a 🟡: el código se endureció en A3a y falta solo la env de Upstash (dueño). El
+**flip prod** de `rls-bypassed-by-superuser-role` (🟢 solo en código) sigue siendo del dueño; su prerrequisito
+de código (`p2002-target-null-bajo-rls`) se cerró en A2a-S06.
 
 ---
 
@@ -810,11 +1022,19 @@ era intencional.
    la transacción. No romper la semántica local-a-tx.
 2. **`lib/session.ts`** — `getActor()` throws / `tryGetActor()` null; demo actor gateado por
    `KINESOFT_ALLOW_DEMO_ACTOR` + `NODE_ENV !== "production"` + tenant `movare`. No relajar el gate.
-3. **`middleware.ts:45-46`** — borra `x-tenant-slug` y `x-tenant-id` de cada request y solo re-setea
+3. **`middleware.ts:109-144`** — borra `x-tenant-slug` y `x-tenant-id` de cada request y solo re-setea
    `x-tenant-slug` para `/c/<slug>` y subdominios (anti-smuggling). Preservar el orden delete-then-set.
+   Desde A3b (30-sep) el mismo middleware **refresca la sesión de Supabase** (`getAll`/`setAll` +
+   `getSession()`, `:69-87`), copia las cookies al request y a la respuesta, marca `private, no-store` si hubo
+   Set-Cookie (`:129`) y deja pasar `/_next` y `/api/webhooks` sin tocarlos (`:99`). El strip y el
+   `x-request-id` corren en **todos** los caminos, también cuando hubo refresh: no separarlos.
 4. **`lib/mercadopago.ts`** — firma HMAC-SHA256 con `timingSafeEqual`, ventana de replay 5 min,
    `consumeWebhook` idempotente por `(externalId, status)`, `redactPayload` allow-list; prod 503 sin
-   `MP_WEBHOOK_SECRET`. No reintroducir carve-out por `NODE_ENV` en la firma.
+   `MP_WEBHOOK_SECRET`. No reintroducir carve-out por `NODE_ENV` en la firma. **Desde A2b (30-sep):**
+   `nextPaymentStatus` (`:184`) nunca baja un PAID salvo a REFUNDED; cada evento queda en
+   `rawPayload.attempts` (redactado, últimos 20); todo corre en una tx con `SELECT … FOR UPDATE` sobre el turno
+   (`:283`) + reintento como update ante P2002; solo PENDING pasa a CONFIRMED y **nunca se reactiva** un turno
+   CANCELLED/NO_SHOW/COMPLETED (se registra el pago y se avisa "revisá el reembolso").
 5. **`lib/copago.ts`** (re-exportado por `lib/billing-internal.ts`) — `resolveBookingCopagoCents` con precedencia estricta nullable
    (`Booking.copagoCents` → `Coverage.copagoCents` → insurer → Particular → service); 0 es
    intencional. Fuente única de copago. No duplicar el cálculo.
@@ -823,7 +1043,8 @@ era intencional.
 7. **`lib/bookings.ts`** — `expectedUpdatedAt` (optimistic concurrency, 6 usos); mutaciones bajo
    `runWithRls`. No quitar el chequeo de `updatedAt`.
 8. **`app/auth/callback/route.ts`** — linkea `Patient` solo si `email_confirmed_at` y (`userId==null`
-   o ya coincide); nunca re-bindea un `Patient` ya linkeado (anti-takeover).
+   o ya coincide); nunca re-bindea un `Patient` ya linkeado (anti-takeover). Desde A3b tampoco vincula
+   fichas a una identidad con Membership (staff ≠ paciente, `:62`).
 9. **`lib/files.ts`** — `ALLOWED_MIME`, `SAFE_EXT_RE /^[a-z0-9]{1,8}$/` contra traversal,
    `getDownloadUrl` audita cada URL firmada. Mantener el audit por descarga.
 10. **`lib/insurers-internal.ts`** — `resolveInsurerName` normaliza y linkea free-form al catálogo
@@ -834,9 +1055,11 @@ era intencional.
     debe recibir tz AR.
 12. **`lib/*-internal.ts`** — billing/insurers/public-booking/notifications con `import "server-only"`;
     no exponerlos como RPC (`"use server"`).
-13. **`lib/rate-limit.ts`** — ruta Upstash con `INCR`+`PEXPIRE NX` correcta; solo cae a `memory()` sin
-    config. *(Corrección 2026-09-29: la ruta Upstash no tiene try/catch ni timeout, y la tabla de SECURITY §8
-no coincidía con el código → A3 S-rl.)*
+13. **`lib/rate-limit.ts`** — ruta Upstash con `INCR`+`PEXPIRE NX`; desde A3a (30-sep) con try/catch +
+    `AbortSignal.timeout(1500)` + validación de la respuesta, y **ante cualquier falla cae a `memory()` con log**
+    `rate_limit.upstash_fallback` (un Upstash caído no rompe el login). Claves con prefijo
+    `rl:<VERCEL_ENV|dev>:` (preview y prod no comparten contadores) y purga del `Map` a 10k claves. La IP sale
+    **solo** de `clientIp()` (`lib/client-ip.ts`); no volver a parsear `x-forwarded-for` a mano.
 14. **`lib/audit-extension.ts`** — extensión Prisma que audita reads sobre `PHI_MODELS` tras resolver
     la query. ⚠️ **Corrección 2026-09-29: NO está cableada.** `getAuditedPrisma` (`lib/db.ts:53`) no tiene
     callers, así que hoy no se audita ninguna lectura automáticamente. Activarla o no es una decisión de
@@ -851,6 +1074,47 @@ no coincidía con el código → A3 S-rl.)*
 17. **Anticipos de diseño ya presentes** — `Booking.seriesId` poblado para regrupar series sin
     migración destructiva; enum `Role` con ASSISTANT/BILLING/ENTERPRISE mirando al futuro; schema
     100% dinero en `*Cents Int`. No revertir.
+18. **`lib/booking-capacity.ts` — contrato de `isHoldingCapacity` (A2, 30-sep).** Puro, sin reloj propio
+    (`now` lo pasa el caller). Deja de contar para el cupo **solo** la reserva pública impaga y vencida:
+    `isPublicReservation` && `status = PENDING` && `paymentStatus ∈ {UNPAID, FAILED}` && `now - createdAt > 30 min`
+    (exactamente 30 min todavía retiene). El filtro de CANCELLED es del caller. Lo consumen create/update/batch
+    y `suggestNextFreeSlot` de `lib/bookings.ts`, el turnero público y el webhook. **El discriminante es la
+    key, no `patientId != null`:** `isPublicReservation({idempotencyKey, patientId})` (`:97`) reconoce
+    `pub:<tenantId>:<uuid>` y el formato pre-A2 `<tenant>:<prof>:<ISO>:<patientId>` (último segmento = el
+    `patientId` de la fila); ante la duda **retiene**. Por eso `createBooking` descarta toda key de cliente
+    con prefijo `pub:`. No simplificar a "PENDING con paciente": un guest de la recepción al que se le asigna
+    paciente quedaría idéntico y liberaría el cupo.
+19. **`lib/safe-next.ts`** — `safeNext`/`safeNextFromUrl` aceptan solo paths propios (empieza con `/`, sin `//`,
+    sin `\`, sin caracteres de control, y el origin no cambia al resolverlo contra un centinela) y `isAllowedOrigin` chequea Origin/Sec-Fetch-Site en los POST de auth. Todo `next=` de
+    sign-in, sign-out, google, callback, confirm y login pasa por acá; no concatenar `${APP_URL}${next}`.
+20. **`lib/recovery-cookie.ts`** — cookie `ks_recovery` httpOnly de 15 min, valor `<userId>.<exp>.<hmac>`
+    firmado y verificado con `timingSafeEqual`. Solo la setea `/auth/confirm` en `type=recovery`; el reset
+    (A3c) la exige para no pedir la contraseña actual y la borra tras el éxito (un solo uso). No reemplazarla por
+    un flag sin firma ni alargar el TTL.
+21. **`lib/supabase/cookie-options.ts`** — cookies de Supabase `httpOnly`, `secure` en prod y `sameSite=lax`.
+    `lib/supabase/browser.ts` hoy no tiene importadores: si se usa para auth del lado cliente, revisar el
+    httpOnly antes (el cliente no podría leer la sesión).
+22. **Staff ≠ paciente (A3b)** — una identidad con Membership no se trata como paciente en el portal, el
+    callback no le vincula fichas, `createInvitation` rechaza un email de Patient con portal vinculado **del
+    propio tenant** (no consultar otros tenants: sería un oráculo cross-tenant) y `acceptInvite` rechaza si
+    `Patient.userId = user.id` o el email es de un Patient con portal.
+23. **`lib/redact.ts` + Sentry sin cliente** — logger y `beforeSend*` de Sentry pasan por `redact()`
+    (claves sensibles + emails, JWT, Bearer/Basic, tokens MP, `?token=`/`code=`, DNI con formato);
+    `sendDefaultPii: false`; Sentry es **no-op total sin `SENTRY_DSN`**. No agregar el SDK de cliente sin
+    pasar por C1 (presupuesto de bundle).
+24. **Exports solo por ruta** — `exportBookingsIcs` y `exportPatientsCsv` viven en `lib/*-export-internal.ts`
+    (`server-only`); la única puerta es su ruta (`/api/agenda/export`, `/api/pacientes/export`) con rate-limit,
+    tope de rango y audit. No re-exportarlos desde un `"use server"`.
+25. **Gate de onboarding (A3c)** — `app/(app)/layout.tsx` decide con `decideAppGate`
+    (`lib/onboarding-logic.ts:100`, pura y testeada): sin sesión → `/login?next=` (vía `x-pathname` del
+    middleware + `safeNext`), sin membresía → `/onboarding`, OWNER con `onboardingCompletedAt == null` →
+    `/onboarding`. La migración backfilleó `onboardingCompletedAt = createdAt`, así que los tenants existentes
+    (el cliente vivo) no ven el stepper. No mover el gate a la UI ni saltearlo para "acelerar" un alta.
+26. **`lib/tenant-bootstrap.ts` es el único camino de alta de tenant** — `bootstrapTenant` crea Tenant +
+    Practitioner + Membership OWNER (aceptada) + Insurer "Particular" en una tx, con slug libre derivado del
+    nombre, y rechaza un Practitioner de otro tenant. Lo usan `/onboarding` (paso 2) y
+    `scripts/create-tenant.ts`. El signup **no** crea tenant: no volver a crearlo ahí ni con
+    `admin.createUser({ email_confirm: true })` (era H5).
 
 ---
 

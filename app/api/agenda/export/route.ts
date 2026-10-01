@@ -1,4 +1,4 @@
-import { exportBookingsIcs } from "@/lib/bookings";
+import { exportBookingsIcs } from "@/lib/bookings-export-internal";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
 import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
@@ -11,7 +11,10 @@ export const dynamic = "force-dynamic";
  * file of every booking in the requested window for the active tenant.
  * Defaults to the current ISO week if no range supplied.
  *
- * Auth: requires an authenticated practitioner session.
+ * Auth: requires an authenticated practitioner session. This route is the
+ * ONLY door to `exportBookingsIcs` (server-only since A2a-S06: as a "use
+ * server" export it was callable as an RPC, skipping this rate-limit and the
+ * 90-day cap). Basic-access rows come out masked (no notes/title/description).
  * Rate-limit: 10 exports per minute per user.
  * Range cap: 90 days max to prevent unbounded scrapes.
  */
@@ -58,7 +61,7 @@ export async function GET(req: Request) {
     return new Response("Range too wide (max 90 days)", { status: 400 });
   }
 
-  const body = await exportBookingsIcs({ from, to });
+  const body = await exportBookingsIcs(actor, { from, to });
   const filename = `agenda-${from.toISOString().slice(0, 10)}.ics`;
   return new Response(body, {
     headers: {

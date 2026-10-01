@@ -9,7 +9,8 @@ import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatARS, parseARS } from "@/lib/format";
+import { MoneyInput } from "@/components/ui/money-input";
+import { formatARS } from "@/lib/format";
 import { SERVICE_COLORS } from "@/lib/service-colors";
 import type { ServiceRow } from "@/lib/services-types";
 import {
@@ -128,15 +129,25 @@ function ServiceModal({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(service?.color ?? null);
+  // Precio controlado en centavos (MoneyInput). Antes era `type=number
+  // step=50` leído con `parseARS`: "1500.5" del input numérico se leía como
+  // miles → ×100 (A2b-S-cfg).
+  const [priceCents, setPriceCents] = useState<number | null>(service?.priceCents ?? 0);
+  const [priceInvalid, setPriceInvalid] = useState(false);
+  const priceChanged = !!service && (priceCents ?? 0) !== service.priceCents;
 
   const submit = (formData: FormData) => {
     setError(null);
+    if (priceInvalid) {
+      setError("Revisá el precio: el monto no es válido.");
+      return;
+    }
     start(async () => {
       const payload = {
         name: String(formData.get("name") ?? ""),
         description: String(formData.get("description") ?? ""),
         durationMin: Number(formData.get("durationMin") ?? 45),
-        priceCents: parseARS(String(formData.get("price") ?? "")) ?? 0,
+        priceCents: priceCents ?? 0,
         practitionerId: String(formData.get("practitionerId") ?? ""),
         maxConcurrent: String(formData.get("maxConcurrent") ?? ""),
         color: String(formData.get("color") ?? ""),
@@ -191,13 +202,16 @@ function ServiceModal({
             defaultValue={service?.durationMin ?? 45}
             required
           />
-          <FormField
+          <MoneyInput
             label="Precio (ARS)"
-            name="price"
-            type="number"
-            min={0}
-            step={50}
-            defaultValue={service ? service.priceCents / 100 : 0}
+            value={priceCents}
+            onChange={setPriceCents}
+            onInvalidChange={setPriceInvalid}
+            hint={
+              priceChanged
+                ? "Afecta los turnos no cobrados sin copago propio."
+                : undefined
+            }
           />
         </div>
         <FormField

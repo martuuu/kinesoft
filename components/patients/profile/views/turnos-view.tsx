@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { setBookingStatus, deleteBooking } from "@/lib/bookings";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
@@ -21,19 +22,38 @@ export function TurnosView({
   loading,
   patchBooking,
   dropBooking,
+  restoreBooking,
+  readOnly = false,
 }: {
   patientId: string;
   bookings: PatientBookingFull[] | null;
   loading: boolean;
   patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
   dropBooking: (id: string) => void;
+  /**
+   * Rollback del borrado optimista: re-inserta la fila si el server rechaza el
+   * borrado. Sin este callback la fila recién se quita cuando el server
+   * confirma (no hay optimismo que deshacer).
+   */
+  restoreBooking?: (b: PatientBookingFull) => void;
+  /**
+   * Acceso básico = solo ver (decisión del dueño, 30-sep). Hoy el perfil
+   * completo solo se monta con acceso `full`, así que el default es editable;
+   * el prop deja la vista lista para cuando se muestre en otro contexto.
+   */
+  readOnly?: boolean;
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [pending, start] = useTransition();
+  // `setBookingStatus` devuelve la nueva versión (`data.updatedAt`): se guarda
+  // en la fila para que la acción siguiente mande el lock vigente y no rebote
+  // como "cambiado en otra pestaña".
+  const versionOf = (b: PatientBookingFull) => new Date(b.updatedAt).toISOString();
 
   // "Nuevo turno" opens the agenda's create flow pre-filled with this patient
   // (the /agenda?new=1&patient= deep-link is already handled by AgendaClient).
-  const header = (
+  const header = readOnly ? null : (
     <div style={{ display: "flex", justifyContent: "flex-end" }}>
       <Link href={`/agenda?new=1&patient=${patientId}`} style={{ textDecoration: "none" }}>
         <Button variant="primary">
@@ -77,24 +97,72 @@ export function TurnosView({
     return aUp ? -1 : 1;
   });
 
+  // A2b-S-ui (handoff de A2a-S06): optimistic lock con `expectedUpdatedAt` y,
+  // al reactivar un CANCELLED, confirmación de sobreturno / superposición del
+  // paciente con `useConfirm` y re-llamada con el flag. Antes se mandaba sin
+  // versión (pisaba cambios de otra pestaña) y el conflicto se mostraba como
+  // un error genérico sin salida.
   const setStatus = (b: PatientBookingFull, status: PatientBookingFull["status"]) => {
-    const prev = b.status;
+    const prevStatus = b.status;
+    const expected = versionOf(b);
     patchBooking(b.id, { status });
     start(async () => {
-      const r = await setBookingStatus(b.id, status);
-      if (!r.ok) {
-        patchBooking(b.id, { status: prev });
+      let force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {};
+      // Como mucho dos confirmaciones (cupo del profesional + paciente superpuesto).
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await setBookingStatus(b.id, status, expected, force);
+        if (r.ok) {
+          patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
+          return;
+        }
+        if (r.conflict && !force.allowOverbooking) {
+          const ok = await confirm({
+            title: `${r.conflict.practitionerName} ya tiene un turno en ese horario`,
+            message: "Si lo reactivás, queda como sobreturno.",
+            confirmLabel: "Reactivar como sobreturno",
+          });
+          if (!ok) break;
+          force = { ...force, allowOverbooking: true };
+          continue;
+        }
+        if (r.patientOverlap && !force.allowPatientOverlap) {
+          const ok = await confirm({
+            title: "Se superpone con otro turno del paciente",
+            message: "El paciente ya tiene un turno que se cruza con este horario. ¿Reactivarlo igual?",
+            confirmLabel: "Reactivar igual",
+          });
+          if (!ok) break;
+          force = { ...force, allowPatientOverlap: true };
+          continue;
+        }
         toast.error("No pudimos actualizar el turno", { description: r.error });
+        break;
       }
+      patchBooking(b.id, { status: prevStatus });
     });
   };
-  const remove = (b: PatientBookingFull) => {
-    if (!window.confirm("¿Eliminar este turno? Esta acción es definitiva.")) return;
-    dropBooking(b.id);
+  // Borrado: confirmación con `useConfirm` (no `window.confirm`), lock y
+  // rollback de la fila si el server lo rechaza (p. ej. turno con cobro
+  // registrado, o cambiado en otra pestaña). Antes la fila desaparecía aunque
+  // el borrado fallara.
+  const remove = async (b: PatientBookingFull) => {
+    const ok = await confirm({
+      title: "¿Eliminar este turno?",
+      message: "Esta acción es definitiva. Si solo no va a venir, usá «Cancelar turno».",
+      confirmLabel: "Eliminar",
+      tone: "danger",
+    });
+    if (!ok) return;
+    if (restoreBooking) dropBooking(b.id);
     start(async () => {
-      const r = await deleteBooking(b.id);
-      if (!r.ok) toast.error("No pudimos eliminar el turno", { description: r.error });
-      else toast.success("Turno eliminado");
+      const r = await deleteBooking(b.id, versionOf(b));
+      if (!r.ok) {
+        if (restoreBooking) restoreBooking(b);
+        toast.error("No pudimos eliminar el turno", { description: r.error });
+        return;
+      }
+      if (!restoreBooking) dropBooking(b.id);
+      toast.success("Turno eliminado");
     });
   };
 
@@ -129,7 +197,11 @@ export function TurnosView({
             <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>{formatARS(b.copagoCents)}</span>
             <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
             <BookingStatusTag status={b.status} />
-            <TurnoActionsMenu booking={b} onStatus={(s) => setStatus(b, s)} onDelete={() => remove(b)} disabled={pending} />
+            {readOnly ? (
+              <span />
+            ) : (
+              <TurnoActionsMenu booking={b} onStatus={(s) => setStatus(b, s)} onDelete={() => void remove(b)} disabled={pending} />
+            )}
           </div>
         );
       })}

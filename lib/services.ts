@@ -162,27 +162,65 @@ export async function updateService(
     }));
     if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
   }
-  await runWithRls(actor.tenantId, (tx) => tx.service.update({
-    where: { id },
-    data: {
-      ...parsed.data,
-      description: parsed.data.description === "" ? null : parsed.data.description,
-      color: parsed.data.color === "" ? null : parsed.data.color,
-      practitionerId:
-        parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
-    },
-  }));
+  let changes: AuditDiff;
+  try {
+    // Lectura del "antes" y update en la misma transacción: el audit
+    // antes/después (A2b-S-cfg) tiene que describir exactamente lo que
+    // pisó este update, no lo que otro guardado dejó un instante antes.
+    changes = await runWithRls(actor.tenantId, async (tx) => {
+      const before = await tx.service.findFirstOrThrow({
+        where: { id, tenantId: actor.tenantId },
+        select: { name: true, priceCents: true },
+      });
+      const after = await tx.service.update({
+        where: { id },
+        data: {
+          ...parsed.data,
+          description: parsed.data.description === "" ? null : parsed.data.description,
+          color: parsed.data.color === "" ? null : parsed.data.color,
+          practitionerId:
+            parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
+        },
+        select: { name: true, priceCents: true },
+      });
+      return auditDiff(before, after);
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return { ok: false, error: "Ya existe un servicio con ese nombre." };
+    }
+    logger.error("service.update.failed", { err: e instanceof Error ? e.message : String(e) });
+    return { ok: false, error: "No pudimos guardar el servicio." };
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
     action: "service.update",
     entity: "Service",
     entityId: id,
+    // Solo nombre y monto, y solo si cambiaron: el precio es plata (entra en
+    // el fallback del copago) y hasta A2 el audit no decía de cuánto a cuánto.
+    ...(changes ? { payload: changes } : {}),
   });
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
   revalidateTag(tags.services(actor.tenantId));
   return { ok: true, data: undefined };
+}
+
+type AuditDiff = { before: Record<string, unknown>; after: Record<string, unknown> } | null;
+
+/** `{ before, after }` con solo los campos que cambiaron; null si ninguno. */
+function auditDiff<T extends Record<string, unknown>>(before: T, after: T): AuditDiff {
+  const b: Record<string, unknown> = {};
+  const a: Record<string, unknown> = {};
+  for (const k of Object.keys(before)) {
+    if (before[k] !== after[k]) {
+      b[k] = before[k];
+      a[k] = after[k];
+    }
+  }
+  return Object.keys(b).length ? { before: b, after: a } : null;
 }
 
 export async function deleteService(id: string): Promise<ActionResult> {

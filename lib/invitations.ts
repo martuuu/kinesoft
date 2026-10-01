@@ -19,7 +19,7 @@
  * authenticated. The Practitioner row inherits the invite's specialty
  * (if any).
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { Role } from "@prisma/client";
 import { z } from "zod";
@@ -30,6 +30,8 @@ import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { tags } from "@/lib/cache-tags";
+import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import type { ActionResult } from "@/lib/validation";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
 
@@ -125,6 +127,9 @@ export async function createInvitation(
   const actor = await requireOwner();
   const emailLc = parsed.data.email.toLowerCase();
 
+  const rl = await inviteRateLimit(actor.userId, emailLc);
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
+
   // Refuse if a user with this email is already a member of the tenant.
   const existing = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { tenantId: actor.tenantId, user: { email: emailLc } },
@@ -132,6 +137,27 @@ export async function createInvitation(
   }));
   if (existing) {
     return { ok: false, error: "Ese email ya es miembro del consultorio." };
+  }
+
+  // Staff ≠ paciente (A3b-S-auth): no se invita al equipo un email que en
+  // ESTE consultorio es un paciente con acceso al portal. Solo se mira el
+  // propio tenant (canal RLS): mirar "cualquier tenant" acá le daría a
+  // cualquier OWNER un oráculo de "¿este email es paciente en algún lado?".
+  // El chequeo entre tenants lo hace `acceptInvite`, donde quien pregunta es
+  // el dueño de la identidad.
+  const portalPatient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
+    where: {
+      tenantId: actor.tenantId,
+      email: { equals: emailLc, mode: "insensitive" },
+      userId: { not: null },
+    },
+    select: { id: true },
+  }));
+  if (portalPatient) {
+    return {
+      ok: false,
+      error: "Ese email es de un paciente con acceso al portal. Para el equipo usá otro email.",
+    };
   }
 
   // If there's already a non-expired invitation for this email, return
@@ -147,14 +173,41 @@ export async function createInvitation(
   if (live) {
     // Existing invite — rotate the token (the stored hash can't reproduce the
     // old URL) and re-send, extending the TTL so the fresh prompt is valid.
+    //
+    // A3b-S-auth: re-invitar ACTUALIZA rol y datos. Antes se ignoraba lo que
+    // el OWNER cargó la segunda vez: invitaba como PRACTITIONER, se daba
+    // cuenta, re-invitaba como ADMIN… y el invitado entraba como PRACTITIONER.
     const rawToken = randomBytes(24).toString("base64url");
+    const next = {
+      firstName: parsed.data.firstName,
+      lastName: parsed.data.lastName,
+      role: parsed.data.role as Role,
+      specialty: parsed.data.specialty || null,
+    };
     await runWithRls(actor.tenantId, (tx) => tx.invitation.update({
       where: { id: live.id },
-      data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+      data: {
+        ...next,
+        token: hashInviteToken(rawToken),
+        expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+      },
     }));
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    for (const k of ["firstName", "lastName", "role", "specialty"] as const) {
+      if (live[k] !== next[k]) changed[k] = { from: live[k], to: next[k] };
+    }
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "invitation.reinvite",
+      entity: "Invitation",
+      entityId: live.id,
+      payload: { email: emailLc, changed },
+    });
+    revalidatePath("/configuracion");
     const emailSent = await sendInvitationEmail({
       email: live.email,
-      firstName: live.firstName,
+      firstName: next.firstName,
       tenantName: (await runWithRls(actor.tenantId, (tx) => tx.tenant.findUnique({
         where: { id: actor.tenantId },
         select: { name: true },
@@ -201,6 +254,21 @@ export async function createInvitation(
   });
   revalidatePath("/configuracion");
   return { ok: true, data: { id: row.id, url: inviteUrl(rawToken), emailSent } };
+}
+
+/**
+ * A3a-S-rl: `createInvitation` y `regenerateInvitationUrl` mandan un mail de
+ * Supabase por llamada y no tenían límite — un owner (o una sesión robada)
+ * podía usar el consultorio como cañón de spam y quemar la cuota de envío.
+ * 10/h por actor + 1 cada 10 min por destinatario (hash del email: nunca en
+ * claro en la clave). Create y regenerate comparten el bucket del
+ * destinatario, así "crear + regenerar" seguidos también cuenta.
+ */
+async function inviteRateLimit(actorId: string, email: string) {
+  return rateLimitAll([
+    { key: `invite:actor:${actorId}`, limit: 10, windowMs: 3_600_000 },
+    { key: `invite:to:${hashKeyPart(email)}`, limit: 1, windowMs: 600_000 },
+  ]);
 }
 
 /**
@@ -288,6 +356,8 @@ export async function regenerateInvitationUrl(
     select: { id: true, email: true, firstName: true },
   }));
   if (!row) return { ok: false, error: "Invitación no encontrada o ya aceptada." };
+  const rl = await inviteRateLimit(actor.userId, row.email);
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
   // Tokens are stored hashed, so the old URL is unrecoverable — mint a fresh
   // token (rotating it) and extend the TTL for the re-share.
   const rawToken = randomBytes(24).toString("base64url");
@@ -317,13 +387,19 @@ export async function changeMemberRole(
   const actor = await requireOwner();
   const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { id: membershipId, tenantId: actor.tenantId },
-    select: { id: true, userId: true, role: true },
+    select: { id: true, userId: true, role: true, acceptedAt: true },
   }));
   if (!m) return { ok: false, error: "Miembro no encontrado." };
   if (m.userId === actor.userId && role !== "OWNER") {
     return { ok: false, error: "No podés cambiar tu propio rol de OWNER." };
   }
+  if (m.role === role) return { ok: true, data: undefined };
   if (role === "OWNER" && m.userId !== actor.userId) {
+    // El OWNER no se transfiere a una membresía que nunca se aceptó: el
+    // consultorio quedaría sin nadie que pueda entrar como dueño.
+    if (!m.acceptedAt) {
+      return { ok: false, error: "Solo podés transferir el OWNER a alguien que ya aceptó la invitación." };
+    }
     // Transferring OWNER role — downgrade self to ADMIN first.
     await runWithRls(actor.tenantId, async (tx) => {
       await tx.membership.update({
@@ -347,12 +423,25 @@ export async function changeMemberRole(
     action: "membership.role.change",
     entity: "Membership",
     entityId: membershipId,
-    payload: { role },
+    payload: { from: m.role, role },
   });
   revalidatePath("/configuracion");
+  // A2b-S-cfg: la lista de profesionales de la agenda está cacheada por tag;
+  // sin esto un cambio de equipo tardaba hasta el TTL en verse.
+  revalidateTag(tags.practitioners(actor.tenantId));
   return { ok: true, data: undefined };
 }
 
+/**
+ * Quitar a alguien del equipo (A2b-S-cfg).
+ *
+ * Antes se borraba la membresía sin mirar nada: el profesional seguía en el
+ * selector de la agenda (listPractitioners no miraba membresías) y sus turnos
+ * futuros y pacientes asignados quedaban colgados de alguien que ya no puede
+ * entrar. Ahora se rechaza, con conteo, mientras tenga turnos futuros activos
+ * (PENDING/CONFIRMED) o pacientes asignados sin archivar: hay que
+ * reasignarlos primero. El conteo y el borrado van en la misma transacción.
+ */
 export async function removeMember(membershipId: string): Promise<ActionResult> {
   const actor = await requireOwner();
   const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
@@ -363,16 +452,61 @@ export async function removeMember(membershipId: string): Promise<ActionResult> 
   if (m.userId === actor.userId) {
     return { ok: false, error: "No podés removerte a vos mismo. Transferí el OWNER primero." };
   }
-  // Soft remove: delete the Membership but leave the UserProfile +
-  // Practitioner intact (they may be members of other tenants).
-  await runWithRls(actor.tenantId, (tx) => tx.membership.delete({ where: { id: membershipId } }));
+  const blocked = await runWithRls(actor.tenantId, async (tx) => {
+    const prac = await tx.practitioner.findFirst({
+      where: { userId: m.userId, tenantId: actor.tenantId },
+      select: { id: true },
+    });
+    if (prac) {
+      const [futureBookings, assignedPatients] = await Promise.all([
+        tx.booking.count({
+          where: {
+            tenantId: actor.tenantId,
+            practitionerId: prac.id,
+            scheduledFor: { gte: new Date() },
+            status: { in: ["PENDING", "CONFIRMED"] },
+          },
+        }),
+        tx.patient.count({
+          where: {
+            tenantId: actor.tenantId,
+            assignedPractitionerId: prac.id,
+            archivedAt: null,
+          },
+        }),
+      ]);
+      if (futureBookings > 0 || assignedPatients > 0) {
+        return { futureBookings, assignedPatients };
+      }
+    }
+    // Soft remove: delete the Membership but leave the UserProfile +
+    // Practitioner intact (history: past bookings/sessions point at it, and
+    // they may be members of other tenants).
+    await tx.membership.delete({ where: { id: membershipId } });
+    return null;
+  });
+  if (blocked) {
+    const parts: string[] = [];
+    if (blocked.futureBookings > 0) {
+      parts.push(`${blocked.futureBookings} turno${blocked.futureBookings === 1 ? "" : "s"} futuro${blocked.futureBookings === 1 ? "" : "s"}`);
+    }
+    if (blocked.assignedPatients > 0) {
+      parts.push(`${blocked.assignedPatients} paciente${blocked.assignedPatients === 1 ? "" : "s"} asignado${blocked.assignedPatients === 1 ? "" : "s"}`);
+    }
+    return {
+      ok: false,
+      error: `No se puede quitar: tiene ${parts.join(" y ")}. Reasignalos primero.`,
+    };
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
     action: "membership.remove",
     entity: "Membership",
     entityId: membershipId,
+    payload: { userId: m.userId },
   });
   revalidatePath("/configuracion");
+  revalidateTag(tags.practitioners(actor.tenantId));
   return { ok: true, data: undefined };
 }

@@ -12,13 +12,15 @@
  *
  * Renders a single shared `<Modal>`-style dialog driven by promise state,
  * so any number of callsites reuse one mounted instance. Escape / backdrop
- * / "Cancelar" resolve `false`; the confirm button resolves `true`.
+ * / "Cancelar" resolve `false`; the confirm button resolves `true`. Escape
+ * no se propaga a overlays de abajo (Drawer, menús): ver el efecto del diálogo.
  */
 import { AnimatePresence, motion } from "framer-motion";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
 } from "react";
@@ -56,10 +58,13 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
     setState(null);
   }, []);
 
+  const cancel = useCallback(() => settle(false), [settle]);
+  const accept = useCallback(() => settle(true), [settle]);
+
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      <ConfirmDialog state={state} onCancel={() => settle(false)} onConfirm={() => settle(true)} />
+      <ConfirmDialog state={state} onCancel={cancel} onConfirm={accept} />
     </ConfirmContext.Provider>
   );
 }
@@ -80,6 +85,25 @@ function ConfirmDialog({
   onConfirm: () => void;
 }) {
   const danger = state?.tone === "danger";
+  const open = !!state;
+  // Esc cierra SOLO este diálogo (A2b-S-ui). Antes el keydown del backdrop no
+  // frenaba el evento y el listener de `window` del Drawer de abajo también lo
+  // veía: un Esc cancelaba la confirmación Y cerraba el drawer (perdiendo el
+  // formulario). Se escucha en fase de CAPTURA sobre `window` — corre antes que
+  // cualquier listener en burbuja (Drawer, menús) — y se corta la propagación.
+  // Enter queda en manos del botón enfocado: el viejo handler de Enter en el
+  // backdrop confirmaba aunque el foco estuviera en "Cancelar".
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onCancel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onCancel]);
   return (
     <AnimatePresence>
       {state && (
@@ -93,10 +117,6 @@ function ConfirmDialog({
           initial="initial"
           animate="animate"
           exit="exit"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onCancel();
-            if (e.key === "Enter") onConfirm();
-          }}
           style={{
             position: "fixed",
             inset: 0,

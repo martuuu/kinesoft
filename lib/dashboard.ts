@@ -8,7 +8,7 @@
 import { unstable_cache } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { visibilityForActor } from "@/lib/visibility";
+import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
@@ -43,6 +43,11 @@ export type DashboardData = {
     nearingDischarge: number;
   };
   pinnedKpis: KpiKey[];
+  /**
+   * A2b-S-vis: `access` por fila. Las filas "basic" (paciente ni asignado
+   * ni compartido) llegan SIN diagnóstico ni progreso del plan (`cond: ""`,
+   * 0/0) y sin id del próximo turno: el QuickMenu es de solo lectura.
+   */
   recent: {
     id: string;
     name: string;
@@ -51,6 +56,9 @@ export type DashboardData = {
     sessionsTotal: number;
     nextBookingId: string | null;
     nextBookingAt: Date | null;
+    /** Optimistic lock del próximo turno (`expectedUpdatedAt` de setBookingStatus). */
+    nextBookingUpdatedAt: Date | null;
+    access: "full" | "basic";
   }[];
   next: {
     id: string;
@@ -74,8 +82,15 @@ export type DashboardData = {
  */
 type DashboardCounts = Omit<
   DashboardData,
-  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey"
->;
+  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey" | "recent" | "next"
+> & {
+  // Filas crudas: el enmascarado por acceso se aplica FUERA del cache, por
+  // request. Si se hiciera adentro, un share revocado seguiría mostrando el
+  // diagnóstico hasta que venza el TTL, y la clave de cache tendría que
+  // incluir los shares del actor.
+  recent: (Omit<DashboardData["recent"][number], "access">)[];
+  next: (DashboardData["next"][number] & { patientId: string | null; serviceName: string })[];
+};
 
 /**
  * Heavy DB work — wrapped in `unstable_cache` so repeated dashboard hits
@@ -199,7 +214,7 @@ const _loadDashboardCounts = unstable_cache(
                     },
                     orderBy: { scheduledFor: "asc" },
                     take: 1,
-                    select: { id: true, scheduledFor: true },
+                    select: { id: true, scheduledFor: true, updatedAt: true },
                   },
                 },
               },
@@ -305,9 +320,12 @@ const _loadDashboardCounts = unstable_cache(
         sessionsTotal: s.program.totalSessions,
         nextBookingId: s.program.patient.bookings[0]?.id ?? null,
         nextBookingAt: s.program.patient.bookings[0]?.scheduledFor ?? null,
+        nextBookingUpdatedAt: s.program.patient.bookings[0]?.updatedAt ?? null,
       })),
       next: nextAppts.map((b) => ({
         id: b.id,
+        patientId: b.patientId,
+        serviceName: b.service.name,
         time: b.scheduledFor.toLocaleTimeString("es-AR", {
           hour: "2-digit",
           minute: "2-digit",
@@ -395,6 +413,22 @@ export async function getDashboardData(): Promise<DashboardData> {
 
   const counts = await taggedFetcher(actor.tenantId, scope, dayKey);
 
+  // A2b-S-vis: "recientes" sale de las sesiones de TODO el tenant y
+  // "próximos" puede incluir pacientes asignados a otro profesional. Se
+  // resuelve el acceso por fila (una sola query) y las básicas pierden el
+  // diagnóstico/plan, la OS y el copago — igual que en el directorio.
+  const patientIds = Array.from(
+    new Set([
+      ...counts.recent.map((r) => r.id),
+      ...counts.next.map((n) => n.patientId).filter((id): id is string => !!id),
+    ])
+  );
+  const accessMap = await bulkPatientAccess(actor, patientIds);
+  const isFull = (id: string) => accessMap.get(id) === "full";
+  // `unstable_cache` serializa a JSON: en un hit las fechas vuelven como
+  // string. Se rehidratan acá para que el cliente reciba `Date` de verdad.
+  const toDate = (d: Date | string | null) => (d ? new Date(d) : null);
+
   // Per-user bits computed outside the cache — preferences / reminder
   // dismissal differ per practitioner and would explode cache cardinality.
   const reminderKey = `near-discharge:${isoWeekKey(now)}`;
@@ -405,6 +439,30 @@ export async function getDashboardData(): Promise<DashboardData> {
 
   return {
     ...counts,
+    recent: counts.recent.map((r) =>
+      isFull(r.id)
+        ? {
+            ...r,
+            nextBookingAt: toDate(r.nextBookingAt),
+            nextBookingUpdatedAt: toDate(r.nextBookingUpdatedAt),
+            access: "full" as const,
+          }
+        : {
+            id: r.id,
+            name: r.name,
+            cond: "",
+            sessionsDone: 0,
+            sessionsTotal: 0,
+            nextBookingId: null,
+            nextBookingAt: toDate(r.nextBookingAt),
+            nextBookingUpdatedAt: null,
+            access: "basic" as const,
+          }
+    ),
+    // Guest (sin paciente) = operable; con paciente básico → solo servicio.
+    next: counts.next.map(({ patientId, serviceName, ...n }) =>
+      !patientId || isFull(patientId) ? n : { ...n, tag: serviceName }
+    ),
     greetingName: actor.practitionerName.split(" ")[0],
     pinnedKpis: prefs.pinnedKpis,
     reminderDismissed,

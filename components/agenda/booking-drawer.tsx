@@ -13,6 +13,11 @@
  *     Cancelar).
  *   - Delete the booking.
  *
+ * Acceso básico = solo ver (decisión del dueño, 30-sep; A2a-S06): with
+ * `patientAccess === "basic"` the edit / reschedule / status / delete controls
+ * are NOT rendered — the server rejects them anyway, this only reflects it.
+ * Guest turnos (`"none"`, no patient) stay operable.
+ *
  * Pure UI — every mutation goes through server actions in `lib/bookings.ts`.
  */
 import { useEffect, useState, useTransition } from "react";
@@ -36,7 +41,9 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { recordatorioHtml } from "@/components/agenda/recordatorio-turno";
-import type { BookingStatus } from "@prisma/client";
+import { PAYMENT_HOLD_LABEL, paymentHoldState, type PaymentHoldState } from "@/lib/agenda-filters";
+import { recordsDiffer } from "@/lib/form-dirty";
+import type { BookingStatus, PaymentStatus } from "@prisma/client";
 
 type BookingDTO = {
   id: string;
@@ -57,6 +64,9 @@ type BookingDTO = {
   title: string | null;
   description: string | null;
   patientAccess: "full" | "basic" | "none";
+  /** A2b-S-ui: para "Pendiente de pago" / "· vencida" (opcionales, ver agenda-utils). */
+  paymentStatus?: PaymentStatus;
+  createdAt?: string;
 };
 
 /** Cents → "$1.234" (AR pesos, no decimals). */
@@ -114,9 +124,10 @@ export function BookingDrawer({
   // "next free slot" suggestion + sobreturno override.
   const [editingWhen, setEditingWhen] = useState(false);
   const [newWhenLocal, setNewWhenLocal] = useState<string>("");
-  const [reschConflict, setReschConflict] = useState<
-    { practitionerName: string; nextFreeISO: string | null } | null
-  >(null);
+  const [reschConflict, setReschConflict] = useState<ConflictInfo | null>(null);
+  // Same sobreturno banner for a duration change that overflows the cupo
+  // (A2a-S06: updateBooking now re-checks capacity when durationMin changes).
+  const [editConflict, setEditConflict] = useState<ConflictInfo | null>(null);
   // Edit sub-flow — independent of reschedule. Lets the practitioner
   // tweak duration + notes + swap the linked patient without touching
   // the slot. Most common mid-life edits requested by clients.
@@ -141,6 +152,7 @@ export function BookingDrawer({
     setEditingWhen(false);
     setEditingDetails(false);
     setReschConflict(null);
+    setEditConflict(null);
     setError(null);
     setEditPatient(undefined);
     setRecent([]);
@@ -173,12 +185,33 @@ export function BookingDrawer({
     CANCELLED: "Turno cancelado",
   };
 
-  const setStatus = (status: BookingStatus) => {
+  const setStatus = (
+    status: BookingStatus,
+    force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {}
+  ) => {
     if (!booking) return;
     setError(null);
     start(async () => {
-      const r = await setBookingStatus(booking.id, status, booking.updatedAt);
+      const r = await setBookingStatus(booking.id, status, booking.updatedAt, force);
       if (!r.ok) {
+        // Reactivating a CANCELLED turno re-checks the cupo and the patient's
+        // own overlap: offer the same explicit override as a reschedule.
+        if (r.conflict || r.patientOverlap) {
+          const ok = await confirm({
+            title: r.conflict ? "Cupo completo en ese horario" : "El paciente ya tiene un turno superpuesto",
+            message: r.conflict
+              ? `${r.conflict.practitionerName} ya tiene un turno en ese horario. ¿Reactivarlo igual como sobreturno?`
+              : "Este turno se superpone con otro del mismo paciente. ¿Reactivarlo igual?",
+            confirmLabel: "Reactivar igual",
+          });
+          if (ok) {
+            setStatus(status, {
+              ...force,
+              ...(r.conflict ? { allowOverbooking: true } : { allowPatientOverlap: true }),
+            });
+          }
+          return;
+        }
         setError(r.error);
         toast.error("No pudimos actualizar el turno", { description: r.error });
         return;
@@ -210,31 +243,73 @@ export function BookingDrawer({
     });
   };
 
-  const submitEditDetails = () => {
+  // Back to the booking's values — "Cancelar edición" used to reset only
+  // duration + notes, so a half-typed title or a cleared patient survived into
+  // the next "Editar".
+  const resetEditFields = () => {
+    if (!booking) return;
+    setEditDuration(booking.durationMin);
+    setEditNotes(booking.notes ?? "");
+    setEditTitle(booking.title ?? "");
+    setEditDescription(booking.description ?? "");
+    setEditPatient(undefined);
+    setEditConflict(null);
+  };
+
+  const submitEditDetails = (
+    force: { allowOverbooking?: boolean; allowPatientOverlap?: boolean } = {}
+  ) => {
     if (!booking) return;
     setError(null);
+    // "Cambiar" paciente cleared the picker but nothing was picked: saving
+    // used to send `""` and silently unlink the patient. Require a choice.
+    if (editPatient === null) {
+      setError("Elegí el paciente del turno (o cancelá la edición para dejar el actual).");
+      return;
+    }
+    // Send ONLY what changed (A2a-S06). Sending every field made a save
+    // overwrite notes/title/description with whatever the form held — e.g.
+    // values another session had changed meanwhile.
+    const dur = Math.max(15, Math.min(240, Math.floor(editDuration) || 45));
+    const changes: {
+      durationMin?: number;
+      notes?: string;
+      title?: string;
+      description?: string;
+      patientId?: string;
+    } = {};
+    if (dur !== booking.durationMin) changes.durationMin = dur;
+    if (editNotes !== (booking.notes ?? "")) changes.notes = editNotes;
+    if (editTitle !== (booking.title ?? "")) changes.title = editTitle;
+    if (editDescription !== (booking.description ?? "")) changes.description = editDescription;
+    if (editPatient && editPatient.id !== booking.patientId) changes.patientId = editPatient.id;
+    if (Object.keys(changes).length === 0) {
+      setEditingDetails(false);
+      resetEditFields();
+      return;
+    }
+    setEditConflict(null);
     start(async () => {
-      const dur = Math.max(15, Math.min(240, Math.floor(editDuration) || 45));
-      // `editPatient === undefined` → don't include patientId in the
-      // patch (server keeps the current link).
-      // `editPatient === null` → user cleared the link explicitly.
-      // `editPatient.id` → server validates tenant + relinks.
-      const patientId =
-        editPatient === undefined
-          ? undefined
-          : editPatient === null
-            ? ""
-            : editPatient.id;
       const r = await updateBooking({
         id: booking.id,
-        durationMin: dur,
-        notes: editNotes,
-        title: editTitle,
-        description: editDescription,
+        ...changes,
+        ...force,
         expectedUpdatedAt: booking.updatedAt,
-        ...(patientId !== undefined ? { patientId } : {}),
       });
       if (!r.ok) {
+        if (r.conflict) {
+          setEditConflict(r.conflict);
+          return;
+        }
+        if (r.patientOverlap) {
+          const ok = await confirm({
+            title: "El paciente ya tiene un turno superpuesto",
+            message: "Con este cambio el turno se superpone con otro del mismo paciente. ¿Guardar igual?",
+            confirmLabel: "Guardar igual",
+          });
+          if (ok) submitEditDetails({ ...force, allowPatientOverlap: true });
+          return;
+        }
         setError(r.error);
         return;
       }
@@ -260,7 +335,9 @@ export function BookingDrawer({
     });
   };
 
-  const submitReschedule = (opts: { iso?: string; force?: boolean } = {}) => {
+  const submitReschedule = (
+    opts: { iso?: string; force?: boolean; allowPatientOverlap?: boolean } = {}
+  ) => {
     if (!booking) return;
     // The datetime-local input is AR wall-clock; tag it with the
     // -03:00 offset before sending so the server parses unambiguously.
@@ -274,6 +351,7 @@ export function BookingDrawer({
         id: booking.id,
         scheduledFor: iso,
         allowOverbooking: opts.force ?? false,
+        allowPatientOverlap: opts.allowPatientOverlap ?? false,
         expectedUpdatedAt: booking.updatedAt,
       });
       if (!r.ok) {
@@ -281,6 +359,16 @@ export function BookingDrawer({
           setReschConflict(r.conflict);
           // Sync the input so the user sees the slot we just tried.
           setNewWhenLocal(isoToARLocalInput(iso));
+          return;
+        }
+        // The patient's own overlap (A2a-S06: now checked on reschedule too).
+        if (r.patientOverlap) {
+          const ok = await confirm({
+            title: "El paciente ya tiene un turno superpuesto",
+            message: "En ese horario el paciente ya tiene otro turno. ¿Reprogramar igual?",
+            confirmLabel: "Reprogramar igual",
+          });
+          if (ok) submitReschedule({ ...opts, iso, allowPatientOverlap: true });
           return;
         }
         setError(r.error);
@@ -306,8 +394,40 @@ export function BookingDrawer({
     }
   };
 
+  // Guest turnos ("none") are operable; only basic access is read-only.
+  const canEdit = booking?.patientAccess !== "basic";
+
+  // Dirty-guard (A2b-S-ui): con "Editar" o "Reprogramar" abiertos y algo
+  // cambiado, Esc / fondo / X preguntan antes de tirar la edición. El paciente
+  // cuenta como cambio con la misma regla que el guardado (null = desvincular,
+  // otro id = re-vincular); el picker avisa su selección inicial al montar.
+  const patientChanged =
+    !!booking &&
+    (editPatient === null || (!!editPatient && editPatient.id !== booking.patientId));
+  const dirty =
+    !!booking &&
+    canEdit &&
+    ((editingDetails &&
+      (patientChanged ||
+        recordsDiffer(
+          {
+            durationMin: booking.durationMin,
+            notes: booking.notes ?? "",
+            title: booking.title ?? "",
+            description: booking.description ?? "",
+          },
+          { durationMin: editDuration, notes: editNotes, title: editTitle, description: editDescription }
+        ))) ||
+      (editingWhen && newWhenLocal !== isoToARLocalInput(booking.scheduledFor)));
+
   return (
-    <Drawer open={!!booking} onClose={onClose} title={booking ? "Turno" : undefined}>
+    <Drawer
+      open={!!booking}
+      onClose={onClose}
+      title={booking ? "Turno" : undefined}
+      dirty={dirty}
+      dirtyMessage="Tenés cambios del turno sin guardar. Si cerrás, se pierden."
+    >
       {booking && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div
@@ -330,7 +450,7 @@ export function BookingDrawer({
                 <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{booking.patientCondition}</div>
               )}
             </div>
-            <StatusTag s={booking.status} />
+            <StatusTag s={booking.status} hold={paymentHoldState(booking, new Date())} />
           </div>
 
           <div
@@ -381,6 +501,13 @@ export function BookingDrawer({
             {booking.title && <Row label="Diagnóstico">{booking.title}</Row>}
             {booking.description && <Row label="Descripción">{booking.description}</Row>}
             {booking.notes && <Row label="Notas">{booking.notes}</Row>}
+            {!canEdit && (
+              <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 4 }}>
+                Tenés acceso básico a este paciente: podés ver el turno pero no modificarlo. Pedile al
+                profesional a cargo que te lo comparta.
+              </div>
+            )}
+            {canEdit && (
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, gap: 6, flexWrap: "wrap" }}>
               {editingWhen ? (
                 <button
@@ -413,8 +540,7 @@ export function BookingDrawer({
                   type="button"
                   onClick={() => {
                     setEditingDetails(false);
-                    setEditDuration(booking.durationMin);
-                    setEditNotes(booking.notes ?? "");
+                    resetEditFields();
                   }}
                   disabled={pending}
                   style={miniGhostBtn}
@@ -436,6 +562,7 @@ export function BookingDrawer({
                 </button>
               )}
             </div>
+            )}
           </div>
 
           {recent.length > 0 && (
@@ -488,7 +615,7 @@ export function BookingDrawer({
             </div>
           )}
 
-          {editingDetails && (
+          {canEdit && editingDetails && (
             <div
               style={{
                 padding: 14,
@@ -600,17 +727,27 @@ export function BookingDrawer({
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <Button
                   variant="primary"
-                  onClick={submitEditDetails}
+                  onClick={() => submitEditDetails()}
                   disabled={pending}
                   style={{ fontSize: 12, padding: "8px 14px" }}
                 >
                   {pending ? "Guardando…" : "Guardar cambios"}
                 </Button>
               </div>
+              {editConflict && (
+                <ConflictBanner
+                  conflict={editConflict}
+                  pending={pending}
+                  // A longer turno can't "move" to the next free slot: the
+                  // only choices are to force the sobreturno or go back.
+                  onForce={() => submitEditDetails({ allowOverbooking: true })}
+                  onBack={() => setEditConflict(null)}
+                />
+              )}
             </div>
           )}
 
-          {editingWhen && (
+          {canEdit && editingWhen && (
             <div
               style={{
                 padding: 14,
@@ -643,87 +780,17 @@ export function BookingDrawer({
               </div>
 
               {reschConflict && (
-                <div
-                  role="alert"
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    background: "rgba(255,176,32,0.12)",
-                    border: "1px solid rgba(255,176,32,0.4)",
-                    fontSize: 12,
-                    color: "var(--navy-700)",
-                    display: "grid",
-                    gap: 8,
-                  }}
-                >
-                  <div style={{ fontWeight: 700, color: "var(--navy-900)" }}>
-                    ⚠ {reschConflict.practitionerName} ya tiene un turno en ese horario.
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {reschConflict.nextFreeISO && (
-                      <button
-                        type="button"
-                        onClick={() => submitReschedule({ iso: reschConflict.nextFreeISO! })}
-                        disabled={pending}
-                        style={{
-                          padding: "6px 12px",
-                          borderRadius: 999,
-                          background: "var(--sky-700)",
-                          color: "#fff",
-                          fontSize: 11.5,
-                          fontWeight: 600,
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Usar próximo libre ·{" "}
-                        {new Date(reschConflict.nextFreeISO).toLocaleString("es-AR", {
-                          weekday: "short",
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          hour12: false,
-                          timeZone: "America/Argentina/Buenos_Aires",
-                        })}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => submitReschedule({ force: true })}
-                      disabled={pending}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: 999,
-                        background: "rgba(255,176,32,0.9)",
-                        color: "var(--navy-900)",
-                        fontSize: 11.5,
-                        fontWeight: 600,
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Forzar sobreturno
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setReschConflict(null)}
-                      disabled={pending}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: 999,
-                        background: "transparent",
-                        color: "var(--navy-500)",
-                        fontSize: 11.5,
-                        fontWeight: 600,
-                        border: "1px solid rgba(15,30,51,0.12)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Volver atrás
-                    </button>
-                  </div>
-                </div>
+                <ConflictBanner
+                  conflict={reschConflict}
+                  pending={pending}
+                  onUseNextFree={
+                    reschConflict.nextFreeISO
+                      ? () => submitReschedule({ iso: reschConflict.nextFreeISO! })
+                      : undefined
+                  }
+                  onForce={() => submitReschedule({ force: true })}
+                  onBack={() => setReschConflict(null)}
+                />
               )}
             </div>
           )}
@@ -806,6 +873,7 @@ export function BookingDrawer({
             </div>
           </div>
 
+          {canEdit && (
           <div>
             <div style={menuLabel}>Cambiar estado</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
@@ -843,6 +911,7 @@ export function BookingDrawer({
               </Button>
             </div>
           </div>
+          )}
 
           {error && (
             <div
@@ -858,6 +927,7 @@ export function BookingDrawer({
             </div>
           )}
 
+          {canEdit && (
           <button
             type="button"
             onClick={remove}
@@ -876,9 +946,114 @@ export function BookingDrawer({
           >
             Eliminar turno
           </button>
+          )}
         </div>
       )}
     </Drawer>
+  );
+}
+
+type ConflictInfo = { practitionerName: string; nextFreeISO: string | null };
+
+/**
+ * Amber "ya tiene un turno en ese horario" banner, shared by reschedule and
+ * the duration edit so both offer the same sobreturno override.
+ */
+function ConflictBanner({
+  conflict,
+  pending,
+  onUseNextFree,
+  onForce,
+  onBack,
+}: {
+  conflict: ConflictInfo;
+  pending: boolean;
+  onUseNextFree?: () => void;
+  onForce: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      style={{
+        padding: 12,
+        borderRadius: 12,
+        background: "rgba(255,176,32,0.12)",
+        border: "1px solid rgba(255,176,32,0.4)",
+        fontSize: 12,
+        color: "var(--navy-700)",
+        display: "grid",
+        gap: 8,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "var(--navy-900)" }}>
+        ⚠ {conflict.practitionerName} ya tiene un turno en ese horario.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {onUseNextFree && conflict.nextFreeISO && (
+          <button
+            type="button"
+            onClick={onUseNextFree}
+            disabled={pending}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 999,
+              background: "var(--sky-700)",
+              color: "#fff",
+              fontSize: 11.5,
+              fontWeight: 600,
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            Usar próximo libre ·{" "}
+            {new Date(conflict.nextFreeISO).toLocaleString("es-AR", {
+              weekday: "short",
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+              timeZone: "America/Argentina/Buenos_Aires",
+            })}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onForce}
+          disabled={pending}
+          style={{
+            padding: "6px 12px",
+            borderRadius: 999,
+            background: "rgba(255,176,32,0.9)",
+            color: "var(--navy-900)",
+            fontSize: 11.5,
+            fontWeight: 600,
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          Forzar sobreturno
+        </button>
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={pending}
+          style={{
+            padding: "6px 12px",
+            borderRadius: 999,
+            background: "transparent",
+            color: "var(--navy-500)",
+            fontSize: 11.5,
+            fontWeight: 600,
+            border: "1px solid rgba(15,30,51,0.12)",
+            cursor: "pointer",
+          }}
+        >
+          Volver atrás
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -903,7 +1078,33 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function StatusTag({ s }: { s: BookingStatus }) {
+function StatusTag({ s, hold = null }: { s: BookingStatus; hold?: PaymentHoldState }) {
+  if (s === "PENDING" && hold) {
+    // Reserva online impaga (A2b-S-ui): vencida = ya no retiene el horario.
+    const expired = hold === "vencida";
+    return (
+      <span
+        title={
+          expired
+            ? "La reserva online no se pagó en 30 minutos: ya no retiene el horario."
+            : "Reserva online esperando el pago (retiene el horario 30 minutos)."
+        }
+        style={{
+          fontSize: 10.5,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          padding: "3px 8px",
+          borderRadius: 999,
+          background: expired ? "rgba(15,30,51,0.04)" : "rgba(255,176,32,0.18)",
+          color: expired ? "var(--navy-500)" : "#9A5B00",
+          border: expired ? "1px dashed rgba(15,30,51,0.3)" : undefined,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {PAYMENT_HOLD_LABEL[hold]}
+      </span>
+    );
+  }
   const map: Record<BookingStatus, { label: string; bg: string; color: string }> = {
     PENDING: { label: "Pendiente", bg: "rgba(15,30,51,0.06)", color: "var(--navy-700)" },
     CONFIRMED: { label: "Confirmado", bg: "rgba(31,79,190,0.12)", color: "var(--sky-700)" },

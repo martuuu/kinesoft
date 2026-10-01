@@ -73,9 +73,11 @@ function LandingNav() {
       <Link href="/login" style={{ fontSize: 13.5, color: "var(--navy-700)", fontWeight: 600 }}>
         Ingresar
       </Link>
-      <Button variant="primary" style={{ fontSize: 13, padding: "9px 18px" }}>
-        Probar gratis <IconArrow size={14} />
-      </Button>
+      <Link href="/signup">
+        <Button variant="primary" style={{ fontSize: 13, padding: "9px 18px" }}>
+          Probar gratis <IconArrow size={14} />
+        </Button>
+      </Link>
     </header>
   );
 }
@@ -159,9 +161,11 @@ function LandingHero() {
             recuperación de tus pacientes desde la primera consulta hasta el alta.
           </p>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <Button variant="primary" style={{ padding: "14px 22px", fontSize: 14 }}>
-              Empezar gratis 14 días <IconArrow size={15} />
-            </Button>
+            <Link href="/signup">
+              <Button variant="primary" style={{ padding: "14px 22px", fontSize: 14 }}>
+                Empezar gratis 14 días <IconArrow size={15} />
+              </Button>
+            </Link>
             <Button variant="ghost" style={{ padding: "14px 22px", fontSize: 14 }}>
               <IconPlay size={12} /> Ver demo (2 min)
             </Button>
@@ -813,19 +817,25 @@ function LandingPricing() {
                 </span>
                 <span style={{ fontSize: 12, color: "var(--navy-300)" }}>{p.sub}</span>
               </div>
-              <Button
-                variant={p.tone === "primary" ? "primary" : "ghost"}
-                style={{
-                  width: "100%",
-                  justifyContent: "center",
-                  padding: "12px",
-                  fontSize: 13,
-                  marginBottom: 22,
-                  ...ctaStyle(p.tone),
-                }}
-              >
-                {p.cta} <IconArrow size={13} />
-              </Button>
+              {/* A3c: los planes self-service llevan al signup; "Clínica" (a medida) no tiene alta propia. */}
+              {(() => {
+                const cta = (
+                  <Button
+                    variant={p.tone === "primary" ? "primary" : "ghost"}
+                    style={{
+                      width: "100%",
+                      justifyContent: "center",
+                      padding: "12px",
+                      fontSize: 13,
+                      marginBottom: 22,
+                      ...ctaStyle(p.tone),
+                    }}
+                  >
+                    {p.cta} <IconArrow size={13} />
+                  </Button>
+                );
+                return p.price === "A medida" ? cta : <Link href="/signup" style={{ display: "block" }}>{cta}</Link>;
+              })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {p.feats.map((f) => (
                   <div
@@ -1031,9 +1041,11 @@ function LandingCTA() {
             </p>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Button variant="lime" style={{ padding: "16px 22px", fontSize: 15, justifyContent: "center" }}>
-              Crear mi consultorio gratis <IconArrow size={15} />
-            </Button>
+            <Link href="/signup" style={{ display: "grid" }}>
+              <Button variant="lime" style={{ padding: "16px 22px", fontSize: 15, justifyContent: "center" }}>
+                Crear mi consultorio gratis <IconArrow size={15} />
+              </Button>
+            </Link>
             <button
               className="k-btn"
               style={{

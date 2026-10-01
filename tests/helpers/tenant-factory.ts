@@ -81,7 +81,13 @@ export async function createEphemeralTenant(
   const userId = `test-user-${s}`;
 
   const tenant = await prisma.tenant.create({
-    data: { slug, name: `Test ${s}`, sharedPatientView: opts.sharedPatientView ?? false },
+    data: {
+      slug,
+      name: `Test ${s}`,
+      sharedPatientView: opts.sharedPatientView ?? false,
+      // Como el backfill de tenant_onboarding: los tenants de test ya "terminaron" el alta.
+      onboardingCompletedAt: new Date(),
+    },
   });
   await prisma.userProfile.create({
     data: { id: userId, email: `${userId}@test.local`, fullName: `Test ${s}` },

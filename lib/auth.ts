@@ -1,101 +1,54 @@
 "use server";
 
 /**
- * Authentication server actions — Sprint 16 (C).
+ * Authentication server actions.
  *
- *   - `signUpPractitioner` — self-serve owner signup. Creates a Supabase
- *     auth user via the admin API, then provisions the tenant +
- *     practitioner + OWNER membership in a single Prisma transaction.
+ *   - `signUpPractitioner` — signup con email VERIFICADO (A3c-S-signup).
+ *     Solo crea la identidad en Supabase (`auth.signUp`, que manda el mail de
+ *     confirmación). **No crea ningún tenant**: el consultorio se da de alta
+ *     en `/onboarding` después de verificar. Con `inviteToken` es el signup
+ *     de unión a un consultorio existente.
  *
  *   - `sendPasswordReset` — fire-and-forget `resetPasswordForEmail`.
  *     The same email arrives whether the address exists or not so we
  *     don't leak account presence; UI shows "if your email exists you'll
  *     get a link" regardless of result.
  *
- *   - `updatePasswordWithRecoverySession` — called from /reset after the
- *     user clicks the recovery email link and Supabase has set a session
- *     cookie with the `recovery` token.
+ *   - `updatePasswordWithRecoverySession` — /reset. Con la cookie firmada
+ *     `ks_recovery` (la deja `/auth/confirm` tras un link de recovery) cambia
+ *     la clave sin pedir la actual; sin ella, exige la contraseña actual.
  *
- * Auth + tenancy invariants enforced here:
- *   - Slug uniqueness is checked twice: pre-flight + DB constraint.
- *   - Email duplicates across Supabase identities are surfaced cleanly
- *     (don't leak whether the email already exists for security; we
- *     return a generic "no se pudo crear la cuenta" on dupe).
- *   - On any Prisma failure after the Supabase user was created we
- *     **delete the orphan auth user** so the email can be retried.
+ * H5 (auditoría 23-sep): el signup anterior creaba el usuario con el admin
+ * client y `email_confirm: true` (auto-confirmado) y armaba el tenant en el
+ * acto: cualquiera podía crear consultorios con un email ajeno, sin probar
+ * que era suyo, y quemar ese email para el dueño real. Eso se eliminó.
  */
-import { z } from "zod";
-// signUpPractitioner provisions a NOT-YET-EXISTENT tenant (Tenant has only a
-// SELECT policy → INSERT aborts under the app role) → service channel. See lib/db.ts.
+import { cookies, headers } from "next/headers";
+// Lecturas pre-sesión (la invitación por token, el chequeo staff ≠ paciente):
+// todavía no hay Actor ni GUC posible → canal service. See lib/db.ts.
 import { prismaService as prisma } from "@/lib/db";
-import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { rateLimit } from "@/lib/rate-limit";
-import { audit } from "@/lib/audit";
+import { hashKeyPart, rateLimit, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
+import { hashInviteToken } from "@/lib/invitations-tokens";
+import { RECOVERY_COOKIE, verifyRecoveryCookie } from "@/lib/recovery-cookie";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
-import { headers } from "next/headers";
-import type { ActionResult } from "@/lib/validation";
+import { z } from "zod";
+import {
+  ResetPasswordInput,
+  SignupInput,
+  type ActionResult,
+  type ResetPasswordInputType,
+  type SignupInputType,
+} from "@/lib/validation";
 
-const slugRe = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-
-const SignupInput = z.object({
-  clinicName: z.string().trim().min(2, "Nombre del consultorio requerido").max(80),
-  slug: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .min(3, "Mínimo 3 caracteres")
-    .max(40)
-    .regex(
-      slugRe,
-      "Solo minúsculas, números y guiones. No empieza ni termina con guión."
-    ),
-  email: z.string().trim().toLowerCase().email("Email inválido"),
-  password: z
-    .string()
-    .min(8, "Mínimo 8 caracteres")
-    .max(72)
-    .regex(/[A-Za-z]/, "Incluí al menos una letra")
-    .regex(/[0-9]/, "Incluí al menos un número"),
-  fullName: z.string().trim().min(2, "Nombre completo requerido").max(80),
-  licenseNumber: z
-    .string()
-    .trim()
-    .max(40)
-    .optional()
-    .or(z.literal("")),
-});
-
-const RESERVED_SLUGS = new Set([
-  "admin",
-  "api",
-  "app",
-  "auth",
-  "agenda",
-  "biblioteca",
-  "booking",
-  "c",
-  "configuracion",
-  "dashboard",
-  "diagnostico",
-  "forgot",
-  "invite",
-  "login",
-  "logout",
-  "pacientes",
-  "portal",
-  "reportes",
-  "reset",
-  "seguimiento",
-  "signup",
-  "terapia-manual",
-  "www",
-]);
+/** Mismo mensaje exista o no la cuenta: el signup no es un oráculo de emails. */
+const SIGNUP_SENT = "Te mandamos un email para confirmar tu cuenta.";
 
 export async function signUpPractitioner(
-  raw: z.input<typeof SignupInput>
-): Promise<ActionResult<{ redirect: string }>> {
+  raw: SignupInputType
+): Promise<ActionResult<{ email: string; joining: boolean; message: string }>> {
   const parsed = SignupInput.safeParse(raw);
   if (!parsed.success) {
     return {
@@ -106,157 +59,84 @@ export async function signUpPractitioner(
   }
   const data = parsed.data;
 
-  // Rate limit by IP — 3 signups per 10 minutes per IP. Prevents
-  // tenant-flood + Supabase user enumeration.
-  const ip = headers().get("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await rateLimit(`signup:${ip}`, { limit: 3, windowMs: 600_000 });
+  // Unión por invitación: el email lo fija la invitación (el del form se
+  // ignora: si no, cualquiera con el link se registraría con SU email y la
+  // invitación no le serviría a nadie).
+  let email = data.email;
+  let next = "/onboarding";
+  const inviteToken = data.inviteToken || null;
+  if (inviteToken) {
+    const invite = await prisma.invitation.findUnique({
+      where: { token: hashInviteToken(inviteToken) },
+      select: { email: true, acceptedAt: true, expiresAt: true },
+    });
+    if (!invite || invite.acceptedAt || invite.expiresAt < new Date()) {
+      return { ok: false, error: "La invitación no es válida o venció. Pedile al consultorio una nueva." };
+    }
+    email = invite.email.toLowerCase();
+    next = `/invite/${encodeURIComponent(inviteToken)}`;
+  }
+
+  // 3 por IP cada 10 min (A3a) + 3 por hora por email: signUp manda un mail,
+  // y rotando IPs se podía bombardear el buzón de un tercero.
+  const limited = await rateLimitAll([
+    { key: `signup:${clientIp(headers())}`, limit: 3, windowMs: 600_000 },
+    { key: `signup:email:${hashKeyPart(email)}`, limit: 3, windowMs: 3_600_000 },
+  ]);
   if (!limited.ok) {
-    return {
-      ok: false,
-      error: "Demasiados intentos. Probá de nuevo en unos minutos.",
-    };
+    return { ok: false, error: rateLimitedMessage(limited.retryAfterMs) };
   }
 
-  if (RESERVED_SLUGS.has(data.slug)) {
-    return {
-      ok: false,
-      error: "Ese identificador está reservado. Probá con otro.",
-      fieldErrors: { slug: ["Reservado"] },
-    };
-  }
+  const ok = { ok: true as const, data: { email, joining: !!inviteToken, message: SIGNUP_SENT } };
 
-  // Pre-flight slug check so the friendly error fires before we hit the
-  // admin API. (DB unique constraint is still authoritative.)
-  const existing = await prisma.tenant.findUnique({
-    where: { slug: data.slug },
+  // Staff ≠ paciente (misma regla que acceptInvite): un email que ya usa el
+  // portal de pacientes no se registra como profesional. Acá quien pregunta
+  // todavía NO probó ser dueño del email, así que no se le dice por qué: misma
+  // respuesta que un alta normal y no se manda nada (Supabase tampoco manda
+  // mail a una identidad existente). El mensaje explícito lo da el paso 2 de
+  // /onboarding, con la identidad ya verificada.
+  const asPatient = await prisma.patient.findFirst({
+    where: { email: { equals: email, mode: "insensitive" }, userId: { not: null } },
     select: { id: true },
   });
-  if (existing) {
-    return {
-      ok: false,
-      error: "Ya existe un consultorio con ese identificador.",
-      fieldErrors: { slug: ["Ya está en uso"] },
-    };
+  if (asPatient) {
+    logger.info("signup.rejected_patient_identity", {});
+    return ok;
   }
 
-  const admin = getSupabaseAdminClient();
-  if (!admin) {
-    return {
-      ok: false,
-      error:
-        "Configuración del servidor incompleta. Pedile al administrador que configure SUPABASE_SERVICE_ROLE_KEY.",
-    };
-  }
-
-  // Step 1: create the Supabase auth user. We auto-confirm the email
-  // since the user is doing the signup interactively and we trust the
-  // session flow downstream.
-  const { data: userData, error: createErr } = await admin.auth.admin.createUser({
-    email: data.email,
-    password: data.password,
-    email_confirm: true,
-    user_metadata: { full_name: data.fullName },
-  });
-  if (createErr || !userData.user) {
-    logger.warn("signup.supabase_create_failed", { error: createErr?.message });
-    // Don't leak whether the email is already registered — return a
-    // generic error.
-    return { ok: false, error: "No pudimos crear la cuenta. Probá con otro email." };
-  }
-  const userId = userData.user.id;
-
-  // Step 2: provision the tenant + user profile + practitioner +
-  // membership inside ONE transaction. If any step fails, delete the
-  // orphan Supabase user so the email can be retried.
-  try {
-    await prisma.$transaction(async (tx) => {
-      await tx.userProfile.create({
-        data: {
-          id: userId,
-          email: data.email,
-          fullName: data.fullName,
-        },
-      });
-      const tenant = await tx.tenant.create({
-        data: {
-          slug: data.slug,
-          name: data.clinicName,
-        },
-      });
-      const practitioner = await tx.practitioner.create({
-        data: {
-          tenantId: tenant.id,
-          userId,
-          licenseNumber: data.licenseNumber || null,
-        },
-      });
-      await tx.membership.create({
-        data: {
-          tenantId: tenant.id,
-          userId,
-          role: "OWNER",
-          acceptedAt: new Date(),
-        },
-      });
-      // Every tenant gets a "Particular" insurer (out-of-pocket). It's the
-      // default obra social for patients without coverage; the OWNER sets
-      // its price in /configuracion → Obras Sociales.
-      await tx.insurer.create({
-        data: {
-          tenantId: tenant.id,
-          name: "Particular",
-          copagoCents: 0,
-          fixedFeeCents: 0,
-          isParticular: true,
-          active: true,
-        },
-      });
-      await audit({
-        tenantId: tenant.id,
-        actorId: userId,
-        action: "tenant.create",
-        entity: "Tenant",
-        entityId: tenant.id,
-        payload: { slug: tenant.slug, practitionerId: practitioner.id },
-      });
-    });
-  } catch (e) {
-    logger.error("signup.prisma_failed", {
-      error: e instanceof Error ? e.message : String(e),
-      userId,
-    });
-    // Clean up the orphan auth user so the email can be reused.
-    await admin.auth.admin.deleteUser(userId).catch((cleanupErr) => {
-      logger.error("signup.cleanup_failed", {
-        userId,
-        error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
-      });
-    });
-    return {
-      ok: false,
-      error: "No pudimos completar el registro. Intentá de nuevo.",
-    };
-  }
-
-  // Step 3: sign the user in via the server client so the cookie is
-  // set for the redirect to /dashboard. The Supabase server client
-  // reads/writes cookies on the incoming request.
   const supabase = getSupabaseServerClient();
-  const { error: signInErr } = await supabase.auth.signInWithPassword({
-    email: data.email,
+  // `emailRedirectTo` es el DESTINO FINAL (llega a la plantilla como
+  // `{{ .RedirectTo }}`, que la plantilla pone en `next` de /auth/confirm).
+  // Si fuera `/auth/confirm?next=…`, /auth/confirm redirigía a sí mismo sin
+  // token_hash → "link inválido" con la cuenta ya verificada
+  // (bug `signup-confirm-doble-salto`, cierre de A3c).
+  const emailRedirectTo = `${env.NEXT_PUBLIC_APP_URL}${next}`;
+  const { data: signUpData, error } = await supabase.auth.signUp({
+    email,
     password: data.password,
+    options: { emailRedirectTo, data: { full_name: data.fullName } },
   });
-  if (signInErr) {
-    // Account is provisioned but auto-login failed — send to /login
-    // with the email pre-filled so the user just types the password.
-    logger.warn("signup.auto_signin_failed", { error: signInErr.message });
-    return {
-      ok: true,
-      data: { redirect: `/login?email=${encodeURIComponent(data.email)}` },
-    };
+  if (error) {
+    // 429 del propio Supabase (límite de mails del proyecto) → se dice; el
+    // resto (password débil para la política del proyecto, etc.) → genérico.
+    logger.warn("signup.supabase_failed", { status: error.status, message: error.message });
+    if (error.status === 429) {
+      return { ok: false, error: "Hay demasiados pedidos en este momento. Probá de nuevo en unos minutos." };
+    }
+    if (/password/i.test(error.message)) {
+      return { ok: false, error: "La contraseña no cumple los requisitos. Probá con una más larga.", fieldErrors: { password: ["Contraseña débil"] } };
+    }
+    return { ok: false, error: "No pudimos crear la cuenta. Probá de nuevo en unos minutos." };
   }
-
-  return { ok: true, data: { redirect: "/dashboard" } };
+  // Con "Confirm email" ON, signUp NO devuelve sesión. Si la devuelve, el
+  // proyecto tiene la confirmación apagada: la cuenta queda sin verificar y
+  // eso es un error de configuración (ver EXTERNAL-CONFIG). Se loguea fuerte;
+  // igual no se crea tenant acá (lo hace /onboarding, que exige email
+  // verificado).
+  if (signUpData?.session) {
+    logger.error("signup.confirm_email_disabled", {});
+  }
+  return ok;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -279,13 +159,15 @@ export async function sendPasswordReset(
     };
   }
 
-  const ip = headers().get("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await rateLimit(`forgot:${ip}`, { limit: 5, windowMs: 600_000 });
+  // A3a-S-rl: por IP y además por hash del email (3/h): sin esto, rotando
+  // IPs se podía bombardear el buzón de una persona con mails de reset. El
+  // límite aplica exista o no la cuenta, así que no filtra enumeración.
+  const limited = await rateLimitAll([
+    { key: `forgot:ip:${clientIp(headers())}`, limit: 5, windowMs: 600_000 },
+    { key: `forgot:email:${hashKeyPart(parsed.data.email)}`, limit: 3, windowMs: 3_600_000 },
+  ]);
   if (!limited.ok) {
-    return {
-      ok: false,
-      error: "Demasiados intentos. Probá de nuevo en unos minutos.",
-    };
+    return { ok: false, error: rateLimitedMessage(limited.retryAfterMs) };
   }
 
   // We use the server (anon-key) client here, NOT the admin client.
@@ -293,35 +175,44 @@ export async function sendPasswordReset(
   // success regardless of whether the email exists — perfect for our
   // "no enumeration" stance.
   //
-  // The email link points at `/auth/callback?next=/reset` because the
-  // callback exchanges the recovery code for a server-side session
-  // cookie. Going straight to `/reset` would leave the user without a
-  // session (the recovery token lives in the URL hash, client-only).
+  // A3c: el destino es `/auth/confirm` (verifyOtp con token_hash), no el
+  // `/auth/callback` de PKCE: el code de PKCE solo se canjea en el MISMO
+  // browser que pidió el mail, y la gente abre el mail en el celular.
+  // `/auth/confirm` además deja la cookie firmada `ks_recovery` que habilita
+  // /reset sin la clave actual. El link real lo arma la plantilla "Reset
+  // password" de Supabase (tarea del dueño, EXTERNAL-CONFIG):
+  //   {{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset
+  // Este `redirectTo` es el `{{ .RedirectTo }}` y tiene que estar en las
+  // Redirect URLs del proyecto.
   const supabase = getSupabaseServerClient();
-  const redirectTo = `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset`;
-  await supabase.auth.resetPasswordForEmail(parsed.data.email, { redirectTo });
+  // Destino final (misma regla que el signup): la plantilla de reset fija next=/reset.
+  const redirectTo = `${env.NEXT_PUBLIC_APP_URL}/reset`;
+  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, { redirectTo });
+  if (error) {
+    // Se loguea (SMTP caído, redirect no permitido) pero la respuesta es la
+    // misma: nunca revelar si el email está registrado.
+    logger.warn("auth.forgot.failed", { status: error.status, message: error.message });
+  }
   // Always return ok — never reveal whether the email is registered.
   return { ok: true, data: undefined };
 }
 
-const ResetInput = z.object({
-  password: z
-    .string()
-    .min(8, "Mínimo 8 caracteres")
-    .max(72)
-    .regex(/[A-Za-z]/, "Incluí al menos una letra")
-    .regex(/[0-9]/, "Incluí al menos un número"),
-});
-
 /**
- * Called from /reset after the user follows the recovery email link.
- * Supabase has set a `recovery`-typed session cookie via the callback;
- * `updateUser({ password })` consumes it.
+ * /reset (A3c-S-signup). Dos modos:
+ *   - **recovery**: la cookie firmada `ks_recovery` de ESTE usuario (la deja
+ *     `/auth/confirm` tras verificar el link del mail) → acepta la clave nueva
+ *     sin la actual, y la cookie se borra: es de un solo uso.
+ *   - **cambio común**: sin cookie, se exige la contraseña actual.
+ *
+ * Por qué: antes bastaba CUALQUIER sesión para cambiar la clave. Una sesión
+ * robada (una notebook compartida del consultorio, un token filtrado) se
+ * convertía en toma de cuenta permanente: cambiaba la clave y dejaba afuera al
+ * dueño.
  */
 export async function updatePasswordWithRecoverySession(
-  raw: z.input<typeof ResetInput>
+  raw: ResetPasswordInputType
 ): Promise<ActionResult> {
-  const parsed = ResetInput.safeParse(raw);
+  const parsed = ResetPasswordInput.safeParse(raw);
   if (!parsed.success) {
     return {
       ok: false,
@@ -329,22 +220,52 @@ export async function updatePasswordWithRecoverySession(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const ip = headers().get("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await rateLimit(`reset:${ip}`, { limit: 5, windowMs: 600_000 });
+  const limited = await rateLimit(`reset:${clientIp(headers())}`, { limit: 5, windowMs: 600_000 });
   if (!limited.ok) {
-    return { ok: false, error: "Demasiados intentos. Esperá unos minutos." };
+    return { ok: false, error: rateLimitedMessage(limited.retryAfterMs) };
   }
   const supabase = getSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) {
+  const user = userData.user;
+  if (!user?.email) {
     return {
       ok: false,
       error: "El link expiró o ya fue usado. Volvé a pedir el reset.",
     };
   }
+
+  const jar = cookies();
+  const viaRecovery = verifyRecoveryCookie(jar.get(RECOVERY_COOKIE)?.value, user.id);
+  if (!viaRecovery) {
+    const current = parsed.data.currentPassword ?? "";
+    if (!current) {
+      return {
+        ok: false,
+        error: "Ingresá tu contraseña actual. Si no la recordás, pedí un link desde “Olvidé mi contraseña”.",
+        fieldErrors: { currentPassword: ["Requerida"] },
+      };
+    }
+    // Además del límite por IP, por usuario: sin esto la contraseña actual se
+    // podía adivinar desde una sesión robada rotando IPs.
+    const perUser = await rateLimit(`reset:user:${user.id}`, { limit: 5, windowMs: 600_000 });
+    if (!perUser.ok) return { ok: false, error: rateLimitedMessage(perUser.retryAfterMs) };
+    const { error: pwErr } = await supabase.auth.signInWithPassword({ email: user.email, password: current });
+    if (pwErr) {
+      return {
+        ok: false,
+        error: "La contraseña actual no es correcta.",
+        fieldErrors: { currentPassword: ["Incorrecta"] },
+      };
+    }
+  }
+
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) {
+    logger.warn("auth.reset.update_failed", { status: error.status, message: error.message });
     return { ok: false, error: "No pudimos actualizar la contraseña. Probá de nuevo." };
   }
+  // Un solo uso. Se borra recién tras el cambio exitoso: si Supabase falló,
+  // el usuario reintenta dentro de los 15 min sin pedir otro mail.
+  if (viaRecovery) jar.delete(RECOVERY_COOKIE);
   return { ok: true, data: undefined };
 }

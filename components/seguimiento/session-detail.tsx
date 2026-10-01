@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import type { Prisma, SessionExerciseStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
@@ -18,6 +18,8 @@ import {
   updateSessionMeta,
 } from "@/lib/sessions";
 import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useUnsavedGuard } from "@/components/seguimiento/use-unsaved-guard";
 
 type SessionDTO = Prisma.SessionGetPayload<{
   include: {
@@ -40,6 +42,46 @@ type SessionDTO = Prisma.SessionGetPayload<{
   };
 }>;
 
+/**
+ * Borrador de las anotaciones del kine. Vive en `SessionDetail` (no en el
+ * panel) para que "Cerrar sesión" mande lo que está tipeado: H3 era que el
+ * cierre solo mandaba el id y lo no guardado se perdía.
+ */
+type MetaDraft = {
+  notes: string;
+  paInPre: number | "";
+  paInPost: number | "";
+  rpe: number | "";
+};
+
+function draftFrom(session: SessionDTO): MetaDraft {
+  return {
+    notes: session.notes ?? "",
+    paInPre: session.paInPre ?? "",
+    paInPost: session.paInPost ?? "",
+    rpe: session.rpe ?? "",
+  };
+}
+
+/** `""` → `null`: vaciar un campo es un cambio válido (antes no se podía borrar). */
+function draftToMeta(d: MetaDraft) {
+  return {
+    notes: d.notes.trim() === "" ? null : d.notes,
+    paInPre: d.paInPre === "" ? null : d.paInPre,
+    paInPost: d.paInPost === "" ? null : d.paInPost,
+    rpe: d.rpe === "" ? null : d.rpe,
+  };
+}
+
+function sameDraft(a: MetaDraft, b: MetaDraft) {
+  return (
+    a.notes.trim() === b.notes.trim() &&
+    a.paInPre === b.paInPre &&
+    a.paInPost === b.paInPost &&
+    a.rpe === b.rpe
+  );
+}
+
 export function SessionDetail({
   session,
   scheduledLabel,
@@ -53,12 +95,23 @@ export function SessionDetail({
   const diagnosis = session.program.case?.diagnoses?.[0]?.condition?.name ?? null;
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const confirm = useConfirm();
+  const [draft, setDraft] = useState<MetaDraft>(() => draftFrom(session));
+  // Base = lo persistido (props). Tras guardar, `router.refresh()` trae las
+  // props nuevas y el borrador vuelve a coincidir → deja de estar sucio.
+  const dirty = !completed && !sameDraft(draft, draftFrom(session));
+  useUnsavedGuard(dirty);
 
-  const finish = () => {
+  const finish = async () => {
     setError(null);
-    if (!confirm("¿Cerrar la sesión y marcarla como realizada?")) return;
+    const ok = await confirm({
+      title: "¿Cerrar la sesión?",
+      message: "Se marca como realizada con las anotaciones, EVA y RPE que cargaste. Los ejercicios pendientes quedan como hechos.",
+      confirmLabel: "Cerrar sesión",
+    });
+    if (!ok) return;
     start(async () => {
-      const r = await completeSessionFromSeguimiento(session.id);
+      const r = await completeSessionFromSeguimiento(session.id, draftToMeta(draft));
       if (!r.ok) setError(r.error);
       else router.refresh();
     });
@@ -176,7 +229,13 @@ export function SessionDetail({
         />
       </main>
 
-      <SessionNotes session={session} disabled={completed} />
+      <SessionNotes
+        session={session}
+        draft={draft}
+        onChange={setDraft}
+        dirty={dirty}
+        disabled={completed}
+      />
     </div>
   );
 }
@@ -198,6 +257,7 @@ function ExerciseSequencer({
   disabled: boolean;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   // Component is keyed by the order signature in its parent, so on a
   // genuine server refresh we re-mount and `exercises` is the fresh prop.
   // No useEffect-sync anti-pattern needed.
@@ -220,8 +280,14 @@ function ExerciseSequencer({
     });
   };
 
-  const onRemove = (id: string) => {
-    if (!confirm("¿Quitar este ejercicio de la sesión?")) return;
+  const onRemove = async (id: string) => {
+    const ok = await confirm({
+      title: "¿Quitar este ejercicio de la sesión?",
+      confirmLabel: "Quitar",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setError(null);
     setLocal((s) => s.filter((x) => x.id !== id));
     start(async () => {
       const r = await removeSessionExercise(id);
@@ -283,11 +349,15 @@ function ExerciseSequencer({
         existingIds={new Set(local.map((sx) => sx.exerciseId))}
         onClose={() => setPicker(false)}
         onPick={(ex) => {
+          setError(null);
           start(async () => {
             const r = await addSessionExercise({ sessionId, exerciseId: ex.id });
             if (r.ok) {
               setPicker(false);
               router.refresh();
+            } else {
+              setPicker(false);
+              setError(r.error);
             }
           });
         }}
@@ -317,11 +387,16 @@ function ExerciseRow({
   const [reps, setReps] = useState(sx.reps);
   const [notes, setNotes] = useState(sx.notes ?? "");
   const [openNotes, setOpenNotes] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const save = (patch: { status?: SessionExerciseStatus; sets?: number; reps?: number; notes?: string }) => {
+    setError(null);
     start(async () => {
       const r = await updateSessionExercise({ sessionExerciseId: sx.id, ...patch });
+      // Antes el error se tragaba y el valor tipeado quedaba en pantalla como
+      // si se hubiera guardado.
       if (r.ok) router.refresh();
+      else setError(r.error);
     });
   };
 
@@ -384,6 +459,11 @@ function ExerciseRow({
               background: "rgba(255,255,255,0.7)",
             }}
           />
+        )}
+        {error && (
+          <div role="alert" style={{ marginTop: 4, fontSize: 11, color: "#9F1F1F" }}>
+            No se guardó: {error}
+          </div>
         )}
       </div>
       <NumberInline
@@ -534,24 +614,32 @@ function StatusButton({
   );
 }
 
-function SessionNotes({ session, disabled }: { session: SessionDTO; disabled: boolean }) {
+function SessionNotes({
+  session,
+  draft,
+  onChange,
+  dirty,
+  disabled,
+}: {
+  session: SessionDTO;
+  draft: MetaDraft;
+  onChange: (d: MetaDraft) => void;
+  dirty: boolean;
+  disabled: boolean;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [notes, setNotes] = useState(session.notes ?? "");
-  const [paInPre, setPaInPre] = useState<number | "">(session.paInPre ?? "");
-  const [paInPost, setPaInPost] = useState<number | "">(session.paInPost ?? "");
-  const [rpe, setRpe] = useState<number | "">(session.rpe ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const set = <K extends keyof MetaDraft>(k: K, v: MetaDraft[K]) => onChange({ ...draft, [k]: v });
 
   const save = () => {
+    setError(null);
     start(async () => {
-      const r = await updateSessionMeta({
-        sessionId: session.id,
-        notes: notes || undefined,
-        paInPre: paInPre === "" ? undefined : Number(paInPre),
-        paInPost: paInPost === "" ? undefined : Number(paInPost),
-        rpe: rpe === "" ? undefined : Number(rpe),
-      });
+      const r = await updateSessionMeta({ sessionId: session.id, ...draftToMeta(draft) });
+      // Antes un error acá se tragaba: el kine veía sus notas en pantalla y
+      // creía que estaban guardadas.
       if (r.ok) router.refresh();
+      else setError(r.error);
     });
   };
 
@@ -561,14 +649,15 @@ function SessionNotes({ session, disabled }: { session: SessionDTO; disabled: bo
         Anotaciones del kinesiólogo
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <MiniField label="EVA pre" value={paInPre} onChange={setPaInPre} disabled={disabled} />
-        <MiniField label="EVA post" value={paInPost} onChange={setPaInPost} disabled={disabled} />
-        <MiniField label="RPE" value={rpe} onChange={setRpe} disabled={disabled} />
+        <MiniField label="EVA pre" value={draft.paInPre} onChange={(v) => set("paInPre", v)} disabled={disabled} />
+        <MiniField label="EVA post" value={draft.paInPost} onChange={(v) => set("paInPost", v)} disabled={disabled} />
+        <MiniField label="RPE" value={draft.rpe} onChange={(v) => set("rpe", v)} disabled={disabled} />
       </div>
       <textarea
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
+        value={draft.notes}
+        onChange={(e) => set("notes", e.target.value)}
         rows={6}
+        maxLength={4000}
         placeholder="Cómo respondió, observaciones, próximos pasos…"
         disabled={disabled}
         style={{
@@ -581,7 +670,26 @@ function SessionNotes({ session, disabled }: { session: SessionDTO; disabled: bo
           minHeight: 100,
         }}
       />
-      <Button variant="ghost" onClick={save} disabled={pending || disabled}>
+      {error && (
+        <div
+          role="alert"
+          style={{
+            padding: 10,
+            borderRadius: 10,
+            background: "rgba(228,70,70,0.1)",
+            color: "#9F1F1F",
+            fontSize: 12,
+          }}
+        >
+          No se guardó: {error}
+        </div>
+      )}
+      {dirty && !error && (
+        <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+          Cambios sin guardar. También se guardan al cerrar la sesión.
+        </div>
+      )}
+      <Button variant="ghost" onClick={save} disabled={pending || disabled || !dirty}>
         {pending ? "Guardando…" : "Guardar anotaciones"}
       </Button>
       {session.program.case?.diagnoses?.[0]?.condition && (

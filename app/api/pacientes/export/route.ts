@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { exportPatientsCsv } from "@/lib/patients";
+import { exportPatientsCsv } from "@/lib/patients-export-internal";
 import { tryGetActor } from "@/lib/session";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -14,7 +14,13 @@ export const dynamic = "force-dynamic";
  * returns null when the visitor has no Supabase session — the route then
  * responds 401 without ever calling `exportPatientsCsv`.
  *
- * Rate-limit: 5 exports per minute per user to stop scrape attacks.
+ * Rate-limit: 5 exports per minute per user to stop scrape attacks. This
+ * route is the ONLY door to `exportPatientsCsv` (server-only since the A2
+ * review: as a "use server" export it was callable as an RPC, skipping this
+ * rate-limit and the 1000-id cap).
+ *
+ * A2b-S-vis: el export se audita (`patient.export`) y escapa fórmulas dentro
+ * de `exportPatientsCsv`; acá solo se parsean `ids` y `archived`.
  */
 export async function GET(req: Request) {
   const actor = await tryGetActor();
@@ -33,8 +39,14 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  const ids = url.searchParams.get("ids")?.split(",").filter(Boolean);
-  const csv = await exportPatientsCsv(ids && ids.length ? { ids } : undefined);
+  // Tope de ids: la selección masiva de la UI es de una página; un query
+  // gigante no tiene uso legítimo y se descarta el excedente.
+  const ids = url.searchParams.get("ids")?.split(",").filter(Boolean).slice(0, 1000);
+  // `?archived=include|only` — la pestaña "Archivados" pide "only"; sin el
+  // parámetro se exportan solo los activos (comportamiento previo).
+  const a = url.searchParams.get("archived");
+  const archived = a === "include" || a === "only" ? a : "exclude";
+  const csv = await exportPatientsCsv(actor, ids && ids.length ? { ids } : { archived });
   const filename = `pacientes-${new Date().toISOString().slice(0, 10)}.csv`;
   return new Response(csv, {
     status: 200,

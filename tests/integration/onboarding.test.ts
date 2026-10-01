@@ -1,0 +1,259 @@
+/**
+ * Stepper de alta del consultorio (A3c-S-signup, 2026-09-30).
+ *
+ * - sin email verificado no hay tenant;
+ * - el paso 2 crea Tenant + Practitioner + OWNER (aceptada) + "Particular" en
+ *   una transacción, con el alta sin terminar (`onboardingCompletedAt` null);
+ * - re-ejecutar el paso 2 EDITA: no duplica tenant, membresía ni Particular
+ *   (tampoco con dos pedidos simultáneos);
+ * - staff ≠ paciente: una identidad de portal no crea consultorio;
+ * - el paso 7 exige al menos un servicio y es idempotente;
+ * - la invitación pendiente se reabre solo para el email invitado.
+ *
+ * Actions REALES contra Postgres (lib/onboarding.ts, lib/services.ts); solo se
+ * mockea el cliente de Supabase (quién es el usuario y si verificó el email).
+ */
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { randomBytes } from "node:crypto";
+import type { PrismaClient } from "@prisma/client";
+import { saveOnboardingClinic, completeOnboarding, openPendingInvitation } from "@/lib/onboarding";
+import { createService } from "@/lib/services";
+import { hashInviteToken } from "@/lib/invitations-tokens";
+import { __rateLimitInternals } from "@/lib/rate-limit";
+import {
+  ownerClient,
+  createEphemeralTenant,
+  deleteTenantDeep,
+  uniqueSuffix,
+  type EphemeralTenant,
+} from "@/tests/helpers/tenant-factory";
+
+const sb = vi.hoisted(() => ({
+  user: null as null | {
+    id: string;
+    email: string;
+    email_confirmed_at: string | null;
+    user_metadata: Record<string, unknown>;
+  },
+}));
+vi.mock("@/lib/supabase/server", () => ({
+  getSupabaseServerClient: () => ({
+    auth: { getUser: async () => ({ data: { user: sb.user }, error: null }) },
+  }),
+}));
+
+const RUN = process.env.INTEGRATION === "1";
+
+describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
+  let db: PrismaClient;
+  let A: EphemeralTenant;
+  const createdTenants: string[] = [];
+  const extraUsers: string[] = [];
+
+  beforeAll(async () => {
+    db = ownerClient();
+    A = await createEphemeralTenant(db);
+    // Como el cliente vivo tras el backfill de la migración: alta completa.
+    await db.tenant.update({ where: { id: A.tenantId }, data: { onboardingCompletedAt: new Date() } });
+  });
+  afterAll(async () => {
+    // Lo creado por el stepper + lo que haya dejado una corrida anterior caída
+    // (todo tenant cuyo OWNER es una identidad `test-user-onb-*`).
+    const leaked = await db.membership.findMany({
+      where: { userId: { startsWith: "test-user-onb-" }, role: "OWNER" },
+      select: { tenantId: true },
+    });
+    for (const t of new Set([...createdTenants, ...leaked.map((m) => m.tenantId)])) {
+      await deleteTenantDeep(db, t);
+    }
+    // Practitioner de un OWNER cuyo tenant ya se borró cascadea con el tenant.
+    await db.userProfile.deleteMany({ where: { id: { startsWith: "test-user-onb-" } } });
+    await A?.cleanup();
+    if (extraUsers.length) {
+      await db?.patient.updateMany({ where: { userId: { in: extraUsers } }, data: { userId: null } });
+      await db?.userProfile.deleteMany({ where: { id: { in: extraUsers } } });
+    }
+    await db?.$disconnect();
+  });
+  beforeEach(() => __rateLimitInternals.reset());
+
+  /** Identidad nueva (sin nada en la DB todavía; /auth/confirm hace el upsert del perfil). */
+  const newIdentity = (verified = true) => {
+    const id = `test-user-onb-${uniqueSuffix()}`;
+    extraUsers.push(id);
+    sb.user = {
+      id,
+      email: `${id}@test.local`,
+      email_confirmed_at: verified ? new Date(0).toISOString() : null,
+      user_metadata: { full_name: "Camila Rossi" },
+    };
+    return id;
+  };
+
+  const ownedState = async (userId: string) => {
+    const ms = await db.membership.findMany({ where: { userId }, include: { tenant: true } });
+    const tenantIds = ms.map((m) => m.tenantId);
+    return {
+      memberships: ms,
+      practitioners: await db.practitioner.count({ where: { userId } }),
+      particulars: await db.insurer.count({ where: { tenantId: { in: tenantIds }, isParticular: true } }),
+    };
+  };
+
+  it("sin email verificado no crea tenant", async () => {
+    const uid = newIdentity(false);
+    const tenantsBefore = await db.tenant.count();
+    const r = await saveOnboardingClinic({ name: "Consultorio Sin Verificar" });
+    expect(r.ok).toBe(false);
+    expect(await db.tenant.count()).toBe(tenantsBefore);
+    expect((await ownedState(uid)).memberships).toHaveLength(0);
+  });
+
+  it("paso 2 crea Tenant + Practitioner + OWNER + Particular atómico, con el alta abierta", async () => {
+    const uid = newIdentity();
+    const r = await saveOnboardingClinic({
+      name: "Centro Kinésico Onboarding",
+      phone: "011 4555-1234",
+      whatsapp: "+54 9 11 5555-1234",
+      publicEmail: "Turnos@Onb.test",
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    createdTenants.push(r.data.tenantId);
+    expect(r.data.created).toBe(true);
+
+    const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+    expect(t).toMatchObject({
+      name: "Centro Kinésico Onboarding",
+      phone: "011 4555-1234",
+      whatsapp: "+54 9 11 5555-1234",
+      publicEmail: "turnos@onb.test",
+      onboardingCompletedAt: null,
+    });
+    expect(t.slug).toMatch(/^centro-kinesico-onboarding(-\d+)?$/);
+
+    const s = await ownedState(uid);
+    expect(s.memberships).toHaveLength(1);
+    expect(s.memberships[0]).toMatchObject({ role: "OWNER", tenantId: t.id });
+    expect(s.memberships[0].acceptedAt).not.toBeNull();
+    expect(s.practitioners).toBe(1);
+    expect(s.particulars).toBe(1);
+    const profile = await db.userProfile.findUniqueOrThrow({ where: { id: uid } });
+    expect(profile).toMatchObject({ email: `${uid}@test.local`, fullName: "Camila Rossi" });
+    expect(await db.auditEvent.count({ where: { tenantId: t.id, action: "tenant.create" } })).toBe(1);
+  });
+
+  it("re-ejecutar el paso 2 edita el consultorio: no duplica tenant, membresía ni Particular", async () => {
+    const uid = newIdentity();
+    const first = await saveOnboardingClinic({ name: "Primero" });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    createdTenants.push(first.data.tenantId);
+    const tenantsAfterFirst = await db.tenant.count();
+
+    const second = await saveOnboardingClinic({ name: "Nombre Corregido", whatsapp: "11 5555 0000" });
+    expect(second).toEqual({ ok: true, data: { tenantId: first.data.tenantId, created: false } });
+
+    expect(await db.tenant.count()).toBe(tenantsAfterFirst);
+    const s = await ownedState(uid);
+    expect(s.memberships).toHaveLength(1);
+    expect(s.practitioners).toBe(1);
+    expect(s.particulars).toBe(1);
+    const t = await db.tenant.findUniqueOrThrow({ where: { id: first.data.tenantId } });
+    expect(t).toMatchObject({ name: "Nombre Corregido", whatsapp: "11 5555 0000" });
+  });
+
+  it("dos pedidos simultáneos del paso 2 dejan un solo consultorio", async () => {
+    const uid = newIdentity();
+    const [a, b] = await Promise.all([
+      saveOnboardingClinic({ name: "Doble Click" }),
+      saveOnboardingClinic({ name: "Doble Click" }),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    createdTenants.push(a.data.tenantId);
+    expect(b.data.tenantId).toBe(a.data.tenantId);
+    const s = await ownedState(uid);
+    expect(s.memberships).toHaveLength(1);
+    expect(s.particulars).toBe(1);
+  });
+
+  it("una identidad de portal de pacientes no crea consultorio", async () => {
+    const uid = newIdentity();
+    await db.userProfile.create({ data: { id: uid, email: `${uid}@test.local` } });
+    await db.patient.create({
+      data: { tenantId: A.tenantId, firstName: "P", lastName: "Portal", email: `${uid}@test.local`, userId: uid, documentId: `DNI-${uid}` },
+    });
+    const tenantsBefore = await db.tenant.count();
+    const r = await saveOnboardingClinic({ name: "No Debería" });
+    expect(r.ok).toBe(false);
+    expect(await db.tenant.count()).toBe(tenantsBefore);
+  });
+
+  it("quien ya es miembro de otro consultorio no crea uno nuevo desde el stepper", async () => {
+    sb.user = { id: A.userId, email: `${A.userId}@test.local`, email_confirmed_at: new Date(0).toISOString(), user_metadata: {} };
+    const tenantsBefore = await db.tenant.count();
+    const r = await saveOnboardingClinic({ name: "Segundo Consultorio" });
+    expect(r.ok).toBe(false);
+    expect(await db.tenant.count()).toBe(tenantsBefore);
+  });
+
+  it("paso 7: exige un servicio, marca onboardingCompletedAt y es idempotente", async () => {
+    newIdentity();
+    const r = await saveOnboardingClinic({ name: "Para Completar" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    createdTenants.push(r.data.tenantId);
+
+    const early = await completeOnboarding();
+    expect(early.ok).toBe(false);
+    expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).onboardingCompletedAt).toBeNull();
+
+    // Paso 4 con la action real de Configuración (el OWNER ya tiene Actor).
+    const svc = await createService({ name: "Sesión", durationMin: 45, priceCents: 1_500_000, maxConcurrent: 3 });
+    expect(svc.ok).toBe(true);
+
+    const done = await completeOnboarding();
+    expect(done.ok).toBe(true);
+    const at = (await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).onboardingCompletedAt;
+    expect(at).not.toBeNull();
+
+    const again = await completeOnboarding();
+    expect(again.ok).toBe(true);
+    expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).onboardingCompletedAt).toEqual(at);
+
+    // Con el alta cerrada, el paso 2 ya no edita (la cuenta "ya pertenece").
+    const late = await saveOnboardingClinic({ name: "Tarde" });
+    expect(late.ok).toBe(false);
+  });
+
+  it("invitación pendiente: se reabre (token rotado) solo para el email invitado", async () => {
+    const uid = newIdentity();
+    const oldRaw = randomBytes(24).toString("base64url");
+    const inv = await db.invitation.create({
+      data: {
+        tenantId: A.tenantId,
+        email: `${uid}@test.local`,
+        firstName: "Inv",
+        lastName: "Pendiente",
+        token: hashInviteToken(oldRaw),
+        invitedById: A.userId,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+
+    const r = await openPendingInvitation(inv.id);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const newRaw = r.data.url.replace("/invite/", "");
+    const row = await db.invitation.findUniqueOrThrow({ where: { id: inv.id } });
+    expect(row.token).toBe(hashInviteToken(newRaw));
+    expect(row.token).not.toBe(hashInviteToken(oldRaw));
+
+    // Otra identidad no puede reabrir (ni rotar) una invitación ajena.
+    newIdentity();
+    const other = await openPendingInvitation(inv.id);
+    expect(other.ok).toBe(false);
+    expect((await db.invitation.findUniqueOrThrow({ where: { id: inv.id } })).token).toBe(row.token);
+  });
+});

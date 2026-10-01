@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { parseARS } from "@/lib/format";
+import { MoneyInput } from "@/components/ui/money-input";
 import { fmtMoney } from "./agenda-utils";
 
 const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
@@ -91,30 +91,19 @@ export function CopagoRow({
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-700)" }}>{loading ? "Cargando…" : obraSocial}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 13, color: "var(--navy-500)" }}>$</span>
-          <input
-            type="number"
-            min={0}
-            step={100}
-            inputMode="numeric"
-            aria-label="Monto de copago"
-            value={loading ? "" : Math.round(valueCents / 100)}
-            disabled={loading}
-            onChange={(e) => onValueCents(Math.max(0, parseARS(e.target.value) ?? 0))}
-            style={{
-              width: 110,
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: "1px solid rgba(15,30,51,0.12)",
-              background: "#fff",
-              fontSize: 14,
-              fontWeight: 600,
-              textAlign: "right",
-              color: "var(--navy-900)",
-            }}
-          />
-        </div>
+        {/* MoneyInput (A2b-S-cfg): was `type=number step=100`, which rejected a
+            $50 copago in browser validation and blocked creating the turno,
+            and rounded away the cents. Empty → 0 ("no cobrar"): the parent
+            state is a plain number. */}
+        <MoneyInput
+          variant="compact"
+          width={120}
+          ariaLabel="Monto de copago"
+          value={loading ? null : valueCents}
+          disabled={loading}
+          placeholder={loading ? "" : "0"}
+          onChange={(cents) => onValueCents(cents ?? 0)}
+        />
       </div>
 
       <AnimatePresence initial={false}>

@@ -29,9 +29,21 @@ open security items in [AUDIT.md](AUDIT.md).
   (NOBYPASSRLS) and the isolation test is green. The **prod connection-role
   flip** remains an owner task.
 
-**Still open** (tracked in AUDIT.md): distributed rate-limiting (Upstash, §8
-below — owner/bucket C), the prod RLS role flip (§9), and GDPR
-export/retention.
+- **Bloque A2/A3 (30-sep-2026)** — ✅ closed in code: basic access = view only
+  (§1.1), public booking never touches an existing patient row (§2), webhook
+  no-downgrade/no-revive (§4), open redirects + Origin checks, httpOnly cookies
+  and session refresh (§11), hardened rate-limit (§8), staff ≠ patient (§9),
+  Sentry/CSP reports/HSTS/PII redaction (§12), Next 14.2.35.
+- **Bloque A3c (30-sep-2026)** — ✅ H5 closed: the signup uses `auth.signUp` with
+  email verification (`lib/auth.ts:49`); `admin.createUser({ email_confirm: true })`
+  and tenant creation at signup are gone. The tenant is created only in
+  `/onboarding` (step 2, `lib/tenant-bootstrap.ts`) by a verified identity.
+  Requires "Confirm email" ON in Supabase (EXTERNAL-CONFIG §0.1).
+
+**Still open** (tracked in AUDIT.md): the
+Upstash env (§8 — owner); the
+prod RLS role flip (§9, its code prerequisite `p2002-target-null-bajo-rls` is
+closed); CSP enforce (C1); GDPR export/retention.
 
 ## 1. Identity & tenancy
 
@@ -65,6 +77,40 @@ to the seeded `movare` tenant + first practitioner when there's no
 Supabase session. **Never set this in production** — `lib/session.ts`
 also enforces `NODE_ENV !== "production"`.
 
+## 1.1 Access matrix: basic = view only (owner decision, 30-sep-2026)
+
+A PRACTITIONER who is neither the assigned practitioner nor has a
+`PatientShare` has **basic** access (`lib/visibility.ts`). OWNER/ADMIN always
+have full access; the tenant flag `sharedPatientView` grants full to everyone.
+**The server enforces it; the UI only mirrors it.**
+
+| Action | full | basic |
+| --- | --- | --- |
+| See the booking (name, time, service) | ✅ | ✅ (notes, `title`, `description` nulled — `lib/bookings.ts:366-372`) |
+| Edit / reschedule / change status / delete a booking, toggle copago or OS paid | ✅ | ❌ `BASIC_ACCESS_ERROR` (`lib/bookings.ts:64`) |
+| Create a booking (single or batch) for that patient | ✅ | ❌ |
+| Guest bookings (no patient) | ✅ | ✅ operable |
+| Edit patient, coverage, default copago, portal invite | ✅ | ❌ |
+| Sessions (detail, close, reschedule, meta, exercises) | ✅ | ❌ (`getSessionDetail` → 404) |
+| Files, activity, clinical-history mutations (diagnosis, plans, EVA) | ✅ | ❌ (list → `[]`) |
+| Archive / bulk archive (all-or-nothing) | ✅ | ❌ |
+| Dashboard recent/upcoming | ✅ | row without diagnosis/progress/actions |
+| ICS / CSV export | ✅ | row masked (no notes/title/description/PHI) |
+
+**Exports are route-only.** `exportBookingsIcs` and `exportPatientsCsv` live in
+`lib/bookings-export-internal.ts` / `lib/patients-export-internal.ts`
+(`server-only`). As `"use server"` exports they were callable as RPC, skipping
+the route's rate-limit and the 90-day cap. The CSV neutralises formula cells
+(`= + - @`, TAB/CR — `lib/csv.ts`) and writes an `AuditEvent`
+`patient.export`.
+
+**Input ids are validated against the tenant** before any write, because FK
+checks bypass RLS: `practitionerId` in `createBooking`/batch, `patientId` in the
+batch (also in `dryRun`). A client `idempotencyKey` that belongs to another
+tenant's row is rejected (the key is globally unique; under BYPASSRLS the upsert
+used to overwrite the foreign booking). Known gap (C0): write paths check
+practitioner ∈ tenant but not an **accepted** membership.
+
 ## 2. The public surface
 
 Public, unauthenticated surfaces (`/c/<slug>/booking`, the booking result
@@ -72,9 +118,18 @@ pages, the MP webhook):
 
 - Resolve tenant by slug, not by header.
 - Every public server action is rate-limited per IP via `lib/rate-limit.ts`.
-- `lib/public-booking.ts#submitPublicBooking` **never overwrites existing
-  PII** on a Patient row — at most it fills `null` fields. This prevents
-  an attacker who knows a target's email from rewriting their HC.
+- `lib/public-booking.ts#submitPublicBooking` **never modifies an existing
+  Patient row** — not even to fill empty fields (H4, closed in A2b,
+  30-sep-2026). The match is by normalised DNI only
+  (`resolvePublicPatient`, `lib/public-booking-internal.ts:122`); if the typed
+  name/email/phone differ from the file, they go to the booking as a snapshot
+  (`guestName/guestEmail/guestPhone`) plus the note "Reserva online · datos de
+  contacto distintos a la ficha" for the practitioner to review. Before A2 a
+  stranger's DNI + the attacker's email took over the patient's portal.
+- The wizard sends a per-instance key `pub:<tenantId>:<uuid>`; a reused key with
+  different data is rejected and a CANCELLED booking is never revived. The slot
+  must belong to the day's grid (`checkPublicSlot`, hours, Sunday, 1 h lead
+  time), checked again on submit.
 - `lib/public-booking.ts#getPublicBookingStatus` returns only initials +
   non-PHI fields. The booking id (25-char CUID) is sufficiently random
   for the polling endpoint, but the payload is minimised regardless.
@@ -90,14 +145,20 @@ treating the email as authoritative — Supabase magic-link / unverified
 sign-ups can never read PHI on a Patient row that happens to share their
 email.
 
-`submitCheckIn`:
+The portal matches the patient's email case-insensitively and treats any
+identity with a `Membership` as "no patient files" (staff ≠ patient, §9).
 
-- Rate-limited per IP.
+`submitCheckIn` (`lib/portal.ts:196`):
+
+- Rate-limited per IP (4/min).
 - Refuses a second check-in for the same session id.
-- Patient input is capped at 500 chars per entry and **prepended**
-  (newest-first) to `Patient.notes`, then the whole field is truncated to
-  4 kB. Pre-Sprint 11 the append-then-truncate order let a runaway
-  patient bury practitioner notes off the bottom of the buffer.
+- **Never writes `Patient.notes`** (since A3b, 30-sep-2026). It creates the
+  `EvaScore`, notifies the assigned practitioner (or OWNER/ADMIN) and writes an
+  `AuditEvent` `portal.checkin` with the text (capped at 500 chars). Before, the
+  text was prepended to `Patient.notes` and the field truncated to 4 kB, which
+  cut off the practitioner's older notes.
+- Known gap (C1, portal v2): `getPortalPlan` returns the practitioner's
+  `Session.notes` to the patient.
 
 ## 4. Mercado Pago webhook
 
@@ -116,9 +177,15 @@ environments. The new model (`lib/mercadopago.ts` +
   **anchored when the preference was created** (`Payment.expectedAmountCents`,
   Ronda 2) — not the live `Service.priceCents` — before flipping the booking to
   PAID. A mismatch persists `Payment FAILED` instead of losing the trace.
-- ⚠️ Open (audit 2026-09-23, A2): another payment attempt (different
-  `externalId`) can overwrite a PAID with FAILED/AUTHORIZED, and a late PAID
-  revives a CANCELLED booking.
+- **No downgrade, no revive** (A2b, 30-sep-2026): `nextPaymentStatus`
+  (`lib/mercadopago.ts:184`) only lets a PAID go to REFUNDED; every event is
+  kept (redacted, last 20) in `rawPayload.attempts`; the whole update runs in
+  one tx with `SELECT … FOR UPDATE` on the booking, and a concurrent P2002 is
+  retried as an update. Only PENDING becomes CONFIRMED: a CANCELLED/NO_SHOW/
+  COMPLETED booking records the payment and notifies "revisá el reembolso"
+  instead of coming back to life. A duplicate payment also notifies.
+- Known gap (C): a late payment on an expired public reservation confirms it
+  and notifies, without re-checking capacity.
 - `rawPayload` is redacted to a known-safe subset before persistence —
   no cardholder name, document, or device fingerprint.
 
@@ -131,9 +198,16 @@ row when:
 2. The Patient row has `userId == null` (or already matches this user).
 
 A Patient already linked to a different identity is never re-bound. This
-closes the account-takeover vector via mistyped Patient emails.
+closes the account-takeover vector via mistyped Patient emails. Since A3b
+(30-sep-2026) the callback also never links files to an identity that has a
+`Membership` (staff ≠ patient), and its `next` goes through `safeNext` (§11).
 
 ## 6. File uploads
+
+`lib/files.ts` (since A2b, 30-sep-2026, every file action requires **full**
+access to the patient: basic gets an empty list and upload/delete/download are
+rejected; the download `AuditEvent` is written **before** the URL is signed,
+and `deletePatientFile` checks the storage `{ error }`).
 
 `lib/files.ts#uploadPatientFile`:
 
@@ -152,15 +226,29 @@ closes the account-takeover vector via mistyped Patient emails.
 the user-scoped actions (`listNotifications`, `markRead`, …) are
 exported from the `"use server"` module.
 
-## 8. Rate limiting
+## 8. Rate limiting (rewritten 30-sep-2026, A3a)
 
-`lib/rate-limit.ts` falls back to an in-memory sliding window when
-`UPSTASH_REDIS_REST_URL` is not configured. **In-memory does not work on
-Vercel serverless** — each lambda isolate has its own bucket map and
-cold starts reset the counters. Configure Upstash before shipping any
-public surface to production.
+`lib/rate-limit.ts` uses Upstash Redis when `UPSTASH_REDIS_REST_URL` /
+`_TOKEN` are set, and an in-memory window otherwise. **In-memory does not
+protect anything on Vercel serverless** (one map per isolate, reset on cold
+start): the Upstash env is an owner task (EXTERNAL-CONFIG §4).
 
-Rate limits currently in place:
+How the Upstash path behaves since A3a:
+
+- `try/catch` + `AbortSignal.timeout(1500)` + validation of every command's
+  result. **Any failure falls back to memory** and logs
+  `rate_limit.upstash_fallback` (throttled to 1/min). Before, a network error
+  broke login instead of degrading.
+- Keys are prefixed `rl:<VERCEL_ENV|dev>:` so preview/staging and production
+  never share counters.
+- The memory map is swept and capped at 10k keys.
+- The client IP comes only from `clientIp(headers)` (`lib/client-ip.ts`; it
+  replaced 8 hand-rolled copies). Composite limits go through
+  `rateLimitAll([...])`; emails are hashed (`hashKeyPart`, sha256) before being
+  used as a key.
+- **Uniform 429:** form route handlers redirect 303 to `?error=rate_limited`;
+  server actions return "Demasiados intentos. Probá de nuevo en N s."
+  (`rateLimitedMessage`).
 
 | Surface | Limit |
 | --- | --- |
@@ -169,20 +257,20 @@ Rate limits currently in place:
 | `getPublicBookingStatus` | 120 / min / IP |
 | `submitCheckIn` | 4 / min / IP |
 | Mercado Pago webhook | 60 / min / IP |
-| `/api/auth/sign-in` (login) | 10 / min / IP |
-| `/api/auth/google` | 10 / min / IP |
-| signup (`signUpPractitioner`) | 3 / 10 min / IP |
-| forgot password | 5 / 10 min / IP |
-| reset password | 5 / 10 min / IP |
+| `/api/auth/sign-in` (login) | 10 / min / IP **+** 10 / 15 min / email hash → 303 `?error=rate_limited` |
+| `/api/auth/google` | 10 / min / IP → 303 |
+| signup | 3 / 10 min / IP **+** 3 / h / email hash |
+| forgot password | 5 / 10 min / IP **+** 3 / h / email hash |
+| reset password | 5 / 10 min / IP **+** 5 / 10 min / user (only without `ks_recovery`, when the current password is checked) |
+| `createInvitation` / `regenerateInvitationUrl` | 10 / h / actor **+** 1 / 10 min / recipient (shared bucket) |
+| `sendPatientPortalInvite` | 10 / h / actor **+** 1 / 10 min / recipient |
+| `acceptInvite` | 10 / 10 min / IP |
 | `/api/pacientes/export` | 5 / min / user |
 | `/api/agenda/export` | 10 / min / user |
 
-**Known gaps (audit 2026-09-23 → A3 `S-rl`):** no limit on the actions that
-send email (`createInvitation`, `regenerateInvitationUrl`,
-`sendPatientPortalInvite`) nor on `acceptInvite`; keys are IP-only (no
-email/tenant composite); the Upstash path has no try/catch/timeout (a network
-error breaks login instead of falling back). The orphan `/api/booking/checkout`
-was deleted in A0b.
+Accepted trade-off: the per-email login limit lets someone lock a third party's
+account out of password login for up to 15 minutes (Google login and the
+recovery flow still work).
 
 ## 9. Row-Level Security (RLS) — a real backstop (Ronda 4)
 
@@ -237,13 +325,29 @@ what makes a missed wrap fail loudly instead of leaking.
 a hand-written `where: { tenantId }` in every query) is applied everywhere.
 (`getTenantPrisma()` is dead code — no call sites.) RLS is the net under it,
 not a replacement for it. Note that **FK checks bypass RLS**: an input id from
-another tenant (e.g. `patientId` in `createBookingsBatch`) is persisted unless
-the action validates it against the tenant first (audit 2026-09-23, A2).
+another tenant is persisted unless the action validates it against the tenant
+first. For bookings this is closed since A2a (§1.1); every new action must do
+the same.
 
-**Staff ≠ patient rule:** documented as "enforced" in the roadmap, but **not
-implemented** in code (audit 2026-09-23). Combined with the signup
-auto-confirming emails (H5) and the portal matching patients by email, it is a
-PHI exposure path → A3 (`S-auth`).
+**Staff ≠ patient rule** (implemented in A3b, 30-sep-2026): an identity with a
+`Membership` is never treated as a patient.
+
+- The portal shows "no files" to a staff identity (`lib/portal.ts:61-63`).
+- `/auth/callback` never links patient files to staff.
+- `createInvitation` rejects the email of a Patient **with a linked portal** —
+  **only within the inviting tenant**. Decision taken in A3b, a deliberate
+  deviation from the plan's wording ("a Patient in any tenant"): looking at
+  other tenants would turn the rejection into a cross-tenant oracle ("this
+  email is a patient somewhere").
+- `acceptInvite` rejects when `Patient.userId = user.id` or the email belongs to
+  a Patient with a linked portal (service channel, any tenant: the invitee
+  already proved the email, so it reveals nothing new).
+
+H5 (auto-confirmed signup) is closed since A3c, so identities are verified; this
+rule stays as the barrier between staff and patient identities. A portal
+patient's email that tries to sign up as staff gets the same response as a
+normal signup, with no mail and no tenant (anti-oracle, `lib/auth.ts:98-104`).
+
 
 ## 10. Platform superadmin (cross-tenant privilege tier)
 
@@ -291,3 +395,62 @@ tenant reads) and its tags.
   run by the owner against the owner/`DIRECT_URL` connection. There is **no
   in-app path** to promote a user, no invitation flow, and no self-service —
   which keeps the tier out of reach of any tenant-level compromise.
+
+## 11. Session, cookies & redirects (A3b, 30-sep-2026)
+
+- **Session refresh in the middleware.** `middleware.ts` builds a Supabase
+  server client with `getAll`/`setAll` and calls `getSession()` (not
+  `getUser()`: no authorisation decision is taken there, it only refreshes).
+  Refreshed cookies are copied to the request and to the response, and the
+  response gets `Cache-Control: private, no-store` when a `Set-Cookie` was
+  written. `/_next` and `/api/webhooks` bypass it. The `x-tenant-*` strip and the
+  `x-request-id` run on every path (§1, AUDIT §5.3).
+- **Cookie flags.** Supabase cookies are `httpOnly`, `secure` in production and
+  `sameSite=lax` (`lib/supabase/cookie-options.ts`); the `@supabase/ssr` default
+  was `httpOnly: false`. `lax` is required: the OAuth callback and email links
+  arrive as top-level cross-site navigations.
+- **Open redirects closed.** Every `next=` goes through `safeNext` /
+  `safeNextFromUrl` (`lib/safe-next.ts`): own paths only. `next=@evil.com` in
+  the callback and sign-out was a real open redirect
+  (`https://app@evil.com`).
+- **Login/logout CSRF.** The three auth POSTs (sign-in, sign-out, google) check
+  `Origin` / `Sec-Fetch-Site` with `isAllowedOrigin`.
+- **Login errors** use a closed map of codes (`rate_limited`,
+  `invalid_credentials`, `missing_credentials`, `email_not_confirmed`,
+  `oauth_failed`, `missing_code`, `link_invalid`); any other `?error=` shows a
+  generic message (no reflected text).
+- **Google OAuth** no longer asks for `prompt=consent` / `access_type=offline`
+  (KineSoft never needs a Google refresh token).
+- **`/auth/confirm`** verifies `token_hash` with `verifyOtp` for signup, email,
+  invite, recovery and magiclink. On `recovery` it sets `ks_recovery`: httpOnly,
+  15 min, value `<userId>.<exp>.<hmac>` signed and checked with
+  `timingSafeEqual` (`lib/recovery-cookie.ts`). The reset (A3c,
+  `updatePasswordWithRecoverySession`) skips the current password only with a
+  valid cookie of the same user, and deletes it after success (single use);
+  without it the current password is required.
+
+## 12. Observability & headers (A3b, 30-sep-2026)
+
+- **Next 14.2.35** (from 14.2.18): CVE-2025-29927 (middleware bypass via
+  `x-middleware-subrequest`, which would have skipped the header strip),
+  plus 56332, 32421, 57822 (SSRF via `Location`), 55183/55184/67779 (RSC).
+- **Sentry** (`@sentry/nextjs` 11.1.0) is a **total no-op without
+  `SENTRY_DSN`**: `next.config.mjs` is not wrapped and `register()` returns
+  early. With a DSN: `sendDefaultPii: false`, and `beforeSend`,
+  `beforeSendTransaction` and `beforeBreadcrumb` pass through `redact()`.
+  **No client SDK** (bundle budget): client-side errors are not captured until
+  C1.
+- **PII redaction** (`lib/redact.ts`, used by the logger and by Sentry): by key
+  (password, secret, token, authorization, cookie, apikey, dni, documentId,
+  cuit, cuil, phone, whatsapp) and by value (emails, JWTs, Bearer/Basic, MP
+  tokens, `?token=` / `code=`, formatted DNI). Audit payloads carry field
+  names, not values (e.g. `updatePatient`, `session.meta.update`).
+- **CSP** is still **Report-Only**; reports go to Sentry (`report-uri` +
+  `report-to`, derived from the DSN). Allow-listed: Google Fonts,
+  youtube-nocookie, and `form-action` to Supabase + accounts.google.com (the
+  portal/wizard POST redirects there). Enforce = C1, after two weeks without
+  own violations.
+- **HSTS** (`max-age=63072000; includeSubDomains; preload`) only when
+  `VERCEL_ENV=production`; server-action `allowedOrigins` drop `localhost` in
+  Production. Both are computed at build time, so Vercel must expose System
+  Environment Variables to the build.

@@ -2,57 +2,55 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 import { signUpPractitioner } from "@/lib/auth";
 
+export type SignupInvite =
+  | { token: string; email: string; firstName: string; tenantName: string }
+  | { invalid: "not_found" | "accepted" | "expired" };
+
+const INVALID_COPY: Record<"not_found" | "accepted" | "expired", string> = {
+  not_found: "El link de invitación no es válido. Pedile al consultorio que te mande uno nuevo.",
+  accepted: "Esta invitación ya fue aceptada. Si es tuya, ingresá con tu cuenta.",
+  expired: "La invitación venció. Pedile al consultorio que te mande una nueva.",
+};
+
 /**
- * Self-serve owner signup. Same brand panel as `/login` for visual
- * consistency, but the form is its own client component so we can keep
- * the slug + email field-level errors next to their inputs instead of
- * a top-level banner.
+ * Paso 1 del alta: la cuenta (A3c-S-signup). Solo nombre, email y
+ * contraseña: el consultorio se carga en `/onboarding` DESPUÉS de verificar el
+ * email (antes se creaba todo acá, sin verificar nada — H5).
+ *
+ * Con `invite` es el signup de unión: el email es el de la invitación (fijo) y
+ * al confirmar el mail vuelve a `/invite/<token>` para aceptarla.
  */
-export function SignupScreen() {
-  const router = useRouter();
+export function SignupScreen({ invite }: { invite: SignupInvite | null }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
-  // Live slug preview as the user types the clinic name. Pure UX —
-  // server still validates.
-  const [clinicName, setClinicName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [slugTouched, setSlugTouched] = useState(false);
+  const [sentTo, setSentTo] = useState<{ email: string; message: string } | null>(null);
 
-  const derivedSlug = clinicName
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    .slice(0, 40);
-  const effectiveSlug = slugTouched ? slug : derivedSlug;
+  const joining = invite && "token" in invite ? invite : null;
+  const invalidInvite = invite && "invalid" in invite ? invite.invalid : null;
 
   const onSubmit = (formData: FormData) => {
     setError(null);
     setFieldErrors({});
     start(async () => {
       const r = await signUpPractitioner({
-        clinicName: String(formData.get("clinicName") ?? ""),
-        slug: effectiveSlug,
-        email: String(formData.get("email") ?? ""),
-        password: String(formData.get("password") ?? ""),
         fullName: String(formData.get("fullName") ?? ""),
-        licenseNumber: String(formData.get("licenseNumber") ?? ""),
+        email: joining ? joining.email : String(formData.get("email") ?? ""),
+        password: String(formData.get("password") ?? ""),
+        inviteToken: joining?.token ?? "",
       });
       if (!r.ok) {
         setError(r.error);
         setFieldErrors(r.fieldErrors ?? {});
         return;
       }
-      router.replace(r.data.redirect);
+      setSentTo({ email: r.data.email, message: r.data.message });
     });
   };
 
@@ -112,7 +110,7 @@ export function SignupScreen() {
         <div style={{ marginTop: "auto", maxWidth: 460 }}>
           <Tag tone="lime" className="mb-6">
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--navy-900)" }} />
-            Crear consultorio
+            {joining ? "Unirte a un consultorio" : "Crear consultorio"}
           </Tag>
           <h1 className="k-display" style={{ fontSize: 56, lineHeight: 1.02, margin: "0 0 18px" }}>
             Sumá tu
@@ -121,9 +119,9 @@ export function SignupScreen() {
             <br />a KineSoft.
           </h1>
           <p style={{ fontSize: 16, lineHeight: 1.55, color: "var(--navy-500)", margin: 0, maxWidth: 420 }}>
-            Creá tu espacio en minutos. Vas a poder invitar a tu equipo, cargar
-            obras sociales y comenzar a usar la agenda + historia clínica
-            inmediatamente.
+            {joining
+              ? `${joining.tenantName} te invitó a su equipo en KineSoft. Creá tu cuenta y empezá a trabajar con la agenda y las historias clínicas del consultorio.`
+              : "Creá tu cuenta, confirmá tu email y configurá tu consultorio en pocos pasos: horario, servicios, obras sociales y equipo."}
           </p>
           <ul style={{ marginTop: 20, padding: 0, listStyle: "none", display: "grid", gap: 8 }}>
             {[
@@ -186,74 +184,71 @@ export function SignupScreen() {
               marginBottom: 10,
             }}
           >
-            Nuevo consultorio
+            {joining ? "Unirte al equipo" : "Paso 1 de 7 · Tu cuenta"}
           </div>
-          <h2 className="k-display" style={{ fontSize: 28, margin: "0 0 22px", lineHeight: 1.1 }}>
-            Creá tu cuenta en KineSoft
+          <h2 className="k-display" style={{ fontSize: 28, margin: "0 0 10px", lineHeight: 1.1 }}>
+            {joining ? `Sumate a ${joining.tenantName}` : "Creá tu cuenta en KineSoft"}
           </h2>
+          <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 22px", lineHeight: 1.5 }}>
+            {joining
+              ? "Creá tu cuenta con el email de la invitación. Después de confirmarlo, aceptás la invitación y entrás."
+              : "Te mandamos un email para confirmarla. Después cargás los datos de tu consultorio en pocos pasos."}
+          </p>
 
+          {invalidInvite ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              <Notice tone="error">{INVALID_COPY[invalidInvite]}</Notice>
+              <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+                Ir al login
+              </Link>
+            </div>
+          ) : sentTo ? (
+            <div role="status" style={{ display: "grid", gap: 14 }}>
+              <Notice tone="success">
+                <strong style={{ display: "block", marginBottom: 4 }}>{sentTo.message}</strong>
+                Lo enviamos a <strong>{sentTo.email}</strong>. Abrí el link desde cualquier dispositivo para
+                {joining ? " confirmar tu cuenta y aceptar la invitación." : " confirmar tu cuenta y seguir con el alta del consultorio."}
+              </Notice>
+              <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+                ¿No llega? Revisá spam o promociones. Si ya tenías cuenta con ese email, no te llega un mail nuevo:{" "}
+                <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>ingresá</Link> o{" "}
+                <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600 }}>recuperá tu contraseña</Link>.
+              </p>
+            </div>
+          ) : (
           <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 14 }}>
-            <Field label="Nombre del consultorio" error={fieldErrors.clinicName?.[0]}>
+            <Field label="Tu nombre completo" error={fieldErrors.fullName?.[0]}>
               <input
                 type="text"
-                name="clinicName"
+                name="fullName"
                 required
-                value={clinicName}
-                onChange={(e) => setClinicName(e.target.value)}
-                placeholder="Centro Kinésico Movare"
+                defaultValue={joining?.firstName ?? ""}
+                placeholder="Camila Rossi"
                 style={inputStyle}
+                autoComplete="name"
               />
             </Field>
 
             <Field
-              label="Identificador (URL)"
-              hint={effectiveSlug ? `Tu URL: kinesoft.app/c/${effectiveSlug}` : "Solo minúsculas, números y guiones"}
-              error={fieldErrors.slug?.[0]}
+              label={joining ? "Email de la invitación" : "Email profesional"}
+              hint={joining ? "Es el email al que te invitaron: no se puede cambiar." : undefined}
+              error={fieldErrors.email?.[0]}
             >
-              <input
-                type="text"
-                name="slug"
-                required
-                value={effectiveSlug}
-                onChange={(e) => {
-                  setSlugTouched(true);
-                  setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""));
-                }}
-                placeholder="movare"
-                style={inputStyle}
-              />
-            </Field>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="Tu nombre completo" error={fieldErrors.fullName?.[0]}>
-                <input
-                  type="text"
-                  name="fullName"
-                  required
-                  placeholder="Camila Rossi"
-                  style={inputStyle}
-                  autoComplete="name"
-                />
-              </Field>
-              <Field label="Matrícula (opcional)" error={fieldErrors.licenseNumber?.[0]}>
-                <input type="text" name="licenseNumber" placeholder="MN 12345" style={inputStyle} />
-              </Field>
-            </div>
-
-            <Field label="Email profesional" error={fieldErrors.email?.[0]}>
               <input
                 type="email"
                 name="email"
                 required
+                readOnly={!!joining}
+                defaultValue={joining?.email ?? ""}
                 placeholder="camila@movare.com.ar"
-                style={inputStyle}
+                style={joining ? { ...inputStyle, background: "rgba(15,30,51,0.04)", color: "var(--navy-500)" } : inputStyle}
                 autoComplete="email"
               />
             </Field>
 
             <Field
               label="Contraseña"
-              hint="Mínimo 8 caracteres"
+              hint="Mínimo 8 caracteres, con al menos una letra y un número"
               error={fieldErrors.password?.[0]}
             >
               <input
@@ -267,20 +262,7 @@ export function SignupScreen() {
               />
             </Field>
 
-            {error && (
-              <div
-                role="alert"
-                style={{
-                  padding: 10,
-                  borderRadius: 10,
-                  background: "rgba(228,70,70,0.1)",
-                  color: "#9F1F1F",
-                  fontSize: 12,
-                }}
-              >
-                {error}
-              </div>
-            )}
+            {error && <Notice tone="error" role="alert">{error}</Notice>}
 
             <Button
               variant="primary"
@@ -288,16 +270,20 @@ export function SignupScreen() {
               disabled={pending}
               style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
             >
-              {pending ? "Creando…" : "Crear consultorio"} <IconArrow size={16} />
+              {pending ? "Creando tu cuenta…" : "Crear mi cuenta"} <IconArrow size={16} />
             </Button>
 
             <div style={{ marginTop: 4, fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
               ¿Ya tenés cuenta?{" "}
-              <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+              <Link
+                href={joining ? `/login?next=${encodeURIComponent(`/invite/${joining.token}`)}` : "/login"}
+                style={{ color: "var(--sky-700)", fontWeight: 600 }}
+              >
                 Ingresar
               </Link>
             </div>
           </form>
+          )}
         </div>
       </div>
     </div>
@@ -339,5 +325,31 @@ function Field({
         <span style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 4, display: "block" }}>{hint}</span>
       ) : null}
     </label>
+  );
+}
+
+function Notice({
+  tone,
+  role,
+  children,
+}: {
+  tone: "success" | "error";
+  role?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role={role}
+      style={{
+        padding: 12,
+        borderRadius: 12,
+        background: tone === "success" ? "rgba(200,245,100,0.18)" : "rgba(228,70,70,0.1)",
+        color: tone === "success" ? "var(--navy-900)" : "#9F1F1F",
+        fontSize: 13,
+        lineHeight: 1.5,
+      }}
+    >
+      {children}
+    </div>
   );
 }

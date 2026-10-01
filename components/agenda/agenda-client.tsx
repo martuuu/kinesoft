@@ -13,6 +13,16 @@ import {
   IconPlus,
 } from "@/components/ui/icons";
 import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
+import {
+  DEFAULT_AGENDA_VISIBILITY,
+  agendaVisibilityStorageKey,
+  applyAgendaVisibility,
+  countHidden,
+  hasTickingPaymentHold,
+  hiddenCountLabel,
+  parseAgendaVisibility,
+  type AgendaVisibility,
+} from "@/lib/agenda-filters";
 import type { BookingDTO } from "./agenda-utils";
 import { BookingModal } from "./booking-modal";
 import { ViewOptionsMenu } from "./view-options-menu";
@@ -41,6 +51,14 @@ export type Props = {
    * covers the case where the server forgets to pass them.
    */
   businessHours?: AgendaHours;
+  /**
+   * Quién mira la agenda (A2b-S-ui). `userId` separa los toggles de
+   * visibilidad guardados en localStorage por usuario (PC compartida de
+   * recepción); `practitionerId` es el profesional por defecto del modal de
+   * turno nuevo cuando no hay filtro de profesional. Opcional: sin él, la
+   * clave es común y el modal cae al primer profesional de la lista.
+   */
+  viewer?: { userId: string; practitionerId: string } | null;
 };
 
 type AgendaHours = { start: number; end: number; slotMinutes: number };
@@ -65,6 +83,41 @@ export function AgendaClient(props: Props) {
   const { agenda } = useTweaks();
   const showDayHeader = agenda.agendaShowWeekHeader;
 
+  // Toggles "Mostrar cancelados" / "Mostrar ausentes" (A2b-S-ui ítem 4).
+  // Primer render con los defaults (= conducta de siempre, todo visible) para
+  // no romper la hidratación; lo guardado se lee después de montar. Todo acceso
+  // a localStorage va en try/catch: modo privado / storage bloqueado → defaults.
+  const storageKey = agendaVisibilityStorageKey(props.viewer?.userId);
+  const [visibility, setVisibilityState] = useState<AgendaVisibility>(DEFAULT_AGENDA_VISIBILITY);
+  useEffect(() => {
+    try {
+      setVisibilityState(parseAgendaVisibility(window.localStorage.getItem(storageKey)));
+    } catch {
+      /* storage no disponible: quedan los defaults */
+    }
+  }, [storageKey]);
+  const setVisibility = (v: AgendaVisibility) => {
+    setVisibilityState(v);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(v));
+    } catch {
+      /* no persiste, pero el toggle funciona en esta pestaña */
+    }
+  };
+
+  // Reserva pública impaga: vence a los 30 min del alta. Si hay alguna todavía
+  // "pendiente" en pantalla, re-render cada minuto para que la etiqueta pase a
+  // "vencida" sin recargar (las vistas calculan con `new Date()` al render).
+  // Mismo predicado que las vistas y el server (revisión A2: antes miraba solo
+  // UNPAID, sin FAILED ni el discriminante de reserva pública).
+  const hasUnpaidPending = hasTickingPaymentHold(props.bookings, new Date());
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    if (!hasUnpaidPending) return;
+    const id = window.setInterval(() => setClockTick((t) => t + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, [hasUnpaidPending]);
+
   // Deep-link from "Nuevo turno" quick action: /agenda?new=1&patient=<id>
   // opens the create modal pre-filled with that patient. We clear the
   // query string after opening so a refresh doesn't re-trigger.
@@ -81,19 +134,40 @@ export function AgendaClient(props: Props) {
   const anchor = useMemo(() => new Date(props.anchorISO), [props.anchorISO]);
   const weekStart = useMemo(() => new Date(props.weekStartISO), [props.weekStartISO]);
 
+  const visibleBookings = useMemo(
+    () => applyAgendaVisibility(props.bookings, visibility),
+    [props.bookings, visibility]
+  );
+
   const bookingsByDay = useMemo(() => {
     const map = new Map<string, BookingDTO[]>();
-    for (const b of props.bookings) {
+    for (const b of visibleBookings) {
       const k = toARDateKey(b.scheduledFor);
       map.set(k, [...(map.get(k) ?? []), b]);
     }
     return map;
-  }, [props.bookings]);
+  }, [visibleBookings]);
 
   const todayKey = toARDateKey(anchor);
   const todayList = (bookingsByDay.get(todayKey) ?? []).sort(
     (a, b) => +new Date(a.scheduledFor) - +new Date(b.scheduledFor)
   );
+
+  // Conteo de ocultos en el header, sobre lo que abarca la vista actual (el día
+  // en Día/Lista, la semana en Semana): un turno filtrado nunca tiene que
+  // parecer un hueco libre.
+  const hiddenLabel = useMemo(() => {
+    const scope =
+      props.view === "week"
+        ? props.bookings
+        : props.bookings.filter((b) => toARDateKey(b.scheduledFor) === todayKey);
+    return hiddenCountLabel(countHidden(scope, visibility));
+  }, [props.bookings, props.view, todayKey, visibility]);
+
+  // Profesional por defecto del turno nuevo: el del filtro de la agenda, si no
+  // el del usuario (si atiende), si no el primero de la lista.
+  const defaultPractitionerId =
+    props.practitionerFilterId ?? props.viewer?.practitionerId ?? null;
 
   // Default datetime for the "Nuevo turno" button (no slot clicked):
   // the anchor day at the start of business hours, in AR wall-clock.
@@ -126,6 +200,36 @@ export function AgendaClient(props: Props) {
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
             {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Argentina/Buenos_Aires" })}
           </h1>
+          {hiddenLabel && (
+            <div
+              role="status"
+              style={{
+                marginTop: 4,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 12,
+                color: "var(--navy-500)",
+              }}
+            >
+              <span>{hiddenLabel}</span>
+              <button
+                type="button"
+                onClick={() => setVisibility(DEFAULT_AGENDA_VISIBILITY)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  padding: 0,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--sky-700)",
+                  cursor: "pointer",
+                }}
+              >
+                Mostrar todos
+              </button>
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           {/* Week nav cluster — consistent 36 px height for all three controls */}
@@ -257,7 +361,12 @@ export function AgendaClient(props: Props) {
             </select>
           )}
 
-          <ViewOptionsMenu density={density} setDensity={setDensity} />
+          <ViewOptionsMenu
+            density={density}
+            setDensity={setDensity}
+            visibility={visibility}
+            setVisibility={setVisibility}
+          />
 
           <a
             href={`/api/agenda/export?from=${toARDateKey(weekStart)}`}
@@ -315,7 +424,7 @@ export function AgendaClient(props: Props) {
             {props.view === "week" && (
               <WeekGridView
                 weekStart={weekStart}
-                bookings={props.bookings}
+                bookings={visibleBookings}
                 onEdit={setEditing}
                 businessHours={props.businessHours ?? AGENDA_HOURS_FALLBACK}
                 showHeader={agenda.agendaShowWeekHeader}
@@ -400,9 +509,9 @@ export function AgendaClient(props: Props) {
         {creating && (
           <BookingModal
             key="booking-create"
-            mode="create"
             defaultISO={creating.defaultISO ?? defaultCreateISO}
             defaultPatientId={creating.defaultPatientId ?? null}
+            defaultPractitionerId={defaultPractitionerId}
             services={props.services}
             practitioners={props.practitioners}
             patients={props.patients}

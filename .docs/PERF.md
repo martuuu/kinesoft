@@ -26,7 +26,8 @@
   nota sobre el dashboard).
 - `EXPLAIN (ANALYZE, BUFFERS)` automático de la query más lenta de cada escenario; se reportan los Seq Scan de más de
   500 filas.
-- Resultados crudos: `tests/perf/baseline.json` y `tests/perf/pool-pressure.json` (se regrabaron en cada corrida).
+- Resultados crudos: `tests/perf/baseline.json` y `tests/perf/pool-pressure.json`. `baseline.json` es el de A1 y
+  **no se regrabó** al cierre del Bloque A: sigue siendo la referencia de los presupuestos de C1.
 
 ## Baseline (2026-09-30, rol `kinesoft_app` con RLS, Docker local)
 
@@ -52,6 +53,36 @@
 **Presión de pool** (`connection_limit=1`, 10 dashboards + 10 agendas concurrentes): 0 errores y p95 entre 1,1 y
 2,6 s según la corrida. Todo se serializa detrás de una conexión. En una corrida con estadísticas vacías, una query
 lenta retuvo la conexión más de 2 s y **17 de 20 requests fallaron con P2028** (timeout al abrir la transacción).
+
+## Re-medición al cierre del Bloque A (30-sep)
+
+Misma fixture, mismo rol (`kinesoft_app`), después de A2 + A3. Sin regresiones graves. `tests/perf/baseline.json`
+**no se regrabó**: sigue siendo el de A1, que es contra el que se fijan los presupuestos de C1.
+
+| Escenario | Statements A1 → A | Tx A1 → A | Nota |
+|---|---|---|---|
+| GET /agenda (6 loaders) | 48 → 48 | 9 → 9 | igual |
+| · `listBookingsInRange` (semana) | 14 → 14 | 3 → 3 | igual |
+| · `listPatients()` | 13 → 13 | 2 → 2 | igual |
+| GET /dashboard | 45 → 48 | 15 → 16 | acceso resuelto fuera del `unstable_cache` (A2b-S-vis) |
+| GET /pacientes/[id] | 63 → 63 | 14 → 14 | igual |
+| GET /seguimiento | **8 → 28** | 1 → 1 | 15 → 47 ms: 4 buckets + filtro de acceso (A2a-S03). Sigue en 1 tx; va a C1 (`seguimiento-7-queries`) |
+| GET /biblioteca | 40 → 40 | 6 → 6 | igual |
+| POST `createBooking` | 12 → 17 | **7 → 6** | más validaciones (IDOR, key de otro tenant, capacidad) en menos tx |
+| POST `createBookingsBatch` (20) | 68 → 72 | 23 → 22 | validación de practitioner/paciente ∈ tenant |
+| POST `createProgram` (16) | 9 → 11 | 1 → 1 | |
+
+**Bundle al cierre del Bloque A** (`next build` + `perf:bundle`, first-load gzip):
+
+| Ruta | A1 | Cierre A | Presupuesto |
+|---|---|---|---|
+| `/agenda` | 176,6 kB | **183,8 kB** | ≤ 180 kB → **excedido** |
+| `/c/[slug]/booking` | 147,3 kB | 149,7 kB | ≤ 150 kB (al borde) |
+| `/login` | — | 141,5 kB | ≤ 150 kB |
+
+Parte del aumento general (~2 kB por ruta) es el upgrade de Next 14.2.18 → 14.2.35 (A3b-S-obs). `/agenda` creció
+~7 kB y quedó por encima de los 180 kB (en A1 estaba debajo): el reporte de CI es solo informativo, así que no
+rompe el build; el recorte va a C1 (presupuesto de bundle; framer-motion en el root layout ya estaba anotado).
 
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 

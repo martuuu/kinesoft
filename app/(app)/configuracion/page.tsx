@@ -39,7 +39,13 @@ export default async function ConfiguracionPage() {
       listPendingInvitations(),
       runWithRls(actor.tenantId, (tx) =>
         tx.practitioner.findMany({
-          where: { tenantId: actor.tenantId },
+          // Solo miembros con la invitación aceptada: un profesional removido
+          // (membresía borrada) conserva su fila Practitioner y seguía en los
+          // pickers. Mismo filtro que `listPractitioners` (lib/bookings.ts).
+          where: {
+            tenantId: actor.tenantId,
+            user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
+          },
           include: { user: { select: { fullName: true, email: true } } },
           orderBy: { createdAt: "asc" },
         })

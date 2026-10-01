@@ -64,7 +64,8 @@ const MIN_DOB = new Date("1900-01-01");
 export const PatientHCSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().min(1).max(80),
-  email: z.string().email().max(120),
+  // trim + minúsculas antes de validar, como `patientEmail` (A2a-S08).
+  email: z.string().trim().toLowerCase().email().max(120),
   phone: z.string().trim().min(6).max(30),
   documentId: z.string().trim().min(4).max(20),
   dateOfBirth: z
@@ -87,6 +88,12 @@ export const PatientHCSchema = z.object({
 
 export const SubmitSchema = z.object({
   tenantSlug: z.string().min(1).max(80),
+  // Key de idempotencia POR INSTANCIA del wizard (A2b-S-pub), como en la
+  // agenda. Antes era determinística (`tenant:prof:slot:paciente`): re-reservar
+  // el mismo horario después de cancelar devolvía el turno CANCELLED viejo
+  // (el upsert con `update: {}` no lo revivía) y el paciente pagaba un turno
+  // cancelado. El wizard la rota cuando cambia el horario elegido.
+  idempotencyKey: z.string().uuid(),
   practitionerId: z.string().min(1).max(40),
   serviceId: z.string().min(1).max(40),
   scheduledFor: z.string().min(1),
@@ -94,3 +101,18 @@ export const SubmitSchema = z.object({
 });
 
 export type SubmitPublicBookingInput = z.infer<typeof SubmitSchema>;
+
+/**
+ * DNI normalizado para matchear fichas (H4): sin puntos, espacios ni guiones,
+ * en mayúsculas. "30.123.456", "30 123 456" y "30123456" son la misma persona.
+ * El match se hace contra la columna normalizada igual (SQL `regexp_replace`),
+ * así que una ficha cargada a mano con puntos también matchea.
+ */
+export function normalizeDocumentId(raw: string): string {
+  return raw.replace(/[^0-9a-zA-Z]/g, "").toUpperCase();
+}
+
+/** Teléfono comparable: solo dígitos. Para decidir si el contacto "difiere". */
+export function normalizePhoneForCompare(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/\D/g, "");
+}

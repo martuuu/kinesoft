@@ -15,7 +15,7 @@
  * is fully client-side; submission goes through the `submitPublicBooking`
  * server action which creates Patient + Booking + MP preference.
  */
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
@@ -77,7 +77,9 @@ export function PublicBookingWizard({
     clinic.practitioners.length === 1 ? clinic.practitioners[0].id : null
   );
   const [serviceId, setServiceId] = useState<string | null>(null);
-  const [dateISO, setDateISO] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  // Hoy en calendario AR: `toISOString().slice(0,10)` pasadas las 21:00 AR
+  // (00:00 UTC) arrancaba el wizard en mañana.
+  const [dateISO, setDateISO] = useState<string>(() => toARDateKey(new Date()));
   const [slotISO, setSlotISO] = useState<string | null>(null);
   const [hc, setHc] = useState<PatientHC>(() => {
     if (prefill) return { ...EMPTY_HC, ...prefill };
@@ -92,6 +94,18 @@ export function PublicBookingWizard({
     }
     return EMPTY_HC;
   });
+
+  // Key de idempotencia POR INTENTO de este wizard (A2b-S-pub): un doble
+  // click o un reintento tras un error de Mercado Pago reencuentran el mismo
+  // turno; si el paciente cambia profesional/servicio/horario es otro intento
+  // → key nueva (el server rechaza una key reusada con otros datos).
+  const attemptRef = useRef<{ sig: string; key: string } | null>(null);
+  const keyFor = (sig: string) => {
+    if (!attemptRef.current || attemptRef.current.sig !== sig) {
+      attemptRef.current = { sig, key: newIdempotencyKey() };
+    }
+    return attemptRef.current.key;
+  };
 
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +150,7 @@ export function PublicBookingWizard({
     start(async () => {
       const r = await submitPublicBooking({
         tenantSlug: clinic.slug,
+        idempotencyKey: keyFor(`${practitionerId}|${serviceId}|${slotISO}`),
         practitionerId,
         serviceId,
         scheduledFor: slotISO,
@@ -276,6 +291,19 @@ export function PublicBookingWizard({
   );
 }
 
+/** UUID v4 (el server lo valida). `randomUUID` exige contexto seguro; fallback a `getRandomValues`. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 function isHcValid(hc: PatientHC) {
   return (
     hc.firstName.trim().length > 0 &&
@@ -362,21 +390,29 @@ function Nav({ clinic, session }: { clinic: PublicClinic; session: { email: stri
           Mis turnos
         </Link>
       ) : (
-        <Link
-          href={`/api/auth/google?next=${encodeURIComponent(`/c/${clinic.slug}/booking`)}`}
-          style={{
-            padding: "7px 14px",
-            borderRadius: 999,
-            background: "rgba(255,255,255,0.7)",
-            border: "1px solid rgba(15,30,51,0.08)",
-            fontSize: 12,
-            color: "var(--navy-900)",
-            fontWeight: 600,
-            textDecoration: "none",
-          }}
+        // A3b-S-auth: /api/auth/google solo acepta POST (un <Link> GET daba 405).
+        <form
+          action={`/api/auth/google?next=${encodeURIComponent(`/c/${clinic.slug}/booking`)}`}
+          method="post"
+          style={{ margin: 0 }}
         >
-          Iniciar sesión
-        </Link>
+          <button
+            type="submit"
+            style={{
+              padding: "7px 14px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.7)",
+              border: "1px solid rgba(15,30,51,0.08)",
+              fontSize: 12,
+              color: "var(--navy-900)",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Iniciar sesión
+          </button>
+        </form>
       )}
     </header>
   );
@@ -801,22 +837,30 @@ function DataStep({
               Iniciá sesión con Google y precargamos tus datos.
             </div>
           </div>
-          <a
-            href={`/api/auth/google?next=${encodeURIComponent(`/c/${clinic.slug}/booking`)}`}
-            style={{
-              padding: "8px 14px",
-              borderRadius: 999,
-              background: "#fff",
-              border: "1px solid rgba(15,30,51,0.08)",
-              fontSize: 12.5,
-              color: "var(--navy-900)",
-              fontWeight: 600,
-              textDecoration: "none",
-            }}
+          {/* A3b-S-auth: form POST (el GET daba 405). */}
+          <form
+            action={`/api/auth/google?next=${encodeURIComponent(`/c/${clinic.slug}/booking`)}`}
+            method="post"
+            style={{ margin: 0 }}
           >
-            <span style={{ fontWeight: 700, color: "#4285F4", marginRight: 4 }}>G</span> Ingresar con
-            Google
-          </a>
+            <button
+              type="submit"
+              style={{
+                padding: "8px 14px",
+                borderRadius: 999,
+                background: "#fff",
+                border: "1px solid rgba(15,30,51,0.08)",
+                fontSize: 12.5,
+                color: "var(--navy-900)",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              <span style={{ fontWeight: 700, color: "#4285F4", marginRight: 4 }}>G</span> Ingresar con
+              Google
+            </button>
+          </form>
         </Card>
       )}
 

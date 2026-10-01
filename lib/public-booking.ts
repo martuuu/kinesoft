@@ -7,8 +7,9 @@
  *
  * Security model:
  *   - All inputs are rate-limited (per IP).
- *   - `submitPublicBooking` does not overwrite PII on an existing Patient
- *     row — at most it fills `null` fields, never replaces existing data.
+ *   - `submitPublicBooking` NEVER writes to an existing Patient row (H4):
+ *     it matches by normalized DNI and puts a differing contact on the
+ *     booking snapshot (`guest*`) for the kine to review.
  *   - `getPublicBookingStatus` returns only initials + non-PHI fields
  *     even though the booking id is a 25-char CUID.
  *   - The PII prefill lookup (`findPatientByEmail`) is NOT exported from
@@ -25,11 +26,19 @@ import { createCheckoutPreference } from "@/lib/mercadopago";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
-import { localToARIso, toARDow } from "@/lib/datetime-ar";
-import { overlapBlocks } from "@/lib/booking-capacity";
+import { clientIp } from "@/lib/client-ip";
+import { toARDateKey } from "@/lib/datetime-ar";
+import {
+  PUBLIC_OVERLAP_LOOKBACK_MS,
+  arDayWindow,
+  buildPublicSlots,
+  checkPublicSlot,
+} from "@/lib/public-booking-slots";
+import { releaseOwnExpiredPublicHold, resolvePublicPatient } from "@/lib/public-booking-internal";
 import type { ActionResult } from "@/lib/validation";
 import {
   SubmitSchema,
+  normalizeDocumentId,
   type PublicClinic,
   type PublicSlot,
   type PublicBookingStatus,
@@ -38,7 +47,7 @@ import {
 
 function callerIp(): string {
   const h = headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  return clientIp(h);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -78,12 +87,38 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   };
 }
 
-// Fallback defaults — used when the tenant lookup fails or returns
-// null. Each tenant's actual window comes from
-// `Tenant.businessHoursStart/End` (Sprint 17), read in `listPublicSlots`.
-const DEFAULT_OPEN_HOUR = 8;
-const DEFAULT_CLOSE_HOUR = 19;
-const SLOT_MIN = 45;
+/**
+ * Turnos existentes que cuentan para la grilla de un día: mismo profesional +
+ * servicio, no cancelados, con look-back para los que arrancaron antes de la
+ * medianoche AR. Trae lo que pide `isHoldingCapacity` (S06): la reserva
+ * pública impaga de más de 30 min deja de bloquear.
+ */
+async function loadDayBookings(
+  tenantId: string,
+  practitionerId: string,
+  serviceId: string,
+  dayStart: Date,
+  dayEnd: Date
+) {
+  return prisma.booking.findMany({
+    where: {
+      tenantId,
+      practitionerId,
+      serviceId,
+      status: { notIn: ["CANCELLED"] },
+      scheduledFor: { gte: new Date(dayStart.getTime() - PUBLIC_OVERLAP_LOOKBACK_MS), lt: dayEnd },
+    },
+    select: {
+      scheduledFor: true,
+      durationMin: true,
+      status: true,
+      paymentStatus: true,
+      createdAt: true,
+      patientId: true,
+      idempotencyKey: true,
+    },
+  });
+}
 
 export async function listPublicSlots(input: {
   tenantSlug: string;
@@ -103,11 +138,7 @@ export async function listPublicSlots(input: {
 
   const tenant = await prisma.tenant.findUnique({
     where: { slug: input.tenantSlug },
-    select: {
-      id: true,
-      businessHoursStart: true,
-      businessHoursEnd: true,
-    },
+    select: { id: true, businessHoursStart: true, businessHoursEnd: true },
   });
   if (!tenant) return [];
 
@@ -117,68 +148,55 @@ export async function listPublicSlots(input: {
   });
   if (!service) return [];
 
-  // Anchor the day to AR wall-clock, not the host's. On a UTC host (Vercel),
-  // `new Date(date+"T00:00:00")` is 21:00 AR the day before, and building slots
-  // with `setHours` would persist e.g. an "08:00" pick as 08:00 UTC = 05:00 AR.
-  const dayStart = new Date(localToARIso(`${input.date}T00:00:00`));
-  if (Number.isNaN(dayStart.getTime())) return [];
-  // Argentina has no DST, so the next AR midnight is exactly +24h.
-  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
-  if (toARDow(dayStart) === 0) return []; // Sundays closed
-
-  const existing = await prisma.booking.findMany({
-    where: {
-      tenantId: tenant.id,
-      practitionerId: input.practitionerId,
-      serviceId: input.serviceId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { gte: dayStart, lt: dayEnd },
-    },
-    select: { scheduledFor: true, durationMin: true },
+  // Día anclado a la pared AR (no al host: en Vercel es UTC). La grilla la
+  // arma `buildPublicSlots`, la misma que valida el submit.
+  const win = arDayWindow(input.date);
+  if (!win) return [];
+  const existing = await loadDayBookings(
+    tenant.id,
+    input.practitionerId,
+    input.serviceId,
+    win.dayStart,
+    win.dayEnd
+  );
+  return buildPublicSlots({
+    date: input.date,
+    openHour: tenant.businessHoursStart,
+    closeHour: tenant.businessHoursEnd,
+    durationMin: service.durationMin,
+    maxConcurrent: service.maxConcurrent,
+    existing,
+    now: new Date(),
   });
-
-  const openHour = tenant.businessHoursStart ?? DEFAULT_OPEN_HOUR;
-  const closeHour = tenant.businessHoursEnd ?? DEFAULT_CLOSE_HOUR;
-  const slots: PublicSlot[] = [];
-  const total = service.durationMin;
-  for (let m = openHour * 60; m + total <= closeHour * 60; m += SLOT_MIN) {
-    const hh = String(Math.floor(m / 60)).padStart(2, "0");
-    const mm = String(m % 60).padStart(2, "0");
-    // Build the slot as the AR instant for this wall-clock time.
-    const slot = new Date(localToARIso(`${input.date}T${hh}:${mm}:00`));
-    const slotEnd = new Date(slot.getTime() + total * 60_000);
-    const inPast = slot.getTime() < Date.now() + 60 * 60_000;
-    const overlapCount = existing.filter((b) => {
-      const bEnd = new Date(b.scheduledFor.getTime() + b.durationMin * 60_000);
-      return b.scheduledFor < slotEnd && bEnd > slot;
-    }).length;
-    const full = overlapBlocks(overlapCount, service.maxConcurrent);
-    slots.push({
-      // The label IS the AR wall-clock time we just built the slot from.
-      iso: slot.toISOString(),
-      time: `${hh}:${mm}`,
-      available: !full && !inPast,
-    });
-  }
-  return slots;
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // Submit booking
 // ──────────────────────────────────────────────────────────────────────
 
+const SLOT_UNAVAILABLE_ERROR = "Ese horario se acaba de ocupar o ya no se puede reservar online. Elegí otro.";
+const SAME_SLOT_ERROR = "Ya tenés un turno reservado en ese horario.";
+const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo en unos minutos.";
+
 /**
- * Creates the Patient + Booking + Mercado Pago preference.
+ * Crea (o reencuentra, si es un reintento) el turno público + la preferencia
+ * de Mercado Pago.
  *
- *   - Patient: upsert by (tenantId, email). If a row exists, **only fills
- *     null fields** — never overwrites existing PII. This prevents an
- *     attacker who knows a target's email from rewriting their HC.
- *   - Coverage / EmergencyContact: created when supplied + not already
- *     present for this patient.
- *   - Booking: created PENDING / UNPAID with an idempotency key derived
- *     from (tenant, practitioner, slot, patient).
- *   - Mercado Pago: a Checkout Pro preference is built and `init_point`
- *     returned so the client redirects.
+ *   - Idempotencia: key POR INSTANCIA del wizard (UUID del cliente), con
+ *     prefijo `pub:<tenant>:` para que nunca choque con una key de la agenda
+ *     ni de otro tenant. Mismo intento (doble click, reintento tras un error
+ *     de MP) → el mismo turno. Un turno CANCELLED nunca se revive: una reserva
+ *     nueva trae otra key y crea otro turno.
+ *   - Horario: tiene que ser un slot de la grilla del día (`buildPublicSlots`:
+ *     horario del consultorio, domingo, anticipación de 1 h) y tener cupo
+ *     contando solo lo que sigue reteniendo (`isHoldingCapacity`).
+ *   - Re-reserva del propio slot vencido: si el paciente ya tenía en ese
+ *     instante SU reserva pública impaga vencida, se cancela y se crea la nueva
+ *     en la misma tx (`releaseOwnExpiredPublicHold`, revisión A2).
+ *   - Ficha: `resolvePublicPatient` (H4): match por DNI normalizado, nunca
+ *     parchea una ficha existente; el contacto distinto va al snapshot
+ *     `guest*` del turno + nota para el kine.
+ *   - Mercado Pago: preferencia de Checkout Pro; se devuelve `init_point`.
  */
 export async function submitPublicBooking(
   raw: SubmitPublicBookingInput
@@ -203,6 +221,9 @@ export async function submitPublicBooking(
     };
   }
   const data = parsed.data;
+  if (normalizeDocumentId(data.patient.documentId).length < 4) {
+    return { ok: false, error: "Datos inválidos", fieldErrors: { documentId: ["DNI inválido"] } };
+  }
 
   const tenant = await prisma.tenant.findUnique({ where: { slug: data.tenantSlug } });
   if (!tenant) return { ok: false, error: "Centro no encontrado." };
@@ -210,7 +231,11 @@ export async function submitPublicBooking(
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, tenantId: tenant.id },
   });
-  if (!service) return { ok: false, error: "Servicio no encontrado." };
+  // Un servicio atado a otro profesional no se reserva con este (el wizard ya
+  // los filtra; esto cierra el request armado a mano).
+  if (!service || (service.practitionerId && service.practitionerId !== data.practitionerId)) {
+    return { ok: false, error: "Servicio no encontrado." };
+  }
 
   const practitioner = await prisma.practitioner.findFirst({
     where: { id: data.practitionerId, tenantId: tenant.id },
@@ -222,164 +247,209 @@ export async function submitPublicBooking(
   if (Number.isNaN(scheduledFor.getTime())) {
     return { ok: false, error: "Horario inválido." };
   }
-  if (scheduledFor.getTime() < Date.now() - 60_000) {
-    return { ok: false, error: "El horario ya pasó." };
-  }
 
-  // Last-mile capacity check (same practitioner + same service). Overlaps are
-  // allowed up to Service.maxConcurrent (null = ilimitado).
-  const end = new Date(scheduledFor.getTime() + service.durationMin * 60_000);
-  const clashes = await prisma.booking.findMany({
-    where: {
-      tenantId: tenant.id,
-      practitionerId: data.practitionerId,
-      serviceId: service.id,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { lt: end, gte: new Date(scheduledFor.getTime() - 4 * 60 * 60_000) },
+  const idempotencyKey = `pub:${tenant.id}:${data.idempotencyKey}`;
+
+  // ── Reintento del MISMO intento (doble click, error de MP) → mismo turno.
+  const prior = await prisma.booking.findUnique({
+    where: { idempotencyKey },
+    select: {
+      id: true,
+      tenantId: true,
+      practitionerId: true,
+      serviceId: true,
+      scheduledFor: true,
+      status: true,
+      patientId: true,
     },
-    select: { scheduledFor: true, durationMin: true },
   });
-  const overlapCount = clashes.filter(
-    (c) =>
-      c.scheduledFor < end &&
-      new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > scheduledFor
-  ).length;
-  if (overlapBlocks(overlapCount, service.maxConcurrent)) {
-    return { ok: false, error: "Ese horario se acaba de ocupar. Elegí otro." };
-  }
-
-  const dob = new Date(data.patient.dateOfBirth);
-  const emailLc = data.patient.email.trim().toLowerCase();
-
-  // Look up an existing Patient by email OR documentId. If we find one,
-  // we will **never overwrite** existing fields — only fill in null gaps.
-  const existingPatient = await prisma.patient.findFirst({
-    where: {
-      tenantId: tenant.id,
-      OR: [
-        { email: { equals: emailLc, mode: "insensitive" } },
-        { documentId: data.patient.documentId },
-      ],
-    },
-    include: { coverages: true, emergency: true },
-  });
-
-  let patient = existingPatient;
-  if (!patient) {
-    patient = await prisma.patient.create({
-      data: {
-        tenantId: tenant.id,
-        firstName: data.patient.firstName,
-        lastName: data.patient.lastName,
-        email: emailLc,
-        phone: data.patient.phone,
-        documentId: data.patient.documentId,
-        dateOfBirth: dob,
-      },
-      include: { coverages: true, emergency: true },
-    });
+  let bookingId: string;
+  let patientId: string | null;
+  if (prior) {
+    const sameAttempt =
+      prior.tenantId === tenant.id &&
+      prior.practitionerId === data.practitionerId &&
+      prior.serviceId === service.id &&
+      prior.scheduledFor.getTime() === scheduledFor.getTime();
+    if (!sameAttempt) {
+      return { ok: false, error: "Tu reserva cambió. Recargá la página e intentá de nuevo." };
+    }
+    // Un CANCELLED no se revive (antes el upsert devolvía el turno cancelado y
+    // el paciente pagaba un turno que la agenda ya no mostraba como activo).
+    if (prior.status === "CANCELLED") {
+      return { ok: false, error: "Ese turno fue cancelado. Recargá la página para reservar de nuevo." };
+    }
+    bookingId = prior.id;
+    patientId = prior.patientId;
   } else {
-    // Fill ONLY null/empty fields. Never overwrite existing PII — that
-    // would let an attacker who guessed the email rewrite the HC.
-    const patch: {
-      email?: string;
-      phone?: string;
-      documentId?: string;
-      dateOfBirth?: Date;
-    } = {};
-    if (!patient.email) patch.email = emailLc;
-    if (!patient.phone) patch.phone = data.patient.phone;
-    if (!patient.documentId) patch.documentId = data.patient.documentId;
-    if (!patient.dateOfBirth) patch.dateOfBirth = dob;
-    if (Object.keys(patch).length > 0) {
-      await prisma.patient.update({ where: { id: patient.id }, data: patch });
-    }
-    // First/last name are NEVER touched on existing patients.
-  }
-
-  // Coverage — only seed one when the patient has NO coverage on file yet.
-  // The app treats coverage as single-active (setPatientCoverage replaces it),
-  // so we must NOT append a second row for a returning patient who self-reports
-  // a different obra social — the EHR coverage is the source of truth.
-  if (data.patient.coverageInsurer && patient.coverages.length === 0) {
-    await prisma.coverage.create({
-      data: {
-        patientId: patient.id,
-        insurer: data.patient.coverageInsurer.trim().replace(/\s+/g, " "),
-        planName: data.patient.coveragePlan || null,
-      },
-    });
-  }
-  if (data.patient.emergencyName && data.patient.emergencyPhone) {
-    const exists = patient.emergency.find(
-      (e) => e.phone === data.patient.emergencyPhone
+    // ── Horario: tiene que ser de la grilla y tener cupo (misma función que
+    // la lista del wizard). Antes se aceptaba cualquier instante futuro.
+    const dateKey = toARDateKey(scheduledFor);
+    const win = arDayWindow(dateKey);
+    if (!win) return { ok: false, error: "Horario inválido." };
+    const existing = await loadDayBookings(
+      tenant.id,
+      data.practitionerId,
+      service.id,
+      win.dayStart,
+      win.dayEnd
     );
-    if (!exists) {
-      await prisma.emergencyContact.create({
-        data: {
-          patientId: patient.id,
-          name: data.patient.emergencyName,
-          phone: data.patient.emergencyPhone,
+    const slots = buildPublicSlots({
+      date: dateKey,
+      openHour: tenant.businessHoursStart,
+      closeHour: tenant.businessHoursEnd,
+      durationMin: service.durationMin,
+      maxConcurrent: service.maxConcurrent,
+      existing,
+      now: new Date(),
+    });
+    const verdict = checkPublicSlot(scheduledFor, slots);
+    if (verdict === "off-grid") {
+      return { ok: false, error: "Ese horario no está disponible para reservar online. Elegí otro." };
+    }
+    if (verdict === "unavailable") return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
+
+    let resolution: Awaited<ReturnType<typeof resolvePublicPatient>>;
+    try {
+      resolution = await resolvePublicPatient(
+        tenant.id,
+        {
+          firstName: data.patient.firstName,
+          lastName: data.patient.lastName,
+          email: data.patient.email,
+          phone: data.patient.phone,
+          documentId: data.patient.documentId,
+          dateOfBirth: new Date(data.patient.dateOfBirth),
+          coverageInsurer: data.patient.coverageInsurer || undefined,
+          coveragePlan: data.patient.coveragePlan || undefined,
+          emergencyName: data.patient.emergencyName || undefined,
+          emergencyPhone: data.patient.emergencyPhone || undefined,
         },
+        { practitionerId: data.practitionerId }
+      );
+    } catch (e) {
+      logger.error("booking.public.patient_failed", {
+        tenant: tenant.slug,
+        err: e instanceof Error ? e.message : String(e),
       });
+      return { ok: false, error: GENERIC_SUBMIT_ERROR };
+    }
+
+    const notes = [...resolution.reviewNotes, data.patient.notes || ""]
+      .filter((l) => l.trim() !== "")
+      .join("\n");
+    try {
+      // Una reserva pública VENCIDA del mismo paciente en este instante se
+      // cancela en la misma tx (ver `releaseOwnExpiredPublicHold`): si no, el
+      // índice único parcial rechazaba su propio re-intento.
+      const created = await prisma.$transaction(async (tx) => {
+        const released = await releaseOwnExpiredPublicHold(tx, {
+          tenantId: tenant.id,
+          patientId: resolution.patientId,
+          scheduledFor,
+          now: new Date(),
+        });
+        const row = await tx.booking.create({
+          data: {
+            tenantId: tenant.id,
+            practitionerId: data.practitionerId,
+            serviceId: service.id,
+            patientId: resolution.patientId,
+            scheduledFor,
+            durationMin: service.durationMin,
+            notes: notes || null,
+            title: data.patient.title || null,
+            description: data.patient.description || null,
+            guestName: resolution.contactSnapshot?.guestName ?? null,
+            guestEmail: resolution.contactSnapshot?.guestEmail ?? null,
+            guestPhone: resolution.contactSnapshot?.guestPhone ?? null,
+            idempotencyKey,
+          },
+          select: { id: true, patientId: true },
+        });
+        return { ...row, released };
+      });
+      bookingId = created.id;
+      patientId = created.patientId;
+      if (created.released) {
+        // Auditado acá (no tras MP): la cancelación ya se commiteó aunque la
+        // preferencia falle después.
+        await audit({
+          tenantId: tenant.id,
+          action: "booking.public.expired_replaced",
+          entity: "Booking",
+          entityId: created.released,
+          payload: { replacedBy: created.id, patientId: created.patientId },
+        });
+      }
+    } catch (e) {
+      // P2002 distinguido por los DATOS, no por `meta.target` (que llega null
+      // bajo RLS, ver `resolveUniqueViolation` en lib/bookings.ts):
+      //   - hay una fila viva con ESTA key → dos submits del mismo intento se
+      //     cruzaron → éxito idempotente con esa fila;
+      //   - si no → índice parcial paciente+instante: ya tiene un turno activo
+      //     que arranca a esa hora (reservado desde la agenda u otra pestaña).
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        const twin = await prisma.booking.findUnique({
+          where: { idempotencyKey },
+          select: { id: true, status: true, patientId: true },
+        });
+        if (twin && twin.status !== "CANCELLED") {
+          bookingId = twin.id;
+          patientId = twin.patientId;
+        } else {
+          return { ok: false, error: SAME_SLOT_ERROR };
+        }
+      } else {
+        logger.error("booking.public.create_failed", {
+          tenant: tenant.slug,
+          err: e instanceof Error ? e.message : String(e),
+        });
+        return { ok: false, error: GENERIC_SUBMIT_ERROR };
+      }
     }
   }
 
-  const idempotencyKey = `${tenant.id}:${data.practitionerId}:${scheduledFor.toISOString()}:${patient.id}`;
-  const booking = await prisma.booking
-    .upsert({
-      where: { idempotencyKey },
-      update: {},
-      create: {
-        tenantId: tenant.id,
-        practitionerId: data.practitionerId,
-        serviceId: service.id,
-        patientId: patient.id,
-        scheduledFor,
-        durationMin: service.durationMin,
-        notes: data.patient.notes || null,
-        title: data.patient.title || null,
-        description: data.patient.description || null,
-        idempotencyKey,
-      },
-    })
-    // The patient already has an active turno at this exact slot (booked from
-    // the agenda with a different key) → partial unique index rejects the dup.
-    .catch((e) => {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return null;
-      throw e;
+  let pref: Awaited<ReturnType<typeof createCheckoutPreference>>;
+  try {
+    pref = await createCheckoutPreference({
+      bookingId,
+      title: `${service.name} · ${tenant.name}`,
+      amountCents: service.priceCents,
+      currency: tenant.currency,
+      payer: { email: data.patient.email, name: data.patient.firstName },
     });
-  if (!booking) {
-    return { ok: false, error: "Ya tenés un turno reservado en ese horario." };
+  } catch (e) {
+    // El turno queda PENDING/UNPAID: retiene el cupo 30 min y un reintento con
+    // la misma key lo reencuentra (no duplica).
+    logger.error("booking.public.preference_failed", {
+      bookingId,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    return { ok: false, error: "No pudimos iniciar el pago. Probá de nuevo en unos segundos." };
   }
-
-  const pref = await createCheckoutPreference({
-    bookingId: booking.id,
-    title: `${service.name} · ${tenant.name}`,
-    amountCents: service.priceCents,
-    currency: tenant.currency,
-    payer: { email: emailLc, name: data.patient.firstName },
-  });
 
   await audit({
     tenantId: tenant.id,
     action: "booking.public.create",
     entity: "Booking",
-    entityId: booking.id,
+    entityId: bookingId,
     payload: {
-      patientId: patient.id,
+      patientId,
       preferenceId: pref.preferenceId,
       amountCents: service.priceCents,
+      replay: !!prior,
     },
   });
-  logger.info("booking.public.create", { bookingId: booking.id, tenant: tenant.slug });
+  logger.info("booking.public.create", { bookingId, tenant: tenant.slug, replay: !!prior });
+
 
   revalidatePath("/agenda");
   revalidatePath("/dashboard");
 
   return {
     ok: true,
-    data: { bookingId: booking.id, initPoint: pref.initPoint },
+    data: { bookingId, initPoint: pref.initPoint },
   };
 }
 

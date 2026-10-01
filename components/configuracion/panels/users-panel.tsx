@@ -90,13 +90,51 @@ export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMember
   );
 }
 
+const ROLE_LABELS: Record<Role, string> = {
+  OWNER: "Owner",
+  ADMIN: "Admin",
+  PRACTITIONER: "Kinesiólogo",
+  ASSISTANT: "Asistente",
+  BILLING: "Facturación",
+};
+
 function TeamRow({ member }: { member: TeamMemberRow }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const changeRole = (role: Role) => {
-    if (member.isYou) return;
+  const confirm = useConfirm();
+  const changeRole = async (role: Role) => {
+    if (member.isYou || role === member.role) return;
+    const who = member.fullName ?? member.email;
+    // A2b-S-cfg: el <select> cambiaba el rol al instante, sin confirmar. Un
+    // cambio de rol cambia qué puede ver y tocar esa persona, y transferir el
+    // OWNER te deja a vos como Admin sin vuelta atrás desde tu cuenta: ese
+    // caso lleva una segunda confirmación explícita.
+    if (role === "OWNER") {
+      const first = await confirm({
+        title: `¿Transferir el OWNER a ${who}?`,
+        message:
+          "Pasa a ser el dueño del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como Admin y no vas a poder deshacerlo desde tu cuenta.",
+        confirmLabel: "Continuar",
+        tone: "danger",
+      });
+      if (!first) return;
+      const second = await confirm({
+        title: "Confirmá la transferencia",
+        message: `${who} va a ser el OWNER del consultorio y vos pasás a Admin. ¿Seguro?`,
+        confirmLabel: "Sí, transferir el OWNER",
+        tone: "danger",
+      });
+      if (!second) return;
+    } else {
+      const ok = await confirm({
+        title: `¿Cambiar el rol de ${who}?`,
+        message: `De ${ROLE_LABELS[member.role]} a ${ROLE_LABELS[role]}. Cambia lo que puede ver y hacer en el consultorio.`,
+        confirmLabel: "Cambiar rol",
+      });
+      if (!ok) return;
+    }
     setError(null);
     start(async () => {
       const r = await changeMemberRole(member.membershipId, role);
@@ -104,11 +142,12 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
       else router.refresh();
     });
   };
-  const confirm = useConfirm();
   const remove = async () => {
     const ok = await confirm({
-      title: `¿Eliminar a ${member.email} del equipo?`,
-      confirmLabel: "Eliminar",
+      title: `¿Quitar a ${member.fullName ?? member.email} del equipo?`,
+      message:
+        "Deja de tener acceso al consultorio. Si tiene turnos futuros o pacientes asignados, primero tenés que reasignarlos.",
+      confirmLabel: "Quitar",
       tone: "danger",
     });
     if (!ok) return;
@@ -158,11 +197,11 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
           fontWeight: 600,
         }}
       >
-        <option value="OWNER">Owner</option>
-        <option value="ADMIN">Admin</option>
-        <option value="PRACTITIONER">Kinesiólogo</option>
-        <option value="ASSISTANT">Asistente</option>
-        <option value="BILLING">Facturación</option>
+        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+          <option key={r} value={r}>
+            {ROLE_LABELS[r]}
+          </option>
+        ))}
       </select>
       <div style={{ textAlign: "right" }}>
         {!member.isYou && (

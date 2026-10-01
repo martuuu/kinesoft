@@ -91,12 +91,14 @@ código; prod migra sola en el deploy.
 
 ### Integridad de pacientes y dinero
 
-- [ ] **Gate de rol en borrado definitivo.** Un usuario con rol PRACTITIONER **no** puede "eliminar
-  definitivamente" un paciente / programa / sesión (mensaje: "Solo el dueño o un administrador…").
-  Un OWNER/ADMIN sí. *(Archivar sigue disponible para todos.)*
+- [ ] **Gate de rol en borrado definitivo.** Un usuario con rol PRACTITIONER **no** puede eliminar
+  un programa / sesión (mensaje: "Solo el dueño o un administrador…"). Un OWNER/ADMIN sí.
+  *(30-sep: "eliminar definitivamente" **paciente** ya no existe — solo Archivar, que exige acceso
+  completo. Ver Bloque A — A2/A3.)*
 - [ ] **Parser de dinero AR.** En Configuración (precio de servicio, copago, arancel fijo) y en el
   copago de un turno, ingresá **"1.500,50"** → debe guardar $1.500,50 (150050 centavos), no romperse.
-  Ingresá texto inválido → toma 0 sin explotar.
+  ~~Ingresá texto inválido → toma 0 sin explotar.~~ *Obsoleto (A2b, 30-sep): con `MoneyInput` un texto
+  inválido marca el campo y bloquea Guardar.*
 - [ ] **Validación de cobertura.** El formulario de cobertura del paciente ahora valida con schema
   (nombres largos recortados, etc.) y muestra errores de campo.
 
@@ -115,8 +117,8 @@ código; prod migra sola en el deploy.
   **Report-Only** — no bloquea nada todavía; revisá la consola del navegador para ver reportes de CSP
   y afinarlo antes de activarlo como bloqueante más adelante).
 
-> **Sentry** quedó cableado como **no-op** (no rompe nada) hasta que cargues el `SENTRY_DSN`
-> (bucket C) — no hay nada que QA-ear ahí todavía.
+> ~~**Sentry** quedó cableado como **no-op**~~ *Actualizado 30-sep: el SDK real se instaló en A3b; su QA
+> (con DSN en staging) está en la sección Bloque A — A2/A3.*
 
 ---
 
@@ -523,8 +525,159 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 - [ ] **CI en GitHub:** en la próxima PR aparecen los jobs `verify` y `integration`. `integration` corre dos
   veces la suite: con RLS y como owner.
-- [ ] **Local:** con el Docker arriba, `npm run test:integration` da 37/37 y `npm run test:integration:owner`
-  da 33 más 4 saltados, con el aviso "SKIP: … BYPASSRLS".
+- [ ] **Local:** con el Docker arriba, `npm run test:integration` queda todo verde y
+  `npm run test:integration:owner` también, con los 4 del tripwire RLS saltados y el aviso "SKIP: … BYPASSRLS".
+  *(Los 37/37 eran de A1; A2/A3 sumaron archivos.)*
 - [ ] **Sin basura:** después de correr la integración, no quedan tenants `test-%`. En Adminer (:8080) o psql:
   `SELECT count(*) FROM "Tenant" WHERE slug LIKE 'test-%'` → 0.
 - [ ] **Perf (opcional):** `npm run test:perf` imprime la tabla de .docs/PERF.md con números del mismo orden.
+
+---
+
+## Bloque A — A2/A3 (30-sep-2026)
+
+> Gate automático de cierre del Bloque A (A2 + A3a/b/c): `tsc` 0 · unit 252/252 en TZ=UTC y TZ=AR · guard ✓ ·
+> integración 175/175 (`kinesoft_app`) y 171 + 4 skip (owner) · `next build` ✓. **Todo lo de abajo se prueba en staging (o local) con `TZ=UTC`**, nunca en un Preview que
+> comparta la DB de prod. Marcas: 🧪 **MP** = requiere sandbox de Mercado Pago · 📡 **DSN** = requiere
+> `SENTRY_DSN` en staging · ⏱ **JWT** = requiere bajar el JWT expiry de staging · ☁️ **Upstash** = requiere
+> Upstash configurado en staging · ✉️ **SMTP** = requiere SMTP propio y email real en staging. Ojo: **A3b no se
+> despliega sin A3c** (ver MIGRACIONES-RUNBOOK §Deploy del Bloque A); el QA del signup/stepper va en la sección
+> de A3c.
+
+### A2a-S06 · Turnos (guards de escritura)
+
+- [ ] 🔴 Con un PRACTITIONER de **acceso básico** (paciente no asignado ni compartido): el drawer del turno no
+  muestra Editar / Reprogramar / estado / borrar; el ICS exportado no trae notas, título ni descripción de ese
+  turno.
+- [ ] Dos toggles seguidos en Facturación (copago y OS) → ninguno dice "cambió en otra sesión".
+- [ ] 🔴 Borrar un turno con **copago cobrado a mano** → rechazo "tiene un cobro registrado… cancelalo".
+- [ ] Alargar la duración de una osteopatía sobre un cupo lleno → banner de sobreturno y botón "Forzar".
+- [ ] Reactivar un turno CANCELLED sobre un cupo lleno → pide confirmar el sobreturno.
+- [ ] "Cambiar" paciente sin elegir uno → no guarda.
+- [ ] "Cancelar edición" vuelve todos los campos a como estaban.
+
+### A2a-S08 · Paciente, cobertura y copago
+
+- [ ] 🔴 Editar solo el N° de afiliado → el copago propio del paciente se conserva.
+- [ ] 🔴 Cambiar la obra social con copago propio → aviso con el monto; si cancelás, no se guarda nada.
+- [ ] Vaciar email y teléfono del paciente → quedan vacíos.
+- [ ] Editar el mismo paciente en dos pestañas → la segunda en guardar recibe el aviso de "cambió".
+- [ ] No existe "Eliminar" paciente (solo Archivar).
+- [ ] Un paciente con más de 100 turnos → "Ver más" en Turnos y Facturación.
+- [ ] Invitar al portal con Supabase caído (o sin red al admin) → "Email no enviado", no un falso OK.
+
+### A2a-S03 · Seguimiento
+
+- [ ] 🔴 Cargar EVA y notas **sin guardar** y apretar "Cerrar sesión" → quedan guardadas.
+- [ ] Doble click en "Cerrar sesión" → se cierra una sola vez (una EVA, una notificación).
+- [ ] Salir de la sesión con cambios sin guardar → aviso.
+- [ ] Vaciar las notas de una sesión → quedan vacías.
+- [ ] EVA 11 → error de validación.
+- [ ] Reprogramar una sesión a un día en el que el paciente tiene turno → aviso con link a la agenda; **el
+  turno no se mueve**.
+- [ ] "Sesión a medida" → Cancelar no crea nada.
+- [ ] PRACTITIONER sin acceso al paciente → la sesión da 404.
+- [ ] "Vencidas sin cerrar" muestra solo planes activos.
+
+### A2b-S-pub · Reserva pública y webhook
+
+- [ ] 🔴 Reservar con el DNI de un paciente existente y **otro** email → la ficha queda intacta y el turno
+  trae la nota "datos de contacto distintos a la ficha".
+- [ ] Reservar para un familiar con el mismo celular → funciona (no error boundary).
+- [ ] Cancelar una reserva y volver a reservar → turno nuevo (el cancelado no revive).
+- [ ] Forzar un horario fuera de la grilla (editando el request) → rechazo.
+- [ ] Una reserva pendiente de pago con más de 30 min → libera el cupo y la agenda la muestra "· vencida".
+- [ ] Re-reservar el propio slot vencido → ok, la reserva vieja queda cancelada.
+- [ ] 🔴 🧪 **MP:** pagar un turno que ya estaba cancelado → sigue cancelado y llega el aviso "revisá el
+  reembolso".
+
+### A2b-S-ui · Paridad de modales y agenda
+
+- [ ] Dirty-guard (Esc, backdrop y X piden confirmar) en Nuevo turno, Nuevo paciente, Editar paciente y el
+  drawer del turno.
+- [ ] Esc sobre el diálogo de confirmación cierra solo el diálogo, no el drawer de abajo.
+- [ ] Alta inline de paciente con conflicto y reintento → no se duplica la ficha.
+- [ ] El profesional por defecto del turno nuevo = el del filtro de la agenda.
+- [ ] El copago cambia al cambiar el servicio y muestra de dónde sale.
+- [ ] "Múltiples turnos" con "actualizar copago" → actualiza el copago del paciente.
+- [ ] Toggles "Mostrar cancelados" / "Mostrar ausentes" → conteo de ocultos en el header y se recuerdan al
+  recargar.
+- [ ] Una reserva "Pendiente de pago" pasa a "· vencida" sin recargar.
+- [ ] Perfil → Turnos: dos cambios de estado seguidos sin falso "cambió"; borrar uno cobrado → error y la fila
+  vuelve.
+
+### A2b-S-vis · Visibilidad de HC y export
+
+- [ ] PRACTITIONER no asignado → Archivos y Actividad vacías; en el dashboard "Acceso básico" sin acciones;
+  próximos turnos solo con el servicio.
+- [ ] Export CSV desde Archivados y desde una selección → trae lo pedido, con la columna "Archivado".
+- [ ] Un paciente con nombre `=1+1` → en Excel se ve como texto, no como fórmula.
+- [ ] Descargar un archivo → queda el `AuditEvent` `patientFile.download`.
+- [ ] "Marcar realizado" desde el dashboard con el turno editado en otra pestaña → error de lock y refresco.
+
+### A2b-S-cfg · Montos y equipo
+
+- [ ] Copago de $50 → el turno se crea (antes bloqueaba por el step de 100).
+- [ ] "1.500,50" y "1500.5" en precio → se guarda $1.500,50; "abc" bloquea Guardar.
+- [ ] Editar precio/copago → aviso "Afecta los turnos no cobrados sin copago propio."
+- [ ] Quitar un kine con turnos futuros → error con el conteo; sin turnos → desaparece de la agenda.
+- [ ] Cambio de rol → confirmación; transferir OWNER → doble confirmación.
+- [ ] Editar servicio/OS → `AuditEvent` con antes/después.
+
+### Fixes de la revisión de A2
+
+- [ ] Turno guest de osteopatía + asignarle paciente → pasa a Confirmado y sigue bloqueando el cupo.
+- [ ] Reserva con tarjeta rechazada (FAILED) → "Pendiente de pago" y a los 30 min "· vencida".
+
+### A3a-S-rl · Rate-limit
+
+- [ ] 11 logins malos seguidos → vuelve a /login con el mensaje de demasiados intentos.
+- [ ] Invitar el mismo email dos veces seguidas → "Probá de nuevo en N s".
+- [ ] Reenviar la invitación al portal dos veces seguidas → idem.
+- [ ] ☁️ **Upstash:** en staging con credenciales de Upstash inválidas → el login funciona igual y aparece el
+  log `rate_limit.upstash_fallback`.
+- [ ] ☁️ **Upstash:** en la consola de Upstash las claves llevan prefijo `rl:preview:` (staging) y
+  `rl:production:` (prod), nunca mezcladas.
+
+### A3b-S-auth · Sesión, cookies e identidad
+
+- [ ] 🔴 ⏱ **JWT:** con un JWT expiry corto en staging, usar la app más de 1 h sin deslogueo.
+- [ ] `/login?error=<cualquier texto>` → mensaje genérico, no el texto.
+- [ ] `/api/auth/sign-in?next=//evil.com` (y `next=@evil.com`) → termina en /dashboard.
+- [ ] Login con Google desde el wizard de reserva y desde el portal → funciona (antes 405).
+- [ ] Recovery de contraseña abriendo el link en otro dispositivo → funciona (ver A3c).
+- [ ] Re-invitar a un email con otro rol → la invitación queda con el rol nuevo.
+- [ ] 🔴 Un usuario del equipo entra al portal de pacientes → ve "sin fichas".
+- [ ] 🔴 Check-in del paciente → llega como notificación al kine y las notas de la ficha quedan intactas.
+- [ ] Las cookies `sb-…` aparecen como HttpOnly (y Secure en staging/prod) en DevTools.
+
+### A3b-S-obs · Sentry, CSP, headers
+
+- [ ] 📡 **DSN:** forzar un error de servidor → llega a Sentry sin emails, DNI ni tokens.
+- [ ] 📡 **DSN:** los reportes de CSP aparecen en Sentry → Security.
+- [ ] `curl -I` a prod → trae `Strict-Transport-Security`; a un Preview → no.
+- [ ] Login con Google desde el portal → sin violaciones de `form-action` en la consola.
+- [ ] Un video de YouTube de la biblioteca y las Google Fonts → sin violaciones de CSP.
+
+### A3c · Signup verificado y stepper de alta
+
+> Todo en **staging con ✉️ SMTP propio y email real** (EXTERNAL-CONFIG §0.1: Confirm email ON, plantillas y
+> Redirect URLs cargadas). Sin esto no se mergea: ver MIGRACIONES-RUNBOOK §2.1.
+
+- [ ] 🔴 ✉️ Landing → "Probar gratis" → signup → llega el mail → abrirlo **en el celular** → cae en
+  `/onboarding` paso 2.
+- [ ] 🔴 Completar los pasos 2 a 7 → termina en `/agenda`. Recargar a mitad del stepper → retoma en el paso
+  donde estaba.
+- [ ] Volver al paso 2 y guardar de nuevo → edita el consultorio, no duplica tenant ni slug.
+- [ ] Paso 7 sin ningún servicio cargado → bloqueado con el aviso.
+- [ ] 🔴 ✉️ Signup con un email ya registrado (o de un paciente con portal) → el mismo mensaje de "te mandamos
+  un mail", y no llega ningún mail.
+- [ ] ✉️ Invitación → "Crear mi cuenta para unirme" → el email viene fijo → confirmar → `/invite/<token>` →
+  aceptar → entra a la app **sin** stepper.
+- [ ] ✉️ Cuenta verificada que tiene una invitación pendiente → en `/onboarding` ve la invitación y puede
+  aceptarla o crear su propio consultorio.
+- [ ] 🔴 ✉️ "Olvidé mi contraseña" → link → `/reset` **sin** pedir la actual. Reusar el mismo link (o volver a
+  `/reset` después del cambio) → ahora pide la actual.
+- [ ] 🔴 El cliente vivo (tenant existente) entra y **no** ve el stepper.
+- [ ] Entrar sin sesión a una ruta protegida (p. ej. `/pacientes/<id>`) → `/login?next=…` y, tras loguearse,
+  vuelve a esa ruta.

@@ -5,7 +5,38 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 
-export function LoginScreen({ error }: { error?: string } = {}) {
+/**
+ * Mensajes de error del login por código (A3b-S-auth). Los emiten
+ * `/api/auth/sign-in`, `/api/auth/google`, `/auth/callback` y
+ * `/auth/confirm`. Un código desconocido muestra el genérico: nunca se pinta
+ * el valor de la query.
+ */
+const LOGIN_ERRORS: Record<string, string> = {
+  rate_limited: "Demasiados intentos. Esperá un minuto y probá de nuevo.",
+  invalid_credentials: "Email o contraseña incorrectos.",
+  missing_credentials: "Completá tu email y tu contraseña.",
+  email_not_confirmed: "Todavía no confirmaste tu email. Buscá el mail que te mandamos y seguí el link.",
+  oauth_failed: "No pudimos ingresar con Google. Probá de nuevo.",
+  missing_code: "No pudimos ingresar con Google. Probá de nuevo.",
+  link_invalid: "El link venció o ya se usó. Pedí uno nuevo.",
+};
+const GENERIC_LOGIN_ERROR = "No pudimos iniciar sesión. Probá de nuevo.";
+
+export function loginErrorMessage(code: string | undefined): string | null {
+  if (!code) return null;
+  return Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, code)
+    ? LOGIN_ERRORS[code]
+    : GENERIC_LOGIN_ERROR;
+}
+
+export function LoginScreen({
+  error,
+  next,
+  email,
+}: { error?: string; next?: string; email?: string } = {}) {
+  const errorMessage = loginErrorMessage(error);
+  // `next` ya viene validado por la page (safeNext); acá solo se propaga.
+  const q = next ? `?next=${encodeURIComponent(next)}` : "";
   return (
     <div
       className="k-app"
@@ -186,7 +217,7 @@ export function LoginScreen({ error }: { error?: string } = {}) {
             Ingresá a tu consultorio
           </h2>
 
-          {error && (
+          {errorMessage && (
             <div
               role="alert"
               style={{
@@ -198,17 +229,17 @@ export function LoginScreen({ error }: { error?: string } = {}) {
                 marginBottom: 16,
               }}
             >
-              {error}
+              {errorMessage}
             </div>
           )}
 
-          <form action="/api/auth/sign-in" method="post" autoComplete="on">
+          <form action={`/api/auth/sign-in${q}`} method="post" autoComplete="on">
             <Field label="Email profesional">
               <input
                 type="email"
                 name="email"
                 required
-                defaultValue=""
+                defaultValue={email ?? ""}
                 placeholder="camila.rossi@movare.com.ar"
                 style={inputStyle}
               />
@@ -289,7 +320,7 @@ export function LoginScreen({ error }: { error?: string } = {}) {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <form action="/api/auth/google" method="post">
+            <form action={`/api/auth/google${q}`} method="post">
               <Button variant="ghost" type="submit" style={{ justifyContent: "center", fontSize: 13, width: "100%" }}>
                 <span style={{ fontWeight: 700, color: "#4285F4" }}>G</span> Google
               </Button>

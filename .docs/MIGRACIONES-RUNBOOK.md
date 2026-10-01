@@ -128,6 +128,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 7 | `20260803022653_exercise_media_and_article` | tablas `ExerciseMedia`/`ExerciseArticle` **+ políticas RLS** | 7 |
 | 8 | `20260803183019_user_prefs_catalog` | `UserPreferences.catalogPrefs` (JSON) | 8 |
 | 9 | `20260816014954_tenant_agenda_slot_minutes` | `Tenant.agendaSlotMinutes` (vista 30/60 min) | 10 |
+| 10 | `20260930120000_tenant_onboarding` | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` + backfill | A3c — **ver §2.1** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
@@ -179,6 +180,108 @@ DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
 - `KINESOFT_ALLOW_DEMO_ACTOR` → **NO debe existir en prod** (es el bypass de login local)
 
 ---
+
+## 2.1 Deploy del Bloque A (A2 + A3) — orden exacto (30-sep-2026)
+
+> ⚠️ **Hay UNA migración nueva en este bloque: `20260930120000_tenant_onboarding`** (A3c). A2, A3a y A3b no
+> tienen migraciones. Reglas de corte:
+> - **A3 no se despliega sin el SMTP propio configurado** (EXTERNAL-CONFIG §0.1): sin él, los mails de
+>   verificación del signup no llegan y nadie puede darse de alta.
+> - **A3b no se despliega sin A3c**: la página de invitación de A3b ofrece "Crear mi cuenta para unirme", que
+>   con el signup viejo crearía un consultorio nuevo en vez de sumarse al equipo.
+> - **El QA del signup (QA.md §A3c) se corre en staging con un email real ANTES del merge a `main`.** Si falla,
+>   no se mergea.
+> - El bug `signup-confirm-doble-salto` (hallado al cerrar A3c) **ya está corregido en código** (30-sep): el
+>   `emailRedirectTo` es el destino final y `/auth/confirm` desenvuelve un `next` que apunta a sí mismo. Igual
+>   se verifica con el QA de email real.
+> - A2 (+ A3a) sí puede ir solo, antes, si conviene separar.
+
+**1) Prechecks de solo lectura** (SQL Editor de prod, o `psql "$DIRECT_URL"` con `.env.prod.local`). Anotá los
+tres resultados antes de seguir:
+
+```sql
+-- (a) Reservas públicas pre-A2 que el discriminante nuevo reconoce (por la key
+--     vieja `<tenant>:<prof>:<ISO>:<patientId>`). Informativo.
+SELECT status, "paymentStatus", count(*) FROM "Booking"
+WHERE "patientId" IS NOT NULL
+  AND "idempotencyKey" ~ '^[^:]+:[^:]+:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z:[^:]+$'
+  AND "idempotencyKey" LIKE '%:' || "patientId"
+GROUP BY 1,2;
+
+-- (b) Reservas públicas impagas FUTURAS de más de 30 min: al deployar pasan a
+--     "vencidas" y liberan el cupo (otro paciente puede tomar ese horario).
+SELECT count(*) FROM "Booking"
+WHERE status='PENDING' AND "paymentStatus" IN ('UNPAID','FAILED') AND "patientId" IS NOT NULL
+  AND "scheduledFor" > now() AND "createdAt" < now() - interval '30 min';
+
+-- (c) Turnos de AGENDA (no públicos) en PENDING con paciente.
+SELECT count(*) FROM "Booking"
+WHERE status='PENDING' AND "patientId" IS NOT NULL
+  AND "idempotencyKey" NOT LIKE 'pub:%'
+  AND "idempotencyKey" !~ '^[^:]+:[^:]+:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z:[^:]+$';
+
+-- (d) Precheck de la migración: el Tenant todavía no tiene las columnas nuevas
+--     (si ya existen, la migración falla: revisá _prisma_migrations primero).
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'Tenant'
+  AND column_name IN ('onboardingCompletedAt','phone','whatsapp','publicEmail');   -- esperado: 0 filas
+```
+
+Qué hacer si dan > 0:
+- **(a) > 0:** nada; es para saber cuántas reservas viejas entran en la regla de los 30 min.
+- **(b) > 0:** **antes del deploy**, confirmar esas reservas a mano (o cobrarlas) desde la agenda. Si no, al
+  deployar dejan de retener el cupo y se ven "Pendiente de pago · vencida".
+- **(c) > 0:** recomendable pasarlos a CONFIRMED a mano desde la agenda. Desde A2 la agenda ya no deja un turno
+  con paciente en PENDING, así que esos quedan en un estado que la app no produce más.
+- **(d) > 0:** frenar; la migración ya corrió (o a medias). Revisar `_prisma_migrations` (§2 paso 2).
+
+**2) Backup:** `npm run db:prod:backup`.
+
+**3) Staging primero (antes del merge a `main`):** con los prerrequisitos de EXTERNAL-CONFIG §0.1 cargados en
+staging (SMTP propio, plantillas con `type=email` / `type=recovery`, Redirect URLs, "Confirm email" ON, "Secure
+password change" OFF, Upstash, DSN), deployar el bloque al Preview de staging. La migración se aplica en staging
+con `migrate deploy` contra la DB de staging (el Preview no migra solo). Correr el QA de
+[QA.md §Bloque A — A2/A3](QA.md) **incluida la subsección A3c con un email real** (mail abierto en otro
+dispositivo, invitación, forgot → reset). Recién con eso verde se mergea.
+
+**4) Migración `20260930120000_tenant_onboarding`** — aditiva: 4 columnas nullable en `Tenant`
+(`onboardingCompletedAt`, `phone`, `whatsapp`, `publicEmail`), sin DROP ni NOT NULL, y backfill
+`onboardingCompletedAt = createdAt` para los tenants existentes (idempotente). `Tenant` no lleva policy nueva.
+La aplica el build de Production al mergear a `main`, o antes, a mano:
+
+```bash
+npm run db:prod:deploy
+npm run db:prod:status      # → "Database schema is up to date!"
+```
+
+Verificar **inmediatamente después** (el cliente vivo no debe ver el stepper de alta):
+
+```sql
+SELECT count(*) FROM "Tenant" WHERE "onboardingCompletedAt" IS NULL;   -- tiene que dar 0
+```
+
+Si da > 0 (un tenant creado entre la migración y el deploy): `UPDATE "Tenant" SET "onboardingCompletedAt" =
+"createdAt" WHERE "onboardingCompletedAt" IS NULL AND "createdAt" < '<momento del deploy>';` solo para tenants
+que ya operaban, no para altas nuevas del signup.
+
+**5) Después del deploy — normalizar emails de pacientes** (no es migración; el código nuevo ya guarda los
+emails normalizados):
+
+```bash
+set -a; . ./.env.prod.local; set +a
+# dry-run (default): lista qué cambiaría y las COLISIONES (ids, no emails)
+DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
+  npx tsx scripts/normalize-patient-emails.ts
+# revisar colisiones: dos fichas del mismo consultorio con el "mismo" email.
+# Esas NO se tocan; el consultorio decide cuál es la buena (archivar la otra o corregir el email).
+DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
+  npx tsx scripts/normalize-patient-emails.ts --apply
+```
+
+La URL tiene que ser la **owner** (BYPASSRLS): con el rol de la app RLS devuelve 0 fichas y el script aborta.
+
+**6) Verificación final en prod:** login del cliente vivo sin stepper; `curl -I` con HSTS; en Sentry (si hay
+DSN) llega un evento de prueba; en Upstash aparecen claves `rl:production:`.
 
 ## 3. Rollback
 

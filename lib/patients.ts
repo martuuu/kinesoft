@@ -27,6 +27,7 @@ import {
 } from "@/lib/visibility";
 import { env } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
@@ -37,7 +38,7 @@ import {
   type PatientUpdateInput,
 } from "@/lib/validation";
 
-import type { ActivityEvent, PatientRow, PatientSort } from "@/lib/patients-types";
+import type { ActivityEvent, PatientBookingFull, PatientRow, PatientSort } from "@/lib/patients-types";
 
 export async function listPatients(opts: {
   q?: string;
@@ -255,20 +256,31 @@ export async function listPatients(opts: {
     });
 }
 
+/**
+ * Archivar / desarchivar.
+ *
+ * A2b-S-vis (30-sep) — gate `full`: archivar se trata como mutación de la
+ * ficha, no como tarea administrativa libre. Saca al paciente del directorio
+ * y de los buscadores de TODO el equipo, así que un profesional con acceso
+ * básico (solo ver) no puede hacerlo sobre un paciente ajeno. OWNER/ADMIN
+ * siempre tienen `full`, así que la parte administrativa queda cubierta sin
+ * un caso aparte; el profesional asignado o con share también puede.
+ */
 export async function setPatientArchived(input: {
   id: string;
   archived: boolean;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id: input.id, tenantId: actor.tenantId },
-    select: { id: true },
-  }));
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  await runWithRls(actor.tenantId, (tx) => tx.patient.update({
-    where: { id: input.id },
-    data: { archivedAt: input.archived ? new Date() : null },
-  }));
+  const denied = await runWithRls(actor.tenantId, async (tx) => {
+    const err = await hcAccessError(actor, input.id, tx);
+    if (err) return err;
+    await tx.patient.update({
+      where: { id: input.id, tenantId: actor.tenantId },
+      data: { archivedAt: input.archived ? new Date() : null },
+    });
+    return null;
+  });
+  if (denied) return { ok: false, error: denied };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -279,58 +291,6 @@ export async function setPatientArchived(input: {
   revalidatePath("/pacientes");
   revalidatePath(`/pacientes/${input.id}`);
   return { ok: true, data: undefined };
-}
-
-/**
- * Build CSV rows for export. Server-only — never sends PII over the
- * wire as a string until the route handler streams it.
- *
- * When `opts.ids` is provided, the export is limited to those patient
- * ids (after tenant + visibility scoping). Otherwise dumps everything
- * the actor can see.
- */
-export async function exportPatientsCsv(opts: { ids?: string[] } = {}): Promise<string> {
-  let rows = await listPatients({ filter: "all" });
-  if (opts.ids && opts.ids.length > 0) {
-    const set = new Set(opts.ids);
-    rows = rows.filter((r) => set.has(r.id));
-  }
-  const header = [
-    "ID",
-    "Apellido",
-    "Nombre",
-    "DNI",
-    "Email",
-    "Telefono",
-    "Plan activo",
-    "Sesiones",
-    "Proximo turno",
-    "Alta",
-  ].join(",");
-  const body = rows
-    .map((p) =>
-      [
-        p.id,
-        csv(p.lastName),
-        csv(p.firstName),
-        csv(p.documentId ?? ""),
-        csv(p.email ?? ""),
-        csv(p.phone ?? ""),
-        csv(p.activeProgramTitle ?? ""),
-        p.sessionsTotal ? `${p.sessionsDone}/${p.sessionsTotal}` : "",
-        p.upcomingAt ? p.upcomingAt.toISOString() : "",
-        p.createdAt.toISOString(),
-      ].join(",")
-    )
-    .join("\n");
-  return header + "\n" + body + "\n";
-}
-
-function csv(s: string) {
-  if (s == null) return "";
-  const needsQuote = /[",\n]/.test(s);
-  const esc = s.replace(/"/g, '""');
-  return needsQuote ? `"${esc}"` : esc;
 }
 
 /**
@@ -525,6 +485,8 @@ type PatientBilling = {
   // What the obra social reimburses the kine per session (Insurer.fixedFeeCents).
   // 0 for Particular / uninsured / free-form coverage (no OS pays).
   insurerFixedFeeCents: number;
+  /** The coverage row points at the tenant's Particular Insurer (per-patient override holder). */
+  isParticular: boolean;
 };
 
 async function resolvePatientBilling(
@@ -548,6 +510,7 @@ async function resolvePatientBilling(
       insurerCopago: null,
       particularCopago,
       insurerFixedFeeCents: 0,
+      isParticular: true,
     };
   }
   return {
@@ -557,6 +520,7 @@ async function resolvePatientBilling(
     insurerCopago: coverage.insurerRef ? coverage.insurerRef.copagoCents : null,
     particularCopago: null,
     insurerFixedFeeCents: coverage.insurerRef?.fixedFeeCents ?? 0,
+    isParticular: coverage.insurerRef?.isParticular === true,
   };
 }
 
@@ -607,24 +571,36 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
 }
 
 /**
- * Full bookings list for the Facturación tab. Capped at 100 so it
- * doesn't blow up for long-running patients. Carries the same billing
- * line as `getPatientBookingsSummary` (service + obra social + copago).
+ * Full bookings list for the Turnos + Facturación tabs, paginated.
+ *
+ * A2a-S08: antes devolvía un array cortado en 100 sin avisar — un paciente
+ * largo "perdía" sus turnos viejos en Facturación. Ahora devuelve
+ * `{ rows, hasMore, nextCursor }`; el perfil muestra "Últimos N · Ver más" y
+ * pide la página siguiente con `cursor` = `nextCursor`. Orden estable
+ * `scheduledFor desc, id desc` para que el cursor no saltee ni repita filas
+ * con el mismo horario. Carries the same billing line as
+ * `getPatientBookingsSummary` (service + obra social + copago).
  */
-export async function getPatientBookingsAll(patientId: string, take = 100) {
+export async function getPatientBookingsAll(patientId: string, take = 100, cursor?: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return [];
-  const [rows, billing] = await Promise.all([
+  const size = Math.min(Math.max(Math.trunc(take) || 100, 1), 200);
+  if (access !== "full") {
+    return { rows: [] as PatientBookingFull[], hasMore: false, nextCursor: null as string | null };
+  }
+  const [found, billing] = await Promise.all([
     runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: { patientId },
-      orderBy: { scheduledFor: "desc" },
-      take,
+      where: { patientId, tenantId: actor.tenantId },
+      orderBy: [{ scheduledFor: "desc" }, { id: "desc" }],
+      take: size + 1, // +1 = sonda de "hay más"
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: { service: { select: { name: true, priceCents: true } } },
     })),
     resolvePatientBilling(patientId, actor.tenantId),
   ]);
-  return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
+  const hasMore = found.length > size;
+  const page = hasMore ? found.slice(0, size) : found;
+  const rows: PatientBookingFull[] = page.map(({ service, copagoCents: bookingCopago, ...b }) => ({
     ...b,
     serviceName: service.name,
     obraSocial: billing.obraSocial,
@@ -641,6 +617,7 @@ export async function getPatientBookingsAll(patientId: string, take = 100) {
     }),
     osAmountCents: billing.insurerFixedFeeCents,
   }));
+  return { rows, hasMore, nextCursor: hasMore ? page[page.length - 1].id : null };
 }
 
 /**
@@ -819,9 +796,33 @@ export async function createPatient(
   }
 }
 
+/** Campos de `Patient` que edita `updatePatient` (y que se comparan para el audit). */
+const PATIENT_EDITABLE_FIELDS = [
+  "firstName",
+  "lastName",
+  "email",
+  "phone",
+  "documentId",
+  "dateOfBirth",
+  "notes",
+  "diagnosisTitle",
+  "diagnosisNote",
+] as const;
+
+/**
+ * Editar la ficha (drawer "Editar paciente" del perfil).
+ *
+ * A2a-S08:
+ *  - `""` borra los opcionales (→ null) — antes respondía OK y el valor quedaba.
+ *  - optimistic lock con `Patient.updatedAt` (`expectedUpdatedAt`): el UPDATE
+ *    lleva el `updatedAt` leído en el WHERE, así dos pestañas editando la misma
+ *    ficha no se pisan en silencio (la segunda recibe "cambió en otra sesión").
+ *  - exige acceso `full` (decisión del dueño 30-sep: acceso básico = solo ver).
+ *  - el audit registra QUÉ campos cambiaron (solo nombres, sin valores: PHI).
+ */
 export async function updatePatient(
   raw: PatientUpdateInput
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; updatedAt: string }>> {
   const actor = await getActor();
   const parsed = PatientUpdate.safeParse(raw);
   if (!parsed.success) {
@@ -831,24 +832,55 @@ export async function updatePatient(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  // `insurerId`/`insurerName` ride along on the shared schema but aren't
-  // `Patient` columns and coverage edits go through `setPatientCoverage`,
-  // so drop them here to avoid an unknown-field Prisma error.
-  const { id, insurerId: _insurerId, insurerName: _insurerName, ...data } = parsed.data;
+  const { id, expectedUpdatedAt, ...data } = parsed.data;
   // RLS Etapa 2: the ownership check + update share the same tx so a
   // race that flipped tenantId between them couldn't slip through. The
-  // try/catch surfaces the new email/phone uniqueness violations with a
+  // try/catch surfaces the email/phone uniqueness violations with a
   // field-specific message instead of crashing the action.
-  let owned: { id: string } | null;
+  type Outcome =
+    | { kind: "notfound" }
+    | { kind: "forbidden" }
+    | { kind: "stale" }
+    | { kind: "ok"; changed: string[]; updatedAt: Date };
+  let outcome: Outcome;
   try {
-    owned = await runWithRls(actor.tenantId, async (tx) => {
-      const row = await tx.patient.findFirst({
+    outcome = await runWithRls(actor.tenantId, async (tx): Promise<Outcome> => {
+      const before = await tx.patient.findFirst({
         where: { id, tenantId: actor.tenantId },
-        select: { id: true },
+        select: {
+          id: true,
+          updatedAt: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          documentId: true,
+          dateOfBirth: true,
+          notes: true,
+          diagnosisTitle: true,
+          diagnosisNote: true,
+        },
       });
-      if (!row) return null;
-      await tx.patient.update({ where: { id }, data });
-      return row;
+      if (!before) return { kind: "notfound" };
+      if ((await patientAccessFor(actor, id, tx)) !== "full") return { kind: "forbidden" };
+      if (expectedUpdatedAt && +before.updatedAt !== +new Date(expectedUpdatedAt)) {
+        return { kind: "stale" };
+      }
+      const prev: Record<string, unknown> = before;
+      const same = (a: unknown, b: unknown) =>
+        a instanceof Date || b instanceof Date ? +(a as Date) === +(b as Date) : (a ?? null) === (b ?? null);
+      const changed = PATIENT_EDITABLE_FIELDS.filter(
+        (f) => (data as Record<string, unknown>)[f] !== undefined && !same(prev[f], (data as Record<string, unknown>)[f])
+      );
+      // `updatedAt` leído en el WHERE: si otra tx lo movió entre el SELECT y
+      // acá (READ COMMITTED), count = 0 → stale en vez de pisar.
+      const res = await tx.patient.updateMany({
+        where: { id, tenantId: actor.tenantId, updatedAt: before.updatedAt },
+        data,
+      });
+      if (res.count === 0) return { kind: "stale" };
+      const after = await tx.patient.findUniqueOrThrow({ where: { id }, select: { updatedAt: true } });
+      return { kind: "ok", changed, updatedAt: after.updatedAt };
     });
   } catch (e) {
     const dup = patientUniqueError(e);
@@ -856,17 +888,27 @@ export async function updatePatient(
     logger.error("patient.update.failed", { err: e instanceof Error ? e.message : String(e) });
     throw e;
   }
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
+  if (outcome.kind === "notfound") return { ok: false, error: "Paciente no encontrado." };
+  if (outcome.kind === "forbidden") {
+    return { ok: false, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+  }
+  if (outcome.kind === "stale") {
+    return {
+      ok: false,
+      error: "La ficha cambió en otra sesión mientras la editabas. Cerrá y volvé a abrir para ver los cambios.",
+    };
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: "patient.update",
     entity: "Patient",
     entityId: id,
+    payload: { fields: outcome.changed },
   });
   revalidatePath("/pacientes");
   revalidatePath(`/pacientes/${id}`);
-  return { ok: true, data: { id } };
+  return { ok: true, data: { id, updatedAt: outcome.updatedAt.toISOString() } };
 }
 
 /**
@@ -886,11 +928,8 @@ export async function setPatientDiagnosis(
 ): Promise<ActionResult> {
   const actor = await getActor();
   const result = await runWithRls(actor.tenantId, async (tx) => {
-    const owned = await tx.patient.findFirst({
-      where: { id: patientId, tenantId: actor.tenantId },
-      select: { id: true },
-    });
-    if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+    const access = await hcAccessError(actor, patientId, tx);
+    if (access) return { ok: false as const, error: access };
     await tx.patient.update({
       where: { id: patientId },
       data: {
@@ -914,7 +953,26 @@ export async function setPatientDiagnosis(
 }
 
 /**
- * Gate a hard-delete (or other admin-only mutation) to OWNER/ADMIN.
+ * A2b-S-vis (30-sep) — gate `full` de las mutaciones de HC. Decisión del
+ * dueño: acceso básico = solo ver. Antes estas actions solo chequeaban el
+ * tenant, así que un profesional no asignado ni compartido podía editar el
+ * diagnóstico, crear/editar planes, cargar EVA o archivar pacientes ajenos
+ * desde la consola. Devuelve el mensaje de error, o `null` si puede seguir.
+ * Corre dentro del `runWithRls` del caller (pasa su `tx`).
+ */
+async function hcAccessError(
+  actor: Actor,
+  patientId: string,
+  tx: Prisma.TransactionClient
+): Promise<string | null> {
+  const access = await patientAccessFor(actor, patientId, tx);
+  if (access === "none") return "Paciente no encontrado.";
+  if (access !== "full") return "No tenés acceso completo a este paciente.";
+  return null;
+}
+
+/**
+ * Gate a hard-delete of a plan/session (or other admin-only mutation) to OWNER/ADMIN.
  * Returns an `ActionResult` error when the actor's membership role is
  * anything else, or `null` when the actor may proceed. Mirrors the inline
  * role check in `assignPatientToPractitioner`.
@@ -935,34 +993,9 @@ async function requireAdminRole(
   return null;
 }
 
-export async function deletePatient(id: string): Promise<ActionResult> {
-  const actor = await getActor();
-  const denied = await requireAdminRole(actor);
-  if (denied) return denied;
-  // RLS adoption (Sprint 16 — Etapa 1): destructive mutations are the
-  // second highest-value target. Cascade deletes traverse FKs the
-  // app-layer extension can't see; wrapping in `runWithRls` ensures
-  // Postgres policies guard every cascading row.
-  const owned = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.patient.findFirst({
-      where: { id, tenantId: actor.tenantId },
-      select: { id: true },
-    });
-    if (!row) return null;
-    await tx.patient.delete({ where: { id } });
-    return row;
-  });
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.delete",
-    entity: "Patient",
-    entityId: id,
-  });
-  revalidatePath("/pacientes");
-  return { ok: true, data: undefined };
-}
+// A2a-S08 (decisión del dueño 30-sep): se quitó `deletePatient`. El borrado
+// definitivo de una ficha arrastraba en cascada turnos, cobros, planes y
+// archivos sin retorno; la única salida es Archivar (`setPatientArchived`).
 
 export async function createProgram(input: {
   patientId: string;
@@ -975,11 +1008,8 @@ export async function createProgram(input: {
   // RLS Etapa 2: owner check + program-with-nested-sessions create
   // share the tx. Returns null if the patient isn't in this tenant.
   const program = await runWithRls(actor.tenantId, async (tx) => {
-    const owned = await tx.patient.findFirst({
-      where: { id: input.patientId, tenantId: actor.tenantId },
-      select: { id: true },
-    });
-    if (!owned) return null;
+    const denied = await hcAccessError(actor, input.patientId, tx);
+    if (denied) return { error: denied };
     return tx.treatmentProgram.create({
       data: {
         tenantId: actor.tenantId,
@@ -1000,7 +1030,7 @@ export async function createProgram(input: {
       },
     });
   });
-  if (!program) return { ok: false, error: "Paciente no encontrado." };
+  if ("error" in program) return { ok: false, error: program.error };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -1018,76 +1048,45 @@ export async function recordEvaScore(input: {
   source?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    select: { id: true },
-  }));
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
-  const row = await runWithRls(actor.tenantId, (tx) => tx.evaScore.create({
-    data: { patientId: input.patientId, value: input.value, source: input.source },
-  }));
+  // Gate + insert en la misma tx (antes eran dos: check y escritura separados).
+  const row = await runWithRls(actor.tenantId, async (tx) => {
+    const denied = await hcAccessError(actor, input.patientId, tx);
+    if (denied) return { error: denied };
+    return tx.evaScore.create({
+      data: { patientId: input.patientId, value: input.value, source: input.source },
+    });
+  });
+  if ("error" in row) return { ok: false, error: row.error };
   revalidatePath(`/pacientes/${input.patientId}`);
   return { ok: true, data: { id: row.id } };
 }
 
-export async function completeSession(input: {
-  sessionId: string;
-  notes?: string;
-  paInPre?: number;
-  paInPost?: number;
-  rpe?: number;
-}): Promise<ActionResult> {
-  const actor = await getActor();
-  const sess = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: {
-      id: input.sessionId,
-      program: { tenantId: actor.tenantId },
-    },
-    include: { program: true },
-  }));
-  if (!sess) return { ok: false, error: "Sesión no encontrada." };
-  await runWithRls(actor.tenantId, (tx) => tx.session.update({
-    where: { id: input.sessionId },
-    data: {
-      completedAt: new Date(),
-      notes: input.notes,
-      paInPre: input.paInPre,
-      paInPost: input.paInPost,
-      rpe: input.rpe,
-    },
-  }));
-  if (input.paInPost != null) {
-    await runWithRls(actor.tenantId, (tx) => tx.evaScore.create({
-      data: {
-        patientId: sess.program.patientId,
-        value: input.paInPost!,
-        source: `session-${sess.index}-post`,
-      },
-    }));
-  }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.complete",
-    entity: "Session",
-    entityId: input.sessionId,
-  });
-  revalidatePath(`/pacientes/${sess.program.patientId}`);
-  return { ok: true, data: undefined };
-}
+// `completeSession` (cierre de sesión en 4 tx, sin gate de acceso ni idempotencia)
+// se borró en A2a: no tenía callers y el cierre vive en
+// `completeSessionFromSeguimiento` (lib/sessions.ts), atómico e idempotente (H3).
 
 // ──────────────────────────────────────────────────────────────────────
 // Coverage (Obra Social) management
 // ──────────────────────────────────────────────────────────────────────
 
 /**
- * Set (replace) the patient's primary coverage. Either `insurerId`
- * resolves to a tenant Insurer row, OR `insurerName` writes a free-form
- * name (when the practitioner hasn't created the Insurer yet).
+ * Set the patient's primary coverage. Either `insurerId` resolves to a tenant
+ * Insurer row, OR `insurerName` writes a free-form name (when the practitioner
+ * hasn't created the Insurer yet). Neither = "Particular" (sin cobertura).
  *
- * Strategy: delete the patient's existing coverages and create one new
- * row. Coverage history is currently denormalised — when we need it we
- * can introduce an "active" flag instead.
+ * H2 (A2a-S08): antes hacía `deleteMany` + `create` en CADA guardado, así que
+ * editar solo el N° de afiliado (o re-guardar una OS "Otra", que el drawer
+ * re-enviaba siempre) borraba `Coverage.copagoCents` — el copago propio del
+ * paciente — y `validUntil`, y los turnos siguientes cobraban el copago de la
+ * OS sin que nadie lo notara. Ahora:
+ *  - misma OS → UPDATE en el lugar (conserva copago propio y vigencia);
+ *  - OS distinta → UPDATE en el lugar con la OS nueva; el copago propio se
+ *    borra SOLO si el caller lo confirma (`resetCopago: true`; la UI lo pide
+ *    con useConfirm). La vigencia sí se resetea: era de la credencial vieja.
+ *  - pasar a Particular con copago propio conservado → la fila queda como
+ *    "Particular" con el override (igual que `setPatientDefaultCopago`).
+ * La cobertura sigue siendo single-active (`coverages[0]` = id desc): las
+ * filas legacy extra se borran.
  */
 export async function setPatientCoverage(input: {
   patientId: string;
@@ -1095,6 +1094,7 @@ export async function setPatientCoverage(input: {
   insurerName?: string;
   planName?: string;
   memberId?: string;
+  resetCopago?: boolean;
 }): Promise<ActionResult> {
   const actor = await getActor();
 
@@ -1106,30 +1106,35 @@ export async function setPatientCoverage(input: {
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const { patientId, insurerId, insurerName, planName, memberId } = parsed.data;
+  const { patientId, insurerId, insurerName, planName, memberId, resetCopago } = parsed.data;
 
-  // RLS-guarded: the ownership check, the insurer lookup and the
-  // delete+create of the Coverage row all run inside the same tenant GUC
-  // transaction. Previously the ownership check sat OUTSIDE any tx, so a
-  // race that flipped the patient's tenantId between check and write could
-  // attach coverage to a foreign patient (audit finding: critical race).
+  // RLS-guarded: the ownership check, the insurer lookup and the write of the
+  // Coverage row all run inside the same tenant GUC transaction. Previously
+  // the ownership check sat OUTSIDE any tx, so a race that flipped the
+  // patient's tenantId between check and write could attach coverage to a
+  // foreign patient (audit finding: critical race).
   const result = await runWithRls(actor.tenantId, async (tx) => {
     const owned = await tx.patient.findFirst({
       where: { id: patientId, tenantId: actor.tenantId },
       select: { id: true },
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+    if ((await patientAccessFor(actor, patientId, tx)) !== "full") {
+      return { ok: false as const, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+    }
 
     let resolvedName = "";
     let resolvedInsurerId: string | null = null;
+    let resolvedIsParticular = false;
     if (insurerId) {
       const ins = await tx.insurer.findFirst({
         where: { id: insurerId, tenantId: actor.tenantId },
-        select: { id: true, name: true },
+        select: { id: true, name: true, isParticular: true },
       });
       if (!ins) return { ok: false as const, error: "Obra social no encontrada." };
       resolvedInsurerId = ins.id;
       resolvedName = ins.name;
+      resolvedIsParticular = ins.isParticular;
     } else if (insurerName) {
       // Free-form ("Otra"): normalize + link to the catalogue if it matches.
       const r = await resolveInsurerName(actor.tenantId, insurerName, tx);
@@ -1137,9 +1142,75 @@ export async function setPatientCoverage(input: {
       resolvedName = r.name;
     }
 
-    await tx.coverage.deleteMany({ where: { patientId } });
-    // Empty name → caller is clearing the coverage; leave it deleted.
-    if (resolvedName) {
+    const existing = await tx.coverage.findFirst({
+      where: { patientId },
+      orderBy: { id: "desc" }, // same "active" row the resolver reads
+      select: {
+        id: true,
+        insurer: true,
+        insurerId: true,
+        copagoCents: true,
+        insurerRef: { select: { isParticular: true } },
+      },
+    });
+
+    // "Particular" = sin fila o fila apuntando al Insurer isParticular.
+    const norm = (s: string) => s.trim().toLowerCase();
+    const newIsParticular = !resolvedName || resolvedIsParticular;
+    const oldIsParticular = !existing || existing.insurerRef?.isParticular === true;
+    const sameOs =
+      newIsParticular || oldIsParticular
+        ? newIsParticular && oldIsParticular
+        : existing!.insurerId && resolvedInsurerId
+          ? existing!.insurerId === resolvedInsurerId
+          : norm(existing!.insurer) === norm(resolvedName);
+
+    const copagoReset = !sameOs && resetCopago === true && existing?.copagoCents != null;
+    const keptCopago = !existing ? null : sameOs || !resetCopago ? existing.copagoCents : null;
+
+    if (existing) {
+      // Single-active: drop legacy duplicates, keep the row we update.
+      await tx.coverage.deleteMany({ where: { patientId, id: { not: existing.id } } });
+    }
+
+    if (!resolvedName) {
+      // → Particular sin OS. Si queda un copago propio, se materializa como
+      // fila "Particular" con el override (el resolver lo lee por hasCoverage).
+      if (existing && keptCopago != null) {
+        if (!oldIsParticular) {
+          const particular = await tx.insurer.findFirst({
+            where: { tenantId: actor.tenantId, isParticular: true },
+            select: { id: true, name: true },
+          });
+          await tx.coverage.update({
+            where: { id: existing.id },
+            data: {
+              insurer: particular?.name ?? "Particular",
+              insurerId: particular?.id ?? null,
+              planName: null,
+              memberId: null,
+              validUntil: null,
+              copagoCents: keptCopago,
+            },
+          });
+        }
+      } else if (existing) {
+        await tx.coverage.deleteMany({ where: { patientId } });
+      }
+    } else if (existing) {
+      await tx.coverage.update({
+        where: { id: existing.id },
+        data: {
+          insurer: resolvedName,
+          insurerId: resolvedInsurerId,
+          planName: planName?.trim() || null,
+          memberId: memberId?.trim() || null,
+          copagoCents: keptCopago,
+          // La vigencia es de la credencial: se conserva solo con la misma OS.
+          ...(sameOs ? {} : { validUntil: null }),
+        },
+      });
+    } else {
       await tx.coverage.create({
         data: {
           patientId,
@@ -1150,15 +1221,11 @@ export async function setPatientCoverage(input: {
         },
       });
     }
-    return { ok: true as const, resolvedName, resolvedInsurerId };
+    return { ok: true as const, resolvedName, resolvedInsurerId, osChanged: !sameOs, copagoReset };
   });
 
   if (!result.ok) return { ok: false, error: result.error };
-  const { resolvedName, resolvedInsurerId } = result;
-  if (!resolvedName) {
-    revalidatePath(`/pacientes/${patientId}`);
-    return { ok: true, data: undefined };
-  }
+  const { resolvedName, resolvedInsurerId, osChanged, copagoReset } = result;
 
   await audit({
     tenantId: actor.tenantId,
@@ -1166,27 +1233,70 @@ export async function setPatientCoverage(input: {
     action: "patient.coverage.update",
     entity: "Patient",
     entityId: patientId,
-    payload: { insurer: resolvedName, insurerId: resolvedInsurerId },
+    payload: { insurer: resolvedName || "Particular", insurerId: resolvedInsurerId, osChanged, copagoReset },
   });
   revalidatePath(`/pacientes/${patientId}`);
+  revalidatePath("/agenda");
   return { ok: true, data: undefined };
 }
 
 /**
- * Pre-established billing for the booking modal: the patient's obra social +
- * their resolved default copago (per-patient override → insurer → Particular).
- * Used to prefill the editable copago row when an existing patient is picked.
+ * Billing preview for the booking modal: the patient's obra social + what the
+ * turno would charge, computed with THE SAME resolver the booking uses
+ * (`resolveBookingCopagoCents`, AUDIT §5 precedence). Prefills the editable
+ * copago row when a patient is picked.
+ *
+ * A2a-S08: antes calculaba `override ?? insurer ?? particular ?? 0` a mano:
+ * sin el escalón "precio del servicio", una OS libre sin catálogo mostraba $0
+ * en el modal y el turno cobraba el precio del servicio.
+ *
+ * `serviceId` opcional: sin él se usa el primer servicio del tenant en el
+ * orden del modal (`listServices`, nombre asc). El modal lo re-consulta al
+ * cambiar de servicio. `source` dice de qué escalón salió el monto.
  * Returns null when the actor lacks full access to the patient.
  */
 export async function getPatientBillingPreview(
-  patientId: string
-): Promise<{ obraSocial: string; copagoCents: number } | null> {
+  patientId: string,
+  serviceId?: string
+): Promise<{
+  obraSocial: string;
+  copagoCents: number;
+  source: "OS" | "copago propio" | "Particular" | "precio del servicio";
+  /** Servicio cuyo precio se usó (el pedido, o el default si no vino). */
+  serviceId: string | null;
+} | null> {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return null;
-  const b = await resolvePatientBilling(patientId, actor.tenantId);
-  const copago = b.coverageOverride ?? b.insurerCopago ?? b.particularCopago ?? 0;
-  return { obraSocial: b.obraSocial, copagoCents: copago };
+  const [b, service] = await Promise.all([
+    resolvePatientBilling(patientId, actor.tenantId),
+    runWithRls(actor.tenantId, (tx) =>
+      tx.service.findFirst({
+        where: { tenantId: actor.tenantId, ...(serviceId ? { id: serviceId } : {}) },
+        orderBy: { name: "asc" },
+        select: { id: true, priceCents: true },
+      })
+    ),
+  ]);
+  const copagoCents = resolveBookingCopagoCents({
+    bookingOverride: null,
+    coverageOverride: b.coverageOverride,
+    hasCoverage: b.hasCoverage,
+    insurerCopago: b.insurerCopago,
+    particularCopago: b.particularCopago,
+    servicePriceCents: service?.priceCents ?? 0,
+  });
+  // Mismo orden que el resolver (lib/copago.ts), solo para etiquetar la fuente.
+  const source = b.hasCoverage
+    ? b.coverageOverride != null
+      ? "copago propio"
+      : b.insurerCopago != null
+        ? b.isParticular ? "Particular" : "OS"
+        : "precio del servicio"
+    : b.particularCopago != null
+      ? "Particular"
+      : "precio del servicio";
+  return { obraSocial: b.obraSocial, copagoCents, source, serviceId: service?.id ?? null };
 }
 
 /**
@@ -1202,7 +1312,8 @@ export async function setPatientDefaultCopago(input: {
   copagoCents: number;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  if (!Number.isFinite(input.copagoCents) || input.copagoCents < 0) {
+  // Mismo tope que `BookingCreate.copagoCents` (centavos Int).
+  if (!Number.isFinite(input.copagoCents) || input.copagoCents < 0 || input.copagoCents > 100_000_00) {
     return { ok: false, error: "Copago inválido." };
   }
   const copago = Math.round(input.copagoCents);
@@ -1212,8 +1323,14 @@ export async function setPatientDefaultCopago(input: {
       select: { id: true },
     });
     if (!owned) return { ok: false as const, error: "Paciente no encontrado." };
+    if ((await patientAccessFor(actor, input.patientId, tx)) !== "full") {
+      return { ok: false as const, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+    }
+    // `orderBy id desc`: la fila ACTIVA (la que lee el resolver). Sin orden,
+    // con filas legacy duplicadas se podía escribir el override en otra.
     const coverage = await tx.coverage.findFirst({
       where: { patientId: input.patientId },
+      orderBy: { id: "desc" },
       select: { id: true },
     });
     if (coverage) {
@@ -1317,11 +1434,16 @@ export async function updateProgram(input: {
   startDate?: string;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findFirst({
-    where: { id: input.id, tenantId: actor.tenantId },
-    select: { id: true, patientId: true },
-  }));
+  const program = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.treatmentProgram.findFirst({
+      where: { id: input.id, tenantId: actor.tenantId },
+      select: { id: true, patientId: true },
+    });
+    if (!row) return null;
+    return { ...row, denied: await hcAccessError(actor, row.patientId, tx) };
+  });
   if (!program) return { ok: false, error: "Plan no encontrado." };
+  if (program.denied) return { ok: false, error: program.denied };
   const patch: Record<string, string | number | Date> = {};
   if (input.title !== undefined) {
     const t = input.title.trim();
@@ -1365,11 +1487,16 @@ export async function setProgramStatus(input: {
   status: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findFirst({
-    where: { id: input.id, tenantId: actor.tenantId },
-    select: { id: true, patientId: true, status: true },
-  }));
+  const program = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.treatmentProgram.findFirst({
+      where: { id: input.id, tenantId: actor.tenantId },
+      select: { id: true, patientId: true, status: true },
+    });
+    if (!row) return null;
+    return { ...row, denied: await hcAccessError(actor, row.patientId, tx) };
+  });
   if (!program) return { ok: false, error: "Plan no encontrado." };
+  if (program.denied) return { ok: false, error: program.denied };
   if (program.status === input.status) return { ok: true, data: undefined };
   await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({
     where: { id: input.id },
@@ -1406,6 +1533,9 @@ export async function deleteProgram(id: string): Promise<ActionResult> {
       select: { id: true, patientId: true, title: true, totalSessions: true },
     });
     if (!row) return null;
+    // A2b-S-vis: OWNER/ADMIN ya implica `full`; el gate queda explícito para
+    // que no dependa de que `requireAdminRole` siga siendo el único filtro.
+    if (await hcAccessError(actor, row.patientId, tx)) return null;
     await tx.treatmentProgram.delete({ where: { id } });
     return row;
   });
@@ -1426,14 +1556,19 @@ export async function deleteSession(id: string): Promise<ActionResult> {
   const actor = await getActor();
   const denied = await requireAdminRole(actor);
   if (denied) return denied;
-  const session = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id, program: { tenantId: actor.tenantId } },
-    select: {
-      id: true,
-      index: true,
-      program: { select: { id: true, patientId: true, totalSessions: true } },
-    },
-  }));
+  const session = await runWithRls(actor.tenantId, async (tx) => {
+    const row = await tx.session.findFirst({
+      where: { id, program: { tenantId: actor.tenantId } },
+      select: {
+        id: true,
+        index: true,
+        program: { select: { id: true, patientId: true, totalSessions: true } },
+      },
+    });
+    // A2b-S-vis: mismo gate explícito que deleteProgram (OWNER/ADMIN ⇒ full).
+    if (!row || (await hcAccessError(actor, row.program.patientId, tx))) return null;
+    return row;
+  });
   if (!session) return { ok: false, error: "Sesión no encontrada." };
 
   await runWithRls(actor.tenantId, async (tx) => {
@@ -1487,9 +1622,23 @@ export async function sendPatientPortalInvite(input: {
     },
   }));
   if (!patient) return { ok: false, error: "Paciente no encontrado." };
+  // A2a-S08: invitar al portal expone la historia del paciente → acceso `full`.
+  if ((await patientAccessFor(actor, patient.id)) !== "full") {
+    return { ok: false, error: "No tenés acceso completo a este paciente: solo podés verlo." };
+  }
   if (!patient.email) {
     return { ok: false, error: "El paciente no tiene email cargado." };
   }
+
+  // A3a-S-rl: cada llamada manda un mail de Supabase y no había límite (spam
+  // + cuota de envío). 10/h por actor + 1 cada 10 min por destinatario (hash
+  // del email, nunca en claro). Va después de los chequeos de acceso para que
+  // un rechazo por permisos no consuma cupo.
+  const rl = await rateLimitAll([
+    { key: `portal-invite:actor:${actor.userId ?? actor.tenantId}`, limit: 10, windowMs: 3_600_000 },
+    { key: `portal-invite:to:${hashKeyPart(patient.email)}`, limit: 1, windowMs: 600_000 },
+  ]);
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
   const portalUrl = `${env.NEXT_PUBLIC_APP_URL}/portal/c/${patient.tenant.slug}`;
 
@@ -1505,10 +1654,13 @@ export async function sendPatientPortalInvite(input: {
     const admin = getSupabaseAdminClient();
     if (admin) {
       try {
-        await admin.auth.admin.inviteUserByEmail(patient.email.toLowerCase(), {
+        // supabase-js NO tira excepción: devuelve `{ error }`. Antes esta rama
+        // lo ignoraba y respondía "Email enviado" aunque Supabase rechazara.
+        const { error } = await admin.auth.admin.inviteUserByEmail(patient.email.toLowerCase(), {
           redirectTo: portalUrl,
         });
-        return { ok: true, data: { emailSent: true, portalUrl } };
+        if (!error) return { ok: true, data: { emailSent: true, portalUrl } };
+        logger.warn("patient.portal_invite.resend_email_failed", { err: error.message });
       } catch (e) {
         logger.warn("patient.portal_invite.resend_email_failed", { err: e instanceof Error ? e.message : String(e) });
         /* fall through to manual URL */
@@ -1534,6 +1686,7 @@ export async function sendPatientPortalInvite(input: {
         }
       );
       if (!error) emailSent = true;
+      else logger.warn("patient.portal_invite.email_failed", { err: error.message });
     } catch (e) {
       logger.warn("patient.portal_invite.email_failed", { err: e instanceof Error ? e.message : String(e) });
       /* fall back to manual URL */
@@ -1565,47 +1718,74 @@ export async function bulkArchivePatients(input: {
   if (input.ids.length > 200) {
     return { ok: false, error: "Demasiados pacientes a la vez (máx 200)." };
   }
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
-    where: { id: { in: input.ids }, tenantId: actor.tenantId },
-    select: { id: true },
-  }));
-  const ownedIds = owned.map((p) => p.id);
-  const result = await runWithRls(actor.tenantId, (tx) => tx.patient.updateMany({
-    where: { id: { in: ownedIds }, tenantId: actor.tenantId },
-    data: { archivedAt: input.archived ? new Date() : null },
-  }));
+  // A2b-S-vis: todo-o-nada. Mismo gate `full` que `setPatientArchived`; si
+  // algún id es ajeno (otro tenant / inexistente) o de acceso básico, no se
+  // archiva NINGUNO y se dice cuántos fallaron. Antes los ids ajenos se
+  // descartaban en silencio y los básicos se archivaban.
+  const ids = Array.from(new Set(input.ids));
+  const outcome = await runWithRls(actor.tenantId, async (tx) => {
+    const access = await bulkPatientAccess(actor, ids, tx);
+    const missing = ids.filter((id) => !access.has(id)).length;
+    const basic = ids.filter((id) => access.get(id) === "basic").length;
+    if (missing > 0) return { kind: "missing" as const, n: missing };
+    if (basic > 0) return { kind: "basic" as const, n: basic };
+    const r = await tx.patient.updateMany({
+      where: { id: { in: ids }, tenantId: actor.tenantId },
+      data: { archivedAt: input.archived ? new Date() : null },
+    });
+    return { kind: "ok" as const, count: r.count };
+  });
+  if (outcome.kind === "missing") {
+    return { ok: false, error: "Algunos pacientes no se encontraron. Recargá la lista." };
+  }
+  if (outcome.kind === "basic") {
+    return {
+      ok: false,
+      error:
+        outcome.n === 1
+          ? "No tenés acceso completo a 1 de los pacientes elegidos. No se archivó ninguno."
+          : `No tenés acceso completo a ${outcome.n} de los pacientes elegidos. No se archivó ninguno.`,
+    };
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: input.archived ? "patient.bulk_archive" : "patient.bulk_unarchive",
     entity: "Patient",
-    payload: { count: result.count, ids: ownedIds.slice(0, 50) },
+    payload: { count: outcome.count, ids: ids.slice(0, 50) },
   });
   revalidatePath("/pacientes");
-  return { ok: true, data: { updated: result.count } };
+  return { ok: true, data: { updated: outcome.count } };
 }
 
 /**
  * Activity feed for a patient — every AuditEvent that touches the
  * patient row OR any of its child entities (PatientFile, Booking,
  * TreatmentProgram, Session, Coverage, EvaScore). Most recent first.
+ *
+ * A2b-S-vis: exige acceso `full`. Los payloads del audit llevan nombres de
+ * archivos, títulos de planes y cambios de diagnóstico: con acceso básico
+ * el feed filtraba HC que la ficha misma esconde. Básico/ajeno → `[]`.
  */
 export async function getPatientActivity(
   patientId: string,
   opts: { limit?: number } = {}
 ): Promise<ActivityEvent[]> {
   const actor = await getActor();
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id: patientId, tenantId: actor.tenantId },
-    select: {
-      id: true,
-      bookings: { select: { id: true } },
-      programs: {
-        select: { id: true, sessions: { select: { id: true } } },
+  const owned = await runWithRls(actor.tenantId, async (tx) => {
+    if (await hcAccessError(actor, patientId, tx)) return null;
+    return tx.patient.findFirst({
+      where: { id: patientId, tenantId: actor.tenantId },
+      select: {
+        id: true,
+        bookings: { select: { id: true } },
+        programs: {
+          select: { id: true, sessions: { select: { id: true } } },
+        },
+        files: { select: { id: true } },
       },
-      files: { select: { id: true } },
-    },
-  }));
+    });
+  });
   if (!owned) return [];
 
   const childEntities: Record<string, string[]> = {
@@ -1705,9 +1885,15 @@ export async function setPatientShares(input: {
     .filter((id) => id !== patient.assignedPractitionerId);
 
   // Validate every requested practitioner belongs to this tenant — no
-  // cross-tenant grants.
+  // cross-tenant grants — and is still an active member (invitación aceptada):
+  // un profesional removido no recibe shares nuevos y los que tenía se quitan
+  // al guardar (no está en `wanted`). Mismo filtro que `listPractitioners`.
   const tenantPractitioners = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findMany({
-    where: { tenantId: actor.tenantId, id: { in: wantedRaw } },
+    where: {
+      tenantId: actor.tenantId,
+      id: { in: wantedRaw },
+      user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
+    },
     select: { id: true },
   }));
   const wanted = new Set(tenantPractitioners.map((p) => p.id));

@@ -26,11 +26,55 @@
 
 | Bloque | Qué | Estado |
 |---|---|---|
-| **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | 🟡 A0b/A0c ✅ · **A1 ✅** (red de tests + baseline de perf, Ronda 11) · A0a/A0d del dueño · A2/A3 con planning pendiente |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | ⏳ |
-| **C · Diferido** | **C0** roles/capabilities, rol Secretaria completo, multi-profesional + selector de consultorio, stepper de alta, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
+| **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo; **próximo**): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | ⏳ |
+| **C · Diferido** | **C0** roles/capabilities, rol Secretaria completo, multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
+
+### Bloque A — estado (30-sep-2026)
+
+| Ola | Qué | Estado |
+|---|---|---|
+| **A0** | operación segura (Preview no migra prod, guards en seeds/scripts, roles sin passwords, env fail-fast) + docs | ✅ código · A0a (chequeos) y A0d (staging aislado) del dueño |
+| **A1** | red de tests de integración + baseline de performance | ✅ |
+| **A2a** | S06 turnos (H1, IDOR, P2002 bajo RLS, acceso básico = solo ver, ICS) ∥ S08 paciente/cobertura (H2) ∥ S03 Seguimiento (H3, sin heurística ±2 h) | ✅ |
+| **A2b** | S-pub reserva pública + webhook (H4, no-downgrade/no-revive, 30 min) ∥ S-ui paridad de modales y agenda ∥ S-vis visibilidad + export ∥ S-cfg `MoneyInput` + equipo | ✅ |
+| **A3a** | S-rl rate-limit endurecido | ✅ (falta la env de Upstash, dueño) |
+| **A3b** | S-auth sesión/cookies/redirects/staff ≠ paciente/check-in ∥ S-obs Sentry, CSP, HSTS, Next 14.2.35 | ✅ (falta `SENTRY_DSN`, dueño) |
+| **A3c** | M-onb migración `20260930120000_tenant_onboarding` → S-signup signup verificado + stepper de alta v1 (pasos 2-7) | ✅ cierra H5 (falta SMTP propio + plantillas, dueño) |
+
+Detalle y evidencia en [AUDIT.md §Ronda 12](AUDIT.md); QA en [QA.md §Bloque A — A2/A3](QA.md); orden de prod en
+[MIGRACIONES-RUNBOOK.md §2.1](MIGRACIONES-RUNBOOK.md). **A3 no se despliega sin el SMTP propio del dueño, y A3b
+no se despliega sin A3c.**
+
+Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard ✓ · integración 175/175
+(`kinesoft_app`) y 171 + 4 skip (owner) · `next build` ✓ · perf sin regresiones graves ([PERF.md](PERF.md)).
+
+**Próximos pasos:**
+1. Commit del dueño del Bloque A (A2 + A3, con la migración `20260930120000_tenant_onboarding`).
+2. ~~Fix `signup-confirm-doble-salto`~~ ✅ hecho el 30-sep (el link de confirmación ya aterriza en el destino).
+3. Dueño: prerrequisitos de EXTERNAL-CONFIG §0.1 (SMTP, plantillas, Redirect URLs, "Confirm email", Upstash,
+   `SENTRY_DSN`, System Env Vars) → staging → QA → prod según el runbook. Después, el flip de RLS en prod (su
+   prerrequisito de código ya está).
+4. **B-pre** (catálogo, agenda por profesional × sede, motor de disponibilidad, agenda de Secretaria): planning
+   detallado para aprobar antes de arrancar. El stepper de alta v1 ya existe (A3c: consultorio, horarios,
+   servicios, OS, equipo); B-pre le suma sedes, horarios por profesional, prácticas del catálogo y coberturas.
+
+**Hallazgos nuevos de A2/A3, ya clasificados** (filas en [AUDIT.md §2](AUDIT.md)):
+- **C0:** los write-paths (turnos, reasignar paciente, servicios, sesión a medida) validan practitioner ∈ tenant
+  pero no membresía aceptada.
+- **C:** el batch no rechaza una `idempotencyKey` de otro tenant (no escribe nada ajeno); TOCTOU de cupo 1 entre
+  chequeo e INSERT, y el pago tardío sobre una reserva vencida confirma sin revalidar el cupo.
+- **C0 (A3c):** `phone`/`whatsapp`/`publicEmail` del consultorio solo se editan en el stepper (falta en
+  Configuración).
+- **C (A3c):** OWNER con alta sin terminar que acepta la invitación de otro tenant: en los pasos 3-6 `getActor`
+  puede elegir el otro tenant (raro).
+- **A (A3c):** `signup-confirm-doble-salto` ✅ cerrado el 30-sep.
+- **C1:** `formatARS` sin centavos en listados; /seguimiento de 8 a 28 statements (1 tx, 15→47 ms); **portal v2:** `getPortalPlan`
+  expone `Session.notes` del kine al paciente; destildar el copago de una reserva pública la puede dejar vencida
+  (aceptado).
+- **ops:** `.env.local` con `NODE_ENV` rompe el `next build` local (comando en TESTING.md).
 
 ## Estado de ejecución — cómo leer las marcas
 
@@ -47,7 +91,7 @@ Cada ola/sesión lleva una marca, verificada contra
 > dueño** y vive en [QA.md](QA.md) (una sección por ronda). Una sesión puede estar ✅ en código y
 > todavía tener su checklist de QA sin tildar.
 
-*Última pasada de marcado: **2026-09-29**, sobre las rondas 1-11.*
+*Última pasada de marcado: **2026-09-30**, sobre las rondas 1-12 (Bloque A2/A3).*
 
 ## Cómo se pilotea una sesión
 
@@ -227,7 +271,7 @@ server actions por env para prod.
 - Own: `next.config.mjs`.
 - Gate: `curl` de headers en preview; app funciona con CSP report-only sin violaciones propias.
 
-**`sentry-observabilidad`** 🟡 *(serial tras headers — mismo next.config.mjs)* — `@sentry/nextjs` en
+**`sentry-observabilidad`** 🟡 *(SDK real instalado en A3b-S-obs, 30-sep; falta el DSN del dueño)* *(serial tras headers — mismo next.config.mjs)* — `@sentry/nextjs` en
 modo no-op (gate de activación = `SENTRY_DSN`, patrón listo-para-activar); `logger.warn` en los
 catches de `notifications-internal` y `audit-extension`; audit de lectura PHI con `waitUntil`/await
 para que no se pierda en freeze serverless.
@@ -258,23 +302,23 @@ por hash) en vez de guardarlo en claro.
 
 | # | Ítem | Depende de | Estado |
 |---|---|---|---|
-| 1 | Rate-limiting distribuido en superficies públicas (Upstash env en Vercel) | **Upstash (C)** | ⏳ dueño |
+| 1 | Rate-limiting distribuido en superficies públicas (Upstash env en Vercel) | **Upstash (C)** | 🟡 código endurecido en A3a (30-sep); env de Upstash ⏳ dueño |
 | 2 | `MP_WEBHOOK_SECRET` + credenciales MP prod seteadas | **MP (C)** | ⏳ dueño |
 | 3 | Monto de pago anclado + `Payment FAILED` en mismatch | `payment-amount-anclado` | ✅ |
 | 4 | `deleteBooking` no destruye `Payment` (Restrict + guard) | `delete-guard-booking` | ✅ |
 | 5 | Doble-submit de turno neutralizado (idempotency determinística) | `booking-concurrencia` | ✅ *(re-implementado en Ronda 6: key del cliente + índice único parcial; la key determinística pisaba turnos)* |
 | 6 | Bugs QA de agenda cerrados y verificados con `TZ=UTC` | Olas 1.1-1.2 | 🟡 código ✅ · QA `TZ=UTC` del dueño pendiente |
 | 7 | Headers de seguridad + `allowedOrigins` prod (CSP al menos report-only) | `headers-seguridad` | ✅ (CSP en Report-Only) |
-| 8 | Sentry cableado (no-op sin DSN acepta corte; DSN real dentro de la semana) | `sentry-observabilidad` + Sentry (C) | 🟡 shim no-op en `lib/observability.ts`; falta `@sentry/nextjs` + `SENTRY_DSN` |
+| 8 | Sentry cableado (no-op sin DSN acepta corte; DSN real dentro de la semana) | `sentry-observabilidad` + Sentry (C) | 🟡 `@sentry/nextjs` instalado en A3b (30-sep, no-op sin DSN); falta `SENTRY_DSN` del dueño |
 | 9 | Error/loading/404 en español con retry | `error-loading-boundaries` | ✅ (403 custom diferido) |
 | 10 | Login con feedback de error | `login-error-feedback` | ✅ |
 | 11 | CI typecheck+build como required check + branch protection | `ci-gate-minimo` + Vercel (C) | 🟡 workflow ✅; **branch protection la activa el dueño** |
 | 12 | Checklist de QA manual versionado, corrido completo en preview UTC | [TESTING.md](TESTING.md) | 🟡 versionado ✅ ([QA.md](QA.md)); la corrida completa es del dueño |
-| 13 | Gate de rol en hard-deletes (paciente/programa/sesión) | `patients-integridad` | ✅ |
+| 13 | Gate de rol en hard-deletes (paciente/programa/sesión) | `patients-integridad` | ✅ (desde A2 el borrado definitivo de paciente no existe: solo Archivar) |
 | 14 | Verificado: bucket Supabase `patient-files` **privado**; `.env` prod fuera de git (rotar si estuvo expuesta) | **Supabase (C)** | ⏳ verificación del dueño |
 | 15 | Sin datos fabricados en prod (`KINESOFT_ALLOW_DEMO_ACTOR` unset en Vercel) | verificación | ⏳ verificación del dueño |
 | 16 | Logging sin PII/secretos (`redactPayload` ya existe) | verificación | ✅ código (`lib/mercadopago.ts#redactPayload`) |
-| 17 | Inputs de dinero con parser AR estandarizado | `money-input-parser` | ✅ `parseARS` en `lib/format.ts` + call-sites; **no** se creó el componente `MoneyInput` (no hizo falta) |
+| 17 | Inputs de dinero con parser AR estandarizado | `money-input-parser` | ✅ `parseARS` en `lib/format.ts` + call-sites; desde A2b (30-sep) además el componente `MoneyInput` (el `type=number` con step 100 bloqueaba copagos de $50) |
 
 **Diferido-con-gate** (registrado en el tracker de abajo): RLS real, suite de integración/E2E,
 guard estático, password policy reforzada, email transaccional propio, APM, legal (Ley 26.529),
@@ -470,8 +514,8 @@ al kine; los profesionales no pagan.*
 
 ### Ola 2.9 — Onboarding + cierre de etapa · ⏳ pendiente
 
-- ⏳ **`onboarding-pulido`** — Polish del self-serve + email transaccional propio (bucket C: dominio
-  verificado, SPF/DKIM — gate del corte E2). Dep: `paywall-trial-ui`.
+- ⏳ **`onboarding-pulido`** — Polish del self-serve (el stepper v1 ya existe desde A3c; el SMTP propio pasó a
+  prerrequisito del deploy de A3). Dep: `paywall-trial-ui`.
 
 **Checklist de corte E2 (adicional al de E1):**
 
@@ -548,7 +592,7 @@ Nada se difiere por omisión. Cada ítem se revisa al cierre de cada ola.
 | Suite integración/E2E + concurrencia + tripwire | Antes de abrir signup self-serve / 2º tenant (Ola 2.1) | 🟡 tripwire de aislamiento ✅ + fábrica de tenant efímero ✅; falta E2E Playwright y el test automatizado de concurrencia |
 | Guard estático de seguridad en CI | Junto con Ola 2.1-2.2 | 🟡 `scripts/guard-tenant-isolation.mjs` existe, tiene script npm (`guard:isolation`) y viene verde desde la Ronda 7. **Falta el paso en `.github/workflows/ci.yml`** — hoy se corre a mano |
 | Password policy reforzada | Antes de signup público abierto (o `password-policy` en E1 si entra) | ✅ entró en E1 (Ronda 2) |
-| Email transaccional propio (SPF/DKIM) | Antes de signup self-serve (corte E2). Mientras: SMTP default de Supabase para el cliente único | ⏳ |
+| Email transaccional propio (SPF/DKIM) | Antes de signup self-serve. **Desde A3c el signup exige email verificado: es prerrequisito del deploy de A3** (EXTERNAL-CONFIG §0.1) | ⏳ dueño |
 | APM / query-perf (`m3-no-apm`) | ≥5 tenants activos O primer incidente de latencia p95 | ⏳ |
 | Virus-scan de uploads (`l2-no-virus-scan`) | Antes de habilitar upload de archivos desde el portal (Ola 2.7) | ⏳ |
 | Paciente multi-consultorio (`patient-tenancy-single-home-row`) | Primer caso real de paciente atendido en 2 consultorios del sistema | ⏳ |

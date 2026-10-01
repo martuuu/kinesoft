@@ -6,15 +6,19 @@
 > checklist de QA manual. La implementación se ejecuta en las sesiones `ci-gate-minimo` (capa 1) y
 > `suite-integracion` / `ci-pipeline-completo-y-guard` (capas 3-4 + guards) del [ROADMAP.md](ROADMAP.md).
 >
-> **Estado actual (2026-09-29):**
-> - **Unit (capa 1):** 70 tests en 7 archivos (`tests/unit/*`: datetime-ar, format, copago,
->   booking-capacity, agenda-utils, assert-safe-target, env), sin DB ni red. Corren en CI y deben
->   pasar con `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`.
-> - **Integración (capa 3, A1.1):** 37 tests en 4 archivos (`tests/integration/`): tripwire RLS, write-paths
->   de turnos, paciente/cobertura/copago y matriz de autorización cross-tenant. Corre las **server actions
->   reales** con `getActor()` real; solo se mockean la cookie/headers, la red de Supabase (+ el admin client,
->   para que ningún test mande mails reales) y el runtime de cache de Next
->   (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
+> **Estado actual (30-sep-2026, cierre del Bloque A):**
+> - **Unit (capa 1):** 252 tests en 19 archivos (`tests/unit/*`), sin DB ni red. Corren en CI y deben pasar con
+>   `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`. Nuevos en A2/A3: `booking-capacity-hold`,
+>   `public-slots`, `money-input`, `csv`, `agenda-filters`, `form-dirty`, `rate-limit`, `safe-next`,
+>   `recovery-cookie`, `logger-redact`, `observability` y (A3c) `onboarding-logic` (13: slug, `decideAppGate`,
+>   paso de retome).
+> - **Integración (capa 3):** 13 archivos en `tests/integration/`, 175 tests (rol `kinesoft_app`; con owner
+>   BYPASSRLS, 171 + 4 skip). A1.1 dejó `rls-isolation`, `bookings-write`, `patient-coverage` y `authz-matrix`;
+>   A2/A3 sumaron `sessions`, `public-booking`, `mp-webhook`, `team`, `visibility`, `portal`, `invitations` y
+>   (A3c) `signup` (10: signup verificado, anti-oráculo, invitación, forgot/reset con y sin `ks_recovery`) y
+>   `onboarding` (8: bootstrap del tenant, paso 2 idempotente, paso 7 exige servicio). Corre las **server actions reales** con `getActor()` real; solo se
+>   mockean la cookie/headers, la red de Supabase (+ el admin client, para que ningún test mande mails reales) y
+>   el runtime de cache de Next (`tests/helpers/integration-setup.ts`). CI la corre con **los dos roles**.
 > - **E2E (capa 4):** Playwright no está instalado (Bloque B, S26).
 > - **CI:** typecheck → unit (TZ=UTC y TZ=AR) → guard → build → reporte de bundle; y el job `integration`
 >   (Postgres efímero, migraciones desde cero, rol app + owner). En todas las PR y ramas de trabajo.
@@ -34,24 +38,50 @@ npm run test:integration -- <archivo|patrón> # uno solo
 - Identidad del actor por test: `asUser(userId)` (`tests/helpers/actor.ts`).
 - Algunos comportamientos difieren según el rol: `appRoleBypassesRls()` (`tests/helpers/db-role.ts`).
 
-### Contrato A2: bugs conocidos escritos como `it.fails`
+### Contrato A2: bugs conocidos escritos como `it.fails` — ✅ todos dados vuelta (30-sep-2026)
 
-Cada uno tiene la expectativa **correcta** y hoy falla. La sesión indicada lo da vuelta a `it(...)` como parte de
-su gate. Verificado el 2026-09-30: cada uno falla por la aserción esperada, no por errores de setup.
+A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, no por setup). A2 los dio vuelta a
+`it(...)` como parte del gate de cada sesión; ya no queda ningún `it.fails` en `tests/` y la matriz
+`authz-matrix` no tiene filas con `failsUntil`. Los títulos conservan el prefijo `[sesión]` para rastrearlos.
 
-| Sesión | Test | Archivo |
-|---|---|---|
-| A2-S06 · H1 | `deleteBooking` de un turno con copago cobrado a mano → rechaza | bookings-write |
-| A2-S06 · H1 | `deleteBooking` de un turno con la OS confirmada → rechaza | bookings-write |
-| A2-S06 | toggle de cobro con `expectedUpdatedAt` viejo → rechaza | bookings-write |
-| A2-S06 | reactivar un CANCELLED sobre cupo lleno → pide sobreturno | bookings-write |
-| A2-S06 | alargar la duración sobre cupo lleno → pide sobreturno | bookings-write |
-| A2-S06 | `createBookingsBatch` con paciente de otro tenant → rechaza sin escribir | bookings-write + authz-matrix |
-| A2-S06 | `createBooking` con profesional de otro tenant → rechaza sin escribir | bookings-write + authz-matrix |
-| A2-S06 · **nuevo** | bajo RLS, el P2002 del índice único llega con `target: null` → mensaje genérico en vez del accionable (solo falla con `kinesoft_app`) | bookings-write |
-| A2-S08 · H2 | re-guardar la misma obra social conserva `Coverage.copagoCents` | patient-coverage |
-| A2-S08 | `updatePatient` con email vacío lo borra | patient-coverage |
-| A2-S08 | preview de copago del modal = lo que cobra el turno (OS libre) | patient-coverage |
+| Sesión | Test | Archivo | Estado |
+|---|---|---|---|
+| A2-S06 · H1 | `deleteBooking` de un turno con copago cobrado a mano → rechaza | bookings-write | ✅ |
+| A2-S06 · H1 | `deleteBooking` de un turno con la OS confirmada → rechaza | bookings-write | ✅ |
+| A2-S06 | toggle de cobro con `expectedUpdatedAt` viejo → rechaza | bookings-write | ✅ |
+| A2-S06 | reactivar un CANCELLED sobre cupo lleno → pide sobreturno | bookings-write | ✅ |
+| A2-S06 | alargar la duración sobre cupo lleno → pide sobreturno | bookings-write | ✅ |
+| A2-S06 | `createBookingsBatch` con paciente de otro tenant → rechaza sin escribir | bookings-write + authz-matrix | ✅ |
+| A2-S06 | `createBooking` con profesional de otro tenant → rechaza sin escribir | bookings-write + authz-matrix | ✅ |
+| A2-S06 · `p2002-target-null-bajo-rls` | bajo RLS, el P2002 con `target: null` da el mensaje accionable, no un segundo turno | bookings-write | ✅ |
+| A2-S08 · H2 | re-guardar la misma obra social conserva `Coverage.copagoCents` | patient-coverage | ✅ |
+| A2-S08 | `updatePatient` con email vacío lo borra | patient-coverage | ✅ |
+| A2-S08 | preview de copago del modal = lo que cobra el turno (OS libre) | patient-coverage | ✅ |
+
+### Convenciones nuevas de A2/A3
+
+- **Webhook de MP por la ruta firmada** (`tests/integration/mp-webhook.test.ts`): el test llama al `POST` real de
+  `app/api/webhooks/mercadopago/route.ts` con una firma HMAC real (secreto de test) → `verifyWebhookSignature` →
+  `consumeWebhook` → Postgres. Lo único mockeado es el SDK `mercadopago` (`Payment.get`, el detalle del pago) y el
+  rate-limit. No se llama a `consumeWebhook` directo: se saltearía la firma y el anti-replay.
+- **Rate-limit en integración:** los tests que mandan dos veces al mismo destinatario (invitaciones, portal)
+  llaman a `__rateLimitInternals.reset()` (`lib/rate-limit.ts`) entre llamadas, porque el bucket de 1 cada 10 min
+  por destinatario es compartido y el segundo caso daría "Probá de nuevo en N s". En unit, `rate-limit.test.ts`
+  mockea `fetch` para Upstash (error de red → fallback, timeout, respuesta inválida, purga, claves compuestas).
+- **Reloj explícito:** `isHoldingCapacity`, `buildPublicSlots`, `paymentHoldState` y `listOpenSessions` reciben
+  `now`; los tests lo fijan en TZ=UTC en vez de mockear `Date`.
+
+### Build local (`next build`) — por qué con `-v NODE_ENV=production`
+
+`.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el
+prerender. Para el gate de build contra el Docker:
+
+```bash
+npx dotenv -e .env.local -v NODE_ENV=production -- npx next build
+```
+
+`-v` pisa solo esa clave para el build, sin tocar `.env.local`. La alternativa es sacar `NODE_ENV` de
+`.env.local`. Sin DSN, el build no carga Sentry (no-op).
 
 ## Regla de oro: los fixes de timezone van ANTES que la suite de integración
 
@@ -183,8 +213,8 @@ finding `no-qa-checklist-versionado`. Marcar ✅/❌ por ítem, con captura si a
 - [ ] Cambiar el precio del servicio mientras hay un checkout en vuelo → `Payment FAILED` registrado (no silencioso).
 
 **Pacientes / dinero:**
-- [ ] PRACTITIONER intenta "Eliminar definitivamente" un paciente → bloqueado; OWNER/ADMIN puede.
-- [ ] Borrar un turno **pagado** → error claro (no destruye el Payment).
+- [ ] No existe "Eliminar definitivamente" paciente (se quitó en A2): solo Archivar, y archivar exige acceso completo.
+- [ ] Borrar un turno **pagado** (MP, copago cobrado a mano u OS confirmada) → error claro "cancelalo" (no destruye nada).
 - [ ] Input de precio/copago con "1.500,50" → se guarda 150050 cents.
 
 **Auth / boundaries:**

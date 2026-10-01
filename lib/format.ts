@@ -114,6 +114,92 @@ export function parseARS(input: string | number | null | undefined): number | nu
 }
 
 /**
+ * Money INPUT helpers (A2b-S-cfg) — the pure core of `components/ui/money-input.tsx`.
+ *
+ * Why not `parseARS` + `<input type="number">`: the old inputs were
+ * `type=number` with `step=50/100`, and that produced two real bugs:
+ *   - a $50 copago in the booking modal (`step=100`) failed the browser's
+ *     step validation and silently BLOCKED creating the turno;
+ *   - a number input hands back "1500.5" (dot decimal), and `parseARS` treats
+ *     "." as the AR thousands separator → "15005" → an amount ×10/×100.
+ * `parseMoneyInput` is exact string arithmetic (never `Number()*100`, never a
+ * float), rejects what it doesn't understand instead of guessing, and handles
+ * the dot-decimal case explicitly. `parseARS` keeps its lenient contract for
+ * any other caller.
+ */
+export type MoneyParse = { ok: true; cents: number | null } | { ok: false };
+
+/** Biggest amount we accept: 13 integer digits keep `pesos*100` < 2^53. */
+const MAX_PESO_DIGITS = 13;
+
+/**
+ * Parse what the user typed into integer cents.
+ *
+ *   ""  / "  "          → { ok, cents: null }   (empty is valid: "no value")
+ *   "2750"              → 275000
+ *   "1.500,50"          → 150050               ("," decimal, "." thousands)
+ *   "1.500" / "1.500.000" → 150000 / 150000000 (dots in groups of 3 = thousands)
+ *   "1500.5" / "12.50"  → 150050 / 1250        (single "." + 1-2 digits = decimal:
+ *                                                a number keypad or a paste)
+ *   "$ 2.000"           → 200000
+ *   "-5", "abc", "1,2,3", "1,555", "1.50,5" → { ok: false }
+ */
+export function parseMoneyInput(input: string | null | undefined): MoneyParse {
+  if (input == null) return { ok: true, cents: null };
+  // Drop "$", spaces and NBSP (the formatted value may be pasted back in).
+  const s = input.replace(/[\s $]/g, "");
+  if (s === "") return { ok: true, cents: null };
+  if (!/^[\d.,]+$/.test(s)) return { ok: false };
+
+  let intPart: string;
+  let decPart = "";
+  const commas = s.split(",").length - 1;
+  if (commas > 1) return { ok: false };
+  if (commas === 1) {
+    [intPart, decPart] = s.split(",");
+    if (!isThousandsGrouped(intPart)) return { ok: false };
+    intPart = intPart.replace(/\./g, "");
+  } else {
+    const dots = s.split(".").length - 1;
+    if (dots === 1 && /^\d+\.\d{1,2}$/.test(s)) {
+      [intPart, decPart] = s.split(".");
+    } else {
+      if (!isThousandsGrouped(s)) return { ok: false };
+      intPart = s.replace(/\./g, "");
+    }
+  }
+  if (decPart.length > 2 || !/^\d*$/.test(decPart)) return { ok: false };
+  if (intPart === "" && decPart === "") return { ok: false };
+  const intDigits = intPart.replace(/^0+(?=\d)/, "");
+  if (intDigits.length > MAX_PESO_DIGITS) return { ok: false };
+  const pesos = intDigits === "" ? 0 : parseInt(intDigits, 10);
+  const cents = decPart === "" ? 0 : parseInt(decPart.padEnd(2, "0"), 10);
+  return { ok: true, cents: pesos * 100 + cents };
+}
+
+/** "1500", "1.500", "1.500.000" are fine; "1.50", "1.5000", ".5" are not. */
+function isThousandsGrouped(intPart: string): boolean {
+  if (!intPart.includes(".")) return /^\d*$/.test(intPart);
+  return /^\d{1,3}(\.\d{3})+$/.test(intPart);
+}
+
+/**
+ * Canonical text for a cents value inside an editable input: "1.500" for
+ * whole pesos, "1.500,50" when there are cents, "" for null. No "$" (the
+ * input shows it as an adornment) and built by hand — not Intl — so the
+ * server and browser render the exact same string (no hydration drift) and
+ * `parseMoneyInput(formatMoneyInput(c)) === c` for every integer c >= 0.
+ */
+export function formatMoneyInput(cents: number | null | undefined): string {
+  if (cents == null || !Number.isFinite(cents)) return "";
+  const c = Math.max(0, Math.round(cents));
+  const pesos = Math.floor(c / 100);
+  const rest = c % 100;
+  const grouped = String(pesos).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return rest === 0 ? grouped : `${grouped},${String(rest).padStart(2, "0")}`;
+}
+
+/**
  * Relative date (today / mañana / "en 3 días" / "hace 2 días"). Falls
  * back to `formatDateAR(d, "weekdayDayMonth")` past ±7 days.
  */

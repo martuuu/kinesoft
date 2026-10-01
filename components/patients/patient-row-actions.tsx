@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { setPatientArchived } from "@/lib/patients";
+import { useToast } from "@/components/ui/toast";
 
 /**
  * Per-row "⋯" menu for the Pacientes directory.
@@ -19,6 +20,7 @@ export function PatientRowActions({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
+  const toast = useToast();
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -40,7 +42,16 @@ export function PatientRowActions({
   const toggle = () => {
     setOpen(false);
     start(async () => {
-      await setPatientArchived({ id: patientId, archived: !archived });
+      const r = await setPatientArchived({ id: patientId, archived: !archived });
+      // Antes se ignoraba el resultado: un rechazo (acceso básico, paciente
+      // ajeno) no mostraba nada. El menú ya no se renderiza para filas de
+      // acceso básico (patients-list), esto cubre el resto.
+      if (!r.ok) {
+        toast.error(archived ? "No pudimos reactivar el paciente" : "No pudimos archivar el paciente", {
+          description: r.error,
+        });
+        return;
+      }
       router.refresh();
     });
   };

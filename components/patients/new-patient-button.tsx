@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { IconPlus } from "@/components/ui/icons";
 import { Drawer } from "@/components/ui/drawer";
+import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { Section } from "@/components/patients/profile/ui";
@@ -32,6 +33,9 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
   // Coverage (obra social): "particular" | "ins:<id>" | "other".
   const [coverage, setCoverage] = useState("particular");
   const [otherInsurer, setOtherInsurer] = useState("");
+  // Dirty-guard (A2b-S-ui): Esc / fondo / X ya no tiran la ficha a medio cargar.
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const { dirty, onFormInput } = useFormDirty(formRef, { coverage, otherInsurer });
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -62,7 +66,7 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
   };
 
   return (
-    <Drawer open onClose={onClose} width={560}>
+    <Drawer open onClose={onClose} width={560} dirty={dirty}>
       <header style={{ marginBottom: 16, paddingRight: 40 }}>
         <EyebrowLabel tone="accent">Nuevo paciente</EyebrowLabel>
         <h2 className="k-display" style={{ fontSize: 22, margin: "6px 0 0", fontWeight: 700 }}>
@@ -70,7 +74,13 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
         </h2>
       </header>
 
-      <form action={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <form
+        ref={formRef}
+        action={submit}
+        onInput={onFormInput}
+        onChange={onFormInput}
+        style={{ display: "flex", flexDirection: "column", gap: 12 }}
+      >
         <FormField label="Nombre" name="firstName" required error={fieldErrors.firstName?.[0]} />
         <FormField label="Apellido" name="lastName" required error={fieldErrors.lastName?.[0]} />
         <FormField label="DNI" name="documentId" required error={fieldErrors.documentId?.[0]} />

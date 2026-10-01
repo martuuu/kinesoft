@@ -3,43 +3,129 @@
 /**
  * Seguimiento domain — session-level workflow.
  *
- * `listOpenSessions` returns the practitioner's upcoming + today + recently-
- * completed sessions across all programs (the Seguimiento landing).
- * `getSessionDetail` returns one session with its program, patient and
- * exercise checklist. `updateSessionExercise` lets the practitioner tick
- * off exercises mid-session, edit sets/reps or leave per-exercise notes.
+ * `listOpenSessions` returns the Seguimiento landing by buckets (vencidas,
+ * hoy, próximas, realizadas 14 días). `getSessionDetail` returns one session
+ * with its program, patient and exercise checklist. The rest are the
+ * session-level mutations (exercise checklist, meta, close, reschedule).
+ *
+ * A2a-S03 (acceso básico = solo ver, §12.0): TODO lo de este archivo exige
+ * acceso `full` al paciente. Un PRACTITIONER sin asignación ni share ve el
+ * turno en la agenda, pero no la sesión clínica ni la puede tocar. El gate
+ * corre dentro de la misma `runWithRls` que la escritura (helper
+ * `sessionForWrite`), así no hay ventana entre chequeo y escritura.
  */
 import { revalidatePath } from "next/cache";
-import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import type { Prisma } from "@prisma/client";
+import { runWithRls, type DbClient } from "@/lib/rls";
+import { getActor, type Actor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/notifications-internal";
 import { gatingForActor } from "@/lib/plan-gating";
-import type { ActionResult } from "@/lib/validation";
+import { bulkPatientAccess, patientAccessFor, visibilityForActor } from "@/lib/visibility";
+import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
+import {
+  SessionExerciseUpdate,
+  SessionMeta,
+  SessionMetaUpdate,
+  type ActionResult,
+  type SessionMetaInput,
+  type SessionMetaUpdateInput,
+} from "@/lib/validation";
 import { NotificationKind, type SessionExerciseStatus } from "@prisma/client";
 
-import type { OpenSessionRow } from "@/lib/sessions-types";
+import {
+  OPEN_SESSIONS_BUCKET_LIMIT,
+  type CompleteSessionResult,
+  type OpenSessionBucket,
+  type OpenSessionBuckets,
+  type OpenSessionRow,
+  type RescheduleSessionResult,
+} from "@/lib/sessions-types";
 
-export async function listOpenSessions(): Promise<OpenSessionRow[]> {
-  const actor = await getActor();
-  const since = new Date();
-  since.setHours(0, 0, 0, 0);
-  since.setDate(since.getDate() - 14);
+const NO_ACCESS = "No tenés acceso completo a este paciente.";
+const DAY_MS = 86_400_000;
 
-  const rows = await runWithRls(actor.tenantId, (tx) => tx.session.findMany({
-    where: {
-      program: { tenantId: actor.tenantId },
-      OR: [{ completedAt: null }, { completedAt: { gte: since } }],
+/** Día AR [start, end) de un instante. AR es UTC-3 fijo (sin DST): un día = 24 h. */
+function arDayBounds(d: Date): { start: Date; end: Date; key: string } {
+  const key = toARDateKey(d);
+  const start = new Date(localToARIso(`${key}T00:00:00`));
+  return { start, end: new Date(start.getTime() + DAY_MS), key };
+}
+
+/**
+ * Rechazo de negocio dentro de una `runWithRls`: tirarlo hace rollback de la
+ * tx y `denied()` lo convierte en `{ ok: false, error }`. Cualquier otro error
+ * sigue propagando.
+ */
+class Denied extends Error {}
+
+async function denied<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    if (e instanceof Denied) return { ok: false, error: e.message };
+    throw e;
+  }
+}
+
+/**
+ * Carga la sesión (tenant-scoped) y exige acceso `full` al paciente, en el
+ * `tx` del caller. Tira `Denied` si no existe o no hay acceso.
+ */
+async function sessionForWrite(tx: DbClient, actor: Actor, sessionId: string) {
+  const s = await tx.session.findFirst({
+    where: { id: sessionId, program: { tenantId: actor.tenantId } },
+    select: {
+      id: true,
+      index: true,
+      completedAt: true,
+      scheduledFor: true,
+      practitionerId: true,
+      paInPre: true,
+      paInPost: true,
+      program: {
+        select: {
+          id: true,
+          patientId: true,
+          patient: { select: { firstName: true, lastName: true } },
+        },
+      },
     },
-    orderBy: [{ completedAt: "asc" }, { scheduledFor: "asc" }],
-    include: {
-      program: { include: { patient: true } },
-      exercises: { select: { status: true } },
-    },
-    take: 80,
-  }));
+  });
+  if (!s) throw new Denied("Sesión no encontrada.");
+  if ((await patientAccessFor(actor, s.program.patientId, tx)) !== "full") throw new Denied(NO_ACCESS);
+  return s;
+}
 
-  return rows.map((s) => ({
+/** Same gate, entrando por un SessionExercise. */
+async function sessionExerciseForWrite(tx: DbClient, actor: Actor, sessionExerciseId: string) {
+  const sx = await tx.sessionExercise.findFirst({
+    where: { id: sessionExerciseId, session: { program: { tenantId: actor.tenantId } } },
+    select: {
+      id: true,
+      order: true,
+      sessionId: true,
+      session: { select: { program: { select: { patientId: true } } } },
+    },
+  });
+  if (!sx) throw new Denied("Ejercicio no encontrado.");
+  if ((await patientAccessFor(actor, sx.session.program.patientId, tx)) !== "full") throw new Denied(NO_ACCESS);
+  return sx;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Landing
+// ──────────────────────────────────────────────────────────────────────
+
+const openSessionInclude = {
+  program: { select: { patientId: true, title: true, totalSessions: true, patient: { select: { firstName: true, lastName: true } } } },
+  exercises: { select: { status: true } },
+} satisfies Prisma.SessionInclude;
+
+type OpenSessionDbRow = Prisma.SessionGetPayload<{ include: typeof openSessionInclude }>;
+
+function toOpenSessionRow(s: OpenSessionDbRow): OpenSessionRow {
+  return {
     id: s.id,
     index: s.index,
     scheduledFor: s.scheduledFor,
@@ -50,38 +136,134 @@ export async function listOpenSessions(): Promise<OpenSessionRow[]> {
     totalSessions: s.program.totalSessions,
     exerciseCount: s.exercises.length,
     doneCount: s.exercises.filter((e) => e.status === "DONE").length,
-  }));
+  };
 }
 
+/**
+ * Landing de Seguimiento (A2a-S03 ítem 5). Cambios vs. la versión anterior:
+ *   - el día es el día AR (`lib/datetime-ar.ts`); antes `setHours(0)` del host
+ *     (UTC en Vercel) corría el corte 3 h;
+ *   - una query por bucket con su propio tope: el `take: 80` global ordenado
+ *     por `completedAt asc` dejaba afuera pendientes cuando había muchas
+ *     realizadas, y las vencidas sin cerrar no aparecían en ningún lado;
+ *   - buckets abiertos (vencidas/hoy/próximas) solo de planes ACTIVE: un plan
+ *     CANCELLED o PAUSED no tiene que pedir que cierres sus sesiones.
+ *     "Realizadas" incluye COMPLETED (si no, la sesión que autocompleta el plan
+ *     desaparecería de la lista en el mismo click);
+ *   - solo pacientes con acceso `full`: se filtra en SQL (para que tope y
+ *     conteo sean reales) y se re-verifica con `bulkPatientAccess`, que es la
+ *     fuente de verdad del modelo de acceso.
+ */
+export async function listOpenSessions(now: Date = new Date()): Promise<OpenSessionBuckets> {
+  const actor = await getActor();
+  const today = arDayBounds(now);
+  const recentSince = new Date(today.start.getTime() - 14 * DAY_MS);
+  const take = OPEN_SESSIONS_BUCKET_LIMIT;
+
+  return runWithRls(actor.tenantId, async (tx) => {
+    const vis = await visibilityForActor(actor, tx);
+    const patientAccessWhere: Prisma.PatientWhereInput = vis.seesAll
+      ? {}
+      : {
+          OR: [
+            { assignedPractitionerId: actor.practitionerId },
+            { shares: { some: { practitionerId: actor.practitionerId } } },
+          ],
+        };
+    const programWhere = (statuses: ("ACTIVE" | "COMPLETED" | "PAUSED")[]): Prisma.TreatmentProgramWhereInput => ({
+      tenantId: actor.tenantId,
+      status: { in: statuses },
+      patient: patientAccessWhere,
+    });
+
+    const bucket = async (
+      where: Prisma.SessionWhereInput,
+      orderBy: Prisma.SessionOrderByWithRelationInput
+    ): Promise<{ rows: OpenSessionDbRow[]; total: number }> => {
+      const rows = await tx.session.findMany({ where, orderBy, include: openSessionInclude, take });
+      // Solo contamos cuando el tope cortó: el caso común es 1 query.
+      const total = rows.length < take ? rows.length : await tx.session.count({ where });
+      return { rows, total };
+    };
+
+    const open = programWhere(["ACTIVE"]);
+    const overdue = await bucket(
+      { program: open, completedAt: null, scheduledFor: { lt: today.start } },
+      // Las más recientes primero: son las que todavía se pueden cerrar con memoria fresca.
+      { scheduledFor: "desc" }
+    );
+    const todayB = await bucket(
+      { program: open, completedAt: null, scheduledFor: { gte: today.start, lt: today.end } },
+      { scheduledFor: "asc" }
+    );
+    const upcoming = await bucket(
+      { program: open, completedAt: null, scheduledFor: { gte: today.end } },
+      { scheduledFor: "asc" }
+    );
+    const recent = await bucket(
+      { program: programWhere(["ACTIVE", "COMPLETED", "PAUSED"]), completedAt: { gte: recentSince } },
+      { completedAt: "desc" }
+    );
+
+    const all = [overdue, todayB, upcoming, recent].flatMap((b) => b.rows);
+    const access = await bulkPatientAccess(
+      actor,
+      [...new Set(all.map((s) => s.program.patientId))],
+      tx
+    );
+    const finalize = (b: { rows: OpenSessionDbRow[]; total: number }): OpenSessionBucket => {
+      const rows = b.rows.filter((s) => access.get(s.program.patientId) === "full");
+      return { rows: rows.map(toOpenSessionRow), total: b.total - (b.rows.length - rows.length) };
+    };
+
+    return {
+      overdue: finalize(overdue),
+      today: finalize(todayB),
+      upcoming: finalize(upcoming),
+      recent: finalize(recent),
+    };
+  });
+}
+
+/**
+ * Detalle de una sesión. `null` si no existe en el tenant **o** si el actor
+ * no tiene acceso `full` al paciente (la página responde 404 en ambos casos:
+ * no se filtra que la sesión existe).
+ */
 export async function getSessionDetail(id: string) {
   const actor = await getActor();
-  return runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id, program: { tenantId: actor.tenantId } },
-    include: {
-      program: {
-        include: {
-          patient: true,
-          case: {
-            include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } },
-          },
-          sessions: {
-            orderBy: { index: "asc" },
-            select: {
-              id: true,
-              index: true,
-              completedAt: true,
-              paInPre: true,
-              paInPost: true,
+  return runWithRls(actor.tenantId, async (tx) => {
+    const s = await tx.session.findFirst({
+      where: { id, program: { tenantId: actor.tenantId } },
+      include: {
+        program: {
+          include: {
+            patient: true,
+            case: {
+              include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } },
+            },
+            sessions: {
+              orderBy: { index: "asc" },
+              select: {
+                id: true,
+                index: true,
+                completedAt: true,
+                paInPre: true,
+                paInPost: true,
+              },
             },
           },
         },
+        exercises: {
+          orderBy: { order: "asc" },
+          include: { exercise: true },
+        },
       },
-      exercises: {
-        orderBy: { order: "asc" },
-        include: { exercise: true },
-      },
-    },
-  }));
+    });
+    if (!s) return null;
+    if ((await patientAccessFor(actor, s.program.patientId, tx)) !== "full") return null;
+    return s;
+  });
 }
 
 export async function updateSessionExercise(input: {
@@ -92,109 +274,98 @@ export async function updateSessionExercise(input: {
   notes?: string;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  // Ownership check via the program join.
-  const sx = await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.findFirst({
-    where: {
-      id: input.sessionExerciseId,
-      session: { program: { tenantId: actor.tenantId } },
-    },
-    select: { id: true, sessionId: true, session: { select: { program: { select: { patientId: true } } } } },
+  const parsed = SessionExerciseUpdate.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos.", fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  const { sessionExerciseId, ...data } = parsed.data;
+
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionExerciseForWrite(tx, actor, sessionExerciseId);
+    await tx.sessionExercise.update({ where: { id: sessionExerciseId }, data });
+    return g;
   }));
-  if (!sx) return { ok: false, error: "Ejercicio no encontrado." };
+  if (!res.ok) return res;
+  const r = res.value;
 
-  const data: { status?: SessionExerciseStatus; sets?: number; reps?: number; notes?: string } = {};
-  if (input.status !== undefined) data.status = input.status;
-  if (input.sets !== undefined) data.sets = input.sets;
-  if (input.reps !== undefined) data.reps = input.reps;
-  if (input.notes !== undefined) data.notes = input.notes;
-
-  await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.update({ where: { id: input.sessionExerciseId }, data }));
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: "sessionExercise.update",
     entity: "SessionExercise",
-    entityId: input.sessionExerciseId,
+    entityId: sessionExerciseId,
     payload: data as Record<string, unknown>,
   });
 
-  revalidatePath(`/seguimiento/${sx.sessionId}`);
-  revalidatePath(`/pacientes/${sx.session.program.patientId}`);
+  revalidatePath(`/seguimiento/${r.sessionId}`);
+  revalidatePath(`/pacientes/${r.session.program.patientId}`);
   return { ok: true, data: undefined };
 }
 
 /**
- * Reschedule one session within a plan + sync its companion booking
- * (if any). Used from the patient profile PlanView when the patient
- * can't make the original slot.
+ * Reprogramar UNA sesión del plan (A2a-S03 ítem 4).
  *
- * Strategy for booking sync:
- *   - Look for a booking belonging to the same patient + practitioner
- *     within ±2 h of the original `scheduledFor`. If we find one,
- *     update it to the new datetime + practitioner.
- *   - If there's no companion booking (e.g. the plan was created from
- *     /diagnostico, which doesn't auto-create bookings), the session
- *     just gets the new datetime — the kine can create the booking
- *     manually from /agenda.
+ * Mueve solo la sesión. Antes buscaba un turno del mismo paciente y
+ * profesional a ±2 h del horario original y lo movía también: con dos turnos
+ * cercanos (o uno que no tenía nada que ver con el plan) movía el equivocado,
+ * sin optimistic lock ni chequeo de capacidad, y el copy de la UI prometía
+ * "el turno asociado se mueve automáticamente". Sesión y turno no tienen FK
+ * entre sí: la heurística no tiene arreglo sin modelar el vínculo (Bloque B).
+ *
+ * Ahora solo informa: si el paciente tiene un turno (no cancelado) ese mismo
+ * día AR, lo devuelve para que la UI linkee a la agenda y el kine lo mueva a
+ * mano con todos los guards de `updateBooking`.
  */
 export async function rescheduleSession(input: {
   sessionId: string;
   scheduledFor: string; // ISO
   practitionerId?: string;
-}): Promise<ActionResult> {
+}): Promise<ActionResult<RescheduleSessionResult>> {
   const actor = await getActor();
-  const session = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id: input.sessionId, program: { tenantId: actor.tenantId } },
-    include: {
-      program: { select: { id: true, patientId: true, tenantId: true } },
-    },
-  }));
-  if (!session) return { ok: false, error: "Sesión no encontrada." };
-
   const newDate = new Date(input.scheduledFor);
-  if (Number.isNaN(newDate.getTime())) {
+  if (!input.scheduledFor || Number.isNaN(newDate.getTime())) {
     return { ok: false, error: "Fecha inválida." };
   }
 
-  const targetPractitioner = input.practitionerId ?? session.practitionerId;
-  if (targetPractitioner !== session.practitionerId) {
-    const ownedPrac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
-      where: { id: targetPractitioner, tenantId: actor.tenantId },
-      select: { id: true },
-    }));
-    if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
-  }
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionForWrite(tx, actor, input.sessionId);
+    const session = g;
+    if (session.completedAt) throw new Denied("La sesión ya fue realizada: no se puede reprogramar.");
 
-  // Look for a companion booking within ±2h of the original session time
-  // belonging to the same patient + practitioner.
-  const originalTime = session.scheduledFor.getTime();
-  const window = 2 * 3_600_000;
-  const companion = await runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
-    where: {
-      tenantId: actor.tenantId,
-      patientId: session.program.patientId,
-      practitionerId: session.practitionerId,
-      scheduledFor: {
-        gte: new Date(originalTime - window),
-        lt: new Date(originalTime + window),
-      },
-      status: { notIn: ["CANCELLED"] },
-    },
-    select: { id: true },
-  }));
+    const targetPractitioner = input.practitionerId ?? session.practitionerId;
+    if (targetPractitioner !== session.practitionerId) {
+      const ownedPrac = await tx.practitioner.findFirst({
+        where: { id: targetPractitioner, tenantId: actor.tenantId },
+        select: { id: true },
+      });
+      if (!ownedPrac) throw new Denied("Profesional fuera del tenant.");
+    }
 
-  await runWithRls(actor.tenantId, async (tx) => {
     await tx.session.update({
       where: { id: input.sessionId },
       data: { scheduledFor: newDate, practitionerId: targetPractitioner },
     });
-    if (companion) {
-      await tx.booking.update({
-        where: { id: companion.id },
-        data: { scheduledFor: newDate, practitionerId: targetPractitioner },
-      });
-    }
-  });
+
+    const day = arDayBounds(newDate);
+    const booking = await tx.booking.findFirst({
+      where: {
+        tenantId: actor.tenantId,
+        patientId: session.program.patientId,
+        scheduledFor: { gte: day.start, lt: day.end },
+        status: { not: "CANCELLED" },
+      },
+      orderBy: { scheduledFor: "asc" },
+      select: { id: true, scheduledFor: true },
+    });
+
+    return {
+      session,
+      targetPractitioner,
+      bookingOnDay: booking ? { ...booking, dateKey: day.key } : null,
+    } as const;
+  }));
+  if (!res.ok) return res;
+  const r = res.value;
 
   await audit({
     tenantId: actor.tenantId,
@@ -203,117 +374,192 @@ export async function rescheduleSession(input: {
     entity: "Session",
     entityId: input.sessionId,
     payload: {
-      from: session.scheduledFor.toISOString(),
+      from: r.session.scheduledFor.toISOString(),
       to: newDate.toISOString(),
-      practitionerId: targetPractitioner,
-      bookingSynced: !!companion,
+      practitionerId: r.targetPractitioner,
+      bookingOnDay: r.bookingOnDay?.id ?? null,
     },
   });
 
-  revalidatePath(`/pacientes/${session.program.patientId}`);
-  revalidatePath("/agenda");
-  return { ok: true, data: undefined };
-}
-
-export async function updateSessionMeta(input: {
-  sessionId: string;
-  notes?: string;
-  paInPre?: number;
-  paInPost?: number;
-  rpe?: number;
-}): Promise<ActionResult> {
-  const actor = await getActor();
-  const s = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id: input.sessionId, program: { tenantId: actor.tenantId } },
-    select: { id: true, program: { select: { patientId: true } } },
-  }));
-  if (!s) return { ok: false, error: "Sesión no encontrada." };
-
-  await runWithRls(actor.tenantId, (tx) => tx.session.update({
-    where: { id: input.sessionId },
-    data: {
-      notes: input.notes,
-      paInPre: input.paInPre,
-      paInPost: input.paInPost,
-      rpe: input.rpe,
-    },
-  }));
+  revalidatePath(`/pacientes/${r.session.program.patientId}`);
+  revalidatePath(`/seguimiento`);
   revalidatePath(`/seguimiento/${input.sessionId}`);
-  return { ok: true, data: undefined };
+  return { ok: true, data: { bookingOnDay: r.bookingOnDay } };
 }
 
-export async function completeSessionFromSeguimiento(sessionId: string): Promise<ActionResult> {
+/**
+ * Guarda notas / EVA pre-post / RPE sin cerrar la sesión. `null` vacía el
+ * campo (antes `""` viajaba como `undefined` y las notas no se podían borrar).
+ */
+export async function updateSessionMeta(input: SessionMetaUpdateInput): Promise<ActionResult> {
   const actor = await getActor();
-  const s = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id: sessionId, program: { tenantId: actor.tenantId } },
-    include: {
-      program: { include: { patient: { select: { firstName: true, lastName: true } } } },
-      exercises: true,
-    },
-  }));
-  if (!s) return { ok: false, error: "Sesión no encontrada." };
-
-  await runWithRls(actor.tenantId, (tx) => tx.session.update({
-    where: { id: sessionId },
-    data: { completedAt: new Date() },
-  }));
-  // Mark any remaining "PENDING" exercises as DONE for consistency unless the
-  // practitioner explicitly skipped them.
-  await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.updateMany({
-    where: { sessionId, status: "PENDING" },
-    data: { status: "DONE" },
-  }));
-  if (s.paInPost != null) {
-    await runWithRls(actor.tenantId, (tx) => tx.evaScore.create({
-      data: {
-        patientId: s.program.patientId,
-        value: s.paInPost!,
-        source: `session-${s.index}-post`,
-      },
-    }));
+  const parsed = SessionMetaUpdate.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      fieldErrors: parsed.error.flatten().fieldErrors,
+    };
   }
+  const { sessionId, ...meta } = parsed.data;
+
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionForWrite(tx, actor, sessionId);
+    await tx.session.update({ where: { id: sessionId }, data: meta });
+    return g;
+  }));
+  if (!res.ok) return res;
+  const r = res.value;
+
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
-    action: "session.complete",
+    action: "session.meta.update",
     entity: "Session",
     entityId: sessionId,
+    // Los puntajes sí; el texto de las notas es HC y no se copia al audit.
+    payload: {
+      fields: Object.keys(meta).filter((k) => meta[k as keyof typeof meta] !== undefined),
+      paInPre: meta.paInPre,
+      paInPost: meta.paInPost,
+      rpe: meta.rpe,
+    },
   });
+  revalidatePath(`/seguimiento/${sessionId}`);
+  revalidatePath(`/pacientes/${r.program.patientId}`);
+  return { ok: true, data: undefined };
+}
 
-  // Nearing-discharge signal: notify when we cross the last-2 threshold,
-  // and again when the final session is closed.
-  const total = s.program.totalSessions;
-  const remaining = total - s.index;
-  const patientName = `${s.program.patient.firstName} ${s.program.patient.lastName}`;
-  if (actor.userId && (remaining === 1 || remaining === 0)) {
-    await notify({
-      tenantId: actor.tenantId,
-      userId: actor.userId,
-      kind: NotificationKind.PROGRAM_NEARING_DISCHARGE,
-      title:
-        remaining === 0
-          ? `Plan completado · ${patientName}`
-          : `Última sesión próxima · ${patientName}`,
-      body:
-        remaining === 0
-          ? `Programá el alta o la continuidad.`
-          : `Sesión ${total} de ${total} pendiente.`,
-      link: `/pacientes/${s.program.patientId}`,
-    });
+/**
+ * Cierre de sesión desde Seguimiento (H3, A2a-S03 ítem 1).
+ *
+ * Bug que lo motivó: "Cerrar sesión" solo mandaba el id; las notas y EVA
+ * tipeadas en el panel sin apretar "Guardar anotaciones" se perdían, y la
+ * EvaScore se armaba con el `paInPost` viejo leído antes. Además eran 4
+ * transacciones sueltas (una caída a mitad dejaba la sesión cerrada sin
+ * ejercicios marcados ni EVA) y un doble click duplicaba EvaScore y
+ * notificación.
+ *
+ * Ahora:
+ *   - `meta` (notas, EVA pre/post, RPE) llega validada con zod y se guarda en
+ *     el mismo UPDATE que cierra;
+ *   - todo va en UNA `runWithRls`: gate `full`, cierre, ejercicios PENDING →
+ *     DONE, EvaScore y autocompletado del plan;
+ *   - idempotente: el cierre es un `updateMany … WHERE completedAt IS NULL`.
+ *     Si otro request ya la cerró (doble click, dos pestañas), `count = 0` y
+ *     se devuelve ok sin efectos (ni meta, ni EVA, ni notificación). Con dos
+ *     tx concurrentes, Postgres re-evalúa el WHERE de la segunda después del
+ *     commit de la primera (READ COMMITTED), así que solo una "gana";
+ *   - el plan se autocompleta por CONTEO de sesiones completadas vs.
+ *     `totalSessions`, no por `index == total`: cerrar la última sesión antes
+ *     que una intermedia completaba el plan con sesiones pendientes, y cerrar
+ *     la última de un plan con una sesión a medida agregada no lo completaba.
+ *
+ * La notificación va después del commit con `notify()` (fire-and-forget por
+ * contrato: una falla del aviso no puede deshacer un cierre clínico), y solo
+ * la emite el request que ganó el cierre.
+ */
+export async function completeSessionFromSeguimiento(
+  sessionId: string,
+  meta?: SessionMetaInput
+): Promise<ActionResult<CompleteSessionResult>> {
+  const actor = await getActor();
+  const parsed = SessionMeta.safeParse(meta ?? {});
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      fieldErrors: parsed.error.flatten().fieldErrors,
+    };
   }
-  // Auto-complete the program when the last session closes.
-  if (remaining === 0) {
-    await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({
+  const m = parsed.data;
+  const now = new Date();
+
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const s = await sessionForWrite(tx, actor, sessionId);
+
+    const claimed = await tx.session.updateMany({
+      where: { id: sessionId, completedAt: null },
+      data: { completedAt: now, notes: m.notes, paInPre: m.paInPre, paInPost: m.paInPost, rpe: m.rpe },
+    });
+    if (claimed.count === 0) {
+      return { s, alreadyCompleted: true, programCompleted: false, remaining: null, total: null } as const;
+    }
+
+    // Los PENDING quedan DONE salvo que el kine los haya salteado explícitamente.
+    await tx.sessionExercise.updateMany({
+      where: { sessionId, status: "PENDING" },
+      data: { status: "DONE" },
+    });
+
+    // EVA post: lo que llegó en el cierre; si no vino, lo último guardado.
+    const post = m.paInPost !== undefined ? m.paInPost : s.paInPost;
+    if (post != null) {
+      await tx.evaScore.create({
+        data: { patientId: s.program.patientId, value: post, source: `session-${s.index}-post`, takenAt: now },
+      });
+    }
+
+    const done = await tx.session.count({ where: { programId: s.program.id, completedAt: { not: null } } });
+    const program = await tx.treatmentProgram.findUniqueOrThrow({
       where: { id: s.program.id },
-      data: { status: "COMPLETED" },
-    }));
+      select: { totalSessions: true },
+    });
+    const remaining = Math.max(0, program.totalSessions - done);
+    let programCompleted = false;
+    if (remaining === 0) {
+      // Un plan CANCELLED no se "revive" como COMPLETED.
+      const u = await tx.treatmentProgram.updateMany({
+        where: { id: s.program.id, status: { in: ["ACTIVE", "PAUSED"] } },
+        data: { status: "COMPLETED" },
+      });
+      programCompleted = u.count > 0;
+    }
+    return { s, alreadyCompleted: false, programCompleted, remaining, total: program.totalSessions } as const;
+  }));
+  if (!res.ok) return res;
+  const r = res.value;
+
+  const patientId = r.s.program.patientId;
+  if (!r.alreadyCompleted) {
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "session.complete",
+      entity: "Session",
+      entityId: sessionId,
+      payload: {
+        paInPre: m.paInPre,
+        paInPost: m.paInPost,
+        rpe: m.rpe,
+        programCompleted: r.programCompleted,
+      },
+    });
+
+    // Señal de alta próxima: al quedar 1 pendiente y al completar el plan.
+    const patientName = `${r.s.program.patient.firstName} ${r.s.program.patient.lastName}`;
+    if (actor.userId && (r.remaining === 1 || r.programCompleted)) {
+      await notify({
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        kind: NotificationKind.PROGRAM_NEARING_DISCHARGE,
+        title: r.programCompleted ? `Plan completado · ${patientName}` : `Última sesión próxima · ${patientName}`,
+        body: r.programCompleted
+          ? `Programá el alta o la continuidad.`
+          : `Sesión ${r.total} de ${r.total} pendiente.`,
+        link: `/pacientes/${patientId}`,
+      });
+    }
   }
 
   revalidatePath(`/seguimiento`);
   revalidatePath(`/seguimiento/${sessionId}`);
-  revalidatePath(`/pacientes/${s.program.patientId}`);
+  revalidatePath(`/pacientes/${patientId}`);
   revalidatePath(`/dashboard`);
-  return { ok: true, data: undefined };
+  return {
+    ok: true,
+    data: { alreadyCompleted: r.alreadyCompleted, programCompleted: r.programCompleted },
+  };
 }
 
 /**
@@ -329,27 +575,27 @@ export async function reorderSessionExercises(input: {
   orderedIds: string[];
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const sess = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id: input.sessionId, program: { tenantId: actor.tenantId } },
-    include: { exercises: { select: { id: true } } },
-  }));
-  if (!sess) return { ok: false, error: "Sesión no encontrada." };
-  const known = new Set(sess.exercises.map((e) => e.id));
-  const valid = input.orderedIds.filter((id) => known.has(id));
-  if (valid.length !== sess.exercises.length) {
-    return { ok: false, error: "Lista incompleta." };
-  }
-  await runWithRls(actor.tenantId, async (tx) => {
-    for (const [i, e] of sess.exercises.entries()) {
-      await tx.sessionExercise.update({
-        where: { id: e.id },
-        data: { order: -(i + 1) },
-      });
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionForWrite(tx, actor, input.sessionId);
+    const exercises = await tx.sessionExercise.findMany({
+      where: { sessionId: input.sessionId },
+      select: { id: true },
+    });
+    const known = new Set(exercises.map((e) => e.id));
+    const valid = input.orderedIds.filter((id) => known.has(id));
+    if (valid.length !== exercises.length || new Set(valid).size !== valid.length) {
+      throw new Denied("Lista incompleta.");
+    }
+    for (const [i, e] of exercises.entries()) {
+      await tx.sessionExercise.update({ where: { id: e.id }, data: { order: -(i + 1) } });
     }
     for (const [i, id] of valid.entries()) {
       await tx.sessionExercise.update({ where: { id }, data: { order: i + 1 } });
     }
-  });
+    return g;
+  }));
+  if (!res.ok) return res;
+  const r = res.value;
   revalidatePath(`/seguimiento/${input.sessionId}`);
   return { ok: true, data: undefined };
 }
@@ -362,62 +608,70 @@ export async function addSessionExercise(input: {
   notes?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const sess = await runWithRls(actor.tenantId, (tx) => tx.session.findFirst({
-    where: { id: input.sessionId, program: { tenantId: actor.tenantId } },
-    select: { id: true, program: { select: { patientId: true } } },
-  }));
-  if (!sess) return { ok: false, error: "Sesión no encontrada." };
-
   // Gate by plan — a FREE tenant can't sneak a PRO-only exercise by
   // POSTing its id directly.
   const gate = await gatingForActor();
-  const ex = await runWithRls(actor.tenantId, (tx) => tx.exercise.findFirst({
-    where: { AND: [{ id: input.exerciseId }, gate.visibility] },
-    select: { id: true, defaultSets: true, defaultReps: true },
-  }));
-  if (!ex) return { ok: false, error: "Ejercicio no disponible en este plan." };
 
-  const lastOrder = await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.aggregate({
-    where: { sessionId: input.sessionId },
-    _max: { order: true },
-  }));
-  const nextOrder = (lastOrder._max.order ?? 0) + 1;
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionForWrite(tx, actor, input.sessionId);
+    const ex = await tx.exercise.findFirst({
+      where: { AND: [{ id: input.exerciseId }, gate.visibility] },
+      select: { id: true, defaultSets: true, defaultReps: true },
+    });
+    if (!ex) throw new Denied("Ejercicio no disponible en este plan.");
 
-  const row = await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.create({
-    data: {
-      sessionId: input.sessionId,
-      exerciseId: ex.id,
-      order: nextOrder,
-      // Exercise defaults are now optional (time-based / read-only items) →
-      // fall back to 3×12 when the source has none, since SessionExercise
-      // requires sets/reps.
-      sets: input.sets ?? ex.defaultSets ?? 3,
-      reps: input.reps ?? ex.defaultReps ?? 12,
-      notes: input.notes,
-    },
+    const lastOrder = await tx.sessionExercise.aggregate({
+      where: { sessionId: input.sessionId },
+      _max: { order: true },
+    });
+    const row = await tx.sessionExercise.create({
+      data: {
+        sessionId: input.sessionId,
+        exerciseId: ex.id,
+        order: (lastOrder._max.order ?? 0) + 1,
+        // Exercise defaults are now optional (time-based / read-only items) →
+        // fall back to 3×12 when the source has none, since SessionExercise
+        // requires sets/reps.
+        sets: input.sets ?? ex.defaultSets ?? 3,
+        reps: input.reps ?? ex.defaultReps ?? 12,
+        notes: input.notes,
+      },
+    });
+    return { session: g, rowId: row.id } as const;
   }));
+  if (!res.ok) return res;
+  const r = res.value;
+
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: "sessionExercise.create",
     entity: "SessionExercise",
-    entityId: row.id,
+    entityId: r.rowId,
   });
   revalidatePath(`/seguimiento/${input.sessionId}`);
-  revalidatePath(`/pacientes/${sess.program.patientId}`);
-  return { ok: true, data: { id: row.id } };
+  revalidatePath(`/pacientes/${r.session.program.patientId}`);
+  return { ok: true, data: { id: r.rowId } };
 }
 
 export async function removeSessionExercise(id: string): Promise<ActionResult> {
   const actor = await getActor();
-  const sx = await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.findFirst({
-    where: { id, session: { program: { tenantId: actor.tenantId } } },
-    select: { id: true, sessionId: true, session: { select: { program: { select: { patientId: true } } } } },
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const g = await sessionExerciseForWrite(tx, actor, id);
+    await tx.sessionExercise.delete({ where: { id } });
+    return g;
   }));
-  if (!sx) return { ok: false, error: "Ejercicio no encontrado." };
-  await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.delete({ where: { id } }));
-  revalidatePath(`/seguimiento/${sx.sessionId}`);
-  revalidatePath(`/pacientes/${sx.session.program.patientId}`);
+  if (!res.ok) return res;
+  const r = res.value;
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "sessionExercise.delete",
+    entity: "SessionExercise",
+    entityId: id,
+  });
+  revalidatePath(`/seguimiento/${r.sessionId}`);
+  revalidatePath(`/pacientes/${r.session.program.patientId}`);
   return { ok: true, data: undefined };
 }
 
@@ -431,42 +685,54 @@ export async function addCustomSession(input: {
   scheduledFor?: string; // ISO
 }): Promise<ActionResult<{ sessionId: string }>> {
   const actor = await getActor();
-  const program = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findFirst({
-    where: { id: input.programId, tenantId: actor.tenantId },
-    include: { sessions: { orderBy: { index: "desc" }, take: 1 } },
-  }));
-  if (!program) return { ok: false, error: "Plan no encontrado." };
+  const title = input.title?.trim() ? input.title.trim().slice(0, 4000) : null;
+  const explicit = input.scheduledFor ? new Date(input.scheduledFor) : null;
+  if (explicit && Number.isNaN(explicit.getTime())) return { ok: false, error: "Fecha inválida." };
 
-  const lastIndex = program.sessions[0]?.index ?? 0;
-  const lastSched = program.sessions[0]?.scheduledFor ?? program.startDate;
-  const cadenceDays = Math.max(1, Math.floor(7 / program.frequency));
-  const fallback = new Date(lastSched);
-  fallback.setDate(fallback.getDate() + cadenceDays);
-  const scheduledFor = input.scheduledFor ? new Date(input.scheduledFor) : fallback;
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const program = await tx.treatmentProgram.findFirst({
+      where: { id: input.programId, tenantId: actor.tenantId },
+      include: { sessions: { orderBy: { index: "desc" }, take: 1 } },
+    });
+    if (!program) throw new Denied("Plan no encontrado.");
+    if ((await patientAccessFor(actor, program.patientId, tx)) !== "full") {
+      throw new Denied(NO_ACCESS);
+    }
 
-  const sess = await runWithRls(actor.tenantId, (tx) => tx.session.create({
-    data: {
-      programId: program.id,
-      practitionerId: actor.practitionerId,
-      index: lastIndex + 1,
-      scheduledFor,
-      notes: input.title ?? null,
-    },
+    const lastIndex = program.sessions[0]?.index ?? 0;
+    const lastSched = program.sessions[0]?.scheduledFor ?? program.startDate;
+    const cadenceDays = Math.max(1, Math.floor(7 / program.frequency));
+    // Suma en ms (AR sin DST), no `setDate` del host.
+    const scheduledFor = explicit ?? new Date(lastSched.getTime() + cadenceDays * DAY_MS);
+
+    const sess = await tx.session.create({
+      data: {
+        programId: program.id,
+        practitionerId: actor.practitionerId,
+        index: lastIndex + 1,
+        scheduledFor,
+        notes: title,
+      },
+    });
+    await tx.treatmentProgram.update({
+      where: { id: program.id },
+      data: { totalSessions: { increment: 1 } },
+    });
+    return { sessionId: sess.id, patientId: program.patientId } as const;
   }));
-  await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({
-    where: { id: program.id },
-    data: { totalSessions: { increment: 1 } },
-  }));
+  if (!res.ok) return res;
+  const r = res.value;
+
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: "session.create",
     entity: "Session",
-    entityId: sess.id,
+    entityId: r.sessionId,
   });
-  revalidatePath(`/pacientes/${program.patientId}`);
+  revalidatePath(`/pacientes/${r.patientId}`);
   revalidatePath(`/seguimiento`);
-  return { ok: true, data: { sessionId: sess.id } };
+  return { ok: true, data: { sessionId: r.sessionId } };
 }
 
 /**
@@ -479,46 +745,39 @@ export async function substituteSessionExercise(input: {
   newExerciseId: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
-  const sx = await runWithRls(actor.tenantId, (tx) => tx.sessionExercise.findFirst({
-    where: {
-      id: input.sessionExerciseId,
-      session: { program: { tenantId: actor.tenantId } },
-    },
-    include: { session: { include: { program: true } } },
-  }));
-  if (!sx) return { ok: false, error: "Ejercicio no encontrado." };
-
   const gate = await gatingForActor();
-  const replacement = await runWithRls(actor.tenantId, (tx) => tx.exercise.findFirst({
-    where: { AND: [{ id: input.newExerciseId }, gate.visibility] },
-    select: { id: true, defaultSets: true, defaultReps: true },
-  }));
-  if (!replacement) return { ok: false, error: "Ejercicio destino no disponible." };
 
-  const order = sx.order;
-  // Two-step: bump the old row to a negative order to bypass the unique
-  // constraint, then create the new one in the same slot.
-  await runWithRls(actor.tenantId, async (tx) => {
-    await tx.sessionExercise.update({
-      where: { id: sx.id },
-      data: { order: -order },
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const sx = await sessionExerciseForWrite(tx, actor, input.sessionExerciseId);
+    const replacement = await tx.exercise.findFirst({
+      where: { AND: [{ id: input.newExerciseId }, gate.visibility] },
+      select: { id: true, defaultSets: true, defaultReps: true },
     });
+    if (!replacement) throw new Denied("Ejercicio destino no disponible.");
+
+    // Two-step: bump the old row to a negative order to bypass the unique
+    // constraint, then create the new one in the same slot.
+    await tx.sessionExercise.update({ where: { id: sx.id }, data: { order: -sx.order } });
     await tx.sessionExercise.create({
       data: {
         sessionId: sx.sessionId,
         exerciseId: replacement.id,
-        order,
+        order: sx.order,
         sets: replacement.defaultSets ?? 3,
         reps: replacement.defaultReps ?? 12,
       },
     });
     await tx.sessionExercise.delete({ where: { id: sx.id } });
-  });
+    return sx;
+  }));
+  if (!res.ok) return res;
+  const r = res.value;
 
-  revalidatePath(`/seguimiento/${sx.sessionId}`);
-  revalidatePath(`/pacientes/${sx.session.program.patientId}`);
+  revalidatePath(`/seguimiento/${r.sessionId}`);
+  revalidatePath(`/pacientes/${r.session.program.patientId}`);
   return { ok: true, data: { id: input.newExerciseId } };
 }
+
 
 // ──────────────────────────────────────────────────────────────────────
 // Bulk-assign — Sprint 16 (D.1)
@@ -569,7 +828,6 @@ export async function listAssignablePrograms(): Promise<
 
   // Visibility gate: we don't want to leak that other-owner patients
   // exist via the program picker. Filter using the same access model.
-  const { bulkPatientAccess } = await import("@/lib/visibility");
   const access = await bulkPatientAccess(
     actor,
     rows.map((r) => r.patient.id)
@@ -625,7 +883,6 @@ export async function bulkAddSessionExercises(input: {
   if (!program) return { ok: false, error: "Plan no encontrado." };
 
   // Visibility check on the patient — same gate as everywhere else.
-  const { patientAccessFor } = await import("@/lib/visibility");
   if ((await patientAccessFor(actor, program.patientId)) !== "full") {
     return { ok: false, error: "No tenés acceso a este paciente." };
   }

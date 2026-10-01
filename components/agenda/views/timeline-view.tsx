@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { localToARIso, toARMinutes } from "@/lib/datetime-ar";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import {
   fmtHour,
   buildSlots,
@@ -367,6 +368,11 @@ function BookingCard({
   const isCancelled = b.status === "CANCELLED";
   const isDone = b.status === "COMPLETED";
   const isNoShow = b.status === "NO_SHOW";
+  // Reserva pública impaga (A2b-S-ui): vencida a los 30 min → ya no retiene el
+  // horario. Se ve lavada y con borde punteado (fondo = estado) y con el texto
+  // explícito, para que la recepción sepa que puede dar ese horario.
+  const hold = paymentHoldState(b, new Date());
+  const isExpiredHold = hold === "vencida";
 
   // Left bar = the service's colour (identity); state is conveyed by the
   // card's tint / opacity / strike-through.
@@ -381,7 +387,7 @@ function BookingCard({
   return (
     <button
       onClick={() => onEdit(b)}
-      title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${cardLabel ? ` · ${cardLabel}` : ""}`}
+      title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${hold ? ` · ${PAYMENT_HOLD_LABEL[hold]}` : ""}${cardLabel ? ` · ${cardLabel}` : ""}`}
       style={{
         // Up to 5 per row, but never wider than CARD_MAX — a lone turno keeps
         // a sane width instead of stretching across the whole agenda.
@@ -398,10 +404,14 @@ function BookingCard({
             ? "rgba(255,176,32,0.14)"
             : isDone
               ? "rgba(54,179,126,0.1)"
-              : "rgba(255,255,255,0.85)",
+              : isExpiredHold
+                ? "rgba(15,30,51,0.03)"
+                : "rgba(255,255,255,0.85)",
         border:
-          "1px solid " +
-          (isCancelled
+          (isExpiredHold ? "1px dashed " : "1px solid ") +
+          (isExpiredHold
+            ? "rgba(15,30,51,0.3)"
+            : isCancelled
             ? "rgba(228,70,70,0.3)"
             : isNoShow
               ? "rgba(255,176,32,0.45)"
@@ -413,7 +423,7 @@ function BookingCard({
         display: "flex",
         alignItems: "center",
         gap: 8,
-        opacity: isCancelled ? 0.6 : dimmed ? 0.55 : isDone ? 0.85 : 1,
+        opacity: isCancelled ? 0.6 : dimmed ? 0.55 : isDone || isExpiredHold ? 0.85 : 1,
         cursor: "pointer",
         textDecoration: isCancelled ? "line-through" : "none",
         textAlign: "left",
@@ -466,6 +476,17 @@ function BookingCard({
           {/* Duration FIRST and unshrinkable: card height is no longer
               proportional to it, and putting it last let the ellipsis eat it. */}
           <span className="k-mono" style={{ flexShrink: 0 }}>{b.durationMin}′</span>
+          {hold && (
+            <span
+              style={{
+                flexShrink: 0,
+                fontWeight: 700,
+                color: isExpiredHold ? "var(--navy-500)" : "#9A5B00",
+              }}
+            >
+              · {PAYMENT_HOLD_LABEL[hold]}
+            </span>
+          )}
           {cardLabel && (
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               · {cardLabel}

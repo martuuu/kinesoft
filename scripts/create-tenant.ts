@@ -1,15 +1,17 @@
 /**
  * CLI helper to provision a brand-new consultorio (tenant) with its
- * OWNER user. Mirrors what the `/signup` web flow does
- * (`lib/auth.ts#signUpPractitioner`) but runs from the shell so you can
+ * OWNER user. Mirrors what the web flow does (`/signup` + `/onboarding`,
+ * A3c) but runs from the shell so you can
  * bootstrap clients without the browser — useful for onboarding,
  * staging seeds, or migrating an existing clinic into the system.
  *
  * Steps performed:
  *   1. `supabase.auth.admin.createUser` with the supplied email +
  *      password (auto-confirmed so the user can log in immediately).
- *   2. `prisma.$transaction` provisioning UserProfile + Tenant +
- *      Practitioner + Membership(OWNER) + AuditEvent.
+ *   2. `prisma.$transaction` + `bootstrapTenant` (lib/tenant-bootstrap.ts,
+ *      la misma lógica que el alta web): UserProfile + Tenant + Practitioner +
+ *      Membership(OWNER) + Insurer "Particular" + AuditEvent. El alta queda
+ *      completa (`onboardingCompletedAt`), así el OWNER no ve el stepper.
  *   3. Optional: seed a starter set of `Service` rows.
  *
  * Idempotency: if the email already exists in Supabase Auth, we re-use
@@ -34,7 +36,9 @@
  * The DATABASE_URL / DIRECT_URL / NEXT_PUBLIC_SUPABASE_URL /
  * SUPABASE_SERVICE_ROLE_KEY env vars must be set (same as the app).
  */
-import { PrismaClient, Role } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
+import { bootstrapTenant, PractitionerElsewhereError } from "../lib/tenant-bootstrap";
+import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
 import { assertSafeTarget } from "./lib/assert-safe-target";
 import { createClient } from "@supabase/supabase-js";
 
@@ -90,19 +94,10 @@ function parseArgs(): Args {
   return merged;
 }
 
-const RESERVED_SLUGS = new Set([
-  "admin", "api", "app", "auth", "agenda", "biblioteca", "booking",
-  "c", "configuracion", "dashboard", "diagnostico", "forgot", "invite",
-  "login", "logout", "pacientes", "portal", "reportes", "reset",
-  "seguimiento", "signup", "terapia-manual", "www",
-]);
-
-const slugRe = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-
 async function main() {
   const args = parseArgs();
   const slug = args.slug.toLowerCase();
-  if (!slugRe.test(slug)) {
+  if (!SLUG_RE.test(slug)) {
     throw new Error(
       `Slug "${slug}" inválido. Solo minúsculas, números y guiones; sin guiones al inicio/fin; 3-40 chars.`
     );
@@ -186,59 +181,33 @@ async function main() {
     );
   }
 
-  const tenantId = await prisma.$transaction(async (tx) => {
-    await tx.userProfile.upsert({
-      where: { id: userId! },
-      update: { email: args.email, fullName: args.ownerName },
-      create: { id: userId!, email: args.email, fullName: args.ownerName },
-    });
-
-    const tenant = await tx.tenant.create({
-      data: { slug, name: args.clinic },
-    });
-
-    // Reuse the existing Practitioner row if the user already had one
-    // (unique on userId). Otherwise create one for this tenant.
-    const existingPrac = await tx.practitioner.findUnique({
-      where: { userId: userId! },
-      select: { id: true },
-    });
-    if (existingPrac) {
-      console.log(
-        "    User already has a Practitioner row from another tenant — keeping it."
-      );
-    } else {
-      await tx.practitioner.create({
-        data: {
-          tenantId: tenant.id,
-          userId: userId!,
-          licenseNumber: args.license ?? null,
-        },
-      });
-    }
-
-    await tx.membership.create({
-      data: {
-        tenantId: tenant.id,
+  // Misma lógica que el alta web (`/onboarding`): lib/tenant-bootstrap.ts.
+  // Crea además el "Particular" (antes el script no lo creaba) y rechaza a un
+  // usuario que ya es Practitioner de otro tenant (antes lo "reusaba" y el
+  // OWNER no podía entrar: buildActor no encontraba practitioner en el nuevo).
+  // El alta queda COMPLETA (el operador ya configuró): el OWNER no ve el stepper.
+  let tenantId: string;
+  try {
+    ({ tenantId } = await prisma.$transaction((tx) =>
+      bootstrapTenant(tx, {
         userId: userId!,
-        role: Role.OWNER,
-        acceptedAt: new Date(),
-      },
-    });
-
-    await tx.auditEvent.create({
-      data: {
-        tenantId: tenant.id,
-        actorId: userId!,
-        action: "tenant.create",
-        entity: "Tenant",
-        entityId: tenant.id,
-        payload: { source: "scripts/create-tenant.ts", slug, name: args.clinic },
-      },
-    });
-
-    return tenant.id;
-  });
+        email: args.email,
+        fullName: args.ownerName,
+        clinicName: args.clinic,
+        slug,
+        licenseNumber: args.license ?? null,
+        onboardingCompleted: true,
+        source: "scripts/create-tenant.ts",
+      })
+    ));
+  } catch (e) {
+    if (e instanceof PractitionerElsewhereError) {
+      throw new Error(
+        `El usuario ya es Practitioner del tenant ${e.tenantId}. Un usuario no puede ser profesional de dos consultorios: usá otro email o una invitación.`
+      );
+    }
+    throw e;
+  }
 
   console.log(`    Tenant created: id=${tenantId}, slug=${slug}`);
 

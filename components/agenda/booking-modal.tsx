@@ -1,33 +1,48 @@
 "use client";
 
+/**
+ * Modal (drawer) de TURNO NUEVO de la agenda. Solo alta: la edición de un
+ * turno existente vive en `booking-drawer.tsx` (A2b-S-ui borró la rama muerta
+ * `mode="edit"` de este archivo, que ya nadie montaba y mandaba cambios de
+ * estado sin optimistic lock).
+ */
 import { useEffect, useRef, useState, useTransition } from "react";
-import type { BookingStatus } from "@prisma/client";
 import { useToast } from "@/components/ui/toast";
 import { FormField } from "@/components/ui/form-field";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Avatar } from "@/components/ui/avatar";
 import { Drawer } from "@/components/ui/drawer";
-import { IconArrow, IconCheck } from "@/components/ui/icons";
-import {
-  createBooking,
-  createBookingsBatch,
-  deleteBooking,
-  setBookingStatus,
-} from "@/lib/bookings";
+import { IconArrow } from "@/components/ui/icons";
+import { useFormDirty } from "@/components/ui/use-form-dirty";
+import { createBooking, createBookingsBatch } from "@/lib/bookings";
 import type { BatchOutcome } from "@/lib/bookings";
 import { PatientPicker } from "@/components/patients/patient-picker";
 import { createPatient, getPatientBillingPreview, setPatientDefaultCopago } from "@/lib/patients";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
-import type { BookingDTO } from "./agenda-utils";
 import type { Props } from "./agenda-client";
 import { CopagoRow, DayOfWeekPicker, Select } from "./controls";
 
+type BillingPreview = NonNullable<Awaited<ReturnType<typeof getPatientBillingPreview>>>;
+
+/** De dónde sale el copago que se pre-carga (se muestra junto al monto). */
+const BILLING_SOURCE_LABEL: Record<BillingPreview["source"], string> = {
+  OS: "copago de la obra social",
+  "copago propio": "copago propio del paciente",
+  Particular: "tarifa particular del consultorio",
+  "precio del servicio": "precio del servicio",
+};
+
+/** Campos del alta inline → nombre del input en este formulario (para `fieldErrors`). */
+const INLINE_PATIENT_FIELDS = {
+  firstName: "newFirstName",
+  lastName: "newLastName",
+  documentId: "newDocumentId",
+  phone: "newPhone",
+} as const;
+
 export function BookingModal({
-  mode,
-  booking,
   defaultISO,
   defaultPatientId,
+  defaultPractitionerId,
   services,
   practitioners,
   patients,
@@ -35,10 +50,10 @@ export function BookingModal({
   onClose,
   onSaved,
 }: {
-  mode: "create" | "edit";
-  booking?: BookingDTO;
   defaultISO?: string;
   defaultPatientId?: string | null;
+  /** Filtro de profesional de la agenda, o el profesional del usuario. */
+  defaultPractitionerId?: string | null;
   services: Props["services"];
   practitioners: Props["practitioners"];
   patients: Props["patients"];
@@ -99,51 +114,130 @@ export function BookingModal({
   //   "other"       → free-form name typed by the kine
   const [newCoverage, setNewCoverage] = useState("particular");
   const [newOtherInsurer, setNewOtherInsurer] = useState("");
+  // Alta inline de paciente (A2b-S-ui): la ficha creada se guarda acá y un
+  // reintento del submit (p. ej. después de un sobreturno rechazado o de un
+  // error de red al crear el turno) la REUSA en vez de llamar otra vez a
+  // `createPatient`. Antes cada reintento creaba otra ficha o rebotaba por
+  // DNI duplicado con la primera ya guardada.
+  const [createdPatient, setCreatedPatient] = useState<{ id: string; name: string } | null>(null);
+  const [inlineErrors, setInlineErrors] = useState<Record<string, string>>({});
   // Existing-patient billing: when a registered patient is picked we load
   // their obra social + pre-established copago and show an editable row.
-  const [selectedPatient, setSelectedPatient] = useState<{ id: string; name: string } | null>(null);
-  const [billing, setBilling] = useState<{ obraSocial: string; copagoCents: number } | null>(null);
+  // Se inicializa sincrónico con el paciente del deep-link para que la foto
+  // del dirty-guard ya lo incluya (si no, abrir y cerrar preguntaría).
+  const [selectedPatient, setSelectedPatient] = useState<{ id: string; name: string } | null>(
+    () => (defaultPatientId ? patients.find((x) => x.id === defaultPatientId) ?? null : null)
+  );
+  const [billing, setBilling] = useState<BillingPreview | null>(null);
   const [copagoInput, setCopagoInput] = useState(0); // cents
+  // ¿El usuario tocó el copago a mano? Si no, cambiar de servicio re-carga el
+  // monto sugerido; si sí, se respeta lo que escribió.
+  const [copagoEdited, setCopagoEdited] = useState(false);
+  const copagoEditedRef = useRef(false);
   const [copagoLoading, setCopagoLoading] = useState(false);
   const [updateDefaultCopago, setUpdateDefaultCopago] = useState(false);
   const billingSeq = useRef(0);
+  // Service-driven duration: picking a service copies its `durationMin`
+  // into the editable duration field. Default 45 only until a service is
+  // chosen (kine asked: Osteopatía 60' should auto-fill 60, not stay 45).
+  const [serviceId, setServiceId] = useState("");
+  const [durationMin, setDurationMin] = useState(45);
 
-  const loadPatientBilling = (p: { id: string; name: string } | null) => {
-    setSelectedPatient(p);
-    setBilling(null);
-    setUpdateDefaultCopago(false);
-    if (!p) return;
+  const onCopagoInput = (cents: number) => {
+    copagoEditedRef.current = true;
+    setCopagoEdited(true);
+    setCopagoInput(cents);
+  };
+
+  /**
+   * Preview de cobro del paciente PARA el servicio elegido (handoff de
+   * A2a-S08): el precio particular depende del servicio. Guard de secuencia:
+   * solo aplica la última respuesta (cambiar rápido de paciente o de
+   * servicio no deja un monto viejo).
+   */
+  const fetchBilling = (patientId: string, svcId: string) => {
     const seq = ++billingSeq.current;
     setCopagoLoading(true);
-    getPatientBillingPreview(p.id)
+    getPatientBillingPreview(patientId, svcId || undefined)
       .then((res) => {
         if (seq !== billingSeq.current) return; // stale-response guard
-        if (res) {
-          setBilling(res);
-          setCopagoInput(res.copagoCents);
-        }
+        setBilling(res);
+        if (res && !copagoEditedRef.current) setCopagoInput(res.copagoCents);
+      })
+      .catch(() => {
+        if (seq === billingSeq.current) setBilling(null);
       })
       .finally(() => {
         if (seq === billingSeq.current) setCopagoLoading(false);
       });
   };
 
+  const loadPatientBilling = (p: { id: string; name: string } | null) => {
+    setSelectedPatient(p);
+    setBilling(null);
+    setUpdateDefaultCopago(false);
+    copagoEditedRef.current = false;
+    setCopagoEdited(false);
+    if (!p) {
+      billingSeq.current++; // invalida una respuesta en vuelo
+      setCopagoLoading(false);
+      return;
+    }
+    fetchBilling(p.id, serviceId);
+  };
+
   // Deep-link / pre-selected patient: load their billing on mount.
   useEffect(() => {
-    if (mode !== "create" || isGuest || !defaultPatientId) return;
-    const p = patients.find((x) => x.id === defaultPatientId);
-    if (p) loadPatientBilling(p);
+    if (isGuest || !selectedPatient) return;
+    fetchBilling(selectedPatient.id, serviceId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Service-driven duration: picking a service copies its `durationMin`
-  // into the editable duration field. Default 45 only until a service is
-  // chosen (kine asked: Osteopatía 60' should auto-fill 60, not stay 45).
-  const [serviceId, setServiceId] = useState("");
-  const [durationMin, setDurationMin] = useState(45);
+
   const onServiceChange = (id: string) => {
     setServiceId(id);
     const svc = services.find((s) => s.id === id);
     if (svc) setDurationMin(svc.durationMin);
+    if (!isGuest && selectedPatient) fetchBilling(selectedPatient.id, id);
+  };
+
+  // Profesional por defecto (A2b-S-ui): filtro de la agenda → el del usuario →
+  // el primero. Antes siempre era el primero de la lista y la secretaria que
+  // estaba mirando la agenda de otro kine le cargaba el turno al equivocado.
+  const initialPractitionerId =
+    (defaultPractitionerId && practitioners.some((p) => p.id === defaultPractitionerId)
+      ? defaultPractitionerId
+      : practitioners[0]?.id) ?? "";
+
+  // Dirty-guard del drawer: la foto incluye los inputs con `name` + el estado
+  // que vive fuera de ellos (switches, días, obra social del alta inline…).
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const { dirty, onFormInput } = useFormDirty(formRef, {
+    isGuest,
+    multiTurno,
+    count,
+    weekdays: weekdays.join(","),
+    newCoverage,
+    newOtherInsurer,
+    patient: selectedPatient?.id ?? null,
+    serviceId,
+    copagoEdited,
+    updateDefaultCopago,
+  });
+
+  /**
+   * "Actualizar el copago del paciente" (prompt del CopagoRow): se aplica
+   * después de crear el/los turno(s) — también en Múltiples turnos, que antes
+   * lo ignoraba. Un fallo no deshace los turnos, pero se avisa (antes se
+   * tragaba el error).
+   */
+  const applyDefaultCopago = async () => {
+    if (!updateDefaultCopago || !selectedPatient || isGuest) return;
+    const r = await setPatientDefaultCopago({ patientId: selectedPatient.id, copagoCents: copagoInput });
+    if (!r.ok) {
+      toast.error("El turno se creó, pero no pudimos actualizar el copago del paciente", {
+        description: r.error,
+      });
+    }
   };
 
   const finalizeCreate = async (payload: Parameters<typeof createBooking>[0]) => {
@@ -189,9 +283,7 @@ export function BookingModal({
     setPatientOverlap(null);
     // "Ambas opciones": the turno already carries its own copago override;
     // if the kine confirmed the prompt, also make it the patient's default.
-    if (updateDefaultCopago && selectedPatient) {
-      await setPatientDefaultCopago({ patientId: selectedPatient.id, copagoCents: copagoInput });
-    }
+    await applyDefaultCopago();
     toast.success("Turno creado");
     onSaved();
   };
@@ -208,6 +300,7 @@ export function BookingModal({
       return;
     }
     const d = r.data;
+    if (d.created > 0) await applyDefaultCopago();
     const parts = [`${d.created} de ${d.requested} turnos creados`];
     if (d.sobreturnos > 0) parts.push(`${d.sobreturnos} como sobreturno`);
     if (d.omitted > 0) parts.push(`${d.omitted} omitidos`);
@@ -221,18 +314,22 @@ export function BookingModal({
 
   const submit = (formData: FormData) => {
     setError(null);
+    setInlineErrors({});
     setConflict(null);
     setSamePatient(null);
     setPatientOverlap(null);
     setBatchConflict(null);
     start(async () => {
-      if (mode === "create") {
-        let patientId = String(formData.get("patientId") ?? "") || undefined;
+      let patientId = String(formData.get("patientId") ?? "") || undefined;
 
-        // "Nuevo paciente" switch: register the patient first, then book
-        // the turno against the freshly-created id. Replaces the old
-        // guest/externo path — every booking now links a real Patient.
-        if (isGuest) {
+      // "Nuevo paciente" switch: register the patient first, then book
+      // the turno against the freshly-created id. Replaces the old
+      // guest/externo path — every booking now links a real Patient.
+      if (isGuest) {
+        if (createdPatient) {
+          // Reintento: la ficha ya existe (ver `createdPatient`).
+          patientId = createdPatient.id;
+        } else {
           const firstName = String(formData.get("newFirstName") ?? "").trim();
           const lastName = String(formData.get("newLastName") ?? "").trim();
           const documentId = String(formData.get("newDocumentId") ?? "").trim();
@@ -241,6 +338,7 @@ export function BookingModal({
             return;
           }
           if (documentId.length < 4) {
+            setInlineErrors({ newDocumentId: "Mínimo 4 caracteres." });
             setError("El DNI es obligatorio (mín. 4 caracteres).");
             return;
           }
@@ -255,66 +353,72 @@ export function BookingModal({
             insurerName: newCoverage === "other" ? newOtherInsurer.trim() || undefined : undefined,
           });
           if (!created.ok) {
+            // `fieldErrors` de zod al lado de cada campo (antes solo el
+            // genérico "Datos inválidos", sin decir cuál).
+            const fe: Record<string, string> = {};
+            for (const [k, msgs] of Object.entries(created.fieldErrors ?? {})) {
+              const input = INLINE_PATIENT_FIELDS[k as keyof typeof INLINE_PATIENT_FIELDS];
+              if (input && msgs?.[0]) fe[input] = msgs[0];
+            }
+            setInlineErrors(fe);
             setError(created.error);
             return;
           }
+          setCreatedPatient({ id: created.data.id, name: `${firstName} ${lastName}` });
           patientId = created.data.id;
         }
+      }
 
-        if (!patientId) {
-          setError("Elegí un paciente o activá «Nuevo paciente» para registrarlo.");
-          return;
-        }
-
-        const payload = {
-          patientId,
-          idempotencyKey,
-          serviceId: String(formData.get("serviceId") ?? ""),
-          practitionerId: String(formData.get("practitionerId") ?? ""),
-          // AR-tagged: prevents the +3h shift to UTC on the server.
-          scheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
-          durationMin: Number(formData.get("durationMin")) || 45,
-          // Mini-diagnóstico opcional. Vacío → undefined, y el server toma
-          // el diagnóstico del paciente. Sirve tanto para createBooking
-          // como para createBookingsBatch (ambos reciben este payload).
-          title: String(formData.get("title") ?? "").trim() || undefined,
-          description: String(formData.get("description") ?? "").trim() || undefined,
-          notes: String(formData.get("notes") ?? "") || undefined,
-          // Per-turno copago override — only when the kine actually changed
-          // it from the patient's pre-established value.
-          copagoCents:
-            !isGuest && billing && copagoInput !== billing.copagoCents ? copagoInput : undefined,
-        };
-        // Múltiples turnos: preflight first so the user is TOLD about conflicts
-        // and chooses what to do, instead of slots being dropped silently.
-        if (multiTurno && count > 1) {
-          const batchPayload = {
-            ...payload,
-            count,
-            daysOfWeek: weekdays.length > 0 ? weekdays : undefined,
-          };
-          const preview = await createBookingsBatch({ ...batchPayload, dryRun: true });
-          if (!preview.ok) {
-            setError(preview.error);
-            toast.error("No pudimos crear los turnos", { description: preview.error });
-            return;
-          }
-          // Nothing in the way → just create.
-          if (preview.data.conflicted === 0 && preview.data.duplicates === 0) {
-            await runBatch(batchPayload, false);
-            return;
-          }
-          setBatchConflict({ plan: preview.data, payload: batchPayload });
-          setConflict(null);
-          setSamePatient(null);
-          setError(null);
-          return;
-        }
-        await finalizeCreate(payload);
+      if (!patientId) {
+        setError("Elegí un paciente o activá «Nuevo paciente» para registrarlo.");
         return;
       }
-      // edit-only flow: status change handled via the buttons below
-      onSaved();
+
+      const payload = {
+        patientId,
+        idempotencyKey,
+        serviceId: String(formData.get("serviceId") ?? ""),
+        practitionerId: String(formData.get("practitionerId") ?? ""),
+        // AR-tagged: prevents the +3h shift to UTC on the server.
+        scheduledFor: localToARIso(String(formData.get("scheduledFor") ?? "")),
+        durationMin: Number(formData.get("durationMin")) || 45,
+        // Mini-diagnóstico opcional. Vacío → undefined, y el server toma
+        // el diagnóstico del paciente. Sirve tanto para createBooking
+        // como para createBookingsBatch (ambos reciben este payload).
+        title: String(formData.get("title") ?? "").trim() || undefined,
+        description: String(formData.get("description") ?? "").trim() || undefined,
+        notes: String(formData.get("notes") ?? "") || undefined,
+        // Per-turno copago override — only when the kine actually changed
+        // it from the patient's pre-established value.
+        copagoCents:
+          !isGuest && billing && copagoInput !== billing.copagoCents ? copagoInput : undefined,
+      };
+      // Múltiples turnos: preflight first so the user is TOLD about conflicts
+      // and chooses what to do, instead of slots being dropped silently.
+      if (multiTurno && count > 1) {
+        const batchPayload = {
+          ...payload,
+          count,
+          daysOfWeek: weekdays.length > 0 ? weekdays : undefined,
+        };
+        const preview = await createBookingsBatch({ ...batchPayload, dryRun: true });
+        if (!preview.ok) {
+          setError(preview.error);
+          toast.error("No pudimos crear los turnos", { description: preview.error });
+          return;
+        }
+        // Nothing in the way → just create.
+        if (preview.data.conflicted === 0 && preview.data.duplicates === 0) {
+          await runBatch(batchPayload, false);
+          return;
+        }
+        setBatchConflict({ plan: preview.data, payload: batchPayload });
+        setConflict(null);
+        setSamePatient(null);
+        setError(null);
+        return;
+      }
+      await finalizeCreate(payload);
     });
   };
 
@@ -359,117 +463,34 @@ export function BookingModal({
     });
   };
 
-  const setStatus = (status: BookingStatus) => {
-    if (!booking) return;
-    start(async () => {
-      const result = await setBookingStatus(booking.id, status);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      onSaved();
-    });
-  };
-
-  const remove = () => {
-    if (!booking) return;
-    start(async () => {
-      const result = await deleteBooking(booking.id);
-      if (!result.ok) {
-        setError(result.error);
-        toast.error("No pudimos eliminar el turno", { description: result.error });
-        return;
-      }
-      toast.success("Turno eliminado");
-      onSaved();
-    });
-  };
-
   return (
     <Drawer
       open={true}
       onClose={onClose}
-      title={mode === "create" ? "Nuevo turno" : "Turno"}
+      title="Nuevo turno"
       // Wide enough that the form doesn't scroll sideways AND the
       // sobreturno / mismo-día prompts land above the fold.
       width={580}
+      dirty={dirty}
+      dirtyMessage={
+        createdPatient
+          ? `La ficha de ${createdPatient.name} ya quedó creada, pero el turno todavía no. Si cerrás, se pierde lo que cargaste del turno.`
+          : "El turno todavía no se creó. Si cerrás, se pierde lo que cargaste."
+      }
     >
-      {mode === "edit" && booking ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Card style={{ padding: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <Avatar name={booking.patientName} size={40} tone="sky" />
-                <div>
-                  <div style={{ fontWeight: 700 }}>{booking.patientName}</div>
-                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-                    {new Date(booking.scheduledFor).toLocaleString("es-AR", {
-                      weekday: "long",
-                      day: "2-digit",
-                      month: "long",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      hour12: false,
-                      timeZone: "America/Argentina/Buenos_Aires",
-                    })}
-                    {" · "}
-                    {booking.durationMin} min · {booking.serviceName}
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-              <Button variant="primary" onClick={() => setStatus("CONFIRMED")} disabled={pending}>
-                Confirmar
-              </Button>
-              <Button variant="lime" onClick={() => setStatus("COMPLETED")} disabled={pending}>
-                <IconCheck size={12} stroke={3} /> Marcar realizado
-              </Button>
-              <Button variant="ghost" onClick={() => setStatus("NO_SHOW")} disabled={pending}>
-                Ausente
-              </Button>
-              <Button variant="ghost" onClick={() => setStatus("CANCELLED")} disabled={pending}>
-                Cancelar turno
-              </Button>
-            </div>
-
-            {error && (
-              <div
-                style={{
-                  padding: 10,
-                  borderRadius: 10,
-                  background: "rgba(228,70,70,0.1)",
-                  color: "#9F1F1F",
-                  fontSize: 12,
-                }}
-              >
-                {error}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-              <button
-                onClick={remove}
-                disabled={pending}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#9F1F1F",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                Eliminar
-              </button>
-              <Button variant="ghost" onClick={onClose}>
-                Cerrar
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <form action={submit} style={{ display: "grid", gap: 10 }}>
-            <Select label="Profesional" name="practitionerId" required>
+          <form
+            ref={formRef}
+            action={submit}
+            onInput={onFormInput}
+            onChange={onFormInput}
+            style={{ display: "grid", gap: 10 }}
+          >
+            <Select
+              label="Profesional"
+              name="practitionerId"
+              required
+              defaultValue={initialPractitionerId}
+            >
               {practitioners.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -549,12 +570,31 @@ export function BookingModal({
                   </span>
                 </span>
               </label>
-              {isGuest ? (
+              {isGuest && createdPatient ? (
+                // La ficha ya se creó en un intento anterior: se reusa (ver
+                // `createdPatient`). Los campos no se muestran para que no
+                // parezca que editarlos cambia la ficha ya guardada.
+                <div
+                  role="status"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    background: "rgba(54,179,126,0.1)",
+                    border: "1px solid rgba(54,179,126,0.35)",
+                    fontSize: 12.5,
+                    color: "var(--navy-700)",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Ya registramos a <b>{createdPatient.name}</b>. El turno se crea para esa ficha;
+                  los datos se corrigen después desde su perfil.
+                </div>
+              ) : isGuest ? (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <FormField label="Nombre" name="newFirstName" required />
-                  <FormField label="Apellido" name="newLastName" required />
-                  <FormField label="DNI" name="newDocumentId" required />
-                  <FormField label="Teléfono" name="newPhone" />
+                  <FormField label="Nombre" name="newFirstName" required error={inlineErrors.newFirstName} />
+                  <FormField label="Apellido" name="newLastName" required error={inlineErrors.newLastName} />
+                  <FormField label="DNI" name="newDocumentId" required error={inlineErrors.newDocumentId} />
+                  <FormField label="Teléfono" name="newPhone" error={inlineErrors.newPhone} />
                   <div style={{ gridColumn: "1 / -1" }}>
                     <FormField
                       as="select"
@@ -583,8 +623,11 @@ export function BookingModal({
                 <PatientPicker
                   name="patientId"
                   label={null}
-                  initialPatientId={defaultPatientId ?? null}
-                  initialPatients={patients}
+                  // Al volver de «Nuevo paciente» el picker se re-monta: que
+                  // arranque con el paciente que ya estaba elegido (y cuyo
+                  // copago se muestra), no con el del deep-link.
+                  initialPatientId={selectedPatient?.id ?? null}
+                  initialPatients={selectedPatient ? [selectedPatient, ...patients] : patients}
                   onChange={loadPatientBilling}
                 />
               )}
@@ -592,15 +635,26 @@ export function BookingModal({
 
             {/* Cobertura + copago del paciente seleccionado (editable). */}
             {!isGuest && selectedPatient && (billing || copagoLoading) && (
-              <CopagoRow
-                obraSocial={billing?.obraSocial ?? "—"}
-                original={billing?.copagoCents ?? 0}
-                valueCents={copagoInput}
-                onValueCents={setCopagoInput}
-                updateDefault={updateDefaultCopago}
-                setUpdateDefault={setUpdateDefaultCopago}
-                loading={copagoLoading}
-              />
+              <div style={{ display: "grid", gap: 4 }}>
+                <CopagoRow
+                  obraSocial={billing?.obraSocial ?? "—"}
+                  original={billing?.copagoCents ?? 0}
+                  valueCents={copagoInput}
+                  onValueCents={onCopagoInput}
+                  updateDefault={updateDefaultCopago}
+                  setUpdateDefault={setUpdateDefaultCopago}
+                  loading={copagoLoading}
+                />
+                {billing && !copagoLoading && (
+                  <div style={{ fontSize: 11, color: "var(--navy-500)", paddingLeft: 4 }}>
+                    Monto sugerido según {BILLING_SOURCE_LABEL[billing.source]}
+                    {!serviceId && billing.source === "precio del servicio"
+                      ? " (elegí el servicio para ver su precio)"
+                      : ""}
+                    .
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Mini-diagnóstico opcional: si se dejan vacíos, el server
@@ -946,7 +1000,6 @@ export function BookingModal({
               </Button>
             </div>
           </form>
-      )}
     </Drawer>
   );
 }

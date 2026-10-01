@@ -1,4 +1,4 @@
-import type { BookingStatus } from "@prisma/client";
+import type { BookingStatus, PaymentStatus } from "@prisma/client";
 
 export type BookingRow = {
   id: string;
@@ -46,4 +46,16 @@ export type BookingRow = {
    * the HC. Guest bookings (patientId === null) get `"none"`.
    */
   patientAccess: "full" | "basic" | "none";
+  /**
+   * Cobro del turno + alta. Con los dos la agenda distingue la reserva pública
+   * impaga ("Pendiente de pago") de la vencida a los 30 min ("Pendiente de pago
+   * · vencida", `isHoldingCapacity` de lib/booking-capacity.ts).
+   */
+  paymentStatus: PaymentStatus;
+  createdAt: Date;
+  /**
+   * Revisión A2: ¿la creó el turnero público? (`isPublicReservation`, por la
+   * idempotencyKey — que no viaja al cliente). Solo esas vencen a los 30 min.
+   */
+  publicReservation: boolean;
 };

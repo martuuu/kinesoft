@@ -85,24 +85,32 @@ export function FacturacionView({
     0
   );
 
+  // Optimistic lock (A2a-S06): each toggle sends the row version it was
+  // rendered with and patches back the NEW `updatedAt` the server returns.
+  // Without that patch the second toggle in a row (OS, then copago) would carry
+  // the old version and bounce as "cambió en otra sesión".
   const confirmOS = (b: PatientBookingFull, next: boolean) => {
     patchBooking(b.id, { insurerPaidAt: next ? new Date() : null });
     start(async () => {
-      const r = await setBookingInsurerPaid(b.id, next);
+      const r = await setBookingInsurerPaid(b.id, next, new Date(b.updatedAt).toISOString());
       if (!r.ok) {
         patchBooking(b.id, { insurerPaidAt: b.insurerPaidAt });
         toast.error("No pudimos actualizar el pago de la obra social", { description: r.error });
+        return;
       }
+      patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
     });
   };
   const confirmCopago = (b: PatientBookingFull, next: boolean) => {
     patchBooking(b.id, { paymentStatus: next ? "PAID" : "UNPAID" });
     start(async () => {
-      const r = await setBookingCopagoPaid(b.id, next);
+      const r = await setBookingCopagoPaid(b.id, next, new Date(b.updatedAt).toISOString());
       if (!r.ok) {
         patchBooking(b.id, { paymentStatus: b.paymentStatus });
         toast.error("No pudimos actualizar el copago", { description: r.error });
+        return;
       }
+      patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
     });
   };
 

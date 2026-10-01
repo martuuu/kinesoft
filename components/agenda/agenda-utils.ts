@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { BookingStatus } from "@prisma/client";
+import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import { formatARS } from "@/lib/format";
 
 export type BookingDTO = {
@@ -31,6 +31,16 @@ export type BookingDTO = {
    * is a guest booking (no patient row yet).
    */
   patientAccess: "full" | "basic" | "none";
+  /**
+   * A2b-S-ui: cobro del turno + alta (ISO). Con los dos, la agenda distingue la
+   * reserva pública impaga ("Pendiente de pago") de la vencida a los 30 min
+   * ("Pendiente de pago · vencida", `isHoldingCapacity`). Opcionales: si el
+   * server no los manda, la agenda muestra el estado de siempre.
+   */
+  paymentStatus?: PaymentStatus;
+  createdAt?: string;
+  /** Revisión A2: reserva del turnero público (`isPublicReservation`). */
+  publicReservation?: boolean;
 };
 
 export const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];

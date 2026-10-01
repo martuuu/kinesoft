@@ -14,6 +14,15 @@
  *   - `submitCheckIn` is rate-limited per patient — the prior version let
  *     an authed portal user spam-append into `Patient.notes` until the
  *     practitioner's earlier notes were truncated off the 4 kB tail.
+ *
+ * A3b-S-auth:
+ *   - **staff ≠ paciente:** una identidad con Membership en CUALQUIER
+ *     consultorio no ve fichas en el portal (el portal matchea por email
+ *     entre tenants; un kine con el mismo email que una ficha de otro
+ *     consultorio no tiene por qué entrar por acá). Se ve como "sin fichas".
+ *   - match de email **case-insensitive**: había fichas cargadas con
+ *     mayúsculas ("Juan@Mail.com") que nunca aparecían en el portal.
+ *   - el check-in **ya no escribe `Patient.notes`** (ver `submitCheckIn`).
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
@@ -23,7 +32,10 @@ import { headers } from "next/headers";
 // runs on the service channel (BYPASSRLS) — same trust model as public-booking.
 import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
+import { audit } from "@/lib/audit";
+import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import type { ActionResult } from "@/lib/validation";
 import type {
   PortalAuth,
@@ -36,12 +48,24 @@ import type {
  * on an unverified email — that's how account takeover via magic-link
  * sign-up happens.
  */
-async function verifiedUser(): Promise<{ id: string; email: string; fullName: string | null } | null> {
+async function verifiedUser(): Promise<{
+  id: string;
+  email: string;
+  fullName: string | null;
+  isStaff: boolean;
+} | null> {
   const supabase = getSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user?.email) return null;
   if (!user.email_confirmed_at) return null;
+  // Staff ≠ paciente (A3b-S-auth): con Membership en cualquier consultorio, el
+  // portal no la trata como paciente (ver getPortalAuth / authedPatientByTenant).
+  const staff = await prisma.membership.findFirst({
+    where: { userId: user.id },
+    select: { id: true },
+  });
   return {
+    isStaff: !!staff,
     id: user.id,
     email: user.email.toLowerCase(),
     fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
@@ -51,9 +75,13 @@ async function verifiedUser(): Promise<{ id: string; email: string; fullName: st
 export async function getPortalAuth(): Promise<PortalAuth> {
   const me = await verifiedUser();
   if (!me) return { signedIn: false };
+  // Staff: sesión válida pero sin fichas (la pantalla "no hay fichas
+  // vinculadas a tu email"); devolver signedIn:false lo dejaba en un loop de
+  // "Ingresá con Google" estando ya logueado.
+  if (me.isStaff) return { signedIn: true, email: me.email, fullName: me.fullName, patients: [] };
 
   const patients = await prisma.patient.findMany({
-    where: { email: me.email },
+    where: { email: { equals: me.email, mode: "insensitive" } },
     include: {
       tenant: { select: { slug: true, name: true } },
       programs: {
@@ -106,11 +134,12 @@ export async function getPortalAuth(): Promise<PortalAuth> {
 
 async function authedPatientByTenant(tenantSlug: string) {
   const me = await verifiedUser();
-  if (!me) return null;
+  if (!me || me.isStaff) return null;
   const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
   if (!tenant) return null;
   const patient = await prisma.patient.findFirst({
-    where: { tenantId: tenant.id, email: me.email },
+    where: { tenantId: tenant.id, email: { equals: me.email, mode: "insensitive" } },
+    select: { id: true, firstName: true, lastName: true, assignedPractitionerId: true },
   });
   if (!patient) return null;
   return { user: me, tenant, patient };
@@ -155,9 +184,14 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
 
 /**
  * Patient submits a pre-session check-in. Persists as an `EvaScore` keyed
- * by session id. Patient `notes` get **prepended** (newest first) and
- * capped at 4 kB total so a runaway patient can't bury practitioner
- * annotations.
+ * by session id.
+ *
+ * A3b-S-auth: el texto del paciente YA NO se escribe en `Patient.notes`.
+ * Antes se anteponía y se cortaba a 4 kB, así que cada check-in largo le
+ * truncaba al kine sus propias notas viejas (pérdida de datos clínicos). Ahora
+ * va como notificación al profesional asignado (o a OWNER/ADMIN si no hay
+ * asignado) + un audit con el texto completo. La EvaScore se crea igual; la
+ * nota dentro de la EvaScore llega con M1 en el bloque B.
  */
 export async function submitCheckIn(input: {
   tenantSlug: string;
@@ -165,14 +199,13 @@ export async function submitCheckIn(input: {
   pain: number;
   notes?: string;
 }): Promise<ActionResult> {
-  const ip = headers().get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   // Tight rate limit — a check-in per session is enough; aggressive spam
   // would be the only reason to exceed this.
-  const rl = await rateLimit(`portal:checkin:${ip}`, {
+  const rl = await rateLimit(`portal:checkin:${clientIp(headers())}`, {
     limit: 4,
     windowMs: 60_000,
   });
-  if (!rl.ok) return { ok: false, error: "Demasiados intentos." };
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
   const auth = await authedPatientByTenant(input.tenantSlug);
   if (!auth) return { ok: false, error: "Sin acceso." };
@@ -206,16 +239,42 @@ export async function submitCheckIn(input: {
       source: `checkin-${sess.id}`,
     },
   });
-  if (input.notes && input.notes.trim()) {
-    // Newest-first prepend so practitioner notes stay readable when the
-    // 4 kB cap kicks in. Patient input is truncated to 500 chars per entry.
-    const patientText = input.notes.trim().slice(0, 500);
-    const head = `[check-in sesión ${sess.index} · EVA ${pain}/10] ${patientText}\n`;
-    await prisma.patient.update({
-      where: { id: auth.patient.id },
-      data: {
-        notes: { set: (head + (auth.patient.notes ?? "")).slice(0, 4000) },
-      },
+  const patientText = input.notes?.trim().slice(0, 500) || null;
+  await audit({
+    tenantId: auth.tenant.id,
+    actorId: auth.user.id,
+    action: "portal.checkin",
+    entity: "Patient",
+    entityId: auth.patient.id,
+    payload: { sessionId: sess.id, sessionIndex: sess.index, pain, notes: patientText },
+  });
+  const patientName = `${auth.patient.firstName} ${auth.patient.lastName}`.trim();
+  const title = `Check-in de ${patientName} · sesión ${sess.index} · EVA ${pain}/10`;
+  const link = `/pacientes/${auth.patient.id}`;
+  const assignedUserId = auth.patient.assignedPractitionerId
+    ? (
+        await prisma.practitioner.findFirst({
+          where: { id: auth.patient.assignedPractitionerId, tenantId: auth.tenant.id },
+          select: { userId: true },
+        })
+      )?.userId
+    : null;
+  if (assignedUserId) {
+    await notify({
+      tenantId: auth.tenant.id,
+      userId: assignedUserId,
+      kind: "SYSTEM",
+      title,
+      body: patientText ?? undefined,
+      link,
+    });
+  } else {
+    await notifyTenantOwners({
+      tenantId: auth.tenant.id,
+      kind: "SYSTEM",
+      title,
+      body: patientText ?? undefined,
+      link,
     });
   }
   revalidatePath(`/portal/c/${input.tenantSlug}`);

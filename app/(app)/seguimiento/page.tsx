@@ -1,28 +1,18 @@
 import Link from "next/link";
 import { listOpenSessions } from "@/lib/sessions";
+import type { OpenSessionBucket, OpenSessionRow } from "@/lib/sessions-types";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { IconActivity, IconCheck } from "@/components/ui/icons";
-import { toARDateKey, localToARIso } from "@/lib/datetime-ar";
 
 export const metadata = { title: "Seguimiento · KineSoft" };
 export const dynamic = "force-dynamic";
 
 export default async function SeguimientoPage() {
-  const sessions = await listOpenSessions();
-  // Anchor "today" to the AR business day, not the host tz (UTC on Vercel).
-  const todayKey = toARDateKey(new Date());
-  const todayStart = new Date(localToARIso(`${todayKey}T00:00:00`));
-  const todayEnd = new Date(todayStart.getTime() + 86_400_000);
-
-  const today = sessions.filter(
-    (s) => s.scheduledFor >= todayStart && s.scheduledFor < todayEnd && !s.completedAt
-  );
-  const upcoming = sessions.filter(
-    (s) => s.scheduledFor >= todayEnd && !s.completedAt
-  );
-  const past = sessions.filter((s) => s.completedAt);
+  // Los buckets (y el corte del día AR) los arma el servidor: acá solo se
+  // renderizan. Ver `listOpenSessions` para el porqué de cada bucket.
+  const { overdue, today, upcoming, recent } = await listOpenSessions();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -33,14 +23,23 @@ export default async function SeguimientoPage() {
         </h1>
       </header>
 
-      <Section title="Hoy" count={today.length}>
-        <SessionList items={today} emphasize />
+      {overdue.total > 0 && (
+        <Section
+          title="Vencidas sin cerrar"
+          hint="Sesiones de planes activos con fecha pasada que nunca se cerraron."
+          bucket={overdue}
+        >
+          <SessionList items={overdue.rows} overdue />
+        </Section>
+      )}
+      <Section title="Hoy" bucket={today}>
+        <SessionList items={today.rows} emphasize />
       </Section>
-      <Section title="Próximas" count={upcoming.length}>
-        <SessionList items={upcoming} />
+      <Section title="Próximas" bucket={upcoming}>
+        <SessionList items={upcoming.rows} />
       </Section>
-      <Section title="Últimas completadas" count={past.length}>
-        <SessionList items={past} completed />
+      <Section title="Realizadas · últimos 14 días" bucket={recent}>
+        <SessionList items={recent.rows} completed />
       </Section>
     </div>
   );
@@ -48,13 +47,16 @@ export default async function SeguimientoPage() {
 
 function Section({
   title,
-  count,
+  hint,
+  bucket,
   children,
 }: {
   title: string;
-  count: number;
+  hint?: string;
+  bucket: OpenSessionBucket;
   children: React.ReactNode;
 }) {
+  const truncated = bucket.total > bucket.rows.length;
   return (
     <section>
       <div
@@ -65,12 +67,20 @@ function Section({
           marginBottom: 8,
         }}
       >
-        <div className="k-display" style={{ fontSize: 16, fontWeight: 700 }}>
-          {title}
+        <div>
+          <div className="k-display" style={{ fontSize: 16, fontWeight: 700 }}>
+            {title}
+          </div>
+          {hint && <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{hint}</div>}
         </div>
-        <Tag tone="soft">{count}</Tag>
+        <Tag tone="soft">{truncated ? `${bucket.rows.length} de ${bucket.total}` : bucket.total}</Tag>
       </div>
       {children}
+      {truncated && (
+        <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--navy-500)" }}>
+          Se muestran las primeras {bucket.rows.length}. Las demás están en la pestaña Plan de cada paciente.
+        </div>
+      )}
     </section>
   );
 }
@@ -79,10 +89,12 @@ function SessionList({
   items,
   emphasize,
   completed,
+  overdue,
 }: {
-  items: Awaited<ReturnType<typeof listOpenSessions>>;
+  items: OpenSessionRow[];
   emphasize?: boolean;
   completed?: boolean;
+  overdue?: boolean;
 }) {
   if (items.length === 0) {
     return (
@@ -130,6 +142,7 @@ function SessionList({
                 <IconCheck size={10} stroke={3} /> Hecho
               </Tag>
             )}
+            {overdue && <Tag tone="soft">Sin cerrar</Tag>}
           </div>
           <div
             style={{

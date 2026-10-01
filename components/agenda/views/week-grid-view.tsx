@@ -8,6 +8,7 @@ import { toARDateKey, toARDow, toARMinutes } from "@/lib/datetime-ar";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "./list-view";
+import { paymentHoldState } from "@/lib/agenda-filters";
 
 /** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
 function WeekSlotModal({
@@ -92,7 +93,7 @@ function WeekSlotModal({
                     {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
                   </div>
                 </div>
-                <StatusTag s={b.status} />
+                <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
               </button>
             );
           })}

@@ -3,6 +3,7 @@ import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { AgendaClient } from "@/components/agenda/agenda-client";
+import { getActor } from "@/lib/session";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 
 export const metadata = { title: "Agenda · KineSoft" };
@@ -54,7 +55,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   weekEnd.setDate(weekEnd.getDate() + 7);
 
   const practitionerFilter = searchParams.practitioner ?? null;
-  const [bookings, services, practitioners, patients, insurers, settings] = await Promise.all([
+  const [actor, bookings, services, practitioners, patients, insurers, settings] = await Promise.all([
+    getActor(),
     listBookingsInRange({
       from: weekStart,
       to: weekEnd,
@@ -75,10 +77,12 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       autoCreate={searchParams.new === "1"}
       autoCreatePatientId={searchParams.patient ?? null}
       practitionerFilterId={practitionerFilter}
+      viewer={{ userId: actor.userId, practitionerId: actor.practitionerId }}
       bookings={bookings.map((b) => ({
         ...b,
         scheduledFor: b.scheduledFor.toISOString(),
         updatedAt: b.updatedAt.toISOString(),
+        createdAt: b.createdAt.toISOString(),
       }))}
       services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color }))}
       practitioners={practitioners.map((p) => ({

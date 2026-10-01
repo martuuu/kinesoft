@@ -46,6 +46,52 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
 6. Verificar: el log de un Preview dice `[vercel-build] skip migrate (VERCEL_ENV=preview)` y la app conecta a
    staging.
 
+### 0.1 Bloque A3 — tareas del dueño **antes de desplegar A3** (30-sep-2026) 🔴
+
+El código de A3 está completo (A3a, A3b y A3c; Bloque A cerrado el 30-sep). **A3 no se despliega sin estos puntos**: sin SMTP propio los
+mails de verificación del signup no llegan a externos y nadie puede darse de alta. Orden sugerido: 1 → 2 → 3 →
+4 en **staging**, QA con un email real, y después lo mismo en prod.
+
+1. **SMTP propio** (Resend o Postmark):
+   - dominio verificado con **SPF, DKIM y DMARC** (registros DNS en el dominio, §2);
+   - Supabase → Authentication → **SMTP Settings → Custom SMTP** con esas credenciales (prod y staging, cada uno
+     con el suyo).
+2. **Plantillas de email en es-AR** (Supabase → Authentication → Email Templates). Todos los links van a
+   `/auth/confirm` con el `token_hash` (no al link por defecto de Supabase, que usa PKCE y falla si el mail se
+   abre en otro dispositivo). Texto exacto del link:
+
+   | Plantilla | Link |
+   |---|---|
+   | **Confirm signup** | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}` |
+   | **Reset password** | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset` |
+   | Invite user / Magic link | mismo formato con `type=invite` / `type=magiclink` y `next={{ .RedirectTo }}` |
+
+   - Confirm signup usa `type=email` (el tipo vigente de `verifyOtp`); `/auth/confirm` acepta también `signup`
+     por compatibilidad (`app/auth/confirm/route.ts:36`), pero la plantilla va con `email`.
+   - `{{ .RedirectTo }}` es el `emailRedirectTo` que manda el signup: `/onboarding` en un alta normal y
+     `/invite/<token>` en la unión por invitación. `/auth/confirm` lo reduce a path con `safeNextFromUrl`.
+   - En `recovery` la ruta deja la cookie firmada `ks_recovery` (15 min, un solo uso): con ella `/reset` no pide
+     la contraseña actual.
+   - El código manda como `emailRedirectTo`/`redirectTo` el **destino final** (`<APP_URL>/onboarding`,
+     `<APP_URL>/invite/<token>`, `<APP_URL>/reset`): esas URLs tienen que estar en Redirect URLs (punto 3).
+3. **URL Configuration** (Supabase → Authentication): Site URL = el dominio de prod (en staging, el de staging) y
+   **Redirect URLs**: `<APP_URL>/auth/confirm**`, `<APP_URL>/auth/callback`, `<APP_URL>/invite/**`,
+   `<APP_URL>/onboarding`, `<APP_URL>/reset` y `<APP_URL>/portal/**`. Si un `emailRedirectTo` / `redirectTo` no está en la lista,
+   Supabase lo reemplaza por la Site URL sin avisar.
+4. **"Confirm email" ON** (Authentication → Providers → Email). Junto con el signup de A3c es lo que cierra H5:
+   sin esto `auth.signUp` devuelve sesión con el email sin verificar (el código lo detecta y loguea
+   `signup.confirm_email_disabled`, pero la cuenta ya quedó creada sin verificar).
+   - **"Secure password change" OFF** (misma pantalla). Si está ON, `updateUser({ password })` exige un nonce
+     por mail y el `/reset` de A3c falla.
+5. **Upstash Redis** en **sa-east-1**, una DB para **prod** y otra para **staging** (§4). Las claves ya llevan
+   prefijo por entorno, pero bases separadas evitan que un QA agote la cuota de prod.
+6. **`SENTRY_DSN`** (§5) en Production y en Preview/staging, scope **build + runtime**.
+7. **Vercel → Settings → Environment Variables → "Automatically expose System Environment Variables" ON.** CSP,
+   HSTS y `allowedOrigins` se calculan en el build con `VERCEL_ENV`; sin esto, Production se buildea como si no
+   fuera Production (sin HSTS, con localhost en `allowedOrigins`).
+8. *(Opcional)* Registrar el dominio en **hstspreload.org** si se quiere el preload real (el header ya lo
+   declara; salir de la lista tarda meses: hacerlo solo con el dominio definitivo).
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -90,7 +136,8 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
      saneada con `/^[a-z0-9]{1,5}$/`. Sin el bucket, toda subida desde `/plataforma/ejercicios`
      falla (la media tipo YOUTUBE sigue andando: guarda un link, no un archivo).
   5. **Password policy** de Supabase Auth (complejidad) alineada con `password-policy`.
-  6. Límites del SMTP default (mientras no haya email propio).
+  6. **Custom SMTP propio** (§0.1 y §7): el SMTP default de Supabase no entrega a externos; es
+     bloqueante de A3.
 - **Bloquea:** RLS real en prod (residual de la Ola 2.2 / Ronda 4), escritura del catálogo global
   desde Plataforma, subida de media de ejercicios, corte E1 #14, `password-policy`.
 - **Responsable:** dueño (roles/buckets/policy) + ejecutor técnico (cambio de connection strings).
@@ -100,9 +147,11 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
   buckets `patient-files` y `exercise-media` creados y privados.
 
 ### 4. Rate-limiting gestionado — Upstash Redis
-- **Qué configura:** crear una DB Redis en Upstash y setear `UPSTASH_REDIS_REST_URL` +
-  `UPSTASH_REDIS_REST_TOKEN` en Vercel prod. El código ya rutea a Upstash cuando están; sin ellas
-  cae a memoria per-lambda (inútil en serverless).
+- **Qué configura:** crear una DB Redis en Upstash (región **sa-east-1**; una para prod y otra para
+  staging) y setear `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` en Vercel (Production y
+  Preview). El código ya rutea a Upstash cuando están; sin ellas cae a memoria per-lambda (inútil en
+  serverless). Desde A3a (30-sep-2026) un Upstash caído o lento (>1,5 s) cae a memoria con el log
+  `rate_limit.upstash_fallback` en vez de romper el login, y las claves llevan prefijo `rl:<VERCEL_ENV>:`.
 - **Bloquea:** corte E1 #1 (rate-limit real en superficies públicas). Findings `c1-ratelimit-inmemory`,
   `rate-limit-inmemory-activo-prod`.
 - **Responsable:** dueño.
@@ -111,11 +160,15 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
 - **No tocar:** el fallback a `memory()` ante error de transporte debe preservarse.
 
 ### 5. Monitoreo de errores — Sentry
-- **Qué configura:** cuenta Sentry + DSN de prod. La sesión `sentry-observabilidad` deja el SDK
-  cableado en modo no-op; el DSN lo activa.
-- **Bloquea:** corte E1 #8. Findings `m1-sentry-no-wired`, `sentry-no-cableado`.
+- **Qué configura:** cuenta Sentry + proyecto. Desde A3b (30-sep-2026) `@sentry/nextjs` está instalado y es
+  **no-op total sin DSN**. Variables (Vercel, scope build + runtime):
+  - `SENTRY_DSN` — obligatoria para activar; también define a dónde van los reportes de CSP.
+  - Opcionales: `SENTRY_AUTH_TOKEN` + `SENTRY_ORG` + `SENTRY_PROJECT` (sin ellas no se suben sourcemaps),
+    `SENTRY_TRACES_SAMPLE_RATE` (default 5% en prod, 0 en el resto), `SENTRY_DEBUG`.
+  - Solo servidor/edge: **no hay SDK de cliente** (presupuesto de bundle) → errores del navegador fuera hasta C1.
+- **Bloquea:** corte E1 #8; A3 (QA de observabilidad). Findings `m1-sentry-no-wired`, `sentry-no-cableado`.
 - **Responsable:** dueño.
-- **Estado:** 🔴
+- **Estado:** 🔴 (código listo; falta el DSN).
 - **Gate de activación:** `SENTRY_DSN` presente.
 
 ### 6. Pagos — Mercado Pago
@@ -130,10 +183,11 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
 - **Gate de activación:** `MP_WEBHOOK_SECRET` + credenciales prod; sandbox para QA.
 
 ### 7. Email transaccional
-- **Qué configura:** proveedor de email transaccional propio (invitaciones, reset de password,
-  confirmaciones de turno) con verificación de dominio (SPF/DKIM). Mientras tanto se usa el SMTP
-  default de Supabase (suficiente para el cliente único).
-- **Bloquea:** corte E2 (signup self-serve abierto). Sesión `onboarding-pulido`.
+- **Qué configura:** proveedor de email transaccional propio (Resend o Postmark) para verificación de
+  signup, invitaciones, reset de password y portal, con dominio verificado (SPF/DKIM/DMARC) y cargado como
+  Custom SMTP en Supabase Auth. Detalle y plantillas en §0.1.
+- **Bloquea:** **despliegue de A3** (signup verificado + stepper, decisión del dueño del 30-sep-2026): con el
+  SMTP default de Supabase los mails no llegan a externos.
 - **Responsable:** dueño.
 - **Estado:** 🔴 (usando SMTP default de Supabase).
 - **Gate de activación:** dominio verificado + credenciales SMTP propias.
@@ -163,9 +217,10 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
 
 ### 11. Legal — bucket D
 - **Qué configura:** términos y condiciones, política de privacidad, y el marco regulatorio de
-  historia clínica en Argentina (**Ley 26.529** — retención/derechos del paciente). Afecta el
-  "eliminar definitivamente" de pacientes y la retención de HC.
-- **Bloquea:** corte E2 (signup público). Mitigado en E1 por el gate de rol + type-to-confirm.
+  historia clínica en Argentina (**Ley 26.529** — retención/derechos del paciente). Afecta la
+  retención de HC y un eventual borrado a pedido del paciente.
+- **Bloquea:** corte E2 (signup público). Mitigado: desde A2 (30-sep-2026) no existe el borrado
+  definitivo de pacientes, solo Archivar.
 - **Responsable:** asesor legal / decisión de negocio.
 - **Estado:** 🔴
 - **Gate de activación:** revisión legal completada.

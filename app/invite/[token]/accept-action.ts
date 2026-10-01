@@ -2,11 +2,16 @@
 
 // Pre-membership provisioning: the user is NOT yet a member of the invite's
 // tenant, so no Actor GUC exists → service channel (BYPASSRLS). See lib/db.ts.
+import { headers } from "next/headers";
+import { revalidateTag } from "next/cache";
 import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { tags } from "@/lib/cache-tags";
+import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import type { ActionResult } from "@/lib/validation";
 
 /**
@@ -23,6 +28,12 @@ import type { ActionResult } from "@/lib/validation";
  *   - Stamp `Invitation.acceptedAt`.
  */
 export async function acceptInvite(token: string): Promise<ActionResult> {
+  // A3a-S-rl: sin límite se podía probar tokens por fuerza bruta (el token es
+  // de 192 bits, así que es más contención de carga que de adivinanza) y
+  // martillar el canal service. 10 cada 10 min por IP.
+  const rl = await rateLimit(`invite:accept:${clientIp(headers())}`, { limit: 10, windowMs: 600_000 });
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
+
   const supabase = getSupabaseServerClient();
   const {
     data: { user },
@@ -43,6 +54,28 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
   if (invite.expiresAt < new Date()) return { ok: false, error: "La invitación venció." };
   if (invite.email.toLowerCase() !== user.email.toLowerCase()) {
     return { ok: false, error: "El email de tu sesión no coincide con la invitación." };
+  }
+
+  // Staff ≠ paciente (A3b-S-auth): una identidad que ya se usa en el portal
+  // de pacientes (vinculada a una ficha, o su email es de una ficha con portal
+  // vinculado) en CUALQUIER consultorio no se suma al equipo. Canal service a
+  // propósito: quien pregunta es el dueño de la identidad, así que no filtra
+  // nada ajeno (el chequeo de `createInvitation` es solo del propio tenant).
+  const asPatient = await prisma.patient.findFirst({
+    where: {
+      OR: [
+        { userId: user.id },
+        { email: { equals: user.email, mode: "insensitive" }, userId: { not: null } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (asPatient) {
+    return {
+      ok: false,
+      error:
+        "Esta cuenta se usa en el portal de pacientes. Para sumarte al equipo, pedí la invitación con otro email.",
+    };
   }
 
   try {
@@ -109,6 +142,9 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
       entity: "Invitation",
       entityId: invite.id,
     });
+    // Handoff A2: el nuevo miembro puede ser un Practitioner nuevo → el
+    // listado cacheado de profesionales del tenant queda viejo sin esto.
+    revalidateTag(tags.practitioners(invite.tenant.id));
     logger.info("invitation.accept", {
       tenantSlug: invite.tenant.slug,
       email: invite.email,
@@ -116,8 +152,10 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
 
     return { ok: true, data: undefined };
   } catch (err) {
+    // Nunca el token crudo en logs (handoff A3a): con él se acepta la
+    // invitación. El id de la invitación alcanza para correlacionar.
     logger.error("invitation.accept.failed", {
-      token,
+      invitationId: invite.id,
       error: err instanceof Error ? err.message : String(err),
     });
     return { ok: false, error: "No pudimos aceptar la invitación." };

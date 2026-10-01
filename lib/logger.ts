@@ -12,9 +12,19 @@
  *   - `logger.withRequest({ requestId, tenantId, … })` returns a logger
  *     instance with EXPLICIT context bound — useful for background jobs
  *     and webhook handlers that don't run inside the ALS frame.
+ *
+ * A3b-S-obs — redacción: cada línea (msg + ctx, a cualquier profundidad) pasa
+ * por `redact()` antes de salir. Los logs de Vercel los lee cualquiera con
+ * acceso al proyecto y se retienen fuera de nuestra base; un `ctx` con el email
+ * del paciente, un `?token=` de invitación o un header `cookie` no puede quedar
+ * ahí en claro. La lógica vive en `lib/redact.ts` (pura, apta para edge) y la
+ * reusa el `beforeSend` de Sentry.
  */
 import { env } from "@/lib/env";
 import { getRequestContext } from "@/lib/request-context";
+import { redact, redactString } from "@/lib/redact";
+
+export { redact, redactString } from "@/lib/redact";
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 type Level = keyof typeof LEVELS;
@@ -49,13 +59,13 @@ function emit(level: Level, msg: string, ctx?: Ctx, bound?: Ctx) {
   if (LEVELS[level] < threshold) return;
   // Layering order: ambient (auto), bound (logger.withRequest), explicit
   // call-site (highest priority).
+  // ambientCtx son ids (no PII): no hace falta redactarlos, pero van dentro del
+  // mismo objeto y `redact` los deja intactos.
   const line = {
     level,
-    msg,
+    msg: redactString(msg),
     ts: new Date().toISOString(),
-    ...ambientCtx(),
-    ...(bound ?? {}),
-    ...(ctx ?? {}),
+    ...redact({ ...ambientCtx(), ...(bound ?? {}), ...(ctx ?? {}) }),
   };
   if (isProd) {
     process.stdout.write(JSON.stringify(line) + "\n");
@@ -67,7 +77,7 @@ function emit(level: Level, msg: string, ctx?: Ctx, bound?: Ctx) {
       Object.keys(line).length > 3
         ? " " + JSON.stringify({ ...line, level: undefined, msg: undefined, ts: undefined })
         : "";
-    process.stdout.write(`${color}[${level}]${reset} ${msg}${ctxStr}\n`);
+    process.stdout.write(`${color}[${level}]${reset} ${line.msg}${ctxStr}\n`);
   }
 }
 
