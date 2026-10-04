@@ -21,15 +21,28 @@ import {
 } from "@/lib/patients";
 import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
+import type { PatientAdminCore } from "@/lib/patients-types";
 import { SharePatientButton } from "@/components/patients/share-patient-button";
 import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
+
+/**
+ * P0-S02u-perfil: estado del chip de plan del hero. Antes era un booleano
+ * `active` que llegaba en true con cualquier plan (también terminado), así que
+ * el hero decía "Plan activo" a un paciente dado de alta. Lo calcula
+ * `pickProfilePrograms` (patient-profile.tsx).
+ */
+export type HeroPlanState =
+  | { kind: "active"; otherActiveCount: number }
+  | { kind: "paused" }
+  | { kind: "ended" }
+  | { kind: "none" };
 
 export function PatientHero({
   patient,
   age,
   coverageLabel,
-  active,
+  plan,
   insurers,
   practitioners,
   canReassign,
@@ -37,7 +50,7 @@ export function PatientHero({
   patient: PatientWithRelations;
   age: number | null;
   coverageLabel: string;
-  active: boolean;
+  plan: HeroPlanState;
   insurers: InsurerOption[];
   practitioners: PractitionerOption[];
   canReassign: boolean;
@@ -65,11 +78,7 @@ export function PatientHero({
             >
               HC-{patient.id.slice(-6).toUpperCase()}
             </span>
-            {active ? (
-              <Tag tone="lime">Plan activo</Tag>
-            ) : (
-              <Tag tone="soft">Sin plan</Tag>
-            )}
+            <HeroPlanTag plan={plan} />
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
             <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
@@ -116,6 +125,67 @@ export function PatientHero({
         />
       )}
     </>
+  );
+}
+
+/**
+ * P0-S07v · Hero del perfil administrativo (nivel `admin`, PD-13): lo que ve
+ * un rol sin `clinical.read` (Secretaria/ASSISTANT, BILLING).
+ *
+ * Es un componente aparte, no `PatientHero` con flags, porque recibe otro
+ * tipo (`PatientAdminCore`, sin notas ni diagnóstico): así el compilador
+ * impide que un campo clínico llegue a este render por error.
+ *
+ * Qué NO tiene, a propósito:
+ *  - chip de plan: el título y el estado del plan son HC;
+ *  - "Editar": `updatePatient` y `setPatientCoverage` exigen acceso `full`
+ *    (lib/patients.ts) → para `admin` la ficha es de solo lectura;
+ *  - Compartir, Archivar y Portal: también exigen `full` en el server.
+ * "Agregar turno" solo con `canBook` (`agenda.operateAll`): BILLING no crea turnos.
+ */
+export function PatientAdminHero({
+  patient,
+  canBook,
+}: {
+  patient: PatientAdminCore;
+  canBook: boolean;
+}) {
+  const age = patient.dateOfBirth
+    ? Math.floor((Date.now() - +new Date(patient.dateOfBirth)) / (365.25 * 86_400_000))
+    : null;
+  const cov = patient.coverage;
+  const coverageLabel = cov ? `${cov.insurer}${cov.planName ? " " + cov.planName : ""}` : "Particular";
+  return (
+    <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+      <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 240 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+          <Tag tone="soft">Ficha administrativa</Tag>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+          <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
+            {patient.firstName} {patient.lastName}
+          </h1>
+          <span style={{ fontSize: 13, color: "var(--navy-500)" }}>
+            {age != null ? `${age} años` : ""}
+            {patient.documentId ? `${age != null ? " · " : ""}DNI ${patient.documentId}` : ""}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
+          <HeroFact label="Tel." value={patient.phone ?? "—"} />
+          <HeroFact label="Email" value={patient.email ?? "—"} />
+          <HeroFact label="Cobertura" value={coverageLabel} />
+          <HeroFact label="Kine" value={patient.assignedPractitionerName ?? "Consultorio común"} />
+        </div>
+      </div>
+      {canBook && (
+        <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
+          <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+            <IconPlus size={12} /> Agregar turno
+          </Button>
+        </Link>
+      )}
+    </Card>
   );
 }
 
@@ -703,4 +773,30 @@ function HeroFact({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
+}
+
+function HeroPlanTag({ plan }: { plan: HeroPlanState }) {
+  if (plan.kind === "active") {
+    const n = plan.otherActiveCount;
+    return (
+      <>
+        <Tag tone="lime">Plan activo</Tag>
+        {/* "+N": hay más de un plan ACTIVE (p. ej. Kine y Osteo en paralelo). El
+            número solo no se entiende con lector de pantalla: `role="img"` + aria
+            (un aria-label en un span genérico se ignora). */}
+        {n > 0 && (
+          <span
+            role="img"
+            aria-label={`Y ${n} ${n === 1 ? "plan activo más" : "planes activos más"}`}
+            title={`${n} ${n === 1 ? "plan activo más" : "planes activos más"}: miralos en el tab Plan`}
+          >
+            <Tag tone="lime">+{n}</Tag>
+          </span>
+        )}
+      </>
+    );
+  }
+  if (plan.kind === "paused") return <Tag tone="soft">Plan pausado</Tag>;
+  if (plan.kind === "ended") return <Tag tone="soft">Sin plan activo</Tag>;
+  return <Tag tone="soft">Sin plan</Tag>;
 }

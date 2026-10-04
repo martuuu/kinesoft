@@ -3,9 +3,16 @@
 /**
  * Exercise media (VIDEO / IMAGE / GIF uploads + YOUTUBE links) — platform
  * superadmin only. Uploads reuse the lib/files.ts pattern: a dedicated Supabase
- * bucket, MIME allow-list, size cap, signed download URLs, and a local-stub
- * fallback when storage isn't configured (dev). Media rows are global catalog
- * content (`ExerciseMedia`, no tenantId) written via `prismaService`.
+ * bucket, MIME allow-list, size cap and a local-stub fallback when storage isn't
+ * configured (dev). Media rows are global catalog content (`ExerciseMedia`, no
+ * tenantId) written via `prismaService`.
+ *
+ * S02m (fuga E0): este archivo es `"use server"`, así que TODA export es una
+ * action invocable por RPC. Acá vivía `resolveMediaUrl(type, url)`, que firmaba
+ * cualquier clave del bucket sin sesión. Este archivo ya no exporta ningún
+ * firmador (lo fija `tests/integration/storage-service-role.test.ts`): la firma
+ * vive en `lib/exercise-media-internal.ts` (server-only, por `mediaId`) y el
+ * Storage va por service role (`lib/storage-internal.ts`).
  */
 import { randomBytes } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
@@ -14,10 +21,10 @@ import { prismaService } from "@/lib/db";
 import { requireSuperAdmin } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { isStorageConfigured, storageRemove, storageUpload } from "@/lib/storage-internal";
+import { EXERCISE_MEDIA_BUCKET as BUCKET, youtubeId } from "@/lib/exercise-media-internal";
 import type { ActionResult } from "@/lib/validation";
 
-const BUCKET = "exercise-media";
 const SAFE_EXT_RE = /^[a-z0-9]{1,5}$/;
 const ALLOWED_MIME = new Set<string>([
   "video/mp4",
@@ -29,53 +36,12 @@ const ALLOWED_MIME = new Set<string>([
   "image/gif",
 ]);
 
-function storageEnabled() {
-  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
-}
-
 function revalidateFor(slug?: string) {
   if (slug) revalidatePath(`/biblioteca/${slug}`);
   revalidatePath("/plataforma/ejercicios");
   revalidatePath("/biblioteca");
   revalidatePath("/terapia-manual");
   revalidateTag(cacheTags.catalog());
-}
-
-/** youtube.com/watch?v=ID | youtu.be/ID | /embed/ID → the video id, else null. */
-function youtubeId(url: string): string | null {
-  try {
-    const u = new URL(url.trim());
-    const host = u.hostname.replace(/^www\./, "");
-    if (host === "youtu.be") return u.pathname.slice(1).split("/")[0] || null;
-    if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
-      if (u.pathname === "/watch") return u.searchParams.get("v");
-      const m = u.pathname.match(/^\/(embed|shorts)\/([^/?]+)/);
-      if (m) return m[2];
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolve a media row's stored `url` into something renderable:
- *   - YOUTUBE → privacy-enhanced nocookie embed URL (null if unparseable)
- *   - upload  → 1-hour signed URL (or the raw stub key in dev)
- * Server-only helper for the reader.
- */
-export async function resolveMediaUrl(
-  type: ExerciseMediaType,
-  url: string,
-): Promise<string | null> {
-  if (type === "YOUTUBE") {
-    const id = youtubeId(url);
-    return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
-  }
-  if (!storageEnabled() || url.startsWith("stub:")) return null;
-  const supabase = getSupabaseServerClient();
-  const { data } = await supabase.storage.from(BUCKET).createSignedUrl(url, 3600);
-  return data?.signedUrl ?? null;
 }
 
 export async function addExerciseMedia(formData: FormData): Promise<ActionResult<{ id: string }>> {
@@ -96,6 +62,9 @@ export async function addExerciseMedia(formData: FormData): Promise<ActionResult
 
   const id = randomBytes(12).toString("hex");
   let url: string;
+  // Clave subida a Storage en esta llamada: si después falla el INSERT de la
+  // fila, se borra para no dejar un objeto huérfano que ninguna fila referencia.
+  let uploadedKey: string | null = null;
 
   if (type === "YOUTUBE") {
     const link = String(formData.get("url") ?? "").trim();
@@ -107,31 +76,35 @@ export async function addExerciseMedia(formData: FormData): Promise<ActionResult
     if (file.size > 50 * 1024 * 1024) return { ok: false, error: "El archivo no puede superar 50 MB." };
     const mime = (file.type || "application/octet-stream").toLowerCase();
     if (!ALLOWED_MIME.has(mime)) return { ok: false, error: "Tipo de archivo no permitido." };
-    if (storageEnabled()) {
-      const supabase = getSupabaseServerClient();
+    if (isStorageConfigured()) {
       const raw = (file.name.split(".").pop() ?? "bin").toLowerCase();
       const ext = SAFE_EXT_RE.test(raw) ? raw : "bin";
       url = `exercises/${exerciseId}/${id}.${ext}`;
       const buf = new Uint8Array(await file.arrayBuffer());
-      const { error } = await supabase.storage.from(BUCKET).upload(url, buf, {
-        contentType: mime,
-        upsert: false,
-      });
-      if (error) return { ok: false, error: "No pudimos subir el archivo." };
+      const up = await storageUpload(BUCKET, url, buf, mime);
+      if (!up.ok) return { ok: false, error: "No pudimos subir el archivo." };
+      uploadedKey = url;
     } else {
       url = `stub:${id}`;
     }
   }
 
-  const last = await prismaService.exerciseMedia.findFirst({
-    where: { exerciseId },
-    orderBy: { order: "desc" },
-    select: { order: true },
-  });
-  const row = await prismaService.exerciseMedia.create({
-    data: { id, exerciseId, type, url, caption, order: (last?.order ?? -1) + 1 },
-    select: { id: true },
-  });
+  let row: { id: string };
+  try {
+    const last = await prismaService.exerciseMedia.findFirst({
+      where: { exerciseId },
+      orderBy: { order: "desc" },
+      select: { order: true },
+    });
+    row = await prismaService.exerciseMedia.create({
+      data: { id, exerciseId, type, url, caption, order: (last?.order ?? -1) + 1 },
+      select: { id: true },
+    });
+  } catch (e) {
+    // Best-effort: si el remove también falla queda logueado en storage.failed.
+    if (uploadedKey) await storageRemove(BUCKET, [uploadedKey]);
+    throw e;
+  }
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,
@@ -151,9 +124,13 @@ export async function deleteExerciseMedia(id: string): Promise<ActionResult> {
     select: { id: true, type: true, url: true, exercise: { select: { slug: true } } },
   });
   if (!media) return { ok: false, error: "Media no encontrada." };
-  if (media.type !== "YOUTUBE" && storageEnabled() && !media.url.startsWith("stub:")) {
-    const supabase = getSupabaseServerClient();
-    await supabase.storage.from(BUCKET).remove([media.url]);
+  if (media.type !== "YOUTUBE" && !media.url.startsWith("stub:")) {
+    // supabase-js no tira: antes el `{ error }` se ignoraba y se borraba la fila,
+    // dejando el objeto huérfano en el bucket. Si Storage falla (o no está
+    // configurado en un entorno que tiene uploads reales), la fila queda y el
+    // superadmin reintenta. Mismo criterio que `deletePatientFile`.
+    const rm = await storageRemove(BUCKET, [media.url]);
+    if (!rm.ok) return { ok: false, error: "No pudimos borrar el archivo. Probá de nuevo." };
   }
   await prismaService.exerciseMedia.delete({ where: { id } });
   await audit({

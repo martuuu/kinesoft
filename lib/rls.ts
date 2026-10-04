@@ -23,10 +23,30 @@ import type { Prisma } from "@prisma/client";
  */
 export type DbClient = Prisma.TransactionClient;
 
+/**
+ * Opciones de la transacción interactiva (Planes P0-Ck, C8; aditivo). Solo
+ * `timeout` y `maxWait`, a propósito: el nivel de aislamiento queda en el
+ * default de siempre (cambiarlo alteraría la semántica de los locks).
+ * Sin `opts`, Prisma usa sus defaults (5 s de timeout, 2 s de maxWait): el
+ * commit de un plan (≤ 60 statements para 20 filas) pide más, p. ej.
+ * `{ timeout: 15000, maxWait: 5000 }`. Al vencer, Prisma aborta la tx con
+ * P2028 y revierte todo.
+ */
+export type RlsTxOptions = {
+  /** ms máximos de la tx completa antes de abortar (P2028). */
+  timeout?: number;
+  /** ms máximos esperando una conexión del pool para arrancar. */
+  maxWait?: number;
+};
+
 export async function runWithRls<T>(
   tenantId: string,
-  fn: (tx: Prisma.TransactionClient) => Promise<T>
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  opts?: RlsTxOptions
 ): Promise<T> {
+  // Se copian solo las dos claves: así un caller no puede colar
+  // `isolationLevel` u otra opción por un objeto más ancho.
+  const txOpts = opts ? { timeout: opts.timeout, maxWait: opts.maxWait } : undefined;
   return prisma.$transaction(async (tx) => {
     // `set_config('app.current_tenant_id', $1, true)` — `true` makes it
     // local to the transaction, so the GUC is automatically reset when
@@ -36,7 +56,7 @@ export async function runWithRls<T>(
       tenantId
     );
     return fn(tx);
-  });
+  }, txOpts);
 }
 
 /**

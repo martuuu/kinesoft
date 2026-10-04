@@ -1,0 +1,14 @@
+{
+  // Typecheck de los scripts de Planes (S02x en adelante): el tsconfig raíz
+  // excluye `scripts/`, y `scripts/tsconfig.json` (commonjs) incluye TODO
+  // scripts/, con deuda vieja que no es de esta ola. Acá entran solo los
+  // scripts de Planes y `scripts/lib`; lo que importen de `lib/` se chequea
+  // por arrastre. `incremental: false` para no dejar un .tsbuildinfo suelto.
+  // Uso: npx tsc --noEmit -p tsconfig.scripts.json
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": ["scripts/plans-*.ts", "scripts/lib/**/*.ts"],
+  "exclude": ["node_modules"]
+}

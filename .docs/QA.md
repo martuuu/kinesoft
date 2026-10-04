@@ -757,3 +757,58 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Onboarding
 - [ ] Alta nueva: 9 pasos; Sede con dirección, Tu horario, práctica en servicios, obras sociales del catálogo.
 - [ ] 🔴 El cliente vivo no ve el stepper.
+
+## Planes P0 (ES1) — fugas E0, Secretaria, fixes de planes (04-oct-2026)
+
+> **Sin migraciones.** Todo en staging (o local) con **`TZ=UTC`**, sobre B-pre ya aplicado. Usuarios de prueba:
+> OWNER, PRACTITIONER con un paciente ajeno (acceso básico), Secretaria (ASSISTANT) y BILLING; un tenant con
+> "Consultorio común" y otro sin. Para Storage, `SUPABASE_SERVICE_ROLE_KEY` cargada en el entorno.
+> Primero la agenda completa de [§B-pre](#b-pre--agenda-profesional-y-catálogo-01-oct-2026) (no cambió).
+
+### Planes y fechas
+- [ ] 🔴 Crear un plan desde la Tab Plan a las 22:30 AR → la sesión 1 cae **hoy** (no ayer a las 21:00).
+- [ ] Tab Plan: 6 y 7 sesiones por semana se aceptan; más de 60 sesiones → error visible; "Aplicar plantilla" en
+  gris con aviso en FREE; cambiar el estado pide confirmación y un error se ve; "Eliminar" solo para admin.
+- [ ] Diagnóstico → Asignar plan: fecha de hoy AR, sin paciente preseleccionado; lun/jue → sesiones solo lun y jue;
+  1 día × 60 sesiones → error "máximo 58" visible; sin días → error; wizard con "No encontramos…" si no hay match.
+- [ ] Plantilla con ejercicios sin dosis → crea 3×12; un PRACTITIONER en básico no aplica plantilla ni crea plan
+  (ni desde Diagnóstico); borrar la plantilla de otro sin ser admin → rechazo.
+- [ ] Doble click en "Sesión a medida" → una sola sesión nueva.
+- [ ] Bulk de ejercicios no toca sesiones realizadas; reprogramar una sesión de un plan cancelado → rechazo; un
+  ejercicio archivado no se puede asignar.
+- [ ] Cerrar desde Seguimiento la última sesión → plan COMPLETED y aparece en Actividad. **Cerrar desde dos pestañas
+  las dos últimas sesiones → plan COMPLETED.**
+- [ ] Perfil: plan COMPLETED o PAUSED → el hero no dice "Plan activo"; con 2 ACTIVE muestra el más reciente y "+1";
+  Sesiones agrupadas con badge coherente.
+
+### Secretaria (ASSISTANT) y Facturación (BILLING)
+- [ ] 🔴 La Secretaria reprograma, cambia estado, cancela y crea un turno de un paciente en básico, **sin ver ni pisar**
+  título, descripción ni notas. No ve Eliminar ni cobros. "Usar como diagnóstico" no aparece.
+- [ ] 🔴 La Secretaria da de alta un paciente desde el modal del turno → queda a cargo del profesional del turno; la
+  Secretaria no ve su HC. En el directorio no hay botón "Nuevo paciente".
+- [ ] Con "Consultorio común", la Secretaria ve el perfil administrativo (datos y turnos con estado de cobro), sin
+  pestañas clínicas; "Agregar turno" visible. BILLING ve el perfil sin "Agregar turno" y no opera turnos.
+- [ ] Re-vincular un turno con notas a otro paciente como Secretaria → *"Este turno tiene datos clínicos: pedile al
+  profesional que lo cambie"*. El copago que tipea la Secretaria se ignora (rige la cobertura); en un guest sí lo fija.
+- [ ] BILLING no opera turnos guest (ni borra ni cobra).
+- [ ] Directorio como Secretaria: con `?diagnosisSlug=…` o `?filter=active` → lista vacía; sin filtros ve todos.
+- [ ] Secretaria asignada a un paciente no puede compartirlo ni reasignarlo.
+- [ ] PRACTITIONER básico: el perfil ajeno dice "Sin acceso" a la HC; no encuentra por email a un paciente ajeno; el
+  picker del Plan Builder muestra solo propios y compartidos.
+- [ ] Dashboard de la Secretaria con alcance propio; Seguimiento vacío.
+
+### PHI, exports y Storage
+- [ ] ICS exportado por la Secretaria → sin título, descripción ni notas.
+- [ ] Portal del paciente con 2 planes ACTIVE → muestra el más reciente y **sin** notas de sesión.
+- [ ] Archivos del paciente: subir, descargar y borrar (full); un básico no los ve.
+- [ ] Plataforma → media de ejercicios: subir, ver y borrar; `/biblioteca/<slug>` muestra la media.
+
+### Display
+- [ ] Ausente en ámbar en Lista, drawer, perfil y Recepción (StatusTag único).
+
+### Plata (lógica pura; se ve desde ES2b, se prueba en unit)
+- [ ] Ausente con copago REFUNDED → el turno de reemplazo lleva la cuota, no $0 (con PAID previo → $0).
+- [ ] Preview con la última sesión en un día bloqueado → sugiere el día hábil siguiente.
+
+### Prechecks de Martin (solo lectura, durante ES1)
+- [ ] (0)-(17) de PLANES.md §16; si (2) > 0, dedupe en dry-run (MIGRACIONES-RUNBOOK §2.3); si (15) > 0, reasignar.

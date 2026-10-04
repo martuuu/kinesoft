@@ -10,6 +10,9 @@ import { sectionCard } from "./styles";
  * "Últimos turnos": los dos turnos más recientes del paciente (sin el abierto),
  * cada uno linkea al día en la agenda. La carga la hace `index.tsx` al abrir.
  * No renderiza nada si la lista viene vacía.
+ *
+ * P0-S07u: es historia clínica (título/notas de otros turnos + link a la HC):
+ * `index.tsx` solo la monta, y solo pide los datos, con `clinicalWritable`.
  */
 export function RecentBookings({
   recent,

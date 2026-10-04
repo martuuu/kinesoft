@@ -18,7 +18,10 @@ export const STATUS_TOAST: Partial<Record<BookingStatus, string>> = {
  *
  * Contrato: solo presenta. `onSetStatus` es el `setStatus` del drawer, que lleva
  * el lock optimista (`expectedUpdatedAt`) y el re-chequeo de cupo / superposición
- * al reactivar. Quien la renderiza decide si se muestra (acceso básico = no).
+ * al reactivar. Quien la renderiza decide si se muestra: `canOperate`
+ * (P0-S07u; antes `patientAccess !== "basic"`). La Secretaria con
+ * `agenda.operateAll` la ve completa, Cancelar incluido; un PRACTITIONER en
+ * básico no. Eliminar NO está acá: sigue la regla de siempre en `index.tsx`.
  */
 export function StatusActions({
   pending,

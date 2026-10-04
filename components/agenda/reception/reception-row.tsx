@@ -26,17 +26,21 @@ import { fmtHour, type BookingDTO } from "../agenda-utils";
 
 type StateStyle = { icon: ReactNode; bg: string; fg: string; border?: string };
 
-// Fondo = estado, igual que en la grilla. Los tonos salen de los pills de
-// `statusPill` (list-view): ámbar para lo que requiere atención, verde para
-// lo terminado, gris para lo que ya no cuenta.
+// Fondo = estado, igual que en la grilla. Los estados que también son un
+// BookingStatus (por llegar = confirmado, atendido = hecho, ausente,
+// cancelado) usan la paleta única `--st-*` del `StatusTag` (P0-S04b), así
+// "Ausente" es el mismo ámbar en Recepción, Lista, drawer y perfil. Los propios
+// de Recepción (demorado, en sala, en atención) no tienen BookingStatus y
+// quedan con sus tonos; el ausente conserva el borde punteado para no
+// confundirse con "demorado" (mismo ámbar, distinto borde e ícono).
 const STATE_STYLE: Record<ReceptionState, StateStyle> = {
-  "por-llegar": { icon: <IconClock size={11} stroke={2.4} />, bg: "rgba(31,79,190,0.08)", fg: "var(--sky-700)" },
+  "por-llegar": { icon: <IconClock size={11} stroke={2.4} />, bg: "var(--st-confirmed-bg)", fg: "var(--st-confirmed-fg)" },
   demorado: { icon: <IconClock size={11} stroke={2.6} />, bg: "rgba(255,176,32,0.2)", fg: "#9A5B00", border: "1px solid rgba(154,91,0,0.35)" },
   "en-sala": { icon: <IconUsers size={11} stroke={2.4} />, bg: "rgba(200,245,100,0.45)", fg: "var(--navy-900)" },
   "en-atencion": { icon: <IconActivity size={11} stroke={2.4} />, bg: "var(--navy-900)", fg: "#fff" },
-  atendido: { icon: <IconCheck size={11} stroke={3} />, bg: "rgba(54,179,126,0.14)", fg: "#1F7A52" },
-  ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "rgba(255,176,32,0.12)", fg: "#9A5B00", border: "1px dashed rgba(154,91,0,0.4)" },
-  cancelado: { icon: <IconX size={11} stroke={2.6} />, bg: "rgba(15,30,51,0.05)", fg: "var(--navy-500)" },
+  atendido: { icon: <IconCheck size={11} stroke={3} />, bg: "var(--st-completed-bg)", fg: "var(--st-completed-fg)" },
+  ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-noshow-bg)", fg: "var(--st-noshow-fg)", border: "1px dashed rgba(154,91,0,0.4)" },
+  cancelado: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-cancelled-bg)", fg: "var(--st-cancelled-fg)" },
 };
 
 export function ReceptionStateTag({ entry }: { entry: Pick<ReceptionEntry<BookingDTO>, "state" | "waitingMinutes" | "lateMinutes"> }) {

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ExerciseMediaType } from "@prisma/client";
 import { getExercise } from "@/lib/exercises";
-import { resolveMediaUrl } from "@/lib/exercise-media";
+import { signExerciseMedia } from "@/lib/exercise-media-internal";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Markdown } from "@/components/ui/markdown";
@@ -23,12 +23,14 @@ export default async function Page({ params }: { params: { slug: string } }) {
 
   // Resolve every media row to a renderable src (embed URL / signed URL /
   // null in dev-stub). Keeps ordering; nulls fall back to a placeholder.
+  // S02m: se firma por id de la fila, en el server, DESPUÉS de que
+  // `getExercise` aplicó el plan-gating; el cliente nunca elige qué clave firmar.
   const media: ResolvedMedia[] = await Promise.all(
     ex.media.map(async (m) => ({
       id: m.id,
       type: m.type,
       caption: m.caption,
-      src: await resolveMediaUrl(m.type, m.url),
+      src: await signExerciseMedia(m.id),
     })),
   );
 

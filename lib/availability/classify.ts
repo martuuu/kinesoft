@@ -146,6 +146,28 @@ export function blocksHitting(
   });
 }
 
+/**
+ * Turnos del paciente que se superponen con [when, when + duración)
+ * (semiabierto: tocarse en el borde no es solape), de cualquier profesional o
+ * servicio, en el orden de entrada. Sin paciente (guest) → vacío.
+ *
+ * Aditivo de S07p (Planes, ES1): el preview del plan muestra CON QUÉ turnos
+ * choca la fila ("Se superpone con otro turno del paciente") y `classifyInstant`
+ * solo dice si hay alguno. Es el mismo predicado que usa `evaluate` para
+ * `patientOverlap`; se deja `evaluate` sin tocar para no mover la paridad del
+ * batch (AUDIT §5.27).
+ */
+export function patientConflictsAt<B extends { id: string; patientId: string | null; scheduledFor: Date; durationMin: number }>(
+  bookings: ReadonlyArray<B>,
+  q: { patientId: string | null | undefined; when: Date; durationMin: number; excludeBookingId?: string | null }
+): B[] {
+  if (!q.patientId) return [];
+  const end = new Date(q.when.getTime() + q.durationMin * MIN_MS);
+  return bookings.filter(
+    (b) => b.patientId === q.patientId && b.id !== q.excludeBookingId && overlapsWindow(b, q.when, end)
+  );
+}
+
 /** Minutos de pared AR de `d`, con los segundos como fracción. El offset AR es
  *  de horas enteras, así que los segundos UTC son los AR. */
 function arMinutesExact(d: Date): number {

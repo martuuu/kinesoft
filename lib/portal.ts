@@ -145,15 +145,31 @@ async function authedPatientByTenant(tenantSlug: string) {
   return { user: me, tenant, patient };
 }
 
+/**
+ * P0-S02p:
+ * - **sin `notes`**: `Session.notes` son notas del kine (clínicas, privadas).
+ *   Viajaban en el DTO al navegador del paciente aunque la página no las
+ *   pintara: cualquiera las leía en el payload RSC. El `select` ya no las pide.
+ * - **determinístico**: con dos planes ACTIVE (pasa con datos legacy y con la
+ *   adopción de Planes) el `findFirst` sin `orderBy` devolvía el que Postgres
+ *   leyera primero. Ahora es el ACTIVE más reciente por `startDate`, con
+ *   `createdAt` e `id` de desempate. Se ordena por `startDate` y no solo por
+ *   `createdAt` (que usa `getPatientProgramsLite`) porque un plan adoptado o
+ *   migrado se crea hoy con un inicio viejo: para el paciente "el plan
+ *   actual" es el que empezó último.
+ * - acotado al tenant del slug también en la query (el `patientId` ya lo
+ *   implica; es defensa en profundidad sobre el canal BYPASSRLS).
+ */
 export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO | null> {
   const auth = await authedPatientByTenant(tenantSlug);
   if (!auth) return null;
   const program = await prisma.treatmentProgram.findFirst({
-    where: { patientId: auth.patient.id, status: "ACTIVE" },
+    where: { patientId: auth.patient.id, tenantId: auth.tenant.id, status: "ACTIVE" },
+    orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     include: {
       sessions: {
         orderBy: { index: "asc" },
-        select: { id: true, index: true, scheduledFor: true, completedAt: true, notes: true },
+        select: { id: true, index: true, scheduledFor: true, completedAt: true },
       },
     },
   });
@@ -176,7 +192,6 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
       index: s.index,
       scheduledFor: s.scheduledFor.toISOString(),
       completedAt: s.completedAt?.toISOString() ?? null,
-      notes: s.notes,
       hasCheckIn: withCheckIn.has(s.id),
     })),
   };

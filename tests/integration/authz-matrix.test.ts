@@ -22,16 +22,18 @@ import {
   setPatientCoverage,
   updatePatient,
   setPatientDiagnosis,
-  createProgram,
   recordEvaScore,
-  updateProgram,
-  setProgramStatus,
-  deleteProgram,
-  deleteSession,
   setPatientArchived,
   bulkArchivePatients,
   getPatientActivity,
 } from "@/lib/patients";
+import {
+  createProgram,
+  updateProgram,
+  setProgramStatus,
+  deleteProgram,
+  deleteSession,
+} from "@/lib/programs";
 import { exportPatientsCsv as exportPatientsCsvFor } from "@/lib/patients-export-internal";
 import { getActor } from "@/lib/session";
 import { listPatientFiles, uploadPatientFile, deletePatientFile, getDownloadUrl } from "@/lib/files";
@@ -191,7 +193,7 @@ const ROWS: Row[] = [
   },
   {
     name: "createProgram para un paciente de B",
-    act: (c) => createProgram({ patientId: c.patB, title: "Colado por A", totalSessions: 2, frequency: 1, startDate: new Date() }),
+    act: (c) => createProgram({ patientId: c.patB, title: "Colado por A", totalSessions: 2, frequency: 1, startDate: "2030-01-06" }),
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.patB, title: "Colado por A" } }),
   },
   {
@@ -231,7 +233,18 @@ const ROWS: Row[] = [
   },
 ];
 
-describe.skipIf(!RUN)("autorización cross-tenant (actor de A con ids de B)", () => {
+/**
+ * P0-S07sb (Planes E1): columna ASSISTANT. La Secretaria tiene
+ * `agenda.operateAll`, que NO mira el nivel de acceso: si un write-path
+ * dependiera de él para cortar un id ajeno (`patientAccessFor` da "none"),
+ * la Secretaria lo saltearía. Por eso la misma matriz corre también con un
+ * ASSISTANT del tenant A.
+ */
+for (const who of ["OWNER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
+  who === "OWNER"
+    ? "autorización cross-tenant (actor de A con ids de B)"
+    : "autorización cross-tenant (actor de A con ids de B) · ASSISTANT (P0-S07sb)",
+  () => {
   let db: PrismaClient;
   const ctx = {} as Ctx;
 
@@ -258,7 +271,7 @@ describe.skipIf(!RUN)("autorización cross-tenant (actor de A con ids de B)", ()
     ctx.fileB = hcB.fileId;
     ctx.programB = hcB.programId;
     ctx.sessionB = hcB.sessionId;
-    asUser(ctx.A.userId);
+    asUser(who === "OWNER" ? ctx.A.userId : (await addPractitioner(db, ctx.A, "ASSISTANT")).userId);
   });
 
   afterAll(async () => {
@@ -290,7 +303,8 @@ describe.skipIf(!RUN)("autorización cross-tenant (actor de A con ids de B)", ()
     expect(csv).not.toContain(ctx.patB);
     expect(csv.trim().split("\n")).toHaveLength(1); // solo el header
   });
-});
+  }
+);
 
 /**
  * A2b-S-vis — acceso BÁSICO en el mismo tenant (decisión del dueño 30-sep:
@@ -335,7 +349,7 @@ const BASIC_ROWS: BasicRow[] = [
   },
   {
     name: "createProgram",
-    act: (c) => createProgram({ patientId: c.pat, title: "Colado por básico", totalSessions: 2, frequency: 1, startDate: new Date() }),
+    act: (c) => createProgram({ patientId: c.pat, title: "Colado por básico", totalSessions: 2, frequency: 1, startDate: "2030-01-06" }),
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.pat, title: "Colado por básico" } }),
   },
   {
@@ -375,14 +389,24 @@ const BASIC_ROWS: BasicRow[] = [
   },
 ];
 
-describe.skipIf(!RUN)("autorización por acceso básico (mismo tenant, sin asignación ni share)", () => {
+/**
+ * P0-S07sb: la misma matriz de HC con la Secretaria (ASSISTANT, nivel `admin`
+ * de PD-13). Opera turnos (`agenda.operateAll`) pero no toca nada clínico:
+ * archivos, diagnóstico, EVA, planes y sesiones siguen rechazados, igual que
+ * para un profesional en básico.
+ */
+for (const who of ["PRACTITIONER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
+  who === "PRACTITIONER"
+    ? "autorización por acceso básico (mismo tenant, sin asignación ni share)"
+    : "autorización por nivel admin (mismo tenant) · ASSISTANT (P0-S07sb)",
+  () => {
   let db: PrismaClient;
   const ctx = {} as BasicCtx;
 
   beforeAll(async () => {
     db = ownerClient();
     ctx.T = await createEphemeralTenant(db);
-    const kine = await addPractitioner(db, ctx.T, "PRACTITIONER");
+    const kine = await addPractitioner(db, ctx.T, who);
     ctx.basicUserId = kine.userId;
     // Asignado al OWNER: el segundo profesional queda con acceso "basic".
     ctx.pat = await addPatient(db, ctx.T, {
@@ -419,7 +443,8 @@ describe.skipIf(!RUN)("autorización por acceso básico (mismo tenant, sin asign
     expect(await getPatientActivity(ctx.pat)).toEqual([]);
   });
 
-  it("exportPatientsCsv con acceso básico → la fila sale sin email ni teléfono", async () => {
+  // `admin` (PD-13) SÍ ve el contacto: la parte de email/teléfono es solo de básico.
+  (who === "PRACTITIONER" ? it : it.skip)("exportPatientsCsv con acceso básico → la fila sale sin email ni teléfono", async () => {
     const csv = await exportPatientsCsv({ ids: [ctx.pat] });
     const lines = csv.trim().split("\n");
     expect(lines).toHaveLength(2);
@@ -428,4 +453,5 @@ describe.skipIf(!RUN)("autorización por acceso básico (mismo tenant, sin asign
     expect(csv).not.toContain("1155554444");
     expect(csv).not.toContain("Lumbalgia");
   });
-});
+  }
+);

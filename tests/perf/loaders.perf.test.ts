@@ -12,6 +12,7 @@
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 
@@ -27,12 +28,11 @@ import {
   listPatients,
   getPatientCore,
   getPatientName,
-  getPatientProgramsLite,
   getPatientBookingsSummary,
   getPatientBillableCount,
   getPatientEvaScores,
-  createProgram,
 } from "@/lib/patients";
+import { getPatientProgramsLite, createProgram } from "@/lib/programs";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { getDashboardData, getMonthBookingDays } from "@/lib/dashboard";
@@ -74,8 +74,10 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
   }, 600_000);
 
   afterAll(async () => {
+    // P0-Cs: `PERF_OUT_DIR` deja escribir la medición fuera del árbol (scratchpad)
+    // para compararla con `tests/perf/compare.ts` sin pisar el baseline versionado.
     writeFileSync(
-      "tests/perf/baseline.json",
+      join(process.env.PERF_OUT_DIR ?? "tests/perf", "baseline.json"),
       JSON.stringify({ measuredAt: new Date().toISOString(), role: process.env.PERF_ROLE ?? "app", rows }, null, 2) + "\n",
     );
     console.table(
@@ -218,7 +220,7 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
   it("POST createProgram (16 sesiones, Tab Plan)", async () => {
     let i = 0;
     await bench("createProgram.16", () =>
-      createProgram({ patientId: T.patientIds[500 + i++], title: "Plan perf", totalSessions: 16, frequency: 2, startDate: new Date("2028-03-01T03:00:00.000Z") }),
+      createProgram({ patientId: T.patientIds[500 + i++], title: "Plan perf", totalSessions: 16, frequency: 2, startDate: "2028-03-01" }),
     );
   });
 });

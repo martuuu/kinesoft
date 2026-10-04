@@ -18,13 +18,20 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient, ProgramStatus } from "@prisma/client";
 import {
   addCustomSession,
+  addSessionExercise,
+  bulkAddSessionExercises,
   completeSessionFromSeguimiento,
   getSessionDetail,
   listOpenSessions,
   rescheduleSession,
+  substituteSessionExercise,
   updateSessionExercise,
   updateSessionMeta,
 } from "@/lib/sessions";
+import { completeSessionInTx, reopenSessionIfUntouchedInTx } from "@/lib/sessions-internal";
+import { runWithRls } from "@/lib/rls";
+import { planPatientLockKey } from "@/lib/plan-lock";
+import { waitForAdvisoryWaiter } from "@/tests/helpers/advisory-wait";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -293,5 +300,314 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     expect(await db.session.count({ where: { programId: program.id } })).toBe(2);
     expect(await db.evaScore.count({ where: { patientId: p } })).toBe(0);
     asUser(A.userId);
+  });
+  // ────────────────────────────────────────────────────────────────────
+  // Planes P0 · S02s — internos (C8) y carreras
+  // ────────────────────────────────────────────────────────────────────
+
+  it("[P0-S02s] 2 addCustomSession concurrentes no duplican index", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { program } = await makeProgram(p, { n: 2 });
+
+    // Un holder externo toma la fila del programa y el lock de estructura del
+    // paciente. Antes del fix (it.fails, verificado esperando a los backends bloqueados por el holder): las
+    // dos altas leían el último index y se frenaban recién en el INSERT (la FK
+    // de Session toma FOR KEY SHARE sobre el programa); al soltar, las dos
+    // insertaban index 3 ([1,2,3,3]). Ahora las dos esperan en
+    // `lockPlanPatient` ANTES de leer, y se serializan.
+    const key = planPatientLockKey({ tenantId: A.tenantId, patientId: p });
+    let calls: Promise<unknown>[] = [];
+    await db.$transaction(
+      async (htx) => {
+        await htx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${program.id} FOR UPDATE`;
+        await htx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+        calls = [
+          addCustomSession({ programId: program.id, title: "Extra A" }),
+          addCustomSession({ programId: program.id, title: "Extra B" }),
+        ];
+        await waitForAdvisoryWaiter(db, key, { minWaiters: 2 });
+      },
+      { timeout: 20_000 }
+    );
+    const results = await Promise.all(calls);
+    expect(results.every((r) => (r as { ok: boolean }).ok)).toBe(true);
+
+    const idx = (await db.session.findMany({ where: { programId: program.id }, select: { index: true } }))
+      .map((s) => s.index)
+      .sort((a, b) => a - b);
+    expect(idx).toEqual([1, 2, 3, 4]);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).totalSessions).toBe(4);
+  });
+
+  it("[P0-S02s] add/substitute/bulk rechazan ejercicios archivados", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { program, sessions } = await makeProgram(p, { n: 1 });
+    const archived = await db.exercise.create({
+      data: { slug: `test-arch-${uniqueSuffix()}`, name: "Archivado", tenantId: A.tenantId, archivedAt: new Date() },
+    });
+    const sx = await db.sessionExercise.create({
+      data: { sessionId: sessions[0].id, exerciseId, order: 1, sets: 3, reps: 10 },
+    });
+
+    const add = await addSessionExercise({ sessionId: sessions[0].id, exerciseId: archived.id });
+    const sub = await substituteSessionExercise({ sessionExerciseId: sx.id, newExerciseId: archived.id });
+    const bulk = await bulkAddSessionExercises({
+      programId: program.id,
+      exerciseIds: [archived.id],
+      range: { kind: "all" },
+    });
+    expect(add.ok).toBe(false);
+    expect(sub.ok).toBe(false);
+    expect(bulk.ok).toBe(false);
+    expect(await db.sessionExercise.count({ where: { exerciseId: archived.id } })).toBe(0);
+    // El substitute rechazado no se llevó el ejercicio original.
+    expect(await db.sessionExercise.findUnique({ where: { id: sx.id } })).not.toBeNull();
+  });
+
+  it("[P0-S02s] bulk no toca completadas", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { program, sessions } = await makeProgram(p, { n: 2 });
+    await db.session.update({ where: { id: sessions[0].id }, data: { completedAt: new Date() } });
+
+    const r = await bulkAddSessionExercises({ programId: program.id, exerciseIds: [exerciseId], range: { kind: "all" } });
+    expect(r).toEqual({ ok: true, data: { created: 1, skipped: 0 } });
+    expect(await db.sessionExercise.count({ where: { sessionId: sessions[0].id } })).toBe(0);
+    expect(await db.sessionExercise.count({ where: { sessionId: sessions[1].id } })).toBe(1);
+  });
+
+  it("[P0-S02s] reschedule en plan CANCELLED → rechazo", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    for (const status of ["CANCELLED", "COMPLETED"] as const) {
+      const { sessions } = await makeProgram(p, { n: 1, status });
+      const s = sessions[0];
+      const r = await rescheduleSession({
+        sessionId: s.id,
+        scheduledFor: new Date(s.scheduledFor.getTime() + 2 * DAY).toISOString(),
+      });
+      expect(r.ok).toBe(false);
+      expect((await db.session.findUniqueOrThrow({ where: { id: s.id } })).scheduledFor.toISOString()).toBe(
+        s.scheduledFor.toISOString()
+      );
+    }
+  });
+
+  it("rescheduleSession valida con zod: fecha sin hora/offset → rechazo sin escribir", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { sessions } = await makeProgram(p, { n: 1 });
+    const s = sessions[0];
+    // "2027-03-10" a pelo el host lo lee como 00:00 UTC = 21:00 AR del día anterior.
+    for (const scheduledFor of ["2027-03-10", "mañana", ""]) {
+      expect(await rescheduleSession({ sessionId: s.id, scheduledFor })).toMatchObject({ ok: false });
+    }
+    expect((await db.session.findUniqueOrThrow({ where: { id: s.id } })).scheduledFor.toISOString()).toBe(
+      s.scheduledFor.toISOString()
+    );
+  });
+
+  it("completeSessionInTx 'booking': solo completedAt (sin ejercicios, EVA ni meta), sin autocompletar, idempotente", async () => {
+    const p = await addPatient(db, A);
+    const { program, sessions } = await makeProgram(p, { n: 1 });
+    const s = sessions[0];
+    await db.session.update({ where: { id: s.id }, data: { paInPost: 5 } });
+    await db.sessionExercise.create({ data: { sessionId: s.id, exerciseId, order: 1, sets: 3, reps: 10 } });
+    const now = new Date();
+
+    const r1 = await runWithRls(A.tenantId, (tx) =>
+      completeSessionInTx(tx, {
+        tenantId: A.tenantId,
+        sessionId: s.id,
+        actorId: A.userId,
+        source: "booking",
+        meta: { notes: "no se escribe", paInPost: 9 },
+        now,
+      })
+    );
+    expect(r1).toEqual({ claimed: true, programId: program.id });
+    const row = await db.session.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row.completedAt?.toISOString()).toBe(now.toISOString());
+    expect(row).toMatchObject({ notes: null, paInPost: 5 });
+    expect((await db.sessionExercise.findFirstOrThrow({ where: { sessionId: s.id } })).status).toBe("PENDING");
+    expect(await db.evaScore.count({ where: { patientId: p } })).toBe(0);
+    // 1/1 sesiones cerradas y el plan sigue ACTIVE: el helper no autocompleta.
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("ACTIVE");
+    expect(
+      await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "session.complete", entityId: s.id } })
+    ).toBe(1);
+
+    const r2 = await runWithRls(A.tenantId, (tx) =>
+      completeSessionInTx(tx, { tenantId: A.tenantId, sessionId: s.id, actorId: A.userId, source: "booking", now })
+    );
+    expect(r2).toEqual({ claimed: false, programId: program.id });
+    expect(
+      await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "session.complete", entityId: s.id } })
+    ).toBe(1);
+  });
+
+  it("completeSessionInTx: sesión de otro tenant → no la encuentra y no escribe", async () => {
+    const B = await createEphemeralTenant(db);
+    try {
+      const p = await addPatient(db, A);
+      const { sessions } = await makeProgram(p, { n: 1 });
+      const r = await runWithRls(B.tenantId, (tx) =>
+        completeSessionInTx(tx, {
+          tenantId: B.tenantId,
+          sessionId: sessions[0].id,
+          actorId: B.userId,
+          source: "seguimiento",
+          now: new Date(),
+        })
+      );
+      expect(r).toEqual({ claimed: false, programId: null });
+      expect((await db.session.findUniqueOrThrow({ where: { id: sessions[0].id } })).completedAt).toBeNull();
+    } finally {
+      await B.cleanup();
+    }
+  });
+
+  it("reopenSessionIfUntouchedInTx: reabre la untouched; la tocada queda realizada; otro tenant no la ve", async () => {
+    const p = await addPatient(db, A);
+    const { sessions } = await makeProgram(p, { n: 4 });
+    const done = new Date();
+    for (const s of sessions) await db.session.update({ where: { id: s.id }, data: { completedAt: done } });
+    // [0] untouched (ejercicio PENDING no cuenta) · [1] con notas · [2] con un ejercicio DONE · [3] abierta.
+    await db.sessionExercise.create({ data: { sessionId: sessions[0].id, exerciseId, order: 1, sets: 3, reps: 10 } });
+    await db.session.update({ where: { id: sessions[1].id }, data: { notes: "evolución" } });
+    await db.sessionExercise.create({
+      data: { sessionId: sessions[2].id, exerciseId, order: 1, sets: 3, reps: 10, status: "DONE" },
+    });
+    await db.session.update({ where: { id: sessions[3].id }, data: { completedAt: null } });
+
+    const reopen = (tenantId: string, sessionId: string) =>
+      runWithRls(tenantId, (tx) => reopenSessionIfUntouchedInTx(tx, { tenantId, sessionId, now: new Date() }));
+
+    expect(await reopen(A.tenantId, sessions[0].id)).toEqual({ reopened: true });
+    expect(await reopen(A.tenantId, sessions[1].id)).toEqual({ reopened: false, reason: "touched" });
+    expect(await reopen(A.tenantId, sessions[2].id)).toEqual({ reopened: false, reason: "touched" });
+    expect(await reopen(A.tenantId, sessions[3].id)).toEqual({ reopened: false, reason: "not-completed" });
+
+    const rows = await db.session.findMany({ where: { id: { in: sessions.map((s) => s.id) } } });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(sessions[0].id)?.completedAt).toBeNull();
+    expect(byId.get(sessions[1].id)?.completedAt).not.toBeNull();
+    expect(byId.get(sessions[2].id)?.completedAt).not.toBeNull();
+
+    const B = await createEphemeralTenant(db);
+    try {
+      expect(await reopen(B.tenantId, sessions[1].id)).toEqual({ reopened: false, reason: "not-found" });
+    } finally {
+      await B.cleanup();
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Planes P0 · cierre de ES1 (P0.Z) — carreras de Seguimiento
+  // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Espera a que `n` backends estén bloqueados en un lock de FILA con una
+   * sentencia que matchea `pattern`. `advisory-wait` filtra por clave de
+   * advisory; acá los locks son de fila, que en `pg_locks` no tienen clave
+   * legible, así que se mira `pg_stat_activity` (wait_event_type = 'Lock').
+   * Si no se llega a bloquear en el plazo, tira: la carrera no se probó.
+   */
+  async function waitForRowLockWaiters(pattern: string, n: number, timeoutMs = 5_000) {
+    const deadline = Date.now() + timeoutMs;
+    let last = 0;
+    for (;;) {
+      const rows = await db.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE ${pattern}`;
+      last = rows[0]?.n ?? 0;
+      if (last >= n) return;
+      if (Date.now() >= deadline) throw new Error(`waitForRowLockWaiters: ${last}/${n} en ${pattern}`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  it("[P0-Z] dos cierres concurrentes de las últimas sesiones autocompletan el plan", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { program, sessions } = await makeProgram(p, { n: 3 });
+    await db.session.update({ where: { id: sessions[0].id }, data: { completedAt: new Date() } });
+    const last2 = [sessions[1], sessions[2]];
+    for (const s of last2) {
+      await db.sessionExercise.create({ data: { sessionId: s.id, exerciseId, order: 1, sets: 3, reps: 10 } });
+    }
+
+    // Barrera: un holder lockea los ejercicios de las dos sesiones. Cada cierre
+    // reclama su sesión y se frena en el UPDATE de sus ejercicios; al soltar,
+    // los dos siguen a la vez. Antes del fix cada uno contaba las realizadas
+    // sin ver el cierre (sin commitear) del otro → 2/3 en los dos → el plan
+    // quedaba ACTIVE con 3/3. Con el FOR UPDATE del programa antes del conteo,
+    // el segundo espera el commit del primero y cuenta 3/3.
+    let calls: Promise<Awaited<ReturnType<typeof completeSessionFromSeguimiento>>>[] = [];
+    await db.$transaction(
+      async (htx) => {
+        await htx.$queryRaw`SELECT id FROM "SessionExercise" WHERE "sessionId" IN (${last2[0].id}, ${last2[1].id}) FOR UPDATE`;
+        calls = last2.map((s) => completeSessionFromSeguimiento(s.id));
+        await waitForRowLockWaiters('%"SessionExercise"%', 2);
+      },
+      { timeout: 20_000 }
+    );
+    const results = await Promise.all(calls);
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(results.filter((r) => r.ok && r.data.programCompleted)).toHaveLength(1);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("COMPLETED");
+    expect(
+      await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.status", entityId: program.id } })
+    ).toBe(1);
+  });
+
+  it("[P0-Z] reprogramar vs. cierre concurrente: una sesión realizada no se mueve", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { sessions } = await makeProgram(p, { n: 1 });
+    const s = sessions[0];
+
+    // El holder cierra la sesión y la tiene lockeada. Antes del fix el
+    // reprogramar leía `completedAt` null (snapshot), pasaba el chequeo y su
+    // UPDATE por id esperaba el lock; al commitear el cierre, lo pisaba igual:
+    // sesión realizada con la fecha movida. Ahora lee con FOR UPDATE y re-chequea.
+    let call: ReturnType<typeof rescheduleSession> | undefined;
+    await db.$transaction(
+      async (htx) => {
+        await htx.session.update({ where: { id: s.id }, data: { completedAt: new Date() } });
+        call = rescheduleSession({ sessionId: s.id, scheduledFor: new Date(s.scheduledFor.getTime() + 2 * DAY).toISOString() });
+        await waitForRowLockWaiters('%"Session"%', 1);
+      },
+      { timeout: 20_000 }
+    );
+    const r = await call!;
+    expect(r.ok).toBe(false);
+    const row = await db.session.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row.scheduledFor.toISOString()).toBe(s.scheduledFor.toISOString());
+    expect(row.completedAt).not.toBeNull();
+  });
+
+  it("[P0-Z] reprogramar vs. cancelar el plan en paralelo: espera el estado del plan y rechaza", async () => {
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const { program, sessions } = await makeProgram(p, { n: 1 });
+    const s = sessions[0];
+
+    let call: ReturnType<typeof rescheduleSession> | undefined;
+    await db.$transaction(
+      async (htx) => {
+        await htx.treatmentProgram.update({ where: { id: program.id }, data: { status: "CANCELLED" } });
+        call = rescheduleSession({ sessionId: s.id, scheduledFor: new Date(s.scheduledFor.getTime() + 2 * DAY).toISOString() });
+        await waitForRowLockWaiters('%"TreatmentProgram"%FOR UPDATE%', 1);
+      },
+      { timeout: 20_000 }
+    );
+    const r = await call!;
+    expect(r.ok).toBe(false);
+    expect((await db.session.findUniqueOrThrow({ where: { id: s.id } })).scheduledFor.toISOString()).toBe(
+      s.scheduledFor.toISOString()
+    );
   });
 });

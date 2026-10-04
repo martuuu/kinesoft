@@ -573,6 +573,77 @@ editando el archivo (las marcadas `~`).
   - [catálogo] 37 siglas ambiguas sin alias (OSPA no se busca por sigla); Sancor 1000/1500 y especialidades de
     Mendoza por verificar.
 
+**Ronda 14 — Planes P0 (ES1): fugas E0, Secretaria (E1), fixes de planes y cimientos (04-oct-2026):** ejecutada en
+develop según [PLANES.md §8](PLANES.md). **Sin migraciones.** Pendiente: commit de Martin y QA de staging
+([QA.md §Planes P0](QA.md)). Nada se despliega hasta cerrar B (decisión del 04-oct): las fugas E0 siguen vivas en
+prod salvo hotfix (PLANES.md, "Abierto para Martin" (1)). Filas cerradas en §2 "Hallazgos del planning de Planes";
+los cimientos (motor y plata puros, loader por días, locks, `auditInTx`, dedupe) no tienen callers hasta ES2b.
+
+- 🟢 **E0 (fugas vivas, bloque A):**
+  - `getPatient` borrada: era una server action sin gate que devolvía la HC completa por RPC
+    (`tests/integration/patients-rpc-surface.test.ts:66-68` afirma que el export no existe).
+  - Firmador de media: `lib/exercise-media.ts` ya no exporta firmadores (`:10-12`); `signExerciseMedia(mediaId)`
+    carga la fila y firma su clave (`lib/exercise-media-internal.ts:56`). Nada firma una clave que mande el cliente.
+  - Storage por service role: `lib/storage-internal.ts:68,86,104` (upload/sign/remove chequeando `{error}`), usado
+    por `lib/files.ts:39` con los gates de hoy. **Lado prod = precheck (17)** (buckets privados, sin policies
+    anon/authenticated) y `SUPABASE_SERVICE_ROLE_KEY` en Vercel.
+  - `listBookingsInRange` con `bookingFieldAccess` (`lib/bookings.ts:727`) y `patientCondition` solo con
+    `clinical.read` + full (`:744-777`); programas con `orderBy createdAt desc` (`:697`).
+- 🟢 **E1 (Secretaria):**
+  - Nivel de acceso **`admin`** (PD-13): un rol sin `clinical.read` tiene siempre exactamente `admin` sobre todos los
+    pacientes del tenant, también con "Consultorio común", share o asignación (`lib/visibility.ts:138,153-155,200,249`).
+    Campo nuevo `Visibility.adminView` (`:90`). Cambio visible: `seesAll=false` para esos roles → el dashboard de
+    Secretaria/Facturación queda con alcance propio y Seguimiento vacío.
+  - Predicados puros `canOperateBooking` = `full || agenda.operateAll` y `canWriteClinical` = `clinical.read &&
+    full` (`lib/capabilities.ts:182,192`), en forma positiva: con `admin`, la forma `!== "basic"` dejaría operar a
+    BILLING. `bookingFieldAccess` (`lib/booking-field-access.ts:34`): un campo se escribe si y solo si se lee.
+  - Turnos: gate `canOperateBooking` en create/batch/update/status/cancel y los campos clínicos se sacan del patch
+    **antes** del write y del audit (`lib/bookings.ts:162-212`); `AgendaBookingRow.canOperate`/`clinicalWritable`
+    calculados en el server (`:943`); `admin` ve obra social, cobertura y estado de cobro, nunca texto clínico
+    (`:745,904,945`). Borrar turnos y cobros siguen pidiendo full (matriz de cobros → C0).
+  - Pacientes: `createPatient(raw, {assignTo})` deja la ficha a cargo del profesional del turno, validado en la tx
+    (`lib/patients.ts:757-857`); BILLING no crea; `getPatientCore` devuelve la proyección `admin` (`:332-402`);
+    `setPatientDiagnosis` exige `canWriteClinical` (`:1026-1036`). Audits nuevos: `patient.create`
+    `{assignedPractitionerId, clinicalIgnored?}` y `patient.read.admin`.
+  - UI: drawer opera con `canOperate` y edita texto con `clinicalWritable`; "Usar como diagnóstico" ya no borra el
+    diagnóstico (`components/agenda/booking-drawer/index.tsx:18-21,163,265`); perfil administrativo sin pestañas
+    clínicas y "Agregar turno" solo con `agenda.operateAll` (`components/patients/patient-profile.tsx:356-397`,
+    `app/(app)/pacientes/[id]/page.tsx:56`); la Secretaria crea pacientes solo desde el modal del turno.
+- 🟢 **Fixes de planes:** gates full en `createProgram` (`lib/programs.ts:164-187`, zod + día AR), Diagnóstico
+  (`lib/diagnosis.ts:208-280`) y plantillas (`lib/plan-templates.ts:172-224`); ejercicios `assignableExerciseWhere`;
+  dosis `?? 3/12`; tope 60; días elegidos en Diagnóstico; portal sin `Session.notes` y con el ACTIVE más reciente
+  (`lib/portal.ts:150-168`); ICS con `bookingFieldAccess` (`lib/bookings-export-internal.ts:68-84`); `addCustomSession`
+  con `FOR UPDATE` del programa (`lib/sessions.ts:~745`); fechas de plan en día AR en las 4 superficies; StatusTag
+  único (`components/ui/status-tag.tsx`); tokens (`app/globals.css:26,34,51-52,63+`); perfil con el ACTIVE más
+  reciente + "+N" (`pickProfilePrograms`, `patient-profile.tsx:63`).
+- 🟢 **Cimientos sin callers (ES2b los consume):** `runWithRls(..., {timeout, maxWait})` + `auditInTx`;
+  `lockCapacityMany` y `lockPlanPatient` (`lib/booking-cap-lock.ts`, `lib/plan-lock.ts`); motor puro
+  `lib/availability/plan.ts` + `patientConflictsAt` + `nextFreeSlot({until})`; `lib/plan-schedule.ts`;
+  `loadAvailabilityInputsForDays` (`lib/availability-loader.ts`); `lib/plan-pricing.ts` y `lib/plan-display.ts`;
+  `lib/sessions-internal.ts` (`completeSessionInTx:67`, `reopenSessionIfUntouchedInTx:152`); dedupe de
+  `(programId, index)` (`scripts/plans-dedupe-session-index.ts`, dry-run local: 0 duplicados); `tests/perf/compare.ts`
+  y `PERF_OUT_DIR`; `tests/helpers/advisory-wait.ts`.
+- **Revisión P0.Z:** revisor (a) 0 altos, revisor (b) 0 fugas nuevas. Sus ítems (A1, A3-A5, H-b1..H-b4) están en §2
+  como "cerrado en P0.Z (fixer)" (verificados en el archivo y con tests `[P0-Z]`: `tests/unit/plan-pricing.test.ts`,
+  `tests/unit/availability-plan.test.ts`, `tests/integration/sessions.test.ts`, `tests/integration/es1-review-fixes.test.ts`).
+- **Gate de ES1 (04-oct, en solitario sobre el Docker):** `tsc` 0 (app y `tsconfig.scripts.json`); unit 1451/1451 en UTC
+  y en AR; guard OK; `next build` OK; `perf:bundle` sin excesos; integración completa 572 + 1 skip (`kinesoft_app`) y
+  555 + 18 skip (owner BYPASSRLS); perf + `compare.ts` sin regresiones (28 escenarios); 0 `it.fails` pendientes.
+- **Perf (fixer 3):** las 7 "regresiones" que dio `compare.ts` ya estaban en HEAD `3ff2e50` (medido con `git archive`
+  de HEAD contra el mismo Docker): `agenda-multi.json` se grabó antes de `liveBlocksInTx` (re-lectura de bloqueos con el
+  lock de cupo, +1 por tx de escritura) y las filas A1 `createBooking`/`createBookingsBatch.20` se emparejaban por nombre
+  con un camino sin motor. `compare.ts` lleva `REFERENCE_ERRATA` documentada; **al regrabar los JSON, borrarla en el
+  mismo cambio**. Deltas de ES1 solo informativos: `listBookingsInRange` y el perfil leen Membership una vez más
+  (`getMembershipRole` en tx propia). Pendientes perf (C1): batch con `create` + catch P2002 en vez de `upsert`
+  (~40 sentencias menos en 20 turnos; cambia la semántica de un write-path), rol duplicado en `listBookingsInRange` y
+  perfil, `bulkPatientAccess` re-lee tenant/membership ya leídos por `visibilityForActor`; la regla `plus10` de
+  `listOpenSessions*` no matchea ninguna fila (loaders lo mide como `seguimiento`).
+- **Hallazgos nuevos** (filas en §2 "Hallazgos del planning de Planes"): `lib/search.ts` (C); edición de contacto y
+  cobertura por la Secretaria, selector "Profesional a cargo", proyección `admin` del directorio y filtros/selector de UI
+  sin `clinical.read` (C0); "Deshacer
+  Atendido" no reabre una sesión a medida (B, ES2b/S12b); wizard mobile sin días (S23); tooltip de `edit-toggles`
+  (P3); `--app-bg` del invite (C); `lockCapacityScope` → `lockCapacityMany` (C1).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -922,7 +993,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | public-booking-wizard-today-utc | baja | public-booking-wizard.tsx:606 | 🟢 | fix-public-booking-tz (Ronda 1) |
 | agenda-client-emptyslot-sethours | baja | agenda-client.tsx:738 | 🟢 | fix-timeline-oncreate (Ronda 1) |
 | getdaycounts-utc-slice | baja | lib/bookings.ts:163 | 🟢 | fix-bookings-tz (Ronda 1) |
-| plan-startdate-utc-midnight | media | plan-view.tsx:685 · lib/patients.ts:967 | 🔴 | **REABIERTO (Ronda 11)**: diagnosis/plan-templates OK, pero la Tab Plan manda `new Date("YYYY-MM-DD")` (medianoche UTC = 21:00 AR del día anterior) y `createProgram` no usa el zod `ProgramCreate`. Destino: B0-S02 |
+| plan-startdate-utc-midnight | media | lib/programs.ts:164-187 · lib/plan-form-defaults.ts:32 | 🟢 | Reabierto en Ronda 11; **cerrado en ES1** (Ronda 14): `createProgram` con zod `ProgramCreate` y día AR (P0-S02a), Tab Plan y plantilla con hoy AR (P0-S02u-plan, P0-S02t). Ver `plan-dates-utc-host` |
 | ics-export-week-window-host-tz | media | agenda/export/route.ts:17 | 🟢 | tz-server-exports (Ronda 1) |
 
 **Integridad / concurrencia (bucket A/B):**
@@ -934,10 +1005,10 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | batch-create-overlap-race-and-no-rls | media | lib/bookings.ts:734 | 🟢 | idempotencia Ronda 1 + parte RLS Ronda 4 |
 | booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:1191,1210 | 🟢 | A2a-S06 (30-sep) — lock atómico con `updatedAt` en el WHERE; devuelven el `updatedAt` nuevo |
 | mp-webhook-idempotency-check-outside-tx | baja | lib/mercadopago.ts:193 | 🟢 | payment-amount-anclado (Ronda 2) |
-| session-index-no-unique-constraint | baja | schema.prisma:715 | 🔴 | soft-delete-wholesale |
+| session-index-no-unique-constraint | baja | schema.prisma:715 | 🔴 | Planes P1-S10 (M1: único parcial `Session_programId_index_live_key`; dedupe previo P0-S02x). Absorbe `soft-delete-wholesale` |
 | program-session-hard-delete | media | lib/patients.ts:1316 | 🟢 | patients-integridad — gate de rol (Ronda 2) |
 | session-totalsessions-read-modify-write | baja | lib/patients.ts:1347 | 🟢 | patients-integridad (Ronda 2) |
-| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1091 | 🔴 | copago-snapshot (B, con Planes). A2a-S08 cortó la parte de pérdida: misma OS actualiza en el lugar y el copago propio solo se borra con `resetCopago` confirmado |
+| retroactive-copago-on-coverage-replace | media | lib/patients.ts:1091 | 🔴 | Planes P2-S12 (Q8: congelar el copago al cobrar) = **parcial**; el resto (impagos pasados, `insurerPaidAt`) → C0. A2a-S08 cortó la parte de pérdida: misma OS actualiza en el lugar y el copago propio solo se borra con `resetCopago` confirmado |
 | coverage-sin-schema-zod | media | lib/patients.ts:1015 | 🟢 | patients-integridad (Ronda 2) |
 
 **Seguridad / config / observabilidad:**
@@ -982,9 +1053,9 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
 | roles-assistant-billing-cosmeticos | media | schema.prisma:108 · lib/capabilities.ts | 🟡 | roles-assistant-billing — B-pre les dio capabilities reales (ASSISTANT opera la agenda sin `clinical.read`); falta en C0 que puedan loguearse sin fila Practitioner (`secretaria-sin-practitioner`) |
 | no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
-| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | realtime-agenda (B4) |
-| portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | portal-userid-link |
-| patient-tenancy-single-home-row | baja | schema.prisma:250 | ⏸ | gate: 1er paciente en 2 tenants |
+| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | **C2** (reclasificada en el Paso 0 de Planes, 04-oct: decía "(B4)", que choca con la ola P4 de Planes) |
+| portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
+| patient-tenancy-single-home-row | baja | schema.prisma:250 | 🔴 | Planes P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + P4-S24a (una cuenta, fichas por consultorio, sin compartir nada clínico) |
 | l1-portal-minimo | baja | lib/portal.ts:1 | 🔴 | Portal v2 (Ola 2.6) |
 | scripts-adhoc-como-tests | baja | scripts/create-tenant.ts:1 | 🔴 | suite-integracion |
 | no-qa-checklist-versionado | baja | — | 🟢 | TESTING.md |
@@ -1043,7 +1114,7 @@ Evidencia de cada cierre en §Ronda 12.
 | formatars-sin-centavos-en-listados | baja | C1 | lib/format.ts | 🔴 | C1 — $1.500,50 se ve "$1.501" |
 | destildar-copago-publica-la-vence | baja | C1 | components/agenda | ⏸ | aceptado: vuelve UNPAID y puede quedar vencida |
 | seguimiento-7-queries | baja | C1 | app/(app)/seguimiento/page.tsx | 🔴 | C1 perf — medido al cierre de A: 8→28 statements en 1 tx, 15→47 ms (PERF.md) |
-| portal-plan-expone-notas-de-sesion | media | C1 | lib/portal.ts:148,156,179 | 🔴 | C1 · portal v2 — `getPortalPlan` devuelve `Session.notes` del kine al paciente |
+| portal-plan-expone-notas-de-sesion | media | B | lib/portal.ts:150-168 | 🟢 | P0-S02p (ES1) — `getPortalPlan` sin `notes` y con el ACTIVE más reciente; test en `portal.test.ts` |
 | signup-confirm-doble-salto | alta | A | lib/auth.ts · lib/safe-next.ts `unwrapConfirmNext` · app/auth/confirm/route.ts | 🟢 | cerrado 30-sep: `emailRedirectTo` = destino final + unwrap de `next` autorreferente; test en safe-next.test.ts |
 | tenant-contacto-solo-en-stepper | baja | C0 | lib/onboarding.ts · Configuración | 🔴 | C0 — `phone`/`whatsapp`/`publicEmail` no se editan en `updateTenantBasics` |
 | onboarding-actor-otro-tenant | baja | C | lib/onboarding.ts (pasos 3-6) | 🔴 | C — OWNER con alta sin terminar que acepta invitación de otro tenant: `getActor` puede elegir el otro |
@@ -1070,7 +1141,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | missing-fk-indexes (`Coverage.patientId`) | baja | C1 | prisma/schema.prisma | 🔴 | C1 (ya anotado en A1; se re-confirmó) |
 | bundle-sobre-presupuesto-bpre | media | C1 | /agenda 195 · /configuracion 209 · /pacientes/[id] 194 · /onboarding 185 · /plataforma/ejercicios 184 · /diagnostico 180 · /c/[slug]/booking 153 kB | 🔴 | C1 — el layout compartido creció 10-16% |
 | zoom-dia-semana | baja | C1 | lib/preferences.ts · components/agenda/agenda-utils.ts | 🔴 | C1 — el zoom 15/30/60 solo aplica a Por profesional; decidir zoom por usuario vs `Tenant.agendaSlotMinutes` |
-| statustag-fmtmoney-duplicados | baja | C1 | components/agenda | 🔴 | C1 — dos `StatusTag` y dos `fmtMoney` |
+| statustag-fmtmoney-duplicados | baja | B | components/ui/status-tag.tsx · billing-rows.tsx:4,50 | 🟡 | P0-S04b hecho (un `StatusTag`, `formatARS` en `billing-rows`); cierre formal en P3.Z |
 | booking-body-css-regla-muerta | baja | C | app/globals.css | 🔴 | C — regla `.booking-body` (≤1024 px) |
 | turnero-texto-fijo-lun-sab | baja | C | nav del turnero público | 🔴 | C — "lun-sáb 8 a 19hs" fijo; derivar de las franjas reales |
 | public-overlap-lookback-sin-uso | baja | C | lib/public-booking* | 🔴 | C — `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso |
@@ -1078,6 +1149,93 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | secretaria-sin-practitioner | media | C0 | lib/session.ts:91-97 | 🔴 | C0 — `buildActor` exige fila Practitioner: una Secretaria (ASSISTANT) no puede loguearse sin una |
 | catalogo-siglas-ambiguas | baja | catálogo | prisma/catalog/payers.csv (`aliases`) · lib/catalog/normalize.ts `matchKey` | 🔴 | curado en Plataforma — 37 siglas ambiguas sin alias (p. ej. OSPA no se encuentra por sigla) |
 | catalogo-datos-por-verificar | baja | catálogo | prisma/catalog/payer-plans.csv · specialties.csv | 🔴 | curado — planes Sancor 1000/1500 y especialidades de Mendoza |
+
+### Hallazgos del planning de Planes y de su verificación (02/03-oct-2026)
+
+Planning en [PLANES.md](PLANES.md) (firmado por Martin el 03-oct). Los de bloque A eran fugas vivas o permisos de la
+Secretaria (enmiendas E0/E1, verificadas por `wf_bf603f14-cb7`). **ES1 los cerró en código** (Ronda 14); por la
+decisión del 04-oct ("nada se despliega hasta cerrar B") **siguen vivos en prod** hasta el deploy final, salvo que
+Martin decida un hotfix (PLANES.md, "Abierto para Martin"). Las líneas de 🟢 son del working tree al cierre de ES1.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Sesión dueña / cierre |
+|---|---|---|---|---|---|
+| getpatient-rpc-sin-gate | alta | A | ~~lib/patients.ts:647~~ | 🟢 | P0-S02a — borrada; `tests/integration/patients-rpc-surface.test.ts:66-68` afirma que el export no existe. El revisor (b) barrió las exports que leen Patient/Booking/Session: 0 fugas nuevas |
+| exercise-media-firmador-abierto | alta | A | lib/exercise-media.ts:10-12 · lib/exercise-media-internal.ts:56 | 🟢 | P0-S02m — `lib/exercise-media.ts` sin firmadores; `signExerciseMedia(mediaId)` firma solo la clave de la fila (solo media global; scoping por tenant → C1 si aparece media de tenant) |
+| storage-policies-sin-verificar | alta | A | lib/storage-internal.ts:68,86,104 · lib/files.ts:39 · storage.objects | 🟢 | **Lado código** (P0-S02m: Storage solo por service role, `{error}` chequeado). **Prod pendiente:** precheck (17) de Martin; si hay bucket público o policy anon/authenticated, se dropea en el mismo deploy (MIGRACIONES-RUNBOOK §2.3). Requiere `SUPABASE_SERVICE_ROLE_KEY` en Vercel |
+| listbookingsinrange-rpc-sin-clinical | media | A | lib/bookings.ts:663,727,744-777 | 🟢 | P0-S07k — `bookingFieldAccess` + `patientCondition` solo con `clinical.read` y full; test `bookings-range-clinical.test.ts` (borrarla sigue en C1) |
+| secretaria-autoasigna-pacientes | alta | A | lib/patients.ts:757-857 | 🟢 | P0-S07sp — `createPatient(raw, {assignTo})` al profesional del turno, validado en la tx. Prod: precheck (15) antes del deploy |
+| secretaria-ve-hc-con-shared | alta | A | lib/visibility.ts:138,153-155,200,249 · lib/patients.ts:332-402,1026-1036 · booking-drawer/index.tsx:163 · patient-profile.tsx:356 | 🟢 | P0-S02p (nivel `admin`) + P0-S07sp (proyección `admin`, `setPatientDiagnosis` con `canWriteClinical`) + P0-S07u (drawer; "Usar como diagnóstico" ya no borra) + P0-S07v (perfil) |
+| portal-userid-unique-500 | media | B | prisma/schema.prisma:178 · app/auth/callback/route.ts:69-83 | 🔴 | P1-S10 (índice por consultorio, DROP INDEX aprobado) + P4-S24a (callback atrapa P2002) |
+| plan-creation-sin-gate-basic | alta | B | lib/programs.ts:164-187 | 🟢 | P0-S02a — `createProgram` (movida a `lib/programs.ts` por P0-Cs) con `hcAccessError` en la tx, zod `ProgramCreate` 1..60 y día AR; S02d/S02t en sus puertas |
+| diagnosis-ejercicios-y-condicion-sin-gate | alta | B | lib/diagnosis.ts:208-280 | 🟢 | P0-S02d — gate full en la tx, ejercicios `assignable`, condición global o del tenant |
+| apply-plan-template-null-sets-reps | media | B | lib/plan-templates.ts:172-224 | 🟢 | P0-S02t — dosis `?? 3/12`, gate full + `TEMPLATES_PLANS`, `deletePlanTemplate` solo autor o admin (`:110-126`) |
+| varios-planes-activos-take1 | media | B | lib/patients.ts:186 · lib/bookings.ts:697 · lib/diagnosis.ts:435 · lib/portal.ts:168 · patient-profile.tsx:63 | 🟢 | P0-S02a / S07k / S02d / S02p / S02u-perfil — `orderBy createdAt desc`; el perfil elige el ACTIVE más reciente y muestra "+N" |
+| session-index-race-addCustomSession | media | B | lib/sessions.ts:~745 | 🟢 | P0-S02s — `SELECT … FOR UPDATE` del programa; test de concurrencia en `sessions.test.ts` |
+| gating-ejercicios-incluye-archivados | media | B | lib/plan-gating.ts:88 · lib/sessions.ts:646,810,959 | 🟢 | P0-Ck (`assignableExerciseWhere`) + P0-S02s/S02d/S02t; el bulk no toca sesiones realizadas |
+| statustag-tres-paletas | baja | B | components/ui/status-tag.tsx:83 | 🟢 | P0-S04b — un solo `StatusTag` con `--st-*`; drawer, Lista, perfil y Recepción lo re-exportan |
+| tokens-inexistentes | baja | B | app/globals.css:26,34,51-52,63 | 🟢 | P0-S04a — `--lime-700`, `--navy-400`, `--disc-kine`/`--disc-osteo` (hex AA) y `--st-*` definidos; `tag.tsx` no necesitó cambios |
+| saveDiagnosisDraft-rpc-muerta | baja | B | lib/diagnosis.ts:14 | 🟢 | P0-S02d — borrada (sin callers) |
+| ics-ignora-clinical-read | media | B | lib/bookings-export-internal.ts:68-84 | 🟢 | P0-S02p — detalle solo con `bookingFieldAccess` (full **y** `clinical.read`); test `ics-export.test.ts` |
+| plan-dates-utc-host | media | B | diagnostico-wizard.tsx:60 · assign-plan-modal.tsx:103 · plan-template-apply.tsx:10 · lib/plan-form-defaults.ts:32 | 🟢 | P0-S02u-diag + P0-S02u-plan — hoy AR con `toARDateKey` (`plan-view.tsx:346` no era bug). Absorbe `plan-startdate-utc-midnight` |
+| updateProgram-desincroniza-total | alta | B | lib/programs.ts:222 | 🔴 | P2-S15 — `updateProgram` solo título y notas, con CAS (en ES1 solo pasó a zod + una tx) |
+| hard-delete-plan-session | media | B | lib/programs.ts (`deleteSession`) | 🔴 | P2-S15 — archivar |
+| delete-service-sin-contar-planes | media | B | lib/services.ts (`deleteService`) | 🔴 | P2-S13 |
+| ensureTag-kind-libre | media | B | lib/exercises.ts:207-221 | 🔴 | P2-S13x |
+| reception-p2002-500 | media | B | lib/bookings.ts (`markReceptionAction`) | 🔴 | P2-S12 |
+| upsert-holder-pisa-turno-de-plan | alta | B | lib/bookings.ts (`createBooking`, upsert del holder) | 🔴 | P2-S12 |
+| dashboard-session-index-crudo | baja | B | lib/dashboard.ts:319 · seguimiento/[sessionId]/page.tsx:13,25 | 🔴 | P2-S14 + P3-S20 |
+| limites-sesiones-divergentes | baja | B | lib/validation.ts:318 · diagnosis · plantillas · plan-view.tsx:419 | 🟡 | tope 60 (`PLAN_MAX_SESSIONS`) aplicado en P0 (S02a/S02d/S02t/S02u-plan) → se cierra en P4.Z con el editor |
+| plantillas-sin-crud | media | B | lib/plan-templates.ts | 🔴 | P3-S17t + P3-S21t |
+| plan-status-sin-confirm | baja | B | plan-view.tsx:126,567 | 🟡 | P0-S02u-plan (`useConfirm` en todo cambio de estado, errores visibles, "Eliminar" solo admin) → se cierra en P3.Z con S22a |
+| hero-plan-activo-falso | baja | B | profile/hero.tsx:35 · patient-profile.tsx:63-71 | 🟡 | P0-S02u-perfil (`HeroPlanState`: activo / pausado / terminado) → cierre formal en P3.Z con S22h |
+| service-duration-mayor-lookback | baja | C1 | lib/services.ts:70 (5..480) vs lookback 240 | 🔴 | C1 — Planes valida la duración efectiva 15..240 (`validatePlanRefsInTx`) y exige override |
+| perf-baseline-se-regraba | baja | B | tests/perf/loaders.perf.test.ts:77-80 · pool-pressure:40 · agenda-multi:23 · tests/perf/compare.ts | 🟢 | P0-Cs + P0-Ct — `PERF_OUT_DIR` (medir fuera del árbol) + `compare.ts` contra el baseline versionado |
+
+**Revisión de cierre de ES1 (P0.Z).** Revisor (a) (locks, dedupe, sesiones, TZ): 0 altos. Revisor (b) (seguridad,
+E0/E1): 0 fugas nuevas; los H-b son preexistentes.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre |
+|---|---|---|---|---|---|
+| A1 prior-paid-cuenta-refunded | media | B | lib/plan-pricing.ts:309 (`priorPaidStamp`) | 🟢 | cerrado en P0.Z (fixer) — el reemplazo salía en $0 con un previo REFUNDED/AUTHORIZED. Ahora "cobro previo" = `bookingWasCollected` (`PAID`, `insurerPaidAt` o Payment `PAID`, `lib/plan-pricing.ts:89`); `bookingHasMoney` sigue para la fila bloqueada del reprecio. PLANES C5 |
+| A3 sugerencia-ultima-fila-mismo-dia | baja | B | lib/availability/plan.ts (`classifyPlanRows`, última fila) | 🟢 | cerrado en P0.Z (fixer) — la última fila usaba `addDays(día,1)` y nunca sugería otro día; ahora pasa `null` (horizonte de `nextFreeSlot`) |
+| A4 autocompletar-carrera-ultimas-sesiones | baja | B | lib/sessions.ts (`completeSessionFromSeguimiento`) | 🟢 | cerrado en P0.Z (fixer) — dos cierres concurrentes de las últimas sesiones nunca autocompletaban; ahora toma Session → `TreatmentProgram` `FOR UPDATE` antes del conteo (PLANES C2 (3)) |
+| A5 reschedule-session-check-then-write | baja | B | lib/sessions.ts (`rescheduleSession`) | 🟢 | cerrado en P0.Z (fixer) — check-then-write sin lock; ahora toma Session → `TreatmentProgram` `FOR UPDATE` en la tx (PLANES C2 (3)) |
+| H-b1 listpatients-oraculo-diagnostico | media | B | lib/patients.ts (`listPatients`) | 🟢 | cerrado en P0.Z (fixer) — era un oráculo de diagnóstico. Decisión: con filtros clínicos (diagnóstico / con plan / sin plan) un rol sin `clinical.read` recibe lista vacía; con obra social / edad / última visita se descartan las filas basic y se conservan las `admin`. Cerrado también el oráculo de email en `q` para filas basic. Test: `tests/integration/es1-review-fixes.test.ts` para `admin`/basic |
+| H-b2 share-authority-secretaria | baja-media | B | lib/patients.ts (`requireShareAuthority`, `assignPatientToPractitioner`) | 🟢 | cerrado en P0.Z (fixer) — la Secretaria asignada manejaba shares y `assignPatientToPractitioner` no exigía `CLINICAL_ROLES`. Test: `es1-review-fixes.test.ts` |
+| H-b3 guest-full-abre-billing | baja | B | lib/bookings.ts (turnos guest) | 🟢 | cerrado en P0.Z (fixer) — guest = full le abría a BILLING operar, borrar y cobrar turnos guest. Ahora `guestOperable` = `agenda.operateAll || clinical.read`; la Secretaria sigue fijando el copago de un guest (intencional). Test: `es1-review-fixes.test.ts` |
+| H-b4 search-assignment-edad-plan | baja | B | lib/diagnosis.ts:404 (`searchPatientsForAssignment`) | 🟢 | cerrado en P0.Z (fixer) — devolvía edad y plan activo a cualquier rol (el picker del Plan Builder queda en propios + compartidos). Test: `es1-review-fixes.test.ts` |
+
+**Hallazgos nuevos de ES1** (clasificados en el momento):
+
+| Slug | Sev | Bloque | Ubicación | Estado | Destino |
+|---|---|---|---|---|---|
+| search-condition-sin-tenant-y-email-basic | baja | C | lib/search.ts:70,111 | 🔴 | C — la búsqueda de `condition` no filtra por tenant (con BYPASSRLS ve los nombres de condiciones privadas de otros consultorios; sin PHI) y a nivel basic muestra el email del paciente si no hay DNI |
+| secretaria-edita-contacto-cobertura | media | C0 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🔴 | C0 — PD-13 dice que `admin` ve contacto y cobertura; en ES1 el perfil `admin` es **solo lectura**. También: selector "Profesional a cargo" al crear desde el directorio (hoy la Secretaria crea solo desde el modal del turno) y `getPatientBillingPreview` sigue pidiendo full (la Secretaria ve copago null en el modal) |
+| ui-filtros-y-selector-sin-clinical | baja | C0 | profile/hero.tsx (selector "Profesional a cargo") · PatientsSearchBar | 🔴 | C0 — el selector del hero debería listar solo roles clínicos (el server ya rechaza los otros) y la barra del directorio debería ocultar "Con plan/Sin plan" y el filtro de diagnóstico sin `clinical.read` (el server ya devuelve vacío) |
+| directorio-admin-sin-contacto | baja | C0 | lib/patients.ts (`listPatients`) · patients-list.tsx:44 · recent-patients.tsx | 🔴 | C0 (o ES3) — el directorio para `admin` sigue con la proyección básica (sin contacto); al sumar `admin` a `PatientRow`, los chequeos de UI pasan a la forma positiva `=== "full"` |
+| deshacer-atendido-no-reabre-sesion-a-medida | media | B | lib/sessions.ts:771 (`addCustomSession` guarda el título en `notes`) · lib/sessions-internal.ts:152 | 🔴 | **ES2b / S12b** — una sesión a medida nunca queda "untouched", así que "Deshacer Atendido" no la reabre. Decidir en S12b (columna `Session.title` de M1) |
+| wizard-mobile-sin-dias | baja | B | components/screens/diagnostico-wizard.tsx | 🔴 | P3-S23 — el wizard mobile no tiene picker de días (el modal sí) |
+| edit-toggles-tooltip-secretaria | baja | B | components/agenda/booking-drawer/edit-toggles.tsx:67 | 🔴 | P3 (o integrador) — "Editar duración + notas del turno" no aplica a la Secretaria |
+| invite-app-bg-token | baja | C | app/invite/[token]/page.tsx:67 | 🔴 | C — `var(--app-bg, …)`: reemplazar por el fallback literal cuando se toque |
+| time-blocks-lockcapacityscope | baja | C1 | lib/time-blocks.ts:152,340 | 🔴 | C1 perf — pasar `lockCapacityScope` a `lockCapacityMany` (1 sentencia) |
+
+**Diferidos del planning de Planes** (sin fila propia hasta que se planifique su bloque):
+- **D:** prepago o seña con MP (D6); cargo por ausencia; pagar online desde el portal.
+- **C0:** "Cobrar paquete" (salvo PQ-08); arancel de OS retroactivo, turnero que cobra `service.priceCents` e ingresos del
+  dashboard que solo cuentan MP (P11); resto de `retroactive-copago-on-coverage-replace`; matriz fina de cobros (la
+  Secretaria marcando cobros o borrando turnos) y BILLING; BILLING en "cualquier profesional". La Secretaria sobre
+  turnos de plan **ya no es diferido**: entra en P0 (S07sb) y P2 (PD-09).
+- **C1:** condiciones custom en Diagnóstico; BK-01/03/04/05/08/09; dosis por tiempo; único anti-carrera del check-in de
+  EVA; perf del batch y de `createBooking`; borrar `listBookingsInRange`; zoom por usuario; aviso del candado si exige
+  tocar `time-blocks.ts`; presupuesto de bundle bloqueante; duraciones > 240 min; **ejercicios del portal fuera de un
+  plan** (los del plan entran en P4-S24e); adjunto de la orden médica de la OS; aviso "autorización por vencer" en el
+  dashboard si no entra en S14; FKs compuestas opcionales hacia Service/Practitioner/Location; sub-ramas de disciplina.
+- **C2:** plan abierto; `no-realtime-agenda-compartida`.
+- **Contract de B-pre:** después de P4.
+
+**Modelo de permisos (E1), vigente desde ES1:** nivel de acceso `admin` en `lib/visibility.ts` (datos administrativos,
+nunca HC) y capabilities `agenda.operateAll` (OWNER, ADMIN, ASSISTANT), `plans.manage`, `plans.schedule` y
+`plans.authorize` (estas tres sin callers hasta ES2b). §5.6 y §5.35 quedaron enmendados.
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -1163,6 +1321,12 @@ era intencional.
    intencional. Fuente única de copago. No duplicar el cálculo.
 6. **`lib/visibility.ts`** — `patientAccessFor`/`bulkPatientAccess`; PHI **nulificado en la
    proyección**, no solo oculto en UI; sin N+1. No mover el corte de acceso a la capa de UI.
+   **Enmienda ES1 (PD-13, nivel `admin`):** `AccessLevel` = `full | admin | basic | none`. Un rol sin `clinical.read`
+   (ASSISTANT, BILLING) tiene **siempre exactamente** `admin` sobre todos los pacientes del tenant: nunca `full` (ni con
+   "Consultorio común", share o asignación) y nunca menos (`lib/visibility.ts:138,153-155,200,249`). `admin` ve datos
+   administrativos (nombre, DNI, contacto, OS/cobertura, emergencia, turnos, estado de cobro), nunca HC. **Regla:**
+   todo chequeo que habilita HC o escritura clínica es `=== "full"` (o `canWriteClinical`), **nunca** `!== "basic"`:
+   con `admin` la forma negativa abre de más.
 7. **`lib/bookings.ts`** — `expectedUpdatedAt` (optimistic concurrency, 6 usos); mutaciones bajo
    `runWithRls`. No quitar el chequeo de `updatedAt`.
 8. **`app/auth/callback/route.ts`** — linkea `Patient` solo si `email_confirmed_at` y (`userId==null`
@@ -1228,7 +1392,9 @@ era intencional.
     pasar por C1 (presupuesto de bundle).
 24. **Exports solo por ruta** — `exportBookingsIcs` y `exportPatientsCsv` viven en `lib/*-export-internal.ts`
     (`server-only`); la única puerta es su ruta (`/api/agenda/export`, `/api/pacientes/export`) con rate-limit,
-    tope de rango y audit. No re-exportarlos desde un `"use server"`.
+    tope de rango y audit. No re-exportarlos desde un `"use server"`. **Desde ES1** el ICS decide el detalle con
+    `bookingFieldAccess` (acceso full **y** `clinical.read`, `lib/bookings-export-internal.ts:68-84`): no volver a
+    gatear solo por nivel.
 25. **Gate de onboarding (A3c)** — `app/(app)/layout.tsx` decide con `decideAppGate`
     (`lib/onboarding-logic.ts:100`, pura y testeada): sin sesión → `/login?next=` (vía `x-pathname` del
     middleware + `safeNext`), sin membresía → `/onboarding`, OWNER con `onboardingCompletedAt == null` →
@@ -1248,7 +1414,9 @@ era intencional.
     último del mes; paso 15 / 14 días; turnos cargados desde 240 min atrás. **Paridad:** con el backfill aplicado
     la salida es idéntica a la de ef3281f (`tests/unit/availability-*.test.ts` contra el oráculo congelado
     `lib/booking-schedule.ts`, más `tests/unit/public-slots.test.ts` sin cambios). Un cambio de comportamiento
-    va al motor con su propio test de paridad, nunca editando el oráculo. **Fallback permanente:** profesional
+    va al motor con su propio test de paridad, nunca editando el oráculo. **ES1 (aditivo, sin cambiar la paridad):**
+    `patientConflictsAt` exportado desde `lib/availability/classify.ts` y `nextFreeSlot({until?})` (cota exclusiva);
+    `availability-*.test.ts` y `public-slots.test.ts` siguen sin cambios. **Fallback permanente:** profesional
     sin franjas = horario del tenant lun-sáb en la sede principal; `Booking.locationId` null = principal. Sin
     cache de disponibilidad a propósito.
 28. **Orden de locks en escrituras de agenda (B-pre).** Siempre **cupo → sedes (compartido) → filas**: (1)
@@ -1291,7 +1459,13 @@ era intencional.
 35. **Capabilities fallan cerrado.** `capabilitiesFor` (`lib/capabilities.ts`) con rol desconocido o sin
     membresía devuelve el set vacío; la UI solo esconde y la barrera es `requireCapability` /
     `requireTenantAdmin` en cada action. ASSISTANT no tiene `clinical.read` (`listAgendaBookings` anula
-    title/description/notes). No volver a chequear `role === "OWNER"` a mano.
+    title/description/notes). No volver a chequear `role === "OWNER"` a mano. **Enmienda ES1 (E1):**
+    `agenda.operateAll` (OWNER, ADMIN, ASSISTANT; positiva, sin chequeos negativos) habilita operar cualquier turno
+    (crear, reprogramar, estado, cancelar) sin campos clínicos. Se consume **solo** por los predicados puros
+    `canOperateBooking` = `full || agenda.operateAll` y `canWriteClinical` = `clinical.read && full`
+    (`lib/capabilities.ts:182,192`), más `bookingFieldAccess` (un campo se escribe si y solo si se lee). Borrar turnos
+    y cobros siguen pidiendo full. `plans.manage`/`plans.schedule`/`plans.authorize` están en la matriz y se usan desde
+    ES2b (el "con full" va en la action, no en la matriz).
 
 ---
 

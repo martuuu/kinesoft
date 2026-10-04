@@ -16,14 +16,39 @@ import {
   deleteSession,
   setProgramStatus,
   updateProgram,
-} from "@/lib/patients";
+} from "@/lib/programs";
 import { addCustomSession, rescheduleSession } from "@/lib/sessions";
 import { localToARIso, isoToARLocalInput } from "@/lib/datetime-ar";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
+import {
+  PLAN_FORM_DEFAULTS,
+  planFormTodayKey,
+  programStatusConfirm,
+  type LegacyProgramStatus,
+} from "@/lib/plan-form-defaults";
 import type { RescheduleSessionResult } from "@/lib/sessions-types";
 import type { PatientWithRelations } from "../types";
 
-export function PlanView({ patient }: { patient: PatientWithRelations }) {
+export function PlanView({
+  patient,
+  canUseTemplates,
+  canDelete,
+}: {
+  patient: PatientWithRelations;
+  /**
+   * P0-Cs: `gatingForActor().canBuildTemplates`, resuelto en la página.
+   * S02u-plan: sin plantillas, "Aplicar plantilla" queda deshabilitado con
+   * aviso en vez de fallar al confirmar. Falla cerrado si no viene.
+   */
+  canUseTemplates?: boolean;
+  /**
+   * S02u-plan: OWNER/ADMIN (el `canReassign` de la página). `deleteProgram`
+   * exige `requireAdminRole`: antes el botón se mostraba a todos y al
+   * profesional le fallaba en silencio. Falla cerrado si no viene.
+   */
+  canDelete?: boolean;
+}) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
   // Show ALL programs of this patient as separate cards. Pre-Sprint 13
@@ -40,7 +65,7 @@ export function PlanView({ patient }: { patient: PatientWithRelations }) {
             <Button variant="primary" onClick={() => setCreating(true)}>
               <IconPlus size={14} /> Crear plan
             </Button>
-            <PlanTemplateApplyButton patientId={patient.id} />
+            <PlanTemplateApplyButton patientId={patient.id} disabled={!canUseTemplates} />
           </div>
         </Card>
       ) : (
@@ -68,11 +93,11 @@ export function PlanView({ patient }: { patient: PatientWithRelations }) {
               <Button variant="ghost" onClick={() => setCreating(true)} style={{ fontSize: 12 }}>
                 <IconPlus size={12} /> Plan nuevo
               </Button>
-              <PlanTemplateApplyButton patientId={patient.id} />
+              <PlanTemplateApplyButton patientId={patient.id} disabled={!canUseTemplates} />
             </div>
           </header>
           {programs.map((prog) => (
-            <ProgramCard key={prog.id} program={prog} />
+            <ProgramCard key={prog.id} program={prog} canDelete={canDelete === true} />
           ))}
         </>
       )}
@@ -92,14 +117,20 @@ export function PlanView({ patient }: { patient: PatientWithRelations }) {
 
 function ProgramCard({
   program,
+  canDelete,
 }: {
   program: PatientWithRelations["programs"][number];
+  canDelete: boolean;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [pending, start] = useTransition();
+  // S02u-plan: antes `changeStatus`/`confirmDelete` ignoraban `{ ok: false }`
+  // y el click "no hacía nada". El error queda visible en la card.
+  const [error, setError] = useState<string | null>(null);
 
   const done = program.sessions.filter((s) => s.completedAt).length;
   const pct = program.totalSessions
@@ -115,20 +146,34 @@ function ProgramCard({
           ? <Tag tone="soft">Pausado</Tag>
           : <Tag tone="soft">Cancelado</Tag>;
 
-  const changeStatus = (next: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED") => {
+  // El `<select>` es controlado (`value={current}`): si se cancela el confirm
+  // React lo vuelve a pintar con el estado real, sin estado local que limpiar.
+  const changeStatus = async (next: LegacyProgramStatus) => {
+    if (next === status) return;
+    const ok = await confirm(programStatusConfirm(next));
+    if (!ok) return;
+    setError(null);
     start(async () => {
       const r = await setProgramStatus({ id: program.id, status: next });
-      if (r.ok) router.refresh();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      router.refresh();
     });
   };
 
   const confirmDelete = () => {
+    setError(null);
     start(async () => {
       const r = await deleteProgram(program.id);
-      if (r.ok) {
+      if (!r.ok) {
         setDeleting(false);
-        router.refresh();
+        setError(r.error);
+        return;
       }
+      setDeleting(false);
+      router.refresh();
     });
   };
 
@@ -211,16 +256,33 @@ function ProgramCard({
             Editar
           </button>
           <AddCustomSessionButton programId={program.id} />
-          <button
-            type="button"
-            onClick={() => setDeleting(true)}
-            disabled={pending}
-            style={{ ...miniBtn, color: "#9F1F1F" }}
-          >
-            Eliminar
-          </button>
+          {canDelete && (
+            <button
+              type="button"
+              onClick={() => setDeleting(true)}
+              disabled={pending}
+              style={{ ...miniBtn, color: "#9F1F1F" }}
+            >
+              Eliminar
+            </button>
+          )}
         </div>
       </header>
+      {error && (
+        <div
+          role="alert"
+          style={{
+            margin: "0 16px 12px",
+            padding: 10,
+            borderRadius: 10,
+            background: "rgba(228,70,70,0.1)",
+            color: "#9F1F1F",
+            fontSize: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
       <div
         style={{
           height: 4,
@@ -260,7 +322,7 @@ function ProgramCard({
       {editing && (
         <EditProgramModal program={program} onClose={() => setEditing(false)} />
       )}
-      {deleting && (
+      {deleting && canDelete && (
         <ConfirmDeleteProgram
           program={program}
           pending={pending}
@@ -354,7 +416,7 @@ function EditProgramModal({
             name="totalSessions"
             type="number"
             min={1}
-            max={64}
+            max={PLAN_MAX_SESSIONS}
             defaultValue={program.totalSessions}
           />
           <FormField
@@ -788,15 +850,19 @@ export function CreateProgramModal({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Hoy AR, congelado al abrir el drawer (S02u-plan). Antes era el día UTC de
+  // `toISOString().slice(0,10)`: de 21:00 a 23:59 AR proponía mañana.
+  const [todayKey] = useState(() => planFormTodayKey());
 
   const submit = (formData: FormData) => {
+    setError(null);
     start(async () => {
       const result = await createProgram({
         patientId,
         title: String(formData.get("title") ?? ""),
-        totalSessions: Number(formData.get("totalSessions")) || 8,
-        frequency: Number(formData.get("frequency")) || 2,
-        startDate: new Date(String(formData.get("startDate") ?? "")),
+        totalSessions: Number(formData.get("totalSessions")) || PLAN_FORM_DEFAULTS.totalSessions,
+        frequency: Number(formData.get("frequency")) || PLAN_FORM_DEFAULTS.frequency,
+        startDate: String(formData.get("startDate") ?? ""),
       });
       if (!result.ok) {
         setError(result.error);
@@ -809,11 +875,25 @@ export function CreateProgramModal({
   return (
     <Drawer open onClose={onClose} title="Crear plan de tratamiento" width={480}>
       <form action={submit} style={{ display: "grid", gap: 10 }}>
-        <FormField label="Nombre" name="title" required defaultValue="Plan kinésico" />
+        <FormField label="Nombre" name="title" required defaultValue={PLAN_FORM_DEFAULTS.title} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <FormField label="Sesiones" name="totalSessions" type="number" min={1} max={64} defaultValue={8} />
-          <FormField label="Freq/sem" name="frequency" type="number" min={1} max={5} defaultValue={2} />
-          <FormField label="Inicio" name="startDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
+          <FormField
+            label="Sesiones"
+            name="totalSessions"
+            type="number"
+            min={1}
+            max={PLAN_FORM_DEFAULTS.maxSessions}
+            defaultValue={PLAN_FORM_DEFAULTS.totalSessions}
+          />
+          <FormField
+            label="Freq/sem"
+            name="frequency"
+            type="number"
+            min={1}
+            max={PLAN_FORM_DEFAULTS.maxFrequency}
+            defaultValue={PLAN_FORM_DEFAULTS.frequency}
+          />
+          <FormField label="Inicio" name="startDate" type="date" required defaultValue={todayKey} />
         </div>
         {error && (
           <div

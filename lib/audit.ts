@@ -1,5 +1,6 @@
 // Audit writes fire from webhooks/jobs without an Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
 
 /**
  * Append-only audit log for PHI access and important domain events.
@@ -7,7 +8,7 @@ import { prismaService as prisma } from "@/lib/db";
  * Usage:
  *   await audit({ tenantId, actorId, action: "patient.read", entity: "Patient", entityId: id });
  */
-export async function audit(params: {
+export type AuditParams = {
   tenantId: string;
   actorId?: string;
   action: string;
@@ -16,22 +17,48 @@ export async function audit(params: {
   ip?: string;
   userAgent?: string;
   payload?: Record<string, unknown>;
-}) {
+};
+
+function auditData(params: AuditParams) {
+  return {
+    tenantId: params.tenantId,
+    actorId: params.actorId,
+    action: params.action,
+    entity: params.entity,
+    entityId: params.entityId,
+    ip: params.ip,
+    userAgent: params.userAgent,
+    payload: params.payload as object | undefined,
+  };
+}
+
+export async function audit(params: AuditParams) {
   try {
-    await prisma.auditEvent.create({
-      data: {
-        tenantId: params.tenantId,
-        actorId: params.actorId,
-        action: params.action,
-        entity: params.entity,
-        entityId: params.entityId,
-        ip: params.ip,
-        userAgent: params.userAgent,
-        payload: params.payload as object | undefined,
-      },
-    });
+    await prisma.auditEvent.create({ data: auditData(params) });
   } catch (err) {
     // never block the request on audit failure, but surface in logs
     console.error("[audit] failed to write", err);
   }
+}
+
+/**
+ * Audit DENTRO de la transacción del caller (Planes P0-Ck, C8).
+ *
+ * `audit()` escribe por otra conexión (service, BYPASSRLS) y traga errores:
+ * sirve para webhooks y jobs sin Actor, pero si la tx del write se revierte
+ * queda un audit de algo que nunca pasó, y si commitea y el audit falla no
+ * queda rastro. Los writes de Planes (crear, renovar autorización, mover en
+ * serie…) auditan acá, en la misma tx: el evento existe si y solo si el write
+ * existe. Mismo criterio que ya usaban `tenant-bootstrap.ts` y
+ * `cancelBookingsInTx` a mano.
+ *
+ * NO atrapa errores, a propósito: en Postgres un statement fallido deja la tx
+ * abortada, así que tragarlo solo movería el error al próximo statement.
+ * Corre con el GUC de `runWithRls`: bajo `kinesoft_app` la policy de
+ * AuditEvent exige `tenantId` = tenant de la tx.
+ *
+ * El payload lleva ids y nombres de campo, nunca PHI (valores clínicos).
+ */
+export async function auditInTx(tx: Prisma.TransactionClient, params: AuditParams): Promise<void> {
+  await tx.auditEvent.create({ data: auditData(params) });
 }

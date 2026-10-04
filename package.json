@@ -19,6 +19,7 @@
     "guard:isolation": "node scripts/guard-tenant-isolation.mjs",
     "catalog:import": "dotenv -e .env.local -- tsx scripts/catalog-import.ts",
     "test:integration": "dotenv -e .env.local -- sh -c 'TZ=UTC INTEGRATION=1 vitest run -c vitest.integration.config.ts \"$@\"' --",
+    "plans:dedupe-session-index": "dotenv -e .env.local -- tsx --conditions=react-server scripts/plans-dedupe-session-index.ts",
     "db:prod:status": "dotenv -e .env.prod.local -- prisma migrate status",
     "db:prod:deploy": "dotenv -e .env.prod.local -- prisma migrate deploy",
     "db:prod:backup": "dotenv -e .env.prod.local -- sh -c 'mkdir -p \"$HOME/kinesoft-backups\" && pg_dump -Fc \"$DIRECT_URL\" -f \"$HOME/kinesoft-backups/prod-$(date +%Y%m%d-%H%M%S).dump\" && ls -lh \"$HOME/kinesoft-backups\" | tail -1'",

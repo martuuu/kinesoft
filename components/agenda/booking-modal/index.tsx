@@ -68,6 +68,8 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { createBooking, createBookingsBatch } from "@/lib/bookings";
 import { createPatient, setPatientDefaultCopago } from "@/lib/patients";
+import { bookingFieldAccess } from "@/lib/booking-field-access";
+import { capabilitySet } from "@/lib/agenda-client-state";
 import { classifyBookingInstant } from "@/lib/availability-actions";
 import { isoToARLocalInput, localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import type { Frequency } from "@/lib/availability/types";
@@ -364,6 +366,21 @@ export function BookingModal({
   const urlError = isTelemedicine ? telemedicineUrlError(telemedicineUrl) : null;
 
   const patientRefId = isGuest ? createdPatient?.id ?? null : selectedPatient?.id ?? null;
+
+  // P0-S07u (E1): campos de texto visibles en el alta. Misma regla que el server
+  // (`bookingFieldAccess`: un campo se escribe si y solo si se puede leer):
+  // sin `clinical.read` no hay título ni descripción, y las notas solo se
+  // ocultan cuando hay paciente (elegido o «Nuevo paciente»: el turno va a
+  // tener paciente igual), porque en ese turno la nota puede ser clínica. Se
+  // pasa `access: "full"` porque el modal no conoce el nivel sobre el paciente
+  // elegido: el server re-filtra con el real y saca lo que no corresponda.
+  // Sin capabilities (no llegaron) falla cerrado: sin campos clínicos.
+  const hasClinical = useMemo(() => capabilitySet(capabilities).has("clinical.read"), [capabilities]);
+  const fieldAccess = bookingFieldAccess({
+    clinical: hasClinical,
+    access: "full",
+    hasPatient: isGuest || !!selectedPatient,
+  });
   const insurerForSlots = isGuest && newCoverage.startsWith("ins:") ? newCoverage.slice(4) : null;
   const practitionerLabels = useMemo(
     () => Object.fromEntries(practitioners.map((p) => [p.id, p.name])),
@@ -547,7 +564,12 @@ export function BookingModal({
             // coverage; "ins:<id>" → tenant insurer; "other" → free-form.
             insurerId: newCoverage.startsWith("ins:") ? newCoverage.slice(4) : undefined,
             insurerName: newCoverage === "other" ? newOtherInsurer.trim() || undefined : undefined,
-          });
+          },
+          // P0-S07sp: el paciente queda a cargo del profesional del turno.
+          // Sin clinical.read es obligatorio (antes quedaba asignado a la
+          // Secretaria, con full, y el kine en básico); a un PRACTITIONER el
+          // server se lo ignora y OWNER/ADMIN lo asignan al del turno.
+          practitionerId ? { assignTo: practitionerId } : undefined);
           if (!created.ok) {
             // `fieldErrors` de zod al lado de cada campo.
             const fe: Record<string, string> = {};
@@ -579,7 +601,8 @@ export function BookingModal({
         durationMin: durationOverride,
         durationEdited: durationOverride !== null,
         // Mini-diagnóstico opcional. Vacío → undefined, y el server toma
-        // el diagnóstico del paciente (alta simple y batch).
+        // el diagnóstico del paciente (alta simple y batch). Un campo oculto
+        // (P0-S07u, `fieldAccess`) no está en el FormData → "" → no viaja.
         title: String(formData.get("title") ?? ""),
         description: String(formData.get("description") ?? ""),
         notes: String(formData.get("notes") ?? ""),
@@ -751,11 +774,13 @@ export function BookingModal({
 
           {/* Mini-diagnóstico opcional: si se dejan vacíos, el server
               completa title/description con el diagnóstico del paciente. */}
-          <FormField
-            label="Título (diagnóstico)"
-            name="title"
-            placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
-          />
+          {fieldAccess.title === "rw" && (
+            <FormField
+              label="Título (diagnóstico)"
+              name="title"
+              placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
+            />
+          )}
 
           <ScheduleSection
             defaultISO={defaultISO}
@@ -826,13 +851,15 @@ export function BookingModal({
             urlError={showUrlError ? urlError : null}
           />
 
-          <FormField
-            as="textarea"
-            label="Descripción (diagnóstico)"
-            name="description"
-            placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
-          />
-          <FormField as="textarea" label="Notas" name="notes" />
+          {fieldAccess.description === "rw" && (
+            <FormField
+              as="textarea"
+              label="Descripción (diagnóstico)"
+              name="description"
+              placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
+            />
+          )}
+          {fieldAccess.notes === "rw" && <FormField as="textarea" label="Notas" name="notes" />}
           {error && (
             <div
               style={{

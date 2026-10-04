@@ -1,4 +1,5 @@
-import { Tag } from "@/components/ui/tag";
+import type { BookingStatus } from "@prisma/client";
+import { StatusTag } from "@/components/ui/status-tag";
 import type { PatientWithRelations } from "./types";
 
 export function Section({
@@ -86,14 +87,14 @@ export function Summary({
   );
 }
 
+/**
+ * Estado del turno en el perfil (Turnos, Facturación). Firma intacta; adentro
+ * es el `StatusTag` único (P0-S04b): antes usaba tonos de `Tag` y "Ausente"
+ * salía gris acá y ámbar en la agenda (statustag-tres-paletas).
+ */
 export function BookingStatusTag({ status }: { status: PatientWithRelations["bookings"][number]["status"] }) {
-  const map: Record<string, { tone: "lime" | "sky" | "soft"; label: string }> = {
-    CONFIRMED: { tone: "sky", label: "Confirmado" },
-    COMPLETED: { tone: "lime", label: "Hecho" },
-    CANCELLED: { tone: "soft", label: "Cancelado" },
-    NO_SHOW: { tone: "soft", label: "Ausente" },
-    PENDING: { tone: "soft", label: "Pendiente" },
-  };
-  const m = map[status] ?? { tone: "soft" as const, label: status };
-  return <Tag tone={m.tone}>{m.label}</Tag>;
+  // `status` viene tipado `string` en `lib/patients-types.ts:89` (DTO del
+  // perfil); en la base es siempre un BookingStatus. Si algún día llega otro
+  // valor, StatusTag lo muestra crudo en vez de romper (igual que el map viejo).
+  return <StatusTag s={status as BookingStatus} />;
 }

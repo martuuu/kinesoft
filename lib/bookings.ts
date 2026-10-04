@@ -46,7 +46,15 @@ import { lockCapacityWindow } from "@/lib/booking-cap-lock";
 import { bulkPatientAccess, patientAccessFor } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
 import { getMembershipRole, requireCapability } from "@/lib/authz";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import {
+  canOperateBooking,
+  canWriteClinical,
+  capabilitiesFor,
+  type Capability,
+  type PatientAccessLevel,
+} from "@/lib/capabilities";
+import { bookingFieldAccess, type BookingFieldAccess, type BookingFieldMode } from "@/lib/booking-field-access";
+import { PLAN_KEY_PREFIX } from "@/lib/plans-constants";
 import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
 import type { ForceFlags } from "@/lib/booking-force-flags";
 import { tags, ttl } from "@/lib/cache-tags";
@@ -108,10 +116,152 @@ const SAME_INSTANT_ERROR =
 
 const STALE_ERROR = "El turno cambió en otra sesión. Refrescá la agenda y reintentá.";
 
-/** Guest (sin paciente) = operable; con paciente, exige acceso `full`. */
+/**
+ * Con paciente, exige acceso `full`. Guest (sin paciente): `guestOperable`
+ * (P0.Z, H-b3): BILLING no; la Secretaria y los kines, como hasta hoy.
+ *
+ * Planes E1 (S07sb): ya NO es el gate de create/batch/update/status/cancelar
+ * (eso es `bookingGateInTx`). Queda para lo que sigue exigiendo full: borrar
+ * el turno, los toggles de cobro (la matriz de cobros es de C0) y la recepción
+ * de un PRACTITIONER sobre turnos ajenos.
+ */
 async function hasFullAccess(actor: Actor, patientId: string | null, tx: Tx): Promise<boolean> {
-  if (!patientId) return true;
+  if (!patientId) return guestOperable(await actorCapsInTx(tx, actor));
   return (await patientAccessFor(actor, patientId, tx)) === "full";
+}
+
+/**
+ * ¿Opera (crea, mueve, cambia estado, borra, marca cobros de) un turno guest?
+ * P0.Z (H-b3, revisor (b) de ES1): antes el guest se evaluaba como "full" para
+ * cualquier rol, así que BILLING (sin `agenda.operateAll` ni `clinical.read`)
+ * creaba turnos guest con copago arbitrario, los borraba y les marcaba cobros.
+ * Ahora: `agenda.operateAll` (OWNER, ADMIN, Secretaria) o `clinical.read`
+ * (cualquier kine: hoy opera los guest de todos y la recepción de un guest
+ * ajeno sigue igual). Que la Secretaria fije el copago de un guest es
+ * intencional (lo cobra en recepción). Una sola regla para el gate de escritura
+ * (`bookingGateInTx`), `hasFullAccess` y el `canOperate` de la agenda.
+ */
+function guestOperable(caps: ReadonlySet<Capability>): boolean {
+  return caps.has("agenda.operateAll") || caps.has("clinical.read");
+}
+
+/**
+ * Re-vínculo de paciente sin `clinical.read` (E1, PLANES §S07sb): mover un
+ * turno de un paciente a otro arrastra su título, descripción y notas, que
+ * pueden ser clínicos y que la Secretaria ni ve. Solo se permite si están
+ * vacíos; si no, que lo cambie el profesional.
+ */
+const CLINICAL_RELINK_ERROR = "Este turno tiene datos clínicos: pedile al profesional que lo cambie";
+
+/**
+ * Capabilities del actor leídas DENTRO de la tx abierta. No se usa
+ * `getMembershipRole` (lib/authz.ts) porque abre su propia `runWithRls`: desde
+ * adentro de otra tx serían dos conexiones del pool a la vez por request.
+ */
+async function actorCapsInTx(tx: Tx, actor: Actor): Promise<ReadonlySet<Capability>> {
+  const m = await tx.membership.findUnique({
+    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+    select: { role: true },
+  });
+  return capabilitiesFor(m?.role);
+}
+
+/** Lee las capabilities a lo sumo una vez por tx, y solo si hacen falta. */
+function lazyCapsInTx(tx: Tx, actor: Actor): () => Promise<ReadonlySet<Capability>> {
+  let p: Promise<ReadonlySet<Capability>> | undefined;
+  return () => (p ??= actorCapsInTx(tx, actor));
+}
+
+/**
+ * Qué puede hacer el actor sobre un turno (o un alta) de `patientId`.
+ * - `canOperate`: crear, mover, cambiar estado y cancelar
+ *   (`canOperateBooking` = full || `agenda.operateAll`; E1/C8).
+ * - `fields`: qué campos de texto escribe (`bookingFieldAccess`, la MISMA regla
+ *   con la que `listAgendaBookings` los lee).
+ * - `full`: acceso full real (guest: cuenta como full si `guestOperable`,
+ *   igual que `hasFullAccess(actor, null)`). Decide si el `copagoCents` del
+ *   actor vale.
+ * - `clinical`: el rol tiene `clinical.read` (regla de re-vínculo).
+ */
+type BookingGate = {
+  level: PatientAccessLevel;
+  canOperate: boolean;
+  fields: BookingFieldAccess;
+  full: boolean;
+  clinical: boolean;
+};
+
+/**
+ * `patientId` null = guest: se opera si `guestOperable` (P0.Z: BILLING no) y los campos
+ * salen de la regla de guest (título/descripción con `clinical.read`; las notas
+ * son del staff). El paciente tiene que venir YA validado contra el tenant
+ * (`patientAccessFor` devuelve "none" para uno ajeno, y `agenda.operateAll` no
+ * mira el nivel: el chequeo de tenant es del caller, antes de esto).
+ *
+ * Sin query de rol cuando el acceso es full: por PD-13 (S02p, `isAdminOnlyRole`
+ * en lib/visibility.ts, derivado de la matriz) `full` solo lo alcanza un rol
+ * CON `clinical.read`, y con full `canOperateBooking` no mira capabilities. El
+ * camino de siempre (profesional con su paciente) no suma ni una sentencia:
+ * `createBooking`/`updateBooking`/el batch tienen techo estricto de statements
+ * (tests/perf/compare.ts, C14).
+ */
+async function bookingGateInTx(
+  tx: Tx,
+  actor: Actor,
+  patientId: string | null,
+  caps: () => Promise<ReadonlySet<Capability>>
+): Promise<BookingGate> {
+  const level: PatientAccessLevel = patientId ? await patientAccessFor(actor, patientId, tx) : "full";
+  if (patientId && level === "full") {
+    return {
+      level,
+      canOperate: true,
+      fields: bookingFieldAccess({ clinical: true, access: "full", hasPatient: true }),
+      full: true,
+      clinical: true,
+    };
+  }
+  const c = await caps();
+  const clinical = c.has("clinical.read");
+  // Guest: `level` vale "full" solo para `bookingFieldAccess` (la regla de
+  // guest no mira el nivel); operar y el copago propio van por `guestOperable`.
+  const canOperate = patientId ? canOperateBooking(c, level) : guestOperable(c);
+  return {
+    level,
+    canOperate,
+    fields: bookingFieldAccess({ clinical, access: level, hasPatient: !!patientId }),
+    full: patientId ? level === "full" : canOperate,
+    clinical,
+  };
+}
+
+/** Un campo es escribible solo si lo es en los dos lados (re-vínculo: el turno antes y después). */
+function intersectFields(a: BookingFieldAccess, b: BookingFieldAccess): BookingFieldAccess {
+  const m = (x: BookingFieldMode, y: BookingFieldMode): BookingFieldMode => (x === "rw" && y === "rw" ? "rw" : "hidden");
+  return { title: m(a.title, b.title), description: m(a.description, b.description), notes: m(a.notes, b.notes) };
+}
+
+/**
+ * Saca del patch los campos de texto que el actor no puede leer (E1: "un campo
+ * se escribe si y solo si se puede leer"). Va ANTES del write y del audit: el
+ * drawer con los campos ocultos (null) mandaba vacíos y borraba el título de un
+ * guest, o la Secretaria pisaba notas clínicas que no ve.
+ */
+function writableFields<P extends { title?: string; description?: string; notes?: string }>(
+  patch: P,
+  fields: BookingFieldAccess
+): P {
+  const out = { ...patch };
+  if (fields.title !== "rw") delete out.title;
+  if (fields.description !== "rw") delete out.description;
+  if (fields.notes !== "rw") delete out.notes;
+  return out;
+}
+
+/** ¿El turno trae algo clínico? Notas = sin el prefijo automático "[SOBRETURNO]". */
+function hasClinicalText(b: { title: string | null; description: string | null; notes: string | null }): boolean {
+  const notes = (b.notes ?? "").replace(/^\[SOBRETURNO\]/, "").trim();
+  return !!(b.title?.trim() || b.description?.trim() || notes);
 }
 
 /**
@@ -132,10 +282,18 @@ async function practitionerLabel(tx: Tx, tenantId: string, practitionerId: strin
  * con prefijo `pub:`: es el espacio de las reservas públicas y
  * `isPublicReservation` (lib/booking-capacity.ts) la usa para saber qué turno
  * puede vencer a los 30 min — un turno de la agenda nunca tiene que parecerlo.
+ *
+ * Planes C3 (S07k): tampoco `plan:` (`PLAN_KEY_PREFIX`), el espacio de los
+ * turnos que genera un plan (`plan:<generationId>:<index>`). La key es
+ * `@unique` global: aceptarla haría que el upsert de `createBooking` encuentre
+ * el turno del plan y entre a su rama `update` (resetea copago, status, notas
+ * y sede de un turno que el cliente no creó). Igual que con `pub:`, se descarta
+ * y el alta cae a una key al azar: fila nueva, el turno del plan intacto. Un
+ * cliente legítimo manda UUIDs, así que descartar no le cambia nada.
  */
 function acceptClientKey(k: unknown): string | null {
   if (typeof k !== "string" || k.length < 8 || k.length > 64) return null;
-  if (k.startsWith("pub:")) return null;
+  if (k.startsWith("pub:") || k.startsWith(PLAN_KEY_PREFIX)) return null;
   return k;
 }
 
@@ -553,6 +711,10 @@ export async function listBookingsInRange(opts: {
           programs: {
             where: { status: "ACTIVE" },
             include: { case: { include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } } } },
+            // S07k: con dos ACTIVE (legacy de prod; el único parcial llega con
+            // M1) el chip mostraba el que Postgres devolviera primero. Gana el
+            // más reciente, igual que el resto de las lecturas del plan activo.
+            orderBy: { createdAt: "desc" },
             take: 1,
           },
         },
@@ -563,17 +725,30 @@ export async function listBookingsInRange(opts: {
   const patientIds = rows
     .map((b) => b.patientId)
     .filter((id): id is string => !!id);
-  const [accessMap, particularCopago] = await Promise.all([
+  const [accessMap, particularCopago, role] = await Promise.all([
     bulkPatientAccess(actor, patientIds),
     getParticularCopagoCents(actor.tenantId),
+    getMembershipRole(actor),
   ]);
+  // E0 (S07k): esta server action se puede llamar por RPC aunque la agenda ya
+  // use `listAgendaBookings`. Gateaba solo full/basic, así que la Secretaria
+  // (ASSISTANT, sin `clinical.read`) con `sharedPatientView` leía título,
+  // descripción, notas y diagnóstico. Ahora: la misma regla que la agenda
+  // (`bookingFieldAccess`) y el chip de diagnóstico solo con clinical + full.
+  const clinical = capabilitiesFor(role).has("clinical.read");
 
   return rows.map((b): BookingRow => {
-    const access: "full" | "basic" | "none" = b.patientId
-      ? (accessMap.get(b.patientId) ?? "basic")
-      : "none";
+    const level = b.patientId ? (accessMap.get(b.patientId) ?? "basic") : "none";
+    // `BookingRow.patientAccess` solo conoce full/basic/none: cualquier otro
+    // nivel (el `admin` de PD-13, S02p) viaja como "basic" = sin link a la HC
+    // (decisión de S07sb, ver el tipo en lib/bookings-types.ts). El gate de
+    // campos usa el nivel real (`bookingFieldAccess` exige "full").
+    const access: BookingRow["patientAccess"] = level === "full" || level === "none" ? level : "basic";
+    const fields = bookingFieldAccess({ clinical, access: level, hasPatient: !!b.patientId });
+    // Chip de diagnóstico = HC: solo clinical.read + full (= `canWriteClinical`
+    // en lectura). Un guest no tiene plan.
     const cond =
-      access === "full"
+      clinical && access === "full"
         ? b.patient?.programs[0]?.case?.diagnoses[0]?.condition?.name ?? null
         : null;
     const name = b.patient
@@ -583,18 +758,22 @@ export async function listBookingsInRange(opts: {
     // coverage. Particular (no insurer / no coverage / guest) falls back
     // to "Particular" with the service price as the amount the patient
     // pays out of pocket. Gated to full access — basic-access rows hide
-    // billing PHI (consistent with notes/condition above).
-    const coverage = access === "full" ? b.patient?.coverages[0] : undefined;
+    // billing PHI (consistent with notes/condition above). PD-13 (S07sb):
+    // el nivel `admin` (Secretaria/Facturación) ve obra social, cobertura y
+    // estado de cobro — SOLO esto; título/descripción/notas siguen con
+    // `bookingFieldAccess` y el diagnóstico con clinical + full.
+    const seesBilling = level === "full" || level === "admin";
+    const coverage = seesBilling ? b.patient?.coverages[0] : undefined;
     const insurer = coverage?.insurerRef;
     const obraSocial =
-      access === "full"
+      seesBilling
         ? insurer?.name ?? coverage?.insurer ?? "Particular"
         : "Particular";
     // Copago precedence: per-turno override → per-patient override →
     // insurer → Particular → service price. Basic-access rows hide billing
     // and just show the service price.
     const copagoCents =
-      access === "full"
+      seesBilling
         ? resolveBookingCopagoCents({
             bookingOverride: b.copagoCents,
             coverageOverride: coverage?.copagoCents ?? null,
@@ -626,13 +805,14 @@ export async function listBookingsInRange(opts: {
       // pública (por la key, no por tener paciente). La key no viaja al cliente.
       publicReservation: isPublicReservation(b),
       // Notes, title and description can carry clinical context — hidden on
-      // basic (A2a-S06: title/description leaked before). Guest rows
-      // ("none", no patient) are the front desk's own turnos: visible and
-      // operable, so their notes aren't blanked either (the drawer edit form
-      // would show them empty).
-      notes: access !== "basic" ? b.notes : null,
-      title: access !== "basic" ? b.title : null,
-      description: access !== "basic" ? b.description : null,
+      // basic (A2a-S06: title/description leaked before) and, since E0, also
+      // without `clinical.read` (`bookingFieldAccess`, same rule as
+      // `listAgendaBookings`). Guest rows keep their notes (the front desk
+      // wrote them: administrative); title/description of a guest still need
+      // `clinical.read`.
+      notes: fields.notes === "rw" ? b.notes : null,
+      title: fields.title === "rw" ? b.title : null,
+      description: fields.description === "rw" ? b.description : null,
       patientAccess: access,
     };
   });
@@ -651,8 +831,8 @@ export async function listBookingsInRange(opts: {
  *   - sin programa/caso/diagnóstico: `patientCondition` siempre null (el chip
  *     de la card lo cubre `title`, el mini-diagnóstico del turno);
  *   - la cobertura NO va por fila: UNA query plana para los pacientes
- *     distintos con acceso `full` (los únicos a los que se les muestra
- *     billing), con la misma precedencia de copago (`resolveBookingCopagoCents`,
+ *     distintos con acceso `full` o `admin` (los únicos a los que se les
+ *     muestra billing; `admin` desde PD-13/S07sb), con la misma precedencia de copago (`resolveBookingCopagoCents`,
  *     AUDIT §5.5) — `obraSocial`/`copagoCents` dan igual que en la completa
  *     (lo afirma bookings-reception.test.ts);
  *   - service/patient con `select` de lo que se muestra, no `include` entero.
@@ -661,7 +841,10 @@ export async function listBookingsInRange(opts: {
  * title/description van null y `notes` solo queda en turnos SIN paciente (la
  * carga el staff: es administrativa, p. ej. el teléfono de una reserva
  * externa). Se suma al gate por paciente de siempre (acceso `basic` →
- * title/description/notes null). `clinicalHidden` lo informa por fila.
+ * title/description/notes null). `clinicalHidden` lo informa por fila, y
+ * `canOperate` / `clinicalWritable` (S07sb) dicen qué puede hacer el actor
+ * con el turno: son la fuente para la UI, calculadas con los mismos
+ * predicados que los write-paths.
  * `agenda.viewAll` (hoy la tienen todos los roles): sin ella, solo la agenda
  * propia — falla cerrado si C0 crea un rol sin esa capability.
  *
@@ -734,11 +917,16 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
     });
     const patientIds = [...new Set(rows.map((b) => b.patientId).filter((id): id is string => !!id))];
     const access = await bulkPatientAccess(actor, patientIds, tx);
-    const fullIds = patientIds.filter((id) => access.get(id) === "full");
+    // PD-13 (S07sb): cobertura/copago también para `admin` (Secretaria y
+    // Facturación ven obra social y estado de cobro); nunca para `basic`.
+    const billingIds = patientIds.filter((id) => {
+      const l = access.get(id);
+      return l === "full" || l === "admin";
+    });
     const [coverages, particularCopago] = await Promise.all([
-      fullIds.length
+      billingIds.length
         ? tx.coverage.findMany({
-            where: { patientId: { in: fullIds }, patient: { tenantId } },
+            where: { patientId: { in: billingIds }, patient: { tenantId } },
             // = `orderBy id desc, take 1` por paciente de la proyección completa.
             orderBy: { id: "desc" },
             select: {
@@ -761,13 +949,26 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
   const primaryName = loaded.locations.find((l) => l.isPrimary)?.name ?? null;
 
   return loaded.rows.map((b): AgendaBookingRow => {
-    const access: "full" | "basic" | "none" = b.patientId ? (loaded.access.get(b.patientId) ?? "basic") : "none";
-    const coverage = access === "full" && b.patientId ? coverageOf.get(b.patientId) : undefined;
+    // PD-13: el nivel real puede ser `admin` (rol sin clinical.read). En la fila
+    // viaja como basic; los campos de texto salen de `bookingFieldAccess` con el
+    // nivel real (forma positiva `=== "full"`), así `admin` nunca ve HC.
+    const level = b.patientId ? (loaded.access.get(b.patientId) ?? "basic") : "none";
+    const access: "full" | "basic" | "none" = level === "full" || level === "none" ? level : "basic";
+    const fields = bookingFieldAccess({ clinical, access: level, hasPatient: !!b.patientId });
+    // S07sb (E1): permisos de la fila calculados acá, la UI no los deduce de
+    // `patientAccess` (que manda `admin` como "basic"). Guest: `guestOperable`
+    // (P0.Z: BILLING no), igual que en los write-paths (`bookingGateInTx`). `clinicalWritable` = el
+    // título/descripción se escriben (= se leen): con paciente es
+    // `canWriteClinical`; en un guest, `clinical.read`.
+    const canOperate = b.patientId ? canOperateBooking(caps, level) : guestOperable(caps);
+    const clinicalWritable = b.patientId ? canWriteClinical(caps, level) : fields.title === "rw";
+    const seesBilling = level === "full" || level === "admin";
+    const coverage = seesBilling && b.patientId ? coverageOf.get(b.patientId) : undefined;
     const insurer = coverage?.insurerRef;
     // Mismo cálculo que `listBookingsInRange` (precedencia §5.5; basic → precio).
-    const obraSocial = access === "full" ? insurer?.name ?? coverage?.insurer ?? "Particular" : "Particular";
+    const obraSocial = seesBilling ? insurer?.name ?? coverage?.insurer ?? "Particular" : "Particular";
     const copagoCents =
-      access === "full"
+      seesBilling
         ? resolveBookingCopagoCents({
             bookingOverride: b.copagoCents,
             coverageOverride: coverage?.copagoCents ?? null,
@@ -777,11 +978,6 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
             servicePriceCents: b.service.priceCents,
           })
         : b.service.priceCents;
-    const showClinical = clinical && access !== "basic";
-    // Sin clinical.read la nota de un turno con paciente puede ser clínica (la
-    // del turnero trae el texto libre del paciente); la de un turno sin
-    // paciente la escribió el staff.
-    const showNotes = access !== "basic" && (clinical || !b.patientId);
     return {
       id: b.id,
       scheduledFor: b.scheduledFor,
@@ -796,9 +992,9 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       patientCondition: null,
       obraSocial,
       copagoCents,
-      notes: showNotes ? b.notes : null,
-      title: showClinical ? b.title : null,
-      description: showClinical ? b.description : null,
+      notes: fields.notes === "rw" ? b.notes : null,
+      title: fields.title === "rw" ? b.title : null,
+      description: fields.description === "rw" ? b.description : null,
       updatedAt: b.updatedAt,
       patientAccess: access,
       paymentStatus: b.paymentStatus,
@@ -811,7 +1007,9 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       telemedicineUrl: b.telemedicineUrl,
       arrivedAt: b.arrivedAt,
       attendingAt: b.attendingAt,
-      clinicalHidden: !showClinical,
+      clinicalHidden: fields.title !== "rw",
+      canOperate,
+      clinicalWritable,
     };
   });
 }
@@ -963,9 +1161,13 @@ export async function createBooking(
     if (!prac) return { kind: "foreign-practitioner" as const };
     if (!service) return { kind: "bad-service" as const };
     if (data.locationId && !location) return { kind: "bad-location" as const };
-    if (patient && !(await hasFullAccess(actor, patient.id, tx))) {
-      return { kind: "basic" as const };
-    }
+    // E1 (S07sb): operar = full || `agenda.operateAll` (la Secretaria, que
+    // desde PD-13 nunca tiene full). PRACTITIONER en básico y BILLING siguen
+    // afuera. Guest: `guestOperable` (P0.Z, H-b3): BILLING tampoco crea guests
+    // (antes contaba como full y fijaba copago). El paciente ya se validó
+    // contra el tenant arriba.
+    const gate = await bookingGateInTx(tx, actor, patient?.id ?? null, lazyCapsInTx(tx, actor));
+    if (!gate.canOperate) return { kind: "basic" as const };
     // Decisión de B3.1: servicio deshabilitado para ESE profesional → rechazo
     // simple, también para OWNER/ADMIN (se habilita en Configuración). Sin un
     // `allowDisabledService`: el cupo, la duración y el turnero ya leen esta
@@ -983,7 +1185,7 @@ export async function createBooking(
       start: data.scheduledFor,
       end,
     });
-    return { kind: "ok" as const, patient, service, rule, duration, end, input };
+    return { kind: "ok" as const, patient, service, rule, duration, end, input, gate };
   });
   if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
   if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
@@ -991,8 +1193,14 @@ export async function createBooking(
   if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
   if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
   if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
-  const { service, rule, duration, end, input } = pre;
+  const { service, rule, duration, end, input, gate } = pre;
   const patientDiag = pre.patient;
+  // E1 (S07sb): lo que el actor no puede leer no lo escribe (título,
+  // descripción y notas según `bookingFieldAccess`), y su `copagoCents` solo
+  // vale con acceso full: sin full rige la precedencia de lib/copago.ts
+  // (AUDIT §5.5) — la Secretaria no fija el precio de la sesión.
+  const own = writableFields(data, gate.fields);
+  const copagoCents = gate.full ? (data.copagoCents ?? null) : null;
 
   // Franjas y bloqueos del profesional en ese horario (motor puro). Con una
   // sede elegida se clasifica contra ESA sede; sin elegir, contra cualquiera
@@ -1091,9 +1299,11 @@ export async function createBooking(
   const telemedicineUrl = isTelemedicine ? (data.telemedicineUrl ?? null) : null;
 
   // Auto-fill the per-turno mini-diagnóstico from the patient's default when
-  // the caller didn't provide an explicit title/description.
-  const title = data.title ?? patientDiag?.diagnosisTitle ?? null;
-  const description = data.description ?? patientDiag?.diagnosisNote ?? null;
+  // the caller didn't provide an explicit title/description. S07sb: también
+  // cuando el actor no puede escribirlos (Secretaria) — el diagnóstico es del
+  // paciente, no lo escribe el actor, y el kine lo ve en su turno.
+  const title = own.title ?? patientDiag?.diagnosisTitle ?? null;
+  const description = own.description ?? patientDiag?.diagnosisNote ?? null;
 
   // Idempotency (clientKey resolved above): a double-submit / retry that shares
   // the SAME key collapses to one row via the @unique column; a *deliberate*
@@ -1175,7 +1385,7 @@ export async function createBooking(
       // `isOverbooked` (M-agenda) es la fuente; el prefijo "[SOBRETURNO]" en
       // notes se sigue escribiendo hasta el contract posterior a B-pre.
       const overbooked = capacityReached || live.blocked;
-      const notes = overbooked ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
+      const notes = overbooked ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
 
       // Sede: lock compartido + activa, en el MISMO tx que el upsert (carrera
       // con archiveLocation). Elegida y ya archivada → rechazo; la de por
@@ -1190,7 +1400,7 @@ export async function createBooking(
         update: {
           serviceId: service.id,
           durationMin: duration,
-          copagoCents: data.copagoCents ?? null,
+          copagoCents,
           notes,
           isOverbooked: overbooked,
           locationId: loc,
@@ -1207,7 +1417,7 @@ export async function createBooking(
           serviceId: service.id,
           scheduledFor: data.scheduledFor,
           durationMin: duration,
-          copagoCents: data.copagoCents ?? null,
+          copagoCents,
           patientId: data.patientId,
           guestName: data.guestName,
           guestEmail: data.guestEmail,
@@ -1352,6 +1562,10 @@ export async function updateBooking(
         isTelemedicine: true,
         service: { select: { id: true, durationMin: true, maxConcurrent: true, practitionerId: true } },
         updatedAt: true,
+        // S07sb: regla de re-vínculo sin `clinical.read` (¿trae algo clínico?).
+        title: true,
+        description: true,
+        notes: true,
         patient: { select: { firstName: true, lastName: true } },
       },
     });
@@ -1361,19 +1575,37 @@ export async function updateBooking(
     if (raw.expectedUpdatedAt && +before.updatedAt !== +new Date(raw.expectedUpdatedAt)) {
       return { kind: "stale" as const };
     }
-    // Acceso básico = solo ver: ni estado, ni reprogramar, ni notas.
-    if (!(await hasFullAccess(actor, before.patientId, tx))) return { kind: "basic" as const };
+    // E1 (S07sb, contrato Secretaria de C8): operar = full ||
+    // `agenda.operateAll`. Acceso básico sin operateAll (PRACTITIONER ajeno,
+    // BILLING) = solo ver: ni estado, ni reprogramar, ni notas. S07c mueve
+    // este gate ADENTRO de `applyBookingUpdateInTx`, no al wrapper.
+    const caps = lazyCapsInTx(tx, actor);
+    const gate = await bookingGateInTx(tx, actor, before.patientId, caps);
+    if (!gate.canOperate) return { kind: "basic" as const };
     // Tenant-scope + access check on the re-bound patient (`undefined` = leave
-    // alone) — atomic with the update.
+    // alone) — atomic with the update. S07sb: el destino pasa por el MISMO
+    // gate (no `hasFullAccess`): la Secretaria asigna paciente a un guest.
     const patientChanged = patch.patientId !== undefined && patch.patientId !== before.patientId;
+    let fields = gate.fields;
     if (patientChanged) {
       const owned = await tx.patient.findFirst({
         where: { id: patch.patientId, tenantId: actor.tenantId },
         select: { id: true },
       });
       if (!owned) return { kind: "foreign-patient" as const };
-      if (!(await hasFullAccess(actor, owned.id, tx))) return { kind: "basic" as const };
+      const target = await bookingGateInTx(tx, actor, owned.id, caps);
+      if (!target.canOperate) return { kind: "basic" as const };
+      // Sin `clinical.read`: guest → paciente sí; paciente → paciente solo si
+      // el turno no trae nada clínico (lo arrastraría a otra HC sin verlo).
+      if (!gate.clinical && before.patientId && hasClinicalText(before)) {
+        return { kind: "clinical-relink" as const };
+      }
+      // Escribible solo si lo es antes Y después del re-vínculo: la nota de
+      // un guest (del staff) pasa a ser de un paciente (clínica).
+      fields = intersectFields(gate.fields, target.fields);
     }
+    // Lo que el actor no lee no se escribe ni se audita (E1).
+    const written = writableFields(patch, fields);
 
     // Parity with createBooking (A2a-S06). Before, only a slot MOVE re-checked
     // capacity: lengthening the turno or reactivating a CANCELLED one over a
@@ -1527,7 +1759,7 @@ export async function updateBooking(
     const after = await tx.booking.update({
       where: { id, tenantId: actor.tenantId, updatedAt: before.updatedAt },
       data: {
-        ...patch,
+        ...written,
         ...(promoteGuest ? { status: "CONFIRMED" as const } : {}),
         ...(newLocationId !== undefined ? { locationId: newLocationId } : {}),
         ...(isOverbooked !== undefined ? { isOverbooked } : {}),
@@ -1535,7 +1767,7 @@ export async function updateBooking(
       },
       select: { updatedAt: true },
     });
-    return { kind: "ok" as const, before, updatedAt: after.updatedAt };
+    return { kind: "ok" as const, before, updatedAt: after.updatedAt, written };
   }).catch((e) => {
     // A reschedule that lands the turno on a slot the SAME patient already
     // occupies trips the partial unique index (patient+slot, non-cancelled) —
@@ -1552,6 +1784,7 @@ export async function updateBooking(
 
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
+  if (outcome.kind === "clinical-relink") return { ok: false, error: CLINICAL_RELINK_ERROR };
   if (outcome.kind === "patient-slot") {
     return {
       ok: false,
@@ -1607,7 +1840,8 @@ export async function updateBooking(
     action: "booking.update",
     entity: "Booking",
     entityId: id,
-    payload: patch as Record<string, unknown>,
+    // El patch YA filtrado (S07sb): un campo sacado no aparece ni en el audit.
+    payload: outcome.written as Record<string, unknown>,
   });
   // Surface status transitions in the bell.
   if (patch.status && patch.status !== before.status && actor.userId) {
@@ -2102,12 +2336,12 @@ export async function createBookingsBatch(
     if (!prac) return { kind: "foreign-practitioner" as const };
     if (!service) return { kind: "bad-service" as const };
     if (data.locationId && !location) return { kind: "bad-location" as const };
-    if (patient && !(await hasFullAccess(actor, patient.id, tx))) {
-      return { kind: "basic" as const };
-    }
+    // E1 (S07sb): mismo gate que createBooking (también para el dryRun).
+    const gate = await bookingGateInTx(tx, actor, patient?.id ?? null, lazyCapsInTx(tx, actor));
+    if (!gate.canOperate) return { kind: "basic" as const };
     const rule = await practitionerServiceRule(tx, actor.tenantId, prac.id, service);
     if (!rule.enabled) return { kind: "service-disabled" as const, serviceName: service.name };
-    return { kind: "ok" as const, patient, service, rule };
+    return { kind: "ok" as const, patient, service, rule, gate };
   });
   if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
   if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
@@ -2115,14 +2349,18 @@ export async function createBookingsBatch(
   if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
   if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
   if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
-  const { service, rule } = pre;
+  const { service, rule, gate } = pre;
   const duration = data.durationMin ?? rule.durationMin;
+  // E1 (S07sb): mismas reglas que createBooking — campos que el actor no lee
+  // fuera, y su copago solo con full (si no, precedencia de lib/copago.ts).
+  const own = writableFields(data, gate.fields);
+  const copagoCents = gate.full ? (data.copagoCents ?? null) : null;
 
   // Diagnóstico por defecto del paciente para auto-completar title/description
   // de cada turno del batch cuando el caller no los envía.
   const patientDiag = pre.patient;
-  const title = data.title ?? patientDiag?.diagnosisTitle ?? null;
-  const description = data.description ?? patientDiag?.diagnosisNote ?? null;
+  const title = own.title ?? patientDiag?.diagnosisTitle ?? null;
+  const description = own.description ?? patientDiag?.diagnosisNote ?? null;
   const isTelemedicine = data.isTelemedicine ?? false;
   const telemedicineUrl = isTelemedicine ? (data.telemedicineUrl ?? null) : null;
 
@@ -2282,7 +2520,7 @@ export async function createBookingsBatch(
           loc = null;
         }
         // Same tagging the single-create path uses, so reports can tell them apart.
-        const notes = isOverbook ? `[SOBRETURNO] ${data.notes ?? ""}`.trim() : data.notes;
+        const notes = isOverbook ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
         await tx.booking.upsert({
           where: { idempotencyKey },
           update: {},
@@ -2292,7 +2530,7 @@ export async function createBookingsBatch(
             serviceId: service.id,
             scheduledFor: when,
             durationMin: duration,
-            copagoCents: data.copagoCents ?? null,
+            copagoCents,
             patientId: data.patientId,
             guestName: data.guestName,
             guestEmail: data.guestEmail,

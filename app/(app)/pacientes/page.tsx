@@ -2,6 +2,7 @@ import Link from "next/link";
 import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { loadFilterFacets } from "@/lib/exercises";
+import { getCapabilities } from "@/lib/authz";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // Conditions list — reusing `loadFilterFacets` keeps the catalog
   // cached (1h TTL) so the page renders without an extra DB roundtrip
   // on warm cache hits.
-  const [patients, facets, insurers] = await Promise.all([
+  const [patients, facets, insurers, caps] = await Promise.all([
     listPatients({
       q,
       filter,
@@ -66,7 +67,13 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
     }),
     loadFilterFacets(),
     listInsurers({ onlyActive: true }),
+    getCapabilities(),
   ]);
+  // P0-S07sp: sin clinical.read, `createPatient` exige `assignTo` (el
+  // profesional a cargo) y este alta no lo pide → se oculta el botón para la
+  // Secretaria/BILLING. Ella da de alta desde el modal del turno, que manda el
+  // profesional del turno. Un selector "Profesional a cargo" acá queda para C0.
+  const canCreateHere = caps.has("clinical.read");
   const totals = {
     all: patients.length,
     withProgram: patients.filter((p) => p.activeProgramTitle).length,
@@ -120,7 +127,9 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           >
             <Button variant="ghost">Exportar CSV</Button>
           </a>
-          <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
+          {canCreateHere && (
+            <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
+          )}
         </div>
       </header>
 

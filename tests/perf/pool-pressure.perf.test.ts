@@ -9,7 +9,8 @@
  * y registra si hay timeouts y la latencia p95, sin fallar por los números.
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PrismaClient } from "@prisma/client";
 
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -31,6 +32,12 @@ import { asUser } from "@/tests/helpers/actor";
 import { createVolumeTenant, type VolumeTenant } from "./volume-fixture";
 
 const RUN = process.env.PERF_IT === "1";
+/**
+ * P0-Ct: dónde se escribe el resultado. `tests/perf/pool-pressure.json` está
+ * versionado y no se regraba al medir: se corre con
+ * `PERF_OUT_DIR=<scratchpad>` y se compara con `tests/perf/compare.ts`.
+ */
+const OUT_DIR = process.env.PERF_OUT_DIR ?? "tests/perf";
 
 describe.skipIf(!RUN)("presión de pool (connection_limit=1)", () => {
   let db: PrismaClient;
@@ -67,7 +74,8 @@ describe.skipIf(!RUN)("presión de pool (connection_limit=1)", () => {
     const p95 = Math.round(ms[Math.floor(ms.length * 0.95) - 1]);
     const errors = results.filter((r) => r.err).map((r) => r.err);
     const out = { measuredAt: new Date().toISOString(), requests: results.length, p95Ms: p95, maxMs: Math.round(ms[ms.length - 1]), errors };
-    writeFileSync("tests/perf/pool-pressure.json", JSON.stringify(out, null, 2) + "\n");
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, "pool-pressure.json"), JSON.stringify(out, null, 2) + "\n");
     console.log("[perf] pool pressure", out);
     expect(results).toHaveLength(20);
   });

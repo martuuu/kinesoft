@@ -52,7 +52,16 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
     asUser(pracUser);
     expect(await getMembershipRole(await getActor())).toBe("PRACTITIONER");
     const caps = await getCapabilities();
-    expect([...caps].sort()).toEqual(["agenda.manageOwnBlocks", "agenda.reception", "agenda.viewAll", "clinical.read"]);
+    // Planes E1 (P0-Ck): PRACTITIONER suma plans.manage/schedule/authorize; NO agenda.operateAll.
+    expect([...caps].sort()).toEqual([
+      "agenda.manageOwnBlocks",
+      "agenda.reception",
+      "agenda.viewAll",
+      "clinical.read",
+      "plans.authorize",
+      "plans.manage",
+      "plans.schedule",
+    ]);
     const err = await requireTenantAdmin().catch((e) => e);
     expect(err).toBeInstanceOf(ForbiddenError);
     expect(err).toBeInstanceOf(Error);
@@ -64,6 +73,11 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
     const caps = await getCapabilities();
     expect(caps.has("clinical.read")).toBe(false);
     expect(caps.has("agenda.manageBlocks")).toBe(true);
+    // Planes E1: la Secretaria opera todos los turnos y agenda/autoriza en planes, sin plans.manage.
+    expect(caps.has("agenda.operateAll")).toBe(true);
+    expect(caps.has("plans.schedule")).toBe(true);
+    expect(caps.has("plans.authorize")).toBe(true);
+    expect(caps.has("plans.manage")).toBe(false);
     await expect(requireCapability("clinical.read")).rejects.toBeInstanceOf(ForbiddenError);
   });
 

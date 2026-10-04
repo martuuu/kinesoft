@@ -35,7 +35,8 @@ export type PortalPlanDTO = {
     index: number;
     scheduledFor: string;
     completedAt: string | null;
-    notes: string | null;
+    // P0-S02p: sin `notes` a propósito. `Session.notes` es nota privada del
+    // kine; el DTO llega al navegador del paciente. No volver a sumarla.
     /** Has the patient already submitted a check-in for this session? */
     hasCheckIn: boolean;
   }[];

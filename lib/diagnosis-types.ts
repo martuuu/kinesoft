@@ -24,4 +24,12 @@ export type AssignInput = {
   frequency: number;
   startDate: string;
   programTitle?: string;
+  /**
+   * Días de la semana elegidos en el wizard, 0=Lun … 6=Dom (la convención de
+   * `expandDates`, no la de `Date#getDay`). Opcional y aditivo (P0-Ck). Con
+   * días, `assignDiagnosisAndCreateProgram` genera las sesiones solo esos días
+   * AR (`expandDates` weekly, a las 00:00 AR; S02d); sin días (o vacío) reparte
+   * por `frequency` desde `startDate`, como antes.
+   */
+  daysOfWeek?: number[];
 };

@@ -4,16 +4,27 @@ import { motion } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import type { Tab } from "./types";
 
+/**
+ * P0-S07v: el perfil administrativo (nivel `admin`, PD-13) reusa esta barra con
+ * `only` = las pestañas que puede ver (Datos y Turnos) y `labels` para
+ * renombrar Resumen → "Datos". Las pestañas clínicas no se ocultan con CSS ni
+ * se deshabilitan: directamente no se renderizan, así no hay un botón que
+ * monte una vista de HC aunque el server la devolviera vacía.
+ */
 export function TabsBar({
   active,
   onChange,
   counts,
+  only,
+  labels,
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
-  counts: { turnos?: number; sesiones: number; plan: number; fact: number };
+  counts: { turnos?: number; sesiones?: number; plan?: number; fact?: number };
+  only?: readonly Tab[];
+  labels?: Partial<Record<Tab, string>>;
 }) {
-  const tabs: { id: Tab; label: string; count?: number }[] = [
+  const all: { id: Tab; label: string; count?: number }[] = [
     { id: "resumen", label: "Resumen" },
     { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
@@ -24,6 +35,9 @@ export function TabsBar({
     { id: "fact", label: "Facturación", count: counts.fact || undefined },
     { id: "actividad", label: "Actividad" },
   ];
+  const tabs = all
+    .filter((t) => !only || only.includes(t.id))
+    .map((t) => (labels?.[t.id] ? { ...t, label: labels[t.id]! } : t));
   return (
     <div
       style={{
@@ -40,6 +54,7 @@ export function TabsBar({
         return (
           <button
             key={t.id}
+            type="button"
             onClick={() => onChange(t.id)}
             style={{
               padding: "12px 18px",

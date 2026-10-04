@@ -52,6 +52,15 @@ export type NextFreeSlotInput = Omit<ClassifyInstantInput, "when" | "excludeBook
   /** Cota inferior: se busca desde `from + 15 min`. */
   from: Date;
   excludeBookingId?: string | null;
+  /**
+   * Cota superior EXCLUSIVA del inicio del turno (aditivo de S07p, Planes):
+   * si se pasa, reemplaza al horizonte de `NEXT_FREE_HORIZON_DAYS`. La
+   * sugerencia de una fila de plan no puede pasar del día anterior a la
+   * próxima sesión (PD-07 / H3-D12), y en un plan mensual eso puede quedar
+   * más lejos que 14 días o mucho más cerca. Sin `until`, comportamiento de
+   * siempre (la paridad con el suggest viejo no cambia).
+   */
+  until?: Date;
 };
 
 /** Memo por (profesional, día): la función inyectada puede ser cara
@@ -82,7 +91,7 @@ function firstCursor(from: Date): number {
 }
 
 /** Próximo instante "libre" (ISO UTC) desde `from + 15 min`, o null si no hay
- *  en `NEXT_FREE_HORIZON_DAYS` días. */
+ *  en `NEXT_FREE_HORIZON_DAYS` días (o antes de `until`, si se pasa). */
 export function nextFreeSlot(input: NextFreeSlotInput): string | null {
   const { from, practitionerId, serviceId, patientId } = input;
   // Solo importan los turnos del cupo (profesional + servicio) y los del paciente.
@@ -97,7 +106,8 @@ export function nextFreeSlot(input: NextFreeSlotInput): string | null {
   // distancia a la medianoche AR del día.
   let dayKey = "";
   let dayStart = Number.POSITIVE_INFINITY;
-  for (let t = firstCursor(from); t - from.getTime() < HORIZON_MS; t += STEP_MS) {
+  const endMs = input.until ? input.until.getTime() : from.getTime() + HORIZON_MS;
+  for (let t = firstCursor(from); t < endMs; t += STEP_MS) {
     if (t < dayStart || t - dayStart >= DAY_MS) {
       dayKey = toARDateKey(new Date(t));
       dayStart = dayWindow(dayKey).start.getTime();

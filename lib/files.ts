@@ -19,6 +19,15 @@
  * borraba y DESCARGABA los estudios de pacientes ajenos. Ahora las cuatro
  * acciones exigen `patientAccessFor === "full"` (OWNER/ADMIN siempre lo
  * tienen). Decisión del dueño: acceso básico = solo ver nombre/hora/servicio.
+ *
+ * Storage por service role (S02m, fuga E0): antes se subía, firmaba y borraba
+ * con el JWT del usuario (`getSupabaseServerClient`), o sea que la barrera real
+ * del bucket eran las policies de `storage.objects`, no verificadas en prod. Con
+ * una policy abierta a `authenticated`, cualquier usuario bajaba estudios de
+ * otro tenant directo contra la API de Storage salteando estos gates. Ahora
+ * todo pasa por `lib/storage-internal.ts` (service role) y la ÚNICA puerta son
+ * los gates de acá (intactos); los buckets quedan privados y sin policies.
+ * Las claves siempre salen de la fila `PatientFile`, nunca del cliente.
  */
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
@@ -26,9 +35,8 @@ import { PatientFileCategory } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
-import { env } from "@/lib/env";
 import type { ActionResult } from "@/lib/validation";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { isStorageConfigured, storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
 import { patientAccessFor } from "@/lib/visibility";
 import type { DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
@@ -71,8 +79,9 @@ const ALLOWED_CATEGORIES = new Set<string>([
 
 import type { PatientFileRow } from "@/lib/files-types";
 
+// Mismo admin client que usan las operaciones (ver `isStorageConfigured`).
 function storageEnabled() {
-  return !!(env.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
+  return isStorageConfigured();
 }
 
 /** `patientAccessFor` devuelve "none" para ids de otro tenant o inexistentes. */
@@ -143,33 +152,40 @@ export async function uploadPatientFile(
   const id = randomBytes(12).toString("hex");
   let storageKey = `stub:${id}`;
 
+  let uploaded = false;
   if (storageEnabled()) {
-    const supabase = getSupabaseServerClient();
     // Sanitise extension — only short alphanumerics, no traversal characters.
     const raw = (file.name.split(".").pop() ?? "bin").toLowerCase();
     const ext = SAFE_EXT_RE.test(raw) ? raw : "bin";
     storageKey = `${actor.tenantId}/${patientId}/${id}.${ext}`;
     const buf = new Uint8Array(await file.arrayBuffer());
-    const { error } = await supabase.storage.from(BUCKET).upload(storageKey, buf, {
-      contentType: mime,
-      upsert: false,
-    });
-    if (error) return { ok: false, error: "No pudimos subir el archivo." };
+    const up = await storageUpload(BUCKET, storageKey, buf, mime);
+    if (!up.ok) return { ok: false, error: "No pudimos subir el archivo." };
+    uploaded = true;
   }
 
-  const row = await runWithRls(actor.tenantId, (tx) => tx.patientFile.create({
-    data: {
-      tenantId: actor.tenantId,
-      patientId,
-      uploaderId: actor.userId ?? undefined,
-      name: file.name,
-      mime,
-      sizeBytes: file.size,
-      storageKey,
-      category,
-      description,
-    },
-  }));
+  let row;
+  try {
+    row = await runWithRls(actor.tenantId, (tx) => tx.patientFile.create({
+      data: {
+        tenantId: actor.tenantId,
+        patientId,
+        uploaderId: actor.userId ?? undefined,
+        name: file.name,
+        mime,
+        sizeBytes: file.size,
+        storageKey,
+        category,
+        description,
+      },
+    }));
+  } catch (e) {
+    // Si el INSERT falla (paciente borrado en el medio, pool caído) el objeto
+    // ya subido quedaría huérfano: PHI en el bucket sin fila que lo referencie
+    // ni forma de encontrarlo. Best-effort: un fallo del remove queda logueado.
+    if (uploaded) await storageRemove(BUCKET, [storageKey]);
+    throw e;
+  }
 
   await audit({
     tenantId: actor.tenantId,
@@ -199,12 +215,11 @@ export async function deletePatientFile(id: string): Promise<ActionResult> {
   const row = found.row;
 
   if (storageEnabled() && !row.storageKey.startsWith("stub:")) {
-    const supabase = getSupabaseServerClient();
     // supabase-js no tira: antes el error se ignoraba y se borraba la fila,
     // dejando el objeto (PHI) huérfano en el bucket sin forma de encontrarlo.
     // Si el storage falla, no se toca la fila y el usuario reintenta.
-    const { error } = await supabase.storage.from(BUCKET).remove([row.storageKey]);
-    if (error) return { ok: false, error: "No pudimos borrar el archivo. Probá de nuevo." };
+    const rm = await storageRemove(BUCKET, [row.storageKey]);
+    if (!rm.ok) return { ok: false, error: "No pudimos borrar el archivo. Probá de nuevo." };
   }
 
   await runWithRls(actor.tenantId, (tx) =>
@@ -252,10 +267,7 @@ export async function getDownloadUrl(id: string): Promise<ActionResult<{ url: st
     entityId: id,
     payload: { name: row.name, patientId: row.patientId },
   });
-  const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(row.storageKey, 600);
-  if (error || !data?.signedUrl) {
-    return { ok: false, error: "No pudimos generar el link." };
-  }
-  return { ok: true, data: { url: data.signedUrl } };
+  const signed = await storageSign(BUCKET, row.storageKey, 600);
+  if (!signed.ok) return { ok: false, error: "No pudimos generar el link." };
+  return { ok: true, data: { url: signed.data } };
 }

@@ -20,16 +20,63 @@
   --lime-300: #c8f564;
   --lime-400: #b4e94a;
   --lime-500: #8ecc30;
+  /* [P0-S04a] Se usaba en ~10 lugares sin estar definido (con fallback
+     #4f8a10, que da 4.2:1 sobre blanco: no llega a AA). #3d7010 da 6:1 sobre
+     blanco y 5.6:1 sobre --bg-panel. Las paletas no lo reasignan. */
+  --lime-700: #3d7010;
 
   --navy-900: #0f1e33;
   --navy-700: #1b2d4a;
   --navy-500: #3a4d6c;
+  /* [P0-S04a] Usado en ~12 lugares (Plataforma, agenda) sin definir y sin
+     fallback: caía al color heredado. Intermedio entre 500 y 300, AA (5.4:1)
+     para texto secundario de 11px. */
+  --navy-400: #5a6b87;
   --navy-300: #6a7b96;
   --navy-200: #9ba9bf;
   --navy-100: #c6cfdd;
 
   --bg-app: linear-gradient(165deg, #c7dbef 0%, #e5eef8 35%, #f2f6fc 100%);
   --bg-panel: #f6f9fd;
+
+  /* Misma pila que .k-mono; users-panel lo pedía con fallback a monospace. */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* ── Disciplina (Planes, P0-S04a) ─────────────────────────────────
+     Hex LITERAL a propósito: [data-palette] reasigna todo --sky-*, y el chip
+     "Kine · 3/10" / "Osteo · 3/6" tiene que significar lo mismo en todos los
+     consultorios. Kine = sky-700 de la paleta base, Osteo = --lime-700. AA
+     sobre blanco y --bg-panel (lo verifica tests/unit/design-tokens.test.ts).
+     Se usan como color de texto/borde o como fondo con texto blanco. */
+  --disc-kine: #1f4fbe;
+  --disc-osteo: #3d7010;
+
+  /* ── Estado del turno (P0-S04a; lo consume el StatusTag único de S04b) ──
+     Una sola paleta: antes había tres (drawer, Lista y perfil) y "Ausente"
+     salía rojo, ámbar o gris según la pantalla (statustag-tres-paletas).
+     Literales: el fondo = estado no puede cambiar con la paleta del tenant
+     (en "mint" el sky es verde y Confirmado se confundiría con Hecho).
+     Valores tomados de los pills existentes de list-view/reception-row; el
+     los que cambian son Cancelado (navy-300 sobre gris daba 3.8:1 → navy-500) y
+     el verde de Hecho, un punto más oscuro.
+     Todo -fg da AA sobre su -bg compuesto sobre blanco y sobre --bg-panel. */
+  --st-pending-bg: rgba(15, 30, 51, 0.06);
+  --st-pending-fg: #1b2d4a;
+  --st-confirmed-bg: rgba(31, 79, 190, 0.12);
+  --st-confirmed-fg: #1f4fbe;
+  --st-completed-bg: rgba(54, 179, 126, 0.14);
+  --st-completed-fg: #1b704b; /* #1f7a52 de antes daba 4.4:1 sobre el panel */
+  --st-noshow-bg: rgba(255, 176, 32, 0.18);
+  --st-noshow-fg: #9a5b00;
+  --st-cancelled-bg: rgba(15, 30, 51, 0.05);
+  --st-cancelled-fg: #3a4d6c;
+  /* Reserva online impaga (PENDING + hold de MP): vigente = ámbar como todo
+     lo que pide atención; vencida = gris con borde punteado (ya no retiene). */
+  --st-hold-bg: rgba(255, 176, 32, 0.18);
+  --st-hold-fg: #9a5b00;
+  --st-hold-expired-bg: rgba(15, 30, 51, 0.04);
+  --st-hold-expired-fg: #3a4d6c;
+  --st-hold-expired-border: rgba(15, 30, 51, 0.3);
   --card-bg: #ffffff;
 
   --glass-bg: rgba(255, 255, 255, 0.55);

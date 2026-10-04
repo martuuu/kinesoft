@@ -20,12 +20,33 @@
  *      + next appointment time are exposed. Everything else (HC, plans,
  *      sessions, contact info) is hidden until shared.
  *
+ *   0. **Nivel `admin` (Planes E1, PD-13, S02p) — se evalúa ANTES que 2-5.**
+ *      Un rol SIN `clinical.read` (ASSISTANT = Secretaria, BILLING =
+ *      Facturación) tiene SIEMPRE exactamente `admin` sobre todos los
+ *      pacientes del tenant:
+ *        - nunca `full`: ni por `sharedPatientView`, ni por `PatientShare`,
+ *          ni por `assignedPractitionerId` (en prod hay pacientes asignados
+ *          a la Secretaria: precheck 15). Antes de S02p la Secretaria con
+ *          "Consultorio común" caía en (2) y leía la HC completa;
+ *        - nunca menos: ve los datos administrativos de todos los pacientes
+ *          sin depender de "Consultorio común" (opera la agenda de todos).
+ *      `admin` = nombre, DNI, contacto, obra social y cobertura, contacto de
+ *      emergencia, turnos y estado de cobro. **Nunca** HC (diagnóstico,
+ *      notas, EVA, título de planes, archivos, actividad, Seguimiento) ni
+ *      escritura clínica ni las acciones que piden full (borrar turnos,
+ *      cobros): operar turnos va por `agenda.operateAll`.
+ *      **Regla de compatibilidad:** todo chequeo que habilita HC o escritura
+ *      se escribe `=== "full"` (forma positiva), nunca `!== "basic"`: con
+ *      `admin` la forma negativa lo dejaría pasar. Los recortes de PHI que
+ *      hoy preguntan `=== "basic"` tratan a `admin` como full hasta que su
+ *      dueño escriba la proyección admin.
+ *
  * Public surface:
  *   - `visibilityForActor(actor)` → coarse Prisma where-fragment used for
  *     LISTING patients/bookings. Lists return EVERY patient of the
  *     tenant; per-row access is decided downstream via `bulkPatientAccess`.
  *   - `patientAccessFor(actor, patientId)` → fine-grained `"full" |
- *     "basic" | "none"` decision for a SINGLE patient. Detail pages and
+ *     "admin" | "basic" | "none"` decision for a SINGLE patient. Detail pages and
  *     mutations gate on this.
  *   - `bulkPatientAccess(actor, ids[])` → batched version that returns
  *     a `Map<patientId, AccessLevel>` in one round trip. Used by list /
@@ -43,13 +64,30 @@ import "server-only";
 import { cache } from "react";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, Role } from "@prisma/client";
+import { capabilitiesFor, type PatientAccessLevel } from "@/lib/capabilities";
 
-export type AccessLevel = "full" | "basic" | "none";
+/**
+ * = `PatientAccessLevel` de `lib/capabilities.ts` (el puro que importa la UI):
+ * un solo tipo para que los predicados `canOperateBooking`/`canWriteClinical`
+ * y `bookingFieldAccess` reciban exactamente lo que devuelve este módulo.
+ */
+export type AccessLevel = PatientAccessLevel;
 
 export type Visibility = {
-  /** Actor's role grants full access to every row in the tenant. */
+  /**
+   * Actor's role grants full access to every row in the tenant. PD-13: un
+   * rol sin `clinical.read` nunca lo tiene (ni con `sharedPatientView`):
+   * los consumidores (`getDashboardData`, `listOpenSessions`) lo usan para
+   * abrir datos clínicos de todo el tenant.
+   */
   seesAll: boolean;
+  /**
+   * PD-13 (S02p): el rol no lee clínica → nivel `admin` sobre TODOS los
+   * pacientes del tenant (datos administrativos, nunca HC). Excluyente con
+   * `seesAll`.
+   */
+  adminView: boolean;
   /** Tenant has shared-view mode enabled (overrides per-patient shares). */
   sharedView: boolean;
   /**
@@ -84,6 +122,22 @@ function readMembershipRole(db: DbClient, userId: string, tenantId: string) {
   });
 }
 
+/**
+ * PD-13: ¿el rol queda en el nivel `admin`? = no tiene `clinical.read` en la
+ * matriz de `lib/capabilities.ts` (hoy ASSISTANT y BILLING). Se deriva de la
+ * matriz y no de una lista de roles para que un rol nuevo sin clínica caiga
+ * solo en `admin` y nunca herede `full` por "Consultorio común".
+ *
+ * Membresía ausente: se conserva el default histórico de este módulo
+ * (`PRACTITIONER`), que tiene `clinical.read` y por lo tanto sigue el camino
+ * asignado/share/básico. No se cambia acá porque `getActor()` ya exige
+ * membresía (sin ella no hay Actor) y pasarla a `admin` le abriría contacto y
+ * cobertura de todo el tenant a una identidad sin rol.
+ */
+function isAdminOnlyRole(role: Role): boolean {
+  return !capabilitiesFor(role).has("clinical.read");
+}
+
 export async function visibilityForActor(
   actor: Actor,
   db?: DbClient
@@ -96,7 +150,9 @@ export async function visibilityForActor(
 
     const sharedView = tenant?.sharedPatientView ?? false;
     const role = membership?.role ?? "PRACTITIONER";
-    const seesAll = role === "OWNER" || role === "ADMIN" || sharedView;
+    const adminView = isAdminOnlyRole(role);
+    // PD-13: sin clinical.read, "Consultorio común" ya no abre todo.
+    const seesAll = !adminView && (role === "OWNER" || role === "ADMIN" || sharedView);
 
     // Sprint 16: lists are NO LONGER filtered by ownership at the SQL
     // layer. Every member sees every patient + booking; per-row access
@@ -105,6 +161,7 @@ export async function visibilityForActor(
     // spread them don't break, but they no longer scope by practitioner.
     return {
       seesAll,
+      adminView,
       sharedView,
       patientWhere: {},
       bookingWhere: {},
@@ -139,6 +196,8 @@ export const patientAccessFor = cache(
 
       const role = membership?.role ?? "PRACTITIONER";
       if (role === "OWNER" || role === "ADMIN") return "full";
+      // PD-13: antes que sharedPatientView / asignación / share, que darían full.
+      if (isAdminOnlyRole(role)) return "admin";
       if (tenant?.sharedPatientView) return "full";
       if (patient.assignedPractitionerId === actor.practitionerId) return "full";
 
@@ -182,6 +241,15 @@ export async function bulkPatientAccess(
     ]);
 
     const role = membership?.role ?? "PRACTITIONER";
+
+    // PD-13: sin clinical.read, `admin` para todos los pacientes del tenant
+    // (los ausentes del mapa siguen siendo "none": no son del tenant). Mismo
+    // orden que `patientAccessFor`: antes del corto circuito de sharedView.
+    if (isAdminOnlyRole(role)) {
+      for (const p of patients) result.set(p.id, "admin");
+      return result;
+    }
+
     const seesAll = role === "OWNER" || role === "ADMIN" || !!tenant?.sharedPatientView;
 
     if (seesAll) {

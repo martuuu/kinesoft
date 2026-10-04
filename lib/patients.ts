@@ -10,38 +10,45 @@
  * to hand-write the scope (read queries from React Server Components).
  */
 import { revalidatePath } from "next/cache";
-import { Prisma } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
 import { getMembershipRole } from "@/lib/authz";
-import { isTenantAdminRole } from "@/lib/capabilities";
+import { isTenantAdminRole, capabilitiesFor, canWriteClinical } from "@/lib/capabilities";
+import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { audit } from "@/lib/audit";
-import { localToARIso } from "@/lib/datetime-ar";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { resolveInsurerName } from "@/lib/insurers-internal";
-import {
-  visibilityForActor,
-  patientAccessFor,
-  bulkPatientAccess,
-} from "@/lib/visibility";
+// P0-S02a (E0): `visibilityForActor` salió con `getPatient`, su único uso acá.
+import { patientAccessFor, bulkPatientAccess, type AccessLevel } from "@/lib/visibility";
+import { hcAccessError } from "@/lib/patient-access-internal";
 import { env } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import {
   PatientCreate,
+  PatientCreateOptions,
   PatientUpdate,
   CoverageSet,
   type ActionResult,
   type PatientCreateInput,
+  type PatientCreateOptionsInput,
   type PatientUpdateInput,
 } from "@/lib/validation";
 
-import type { ActivityEvent, PatientBookingFull, PatientRow, PatientSort } from "@/lib/patients-types";
+import type {
+  ActivityEvent,
+  PatientAdminCore,
+  PatientBookingFull,
+  PatientCoreWithAccess,
+  PatientRow,
+  PatientSort,
+} from "@/lib/patients-types";
 
 export async function listPatients(opts: {
   q?: string;
@@ -171,6 +178,12 @@ export async function listPatients(opts: {
     include: {
       programs: {
         where: { status: "ACTIVE" },
+        // P0-S02a: con 2 planes ACTIVE (legacy o carrera) el `take: 1` sin
+        // `orderBy` devolvía el orden físico de la tabla, así que la columna
+        // "plan activo" del directorio podía mostrar el viejo y cambiar entre
+        // requests. Gana el más reciente, como el resto de los lectores de
+        // "plan activo" de ES1 (`listBookingsInRange`, Seguimiento).
+        orderBy: { createdAt: "desc" },
         take: 1,
         include: {
           sessions: { orderBy: { index: "asc" } },
@@ -189,14 +202,51 @@ export async function listPatients(opts: {
   // lookups when the directory has hundreds of patients.
   const accessMap = await bulkPatientAccess(actor, rows.map((r) => r.id));
 
-  return rows
+  // P0.Z (H-b1, revisor (b) de ES1): los filtros corren en SQL para cualquier
+  // actor, así que una fila que NO es full no puede aparecer *por* matchear un
+  // filtro sobre datos que el actor no ve: era un oráculo (la Secretaria,
+  // BILLING o un kine en básico pedía `diagnosisSlug: "lumbalgia"` y recibía
+  // nombre + DNI de quienes la tienen; con "con/sin plan" sabía quién tenía
+  // plan). Se descarta la fila en vez de sacar el filtro del SQL: el filtro
+  // sigue sirviendo para las filas full y `totals` (que la página calcula
+  // sobre este resultado) no cuenta lo descartado.
+  //  - Filtros clínicos (diagnóstico, con/sin plan): solo filas `full`. Un rol
+  //    sin `clinical.read` (PD-13: siempre `admin`) recibe [] con ellos.
+  //  - Obra social, edad, última visita y email (en `q`): son PHI recortada en
+  //    `basic`, así que no filtran filas basic. `admin` sí los ve en el perfil
+  //    (`PatientAdminCore`: contacto, cobertura, nacimiento, turnos) → se
+  //    conservan sus filas. En `q`, una fila basic queda solo si matchea por
+  //    nombre o DNI (lo que su proyección muestra), no por email.
+  const clinicalFilter =
+    Boolean(opts.diagnosisSlug) || opts.filter === "active" || opts.filter === "no-program";
+  const maskedFilter =
+    Boolean(opts.insurer) || opts.ageMin != null || opts.ageMax != null || Boolean(lvFrom || lvTo);
+  const qLower = q?.toLowerCase();
+  const visibleRows = rows.filter((p) => {
+    const access = accessMap.get(p.id) ?? "basic";
+    if (access === "full") return true;
+    if (clinicalFilter) return false;
+    if (access === "admin") return true;
+    if (maskedFilter) return false;
+    if (qLower) {
+      return [p.firstName, p.lastName, p.documentId].some((f) => f?.toLowerCase().includes(qLower));
+    }
+    return true;
+  });
+
+  return visibleRows
     .map((p): PatientRow => {
       const access = accessMap.get(p.id) ?? "basic";
       const upcomingAt = p.bookings[0]?.scheduledFor ?? null;
       // Basic rows expose ONLY name + DNI + next booking. Every other
       // field is nulled out so a basic-access kine can't even infer
       // medical history by glancing at the directory.
-      if (access === "basic") {
+      // PD-13: `admin` (rol sin clinical.read) tampoco ve HC → en el
+      // directorio usa la misma proyección que basic (S07sp, P0.2, no sumó
+      // `admin` a PatientRow: haría falta pasar `patients-list.tsx` y
+      // `recent-patients.tsx` a `=== "full"`). Contacto y cobertura los ve en
+      // el perfil (`getPatientCore` admin). HC solo con `=== "full"`.
+      if (access !== "full") {
         return {
           id: p.id,
           firstName: p.firstName,
@@ -299,22 +349,95 @@ export async function setPatientArchived(input: {
 /**
  * Patient core — base patient + coverages + emergency contacts.
  *
- * **Hot path + access-gated.** Returns the full payload when the actor
- * has FULL access (owner / shared / OWNER+ADMIN / sharedView), or a
- * minimal "basic" projection (name + DNI + next booking) otherwise.
- * Pages branch on `result.access`.
+ * **Hot path + access-gated.** Three projections, by `result.access`:
+ *  - `full` (owner / shared / OWNER+ADMIN / sharedView): the whole row;
+ *  - `admin` (rol sin `clinical.read`: Secretaria, Facturación — PD-13):
+ *    `PatientAdminCore`, datos para operar la agenda y cobrar, sin HC;
+ *  - `basic` (kine sin acceso): name + DNI + next booking.
+ * Pages branch on `result.access`; HC solo con `=== "full"`.
  *
  * Audit log is written here — `patient.read` fires once per page load
- * regardless of which tabs the user navigates into afterwards. Basic
- * access still writes the audit row so OWNER/ADMIN can see who looked
- * at whose name.
+ * regardless of which tabs the user navigates into afterwards. Basic and
+ * admin access still write the audit row (`patient.read.basic` /
+ * `patient.read.admin`) so OWNER/ADMIN can see who looked at whose data.
  */
-export async function getPatientCore(id: string) {
+export async function getPatientCore(id: string): Promise<PatientCoreWithAccess | null> {
   const actor = await getActor();
   const access = await patientAccessFor(actor, id);
   if (access === "none") return null;
 
-  if (access === "basic") {
+  if (access === "admin") {
+    // P0-S07sp (E1, PD-13): proyección `admin` con `select` explícito, así la
+    // HC (notes, diagnosisTitle/Note, userId del portal, montos de cobertura)
+    // ni siquiera sale de la DB. Antes `admin` caía en la rama básica (falla
+    // cerrado) y la Secretaria no veía contacto ni cobertura para operar.
+    const [patient, nextBooking] = await Promise.all([
+      runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
+        where: { id, tenantId: actor.tenantId },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          documentId: true,
+          email: true,
+          phone: true,
+          dateOfBirth: true,
+          // Misma regla que la rama full: la cobertura vigente es la más
+          // reciente (cuid ordenable por tiempo). Sin copago ni vigencia.
+          coverages: {
+            orderBy: { id: "desc" },
+            take: 1,
+            select: { insurer: true, planName: true, memberId: true, insurerRef: { select: { name: true } } },
+          },
+          emergency: { orderBy: { id: "asc" }, select: { name: true, relation: true, phone: true } },
+          assignedPractitioner: { select: { user: { select: { fullName: true, email: true } } } },
+        },
+      })),
+      runWithRls(actor.tenantId, (tx) => tx.booking.findFirst({
+        where: {
+          tenantId: actor.tenantId,
+          patientId: id,
+          scheduledFor: { gte: new Date() },
+          status: { notIn: ["CANCELLED"] },
+        },
+        orderBy: { scheduledFor: "asc" },
+        select: { scheduledFor: true },
+      })),
+    ]);
+    if (!patient) return null;
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.read.admin",
+      entity: "Patient",
+      entityId: patient.id,
+    });
+    const cov = patient.coverages[0];
+    const assignedUser = patient.assignedPractitioner?.user;
+    // Literal campo por campo (no spread): el tipo congelado es el contrato
+    // con el perfil (S07v) y un campo nuevo en el `select` no tiene que
+    // filtrarse solo.
+    const core: PatientAdminCore = {
+      id: patient.id,
+      firstName: patient.firstName,
+      lastName: patient.lastName,
+      documentId: patient.documentId,
+      email: patient.email,
+      phone: patient.phone,
+      dateOfBirth: patient.dateOfBirth,
+      coverage: cov
+        ? { insurer: cov.insurerRef?.name ?? cov.insurer, planName: cov.planName, memberId: cov.memberId }
+        : null,
+      emergency: patient.emergency.map((e) => ({ name: e.name, relation: e.relation, phone: e.phone })),
+      assignedPractitionerName: assignedUser ? assignedUser.fullName ?? assignedUser.email : null,
+      nextBookingAt: nextBooking?.scheduledFor ?? null,
+      access: "admin",
+    };
+    return core;
+  }
+
+  // `basic` (y cualquier nivel futuro no contemplado: falla cerrado).
+  if (access !== "full") {
     // Minimal projection — name + DNI + next upcoming booking only.
     const [patient, nextBooking] = await Promise.all([
       runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
@@ -382,57 +505,6 @@ export async function getPatientCore(id: string) {
 }
 
 /**
- * Lite list of patient's programs — programs + minimal session metadata
- * (id, index, completedAt, scheduledFor, notes, exercise count) but
- * **no** SessionExercise rows / Exercise joins. Enough for:
- *
- *   - Resumen tab (active program detection + done count)
- *   - SesionesView (list rows with status + exercise count)
- *   - Tab badges (programs.length, allSessionsCount)
- *
- * The heavy join (SessionExercise + Exercise) is only fetched by
- * `getPatientProgramsFull` when the Plan tab opens.
- */
-export async function getPatientProgramsLite(patientId: string) {
-  const actor = await getActor();
-  const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return [];
-  return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
-    where: { patientId },
-    select: {
-      id: true,
-      title: true,
-      status: true,
-      totalSessions: true,
-      frequency: true,
-      startDate: true,
-      createdAt: true,
-      sessions: {
-        orderBy: { index: "asc" },
-        select: {
-          id: true,
-          index: true,
-          scheduledFor: true,
-          completedAt: true,
-          notes: true,
-          _count: { select: { exercises: true } },
-        },
-      },
-      case: {
-        select: {
-          diagnoses: {
-            take: 1,
-            orderBy: { rank: "asc" },
-            select: { condition: { select: { id: true, name: true, cie10: true } } },
-          },
-        },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  }));
-}
-
-/**
  * Aggregate count of bookings worth showing on the Facturación tab
  * badge — anything that isn't UNPAID counts as "billable". Cheap;
  * keeps the tab count accurate without paying for the full bookings
@@ -441,36 +513,14 @@ export async function getPatientProgramsLite(patientId: string) {
 export async function getPatientBillableCount(patientId: string) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return 0;
+  // P0-S07sp: el estado de cobro es administrativo (PD-13) → `admin` también.
+  if (!seesBookings(access)) return 0;
   return runWithRls(actor.tenantId, (tx) => tx.booking.count({
     where: {
+      tenantId: actor.tenantId,
       patientId,
       paymentStatus: { not: "UNPAID" },
     },
-  }));
-}
-
-/**
- * Full patient programs — all sessions + ordered exercises, with the
- * clinical case + diagnoses. Heavy. Only fetch when the user opens
- * the Sesiones or Plan tab.
- */
-export async function getPatientProgramsFull(patientId: string) {
-  const actor = await getActor();
-  const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return [];
-  return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
-    where: { patientId },
-    include: {
-      sessions: {
-        orderBy: { index: "asc" },
-        include: {
-          exercises: { include: { exercise: true }, orderBy: { order: "asc" } },
-        },
-      },
-      case: { include: { diagnoses: { include: { condition: true } } } },
-    },
-    orderBy: { createdAt: "desc" },
   }));
 }
 
@@ -528,6 +578,33 @@ async function resolvePatientBilling(
 }
 
 /**
+ * P0-S07sp (E1, PD-13): ¿el actor ve la lista de turnos y el estado de cobro
+ * del paciente? `full` y `admin` (Secretaria/Facturación: turnos y cobro son
+ * datos administrativos). `basic` sigue sin verlos. Forma positiva: un nivel
+ * nuevo no habilita nada por omisión.
+ */
+function seesBookings(access: AccessLevel): boolean {
+  return access === "full" || access === "admin";
+}
+
+/**
+ * Redacta title/description/notes de un turno del paciente según
+ * `bookingFieldAccess` (la misma regla que la agenda y el ICS: con paciente,
+ * los tres campos solo con `clinical.read` + full). Para `admin` quedan en
+ * null: el campo viaja (forma estable para la UI) pero sin contenido.
+ */
+async function bookingTextRedactor(actor: Actor, access: AccessLevel) {
+  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const fa = bookingFieldAccess({ clinical: caps.has("clinical.read"), access, hasPatient: true });
+  return <T extends { title: string | null; description: string | null; notes: string | null }>(b: T): T => ({
+    ...b,
+    title: fa.title === "rw" ? b.title : null,
+    description: fa.description === "rw" ? b.description : null,
+    notes: fa.notes === "rw" ? b.notes : null,
+  });
+}
+
+/**
  * Recent bookings — capped at `take`. Used by the Resumen tab.
  *
  * Now carries the billing line (serviceName + obra social + copago) so
@@ -537,10 +614,10 @@ async function resolvePatientBilling(
 export async function getPatientBookingsSummary(patientId: string, take = 5) {
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
-  if (access !== "full") return [];
-  const [rows, billing] = await Promise.all([
+  if (!seesBookings(access)) return [];
+  const [rows, billing, redact] = await Promise.all([
     runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: { patientId },
+      where: { patientId, tenantId: actor.tenantId },
       orderBy: { scheduledFor: "desc" },
       take,
       select: {
@@ -557,9 +634,10 @@ export async function getPatientBookingsSummary(patientId: string, take = 5) {
       },
     })),
     resolvePatientBilling(patientId, actor.tenantId),
+    bookingTextRedactor(actor, access),
   ]);
   return rows.map(({ service, copagoCents: bookingCopago, ...b }) => ({
-    ...b,
+    ...redact(b),
     serviceName: service.name,
     obraSocial: billing.obraSocial,
     copagoCents: resolveBookingCopagoCents({
@@ -588,10 +666,10 @@ export async function getPatientBookingsAll(patientId: string, take = 100, curso
   const actor = await getActor();
   const access = await patientAccessFor(actor, patientId);
   const size = Math.min(Math.max(Math.trunc(take) || 100, 1), 200);
-  if (access !== "full") {
+  if (!seesBookings(access)) {
     return { rows: [] as PatientBookingFull[], hasMore: false, nextCursor: null as string | null };
   }
-  const [found, billing] = await Promise.all([
+  const [found, billing, redact] = await Promise.all([
     runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
       where: { patientId, tenantId: actor.tenantId },
       orderBy: [{ scheduledFor: "desc" }, { id: "desc" }],
@@ -600,11 +678,12 @@ export async function getPatientBookingsAll(patientId: string, take = 100, curso
       include: { service: { select: { name: true, priceCents: true } } },
     })),
     resolvePatientBilling(patientId, actor.tenantId),
+    bookingTextRedactor(actor, access),
   ]);
   const hasMore = found.length > size;
   const page = hasMore ? found.slice(0, size) : found;
   const rows: PatientBookingFull[] = page.map(({ service, copagoCents: bookingCopago, ...b }) => ({
-    ...b,
+    ...redact(b),
     serviceName: service.name,
     obraSocial: billing.obraSocial,
     // What the patient pays (copago) and what the OS reimburses (osAmount),
@@ -636,49 +715,14 @@ export async function getPatientEvaScores(patientId: string) {
   }));
 }
 
-/**
- * **Backwards-compatible wrapper** — loads everything in one shot like
- * the pre-Sprint-16 implementation. Kept so callers that haven't
- * migrated yet (`generateMetadata`, ad-hoc scripts) still work.
- *
- * New code should call the slice-specific fetchers above so it doesn't
- * pay for relations it doesn't render.
- */
-export async function getPatient(id: string) {
-  const actor = await getActor();
-  const v = await visibilityForActor(actor);
-  const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id, tenantId: actor.tenantId, ...v.patientWhere },
-    include: {
-      coverages: { orderBy: { id: "desc" } },
-      emergency: true,
-      programs: {
-        include: {
-          sessions: {
-            orderBy: { index: "asc" },
-            include: {
-              exercises: { include: { exercise: true }, orderBy: { order: "asc" } },
-            },
-          },
-          case: { include: { diagnoses: { include: { condition: true } } } },
-        },
-        orderBy: { createdAt: "desc" },
-      },
-      bookings: { orderBy: { scheduledFor: "desc" }, take: 20 },
-      evaScores: { orderBy: { takenAt: "asc" } },
-    },
-  }));
-  if (patient) {
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.read",
-      entity: "Patient",
-      entityId: patient.id,
-    });
-  }
-  return patient;
-}
+// P0-S02a (E0, 04-oct): acá vivía `getPatient`, el wrapper pre-Sprint-16
+// que cargaba toda la HC (planes, sesiones, ejercicios, diagnósticos, EVA,
+// turnos). Tenía 0 callers pero, por estar en un archivo "use server", seguía
+// siendo un endpoint con action-id en un chunk público, y sin gate de acceso
+// (`patientWhere = {}`): un profesional básico o la Secretaria leían la HC
+// completa por RPC. No se reemplaza: cada pantalla usa su lector con gate
+// (`getPatientCore`, `getPatientProgramsLite/Full`, `getPatientEvaScores`…).
+// `tests/integration/patients-rpc-surface.test.ts` impide que vuelva.
 
 /**
  * Lightweight name-only fetch for metadata + breadcrumbs. Avoids the
@@ -712,8 +756,39 @@ function patientUniqueError(
   return { ok: false, error: "Ya existe un paciente con esos datos en este consultorio." };
 }
 
+/**
+ * Roles que leen clínica (`clinical.read`). Un paciente solo puede quedar "a
+ * cargo de" (assignedPractitionerId) un profesional de estos roles: asignar a
+ * la Secretaria o a Facturación no le daría HC (PD-13) y dejaría al paciente
+ * sin nadie con full salvo OWNER/ADMIN. Derivado de la matriz para no copiar
+ * la lista de roles (AUDIT §5.35).
+ */
+const CLINICAL_ROLES: Role[] = Object.values(Role).filter((r) => capabilitiesFor(r).has("clinical.read"));
+
+/**
+ * Alta de paciente.
+ *
+ * P0-S07sp (Planes E1, PD-09/PD-13) — `opts.assignTo` = el profesional del
+ * turno que se agenda desde el modal:
+ *  - **Sin `clinical.read`** (Secretaria/ASSISTANT): exige `agenda.operateAll`
+ *    (BILLING no crea fichas) y `assignTo` obligatorio. Antes el paciente
+ *    quedaba asignado a quien lo creaba (`actor.practitionerId`): la
+ *    Secretaria se quedaba con acceso full a la ficha y el kine del turno la
+ *    veía en básico. Las notas y el diagnóstico se **ignoran**: un campo se
+ *    escribe solo si se puede leer, y la Secretaria no lee HC.
+ *  - **OWNER/ADMIN**: `assignTo` opcional (sin él, como hoy: a su cargo).
+ *  - **PRACTITIONER**: `assignTo` se ignora y la ficha queda a su cargo, como
+ *    hasta hoy. Re-asignar es de OWNER/ADMIN (`assignPatientToPractitioner`):
+ *    si no, un kine podría "regalar" la ficha que acaba de cargar.
+ *
+ * `assignTo` se valida dentro de la tx del alta: del tenant (las FK saltean
+ * RLS y en prod la conexión tiene BYPASSRLS), membresía aceptada en un rol
+ * clínico y, para la Secretaria, distinto del actor. Si no pasa, no se crea
+ * nada.
+ */
 export async function createPatient(
-  raw: PatientCreateInput
+  raw: PatientCreateInput,
+  opts?: PatientCreateOptionsInput
 ): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
   const parsed = PatientCreate.safeParse(raw);
@@ -724,27 +799,62 @@ export async function createPatient(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
+  const parsedOpts = PatientCreateOptions.safeParse(opts ?? {});
+  if (!parsedOpts.success) return { ok: false, error: "Datos inválidos" };
+
+  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const clinical = caps.has("clinical.read");
+  if (!clinical && !caps.has("agenda.operateAll")) {
+    return { ok: false, error: "Tu rol no puede dar de alta pacientes." };
+  }
+  const assignTo = !clinical || caps.has("tenant.admin") ? parsedOpts.data.assignTo : undefined;
+  if (!clinical && !assignTo) {
+    return { ok: false, error: "Elegí el profesional del turno: el paciente queda a su cargo." };
+  }
+
   // Coverage fields aren't `Patient` columns — split them out before the
   // create so Prisma doesn't choke, and use them to seed the primary
-  // Coverage inside the same transaction.
-  const { insurerId, insurerName, ...patientData } = parsed.data;
+  // Coverage inside the same transaction. Notas y diagnóstico se separan
+  // también: sin `clinical.read` no se escriben (ver arriba).
+  const { insurerId, insurerName, notes, diagnosisTitle, diagnosisNote, ...patientData } = parsed.data;
+  const clinicalIgnored = !clinical && Boolean(notes || diagnosisTitle || diagnosisNote);
   try {
     // RLS Etapa 2: create runs under the tenant GUC. The notify+audit
     // calls land outside the transaction since they're fire-and-forget.
     const p = await runWithRls(actor.tenantId, async (tx) => {
+      let assignee = actor.practitionerId;
+      if (assignTo) {
+        const target = await tx.practitioner.findFirst({
+          where: {
+            id: assignTo,
+            tenantId: actor.tenantId,
+            user: {
+              memberships: {
+                some: { tenantId: actor.tenantId, acceptedAt: { not: null }, role: { in: CLINICAL_ROLES } },
+              },
+            },
+          },
+          select: { id: true },
+        });
+        if (!target || (!clinical && target.id === actor.practitionerId)) return null;
+        assignee = target.id;
+      }
       const created = await tx.patient.create({
         data: {
           ...patientData,
-          // Patient-level active diagnosis (short title + long note). These
-          // ARE Patient columns (unlike insurerId/insurerName), so persist
-          // them explicitly — empty → null. Auto-fills new turnos.
-          diagnosisTitle: parsed.data.diagnosisTitle ?? null,
-          diagnosisNote: parsed.data.diagnosisNote ?? null,
+          // Clinical fields only for roles that read them. Patient-level active
+          // diagnosis (short title + long note) ARE Patient columns (unlike
+          // insurerId/insurerName), so persist them explicitly — empty → null.
+          // Auto-fills new turnos.
+          notes: clinical ? notes ?? null : null,
+          diagnosisTitle: clinical ? diagnosisTitle ?? null : null,
+          diagnosisNote: clinical ? diagnosisNote ?? null : null,
           tenantId: actor.tenantId,
-          // Auto-assign the new patient to the kine creating them, so the
-          // per-kine visibility mode works out of the box. OWNER/ADMIN can
-          // later re-assign or set null for "consultorio común".
-          assignedPractitionerId: actor.practitionerId,
+          // Por defecto la ficha queda a cargo de quien la crea, así el modo
+          // de visibilidad por kine funciona de entrada; desde el modal va al
+          // profesional del turno (`assignTo`). OWNER/ADMIN pueden re-asignar
+          // o dejarla en "consultorio común" después.
+          assignedPractitionerId: assignee,
         },
       });
       // Seed coverage when an obra social was chosen at creation time.
@@ -772,12 +882,25 @@ export async function createPatient(
       }
       return created;
     });
+    if (!p) {
+      return {
+        ok: false,
+        error: "El profesional elegido no está disponible en este consultorio.",
+        fieldErrors: { assignTo: ["Profesional inválido"] },
+      };
+    }
     await audit({
       tenantId: actor.tenantId,
       actorId: actor.userId ?? undefined,
       action: "patient.create",
       entity: "Patient",
       entityId: p.id,
+      // Solo ids y flags (sin PHI): a cargo de quién quedó y si se descartaron
+      // campos clínicos que mandó un rol sin `clinical.read`.
+      payload: {
+        assignedPractitionerId: p.assignedPractitionerId,
+        ...(clinicalIgnored ? { clinicalIgnored: true } : {}),
+      },
     });
     if (actor.userId) {
       await notify({
@@ -923,6 +1046,14 @@ export async function updatePatient(
  * Same RLS-guarded pattern as the other patient mutations: the ownership
  * check + update share one tenant-GUC transaction; audit + revalidate
  * fire outside it.
+ *
+ * P0-S07sp (E1): exige `canWriteClinical` (rol con `clinical.read` Y acceso
+ * full a ESTE paciente), no solo full (`hcAccessError`). Hoy, con PD-13, un
+ * rol sin `clinical.read` nunca llega a full, así que el gate viejo ya lo
+ * frenaba; el predicado deja la regla explícita y no depende de cómo
+ * `visibility` resuelva el nivel. Mismos mensajes que `hcAccessError`. Importa porque el drawer de la agenda llama esto con
+ * "Usar como diagnóstico": con los campos ocultos (null) borraba el
+ * diagnóstico del paciente.
  */
 export async function setPatientDiagnosis(
   patientId: string,
@@ -930,11 +1061,15 @@ export async function setPatientDiagnosis(
   note: string
 ): Promise<ActionResult> {
   const actor = await getActor();
+  const caps = capabilitiesFor(await getMembershipRole(actor));
   const result = await runWithRls(actor.tenantId, async (tx) => {
-    const access = await hcAccessError(actor, patientId, tx);
-    if (access) return { ok: false as const, error: access };
+    const access = await patientAccessFor(actor, patientId, tx);
+    if (access === "none") return { ok: false as const, error: "Paciente no encontrado." };
+    if (!canWriteClinical(caps, access)) {
+      return { ok: false as const, error: "No tenés acceso completo a este paciente." };
+    }
     await tx.patient.update({
-      where: { id: patientId },
+      where: { id: patientId, tenantId: actor.tenantId },
       data: {
         diagnosisTitle: title.trim() || null,
         diagnosisNote: note.trim() || null,
@@ -955,93 +1090,9 @@ export async function setPatientDiagnosis(
   return { ok: true, data: undefined };
 }
 
-/**
- * A2b-S-vis (30-sep) — gate `full` de las mutaciones de HC. Decisión del
- * dueño: acceso básico = solo ver. Antes estas actions solo chequeaban el
- * tenant, así que un profesional no asignado ni compartido podía editar el
- * diagnóstico, crear/editar planes, cargar EVA o archivar pacientes ajenos
- * desde la consola. Devuelve el mensaje de error, o `null` si puede seguir.
- * Corre dentro del `runWithRls` del caller (pasa su `tx`).
- */
-async function hcAccessError(
-  actor: Actor,
-  patientId: string,
-  tx: Prisma.TransactionClient
-): Promise<string | null> {
-  const access = await patientAccessFor(actor, patientId, tx);
-  if (access === "none") return "Paciente no encontrado.";
-  if (access !== "full") return "No tenés acceso completo a este paciente.";
-  return null;
-}
-
-/**
- * Gate a hard-delete of a plan/session (or other admin-only mutation) to OWNER/ADMIN.
- * Returns an `ActionResult` error when the actor's membership role is
- * anything else, or `null` when the actor may proceed. Mirrors the inline
- * role check in `assignPatientToPractitioner`.
- */
-async function requireAdminRole(
-  actor: Actor
-): Promise<{ ok: false; error: string } | null> {
-  // B1.7: el rol sale de `lib/authz` (una query por request, cacheada) y el
-  // criterio OWNER/ADMIN de `lib/capabilities` (un solo lugar para C0).
-  if (!isTenantAdminRole(await getMembershipRole(actor))) {
-    return {
-      ok: false,
-      error: "Solo el dueño o un administrador puede eliminar definitivamente.",
-    };
-  }
-  return null;
-}
-
 // A2a-S08 (decisión del dueño 30-sep): se quitó `deletePatient`. El borrado
 // definitivo de una ficha arrastraba en cascada turnos, cobros, planes y
 // archivos sin retorno; la única salida es Archivar (`setPatientArchived`).
-
-export async function createProgram(input: {
-  patientId: string;
-  title: string;
-  totalSessions: number;
-  frequency: number;
-  startDate: Date;
-}): Promise<ActionResult<{ id: string }>> {
-  const actor = await getActor();
-  // RLS Etapa 2: owner check + program-with-nested-sessions create
-  // share the tx. Returns null if the patient isn't in this tenant.
-  const program = await runWithRls(actor.tenantId, async (tx) => {
-    const denied = await hcAccessError(actor, input.patientId, tx);
-    if (denied) return { error: denied };
-    return tx.treatmentProgram.create({
-      data: {
-        tenantId: actor.tenantId,
-        patientId: input.patientId,
-        title: input.title,
-        totalSessions: input.totalSessions,
-        frequency: input.frequency,
-        startDate: input.startDate,
-        sessions: {
-          create: Array.from({ length: input.totalSessions }).map((_, i) => ({
-            practitionerId: actor.practitionerId,
-            index: i + 1,
-            scheduledFor: new Date(
-              input.startDate.getTime() + Math.floor(i * (7 / input.frequency)) * 86_400_000
-            ),
-          })),
-        },
-      },
-    });
-  });
-  if ("error" in program) return { ok: false, error: program.error };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "program.create",
-    entity: "TreatmentProgram",
-    entityId: program.id,
-  });
-  revalidatePath(`/pacientes/${input.patientId}`);
-  return { ok: true, data: { id: program.id } };
-}
 
 export async function recordEvaScore(input: {
   patientId: string;
@@ -1428,15 +1479,26 @@ export async function assignPatientToPractitioner(input: {
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
   if (input.practitionerId) {
+    // P0.Z (H-b2): mismo filtro que `createPatient` (`CLINICAL_ROLES`, membresía
+    // aceptada). Re-asignar a la Secretaria o a Facturación no les da HC
+    // (PD-13) y dejaba al paciente sin profesional con full salvo OWNER/ADMIN.
     const prac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
-      where: { id: input.practitionerId!, tenantId: actor.tenantId },
+      where: {
+        id: input.practitionerId!,
+        tenantId: actor.tenantId,
+        user: {
+          memberships: {
+            some: { tenantId: actor.tenantId, acceptedAt: { not: null }, role: { in: CLINICAL_ROLES } },
+          },
+        },
+      },
       select: { id: true },
     }));
-    if (!prac) return { ok: false, error: "Profesional fuera del tenant." };
+    if (!prac) return { ok: false, error: "Elegí un profesional activo del consultorio con acceso clínico." };
   }
 
   await runWithRls(actor.tenantId, (tx) => tx.patient.update({
-    where: { id: input.patientId },
+    where: { id: input.patientId, tenantId: actor.tenantId },
     data: { assignedPractitionerId: input.practitionerId },
   }));
   await audit({
@@ -1452,179 +1514,6 @@ export async function assignPatientToPractitioner(input: {
   });
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath("/pacientes");
-  return { ok: true, data: undefined };
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Program / Session CRUD
-// ──────────────────────────────────────────────────────────────────────
-
-export async function updateProgram(input: {
-  id: string;
-  title?: string;
-  totalSessions?: number;
-  frequency?: number;
-  startDate?: string;
-}): Promise<ActionResult> {
-  const actor = await getActor();
-  const program = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
-      where: { id: input.id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true },
-    });
-    if (!row) return null;
-    return { ...row, denied: await hcAccessError(actor, row.patientId, tx) };
-  });
-  if (!program) return { ok: false, error: "Plan no encontrado." };
-  if (program.denied) return { ok: false, error: program.denied };
-  const patch: Record<string, string | number | Date> = {};
-  if (input.title !== undefined) {
-    const t = input.title.trim();
-    if (!t) return { ok: false, error: "El título no puede estar vacío." };
-    patch.title = t;
-  }
-  if (input.totalSessions !== undefined) {
-    const n = Math.floor(input.totalSessions);
-    if (n < 1 || n > 64) return { ok: false, error: "Sesiones entre 1 y 64." };
-    patch.totalSessions = n;
-  }
-  if (input.frequency !== undefined) {
-    const f = Math.floor(input.frequency);
-    if (f < 1 || f > 7) return { ok: false, error: "Frecuencia entre 1 y 7." };
-    patch.frequency = f;
-  }
-  if (input.startDate !== undefined) {
-    // `input.startDate` is a "YYYY-MM-DD" value from an <input type="date">.
-    // Parsing it bare makes `new Date` read it as UTC midnight (= 21:00 the
-    // previous day in AR), rolling session 1 back a day. Anchor to AR local
-    // midnight instead.
-    const d = new Date(localToARIso(`${input.startDate}T00:00:00`));
-    if (Number.isNaN(d.getTime())) return { ok: false, error: "Fecha inválida." };
-    patch.startDate = d;
-  }
-  if (Object.keys(patch).length === 0) return { ok: true, data: undefined };
-  await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({ where: { id: input.id }, data: patch }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "program.update",
-    entity: "TreatmentProgram",
-    entityId: input.id,
-  });
-  revalidatePath(`/pacientes/${program.patientId}`);
-  return { ok: true, data: undefined };
-}
-
-export async function setProgramStatus(input: {
-  id: string;
-  status: "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
-}): Promise<ActionResult> {
-  const actor = await getActor();
-  const program = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
-      where: { id: input.id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, status: true },
-    });
-    if (!row) return null;
-    return { ...row, denied: await hcAccessError(actor, row.patientId, tx) };
-  });
-  if (!program) return { ok: false, error: "Plan no encontrado." };
-  if (program.denied) return { ok: false, error: program.denied };
-  if (program.status === input.status) return { ok: true, data: undefined };
-  await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.update({
-    where: { id: input.id },
-    data: { status: input.status },
-  }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "program.status",
-    entity: "TreatmentProgram",
-    entityId: input.id,
-    payload: { from: program.status, to: input.status },
-  });
-  revalidatePath(`/pacientes/${program.patientId}`);
-  revalidatePath("/seguimiento");
-  return { ok: true, data: undefined };
-}
-
-/**
- * Hard-delete a TreatmentProgram + all its Sessions + SessionExercises.
- * Bookings that referenced sessions remain in place (no FK to delete
- * cascade). Audit log records the loss.
- */
-export async function deleteProgram(id: string): Promise<ActionResult> {
-  const actor = await getActor();
-  const denied = await requireAdminRole(actor);
-  if (denied) return denied;
-  // RLS Etapa 2: cascade delete (sessions + sessionExercises) traverses
-  // FKs the app-layer extension can't reach. The GUC ensures Postgres
-  // policies guard every cascaded row.
-  const program = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
-      where: { id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, title: true, totalSessions: true },
-    });
-    if (!row) return null;
-    // A2b-S-vis: OWNER/ADMIN ya implica `full`; el gate queda explícito para
-    // que no dependa de que `requireAdminRole` siga siendo el único filtro.
-    if (await hcAccessError(actor, row.patientId, tx)) return null;
-    await tx.treatmentProgram.delete({ where: { id } });
-    return row;
-  });
-  if (!program) return { ok: false, error: "Plan no encontrado." };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "program.delete",
-    entity: "TreatmentProgram",
-    entityId: id,
-    payload: { title: program.title, totalSessions: program.totalSessions },
-  });
-  revalidatePath(`/pacientes/${program.patientId}`);
-  return { ok: true, data: undefined };
-}
-
-export async function deleteSession(id: string): Promise<ActionResult> {
-  const actor = await getActor();
-  const denied = await requireAdminRole(actor);
-  if (denied) return denied;
-  const session = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.session.findFirst({
-      where: { id, program: { tenantId: actor.tenantId } },
-      select: {
-        id: true,
-        index: true,
-        program: { select: { id: true, patientId: true, totalSessions: true } },
-      },
-    });
-    // A2b-S-vis: mismo gate explícito que deleteProgram (OWNER/ADMIN ⇒ full).
-    if (!row || (await hcAccessError(actor, row.program.patientId, tx))) return null;
-    return row;
-  });
-  if (!session) return { ok: false, error: "Sesión no encontrada." };
-
-  await runWithRls(actor.tenantId, async (tx) => {
-    await tx.session.delete({ where: { id } });
-    // Decrement totalSessions so progress bars stay accurate. Atomic
-    // decrement (vs. read-modify-write) avoids racing a concurrent edit.
-    // The `> 1` guard keeps the counter from ever reaching 0.
-    if (session.program.totalSessions > 1) {
-      await tx.treatmentProgram.update({
-        where: { id: session.program.id },
-        data: { totalSessions: { decrement: 1 } },
-      });
-    }
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.delete",
-    entity: "Session",
-    entityId: id,
-    payload: { index: session.index },
-  });
-  revalidatePath(`/pacientes/${session.program.patientId}`);
   return { ok: true, data: undefined };
 }
 
@@ -1759,7 +1648,7 @@ export async function bulkArchivePatients(input: {
   const outcome = await runWithRls(actor.tenantId, async (tx) => {
     const access = await bulkPatientAccess(actor, ids, tx);
     const missing = ids.filter((id) => !access.has(id)).length;
-    const basic = ids.filter((id) => access.get(id) === "basic").length;
+    const basic = ids.filter((id) => access.has(id) && access.get(id) !== "full").length;
     if (missing > 0) return { kind: "missing" as const, n: missing };
     if (basic > 0) return { kind: "basic" as const, n: basic };
     const r = await tx.patient.updateMany({
@@ -1881,8 +1770,14 @@ async function requireShareAuthority(patientId: string) {
     select: { id: true, assignedPractitionerId: true },
   }));
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
-  const isAdmin = isTenantAdminRole(await getMembershipRole(actor));
-  const isOwner = patient.assignedPractitionerId === actor.practitionerId;
+  const role = await getMembershipRole(actor);
+  const isAdmin = isTenantAdminRole(role);
+  // P0.Z (H-b2): "dueño" = asignado Y con `clinical.read`. En prod hay
+  // pacientes asignados a la Secretaria (precheck 15): sin el chequeo de rol,
+  // ella manejaba los shares y abría la HC a otros profesionales, aunque por
+  // PD-13 nunca tiene full sobre esa ficha.
+  const isOwner =
+    patient.assignedPractitionerId === actor.practitionerId && capabilitiesFor(role).has("clinical.read");
   if (!isAdmin && !isOwner) {
     return {
       ok: false as const,

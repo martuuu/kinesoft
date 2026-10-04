@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { DbClient } from "@/lib/rls";
-import { dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
+import { addDays, dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
 import {
   BOOKING_LOOKBACK_MIN,
   FALLBACK_TENANT_HOURS,
@@ -125,14 +125,114 @@ export async function loadAvailabilityInputs(
   db: DbClient,
   params: LoadAvailabilityParams
 ): Promise<LoadedAvailabilityInput> {
-  const { tenantId, serviceId, locationId, patientId, from, to } = params;
+  const { from, to } = params;
   assertDayKey("from", from);
   assertDayKey("to", to);
   if (from > to) throw new Error(`loadAvailabilityInputs: from (${from}) > to (${to})`);
+  return loadForRuns(db, params, [{ from, to }]);
+}
+
+/** Tope de días distintos de `loadAvailabilityInputsForDays`. Un plan tiene
+ *  ≤ `PLAN_MAX_SESSIONS` (60) filas; aunque cada una sume días de sugerencia,
+ *  400 sobra. Es una red contra un caller que pase una lista sin acotar: cada
+ *  tramo no contiguo es un término más en los OR de 3 queries. */
+export const FOR_DAYS_MAX = 400;
+
+export type LoadAvailabilityForDaysParams = Omit<LoadAvailabilityParams, "from" | "to"> & {
+  /** Días AR a cargar (sin orden ni unicidad requeridos; no vacío). */
+  days: ReadonlyArray<DayKey>;
+};
+
+/**
+ * Lo que devuelve `loadAvailabilityInputsForDays`: el mismo input, con
+ * `from`/`to` = primer y último día pedido y `days` = los días cargados
+ * (ordenados, sin repetir). OJO: excepciones, bloqueos y turnos están SOLO
+ * para `days` (+ el lookback de cada tramo). El motor no mira `from`/`to`, así
+ * que clasificar o buscar hueco en un día que NO está en `days` daría "libre"
+ * de más: el caller tiene que acotarse a `days` (p. ej. `nextFreeSlot` con
+ * `until` dentro del tramo cargado).
+ */
+export type LoadedAvailabilityInputForDays = LoadedAvailabilityInput & {
+  days: ReadonlyArray<DayKey>;
+};
+
+/**
+ * Loader por días sueltos (P0.1 S07L, para el preview y el commit de Planes).
+ *
+ * Por qué no `loadAvailabilityInputs(min..max)`: un plan mensual ×20 cubre
+ * ~20 meses; la ventana contigua traería todos los turnos, bloqueos y
+ * excepciones de esos 600 días para mirar 20. Acá los días se agrupan en
+ * tramos contiguos y cada query de ventana (excepciones, bloqueos, turnos)
+ * lleva un OR de tramos: la cantidad de queries es la MISMA que la ventana
+ * contigua (constante, no crece con los días) y las filas, solo las de los
+ * días pedidos.
+ *
+ * Contrato (test `availability-loader-days`): para cualquier lista de días,
+ * el resultado es el de `loadAvailabilityInputs(min, max)` con excepciones,
+ * bloqueos y turnos filtrados a los que tocan algún día pedido (turnos: con
+ * el lookback de `BOOKING_LOOKBACK_MIN` antes del inicio de cada tramo, igual
+ * que la ventana). Plantillas, servicios, reglas y coberturas, idénticos.
+ */
+export async function loadAvailabilityInputsForDays(
+  db: DbClient,
+  params: LoadAvailabilityForDaysParams
+): Promise<LoadedAvailabilityInputForDays> {
+  const { days: rawDays, ...rest } = params;
+  if (rawDays.length === 0) throw new Error("loadAvailabilityInputsForDays: days vacío");
+  for (const d of rawDays) {
+    if (!isDayKey(d)) {
+      throw new Error(`loadAvailabilityInputsForDays: día inválido (${d}); se espera YYYY-MM-DD`);
+    }
+  }
+  // DayKey "YYYY-MM-DD" ordena lexicográficamente igual que por fecha.
+  const days = Array.from(new Set(rawDays)).sort();
+  if (days.length > FOR_DAYS_MAX) {
+    throw new Error(`loadAvailabilityInputsForDays: ${days.length} días (máx. ${FOR_DAYS_MAX})`);
+  }
+  const runs: DayRun[] = [];
+  for (const d of days) {
+    const last = runs[runs.length - 1];
+    if (last && addDays(last.to, 1) === d) last.to = d;
+    else runs.push({ from: d, to: d });
+  }
+  const input = await loadForRuns(
+    db,
+    { ...rest, from: days[0], to: days[days.length - 1] },
+    runs
+  );
+  return { ...input, days };
+}
+
+/** Tramo de días AR contiguos, inclusive en ambos extremos. */
+type DayRun = { from: DayKey; to: DayKey };
+
+/**
+ * Cuerpo común. `runs` ordenados, disjuntos y no adyacentes (o uno solo =
+ * la ventana contigua de siempre: con un tramo los `where` son EXACTAMENTE los
+ * de antes de S07L, así `loadAvailabilityInputs` no cambia ni de plan de query).
+ * `params.from`/`to` = primer y último día (poda de vigencias de plantillas).
+ */
+async function loadForRuns(
+  db: DbClient,
+  params: LoadAvailabilityParams,
+  runs: ReadonlyArray<DayRun>
+): Promise<LoadedAvailabilityInput> {
+  const { tenantId, serviceId, locationId, patientId, from, to } = params;
+  const single = runs.length === 1;
 
   const windowStart = dayWindow(from).start;
   const windowEnd = dayWindow(to).end; // exclusivo
   const bookingsFrom = new Date(windowStart.getTime() - BOOKING_LOOKBACK_MIN * 60_000);
+  const runWindows = runs.map((r) => {
+    const start = dayWindow(r.from).start;
+    return {
+      start,
+      end: dayWindow(r.to).end,
+      bookingsFrom: new Date(start.getTime() - BOOKING_LOOKBACK_MIN * 60_000),
+      fromDb: dayKeyToDbDate(r.from),
+      toDb: dayKeyToDbDate(r.to),
+    };
+  });
 
   // ── Fase 1: tenant + resolución de ids de entrada contra el tenant ────────
   const requestedIds = params.practitionerIds ? Array.from(new Set(params.practitionerIds)) : null;
@@ -212,7 +312,9 @@ export async function loadAvailabilityInputs(
     db.scheduleException.findMany({
       where: {
         tenantId,
-        date: { gte: fromDb, lte: toDb },
+        ...(single
+          ? { date: { gte: fromDb, lte: toDb } }
+          : { AND: [{ OR: runWindows.map((w) => ({ date: { gte: w.fromDb, lte: w.toDb } })) }] }),
         OR: [{ practitionerId: null }, ...(hasPracs ? [{ practitionerId: { in: pracIds } }] : [])],
       },
       select: { id: true, practitionerId: true, date: true, kind: true, ranges: true, reason: true },
@@ -222,9 +324,11 @@ export async function loadAvailabilityInputs(
       where: {
         tenantId,
         deletedAt: null,
-        startsAt: { lt: windowEnd },
-        endsAt: { gt: windowStart },
+        ...(single ? { startsAt: { lt: windowEnd }, endsAt: { gt: windowStart } } : {}),
         AND: [
+          ...(single
+            ? []
+            : [{ OR: runWindows.map((w) => ({ startsAt: { lt: w.end }, endsAt: { gt: w.start } })) }]),
           { OR: [{ practitionerId: null }, ...(hasPracs ? [{ practitionerId: { in: pracIds } }] : [])] },
           ...(locationFilter !== null
             ? [{ OR: [{ locationId: null }, { locationId: locationFilter }] }]
@@ -248,7 +352,13 @@ export async function loadAvailabilityInputs(
           where: {
             tenantId,
             status: { not: "CANCELLED" },
-            scheduledFor: { gte: bookingsFrom, lt: windowEnd },
+            ...(single
+              ? { scheduledFor: { gte: bookingsFrom, lt: windowEnd } }
+              : {
+                  AND: [
+                    { OR: runWindows.map((w) => ({ scheduledFor: { gte: w.bookingsFrom, lt: w.end } })) },
+                  ],
+                }),
             OR: bookingScope,
           },
           select: {

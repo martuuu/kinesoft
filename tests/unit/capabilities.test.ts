@@ -9,15 +9,36 @@ import {
   CAPABILITIES,
   capabilitiesFor,
   canManageBlocksFor,
+  canOperateBooking,
+  canWriteClinical,
   isTenantAdminRole,
   type Capability,
+  type PatientAccessLevel,
 } from "@/lib/capabilities";
 
+// Planes E1 (PLANES.md §8 P0-Ck, literal): agenda.operateAll / plans.manage /
+// plans.schedule / plans.authorize. "Con full" NO va en la matriz.
 const EXPECTED: Record<Role, Capability[]> = {
   OWNER: [...CAPABILITIES],
   ADMIN: [...CAPABILITIES],
-  PRACTITIONER: ["agenda.viewAll", "agenda.reception", "agenda.manageOwnBlocks", "clinical.read"],
-  ASSISTANT: ["agenda.viewAll", "agenda.reception", "agenda.manageBlocks", "agenda.manageOwnBlocks"],
+  PRACTITIONER: [
+    "agenda.viewAll",
+    "agenda.reception",
+    "agenda.manageOwnBlocks",
+    "clinical.read",
+    "plans.manage",
+    "plans.schedule",
+    "plans.authorize",
+  ],
+  ASSISTANT: [
+    "agenda.viewAll",
+    "agenda.reception",
+    "agenda.manageBlocks",
+    "agenda.manageOwnBlocks",
+    "agenda.operateAll",
+    "plans.schedule",
+    "plans.authorize",
+  ],
   BILLING: ["agenda.viewAll", "billing.manage"],
 };
 const ROLES = Object.keys(EXPECTED) as Role[];
@@ -90,5 +111,90 @@ describe("canManageBlocksFor", () => {
     expect(canManageBlocksFor(caps, me, me)).toBe(false);
     expect(canManageBlocksFor(caps, me, other)).toBe(false);
     expect(canManageBlocksFor(caps, me, null)).toBe(false);
+  });
+});
+
+describe("Planes E1 — capabilities nuevas", () => {
+  const PLAN_CAPS = ["agenda.operateAll", "plans.manage", "plans.schedule", "plans.authorize"] as const;
+
+  it("las 4 existen en CAPABILITIES", () => {
+    for (const c of PLAN_CAPS) expect(CAPABILITIES).toContain(c);
+  });
+
+  it("BILLING no tiene ninguna de las 4", () => {
+    const caps = capabilitiesFor("BILLING");
+    for (const c of PLAN_CAPS) expect(caps.has(c)).toBe(false);
+  });
+
+  it("la Secretaria (ASSISTANT) opera todo y agenda/autoriza en planes, pero NO gestiona planes (PD-09)", () => {
+    const caps = capabilitiesFor("ASSISTANT");
+    expect(caps.has("agenda.operateAll")).toBe(true);
+    expect(caps.has("plans.schedule")).toBe(true);
+    expect(caps.has("plans.authorize")).toBe(true);
+    expect(caps.has("plans.manage")).toBe(false);
+  });
+
+  it("PRACTITIONER gestiona planes pero no opera la agenda ajena por capability", () => {
+    const caps = capabilitiesFor("PRACTITIONER");
+    expect(caps.has("plans.manage")).toBe(true);
+    expect(caps.has("agenda.operateAll")).toBe(false);
+  });
+
+  it.each(["OWNER", "ADMIN"] as const)("%s tiene las 4", (role) => {
+    const caps = capabilitiesFor(role);
+    for (const c of PLAN_CAPS) expect(caps.has(c)).toBe(true);
+  });
+});
+
+const LEVELS: PatientAccessLevel[] = ["full", "admin", "basic", "none"];
+
+describe("canOperateBooking = full || agenda.operateAll (forma positiva, C8)", () => {
+  // Tabla completa rol × nivel. `admin` y `none` NO operan sin operateAll:
+  // es la razón por la que no rige la forma `access !== 'basic'` de E1.
+  const WANT: Record<Role, Record<PatientAccessLevel, boolean>> = {
+    OWNER: { full: true, admin: true, basic: true, none: true },
+    ADMIN: { full: true, admin: true, basic: true, none: true },
+    ASSISTANT: { full: true, admin: true, basic: true, none: true },
+    PRACTITIONER: { full: true, admin: false, basic: false, none: false },
+    BILLING: { full: true, admin: false, basic: false, none: false },
+  };
+  for (const role of ROLES) {
+    for (const lvl of LEVELS) {
+      it(`${role} con acceso ${lvl} → ${WANT[role][lvl]}`, () => {
+        expect(canOperateBooking(capabilitiesFor(role), lvl)).toBe(WANT[role][lvl]);
+      });
+    }
+  }
+
+  it("BILLING en nivel admin NO opera (el bug que evita la forma positiva)", () => {
+    expect(canOperateBooking(capabilitiesFor("BILLING"), "admin")).toBe(false);
+  });
+
+  it("sin membresía: solo con full (falla cerrado en todo lo demás)", () => {
+    const none = capabilitiesFor(null);
+    expect(canOperateBooking(none, "basic")).toBe(false);
+    expect(canOperateBooking(none, "admin")).toBe(false);
+    expect(canOperateBooking(none, "none")).toBe(false);
+  });
+});
+
+describe("canWriteClinical = clinical.read && full", () => {
+  it.each(ROLES)("%s: solo con acceso full y si lee clínica", (role) => {
+    const caps = capabilitiesFor(role);
+    const reads = caps.has("clinical.read");
+    for (const lvl of LEVELS) {
+      expect(canWriteClinical(caps, lvl)).toBe(reads && lvl === "full");
+    }
+  });
+
+  it("ASSISTANT y BILLING nunca, ni con full (PD-13: admin no escribe clínica)", () => {
+    expect(canWriteClinical(capabilitiesFor("ASSISTANT"), "full")).toBe(false);
+    expect(canWriteClinical(capabilitiesFor("BILLING"), "full")).toBe(false);
+    expect(canWriteClinical(capabilitiesFor("ASSISTANT"), "admin")).toBe(false);
+  });
+
+  it("PRACTITIONER: full sí; básico no", () => {
+    expect(canWriteClinical(capabilitiesFor("PRACTITIONER"), "full")).toBe(true);
+    expect(canWriteClinical(capabilitiesFor("PRACTITIONER"), "basic")).toBe(false);
   });
 });

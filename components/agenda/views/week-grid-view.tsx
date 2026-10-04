@@ -9,7 +9,7 @@ import { dowOfDayKey } from "@/lib/availability/day";
 import { splitCountByPractitioner, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
-import { StatusTag } from "./list-view";
+import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";

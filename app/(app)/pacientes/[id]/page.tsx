@@ -2,16 +2,20 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getPatientCore,
-  getPatientProgramsLite,
   getPatientBookingsSummary,
+  getPatientBookingsAll,
   getPatientBillableCount,
   getPatientEvaScores,
   getPatientName,
 } from "@/lib/patients";
+import { getPatientProgramsLite } from "@/lib/programs";
+import { gatingForActor } from "@/lib/plan-gating";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
+import { getCapabilities } from "@/lib/authz";
 import { runWithRls } from "@/lib/rls";
-import { PatientProfile } from "@/components/patients/patient-profile";
+import type { PatientCoreWithAccess } from "@/lib/patients-types";
+import { PatientProfile, PatientAdminProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +31,37 @@ export default async function PatientPage({ params }: { params: { id: string } }
   // payload only if the actor owns / has been shared into / is OWNER+ADMIN.
   // Otherwise the call returns a basic projection and we short-circuit
   // to the gated view before loading any other slice.
-  const core = await getPatientCore(params.id);
+  // Upcast a la unión congelada (full | admin | basic), no a lo que infiere
+  // `getPatientCore`: la rama `admin` compila antes y después de que S07sp sume
+  // esa proyección (después, el `as` es un no-op; el integrador puede sacarlo).
+  const core = (await getPatientCore(params.id)) as PatientCoreWithAccess | null;
   if (!core) notFound();
 
-  if (core.access === "basic") {
+  // P0-S07v · nivel `admin` (PD-13): rol sin `clinical.read` (Secretaria,
+  // BILLING). Va ANTES del corte de "no full": antes caía a la vista básica
+  // ("Sin acceso") y la Secretaria no veía ni el teléfono. Solo se cargan
+  // turnos (con estado de cobro) y capabilities; ningún slice clínico
+  // (programs, EVA, plantillas) se pide para este nivel.
+  if (core.access === "admin") {
+    const [bookingsPage, caps] = await Promise.all([
+      getPatientBookingsAll(params.id, 100),
+      getCapabilities(),
+    ]);
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Breadcrumbs name={`${core.firstName} ${core.lastName}`} />
+        <PatientAdminProfile
+          patient={core}
+          initialBookings={bookingsPage}
+          canBook={caps.has("agenda.operateAll")}
+        />
+      </div>
+    );
+  }
+
+  // HC solo con la forma positiva `=== "full"` (regla de compatibilidad de
+  // E1): cualquier otro nivel (basic, o uno nuevo) cae a la vista básica.
+  if (core.access !== "full") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Breadcrumbs name={`${core.firstName} ${core.lastName}`} />
@@ -48,6 +79,7 @@ export default async function PatientPage({ params }: { params: { id: string } }
     insurers,
     practitioners,
     membership,
+    gate,
   ] = await Promise.all([
     getPatientProgramsLite(params.id),
     getPatientBookingsSummary(params.id, 5),
@@ -73,6 +105,9 @@ export default async function PatientPage({ params }: { params: { id: string } }
         select: { role: true },
       })
     ),
+    // P0-Cs: plan SaaS → plantillas, para que el Tab Plan sepa de antemano si
+    // "Aplicar plantilla" está disponible (hoy solo se entera al confirmar).
+    gatingForActor(),
   ]);
   const canReassign = membership?.role === "OWNER" || membership?.role === "ADMIN";
 
@@ -98,6 +133,7 @@ export default async function PatientPage({ params }: { params: { id: string } }
           name: p.user.fullName ?? p.user.email,
         }))}
         canReassign={canReassign}
+        canUseTemplates={gate.canBuildTemplates}
       />
     </div>
   );

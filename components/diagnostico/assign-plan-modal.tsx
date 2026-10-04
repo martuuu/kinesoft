@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { backdropVariants, modalVariants } from "@/lib/motion";
@@ -20,9 +20,52 @@ import {
   type CaseSelection,
   type Ranking,
 } from "@/lib/diagnosis-engine";
+import type { AssignInput } from "@/lib/diagnosis-types";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
 import { phaseLabel, relationLabel } from "./labels";
 
 export type PatientPick = { id: string; name: string; hc: string; info: string };
+
+/**
+ * Arma el input de `assignDiagnosisAndCreateProgram` a partir del estado del
+ * modal. Puro y exportado para testearlo sin DOM (P0-S02u-diag).
+ *
+ * Antes el picker de días era decorativo: solo viajaba `frequency =
+ * dows.length` y el server repartía desde `startDate` por frecuencia, así que
+ * "lun/jue" podía caer martes/viernes. Ahora los días viajan como
+ * `daysOfWeek` (0=Lun … 6=Dom, la misma convención del picker y de
+ * `expandDates`) y el server genera las sesiones solo esos días AR (S02d).
+ * `frequency` se sigue mandando = cantidad de días porque el server la valida
+ * (1..7) y la persiste en el plan.
+ */
+export function buildAssignInput(args: {
+  patientId: string;
+  conditionSlug: string;
+  conditionName: string;
+  selection: CaseSelection;
+  ranking: Ranking[];
+  orderedIds: string[];
+  selectedExerciseIds: string[];
+  totalSessions: number;
+  dows: number[];
+  startDate: string;
+}): AssignInput {
+  const daysOfWeek = Array.from(new Set(args.dows)).sort((a, b) => a - b);
+  return {
+    patientId: args.patientId,
+    conditionSlug: args.conditionSlug,
+    selection: args.selection,
+    topRankings: args.ranking,
+    // Persist in the practitioner-chosen order.
+    exerciseIds: args.orderedIds.length ? args.orderedIds : args.selectedExerciseIds,
+    totalSessions: args.totalSessions,
+    frequency: Math.max(1, daysOfWeek.length),
+    daysOfWeek,
+    startDate: args.startDate,
+    programTitle: `Plan ${args.conditionName}`,
+  };
+}
 
 export function AssignPlanModal({
   condition,
@@ -44,17 +87,30 @@ export function AssignPlanModal({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [patients, setPatients] = useState<PatientPick[]>(initialPatients);
-  const [patientId, setPatientId] = useState<string | null>(initialPatients[0]?.id ?? null);
+  // Sin preselección (P0-S02u-diag): antes arrancaba con el primer paciente de
+  // la lista marcado y un click distraído en "Asignar" le creaba el plan (y le
+  // escribía la HC) a quien no era. El profesional tiene que elegirlo.
+  const [patientId, setPatientId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [searching, startSearch] = useTransition();
   // Default to 10 sessions per the latest brief. Practitioner can override.
   const [totalSessions, setTotalSessions] = useState(10);
   // Day-of-week picker (0=Mon..6=Sun). Default Mon/Wed/Fri.
   const [dows, setDows] = useState<number[]>([0, 2, 4]);
-  const frequency = Math.max(1, dows.length);
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Hoy en AR, no la fecha UTC del host: después de las 21:00 AR
+  // `toISOString().slice(0,10)` ya es mañana y la sesión 1 caía un día tarde.
+  // `toARDateKey` es estable en cualquier TZ del navegador/host.
+  const [startDate, setStartDate] = useState(() => toARDateKey(new Date()));
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // El aviso vive al pie de un modal con scroll: sin esto, un rechazo del
+  // server (p. ej. "con los días elegidos entran hasta 58 sesiones") quedaba
+  // fuera de vista y parecía que el botón no hacía nada.
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error || success) feedbackRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [error, success]);
 
   // Local order of exercises (sortable below). The modal is re-mounted
   // by its parent via `key=selectedExerciseIds.join("|")`, so the prop
@@ -73,7 +129,9 @@ export function AssignPlanModal({
       const r = await searchPatientsForAssignment(q);
       if (mySeq !== searchSeq.current) return;
       setPatients(r);
-      if (!r.find((p) => p.id === patientId)) setPatientId(r[0]?.id ?? null);
+      // Si el elegido ya no está en los resultados se deselecciona; nunca se
+      // auto-elige el primero (misma razón que el estado inicial).
+      if (!r.find((p) => p.id === patientId)) setPatientId(null);
     });
   };
 
@@ -84,19 +142,31 @@ export function AssignPlanModal({
       setError("Elegí un paciente.");
       return;
     }
+    // Vacío el server repartiría por frecuencia (1/semana), que no es lo que
+    // muestra el picker: se pide al menos un día.
+    if (!dows.length) {
+      setError("Elegí al menos un día de la semana.");
+      return;
+    }
+    if (!startDate) {
+      setError("Elegí la fecha de la primera sesión.");
+      return;
+    }
     start(async () => {
-      const result = await assignDiagnosisAndCreateProgram({
-        patientId,
-        conditionSlug: condition.slug,
-        selection,
-        topRankings: ranking,
-        // Persist in the practitioner-chosen order.
-        exerciseIds: orderedIds.length ? orderedIds : selectedExerciseIds,
-        totalSessions,
-        frequency,
-        startDate,
-        programTitle: `Plan ${condition.name}`,
-      });
+      const result = await assignDiagnosisAndCreateProgram(
+        buildAssignInput({
+          patientId,
+          conditionSlug: condition.slug,
+          conditionName: condition.name,
+          selection,
+          ranking,
+          orderedIds,
+          selectedExerciseIds,
+          totalSessions,
+          dows,
+          startDate,
+        })
+      );
       if (!result.ok) {
         setError(result.error);
         return;
@@ -277,8 +347,8 @@ export function AssignPlanModal({
               label="Sesiones totales"
               value={totalSessions}
               onChange={setTotalSessions}
-              min={2}
-              max={48}
+              min={1}
+              max={PLAN_MAX_SESSIONS}
             />
             <div>
               <div
@@ -386,8 +456,10 @@ export function AssignPlanModal({
           />
         </Step>
 
+        <div ref={feedbackRef}>
         {error && (
           <div
+            role="alert"
             style={{
               padding: 12,
               borderRadius: 12,
@@ -413,6 +485,7 @@ export function AssignPlanModal({
             {success}
           </div>
         )}
+        </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
@@ -525,7 +598,7 @@ function DayOfWeekPicker({
       </div>
       <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
         {dows.length === 0
-          ? "Elegí al menos un día (por defecto: lun/mié/vie)."
+          ? "Elegí al menos un día."
           : `${dows.length} ${dows.length === 1 ? "día" : "días"} por semana`}
       </div>
     </div>

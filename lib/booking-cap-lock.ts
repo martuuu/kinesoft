@@ -25,36 +25,128 @@ import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
  * compita por el cupo se serializa. El costo es serializar altas del mismo
  * profesional + servicio en el mismo día, que no compiten en volumen.
  *
- * Deadlocks: los días se lockean SIEMPRE en orden ascendente (y una
- * transacción solo toma los días de UN turno), así que dos transacciones no
- * pueden esperarse en ciclo. El batch usa una transacción por fecha.
+ * Deadlocks (Planes S07i, contrato C2 / ADR-004; enmienda de AUDIT §5.28):
+ * el invariante es un ORDEN GLOBAL de las claves, no "una transacción toma los
+ * días de un solo turno" (lo que decía este comentario antes, y que ya era
+ * falso: el candado de día y los bloqueos multi-día de `lib/time-blocks.ts`
+ * toman profesionales × servicios × días en una tx). Toda tx que tome más de
+ * una clave de cupo las toma ordenadas por (tenantId, practitionerId,
+ * serviceId, dayKey), cada componente con el compare de strings por defecto
+ * de JS — el mismo orden que los `for` anidados con `sort()` de
+ * `lockCapacityScope` (time-blocks) y que `lockCapacityWindow` (un par
+ * profesional+servicio, días ascendentes). Con un orden total compartido, dos
+ * transacciones nunca se esperan en ciclo: una tx puede tomar los días de N
+ * turnos (un plan, "este y los siguientes") SI LOS ORDENA, y para eso está
+ * `lockCapacityMany`.
+ *
+ * Orden respecto de los otros locks (C2): `lockPlanPatient` (lib/plan-lock.ts)
+ * SIEMPRE antes que el cupo; el cupo antes que `lockTenantLocationsShared`; y
+ * recién después las filas (Booking FOR UPDATE id asc → Session →
+ * TreatmentProgram).
  *
  * Alcance de transacción: se suelta solo en COMMIT/ROLLBACK. Llamarlo fuera
  * de un `runWithRls(...)` / `$transaction` no protege nada.
  */
-const key = (o: { tenantId: string; practitionerId: string; serviceId: string; dayKey: string }) =>
+
+/** Una clave de cupo: (profesional, servicio, día AR) dentro de un tenant. */
+export type CapacityLockKey = {
+  tenantId: string;
+  practitionerId: string;
+  serviceId: string;
+  dayKey: string;
+};
+
+/** La clave textual del advisory lock (exportada para los tests de carrera). */
+export const capacityLockKey = (o: CapacityLockKey) =>
   `kinesoft:cap:${o.tenantId}:${o.practitionerId}:${o.serviceId}:${o.dayKey}`;
 
+/** Compare de strings por defecto de JS (code units UTF-16), el de `Array#sort()`. */
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Claves deduplicadas y en el orden global del contrato C2, como strings
+ * listas para el advisory lock. Se ordena POR COMPONENTE y no por el string
+ * concatenado a propósito: así coincide exactamente con los `for` anidados de
+ * `lockCapacityScope` aunque algún id tuviera largo distinto (con largos
+ * distintos, ordenar "a:…" vs "a1:…" concatenado puede invertir el orden de
+ * los componentes, porque ':' va después de los dígitos).
+ */
+export function orderedCapacityLockKeys(keys: readonly CapacityLockKey[]): string[] {
+  const sorted = [...keys].sort(
+    (a, b) =>
+      cmp(a.tenantId, b.tenantId) ||
+      cmp(a.practitionerId, b.practitionerId) ||
+      cmp(a.serviceId, b.serviceId) ||
+      cmp(a.dayKey, b.dayKey)
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of sorted) {
+    const s = capacityLockKey(k);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Las claves de cupo que necesita una ventana [start, end): el día AR del
+ * inicio y, si la fila cruza la medianoche AR, el siguiente (C2 (1)). Para N
+ * filas: `rows.flatMap(capacityKeysForWindow)` y después `lockCapacityMany`.
+ */
+export function capacityKeysForWindow(o: {
+  tenantId: string;
+  practitionerId: string;
+  serviceId: string;
+  start: Date;
+  end: Date;
+}): CapacityLockKey[] {
+  const from = dayKeyOf(o.start);
+  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
+  return dayKeyRange(from, to).map((dayKey) => ({
+    tenantId: o.tenantId,
+    practitionerId: o.practitionerId,
+    serviceId: o.serviceId,
+    dayKey,
+  }));
+}
+
 /** Lock exclusivo del cupo de (profesional, servicio) en un día AR. */
-export async function lockCapacity(
-  tx: DbClient,
-  o: { tenantId: string; practitionerId: string; serviceId: string; dayKey: string }
-): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key(o)}, 0))`;
+export async function lockCapacity(tx: DbClient, o: CapacityLockKey): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${capacityLockKey(o)}, 0))`;
+}
+
+/**
+ * Toma TODAS las claves de cupo en UNA sentencia (C2 (1); C8, firma congelada).
+ *
+ * Por qué una sola sentencia: el commit de un plan toma los días de hasta 60
+ * turnos y el presupuesto es ≤ 60 statements para 20 filas; una ida y vuelta
+ * por clave se lo comería. El orden lo fija JS (`orderedCapacityLockKeys`) y
+ * la sentencia lo respeta: `WITH ORDINALITY … ORDER BY o` en la subconsulta
+ * hace que `pg_advisory_xact_lock` se evalúe fila por fila en ese orden, así
+ * que la tx espera en la primera clave ocupada SIN tener tomadas las
+ * posteriores (lo que prueba `locks-order.test.ts` mirando `pg_locks`).
+ * Sentencia literal del contrato; no se cambia sin enmendar C2.
+ *
+ * Lista vacía: no-op sin ida a la base.
+ */
+export async function lockCapacityMany(tx: DbClient, keys: readonly CapacityLockKey[]): Promise<void> {
+  const ordered = orderedCapacityLockKeys(keys);
+  if (ordered.length === 0) return;
+  await tx.$executeRaw`SELECT count(pg_advisory_xact_lock(hashtextextended(k, 0))) FROM (SELECT k FROM unnest(${ordered}::text[]) WITH ORDINALITY u(k, o) ORDER BY o) s`;
 }
 
 /**
  * Lockea, en orden, todos los días AR que toca [start, end) (el del inicio y,
  * si el turno cruza la medianoche AR, el siguiente). Es lo que usan los
- * write-paths: un turno de 23:30 a 00:30 compite con los dos días.
+ * write-paths de un turno: uno de 23:30 a 00:30 compite con los dos días.
+ * Delega en `lockCapacityMany` (S07i): mismas claves y mismo orden que antes
+ * (un par profesional+servicio, días ascendentes), en una sola sentencia.
  */
 export async function lockCapacityWindow(
   tx: DbClient,
   o: { tenantId: string; practitionerId: string; serviceId: string; start: Date; end: Date }
 ): Promise<void> {
-  const from = dayKeyOf(o.start);
-  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
-  for (const dayKey of dayKeyRange(from, to)) {
-    await lockCapacity(tx, { tenantId: o.tenantId, practitionerId: o.practitionerId, serviceId: o.serviceId, dayKey });
-  }
+  await lockCapacityMany(tx, capacityKeysForWindow(o));
 }

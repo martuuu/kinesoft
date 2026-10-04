@@ -70,3 +70,23 @@ export function resolveCapabilities(
     hasFullCatalog,
   };
 }
+
+/**
+ * Filtro de ejercicios que se pueden ASIGNAR a una sesión (Planes P0, C8):
+ * la visibilidad del plan SaaS (`gate.visibility`: los del tenant + global
+ * según FREE/STARTER/PRO) **y** no archivado.
+ *
+ * Por qué aparte de `visibility`: los write-paths de Diagnóstico, plantillas y
+ * sesiones validaban solo `gate.visibility`, así que un ejercicio archivado
+ * (que ya no aparece en la biblioteca) se podía seguir asignando por id. Ver
+ * los it.fails de S02d/S02t. El browse de la biblioteca ya combinaba las dos
+ * condiciones a mano (`lib/exercises.ts`); esto las junta en un solo lugar.
+ *
+ * Se combina con AND junto al resto del where:
+ * `where: { AND: [{ id: { in: ids } }, assignableExerciseWhere(gate)] }`.
+ */
+export function assignableExerciseWhere(
+  gate: Pick<ExerciseCapabilities, "visibility">
+): Prisma.ExerciseWhereInput {
+  return { AND: [gate.visibility, { archivedAt: null }] };
+}

@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import { formatARS } from "@/lib/format";
 import type { AgendaBookingRow, BookingRow } from "@/lib/bookings-types";
@@ -60,6 +59,16 @@ export type BookingDTO = {
   telemedicineUrl?: string | null;
   /** Sin `clinical.read` o acceso básico: title/description/notas vienen null a propósito. */
   clinicalHidden?: boolean;
+  /**
+   * P0-S07u (E1): permisos por fila calculados en el server (`AgendaBookingRow`,
+   * S07sb). `canOperate` = `canOperateBooking` (reprogramar, estado, cancelar);
+   * `clinicalWritable` = `canWriteClinical` (título, descripción, notas, "Usar
+   * como diagnóstico", "últimos turnos"). Opcionales: la proyección completa
+   * (`listBookingsInRange`) no los trae y el drawer cae en `bookingDrawerAccess`,
+   * que falla cerrado.
+   */
+  canOperate?: boolean;
+  clinicalWritable?: boolean;
 };
 
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
@@ -105,7 +114,22 @@ export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
     isTelemedicine: row.isTelemedicine,
     telemedicineUrl: row.telemedicineUrl,
     clinicalHidden: row.clinicalHidden,
+    ...serverPermissions(row),
   };
+}
+
+/**
+ * `canOperate` / `clinicalWritable` de la fila, solo si vienen. Se leen por
+ * forma (no por el tipo) porque los agrega S07sb en `AgendaBookingRow` en la
+ * misma ola: así compila antes y después. Ausentes (no `false`) cuando no
+ * llegan, para que el drawer use su fallback y no confunda "no vino" con "no".
+ */
+function serverPermissions(row: object): Pick<BookingDTO, "canOperate" | "clinicalWritable"> {
+  const r = row as { canOperate?: unknown; clinicalWritable?: unknown };
+  const out: Pick<BookingDTO, "canOperate" | "clinicalWritable"> = {};
+  if (typeof r.canOperate === "boolean") out.canOperate = r.canOperate;
+  if (typeof r.clinicalWritable === "boolean") out.clinicalWritable = r.clinicalWritable;
+  return out;
 }
 
 export const DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"];
@@ -210,21 +234,4 @@ export function osLabel(obraSocial: string): string {
 export function billingLine(b: { serviceName: string; obraSocial: string; copagoCents: number }) {
   const os = osLabel(b.obraSocial);
   return [b.serviceName, os, fmtMoney(b.copagoCents)].filter(Boolean).join(" - ");
-}
-
-/** Inline pill matching the <Tag> footprint for statuses the Tag tones
- *  don't cover (amber/green semantics for Ausente / Hecho). */
-export function statusPill(bg: string, color: string): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    fontSize: 10.5,
-    fontWeight: 700,
-    padding: "3px 9px",
-    borderRadius: 999,
-    background: bg,
-    color,
-    whiteSpace: "nowrap",
-  };
 }

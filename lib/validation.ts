@@ -3,17 +3,8 @@
  * Keeping them in one place avoids drift between the two layers.
  */
 import { z } from "zod";
-import { localToARIso } from "@/lib/datetime-ar";
-
-/**
- * A `<input type="date">` value is a bare "YYYY-MM-DD". Parsing it with
- * `new Date(v)` reads it as UTC midnight, which on a UTC host is the previous
- * AR day at 21:00 — so a plan created "on Monday" would schedule session 1 on
- * Sunday. Anchor bare dates to AR midnight; leave values that already carry a
- * time/offset (e.g. a datetime-local already tagged by the client) untouched.
- */
-const toARDateOrInstant = (v: string): Date =>
-  /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(localToARIso(`${v}T00:00:00`)) : new Date(v);
+import { isDayKey } from "@/lib/availability/day";
+import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
 
 /**
  * Email de paciente normalizado (A2a-S08): trim + minúsculas ANTES de validar
@@ -53,6 +44,21 @@ export const PatientCreate = z.object({
   insurerName: z.string().trim().max(80).optional().or(z.literal("").transform(() => undefined)),
 });
 export type PatientCreateInput = z.input<typeof PatientCreate>;
+
+/**
+ * Opciones del alta (`createPatient(raw, opts)`, Planes E1 / S07sp).
+ * `assignTo` = el profesional del turno que se está agendando desde el modal.
+ * Va aparte del formulario de la ficha porque no es un dato del paciente sino
+ * de a cargo de quién queda. Sin `clinical.read` (Secretaria) es obligatorio:
+ * si no, la ficha quedaba asignada a la Secretaria (full para ella, básico
+ * para el kine). La pertenencia al tenant y el rol se validan en la tx.
+ */
+export const PatientCreateOptions = z
+  .object({
+    assignTo: z.string().trim().min(1).max(64).optional().or(z.literal("").transform(() => undefined)),
+  })
+  .strict();
+export type PatientCreateOptionsInput = z.input<typeof PatientCreateOptions>;
 
 /**
  * Campo opcional "vaciable" para la EDICIÓN (A2a-S08): `undefined` = no tocar,
@@ -278,17 +284,81 @@ export const EvaScoreCreate = z.object({
   source: z.string().max(40).optional(),
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Planes de tratamiento (`lib/programs.ts`). PLANES.md P0.1 · S02a.
+//
+// `startDate` es el DayKey 'YYYY-MM-DD' del `<input type="date">` y se queda
+// como string: el server lo lleva a medianoche AR con `dayWindow` (C11). Antes
+// el schema aceptaba cualquier string y lo convertía con `new Date(v)` si traía
+// hora; y `createProgram` ni siquiera lo usaba: parseaba `new Date("2026-10-06")`
+// = medianoche UTC = 21:00 del 05/10 en AR, y la sesión 1 caía el día anterior
+// en un host UTC (Vercel). `isDayKey` también rechaza fechas inexistentes
+// (2026-02-29), que `new Date` corría al 1/3 sin avisar.
+//
+// Los mensajes son la copy que muestra el Drawer (`result.error`), por eso van
+// en cada regla y no en un "Datos inválidos" genérico.
+// ─────────────────────────────────────────────────────────────────────────────
+const planDayKey = z
+  .string({ required_error: "Fecha inválida.", invalid_type_error: "Fecha inválida." })
+  .refine(isDayKey, "Fecha inválida.");
+const planTitle = z
+  .string({ required_error: "El título no puede estar vacío." })
+  .trim()
+  .min(1, "El título no puede estar vacío.")
+  .max(120, "El título puede tener hasta 120 caracteres.");
+const planSessionsMsg = `Sesiones entre 1 y ${PLAN_MAX_SESSIONS}.`;
+// Frecuencia legacy = sesiones por semana (1..7). `0` hacía `7 / 0 = Infinity`
+// en la expansión de fechas → `Invalid Date` → 500 de Prisma (P0-S02a).
+const planFrequency = z.coerce
+  .number({ invalid_type_error: "Frecuencia entre 1 y 7." })
+  .int("Frecuencia entre 1 y 7.")
+  .min(1, "Frecuencia entre 1 y 7.")
+  .max(7, "Frecuencia entre 1 y 7.");
+
 export const ProgramCreate = z.object({
-  patientId: z.string().min(1),
-  title: z.string().min(1).max(120),
-  totalSessions: z.coerce.number().int().min(1).max(64).default(8),
-  frequency: z.coerce.number().int().min(1).max(7).default(2),
-  startDate: z
-    .string()
-    .min(1)
-    .transform(toARDateOrInstant),
+  patientId: z.string().min(1).max(64),
+  title: planTitle,
+  // Tope 60 (PD-04, `PLAN_MAX_SESSIONS`): antes 64, distinto del editor,
+  // las plantillas y `expandDates` (slug `limites-sesiones-divergentes`).
+  totalSessions: z.coerce
+    .number({ invalid_type_error: planSessionsMsg })
+    .int(planSessionsMsg)
+    .min(1, planSessionsMsg)
+    .max(PLAN_MAX_SESSIONS, planSessionsMsg),
+  frequency: planFrequency,
+  startDate: planDayKey,
 });
 export type ProgramCreateInput = z.input<typeof ProgramCreate>;
+
+/**
+ * Edición legacy de un plan (la conducta de hoy se mantiene hasta P2-S15, que
+ * la deja en título y notas con CAS). Todo opcional: ausente = no se toca.
+ *
+ * `totalSessions` acá NO lleva el tope 60: el Drawer de edición manda siempre
+ * el total actual, y un plan creado con el tope viejo (hasta 64) no podría ni
+ * renombrarse. El tope se aplica en la action solo cuando el valor CAMBIA
+ * (necesita el total actual, que sale de la base).
+ */
+export const ProgramUpdate = z.object({
+  id: z.string().min(1).max(64),
+  title: planTitle.optional(),
+  totalSessions: z.coerce
+    .number({ invalid_type_error: planSessionsMsg })
+    .int(planSessionsMsg)
+    .min(1, planSessionsMsg)
+    .optional(),
+  frequency: planFrequency.optional(),
+  startDate: planDayKey.optional(),
+});
+export type ProgramUpdateInput = z.input<typeof ProgramUpdate>;
+
+export const ProgramStatusSet = z.object({
+  id: z.string().min(1).max(64),
+  status: z.enum(["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"], {
+    errorMap: () => ({ message: "Estado de plan inválido." }),
+  }),
+});
+export type ProgramStatusSetInput = z.input<typeof ProgramStatusSet>;
 
 export type ActionResult<T = void> =
   | { ok: true; data: T }

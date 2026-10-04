@@ -9,8 +9,14 @@
  * Follows the archivos-view upload pattern (`<form action>` + hidden
  * `<input type="file">`) and the services-panel mutation conventions
  * (useTransition + useToast + useConfirm + router.refresh()). Uploaded files
- * are NOT previewed here — we have no signed URLs on the client, so a row just
- * shows its caption / "archivo".
+ * are NOT previewed here: a row just shows its caption / "archivo".
+ *
+ * S02m: `MediaItem.url` es la clave de Storage y llega al cliente, pero ya no
+ * sirve para nada fuera del server: no existe ninguna action que firme una
+ * clave mandada por el cliente (antes `resolveMediaUrl` lo hacía sin sesión) y
+ * el bucket es privado por service role. Si algún día se quiere preview acá, se
+ * pide por `mediaId` a una action con `requireSuperAdmin` que llame a
+ * `signExerciseMedia` — nunca pasando `url`.
  */
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";

@@ -4,35 +4,55 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { recordEvaScore } from "@/lib/patients";
 import { CreateProgramModal } from "./plan-view";
 import type { PatientWithRelations } from "../types";
 
+const STATUS_LABEL: Record<PatientWithRelations["programs"][number]["status"], string> = {
+  ACTIVE: "Activo",
+  PAUSED: "Pausado",
+  COMPLETED: "Completado",
+  CANCELLED: "Cancelado",
+};
+
+/**
+ * P0-S02u-perfil: `program` es el plan en foco (`pickProfilePrograms`): el
+ * ACTIVE más reciente o, si no hay, el último plan. Antes un plan terminado se
+ * mostraba como si fuera el vigente y "Crear plan" desaparecía; ahora lleva su
+ * estado y, sin plan activo, se ofrece crear uno.
+ */
 export function ResumenView({
   patient,
-  activeProgram,
+  program,
+  otherActiveCount = 0,
   diagnosisName,
   done,
 }: {
   patient: PatientWithRelations;
-  activeProgram?: PatientWithRelations["programs"][number];
+  program: PatientWithRelations["programs"][number] | null;
+  otherActiveCount?: number;
   diagnosisName: string | null;
   done: number;
 }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
+  const isActive = program?.status === "ACTIVE";
   return (
     <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 320px", gap: 14 }}>
       <Card style={{ padding: 16 }}>
         <div className="k-display" style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
           Plan
         </div>
-        {activeProgram ? (
+        {program && (
           <>
-            <div style={{ fontSize: 13, color: "var(--navy-700)" }}>{activeProgram.title}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, color: "var(--navy-700)" }}>{program.title}</span>
+              {!isActive && <Tag tone="soft">{STATUS_LABEL[program.status]}</Tag>}
+            </div>
             <div className="k-mono" style={{ fontSize: 12, color: "var(--sky-700)", marginTop: 4 }}>
-              {done} / {activeProgram.totalSessions}
+              {done} / {program.totalSessions}
             </div>
             <div
               style={{
@@ -45,17 +65,28 @@ export function ResumenView({
             >
               <div
                 style={{
-                  width: `${activeProgram.totalSessions ? (done / activeProgram.totalSessions) * 100 : 0}%`,
+                  width: `${program.totalSessions ? Math.min((done / program.totalSessions) * 100, 100) : 0}%`,
                   height: "100%",
-                  background: "linear-gradient(90deg, var(--sky-500), var(--lime-400))",
+                  background: isActive
+                    ? "linear-gradient(90deg, var(--sky-500), var(--lime-400))"
+                    : "var(--navy-300)",
                 }}
               />
             </div>
+            {isActive && otherActiveCount > 0 && (
+              <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "10px 0 0" }}>
+                +{otherActiveCount}{" "}
+                {otherActiveCount === 1 ? "plan activo más" : "planes activos más"} en el tab Plan.
+              </p>
+            )}
           </>
-        ) : (
+        )}
+        {!isActive && (
           <>
-            <p style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
-              Este paciente todavía no tiene un plan de tratamiento.
+            <p style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: program ? 12 : undefined }}>
+              {program
+                ? "No tiene un plan activo."
+                : "Este paciente todavía no tiene un plan de tratamiento."}
             </p>
             <Button variant="primary" onClick={() => setCreating(true)} style={{ width: "100%", justifyContent: "center" }}>
               <IconPlus size={14} /> Crear plan

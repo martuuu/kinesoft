@@ -826,6 +826,7 @@ export function AgendaClient(props: Props) {
 
       <BookingDrawer
         booking={editing}
+        capabilities={props.capabilities ?? null}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);

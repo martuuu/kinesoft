@@ -1,30 +1,56 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ModalCloseButton } from "@/components/ui/modal-close";
 import { IconArrow, IconPlus } from "@/components/ui/icons";
 import { applyPlanTemplate, listPlanTemplates } from "@/lib/plan-templates";
 import type { PlanTemplateRow } from "@/lib/plan-templates-types";
+import { planFormTodayKey } from "@/lib/plan-form-defaults";
 
 /**
- * "Aplicar plantilla" button rendered on the patient profile Plan tab.
- * Only mounts when the active plan unlocks templates.
+ * "Aplicar plantilla" del tab Plan del perfil.
+ *
+ * P0-S02u-plan: el botón se montaba siempre y, en un plan SaaS sin plantillas,
+ * el error aparecía recién al confirmar. Ahora la página resuelve
+ * `gatingForActor().canBuildTemplates` y, si no hay plantillas, el botón queda
+ * deshabilitado con el aviso visible al lado (un `title` solo no lo ve nadie en
+ * mobile). El server sigue gateando `applyPlanTemplate`: esto es UX, no barrera.
  */
-export function PlanTemplateApplyButton({ patientId }: { patientId: string }) {
+export function PlanTemplateApplyButton({
+  patientId,
+  disabled = false,
+}: {
+  patientId: string;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const hintId = useId();
   return (
-    <>
-      <Button variant="ghost" onClick={() => setOpen(true)}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <Button
+        variant="ghost"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        aria-describedby={disabled ? hintId : undefined}
+      >
         Aplicar plantilla
       </Button>
-      {open && <PlanTemplateApplyModal patientId={patientId} onClose={() => setOpen(false)} />}
-    </>
+      {disabled && (
+        <span id={hintId} style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+          Las plantillas no están incluidas en tu plan.
+        </span>
+      )}
+      {open && !disabled && (
+        <PlanTemplateApplyModal patientId={patientId} onClose={() => setOpen(false)} />
+      )}
+    </span>
   );
 }
 
-function PlanTemplateApplyModal({
+/** Exportado para el render test (P0-S02u-plan); en la app lo monta el botón. */
+export function PlanTemplateApplyModal({
   patientId,
   onClose,
 }: {
@@ -37,7 +63,9 @@ function PlanTemplateApplyModal({
   const [loading, setLoading] = useState(true);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Hoy AR, no el día UTC: de 21:00 a 23:59 AR el slice de `toISOString`
+  // proponía mañana como primera sesión (P0-S02u-plan).
+  const [startDate, setStartDate] = useState(() => planFormTodayKey());
 
   useEffect(() => {
     listPlanTemplates()

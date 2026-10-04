@@ -1,14 +1,12 @@
 "use client";
 
-import type { BookingStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
-import { Tag } from "@/components/ui/tag";
-import { IconCheck } from "@/components/ui/icons";
+import { StatusTag } from "@/components/ui/status-tag";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
-import { PAYMENT_HOLD_LABEL, paymentHoldState, type PaymentHoldState } from "@/lib/agenda-filters";
+import { paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge } from "@/lib/agenda-client-state";
-import { fmtHour, fmtMoney, osLabel, statusPill, type BookingDTO } from "../agenda-utils";
+import { fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 
 /** Shared column track for the Lista view header + rows (kept in one
@@ -157,52 +155,7 @@ export function ListView({
   );
 }
 
-/**
- * `hold`: reserva pública impaga (A2b-S-ui). Mientras sostiene el cupo se lee
- * "Pendiente de pago"; pasados los 30 min, "Pendiente de pago · vencida" en
- * gris punteado (ya no ocupa el horario: se puede dar a otro paciente).
- */
-export function StatusTag({ s, hold = null }: { s: BookingStatus; hold?: PaymentHoldState }) {
-  if (s === "PENDING" && hold) {
-    return hold === "vencida" ? (
-      <span
-        title="La reserva online no se pagó en 30 minutos: ya no retiene el horario."
-        style={{
-          ...statusPill("rgba(15,30,51,0.04)", "var(--navy-500)"),
-          border: "1px dashed rgba(15,30,51,0.3)",
-        }}
-      >
-        {PAYMENT_HOLD_LABEL.vencida}
-      </span>
-    ) : (
-      <span
-        title="Reserva online esperando el pago (retiene el horario 30 minutos)."
-        style={statusPill("rgba(255,176,32,0.18)", "#9A5B00")}
-      >
-        {PAYMENT_HOLD_LABEL.pendiente}
-      </span>
-    );
-  }
-  switch (s) {
-    case "CONFIRMED":
-      return <Tag tone="sky">Confirmado</Tag>;
-    case "COMPLETED":
-      return (
-        <span style={statusPill("rgba(54,179,126,0.14)", "#1F7A52")}>
-          <IconCheck size={10} stroke={3} /> Hecho
-        </span>
-      );
-    case "CANCELLED":
-      return <Tag tone="soft">Cancelado</Tag>;
-    case "NO_SHOW":
-      return <span style={statusPill("rgba(255,176,32,0.18)", "#9A5B00")}>Ausente</span>;
-    case "PENDING":
-      return <Tag tone="lime">Pendiente</Tag>;
-    default: {
-      // Exhaustiveness guard: adding a BookingStatus without a branch here
-      // fails the build instead of silently rendering nothing / "Pendiente".
-      const _exhaustive: never = s;
-      return _exhaustive;
-    }
-  }
-}
+// El pill de estado vive en `components/ui/status-tag.tsx` (P0-S04b: una sola
+// paleta `--st-*` para Lista, drawer, perfil y semana). Se re-exporta para no
+// romper los imports existentes desde esta vista.
+export { StatusTag };

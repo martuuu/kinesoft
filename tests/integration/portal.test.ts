@@ -122,6 +122,41 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(await db.evaScore.count({ where: { patientId } })).toBe(1);
   });
 
+  // P0-S02p: `Session.notes` son notas del kine (clínicas, privadas): el DTO
+  // del portal las mandaba al navegador del paciente aunque la página no las
+  // pintara. Y con dos planes ACTIVE el `findFirst` sin orden devolvía
+  // cualquiera de los dos (el que el planner de Postgres leyera primero).
+  it("[P0-S02p] getPortalPlan sin notes y determinístico", async () => {
+    const uid = patientIdentity();
+    const patientId = await addPatient(db, A, { email: `${uid}@test.local` });
+    const DAY = 86_400_000;
+    // El viejo se crea PRIMERO a propósito: un findFirst sin orden tiende a
+    // devolver el primero insertado (menor ctid), o sea el viejo.
+    await db.treatmentProgram.create({
+      data: { tenantId: A.tenantId, patientId, title: "Plan viejo", startDate: new Date(Date.now() - 60 * DAY) },
+    });
+    const newer = await db.treatmentProgram.create({
+      data: { tenantId: A.tenantId, patientId, title: "Plan nuevo", startDate: new Date(Date.now() - 2 * DAY) },
+    });
+    await db.session.create({
+      data: {
+        programId: newer.id,
+        practitionerId: A.practitionerId,
+        index: 1,
+        scheduledFor: new Date(Date.now() + DAY),
+        notes: "Nota privada del kine",
+      },
+    });
+    asUser(uid);
+
+    const plan = await getPortalPlan(A.slug);
+    expect(plan?.programId).toBe(newer.id);
+    expect(plan?.title).toBe("Plan nuevo");
+    expect(plan?.sessions).toHaveLength(1);
+    expect(plan?.sessions[0]).not.toHaveProperty("notes");
+    expect(JSON.stringify(plan)).not.toContain("Nota privada del kine");
+  });
+
   it("una identidad staff no puede hacer check-in sobre una ficha con su email", async () => {
     const patientId = (
       await db.patient.findFirstOrThrow({ where: { tenantId: A.tenantId, email: `${A.userId}@test.local` } })

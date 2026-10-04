@@ -35,6 +35,34 @@ export const CAPABILITIES = [
   "billing.manage",
   /** Configuración del consultorio (catálogo, prestadoras, settings, equipo). */
   "tenant.admin",
+  /**
+   * Operar TODOS los turnos del tenant (crear, reprogramar, cancelar, estado,
+   * Recepción) sin depender del nivel de acceso al paciente (Planes E1,
+   * PD-09). Es **positiva**: habilita, nunca se usa para negar. Existe porque
+   * la Secretaria (ASSISTANT) no tiene `clinical.read` y desde PD-13 nunca
+   * llega a acceso "full", así que "operar con full" la dejaría afuera.
+   * No habilita campos clínicos: eso lo decide `bookingFieldAccess`.
+   */
+  "agenda.operateAll",
+  /**
+   * Planes: crear, editar título/notas, precio, cantidad, ciclo de vida,
+   * adoptar, vincular/sacar y re-planificar. La action exige ADEMÁS acceso
+   * full + `clinical.read` (`assertPlanManageInTx`, P2-C1): "con full" no va
+   * en la matriz.
+   */
+  "plans.manage",
+  /**
+   * Planes: agendar una sesión, mover "solo este" / "este y los siguientes",
+   * cancelar y Recepción. La action exige ADEMÁS full o `agenda.operateAll`
+   * (`assertPlanScheduleInTx`). Sin `clinical.read` solo ve la proyección
+   * administrativa (título null).
+   */
+  "plans.schedule",
+  /**
+   * Planes: cargar y renovar la autorización de la obra social (PD-16). La
+   * action exige ADEMÁS full o `agenda.operateAll` (`assertPlanAuthorizeInTx`).
+   */
+  "plans.authorize",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -53,11 +81,39 @@ const ALL: readonly Capability[] = CAPABILITIES;
  *   exige; antes de adoptarlo en cobros hay que decidir si el profesional
  *   cobra en el consultorio (cambiaría su comportamiento actual).
  */
+/*
+ * Planes E1 (firmado 03-oct, matriz literal de PLANES.md §8 P0-Ck):
+ * - `agenda.operateAll`: OWNER, ADMIN, ASSISTANT. PRACTITIONER no: opera sus
+ *   turnos por acceso full al paciente, como hasta hoy. BILLING no.
+ * - `plans.manage`: OWNER, ADMIN, PRACTITIONER (el "con full" lo chequea la
+ *   action). La Secretaria NO crea ni edita planes (PD-09).
+ * - `plans.schedule` y `plans.authorize`: OWNER, ADMIN, PRACTITIONER y
+ *   ASSISTANT. BILLING no tiene ninguna de las cuatro (ve el saldo por
+ *   `billing.manage`).
+ * Hoy (P0.0) ninguna action las consulta: se publican antes para que las
+ * sesiones paralelas de P0.1/P0.2 compilen contra la firma congelada.
+ */
 const MATRIX: Record<Role, readonly Capability[]> = {
   OWNER: ALL,
   ADMIN: ALL,
-  PRACTITIONER: ["agenda.viewAll", "agenda.reception", "agenda.manageOwnBlocks", "clinical.read"],
-  ASSISTANT: ["agenda.viewAll", "agenda.reception", "agenda.manageBlocks", "agenda.manageOwnBlocks"],
+  PRACTITIONER: [
+    "agenda.viewAll",
+    "agenda.reception",
+    "agenda.manageOwnBlocks",
+    "clinical.read",
+    "plans.manage",
+    "plans.schedule",
+    "plans.authorize",
+  ],
+  ASSISTANT: [
+    "agenda.viewAll",
+    "agenda.reception",
+    "agenda.manageBlocks",
+    "agenda.manageOwnBlocks",
+    "agenda.operateAll",
+    "plans.schedule",
+    "plans.authorize",
+  ],
   BILLING: ["agenda.viewAll", "billing.manage"],
 };
 
@@ -95,4 +151,44 @@ export function canManageBlocksFor(
     targetPractitionerId === actorPractitionerId &&
     caps.has("agenda.manageOwnBlocks")
   );
+}
+
+/**
+ * Nivel de acceso a un paciente tal como lo ven los predicados puros. Es un
+ * superconjunto de `AccessLevel` (`lib/visibility.ts`, server-only): incluye
+ * `admin` (nivel "administrativo" de la Secretaria/Facturación, PD-13, que
+ * S02p suma a `AccessLevel`) para que el tipo de visibility sea asignable acá
+ * antes y después de esa sesión. Se declara aparte porque este módulo lo
+ * importa la UI y no puede arrastrar `server-only`.
+ */
+export type PatientAccessLevel = "full" | "admin" | "basic" | "none";
+
+/**
+ * ¿Puede operar (crear, mover, cancelar, cambiar estado de) un turno?
+ * Planes E1/C8: `full || agenda.operateAll`.
+ *
+ * Forma POSITIVA a propósito: E1 la escribió como `access !== 'basic' || …`,
+ * pero con el nivel `admin` eso dejaría operar a BILLING en `admin` (y a
+ * cualquiera en `none`). Para `full`/`basic` las dos formas coinciden.
+ *
+ * Turno sin paciente (guest): no pasa por acá; `lib/bookings.ts` usa
+ * `guestOperable` (`agenda.operateAll || clinical.read`). P0.Z H-b3: antes el
+ * guest se evaluaba como `full` y BILLING lo creaba, borraba y marcaba cobrado.
+ *
+ * No decide QUÉ campos se escriben: eso es `bookingFieldAccess`
+ * (`lib/booking-field-access.ts`). S07k, S02p, S07sb, S07u y S07sp lo usan;
+ * no lo reimplementan.
+ */
+export function canOperateBooking(caps: ReadonlySet<Capability>, access: PatientAccessLevel): boolean {
+  return access === "full" || caps.has("agenda.operateAll");
+}
+
+/**
+ * ¿Puede escribir contenido clínico del paciente (HC, diagnóstico, "Usar como
+ * diagnóstico", campos clínicos del turno)? Exige las dos cosas: el rol lee
+ * clínica Y el acceso a ESE paciente es full. `admin` nunca habilita
+ * escritura clínica (PD-13), y un PRACTITIONER en básico tampoco.
+ */
+export function canWriteClinical(caps: ReadonlySet<Capability>, access: PatientAccessLevel): boolean {
+  return caps.has("clinical.read") && access === "full";
 }

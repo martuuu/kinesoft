@@ -131,6 +131,33 @@ export type PatientBasic = {
   access: "basic";
 };
 
+/**
+ * Proyección "administrativa" (PD-13, Planes E1): lo que ve un rol SIN
+ * `clinical.read` (Secretaria/ASSISTANT, BILLING) sobre cualquier paciente del
+ * tenant. Datos para operar la agenda y cobrar: identidad, contacto, cobertura,
+ * contacto de emergencia y a cargo de quién está. **Nunca** HC: sin notas,
+ * diagnóstico, EVA, títulos de plan, archivos ni actividad clínica.
+ *
+ * Contrato congelado por el orquestador antes de P0.2: S07sp lo devuelve desde
+ * `getPatientCore` y S07v lo consume en el perfil. No sumar campos clínicos.
+ */
+export type PatientAdminCore = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  documentId: string | null;
+  email: string | null;
+  phone: string | null;
+  dateOfBirth: Date | null;
+  /** Cobertura vigente (la más reciente), sin montos. null = sin cobertura. */
+  coverage: { insurer: string; planName: string | null; memberId: string | null } | null;
+  emergency: { name: string; relation: string | null; phone: string }[];
+  assignedPractitionerName: string | null;
+  nextBookingAt: Date | null;
+  access: "admin";
+};
+
 export type PatientCoreWithAccess =
   | (PatientCore & { access: "full" })
+  | PatientAdminCore
   | PatientBasic;

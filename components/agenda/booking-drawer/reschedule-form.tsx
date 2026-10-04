@@ -19,6 +19,9 @@ import type { ForcePrompt } from "./types";
  * - `onForce`: reintentar con el flag del aviso (`prompt.flag`: sobreturno,
  *   bloqueo o fuera de horario; B5.7) sumado a los ya mandados.
  * - `onDismissConflict`: "Volver" del banner.
+ *
+ * Se monta con `canOperate` (P0-S07u): reprogramar es operar, no clínica, así
+ * que la Secretaria con `agenda.operateAll` lo usa aunque no vea la HC.
  */
 export function RescheduleForm({
   value,

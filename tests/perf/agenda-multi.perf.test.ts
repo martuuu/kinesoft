@@ -20,13 +20,16 @@
  * importa (el owner con BYPASSRLS elige otro).
  *
  * No falla por números (como A1): los presupuestos se activan en C1.
- * Escribe `tests/perf/agenda-multi.json`.
- *
- * Correr SOLO este archivo (loaders.perf regraba baseline.json):
- *   npm run test:perf -- tests/perf/agenda-multi.perf.test.ts
+ * Escribe `<PERF_OUT_DIR>/agenda-multi.json` (default `tests/perf/`, el
+ * versionado). P0-Ct: para medir sin ensuciar el árbol,
+ *   PERF_OUT_DIR=<scratchpad> npm run test:perf -- tests/perf/agenda-multi.perf.test.ts
+ *   npx tsx tests/perf/compare.ts <scratchpad>
+ * La comparación `vsA1` sigue leyendo el baseline VERSIONADO
+ * (`tests/perf/baseline.json`), nunca el recién medido del PERF_OUT_DIR.
  */
 import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 
@@ -74,7 +77,8 @@ import { appRoleBypassesRls } from "@/tests/helpers/db-role";
 import { createAgendaMultiTenant, type AgendaMultiTenant } from "./volume-fixture";
 
 const RUN = process.env.PERF_IT === "1";
-const OUT = "tests/perf/agenda-multi.json";
+const OUT_DIR = process.env.PERF_OUT_DIR ?? "tests/perf";
+const OUT = join(OUT_DIR, "agenda-multi.json");
 /** Presupuesto de un render a 60 fps: si el layout puro solo ya se lo come, hay que virtualizar. */
 const FRAME_BUDGET_MS = 16;
 
@@ -156,6 +160,7 @@ describe.skipIf(!RUN)("perf B4.6 — agenda multi-profesional (6 profesionales, 
   }, 600_000);
 
   afterAll(async () => {
+    mkdirSync(OUT_DIR, { recursive: true });
     const worst = [...rows].filter((r) => r.explain).sort((a, b) => (b.explain!.execMs ?? 0) - (a.explain!.execMs ?? 0))[0];
     writeFileSync(
       OUT,

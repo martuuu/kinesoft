@@ -31,7 +31,9 @@
   - el comando de commit para Martin (lo ejecuta él).
 - **IDs que chocan:**
   - «H1-H6» son hallazgos altos de la auditoría, no olas.
-  - «A0-A3 / B-pre / B0-B4 / C0-C2» son olas de bloque. «S01…S27» son sesiones del diseño de Planes. «Ronda N» es
-    el historial de entregas en AUDIT/QA.
+  - «A0-A3 / B-pre / B0-B4 / C0-C2» son olas de bloque. «P0-P4» = olas de Planes (= B0-B4), y se ejecutan en las
+    corridas «ES1..ES4» (ES1 = P0, ES2a = P1, ES2b = P2, ES3 = P3, ES4 = P4). Las olas internas de B-pre se llamaron
+    B1-B5 y no son las de Planes. «S01…S32» (y P0-Cs, P2-C1, etc.) son sesiones de Planes ([.docs/PLANES.md](.docs/PLANES.md)).
+    «Ronda N» es el historial de entregas en AUDIT/QA.
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
 - Las skills genéricas de `.claude/skills/` no mandan sobre `.docs/`, sobre AGENTS.md ni sobre este archivo.

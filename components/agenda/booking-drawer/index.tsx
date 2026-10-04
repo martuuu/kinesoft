@@ -13,10 +13,16 @@
  *     Cancelar).
  *   - Delete the booking.
  *
- * Acceso básico = solo ver (decisión del dueño, 30-sep; A2a-S06): with
- * `patientAccess === "basic"` the edit / reschedule / status / delete controls
- * are NOT rendered — the server rejects them anyway, this only reflects it.
- * Guest turnos (`"none"`, no patient) stay operable.
+ * Gating (P0-S07u, Planes E1; `bookingDrawerAccess` en `./types`):
+ *   - operar (Reprogramar, Editar duración/paciente, Cambiar estado, Cancelar)
+ *     = `canOperate` del server (`canOperateBooking` = full || operateAll). Antes
+ *     era `patientAccess !== "basic"` y la Secretaria quedaba en solo lectura;
+ *   - título, descripción, notas, "Usar como diagnóstico" y "Últimos turnos" =
+ *     `clinicalWritable` (`canWriteClinical`). Con los campos ocultos (null),
+ *     "Usar como diagnóstico" mandaba vacíos y BORRABA el diagnóstico;
+ *   - Eliminar = la regla de siempre (full o guest), sin cambios.
+ * Acceso básico sin `agenda.operateAll` sigue siendo solo ver (decisión del
+ * dueño, 30-sep; A2a-S06). El server rechaza igual; esto solo lo refleja.
  *
  * Pure UI — every mutation goes through server actions in `lib/bookings.ts`.
  *
@@ -32,7 +38,7 @@
  * re-llamada acumulando el flag (`lib/booking-force-flags.ts`). Antes caían en
  * el `error` genérico y no había forma de forzarlos desde acá.
  */
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { Drawer } from "@/components/ui/drawer";
 import {
@@ -62,19 +68,41 @@ import {
   nextForcePrompt,
   withForce,
 } from "@/lib/booking-force-flags";
+import { capabilitySet } from "@/lib/agenda-client-state";
 import { ReceptionInfo } from "./reception-info";
-import type { BannerState, DrawerBooking, ForceFlags } from "./types";
+import {
+  bookingDrawerAccess,
+  type BannerState,
+  type BookingDrawerAccess,
+  type DrawerBooking,
+  type ForceFlags,
+} from "./types";
 
 export type { DrawerBooking } from "./types";
+
+/** Sin turno abierto no se muestra nada; el valor solo evita nulls abajo. */
+const CLOSED: BookingDrawerAccess = {
+  canOperate: false,
+  clinicalWritable: false,
+  notesWritable: false,
+  canDelete: false,
+};
 
 export function BookingDrawer({
   booking,
   onClose,
   onSaved,
+  capabilities,
 }: {
   booking: DrawerBooking | null;
   onClose: () => void;
   onSaved: () => void;
+  /**
+   * P0-S07u: capabilities del actor (array del server). Solo las usa el
+   * fallback de `bookingDrawerAccess` cuando la fila no trae
+   * `canOperate`/`clinicalWritable`; sin ellas el fallback no habilita clínica.
+   */
+  capabilities?: readonly string[] | null;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +134,9 @@ export function BookingDrawer({
   // means the user cleared the link (booking becomes a guest slot).
   const [editPatient, setEditPatient] = useState<PickedPatient | null | undefined>(undefined);
 
+  const caps = useMemo(() => capabilitySet(capabilities), [capabilities]);
+  const access = booking ? bookingDrawerAccess(booking, caps) : CLOSED;
+
   // Reset reschedule state every time a different booking opens.
   // Uses AR-formatted Intl output instead of `Date.prototype.getHours()`
   // so the input shows the same wall-clock as the agenda regardless of
@@ -125,9 +156,11 @@ export function BookingDrawer({
       setEditTitle(booking.title ?? "");
       setEditDescription(booking.description ?? "");
     }
-    // Preview: the patient's two most recent OTHER turnos.
+    // Preview: the patient's two most recent OTHER turnos. Solo con escritura
+    // clínica (P0-S07u): la lista muestra título/notas de otros turnos y el
+    // link a la HC; para la Secretaria es historia clínica, no se pide.
     let cancelled = false;
-    if (booking?.patientId) {
+    if (booking?.patientId && bookingDrawerAccess(booking, caps).clinicalWritable) {
       getPatientBookingsSummary(booking.patientId, 4)
         .then((rows) => {
           if (cancelled) return;
@@ -225,9 +258,13 @@ export function BookingDrawer({
       patientId?: string;
     } = {};
     if (dur !== booking.durationMin) changes.durationMin = dur;
-    if (editNotes !== (booking.notes ?? "")) changes.notes = editNotes;
-    if (editTitle !== (booking.title ?? "")) changes.title = editTitle;
-    if (editDescription !== (booking.description ?? "")) changes.description = editDescription;
+    // Un campo que el actor no puede escribir no viaja nunca (P0-S07u): llega
+    // null del server y el form lo tendría como "", así que cualquier
+    // comparación rara terminaría pisando el valor real que no ve.
+    if (access.notesWritable && editNotes !== (booking.notes ?? "")) changes.notes = editNotes;
+    if (access.clinicalWritable && editTitle !== (booking.title ?? "")) changes.title = editTitle;
+    if (access.clinicalWritable && editDescription !== (booking.description ?? ""))
+      changes.description = editDescription;
     if (editPatient && editPatient.id !== booking.patientId) changes.patientId = editPatient.id;
     if (Object.keys(changes).length === 0) {
       setEditingDetails(false);
@@ -270,8 +307,10 @@ export function BookingDrawer({
 
   // Write the current title/description as the patient's default diagnosis, so
   // it auto-fills their future turnos.
+  // P0-S07u: solo con `clinicalWritable`. Sin él título y descripción llegan
+  // null (ocultos) y esto mandaba "" → borraba el diagnóstico del paciente.
   const applyAsPatientDiagnosis = () => {
-    if (!booking?.patientId) return;
+    if (!booking?.patientId || !access.clinicalWritable) return;
     const pid = booking.patientId;
     setError(null);
     start(async () => {
@@ -329,8 +368,10 @@ export function BookingDrawer({
     });
   };
 
-  // Guest turnos ("none") are operable; only basic access is read-only.
-  const canEdit = booking?.patientAccess !== "basic";
+  // P0-S07u (handoff S02p H7): era `patientAccess !== "basic"`, y la
+  // Secretaria con Consultorio común (fila "basic" = nivel admin) perdía la
+  // edición. Ahora es `canOperate` (guest sigue operable).
+  const { canOperate, clinicalWritable, notesWritable, canDelete } = access;
 
   // Dirty-guard (A2b-S-ui): con "Editar" o "Reprogramar" abiertos y algo
   // cambiado, Esc / fondo / X preguntan antes de tirar la edición. El paciente
@@ -341,7 +382,7 @@ export function BookingDrawer({
     (editPatient === null || (!!editPatient && editPatient.id !== booking.patientId));
   const dirty =
     !!booking &&
-    canEdit &&
+    canOperate &&
     ((editingDetails &&
       (patientChanged ||
         recordsDiffer(
@@ -371,13 +412,13 @@ export function BookingDrawer({
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>
             <BillingRows booking={booking} />
             <ReceptionInfo booking={booking} />
-            {!canEdit && (
+            {!canOperate && (
               <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 4 }}>
                 Tenés acceso básico a este paciente: podés ver el turno pero no modificarlo. Pedile al
                 profesional a cargo que te lo comparta.
               </div>
             )}
-            {canEdit && (
+            {canOperate && (
               <EditToggles
                 status={booking.status}
                 pending={pending}
@@ -403,11 +444,13 @@ export function BookingDrawer({
             )}
           </div>
 
-          <RecentBookings recent={recent} patientId={booking.patientId} />
+          {clinicalWritable && <RecentBookings recent={recent} patientId={booking.patientId} />}
 
-          {canEdit && editingDetails && (
+          {canOperate && editingDetails && (
             <EditDetailsForm
               booking={booking}
+              clinicalWritable={clinicalWritable}
+              notesWritable={notesWritable}
               values={{
                 duration: editDuration,
                 title: editTitle,
@@ -432,7 +475,7 @@ export function BookingDrawer({
             />
           )}
 
-          {canEdit && editingWhen && (
+          {canOperate && editingWhen && (
             <RescheduleForm
               value={newWhenLocal}
               onChange={(v) => {
@@ -475,7 +518,7 @@ export function BookingDrawer({
 
           <ShareActions booking={booking} />
 
-          {canEdit && <StatusActions pending={pending} onSetStatus={(s) => setStatus(s)} />}
+          {canOperate && <StatusActions pending={pending} onSetStatus={(s) => setStatus(s)} />}
 
           {error && (
             <div
@@ -491,7 +534,7 @@ export function BookingDrawer({
             </div>
           )}
 
-          {canEdit && (
+          {canDelete && (
           <button
             type="button"
             onClick={remove}

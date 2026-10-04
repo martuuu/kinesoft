@@ -47,6 +47,14 @@ export type BookingRow = {
    * Access tier the actor has on this booking's patient. `"basic"`
    * tells the agenda renderer to suppress diagnosis / hide the link to
    * the HC. Guest bookings (patientId === null) get `"none"`.
+   *
+   * Decisión S07sb (Planes E1): el nivel `admin` de PD-13 (Secretaria y
+   * Facturación) viaja como `"basic"` y el tipo NO se amplía. Hay UI que
+   * todavía decide con `!== "basic"` (link "Abrir historia clínica", etc.):
+   * con `"admin"` en la unión, esa forma negativa le abriría la HC. Lo que
+   * `admin` sí puede (operar turnos, ver cobertura y copago) no sale de acá:
+   * sale de `canOperate` / `clinicalWritable` de `AgendaBookingRow` y de
+   * `obraSocial`/`copagoCents`, que el server ya calcula con el nivel real.
    */
   patientAccess: "full" | "basic" | "none";
   /**
@@ -116,7 +124,14 @@ export type BatchDateOutcome = {
  *   - Sin `clinical.read` (ASSISTANT, BILLING): `title`/`description` null y
  *     `notes` null salvo en turnos SIN paciente (la nota de un turno "guest" la
  *     carga el staff: es administrativa). `clinicalHidden` lo dice explícito
- *     para que la UI muestre "sin acceso" y no "vacío".
+ *     para que la UI muestre "sin acceso" y no "vacío". Misma regla para leer y
+ *     escribir: `bookingFieldAccess` (lib/booking-field-access.ts).
+ *   - Obra social y copago: con acceso `full` y también con `admin` (PD-13: la
+ *     Secretaria y Facturación ven cobertura y estado de cobro); con `basic`,
+ *     "Particular" + precio del servicio.
+ *   - Permisos de la fila (S07sb): `canOperate` y `clinicalWritable`,
+ *     calculados en el server con los mismos predicados que los write-paths.
+ *     Son la fuente para la UI (no deducirlos de `patientAccess`).
  */
 export type AgendaBookingRow = BookingRow & {
   /** Sobreturno (reemplaza el prefijo "[SOBRETURNO]" de notes, M-agenda). */
@@ -134,8 +149,22 @@ export type AgendaBookingRow = BookingRow & {
   /** Recepción (decisión 3): llegó a la sala / pasó a atención. */
   arrivedAt: Date | null;
   attendingAt: Date | null;
-  /** true = el actor no tiene `clinical.read`: title/description/notas ocultos. */
+  /** true = title/description ocultos (sin `clinical.read`, o con paciente sin full); notas según `bookingFieldAccess`. */
   clinicalHidden: boolean;
+  /**
+   * S07sb (E1): el actor puede crear/mover/cambiar estado/cancelar este turno
+   * = `canOperateBooking(caps, access)` (full || `agenda.operateAll`). Guest:
+   * `guestOperable` (`agenda.operateAll || clinical.read`; P0.Z H-b3: BILLING
+   * no opera guests). NO incluye borrar ni los toggles de cobro: esos siguen
+   * exigiendo full (o guest operable).
+   */
+  canOperate: boolean;
+  /**
+   * S07sb (E1): el actor escribe (= lee) título y descripción. Con paciente =
+   * `canWriteClinical(caps, access)`; guest = `clinical.read`. Las notas: con
+   * paciente siguen a esto; en un guest siguen a `canOperate` (son del staff).
+   */
+  clinicalWritable: boolean;
 };
 
 /** Tope del rango de `listAgendaBookings` (una vista de mes + márgenes). */

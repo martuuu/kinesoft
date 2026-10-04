@@ -1,5 +1,6 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { ForceFlags, ForcePrompt } from "@/lib/booking-force-flags";
+import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 
 /**
  * Lo que el drawer necesita del turno. Es un subconjunto estructural de
@@ -43,7 +44,78 @@ export type DrawerBooking = {
   locationName?: string | null;
   isTelemedicine?: boolean;
   telemedicineUrl?: string | null;
+  /** Sin `clinical.read` o sin full: title/description/notas llegan null a propósito. */
+  clinicalHidden?: boolean;
+  /**
+   * P0-S07u (E1): permisos de la fila calculados en el server (S07sb,
+   * `AgendaBookingRow`). Opcionales: sin ellos manda `bookingDrawerAccess`,
+   * que falla cerrado.
+   */
+  canOperate?: boolean;
+  clinicalWritable?: boolean;
 };
+
+/** Qué muestra el drawer para un turno (ver `bookingDrawerAccess`). */
+export type BookingDrawerAccess = {
+  /** Reprogramar, Editar (duración / paciente), Cambiar estado y Cancelar. */
+  canOperate: boolean;
+  /** Título, descripción, "Usar como diagnóstico" y "Últimos turnos". */
+  clinicalWritable: boolean;
+  /** Notas: las clínicas con `clinicalWritable`; en un guest, las del staff. */
+  notesWritable: boolean;
+  /** Eliminar turno: la regla de siempre, en forma positiva (ver abajo). */
+  canDelete: boolean;
+};
+
+/**
+ * Gating del drawer (P0-S07u, Planes E1). Puro para testearlo sin montar nada;
+ * la barrera real es el server (`applyBookingUpdateInTx`), esto solo evita
+ * mostrar controles que van a rebotar o, peor, que escriben sobre datos que el
+ * usuario no ve.
+ *
+ * - Operar = `canOperate` del server. Antes era `patientAccess !== "basic"` y la
+ *   Secretaria (que ve a todos en `admin`, que la fila manda como "basic")
+ *   perdía Reprogramar / Estado / Cancelar aunque tuviera `agenda.operateAll`.
+ * - Clínico = `clinicalWritable` del server. Con los campos ocultos (null) el
+ *   form arrancaba con título y descripción vacíos y "Usar como diagnóstico"
+ *   mandaba esos vacíos a `setPatientDiagnosis`: **borraba** el diagnóstico.
+ * - Notas: en un turno guest las carga el staff (administrativas, misma regla
+ *   que `bookingFieldAccess` para `hasPatient: false`), así que siguen a
+ *   `canOperate`; con paciente son clínicas y siguen a `clinicalWritable`.
+ * - Eliminar = la regla de hoy (`patientAccess !== "basic"`) escrita como
+ *   `full || guest`: es lo mismo para la fila actual, pero si mañana la fila
+ *   trae `admin` no lo habilita. Los cobros no viven en el drawer (matriz de
+ *   cobros en C0).
+ *
+ * Fallback sin los campos del server (proyección completa, o antes de S07sb):
+ * operar solo con `full` o guest; clínico con `canWriteClinical`, contando el
+ * guest como `full` (igual que `hasFullAccess(actor, null)` en el server) y
+ * nunca si la fila dice `clinicalHidden`. Es decir, falla cerrado: sin
+ * `agenda.operateAll` en el fallback la Secretaria sigue en solo lectura.
+ */
+const NO_CAPS: ReadonlySet<Capability> = new Set();
+
+export function bookingDrawerAccess(
+  booking: Pick<
+    DrawerBooking,
+    "patientId" | "patientAccess" | "clinicalHidden" | "canOperate" | "clinicalWritable"
+  >,
+  caps: ReadonlySet<Capability>
+): BookingDrawerAccess {
+  const isGuest = !booking.patientId || booking.patientAccess === "none";
+  const access = isGuest ? "full" : booking.patientAccess;
+  // Fallback sin `agenda.operateAll` a propósito (falla cerrado): solo el
+  // server sabe si el operateAll aplica a esta fila.
+  const canOperate = booking.canOperate ?? canOperateBooking(NO_CAPS, access);
+  const clinicalWritable =
+    booking.clinicalWritable ?? (!booking.clinicalHidden && canWriteClinical(caps, access));
+  return {
+    canOperate,
+    clinicalWritable,
+    notesWritable: clinicalWritable || (isGuest && canOperate),
+    canDelete: canOperate && access === "full",
+  };
+}
 
 /** Respuesta `conflict` de `updateBooking` (misma forma que el alta). */
 export type ConflictInfo = { practitionerName: string; nextFreeISO: string | null };

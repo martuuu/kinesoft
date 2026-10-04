@@ -180,3 +180,13 @@ export const IconMenu = (p: IconProps) => (
     <path d="M3 6h18M3 12h18M3 18h18" />
   </Icon>
 );
+// [P0-S04a] Entrada "Planes" (sidebar, pestañas, puertas de creación):
+// portapapeles con lista. Distinto de IconFile (HC/archivos) e IconCal (agenda)
+// para que el plan no se confunda con un turno ni con un documento.
+export const IconPlans = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="5" y="4" width="14" height="17" rx="2" />
+    <path d="M9 4V3h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z" />
+    <path d="M9 10h6M9 14h6M9 18h3" />
+  </Icon>
+);

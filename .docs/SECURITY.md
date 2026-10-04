@@ -86,7 +86,8 @@ also enforces `NODE_ENV !== "production"`.
 
 A PRACTITIONER who is neither the assigned practitioner nor has a
 `PatientShare` has **basic** access (`lib/visibility.ts`). OWNER/ADMIN always
-have full access; the tenant flag `sharedPatientView` grants full to everyone.
+have full access; the tenant flag `sharedPatientView` grants full to everyone
+**with `clinical.read`** (since ES1, roles without it get the `admin` level, §13).
 **The server enforces it; the UI only mirrors it.**
 
 | Action | full | basic |
@@ -218,7 +219,8 @@ closes the account-takeover vector via mistyped Patient emails. Since A3b
 
 ## 6. File uploads
 
-`lib/files.ts` (since A2b, 30-sep-2026, every file action requires **full**
+`lib/files.ts` (since ES1, Storage goes **only through the service role**,
+`lib/storage-internal.ts`, §13; since A2b, 30-sep-2026, every file action requires **full**
 access to the patient: basic gets an empty list and upload/delete/download are
 rejected; the download `AuditEvent` is written **before** the URL is signed,
 and `deletePatientFile` checks the storage `{ error }`).
@@ -491,7 +493,7 @@ tenant reads) and its tags.
   Production. Both are computed at build time, so Vercel must expose System
   Environment Variables to the build.
 
-## 13. Capabilities and the agenda surfaces (B-pre, 01-oct-2026)
+## 13. Capabilities and the agenda surfaces (B-pre 01-oct, Planes ES1 04-oct-2026)
 
 **Matrix** (`lib/capabilities.ts`, pure; `lib/authz.ts` resolves the role from
 the Membership — `Actor` still doesn't carry it):
@@ -518,6 +520,52 @@ the Membership — `Actor` still doesn't carry it):
   enforcing it the owner decides whether the practitioner charges (ROADMAP).
 - Known gap (C0): `buildActor` requires a `Practitioner` row
   (`lib/session.ts:91-97`), so a Secretaria (ASSISTANT) can't log in without one.
+**Planes ES1 (04-oct-2026, in code; not deployed until block B closes).** Detail in
+[PLANES.md](PLANES.md) §2.6/§8 and AUDIT §Ronda 14.
+
+| Capability | OWNER/ADMIN | PRACTITIONER | ASSISTANT | BILLING |
+| --- | --- | --- | --- | --- |
+| `agenda.operateAll` | ✅ | — | ✅ | — |
+| `plans.manage` | ✅ | ✅ (with full, checked in the action) | — | — |
+| `plans.schedule` / `plans.authorize` | ✅ | ✅ (with full) | ✅ | — |
+
+- **Patient access level `admin`** (`lib/visibility.ts`, PD-13): a role without
+  `clinical.read` (ASSISTANT, BILLING) always gets exactly `admin` on every
+  patient of the tenant — never `full` (not even with `sharedPatientView`, a
+  share or an assignment), never less. `admin` sees name, DNI, contact,
+  insurance/coverage, emergency contact, bookings and payment status; never
+  diagnosis, notes, EVA, plan titles, files, clinical activity or Seguimiento.
+  `seesAll` is false for these roles (own-scope dashboard). **Rule:** every
+  check that opens clinical data or clinical writes is `=== "full"` (or
+  `canWriteClinical`), never `!== "basic"`.
+- **Pure predicates** (`lib/capabilities.ts`): `canOperateBooking = full ||
+  agenda.operateAll` (create, batch, update, status, cancel) and
+  `canWriteClinical = clinical.read && full`. `bookingFieldAccess`
+  (`lib/booking-field-access.ts`): a booking field is written iff it can be
+  read; disallowed fields are dropped from the patch **before** the write and
+  the audit. Guest bookings: operable with `agenda.operateAll || clinical.read`
+  (BILLING can't). Deleting bookings and charge toggles still require full.
+- **Secretaria creating patients:** `createPatient(raw, {assignTo})` assigns
+  the patient to the booking's practitioner (same tenant, accepted clinical
+  membership, validated in the tx); BILLING can't create; clinical fields are
+  ignored. Shares and `assignPatientToPractitioner` require a clinical role.
+- **Storage only via service role** (`lib/storage-internal.ts`, `server-only`,
+  every `{ error }` checked): `lib/files.ts` keeps its gates; exercise media is
+  signed by `signExerciseMedia(mediaId)` from the DB row
+  (`lib/exercise-media-internal.ts`) — nothing signs a client-supplied key.
+  Buckets private, no `storage.objects` policies for anon/authenticated (prod:
+  precheck 17, MIGRACIONES-RUNBOOK §2.3). Needs `SUPABASE_SERVICE_ROLE_KEY`.
+- **No PHI to the portal or the ICS:** `getPortalPlan` drops `Session.notes`;
+  the ICS export decides detail with `bookingFieldAccess` (full **and**
+  `clinical.read`); `listBookingsInRange` too, and `patientCondition` only with
+  `clinical.read` + full.
+- **RPC surface:** `getPatient` (ungated, full clinical history) and
+  `saveDiagnosisDraft` were deleted; the P0.Z reviewer swept every export of
+  `patients`, `bookings`, `sessions`, `diagnosis`, `portal` and
+  `exercise-media` that reads Patient/Booking/Session: each one is gated.
+- Known gaps → C0: the `admin` profile is read-only (the Secretaria can't edit
+  contact/coverage yet) and the directory still uses the basic projection for
+  `admin`; `lib/search.ts` condition search isn't tenant-filtered (no PHI) → C.
 
 **Availability reads** (`lib/availability-actions.ts`): `agenda.viewAll`, zod,
 every input id (practitioner, service, location, patient, insurer) validated

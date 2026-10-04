@@ -112,6 +112,18 @@ Pure logic lives outside `"use server"` files so it can be unit-tested
 | `components/ui/money-input.tsx` + `parseMoneyInput`/`formatMoneyInput` (`lib/format.ts`) | **the** control for typed ARS amounts: text + `inputMode="decimal"`, integer cents, string math (no float), invalid text blocks submit. Replaced every `type=number` money input |
 | `Drawer` `dirty` / `dirtyMessage` (`components/ui/drawer.tsx`) | Esc / backdrop / X ask for confirmation when the form is dirty; `ConfirmDialog` stops Esc in the capture phase so it doesn't close the drawer below |
 
+## Modules added in Planes ES1 (04-oct-2026)
+
+| Module | What it owns |
+| --- | --- |
+| `lib/sessions-internal.ts` (`server-only`) | **The only door to close and reopen a plan session**: `completeSessionInTx` (doesn't gate, doesn't touch Booking, doesn't autocomplete; `'booking'` writes only `completedAt`) and `reopenSessionIfUntouchedInTx`. Seguimiento uses it today; the agenda sync (ES2b) reuses it. PLANES C8 |
+| `lib/storage-internal.ts` (`server-only`) | Supabase Storage via the **service role** only (upload / sign / remove, `{ error }` checked, fails closed without the env). `lib/files.ts` and exercise media go through it |
+| `lib/exercise-media-internal.ts` (`server-only`) | `signExerciseMedia(mediaId)`: signs the key stored in the row, never a client key |
+| `lib/patient-access-internal.ts` · `lib/programs.ts` | `hcAccessError` moved out of `patients.ts`; program actions (`createProgram` with zod + AR day, `updateProgram`, `setProgramStatus`, …) |
+| `lib/booking-field-access.ts` · `lib/plan-lock.ts` · `lockCapacityMany` | field rule for bookings; plan-patient lock and one-statement capacity locks (PLANES C2) |
+| `lib/availability/plan.ts` · `lib/plan-schedule.ts` · `lib/plan-pricing.ts` · `lib/plan-display.ts` · `loadAvailabilityInputsForDays` | pure plan engine, schedule v1, money and display, and the per-day loader. No callers until ES2b |
+| `lib/plans-dedupe*.ts` + `scripts/plans-dedupe-session-index.ts` | pre-M1 dedupe of `Session(programId, index)` (MIGRACIONES-RUNBOOK §2.3) |
+
 ## Timezone (a core invariant)
 
 Argentina is fixed UTC−3, **no DST**. All wall-clock logic uses the helpers in
@@ -136,7 +148,7 @@ through `dbDateToDayKey`/`dayKeyToDbDate` (`lib/availability/day.ts`).
 mini-diagnosis, defaulted from `Patient.diagnosisTitle` / `diagnosisNote`),
 `idempotencyKey`, `updatedAt` (optimistic-concurrency token). Bookings have
 **no FK** to `Session`/`TreatmentProgram` — they live in parallel. ⚠️ **Superseded
-by ADR-001 (proposed, 2026-09-23)** — see §Architecture decisions: plans must
+by ADR-001 (accepted, amended 03-oct-2026; pending M1)** — see §Architecture decisions: plans must
 generate their bookings, so the FK is coming in Bloque B.
 
 - **Single turno**: `createBooking` (conflict/sobreturno UX + next-free-slot;
@@ -402,9 +414,15 @@ Booking.locationId? ──► Location (RESTRICT; null = primary)
 `getCapabilities` with React `cache`, `requireCapability`,
 `requireTenantAdmin`). OWNER/ADMIN: everything. PRACTITIONER:
 `agenda.viewAll`, `agenda.reception`, `agenda.manageOwnBlocks`,
-`clinical.read`. ASSISTANT (the future Secretaria, C0): `agenda.viewAll`,
+`clinical.read`. ASSISTANT (the Secretaria): `agenda.viewAll`,
 `agenda.reception`, `agenda.manageBlocks`, `agenda.manageOwnBlocks` — **no**
-`clinical.read`. BILLING: `agenda.viewAll`, `billing.manage`.
+`clinical.read`. BILLING: `agenda.viewAll`, `billing.manage`. Since Planes ES1
+(04-oct): `agenda.operateAll` (OWNER/ADMIN/ASSISTANT) and `plans.manage` /
+`plans.schedule` / `plans.authorize` (used from ES2b); the per-patient level
+`admin` (`lib/visibility.ts`) for every role without `clinical.read`; and the
+pure predicates `canOperateBooking` / `canWriteClinical` plus
+`bookingFieldAccess` (`lib/booking-field-access.ts`), which every booking
+write and read reuses instead of re-implementing.
 `schedule.configure` and `tenant.admin` are admin-only. Replaces the six copied
 `role === OWNER|ADMIN` checks (tenant-settings, services, insurers,
 patients ×3, configuración). Unknown role → empty set (fails closed). UI only
@@ -511,7 +529,7 @@ platform tier**:
 
 ## Architecture decisions (ADR)
 
-### ADR-001 — Booking ↔ plan/session FK (status: PROPOSED, 2026-09-23)
+### ADR-001 — Booking ↔ plan/session FK (status: ACCEPTED, amended — pending M1; 2026-09-23, amended 03-oct-2026)
 
 - **Context.** The owner requires that *every plan generates its bookings* and
   that, for the same patient, in-plan vs out-of-plan bookings are
@@ -530,7 +548,19 @@ platform tier**:
   complete version — no "Plans v1".
 - **Consequences.** Nothing linked is hard-deleted (archive instead); the copago
   precedence (`lib/copago.ts`) is untouched — a plan price is stamped on
-  `Booking.copagoCents` with `pricedByPlan`. Pending the owner's approval (D25).
+  `Booking.copagoCents` with `pricedByPlan`.
+- **Amendment (owner sign-off 03-oct-2026, PD-03/PD-04; detail in
+  [PLANES.md](PLANES.md) §3).** Built **on top of ADR-003**: a plan references
+  `(practitionerId, serviceId) + locationId`, with no FK to
+  `PractitionerService`. Three composite FKs (`Booking_plan_tenant_fkey`,
+  `Booking_plan_patient_fkey`, `Booking_session_program_fkey`) are the
+  integrity net under BYPASSRLS. The partial unique index excludes CANCELLED
+  **and NO_SHOW**, so "Ausente" frees the session for a new booking.
+  `idempotencyKey` is unique per tenant. The same migration (M1,
+  `plans_booking_link`) adds `ProgramAuthorization` and `PatientChangeRequest`
+  (both with RLS) and relaxes `Patient_userId_key` to one per tenant (owner
+  approved exception to "additive only"). Status moves to ACCEPTED (no
+  "amended — pending") when M1 is written and verified (ES2a).
 
 ### ADR-002 — Sentry on server/edge only, no client SDK (status: ACCEPTED, 30-sep-2026)
 

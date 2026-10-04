@@ -338,7 +338,7 @@ JOIN "Membership" m ON m."userId"=p."userId" AND m."tenantId"=p."tenantId" AND m
 GROUP BY 1;
 --     turnos futuros de profesionales SIN membresía aceptada (no reciben franjas: revisar a mano)
 SELECT b."practitionerId", COUNT(*) FROM "Booking" b
-WHERE b."scheduledFor" > now() AND b.status <> 'CANCELLED' AND NOT EXISTS (
+WHERE b."scheduledFor" > (now() AT TIME ZONE 'UTC') AND b.status <> 'CANCELLED' AND NOT EXISTS (
   SELECT 1 FROM "Practitioner" p
   JOIN "Membership" m ON m."userId"=p."userId" AND m."tenantId"=p."tenantId" AND m."acceptedAt" IS NOT NULL
   WHERE p.id=b."practitionerId")
@@ -353,10 +353,14 @@ SELECT COUNT(*) FROM "Booking" WHERE notes LIKE '[SOBRETURNO]%';
 --     turnos futuros fuera del horario del tenant o en domingo: siguen en la agenda; desde B-pre reprogramarlos
 --     o reactivarlos da el aviso blando "fuera de horario" (se fuerza, no se rechaza). Informativo.
 SELECT COUNT(*) FROM "Booking" b JOIN "Tenant" t ON t.id=b."tenantId"
-WHERE b."scheduledFor" > now() AND b.status <> 'CANCELLED' AND (
-  EXTRACT(DOW FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires')=0
-  OR EXTRACT(HOUR FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires') < t."businessHoursStart"
-  OR EXTRACT(HOUR FROM b."scheduledFor" AT TIME ZONE 'America/Argentina/Buenos_Aires') >= t."businessHoursEnd");
+--     OJO (corregido en el Paso 0 de Planes, 03-oct): las columnas son TIMESTAMP(3) SIN zona y guardan UTC.
+--     `col AT TIME ZONE 'America/...'` sobre un timestamp sin zona lo interpreta COMO hora AR y devuelve UTC:
+--     corría la hora 3 h al revés. La hora AR es ((col AT TIME ZONE 'UTC') AT TIME ZONE 'America/...'),
+--     y "ahora" comparable es (now() AT TIME ZONE 'UTC').
+WHERE b."scheduledFor" > (now() AT TIME ZONE 'UTC') AND b.status <> 'CANCELLED' AND (
+  EXTRACT(DOW FROM ((b."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires'))=0
+  OR EXTRACT(HOUR FROM ((b."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires')) < t."businessHoursStart"
+  OR EXTRACT(HOUR FROM ((b."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires')) >= t."businessHoursEnd");
 SELECT COUNT(*) FROM "Booking";
 ```
 
@@ -448,6 +452,70 @@ público ofrece los mismos horarios que antes; un sobreturno viejo muestra el ba
 **Rollback:** volver el deploy de Vercel al commit anterior. El schema nuevo es compatible con el código viejo
 (columnas nullable o con default, tablas nuevas sin uso). Las filas que cargue el código nuevo (sedes, franjas,
 bloqueos) quedan y se reusan al volver a desplegar.
+
+## 2.3 Planes: preparación del deploy de M1 (`plans_booking_link`) — desde ES1 (04-oct-2026)
+
+> **ES1 (Planes P0) no tiene migraciones.** La única migración de Planes es M1 `plans_booking_link` (ES2a). Por la
+> decisión del 04-oct va en **un solo deploy al cierre del bloque B**, después de `catalog_global` y
+> `agenda_foundations` (orden completo en [PLANES.md §16](PLANES.md)). Esta sección deja lo que ES1 preparó para ese
+> deploy: el dedupe que M1 necesita y dos prechecks que vencen antes del deploy.
+
+**Prechecks de solo lectura** (los SQL completos están en PLANES.md §16; acá los que trajo ES1):
+
+```sql
+-- (2) BLOQUEANTE para M1: sesiones repetidas (programId, index). Si > 0 → dedupe (abajo).
+SELECT count(*) FROM (SELECT "programId","index" FROM "Session" GROUP BY 1,2 HAVING count(*)>1) x;
+
+-- (15) Pacientes asignados a ASSISTANT/BILLING (S07sp). Si > 0: REASIGNARLOS con "Asignar profesional"
+--      (assignPatientToPractitioner) ANTES del deploy. Con el nivel `admin` esa Secretaria deja de tener full
+--      sobre "sus" pacientes y el kine tiene que quedar a cargo.
+SELECT count(*) FROM "Patient" p
+JOIN "Practitioner" pr ON pr.id = p."assignedPractitionerId"
+JOIN "Membership" m ON m."userId" = pr."userId" AND m."tenantId" = p."tenantId"
+WHERE m.role IN ('ASSISTANT','BILLING');
+
+-- (17) Storage (S02m): buckets privados y ninguna policy de storage.objects para anon/authenticated.
+SELECT id, public FROM storage.buckets;
+SELECT policyname, roles, cmd FROM pg_policies WHERE schemaname='storage' AND tablename='objects';
+```
+
+- **(17):** desde ES1 la app usa Storage **solo con service role** (`lib/storage-internal.ts`), así que
+  `SUPABASE_SERVICE_ROLE_KEY` **tiene que estar en Vercel** (Production y staging) antes del deploy; sin ella, subir,
+  firmar y borrar archivos fallan cerrado. Si (17) muestra un bucket `public = true` o una policy para `anon` /
+  `authenticated` sobre `patient-files` o `exercise-media`, es una **fuga de bloque A**: hacer privado el bucket y
+  dropear esas policies **en el mismo deploy** en que el código pasa a service role (ni antes, porque el código viejo
+  las usa, ni después, porque quedarían abiertas). En el SQL Editor: `DROP POLICY "<nombre>" ON storage.objects;`
+  por cada una, con backup previo.
+
+**Dedupe de `(programId, index)`** (S02x; lo corre Martin; no es migración). M1 crea el único parcial
+`Session_programId_index_live_key` y aborta si hay repetidos. El script renumera: en cada grupo conserva el id menor y
+manda el resto, en id asc, a `max+1`, `+2`… del programa. No borra nada ni toca `SessionExercise`, `EvaScore`,
+`totalSessions` ni `Booking`. Idempotente. Dry-run por defecto (tx READ ONLY); aborta sin BYPASSRLS (bajo RLS vería 0
+sesiones = falso verde). Imprime el mapeo viejo → nuevo con ids, sin PHI. Requiere `--conditions=react-server`
+(importa un módulo `server-only`).
+
+```bash
+# Local (Docker :5433)
+npm run plans:dedupe-session-index                 # dry-run (local: 0 duplicados al cierre de ES1)
+npm run plans:dedupe-session-index -- --apply
+
+# Prod (y staging, con su .env): NUNCA el script npm (lee .env.local). Pide el project ref.
+KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx --conditions=react-server scripts/plans-dedupe-session-index.ts
+# opcional: --tenant=<id>[,<id>…] limita el alcance
+```
+
+**Orden** (staging primero, después prod), **inmediatamente antes del deploy de M1 y en una ventana sin uso** (entre el
+dedupe y M1 no puede entrar una sesión a medida nueva que vuelva a duplicar):
+1. precheck (2);
+2. backup (`npm run db:prod:backup`);
+3. dry-run;
+4. revisar el mapeo (qué sesiones cambian de número);
+5. `--apply`;
+6. dry-run otra vez → **tiene que dar 0**;
+7. recién ahí, el deploy con M1.
+
+Aviso al usuario: las sesiones movidas cambian su "Sesión n" (pasan al final del plan). El test de integración del
+dedupe se autosaltea después de M1.
 
 ## 3. Rollback
 

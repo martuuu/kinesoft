@@ -1,22 +1,8 @@
 "use client";
 
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
+import { formatARS } from "@/lib/format";
 import type { DrawerBooking } from "./types";
-
-/**
- * Cents → "$1.234" (AR pesos, no decimals).
- *
- * Ojo: no es el `fmtMoney` de `agenda-utils` (ese va por `formatARS`); se deja el
- * del drawer tal cual para no cambiar lo que se ve en esta pasada de refactor.
- */
-function fmtMoney(cents: number) {
-  return (cents / 100).toLocaleString("es-AR", {
-    style: "currency",
-    currency: "ARS",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-}
 
 /** Obra social name to show, or "" when particular (never prints the
  *  literal "Particular" / "Obra social" words). */
@@ -61,9 +47,11 @@ export function BillingRows({ booking }: { booking: DrawerBooking }) {
       {osLabel(booking.obraSocial) && (
         <Row label="Obra social">{osLabel(booking.obraSocial)}</Row>
       )}
+      {/* `formatARS` (P0-S04b): el drawer tenía su propio `fmtMoney` con
+          `toLocaleString`; ahora es el mismo formateo que Lista y semana. */}
       <Row label="Copago">
         <span style={{ fontWeight: 700, color: "var(--navy-900)" }}>
-          {fmtMoney(booking.copagoCents)}
+          {formatARS(booking.copagoCents)}
         </span>
       </Row>
       {booking.title && <Row label="Diagnóstico">{booking.title}</Row>}

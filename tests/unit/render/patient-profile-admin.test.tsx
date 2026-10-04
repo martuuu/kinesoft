@@ -1,0 +1,237 @@
+// P0-S07v · Perfil administrativo (nivel `admin`, PD-13 / Planes E1).
+//
+// Contrato: para `admin` el perfil muestra solo datos y turnos, sin pestañas
+// clínicas (Evolución, Plan, Seguimiento, archivos, actividad clínica). Antes
+// la página mandaba todo lo que no fuera `full` a la vista básica ("Sin
+// acceso"): la Secretaria no veía ni el teléfono del paciente.
+//
+// Dos niveles:
+//  1. el componente real (`PatientAdminProfile`) renderizado con props;
+//  2. la página real (`app/(app)/pacientes/[id]/page.tsx`) con la capa de datos
+//     mockeada (red/DB): con `access: "admin"` no pide ningún slice clínico.
+// Los tests contra el server de S07sp (proyección `admin` real de
+// `getPatientCore`, turnos redactados) son post-integración y viven en
+// `tests/integration/patients-secretaria.test.ts`.
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  notFound: () => {
+    throw new Error("NEXT_NOT_FOUND");
+  },
+}));
+vi.mock("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: () => {}, unstable_cache: (f: unknown) => f }));
+// `React.cache` solo existe en el runtime de RSC (lo usan lib/session, lib/authz).
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return { ...actual, default: actual, cache: <T,>(fn: T) => fn };
+});
+
+// Capa de datos de la página: se mockea la frontera con la DB, nunca la página
+// ni el componente bajo test.
+const data = vi.hoisted(() => ({
+  getPatientCore: vi.fn(),
+  getPatientBookingsAll: vi.fn(),
+  getPatientBookingsSummary: vi.fn(),
+  getPatientBillableCount: vi.fn(),
+  getPatientEvaScores: vi.fn(),
+  getPatientName: vi.fn(),
+  getPatientProgramsLite: vi.fn(),
+  gatingForActor: vi.fn(),
+  listInsurers: vi.fn(),
+  runWithRls: vi.fn(),
+  getCapabilities: vi.fn(),
+}));
+vi.mock("@/lib/patients", () => ({
+  getPatientCore: data.getPatientCore,
+  getPatientBookingsAll: data.getPatientBookingsAll,
+  getPatientBookingsSummary: data.getPatientBookingsSummary,
+  getPatientBillableCount: data.getPatientBillableCount,
+  getPatientEvaScores: data.getPatientEvaScores,
+  getPatientName: data.getPatientName,
+  // Actions que importa el hero completo (no se invocan en render estático).
+  assignPatientToPractitioner: vi.fn(),
+  sendPatientPortalInvite: vi.fn(),
+  setPatientArchived: vi.fn(),
+  setPatientCoverage: vi.fn(),
+  updatePatient: vi.fn(),
+}));
+vi.mock("@/lib/programs", () => ({ getPatientProgramsLite: data.getPatientProgramsLite }));
+vi.mock("@/lib/plan-gating", () => ({ gatingForActor: data.gatingForActor }));
+vi.mock("@/lib/insurers", () => ({ listInsurers: data.listInsurers }));
+vi.mock("@/lib/rls", () => ({ runWithRls: data.runWithRls }));
+vi.mock("@/lib/session", () => ({ getActor: async () => ({ userId: "u1", tenantId: "t1" }) }));
+vi.mock("@/lib/authz", () => ({ getCapabilities: data.getCapabilities }));
+
+import { PatientAdminProfile, ADMIN_PROFILE_TABS } from "@/components/patients/patient-profile";
+import { ConfirmProvider } from "@/components/ui/confirm-dialog";
+import { capabilitiesFor } from "@/lib/capabilities";
+import type { PatientAdminCore, PatientBookingFull } from "@/lib/patients-types";
+import PatientPage from "@/app/(app)/pacientes/[id]/page";
+
+const admin: PatientAdminCore = {
+  id: "pat_000000abcdef",
+  firstName: "Lucía",
+  lastName: "Gómez",
+  documentId: "30111222",
+  email: "lucia@example.com",
+  phone: "+54 11 5555-0001",
+  dateOfBirth: new Date("1990-03-15T00:00:00Z"),
+  coverage: { insurer: "OSDE", planName: "310", memberId: "AF-998877" },
+  emergency: [{ name: "Marta Gómez", relation: "Madre", phone: "+54 11 5555-0002" }],
+  assignedPractitionerName: "Juan Kine",
+  nextBookingAt: new Date("2030-01-10T13:00:00Z"),
+  access: "admin",
+};
+
+// Centinelas: si un campo clínico llegara en la fila (redacción rota en el
+// server), la UI administrativa igual no lo pinta.
+const CLINICAL = ["LUMBALGIA_SECRETA", "DESC_SECRETA", "NOTA_SECRETA"];
+
+function booking(over: Partial<PatientBookingFull>): PatientBookingFull {
+  return {
+    id: "bk_1",
+    tenantId: "t1",
+    patientId: admin.id,
+    practitionerId: "pr_1",
+    serviceId: "sv_1",
+    scheduledFor: new Date("2026-09-01T13:00:00Z"),
+    durationMin: 45,
+    copagoCents: 250000,
+    status: "COMPLETED",
+    paymentStatus: "UNPAID",
+    insurerPaidAt: null,
+    title: CLINICAL[0],
+    description: CLINICAL[1],
+    notes: CLINICAL[2],
+    serviceName: "Kinesiología",
+    obraSocial: "OSDE",
+    osAmountCents: 800000,
+    updatedAt: new Date("2026-09-01T12:00:00Z"),
+    createdAt: new Date("2026-08-01T12:00:00Z"),
+    ...over,
+  } as unknown as PatientBookingFull;
+}
+
+const rows = [
+  booking({ id: "bk_1", paymentStatus: "UNPAID" }),
+  booking({ id: "bk_2", scheduledFor: new Date("2026-08-25T13:00:00Z"), paymentStatus: "PAID", insurerPaidAt: new Date() }),
+];
+
+function render(props: Partial<Parameters<typeof PatientAdminProfile>[0]> = {}) {
+  return renderToStaticMarkup(
+    <ConfirmProvider>
+      <PatientAdminProfile
+        patient={admin}
+        initialBookings={{ rows, hasMore: false, nextCursor: null }}
+        canBook
+        {...props}
+      />
+    </ConfirmProvider>
+  );
+}
+
+const CLINICAL_TABS = ["Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Facturación", "Resumen"];
+
+/** Etiquetas de los botones de pestaña (la barra de tabs del perfil). */
+function tabLabels(html: string) {
+  return [...html.matchAll(/<button type="button"[^>]*>([^<]+)/g)].map((m) => m[1].trim());
+}
+
+describe("[P0-S07v] PatientAdminProfile", () => {
+  it("solo pestañas Datos y Turnos; ninguna clínica", () => {
+    expect(ADMIN_PROFILE_TABS).toEqual(["resumen", "turnos"]);
+    const labels = tabLabels(render());
+    expect(labels).toEqual(["Datos", "Turnos"]);
+    for (const t of CLINICAL_TABS) expect(labels).not.toContain(t);
+  });
+
+  it("Datos: contacto, cobertura, emergencia y a cargo; sin plan ni acciones de HC", () => {
+    const html = render();
+    for (const s of ["Lucía Gómez", "30111222", "lucia@example.com", "+54 11 5555-0001", "15/03/1990", "OSDE", "310", "AF-998877", "Marta Gómez", "Madre", "+54 11 5555-0002", "Juan Kine"]) {
+      expect(html).toContain(s);
+    }
+    // Copago pendiente: solo bk_1 (COMPLETED, UNPAID).
+    expect(html).toContain("1 turno");
+    // Nada de plan (el título/estado del plan es HC) ni acciones que exigen full.
+    for (const s of ["Plan activo", "Sin plan", "Plan pausado", "Editar", "Compartir", "Archivar", "portal", "HC-"]) {
+      expect(html).not.toContain(s);
+    }
+    for (const s of CLINICAL) expect(html).not.toContain(s);
+  });
+
+  it("Turnos: estado del turno y de cobro, sin título/descripción/notas", () => {
+    const html = render({ initialTab: "turnos" });
+    expect(html.match(/data-testid="admin-turno-row"/g)?.length).toBe(2);
+    expect(html).toContain("Kinesiología");
+    expect(html).toContain("Cobrado");
+    expect(html).toContain("Pendiente");
+    expect(html).toContain("Ver en agenda");
+    for (const s of CLINICAL) expect(html).not.toContain(s);
+    // Sin operaciones que el nivel admin no tiene en el perfil.
+    for (const s of ["Eliminar", "Marcar hecho", "Confirmar"]) expect(html).not.toContain(s);
+  });
+
+  it("Agregar turno solo con agenda.operateAll (BILLING no)", () => {
+    expect(render({ canBook: true })).toContain("Agregar turno");
+    expect(render({ canBook: false })).not.toContain("Agregar turno");
+  });
+});
+
+describe("[P0-S07v] página del paciente con nivel admin", () => {
+  beforeEach(() => {
+    for (const f of Object.values(data)) f.mockReset();
+    data.getPatientCore.mockResolvedValue(admin);
+    data.getPatientBookingsAll.mockResolvedValue({ rows, hasMore: false, nextCursor: null });
+  });
+
+  it("renderiza el perfil administrativo sin pedir slices clínicos", async () => {
+    data.getCapabilities.mockResolvedValue(capabilitiesFor("ASSISTANT"));
+    const el = await PatientPage({ params: { id: admin.id } });
+    const html = renderToStaticMarkup(<ConfirmProvider>{el}</ConfirmProvider>);
+
+    expect(html).toContain("Ficha administrativa");
+    expect(html).toContain("+54 11 5555-0001");
+    expect(html).not.toContain("Sin acceso");
+    expect(html).toContain("Agregar turno");
+    expect(tabLabels(html)).toEqual(["Datos", "Turnos"]);
+
+    expect(data.getPatientBookingsAll).toHaveBeenCalledWith(admin.id, 100);
+    for (const f of [
+      data.getPatientProgramsLite,
+      data.getPatientEvaScores,
+      data.getPatientBookingsSummary,
+      data.getPatientBillableCount,
+      data.gatingForActor,
+      data.listInsurers,
+      data.runWithRls,
+    ]) {
+      expect(f).not.toHaveBeenCalled();
+    }
+  });
+
+  it("BILLING: mismo perfil, sin Agregar turno", async () => {
+    data.getCapabilities.mockResolvedValue(capabilitiesFor("BILLING"));
+    const el = await PatientPage({ params: { id: admin.id } });
+    const html = renderToStaticMarkup(<ConfirmProvider>{el}</ConfirmProvider>);
+    expect(html).toContain("Ficha administrativa");
+    expect(html).not.toContain("Agregar turno");
+  });
+
+  it("basic sigue en la vista básica (sin turnos ni capabilities)", async () => {
+    data.getPatientCore.mockResolvedValue({
+      id: admin.id,
+      firstName: "Lucía",
+      lastName: "Gómez",
+      documentId: null,
+      nextBookingAt: null,
+      access: "basic",
+    });
+    const el = await PatientPage({ params: { id: admin.id } });
+    const html = renderToStaticMarkup(<ConfirmProvider>{el}</ConfirmProvider>);
+    expect(html).toContain("Sin acceso");
+    expect(data.getPatientBookingsAll).not.toHaveBeenCalled();
+    expect(data.getPatientProgramsLite).not.toHaveBeenCalled();
+  });
+});

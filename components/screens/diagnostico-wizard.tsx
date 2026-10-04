@@ -8,7 +8,7 @@
  * top diagnosis to a patient via `assignDiagnosisAndCreateProgram`.
  */
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -23,9 +23,44 @@ import {
   rankSelection,
   exercisesFor,
   type CatalogDTO,
+  type CaseSelection,
+  type Ranking,
 } from "@/lib/diagnosis-engine";
+import type { AssignInput } from "@/lib/diagnosis-types";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 type PatientPick = { id: string; name: string; hc: string; info: string };
+
+/**
+ * Input de `assignDiagnosisAndCreateProgram` del wizard mobile. Puro y
+ * exportado para testearlo sin DOM (P0-S02u-diag).
+ *
+ * `startDate` = hoy en AR: antes era `new Date().toISOString().slice(0,10)`,
+ * que después de las 21:00 AR ya es mañana (UTC) y corría la sesión 1 un día.
+ * El wizard no tiene picker de días: sin `daysOfWeek`, el server reparte las 8
+ * sesiones a 2/semana desde hoy (contrato de S02d), como antes.
+ */
+export function buildWizardAssignInput(args: {
+  patientId: string;
+  conditionSlug: string;
+  conditionName: string;
+  selection: CaseSelection;
+  ranking: Ranking[];
+  exerciseIds: string[];
+  now?: Date;
+}): AssignInput {
+  return {
+    patientId: args.patientId,
+    conditionSlug: args.conditionSlug,
+    selection: args.selection,
+    topRankings: args.ranking,
+    exerciseIds: args.exerciseIds,
+    totalSessions: 8,
+    frequency: 2,
+    startDate: toARDateKey(args.now ?? new Date()),
+    programTitle: `Plan ${args.conditionName}`,
+  };
+}
 
 const STEPS = ["Zona", "Síntoma", "Cuándo", "Intensidad", "Diagnóstico", "Paciente"] as const;
 
@@ -113,18 +148,23 @@ export function DiagnosticoWizard({
     setError(null);
     const exercises = exercisesFor(top.slug, catalog);
     const exerciseIds = exercises.filter((e) => e.relation === "DIRECT").map((e) => e.exerciseId);
+    // Sin ejercicios DIRECT el server rechaza igual; se avisa acá con un
+    // mensaje que dice qué hacer en vez de mandar el request.
+    if (!exerciseIds.length) {
+      setError("Este diagnóstico no tiene ejercicios directos. Asignalo desde la vista de escritorio y elegí los ejercicios.");
+      return;
+    }
     start(async () => {
-      const r = await assignDiagnosisAndCreateProgram({
-        patientId,
-        conditionSlug: top.slug,
-        selection,
-        topRankings: ranking,
-        exerciseIds,
-        totalSessions: 8,
-        frequency: 2,
-        startDate: new Date().toISOString().slice(0, 10),
-        programTitle: `Plan ${top.name}`,
-      });
+      const r = await assignDiagnosisAndCreateProgram(
+        buildWizardAssignInput({
+          patientId,
+          conditionSlug: top.slug,
+          conditionName: top.name,
+          selection,
+          ranking,
+          exerciseIds,
+        })
+      );
       if (!r.ok) {
         setError(r.error);
         return;
@@ -210,6 +250,7 @@ export function DiagnosticoWizard({
 
       {(error || success) && (
         <div
+          role={error ? "alert" : "status"}
           style={{
             padding: 10,
             borderRadius: 10,
@@ -429,18 +470,28 @@ function PatientStep({
   patients: PatientPick[];
   setPatients: (v: PatientPick[]) => void;
   patientId: string | null;
-  setPatientId: (id: string) => void;
+  setPatientId: (id: string | null) => void;
   initial: PatientPick[];
 }) {
   const [q, setQ] = useState("");
   const [searching, start] = useTransition();
+  // Guarda de secuencia: solo la respuesta de la última tecla actualiza la
+  // lista (si no, una respuesta vieja pisa a la nueva).
+  const seq = useRef(0);
   const search = (v: string) => {
     setQ(v);
+    const mine = ++seq.current;
     start(async () => {
       const r = await searchPatientsForAssignment(v);
+      if (mine !== seq.current) return;
       setPatients(r);
+      // P0-S02u-diag: antes una búsqueda sin resultados volvía a mostrar la
+      // lista inicial y el paciente elegido podía quedar seleccionado aunque
+      // ya no estuviera a la vista. Si sale de los resultados, se deselecciona.
+      if (patientId && !r.some((p) => p.id === patientId)) setPatientId(null);
     });
   };
+  const list = q.trim() ? patients : patients.length ? patients : initial;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <input
@@ -467,11 +518,13 @@ function PatientStep({
         <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Buscando…</div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {(patients.length ? patients : initial).map((p) => {
+        {list.map((p) => {
           const on = p.id === patientId;
           return (
             <button
               key={p.id}
+              type="button"
+              aria-pressed={on}
               onClick={() => setPatientId(p.id)}
               style={{
                 padding: 10,
@@ -496,6 +549,11 @@ function PatientStep({
             </button>
           );
         })}
+        {list.length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>
+            No encontramos pacientes que coincidan.
+          </div>
+        )}
       </div>
     </div>
   );

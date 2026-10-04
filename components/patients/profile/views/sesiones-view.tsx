@@ -3,13 +3,38 @@ import { Tag } from "@/components/ui/tag";
 import { IconCheck } from "@/components/ui/icons";
 import type { PatientWithRelations } from "../types";
 
+type SessionLite = PatientWithRelations["programs"][number]["sessions"][number];
+
+/** Un grupo por plan; lo arma `pickProfilePrograms` (patient-profile.tsx). */
+export type SessionGroup = {
+  id: string;
+  title: string;
+  status: PatientWithRelations["programs"][number]["status"];
+  sessions: SessionLite[];
+};
+
+const STATUS_LABEL: Record<SessionGroup["status"], string> = {
+  ACTIVE: "Activo",
+  PAUSED: "Pausado",
+  COMPLETED: "Completado",
+  CANCELLED: "Cancelado",
+};
+
+/**
+ * P0-S02u-perfil: antes listaba solo las sesiones del primer plan mientras el
+ * badge del tab contaba las de todos, y con dos planes activos las del segundo
+ * no se veían en ningún lado. Ahora lista todas, agrupadas por plan (el número
+ * de sesión reinicia en cada plan, sin el encabezado "03" sería ambiguo). Con un
+ * solo plan no hay encabezado: se ve igual que antes.
+ */
 export function SesionesView({
   patient,
-  sessions,
+  groups,
 }: {
   patient: PatientWithRelations;
-  sessions: PatientWithRelations["programs"][number]["sessions"];
+  groups: SessionGroup[];
 }) {
+  const grouped = groups.length > 1;
   return (
     <Card style={{ padding: 0, overflow: "hidden" }}>
       <div
@@ -31,13 +56,38 @@ export function SesionesView({
         <span>Notas</span>
         <span style={{ textAlign: "right" }}>Acción</span>
       </div>
-      {sessions.length === 0 ? (
+      {groups.length === 0 ? (
         <div style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
           Este paciente todavía no tiene sesiones. Creá un plan desde Resumen.
         </div>
       ) : (
-        sessions.map((s) => (
-          <SessionRow key={s.id} session={s} patientId={patient.id} />
+        groups.map((g) => (
+          <section key={g.id} aria-label={grouped ? `Sesiones de ${g.title}` : undefined}>
+            {grouped && (
+              <div
+                style={{
+                  padding: "10px 18px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "var(--navy-700)",
+                  background: "rgba(15,30,51,0.03)",
+                  borderBottom: "1px solid rgba(15,30,51,0.06)",
+                }}
+              >
+                <span>{g.title}</span>
+                <Tag tone={g.status === "ACTIVE" ? "lime" : "soft"}>{STATUS_LABEL[g.status]}</Tag>
+                <span style={{ marginLeft: "auto", fontWeight: 500, color: "var(--navy-500)" }}>
+                  {g.sessions.length} {g.sessions.length === 1 ? "sesión" : "sesiones"}
+                </span>
+              </div>
+            )}
+            {g.sessions.map((s) => (
+              <SessionRow key={s.id} session={s} patientId={patient.id} />
+            ))}
+          </section>
         ))
       )}
     </Card>
@@ -47,7 +97,7 @@ export function SesionesView({
 function SessionRow({
   session,
 }: {
-  session: PatientWithRelations["programs"][number]["sessions"][number];
+  session: SessionLite;
   patientId: string;
 }) {
   const completed = !!session.completedAt;
