@@ -12,7 +12,8 @@
   - E1: Secretaria (nivel "administrativo", `agenda.operateAll`, ola nueva P0.2);
   - E2: autorización de la OS (tabla `ProgramAuthorization`);
   - E3: portal ampliado e identidad multi-consultorio (`PatientChangeRequest`, `Patient.userId` único por consultorio, ola P4.0).
-- **ES1 (P0) ejecutada el 04-oct** en develop, sin migraciones: §8 con las enmiendas de abajo (§5, C2, C5, C8, S11e, P2-C1, V1-D18/V2/M13). **Pendiente:** commit de Martin y QA de staging ([QA.md §Planes P0](QA.md)). ES2a no arranca hasta que ese QA esté hecho. Cierres y hallazgos en AUDIT §Ronda 14.
+- **ES1 (P0) ejecutada el 04-oct** en develop, sin migraciones: §8 con las enmiendas de abajo (§5, C2, C5, C8, S11e, P2-C1, V1-D18/V2/M13). Commit `d7ac75f`. **Pendiente:** QA de staging ([QA.md §Planes P0](QA.md)). Cierres y hallazgos en AUDIT §Ronda 14.
+- **ES2a (P1) ejecutada el 04-oct** en develop: M1 `plans_booking_link` escrita, aplicada y verificada **solo en el Docker local** (§9). **Pendiente:** commit de Martin; ES2b arranca después. **C1 enmendado en P1.Z (F1):** los dos CHECK de pricing usan `IS NOT DISTINCT FROM` en vez de `=` (con `pricingMode` NULL, `=` da NULL y el CHECK dejaba pasar un precio sin modo); decisión del orquestador, avisada a Martin. El bloque SQL de §3 ya es idéntico al archivo (sha256 `7a0e2797…45cd`). Deploy, prechecks, P3009, down-script y post-checks: [MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md). Cierres y hallazgos en AUDIT §Ronda 15.
 - **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → ES2b → ES3 → ES4), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
 - **Una sola migración en todo Planes:** M1 `plans_booking_link`. Ahora suma 2 tablas con RLS y la relajación de `Patient_userId_key`, una excepción a "todo aditivo" que Martin aprobó el 03-oct.
 - **Abierto para Martin** (el Paso 0 no lo resuelve):
@@ -455,10 +456,10 @@ ALTER TABLE "TreatmentProgram"
   ADD CONSTRAINT "TreatmentProgram_serviceId_fkey"  FOREIGN KEY ("serviceId")  REFERENCES "Service"("id")  ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "TreatmentProgram_locationId_fkey" FOREIGN KEY ("locationId") REFERENCES "Location"("id") ON DELETE RESTRICT ON UPDATE CASCADE, -- null=principal; SET NULL movería el plan en silencio
   ADD CONSTRAINT "TreatmentProgram_templateId_fkey" FOREIGN KEY ("templateId") REFERENCES "PlanTemplate"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-  ADD CONSTRAINT "TreatmentProgram_pricing_check" CHECK (
+  ADD CONSTRAINT "TreatmentProgram_pricing_check" CHECK (   -- IS NOT DISTINCT FROM, no "=": con modo NULL, "=" da NULL (3VL), el disyunto queda NULL y el CHECK pasaría con precio. Sin modo = sin precio.
        ("pricingMode" IS NULL AND "pricePerSessionCents" IS NULL AND "totalPriceCents" IS NULL)
-    OR ("pricingMode" = 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
-    OR ("pricingMode" = 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL)),
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL)),
   ADD CONSTRAINT "TreatmentProgram_price_nonneg_check" CHECK (COALESCE("pricePerSessionCents",0) >= 0 AND COALESCE("totalPriceCents",0) >= 0),
   ADD CONSTRAINT "TreatmentProgram_duration_check" CHECK ("durationMin" IS NULL OR "durationMin" BETWEEN 15 AND 240), -- = zod de turnos (15..240) y BOOKING_LOOKBACK_MIN
   ADD CONSTRAINT "TreatmentProgram_schedule_check" CHECK ("schedule" IS NULL OR jsonb_typeof("schedule") = 'object');
@@ -521,10 +522,10 @@ ALTER TABLE "PlanTemplate"
   ADD COLUMN "schedule" JSONB, ADD COLUMN "pricingMode" "ProgramPricingMode", ADD COLUMN "pricePerSessionCents" INTEGER,
   ADD COLUMN "totalPriceCents" INTEGER, ADD COLUMN "notes" TEXT, ADD COLUMN "archivedAt" TIMESTAMP(3),
   ADD CONSTRAINT "PlanTemplate_serviceId_fkey" FOREIGN KEY ("serviceId") REFERENCES "Service"("id") ON DELETE SET NULL ON UPDATE CASCADE, -- SET NULL: deleteTenantDeep borra Service antes del cascade
-  ADD CONSTRAINT "PlanTemplate_pricing_check" CHECK (
+  ADD CONSTRAINT "PlanTemplate_pricing_check" CHECK (   -- IS NOT DISTINCT FROM, no "=": con modo NULL, "=" da NULL (3VL), el disyunto queda NULL y el CHECK pasaría con precio. Sin modo = sin precio.
        ("pricingMode" IS NULL AND "pricePerSessionCents" IS NULL AND "totalPriceCents" IS NULL)
-    OR ("pricingMode" = 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
-    OR ("pricingMode" = 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL)),
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL)),
   ADD CONSTRAINT "PlanTemplate_price_nonneg_check" CHECK (COALESCE("pricePerSessionCents",0) >= 0 AND COALESCE("totalPriceCents",0) >= 0),
   ADD CONSTRAINT "PlanTemplate_duration_check" CHECK ("durationMin" IS NULL OR "durationMin" BETWEEN 15 AND 240),
   ADD CONSTRAINT "PlanTemplate_schedule_check" CHECK ("schedule" IS NULL OR jsonb_typeof("schedule") = 'object');
@@ -536,7 +537,7 @@ ALTER TABLE "EvaScore" ADD COLUMN "note" TEXT, ADD COLUMN "sessionId" TEXT,
 CREATE INDEX "EvaScore_sessionId_idx" ON "EvaScore"("sessionId");   -- reemplaza el string ambiguo; las escrituras nuevas llenan ambos
 
 -- Identidad del portal (PD-14) y pedidos de cambio "Mis datos" (E3).
-CREATE UNIQUE INDEX "Patient_id_tenantId_key" ON "Patient"("id","tenantId");   -- destino de FK compuesta; SHARE lock, no bloquea lecturas
+CREATE UNIQUE INDEX "Patient_id_tenantId_key" ON "Patient"("id","tenantId");   -- destino de FK compuesta; el CREATE toma SHARE (bloquea escrituras, no lecturas), pero el DROP INDEX de abajo toma ACCESS EXCLUSIVE sobre Patient (bloquea también lecturas) hasta el COMMIT de M1
 -- EXCEPCIÓN aprobada por Martin (03-oct): relaja la unicidad global de userId a una por consultorio. Ver cabecera.
 CREATE UNIQUE INDEX "Patient_tenantId_userId_key" ON "Patient"("tenantId","userId");
 DROP INDEX "Patient_userId_key";
@@ -637,14 +638,15 @@ S10 lo prueba corriendo toda la integración con el cliente viejo sobre el schem
 
 **Rollback:**
 - El código viejo tolera M1, así que alcanza con el rollback del deploy en Vercel.
-- **El down-script** queda en el RUNBOOK §"Deploy de M1" y se usa solo con backup y decisión de Martin. Orden:
+- **El down-script** está escrito en [MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md) «Rollback» (probado en el Docker local dentro de una tx con ROLLBACK) y se usa solo con backup y decisión de Martin. Orden:
   1. `DROP TABLE "PatientChangeRequest"`; `DROP TABLE "ProgramAuthorization"` (arrastran sus policies e índices);
   2. `DROP TYPE "PatientChangeRequestStatus"`;
   3. recrear `Patient_userId_key` **solo si** `SELECT count(*) FROM (SELECT "userId" FROM "Patient" WHERE "userId" IS NOT NULL GROUP BY 1 HAVING count(*)>1) x` = 0 (si hay repetidos, frenar: hay pacientes vinculados en más de un consultorio); después `DROP INDEX "Patient_tenantId_userId_key"` y `DROP INDEX "Patient_id_tenantId_key"`;
   4. el resto en orden inverso al SQL: `EvaScore`, `PlanTemplate`, `Booking` (constraints, índices y columnas), `Session`, `TreatmentProgram`, `Service`; al final `DROP TYPE "ProgramPricingMode"` y `DROP TYPE "Discipline"`. Los tags DISCIPLINE se dejan.
-- **P3009:** si el `lock_timeout` aborta el build, Martin corre `npx dotenv -e .env.prod.local -- npx prisma migrate resolve --rolled-back <ts>_plans_booking_link` antes de reintentar.
+- Después del down-script, M1 se marca revertida en `_prisma_migrations` (`migrate resolve --rolled-back`, o el UPDATE de `rolled_back_at` si Prisma se niega; RUNBOOK §2.4).
+- **P3009:** ante **cualquier** fallo de la tx (`lock_timeout`, duplicado `(programId, index)`, rol sin BYPASSRLS por la guarda del backfill, id `tag_discipline_*` usado con otro slug), Martin corre `npx dotenv -e .env.prod.local -- npx prisma migrate resolve --rolled-back 20261004120000_plans_booking_link` antes de reintentar.
 
-**Drift aceptado** (la lista que P1-R espera ver en `migrate diff`, y nada más):
+**Drift aceptado.** Medido en P1.Z: `migrate diff` muestra **exactamente 3 líneas** (`DROP CONSTRAINT` de `Booking_plan_patient_fkey`, `Booking_plan_tenant_fkey` y `Booking_session_program_fkey`). Prisma 5 no ve el resto de la lista (CHECKs, predicados de los parciales, policies), que igual existe solo en el SQL y no se borra. Objetos fuera del schema:
 - únicos parciales: `Session_programId_index_live_key`, `Booking_session_active_key`, `ProgramAuthorization_programId_current_key`, `PatientChangeRequest_patient_pending_key`;
 - FKs compuestas: `Booking_plan_tenant_fkey`, `Booking_plan_patient_fkey`, `Booking_session_program_fkey` (y las de las tablas nuevas solo si Prisma no las expresa igual);
 - todos los CHECK: `TreatmentProgram_*_check`, `Session_priceCents_check`, `Booking_plan_link_check`, `Booking_plan_patient_check`, `Booking_priced_by_plan_check`, `PlanTemplate_*_check`, `ProgramAuthorization_*_check`, `PatientChangeRequest_*_check`;
@@ -1425,13 +1427,20 @@ git add -A && git commit -m "Planes P0 (ES1): sin migración — fugas E0 cerrad
 - con "Consultorio común", la Secretaria ve el perfil administrativo, sin pestañas clínicas;
 - "Usar como diagnóstico" no aparece para la Secretaria.
 
-**Deploy:** ninguno (decisión del 04-oct: nada se despliega hasta cerrar B). Ver "Abierto para Martin" (1) sobre las fugas E0. ES2a no arranca hasta que el QA de ES1 esté hecho.
+**Deploy:** ninguno (decisión del 04-oct: nada se despliega hasta cerrar B). Ver "Abierto para Martin" (1) sobre las fugas E0. ES2a se ejecutó a continuación (04-oct, §9).
 
 **Durante ES1**, Martin corre los prechecks (0)-(17), que son de solo lectura, y, si (2) > 0, el dedupe en dry-run. Si (15) > 0, reasigna esos pacientes antes del deploy final.
 
 ---
 
 ## 9. ES2a · P1 (= B1): M1 sola · corrida corta · **1 migración**
+
+> **Estado (04-oct): ejecutada en develop, pendiente commit de Martin.** S10a/b/c + P1.Z hechos. M1 aplicada solo en el
+> Docker local. Enmiendas: F1 (C1, CHECK de pricing con `IS NOT DISTINCT FROM`) y F2 (el dedupe ignora sesiones
+> archivadas si existe `archivedAt`); el comentario del `DROP INDEX` en el SQL se corrigió (ACCESS EXCLUSIVE sobre
+> Patient, también lecturas, hasta el COMMIT). Tests: `tests/helpers/plan-factory.ts`, `plans-m1-schema`,
+> `plans-m1-backfill`, `plans-m1-new-tables`, bloque M1 de `rls-isolation` y `plans-dedupe` convertido. Gate y
+> evidencia: AUDIT §Ronda 15. RUNBOOK §2.4 cubre el deploy.
 
 **Prerrequisitos:**
 - commit de ES1 = `git log -1`, working tree limpio;
@@ -1473,7 +1482,7 @@ git add -A && git commit -m "Planes P0 (ES1): sin migración — fugas E0 cerrad
 1. **Revisor de solo lectura (P1-R):**
    - SQL contra C1 literal;
    - nombres `map:` del schema;
-   - `npx dotenv -e .env.local -- npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script`: solo debe mostrar el drift aceptado de §3 (4 parciales, FKs compuestas, CHECKs y las 2 policies);
+   - `npx dotenv -e .env.local -- npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script`: solo debe mostrar el drift aceptado de §3 (en la práctica, las 3 FKs compuestas de Booking);
    - `npm run guard:isolation` reconoce las 2 tablas nuevas;
    - guard del backfill, `lock_timeout`, down-script (con la recreación condicional de `Patient_userId_key`) y RUNBOOK.
 2. Fixer.

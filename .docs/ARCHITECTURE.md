@@ -146,10 +146,36 @@ through `dbDateToDayKey`/`dayKeyToDbDate` (`lib/availability/day.ts`).
 (per-turno override), `insurerPaidAt` (OS reimbursement confirmation),
 `seriesId` (groups a multi-turno batch), `title` / `description` (per-turno
 mini-diagnosis, defaulted from `Patient.diagnosisTitle` / `diagnosisNote`),
-`idempotencyKey`, `updatedAt` (optimistic-concurrency token). Bookings have
-**no FK** to `Session`/`TreatmentProgram` — they live in parallel. ⚠️ **Superseded
-by ADR-001 (accepted, amended 03-oct-2026; pending M1)** — see §Architecture decisions: plans must
-generate their bookings, so the FK is coming in Bloque B.
+`idempotencyKey`, `updatedAt` (optimistic-concurrency token). Since M1
+(`plans_booking_link`, ES2a, 04-oct-2026; local only until the end-of-B deploy)
+a booking can belong to a plan: `programId` + `sessionId` (both or neither),
+`pricedByPlan`. Without `programId` it is a standalone ("fuera de plan")
+booking. No action writes the link yet: ES2b does (ADR-001).
+
+**Plans after M1 (summary; SQL in [PLANES.md](PLANES.md) §3).**
+- `TreatmentProgram`: `discipline` (KINESIOLOGY/OSTEOPATHY), responsible
+  `practitionerId` (backfilled from the first session), `serviceId`,
+  `locationId` (null = main), `templateId`, `durationMin` 15..240, `schedule`
+  (JSON object; clear it with `Prisma.DbNull`, never `JsonNull`),
+  `pricingMode` PER_SESSION | PACKAGE with exactly one price (CHECK with
+  `IS NOT DISTINCT FROM`), `idempotencyKey` unique **per tenant**, `updatedAt`,
+  `archivedAt`.
+- `Session`: `title`, `priceCents`, `archivedAt`, `updatedAt`; `index` is unique
+  among live sessions only (`Session_programId_index_live_key`) and archiving
+  does not renumber.
+- `Booking`: one active booking per session (`Booking_session_active_key`,
+  excludes CANCELLED and NO_SHOW); composite FKs force same tenant, same
+  patient and session-of-that-plan; a guest booking can't be a plan booking.
+- Everything linked is `ON DELETE RESTRICT` (SQLSTATE 23503 / P2003): plans
+  and sessions are archived, not deleted.
+- New tenant tables with RLS: `ProgramAuthorization` (OS authorization with
+  history, one current per plan) and `PatientChangeRequest` (portal "Mis datos"
+  requests, one PENDING per patient).
+- `Patient.userId` is unique **per tenant** (`Patient_tenantId_userId_key`);
+  `UserProfile.patients` is 1:n (a portal account with records in N clinics).
+- Objects Prisma can't express (partial uniques, composite FKs, CHECKs,
+  policies) live only in the SQL; `migrate diff` shows exactly the 3 composite
+  FKs of Booking as accepted drift.
 
 - **Single turno**: `createBooking` (conflict/sobreturno UX + next-free-slot;
   since B-pre also soft warnings `blocked` / `outOfHours`, forced with
@@ -529,7 +555,7 @@ platform tier**:
 
 ## Architecture decisions (ADR)
 
-### ADR-001 — Booking ↔ plan/session FK (status: ACCEPTED, amended — pending M1; 2026-09-23, amended 03-oct-2026)
+### ADR-001 — Booking ↔ plan/session FK (status: ACCEPTED, amended; M1 written 04-oct-2026; 2026-09-23, amended 03-oct-2026)
 
 - **Context.** The owner requires that *every plan generates its bookings* and
   that, for the same patient, in-plan vs out-of-plan bookings are
@@ -559,8 +585,13 @@ platform tier**:
   `idempotencyKey` is unique per tenant. The same migration (M1,
   `plans_booking_link`) adds `ProgramAuthorization` and `PatientChangeRequest`
   (both with RLS) and relaxes `Patient_userId_key` to one per tenant (owner
-  approved exception to "additive only"). Status moves to ACCEPTED (no
-  "amended — pending") when M1 is written and verified (ES2a).
+  approved exception to "additive only").
+- **M1 written and verified (ES2a, 04-oct-2026):**
+  `prisma/migrations/20261004120000_plans_booking_link`, applied to local
+  Docker only; staging/prod go in the single end-of-B deploy
+  (MIGRACIONES-RUNBOOK §2.4). Review amendment F1: the pricing CHECKs use
+  `IS NOT DISTINCT FROM` (with `=`, a NULL mode made the CHECK pass with a
+  price). The link columns have no writers until ES2b.
 
 ### ADR-002 — Sentry on server/edge only, no client SDK (status: ACCEPTED, 30-sep-2026)
 

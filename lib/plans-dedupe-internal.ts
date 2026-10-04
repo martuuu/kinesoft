@@ -26,6 +26,12 @@ import { planSessionIndexDedupe, type SessionIndexDedupePlan, type SessionIndexR
  *    sesión de la app no puede meter un `max+1` entre la lectura y el UPDATE.
  *    Las lecturas de la app siguen. Si no consigue el lock, aborta sin tocar
  *    nada y se reintenta.
+ *  - Post-M1 (P1.Z): M1 agrega `Session.archivedAt` y el único es PARCIAL
+ *    (`WHERE "archivedAt" IS NULL`). Una archivada puede repetir el index de
+ *    una viva legítimamente (archivar no renumera), así que, si la columna
+ *    existe, solo se agrupan y se mueven sesiones vivas. Se detecta con
+ *    `information_schema` DENTRO de la misma tx (no con el cliente generado):
+ *    pre-M1 la columna no existe y el comportamiento sigue idéntico.
  *  - El UPDATE lleva `index = from` y `programId` en el WHERE y se exige que
  *    afecte exactamente las filas planificadas; al final se re-verifica que no
  *    quede ningún repetido en el alcance. Cualquier desvío → rollback.
@@ -62,25 +68,44 @@ function tenantFilter(tenantIds: DedupeTenantScope): Prisma.Sql {
   return Prisma.sql`AND p."tenantId" = ANY(${[...tenantIds]}::text[])`;
 }
 
-/** Todas las sesiones de los programas que tienen al menos un `(programId, index)` repetido. */
-async function loadAffectedRows(tx: Tx, tenantIds: DedupeTenantScope): Promise<SessionIndexRow[]> {
+/**
+ * `true` si `Session.archivedAt` existe (M1 aplicada). Se consulta en la tx del
+ * dedupe para que la decisión y la lectura vean el mismo schema.
+ */
+async function sessionHasArchivedAt(tx: Tx): Promise<boolean> {
+  const [r] = await tx.$queryRaw<{ n: bigint }[]>`
+    SELECT count(*)::bigint AS n FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'Session' AND column_name = 'archivedAt'`;
+  return Number(r?.n ?? 0) > 0;
+}
+
+/** Filtro "solo vivas" para el alias dado; vacío pre-M1 (la columna no existe). */
+function liveFilter(live: boolean, alias: "s" | "d"): Prisma.Sql {
+  if (!live) return Prisma.empty;
+  return alias === "s" ? Prisma.sql`AND s."archivedAt" IS NULL` : Prisma.sql`AND d."archivedAt" IS NULL`;
+}
+
+/** Todas las sesiones (vivas, post-M1) de los programas que tienen al menos un `(programId, index)` repetido. */
+async function loadAffectedRows(tx: Tx, tenantIds: DedupeTenantScope, live: boolean): Promise<SessionIndexRow[]> {
   return tx.$queryRaw<SessionIndexRow[]>`
     SELECT s."id" AS "id", s."programId" AS "programId", p."tenantId" AS "tenantId", s."index" AS "index"
     FROM "Session" s
     JOIN "TreatmentProgram" p ON p."id" = s."programId"
     WHERE s."programId" IN (
-      SELECT d."programId" FROM "Session" d GROUP BY d."programId", d."index" HAVING count(*) > 1
+      SELECT d."programId" FROM "Session" d WHERE TRUE ${liveFilter(live, "d")}
+      GROUP BY d."programId", d."index" HAVING count(*) > 1
     )
+    ${liveFilter(live, "s")}
     ${tenantFilter(tenantIds)}`;
 }
 
-async function countDuplicateGroups(tx: Tx, tenantIds: DedupeTenantScope): Promise<number> {
+async function countDuplicateGroups(tx: Tx, tenantIds: DedupeTenantScope, live: boolean): Promise<number> {
   const [r] = await tx.$queryRaw<{ n: bigint }[]>`
     SELECT count(*)::bigint AS n FROM (
       SELECT s."programId", s."index"
       FROM "Session" s
       JOIN "TreatmentProgram" p ON p."id" = s."programId"
-      WHERE TRUE ${tenantFilter(tenantIds)}
+      WHERE TRUE ${liveFilter(live, "s")} ${tenantFilter(tenantIds)}
       GROUP BY s."programId", s."index"
       HAVING count(*) > 1
     ) x`;
@@ -105,7 +130,8 @@ export async function runSessionIndexDedupe(opts: {
         await tx.$executeRaw`LOCK TABLE "Session" IN SHARE ROW EXCLUSIVE MODE`;
       }
 
-      const plan = planSessionIndexDedupe(await loadAffectedRows(tx, tenantIds));
+      const live = await sessionHasArchivedAt(tx);
+      const plan = planSessionIndexDedupe(await loadAffectedRows(tx, tenantIds, live));
       if (!apply || plan.moves.length === 0) return { applied: apply, plan, updated: 0 };
 
       const ids = plan.moves.map((m) => m.sessionId);
@@ -123,7 +149,7 @@ export async function runSessionIndexDedupe(opts: {
           `[plans-dedupe] se esperaban ${plan.moves.length} filas actualizadas y fueron ${updated}. Rollback: no se escribió nada.`,
         );
       }
-      const left = await countDuplicateGroups(tx, tenantIds);
+      const left = await countDuplicateGroups(tx, tenantIds, live);
       if (left !== 0) {
         throw new Error(`[plans-dedupe] después del UPDATE quedan ${left} grupos repetidos. Rollback: no se escribió nada.`);
       }

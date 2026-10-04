@@ -27,7 +27,7 @@
 | Bloque | Qué | Estado |
 |---|---|---|
 | **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅ código completo** (01-oct, Ronda 13; pendiente commit/deploy/QA del dueño + import del catálogo) · **Planes: planning firmado (03-oct)**, ejecución wave a wave ES1 → ES2a → ES2b → ES3 → ES4 (**ES1 ✅ ejecutada el 04-oct**, pendiente commit y QA); deploy, migración en prod, Playwright y suite completa al final del bloque B (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅ código completo** (01-oct, Ronda 13; pendiente commit/deploy/QA del dueño + import del catálogo) · **Planes: planning firmado (03-oct)**, ejecución wave a wave ES1 → ES2a → ES2b → ES3 → ES4 (**ES1 ✅** `d7ac75f`, pendiente QA de staging; **ES2a ✅ ejecutada el 04-oct** con M1 solo en local, pendiente commit; sigue ES2b); deploy, migración en prod, Playwright y suite completa al final del bloque B (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
 | **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
@@ -80,7 +80,7 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **B4** | proyección liviana + recepción ∥ vista Por profesional ∥ integración de la agenda ∥ candado por día ∥ Recepción ∥ perf multi-profesional | ✅ |
 | **B5** | modal (Turno / Varias sesiones / Bloquear horario, slot picker, telemedicina) ∥ onboarding (Sede, Tu horario) ∥ turnero (sede, cobertura, primer turno) | ✅ |
 | **Cierre** | integrador → revisor → fixer → docs → gate | ✅ código (fixes de la revisión en AUDIT §Ronda 13) |
-| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**, ejecución wave a wave: **ES1 ✅ (04-oct, sin migración; pendiente commit de Martin y QA de staging)** → ES2a (M1) → ES2b → ES3 → ES4. Deploy, migración en prod, Playwright y suite completa **al final del bloque B** (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) |
+| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**, ejecución wave a wave: **ES1 ✅ (04-oct, sin migración, `d7ac75f`; pendiente QA de staging)** → **ES2a ✅ (04-oct, M1 `plans_booking_link` aplicada solo en local; pendiente commit)** → ES2b → ES3 → ES4. Deploy, migración en prod, Playwright y suite completa **al final del bloque B** (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) |
 
 > ⚠️ **IDs que chocan:** las olas internas de B-pre se llamaron B1-B5 (y así las citan los comentarios del código:
 > "B1.7", "B3.1", "B4.6"…); no son las olas de Planes. Para no chocar, **las olas de Planes se llaman P0-P4** (= B0-B4
@@ -106,9 +106,14 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
    entre corridas; **nada se despliega hasta cerrar B** (04-oct): el deploy de todo B (B-pre + M1 + Planes) va al final.
    - **ES1 ✅ ejecutada (04-oct):** fugas E0 cerradas en código, Secretaria (nivel `admin`, `agenda.operateAll`, alta
      de paciente a cargo del profesional), fixes de planes y cimientos sin callers. Sin migraciones. Evidencia en
-     [AUDIT.md §Ronda 14](AUDIT.md); QA en [QA.md §Planes P0](QA.md). **Pendiente:** commit de Martin + QA de staging.
+     [AUDIT.md §Ronda 14](AUDIT.md); QA en [QA.md §Planes P0](QA.md). Commit `d7ac75f`. **Pendiente:** QA de staging.
      Las fugas E0 siguen vivas en prod hasta el deploy (o hotfix, decisión de Martin: PLANES.md "Abierto para Martin").
-   - **Siguiente: ES2a (M1 sola)**, recién después del QA de ES1.
+   - **ES2a ✅ ejecutada (04-oct):** **1 migración nueva**, M1 `plans_booking_link` (FK turno↔plan/sesión, 2 tablas con
+     RLS, `Patient.userId` único por consultorio), aplicada y verificada solo en el Docker local. Enmienda F1 de C1
+     (CHECK de pricing con `IS NOT DISTINCT FROM`). Evidencia en [AUDIT.md §Ronda 15](AUDIT.md); deploy en
+     [MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md) (va en el deploy único del cierre de B). **Pendiente:** commit
+     de Martin.
+   - **Siguiente: ES2b** (core de turnos + dominio server, sin migración), después del commit de ES2a.
 3. **C1 perf** (en paralelo cuando haya lugar): payload de /agenda (~1 MB/semana), batch y `createBooking` en una
    tx, `weekOccupancy`, bundles sobre presupuesto, harness de EXPLAIN con literales (PERF.md §B4.6).
 4. Contract posterior a B-pre (migración propia, después de que B-pre esté en prod): `Service.practitionerId`,
@@ -500,9 +505,10 @@ al kine; los profesionales no pagan.*
 
 ### Ola 2.5 — Integridad restante + portal base · ⏳ pendiente
 
-- 🔀 **`soft-delete-wholesale`** *(migración)* — **Lo cubre Planes M1** (`plans_booking_link`, P1-S10): `archivedAt`
-  en TreatmentProgram y Session, único parcial `(programId,index)` sobre las sesiones vivas y "nada vinculado se borra en
-  duro" (I7). Cierra `session-index-no-unique-constraint` y los residuales de `program-session-hard-delete`.
+- 🔀 **`soft-delete-wholesale`** *(migración)* — **Lo cubre Planes M1** (`plans_booking_link`, P1-S10, escrita en ES2a):
+  `archivedAt` en TreatmentProgram y Session, único parcial `(programId,index)` sobre las sesiones vivas (cerró
+  `session-index-no-unique-constraint`) y RESTRICT en todo lo vinculado. Falta que las actions archiven en vez de borrar
+  (I7, P2-S15: `hard-delete-plan-session`).
   `archivedAt` en Booking **no** entra (los turnos se cancelan, no se borran). Ver [PLANES.md](PLANES.md) §3.
 - ⏳ **`copago-snapshot`** — *(decisión de producto)* persistir `copagoCents` al crear/completar el
   turno para que reemplazar cobertura no mute importes históricos. Cierra

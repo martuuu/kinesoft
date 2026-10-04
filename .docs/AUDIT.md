@@ -644,6 +644,38 @@ los cimientos (motor y plata puros, loader por días, locks, `auditInTx`, dedupe
   Atendido" no reabre una sesión a medida (B, ES2b/S12b); wizard mobile sin días (S23); tooltip de `edit-toggles`
   (P3); `--app-bg` del invite (C); `lockCapacityScope` → `lockCapacityMany` (C1).
 
+**Ronda 15 — Planes P1 (ES2a): migración M1 `plans_booking_link` (04-oct-2026):** ejecutada en develop según
+[PLANES.md §9](PLANES.md). **1 migración nueva**, aplicada y verificada **solo en el Docker local**; staging y prod
+van en el deploy único del cierre de B ([MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md)). Pendiente: commit de
+Martin. sha256 de `migration.sql` = `7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd`; el bloque SQL de
+PLANES §3 es idéntico al archivo.
+
+- 🟢 **M1 escrita (S10a/b/c):** FK turno↔plan/sesión + 3 FKs compuestas (la red bajo BYPASSRLS), 4 únicos parciales
+  (`Session_programId_index_live_key`, `Booking_session_active_key`, `ProgramAuthorization_programId_current_key`,
+  `PatientChangeRequest_patient_pending_key`), precio por sesión/paquete, disciplina, responsable (backfill con guarda
+  sin-BYPASSRLS), `archivedAt`, idempotencia por tenant, tags DISCIPLINE, `ProgramAuthorization` y `PatientChangeRequest`
+  con RLS ENABLE + FORCE + policy (guard OK), `Patient_userId_key` → `Patient_tenantId_userId_key` (DROP INDEX aprobado
+  el 03-oct). Schema con `map:` a los nombres del SQL; `UserProfile.patients` 1:n. ADR-001 → ACCEPTED.
+- 🟢 **Revisión P1.Z (cerrados por el fixer):**
+  - **F1 `pricing-check-null-mode`:** `TreatmentProgram_pricing_check` y `PlanTemplate_pricing_check` usaban `=`; con
+    `pricingMode` NULL el disyunto da NULL (lógica de 3 valores) y el CHECK aceptaba un precio sin modo. Ahora `IS NOT
+    DISTINCT FROM`. **Enmienda de C1** (decisión del orquestador, avisada a Martin). Una base que haya aplicado la
+    versión vieja se arregla con la nota de RUNBOOK §2.4.
+  - **F2 `dedupe-agrupa-archivadas`:** el dedupe agrupaba sesiones archivadas con vivas. Ahora filtra `"archivedAt" IS
+    NULL` si la columna existe (`lib/plans-dedupe-internal.ts:72-85`); post-M1 el dry-run da 0 y sigue siendo una
+    herramienta pre-M1.
+  - Comentario del SQL corregido: el `DROP INDEX` toma ACCESS EXCLUSIVE sobre Patient (también lecturas) hasta el
+    COMMIT. El RUNBOOK pide ventana sin uso para todo M1, no solo para el dedupe.
+- **Notas de la revisión** (sin cambio de código):
+  - `Booking_patientId_fkey` es `ON DELETE SET NULL` desde `init` (`prisma/migrations/20260518134107_init/migration.sql:614`);
+    si un día se borrara un paciente con turno de plan, el SET NULL violaría `Booking_plan_patient_check`. Hoy no pasa
+    porque `TreatmentProgram→Patient` es RESTRICT y frena antes. Tenerlo en cuenta si se toca el borrado de pacientes.
+  - Un RESTRICT de FK llega como SQLSTATE **23503** (`foreign_key_violation`), no 23001: los tests y los mapeos de
+    error de ES2b tienen que esperar 23503 / P2003.
+- **Gate de ES2a (04-oct, en solitario sobre el Docker):** M1 aplicada en local con `migrate deploy`, `migrate status` al día (28 migraciones), sha256 `7a0e2797…45cd` = checksum, SQL idéntico a PLANES §3; `migrate diff` = solo las 3 FKs compuestas de Booking (drift aceptado); integración con el cliente VIEJO sobre el schema nuevo en verde (568+5 skip app, 552+21 skip owner); `tsc` 0 (app y scripts); unit 1451/1451 UTC y AR; guard OK (30 modelos con tenantId); `next build` OK; `perf:bundle` sin excesos; integración completa 632+19 skip (`kinesoft_app`) y 625+26 skip (owner); perf + `compare.ts` sin regresiones; 0 `it.fails` pendientes.
+- **Hallazgos nuevos para ES2b** (bloque B; filas en §2 "Hallazgos del planning de Planes"):
+  `delete-service-sin-contar-planes` y `hard-delete-plan-session` ahora con la causa concreta post-M1 (P2003 → 500).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -1005,7 +1037,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | batch-create-overlap-race-and-no-rls | media | lib/bookings.ts:734 | 🟢 | idempotencia Ronda 1 + parte RLS Ronda 4 |
 | booking-paid-toggles-no-optimistic-lock | baja | lib/bookings.ts:1191,1210 | 🟢 | A2a-S06 (30-sep) — lock atómico con `updatedAt` en el WHERE; devuelven el `updatedAt` nuevo |
 | mp-webhook-idempotency-check-outside-tx | baja | lib/mercadopago.ts:193 | 🟢 | payment-amount-anclado (Ronda 2) |
-| session-index-no-unique-constraint | baja | schema.prisma:715 | 🔴 | Planes P1-S10 (M1: único parcial `Session_programId_index_live_key`; dedupe previo P0-S02x). Absorbe `soft-delete-wholesale` |
+| session-index-no-unique-constraint | baja | prisma/migrations/20261004120000_plans_booking_link | 🟢 | Planes P1-S10 (ES2a, Ronda 15) — único parcial `Session_programId_index_live_key` (`WHERE "archivedAt" IS NULL`), test en `plans-m1-schema.test.ts`; dedupe previo P0-S02x para prod. Absorbe `soft-delete-wholesale` (el "archivar en vez de borrar" de las actions es P2-S15) |
 | program-session-hard-delete | media | lib/patients.ts:1316 | 🟢 | patients-integridad — gate de rol (Ronda 2) |
 | session-totalsessions-read-modify-write | baja | lib/patients.ts:1347 | 🟢 | patients-integridad (Ronda 2) |
 | retroactive-copago-on-coverage-replace | media | lib/patients.ts:1091 | 🔴 | Planes P2-S12 (Q8: congelar el copago al cobrar) = **parcial**; el resto (impagos pasados, `insurerPaidAt`) → C0. A2a-S08 cortó la parte de pérdida: misma OS actualiza en el lugar y el copago propio solo se borra con `resetCopago` confirmado |
@@ -1165,7 +1197,7 @@ Martin decida un hotfix (PLANES.md, "Abierto para Martin"). Las líneas de 🟢 
 | listbookingsinrange-rpc-sin-clinical | media | A | lib/bookings.ts:663,727,744-777 | 🟢 | P0-S07k — `bookingFieldAccess` + `patientCondition` solo con `clinical.read` y full; test `bookings-range-clinical.test.ts` (borrarla sigue en C1) |
 | secretaria-autoasigna-pacientes | alta | A | lib/patients.ts:757-857 | 🟢 | P0-S07sp — `createPatient(raw, {assignTo})` al profesional del turno, validado en la tx. Prod: precheck (15) antes del deploy |
 | secretaria-ve-hc-con-shared | alta | A | lib/visibility.ts:138,153-155,200,249 · lib/patients.ts:332-402,1026-1036 · booking-drawer/index.tsx:163 · patient-profile.tsx:356 | 🟢 | P0-S02p (nivel `admin`) + P0-S07sp (proyección `admin`, `setPatientDiagnosis` con `canWriteClinical`) + P0-S07u (drawer; "Usar como diagnóstico" ya no borra) + P0-S07v (perfil) |
-| portal-userid-unique-500 | media | B | prisma/schema.prisma:178 · app/auth/callback/route.ts:69-83 | 🔴 | P1-S10 (índice por consultorio, DROP INDEX aprobado) + P4-S24a (callback atrapa P2002) |
+| portal-userid-unique-500 | media | B | prisma/schema.prisma (Patient) · app/auth/callback/route.ts:69-83 | 🟡 | **Índice listo en P1-S10** (ES2a): `Patient_tenantId_userId_key` reemplaza al global, test en `plans-m1-new-tables.test.ts` (mismo `userId` en 2 tenants pasa, en el mismo da P2002). Se cierra con P4-S24a (el flujo del callback y el P2002 del mismo consultorio) |
 | plan-creation-sin-gate-basic | alta | B | lib/programs.ts:164-187 | 🟢 | P0-S02a — `createProgram` (movida a `lib/programs.ts` por P0-Cs) con `hcAccessError` en la tx, zod `ProgramCreate` 1..60 y día AR; S02d/S02t en sus puertas |
 | diagnosis-ejercicios-y-condicion-sin-gate | alta | B | lib/diagnosis.ts:208-280 | 🟢 | P0-S02d — gate full en la tx, ejercicios `assignable`, condición global o del tenant |
 | apply-plan-template-null-sets-reps | media | B | lib/plan-templates.ts:172-224 | 🟢 | P0-S02t — dosis `?? 3/12`, gate full + `TEMPLATES_PLANS`, `deletePlanTemplate` solo autor o admin (`:110-126`) |
@@ -1178,8 +1210,8 @@ Martin decida un hotfix (PLANES.md, "Abierto para Martin"). Las líneas de 🟢 
 | ics-ignora-clinical-read | media | B | lib/bookings-export-internal.ts:68-84 | 🟢 | P0-S02p — detalle solo con `bookingFieldAccess` (full **y** `clinical.read`); test `ics-export.test.ts` |
 | plan-dates-utc-host | media | B | diagnostico-wizard.tsx:60 · assign-plan-modal.tsx:103 · plan-template-apply.tsx:10 · lib/plan-form-defaults.ts:32 | 🟢 | P0-S02u-diag + P0-S02u-plan — hoy AR con `toARDateKey` (`plan-view.tsx:346` no era bug). Absorbe `plan-startdate-utc-midnight` |
 | updateProgram-desincroniza-total | alta | B | lib/programs.ts:222 | 🔴 | P2-S15 — `updateProgram` solo título y notas, con CAS (en ES1 solo pasó a zod + una tx) |
-| hard-delete-plan-session | media | B | lib/programs.ts (`deleteSession`) | 🔴 | P2-S15 — archivar |
-| delete-service-sin-contar-planes | media | B | lib/services.ts (`deleteService`) | 🔴 | P2-S13 |
+| hard-delete-plan-session | media | B | lib/programs.ts:330 (`deleteProgram`) · :366 (`deleteSession`) | 🔴 | P2-S15 — archivar. **Post-M1 (ES2a):** borrar un plan o una sesión con turnos vinculados o con `ProgramAuthorization` da P2003 (RESTRICT, SQLSTATE 23503) → 500; hasta S15, mapear el error o archivar |
+| delete-service-sin-contar-planes | media | B | lib/services.ts:289-302 (`deleteService`) | 🔴 | P2-S13 — cuenta solo `bookings`; con `TreatmentProgram.serviceId` RESTRICT (M1) un servicio usado por un plan da P2003 → 500. Contar también `programs` (las plantillas son SET NULL) |
 | ensureTag-kind-libre | media | B | lib/exercises.ts:207-221 | 🔴 | P2-S13x |
 | reception-p2002-500 | media | B | lib/bookings.ts (`markReceptionAction`) | 🔴 | P2-S12 |
 | upsert-holder-pisa-turno-de-plan | alta | B | lib/bookings.ts (`createBooking`, upsert del holder) | 🔴 | P2-S12 |
@@ -1218,6 +1250,14 @@ E0/E1): 0 fugas nuevas; los H-b son preexistentes.
 | edit-toggles-tooltip-secretaria | baja | B | components/agenda/booking-drawer/edit-toggles.tsx:67 | 🔴 | P3 (o integrador) — "Editar duración + notas del turno" no aplica a la Secretaria |
 | invite-app-bg-token | baja | C | app/invite/[token]/page.tsx:67 | 🔴 | C — `var(--app-bg, …)`: reemplazar por el fallback literal cuando se toque |
 | time-blocks-lockcapacityscope | baja | C1 | lib/time-blocks.ts:152,340 | 🔴 | C1 perf — pasar `lockCapacityScope` a `lockCapacityMany` (1 sentencia) |
+
+**Hallazgos de ES2a (P1.Z)** (Ronda 15):
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre |
+|---|---|---|---|---|---|
+| F1 pricing-check-null-mode | media | B | M1: `TreatmentProgram_pricing_check` · `PlanTemplate_pricing_check` | 🟢 | cerrado en P1.Z (fixer) — `=` → `IS NOT DISTINCT FROM`: con modo NULL el CHECK aceptaba precio (3VL). Enmienda de C1, avisada a Martin |
+| F2 dedupe-agrupa-archivadas | baja | B | lib/plans-dedupe-internal.ts:72-85 | 🟢 | cerrado en P1.Z (fixer) — filtra `"archivedAt" IS NULL` si la columna existe; test "archivada + viva = 0" en `plans-dedupe.test.ts` |
+| booking-patient-setnull-vs-plan-check | baja | B | init `Booking_patientId_fkey` (SET NULL) · M1 `Booking_plan_patient_check` | 🔴 | nota — latente: hoy lo frena `TreatmentProgram→Patient` RESTRICT. Revisar si se cambia el borrado de pacientes |
 
 **Diferidos del planning de Planes** (sin fila propia hasta que se planifique su bloque):
 - **D:** prepago o seña con MP (D6); cargo por ausencia; pagar online desde el portal.

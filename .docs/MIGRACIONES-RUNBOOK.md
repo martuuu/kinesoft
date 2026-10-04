@@ -57,6 +57,9 @@ npx dotenv -e .env.local -- npx prisma migrate status   # → "Database schema i
 (aditiva, con el porqué en la cabecera), editar `schema.prisma` en paralelo, y aplicarla con el paso 1.
 Verificar objeto por objeto (columnas, índices, policies) y correr `npm run guard:isolation`.
 
+**No correr `npx prisma format` en una sesión:** reformatea **todo** `schema.prisma` (alineación de columnas de
+cada modelo) y el diff tapa el cambio real; se vio en ES2a. Se edita a mano solo el bloque que toca la sesión.
+
 **Resetear la base local** (destructivo, solo el dueño; el agente no lo corre):
 
 ```bash
@@ -72,7 +75,9 @@ DATABASE_URL="postgresql://kinesoft:kinesoft@localhost:5433/kinesoft?schema=publ
 ## 2. Producción (Supabase + Vercel)
 
 > Desde A0b **solo el deploy de Production migra** (`scripts/vercel-build.mjs`); los Preview no.
-> Las migraciones son aditivas, así que el código viejo sigue andando si se aplican antes del deploy.
+> Las migraciones son aditivas, así que el código viejo sigue andando si se aplican antes del deploy. Única
+> excepción aprobada: M1 `plans_booking_link` dropea `Patient_userId_key` (relaja la unicidad, el código viejo lo
+> tolera; §2.4).
 
 ### Paso a paso (para cada bloque con migraciones)
 
@@ -131,6 +136,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 10 | `20260930120000_tenant_onboarding` | `Tenant.onboardingCompletedAt/phone/whatsapp/publicEmail` + backfill | A3c — **ver §2.1** |
 | 11 | `20260930200000_catalog_global` | catálogo global + punteros nullable + RLS de solo lectura | B-pre — **ver §2.2** |
 | 12 | `20261001090000_agenda_foundations` | sedes, franjas, excepciones, bloqueos, PS/PP, Booking expand + **backfill** | B-pre — **ver §2.2** |
+| 13 | `20261004120000_plans_booking_link` | M1 de Planes: FK turno↔plan/sesión, 2 tablas con RLS, `Patient_userId_key` por consultorio + **backfill** | ES2a — **ver §2.3 y §2.4** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
@@ -455,10 +461,10 @@ bloqueos) quedan y se reusan al volver a desplegar.
 
 ## 2.3 Planes: preparación del deploy de M1 (`plans_booking_link`) — desde ES1 (04-oct-2026)
 
-> **ES1 (Planes P0) no tiene migraciones.** La única migración de Planes es M1 `plans_booking_link` (ES2a). Por la
-> decisión del 04-oct va en **un solo deploy al cierre del bloque B**, después de `catalog_global` y
-> `agenda_foundations` (orden completo en [PLANES.md §16](PLANES.md)). Esta sección deja lo que ES1 preparó para ese
-> deploy: el dedupe que M1 necesita y dos prechecks que vencen antes del deploy.
+> **ES1 (Planes P0) no tiene migraciones.** La única migración de Planes es M1 `plans_booking_link`, escrita y
+> aplicada en local en ES2a (04-oct). Por la decisión del 04-oct va en **un solo deploy al cierre del bloque B**,
+> después de `catalog_global` y `agenda_foundations`. Esta sección deja lo que ES1 preparó (el dedupe y dos prechecks
+> que vencen antes del deploy); el deploy en sí está en **§2.4**.
 
 **Prechecks de solo lectura** (los SQL completos están en PLANES.md §16; acá los que trajo ES1):
 
@@ -487,16 +493,16 @@ SELECT policyname, roles, cmd FROM pg_policies WHERE schemaname='storage' AND ta
   las usa, ni después, porque quedarían abiertas). En el SQL Editor: `DROP POLICY "<nombre>" ON storage.objects;`
   por cada una, con backup previo.
 
-**Dedupe de `(programId, index)`** (S02x; lo corre Martin; no es migración). M1 crea el único parcial
-`Session_programId_index_live_key` y aborta si hay repetidos. El script renumera: en cada grupo conserva el id menor y
-manda el resto, en id asc, a `max+1`, `+2`… del programa. No borra nada ni toca `SessionExercise`, `EvaScore`,
-`totalSessions` ni `Booking`. Idempotente. Dry-run por defecto (tx READ ONLY); aborta sin BYPASSRLS (bajo RLS vería 0
-sesiones = falso verde). Imprime el mapeo viejo → nuevo con ids, sin PHI. Requiere `--conditions=react-server`
-(importa un módulo `server-only`).
+**Dedupe de `(programId, index)`** (S02x; lo corre Martin; no es migración). Es una herramienta **pre-M1**: M1 crea el
+único parcial `Session_programId_index_live_key` y aborta si hay repetidos. El script renumera: en cada grupo conserva el
+id menor y manda el resto, en id asc, a `max+1`, `+2`… del programa. No borra nada ni toca `SessionExercise`,
+`EvaScore`, `totalSessions` ni `Booking`. Idempotente. Dry-run por defecto (tx READ ONLY); aborta sin BYPASSRLS (bajo
+RLS vería 0 sesiones = falso verde). Imprime el mapeo viejo → nuevo con ids, sin PHI. Requiere
+`--conditions=react-server` (importa un módulo `server-only`).
 
 ```bash
 # Local (Docker :5433)
-npm run plans:dedupe-session-index                 # dry-run (local: 0 duplicados al cierre de ES1)
+npm run plans:dedupe-session-index                 # dry-run (local, con M1 aplicada: 0 movimientos)
 npm run plans:dedupe-session-index -- --apply
 
 # Prod (y staging, con su .env): NUNCA el script npm (lee .env.local). Pide el project ref.
@@ -504,23 +510,256 @@ KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx --c
 # opcional: --tenant=<id>[,<id>…] limita el alcance
 ```
 
-**Orden** (staging primero, después prod), **inmediatamente antes del deploy de M1 y en una ventana sin uso** (entre el
-dedupe y M1 no puede entrar una sesión a medida nueva que vuelva a duplicar):
+**Orden** (staging primero, después prod), **inmediatamente antes del deploy de M1 y en la misma ventana sin uso**
+(entre el dedupe y M1 no puede entrar una sesión a medida nueva que vuelva a duplicar):
 1. precheck (2);
 2. backup (`npm run db:prod:backup`);
 3. dry-run;
 4. revisar el mapeo (qué sesiones cambian de número);
 5. `--apply`;
 6. dry-run otra vez → **tiene que dar 0**;
-7. recién ahí, el deploy con M1.
+7. recién ahí, el deploy con M1 (§2.4).
 
-Aviso al usuario: las sesiones movidas cambian su "Sesión n" (pasan al final del plan). El test de integración del
-dedupe se autosaltea después de M1.
+Aviso al usuario: las sesiones movidas cambian su "Sesión n" (pasan al final del plan).
+
+**Después de M1** el script sigue andando pero no tiene nada que hacer: si existe `Session.archivedAt`, agrupa solo las
+sesiones **vivas** (`"archivedAt" IS NULL`, F2 de P1.Z), igual que el único parcial. Una archivada que repite el index de
+una viva no es duplicado, y el dry-run da 0. `tests/integration/plans-dedupe.test.ts` lo prueba post-M1 (dry-run = 0,
+archivada + viva = 0, se niega sin BYPASSRLS); el apply con duplicados quedó probado en ES1 y en el unit del
+planificador.
+
+## 2.4 Deploy de M1 (`plans_booking_link`) — escrita en ES2a (04-oct-2026)
+
+> **Hay 1 migración nueva:** `20261004120000_plans_booking_link` (sha256 de `migration.sql` =
+> `7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd`). Aplicada y verificada en el Docker local; en
+> staging y prod **no**. Va en el deploy único del cierre de B. Qué crea: PLANES.md §3 (el bloque SQL es idéntico al
+> archivo). Incluye la **única excepción** a "todo aditivo", aprobada por Martin el 03-oct: `DROP INDEX
+> "Patient_userId_key"`, reemplazado por `Patient_tenantId_userId_key`.
+
+### Prechecks (solo lectura; SQL completo en PLANES.md §16)
+
+| # | Qué | Esperado | Si no |
+|---|---|---|---|
+| (0) | rol de `DIRECT_URL` y migraciones previas | `rolbypassrls = t`; B-pre aplicado, nada fallido | sin BYPASSRLS, el backfill **aborta** M1 (guarda a propósito): usar el owner |
+| (1) | M1 no corrió | 0 columnas/tipos; `to_regclass` null en las 2 tablas y los 2 índices nuevos; `Patient_userId_key` presente | frenar |
+| (2) | duplicados `(programId, index)` | 0 | dedupe (§2.3) en la misma ventana |
+| (3) | integridad cross-tenant | 0 en las 4 | frenar |
+| (4) | `idempotencyKey LIKE 'plan:%'` y `copagoCents < 0` | 0 | frenar |
+| (5) | volumen (Booking, Session, Patient) | dimensiona el lock | — |
+| (11) | slugs `kinesiologia` / `osteopatia` | libres o ya `kind = 'DISCIPLINE'` | renombrar el tag ajeno antes: el `ON CONFLICT` es por slug, pero un id `tag_discipline_*` usado con otro slug choca por PK |
+| (15) / (17) | Secretaria asignada / Storage | §2.3 | §2.3 |
+
+```sql
+-- (2) y (11), los bloqueantes que más se mueven entre staging y prod
+SELECT count(*) FROM (SELECT "programId","index" FROM "Session" GROUP BY 1,2 HAVING count(*)>1) x;   -- 0
+SELECT id, slug, kind FROM "Tag" WHERE slug IN ('kinesiologia','osteopatia') OR id LIKE 'tag_discipline_%' OR kind='DISCIPLINE';
+```
+
+### Ventana sin uso (no solo por el dedupe)
+
+M1 es **una** transacción. Cada `ALTER TABLE` toma ACCESS EXCLUSIVE y lo retiene hasta el `COMMIT`: sobre
+`TreatmentProgram`, `Session`, `Booking`, `PlanTemplate`, `EvaScore` y `Service`, y el `DROP INDEX` toma ACCESS
+EXCLUSIVE sobre `Patient` (bloquea **también lecturas**: la ficha y la agenda esperan). Como toma TreatmentProgram y
+Session antes que Booking, un turno en vuelo que tenga Booking y vaya a leer el plan puede cruzarse en un deadlock; el
+`lock_timeout = '5s'` hace que falle rápido en vez de colgar la agenda. Con el volumen actual son milisegundos, pero se
+hace en horario sin uso (el mismo de §2.3) y con el cliente avisado.
+
+### Orden en prod (deploy único al cierre de B)
+
+1. Prechecks (0)-(4), (11), (13), (15) y (17), primero en staging y después en prod.
+2. Si (2) > 0: dedupe según §2.3 (dry-run → revisar → `--apply` → dry-run = 0).
+3. `npm run db:prod:backup` (en staging, el suyo).
+4. **Staging:** `migrate deploy` de todas las pendientes **en orden**: `catalog_global` → `agenda_foundations` →
+   `plans_booking_link`; post-checks de abajo; QA de B-pre y de Planes con `TZ=UTC`.
+5. **Prod:** merge de develop a `main` en la ventana sin uso. El build de Production aplica las migraciones **antes**
+   de servir el código nuevo (`scripts/vercel-build.mjs`); si M1 falla, el build falla y sigue sirviendo el deploy
+   anterior.
+6. Post-checks en prod. Después, los pasos post-deploy de PLANES.md §16 (paso 4).
+
+**GUC del backfill:** `kinesoft.backfill_tenants` acota el backfill del responsable a ciertos tenants (lo usan los
+tests). En prod **no se setea** (= todos). Si alguna vez se acota, va **sin espacios**: `'id1,id2'`
+(`string_to_array` no recorta y `' id2'` no matchea nada, en silencio).
+
+### Si falla: P3009
+
+Cualquier error dentro de la tx (`lock_timeout`, duplicado `(programId, index)`, rol sin BYPASSRLS por la guarda del
+backfill, un id `tag_discipline_*` ya usado con otro slug) hace **ROLLBACK completo**: la base queda como antes, pero
+`_prisma_migrations` registra M1 como fallida y el próximo `migrate deploy` corta con **P3009**. Corregir la causa y:
+
+```bash
+npx dotenv -e .env.prod.local -- npx prisma migrate resolve --rolled-back 20261004120000_plans_booking_link
+npm run db:prod:status        # M1 vuelve a figurar como pendiente
+# reintentar: redeploy en Vercel (o npm run db:prod:deploy)
+```
+
+### Post-checks (objeto por objeto)
+
+```sql
+-- Registro: M1 aplicada una vez, sin error
+SELECT migration_name, checksum, finished_at, rolled_back_at FROM _prisma_migrations WHERE migration_name LIKE '%plans_booking_link';
+-- checksum = 7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd
+
+-- Tablas nuevas con RLS: t,t en las dos; una policy <tabla>_tenant_isolation por tabla; vacías
+SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('ProgramAuthorization','PatientChangeRequest');
+SELECT tablename, policyname FROM pg_policies WHERE tablename IN ('ProgramAuthorization','PatientChangeRequest');
+SELECT (SELECT count(*) FROM "ProgramAuthorization") pa, (SELECT count(*) FROM "PatientChangeRequest") pcr;
+
+-- Identidad del portal: el viejo no está, los 2 nuevos sí
+SELECT to_regclass('"Patient_userId_key"') viejo, to_regclass('"Patient_tenantId_userId_key"') por_tenant,
+       to_regclass('"Patient_id_tenantId_key"') destino_fk;
+
+-- Los 4 únicos parciales, con su predicado
+SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('Session_programId_index_live_key','Booking_session_active_key',
+  'ProgramAuthorization_programId_current_key','PatientChangeRequest_patient_pending_key');
+
+-- FKs compuestas y CHECKs (nombres de PLANES §3)
+SELECT conrelid::regclass, conname, contype FROM pg_constraint
+WHERE conname LIKE 'Booking_plan_%' OR conname LIKE 'Booking_session_%' OR conname LIKE 'Booking_priced_%'
+   OR conname LIKE 'TreatmentProgram_%_check' OR conname LIKE 'PlanTemplate_%_check' OR conname LIKE 'Session_%_check'
+   OR conname LIKE 'ProgramAuthorization_%' OR conname LIKE 'PatientChangeRequest_%' ORDER BY 1,2;
+
+-- Pricing con IS NOT DISTINCT FROM (F1): Postgres lo guarda como NOT (… IS DISTINCT FROM …); ok = t en las 2
+SELECT conname, pg_get_constraintdef(oid) LIKE '%NOT ("pricingMode" IS DISTINCT FROM%' ok FROM pg_constraint
+WHERE conname IN ('TreatmentProgram_pricing_check','PlanTemplate_pricing_check');
+
+-- Datos: M1 no vinculó turnos; tags DISCIPLINE = 2; backfill del responsable
+SELECT count(*) FROM "Booking" WHERE "programId" IS NOT NULL OR "pricedByPlan";                -- 0
+SELECT count(*) FROM "Tag" WHERE kind='DISCIPLINE' AND slug IN ('kinesiologia','osteopatia');  -- 2
+SELECT count(*) FILTER (WHERE "practitionerId" IS NOT NULL) con_responsable,
+       count(*) FILTER (WHERE "practitionerId" IS NULL AND EXISTS (SELECT 1 FROM "Session" s WHERE s."programId"=p.id)) sin_responsable_con_sesiones
+FROM "TreatmentProgram" p;   -- sin_responsable_con_sesiones = 0, salvo profesionales de otro tenant (los descarta el EXISTS)
+```
+
+**Drift esperado.** `npx dotenv -e .env.prod.local -- npx prisma migrate diff --from-schema-datasource
+prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script` (solo lee) tiene que mostrar **exactamente 3
+líneas**: `DROP CONSTRAINT "Booking_plan_patient_fkey"`, `"Booking_plan_tenant_fkey"` y `"Booking_session_program_fkey"`
+(las FKs compuestas de Booking que el schema no declara; drift aceptado). Prisma 5 no ve los CHECK, los predicados de los
+únicos parciales ni las policies, así que no aparecen. Cualquier otra línea → frenar y avisar. **Nunca** se corre
+`migrate dev` para "arreglarlo": borraría esos objetos.
+
+### Rollback
+
+1. **Lo normal:** volver el deploy de Vercel al commit anterior. El código viejo tolera M1 (columnas nuevas null o con
+   default, tablas nuevas vacías, CHECKs que se cumplen sin vínculo, búsquedas por `Patient.userId` con `findFirst`).
+   La migración **no** se baja.
+2. **Down-script** (PLANES.md §3 «Rollback»): solo con backup previo y decisión de Martin. Una tx; si el chequeo del
+   paso 3 encuentra un `userId` repetido, aborta todo (hay pacientes del portal vinculados en más de un consultorio:
+   frenar y decidir antes).
+
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+-- 1. Tablas nuevas (arrastran sus policies, índices y FKs)
+DROP TABLE "PatientChangeRequest";
+DROP TABLE "ProgramAuthorization";
+-- 2.
+DROP TYPE "PatientChangeRequestStatus";
+-- 3. Patient_userId_key vuelve SOLO si no hay userId repetidos
+DO $$ BEGIN
+  IF (SELECT count(*) FROM (SELECT "userId" FROM "Patient" WHERE "userId" IS NOT NULL GROUP BY 1 HAVING count(*)>1) x) > 0 THEN
+    RAISE EXCEPTION 'Patient.userId repetido en más de un consultorio: no se recrea Patient_userId_key. Frenar.';
+  END IF;
+END $$;
+CREATE UNIQUE INDEX "Patient_userId_key" ON "Patient"("userId");
+DROP INDEX "Patient_tenantId_userId_key";
+DROP INDEX "Patient_id_tenantId_key";
+-- 4. El resto, en orden inverso al SQL de M1
+DROP INDEX "EvaScore_sessionId_idx";
+ALTER TABLE "EvaScore" DROP CONSTRAINT "EvaScore_sessionId_fkey", DROP COLUMN "sessionId", DROP COLUMN "note";
+
+DROP INDEX "PlanTemplate_tenantId_discipline_idx";
+DROP INDEX "PlanTemplate_serviceId_idx";
+ALTER TABLE "PlanTemplate"
+  DROP CONSTRAINT "PlanTemplate_schedule_check", DROP CONSTRAINT "PlanTemplate_duration_check",
+  DROP CONSTRAINT "PlanTemplate_price_nonneg_check", DROP CONSTRAINT "PlanTemplate_pricing_check",
+  DROP CONSTRAINT "PlanTemplate_serviceId_fkey",
+  DROP COLUMN "archivedAt", DROP COLUMN "notes", DROP COLUMN "totalPriceCents", DROP COLUMN "pricePerSessionCents",
+  DROP COLUMN "pricingMode", DROP COLUMN "schedule", DROP COLUMN "durationMin", DROP COLUMN "serviceId", DROP COLUMN "discipline";
+
+DROP INDEX "Booking_session_active_key";
+DROP INDEX "Booking_sessionId_idx";
+DROP INDEX "Booking_tenantId_programId_idx";
+ALTER TABLE "Booking"
+  DROP CONSTRAINT "Booking_priced_by_plan_check", DROP CONSTRAINT "Booking_plan_patient_check",
+  DROP CONSTRAINT "Booking_plan_link_check", DROP CONSTRAINT "Booking_session_program_fkey",
+  DROP CONSTRAINT "Booking_plan_patient_fkey", DROP CONSTRAINT "Booking_plan_tenant_fkey",
+  DROP CONSTRAINT "Booking_sessionId_fkey", DROP CONSTRAINT "Booking_programId_fkey",
+  DROP COLUMN "pricedByPlan", DROP COLUMN "sessionId", DROP COLUMN "programId";
+
+DROP INDEX "Session_programId_index_live_key";
+DROP INDEX "Session_id_programId_key";
+ALTER TABLE "Session" DROP CONSTRAINT "Session_priceCents_check",
+  DROP COLUMN "updatedAt", DROP COLUMN "archivedAt", DROP COLUMN "priceCents", DROP COLUMN "title";
+
+DROP INDEX "TreatmentProgram_templateId_idx";
+DROP INDEX "TreatmentProgram_locationId_idx";
+DROP INDEX "TreatmentProgram_serviceId_idx";
+DROP INDEX "TreatmentProgram_practitionerId_idx";
+DROP INDEX "TreatmentProgram_tenantId_discipline_status_idx";
+DROP INDEX "TreatmentProgram_id_patientId_key";
+DROP INDEX "TreatmentProgram_id_tenantId_key";
+DROP INDEX "TreatmentProgram_tenantId_idempotencyKey_key";
+ALTER TABLE "TreatmentProgram"
+  DROP CONSTRAINT "TreatmentProgram_schedule_check", DROP CONSTRAINT "TreatmentProgram_duration_check",
+  DROP CONSTRAINT "TreatmentProgram_price_nonneg_check", DROP CONSTRAINT "TreatmentProgram_pricing_check",
+  DROP CONSTRAINT "TreatmentProgram_templateId_fkey", DROP CONSTRAINT "TreatmentProgram_locationId_fkey",
+  DROP CONSTRAINT "TreatmentProgram_serviceId_fkey", DROP CONSTRAINT "TreatmentProgram_practitionerId_fkey",
+  DROP COLUMN "archivedAt", DROP COLUMN "updatedAt", DROP COLUMN "idempotencyKey", DROP COLUMN "notes",
+  DROP COLUMN "totalPriceCents", DROP COLUMN "pricePerSessionCents", DROP COLUMN "pricingMode", DROP COLUMN "schedule",
+  DROP COLUMN "durationMin", DROP COLUMN "templateId", DROP COLUMN "locationId", DROP COLUMN "serviceId",
+  DROP COLUMN "practitionerId", DROP COLUMN "discipline";
+
+ALTER TABLE "Service" DROP COLUMN "discipline";
+DROP TYPE "ProgramPricingMode";
+DROP TYPE "Discipline";
+-- Los 2 tags DISCIPLINE se dejan (el enum TagKind ya tenía DISCIPLINE desde la Ronda 7).
+COMMIT;
+```
+
+3. **Marcar M1 como revertida** en `_prisma_migrations`; sin esto Prisma la sigue dando por aplicada y nunca la
+   re-aplica:
+
+```bash
+npx dotenv -e .env.prod.local -- npx prisma migrate resolve --rolled-back 20261004120000_plans_booking_link
+```
+
+   ⚠️ Prisma documenta `--rolled-back` para migraciones **fallidas**; sobre una que terminó bien puede negarse (P3012,
+   "not in a failed state"). En ese caso, con el backup ya hecho y en el SQL Editor:
+   `UPDATE _prisma_migrations SET rolled_back_at = now() WHERE migration_name = '20261004120000_plans_booking_link';`
+   (Prisma ignora las filas con `rolled_back_at` y la vuelve a aplicar en el próximo deploy). Probarlo primero en
+   staging.
+
+### Nota: bases que aplicaron la versión vieja de M1 (antes de F1)
+
+En P1.Z se enmendó C1 (F1): `TreatmentProgram_pricing_check` y `PlanTemplate_pricing_check` pasaron de `=` a `IS NOT
+DISTINCT FROM`, porque con `pricingMode` NULL el `=` da NULL (lógica de 3 valores) y el CHECK dejaba pasar un precio sin
+modo. Prod y staging nunca la aplicaron. Si alguna base (otro Docker, un staging de prueba) ya tiene la versión
+vieja, `migrate deploy` corta por checksum distinto. Arreglo, con backup, sin re-correr M1:
+
+```sql
+BEGIN;
+ALTER TABLE "TreatmentProgram" DROP CONSTRAINT "TreatmentProgram_pricing_check",
+  ADD CONSTRAINT "TreatmentProgram_pricing_check" CHECK (
+       ("pricingMode" IS NULL AND "pricePerSessionCents" IS NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL));
+ALTER TABLE "PlanTemplate" DROP CONSTRAINT "PlanTemplate_pricing_check",
+  ADD CONSTRAINT "PlanTemplate_pricing_check" CHECK (
+       ("pricingMode" IS NULL AND "pricePerSessionCents" IS NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PER_SESSION' AND "pricePerSessionCents" IS NOT NULL AND "totalPriceCents" IS NULL)
+    OR ("pricingMode" IS NOT DISTINCT FROM 'PACKAGE' AND "totalPriceCents" IS NOT NULL AND "pricePerSessionCents" IS NULL));
+UPDATE _prisma_migrations SET checksum = '7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd'
+WHERE migration_name = '20261004120000_plans_booking_link';
+COMMIT;
+```
+
+Si el `ADD CONSTRAINT` falla, hay filas con precio y sin modo: corregirlas antes (son justo las que el CHECK viejo dejaba
+pasar).
 
 ## 3. Rollback
 
-Prisma no revierte automáticamente. Como todas las migraciones de esta tanda son
-aditivas, el rollback real es **volver el deploy de Vercel** al commit anterior: el
-schema nuevo es compatible con el código viejo (columnas nuevas con default, tablas
-nuevas sin uso). Solo si hiciera falta revertir el DDL, se escribe una migración
-inversa nueva — nunca se edita una ya aplicada.
+Prisma no revierte automáticamente. El rollback real es **volver el deploy de Vercel** al commit anterior: las
+migraciones son aditivas y el código viejo sigue andando sobre el schema nuevo (columnas nuevas con default, tablas
+nuevas sin uso). Si hiciera falta revertir el DDL, se escribe una migración inversa nueva; nunca se edita una ya
+aplicada. **Excepción: M1 `plans_booking_link`** dropea `Patient_userId_key` y tiene su down-script propio (§2.4,
+«Rollback»), que solo se usa con backup y decisión de Martin.

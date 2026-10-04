@@ -6,7 +6,7 @@
 > checklist de QA manual. La implementación se ejecuta en las sesiones `ci-gate-minimo` (capa 1) y
 > `suite-integracion` / `ci-pipeline-completo-y-guard` (capas 3-4 + guards) del [ROADMAP.md](ROADMAP.md).
 >
-> **Estado actual (01-oct-2026, cierre de B-pre):**
+> **Estado actual (01-oct-2026, cierre de B-pre; los conteos de ES1 y ES2a están en los gates de AUDIT §Ronda 14 y 15):**
 > - **Unit (capa 1):** **1156 tests en 51 archivos** (`tests/unit/*`), sin DB ni red. Corren en CI y deben pasar
 >   con `TZ=UTC` **y** con `TZ=America/Argentina/Buenos_Aires`. Al cierre del Bloque A eran 252/19. B-pre sumó el
 >   motor (`availability-{day,ranges,slots,classify,next-free,recurrence}`), `public-booking-engine`,
@@ -100,6 +100,29 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   con varias corridas a la vez, un barrido más agresivo borraba el tenant de otra corrida en curso.
 - **Gate de integración en solitario:** el gate de ola corre la integración sin otras sesiones usando el mismo
   Docker (comparten la base: tests de carrera y de conteo se contaminan con la corrida vecina).
+
+### Patrones nuevos de ES2a (M1 `plans_booking_link`, 04-oct-2026)
+
+- **Fixtures de Planes por insert directo:** `tests/helpers/plan-factory.ts` (planes, sesiones, turnos vinculados y un
+  **fixture legacy**: `totalSessions` ≠ filas, 00:00Z, sin `practitionerId`) con el cliente owner. No pasa por actions:
+  un test de schema tiene que probar que **la base** rechaza, no la validación de una action. `deleteTenantDeep` borra
+  `ProgramAuthorization` y `PatientChangeRequest` antes que planes y pacientes.
+- **Tests de schema:** `plans-m1-schema` (objetos con su nombre, cada CHECK, únicos parciales con su `indexdef`,
+  RESTRICT, idempotencia por tenant, `Prisma.DbNull`), `plans-m1-backfill` (lee el bloque `>>> BACKFILL
+  plans_booking_link` literal, como `agenda-backfill`), `plans-m1-new-tables` (las 2 tablas nuevas e identidad del
+  portal), bloque M1 en `rls-isolation` (B no lee ni escribe lo de A con `kinesoft_app`) y `plans-dedupe` convertido a
+  post-M1 (dry-run = 0).
+- **Tests que solo valen en un rol, con skip visible.** Las FKs compuestas son la única red bajo BYPASSRLS: con
+  `kinesoft_app` RLS frenaría antes y el verde no probaría nada. Esos bloques usan `describe/it.skipIf(!BYPASS)` y, si
+  se saltean, imprimen un `console.warn("[archivo] SKIP …")` que dice con qué comando corren
+  (`npm run test:integration:owner -- <archivo>`). Al revés, la guarda "sin BYPASSRLS falla fuerte" del backfill solo
+  corre con el rol app. Un skip silencioso es un falso verde: siempre el aviso.
+- **Mapa de RLS de las tablas viejas fijado** en `plans-m1-schema.test.ts` (`relrowsecurity`/`relforcerowsecurity` de
+  cada tabla: forzadas vs. sin RLS). Si una migración futura cambia el RLS de una tabla existente o agrega una tabla
+  vieja a la lista, **se actualiza el mapa a propósito** en la misma sesión, con el porqué; si falla sin que nadie lo
+  haya buscado, es una regresión.
+- **Códigos de error:** un CHECK llega como 23514, un único como P2002 y un RESTRICT/FK como **23503** (P2003), no 23001.
+  `pgCode` en `plans-m1-schema.test.ts` normaliza las tres formas en que Prisma los devuelve.
 
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 

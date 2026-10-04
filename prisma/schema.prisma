@@ -79,6 +79,9 @@ model Tenant {
   practitionerServices    PractitionerService[]
   practitionerPayers      PractitionerPayer[]
   practitionerSpecialties PractitionerSpecialty[]
+  // Planes M1 (plans_booking_link)
+  programAuthorizations   ProgramAuthorization[]
+  patientChangeRequests   PatientChangeRequest[]
 
   @@index([slug])
 }
@@ -110,7 +113,9 @@ model UserProfile {
 
   memberships  Membership[]
   practitioner Practitioner?
-  patient      Patient?
+  // Planes M1 (PD-14): una cuenta del portal se vincula a fichas distintas en N
+  // consultorios. `Patient.userId` es único POR CONSULTORIO, ya no global → 1:n.
+  patients     Patient[]
   customConditionsCreated Condition[] @relation("CustomConditionAuthor")
 }
 
@@ -168,6 +173,8 @@ model Practitioner {
   practitionerServices PractitionerService[]
   payers               PractitionerPayer[]
   specialties          PractitionerSpecialty[]
+  // Planes M1: profesional responsable del plan (D17). RESTRICT.
+  programs             TreatmentProgram[]
 
   @@index([tenantId])
 }
@@ -175,7 +182,11 @@ model Practitioner {
 model Patient {
   id            String   @id @default(cuid())
   tenantId      String   // home tenant (the first clinic to register them)
-  userId        String?  @unique // optional Supabase identity for portal access
+  // Optional Supabase identity for portal access. Planes M1 (PD-14, excepción a
+  // "todo aditivo" aprobada por Martin el 03-oct): ya NO es único global
+  // (`Patient_userId_key` se borró); es único por consultorio
+  // (`Patient_tenantId_userId_key`, abajo). Buscar siempre por (tenantId, userId).
+  userId        String?
   // The kine that "owns" this patient. Always set in Sprint 16+: every
   // patient is owned by exactly one practitioner (the one that loaded
   // them). Owners see the full HC by default; other kines see "basic"
@@ -210,6 +221,7 @@ model Patient {
   emergency    EmergencyContact[]
   files        PatientFile[]
   shares       PatientShare[]
+  changeRequests PatientChangeRequest[]
 
   // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
   // NULLs as distinct, so these enforce "no duplicate VALUE" while still
@@ -220,6 +232,10 @@ model Patient {
   @@unique([tenantId, documentId])
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
+  // Planes M1: una ficha por (consultorio, cuenta del portal) — PD-14.
+  @@unique([tenantId, userId], map: "Patient_tenantId_userId_key")
+  // Planes M1: destino de la FK compuesta de PatientChangeRequest.
+  @@unique([id, tenantId], map: "Patient_id_tenantId_key")
   @@index([tenantId, lastName])
   @@index([tenantId, assignedPractitionerId])
 }
@@ -606,13 +622,30 @@ model PlanTemplate {
   totalSessions Int      @default(10)
   frequency     Int      @default(2)
   exerciseIds   Json     // string[] in the canonical order
+  // Planes M1: lo necesario para prellenar el editor. CHECKs en SQL (ver bloque
+  // de comentario "Planes M1" al final): pricing, precios >= 0, duración 15..240
+  // y schedule objeto. Limpiar `schedule` con Prisma.DbNull, NUNCA JsonNull.
+  discipline           Discipline?
+  serviceId            String?
+  durationMin          Int?
+  schedule             Json?
+  pricingMode          ProgramPricingMode?
+  pricePerSessionCents Int?
+  totalPriceCents      Int?
+  notes                String?
+  archivedAt           DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   author  Practitioner @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  // SET NULL: deleteTenantDeep borra Service antes del cascade del tenant.
+  service  Service?    @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  programs TreatmentProgram[]
 
   @@index([tenantId, authorId])
+  @@index([serviceId], map: "PlanTemplate_serviceId_idx")
+  @@index([tenantId, discipline], map: "PlanTemplate_tenantId_discipline_idx")
 }
 
 model ExerciseTag {
@@ -777,13 +810,49 @@ model TreatmentProgram {
   frequency    Int      @default(2) // per week
   startDate    DateTime
   status       ProgramStatus @default(ACTIVE)
+  // Planes M1 (plans_booking_link). Todo nullable/default: el código viejo y los
+  // planes legacy siguen válidos. CHECKs en SQL (bloque "Planes M1" al final).
+  discipline           Discipline?
+  practitionerId       String?   // profesional responsable (D17; backfill desde la 1ª sesión)
+  serviceId            String?
+  locationId           String?   // null = sede principal
+  templateId           String?
+  durationMin          Int?      // override; efectiva = override ?? PS ?? Service (15..240)
+  // PlanScheduleV1. Limpiar con Prisma.DbNull, NUNCA Prisma.JsonNull: JsonNull
+  // guarda un JSON null y viola TreatmentProgram_schedule_check (23514).
+  schedule             Json?
+  pricingMode          ProgramPricingMode?
+  pricePerSessionCents Int?
+  totalPriceCents      Int?
+  notes                String?
+  idempotencyKey       String?   // única POR TENANT (una global reabriría la fuga de A2)
+  archivedAt           DateTime?
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
 
   tenant   Tenant        @relation(fields: [tenantId], references: [id])
   patient  Patient       @relation(fields: [patientId], references: [id])
   case     ClinicalCase? @relation(fields: [caseId], references: [id])
   sessions Session[]
+  // Planes M1. RESTRICT en profesional/servicio/sede (SET NULL movería el plan en
+  // silencio); SET NULL en la plantilla.
+  practitioner   Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
+  service        Service?      @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  location       Location?     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  template       PlanTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  bookings       Booking[]
+  authorizations ProgramAuthorization[]
 
+  @@unique([tenantId, idempotencyKey], map: "TreatmentProgram_tenantId_idempotencyKey_key")
+  // Destinos de las FKs compuestas (Booking_plan_tenant_fkey, Booking_plan_patient_fkey,
+  // ProgramAuthorization_program_tenant_fkey).
+  @@unique([id, tenantId], map: "TreatmentProgram_id_tenantId_key")
+  @@unique([id, patientId], map: "TreatmentProgram_id_patientId_key")
+  @@index([tenantId, discipline, status], map: "TreatmentProgram_tenantId_discipline_status_idx")
+  @@index([practitionerId], map: "TreatmentProgram_practitionerId_idx")
+  @@index([serviceId], map: "TreatmentProgram_serviceId_idx")
+  @@index([locationId], map: "TreatmentProgram_locationId_idx")
+  @@index([templateId], map: "TreatmentProgram_templateId_idx")
   @@index([tenantId, patientId])
   // Hot read: `getPatientProgramsLite/Full` orders programs per patient
   // by createdAt desc — this composite makes that an index-only scan.
@@ -797,6 +866,45 @@ enum ProgramStatus {
   CANCELLED
 }
 
+// Planes M1 (D10).
+enum Discipline {
+  KINESIOLOGY
+  OSTEOPATHY
+}
+
+// Planes M1 (I6). PER_SESSION = pricePerSessionCents; PACKAGE = totalPriceCents
+// repartido en Session.priceCents (la cuota es la fuente de la verdad de la plata).
+enum ProgramPricingMode {
+  PER_SESSION
+  PACKAGE
+}
+
+// Autorización de la obra social de un plan (Planes M1; PQ-01 = sí, PD-16, PQ-15).
+// Historial: renovar = marcar la vigente con supersededAt + INSERT de la nueva.
+// Una sola vigente por plan: índice único PARCIAL
+// ProgramAuthorization_programId_current_key (WHERE supersededAt IS NULL), que
+// Prisma no expresa. CHECKs en SQL: authorizedSessions 1..200, code 1..64 chars,
+// expiresOn >= startsOn. RLS ENABLE + FORCE + ProgramAuthorization_tenant_isolation.
+// Fechas de calendario en DATE: leer con dbDateToDayKey, escribir con dayKeyToDbDate.
+model ProgramAuthorization {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  programId          String
+  code               String?
+  authorizedSessions Int?
+  startsOn           DateTime  @db.Date
+  expiresOn          DateTime? @db.Date
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  supersededAt       DateTime?
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "ProgramAuthorization_tenantId_fkey")
+  // FK compuesta: bajo BYPASSRLS (prod) garantiza que el tenantId de la fila es el del plan.
+  program TreatmentProgram @relation(fields: [programId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: NoAction, map: "ProgramAuthorization_program_tenant_fkey")
+
+  @@index([tenantId, expiresOn], map: "ProgramAuthorization_tenantId_expiresOn_idx")
+}
+
 model Session {
   id           String   @id @default(cuid())
   programId    String
@@ -808,11 +916,22 @@ model Session {
   rpe          Int?      // perceived effort 0..10
   paInPre      Int?      // pain pre 0..10
   paInPost     Int?      // pain post 0..10
+  // Planes M1. `index` es estable: archivar NO renumera. Único PARCIAL
+  // Session_programId_index_live_key (programId, index) WHERE archivedAt IS NULL
+  // (no lo expresa Prisma). CHECK Session_priceCents_check (>= 0).
+  title        String?
+  priceCents   Int?      // la cuota: fuente de la verdad de la plata (I6)
+  archivedAt   DateTime?
+  updatedAt    DateTime  @default(now()) @updatedAt
 
   program      TreatmentProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
   practitioner Practitioner     @relation(fields: [practitionerId], references: [id])
   exercises    SessionExercise[]
+  bookings     Booking[]
+  evaScores    EvaScore[]
 
+  // Destino de la FK compuesta Booking_session_program_fkey.
+  @@unique([id, programId], map: "Session_id_programId_key")
   @@index([programId])
   // Hot read: sessions are always loaded ordered by `index` within a
   // program. Composite avoids a sort step on every patient profile load.
@@ -853,10 +972,15 @@ model EvaScore {
   takenAt   DateTime @default(now())
   value     Int      // 0..10
   source    String?  // "pre", "post", "weekly-checkin"
+  // Planes M1: reemplaza al string ambiguo; las escrituras nuevas llenan ambos.
+  note      String?
+  sessionId String?
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([patientId, takenAt])
+  @@index([sessionId], map: "EvaScore_sessionId_idx")
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -882,12 +1006,16 @@ model Service {
   // B-pre M-cat (expand): práctica del catálogo global que este servicio
   // factura/representa. Null = servicio libre del consultorio.
   practiceId     String?
+  // Planes M1 (D10).
+  discipline     Discipline?
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id])
   practitioner Practitioner? @relation(fields: [practitionerId], references: [id])
   practice             Practice?             @relation(fields: [practiceId], references: [id], onDelete: SetNull)
   bookings     Booking[]
   practitionerServices PractitionerService[]
+  programs             TreatmentProgram[]
+  planTemplates        PlanTemplate[]
 
   @@index([practiceId])
 }
@@ -938,6 +1066,14 @@ model Booking {
   // Telemedicina (decisión 9): URL por turno.
   isTelemedicine  Boolean       @default(false)
   telemedicineUrl String?
+  // Planes M1 (D25). programId y sessionId van juntos (Booking_plan_link_check);
+  // un guest no es turno de plan (Booking_plan_patient_check). `pricedByPlan` solo
+  // lo escribe el motor de Planes (I8; Booking_priced_by_plan_check). Las FKs
+  // compuestas (I1/I4) y el único parcial Booking_session_active_key (I2) están en
+  // el bloque de comentario "Planes M1" al final del schema.
+  programId       String?
+  sessionId       String?
+  pricedByPlan    Boolean       @default(false)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -947,6 +1083,8 @@ model Booking {
   service      Service       @relation(fields: [serviceId], references: [id])
   location     Location?    @relation(fields: [locationId], references: [id], onDelete: Restrict)
   payment      Payment?
+  program      TreatmentProgram? @relation(fields: [programId], references: [id], onDelete: Restrict)
+  session      Session?          @relation(fields: [sessionId], references: [id], onDelete: Restrict)
 
   @@index([tenantId, scheduledFor])
   @@index([practitionerId, scheduledFor])
@@ -956,6 +1094,9 @@ model Booking {
   @@index([patientId, scheduledFor])
   @@index([tenantId, seriesId])
   @@index([tenantId, locationId, scheduledFor])
+  @@index([tenantId, programId], map: "Booking_tenantId_programId_idx")
+  // Chequeo RESTRICT al borrar una Session y "sin turno" derivado.
+  @@index([sessionId], map: "Booking_sessionId_idx")
 }
 
 enum BookingStatus {
@@ -1275,6 +1416,8 @@ model Location {
   schedules  PractitionerSchedule[]
   timeBlocks TimeBlock[]
   bookings   Booking[]
+  // Planes M1: sede del plan (RESTRICT).
+  programs   TreatmentProgram[]
 
   @@index([tenantId])
 }
@@ -1435,3 +1578,62 @@ model PractitionerSpecialty {
   @@index([tenantId])
   @@index([specialtyId])
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// Planes M1 (plans_booking_link) — portal y objetos que Prisma no expresa
+// ═════════════════════════════════════════════════════════════════════
+
+enum PatientChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Pedido de cambio "Mis datos" del portal (E3). Tabla aparte para que el portal
+// NUNCA escriba la fila de Patient ni mueva Patient.updatedAt (lock de
+// updatePatient). Un PENDING por paciente: índice único PARCIAL
+// PatientChangeRequest_patient_pending_key (WHERE status='PENDING'). CHECKs en
+// SQL: changes objeto JSON <= 4 KB; (status='PENDING') = (decidedAt IS NULL).
+// RLS ENABLE + FORCE + PatientChangeRequest_tenant_isolation.
+model PatientChangeRequest {
+  id                String                     @id @default(cuid())
+  tenantId          String
+  patientId         String
+  changes           Json
+  status            PatientChangeRequestStatus @default(PENDING)
+  requestedByUserId String?
+  decidedById       String?
+  decidedAt         DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @default(now()) @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "PatientChangeRequest_tenantId_fkey")
+  // FK compuesta: bajo BYPASSRLS (prod) garantiza que el tenantId de la fila es el de la ficha.
+  patient Patient @relation(fields: [patientId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: NoAction, map: "PatientChangeRequest_patient_tenant_fkey")
+
+  @@index([tenantId, status], map: "PatientChangeRequest_tenantId_status_idx")
+}
+
+// ── Planes M1: DRIFT ACEPTADO (PLANES.md §3) ─────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261004120000_plans_booking_link
+// y Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos,
+// NO se borran (y `migrate dev` está prohibido en este repo):
+//   • Únicos PARCIALES:
+//       Session_programId_index_live_key            ON Session(programId, index) WHERE archivedAt IS NULL
+//       Booking_session_active_key                  ON Booking(sessionId) WHERE sessionId IS NOT NULL AND status NOT IN ('CANCELLED','NO_SHOW')
+//       ProgramAuthorization_programId_current_key  ON ProgramAuthorization(programId) WHERE supersededAt IS NULL
+//       PatientChangeRequest_patient_pending_key    ON PatientChangeRequest(patientId) WHERE status = 'PENDING'
+//   • FKs COMPUESTAS de Booking (las FK saltean RLS y prod es BYPASSRLS → I1/I4 en la base):
+//       Booking_plan_tenant_fkey     (programId, tenantId)  → TreatmentProgram(id, tenantId)  ON DELETE RESTRICT
+//       Booking_plan_patient_fkey    (programId, patientId) → TreatmentProgram(id, patientId) ON DELETE RESTRICT
+//       Booking_session_program_fkey (sessionId, programId) → Session(id, programId)          ON DELETE RESTRICT
+//   • CHECKs: TreatmentProgram_{pricing,price_nonneg,duration,schedule}_check,
+//       Session_priceCents_check, Booking_{plan_link,plan_patient,priced_by_plan}_check,
+//       PlanTemplate_{pricing,price_nonneg,duration,schedule}_check,
+//       ProgramAuthorization_{sessions,code,dates}_check,
+//       PatientChangeRequest_{changes,decided}_check.
+//   • Policies RLS: ProgramAuthorization_tenant_isolation, PatientChangeRequest_tenant_isolation.
+// Regla Prisma.DbNull: para limpiar un Json? (TreatmentProgram.schedule,
+// PlanTemplate.schedule) se usa Prisma.DbNull, NUNCA Prisma.JsonNull: JsonNull
+// guarda un JSON null, jsonb_typeof('null') = 'null' viola el CHECK object y la
+// action revienta con 23514. Precedente: lib/practitioner-schedule.ts.

@@ -50,8 +50,18 @@ export interface EphemeralTenant {
 export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Promise<void> {
   const users = await db.membership.findMany({ where: { tenantId }, select: { userId: true } });
   await db.payment.deleteMany({ where: { booking: { tenantId } } });
+  // Planes M1: Booking → TreatmentProgram/Session es RESTRICT; los turnos se
+  // borran antes que los planes (ya era así).
   await db.booking.deleteMany({ where: { tenantId } });
+  // Planes M1: ProgramAuthorization → TreatmentProgram es RESTRICT (FK
+  // compuesta): va antes que los planes o el deleteMany de abajo falla con 23503.
+  await db.programAuthorization.deleteMany({ where: { tenantId } });
+  // Planes M1: PatientChangeRequest cascadea de Patient y de Tenant, pero se
+  // borra explícito para no depender del orden de cascadas (y que un fallo tire).
+  await db.patientChangeRequest.deleteMany({ where: { tenantId } });
   // Session → TreatmentProgram cascades; SessionExercise → Session cascades.
+  // TreatmentProgram → Practitioner/Service/Location es RESTRICT (M1): por eso
+  // los planes van antes que Service y que el cascade de Tenant.
   await db.treatmentProgram.deleteMany({ where: { tenantId } });
   // Diagnosis → ClinicalCase cascades.
   await db.clinicalCase.deleteMany({ where: { tenantId } });

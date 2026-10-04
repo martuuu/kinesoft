@@ -537,3 +537,174 @@ describe.skipIf(!RUN || BYPASS)("RLS agenda (B2.0 M-agenda, app role)", () => {
     expect(n.count).toBe(1);
   });
 });
+
+// ── Planes M1 (20261004120000_plans_booking_link) · S10c, E4.2 ──────────
+// ProgramAuthorization y PatientChangeRequest: ENABLE + FORCE + UNA policy
+// `<Tabla>_tenant_isolation` (USING y WITH CHECK `tenantId =
+// app_current_tenant_id()`). B no lee, no escribe, no modifica ni borra lo de
+// A; un INSERT con el tenantId ajeno muere en el WITH CHECK; sin GUC
+// (fuera de runWithRls) no se ve nada ni entra nada. Y A sí opera lo propio:
+// la policy no es un deny-all. Las FKs compuestas (red bajo BYPASSRLS) se
+// prueban en plans-m1-new-tables.test.ts.
+describe.skipIf(!RUN || BYPASS)("RLS Planes M1 (ProgramAuthorization / PatientChangeRequest, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const TABLES = ["ProgramAuthorization", "PatientChangeRequest"] as const;
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let patA: string;
+  let planA: string;
+  let authA: string;
+  let authB: string;
+  let reqA: string;
+  let reqB: string;
+
+  async function seed(t: EphemeralTenant) {
+    const pat = await prismaOwner.patient.create({
+      data: { tenantId: t.tenantId, firstName: "M1", lastName: t.slug, assignedPractitionerId: t.practitionerId },
+    });
+    const plan = await prismaOwner.treatmentProgram.create({
+      data: { tenantId: t.tenantId, patientId: pat.id, title: "Plan M1", startDate: new Date("2026-10-05T03:00:00Z") },
+    });
+    const auth = await prismaOwner.programAuthorization.create({
+      data: { tenantId: t.tenantId, programId: plan.id, code: "AUT-1", authorizedSessions: 10, startsOn: new Date("2026-10-01T00:00:00Z") },
+    });
+    const req = await prismaOwner.patientChangeRequest.create({
+      data: { tenantId: t.tenantId, patientId: pat.id, changes: { phone: "1155550000" } },
+    });
+    return { pat: pat.id, plan: plan.id, auth: auth.id, req: req.id };
+  }
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    ({ pat: patA, plan: planA, auth: authA, req: reqA } = await seed(A));
+    ({ auth: authB, req: reqB } = await seed(B));
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra las 2 tablas antes que TreatmentProgram/Patient.
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("catálogo: relrowsecurity y relforcerowsecurity en true, una sola policy `<tabla>_tenant_isolation`", async () => {
+    const rel = await prismaOwner.$queryRaw<{ relname: string; rls: boolean; force: boolean }[]>`
+      SELECT relname, relrowsecurity AS rls, relforcerowsecurity AS force
+      FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = ANY(${[...TABLES]})`;
+    expect(rel.sort((a, b) => a.relname.localeCompare(b.relname))).toEqual([
+      { relname: "PatientChangeRequest", rls: true, force: true },
+      { relname: "ProgramAuthorization", rls: true, force: true },
+    ]);
+    const pol = await prismaOwner.$queryRaw<{ tablename: string; policyname: string; cmd: string; qual: string; with_check: string }[]>`
+      SELECT tablename, policyname, cmd, qual, with_check FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = ANY(${[...TABLES]}) ORDER BY tablename`;
+    expect(pol.map((p) => [p.tablename, p.policyname, p.cmd])).toEqual([
+      ["PatientChangeRequest", "PatientChangeRequest_tenant_isolation", "ALL"],
+      ["ProgramAuthorization", "ProgramAuthorization_tenant_isolation", "ALL"],
+    ]);
+    for (const p of pol) {
+      expect(p.qual).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+      expect(p.with_check).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+    }
+  });
+
+  it("lectura: A ve lo suyo y no lo de B, en las 2 tablas (y B no ve lo de A)", async () => {
+    const [authsA, reqsA] = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.programAuthorization.findMany({ where: { id: { in: [authA, authB] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.patientChangeRequest.findMany({ where: { id: { in: [reqA, reqB] } }, select: { id: true } })).map((r) => r.id),
+    ]);
+    expect(authsA).toEqual([authA]);
+    expect(reqsA).toEqual([reqA]);
+    const [authsB, reqsB] = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.programAuthorization.findMany({ where: { programId: planA } })).length,
+      (await tx.patientChangeRequest.findMany({ where: { patientId: patA } })).length,
+    ]);
+    expect([authsB, reqsB]).toEqual([0, 0]);
+  });
+
+  it("INSERT con el tenantId de A desde B → rechazado por el WITH CHECK", async () => {
+    await expect(
+      runWithRls(B.tenantId, (tx) =>
+        tx.programAuthorization.create({
+          data: { tenantId: A.tenantId, programId: planA, code: "CRUZ", startsOn: new Date("2026-10-01T00:00:00Z"), supersededAt: new Date() },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    await expect(
+      runWithRls(B.tenantId, (tx) =>
+        tx.patientChangeRequest.create({
+          data: { tenantId: A.tenantId, patientId: patA, changes: { phone: "1" }, status: "REJECTED", decidedAt: new Date() },
+        })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    expect(await prismaOwner.programAuthorization.count({ where: { tenantId: A.tenantId } })).toBe(1);
+    expect(await prismaOwner.patientChangeRequest.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("UPDATE / DELETE desde B sobre lo de A afectan 0 filas y lo de A queda intacto", async () => {
+    const counts = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.programAuthorization.updateMany({ where: { id: authA }, data: { code: "PISADO" } })).count,
+      (await tx.programAuthorization.deleteMany({ where: { id: authA } })).count,
+      (await tx.patientChangeRequest.updateMany({ where: { id: reqA }, data: { status: "APPROVED", decidedAt: new Date() } })).count,
+      (await tx.patientChangeRequest.deleteMany({ where: { id: reqA } })).count,
+    ]);
+    expect(counts).toEqual([0, 0, 0, 0]);
+    const a = await prismaOwner.programAuthorization.findUniqueOrThrow({ where: { id: authA } });
+    expect(a.code).toBe("AUT-1");
+    const r = await prismaOwner.patientChangeRequest.findUniqueOrThrow({ where: { id: reqA } });
+    expect(r.status).toBe("PENDING");
+    expect(r.decidedAt).toBeNull();
+  });
+
+  it("A no puede mudar una fila propia al tenant de B (WITH CHECK en UPDATE)", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.patientChangeRequest.update({ where: { id: reqA }, data: { tenantId: B.tenantId } }))
+    ).rejects.toThrow(/row-level security/i);
+    expect((await prismaOwner.patientChangeRequest.findUniqueOrThrow({ where: { id: reqA } })).tenantId).toBe(A.tenantId);
+  });
+
+  it("sin GUC (fuera de runWithRls): 0 filas visibles y ningún INSERT entra", async () => {
+    // Conexión de la app pelada: app_current_tenant_id() = NULL → la policy no matchea nada.
+    const app = new PrismaClient();
+    try {
+      expect(await app.programAuthorization.count({ where: { id: { in: [authA, authB] } } })).toBe(0);
+      expect(await app.patientChangeRequest.count({ where: { id: { in: [reqA, reqB] } } })).toBe(0);
+      await expect(
+        app.programAuthorization.create({
+          data: { tenantId: A.tenantId, programId: planA, startsOn: new Date("2026-10-01T00:00:00Z"), supersededAt: new Date() },
+        })
+      ).rejects.toThrow(/row-level security/i);
+      await expect(
+        app.patientChangeRequest.create({
+          data: { tenantId: A.tenantId, patientId: patA, changes: { phone: "1" }, status: "REJECTED", decidedAt: new Date() },
+        })
+      ).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+    expect(await prismaOwner.programAuthorization.count({ where: { tenantId: A.tenantId } })).toBe(1);
+    expect(await prismaOwner.patientChangeRequest.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("intra-tenant: A crea, lee y borra lo propio (la policy no es deny-all)", async () => {
+    const created = await runWithRls(A.tenantId, async (tx) => ({
+      auth: await tx.programAuthorization.create({
+        data: { tenantId: A.tenantId, programId: planA, code: "AUT-OLD", startsOn: new Date("2026-09-01T00:00:00Z"), supersededAt: new Date() },
+      }),
+      req: await tx.patientChangeRequest.create({
+        data: { tenantId: A.tenantId, patientId: patA, changes: { email: "a@b.c" }, status: "APPROVED", decidedAt: new Date() },
+      }),
+    }));
+    expect(created.auth.tenantId).toBe(A.tenantId);
+    expect(created.req.tenantId).toBe(A.tenantId);
+    const n = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.programAuthorization.deleteMany({ where: { id: created.auth.id } })).count,
+      (await tx.patientChangeRequest.deleteMany({ where: { id: created.req.id } })).count,
+    ]);
+    expect(n).toEqual([1, 1]);
+  });
+});

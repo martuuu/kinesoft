@@ -1,15 +1,21 @@
 /**
  * S02x · dedupe de `Session(programId, index)` contra el Postgres local.
  *
- * Corre el símbolo REAL que usa el script (`runSessionIndexDedupe`) con el
- * canal owner/BYPASSRLS, igual que en prod, y afirma el efecto en las filas:
- * el dry-run no escribe, dos `--apply` dan el mismo resultado, otro tenant
- * queda intacto y no se tocan SessionExercise ni `totalSessions`. Con el rol
- * de la app (RLS) tiene que negarse.
+ * Planes P1 (S10, M1 `plans_booking_link`): con M1 aplicada existe el único
+ * parcial `Session_programId_index_live_key` (programId, index) WHERE
+ * archivedAt IS NULL, así que no puede haber duplicados vivos: el dry-run
+ * reporta 0 y no escribe. El apply con duplicados quedó probado en ES1 (antes de
+ * M1, cuando las fixtures todavía podían meter repetidos) y en el unit del
+ * planificador (`planSessionIndexDedupe`).
  *
- * Las fixtures meten repetidos a propósito: eso solo es posible ANTES de M1.
- * Cuando M1 cree `Session_programId_index_live_key` la suite se saltea sola
- * (el script ya no tiene nada que hacer después de M1).
+ * Corre el símbolo REAL que usa el script (`runSessionIndexDedupe`) con el canal
+ * owner/BYPASSRLS, igual que en prod. Con el rol de la app (RLS) tiene que
+ * negarse. Ya no se autosaltea: si M1 no está aplicada, la suite falla fuerte.
+ *
+ * Post-M1 (P1.Z): una sesión archivada puede repetir el index de una viva (M1 lo
+ * permite: archivar no renumera). Si existe `Session.archivedAt`, el dedupe agrupa
+ * solo sesiones vivas, así que esa archivada no es un "repetido". Lo fija el test
+ * "archivada con el mismo index…". Igual es una herramienta pre-M1 (RUNBOOK).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
@@ -25,13 +31,12 @@ import { appRoleBypassesRls } from "@/tests/helpers/db-role";
 
 const RUN = process.env.INTEGRATION === "1";
 
-describe.skipIf(!RUN)("plans-dedupe · Session(programId, index) (S02x)", () => {
+describe.skipIf(!RUN)("plans-dedupe · Session(programId, index) con M1 aplicada (S02x → S10)", () => {
   let db: PrismaClient;
   let A: EphemeralTenant;
   let B: EphemeralTenant;
-  let uniqueExists = false;
 
-  /** Programa con sesiones en los `indexes` dados (pueden repetirse). */
+  /** Programa con sesiones vivas en los `indexes` dados (sin repetir: M1 lo impide). */
   async function makeProgram(t: EphemeralTenant, indexes: number[]) {
     const patientId = await addPatient(db, t);
     const program = await db.treatmentProgram.create({
@@ -44,26 +49,26 @@ describe.skipIf(!RUN)("plans-dedupe · Session(programId, index) (S02x)", () => 
         startDate: new Date("2026-10-06T12:00:00Z"),
       },
     });
-    const ids: string[] = [];
     for (const index of indexes) {
-      const s = await db.session.create({
+      await db.session.create({
         data: { programId: program.id, practitionerId: t.practitionerId, index, scheduledFor: new Date() },
       });
-      ids.push(s.id);
     }
-    return { programId: program.id, ids };
+    return program.id;
   }
 
+  /** Estado observable de las sesiones: id, index y updatedAt (un write lo movería). */
   const snapshot = async (programId: string) =>
-    (await db.session.findMany({ where: { programId }, select: { id: true, index: true }, orderBy: { id: "asc" } })).map(
-      (s) => [s.id, s.index] as const,
-    );
+    (
+      await db.session.findMany({
+        where: { programId },
+        select: { id: true, index: true, updatedAt: true },
+        orderBy: { id: "asc" },
+      })
+    ).map((s) => [s.id, s.index, s.updatedAt.toISOString()] as const);
 
   beforeAll(async () => {
     db = ownerClient();
-    const [r] = await db.$queryRaw<{ n: bigint }[]>`
-      SELECT count(*)::bigint AS n FROM pg_indexes WHERE indexname = 'Session_programId_index_live_key'`;
-    uniqueExists = Number(r?.n ?? 0) > 0;
     A = await createEphemeralTenant(db);
     B = await createEphemeralTenant(db);
   });
@@ -74,75 +79,59 @@ describe.skipIf(!RUN)("plans-dedupe · Session(programId, index) (S02x)", () => 
     await db?.$disconnect();
   });
 
-  it("dry-run: planifica pero no escribe", async (ctx) => {
-    if (uniqueExists) ctx.skip();
-    const { programId, ids } = await makeProgram(A, [1, 2, 2, 3]);
-    const before = await snapshot(programId);
+  it("M1 aplicada: existe el único parcial y rechaza un index vivo repetido", async () => {
+    const [idx] = await db.$queryRaw<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes WHERE indexname = 'Session_programId_index_live_key'`;
+    expect(idx?.indexdef).toMatch(/UNIQUE INDEX .* WHERE \("archivedAt" IS NULL\)/);
+
+    const programId = await makeProgram(A, [1]);
+    await expect(
+      db.session.create({
+        data: { programId, practitionerId: A.practitionerId, index: 1, scheduledFor: new Date() },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("dry-run: reporta 0 movimientos y no escribe", async () => {
+    const pa = await makeProgram(A, [1, 2, 3, 5]);
+    const pb = await makeProgram(B, [1, 2]);
+    const beforeA = await snapshot(pa);
+    const beforeB = await snapshot(pb);
+
+    const r = await runSessionIndexDedupe({ db, tenantIds: [A.tenantId, B.tenantId], apply: false });
+
+    expect(r.applied).toBe(false);
+    expect(r.updated).toBe(0);
+    expect(r.plan.moves).toEqual([]);
+    expect(await snapshot(pa)).toEqual(beforeA);
+    expect(await snapshot(pb)).toEqual(beforeB);
+  });
+
+  it("archivada con el mismo index que una viva: dry-run 0 movimientos y no escribe (P1.Z)", async () => {
+    const pa = await makeProgram(A, [1, 2]);
+    // Archivar no renumera: la archivada conserva index 1 y entra una viva nueva con index 1.
+    const first = await db.session.findFirstOrThrow({ where: { programId: pa, index: 1 } });
+    await db.session.update({ where: { id: first.id }, data: { archivedAt: new Date() } });
+    await db.session.create({
+      data: { programId: pa, practitionerId: A.practitionerId, index: 1, scheduledFor: new Date() },
+    });
+    // Precondición: en la tabla hay un (programId, index) repetido si se cuentan las archivadas.
+    const [dup] = await db.$queryRaw<{ n: bigint }[]>`
+      SELECT count(*)::bigint AS n FROM "Session" WHERE "programId" = ${pa} AND "index" = 1`;
+    expect(Number(dup?.n)).toBe(2);
+    const before = await snapshot(pa);
 
     const r = await runSessionIndexDedupe({ db, tenantIds: [A.tenantId], apply: false });
 
     expect(r.applied).toBe(false);
     expect(r.updated).toBe(0);
-    const sortedDup = [ids[1], ids[2]].sort();
-    expect(r.plan.moves.filter((m) => m.programId === programId)).toEqual([
-      { sessionId: sortedDup[1], programId, tenantId: A.tenantId, from: 2, to: 4 },
-    ]);
-    expect(await snapshot(programId)).toEqual(before);
-  });
-
-  it("apply: renumera, conserva el id menor, no toca SessionExercise ni totalSessions; un segundo apply no cambia nada", async (ctx) => {
-    if (uniqueExists) ctx.skip();
-    const { programId, ids } = await makeProgram(A, [1, 1, 1, 2, 2, 5]);
-    const ex = await db.exercise.create({
-      data: { slug: `test-ex-${uniqueSuffix()}`, name: "Puente", tenantId: A.tenantId },
-    });
-    for (const sessionId of ids) {
-      await db.sessionExercise.create({ data: { sessionId, exerciseId: ex.id, order: 1, sets: 3, reps: 10 } });
-    }
-
-    const first = await runSessionIndexDedupe({ db, tenantIds: [A.tenantId], apply: true });
-    expect(first.applied).toBe(true);
-    expect(first.updated).toBe(first.plan.moves.length);
-
-    const g1 = [ids[0], ids[1], ids[2]].sort();
-    const g2 = [ids[3], ids[4]].sort();
-    const after = new Map(await snapshot(programId));
-    expect(after.get(g1[0])).toBe(1);
-    expect(after.get(g1[1])).toBe(6);
-    expect(after.get(g1[2])).toBe(7);
-    expect(after.get(g2[0])).toBe(2);
-    expect(after.get(g2[1])).toBe(8);
-    expect(after.get(ids[5])).toBe(5);
-    expect(new Set(after.values()).size).toBe(ids.length);
-
-    // Nada se borra ni se re-cuelga: los ejercicios siguen en su sesión.
-    const exRows = await db.sessionExercise.findMany({ where: { sessionId: { in: ids } }, select: { sessionId: true } });
-    expect(exRows.map((e) => e.sessionId).sort()).toEqual([...ids].sort());
-    const prog = await db.treatmentProgram.findUniqueOrThrow({ where: { id: programId }, select: { totalSessions: true } });
-    expect(prog.totalSessions).toBe(10);
-
-    const snap = await snapshot(programId);
-    const second = await runSessionIndexDedupe({ db, tenantIds: [A.tenantId], apply: true });
-    expect(second.plan.moves).toEqual([]);
-    expect(second.updated).toBe(0);
-    expect(await snapshot(programId)).toEqual(snap);
-  });
-
-  it("otro tenant queda intacto", async (ctx) => {
-    if (uniqueExists) ctx.skip();
-    const a = await makeProgram(A, [3, 3]);
-    const b = await makeProgram(B, [1, 1, 2]);
-    const bBefore = await snapshot(b.programId);
-
-    const r = await runSessionIndexDedupe({ db, tenantIds: [A.tenantId], apply: true });
-
-    expect(r.plan.moves.every((m) => m.tenantId === A.tenantId)).toBe(true);
-    expect(new Set((await snapshot(a.programId)).map(([, i]) => i)).size).toBe(2);
-    expect(await snapshot(b.programId)).toEqual(bBefore);
+    expect(r.plan.duplicateGroups).toBe(0);
+    expect(r.plan.moves).toEqual([]);
+    expect(await snapshot(pa)).toEqual(before);
   });
 
   it("con el rol de la app (RLS, sin BYPASSRLS) se niega", async (ctx) => {
-    if (uniqueExists || (await appRoleBypassesRls())) ctx.skip();
+    if (await appRoleBypassesRls()) ctx.skip();
     const app = new PrismaClient();
     try {
       await expect(runSessionIndexDedupe({ db: app, tenantIds: [A.tenantId], apply: false })).rejects.toThrow(/BYPASSRLS/);
