@@ -1,45 +1,28 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPublicClinic } from "@/lib/public-booking";
-import { findPatientByEmailForPrefill } from "@/lib/public-booking-internal";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getPublicBookingGate, loadPublicBookingPage } from "@/lib/public-booking-internal";
 import { PublicBookingWizard } from "@/components/booking/public-booking-wizard";
+import { BookingUnavailable } from "@/components/booking/booking-unavailable";
 
 export const dynamic = "force-dynamic";
 
-export async function generateMetadata({ params }: { params: { slug: string } }) {
-  const clinic = await getPublicClinic(params.slug);
+export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
+  const gate = await getPublicBookingGate(params.slug);
+  if (gate?.state === "closed") {
+    // Turnero apagado (EV0): que los buscadores no indexen una página sin reserva.
+    return { title: `Turnos online · ${gate.contact.name}`, robots: { index: false, follow: false } };
+  }
+  const clinic = gate ? await getPublicClinic(params.slug) : null;
   return { title: clinic ? `Reservar turno · ${clinic.name}` : "Reservar turno · KineSoft" };
 }
 
 export default async function PublicBookingPage({ params }: { params: { slug: string } }) {
-  const clinic = await getPublicClinic(params.slug);
-  if (!clinic) notFound();
+  // Loader en lib/ (testeado en tests/integration/public-booking-disabled.test.ts):
+  // con el turnero cerrado no lee la sesión ni hace el prefill de PII.
+  const data = await loadPublicBookingPage(params.slug);
+  if (!data) notFound();
+  if (data.state === "closed") return <BookingUnavailable contact={data.contact} />;
 
-  // Prefill is only attempted when the user has a verified Supabase
-  // session — the `findPatientByEmailForPrefill` helper trusts the email
-  // it receives, so we must prove it belongs to the requester first.
-  let prefill: Awaited<ReturnType<typeof findPatientByEmailForPrefill>> = null;
-  let userEmail: string | null = null;
-  let userName: string | null = null;
-  try {
-    const supabase = getSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.email && user.email_confirmed_at) {
-      userEmail = user.email;
-      userName = (user.user_metadata?.full_name as string | undefined) ?? null;
-      prefill = await findPatientByEmailForPrefill(user.email);
-    }
-  } catch {
-    /* Supabase not configured — anonymous flow is the default */
-  }
-
-  return (
-    <PublicBookingWizard
-      clinic={clinic}
-      session={userEmail ? { email: userEmail, fullName: userName } : null}
-      prefill={prefill}
-    />
-  );
+  return <PublicBookingWizard clinic={data.clinic} session={data.session} prefill={data.prefill} />;
 }

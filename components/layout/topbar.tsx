@@ -1,24 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconSearch } from "@/components/ui/icons";
+import type { Capability } from "@/lib/capabilities";
+import { useTenantModules } from "./tenant-modules-context";
+import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } from "./sidebar";
 
-const NAV = [
-  { href: "/dashboard", label: "Inicio" },
-  { href: "/agenda", label: "Agenda" },
-  { href: "/pacientes", label: "Pacientes" },
-  { href: "/diagnostico", label: "Diagnóstico" },
-  { href: "/seguimiento", label: "Seguimiento" },
-  { href: "/biblioteca", label: "Ejercicios" },
-  { href: "/terapia-manual", label: "Terapia Manual" },
-  { href: "/configuracion", label: "Config" },
-];
-
-export function TopBar() {
+/**
+ * EV0 (EV-S): misma fuente que el sidebar (`navFor` de `lib/nav.ts` vía
+ * `shellNavItems`), con los mismos filtros de módulo, capability y
+ * `tenant.admin` para Configuración. Acá Configuración se muestra como
+ * "Config" (pill corta) y Plataforma, que antes no estaba en el topbar,
+ * aparece para el admin de plataforma: con el chrome "topbar" no tenía
+ * forma de llegar.
+ */
+export function TopBar({
+  caps = [],
+  isPlatformAdmin = false,
+}: {
+  caps?: readonly Capability[];
+  isPlatformAdmin?: boolean;
+}) {
   const pathname = usePathname();
+  const search = useSearchParams();
+  const { list: modules } = useTenantModules();
+  const capSet = useCapSet(caps);
+  const links = useMemo(() => {
+    const items = shellNavItems(modules, capSet).map((it) => ({
+      href: it.href,
+      label: it.href === CONFIG_HREF ? "Config" : it.label,
+    }));
+    if (isPlatformAdmin) items.push({ href: PLATFORM_HREF, label: "Plataforma" });
+    return items;
+  }, [modules, capSet, isPlatformAdmin]);
+  const active = activeNavHref(
+    links.map((it) => it.href),
+    pathname,
+    search
+  );
   return (
     <header
       className="k-glass"
@@ -33,12 +56,13 @@ export function TopBar() {
     >
       <KineLogo size={26} />
       <nav style={{ display: "flex", gap: 4 }}>
-        {NAV.map((it) => {
-          const on = pathname?.startsWith(it.href);
+        {links.map((it) => {
+          const on = active === it.href;
           return (
             <Link
               key={it.href}
               href={it.href}
+              aria-current={on ? "page" : undefined}
               style={{
                 textDecoration: "none",
                 padding: "8px 16px",

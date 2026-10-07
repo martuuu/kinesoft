@@ -1,6 +1,7 @@
 "use client";
 
 import type { Role } from "@prisma/client";
+import type { TenantModule } from "@/lib/tenant-modules";
 
 export type Tab =
   | "general"
@@ -11,14 +12,28 @@ export type Tab =
   | "diagnosticos"
   | "usuarios";
 
-export function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => void; role: Role }) {
-  const tabs: { key: Tab; label: string; ownerOnly?: boolean }[] = [
+export function TabsBar({
+  tab,
+  setTab,
+  role,
+  modules,
+}: {
+  tab: Tab;
+  setTab: (t: Tab) => void;
+  role: Role;
+  modules: readonly TenantModule[];
+}) {
+  // `module`: la pestaña solo existe si el consultorio tiene ese módulo (EV0).
+  // Diagnósticos = condiciones propias del catálogo de diagnóstico: un
+  // consultorio General no lo tiene. Es UX; las actions de condiciones tienen
+  // su propio gate.
+  const tabs: { key: Tab; label: string; ownerOnly?: boolean; module?: TenantModule }[] = [
     { key: "general", label: "General" },
     { key: "sedes", label: "Sedes" },
     { key: "profesionales", label: "Profesionales" },
     { key: "servicios", label: "Servicios" },
     { key: "obras-sociales", label: "Obras Sociales" },
-    { key: "diagnosticos", label: "Diagnósticos" },
+    { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico" },
     { key: "usuarios", label: "Usuarios", ownerOnly: true },
   ];
   // B3.4: con 7 pestañas la píldora no entra en un celular; scrollea en
@@ -39,6 +54,7 @@ export function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => v
     >
       {tabs.map((t) => {
         if (t.ownerOnly && role !== "OWNER") return null;
+        if (t.module && !modules.includes(t.module)) return null;
         const on = tab === t.key;
         return (
           <button
@@ -68,12 +84,28 @@ export function TabsBar({ tab, setTab, role }: { tab: Tab; setTab: (t: Tab) => v
   );
 }
 
-export function Switch({ on, onChange, disabled }: { on: boolean; onChange: () => void; disabled?: boolean }) {
+/**
+ * `aria-label`: el switch es un botón sin texto; sin nombre accesible un lector
+ * de pantalla anuncia "interruptor, activado" sin decir de qué (revisión EV0).
+ * Quien lo usa le pasa el label de la fila.
+ */
+export function Switch({
+  on,
+  onChange,
+  disabled,
+  "aria-label": ariaLabel,
+}: {
+  on: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+  "aria-label"?: string;
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
+      aria-label={ariaLabel}
       onClick={onChange}
       disabled={disabled}
       style={{

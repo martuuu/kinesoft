@@ -27,8 +27,8 @@
 | Bloque | Qué | Estado |
 |---|---|---|
 | **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅ código completo** (01-oct, Ronda 13; pendiente commit/deploy/QA del dueño + import del catálogo) · **Planes: planning firmado (03-oct)**, ejecución wave a wave ES1 → ES2a → ES2b → ES3 → ES4 (**ES1 ✅** `d7ac75f`, pendiente QA de staging; **ES2a ✅ ejecutada el 04-oct** con M1 solo en local, pendiente commit; sigue ES2b); deploy, migración en prod, Playwright y suite completa al final del bloque B (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
-| **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, realtime, soporte, adjuntos, portal v2, etc.) | ⏳ |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅** (`3ff2e50`, Ronda 13; QA de staging e import del catálogo en el go-live) · **Planes: planning firmado (03-oct)** (**ES1 ✅** `d7ac75f` · **ES2a ✅** `0edb0c8`). **Verticales y Sala de Espera (07-oct):** corridas nuevas EV0 (**✅ pendiente commit**), SV y EV1 ([VERTICALES.md](VERTICALES.md)). Orden: **EV0** → ES2b → ES3 → **SV** → ES4 → **EV1** → reset de prod + deploy único de todo B desde vacío — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
+| **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, soporte, adjuntos, portal v2, etc.; el realtime de la agenda pasó a la corrida SV de B el 07-oct) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
 
@@ -53,8 +53,8 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 
 **Próximos pasos del Bloque A** (commiteado en `ef3281f`):
 1. Dueño: prerrequisitos de EXTERNAL-CONFIG §0.1 (SMTP, plantillas, Redirect URLs, "Confirm email", Upstash,
-   `SENTRY_DSN`, System Env Vars) → staging → QA → prod según el runbook. Después, el flip de RLS en prod (su
-   prerrequisito de código ya está). Puede ir solo o junto con B-pre (MIGRACIONES-RUNBOOK §2.2).
+   `SENTRY_DSN`, System Env Vars). Con la decisión del 07-oct, A sale **junto con todo B** en el go-live con reset de
+   prod (MIGRACIONES-RUNBOOK «Go-live con reset»); los roles (flip de RLS) son el paso 5 del bootstrap.
 
 **Hallazgos nuevos de A2/A3, ya clasificados** (filas en [AUDIT.md §2](AUDIT.md)):
 - **C0:** los write-paths (turnos, reasignar paciente, servicios, sesión a medida) validan practitioner ∈ tenant
@@ -80,12 +80,19 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **B4** | proyección liviana + recepción ∥ vista Por profesional ∥ integración de la agenda ∥ candado por día ∥ Recepción ∥ perf multi-profesional | ✅ |
 | **B5** | modal (Turno / Varias sesiones / Bloquear horario, slot picker, telemedicina) ∥ onboarding (Sede, Tu horario) ∥ turnero (sede, cobertura, primer turno) | ✅ |
 | **Cierre** | integrador → revisor → fixer → docs → gate | ✅ código (fixes de la revisión en AUDIT §Ronda 13) |
-| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**, ejecución wave a wave: **ES1 ✅ (04-oct, sin migración, `d7ac75f`; pendiente QA de staging)** → **ES2a ✅ (04-oct, M1 `plans_booking_link` aplicada solo en local; pendiente commit)** → ES2b → ES3 → ES4. Deploy, migración en prod, Playwright y suite completa **al final del bloque B** (decisión de Martin del 04-oct: nada se despliega hasta cerrar B) |
+| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**: **ES1 ✅ (`d7ac75f`, sin migración)** → **ES2a ✅ (`0edb0c8`, M1 `plans_booking_link`, solo en local)** → ES2b → ES3 → ES4, con las enmiendas EV0/SV del 07-oct al tope de PLANES §10-§12. Sin sesiones de legacy (S25L/S25n/S25b eliminadas por el reset) |
+| **EV0** (07-oct) | Tipo de consultorio (General / Kinesiología), matriz de módulos, guards de segmento, nav único, turnero con switch, onboarding con vertical, /plataforma de consultorios, REVOKE de la Data API. **Migración M2 `20261007120000_tenant_verticals`** (sola) | ✅ **ejecutada (07-oct), pendiente commit de Martin**; M2 solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en [QA.md §EV0](QA.md), ADR-005. **Siguiente: ES2b** |
+| **SV** (07-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado `llamado`, `/sala`, aviso al profesional, agenda en vivo. **Migración M3 `reception_call_realtime`** (sola). Va entre ES3 y ES4 | ⏳ ([VERTICALES.md §7](VERTICALES.md)) |
+| **EV1** (07-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral, lista de pacientes, Plataforma "Común/Pro" muerto) + limpieza R-LEGACY opcional | ⏳ después de ES4 |
+| **Go-live de B** | **Reset de prod** (decisión del 07-oct: no hay datos que preservar) → `migrate deploy` de la cadena completa desde vacío → bootstrap | ⏳ [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md) |
 
 > ⚠️ **IDs que chocan:** las olas internas de B-pre se llamaron B1-B5 (y así las citan los comentarios del código:
 > "B1.7", "B3.1", "B4.6"…); no son las olas de Planes. Para no chocar, **las olas de Planes se llaman P0-P4** (= B0-B4
 > del plan vigente) y se ejecutan en corridas **ES1..ES4** (ES1 = P0, ES2a = P1, ES2b = P2, ES3 = P3, ES4 = P4).
 > Tampoco son las "Ola B2 (RLS)" de la Fase B vieja.
+> **EV0 / EV1** (verticales) y **SV** (Sala de Espera realtime) son corridas del 07-oct, no olas de Planes; **M2/M3** son
+> sus migraciones (M1 = `plans_booking_link`).
+
 
 Detalle y evidencia en [AUDIT.md §Ronda 13](AUDIT.md); arquitectura en [ARCHITECTURE.md §Agenda profesional y
 catálogo](ARCHITECTURE.md); QA en [QA.md §B-pre](QA.md); deploy en [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md).
@@ -94,29 +101,29 @@ catálogo](ARCHITECTURE.md); QA en [QA.md §B-pre](QA.md); deploy en [MIGRACIONE
 Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · guard ✓ · integración 395/395
 (`kinesoft_app`) y 379 + 16 skip (owner) · `next build` ✓ · perf B4.6 ([PERF.md](PERF.md)).
 
-**Próximos pasos:**
-1. Dueño: commit de B-pre ✅ (3ff2e50) → staging (migraciones + prechecks + conteos) → QA de [QA.md §B-pre](QA.md) con
-   `TZ=UTC` → import del catálogo en staging. El precheck de MIGRACIONES-RUNBOOK §2.2 se corrigió en el Paso 0 de
-   Planes (estaba invertido 3 h). Con la decisión del 04-oct, el deploy a prod de B-pre va **junto con Planes** al
-   cierre de B (a confirmar por Martin, ver [PLANES.md](PLANES.md) "Abierto para Martin").
-2. **Planes (P0-P4)** sobre el motor, según [PLANES.md](PLANES.md) (firmado el 03-oct). **No se usa
-   `classifyBatchInstant`**, porque colapsa "bloqueado" y "superposición" en "sobreturno": va un `classifyPlanRows` propio
-   (`lib/availability/plan.ts`) con `expandPlanDates`, bloqueos duros y `(practitionerId, serviceId)` + `locationId`
-   (ADR-003). Una sola migración (`plans_booking_link`, ES2a). Orden: ES1 → ES2a → ES2b → ES3 → ES4, con commit de Martin
-   entre corridas; **nada se despliega hasta cerrar B** (04-oct): el deploy de todo B (B-pre + M1 + Planes) va al final.
-   - **ES1 ✅ ejecutada (04-oct):** fugas E0 cerradas en código, Secretaria (nivel `admin`, `agenda.operateAll`, alta
-     de paciente a cargo del profesional), fixes de planes y cimientos sin callers. Sin migraciones. Evidencia en
-     [AUDIT.md §Ronda 14](AUDIT.md); QA en [QA.md §Planes P0](QA.md). Commit `d7ac75f`. **Pendiente:** QA de staging.
-     Las fugas E0 siguen vivas en prod hasta el deploy (o hotfix, decisión de Martin: PLANES.md "Abierto para Martin").
-   - **ES2a ✅ ejecutada (04-oct):** **1 migración nueva**, M1 `plans_booking_link` (FK turno↔plan/sesión, 2 tablas con
-     RLS, `Patient.userId` único por consultorio), aplicada y verificada solo en el Docker local. Enmienda F1 de C1
-     (CHECK de pricing con `IS NOT DISTINCT FROM`). Evidencia en [AUDIT.md §Ronda 15](AUDIT.md); deploy en
-     [MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md) (va en el deploy único del cierre de B). **Pendiente:** commit
-     de Martin.
-   - **Siguiente: ES2b** (core de turnos + dominio server, sin migración), después del commit de ES2a.
-3. **C1 perf** (en paralelo cuando haya lugar): payload de /agenda (~1 MB/semana), batch y `createBooking` en una
+**Próximos pasos** (actualizado 07-oct):
+1. **Martin, ya (bloque A, independiente de todo):** revisar la Data API de Supabase en prod
+   (`data-api-anon-sin-rls`, [VERTICALES.md §1](VERTICALES.md)).
+2. **Orden de corridas:** **EV0** (M2 + verticales + /plataforma, ✅ pendiente commit) → **ES2b** (siguiente) → ES3 →
+   **SV** (M3) → ES4 → **EV1**, todo en develop con commit de Martin entre corridas. Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
+   línea de [VERTICALES.md §5](VERTICALES.md) (copiadas al tope de PLANES §10-§12).
+   - **ES1 ✅** (`d7ac75f`): fugas E0 cerradas en código, Secretaria, fixes de planes y cimientos. Evidencia en
+     [AUDIT.md §Ronda 14](AUDIT.md).
+   - **ES2a ✅** (`0edb0c8`): M1 `plans_booking_link` (solo local). Evidencia en [AUDIT.md §Ronda 15](AUDIT.md).
+   - **EV0 ✅** (pendiente commit): M2 `tenant_verticals` (solo local), módulos y guards, nav único, turnos online con
+     switch, /plataforma de consultorios, REVOKE de la Data API. Evidencia en [AUDIT.md §Ronda 16](AUDIT.md). La revisión
+     sumó enmiendas para ES2b/ES3 (S14, S15/S27a, S17d, S22b) y SV01 ([VERTICALES.md §5](VERTICALES.md)).
+   - **No se usa `classifyBatchInstant`** (colapsa "bloqueado" y "superposición" en "sobreturno"): va `classifyPlanRows`
+     (`lib/availability/plan.ts`, ADR-003).
+3. **Go-live del bloque B, una sola vez:** prod se **resetea** (decisión del 07-oct: el cliente vuelve a cargar, no hay
+   datos de prod que preservar) → `migrate deploy` de la cadena completa desde vacío (hasta M3) → bootstrap (roles,
+   catálogo, `create-tenant --vertical`, superadmin, /plataforma, Data API, Storage). Comandos en
+   [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md). Ya no hay deploy incremental de B-pre ni de M1,
+   prechecks de datos, dedupe ni hotfix de E0.
+4. **C1 perf** (en paralelo cuando haya lugar): payload de /agenda (~1 MB/semana), batch y `createBooking` en una
    tx, `weekOccupancy`, bundles sobre presupuesto, harness de EXPLAIN con literales (PERF.md §B4.6).
-4. Contract posterior a B-pre (migración propia, después de que B-pre esté en prod): `Service.practitionerId`,
+5. Contract posterior a B-pre (migración propia, después del go-live; con el reset se puede adelantar si Martin lo
+   decide): `Service.practitionerId`,
    prefijo `[SOBRETURNO]`, `Tenant.businessHours*`, `lib/booking-schedule.ts`.
 
 **Decisiones para Martin** (con recomendación):

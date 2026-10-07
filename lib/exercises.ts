@@ -11,7 +11,8 @@ import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { Prisma, TagKind } from "@prisma/client";
-import { getActor } from "@/lib/session";
+import { getActor, ForbiddenError } from "@/lib/session";
+import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
 import { tags as cacheTags, ttl } from "@/lib/cache-tags";
@@ -140,7 +141,10 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
   // that can include the tenantId for private exercises. We pass it as
   // a stringified key part so different gate states get distinct cache
   // slots, then re-hand the actual where object via a closure.
-  const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog });
+  // EV0 V.Z (P1): el combo de condiciones es del módulo `diagnostico`; va en la
+  // clave para que un cambio de vertical desde /plataforma no sirva el slot viejo.
+  const hasDiagnostico = modulesFor(actor.entitlements).has("diagnostico");
+  const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog, dx: hasDiagnostico });
   const fetcher = unstable_cache(
     async (): Promise<FilterFacets> => {
       // Facets come from the structured MUSCLE_GROUP / EQUIPMENT tags (the
@@ -162,10 +166,19 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
         }
         diff.add(e.difficulty);
       }
-      const conditions = await runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
-        select: { slug: true, name: true },
-        orderBy: { name: "asc" },
-      }));
+      // EV0 V.Z (P1, preexistente del bloque A): antes era `findMany` sin
+      // where y la única barrera era RLS. En prod la conexión tiene BYPASSRLS,
+      // así que el filtro de la biblioteca listaba las condiciones custom de
+      // TODOS los consultorios (nombre = dato clínico de otro tenant). Ahora:
+      // globales + las propias, a mano. Sin `diagnostico` (General), ninguna:
+      // es una lectura compartida → vacío (C-EV4).
+      const conditions = !hasDiagnostico
+        ? []
+        : await runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
+            where: { OR: [{ tenantId: null }, { tenantId: actor.tenantId }] },
+            select: { slug: true, name: true },
+            orderBy: { name: "asc" },
+          }));
       return {
         muscleGroups: Array.from(muscle).sort(),
         equipment: Array.from(equip).sort(),
@@ -209,6 +222,11 @@ export async function ensureTag(
   kind: TagKind = "GOAL"
 ): Promise<{ slug: string; label: string }> {
   await getActor(); // auth gate — throws if no session
+  // EV0 V.Z (N2): crear tags es parte de cargar ejercicios propios (módulo
+  // `ejercicios`, `gate.canCreate`). Sin el gate, un consultorio General podía
+  // escribir en la tabla GLOBAL de tags por RPC. Escritura → tira (C-EV4).
+  const gate = await gatingForActor();
+  if (!gate.canCreate) throw new ForbiddenError(MODULE_DENIED_COPY.ejercicios);
   const trimmed = label.trim();
   if (!trimmed) throw new Error("Tag label empty");
   const slug = slugify(trimmed);
@@ -249,6 +267,12 @@ export async function createExercise(input: {
   visibility?: "private";
 }): Promise<ActionResult<{ id: string; slug: string }>> {
   const actor = await getActor();
+  // EV0 V.Z (N2): sin el módulo `ejercicios` (consultorio General) no se crean
+  // ejercicios propios. Va ANTES de los upserts de tags de abajo, que escriben
+  // en la tabla global. Devuelve `ActionResult` (no tira) porque el form de alta
+  // ya muestra `error`; el copy es el del módulo.
+  const gate = await gatingForActor();
+  if (!gate.canCreate) return { ok: false, error: MODULE_DENIED_COPY.ejercicios };
   const name = input.name.trim();
   if (!name) return { ok: false, error: "Nombre requerido." };
 

@@ -124,6 +124,22 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
 - **Códigos de error:** un CHECK llega como 23514, un único como P2002 y un RESTRICT/FK como **23503** (P2003), no 23001.
   `pgCode` en `plans-m1-schema.test.ts` normaliza las tres formas en que Prisma los devuelve.
 
+### Patrones nuevos de EV0 (verticales y /plataforma, 07-oct-2026)
+
+- **Factory con entitlements:** `createEphemeralTenant` (`tests/helpers/tenant-factory.ts`) acepta `vertical`, `plan` y `publicBookingEnabled`. Los **turnos
+  online arrancan prendidos en los tests** (`publicBookingEnabled ?? true`) y **apagados en la base** (default de M2,
+  opt-in): así los tests del turnero anteriores a EV0 siguen probando el wizard, y el caso "apagado" se pide explícito
+  (`public-booking-disabled.test.ts`). Un test que dependa del default real de la base no usa la factory.
+- **Mocks de `getActor` necesitan `entitlements`** (`{vertical, plan, publicBookingEnabled}`): sin eso,
+  `modulesFor(actor.entitlements)` revienta (TypeError) y el test falla por la razón equivocada.
+  Las sesiones de ES2b/ES3 que mockean el actor lo suman (enmienda S22b).
+- **Vertical General como control negativo:** los gates de módulo se prueban con un tenant `GENERAL` (OWNER) que
+  intenta escribir y lee `[]`, **más** el control Kine que sí puede (`module-guards`, `exercise-entitlements`,
+  `ev0-review-fixes`). Una fuga cross-tenant que solo existe con BYPASSRLS (facetas, prefill) se prueba con el rol
+  owner.
+- **M2 con roles temporales:** `tenant-verticals-m2.test.ts` extrae el bloque `>>> REVOKE_DATA_API` del SQL y lo corre
+  contra roles `anon`/`authenticated` creados en el test (el Docker no los tiene). Los marcadores no se mueven.
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

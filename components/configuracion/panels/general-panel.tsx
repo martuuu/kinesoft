@@ -1,19 +1,23 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { Role } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { IconCheck } from "@/components/ui/icons";
 import { useTweaks } from "@/components/layout/tweaks-context";
 import type { TenantSettings } from "@/lib/tenant-settings";
 import {
   setSharedPatientView,
   updateTenantBasics,
   setBusinessHours,
+  setPublicBookingEnabled,
 } from "@/lib/tenant-settings";
+import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   BUSINESS_HOUR_MIN,
   BUSINESS_HOUR_MAX,
@@ -116,6 +120,8 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
         </form>
       </Card>
 
+      <FeaturesCard tenant={tenant} canAdmin={canAdmin} />
+
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Vista de pacientes</EyebrowLabel>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, gap: 16 }}>
@@ -131,7 +137,12 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
               OWNER/ADMIN siempre ven todo independientemente del modo.
             </div>
           </div>
-          <Switch on={shared} onChange={toggleShared} disabled={role !== "OWNER" && role !== "ADMIN"} />
+          <Switch
+            on={shared}
+            onChange={toggleShared}
+            disabled={role !== "OWNER" && role !== "ADMIN"}
+            aria-label="Vista compartida del consultorio"
+          />
         </div>
         {shared && (
           <div
@@ -156,7 +167,7 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Horario del consultorio</EyebrowLabel>
         <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 14, lineHeight: 1.45 }}>
-          Define la franja horaria visible en la agenda y en el turnero público, y cada
+          Define la franja horaria visible en la agenda y en los turnos online, y cada
           cuánto se dibujan las filas de la agenda.
           Permitido: <strong>{BUSINESS_HOUR_MIN}:00</strong> a <strong>{BUSINESS_HOUR_MAX}:00</strong>.
         </div>
@@ -313,17 +324,172 @@ function HourSelect({
   );
 }
 
-/** Label + hint on the left, a Switch on the right. Used for per-user prefs. */
+/**
+ * "Funciones del consultorio" (EV0, EV-K). Lo que el consultorio puede prender
+ * por su cuenta (hoy: los turnos online) y, de solo lectura, el tipo de
+ * consultorio y el plan, que cambia /plataforma (EV-D5/D6). Futuros toggles del
+ * consultorio van como otra `PrefRow` acá, cada uno con su action que pase por
+ * `applyTenantEntitlementsInTx` (source `tenant-settings`) y su key en la
+ * allowlist de C-EV5.
+ */
+function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: boolean }) {
+  const router = useRouter();
+  const confirm = useConfirm();
+  const [pending, start] = useTransition();
+  const [booking, setBooking] = useState(tenant.publicBookingEnabled);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  // El origin solo existe en el browser: se completa después de montar para no
+  // romper la hidratación (el server renderiza la ruta relativa).
+  const path = `/c/${tenant.slug}/booking`;
+  const [bookingUrl, setBookingUrl] = useState(path);
+  useEffect(() => { setBookingUrl(`${window.location.origin}${path}`); }, [path]);
+  useEffect(() => { setBooking(tenant.publicBookingEnabled); }, [tenant.publicBookingEnabled]);
+
+  const toggleBooking = async () => {
+    const next = !booking;
+    if (!next) {
+      const ok = await confirm({
+        title: "¿Apagar los turnos online?",
+        message:
+          "Los pacientes ya no van a poder reservar desde el link. Los turnos que ya reservaron no se tocan.",
+        tone: "danger",
+        confirmLabel: "Apagar",
+        cancelLabel: "Dejarlos activos",
+      });
+      if (!ok) return;
+    }
+    setError(null);
+    setBooking(next);
+    start(async () => {
+      try {
+        const r = await setPublicBookingEnabled(next);
+        if (!r.ok) {
+          setBooking(!next);
+          setError(r.error);
+        } else {
+          router.refresh();
+        }
+      } catch {
+        setBooking(!next);
+        setError("No pudimos guardar el cambio. Reintentá en un momento.");
+      }
+    });
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(bookingUrl).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => setError("No pudimos copiar el link. Copialo a mano.")
+    );
+  };
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <EyebrowLabel>Funciones del consultorio</EyebrowLabel>
+      <div style={{ marginTop: 8 }}>
+        <PrefRow
+          label="Turnos online"
+          hint={
+            <>
+              Tus pacientes reservan solos desde un link público. Solo se ofrecen los servicios
+              marcados como públicos.
+            </>
+          }
+          on={booking}
+          onChange={() => void toggleBooking()}
+          disabled={!canAdmin || pending}
+        />
+        {booking && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+              padding: "0 0 12px",
+            }}
+          >
+            <code
+              style={{
+                flex: "1 1 260px",
+                minWidth: 0,
+                padding: "8px 12px",
+                borderRadius: 10,
+                background: "rgba(15,30,51,0.04)",
+                fontSize: 12,
+                wordBreak: "break-all",
+                fontFamily: "var(--font-mono, monospace)",
+                color: "var(--navy-700)",
+              }}
+            >
+              {bookingUrl}
+            </code>
+            <Button type="button" variant="ghost" onClick={copy}>
+              {copied ? <><IconCheck size={12} stroke={3} /> Copiado</> : "Copiar link"}
+            </Button>
+          </div>
+        )}
+        <PrefRow
+          label="Tipo de consultorio"
+          hint="Define qué secciones ves en KineSoft. Para cambiarlo, escribinos."
+        >
+          <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
+        </PrefRow>
+        <PrefRow label="Plan" hint="Para cambiar de plan, escribinos.">
+          <ReadOnlyValue>{PLAN_LABEL[tenant.plan]}</ReadOnlyValue>
+        </PrefRow>
+      </div>
+      {error && (
+        <div style={{ marginTop: 8 }}>
+          <ErrorBox>{error}</ErrorBox>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReadOnlyValue({ children }: { children: ReactNode }) {
+  return (
+    <span
+      style={{
+        fontSize: 13,
+        fontWeight: 600,
+        color: "var(--navy-900)",
+        padding: "6px 12px",
+        borderRadius: 999,
+        background: "rgba(15,30,51,0.06)",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Label + hint on the left, a Switch on the right (per-user prefs and the
+ * consultorio's features). With `children`, that control replaces the Switch
+ * (read-only values in "Funciones del consultorio").
+ */
 function PrefRow({
   label,
   hint,
-  on,
+  on = false,
   onChange,
+  disabled,
+  children,
 }: {
   label: string;
-  hint: string;
-  on: boolean;
-  onChange: (v: boolean) => void;
+  hint: ReactNode;
+  on?: boolean;
+  onChange?: (v: boolean) => void;
+  disabled?: boolean;
+  children?: ReactNode;
 }) {
   return (
     <div
@@ -340,7 +506,9 @@ function PrefRow({
         <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{label}</div>
         <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
       </div>
-      <Switch on={on} onChange={() => onChange(!on)} />
+      {children ?? (
+        <Switch on={on} onChange={() => onChange?.(!on)} disabled={disabled} aria-label={label} />
+      )}
     </div>
   );
 }

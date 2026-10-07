@@ -37,6 +37,7 @@ import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureRequestContext } from "@/lib/request-context";
 import { clientIp } from "@/lib/client-ip";
+import type { TenantEntitlements } from "@/lib/tenant-modules";
 
 export type Actor = {
   tenantId: string;
@@ -48,7 +49,24 @@ export type Actor = {
   // Platform superadmin (cross-tenant): authors the global exercise catalog +
   // the "Plataforma" owner panel. Orthogonal to the tenant-scoped Role.
   isPlatformAdmin: boolean;
+  /**
+   * EV0 (C-EV3): vertical + plan + switch del turnero del tenant ACTIVO, de la
+   * misma fila de `Tenant` que `buildActor` ya trae (`include: { tenant: true }`),
+   * sin query extra. Los módulos salen de acá (`modulesFor`, `lib/authz.ts`).
+   * Se resuelve en cada request (sin cache entre requests): un cambio desde
+   * /plataforma se ve en la próxima navegación.
+   */
+  entitlements: TenantEntitlements;
 };
+
+/** Solo las tres columnas: no se cuela el resto de la fila de Tenant en el Actor. */
+function entitlementsOf(t: {
+  vertical: TenantEntitlements["vertical"];
+  plan: TenantEntitlements["plan"];
+  publicBookingEnabled: boolean;
+}): TenantEntitlements {
+  return { vertical: t.vertical, plan: t.plan, publicBookingEnabled: t.publicBookingEnabled };
+}
 
 export class UnauthenticatedError extends Error {
   constructor(public reason: "no_session" | "no_membership" = "no_session") {
@@ -104,6 +122,7 @@ async function buildActor(input: {
     practitionerName: prac.user.fullName ?? prac.user.email,
     userId: input.userId,
     isPlatformAdmin: prac.user.isPlatformAdmin,
+    entitlements: entitlementsOf(chosen.tenant),
   };
 }
 
@@ -123,6 +142,7 @@ async function buildDemoActor(): Promise<Actor | null> {
     practitionerName: prac.user.fullName ?? prac.user.email,
     userId: prac.userId,
     isPlatformAdmin: prac.user.isPlatformAdmin,
+    entitlements: entitlementsOf(tenant),
   };
 }
 

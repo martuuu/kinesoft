@@ -15,12 +15,18 @@
  *     consultorio pool — per the Sprint 17 brief "TODO lo que crea
  *     se va a una sola base de datos para el Consultorio").
  *   - Global rows (tenantId == null) are read-only from the app.
+ *   - EV0 (C-EV4): todo esto es del módulo `diagnostico` (un consultorio
+ *     General no lo tiene). Las escrituras tiran `ForbiddenError` vía
+ *     `requireModule`; la lista compartida (`listCustomConditions`, la usa la
+ *     pestaña de Configuración) devuelve `[]` sin el módulo.
  */
 import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { requireModule } from "@/lib/authz";
+import { modulesFor } from "@/lib/tenant-modules";
 import { audit } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
@@ -64,6 +70,8 @@ const ConditionInput = z.object({
  */
 export async function listCustomConditions(): Promise<CustomConditionRow[]> {
   const actor = await getActor();
+  // Lectura compartida: sin el módulo, vacío (no rompe la pantalla).
+  if (!modulesFor(actor.entitlements).has("diagnostico")) return [];
   const rows = await runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
     where: { tenantId: actor.tenantId },
     orderBy: { name: "asc" },
@@ -87,6 +95,9 @@ export async function listCustomConditions(): Promise<CustomConditionRow[]> {
 export async function createCustomCondition(
   raw: z.input<typeof ConditionInput>
 ): Promise<ActionResult<{ id: string; slug: string }>> {
+  // Módulo antes que la validación: un consultorio sin `diagnostico` recibe
+  // Forbidden con cualquier input.
+  const actor = await requireModule("diagnostico");
   const parsed = ConditionInput.safeParse(raw);
   if (!parsed.success) {
     return {
@@ -95,7 +106,6 @@ export async function createCustomCondition(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  const actor = await getActor();
   const data = parsed.data;
   // Slug uniqueness: append a short suffix derived from createdAt-ish
   // if there's a collision within the tenant. Slug stays globally
@@ -141,7 +151,7 @@ export async function updateCustomCondition(
   id: string,
   raw: Partial<z.input<typeof ConditionInput>>
 ): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("diagnostico");
   const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true },
@@ -185,7 +195,7 @@ export async function updateCustomCondition(
 }
 
 export async function deleteCustomCondition(id: string): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("diagnostico");
   const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },
     select: { id: true, _count: { select: { diagnoses: true } } },

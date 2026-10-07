@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { KineLogo } from "@/components/ui/kine-logo";
@@ -9,6 +9,7 @@ import {
   IconHome,
   IconCal,
   IconUsers,
+  IconClock,
   IconHeart,
   IconActivity,
   IconDumbbell,
@@ -17,37 +18,120 @@ import {
   IconLogout,
   IconBookmark,
 } from "@/components/ui/icons";
-import type { ComponentType } from "react";
+import { useMemo, type ComponentType } from "react";
+import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
+import type { Capability } from "@/lib/capabilities";
+import type { TenantModule } from "@/lib/tenant-modules";
+import { useTenantModules } from "./tenant-modules-context";
 
-type NavItem = { href: string; icon: ComponentType<{ size?: number }>; label: string };
+/**
+ * EV0 (EV-S): el sidebar ya no tiene lista propia. Renderiza
+ * `navFor(modules, caps)` de `lib/nav.ts` (única fuente, compartida con el
+ * topbar y los atajos ⌘K): antes de EV0 la lista estaba copiada acá y un
+ * consultorio General veía Diagnóstico/Seguimiento/Ejercicios sin poder
+ * usarlos. Esconder es UX; la barrera es `assertModule`/`guardModuleSegment`.
+ */
+export const NAV_ICONS: Record<NavIconKey, ComponentType<{ size?: number }>> = {
+  home: IconHome,
+  calendar: IconCal,
+  users: IconUsers,
+  clock: IconClock,
+  heart: IconHeart,
+  activity: IconActivity,
+  dumbbell: IconDumbbell,
+  chart: IconChart,
+  settings: IconSettings,
+  bookmark: IconBookmark,
+};
+
+export const CONFIG_HREF = "/configuracion";
+export const PLATFORM_HREF = "/plataforma";
+
+/**
+ * Entradas del nav para el actor: módulos del tenant + capabilities del rol.
+ * Es `navFor` pelado: Configuración declara `capability: "tenant.admin"` en
+ * `lib/nav.ts` (configuracion/page.tsx redirige a cualquier otro rol), así que
+ * no hace falta un filtro propio acá. Se mantiene el nombre porque lo comparten
+ * sidebar, topbar y los tests de render.
+ */
+export function shellNavItems(
+  modules: ReadonlySet<TenantModule>,
+  caps: ReadonlySet<Capability>
+): NavItem[] {
+  return navFor(modules, caps);
+}
+
+/**
+ * Set estable de capabilities: el layout re-renderiza en cada navegación y el
+ * array llega nuevo; la clave evita rearmar el nav por identidad.
+ */
+export function useCapSet(caps: readonly Capability[]): ReadonlySet<Capability> {
+  const key = caps.join(",");
+  return useMemo(() => new Set<Capability>(key ? (key.split(",") as Capability[]) : []), [key]);
+}
+
+/**
+ * Qué entrada del nav está activa: la más específica que matchea.
+ *
+ * Una entrada matchea si el pathname empieza con su path y la URL actual trae
+ * todos los query params de su href. Entre las que matchean gana la que exige
+ * más params. Así `/agenda?view=reception` (Sala de espera) ilumina SOLO
+ * "Sala de espera" y no también "Agenda" (que matchea por prefijo). Cuando SV
+ * mueva la Sala a `/sala` (SV11a) esto sigue funcionando sin cambios.
+ */
+export function activeNavHref(
+  hrefs: readonly string[],
+  pathname: string | null,
+  search: Pick<URLSearchParams, "get"> | null
+): string | null {
+  if (!pathname) return null;
+  let best: { href: string; score: number } | null = null;
+  for (const href of hrefs) {
+    const [path, query = ""] = href.split("?");
+    if (pathname !== path && !pathname.startsWith(`${path}/`)) continue;
+    const want = new URLSearchParams(query);
+    let ok = true;
+    let n = 0;
+    want.forEach((v, k) => {
+      n++;
+      if (search?.get(k) !== v) ok = false;
+    });
+    if (!ok) continue;
+    if (!best || n > best.score) best = { href, score: n };
+  }
+  return best?.href ?? null;
+}
 
 // `next/link` wrapped in motion so nav items can carry a subtle press
 // micro-interaction (whileTap) without giving up client-side navigation.
 const MotionLink = motion(Link);
 
-const NAV: NavItem[] = [
-  { href: "/dashboard", icon: IconHome, label: "Inicio" },
-  { href: "/agenda", icon: IconCal, label: "Agenda" },
-  { href: "/pacientes", icon: IconUsers, label: "Pacientes" },
-  { href: "/diagnostico", icon: IconHeart, label: "Diagnóstico" },
-  { href: "/seguimiento", icon: IconActivity, label: "Seguimiento" },
-  { href: "/biblioteca", icon: IconDumbbell, label: "Ejercicios" },
-  { href: "/terapia-manual", icon: IconActivity, label: "Terapia Manual" },
-  { href: "/reportes", icon: IconChart, label: "Reportes" },
-];
-
 export function Sidebar({
   collapsed = false,
   isPlatformAdmin = false,
+  caps = [],
 }: {
   collapsed?: boolean;
   isPlatformAdmin?: boolean;
+  /** Capabilities del rol (array: llega de un Server Component). Sin caps, falla cerrado. */
+  caps?: readonly Capability[];
 }) {
   const pathname = usePathname();
-  // El catálogo global vive bajo /plataforma pero tiene su propia entrada: que
-  // no se iluminen las dos a la vez.
-  const catalogActive = pathname?.startsWith("/plataforma/catalogo") ?? false;
-  const platformActive = (pathname?.startsWith("/plataforma") ?? false) && !catalogActive;
+  const search = useSearchParams();
+  const { list: modules } = useTenantModules();
+  const capSet = useCapSet(caps);
+  const items = useMemo(() => shellNavItems(modules, capSet), [modules, capSet]);
+  // Configuración va al pie (junto a Plataforma y Cerrar sesión), como antes de EV0.
+  const main = items.filter((it) => it.href !== CONFIG_HREF);
+  const config = items.find((it) => it.href === CONFIG_HREF) ?? null;
+  // Plataforma: UNA entrada a /plataforma (índice de EV-P3) que no sale de
+  // `lib/nav.ts` porque depende de `actor.isPlatformAdmin`, no del tenant.
+  // Activa en cualquier subruta (ejercicios, catálogo, consultorios).
+  const active = activeNavHref(
+    [...items.map((it) => it.href), ...(isPlatformAdmin ? [PLATFORM_HREF] : [])],
+    pathname,
+    search
+  );
   const w = collapsed ? 64 : 232;
   return (
     <aside
@@ -97,14 +181,15 @@ export function Sidebar({
           alignItems: collapsed ? "center" : "stretch",
         }}
       >
-        {NAV.map((it) => {
-          const on = pathname?.startsWith(it.href);
-          const I = it.icon;
+        {main.map((it) => {
+          const on = active === it.href;
+          const I = NAV_ICONS[it.icon];
           return (
             <MotionLink
               key={it.href}
               href={it.href}
               whileTap={{ scale: 0.97 }}
+              aria-current={on ? "page" : undefined}
               style={{
                 position: "relative",
                 textDecoration: "none",
@@ -166,74 +251,23 @@ export function Sidebar({
         }}
       >
         {isPlatformAdmin && (
-          <Link
-            href="/plataforma/ejercicios"
-            title={collapsed ? "Plataforma" : undefined}
-            style={{
-              textDecoration: "none",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: collapsed ? 0 : "11px 14px",
-              width: collapsed ? 44 : "auto",
-              height: collapsed ? 40 : "auto",
-              color: platformActive ? "var(--sky-700)" : "var(--navy-500)",
-              fontSize: 13.5,
-              fontWeight: platformActive ? 700 : 500,
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 12,
-            }}
-          >
-            <IconDumbbell size={18} />
-            {!collapsed && <span>Plataforma</span>}
-          </Link>
+          <FooterLink
+            href={PLATFORM_HREF}
+            label="Plataforma"
+            Icon={IconBookmark}
+            on={active === PLATFORM_HREF}
+            collapsed={collapsed}
+          />
         )}
-        {isPlatformAdmin && (
-          // B1.3: curado del catálogo global (prestadoras, prácticas, especialidades).
-          <Link
-            href="/plataforma/catalogo/prestadoras"
-            title={collapsed ? "Catálogo global" : undefined}
-            style={{
-              textDecoration: "none",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: collapsed ? 0 : "11px 14px",
-              width: collapsed ? 44 : "auto",
-              height: collapsed ? 40 : "auto",
-              color: catalogActive ? "var(--sky-700)" : "var(--navy-500)",
-              fontSize: 13.5,
-              fontWeight: catalogActive ? 700 : 500,
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 12,
-            }}
-          >
-            <IconBookmark size={18} />
-            {!collapsed && <span>Catálogo global</span>}
-          </Link>
+        {config && (
+          <FooterLink
+            href={config.href}
+            label={config.label}
+            Icon={NAV_ICONS[config.icon]}
+            on={active === config.href}
+            collapsed={collapsed}
+          />
         )}
-        <Link
-          href="/configuracion"
-          title={collapsed ? "Configuración" : undefined}
-          style={{
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: collapsed ? 0 : "11px 14px",
-            width: collapsed ? 44 : "auto",
-            height: collapsed ? 40 : "auto",
-            color:
-              pathname?.startsWith("/configuracion") ? "var(--sky-700)" : "var(--navy-500)",
-            fontSize: 13.5,
-            fontWeight: pathname?.startsWith("/configuracion") ? 700 : 500,
-            justifyContent: collapsed ? "center" : "flex-start",
-            borderRadius: 12,
-          }}
-        >
-          <IconSettings size={18} />
-          {!collapsed && <span>Configuración</span>}
-        </Link>
         <form action="/api/auth/sign-out" method="post" style={{ width: "100%" }}>
           <button
             type="submit"
@@ -261,5 +295,44 @@ export function Sidebar({
         </form>
       </div>
     </aside>
+  );
+}
+
+function FooterLink({
+  href,
+  label,
+  Icon,
+  on,
+  collapsed,
+}: {
+  href: string;
+  label: string;
+  Icon: ComponentType<{ size?: number }>;
+  on: boolean;
+  collapsed: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      title={collapsed ? label : undefined}
+      aria-current={on ? "page" : undefined}
+      style={{
+        textDecoration: "none",
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: collapsed ? 0 : "11px 14px",
+        width: collapsed ? 44 : "auto",
+        height: collapsed ? 40 : "auto",
+        color: on ? "var(--sky-700)" : "var(--navy-500)",
+        fontSize: 13.5,
+        fontWeight: on ? 700 : 500,
+        justifyContent: collapsed ? "center" : "flex-start",
+        borderRadius: 12,
+      }}
+    >
+      <Icon size={18} />
+      {!collapsed && <span>{label}</span>}
+    </Link>
   );
 }

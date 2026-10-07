@@ -4,18 +4,34 @@
  * Tenant-level settings — OWNER/ADMIN only (`requireTenantAdmin`, lib/authz.ts;
  * B1.7 sacó de acá la copia local del chequeo de rol).
  *
- * For now the only setting is `sharedPatientView`. Add more here when
- * needed (TZ override, currency, etc.).
+ * Settings: datos del consultorio, horario, `sharedPatientView` y (EV0, EV-K)
+ * el switch del turnero público. Las "funciones del consultorio" (entitlements:
+ * vertical, plan, turnero) NO se escriben acá con `tx.tenant.update`: pasan por
+ * el escritor único `applyTenantEntitlementsInTx` (C-EV5), que para la source
+ * `tenant-settings` solo permite `publicBookingEnabled` (vertical y plan los
+ * cambia /plataforma, EV-D5/D6).
  */
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
+import { z } from "zod";
+import type { TenantPlan, TenantVertical } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
 import { audit } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
+import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
+import { tenantEntitlementTags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 
 export type TenantSettings = {
+  /** Para armar la URL del turnero (`/c/<slug>/booking`) en Configuración. */
+  slug: string;
+  /** Solo lectura en Configuración: la cambia /plataforma (EV-D5). */
+  vertical: TenantVertical;
+  /** Solo lectura en Configuración: la cambia /plataforma o el billing (EV-D6). */
+  plan: TenantPlan;
+  /** Switch del turnero público (EV-D2: nace apagado). */
+  publicBookingEnabled: boolean;
   name: string;
   legalName: string | null;
   taxId: string | null;
@@ -33,6 +49,10 @@ export async function getTenantSettings(): Promise<TenantSettings> {
   const t = await runWithRls(actor.tenantId, (tx) => tx.tenant.findUniqueOrThrow({
     where: { id: actor.tenantId },
     select: {
+      slug: true,
+      vertical: true,
+      plan: true,
+      publicBookingEnabled: true,
       name: true,
       legalName: true,
       taxId: true,
@@ -135,6 +155,43 @@ export async function setSharedPatientView(value: boolean): Promise<ActionResult
   revalidatePath("/pacientes");
   revalidatePath("/agenda");
   revalidatePath("/dashboard");
+  return { ok: true, data: undefined };
+}
+
+const publicBookingSchema = z.boolean();
+
+/**
+ * Prende/apaga el turnero público del consultorio (EV0, EV-K; EV-D2 = opt-in).
+ *
+ * Sin CAS (`expectedUpdatedAt`): es un booleano absoluto, el último que guarda
+ * gana (como `setSharedPatientView`); el CAS de C-EV5 es para el Drawer de
+ * /plataforma, que edita varias columnas a la vez. Mismo valor = no-op del
+ * escritor: ni write ni audit, y no se revalida nada.
+ */
+export async function setPublicBookingEnabled(enabled: boolean): Promise<ActionResult> {
+  const actor = await requireTenantAdmin();
+  const parsed = publicBookingSchema.safeParse(enabled);
+  if (!parsed.success) return { ok: false, error: "Valor inválido para el turnero público." };
+
+  const r = await runWithRls(actor.tenantId, (tx) =>
+    applyTenantEntitlementsInTx(tx, {
+      tenantId: actor.tenantId,
+      source: "tenant-settings",
+      patch: { publicBookingEnabled: parsed.data },
+      actor: { userId: actor.userId, homeTenantId: actor.tenantId },
+    })
+  );
+  if (!r.ok) {
+    // Sin expectedUpdatedAt ni source onboarding, el único motivo posible es
+    // `not-found` (tenant borrado entre getActor y la tx).
+    return { ok: false, error: "No encontramos el consultorio. Recargá la página." };
+  }
+  // Después del commit y solo si hubo cambio (contrato EV-C2): los módulos
+  // (`turneroPublico`) se leen en el layout y en caches por tenant.
+  if (r.changed.length > 0) {
+    for (const tag of tenantEntitlementTags(actor.tenantId)) revalidateTag(tag);
+    revalidatePath("/", "layout");
+  }
   return { ok: true, data: undefined };
 }
 

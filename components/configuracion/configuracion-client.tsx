@@ -8,6 +8,7 @@ import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
 import type { TenantSettings } from "@/lib/tenant-settings";
+import type { TenantModule } from "@/lib/tenant-modules";
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
 import { TabsBar, type Tab } from "./controls";
@@ -21,6 +22,8 @@ import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
 
 type Props = {
   role: Role;
+  /** Módulos del consultorio (EV0): esconden pestañas sin módulo (solo UI). */
+  modules: TenantModule[];
   tenant: TenantSettings;
   insurers: InsurerRow[];
   services: ServiceRow[];
@@ -66,7 +69,7 @@ export function ConfiguracionClient(props: Props) {
         </h1>
       </header>
 
-      <TabsBar tab={tab} setTab={(t) => void setTab(t)} role={props.role} />
+      <TabsBar tab={tab} setTab={(t) => void setTab(t)} role={props.role} modules={props.modules} />
 
       {tab === "general" && <GeneralPanel tenant={props.tenant} role={props.role} />}
       {tab === "sedes" && <LocationsPanel locations={props.locations} />}
@@ -81,7 +84,7 @@ export function ConfiguracionClient(props: Props) {
         <ServicesPanel services={props.services} practitioners={props.practitioners} />
       )}
       {tab === "obras-sociales" && <InsurersPanel insurers={props.insurers} />}
-      {tab === "diagnosticos" && <DiagnosticosPanel conditions={props.customConditions} />}
+      {tab === "diagnosticos" && props.modules.includes("diagnostico") && <DiagnosticosPanel conditions={props.customConditions} />}
       {tab === "usuarios" && props.role === "OWNER" && (
         <UsersPanel team={props.team} pending={props.pending} />
       )}

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import type { Role } from "@prisma/client";
 import { headers } from "next/headers";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { AppShell } from "@/components/layout/app-shell";
@@ -8,6 +9,8 @@ import { runWithRls } from "@/lib/rls";
 import { safeNext } from "@/lib/safe-next";
 import { decideAppGate } from "@/lib/onboarding-logic";
 import { getSessionUser } from "@/lib/onboarding-internal";
+import { modulesFor } from "@/lib/tenant-modules";
+import { capabilitiesFor } from "@/lib/capabilities";
 
 /**
  * Guard for the entire authenticated workspace. Renders the AppShell only
@@ -25,6 +28,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const actor = await tryGetActor();
 
   let gate: string | null;
+  // Rol de la membresía activa: ya se lee para el gate de onboarding; se
+  // reusa para las capabilities del nav (EV-S) sin otra query.
+  let role: Role | null = null;
   if (!actor) {
     const user = await getSessionUser();
     // El layout no recibe el pathname: lo lee de `x-pathname` si el
@@ -50,6 +56,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       ]);
       return { completed: !!tenant?.onboardingCompletedAt, role: m?.role ?? null };
     });
+    role = t.role;
     gate = decideAppGate({
       hasSession: true,
       hasActor: true,
@@ -64,6 +71,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Seed the Tweaks context with the user's persisted agenda preferences so
   // the week view + the Tweaks panel render the right state on first paint.
   const prefs = await getUserPreferences();
+  // EV0 (EV-S): módulos del consultorio (vertical × plan × turnero, de
+  // `actor.entitlements`) y capabilities del rol para filtrar el nav. Arrays y
+  // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es
+  // `assertModule`/`requireCapability` en cada action.
+  const modules = Array.from(modulesFor(actor.entitlements));
+  const caps = Array.from(capabilitiesFor(role));
   return (
     <TweaksProvider
       initialAgenda={{
@@ -72,7 +85,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         agendaShowSunday: prefs.agendaShowSunday,
       }}
     >
-      <AppShell isPlatformAdmin={actor.isPlatformAdmin}>{children}</AppShell>
+      <AppShell isPlatformAdmin={actor.isPlatformAdmin} modules={modules} caps={caps}>
+        {children}
+      </AppShell>
     </TweaksProvider>
   );
 }

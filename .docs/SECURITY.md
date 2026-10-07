@@ -148,10 +148,17 @@ pages, the MP webhook):
 - `lib/public-booking.ts#getPublicBookingStatus` returns only initials +
   non-PHI fields. The booking id (25-char CUID) is sufficiently random
   for the polling endpoint, but the payload is minimised regardless.
-- `findPatientByEmail` is **not** an exported server action. It lives in
-  `lib/public-booking-internal.ts` and is only invoked from server
-  components that have already validated `email_confirmed_at` against
-  the Supabase session.
+- `findPatientByEmailForPrefill` is **not** an exported server action. It lives in
+  `lib/public-booking-internal.ts` and is only invoked from the page loader
+  (`loadPublicBookingPage`) after validating `email_confirmed_at` against
+  the Supabase session. **Prefill acotado al consultorio (EV0 V.Z, P2):**
+  `tenantId` es obligatorio; criterio ficha con `userId` = el usuario → única
+  ficha del consultorio con ese email → nada (dos fichas = ambiguo, sin
+  prefill). Antes buscaba por email en todos los consultorios y precargaba DNI,
+  nacimiento, cobertura y emergencia de una ficha **ajena** (PD-14: entre
+  consultorios no se comparte nada; solo viaja el nombre de la sesión). Con
+  los turnos online apagados el loader corta antes de leer la sesión y el
+  prefill. Test: `ev0-review-fixes.test.ts` (P2).
 
 ## 3. Patient portal
 
@@ -565,7 +572,7 @@ the Membership — `Actor` still doesn't carry it):
   `exercise-media` that reads Patient/Booking/Session: each one is gated.
 - Known gaps → C0: the `admin` profile is read-only (the Secretaria can't edit
   contact/coverage yet) and the directory still uses the basic projection for
-  `admin`; `lib/search.ts` condition search isn't tenant-filtered (no PHI) → C.
+  `admin`. (The ⌘K condition search is tenant-filtered since EV0.)
 
 **Availability reads** (`lib/availability-actions.ts`): `agenda.viewAll`, zod,
 every input id (practitioner, service, location, patient, insurer) validated
@@ -593,3 +600,38 @@ moved since the preview.
 against the tenant, location writes behind the locations advisory lock (shared
 to use a location, exclusive to archive or change the primary).
 
+## 14. Verticales, módulos y /plataforma de consultorios (EV0, 07-oct-2026)
+
+Diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md); contratos en [VERTICALES.md §3](VERTICALES.md).
+
+- **Módulos = barrera en la action, no en el nav.** `requireModule` / `assertModule` (`lib/authz.ts`) en cada export
+  de un área con módulo: escrituras y lecturas de detalle tiran `ForbiddenError` (`MODULE_DENIED_COPY`), lecturas
+  compartidas devuelven `[]`. El `layout.tsx` de segmento (`guardModuleSegment`) y el nav son UX. Por eso la
+  revisión cerró `lib/programs.ts` (N1) y `createExercise`/`ensureTag` (N2): un consultorio General los podía invocar
+  por RPC aunque no viera el botón.
+- **Escritor único de entitlements** (`lib/tenant-entitlements-internal.ts`, server-only): después de
+  `bootstrapTenant`, nadie más escribe `vertical`, `plan`, `subscriptionStatus`, `trialEndsAt` ni
+  `publicBookingEnabled`. Allowlist por `source` (tira ante una key fuera de la lista):
+  - `platform`: todo; exige actor superadmin, cruza tenants por `prismaService`;
+  - `tenant-settings`: solo `publicBookingEnabled`; exige `homeTenantId === tenantId`, tx con `runWithRls`;
+  - `onboarding`: solo `vertical`, mientras el onboarding siga abierto;
+  - `billing`: `plan/subscriptionStatus/trialEndsAt`, para el webhook futuro, que **deriva el `tenantId` del pago
+    verificado** contra MP, nunca del body.
+  FOR UPDATE + CAS (`expectedUpdatedAt`) y revalidación de `tenantEntitlementTags` solo si hubo cambio. Gate: grep 1
+  (excepción: los seeds, que no corren en prod).
+- **Audit de plataforma en el tenant afectado.** `auditPlatformInTx` escribe el `AuditEvent` en el consultorio que se
+  editó (`action: "platform.*"`, `payload.platform.actorHomeTenantId`), no en el del superadmin: el dueño del tenant ve
+  quién le cambió el plan, y el tenant del superadmin no acumula eventos ajenos.
+- **Lecturas de /plataforma** (`lib/platform-tenants-read.ts`): `import "server-only"` (no son server actions: no se
+  pueden invocar por POST), `requireSuperAdmin()` en **cada** export (grep 2) y **sin PHI**: sobre Patient, Booking,
+  Session, etc. solo `count`/`_count` (grep 3); los DTOs de `-types.ts` son el allowlist y el test de integración los
+  fija. El superadmin no es equipo clínico de nadie.
+- **Data API de Supabase.** M2 revoca a `anon` y `authenticated` todo en `public` (tablas, secuencias, rutinas y
+  `DEFAULT PRIVILEGES`), guardado por existencia de los roles. Guard 3c de `npm run guard:isolation`: falla ante un
+  `GRANT … TO anon|authenticated` en migraciones o `prisma/roles.*.sql`, o si el bloque REVOKE desaparece. La app
+  nunca usa PostgREST. **Pendiente de Martin:** desactivar la Data API en la consola (VERTICALES §1). SV01 tiene que
+  respetar el guard (la función de la policy de realtime sin GRANT a `authenticated`).
+- **Turnos online apagados** (`publicBookingEnabled = false`, default de un consultorio nuevo): la página muestra
+  "Turnos online no disponibles" (`noindex`) **sin leer la sesión ni el prefill**; slots `[]` y el submit se rechaza
+  **sin escribir**. El estado de un turno ya reservado sigue consultable. Portal y turnero leen los módulos con
+  `getTenantModulesById` (sin Actor; tenant inexistente = set vacío, falla cerrado).

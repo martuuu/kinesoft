@@ -12,13 +12,21 @@
  * P0-S02a (P0.1): `createProgram`, `updateProgram` y `setProgramStatus`
  * validan con zod (`lib/validation.ts`), escriben en día AR y auditan en la
  * misma tx que el write (`auditInTx`).
+ *
+ * EV0 V.Z (N1, contrato C-EV4): todo esto es del módulo `planes`, que un
+ * consultorio General no tiene. Antes de V.Z ninguna action de este archivo
+ * lo chequeaba: la UI escondía la pestaña, pero `createProgram` & co. se
+ * podían invocar por RPC y escribían igual. Escrituras → `requireModule`
+ * (tira `ForbiddenError`); lecturas del perfil del paciente → `[]` (las usa la
+ * ficha, que es común a las dos verticales y no tiene que romperse).
  */
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import type { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
+import { getMembershipRole, requireModule } from "@/lib/authz";
+import { modulesFor } from "@/lib/tenant-modules";
 import { isTenantAdminRole } from "@/lib/capabilities";
 import { audit, auditInTx } from "@/lib/audit";
 import { addDays, dayWindow } from "@/lib/availability/day";
@@ -62,6 +70,7 @@ function invalidInput(err: z.ZodError): { ok: false; error: string; fieldErrors:
  */
 export async function getPatientProgramsLite(patientId: string) {
   const actor = await getActor();
+  if (!modulesFor(actor.entitlements).has("planes")) return [];
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
@@ -106,6 +115,7 @@ export async function getPatientProgramsLite(patientId: string) {
  */
 export async function getPatientProgramsFull(patientId: string) {
   const actor = await getActor();
+  if (!modulesFor(actor.entitlements).has("planes")) return [];
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
@@ -162,7 +172,7 @@ async function requireAdminRole(
  *   - El audit va en la misma tx (`auditInTx`): existe si y solo si el plan.
  */
 export async function createProgram(raw: ProgramCreateInput): Promise<ActionResult<{ id: string }>> {
-  const actor = await getActor();
+  const actor = await requireModule("planes");
   const parsed = ProgramCreate.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
@@ -220,7 +230,7 @@ export async function createProgram(raw: ProgramCreateInput): Promise<ActionResu
  * lectura del gate, con el audit por fuera.
  */
 export async function updateProgram(raw: ProgramUpdateInput): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("planes");
   const parsed = ProgramUpdate.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
@@ -274,7 +284,7 @@ export async function updateProgram(raw: ProgramUpdateInput): Promise<ActionResu
  * audit van en una tx.
  */
 export async function setProgramStatus(raw: ProgramStatusSetInput): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("planes");
   const parsed = ProgramStatusSet.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
@@ -312,7 +322,7 @@ export async function setProgramStatus(raw: ProgramStatusSetInput): Promise<Acti
  * cascade). Audit log records the loss.
  */
 export async function deleteProgram(id: string): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("planes");
   const denied = await requireAdminRole(actor);
   if (denied) return denied;
   // RLS Etapa 2: cascade delete (sessions + sessionExercises) traverses
@@ -344,7 +354,7 @@ export async function deleteProgram(id: string): Promise<ActionResult> {
 }
 
 export async function deleteSession(id: string): Promise<ActionResult> {
-  const actor = await getActor();
+  const actor = await requireModule("planes");
   const denied = await requireAdminRole(actor);
   if (denied) return denied;
   const session = await runWithRls(actor.tenantId, async (tx) => {

@@ -646,8 +646,8 @@ los cimientos (motor y plata puros, loader por días, locks, `auditInTx`, dedupe
 
 **Ronda 15 — Planes P1 (ES2a): migración M1 `plans_booking_link` (04-oct-2026):** ejecutada en develop según
 [PLANES.md §9](PLANES.md). **1 migración nueva**, aplicada y verificada **solo en el Docker local**; staging y prod
-van en el deploy único del cierre de B ([MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md)). Pendiente: commit de
-Martin. sha256 de `migration.sql` = `7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd`; el bloque SQL de
+van en el deploy único del cierre de B (desde el 07-oct, desde vacío: [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md)).
+Commit `0edb0c8`. sha256 de `migration.sql` = `7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd`; el bloque SQL de
 PLANES §3 es idéntico al archivo.
 
 - 🟢 **M1 escrita (S10a/b/c):** FK turno↔plan/sesión + 3 FKs compuestas (la red bajo BYPASSRLS), 4 únicos parciales
@@ -675,6 +675,42 @@ PLANES §3 es idéntico al archivo.
 - **Gate de ES2a (04-oct, en solitario sobre el Docker):** M1 aplicada en local con `migrate deploy`, `migrate status` al día (28 migraciones), sha256 `7a0e2797…45cd` = checksum, SQL idéntico a PLANES §3; `migrate diff` = solo las 3 FKs compuestas de Booking (drift aceptado); integración con el cliente VIEJO sobre el schema nuevo en verde (568+5 skip app, 552+21 skip owner); `tsc` 0 (app y scripts); unit 1451/1451 UTC y AR; guard OK (30 modelos con tenantId); `next build` OK; `perf:bundle` sin excesos; integración completa 632+19 skip (`kinesoft_app`) y 625+26 skip (owner); perf + `compare.ts` sin regresiones; 0 `it.fails` pendientes.
 - **Hallazgos nuevos para ES2b** (bloque B; filas en §2 "Hallazgos del planning de Planes"):
   `delete-service-sin-contar-planes` y `hard-delete-plan-session` ahora con la causa concreta post-M1 (P2003 → 500).
+
+**Ronda 16 — EV0: verticales, /plataforma de consultorios y Data API (07-oct-2026) ✅ (pendiente commit):** ejecutada
+en develop según [VERTICALES.md](VERTICALES.md) (decisiones de Martin del 07-oct: reset de prod, verticales General /
+Kine base / Kine PRO, Sala de Espera realtime). **1 migración nueva**, M2 `20261007120000_tenant_verticals`, aplicada
+y verificada **solo en el Docker local** (sha256 en [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md));
+va desde vacío en el deploy único de B. Olas V.0 (M2 sola) → V.0b → V.1 → V.2 → V.Z (integrador, 2 revisores de solo
+lectura, fixer). Orden siguiente: **ES2b** → ES3 → SV → ES4 → EV1 → reset + deploy único.
+
+- 🟢 **Cerrados** (filas en §2 «Hallazgos y filas de EV0»): `tenant-verticals`, `plataforma-consultorios`,
+  `turnero-sin-switch`, `entitlements-escritor-unico`, `audit-plataforma-en-tenant-afectado`; en código,
+  `data-api-anon-sin-rls` (REVOKE en M2 + guard 3c; **la acción de consola de Martin sigue pendiente**).
+- 🟢 **Bugs vivos cerrados en la corrida:**
+  - **EV-G:** el ⌘K buscaba condiciones sin filtro de tenant (con BYPASSRLS mostraba nombres de condiciones custom de
+    otros consultorios). Ahora `OR [{tenantId:null},{tenantId}]` y solo con el módulo `diagnostico` (`lib/search.ts:76-83`).
+  - **V.Z P1 (bloque A, preexistente):** `loadFilterFacets` (`lib/exercises.ts:137`) listaba las condiciones custom de
+    todos los tenants; ahora filtra por tenant y devuelve `[]` sin `diagnostico` (el módulo va en la clave de cache).
+  - **V.Z P2 (bloque B, preexistente, PD-14):** el prefill del turnero buscaba la ficha por email en **todos** los
+    consultorios (`findPatientByEmailForPrefill` sin `tenantId`): un paciente de A que abría `/c/B/booking` veía DNI,
+    nacimiento, cobertura y contacto de emergencia cargados por A, y B los recibía al reservar. Ahora `tenantId` es
+    obligatorio y el criterio es ficha con `userId` = usuario → única ficha con ese email → nada
+    (`lib/public-booking-internal.ts:146-185`). Entre consultorios solo viaja el nombre de la sesión. **Corrige** la nota
+    vieja de SECURITY §2 que lo daba por intencional.
+- 🟢 **Revisión V.Z (cerrados por el fixer):**
+  - **N1:** `lib/programs.ts` sin gate de módulo → escrituras con `requireModule('planes')`, lecturas `[]`.
+  - **N2:** `createExercise` devuelve `ActionResult` con `MODULE_DENIED_COPY.ejercicios` y `ensureTag` tira sin
+    `gate.canCreate` (`lib/exercises.ts:229,275`).
+  - **B1-B8 (UX):** `Switch` con `aria-label`; el Drawer de /plataforma refresca ante stale; copy "Turnos online" /
+    "Activo" / "Apagado" / "Titular"; lista de consultorios sin Miembros/Creado (quedan en el detalle); atajos ⌘K
+    "Inicio"/"Ejercicios" iguales al nav; comentario de `lib/authz.ts` corregido; tests de `BookingUnavailable` y
+    `TabsBar` de Configuración.
+- **Enmiendas nuevas a sesiones pendientes** (VERTICALES §5, copiadas en PLANES §10-§11): `searchPatientsForAssignment`
+  → S17d; `recordEvaScore`/`getPatientEvaScores` → S22b; `getSessionsChart` y la clave de cache del dashboard → S14;
+  sobrevivientes de `programs.ts` → S15/S27a; función de la policy de realtime sin GRANT a `authenticated` → SV01.
+- **Aceptado:** el nav del layout no se repinta en navegación suave después de un cambio desde /plataforma (los guards
+  sí redirigen): recargar.
+- **Gate de EV0 (07-oct, en solitario sobre el Docker):** M2 aplicada en local (`migrate status` al día, 29 migraciones); `tsc` 0 (app y scripts); unit 1577/1577 en TZ=UTC y TZ=AR; guard OK (incluido 3c de grants); `next build` OK (sin Suspense extra para `useSearchParams`: `(app)` es dinámico); `perf:bundle` sin excesos; integración completa 706 + 19 skip (`kinesoft_app`) y 699 + 26 skip (owner); perf + `compare.ts` sin regresiones; greps §15.9: entitlements solo por el escritor único (más seeds dev), 4/4 `requireSuperAdmin` en `lib/platform-tenants*`, 0 lecturas de PHI; 0 `it.fails` pendientes.
 
 ## Cómo leer la severidad
 
@@ -1004,7 +1040,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | c2-no-tests-ci | alta | B | package.json | 🟢 | Ronda 1 + Ronda 3 (mismo cierre que `no-test-suite`) |
 | no-static-security-guard | alta | B | .github/workflows/ci.yml | 🟢 | Ronda 10 — step `npm run guard:isolation` en CI; desde A0b (Ronda 11) el CI corre en todas las ramas, no solo `main` |
 | no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook (Ola 2.4) |
-| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4) |
+| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4). **07-oct:** EV0 le da efecto al plan (matriz de módulos) y lo hace editable desde /plataforma; el billing SaaS (webhook MP `source:"billing"`) sigue diferido |
 | c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🟡 | Código endurecido en A3a (30-sep: timeout, fallback con log, prefijo por entorno, purga). **Falta la env de Upstash** (EXTERNAL-CONFIG §4, dueño) |
 | booking-same-patient-slot-toctou | baja | B | lib/bookings.ts (create/update/batch) | 🟢 | Ronda 6 — guard de app + **backstop DB**: índice único parcial `("tenantId","patientId","scheduledFor") WHERE patientId IS NOT NULL AND status <> 'CANCELLED'`, `P2002` manejado en los 4 paths de escritura |
 | sin-panel-owner | alta | B | lib/session.ts / app/(app)/plataforma | 🟡 | Ronda 7 — **parcial**: entregados `UserProfile.isPlatformAdmin`, `requireSuperAdmin()`, guard + sidebar y el panel `plataforma/{ejercicios,tags}` con CRUD del catálogo global. **Faltan** tickets/feedback, formulario de contacto e impersonación cross-tenant |
@@ -1085,7 +1121,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
 | roles-assistant-billing-cosmeticos | media | schema.prisma:108 · lib/capabilities.ts | 🟡 | roles-assistant-billing — B-pre les dio capabilities reales (ASSISTANT opera la agenda sin `clinical.read`); falta en C0 que puedan loguearse sin fila Practitioner (`secretaria-sin-practitioner`) |
 | no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
-| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | **C2** (reclasificada en el Paso 0 de Planes, 04-oct: decía "(B4)", que choca con la ola P4 de Planes) |
+| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | **B · corrida SV** (07-oct: Sala de Espera realtime, entre ES3 y ES4; VERTICALES.md §7). Antes C2 |
 | portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
 | patient-tenancy-single-home-row | baja | schema.prisma:250 | 🔴 | Planes P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + P4-S24a (una cuenta, fichas por consultorio, sin compartir nada clínico) |
 | l1-portal-minimo | baja | lib/portal.ts:1 | 🔴 | Portal v2 (Ola 2.6) |
@@ -1186,14 +1222,14 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 
 Planning en [PLANES.md](PLANES.md) (firmado por Martin el 03-oct). Los de bloque A eran fugas vivas o permisos de la
 Secretaria (enmiendas E0/E1, verificadas por `wf_bf603f14-cb7`). **ES1 los cerró en código** (Ronda 14); por la
-decisión del 04-oct ("nada se despliega hasta cerrar B") **siguen vivos en prod** hasta el deploy final, salvo que
-Martin decida un hotfix (PLANES.md, "Abierto para Martin"). Las líneas de 🟢 son del working tree al cierre de ES1.
+decisión del 04-oct ("nada se despliega hasta cerrar B") **siguen vivos en prod** hasta el deploy final. Desde el
+07-oct no hay hotfix: prod se resetea y el código nuevo sale en el deploy único. Las líneas de 🟢 son del working tree al cierre de ES1.
 
 | Slug | Sev | Bloque | Ubicación | Estado | Sesión dueña / cierre |
 |---|---|---|---|---|---|
 | getpatient-rpc-sin-gate | alta | A | ~~lib/patients.ts:647~~ | 🟢 | P0-S02a — borrada; `tests/integration/patients-rpc-surface.test.ts:66-68` afirma que el export no existe. El revisor (b) barrió las exports que leen Patient/Booking/Session: 0 fugas nuevas |
 | exercise-media-firmador-abierto | alta | A | lib/exercise-media.ts:10-12 · lib/exercise-media-internal.ts:56 | 🟢 | P0-S02m — `lib/exercise-media.ts` sin firmadores; `signExerciseMedia(mediaId)` firma solo la clave de la fila (solo media global; scoping por tenant → C1 si aparece media de tenant) |
-| storage-policies-sin-verificar | alta | A | lib/storage-internal.ts:68,86,104 · lib/files.ts:39 · storage.objects | 🟢 | **Lado código** (P0-S02m: Storage solo por service role, `{error}` chequeado). **Prod pendiente:** precheck (17) de Martin; si hay bucket público o policy anon/authenticated, se dropea en el mismo deploy (MIGRACIONES-RUNBOOK §2.3). Requiere `SUPABASE_SERVICE_ROLE_KEY` en Vercel |
+| storage-policies-sin-verificar | alta | A | lib/storage-internal.ts:68,86,104 · lib/files.ts:39 · storage.objects | 🟢 | **Lado código** (P0-S02m: Storage solo por service role, `{error}` chequeado). **Prod pendiente:** precheck (17) de Martin; si hay bucket público o policy anon/authenticated, se saca en el go-live (MIGRACIONES-RUNBOOK «Go-live con reset», paso 10). Requiere `SUPABASE_SERVICE_ROLE_KEY` en Vercel |
 | listbookingsinrange-rpc-sin-clinical | media | A | lib/bookings.ts:663,727,744-777 | 🟢 | P0-S07k — `bookingFieldAccess` + `patientCondition` solo con `clinical.read` y full; test `bookings-range-clinical.test.ts` (borrarla sigue en C1) |
 | secretaria-autoasigna-pacientes | alta | A | lib/patients.ts:757-857 | 🟢 | P0-S07sp — `createPatient(raw, {assignTo})` al profesional del turno, validado en la tx. Prod: precheck (15) antes del deploy |
 | secretaria-ve-hc-con-shared | alta | A | lib/visibility.ts:138,153-155,200,249 · lib/patients.ts:332-402,1026-1036 · booking-drawer/index.tsx:163 · patient-profile.tsx:356 | 🟢 | P0-S02p (nivel `admin`) + P0-S07sp (proyección `admin`, `setPatientDiagnosis` con `canWriteClinical`) + P0-S07u (drawer; "Usar como diagnóstico" ya no borra) + P0-S07v (perfil) |
@@ -1241,7 +1277,7 @@ E0/E1): 0 fugas nuevas; los H-b son preexistentes.
 
 | Slug | Sev | Bloque | Ubicación | Estado | Destino |
 |---|---|---|---|---|---|
-| search-condition-sin-tenant-y-email-basic | baja | C | lib/search.ts:70,111 | 🔴 | C — la búsqueda de `condition` no filtra por tenant (con BYPASSRLS ve los nombres de condiciones privadas de otros consultorios; sin PHI) y a nivel basic muestra el email del paciente si no hay DNI |
+| search-condition-sin-tenant-y-email-basic | baja | C | lib/search.ts:76-83,126 | 🟡 condiciones 🟢 en EV0 (EV-G) | C (queda el email) — la búsqueda de `condition` no filtra por tenant (con BYPASSRLS ve los nombres de condiciones privadas de otros consultorios; sin PHI) y a nivel basic muestra el email del paciente si no hay DNI |
 | secretaria-edita-contacto-cobertura | media | C0 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🔴 | C0 — PD-13 dice que `admin` ve contacto y cobertura; en ES1 el perfil `admin` es **solo lectura**. También: selector "Profesional a cargo" al crear desde el directorio (hoy la Secretaria crea solo desde el modal del turno) y `getPatientBillingPreview` sigue pidiendo full (la Secretaria ve copago null en el modal) |
 | ui-filtros-y-selector-sin-clinical | baja | C0 | profile/hero.tsx (selector "Profesional a cargo") · PatientsSearchBar | 🔴 | C0 — el selector del hero debería listar solo roles clínicos (el server ya rechaza los otros) y la barra del directorio debería ocultar "Con plan/Sin plan" y el filtro de diagnóstico sin `clinical.read` (el server ya devuelve vacío) |
 | directorio-admin-sin-contacto | baja | C0 | lib/patients.ts (`listPatients`) · patients-list.tsx:44 · recent-patients.tsx | 🔴 | C0 (o ES3) — el directorio para `admin` sigue con la proyección básica (sin contacto); al sumar `admin` a `PatientRow`, los chequeos de UI pasan a la forma positiva `=== "full"` |
@@ -1270,12 +1306,40 @@ E0/E1): 0 fugas nuevas; los H-b son preexistentes.
   tocar `time-blocks.ts`; presupuesto de bundle bloqueante; duraciones > 240 min; **ejercicios del portal fuera de un
   plan** (los del plan entran en P4-S24e); adjunto de la orden médica de la OS; aviso "autorización por vencer" en el
   dashboard si no entra en S14; FKs compuestas opcionales hacia Service/Practitioner/Location; sub-ramas de disciplina.
-- **C2:** plan abierto; `no-realtime-agenda-compartida`.
+- **C2:** plan abierto. (`no-realtime-agenda-compartida` pasó a la corrida SV del bloque B el 07-oct.)
 - **Contract de B-pre:** después de P4.
 
 **Modelo de permisos (E1), vigente desde ES1:** nivel de acceso `admin` en `lib/visibility.ts` (datos administrativos,
 nunca HC) y capabilities `agenda.operateAll` (OWNER, ADMIN, ASSISTANT), `plans.manage`, `plans.schedule` y
 `plans.authorize` (estas tres sin callers hasta ES2b). §5.6 y §5.35 quedaron enmendados.
+
+### Hallazgos y filas de EV0 · verticales y /plataforma (07-oct-2026)
+
+Contexto y contratos en [VERTICALES.md](VERTICALES.md) (plan vigente §15). Corrida **EV0** con la migración M2
+`20261007120000_tenant_verticals`.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Sesión dueña / cierre |
+|---|---|---|---|---|---|
+| data-api-anon-sin-rls | **crítica** | A | 9 tablas de `public` sin RLS (`UserProfile`, `UserPreferences`, `Favorite`, `Tag`, `ExerciseTag`, `ConditionTag`, `ConditionExerciseLink`, `AnatomicalRegion`, `ConditionAnatomy`) + policies sin `TO <rol>` + grants por defecto de Supabase a `anon`/`authenticated` | 🟡 REVOKE en M2 ✅ + acción de Martin en consola: **pendiente** | Si la Data API (PostgREST) expone `public`, la **anon key** (pública) podría leer emails y **escribir `UserProfile.isPlatformAdmin`**. La app nunca usa PostgREST. **Acción de Martin en consola** (Settings → API → Data API: desactivarla o sacar `public`; precheck de solo lectura en VERTICALES.md §1) **+ REVOKE guardado en M2 (EV0)** (`REVOKE ALL … FROM anon, authenticated` + `ALTER DEFAULT PRIVILEGES`, solo si los roles existen) y guard que falla ante un GRANT a `anon`/`authenticated`. No lo resuelve el reset de prod. **EV0:** M2 con el REVOKE guardado (`tenant-verticals-m2.test.ts` con roles temporales) + guard 3c en `guard:isolation`; post-check en RUNBOOK |
+| tenant-verticals | media | B | `Tenant` · `lib/tenant-modules.ts`* · `lib/authz.ts` · `lib/session.ts` | 🟢 EV0 | EV-M (M2) + EV-C1: tipo de consultorio (General / Kinesiología), matriz de módulos `modulesFor`, `assertModule`/`guardModuleSegment`, nav único `lib/nav.ts`. Cubre el gap "no hay gating por tenant" y los segmentos `/diagnostico`, `/seguimiento`, `/biblioteca`, `/terapia-manual` sin guard (EV-Gd). Avanza `plan-fields-inert-no-upgrade-no-enforcement` (el plan pasa a tener efecto) sin billing |
+| plataforma-consultorios | media | B | `lib/platform-tenants*.ts`* · `app/(app)/plataforma/**` | 🟢 EV0 | EV-P1/P2/P3: el superadmin ve y configura todos los consultorios (vertical, plan, estado de suscripción, trial, turnero). `prismaService` + `requireSuperAdmin` por export; solo `count`/`_count` sobre modelos con PHI |
+| turnero-sin-switch | media | B | `lib/public-booking*.ts` · `app/(booking)/c/[slug]/booking/page.tsx` | 🟢 EV0 | EV-T: `Tenant.publicBookingEnabled` (opt-in, EV-D2); apagado → página "Turnos online no disponibles" `noindex` (EV-D4), slots `[]` y submit rechazado sin escribir. Switch en Configuración (EV-K) y en /plataforma |
+| entitlements-escritor-unico | alta | B | `lib/tenant-entitlements-internal.ts`* | 🟢 EV0 | EV-C2 (C-EV5): único escritor de `vertical/plan/subscriptionStatus/trialEndsAt/publicBookingEnabled` después de `bootstrapTenant`, con allowlist por `source`, FOR UPDATE + CAS. Gate: grep 1 de VERTICALES.md §4 |
+| audit-plataforma-en-tenant-afectado | media | B | `lib/audit.ts` | 🟢 EV0 | EV-C2 (C-EV6): `auditPlatformInTx` audita en el tenant **afectado** (`action: "platform.*"`, `payload.platform.actorHomeTenantId`), no en el del superadmin |
+| facetas-condiciones-cross-tenant | media | A | `lib/exercises.ts` (`loadFilterFacets`) | 🟢 EV0 V.Z (P1) | Preexistente: `condition.findMany` sin `where` → con BYPASSRLS listaba condiciones custom de todos los consultorios. Ahora tenant + globales y `[]` sin `diagnostico`. Test con el rol owner en `ev0-review-fixes.test.ts` |
+| turnero-prefill-cross-tenant | media | B | `lib/public-booking-internal.ts` (`findPatientByEmailForPrefill`) | 🟢 EV0 V.Z (P2) | Preexistente (PD-14): prefill con PII de una ficha de **otro** consultorio. Ahora `tenantId` obligatorio; `userId` → ficha única por email → nada. Test: ficha en A, sesión en `/c/B` → prefill null |
+| search-conditions-cmdk-sin-tenant | baja | C | `lib/search.ts:76-83` | 🟢 EV0 (EV-G) | ⌘K de condiciones sin filtro de tenant. Cerrado; ver la fila `search-condition-sin-tenant-y-email-basic` (queda el email a nivel basic) |
+| copy-kinesiologo-en-general | baja | B | users-panel, step-team, steps-catalog (placeholder), hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno | 🔴 | **EV1** — copy neutral para la vertical General |
+| isbasic-muerto-en-plataforma | baja | B | `biblioteca/[slug]:64` (tag Común/Pro), exercise-admin-client / exercise-drawer (toggle), `validation.ts:401` | 🔴 | **EV1** — desde EV0 el catálogo global sale del plan (PRO), no de `isBasic` |
+| soporte-escribinos-sin-canal | baja | B | `components/booking/booking-unavailable.tsx`, mensajes "escribinos" | 🔴 | **EV1** — definir el email/canal de soporte |
+| exercise-drawer-link-en-general | baja | B | exercise-drawer (link a `/biblioteca`) | 🔴 | **EV1** — en un tenant General el link lleva a un segmento guardado (redirige a `/dashboard`) |
+
+**Notas:**
+- `no-realtime-agenda-compartida` (C2) se adelanta: la cubre la corrida **SV** (Sala de Espera realtime, M3), después de
+  ES3 ([VERTICALES.md §7](VERTICALES.md)).
+- Cambio de comportamiento aceptado: Kine FREE/STARTER dejan de ver los ejercicios globales `isBasic` (solo PRO ve el
+  catálogo de Plataforma).
+- Reset de prod (07-oct): el hotfix de E0 se cae y los prechecks de datos de Planes también (PLANES.md §16).
 
 ### Resumen del checklist (al 2026-09-29)
 

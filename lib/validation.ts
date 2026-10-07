@@ -490,5 +490,9 @@ export const OnboardingClinicInput = z.object({
   phone: optionalPhone,
   whatsapp: optionalPhone,
   publicEmail: z.string().trim().toLowerCase().email("Email inválido").max(120).optional().or(z.literal("")),
+  // EV0 (EV-O): tipo de consultorio (`TenantVertical`, inline como el resto).
+  // Opcional: sin valor el alta nace KINESIOLOGY (default de la base) y una
+  // re-entrada al paso no toca la vertical.
+  vertical: z.enum(["GENERAL", "KINESIOLOGY"], { message: "Elegí el tipo de consultorio" }).optional(),
 });
 export type OnboardingClinicInputType = z.input<typeof OnboardingClinicInput>;

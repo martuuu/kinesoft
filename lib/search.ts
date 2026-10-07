@@ -3,9 +3,10 @@
 /**
  * Global search powering the ⌘K command palette.
  *
- * Returns categorised results: patients (tenant-scoped), exercises +
- * conditions (catalog), bookings in the next 7 days, plus a fixed list
- * of navigation shortcuts.
+ * Returns categorised results: patients (tenant-scoped), exercises (only
+ * with the `ejercicios` module, through the catalog gate) + conditions (only
+ * with `diagnostico`: global + this tenant's custom), bookings in the next 7
+ * days, plus the navigation shortcuts of the tenant's modules.
  *
  * Each entry has an `id`, `label`, `sublabel`, `href` and `category` so
  * the palette can render them generically.
@@ -14,25 +15,28 @@ import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { shortcutsFor } from "@/lib/nav";
+import { modulesFor } from "@/lib/tenant-modules";
 
 import type { SearchHit } from "@/lib/search-types";
 
-const SHORTCUTS: SearchHit[] = [
-  { id: "nav:dashboard", category: "shortcut", label: "Dashboard", href: "/dashboard" },
-  { id: "nav:agenda", category: "shortcut", label: "Agenda", href: "/agenda" },
-  { id: "nav:pacientes", category: "shortcut", label: "Pacientes", href: "/pacientes" },
-  { id: "nav:diagnostico", category: "shortcut", label: "Diagnóstico", href: "/diagnostico" },
-  { id: "nav:seguimiento", category: "shortcut", label: "Seguimiento", href: "/seguimiento" },
-  { id: "nav:biblioteca", category: "shortcut", label: "Biblioteca", href: "/biblioteca" },
-  { id: "nav:reportes", category: "shortcut", label: "Reportes", href: "/reportes" },
-];
+// EV0 (C-EV2): los atajos salen de `shortcutsFor(modules)` de `lib/nav.ts`, la
+// misma fuente que sidebar y topbar. Antes había una lista `SHORTCUTS` fija acá
+// y un consultorio General veía "Diagnóstico"/"Seguimiento"/"Biblioteca".
 
 export async function globalSearch(q: string): Promise<SearchHit[]> {
   const term = q.trim();
-  if (!term) return SHORTCUTS;
-
   const actor = await getActor();
-  const gate = await gatingForActor();
+  const modules = modulesFor(actor.entitlements);
+  const shortcuts = shortcutsFor(modules);
+  if (!term) return shortcuts;
+
+  // Sin el módulo no se consulta (no alcanza con filtrar el resultado: es una
+  // query de menos y no depende de que la visibilidad esté bien armada).
+  const withExercises = modules.has("ejercicios");
+  const withConditions = modules.has("diagnostico");
+  // Sin `ejercicios` el gate tampoco hace falta (su visibilidad sería vacía).
+  const gate = withExercises ? await gatingForActor() : null;
   const insensitive = "insensitive" as const;
 
   const [patients, exercises, conditions, bookings] = await Promise.all([
@@ -50,10 +54,12 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
       select: { id: true, firstName: true, lastName: true, documentId: true, email: true },
     })),
-    runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
+    !gate ? Promise.resolve([]) : runWithRls(actor.tenantId, (tx) => tx.exercise.findMany({
       where: {
         AND: [
           gate.visibility,
+          // Igual que la biblioteca: un archivado no se ofrece.
+          { archivedAt: null },
           {
             OR: [
               { name: { contains: term, mode: insensitive } },
@@ -67,12 +73,21 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
       orderBy: { name: "asc" },
       select: { id: true, slug: true, name: true, muscleGroups: true, difficulty: true },
     })),
-    runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
+    !withConditions ? Promise.resolve([]) : runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
       where: {
-        OR: [
-          { name: { contains: term, mode: insensitive } },
-          { cie10: { contains: term, mode: insensitive } },
-          { summary: { contains: term, mode: insensitive } },
+        AND: [
+          // Catálogo global + las custom de ESTE consultorio. Antes no había
+          // filtro de tenant: con RLS lo tapaba la policy, pero en prod la
+          // conexión tiene BYPASSRLS y el ⌘K listaba condiciones custom de
+          // otros consultorios (test [EV0-EV-G] en exercise-entitlements).
+          { OR: [{ tenantId: null }, { tenantId: actor.tenantId }] },
+          {
+            OR: [
+              { name: { contains: term, mode: insensitive } },
+              { cie10: { contains: term, mode: insensitive } },
+              { summary: { contains: term, mode: insensitive } },
+            ],
+          },
         ],
       },
       take: 6,
@@ -152,7 +167,7 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
   }
 
   // Always offer shortcuts that match the term.
-  const shortcutMatches = SHORTCUTS.filter((s) =>
+  const shortcutMatches = shortcuts.filter((s) =>
     s.label.toLowerCase().includes(term.toLowerCase())
   );
   return [...out, ...shortcutMatches];

@@ -1,0 +1,289 @@
+# Verticales, /plataforma de consultorios y Sala de Espera en tiempo real
+
+> **Fuente:** plan vigente `~/.claude/plans/necesito-que-asumas-el-piped-engelbart.md` §15 (07-oct-2026), volcado en el
+> Paso 0 de la corrida EV0. **Este archivo es lo que copian los agentes de EV0, ES2b, ES3, SV, ES4 y EV1 en sus
+> prompts:** los contratos C-EV1..C-EV9 y las enmiendas de §5 van **literales**, sin parafrasear.
+> Planes sigue en [PLANES.md](PLANES.md); las enmiendas de §5 también están copiadas al tope de PLANES §10, §11 y §12.
+>
+> **Estado (07-oct):** **EV0 ✅ ejecutada en develop, pendiente commit de Martin** (V.0 → V.0b → V.1 → V.2 → V.Z con 2
+> revisores y fixer). M2 aplicada solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en
+> [QA.md §EV0](QA.md), diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md). **Siguiente: ES2b** con las enmiendas de §5.
+
+## 0. Contexto: decisiones de Martin del 07-oct
+
+Estado al decidir: ES1 (`d7ac75f`) y ES2a (`0edb0c8`, M1) commiteadas, árbol limpio. Pendientes: ES2b → ES3 → ES4.
+
+1. **Prod se resetea antes del go-live** (reset total, el cliente vuelve a cargar). Se pueden escribir migraciones
+   libremente (igual: una migración encabeza su ola sola, nunca se edita una commiteada).
+2. **Verticales del SaaS:**
+   - **Consultorio General** (ej. cardiología, con Secretaria y profesionales): Dashboard, Agenda, Pacientes,
+     Facturación/cobros, Obras sociales, Configuración + **Sala de Espera**. Sin Sesiones/Seguimiento, Planes,
+     Diagnóstico ni Ejercicios.
+   - **Consultorio Kinesiología** (lo actual, Kine + Osteo): todo. **Kine base**: ejercicios **solo propios** del
+     consultorio. **Kine PRO**: se le suma automáticamente todo el catálogo cargado en Plataforma.
+3. **Sala de Espera para las dos verticales**: panel de staff completo, **realtime de verdad** (acciones casi
+   instantáneas; polling solo como último fallback, ~60 s). La **pantalla TV** se difiere a la fase con Mercado Pago
+   (bloque D).
+4. **/plataforma (superadmin)**: ver y configurar todos los consultorios (tipo, plan, turnero público, etc.). El
+   consultorio, en su Configuración, habilita el turnero público y futuras opciones.
+5. **No se rehace el planning de P2-P4**: se ejecuta como está; lo nuevo entra en **corridas nuevas** y como
+   **enmiendas de una línea** a sesiones pendientes (§5).
+
+**Ojo con los nombres:** "vertical" = tipo de consultorio (`Tenant.vertical`: General / Kinesiología). No es la
+**disciplina** de un servicio o plan (Kine / Osteo) ni el **plan SaaS** del tenant (`Tenant.plan`: FREE / STARTER /
+PRO / ENTERPRISE). "Kine PRO" = vertical KINESIOLOGY + `plan = PRO`.
+
+**Glosario de copy (fijado en la revisión de EV0):** el turnero público se llama **"Turnos online"** en toda la UI
+(switch, columna de /plataforma, link "Ver la página de turnos"; estados "Activo" / "Apagado"); el dueño del consultorio
+es el **"Titular"** (no "Owner"). "Turnero" queda como palabra interna de docs y código.
+
+**Relevamiento del 07-oct (por qué hace falta EV0):**
+- no hay gating por tenant (solo `Tenant.plan` para ejercicios/plantillas/favoritos, `lib/plan-gating.ts`);
+- nav estático y duplicado (`sidebar.tsx`, `topbar.tsx`);
+- `/diagnostico`, `/seguimiento`, `/biblioteca`, `/terapia-manual` sin guard;
+- `/plataforma` solo administra catálogos (no hay tenants);
+- el turnero no tiene switch por consultorio;
+- Recepción existe (`lib/reception-state.ts`, `?view=reception`) pero nada se actualiza entre usuarios;
+- Realtime `postgres_changes` no entregaría nada con nuestras policies (GUC) y las cookies son httpOnly.
+
+## 1. Hallazgo crítico de bloque A: Data API (independiente de todo)
+
+9 tablas de `public` **no tienen RLS** (`UserProfile`, `UserPreferences`, `Favorite`, `Tag`, `ExerciseTag`,
+`ConditionTag`, `ConditionExerciseLink`, `AnatomicalRegion`, `ConditionAnatomy`) y las policies no son `TO <rol>`. Si
+el proyecto de Supabase tiene la **Data API (PostgREST)** exponiendo `public` con los grants por defecto, la **anon key
+(pública)** podría leer emails y **escribir `UserProfile.isPlatformAdmin`**. La app nunca usa PostgREST.
+
+- **Martin, en la consola de prod:** Settings → API → Data API: si `public` está expuesto, **desactivarla** (o quitar
+  `public` de los schemas expuestos). Precheck de solo lectura:
+  `SELECT relname, relrowsecurity, has_table_privilege('anon', oid, 'UPDATE') FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';`
+- **Código (EV0, M2) ✅:** bloque guardado `REVOKE ALL ON ALL TABLES/SEQUENCES/ROUTINES IN SCHEMA public FROM anon,
+  authenticated` + `ALTER DEFAULT PRIVILEGES … REVOKE …`, solo si los roles existen (Docker local no los tiene: NOTICE +
+  no-op; `tenant-verticals-m2.test.ts` lo ejecuta con roles temporales). Guard 3c de `guard:isolation`: falla ante un
+  GRANT a `anon`/`authenticated` en migraciones o `prisma/roles.*.sql`, o si el bloque REVOKE desaparece.
+
+AUDIT: `data-api-anon-sin-rls` (bloque A, crítico): código cerrado; **la acción de consola de Martin sigue pendiente**.
+
+## 2. Orden de corridas
+
+| # | Corrida | Qué | Migración |
+|---|---|---|---|
+| 1 | **EV0** ✅ (pendiente commit) | Tipo de consultorio + matriz de módulos + guards + nav único + turnero con switch + onboarding con vertical + /plataforma de consultorios + REVOKE de la Data API | **M2 `tenant_verticals`** (sola, V.0) |
+| 2 | ES2b (P2) | Como está planificada + simplificaciones del reset (§6) + enmiendas (§5) | — |
+| 3 | ES3 (P3) | Ídem | — |
+| 4 | **SV** (nueva) | Sala de Espera realtime (transporte, "Llamar", aviso al profesional, `/sala`, agenda en vivo) | **M3 `reception_call_realtime`** (sola) |
+| 5 | ES4 (P4) | Ídem, sin las sesiones de legacy; S26a/S26b cubren verticales y realtime | — |
+| 6 | **EV1** (nueva) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional | — |
+| 7 | Deploy único de B | Reset de prod → `migrate deploy` desde vacío (cadena completa) → bootstrap (§8) | — |
+
+SV va entre ES3 y ES4 porque necesita `lib/bookings.ts` (S12, ES2b), `agenda-client.tsx` y `reception-row.tsx` (ES3)
+ya cerrados, y así la matriz authz y el E2E de ES4 la cubren. No comparte archivos con ES4 salvo
+`authz-matrix.test.ts` y `package.json` (handoff).
+
+## 3. Modelo y contratos (EV0)
+
+**M2 `20261007120000_tenant_verticals`** (aditiva):
+```sql
+CREATE TYPE "TenantVertical" AS ENUM ('GENERAL','KINESIOLOGY');
+ALTER TABLE "Tenant" ADD COLUMN "vertical" "TenantVertical" NOT NULL DEFAULT 'KINESIOLOGY';
+ALTER TABLE "Tenant" ADD COLUMN "publicBookingEnabled" BOOLEAN NOT NULL DEFAULT false;  -- opt-in (EV-D2)
+-- + bloque guardado REVOKE anon/authenticated (§15.1)
+```
+"Kine PRO" sigue siendo `plan = PRO` del enum existente. Sin tabla nueva → `guard:isolation` no cambia. Sin
+`features Json`: columnas explícitas.
+
+### 3.1 Matriz de módulos (`modulesFor`, pura)
+
+| Módulo | GENERAL | KINE FREE (sin suscripción) | KINE STARTER = "Base" | KINE PRO/ENT |
+|---|---|---|---|---|
+| agenda · pacientes · facturacion · obrasSociales · salaEspera | ✓ | ✓ | ✓ | ✓ |
+| turneroPublico | = switch | = switch | = switch | = switch |
+| reportes | ✗ | ✓ | ✓ | ✓ |
+| planes · sesiones · diagnostico · evaluaciones · ejercicios (solo propios) | ✗ | ✓ | ✓ | ✓ |
+| plantillas · favoritos | ✗ | ✗ | ✓ | ✓ |
+| ejerciciosGlobales (catálogo de Plataforma) | ✗ | ✗ | ✗ | ✓ |
+
+Invariantes con test: sesiones ⇔ planes; plantillas ⇒ planes; favoritos/ejerciciosGlobales ⇒ ejercicios; Kine
+monótono FREE ⊆ STARTER ⊆ PRO; GENERAL sin módulos Kine. **Cambio de comportamiento:** FREE/STARTER dejan de ver los
+globales `isBasic` (Biblioteca arranca vacía → empty state "Creá tu primer ejercicio · PRO suma el catálogo de la
+plataforma").
+
+### 3.2 Contratos literales (van tal cual a los prompts)
+
+- **C-EV1 `lib/tenant-modules.ts`*** (puro): `TENANT_MODULES`, `TenantModule`, `TenantEntitlements = {vertical, plan, publicBookingEnabled}`, `modulesFor(e)`, `isPublicBookingOpen(e)`, `isProfileTabAllowed(tab, m)`, `MODULE_DENIED_COPY` (voseo), `VERTICAL_LABEL`, `PLAN_LABEL`.
+- **C-EV2 `lib/nav.ts`*** (puro): `NAV_ITEMS` (con `module?`/`capability?`), `navFor(modules, caps)`, `shortcutsFor(modules)`. **Única fuente** de sidebar, topbar y atajos ⌘K. "Sala de espera" apunta a `/agenda?view=reception` hasta que SV cree `/sala`.
+- **C-EV3 `lib/session.ts`**: `Actor.entitlements` desde la fila de tenant que `buildActor` ya lee (`:78`), sin queries extra.
+- **C-EV4 `lib/authz.ts`**: `getTenantModules()`, `assertModule(actor, m)`, `requireModule(m)`, `guardModuleSegment(m)` (para `layout.tsx`, redirige a `/dashboard`). **Regla:** lecturas compartidas devuelven vacío sin el módulo; escrituras y lecturas de detalle tiran. El layout es UX; la barrera es la action.
+- **C-EV5 `lib/tenant-entitlements-internal.ts`*** (server-only): `applyTenantEntitlementsInTx(tx, {tenantId, source, patch, expectedUpdatedAt?, actor})` con allowlist por `source` (`platform`: todo; `tenant-settings`: solo `publicBookingEnabled`; `onboarding`: `vertical` mientras el onboarding siga abierto; `billing`: `plan/subscriptionStatus/trialEndsAt`, para el futuro webhook de MP). FOR UPDATE + CAS + audit en el **tenant afectado**. **Único escritor** de esas columnas después de `bootstrapTenant`. `getTenantModulesById(tenantId)` para portal y turnero (sin Actor).
+- **C-EV6 `lib/audit.ts`**: `auditPlatformInTx` → audita en `affectedTenantId` con `action: "platform.*"` y `payload.platform.actorHomeTenantId`.
+- **C-EV7 `lib/cache-tags.ts`**: `tenantEntitlementTags(t)` revalidados después del commit.
+- **C-EV8** `components/layout/tenant-modules-context.tsx`*: `useTenantModules().has(m)` (default fuera del provider = set Kine PRO, solo UI).
+- **C-EV9 `lib/plan-gating.ts`** (aditivo, firmas C8 intactas): `resolveCapabilities(plan, tenantId, vertical = "KINESIOLOGY")` + `catalogScope: "none"|"own"|"full"`; `canCreate`/`canFavourite`/`canBuildTemplates`/`hasFullCatalog` salen de los módulos.
+
+(`*` = archivo nuevo.)
+
+## 4. Corrida EV0 (sesiones, archivos disjuntos)
+
+| Ola | Sesión | Archivos (* nuevo) |
+|---|---|---|
+| V.0 (sola) | **EV-M** migración M2 | `prisma/schema.prisma`, `…/20261007120000_tenant_verticals/migration.sql`*, `tests/helpers/tenant-factory.ts` (opts `vertical/plan/publicBookingEnabled`, default de tests `true`), `tests/integration/tenant-verticals-m2.test.ts`*, guard de grants `anon/authenticated` |
+| V.0b | **EV-C1** módulos + actor + guards | `lib/tenant-modules.ts`*, `lib/nav.ts`*, `lib/session.ts`, `lib/authz.ts`, `tests/unit/tenant-modules.test.ts`*, `tests/integration/module-guards.test.ts`* |
+| V.0b ∥ | **EV-C2** escritor único + audit | `lib/tenant-entitlements-internal.ts`*, `lib/audit.ts`, `lib/cache-tags.ts`, `tests/integration/tenant-entitlements.test.ts`* |
+| V.1 | **EV-S** shell y nav | `app/(app)/layout.tsx`, `components/layout/{app-shell,sidebar,topbar}.tsx`, `tenant-modules-context.tsx`*, render test* |
+| V.1 | **EV-Gd** guards de segmento | `app/(app)/{diagnostico,seguimiento,biblioteca,terapia-manual,reportes}/layout.tsx`* (no toca `page.tsx` de S20/S23), test* |
+| V.1 | **EV-G** catálogo y ejercicios | `lib/plan-gating.ts`, `tests/unit/plan-gating.test.ts`, `lib/search.ts`, `lib/conditions.ts`, `components/biblioteca/biblioteca-client.tsx`, `tests/integration/exercise-entitlements.test.ts`* |
+| V.1 | **EV-T** turnero con switch | `lib/public-booking.ts`, `lib/public-booking-internal.ts`, `app/(booking)/c/[slug]/booking/page.tsx`, `components/booking/booking-unavailable.tsx`*, `tests/integration/public-booking-disabled.test.ts`* (no se toca webhook MP §5.4 ni middleware §5.3) |
+| V.1 | **EV-K** Configuración | `lib/tenant-settings.ts`, `configuracion/page.tsx`, `configuracion-client.tsx`, `controls.tsx` (tab Diagnósticos solo con `diagnostico`), `panels/general-panel.tsx` ("Funciones del consultorio": switch del turnero + tipo y plan de solo lectura), test* |
+| V.1 | **EV-O** onboarding | `lib/validation.ts` (un campo), `lib/onboarding.ts`, `lib/onboarding-internal.ts`, `lib/tenant-bootstrap.ts`, `components/onboarding/steps-basic.tsx` (segmentado "Kinesiología y osteopatía" / "Consultorio general"), `scripts/create-tenant.ts --vertical`, `tests/integration/onboarding.test.ts` |
+| V.1 | **EV-P1** plataforma server | `lib/platform-tenants{,-schemas,-types,-read}.ts`* (todo `prismaService` + `requireSuperAdmin` por export; solo `count`/`_count` sobre modelos con PHI), tests* |
+| V.1 | **EV-P2** shell de plataforma | `app/(app)/plataforma/layout.tsx` (sub-nav Resumen · Consultorios · Ejercicios · Tags · Catálogo), `components/plataforma/platform-nav.tsx`* |
+| V.2 | **EV-P3** plataforma UI | `app/(app)/plataforma/page.tsx`* (resumen por vertical × plan, trials por vencer, onboarding pendiente), `consultorios/page.tsx`* (lista con filtros), `consultorios/[id]/page.tsx`* (detalle + Drawer "Editar suscripción" con `useConfirm` al cambiar de vertical y `expectedUpdatedAt`), componentes* + render test |
+| V.Z | integrador → 2 revisores de solo lectura ((a) authz, entitlements, PHI, turnero, audit, grants; (b) UX, nav, copy, guards) → fixer → gate → docs → memoria → commit | |
+
+Se mantiene la ruta **`/plataforma`** (ya existe y está guardada); "Plataforma" pasa a una sola entrada de nav. Sin
+impersonación ni billing SaaS (diferidos; el webhook de MP será `source:"billing"`).
+
+**Gate de EV0** (en solitario):
+- `next build`, unit en TZ=UTC y TZ=AR, integración completa con los 2 roles, `migrate deploy` re-aplicado en local +
+  `migrate status`, guard, `tsc -p tsconfig.scripts.json`, perf + `compare.ts`.
+- **grep 1:** ningún write de `vertical/plan/subscriptionStatus/trialEndsAt` fuera de `tenant-entitlements-internal.ts`
+  / `tenant-bootstrap.ts`. **Excepción:** los seeds (`prisma/seed.ts`, `scripts/seed-*`) escriben `plan` al crear datos
+  demo; no corren en prod ni los corre el agente.
+- **grep 2:** un `requireSuperAdmin` por export en `lib/platform-tenants*.ts`.
+- **grep 3:** 0 `prismaService.(patient|booking|session|…).find*` en `lib/platform-tenants*`.
+- **Integración clave (lo que cubre EV0):** guards de segmento (`/diagnostico`, `/seguimiento`, `/biblioteca`,
+  `/terapia-manual`, `/reportes` → `/dashboard` sin el módulo); catálogo (KINE FREE no lista ni asigna globales, PRO sí;
+  GENERAL rechaza alta de ejercicios, tags y favoritos; facetas sin condiciones); condiciones (escrituras tiran, lista
+  `[]`, ⌘K filtrado por tenant); `lib/programs.ts` (GENERAL → Forbidden sin escribir, lecturas `[]`); turnero apagado →
+  slots `[]`, submit rechazado sin escribir y sin prefill (el estado de un turno existente sigue funcionando); plataforma
+  (superadmin edita el tenant B → audit en B, nada en su tenant; un OWNER no superadmin → Forbidden; CAS stale → sin
+  cambios). **No en EV0:** las pestañas Plan/Sesiones del perfil, `lib/sessions.ts`, el dashboard y el diagnóstico server
+  llegan con ES2b/ES3 por las enmiendas de §5 (P2-C1, S12b, S14, S17d, S22b).
+- **QA manual:** [QA.md §EV0](QA.md). Ojo: después de cambiar la vertical desde /plataforma, el nav del layout **no se
+  repinta en navegación suave** (los guards de segmento sí redirigen): hay que recargar. Aceptado en EV0.
+
+**Billing futuro:** el webhook de MP de la suscripción usa `source:"billing"` y **deriva el `tenantId` del pago
+verificado** contra la API de MP (nunca del body ni de la query).
+
+## 5. Enmiendas de una línea a sesiones pendientes (se copian literal en sus prompts)
+
+- **Verticales:**
+  - **P2-C1**: `assertPlanManageInTx`/`assertPlanScheduleInTx`/`assertPlanAuthorizeInTx` arrancan con `assertModule(actor,'planes')`; `plan-authz.test.ts` suma "tenant GENERAL (OWNER) → Forbidden".
+  - **S13**: disciplina del servicio solo con `planes` (UI y server).
+  - **S13x**: `createExercise`/`ensureTag` exigen `gate.canCreate` (**ya hecho en EV0 V.Z, N2: S13x lo preserva**); claves de `unstable_cache` con `gate.catalogScope` (`lib/exercises.ts`, `lib/diagnosis.ts`).
+  - **S14**: sin `planes`, `getDashboardData` no consulta planes/sesiones y devuelve 0.
+  - **S12b**: cada export de `lib/sessions.ts` exige `sesiones` (`listOpenSessions` vacío sin el módulo).
+  - **S17d**: `loadCatalog` (vacío), `getDiagnosisPlanPrefill`, `createPlanFromDiagnosis` exigen `diagnostico`.
+  - **S17d** (revisión EV0): `searchPatientsForAssignment` (`lib/diagnosis.ts`) exige `diagnostico` (`[]` sin el módulo).
+  - **S22b** (revisión EV0): `recordEvaScore` (tira) y `getPatientEvaScores` (`[]`) de `lib/patients.ts` exigen `evaluaciones`.
+  - **S14** (revisión EV0): `getSessionsChart` sin `sesiones` devuelve 0 sin consultar. La clave de `unstable_cache` del dashboard no lleva los módulos: S14 se apoya en el tag `tenantEntitlementTags(tenantId)` (lo revalida el escritor único) para no servir un slot viejo tras un cambio de vertical.
+  - **S15 / S27a** (revisión EV0): los exports de `lib/programs.ts` que sobrevivan mantienen `requireModule('planes')` (escrituras) y `[]` sin el módulo (lecturas); mover o retirar código no se lleva el gate.
+  - **S17t / S21t**: plantillas solo por `gatingForActor(tx).canBuildTemplates` / `has('plantillas')`.
+  - **S20 / S23**: el guard de módulo vive en el `layout.tsx` de EV0; no se duplica ni se borra.
+  - **S21**: `app/(app)/planes/layout.tsx` = `guardModuleSegment('planes')`; la entrada de nav y el atajo van **solo** en `lib/nav.ts`; `sidebar.tsx`, `topbar.tsx` y `lib/search.ts` salen de su lista.
+  - **S22b**: pestañas con `isProfileTabAllowed` + rol; sin `planes` no carga planes ni saldos; los mocks de `getActor` suman `entitlements`.
+  - **S19b / S19c / S18b**: leyenda/filtro de plan, puerta 4, "Agendar próxima sesión", "Vincular", "Crealo como plan…" solo con `has('planes')`.
+  - **S24 / S24e / S24d**: el portal usa `getTenantModulesById` (turnos de plan con `planes`, check-in con `evaluaciones`, `/ejercicios` con `ejercicios`, "Reservar turno" con `turneroPublico`).
+  - **S32**: columna y chips de plan solo con `planes`.
+  - **S26b**: columna "tenant GENERAL (OWNER)" en la matriz + "KINE FREE no asigna globales". **S26a**: escenario General (sin nav clínico; `/diagnostico` → `/dashboard`).
+  - **P2.Z(b)**: el revisor verifica que ningún export de Planes/Sesiones/Diagnóstico/Ejercicios quede sin gate de módulo.
+- **Realtime (para que SV no toque archivos de planes):**
+  - **P2-C1** suma `lib/booking-events-internal.ts`* (server-only, firma congelada): `BookingChangeRef = {bookingId, practitionerId, scheduledFor, prev?, kind?}` y `afterBookingsCommitted(tenantId, refs, opts?)`; hoy solo hace lo de `invalidateBookingDerivedCaches` y nunca tira; SV le suma el publish sin cambiar la firma.
+  - **S07c**: `invalidateBookingDerivedCaches` → `afterBookingsCommitted(actor.tenantId, refs)` en cada write-path de `bookings.ts`, después del commit y fuera de `runWithRls`; `BookingUpdateTxOutcome.ok` suma `refs`.
+  - **S12, S11e, S12b, S15, S16a, S16b, S25a, S17d**: todo write-path que crea, mueve, cambia estado/cobro, cancela o borra un `Booking` llama `afterBookingsCommitted` una vez después del commit; los `*InTx` **devuelven** refs y nunca emiten adentro.
+  - **SV01** (revisión EV0): la función de la policy de `realtime.messages` (`kinesoft_realtime_can_read`) no debe requerir `GRANT` a `authenticated` en `public` (el guard 3c lo rechaza): `SECURITY DEFINER` con `search_path` fijo, o una allowlist puntual y comentada en el guard para ese único GRANT.
+
+## 6. Simplificaciones por el reset de prod (sin rehacer el planning)
+
+- **Se caen:** S25L (legacy server), S25n (script de fechas legacy), S25b (UI legacy), "Completar datos", PQ-14,
+  escenario E2E "legacy", los prechecks de datos (2)-(10) y (13)-(16), corridas del dedupe, ensayo de datos en staging,
+  backfill de `agenda_foundations` y `normalize-patient-emails`, el down-script/ventana sin uso de M1 y el hotfix de E0
+  (prod se resetea; ver §1 igual).
+- **Se mantienen:** S25a (adopción de turnos sueltos sigue siendo útil con datos nuevos), S27a/S27b (retiran las altas
+  viejas), las invariantes I1-I8, precheck (0) rol con BYPASSRLS, (17) Storage privado, P3009 liviano, el SQL de M1 tal
+  cual (commiteado).
+- **R-LEGACY:** se deja como está en ES2b/ES3 (es barato y protege `develop` mientras conviven las altas viejas); EV1 lo
+  limpia después de S27a/b, opcional.
+- **Prechecks:** (1) pasa a "base vacía"; (11) y (12) pasan a post-checks después del bootstrap.
+
+## 7. Corrida SV · Sala de Espera realtime (después de ES3)
+
+**Transporte:** Supabase Realtime **Broadcast privado** por tenant (`tenant:<id>:agenda`).
+- El server publica **después del commit** por el endpoint REST de broadcast con la service key: 1 POST por commit,
+  timeout 1,5 s y sin tirar nunca.
+- El browser se suscribe con un **token corto (10 min) y angosto** que acuña una server action: claims
+  `purpose:"kinesoft-realtime"`, `tenant_id` y `sub` sintético que no sirve contra GoTrue. **No** se le pasa al browser
+  el access token real, porque las cookies httpOnly del A3 se mantienen.
+- La policy sobre `realtime.messages` usa una función pura testeable localmente; queda guardada, así que en el Docker
+  local no hace nada.
+- **Mensajes sin PHI** (`{v, kind, bookingId?, practitionerId, day, prev?, at}`). El cliente **nunca confía en el
+  payload**: re-pide con las mismas actions de la página (`listAgendaBookings`), con debounce y coalescer.
+- **Fallback:** polling cada 60 s **solo** si el canal no está suscripto, más resync al reconectar, al volver la
+  pestaña visible o al volver online.
+- **Drivers:** `supabase` (prod/staging), `local` (SSE en `next dev`, multi-pestaña sin Supabase) y `off`.
+- **Descartados:** canal público (cualquiera con la anon key publica), SSE en Vercel (`maxDuration` 30 s), Pusher/Ably
+  (proveedor nuevo con datos de salud) y trigger SQL (invisible en local).
+
+**M3 `reception_call_realtime`** (sola): `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada.
+
+**Estado nuevo:** `llamado` (`arrivedAt` + `calledAt`), retrocompatible. La acción `llamar` es solo para hoy;
+"Deshacer" limpia `calledAt`.
+
+**UI:**
+- **`/sala`**: tablero por profesional (En atención · Llamado · En sala con espera · Próximos/Demorados) y lista.
+  Capability `agenda.reception` (BILLING afuera). PD-13: solo datos administrativos.
+- **"Llamar"**: el profesional en sus filas; la Secretaria también, en nombre del profesional.
+- **Aviso al profesional en cualquier página**: toast "Llegó María G. · 10:30" con "Ver sala", chime corto, título de
+  la pestaña y preferencia `arrivalAlert` (sonido/visual/off) dentro del blob de `agendaPrefs`, sin migración.
+- **La agenda (día/profesional) y la vista Recepción quedan en vivo.** La nav "Sala de espera" pasa a `/sala`.
+
+| Ola | Sesiones |
+|---|---|
+| SV0 (sola) | SV01 migración M3 + test de la tabla de verdad del predicado |
+| SV1.0 | SV02 contratos puros + env (`REALTIME_DRIVER`) · SV03 estado `llamado` · SV04a publisher (+ fake para integración) · SV04b token + bootstrap |
+| SV1.1 | SV05 cableado en `bookings.ts` + `llamar` (único dueño) · SV06 otros writes (turnero, webhook MP aplicado, candado del día) · SV07 provider cliente + SSE local + CSP `wss` · SV08 tests de emisión de planes + guard estático |
+| SV2 | SV09 agenda en vivo · SV10 `/sala` · SV11a nav (`lib/nav.ts`) · SV11b avisos (toast con acción, sonido, preferencia) |
+| SVZ | integrador → 2 revisores (token/policy/PHI/service key/CSP; coalescer/reconexión/densidad/a11y) → fixer → gate → docs (ADR-006 realtime —ADR-005 es Verticales y módulos, EV0—, SECURITY, EXTERNAL-CONFIG, RUNBOOK) |
+
+**Prechecks de consola (Martin, staging antes de prod):**
+- R1: existe `realtime.messages`.
+- R2: no hay otras policies abiertas.
+- R3: Data API (§1).
+- R4: modo de JWT keys / tipo de API key / "Allow public access" **off** en Realtime.
+- V1-V6 en staging: el token se suscribe; un tenant ajeno, anon o un token vencido no; el cliente no puede publicar; el
+  token no sirve contra PostgREST/GoTrue/Storage; el publish da 202; p95 < 1 s.
+- Deploy con `REALTIME_DRIVER=off` → env → `supabase`.
+
+**Gate de SV:** el de EV0 + truth table del predicado, emisión por write-path con el publisher fake, `perf:bundle`
+(`/agenda` sin crecer el first-load) y QA multi-pestaña con el driver `local`. La verificación V1-V6 en staging la hace
+Martin.
+
+**Diferido:** pantalla TV (topic propio + boxes/consultorios), notificaciones persistidas y campana en vivo, presencia,
+perfil/facturación/dashboard en vivo.
+
+## 8. Decisiones con default (rigen si Martin no dice otra cosa)
+
+| ID | Decisión | Default |
+|---|---|---|
+| EV-D1 | Plantillas de plan | Kine STARTER ("Base") y PRO; FREE = sin suscripción (sin plantillas ni favoritos) |
+| EV-D2 | Turnero en un consultorio nuevo | Apagado (opt-in) desde Configuración o /plataforma |
+| EV-D3 | Reportes en General | Oculto (es placeholder) |
+| EV-D4 | Turnero apagado | Página "Turnos online no disponibles" con contacto, `noindex` |
+| EV-D5 | Quién cambia la vertical | Solo /plataforma (y el OWNER durante el onboarding) |
+| EV-D6 | Qué edita /plataforma | Vertical, plan, estado de suscripción, trial, turnero (datos y `sharedPatientView` solo lectura) |
+| SV-D1 | Transporte | Broadcast privado con token acuñado por el server |
+| SV-D2 | Secretaria "Llama" en nombre del profesional | Sí |
+| SV-D3 | Avisos de llegada persistidos en la campana | No (toast + sonido; la campana no es en vivo) |
+| SV-D4 | Aviso por defecto | Sonido para PRACTITIONER; visual para el resto |
+
+## 9. Bootstrap después del reset (orden de prod)
+
+1. `migrate deploy` desde vacío (cadena completa hasta M3).
+2. Roles SQL.
+3. Import del catálogo global.
+4. `create-tenant --vertical kinesiologia` (casa de la plataforma).
+5. `set-platform-admin`.
+6. Desde /plataforma: plan del cliente kine (PRO u otro) y **prender turnos online** por consultorio (nacen apagados; también desde Configuración → General).
+7. Data API desactivada.
+8. Storage privado.
+
+Comandos y post-checks en [MIGRACIONES-RUNBOOK.md §"Go-live con reset"](MIGRACIONES-RUNBOOK.md).

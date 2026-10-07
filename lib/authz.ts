@@ -19,8 +19,10 @@ import "server-only";
 import { cache } from "react";
 import type { Role } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
-import { getActor, ForbiddenError, type Actor } from "@/lib/session";
+import { redirect } from "next/navigation";
+import { getActor, tryGetActor, ForbiddenError, type Actor } from "@/lib/session";
 import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { modulesFor, MODULE_DENIED_COPY, type TenantModule } from "@/lib/tenant-modules";
 
 // Cacheado por primitivos (no por la identidad del objeto Actor) para que dos
 // llamadas con actores equivalentes en el mismo request compartan la query.
@@ -72,4 +74,69 @@ export async function requireTenantAdmin(
 ): Promise<Actor> {
   const { actor } = await requireCapability("tenant.admin", message);
   return actor;
+}
+
+/*
+ * ── Módulos del consultorio (EV0, contrato C-EV4) ──────────────────────────
+ *
+ * La vertical y el plan del tenant (`actor.entitlements`, C-EV3) definen qué
+ * módulos existen (`modulesFor`, matriz de `lib/tenant-modules.ts`). Es
+ * ortogonal a las capabilities del rol: una action clínica exige el módulo Y su
+ * capability.
+ *
+ * Regla (plan §15.3):
+ *  - **Lecturas compartidas** (listas que se muestran en pantallas comunes, p. ej.
+ *    sesiones abiertas en el dashboard, catálogo de diagnóstico) **devuelven
+ *    vacío** sin el módulo: no rompen una pantalla del consultorio General.
+ *  - **Escrituras y lecturas de detalle** **tiran** `ForbiddenError` con
+ *    `MODULE_DENIED_COPY[m]` (`assertModule` / `requireModule`).
+ *  - **El layout es UX; la barrera es la action.** `guardModuleSegment` en el
+ *    `layout.tsx` del segmento solo evita mostrar una pantalla inútil: en el App
+ *    Router un layout no se re-ejecuta en cada navegación y las server actions se
+ *    pueden invocar sin pasar por él, así que cada action chequea igual.
+ *
+ * No hay cache entre requests: `getActor()` lee la fila de Tenant en cada
+ * request (cacheado solo dentro del request), así que un cambio de vertical o
+ * plan desde /plataforma lo ven enseguida las actions y el guard de un segmento
+ * al entrar a él (su layout se renderiza en ese request). El nav del layout
+ * `(app)` NO: en la navegación suave ese layout no se re-renderiza, y el
+ * sidebar/topbar siguen con los módulos viejos hasta un refresh o una carga
+ * completa. Por eso esconder es UX y la barrera es la action.
+ */
+
+/** Módulos del tenant del actor de la sesión (cacheado por request vía `getActor`). */
+export async function getTenantModules(): Promise<ReadonlySet<TenantModule>> {
+  const actor = await getActor();
+  return modulesFor(actor.entitlements);
+}
+
+/**
+ * Exige un módulo sobre un actor ya resuelto (sync: sirve dentro de un
+ * `runWithRls` o de un `assert*InTx`). Tira `ForbiddenError(MODULE_DENIED_COPY[m])`
+ * o el `message` dado.
+ */
+export function assertModule(actor: Actor, m: TenantModule, message?: string): void {
+  if (!modulesFor(actor.entitlements).has(m)) {
+    throw new ForbiddenError(message ?? MODULE_DENIED_COPY[m]);
+  }
+}
+
+/** `getActor()` + `assertModule`; devuelve el actor para encadenar. */
+export async function requireModule(m: TenantModule, message?: string): Promise<Actor> {
+  const actor = await getActor();
+  assertModule(actor, m, message);
+  return actor;
+}
+
+/**
+ * Para el `layout.tsx` de un segmento de un módulo (`/diagnostico`,
+ * `/seguimiento`, `/biblioteca`, …): sin el módulo, `redirect("/dashboard")`.
+ * Sin actor es no-op: de la sesión se ocupan el middleware y el layout de
+ * `(app)`, y tirar acá rompería la pantalla de login/onboarding. Es UX, no
+ * barrera (ver la regla arriba).
+ */
+export async function guardModuleSegment(m: TenantModule): Promise<void> {
+  const actor = await tryGetActor();
+  if (!actor) return;
+  if (!modulesFor(actor.entitlements).has(m)) redirect("/dashboard");
 }

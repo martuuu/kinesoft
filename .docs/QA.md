@@ -812,3 +812,63 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Prechecks de Martin (solo lectura, durante ES1)
 - [ ] (0)-(17) de PLANES.md §16; si (2) > 0, dedupe en dry-run (MIGRACIONES-RUNBOOK §2.3); si (15) > 0, reasignar.
+
+---
+
+## EV0 · Verticales y Plataforma (07-oct-2026)
+
+> Correr con `TZ=UTC npm run dev` contra el Docker local, con M2 aplicada (`dotenv -e .env.local -- npx prisma migrate
+> deploy`) y un usuario superadmin. **El seed demo arranca con los turnos online apagados** (M2: default `false`,
+> opt-in): para probar el turnero de `movare`, prendelos primero (Configuración o /plataforma). Contexto en
+> [VERTICALES.md](VERTICALES.md). Después de cambiar la vertical desde /plataforma, **recargá**: el nav no se repinta en
+> navegación suave (los guards sí redirigen).
+
+### /plataforma (superadmin)
+- [ ] 🔴 Un OWNER que no es superadmin no ve "Plataforma" en el nav y `/plataforma/consultorios` lo manda a `/dashboard`.
+- [ ] `/plataforma` (Resumen): cantidades por vertical × plan, trials por vencer, onboarding pendiente. Sub-nav Resumen ·
+  Consultorios · Ejercicios · Tags · Catálogo.
+- [ ] Consultorios: lista con filtros, columnas "Turnos online" (Activo / Apagado) y "Titular", sin Miembros ni Creado
+  (están en el detalle); entra en pantalla sin scroll horizontal a 1366 px.
+- [ ] 🔴 Detalle → "Editar suscripción": cambiar la vertical pide confirmación (`useConfirm`); guardar → toast y el
+  detalle muestra el cambio. El historial de cambios del consultorio muestra `platform.*`; el consultorio del
+  superadmin **no** registra nada.
+- [ ] 🔴 Stale: abrir el Drawer en dos pestañas, guardar en una y después en la otra → "Otro cambio se guardó antes.
+  Recargá y revisá." y el Drawer se resincroniza (no pisa el cambio).
+- [ ] El detalle no muestra datos de pacientes, turnos ni HC: solo conteos.
+
+### Vertical General vs Kinesiología
+- [ ] 🔴 Pasar `movare` a **General** y recargar: nav sin Diagnóstico, Seguimiento, Ejercicios, Terapia Manual ni
+  Reportes; ⌘K sin esos atajos ni condiciones. `/diagnostico`, `/seguimiento`, `/biblioteca`, `/terapia-manual` y
+  `/reportes` escritos a mano → `/dashboard`.
+- [ ] Configuración en General: sin pestaña Diagnósticos; la card "Funciones del consultorio" muestra tipo y plan de
+  solo lectura.
+- [ ] ~~Perfil del paciente sin Plan/Sesiones en General~~ → llega con ES3 (S22b); en EV0 no se verifica.
+- [ ] Volver a **Kinesiología** y recargar: todo vuelve. Atajos ⌘K "Inicio" y "Ejercicios" (mismos nombres que el nav).
+
+### Catálogo de ejercicios por plan
+- [ ] 🔴 Kine **FREE/STARTER**: Biblioteca sin ejercicios globales; empty state "Creá tu primer ejercicio" + "PRO suma el
+  catálogo de la plataforma." (en Terapia Manual, "Creá tu primera maniobra"). Crear un ejercicio propio funciona.
+- [ ] Kine **PRO**: ve el catálogo de Plataforma y puede asignarlo.
+- [ ] Filtro de condiciones de la Biblioteca: solo condiciones globales y las de este consultorio (crear una condición
+  custom en otro consultorio y verificar que no aparece).
+- [ ] Favoritos bloqueados sin STARTER: el copy dice "plan Base".
+
+### Turnos online (switch)
+- [ ] 🔴 Apagados: `/c/movare/booking` muestra "Turnos online no disponibles" con el contacto del consultorio (o sin
+  canales si no hay contacto); el email largo corta bien en mobile. El HTML lleva `noindex`.
+- [ ] 🔴 Apagados con un turno ya reservado: la página de estado del turno sigue funcionando.
+- [ ] Prender desde Configuración → General ("Funciones del consultorio" → switch "Turnos online", con nombre
+  accesible): el wizard vuelve. Apagarlo pide confirmación ("¿Apagar los turnos online?").
+- [ ] Prender/apagar desde /plataforma: Configuración refleja el valor al recargar; el detalle del consultorio tiene
+  "Ver la página de turnos ↗".
+- [ ] 🔴 Prefill: logueado con un email que tiene ficha en **otro** consultorio → el wizard de `movare` no precarga DNI,
+  nacimiento, cobertura ni emergencia (a lo sumo el nombre de la sesión). Con ficha en `movare` → precarga esa.
+
+### Onboarding y alta
+- [ ] Onboarding nuevo: segmentado "Kinesiología y osteopatía" / "Consultorio general"; el consultorio nace con esa
+  vertical y con los turnos online apagados (el paso lo avisa: "Activalos en Configuración → General"). Las tarjetas no
+  desbordan a 320 px.
+- [ ] `create-tenant --vertical general|kinesiologia` crea con esa vertical (solo local).
+
+### Data API (Martin, consola de prod)
+- [ ] Precheck de solo lectura de VERTICALES §1 y desactivar la Data API (o sacar `public`).

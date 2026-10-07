@@ -13,7 +13,11 @@
  *     table from silently shipping without isolation;
  *   • a GLOBAL_READONLY catalog table (B-pre M-cat) is missing ENABLE/FORCE,
  *     has no SELECT policy, or has ANY write policy (ALL/INSERT/UPDATE/DELETE):
- *     the app role must only read the global catalog.
+ *     the app role must only read the global catalog;
+ *   • (EV0, M2 tenant_verticals, plan §15.1) any migration or prisma/roles.*.sql
+ *     GRANTs anything to the Supabase Data API roles `anon`/`authenticated`, or
+ *     the guarded REVOKE block of M2 disappears. The app never uses PostgREST
+ *     and 9 public tables have no RLS (UserProfile.isPlatformAdmin among them).
  *
  * B1.0 (M-cat): before this, the guard only read 20260725120000_rls_policies
  * and counted a table as "policied" if its name merely appeared quoted there.
@@ -207,6 +211,69 @@ for (const name of ALLOWLIST) {
     fail(`GLOBAL_READONLY catalog contract broken:\n    ${bad.join("\n    ")}`);
   } else {
     console.log(GREEN(`✓ GLOBAL_READONLY (${GLOBAL_READONLY.size}): ENABLE + FORCE, SELECT-only policies.`));
+  }
+}
+
+// ── 3c. Data API roles (EV0 · M2 tenant_verticals, plan §15.1) ────────
+// Supabase da por default ALL en `public` a `anon` (la anon key es pública) y a
+// `authenticated`. M2 se los revoca (tablas, secuencias, rutinas y DEFAULT
+// PRIVILEGES) en un bloque guardado. Este chequeo es la mitad estática del
+// contrato: (a) ningún SQL nuestro puede volver a dárselos —un GRANT posterior
+// reabriría el agujero sin que nadie lo note— y (b) el bloque no puede
+// desaparecer de la cadena. La mitad dinámica (que el bloque revoca de verdad
+// y no toca kinesoft_app/owner) la prueba tests/integration/tenant-verticals-m2.test.ts.
+{
+  const DATA_API_ROLE = /\b(anon|authenticated)\b/i;
+  const sqlFiles = [
+    ...migrationDirs.map((d) => join(MIGRATIONS_DIR, d, "migration.sql")),
+    ...readdirSync(join(ROOT, "prisma"))
+      .filter((f) => /^roles\..*\.sql$/.test(f))
+      .map((f) => join(ROOT, "prisma", f)),
+  ];
+  const grants = [];
+  let revokeBlockFound = false;
+  for (const file of sqlFiles) {
+    let sql;
+    try {
+      sql = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    sql = sql.replace(/--[^\n]*/g, "");
+    const rel = file.slice(ROOT.length + 1);
+    // Por sentencia: `GRANT … TO … anon|authenticated` (incluye el GRANT de un
+    // ALTER DEFAULT PRIVILEGES y el `GRANT anon TO x` de membresía).
+    for (const stmt of sql.split(";")) {
+      const g = stmt.match(/\bGRANT\b([\s\S]*?)\bTO\b([\s\S]*)/i);
+      if (g && (DATA_API_ROLE.test(g[2]) || DATA_API_ROLE.test(g[1]))) {
+        grants.push(`${rel}: ${stmt.trim().replace(/\s+/g, " ").slice(0, 140)}`);
+      }
+    }
+    if (
+      /ARRAY\s*\[\s*'anon'\s*,\s*'authenticated'\s*\]/i.test(sql) &&
+      /REVOKE\s+ALL\s+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public\s+FROM/i.test(sql) &&
+      /REVOKE\s+ALL\s+ON\s+ALL\s+SEQUENCES\s+IN\s+SCHEMA\s+public\s+FROM/i.test(sql) &&
+      /REVOKE\s+ALL\s+ON\s+ALL\s+(ROUTINES|FUNCTIONS)\s+IN\s+SCHEMA\s+public\s+FROM/i.test(sql) &&
+      /ALTER\s+DEFAULT\s+PRIVILEGES[\s\S]*?REVOKE\s+ALL/i.test(sql)
+    ) {
+      revokeBlockFound = true;
+    }
+  }
+  if (grants.length) {
+    fail(
+      `GRANT to the Supabase Data API roles (anon/authenticated) — the app never uses PostgREST (plan §15.1):\n    ${grants.join(
+        "\n    "
+      )}`
+    );
+  } else {
+    console.log(GREEN("✓ No GRANT to anon/authenticated in migrations or prisma/roles.*.sql."));
+  }
+  if (!revokeBlockFound) {
+    fail(
+      "The guarded REVOKE block for anon/authenticated (M2 20261007120000_tenant_verticals) is missing from the migrations."
+    );
+  } else {
+    console.log(GREEN("✓ Guarded REVOKE of anon/authenticated (tables, sequences, routines, default privileges) present."));
   }
 }
 

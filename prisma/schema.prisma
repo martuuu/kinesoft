@@ -28,6 +28,12 @@ model Tenant {
   plan        TenantPlan @default(FREE)
   subscriptionStatus SubscriptionStatus @default(ACTIVE)
   trialEndsAt DateTime?
+  // EV0 (M2 tenant_verticals): vertical + plan → módulos (`modulesFor`). Default
+  // KINESIOLOGY = lo que son todos los consultorios previos a EV0.
+  vertical    TenantVertical @default(KINESIOLOGY)
+  // EV0 (M2): switch del turnero público. Opt-in (EV-D2): nace apagado y se
+  // prende desde Configuración o /plataforma (escritor único C-EV5).
+  publicBookingEnabled Boolean @default(false)
   // When `true`, every practitioner of the tenant sees all patients +
   // bookings. When `false` (default), each practitioner only sees the
   // patients assigned to them (via `Patient.assignedPractitionerId`).
@@ -86,11 +92,23 @@ model Tenant {
   @@index([slug])
 }
 
+// EV0 (M2 tenant_verticals, 07-oct): el plan solo cambia módulos en la vertical
+// KINESIOLOGY (matriz en `lib/tenant-modules.ts`, plan §15.3). En GENERAL el plan
+// hoy no cambia módulos.
 enum TenantPlan {
-  FREE        // basic catalog only (`Exercise.isBasic = true`) + own custom exercises
-  STARTER     // same catalog visibility as FREE; unlocks templates + favourites
-  PRO         // full global catalog with videos + everything
-  ENTERPRISE  // future: SSO, audit retention, multi-clinic
+  FREE        // Kine sin suscripción: ejercicios solo propios; sin plantillas ni favoritos
+  STARTER     // Kine "Base": ejercicios solo propios + plantillas y favoritos
+  PRO         // Kine PRO: lo de Base + todo el catálogo global cargado en Plataforma
+  ENTERPRISE  // futuro: = PRO (+ SSO, retención de auditoría, multi-sede)
+}
+
+// EV0 (M2 tenant_verticals): tipo de consultorio. GENERAL = consultorio genérico
+// (agenda, pacientes, cobros, obras sociales, sala de espera; sin Planes,
+// Sesiones, Diagnóstico ni Ejercicios). KINESIOLOGY = kine + osteo (todo).
+// Solo lo escribe `lib/tenant-entitlements-internal.ts` (C-EV5) después del alta.
+enum TenantVertical {
+  GENERAL
+  KINESIOLOGY
 }
 
 enum SubscriptionStatus {

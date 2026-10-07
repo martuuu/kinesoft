@@ -19,10 +19,31 @@ import { formatARS } from "@/lib/format";
 import { STEP } from "@/lib/onboarding-logic";
 import { formatHHMM, summarizeWeek } from "@/lib/schedule-validate";
 import type { OnboardingLocation, OnboardingSchedule, OnboardingTenant } from "@/lib/onboarding-internal";
+import type { OnboardingClinicInputType } from "@/lib/validation";
 import { StepHeader } from "./onboarding-shell";
 import { InlineError, StepFooter, useStepNav } from "./step-nav";
 
 // ── Consultorio ────────────────────────────────────────────────────────────
+
+type OnboardingVertical = NonNullable<OnboardingClinicInputType["vertical"]>;
+
+/**
+ * EV0 (EV-O): tipo de consultorio. La ayuda resume la matriz de módulos
+ * (`modulesFor`, `.docs/VERTICALES.md`): General es agenda + pacientes + cobros
+ * sin las herramientas clínicas de Kine.
+ */
+const VERTICAL_OPTIONS: ReadonlyArray<{ value: OnboardingVertical; label: string; help: string }> = [
+  {
+    value: "KINESIOLOGY",
+    label: "Kinesiología y osteopatía",
+    help: "Agenda, pacientes y cobros, más planes de tratamiento, sesiones, diagnóstico y ejercicios.",
+  },
+  {
+    value: "GENERAL",
+    label: "Consultorio general (otras especialidades)",
+    help: "Agenda, pacientes, cobros y obras sociales, sin las herramientas de kinesiología.",
+  },
+];
 
 export function StepClinic({
   tenant,
@@ -35,6 +56,7 @@ export function StepClinic({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
+  const [vertical, setVertical] = useState<OnboardingVertical>(tenant?.vertical ?? "KINESIOLOGY");
 
   const onSubmit = (fd: FormData) => {
     setError(null);
@@ -45,6 +67,7 @@ export function StepClinic({
         phone: String(fd.get("phone") ?? ""),
         whatsapp: String(fd.get("whatsapp") ?? ""),
         publicEmail: String(fd.get("publicEmail") ?? ""),
+        vertical,
       });
       if (!r.ok) {
         setError(r.error);
@@ -61,7 +84,7 @@ export function StepClinic({
       <StepHeader
         eyebrow={`Paso ${STEP.clinic} · Consultorio`}
         title={tenant ? "Datos del consultorio" : "Contanos de tu consultorio"}
-        blurb="El nombre y los datos de contacto que van a ver tus pacientes. El teléfono, el WhatsApp y el email público son opcionales."
+        blurb="El nombre y los datos de contacto que van a ver tus pacientes, y qué tipo de consultorio es. El teléfono, el WhatsApp y el email público son opcionales."
       />
       {patientIdentity ? (
         <InlineError>
@@ -106,9 +129,52 @@ export function StepClinic({
             hint="Opcional. Si lo dejás vacío, no se muestra ningún email."
             error={fieldErrors.publicEmail?.[0]}
           />
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 8 }}>
+              Tipo de consultorio
+            </legend>
+            {/* Radios nativos (mismo patrón que "Turnos cada"): flechas y foco
+                del navegador gratis. El activo se marca también por borde y
+                por el radio tildado, no solo por color. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(220px, 100%), 1fr))", gap: 10 }}>
+              {VERTICAL_OPTIONS.map((o) => {
+                const on = vertical === o.value;
+                return (
+                  <label
+                    key={o.value}
+                    style={{
+                      display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 14px", borderRadius: 12,
+                      background: on ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)",
+                      border: on ? "1.5px solid var(--sky-500)" : "1px solid rgba(15,30,51,0.08)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="vertical"
+                      value={o.value}
+                      checked={on}
+                      onChange={() => setVertical(o.value)}
+                      style={{ marginTop: 3 }}
+                    />
+                    <span style={{ display: "grid", gap: 2 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{o.label}</span>
+                      <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{o.help}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "8px 0 0" }}>
+              Lo podés cambiar hasta terminar el alta. Después, escribinos a soporte.
+            </p>
+            {fieldErrors.vertical?.[0] && <InlineError>{fieldErrors.vertical[0]}</InlineError>}
+          </fieldset>
           {tenant && (
+            // EV-D2: los turnos online nacen apagados; mostrar la URL como si ya
+            // funcionara llevaba a compartir un link que no acepta reservas.
             <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0 }}>
-              Tu turnero online: <strong>/c/{tenant.slug}/booking</strong>
+              Los turnos online arrancan apagados. Activalos en <strong>Configuración → General</strong>.
             </p>
           )}
           {error && <InlineError>{error}</InlineError>}

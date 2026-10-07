@@ -8,6 +8,9 @@
  *      "Particular" en UNA transacción (`lib/tenant-bootstrap.ts`, la misma
  *      lógica que usa `scripts/create-tenant.ts`). Re-ejecutarlo EDITA el
  *      consultorio en alta: nunca duplica tenant, membresía ni Particular.
+ *      EV0: elige el tipo de consultorio (`vertical`, default KINESIOLOGY);
+ *      al re-entrar la cambia por el escritor único (C-EV5) mientras el alta
+ *      siga abierta. El turnero nace apagado (EV-D2).
  *   3. Sede — `saveOnboardingLocation` (B5.5 ONB): confirma/edita la sede
  *      principal que dejó el bootstrap (la crea si falta).
  *   4-8. Horario, tu horario, servicios (+ práctica del catálogo), obras
@@ -20,7 +23,9 @@
  * El paso actual no se guarda: se deriva del estado (`deriveResumeStep`).
  */
 import { randomBytes } from "node:crypto";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
+import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
+import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
@@ -72,9 +77,41 @@ export async function saveOnboardingClinic(
 
   // Idempotencia: re-entrar al paso 2 edita el consultorio en alta.
   if (inProgress) {
-    await runWithRls(inProgress.tenantId, (tx) =>
-      tx.tenant.update({ where: { id: inProgress.tenantId }, data: contact })
-    );
+    const tenantId = inProgress.tenantId;
+    // EV0 (EV-D5): la vertical se puede corregir mientras el alta siga
+    // abierta, y SOLO por el escritor único (C-EV5, source `onboarding`), que
+    // re-chequea `onboardingCompletedAt IS NULL` con la fila bloqueada: si un
+    // `completeOnboarding` en otra pestaña cerró el alta entre `loadMemberships`
+    // y acá, devuelve `onboarding-closed` y no se escribe nada (ni contacto).
+    // `homeTenantId = tenantId` es legítimo: la membresía OWNER sale de la
+    // sesión verificada, no de un input.
+    const entitlements = await runWithRls(tenantId, async (tx) => {
+      const r = d.vertical
+        ? await applyTenantEntitlementsInTx(tx, {
+            tenantId,
+            source: "onboarding",
+            patch: { vertical: d.vertical },
+            actor: { userId: user.id, homeTenantId: tenantId },
+          })
+        : null;
+      if (r && !r.ok) return r;
+      await tx.tenant.update({ where: { id: tenantId }, data: contact });
+      return r;
+    });
+    if (entitlements && !entitlements.ok) {
+      return {
+        ok: false,
+        error:
+          entitlements.reason === "onboarding-closed"
+            ? "El alta del consultorio ya se completó. Entrá desde el panel."
+            : "No pudimos guardar el consultorio. Probá de nuevo.",
+      };
+    }
+    if (entitlements && entitlements.changed.length > 0) {
+      // Después del commit: el set de módulos cambió (nav, catálogo, dashboard).
+      for (const tag of tenantEntitlementTags(tenantId)) revalidateTag(tag);
+      revalidatePath("/", "layout");
+    }
     await audit({
       tenantId: inProgress.tenantId,
       actorId: user.id,
@@ -115,6 +152,7 @@ export async function saveOnboardingClinic(
           phone: contact.phone,
           whatsapp: contact.whatsapp,
           publicEmail: contact.publicEmail,
+          vertical: d.vertical,
           onboardingCompleted: false,
           source: "onboarding",
         })

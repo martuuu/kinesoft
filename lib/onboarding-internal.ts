@@ -9,6 +9,7 @@ import "server-only";
 // Actor ni GUC para leer Invitation/Membership de forma tenant-scoped → canal
 // service, con el filtro por userId/email a mano. Lo del tenant propio, una vez
 // que existe, va por `runWithRls`. See lib/db.ts.
+import type { TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -91,6 +92,8 @@ export type OnboardingTenant = {
   businessHoursStart: number;
   businessHoursEnd: number;
   agendaSlotMinutes: number;
+  /** EV0: tipo de consultorio elegido en el paso 2 (editable mientras el alta siga abierta). */
+  vertical: TenantVertical;
 };
 
 export type OnboardingService = {
@@ -226,6 +229,7 @@ export async function loadOnboardingContext(
           businessHoursStart: true,
           businessHoursEnd: true,
           agendaSlotMinutes: true,
+          vertical: true,
         },
       }),
       tx.service.findMany({

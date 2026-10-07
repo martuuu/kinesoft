@@ -1,0 +1,133 @@
+/**
+ * Nav único (EV0, contrato C-EV2, plan §15.3 / `.docs/VERTICALES.md` §3.2).
+ *
+ * Puro (sin React, sin DB): **única fuente** de sidebar, topbar y atajos ⌘K.
+ * Antes de EV0 la lista estaba copiada en `components/layout/sidebar.tsx`,
+ * `components/layout/topbar.tsx` y `SHORTCUTS` de `lib/search.ts`, sin saber
+ * nada de módulos: un consultorio General iba a ver Diagnóstico/Seguimiento/
+ * Ejercicios. Ahora cada entrada declara su `module` y/o `capability` y
+ * `navFor` filtra.
+ *
+ * Esconder una entrada es UX: la barrera es `assertModule`/`requireModule` en
+ * cada action y `guardModuleSegment` en el layout del segmento (`lib/authz.ts`).
+ *
+ * "Planes" NO va acá todavía: la suma S21 (ES3) junto con su
+ * `app/(app)/planes/layout.tsx`. "Plataforma" tampoco: depende de
+ * `actor.isPlatformAdmin`, no de módulos ni de capabilities del tenant, y la
+ * sigue resolviendo el sidebar (EV-S / EV-P2).
+ */
+import type { Capability } from "@/lib/capabilities";
+import type { SearchHit } from "@/lib/search-types";
+import type { TenantModule } from "@/lib/tenant-modules";
+
+/**
+ * Claves de ícono que el sidebar mapea a componentes de `components/ui/icons`
+ * (EV-S cablea el mapa). Strings y no componentes para que este módulo siga
+ * puro e importable desde el server.
+ */
+export type NavIconKey =
+  | "home" // IconHome
+  | "calendar" // IconCal
+  | "users" // IconUsers
+  | "clock" // IconClock (Sala de espera)
+  | "heart" // IconHeart
+  | "activity" // IconActivity
+  | "dumbbell" // IconDumbbell
+  | "chart" // IconChart
+  | "settings" // IconSettings
+  | "bookmark"; // IconBookmark (Catálogo global de Plataforma)
+
+export type NavItem = {
+  href: string;
+  label: string;
+  icon: NavIconKey;
+  /** Sin el módulo, la entrada no aparece. */
+  module?: TenantModule;
+  /** Sin la capability del rol, la entrada no aparece. */
+  capability?: Capability;
+  /**
+   * Label del atajo en ⌘K; sin `shortcut`, la entrada no es atajo. Igual al
+   * `label` del nav: con "Dashboard"/"Biblioteca" el ⌘K nombraba distinto la
+   * misma pantalla que el sidebar (revisión EV0).
+   */
+  shortcut?: string;
+};
+
+export const NAV_ITEMS: readonly NavItem[] = [
+  { href: "/dashboard", label: "Inicio", icon: "home", shortcut: "Inicio" },
+  { href: "/agenda", label: "Agenda", icon: "calendar", module: "agenda", shortcut: "Agenda" },
+  // Hasta que SV cree `/sala` (SV11a cambia este href). Capability = la de
+  // Recepción: BILLING ve la agenda pero no recepciona.
+  {
+    href: "/agenda?view=reception",
+    label: "Sala de espera",
+    icon: "clock",
+    module: "salaEspera",
+    capability: "agenda.reception",
+  },
+  { href: "/pacientes", label: "Pacientes", icon: "users", module: "pacientes", shortcut: "Pacientes" },
+  {
+    href: "/diagnostico",
+    label: "Diagnóstico",
+    icon: "heart",
+    module: "diagnostico",
+    shortcut: "Diagnóstico",
+  },
+  // Seguimiento = sesiones del plan (en General no hay "Sesiones/Seguimiento").
+  {
+    href: "/seguimiento",
+    label: "Seguimiento",
+    icon: "activity",
+    module: "sesiones",
+    shortcut: "Seguimiento",
+  },
+  { href: "/biblioteca", label: "Ejercicios", icon: "dumbbell", module: "ejercicios", shortcut: "Ejercicios" },
+  // Terapia manual = biblioteca de maniobras: es la parte "kine" de la
+  // biblioteca, sin módulo propio en la matriz → va con `ejercicios`.
+  { href: "/terapia-manual", label: "Terapia Manual", icon: "activity", module: "ejercicios" },
+  { href: "/reportes", label: "Reportes", icon: "chart", module: "reportes", shortcut: "Reportes" },
+  // El sidebar la ubica en el pie; la entrada es una sola. Solo admins:
+  // configuracion/page.tsx redirige a cualquier otro rol, y `capability` la
+  // esconde acá para sidebar y topbar.
+  { href: "/configuracion", label: "Configuración", icon: "settings", capability: "tenant.admin" },
+];
+
+function allowed(
+  it: NavItem,
+  modules: ReadonlySet<TenantModule>,
+  caps: ReadonlySet<Capability> | undefined
+): boolean {
+  if (it.module && !modules.has(it.module)) return false;
+  // Falla cerrado: sin caps conocidas, una entrada que exige capability no se muestra.
+  if (it.capability && !caps?.has(it.capability)) return false;
+  return true;
+}
+
+/** Entradas visibles para los módulos del tenant (y las capabilities del rol). */
+export function navFor(
+  modules: ReadonlySet<TenantModule>,
+  caps?: ReadonlySet<Capability>
+): NavItem[] {
+  return NAV_ITEMS.filter((it) => allowed(it, modules, caps));
+}
+
+/** `nav:dashboard` para `/dashboard`, `nav:agenda` para `/agenda?view=…`. */
+function shortcutId(href: string): string {
+  return `nav:${href.replace(/^\//, "").split(/[/?#]/)[0]}`;
+}
+
+/**
+ * Atajos de navegación del ⌘K (reemplazo de `SHORTCUTS` de `lib/search.ts`).
+ * Solo filtra por módulo: el ⌘K no conoce el rol y una entrada con capability
+ * no se publica como atajo.
+ */
+export function shortcutsFor(modules: ReadonlySet<TenantModule>): SearchHit[] {
+  return NAV_ITEMS.filter(
+    (it) => it.shortcut !== undefined && !it.capability && allowed(it, modules, undefined)
+  ).map((it) => ({
+    id: shortcutId(it.href),
+    category: "shortcut" as const,
+    label: it.shortcut as string,
+    href: it.href,
+  }));
+}

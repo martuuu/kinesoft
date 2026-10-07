@@ -7,6 +7,77 @@
 
 ---
 
+## Go-live con reset (07-oct-2026) — **manda sobre §2.1-§2.4 donde choquen**
+
+> **Decisión de Martin del 07-oct:** prod se **resetea** antes del go-live (reset total; el cliente vuelve a cargar).
+> No hay datos de prod que preservar: el deploy de todo el bloque B (A + B-pre + Planes + verticales + Sala de Espera)
+> es **una sola vez**, con la cadena completa de migraciones aplicada **desde vacío**. Contexto y contratos:
+> [VERTICALES.md](VERTICALES.md); prechecks marcados en [PLANES.md §16](PLANES.md).
+>
+> **Obsoleto por el reset** (queda escrito abajo como historia, con nota en cada sección; se borra cuando el go-live
+> quede hecho): el deploy incremental de §2.1-§2.4, los prechecks de datos, el dedupe de `(programId, index)`, el ensayo
+> de datos en staging, el backfill de `agenda_foundations`, `normalize-patient-emails`, la ventana sin uso y el
+> down-script de M1. Siguen valiendo: el precheck (0) (rol con BYPASSRLS), (17) Storage privado y el P3009 liviano.
+
+**⚠️ Ya, independiente del reset (bloque A, AUDIT `data-api-anon-sin-rls`):** en la consola de prod, Settings → API →
+Data API: si `public` está expuesto, **desactivarla** (o sacar `public` de los schemas expuestos). Precheck de solo
+lectura:
+
+```sql
+SELECT relname, relrowsecurity, has_table_privilege('anon', oid, 'UPDATE')
+FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
+```
+
+**Cadena de migraciones del go-live** (todas se aplican desde vacío, en orden de timestamp, con `migrate deploy`):
+
+| Migración | Corrida | Estado |
+|---|---|---|
+| … todas las anteriores (tabla de §2, #1-#12) | A, B-pre | commiteadas |
+| `20261004120000_plans_booking_link` (M1) | ES2a | commiteada (`0edb0c8`); el SQL no se toca |
+| `20261007120000_tenant_verticals` (**M2**) | EV0 (ola V.0, sola) | **escrita y aplicada solo en el Docker local (07-oct), pendiente commit**. sha256 de `migration.sql` = `29649aa7fb7f4c1bc25eea9e5591a630569b632295961c315c6206c653cc8bb3`. `Tenant.vertical` (enum `TenantVertical`, default `KINESIOLOGY`), `Tenant.publicBookingEnabled` (default `false`) + bloque **guardado** `REVOKE … FROM anon, authenticated` (tablas, secuencias, rutinas y default privileges; en local no hay esos roles → NOTICE + no-op). `lock_timeout` 5 s |
+| `…_reception_call_realtime` (**M3**) | SV (ola SV0, sola) | **futura**: `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada sobre `realtime.messages` |
+
+**Orden del go-live** (staging primero, desde vacío, con QA completo; después prod):
+
+1. Gate final del bloque B en local (después de EV1), commit de Martin, `develop` listo para `main`.
+2. **Backup** de prod (`npm run db:prod:backup`): aunque se descarte, es la única copia de lo que cargó el cliente.
+3. **Reset** de prod (acción de Martin en la consola de Supabase). Precheck (1) → **base vacía**:
+   `SELECT count(*) FROM pg_tables WHERE schemaname='public';` = 0. Precheck (0): el rol de `DIRECT_URL` tiene
+   `rolbypassrls = t`.
+4. `migrate deploy` desde vacío (cadena completa hasta M3): `npm run db:prod:deploy` y `npm run db:prod:status` →
+   "Database schema is up to date!". O merge a `main` y el build de Production aplica la cadena antes de servir.
+5. **Roles SQL** (`prisma/roles.supabase.sql`, ver §2 "Tareas de prod que van una sola vez", punto a) → en Vercel
+   `DATABASE_URL` al rol app y `DATABASE_URL_SERVICE` a `kinesoft_service`.
+6. **Import del catálogo global** (`scripts/catalog-import.ts`, dry-run → `--apply` → dry-run = 0; comandos en §2.2).
+7. **`create-tenant --vertical kinesiologia`** (casa de la plataforma):
+   `KINESOFT_CONFIRM_PROD=<project-ref> npx dotenv -e .env.prod.local -- npx tsx scripts/create-tenant.ts --vertical kinesiologia …`
+   (`--vertical general|kinesiologia`, default `kinesiologia`).
+8. **`set-platform-admin`** (§2, punto b).
+9. Desde **/plataforma** → Consultorios: vertical y plan del cliente kine (PRO u otro) y **prender los turnos online**
+   por consultorio (nacen apagados, EV-D2; también los prende el Titular desde Configuración → General).
+10. **Data API desactivada** (arriba) y **Storage privado** (precheck (17): buckets `public = false`, ninguna policy de
+    `storage.objects` para `anon`/`authenticated`; `SUPABASE_SERVICE_ROLE_KEY` en Vercel).
+11. **Post-checks:** los de M1 (§2.4 "Post-checks", objeto por objeto), (11) tags DISCIPLINE = 2 y (12) vertical/plan del
+    tenant ([PLANES.md §16](PLANES.md)), RLS de las tablas nuevas y **grants de M2** (tiene que dar 0 filas):
+
+    ```sql
+    SELECT c.relname
+    FROM pg_class c
+    WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p','v','m','f')
+      AND (has_table_privilege('anon', c.oid, 'SELECT,INSERT,UPDATE,DELETE')
+           OR has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE'));
+    ```
+
+    Y en el log del deploy, ningún `WARNING tenant_verticals: … siguen accesibles` (autochequeo de M2). Columnas:
+    `SELECT vertical, "publicBookingEnabled" FROM "Tenant";` → el tenant casa con la vertical elegida.
+12. Con SV: `REALTIME_DRIVER=off` en el deploy → prechecks R1-R4 y V1-V6 en staging ([VERTICALES.md §7](VERTICALES.md))
+    → env → `supabase`.
+
+**Si falla un `migrate deploy` (P3009):** con la base vacía no hay nada que salvar: corregir la causa, re-reset y
+`migrate deploy` de nuevo (antes de abrir al cliente). Después de abrir, el rollback es revertir el deploy de Vercel.
+
+---
+
 ## 0. Cómo está armado (leer una vez)
 
 | Archivo | Apunta a | Lo usan |
@@ -115,6 +186,9 @@ npm run db:prod:status      # → "Database schema is up to date!"
 
 ### Migraciones pendientes en prod (bloque reciente)
 
+> **Desde el reset del 07-oct:** esta tabla es la **cadena completa** que se aplica desde vacío en el go-live, no una
+> lista de pendientes sobre datos vivos. Los avisos de abajo (#3 con duplicados, etc.) ya no aplican a prod.
+
 > ⚠️ **Estado real sin verificar (auditoría 2026-09-23):** hasta A0b, `vercel.json` corría `migrate deploy` en
 > cada build y `main` ya contiene estas migraciones, así que **puede que ya estén aplicadas** — o que un
 > deploy haya fallado (por ejemplo la #3, si había duplicados). Antes de nada: `npm run db:prod:status` y la
@@ -137,6 +211,8 @@ En orden. Todas aplicadas y verificadas en local:
 | 11 | `20260930200000_catalog_global` | catálogo global + punteros nullable + RLS de solo lectura | B-pre — **ver §2.2** |
 | 12 | `20261001090000_agenda_foundations` | sedes, franjas, excepciones, bloqueos, PS/PP, Booking expand + **backfill** | B-pre — **ver §2.2** |
 | 13 | `20261004120000_plans_booking_link` | M1 de Planes: FK turno↔plan/sesión, 2 tablas con RLS, `Patient_userId_key` por consultorio + **backfill** | ES2a — **ver §2.3 y §2.4** |
+| 14 | `20261007120000_tenant_verticals` | M2: `Tenant.vertical` + `Tenant.publicBookingEnabled` + REVOKE guardado de `anon`/`authenticated` | EV0 — **ver «Go-live con reset»** |
+| 15 | `…_reception_call_realtime` (futura) | M3: `Booking.calledAt` + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
@@ -190,6 +266,8 @@ DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
 ---
 
 ## 2.1 Deploy del Bloque A (A2 + A3) — orden exacto (30-sep-2026)
+
+> ⚠️ **Obsoleta por el reset de prod (07-oct):** el deploy incremental de A y `normalize-patient-emails` (no hay emails viejos que normalizar). `tenant_onboarding` se aplica desde vacío con la cadena; las tareas de consola de EXTERNAL-CONFIG §0.1 siguen valiendo. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
 > ⚠️ **Hay UNA migración nueva en este bloque: `20260930120000_tenant_onboarding`** (A3c). A2, A3a y A3b no
 > tienen migraciones. Reglas de corte:
@@ -292,6 +370,8 @@ La URL tiene que ser la **owner** (BYPASSRLS): con el rol de la app RLS devuelve
 DSN) llega un evento de prueba; en Upstash aparecen claves `rl:production:`.
 
 ## 2.2 Deploy de B-pre (agenda y catálogo) — orden exacto (01-oct-2026)
+
+> ⚠️ **Obsoleta por el reset de prod (07-oct):** los prechecks de datos y el backfill de `agenda_foundations` (con base vacía no hace nada). El import del catálogo (abajo) **sigue** y es el paso 6 del go-live. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
 > ⚠️ **Hay DOS migraciones nuevas en esta tanda**, en este orden:
 > 1. `20260930200000_catalog_global` — catálogo global (Specialty, Practice, PracticeSpecialty, Payer, PayerPlan,
@@ -461,6 +541,8 @@ bloqueos) quedan y se reusan al volver a desplegar.
 
 ## 2.3 Planes: preparación del deploy de M1 (`plans_booking_link`) — desde ES1 (04-oct-2026)
 
+> ⚠️ **Obsoleta por el reset de prod (07-oct):** el dedupe de `(programId, index)` y los prechecks (2) y (15). El (17) Storage privado **sigue** (paso 10 del go-live). El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
+
 > **ES1 (Planes P0) no tiene migraciones.** La única migración de Planes es M1 `plans_booking_link`, escrita y
 > aplicada en local en ES2a (04-oct). Por la decisión del 04-oct va en **un solo deploy al cierre del bloque B**,
 > después de `catalog_global` y `agenda_foundations`. Esta sección deja lo que ES1 preparó (el dedupe y dos prechecks
@@ -529,6 +611,8 @@ archivada + viva = 0, se niega sin BYPASSRLS); el apply con duplicados quedó pr
 planificador.
 
 ## 2.4 Deploy de M1 (`plans_booking_link`) — escrita en ES2a (04-oct-2026)
+
+> ⚠️ **Obsoleta por el reset de prod (07-oct):** los prechecks de datos, la ventana sin uso, el orden incremental y el down-script. **Siguen:** el precheck (0), el P3009 (liviano: re-reset) y los post-checks objeto por objeto. El orden vigente está en «Go-live con reset» (tope de este archivo). Se deja como historia hasta el go-live.
 
 > **Hay 1 migración nueva:** `20261004120000_plans_booking_link` (sha256 de `migration.sql` =
 > `7a0e279799547192c135e70f5e87dbe28db873406de67efee7ec9872300445cd`). Aplicada y verificada en el Docker local; en
@@ -761,5 +845,5 @@ pasar).
 Prisma no revierte automáticamente. El rollback real es **volver el deploy de Vercel** al commit anterior: las
 migraciones son aditivas y el código viejo sigue andando sobre el schema nuevo (columnas nuevas con default, tablas
 nuevas sin uso). Si hiciera falta revertir el DDL, se escribe una migración inversa nueva; nunca se edita una ya
-aplicada. **Excepción: M1 `plans_booking_link`** dropea `Patient_userId_key` y tiene su down-script propio (§2.4,
-«Rollback»), que solo se usa con backup y decisión de Martin.
+aplicada. Hasta el go-live con reset (07-oct), el rollback de un `migrate deploy` fallido es re-reset y volver a aplicar
+(«Go-live con reset»); el down-script de M1 (§2.4) quedó sin uso.

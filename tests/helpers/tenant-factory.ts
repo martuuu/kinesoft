@@ -1,4 +1,4 @@
-import { PrismaClient, type Role } from "@prisma/client";
+import { PrismaClient, type Role, type TenantPlan, type TenantVertical } from "@prisma/client";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -84,7 +84,20 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
 
 export async function createEphemeralTenant(
   prisma: PrismaClient,
-  opts: { role?: TenantRole; sharedPatientView?: boolean } = {}
+  opts: {
+    role?: TenantRole;
+    sharedPatientView?: boolean;
+    /** EV0 (M2): sin valor → default de la base (KINESIOLOGY). */
+    vertical?: TenantVertical;
+    /** Sin valor → default de la base (FREE). */
+    plan?: TenantPlan;
+    /**
+     * EV0 (M2): en la base el turnero nace APAGADO (opt-in, EV-D2), pero los
+     * tests de antes de EV0 (turnero, webhook MP) asumen que la reserva pública
+     * está abierta: por eso la factory lo prende salvo que se pida `false`.
+     */
+    publicBookingEnabled?: boolean;
+  } = {}
 ): Promise<EphemeralTenant> {
   const s = uniqueSuffix();
   const slug = `test-${s}`;
@@ -95,6 +108,9 @@ export async function createEphemeralTenant(
       slug,
       name: `Test ${s}`,
       sharedPatientView: opts.sharedPatientView ?? false,
+      vertical: opts.vertical,
+      plan: opts.plan,
+      publicBookingEnabled: opts.publicBookingEnabled ?? true,
       // Como el backfill de tenant_onboarding: los tenants de test ya "terminaron" el alta.
       onboardingCompletedAt: new Date(),
     },

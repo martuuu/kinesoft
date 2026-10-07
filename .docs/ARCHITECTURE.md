@@ -536,6 +536,10 @@ platform tier**:
   kind). A superadmin browsing `/biblioteca` can also edit a global card
   in place. Since B-pre also `plataforma/catalogo/*` (prestadoras, prácticas,
   especialidades, propuestas, importaciones) over `lib/catalog-admin.ts`.
+  Since EV0 (07-oct-2026) the root `/plataforma` is a summary (vertical × plan,
+  trials about to expire, pending onboarding) and `plataforma/consultorios`
+  lists and edits every tenant (see ADR-005). Sub-nav:
+  `components/plataforma/platform-nav.tsx`.
 - **Global-catalog writes go through `prismaService`** (`lib/db.ts`), the
   BYPASSRLS channel — because the RLS-forced app role *physically cannot*
   write `tenantId IS NULL` rows (`exercise_write` requires
@@ -611,6 +615,49 @@ platform tier**:
 ### ADR-003 — `PractitionerService` over `Service` (status: ACCEPTED, 30-sep-2026)
 
 See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
+
+### ADR-004 — reservado
+
+Orden de locks de Planes (PLANES §4 C2); lo escribe ES2b.
+
+### ADR-005 — Verticales y módulos (status: ACCEPTED, EV0, 07-oct-2026)
+
+- **Contexto.** Martin decidió el 07-oct vender dos tipos de consultorio: **General** (agenda, pacientes, cobros,
+  Sala de Espera; sin nada clínico de kine) y **Kinesiología** (todo; base = ejercicios propios, PRO = + catálogo de
+  Plataforma). No había gating por tenant: solo `Tenant.plan` para ejercicios/plantillas/favoritos, nav estático
+  duplicado y segmentos sin guard. Detalle en [VERTICALES.md](VERTICALES.md).
+- **Modelo.** M2 `tenant_verticals`: `Tenant.vertical` (`GENERAL`|`KINESIOLOGY`, default `KINESIOLOGY`) y
+  `Tenant.publicBookingEnabled` (default `false`, opt-in). El plan sigue siendo el enum existente. Columnas
+  explícitas, sin `features Json` ni tabla nueva (un Json no tiene tipos ni CHECK, y una tabla sumaba RLS y joins
+  en cada request).
+- **`modulesFor(entitlements)`** (`lib/tenant-modules.ts`, puro y memoizado): `{vertical, plan,
+  publicBookingEnabled}` → set de módulos. Falla cerrado (valor desconocido → sin módulos Kine). Invariantes con
+  test: sesiones ⇔ planes, plantillas ⇒ planes, favoritos/ejerciciosGlobales ⇒ ejercicios, Kine monótono FREE ⊆
+  STARTER ⊆ PRO, GENERAL sin módulos Kine. `Actor.entitlements` sale de la fila de tenant que `buildActor` ya lee:
+  cero queries extra. Sin Actor (turnero, portal): `getTenantModulesById`.
+- **Guards** (`lib/authz.ts`): `requireModule` / `assertModule` en las actions (la barrera); lecturas compartidas →
+  `[]`, escrituras y detalle → `ForbiddenError`. `guardModuleSegment(m)` en el `layout.tsx` de `/diagnostico`,
+  `/seguimiento`, `/biblioteca`, `/terapia-manual`, `/reportes` (redirige a `/dashboard`; es UX). `lib/plan-gating.ts`
+  saca `canCreate`/`canFavourite`/`canBuildTemplates`/`hasFullCatalog` y `catalogScope` de los módulos.
+- **Nav único.** `lib/nav.ts` (`NAV_ITEMS`, `navFor`, `shortcutsFor`) alimenta sidebar, topbar y ⌘K; el cliente
+  lee los módulos con `useTenantModules()` (`components/layout/tenant-modules-context.tsx`). Limitación aceptada:
+  el nav del layout no se repinta en navegación suave después de un cambio desde /plataforma (recargar); los guards
+  sí cortan.
+- **Escritor único.** `applyTenantEntitlementsInTx` (`lib/tenant-entitlements-internal.ts`) es el único que escribe
+  esas columnas después de `bootstrapTenant`, con allowlist por `source` (`platform`, `tenant-settings`,
+  `onboarding`, `billing`), FOR UPDATE + CAS por `updatedAt`, y revalida `tenantEntitlementTags` + el layout solo si
+  algo cambió. Un solo lugar para auditar y testear quién puede cambiar qué. Detalle de la allowlist en
+  [SECURITY.md §14](SECURITY.md).
+- **Audit de plataforma.** `auditPlatformInTx` (`lib/audit.ts`) registra en el tenant **afectado** con `action:
+  "platform.*"` y `payload.platform.actorHomeTenantId`.
+- **Turnos online con switch.** El turnero público (`/c/<slug>/booking`) solo abre con `turneroPublico`
+  (= `publicBookingEnabled`). Apagado: página "Turnos online no disponibles" (`components/booking/booking-unavailable.tsx`,
+  `noindex`, con el contacto del consultorio), slots `[]`, submit rechazado sin escribir y sin prefill; el estado de
+  un turno existente sigue. Se prende desde Configuración → General ("Funciones del consultorio",
+  `setPublicBookingEnabled`, último gana) o desde /plataforma (Drawer con CAS).
+- **Consecuencias.** Kine FREE/STARTER dejan de ver los globales `isBasic` (solo PRO ve el catálogo de Plataforma;
+  `isBasic` queda muerto hasta EV1). Toda sesión pendiente que agregue un export en un área con módulo lleva su gate
+  (enmiendas de VERTICALES §5). El webhook de billing SaaS futuro entra como `source:"billing"`.
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

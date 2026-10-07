@@ -17,7 +17,7 @@
  * app: el Tenant todavía no existe, no hay GUC posible; el cliente propio en
  * el script).
  */
-import type { Prisma } from "@prisma/client";
+import type { Prisma, TenantVertical } from "@prisma/client";
 import { pickFreeSlug, slugify } from "./onboarding-logic"; // relativo: el script lo corre tsx
 import { provisionPractitionerAgenda } from "./agenda-defaults";
 
@@ -49,6 +49,12 @@ export type BootstrapTenantInput = {
   onboardingCompleted: boolean;
   /** Origen para el audit ("onboarding", "scripts/create-tenant.ts"). */
   source: string;
+  /**
+   * EV0: tipo de consultorio. Sin valor = KINESIOLOGY (el cliente de hoy y el
+   * default de la columna). Es la ÚNICA escritura de la vertical fuera de
+   * `applyTenantEntitlementsInTx` (C-EV5): el tenant todavía no existe.
+   */
+  vertical?: TenantVertical;
 };
 
 /** Primer slug libre derivado del nombre (una query `startsWith`). */
@@ -99,6 +105,10 @@ export async function bootstrapTenant(
       whatsapp: input.whatsapp ?? null,
       publicEmail: input.publicEmail ?? null,
       onboardingCompletedAt: input.onboardingCompleted ? new Date() : null,
+      vertical: input.vertical ?? "KINESIOLOGY",
+      // `publicBookingEnabled` NO se pasa: queda en el default de la base
+      // (false). El turnero es opt-in (EV-D2): se prende desde Configuración →
+      // General o /plataforma, nunca por el alta.
     },
   });
   const practitioner = await tx.practitioner.create({
@@ -139,7 +149,7 @@ export async function bootstrapTenant(
       action: "tenant.create",
       entity: "Tenant",
       entityId: tenant.id,
-      payload: { slug, source: input.source, practitionerId: practitioner.id },
+      payload: { slug, source: input.source, practitionerId: practitioner.id, vertical: tenant.vertical },
     },
   });
   return {

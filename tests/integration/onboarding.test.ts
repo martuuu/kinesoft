@@ -35,6 +35,10 @@ import { setBusinessHours } from "@/lib/tenant-settings";
 import { savePractitionerWeek } from "@/lib/practitioner-schedule";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { __rateLimitInternals } from "@/lib/rate-limit";
+import { runWithRls } from "@/lib/rls";
+import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
+import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { revalidateTagSpy } from "@/tests/helpers/integration-setup";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -474,5 +478,85 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     sb.user = { id: A.userId, email: `${A.userId}@test.local`, email_confirmed_at: new Date(0).toISOString(), user_metadata: {} };
     const ctx = await loadOnboardingContext({ id: A.userId, email: `${A.userId}@test.local`, emailVerified: true, fullName: null });
     expect(ctx.kind).toBe("done");
+  });
+
+  // ── EV0 · EV-O: tipo de consultorio en el alta (plan §15.4, EV-D2, EV-D5) ──
+  describe("EV-O · vertical en el alta", () => {
+    it("alta con vertical GENERAL guarda GENERAL y el turnero nace apagado", async () => {
+      newIdentity();
+      const r = await saveOnboardingClinic({ name: "Consultorio General Onb", vertical: "GENERAL" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      createdTenants.push(r.data.tenantId);
+      const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+      expect(t).toMatchObject({ vertical: "GENERAL", publicBookingEnabled: false, onboardingCompletedAt: null });
+    });
+
+    it("alta sin vertical → KINESIOLOGY, con el turnero apagado (opt-in, EV-D2)", async () => {
+      newIdentity();
+      const r = await saveOnboardingClinic({ name: "Kine Por Defecto" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      createdTenants.push(r.data.tenantId);
+      const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+      expect(t).toMatchObject({ vertical: "KINESIOLOGY", publicBookingEnabled: false });
+    });
+
+    it("una vertical fuera del enum no pasa zod ni crea tenant", async () => {
+      newIdentity();
+      const before = await db.tenant.count();
+      const r = await saveOnboardingClinic({ name: "Vertical Rara", vertical: "DENTAL" as never });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.fieldErrors?.vertical?.[0]).toBeTruthy();
+      expect(await db.tenant.count()).toBe(before);
+    });
+
+    it("la vertical se cambia re-entrando al paso 2 con el alta abierta, y no después (onboarding-closed)", async () => {
+      const uid = newIdentity();
+      const r = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "KINESIOLOGY" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const tenantId = r.data.tenantId;
+      createdTenants.push(tenantId);
+
+      revalidateTagSpy.mockClear();
+      const edit = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" });
+      expect(edit).toEqual({ ok: true, data: { tenantId, created: false } });
+      expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
+      // Escritor único (C-EV5): audit `tenant.entitlements` en el tenant, misma tx.
+      const ev = await db.auditEvent.findMany({ where: { tenantId, action: "tenant.entitlements" } });
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ actorId: uid, entity: "Tenant", entityId: tenantId });
+      expect(ev[0].payload).toMatchObject({ source: "onboarding", changed: ["vertical"], before: { vertical: "KINESIOLOGY" }, after: { vertical: "GENERAL" } });
+      // Cache de módulos invalidada después del commit.
+      for (const tag of tenantEntitlementTags(tenantId)) expect(revalidateTagSpy).toHaveBeenCalledWith(tag);
+
+      // Re-entrar sin vertical (o con la misma) no audita de nuevo.
+      expect((await saveOnboardingClinic({ name: "Cambia Vertical" })).ok).toBe(true);
+      expect((await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" })).ok).toBe(true);
+      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(1);
+      expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
+
+      // Cierra el alta.
+      expect((await createService({ name: "Consulta", durationMin: 30, priceCents: 1_000_000 })).ok).toBe(true);
+      expect((await completeOnboarding()).ok).toBe(true);
+
+      // Después: el paso 2 ya no entra (la cuenta "ya pertenece") …
+      const late = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "KINESIOLOGY" });
+      expect(late.ok).toBe(false);
+      // … y el escritor único rechaza la source `onboarding` aunque la llame
+      // alguien que se saltee ese chequeo (carrera con completeOnboarding).
+      const direct = await runWithRls(tenantId, (tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId,
+          source: "onboarding",
+          patch: { vertical: "KINESIOLOGY" },
+          actor: { userId: uid, homeTenantId: tenantId },
+        })
+      );
+      expect(direct).toEqual({ ok: false, reason: "onboarding-closed" });
+      expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
+      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(1);
+    });
   });
 });

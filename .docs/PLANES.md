@@ -4,8 +4,19 @@
 > **Criterio cuando hay conflicto:** primero la integridad de los datos del cliente vivo; después, que cada sesión sea chica, tenga un solo dueño por archivo y se pueda verificar.
 > **Estado verificado:** `develop @ 3ff2e50`, working tree limpio, todo en solo lectura.
 
-## Estado y decisiones firmadas (03-oct)
+## Estado y decisiones firmadas (03-oct, actualizado 07-oct)
 
+- **Decisiones de Martin del 07-oct** (detalle y contratos en [VERTICALES.md](VERTICALES.md); fuente: plan vigente §15):
+  1. **Prod se resetea antes del go-live** (reset total; el cliente vuelve a cargar). No hay datos de prod que preservar:
+     el deploy final es `migrate deploy` desde vacío + bootstrap ([VERTICALES.md §9](VERTICALES.md)). Por eso se caen
+     las sesiones y prechecks de legacy (ver §0.4 y las marcas "eliminada (reset de prod 07-oct)" en §12 y §16).
+  2. **Verticales del SaaS:** Consultorio General (sin Planes, Sesiones, Diagnóstico ni Ejercicios) y Consultorio
+     Kinesiología (base = ejercicios propios; PRO = + catálogo de Plataforma). Corridas nuevas **EV0** (ahora, con la
+     migración M2 `tenant_verticals`) y **EV1** (barrido de General, después de ES4).
+  3. **Sala de Espera realtime** para las dos verticales: corrida nueva **SV** (migración M3 `reception_call_realtime`).
+  4. **No se rehace el planning de P2-P4:** lo nuevo entra como **enmiendas de una línea**, copiadas al tope de §10,
+     §11 y §12 (se pegan literal en los prompts).
+  - **Orden nuevo de corridas:** EV0 → **ES2b** → ES3 → **SV** → ES4 → **EV1** → reset de prod + deploy único de B.
 - **Planning firmado por Martin el 03-oct:** PD-01 a PD-16 y PQ-01 (= sí: la autorización de la OS se registra en el plan). Cambiaron PD-09 (la Secretaria opera **todos** los turnos) y PD-15 (vínculo del portal automático por email verificado). PQ-02 a PQ-15 siguen como consultas al cliente con su default (§1).
 - **Las enmiendas E0-E5 del plan (§14.8) están integradas en este texto** y mandan sobre la versión del journal. Las verificó el workflow `wf_bf603f14-cb7` (3 críticos de solo lectura):
   - E0: fugas vivas (`getPatient`, firmador de media, `listBookingsInRange`) en ES1;
@@ -13,11 +24,12 @@
   - E2: autorización de la OS (tabla `ProgramAuthorization`);
   - E3: portal ampliado e identidad multi-consultorio (`PatientChangeRequest`, `Patient.userId` único por consultorio, ola P4.0).
 - **ES1 (P0) ejecutada el 04-oct** en develop, sin migraciones: §8 con las enmiendas de abajo (§5, C2, C5, C8, S11e, P2-C1, V1-D18/V2/M13). Commit `d7ac75f`. **Pendiente:** QA de staging ([QA.md §Planes P0](QA.md)). Cierres y hallazgos en AUDIT §Ronda 14.
-- **ES2a (P1) ejecutada el 04-oct** en develop: M1 `plans_booking_link` escrita, aplicada y verificada **solo en el Docker local** (§9). **Pendiente:** commit de Martin; ES2b arranca después. **C1 enmendado en P1.Z (F1):** los dos CHECK de pricing usan `IS NOT DISTINCT FROM` en vez de `=` (con `pricingMode` NULL, `=` da NULL y el CHECK dejaba pasar un precio sin modo); decisión del orquestador, avisada a Martin. El bloque SQL de §3 ya es idéntico al archivo (sha256 `7a0e2797…45cd`). Deploy, prechecks, P3009, down-script y post-checks: [MIGRACIONES-RUNBOOK §2.4](MIGRACIONES-RUNBOOK.md). Cierres y hallazgos en AUDIT §Ronda 15.
-- **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → ES2b → ES3 → ES4), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
-- **Una sola migración en todo Planes:** M1 `plans_booking_link`. Ahora suma 2 tablas con RLS y la relajación de `Patient_userId_key`, una excepción a "todo aditivo" que Martin aprobó el 03-oct.
+- **ES2a (P1) ejecutada el 04-oct** en develop: M1 `plans_booking_link` escrita, aplicada y verificada **solo en el Docker local** (§9). Commit `0edb0c8`. **C1 enmendado en P1.Z (F1):** los dos CHECK de pricing usan `IS NOT DISTINCT FROM` en vez de `=` (con `pricingMode` NULL, `=` da NULL y el CHECK dejaba pasar un precio sin modo); decisión del orquestador, avisada a Martin. El bloque SQL de §3 ya es idéntico al archivo (sha256 `7a0e2797…45cd`). Deploy: con el reset del 07-oct, M1 se aplica desde vacío dentro de la cadena completa ([MIGRACIONES-RUNBOOK §"Go-live con reset"](MIGRACIONES-RUNBOOK.md)); el down-script y la ventana sin uso de §2.4 quedaron obsoletos. Cierres y hallazgos en AUDIT §Ronda 15.
+- **EV0 ejecutada el 07-oct** en develop (verticales, /plataforma de consultorios, turnero con switch, REVOKE de la Data API), **pendiente commit de Martin**. M2 `tenant_verticals` aplicada solo en el Docker local. La revisión sumó enmiendas a S14, S15/S27a, S17d y S22b (copiadas abajo en §10 y §11) y a SV01 ([VERTICALES.md §5](VERTICALES.md)). Cierres en AUDIT §Ronda 16. **Siguiente: ES2b.**
+- **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → EV0 → ES2b → ES3 → SV → ES4 → EV1, orden del 07-oct), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
+- **Una sola migración en todo Planes:** M1 `plans_booking_link`. Ahora suma 2 tablas con RLS y la relajación de `Patient_userId_key`, una excepción a "todo aditivo" que Martin aprobó el 03-oct. Fuera de Planes, en el mismo bloque B: M2 `tenant_verticals` (EV0) y M3 `reception_call_realtime` (SV), cada una sola en su ola.
 - **Abierto para Martin** (el Paso 0 no lo resuelve):
-  1. **Fugas E0 en prod.** `getPatient`, `resolveMediaUrl`, `listBookingsInRange` y Storage (si el precheck 17 muestra policies abiertas) están **vivas en prod**. Con la regla del 04-oct siguen así hasta el cierre de B. **Recomendación:** sacarlas como hotfix por el procedimiento del RUNBOOK apenas cierre ES1, solo con los archivos de E0 y con OK explícito.
+  1. ~~Fugas E0 en prod: ¿hotfix?~~ **Resuelto por el reset (07-oct):** no hay hotfix de E0; prod se resetea y el código nuevo sale en el deploy único. **Pero** queda abierto el hallazgo de bloque A `data-api-anon-sin-rls` (la anon key de Supabase podría leer/escribir 9 tablas sin RLS si la Data API expone `public`): acción de Martin en consola **ya**, independiente del reset ([VERTICALES.md §1](VERTICALES.md), AUDIT).
   2. ~~¿Incluye a B-pre?~~ **Resuelto (04-oct):** sí. B-pre, M1 y Planes van en un solo deploy al cierre de B, con las migraciones en orden `catalog_global` → `agenda_foundations` → `plans_booking_link` (§16).
   3. ~~Datos administrativos por defecto~~ **Resuelto por PD-13:** un rol sin `clinical.read` (Secretaria, Facturación) tiene **siempre** el nivel `admin` sobre los pacientes del tenant: ni más (nunca `full`, aunque haya "Consultorio común", share o asignación) ni menos (ve los datos administrativos de todos los pacientes, sin depender de "Consultorio común"). S02p lo implementa en `patientAccessFor`, `bulkPatientAccess` y `seesAll`.
 
@@ -31,7 +43,7 @@
 - **Costos:** por sesión y por paquete.
 - **Disciplinas separadas:** Kinesiología y Osteopatía.
 - **Puertas de creación:** Diagnóstico, Tab Planes del paciente, `/planes/[disciplina]` y "crear desde el turno".
-- **Alcance funcional:** seguimiento; ciclo de vida (pausar, cancelar, completar); edición y adopción de turnos; legacy de prod; portal (gateado); QA + E2E.
+- **Alcance funcional:** seguimiento; ciclo de vida (pausar, cancelar, completar); edición y adopción de turnos; ~~legacy de prod~~ (sin objeto desde el reset de prod del 07-oct); portal (gateado); QA + E2E.
 - **No hay "Planes v1".** Se construye completo, una sola vez, sobre el motor de B-pre. El plan referencia `(practitionerId, serviceId) + locationId` (ADR-003).
 - **Reglas de ejecución:**
   - una migración encabeza su ola, sola;
@@ -174,14 +186,17 @@
 | Corrida | Olas | Qué deja | ¿Llega a prod? |
 |---|---|---|---|
 | **Paso 0** (orquestador, docs) | — | Precheck del RUNBOOK corregido, `.docs/PLANES.md` con las enmiendas integradas, filas de AUDIT, IDs P0-P4 | Commit de docs |
-| **ES1** (~24 agentes) | **P0** | **Fugas vivas (E0):** `getPatient` borrada, firmador de media cerrado y Storage por service role, `listBookingsInRange` sin PHI. **Secretaria (E1):** opera todos los turnos, nivel "administrativo" sin HC, alta de paciente asignada al profesional. **Fixes de planes:** `createProgram` en día AR; gate full en Diagnóstico y plantillas; ejercicios asignables; dosis 3×12; portal e ICS sin PHI; plan activo determinístico; carrera de sesión a medida; StatusTag único. **Cimientos aditivos sin callers:** motor y plata puros, loader por días, locks ordenados, `auditInTx`, dedupe (dry-run) | No hasta cerrar B (04-oct). Ver "Abierto para Martin" (1) |
+| **ES1** (~24 agentes) | **P0** | **Fugas vivas (E0):** `getPatient` borrada, firmador de media cerrado y Storage por service role, `listBookingsInRange` sin PHI. **Secretaria (E1):** opera todos los turnos, nivel "administrativo" sin HC, alta de paciente asignada al profesional. **Fixes de planes:** `createProgram` en día AR; gate full en Diagnóstico y plantillas; ejercicios asignables; dosis 3×12; portal e ICS sin PHI; plan activo determinístico; carrera de sesión a medida; StatusTag único. **Cimientos aditivos sin callers:** motor y plata puros, loader por días, locks ordenados, `auditInTx`, dedupe (dry-run) | No hasta cerrar B (04-oct); sin hotfix de E0 por el reset (07-oct) |
 | **ES2a** (corta) | **P1** | M1 `plans_booking_link`, sola: vínculo turno↔plan + `ProgramAuthorization` + `PatientChangeRequest` + `Patient.userId` único por consultorio | Al cierre de B, en el deploy final (el build la aplica antes de servir el código) |
+| **EV0** (07-oct) | V.0-V.2 | M2 `tenant_verticals` (sola) + verticales, matriz de módulos, guards, nav único, turnero con switch, /plataforma de consultorios, REVOKE de la Data API ([VERTICALES.md](VERTICALES.md)) | No (develop) |
 | **ES2b** | **P2** | Core de turnos server-only + motor (preview y commit en una tx) + sincronía + lecturas y saldo + ciclo de vida + mover y re-planificar + cantidad y precio + autorización de la OS + Diagnóstico server + adopción + guardas | No (develop) |
 | **ES3** | **P3** | Editor único y 4 puertas, agenda, drawer (incluido "Agendar próxima sesión" para la Secretaria), Seguimiento, Turnos y Facturación por plan, plantillas, `/planes/[disciplina]`, edición del plan y renovación de la autorización; retiro de las altas viejas | No |
-| **ES4** | **P4** | **Portal ampliado** (identidad multi-consultorio, turnos y progreso, estado de cuenta, "Mis datos" con confirmación del consultorio, ejercicios del plan), legacy (server, UI y script), ICS "Sesión n/N", listado de pacientes, matriz authz completa, perf y soak, E2E | **Sí: todo el bloque B junto, una sola vez**, después del gate final |
+| **SV** (07-oct) | SV0-SV2 | M3 `reception_call_realtime` (sola) + Sala de Espera realtime, "Llamar", `/sala`, agenda en vivo ([VERTICALES.md §7](VERTICALES.md)) | No |
+| **ES4** | **P4** | **Portal ampliado** (identidad multi-consultorio, turnos y progreso, estado de cuenta, "Mis datos" con confirmación del consultorio, ejercicios del plan), ~~legacy (server, UI y script)~~ (eliminado por el reset del 07-oct), ICS "Sesión n/N", listado de pacientes, matriz authz completa, perf y soak, E2E | No (develop) |
+| **EV1** (07-oct) | — | Barrido de la vertical General + limpieza R-LEGACY opcional | **Sí: todo el bloque B junto, una sola vez**, después del gate final: reset de prod → `migrate deploy` desde vacío → bootstrap |
 | **ES4b** | condicional | Fixes del QA de staging | Junto con ES4 |
 
-**Migraciones:** en todo Planes hay **una sola**: `plans_booking_link` (ES2a). Se aplica en prod recién en el deploy final del bloque B.
+**Migraciones:** en todo Planes hay **una sola**: `plans_booking_link` (ES2a). En el bloque B se suman M2 `tenant_verticals` (EV0) y M3 `reception_call_realtime` (SV). Todas se aplican en prod recién en el deploy final, **desde base vacía** (reset del 07-oct).
 
 ---
 
@@ -248,7 +263,7 @@ Van literales en los prompts del área. "🔁" = cambió respecto de la recomend
 | PQ-11 | ¿Disciplina de cada servicio? | Sugerida desde `practiceId`, se confirma a mano | Antes del deploy final |
 | PQ-12 | ¿Cómo prescribe ejercicios? | Plantilla = misma lista; Diagnóstico = rampa | ES2b (S17d) |
 | PQ-13 | ¿La evaluación es la sesión 1? | Checkbox marcado si es una práctica de evaluación | ES3 |
-| PQ-14 | ¿Qué hacemos con los planes viejos? | Acciones manuales + script en dry-run | ES4 |
+| ~~PQ-14~~ | ~~¿Qué hacemos con los planes viejos?~~ | **Eliminada (reset de prod 07-oct):** no hay planes viejos en prod | — |
 | PQ-15 | ¿Cómo funcionan las órdenes de la OS (renovaciones, qué cuenta como "usada", adjunto)? | Una orden vigente por plan, con historial; "usadas" = sesiones realizadas con fecha AR ≥ `startsOn` de la orden vigente; el adjunto de la orden médica → C1 | ES2b |
 
 ### 1.4 Diferidos (anotados en AUDIT con su bloque en el Paso 0)
@@ -358,7 +373,7 @@ Van literales en los prompts del área. "🔁" = cambió respecto de la recomend
 **R-LEGACY del verificador.** I3, I5 e I6 se verifican **solo en planes vinculados**: `schedule` no nulo o al menos un turno con `programId`. En un legacy, el verificador corre solo I1, I2, I4, I7 e I8.
 
 - Así, pausar, cancelar o archivar un plan viejo con `totalSessions` ≠ filas no falla.
-- "Completar datos" (S25L) reconcilia con confirmación explícita: *"Este plan dice 10 sesiones y tiene 8 cargadas: ¿agregamos 2 o queda en 8?"*.
+- ~~"Completar datos" (S25L)~~ (eliminado por el reset de prod del 07-oct) reconcilia con confirmación explícita: *"Este plan dice 10 sesiones y tiene 8 cargadas: ¿agregamos 2 o queda en 8?"*.
 - Desde ahí el plan pasa a ser vinculado.
 - Si el verificador falla: evento a Sentry con el diff de invariantes.
 
@@ -379,6 +394,10 @@ Van literales en los prompts del área. "🔁" = cambió respecto de la recomend
 - **Numeración:** `index` fijo. Se muestra el **ordinal** por fecha entre las sesiones vivas, calculado en la proyección (`planSessionOrdinal`).
 
 ### 2.5 Legacy
+
+> **Reset de prod (07-oct):** S25n y las acciones S25L/S25b quedan **eliminadas** (no hay planes viejos que
+> normalizar ni completar). Lo de abajo queda como historia. **R-LEGACY** (§2.3) se mantiene en ES2b/ES3 porque en
+> `develop` conviven las altas viejas hasta S27a/b; EV1 lo limpia, opcional.
 
 - Las sesiones a 00:00Z cuentan por **su fecha UTC**.
 - `scripts/normalize-plan-session-dates.ts` (S25n):
@@ -917,7 +936,7 @@ Según el área:
 - **6** (visibility): S02p lo enmienda con el nivel `admin` (E1); el resto de §5.6 se preserva. La enmienda se asienta en AUDIT §5 en P0.Z.
 - **8** (vínculo del auth callback) y **22** (staff ≠ paciente): S02p, S24a, S24.
 - **19** (`safeNext`) y **21** (cookies de Supabase): S24a (toca el callback) y S24d (cierre de sesión global).
-- **16** (scripts `prisma:*` envueltos): S26a, S02x, S25n.
+- **16** (scripts `prisma:*` envueltos): S26a, S02x (~~S25n~~ eliminada por el reset).
 
 ### C13 · UX literal
 
@@ -1508,6 +1527,27 @@ git add -A && git commit -m "Planes P1 (ES2a): migración plans_booking_link (so
 
 ## 10. ES2b · P2 (= B2): core de turnos + dominio server · sin migración nueva
 
+### Enmiendas EV0/SV (07-oct, se copian literal en los prompts)
+
+> Fuente: plan vigente §15.5 = [VERTICALES.md §5](VERTICALES.md). Mandan sobre el texto de las sesiones de abajo donde choquen. Cada línea va **tal cual** en el prompt de la sesión que nombra.
+
+- **Verticales:**
+  - **P2-C1**: `assertPlanManageInTx`/`assertPlanScheduleInTx`/`assertPlanAuthorizeInTx` arrancan con `assertModule(actor,'planes')`; `plan-authz.test.ts` suma "tenant GENERAL (OWNER) → Forbidden".
+  - **S13**: disciplina del servicio solo con `planes` (UI y server).
+  - **S13x**: `createExercise`/`ensureTag` exigen `gate.canCreate` (**ya hecho en EV0 V.Z, N2: S13x lo preserva**); claves de `unstable_cache` con `gate.catalogScope` (`lib/exercises.ts`, `lib/diagnosis.ts`).
+  - **S14**: sin `planes`, `getDashboardData` no consulta planes/sesiones y devuelve 0.
+  - **S12b**: cada export de `lib/sessions.ts` exige `sesiones` (`listOpenSessions` vacío sin el módulo).
+  - **S17d**: `loadCatalog` (vacío), `getDiagnosisPlanPrefill`, `createPlanFromDiagnosis` exigen `diagnostico`.
+  - **S17d** (revisión EV0): `searchPatientsForAssignment` (`lib/diagnosis.ts`) exige `diagnostico` (`[]` sin el módulo).
+  - **S14** (revisión EV0): `getSessionsChart` sin `sesiones` devuelve 0 sin consultar. La clave de `unstable_cache` del dashboard no lleva los módulos: S14 se apoya en el tag `tenantEntitlementTags(tenantId)` (lo revalida el escritor único) para no servir un slot viejo tras un cambio de vertical.
+  - **S15 / S27a** (revisión EV0): los exports de `lib/programs.ts` que sobrevivan mantienen `requireModule('planes')` (escrituras) y `[]` sin el módulo (lecturas); mover o retirar código no se lleva el gate.
+  - **P2.Z(b)**: el revisor verifica que ningún export de Planes/Sesiones/Diagnóstico/Ejercicios quede sin gate de módulo.
+- **Realtime (para que SV no toque archivos de planes):**
+  - **P2-C1** suma `lib/booking-events-internal.ts`* (server-only, firma congelada): `BookingChangeRef = {bookingId, practitionerId, scheduledFor, prev?, kind?}` y `afterBookingsCommitted(tenantId, refs, opts?)`; hoy solo hace lo de `invalidateBookingDerivedCaches` y nunca tira; SV le suma el publish sin cambiar la firma.
+  - **S07c**: `invalidateBookingDerivedCaches` → `afterBookingsCommitted(actor.tenantId, refs)` en cada write-path de `bookings.ts`, después del commit y fuera de `runWithRls`; `BookingUpdateTxOutcome.ok` suma `refs`.
+  - **S12, S11e, S12b, S15, S16a, S16b, S25a, S17d**: todo write-path que crea, mueve, cambia estado/cobro, cancela o borra un `Booking` llama `afterBookingsCommitted` una vez después del commit; los `*InTx` **devuelven** refs y nunca emiten adentro.
+- **Reset de prod (§15.6):** S25a **se mantiene** (adopción de turnos sueltos, útil con datos nuevos). R-LEGACY se deja como está. Se cae el dedupe en staging/prod (no hay datos que deduplicar).
+
 **Prerrequisitos:** commit 2a = `git log -1`, working tree limpio; PD-09, PD-10 y PD-16 firmadas (03-oct); PQ-02, PQ-06, PQ-09, PQ-12 y PQ-15 con respuesta o default.
 
 ### P2.0.0 · P2-C1 · Contratos (serial, medio)
@@ -1777,6 +1817,19 @@ git add -A && git commit -m "Planes P2 (ES2b): core de turnos server-only (con e
 
 ## 11. ES3 · P3 (= B3): UI y puertas · sin migración
 
+### Enmiendas EV0/SV (07-oct, se copian literal en los prompts)
+
+> Fuente: plan vigente §15.5 = [VERTICALES.md §5](VERTICALES.md). Mandan sobre el texto de las sesiones de abajo donde choquen. Cada línea va **tal cual** en el prompt de la sesión que nombra.
+
+- **S17t / S21t**: plantillas solo por `gatingForActor(tx).canBuildTemplates` / `has('plantillas')`.
+- **S20 / S23**: el guard de módulo vive en el `layout.tsx` de EV0; no se duplica ni se borra.
+- **S21**: `app/(app)/planes/layout.tsx` = `guardModuleSegment('planes')`; la entrada de nav y el atajo van **solo** en `lib/nav.ts`; `sidebar.tsx`, `topbar.tsx` y `lib/search.ts` salen de su lista.
+- **S22b**: pestañas con `isProfileTabAllowed` + rol; sin `planes` no carga planes ni saldos; los mocks de `getActor` suman `entitlements`.
+- **S22b** (revisión EV0): `recordEvaScore` (tira) y `getPatientEvaScores` (`[]`) de `lib/patients.ts` exigen `evaluaciones`.
+- **S15 / S27a** (revisión EV0): los exports de `lib/programs.ts` que sobrevivan mantienen `requireModule('planes')` (escrituras) y `[]` sin el módulo (lecturas); mover o retirar código no se lleva el gate.
+- **S19b / S19c / S18b**: leyenda/filtro de plan, puerta 4, "Agendar próxima sesión", "Vincular", "Crealo como plan…" solo con `has('planes')`.
+- **Reset de prod (§15.6):** R-LEGACY se deja como está en ES3; S27a/S27b se mantienen.
+
 **Prerrequisitos:**
 - commit 2b;
 - PD-11 firmada;
@@ -1816,7 +1869,7 @@ git add -A && git commit -m "Planes P2 (ES2b): core de turnos server-only (con e
 |---|---|---|
 | **S19c** Drawer: fila Plan (alto) | `booking-drawer/index.tsx`, `booking-drawer/plan-row.tsx`*, `booking-drawer/patient-header.tsx` (código muerto `:27-29`), `booking-drawer/status-actions.tsx`, `tests/unit/render/booking-drawer-plan.test.tsx`* | Puerta 4 (navega con C10), "Cancelalo", copy de Ausente, paciente bloqueado. **"Agendar próxima sesión"** en un turno de plan con `plans.schedule` (la Secretaria; usa `listSchedulablePlanSessions` + `generatePlanBookings({sessionIds})`, sin título). **"Sacar del plan" y "Vincular a una sesión"** solo con `plans.manage`. "Renovar autorización" (diálogo de S22e) con `plans.authorize` |
 | **S19d** Drawer: mover y plata (alto) | `booking-drawer/reschedule-form.tsx`, `edit-details-form.tsx`, `billing-rows.tsx`, `components/agenda/recordatorio-turno.tsx`, `tests/unit/render/booking-drawer-move.test.tsx`* | "Solo este / Este y los siguientes" (`plans-move`) con `plans.schedule`, "Copago (plan)", recordatorio "Sesión 3 de 10" |
-| **S21** `/planes` + nav (medio) | `app/(app)/planes/page.tsx`*, `app/(app)/planes/[discipline]/page.tsx`*, `components/planes/planes-client.tsx`*, `components/layout/sidebar.tsx`, `components/layout/topbar.tsx`, `lib/search.ts` | Solo disciplinas con algún servicio activo; otra disciplina → `notFound`; "Nuevo plan" con `plans.manage` y `PatientPicker requireFull`; filtro **"Sesiones sin turno"** con `plans.schedule`, sin título, con la acción Agendar |
+| **S21** `/planes` + nav (medio) | `app/(app)/planes/page.tsx`*, `app/(app)/planes/[discipline]/page.tsx`*, `app/(app)/planes/layout.tsx`* (`guardModuleSegment('planes')`), `components/planes/planes-client.tsx`*, `lib/nav.ts` (solo la entrada y el atajo de Planes). ~~`components/layout/sidebar.tsx`, `components/layout/topbar.tsx`, `lib/search.ts`~~ salen (enmienda EV0: la nav vive solo en `lib/nav.ts`) | Solo disciplinas con algún servicio activo; otra disciplina → `notFound`; "Nuevo plan" con `plans.manage` y `PatientPicker requireFull`; filtro **"Sesiones sin turno"** con `plans.schedule`, sin título, con la acción Agendar |
 | **S21t** Plantillas UI (medio) | `components/planes/templates/template-list.tsx`*, `template-drawer.tsx`*, `tests/unit/render/templates.test.tsx`* | Deshabilitadas en FREE con aviso |
 | **S22a** Tab Planes (alto) | `plan-view.tsx`, `components/planes/plan-card.tsx`*, `plan-lifecycle-dialogs.tsx`*, `plan-history.tsx`*, `components/patients/plan-template-apply.tsx`, `tests/unit/render/plan-card.test.tsx`* | PlanCard, D7, historial, plantilla por el editor; deja de usar `addCustomSession`; línea de autorización *"Autorizadas 10 · usadas 6 · agendadas 3 · vence 30/11"* (solo si el DTO la trae) |
 | **S22e** Edición del plan (alto, plata) | `components/planes/plan-edit-dialogs.tsx`, `plan-session-actions.tsx`, `tests/unit/render/plan-edit.test.tsx`* | Cantidad y precio con preview y CAS, mantener total, sesión a medida, archivar y restaurar sesión, "Editar desde la sesión N" (editor `replan`), "Generar turnos para pendientes"; **diálogo de renovación de la autorización** (`renewPlanAuthorization`, visible también para la Secretaria desde el drawer) |
@@ -1880,14 +1933,24 @@ git add -A && git commit -m "Planes P3 (ES3): editor único y 4 puertas (Tab Pla
 
 ---
 
-## 12. ES4 · P4 (= B4): portal ampliado, legacy, matriz y E2E · sin migración
+## 12. ES4 · P4 (= B4): portal ampliado, matriz y E2E (legacy eliminado por el reset) · sin migración
+
+### Enmiendas EV0/SV (07-oct, se copian literal en los prompts)
+
+> Fuente: plan vigente §15.5 = [VERTICALES.md §5](VERTICALES.md). Mandan sobre el texto de las sesiones de abajo donde choquen. Cada línea va **tal cual** en el prompt de la sesión que nombra.
+
+- **S24 / S24e / S24d**: el portal usa `getTenantModulesById` (turnos de plan con `planes`, check-in con `evaluaciones`, `/ejercicios` con `ejercicios`, "Reservar turno" con `turneroPublico`).
+- **S32**: columna y chips de plan solo con `planes`.
+- **S26b**: columna "tenant GENERAL (OWNER)" en la matriz + "KINE FREE no asigna globales". **S26a**: escenario General (sin nav clínico; `/diagnostico` → `/dashboard`).
+- **Reset de prod (§15.6):** S25L, S25n y S25b **eliminadas**; PQ-14 y el escenario E2E "legacy" eliminados. ES4 corre después de SV: `authz-matrix.test.ts` y `package.json` se comparten con SV por handoff.
 
 **Orden de ES4:** P4.0 (S24a ∥ P4-C) → P4.1 (10) → P4.2 (2) → P4.3 (E2E) → P4.Z (gate final del bloque B).
 
 **Prerrequisitos:**
 - commit de ES3;
-- prechecks (8)-(10) y (14) con sus números;
-- PQ-14 y PQ-13 respondidas;
+- ~~prechecks (8)-(10) y (14) con sus números~~ (eliminados por el reset de prod del 07-oct: base vacía);
+- PQ-13 respondida (~~PQ-14~~ eliminada por el reset);
+- commit de SV (orden del 07-oct: ES3 → SV → ES4);
 - **PD-12 lista**:
   - Playwright instalado por el orquestador con OK de Martin **antes de lanzar agentes** (`npm i -D @playwright/test && npx playwright install chromium`);
   - `.env.e2e.local` con el Auth de **staging**, provisto por Martin;
@@ -1917,7 +1980,7 @@ git add -A && git commit -m "Planes P3 (ES3): editor único y 4 puertas (Tab Pla
 
 Tandas sugeridas:
 - **A:** S24, S24p, S24d, S24r, S24e (integración) + S32a.
-- **B:** S24i, S25L, S25n, S32 (integración).
+- **B:** S24i, S32 (integración). ~~S25L, S25n~~ eliminadas (reset de prod 07-oct).
 
 | Sesión | Archivos | Objetivo y tests |
 |---|---|---|
@@ -1927,14 +1990,14 @@ Tandas sugeridas:
 | **S24r** Pedidos del portal (lado consultorio) (alto) | `lib/patient-portal-requests.ts`*, `lib/patient-portal-requests-internal.ts`*, `components/patients/profile/hero.tsx` (banner), `tests/integration/patient-portal-requests.test.ts`* | Aprobar o rechazar con `{id, expectedUpdatedAt}`, CAS y gate `admin` o full. Al aprobar, en una tx: campos de contacto con `where {id, tenantId}`, `applyEmergencyContactInTx` nueva (reemplaza el contacto único), cobertura re-validada, estado APPROVED, `auditInTx` con nombres de campo (sin valores). El email se aplica solo si la cuenta está vinculada. Un cambio de OS avisa *"Cambia el copago de N turnos impagos"* con `useConfirm`. **No edita `lib/patients.ts`** (es de S32): si necesita exportar un helper de cobertura, handoff exacto |
 | **S24e** Ejercicios del plan (alto, PHI) | `lib/portal-exercises.ts`*, `lib/portal-exercises-internal.ts`*, `app/(portal)/portal/c/[slug]/ejercicios/page.tsx`*, `components/portal/exercise-list.tsx`*, `tests/integration/portal-exercises.test.ts`* | Solo `kind = EXERCISE` de sesiones vivas del plan vinculado. Campos `{name, sets, reps, durationSeconds, instructions, media}`, sin `SessionExercise.notes` del kine ni `videoUrl` crudo. Media por `signExerciseMedia` (S02m) con TTL de 600 s, o YouTube nocookie. No toca `lib/exercise-media.ts`. Test: `[P4-S24e] maniobras y notas del kine no salen`; media de un ejercicio fuera de sus sesiones → null |
 | **S24i** ICS "Sesión n/N" (medio) | `lib/bookings-export-internal.ts`, `tests/integration/ics-export.test.ts` | "Kine · Sesión 3/10 · <servicio>"; sin título sin `clinical.read` (el gate ya está desde ES1); la autorización de la OS nunca sale |
-| **S25L** Legacy server (alto) | `lib/plans-legacy.ts`*, `lib/plans-legacy-internal.ts`*, `tests/integration/plans-legacy.test.ts`* | "Completar datos" (refs por `validatePlanRefsInTx` + reconciliar `totalSessions` con confirmación); vincular el mismo día AR (00:00Z por fecha UTC); adoptar series. Tests: 00:00Z en TZ=UTC, nunca adopta una reserva pública PENDING, idempotencia, cross-tenant con el rol owner, reconciliar 10 vs 8 |
-| **S25n** Script de normalización (alto) | `scripts/normalize-plan-session-dates.ts`*, `lib/plan-legacy-normalize.ts`* (puro), `lib/plan-legacy-normalize-internal.ts`*, `tsconfig.scripts.json`, `tests/unit/plan-legacy-normalize.test.ts`*, `tests/integration/normalize-plan-session-dates.test.ts`* | Dry-run por defecto, `--apply`, `assert-safe-target`, aborta sin BYPASSRLS. Excluye sesiones con algún `Booking.sessionId` y programas con `schedule`. Nunca toca Booking. Idempotente (2.ª corrida = 0) |
+| ~~**S25L** Legacy server (alto)~~ — **Eliminada (reset de prod 07-oct)**: no hay planes viejos en prod. Texto original como historia: | `lib/plans-legacy.ts`*, `lib/plans-legacy-internal.ts`*, `tests/integration/plans-legacy.test.ts`* | "Completar datos" (refs por `validatePlanRefsInTx` + reconciliar `totalSessions` con confirmación); vincular el mismo día AR (00:00Z por fecha UTC); adoptar series. Tests: 00:00Z en TZ=UTC, nunca adopta una reserva pública PENDING, idempotencia, cross-tenant con el rol owner, reconciliar 10 vs 8 |
+| ~~**S25n** Script de normalización (alto)~~ — **Eliminada (reset de prod 07-oct)**: no hay fechas legacy que normalizar. Texto original como historia: | `scripts/normalize-plan-session-dates.ts`*, `lib/plan-legacy-normalize.ts`* (puro), `lib/plan-legacy-normalize-internal.ts`*, `tsconfig.scripts.json`, `tests/unit/plan-legacy-normalize.test.ts`*, `tests/integration/normalize-plan-session-dates.test.ts`* | Dry-run por defecto, `--apply`, `assert-safe-target`, aborta sin BYPASSRLS. Excluye sesiones con algún `Booking.sessionId` y programas con `schedule`. Nunca toca Booking. Idempotente (2.ª corrida = 0) |
 | **S32** Listado de pacientes (medio) | `lib/patients.ts`, `lib/patients-types.ts`, `components/patients/patients-list.tsx`, `app/(app)/pacientes/page.tsx`, `tests/integration/patients-list-plans.test.ts`* | Chips por disciplina con `liveProgramWhere`. No cambia las firmas de `updatePatient`, `setPatientCoverage` ni `getPatientCore`; nadie más toca `lib/patients.ts` en P4.1 |
 | **S32a** Archivar desde el listado (medio) | `components/patients/patient-row-actions.tsx`, `components/patients/bulk-select.tsx`, `tests/unit/render/archive-from-list.test.tsx`* | Usan `archive-patient-dialog` (L9) |
 
-### P4.2 · 2 en paralelo
+### P4.2 · S26b (S25b eliminada)
 
-- **S25b · Legacy UI** (medio)
+- ~~**S25b · Legacy UI** (medio)~~ — **Eliminada (reset de prod 07-oct)**: no hay planes viejos que mostrar con banner. Texto original como historia:
   - **Archivos:** `components/planes/plan-legacy-actions.tsx`*, `components/planes/plan-card.tsx`, `components/patients/profile/views/plan-view.tsx` (monta el aviso agregado), `tests/unit/render/plan-legacy.test.tsx`*.
   - **Objetivo:** banner "Plan anterior a la agenda", acciones y aviso "N planes anteriores sin turnos → Vincular".
 - **S26b · Authz, RLS, perf y soak** (alto)
@@ -1955,13 +2018,13 @@ Tandas sugeridas:
   - los 9 del §10 del plan;
   - la Secretaria ve el chip sin título, reprograma un turno de plan y agenda una sesión sin turno;
   - puerta 4;
-  - legacy: vincular el mismo día;
+  - ~~legacy: vincular el mismo día~~ (eliminado por el reset de prod del 07-oct);
   - cambio de precio con un turno cobrado.
 
 ### P4.Z · Cierre de ES4 y gate final del bloque B
 
 1. Integrador.
-2. Revisor de solo lectura (legacy, datos de prod, PHI del portal, E2E sin prod).
+2. Revisor de solo lectura (PHI del portal, E2E sin prod, gates de módulo por vertical). ~~Legacy y datos de prod~~: no aplican desde el reset del 07-oct.
 3. Fixer.
 4. Gate completo + `npm run test:e2e` + perf + bundle.
 5. Docs:
@@ -1977,7 +2040,7 @@ Tandas sugeridas:
 7. Comando de commit:
 
 ```
-git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-consultorio por userId, vínculo automático o por invitación, turnos del plan, estado de cuenta, Mis datos con confirmación del consultorio, ejercicios del plan), legacy (completar/vincular/adoptar + script de normalización en dry-run), ICS 'Sesión n/N' sin PHI, listado de pacientes por disciplina, matriz authz completa, perf/soak, E2E Playwright (sin migraciones)"
+git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-consultorio por userId, vínculo automático o por invitación, turnos del plan, estado de cuenta, Mis datos con confirmación del consultorio, ejercicios del plan), ICS 'Sesión n/N' sin PHI, listado de pacientes por disciplina, matriz authz completa, perf/soak, E2E Playwright (sin migraciones)"
 ```
 
 **ES4b (condicional):**
@@ -2003,7 +2066,7 @@ git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-c
 | `lib/visibility.ts` | S02p |
 | `lib/portal.ts` | S02p → S24a (P4.0) → S24 (P4.1) |
 | `lib/bookings-export-internal.ts` | S02p → S24i |
-| `plan-view.tsx` | P0-Cs → S02u-plan → S22a → S25b |
+| `plan-view.tsx` | P0-Cs → S02u-plan → S22a (~~S25b~~ eliminada) |
 | `patient-profile.tsx` | P0-Cs → S02u-perfil (P0.1) → S07v (P0.2) → S22b |
 | `profile/hero.tsx` | S02u-perfil (P0.1) → S07v (P0.2) → S22h → S24r |
 | `profile/tabs-bar.tsx`, `app/(app)/pacientes/[id]/page.tsx` | P0-Cs (solo la página) → S07v → S22b |
@@ -2025,15 +2088,15 @@ git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-c
    - la perf corre solo en el gate de ES, en solitario.
 5. **Server antes que UI:** ES2b → ES3. Dentro de ES3, el kit (P3.1) va antes que las puertas (P3.2).
 6. **Base de datos:**
-   - M1 nunca corre en paralelo con nada;
+   - M1, M2 (EV0) y M3 (SV) nunca corren en paralelo con nada;
    - como máximo 5 agentes con integración a la vez;
    - tenants únicos y sin sweeps;
    - los advisory locks llevan `tenantId`.
 7. **Entre corridas, todo es secuencial**, con commit de Martin en el medio.
 8. **Riesgo en prod (04-oct):**
    - **no llega nada a prod hasta el cierre del bloque B**: ni el hotfix de ES1 ni M1 sola;
-   - **no se mergea develop → main** hasta el gate final de ES4;
-   - para un fix urgente (incluidas las fugas E0 si Martin lo decide), se sigue el procedimiento de hotfix del RUNBOOK.
+   - **no se mergea develop → main** hasta el gate final (después de EV1, orden del 07-oct);
+   - el deploy final es reset de prod + `migrate deploy` desde vacío + bootstrap (07-oct); no hay hotfix de E0. Un fix urgente distinto sigue el procedimiento de hotfix del RUNBOOK.
 9. **Lo que no se paraleliza:** M1; dos sesiones sobre el core; los pasos de contratos; el retiro (P3.Z.0) con el revisor; el E2E; los gates.
 
 ---
@@ -2095,6 +2158,18 @@ git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-c
 
 ## 16. Prechecks de prod (solo lectura, los corre Martin) y orden de deploy
 
+> **Reset de prod (07-oct, plan §15.6): esta sección cambió de sentido.** Prod se resetea y la cadena completa se
+> aplica desde vacío; no hay datos que chequear ni preservar. Quedan:
+> - **(0)** rol con BYPASSRLS (sigue);
+> - **(1)** pasa a **"base vacía"** (después del reset y antes de `migrate deploy`);
+> - **(11)** y **(12)** pasan a **post-checks después del bootstrap** ([VERTICALES.md §9](VERTICALES.md));
+> - **(17)** Storage privado (sigue);
+> - **(2)-(10) y (13)-(16): eliminados** (eran de datos de prod). El dedupe, el ensayo de datos en staging, los backfills y
+>   el down-script de M1 también se caen.
+>
+> El SQL de abajo queda con cada precheck marcado. El orden vigente es el bootstrap de VERTICALES.md §9 y
+> MIGRACIONES-RUNBOOK §"Go-live con reset".
+
 > Las columnas son `TIMESTAMP(3)` sin zona y guardan UTC.
 > - Hora AR = `((col AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires')`.
 > - "Ahora" comparable = `(now() AT TIME ZONE 'UTC')`.
@@ -2103,7 +2178,9 @@ git add -A && git commit -m "Planes P4 (ES4): portal ampliado (identidad multi-c
 -- (0) Rol que migra (DIRECT_URL) + B-pre aplicado y nada fallido
 SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
 SELECT migration_name, finished_at FROM _prisma_migrations ORDER BY finished_at DESC NULLS FIRST LIMIT 6;
--- (1) BLOQUEANTE: M1 no corrió (0 filas)
+-- (1) BLOQUEANTE · desde el reset (07-oct) = BASE VACÍA, después del reset y antes de migrate deploy:
+SELECT count(*) FROM pg_tables WHERE schemaname='public';   -- 0
+-- (1) ORIGINAL (obsoleto por el reset): M1 no corrió (0 filas)
 SELECT table_name, column_name FROM information_schema.columns WHERE
  (table_name='Booking' AND column_name IN ('programId','sessionId','pricedByPlan')) OR
  (table_name='TreatmentProgram' AND column_name IN ('discipline','practitionerId','serviceId','locationId','schedule','idempotencyKey','updatedAt','archivedAt')) OR
@@ -2114,39 +2191,39 @@ SELECT typname FROM pg_type WHERE typname IN ('Discipline','ProgramPricingMode',
 SELECT to_regclass('"ProgramAuthorization"'), to_regclass('"PatientChangeRequest"'),
        to_regclass('"Patient_id_tenantId_key"'), to_regclass('"Patient_tenantId_userId_key"');
 SELECT to_regclass('"Patient_userId_key"');   -- NO null (lo dropea M1)
--- (2) BLOQUEANTE: duplicados (programId,index) → si >0: dedupe (ES1) dry-run → backup → --apply, en staging y en prod
+-- (2) ELIMINADO (reset de prod 07-oct) · BLOQUEANTE: duplicados (programId,index) → si >0: dedupe (ES1) dry-run → backup → --apply, en staging y en prod
 SELECT "programId","index",count(*),array_agg(id) FROM "Session" GROUP BY 1,2 HAVING count(*)>1;
--- (3) BLOQUEANTE: integridad cross-tenant (0 en todas)
+-- (3) ELIMINADO (reset de prod 07-oct) · BLOQUEANTE: integridad cross-tenant (0 en todas)
 SELECT count(*) FROM "TreatmentProgram" p JOIN "Patient" pa ON pa.id=p."patientId" WHERE pa."tenantId"<>p."tenantId";
 SELECT count(*) FROM "Session" s JOIN "TreatmentProgram" p ON p.id=s."programId" JOIN "Practitioner" pr ON pr.id=s."practitionerId" WHERE pr."tenantId"<>p."tenantId";
 SELECT count(*) FROM "TreatmentProgram" p JOIN "ClinicalCase" c ON c.id=p."caseId" WHERE c."tenantId"<>p."tenantId" OR c."patientId" IS DISTINCT FROM p."patientId";
 SELECT count(*) FROM "SessionExercise" se JOIN "Session" s ON s.id=se."sessionId" JOIN "TreatmentProgram" p ON p.id=s."programId"
   JOIN "Exercise" e ON e.id=se."exerciseId" WHERE e."tenantId" IS NOT NULL AND e."tenantId"<>p."tenantId";
--- (4) BLOQUEANTE: namespace de keys libre y montos sanos (0)
+-- (4) ELIMINADO (reset de prod 07-oct) · BLOQUEANTE: namespace de keys libre y montos sanos (0)
 SELECT count(*) FROM "Booking" WHERE "idempotencyKey" LIKE 'plan:%';
 SELECT count(*) FROM "Booking" WHERE "copagoCents" < 0;
--- (5) Volumen y estados (dimensiona el lock de M1)
+-- (5) ELIMINADO (reset de prod 07-oct) · Volumen y estados (dimensiona el lock de M1)
 SELECT count(*) FROM "Booking";
 SELECT status,count(*) FROM "TreatmentProgram" GROUP BY 1;
 SELECT count(*) total, count(*) FILTER (WHERE "completedAt" IS NULL) pendientes,
        count(*) FILTER (WHERE "completedAt" IS NULL AND "scheduledFor" < (now() AT TIME ZONE 'UTC')) vencidas FROM "Session";
 SELECT count(*) FROM "TreatmentProgram" WHERE "totalSessions" > 60;
 SELECT count(*) FROM "Patient";   -- dimensiona el índice nuevo y el DROP INDEX sobre Patient
--- (6) Varios ACTIVE por paciente (D9) y pacientes archivados con plan ACTIVE (L9)
+-- (6) ELIMINADO (reset de prod 07-oct) · Varios ACTIVE por paciente (D9) y pacientes archivados con plan ACTIVE (L9)
 SELECT "tenantId","patientId",count(*) FROM "TreatmentProgram" WHERE status='ACTIVE' GROUP BY 1,2 HAVING count(*)>1;
 SELECT count(*) FROM "TreatmentProgram" p JOIN "Patient" pa ON pa.id=p."patientId" WHERE p.status='ACTIVE' AND pa."archivedAt" IS NOT NULL;
--- (7) Backfill del responsable: planes con >1 profesional y profesionales sin membresía aceptada
+-- (7) ELIMINADO (reset de prod 07-oct) · Backfill del responsable: planes con >1 profesional y profesionales sin membresía aceptada
 SELECT "programId",count(DISTINCT "practitionerId") FROM "Session" GROUP BY 1 HAVING count(DISTINCT "practitionerId")>1;
 SELECT count(*) FROM "Session" s WHERE NOT EXISTS (SELECT 1 FROM "Practitioner" pr JOIN "Membership" m
   ON m."userId"=pr."userId" AND m."tenantId"=pr."tenantId" AND m."acceptedAt" IS NOT NULL WHERE pr.id=s."practitionerId");
--- (8) Legacy (ES4): convenciones de hora y contador vs filas (los que dan ≠ quedan exentos de I5 hasta "Completar datos")
+-- (8) ELIMINADO (reset de prod 07-oct) · Legacy (ES4): convenciones de hora y contador vs filas (los que dan ≠ quedan exentos de I5 hasta "Completar datos")
 SELECT to_char(s."scheduledFor",'HH24:MI') hhmm_utc,
        to_char((s."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires','HH24:MI') hhmm_ar,
        s."completedAt" IS NOT NULL realizada, s."scheduledFor" >= (now() AT TIME ZONE 'UTC') futura, count(*)
 FROM "Session" s GROUP BY 1,2,3,4 ORDER BY 5 DESC;
 SELECT p.id,p.status,p."totalSessions",count(s.id) n,min(s.index) mn,max(s.index) mx FROM "TreatmentProgram" p
   LEFT JOIN "Session" s ON s."programId"=p.id GROUP BY p.id HAVING count(s.id)<>p."totalSessions" OR max(s.index)<>count(s.id) OR min(s.index)<>1;
--- (9) Candidatos de adopción (S25L): mismo día AR; las 00:00Z cuentan por su fecha UTC
+-- (9) ELIMINADO (reset de prod 07-oct) · Candidatos de adopción (S25L): mismo día AR; las 00:00Z cuentan por su fecha UTC
 WITH ses AS (SELECT s.id,p."tenantId",p."patientId",
    CASE WHEN to_char(s."scheduledFor",'HH24:MI:SS')='00:00:00' THEN s."scheduledFor"::date
         ELSE ((s."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires')::date END dia
@@ -2155,30 +2232,30 @@ SELECT count(DISTINCT ses.id) sesiones, count(DISTINCT b.id) turnos FROM ses JOI
   AND b."patientId"=ses."patientId" AND b.status<>'CANCELLED'
   AND ((b."scheduledFor" AT TIME ZONE 'UTC') AT TIME ZONE 'America/Argentina/Buenos_Aires')::date = ses.dia;
 SELECT count(DISTINCT "seriesId") FROM "Booking" WHERE "seriesId" IS NOT NULL;
--- (10) Plantillas que hoy revientan + EVA por string
+-- (10) ELIMINADO (reset de prod 07-oct) · Plantillas que hoy revientan + EVA por string
 SELECT t.id,t.name,count(*) FILTER (WHERE e.id IS NULL) faltantes,count(*) FILTER (WHERE e."archivedAt" IS NOT NULL) archivados,
   count(*) FILTER (WHERE e."defaultSets" IS NULL OR e."defaultReps" IS NULL) sin_dosis FROM "PlanTemplate" t
   CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(t."exerciseIds")='array' THEN t."exerciseIds" ELSE '[]'::jsonb END) x(id)
   LEFT JOIN "Exercise" e ON e.id=x.id GROUP BY 1,2;
 SELECT split_part(source,'-',1),count(*) FROM "EvaScore" GROUP BY 1;
--- (11) BLOQUEANTE para el insert de tags: slug libre o ya DISCIPLINE; y DISCIPLINE ajenos a los 2
+-- (11) POST-CHECK después del bootstrap (07-oct; antes: BLOQUEANTE para el insert de tags): slug libre o ya DISCIPLINE; y DISCIPLINE ajenos a los 2
 SELECT id,slug,kind FROM "Tag" WHERE slug IN ('kinesiologia','osteopatia') OR kind='DISCIPLINE';
--- (12) Disciplina de servicios (PQ-11) y tier del tenant vivo (D16)
+-- (12) POST-CHECK después del bootstrap (07-oct) · Disciplina de servicios (PQ-11) y tier del tenant vivo (D16)
 SELECT s.id,s.name,s."practiceId",pr.slug FROM "Service" s LEFT JOIN "Practice" pr ON pr.id=s."practiceId";
 SELECT slug, plan FROM "Tenant";
--- (13) Duraciones fuera de 15..240 (un plan sobre ese servicio exige override)
+-- (13) ELIMINADO (reset de prod 07-oct) · Duraciones fuera de 15..240 (un plan sobre ese servicio exige override)
 SELECT id,name,"durationMin" FROM "Service" WHERE "durationMin" > 240 OR "durationMin" < 15;
 SELECT "practitionerId","serviceId","durationMin" FROM "PractitionerService" WHERE "durationMin" > 240 OR "durationMin" < 15;
--- (14) Identidad del portal (S24a, PD-14/15): solo conteos, sin PII
+-- (14) ELIMINADO (reset de prod 07-oct) · Identidad del portal (S24a, PD-14/15): solo conteos, sin PII
 SELECT count(*) FILTER (WHERE "userId" IS NOT NULL) vinculados, count(*) total FROM "Patient";
 SELECT count(*) FROM (SELECT lower(email) FROM "Patient" WHERE email IS NOT NULL GROUP BY 1 HAVING count(DISTINCT "tenantId")>1) x;   -- emails en más de un consultorio
 SELECT count(*) FROM (SELECT "tenantId", lower(email) FROM "Patient" WHERE email IS NOT NULL GROUP BY 1,2 HAVING count(*)>1) x;   -- fichas con el mismo email en un consultorio (no se vinculan solas)
--- (15) Pacientes asignados a ASSISTANT/BILLING (S07sp): si >0, reasignarlos con assignPatientToPractitioner antes del deploy
+-- (15) ELIMINADO (reset de prod 07-oct) · Pacientes asignados a ASSISTANT/BILLING (S07sp): si >0, reasignarlos con assignPatientToPractitioner antes del deploy
 SELECT count(*) FROM "Patient" p
 JOIN "Practitioner" pr ON pr.id = p."assignedPractitionerId"
 JOIN "Membership" m ON m."userId" = pr."userId" AND m."tenantId" = p."tenantId"
 WHERE m.role IN ('ASSISTANT','BILLING');
--- (16) Roles sin clinical.read × "Consultorio común" (S02p: dimensiona a quién le cambia la vista)
+-- (16) ELIMINADO (reset de prod 07-oct) · Roles sin clinical.read × "Consultorio común" (S02p: dimensiona a quién le cambia la vista)
 SELECT t.slug, t."sharedPatientView", m.role, count(*)
 FROM "Membership" m JOIN "Tenant" t ON t.id = m."tenantId"
 WHERE m.role IN ('ASSISTANT','BILLING')
@@ -2188,15 +2265,16 @@ SELECT id, public FROM storage.buckets;
 SELECT policyname, roles, cmd FROM pg_policies WHERE schemaname='storage' AND tablename='objects';
 ```
 
-**Qué hacer con los resultados:**
-- (1), (3) o (4) distintos de lo esperado → **frenar**.
-- (2) > 0 → dedupe.
-- (11) con un slug de kind ≠ DISCIPLINE → renombrarlo antes de M1. Si hay DISCIPLINE ajenos, decidir antes de ES3 si se migran a otro kind.
-- (15) > 0 → reasignar esos pacientes antes del deploy final.
-- (17) con algún bucket `public = true` o una policy para anon/authenticated sobre `patient-files` o `exercise-media` → **fuga de bloque A**: sacarla en el mismo deploy en que el código pasa a service role (y considerar el hotfix de "Abierto para Martin" (1)).
-- El resto dimensiona D9, L9, D17, S25L, S25n, PQ-11, el vínculo del portal (14) y el cambio de vista de la Secretaria (16).
+**Qué hacer con los resultados (vigente desde el reset del 07-oct):**
+- (0) sin BYPASSRLS → usar el owner para `migrate deploy`.
+- (1) ≠ 0 → **frenar**: el reset no quedó completo.
+- (11) post-bootstrap: los 2 tags DISCIPLINE (`kinesiologia`, `osteopatia`) presentes y sin DISCIPLINE ajenos.
+- (12) post-bootstrap: `Tenant.plan` y `vertical` del cliente kine como se configuraron desde /plataforma.
+- (17) con algún bucket `public = true` o una policy para anon/authenticated sobre `patient-files` o `exercise-media` →
+  **fuga de bloque A**: hacer privado el bucket y dropear la policy antes de abrir el consultorio.
+- ~~(2) dedupe, (3)/(4) frenar, (15) reasignar, dimensionar D9/L9/D17/S25L/S25n/(14)/(16)~~: eliminados por el reset.
 
-**Post-checks de M1:**
+**Post-checks de M1** (siguen valiendo después de `migrate deploy` desde vacío, salvo los conteos que asumen datos previos):
 - `pg_constraint` y `pg_indexes` con todos los nombres de C1;
 - planes con sesiones y `practitionerId` null (esperado 0, salvo los que no pasaron el EXISTS);
 - `SELECT count(*) FROM "Booking" WHERE "programId" IS NOT NULL OR "pricedByPlan"` = 0;
@@ -2205,7 +2283,11 @@ SELECT policyname, roles, cmd FROM pg_policies WHERE schemaname='storage' AND ta
 - identidad: `to_regclass('"Patient_userId_key"')` = null y `to_regclass('"Patient_tenantId_userId_key"')` no null;
 - `max(Booking.updatedAt)` es **solo informativo** (el turnero y el webhook escriben a cualquier hora). La garantía es el test de S10 "Booking.updatedAt intacto".
 
-**Orden** (precheck → backup → staging → prod). **Decisión del 04-oct: un solo deploy, al cierre del bloque B.**
+**Orden vigente (07-oct): un solo deploy al cierre de B, con reset de prod.** Corridas en develop: EV0 → ES2b → ES3 → SV → ES4 → EV1 (commit de Martin entre corridas, nada a main). Al cierre: gate final en local (incluido Playwright) → staging desde vacío + QA → **reset de prod** → `migrate deploy` de la cadena completa (hasta M3) → bootstrap de [VERTICALES.md §9](VERTICALES.md) → post-checks (11), (12), (17) y los de M1. Comandos en [MIGRACIONES-RUNBOOK §"Go-live con reset"](MIGRACIONES-RUNBOOK.md).
+
+<details><summary>Orden anterior (04-oct, deploy incremental sobre datos de prod) — <b>obsoleto por el reset</b></summary>
+
+**Orden** (precheck → backup → staging → prod). Decisión del 04-oct: un solo deploy, al cierre del bloque B.
 
 | Paso | Qué | Migración |
 |---|---|---|
@@ -2215,27 +2297,29 @@ SELECT policyname, roles, cmd FROM pg_policies WHERE schemaname='storage' AND ta
 | 3 | **Deploy final:** 1. re-correr los prechecks (0)-(4), (11), (13), (15) y (17); 2. si (2) > 0: dedupe según [MIGRACIONES-RUNBOOK §2.3](MIGRACIONES-RUNBOOK.md) (precheck → backup → dry-run → revisar → `--apply` → dry-run = 0, inmediatamente antes de M1 en ventana sin uso); 3. `npm run db:prod:backup`; 4. staging: `migrate deploy` de todas las migraciones pendientes, en orden (si B-pre va acá: `catalog_global` → `agenda_foundations` → `plans_booking_link`), post-checks y QA completo de B-pre y de "Planes" con TZ=UTC; 5. merge de develop a `main` en horario de poco uso. El build aplica las migraciones antes de servir el código. `plans_booking_link` tiene `lock_timeout` de 5 s; si falla: `migrate resolve --rolled-back` y reintento; 6. post-checks en prod (M1 y RLS de las 2 tablas) | **Sí: las pendientes de B, en orden; M1 una sola vez** |
 | 4 | Post-deploy (Martin): confirmar `Service.discipline` del cliente → `normalize-plan-session-dates` en dry-run contra prod → decidir con los números → backup → `--apply` → recién ahí avisar al cliente de las acciones legacy (el script saltea igual lo vinculado). Import del catálogo y "Refrescar catálogo" si B-pre fue en este deploy | No |
 
-**Rollback:** el código viejo tolera M1. No se baja la migración: se revierte el deploy. El down-script se usa solo con backup y decisión de Martin.
+</details>
 
-**Aviso explícito:** en todo Planes hay **1 migración nueva** (`plans_booking_link`, ES2a), que crea 2 tablas con RLS y **relaja** `Patient_userId_key` (excepción aprobada el 03-oct). ES1, ES2b, ES3 y ES4 no traen migraciones.
+**Rollback:** antes de abrir al cliente, re-reset y `migrate deploy` de nuevo. Después, se revierte el deploy (sin bajar migraciones). ~~El down-script de M1~~ quedó sin uso por el reset.
+
+**Aviso explícito:** en todo Planes hay **1 migración nueva** (`plans_booking_link`, ES2a), que crea 2 tablas con RLS y **relaja** `Patient_userId_key` (excepción aprobada el 03-oct). ES1, ES2b, ES3 y ES4 no traen migraciones. En el bloque B se suman **M2 `20261007120000_tenant_verticals`** (EV0) y **M3 `reception_call_realtime`** (SV, futura), cada una sola en su ola.
 
 ---
 
 ## 17. Riesgos (detalle en la lista estructurada)
 
 - M1 sobre Booking, una tabla caliente que el build auto-migra.
-- Duplicados que abortan M1.
+- ~~Duplicados que abortan M1.~~ (sin objeto: base vacía desde el reset del 07-oct)
 - Deploy final grande, que incluye la extracción del core.
 - Orden de locks y deadlocks.
 - FKs simples bajo BYPASSRLS.
-- Legacy exento del verificador.
+- Legacy exento del verificador (solo en develop hasta S27a/b; EV1 lo limpia).
 - E2E dependiente de A0d (staging aislado) y de `.env.e2e.local`.
 - ~~Consultas tardías (PQ-01 cambia el SQL)~~: PQ-01 respondida, ya está en C1.
 - **Nivel "administrativo" (ES1):** toca la visibilidad de todo el sistema. Si una proyección nueva no lo respeta, la Secretaria vuelve a ver HC. Mitigación: corte central en `visibility.ts`, regla `=== 'full'`, revisor (b) que barre las exports y la columna ASSISTANT en `authz-matrix`.
 - **`DROP INDEX "Patient_userId_key"` en M1:** primera migración no estrictamente aditiva, con ACCESS EXCLUSIVE breve sobre Patient. El código vivo tolera el cambio y el down-script recrea el índice solo si no hay userId repetidos.
 - **Vínculo automático por email:** depende de que el email de la ficha sea correcto. Con más de una ficha con el mismo email no se vincula y se usa la invitación. Los datos financieros y de ejercicios salen solo con el vínculo.
 - **Storage:** el estado de las policies en prod no se pudo verificar. Si abren `patient-files`, es una fuga de bloque A.
-- **Fugas E0 vivas hasta el deploy final** (04-oct), salvo que Martin decida el hotfix.
+- **Fugas E0 vivas en prod hasta el reset + deploy final** (sin hotfix por decisión del 07-oct). **Data API** (`data-api-anon-sin-rls`): acción de consola de Martin ya, independiente del reset.
 - **Un solo deploy grande al cierre de B** (B-pre + M1 + Planes, con la extracción del core): el QA de staging y el gate final son la única red antes de prod.
 - Bundle y payload de la agenda.
 - Tamaño de ES2b y ES3.

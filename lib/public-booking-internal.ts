@@ -12,32 +12,179 @@ import "server-only";
 import { prismaService as prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
+import { isPublicBookingOpen } from "@/lib/tenant-modules";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
+// Ciclo de imports benigno: `public-booking.ts` importa helpers de este archivo
+// y este usa `getPublicClinic` solo dentro de una función (nunca al cargar).
+import { getPublicClinic } from "@/lib/public-booking";
 import {
   normalizeDocumentId,
   normalizePhoneForCompare,
   type PrefillPatient,
+  type PublicClinic,
 } from "@/lib/public-booking-types";
 
+// ──────────────────────────────────────────────────────────────────────
+// Switch del turnero (EV0, plan §15.3, EV-D2)
+// ──────────────────────────────────────────────────────────────────────
+
 /**
- * Look up a Patient row across tenants by email and return the prefill
- * shape used by the booking wizard. The caller is responsible for proving
- * the email belongs to the requester (typically: a verified Supabase
- * session whose `email` matches).
+ * Columnas de `Tenant` que decide el switch (`TenantEntitlements`). Se suman al
+ * `select` de cada lectura pública por slug para no hacer una query extra
+ * (`getTenantModulesById` haría otra ida a la base por request del wizard).
+ */
+export const PUBLIC_BOOKING_SWITCH_SELECT = {
+  vertical: true,
+  plan: true,
+  publicBookingEnabled: true,
+} as const;
+
+/** Contacto PÚBLICO del consultorio (lo que cargó en el onboarding para mostrar). */
+export type PublicClinicContact = {
+  name: string;
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+};
+
+export type PublicBookingGate = { state: "open" } | { state: "closed"; contact: PublicClinicContact };
+
+/**
+ * ¿Qué muestra `/c/[slug]/booking`? null = el slug no existe (404, como antes);
+ * closed = el consultorio existe pero no toma turnos online → página "Turnos
+ * online no disponibles" con su contacto público. Cerrado ≠ 404 a propósito:
+ * el link del turnero ya circuló (Instagram, WhatsApp) y un 404 parece un link
+ * roto; el contacto le da al paciente por dónde pedir el turno.
+ *
+ * Solo devuelve campos que el consultorio publicó (`phone`, `whatsapp`,
+ * `publicEmail`); nunca profesionales, servicios ni nada de pacientes.
+ */
+export async function getPublicBookingGate(slug: string): Promise<PublicBookingGate | null> {
+  const read = await readPublicBookingGate(slug);
+  return read ? read.gate : null;
+}
+
+/**
+ * `getPublicBookingGate` + el id del tenant, para uso interno del loader (el
+ * prefill se acota a este consultorio, EV0 V.Z P2). El id no viaja en
+ * `PublicBookingGate` ni en `PublicClinic`: no tiene por qué llegar al cliente.
+ */
+async function readPublicBookingGate(
+  slug: string
+): Promise<{ tenantId: string; gate: PublicBookingGate } | null> {
+  const t = await prisma.tenant.findUnique({
+    where: { slug },
+    select: { id: true, name: true, phone: true, whatsapp: true, publicEmail: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
+  });
+  if (!t) return null;
+  if (isPublicBookingOpen(t)) return { tenantId: t.id, gate: { state: "open" } };
+  return {
+    tenantId: t.id,
+    gate: {
+      state: "closed",
+      contact: { name: t.name, phone: t.phone, whatsapp: t.whatsapp, email: t.publicEmail },
+    },
+  };
+}
+
+export type PublicBookingPageData =
+  | { state: "closed"; contact: PublicClinicContact }
+  | {
+      state: "open";
+      clinic: PublicClinic;
+      session: { email: string; fullName: string | null } | null;
+      prefill: PrefillPatient | null;
+    };
+
+/**
+ * Loader de `app/(booking)/c/[slug]/booking/page.tsx` (testeable sin render).
+ * Con el turnero cerrado corta ANTES de leer la sesión de Supabase y del
+ * prefill: `findPatientByEmailForPrefill` devuelve PII (DNI, nacimiento,
+ * cobertura) y una página que no va a mostrar el wizard no tiene por qué
+ * cargarla. null → `notFound()` en la página.
+ */
+export async function loadPublicBookingPage(slug: string): Promise<PublicBookingPageData | null> {
+  const read = await readPublicBookingGate(slug);
+  if (!read) return null;
+  const { gate, tenantId } = read;
+  if (gate.state === "closed") return { state: "closed", contact: gate.contact };
+
+  // Re-chequea el switch adentro: si lo apagaron entre las dos lecturas, null
+  // (404 de un request) es aceptable; mostrar el wizard con datos, no.
+  const clinic = await getPublicClinic(slug);
+  if (!clinic) return null;
+
+  // Prefill is only attempted when the user has a verified Supabase
+  // session — the `findPatientByEmailForPrefill` helper trusts the email
+  // it receives, so we must prove it belongs to the requester first.
+  let prefill: PrefillPatient | null = null;
+  let session: { email: string; fullName: string | null } | null = null;
+  try {
+    const supabase = getSupabaseServerClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user?.email && user.email_confirmed_at) {
+      session = {
+        email: user.email,
+        fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
+      };
+      // EV0 V.Z (P2, PD-14): SOLO fichas de ESTE consultorio. Antes se buscaba
+      // por email en todos (canal de servicio, BYPASSRLS): un paciente de A que
+      // abría el turnero de B veía precargados DNI, nacimiento, cobertura y
+      // contacto de emergencia que cargó A — y B, al reservar, los recibía.
+      // Entre consultorios solo viaja el nombre de la sesión (`fullName`).
+      prefill = await findPatientByEmailForPrefill(user.email, {
+        tenantId,
+        userId: user.id,
+      });
+    }
+  } catch {
+    /* Supabase not configured — anonymous flow is the default */
+  }
+  return { state: "open", clinic, session, prefill };
+}
+
+/**
+ * Ficha de ESTE consultorio para precargar el wizard. El caller prueba que el
+ * email (y el `userId`) son del que pide: sesión de Supabase verificada.
+ *
+ * EV0 V.Z (P2): `tenantId` es obligatorio. Antes era opcional y el único caller
+ * no lo pasaba → `findFirst` por email en TODOS los consultorios. Criterio
+ * determinístico dentro del consultorio:
+ *   1. la ficha vinculada al usuario (`Patient.userId`, único por consultorio):
+ *      el vínculo prueba identidad, gana aunque el email de la ficha sea otro;
+ *   2. si no, la ficha con ese email, solo si es UNA. El único de la base es
+ *      `(tenantId, email)` case-sensitive y acá se compara sin mayúsculas: dos
+ *      fichas (p. ej. familiares que comparten casilla) son ambiguas → sin
+ *      prefill, antes que mostrar los datos de la persona equivocada.
  */
 export async function findPatientByEmailForPrefill(
   email: string,
-  opts: { tenantId?: string } = {}
+  opts: { tenantId: string; userId?: string | null }
 ): Promise<PrefillPatient | null> {
   const trimmed = email.trim().toLowerCase();
-  if (!trimmed) return null;
-  const row = await prisma.patient.findFirst({
-    where: {
-      email: { equals: trimmed, mode: "insensitive" },
-      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
-    },
-    include: { coverages: { orderBy: { id: "desc" } }, emergency: true },
-  });
-  if (!row) return null;
+  if (!trimmed || !opts.tenantId) return null;
+  const include = {
+    coverages: { orderBy: { id: "desc" } },
+    emergency: { orderBy: { id: "asc" } },
+  } satisfies Prisma.PatientInclude;
+  let row = opts.userId
+    ? await prisma.patient.findFirst({
+        where: { tenantId: opts.tenantId, userId: opts.userId },
+        include,
+      })
+    : null;
+  if (!row) {
+    const byEmail = await prisma.patient.findMany({
+      where: { tenantId: opts.tenantId, email: { equals: trimmed, mode: "insensitive" } },
+      include,
+      orderBy: { id: "asc" },
+      take: 2,
+    });
+    if (byEmail.length !== 1) return null;
+    row = byEmail[0];
+  }
   return {
     firstName: row.firstName,
     lastName: row.lastName,

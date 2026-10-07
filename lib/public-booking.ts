@@ -7,6 +7,10 @@
  *
  * Security model:
  *   - All inputs are rate-limited (per IP).
+ *   - Switch del turnero (EV0, `Tenant.publicBookingEnabled`, opt-in): apagado,
+ *     `getPublicClinic`/`listPublicSlots`/`findFirstPublicSlot` responden como
+ *     un slug inexistente y `submitPublicBooking` rechaza antes de escribir.
+ *     `getPublicBookingStatus` NO se gatea (turnos ya reservados, retorno de MP).
  *   - `submitPublicBooking` NEVER writes to an existing Patient row (H4):
  *     it matches by normalized DNI and puts a differing contact on the
  *     booking snapshot (`guest*`) for the kine to review.
@@ -39,7 +43,12 @@ import {
   publicDaySlots,
   resolvePublicOffer,
 } from "@/lib/public-booking-slots";
-import { releaseOwnExpiredPublicHold, resolvePublicPatient } from "@/lib/public-booking-internal";
+import {
+  PUBLIC_BOOKING_SWITCH_SELECT,
+  releaseOwnExpiredPublicHold,
+  resolvePublicPatient,
+} from "@/lib/public-booking-internal";
+import { isPublicBookingOpen } from "@/lib/tenant-modules";
 import type { ActionResult } from "@/lib/validation";
 import {
   FirstPublicSlotSchema,
@@ -87,9 +96,12 @@ function publicPractitionerWhere(tenantId: string) {
 export async function getPublicClinic(slug: string): Promise<PublicClinic | null> {
   const tenant = await prisma.tenant.findUnique({
     where: { slug },
-    select: { id: true, slug: true, name: true, legalName: true, palette: true },
+    select: { id: true, slug: true, name: true, legalName: true, palette: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
   });
-  if (!tenant) return null;
+  // Turnero apagado (EV0, EV-D2 opt-in) = mismo resultado que un slug que no
+  // existe: el wizard no recibe profesionales, servicios ni sedes. La página
+  // distingue los dos casos con `getPublicBookingGate` (cerrado ≠ 404).
+  if (!tenant || !isPublicBookingOpen(tenant)) return null;
   const tenantId = tenant.id;
 
   const [practitioners, services, psRows, insurers, ppRows, locations, schedules] = await Promise.all([
@@ -211,10 +223,18 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   };
 }
 
-/** Tenant por slug + profesional con membresía aceptada (o null). */
+/**
+ * Tenant por slug + profesional con membresía aceptada (o null). Con el
+ * turnero apagado también null (EV0): cubre `listPublicSlots` y
+ * `findFirstPublicSlot`, que si no seguían exponiendo la densidad de agenda de
+ * un consultorio que no toma turnos online.
+ */
 async function resolvePublicTarget(tenantSlug: string, practitionerId: string | null) {
-  const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
-  if (!tenant) return null;
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: tenantSlug },
+    select: { id: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
+  });
+  if (!tenant || !isPublicBookingOpen(tenant)) return null;
   if (practitionerId) {
     const p = await prisma.practitioner.findFirst({
       where: { id: practitionerId, ...publicPractitionerWhere(tenant.id) },
@@ -323,7 +343,8 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
 // Submit booking
 // ──────────────────────────────────────────────────────────────────────
 
-const SLOT_UNAVAILABLE_ERROR = "Ese horario se acaba de ocupar o ya no se puede reservar online. Elegí otro.";
+const PUBLIC_BOOKING_CLOSED_ERROR = "Este consultorio no toma turnos online.";
+const SLOT_UNAVAILABLE_ERROR ="Ese horario se acaba de ocupar o ya no se puede reservar online. Elegí otro.";
 const SAME_SLOT_ERROR = "Ya tenés un turno reservado en ese horario.";
 const GENERIC_SUBMIT_ERROR = "No pudimos registrar la reserva. Probá de nuevo en unos minutos.";
 
@@ -388,6 +409,12 @@ export async function submitPublicBooking(
 
   const tenant = await prisma.tenant.findUnique({ where: { slug: data.tenantSlug } });
   if (!tenant) return { ok: false, error: "Centro no encontrado." };
+  // Turnero apagado (EV0): se corta ACÁ, antes del replay idempotente (que
+  // armaría una preferencia nueva de MP sobre un turno viejo) y antes de
+  // `resolvePublicPatient` (que crea fichas). Un request armado a mano contra
+  // un consultorio cerrado no deja nada escrito. El estado de un turno ya
+  // reservado (`getPublicBookingStatus`) y el webhook de MP no se gatean.
+  if (!isPublicBookingOpen(tenant)) return { ok: false, error: PUBLIC_BOOKING_CLOSED_ERROR };
 
   const service = await prisma.service.findFirst({
     where: { id: data.serviceId, tenantId: tenant.id },

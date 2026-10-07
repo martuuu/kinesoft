@@ -15,6 +15,7 @@ import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
 import { toggleFavourite } from "@/lib/favourites";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { BulkAssignModal } from "@/components/biblioteca/bulk-assign-modal";
+import { PLAN_LABEL } from "@/lib/tenant-modules";
 
 // Superadmin-only editor: lazy so the ~everyone-is-not-an-admin case never
 // downloads the drawer + its media/article editors with the page bundle.
@@ -36,8 +37,14 @@ type Active = {
 export type Capabilities = {
   plan: string;
   canFavourite: boolean;
+  /** PRO/ENT (`catalogScope: "full"`): ve el catálogo global de Plataforma. */
   hasFullCatalog: boolean;
 };
+
+/** "Base" para STARTER, "PRO", etc.; un plan desconocido se muestra tal cual. */
+function planLabel(plan: string): string {
+  return (PLAN_LABEL as Record<string, string>)[plan] ?? plan;
+}
 
 type Mode = "exercises" | "manual-therapy";
 
@@ -120,6 +127,10 @@ export function BibliotecaClient({
       ].filter((x) => x != null && x !== "").length,
     [active]
   );
+  // Vacío "de verdad" (sin búsqueda ni filtros): desde EV0 un Kine base arranca
+  // así, porque ya no ve los globales `isBasic` (solo sus propios ejercicios).
+  const libraryEmpty = items.length === 0 && activeFiltersCount === 0 && !active.q;
+  const noun = mode === "manual-therapy" ? "maniobra" : "ejercicio";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -141,7 +152,7 @@ export function BibliotecaClient({
                 color: capabilities.hasFullCatalog ? "var(--sky-700)" : "var(--navy-500)",
               }}
             >
-              {capabilities.plan}
+              {planLabel(capabilities.plan)}
             </span>
           </div>
           <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
@@ -153,8 +164,8 @@ export function BibliotecaClient({
           <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>{pageSubtitle}</div>
           {!capabilities.hasFullCatalog && (
             <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>
-              Estás viendo el catálogo básico + tus elementos. Pasá a PRO para ver el catálogo
-              completo con videos.
+              {mode === "manual-therapy" ? "Tus maniobras." : "Tus ejercicios."} PRO suma el
+              catálogo de la plataforma.
             </div>
           )}
         </div>
@@ -339,9 +350,28 @@ export function BibliotecaClient({
               >
                 <IconDumbbell size={26} />
               </div>
-              <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-                No encontramos ejercicios con estos filtros
-              </div>
+              {libraryEmpty ? (
+                <>
+                  <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
+                    Creá tu primer{noun === "maniobra" ? "a" : ""} {noun}
+                  </div>
+                  {!capabilities.hasFullCatalog && (
+                    <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 6 }}>
+                      PRO suma el catálogo de la plataforma.
+                    </div>
+                  )}
+                  <div style={{ marginTop: 14 }}>
+                    <Button variant="primary" onClick={() => setCreating(true)}>
+                      <IconPlus size={14} /> Nuev{noun === "maniobra" ? "a" : "o"} {noun}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
+                  No encontramos {mode === "manual-therapy" ? "maniobras" : "ejercicios"} con estos
+                  filtros
+                </div>
+              )}
             </Card>
           ) : (
             <div
@@ -674,11 +704,10 @@ function ExerciseCard({
         )}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {ex.kind === "MANUAL_THERAPY" && <Tag tone="lime">Maniobra</Tag>}
-          {ex.isPrivate ? (
-            <Tag tone="sky">🔒 Mío</Tag>
-          ) : ex.isBasic ? (
-            <Tag tone="soft">Básico</Tag>
-          ) : null}
+          {/* EV0: `isBasic` ya no decide visibilidad (un Kine base no ve
+              globales), así que el chip "Básico" no significaba nada. Lo que no
+              es propio viene del catálogo de la plataforma (solo PRO lo ve). */}
+          {ex.isPrivate ? <Tag tone="sky">🔒 Mío</Tag> : <Tag tone="soft">Catálogo</Tag>}
         </div>
       </div>
     </button>
@@ -701,7 +730,7 @@ function QuickPill({
       type="button"
       onClick={locked ? undefined : onToggle}
       disabled={locked}
-      title={locked ? "Mejorá tu plan para usar favoritos" : undefined}
+      title={locked ? "Los favoritos están disponibles desde el plan Base" : undefined}
       style={{
         textAlign: "left",
         padding: "7px 10px",
@@ -716,7 +745,8 @@ function QuickPill({
     >
       {label}
       {locked && (
-        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>plan PRO</span>
+        // Favoritos van desde el plan Base (STARTER, EV-D1), no desde PRO.
+        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>plan Base</span>
       )}
     </button>
   );

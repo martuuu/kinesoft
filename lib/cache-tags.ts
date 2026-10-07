@@ -50,6 +50,27 @@ export const tags = {
 } as const;
 
 /**
+ * Tags que dependen de los entitlements de un consultorio (EV0, C-EV7):
+ * vertical, plan y switch del turnero deciden qué ejercicios ve (propios vs
+ * catálogo global), sus facetas, el dashboard y las condiciones. El caller de
+ * `applyTenantEntitlementsInTx` los revalida DESPUÉS del commit (adentro de la
+ * tx, un rollback dejaría el cache invalidado contra datos viejos y otro
+ * request lo volvería a llenar con el estado previo).
+ *
+ * `catalog()` es global: invalidarlo le cuesta un refetch a todos los tenants,
+ * pero es raro (cambio de plan) y el scope del catálogo depende del plan.
+ */
+export function tenantEntitlementTags(tenantId: string): string[] {
+  return [
+    tags.exercises(tenantId),
+    tags.exerciseFacets(tenantId),
+    tags.dashboard(tenantId),
+    tags.conditions(tenantId),
+    tags.catalog(),
+  ];
+}
+
+/**
  * Cache TTL presets (seconds). Names map to logical staleness budget:
  *   - micro:   one minute, "near-realtime" dashboards
  *   - short:   five minutes, lookup tables that change with mutations

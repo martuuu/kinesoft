@@ -3,6 +3,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { getCapabilities, getMembershipRole } from "@/lib/authz";
 import { getTenantSettings } from "@/lib/tenant-settings";
+import { modulesFor } from "@/lib/tenant-modules";
 import { listInsurers } from "@/lib/insurers";
 import { listServicesWithCounts } from "@/lib/services";
 import { listTeamMembers, listPendingInvitations } from "@/lib/invitations";
@@ -66,9 +67,15 @@ export default async function ConfiguracionPage() {
     getPractitionerScheduleSummary(),
   ]);
 
+  // EV0 (EV-K): los módulos salen de `actor.entitlements` (C-EV3, sin query
+  // extra) y viajan como array (props serializables). Se pasan por props y no
+  // por el contexto de módulos del shell para no depender de que esté montado.
+  const modules = [...modulesFor(actor.entitlements)];
+
   return (
     <ConfiguracionClient
       role={role}
+      modules={modules}
       tenant={tenant}
       insurers={insurers}
       services={services}

@@ -26,17 +26,24 @@
  *     --clinic "Centro Movare" \
  *     --slug movare \
  *     --owner-name "Camila Rossi" \
- *     --license "MN 12345"           # opcional
+ *     --license "MN 12345" \          # opcional
+ *     --vertical general             # opcional: general | kinesiologia (default kinesiologia)
  *
  * Or pass everything via environment:
  *
  *   TENANT_EMAIL=... TENANT_PASSWORD=... TENANT_CLINIC=... \
- *   TENANT_SLUG=... TENANT_OWNER_NAME=... npx tsx scripts/create-tenant.ts
+ *   TENANT_SLUG=... TENANT_OWNER_NAME=... [TENANT_VERTICAL=general] \
+ *   npx tsx scripts/create-tenant.ts
+ *
+ * Tipo de consultorio (EV0): `--vertical general|kinesiologia` se mapea al enum
+ * `TenantVertical` (GENERAL | KINESIOLOGY). Un valor fuera de esa lista corta
+ * el script antes de tocar Supabase o la base. El turnero público nace APAGADO
+ * (EV-D2): se prende desde Configuración → General o /plataforma.
  *
  * The DATABASE_URL / DIRECT_URL / NEXT_PUBLIC_SUPABASE_URL /
  * SUPABASE_SERVICE_ROLE_KEY env vars must be set (same as the app).
  */
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type TenantVertical } from "@prisma/client";
 import { bootstrapTenant, PractitionerElsewhereError } from "../lib/tenant-bootstrap";
 import { enableServiceForPractitioners } from "../lib/agenda-defaults";
 import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
@@ -51,7 +58,25 @@ type Args = {
   ownerName: string;
   license?: string;
   skipServices?: boolean;
+  vertical: TenantVertical;
 };
+
+/**
+ * `--vertical` → `TenantVertical`. Puro y exportado para el unit test
+ * (`tests/unit/create-tenant-args.test.ts`). Sin valor = KINESIOLOGY (el
+ * cliente de hoy); se aceptan mayúsculas/espacios de más y también el nombre
+ * del enum. Cualquier otra cosa → null (el caller corta con el error de uso),
+ * para que un typo no cree un consultorio con la vertical equivocada.
+ */
+export const VERTICAL_FLAG_VALUES = ["general", "kinesiologia"] as const;
+export function parseVerticalFlag(raw: string | boolean | undefined | null): TenantVertical | null {
+  if (raw === undefined || raw === null) return "KINESIOLOGY";
+  if (typeof raw !== "string") return null; // `--vertical` sin valor
+  const v = raw.trim().toLowerCase();
+  if (v === "general") return "GENERAL";
+  if (v === "kinesiologia" || v === "kinesiología" || v === "kinesiology") return "KINESIOLOGY";
+  return null;
+}
 
 function parseArgs(): Args {
   const out: Record<string, string | boolean> = {};
@@ -80,13 +105,20 @@ function parseArgs(): Args {
     license:
       (out["license"] as string | undefined) ?? env.TENANT_LICENSE ?? undefined,
     skipServices: out["skip-services"] === true || env.TENANT_SKIP_SERVICES === "1",
+    vertical: "KINESIOLOGY",
   };
+  const vertical = parseVerticalFlag(out["vertical"] ?? env.TENANT_VERTICAL);
   const missing: string[] = [];
   if (!merged.email) missing.push("email");
   if (!merged.password || merged.password.length < 8) missing.push("password (≥8 chars)");
   if (!merged.clinic) missing.push("clinic");
   if (!merged.slug) missing.push("slug");
   if (!merged.ownerName) missing.push("owner-name");
+  if (vertical === null) {
+    console.error(`--vertical inválido: usá ${VERTICAL_FLAG_VALUES.join(" | ")} (default kinesiologia).`);
+    process.exit(1);
+  }
+  merged.vertical = vertical;
   if (missing.length) {
     console.error(`Missing required args: ${missing.join(", ")}`);
     console.error("Run with --help to see the usage block in the source.");
@@ -198,6 +230,7 @@ async function main() {
         slug,
         licenseNumber: args.license ?? null,
         onboardingCompleted: true,
+        vertical: args.vertical,
         source: "scripts/create-tenant.ts",
       })
     ));
@@ -210,7 +243,7 @@ async function main() {
     throw e;
   }
 
-  console.log(`    Tenant created: id=${tenantId}, slug=${slug}`);
+  console.log(`    Tenant created: id=${tenantId}, slug=${slug}, vertical=${args.vertical}`);
 
   // ── Step 3 — Starter Services ───────────────────────────────────────
   if (!args.skipServices) {
@@ -244,13 +277,17 @@ async function main() {
   console.log("🎉 Listo. El OWNER puede iniciar sesión en /login con:");
   console.log(`     Email:    ${args.email}`);
   console.log(`     Password: (la que pasaste por --password; no se imprime)`);
-  console.log(`     URL:      /c/${slug}/booking  (turnero público)`);
+  console.log(`     URL:      /c/${slug}/booking  (turnero público, APAGADO: activalo en Configuración → General)`);
   console.log("");
 
   await prisma.$disconnect();
 }
 
-main().catch(async (err) => {
-  console.error("❌ Falló:", err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+// Solo como entrypoint (`tsx scripts/create-tenant.ts`): el unit test importa
+// `parseVerticalFlag` y no tiene que disparar el alta ni el `process.exit`.
+if (/create-tenant\.ts$/.test(process.argv[1] ?? "")) {
+  main().catch(async (err) => {
+    console.error("❌ Falló:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

@@ -35,5 +35,11 @@
     corridas «ES1..ES4» (ES1 = P0, ES2a = P1, ES2b = P2, ES3 = P3, ES4 = P4). Las olas internas de B-pre se llamaron
     B1-B5 y no son las de Planes. «S01…S32» (y P0-Cs, P2-C1, etc.) son sesiones de Planes ([.docs/PLANES.md](.docs/PLANES.md)).
     «Ronda N» es el historial de entregas en AUDIT/QA.
+  - «EV0 / EV1» son corridas de verticales y «SV» la corrida de Sala de Espera realtime (07-oct,
+    [.docs/VERTICALES.md](.docs/VERTICALES.md)); no son olas de Planes. «M1» = `plans_booking_link`, «M2» =
+    `tenant_verticals` (EV0), «M3» = `reception_call_realtime` (SV). «EV-D1..D6» y «SV-D1..D4» son decisiones con
+    default (no las PD/PQ de Planes); «C-EV1..9» son contratos de EV0 (no los C1-C14 de Planes).
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
+  - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
+    servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.
 - Las skills genéricas de `.claude/skills/` no mandan sobre `.docs/`, sobre AGENTS.md ni sobre este archivo.
