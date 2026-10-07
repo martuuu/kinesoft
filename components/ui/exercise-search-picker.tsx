@@ -6,7 +6,7 @@ import { Modal } from "@/components/ui/modal";
 import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { listExercises } from "@/lib/exercises";
-import type { ExerciseRow } from "@/lib/exercises-types";
+import type { ExerciseFilters, ExerciseRow } from "@/lib/exercises-types";
 
 /**
  * Unified search picker for both ejercicios + maniobras de terapia
@@ -27,6 +27,21 @@ import type { ExerciseRow } from "@/lib/exercises-types";
  */
 export type PickerFilter = "all" | "EXERCISE" | "MANUAL_THERAPY";
 
+/**
+ * Filtros que el picker manda a `listExercises` (S18s, handoff de S13x).
+ * `disciplineSlug` (`kinesiologia` / `osteopatia`, ver `DISCIPLINE_TAG_SLUGS`)
+ * acota a los ejercicios de esa disciplina + los genéricos (sin tag de
+ * disciplina); el server ignora un slug desconocido. Puro y exportado para
+ * testear lo que realmente sale al server.
+ */
+export function exercisePickerQuery(q: string, filter: PickerFilter, disciplineSlug?: string | null): ExerciseFilters {
+  return {
+    q: q.trim() || undefined,
+    kind: filter,
+    ...(disciplineSlug ? { disciplineSlug } : {}),
+  };
+}
+
 export function ExerciseSearchPicker({
   open,
   title = "Buscar ejercicio o maniobra",
@@ -36,6 +51,7 @@ export function ExerciseSearchPicker({
   onClose,
   defaultFilter = "all",
   width = 580,
+  disciplineSlug,
 }: {
   open: boolean;
   title?: string;
@@ -45,6 +61,9 @@ export function ExerciseSearchPicker({
   onClose: () => void;
   defaultFilter?: PickerFilter;
   width?: number;
+  /** Disciplina del plan/sesión (`DISCIPLINE_TAG_SLUGS[discipline]`). Sin
+   *  valor, no filtra por disciplina (Biblioteca, sesiones legacy). */
+  disciplineSlug?: string | null;
 }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<PickerFilter>(defaultFilter);
@@ -66,16 +85,13 @@ export function ExerciseSearchPicker({
     setLoading(true);
     const seq = ++seqRef.current;
     const t = setTimeout(async () => {
-      const rows = await listExercises({
-        q: q.trim() || undefined,
-        kind: filter,
-      });
+      const rows = await listExercises(exercisePickerQuery(q, filter, disciplineSlug));
       if (seq !== seqRef.current) return;
       setResults(rows.slice(0, 30));
       setLoading(false);
     }, 250);
     return () => clearTimeout(t);
-  }, [open, q, filter]);
+  }, [open, q, filter, disciplineSlug]);
 
   if (!open) return null;
   return (
@@ -85,6 +101,7 @@ export function ExerciseSearchPicker({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Nombre, músculo, descripción…"
+          aria-label="Buscar por nombre, músculo o descripción"
           autoFocus
           style={{
             width: "100%",
@@ -203,6 +220,7 @@ function KindChips({
             <button
               key={it.value}
               type="button"
+              aria-pressed={on}
               onClick={() => onChange(it.value)}
               style={{
                 padding: "6px 12px",

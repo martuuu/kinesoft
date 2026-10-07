@@ -1,6 +1,7 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { ForceFlags, ForcePrompt } from "@/lib/booking-force-flags";
 import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
+import type { AgendaPlanFields } from "@/lib/bookings-types";
 
 /**
  * Lo que el drawer necesita del turno. Es un subconjunto estructural de
@@ -53,7 +54,16 @@ export type DrawerBooking = {
    */
   canOperate?: boolean;
   clinicalWritable?: boolean;
-};
+} & Partial<AgendaPlanFields>;
+/*
+ * C9 (Planes) opcional en el drawer (P3-C): `programId`, `sessionId`,
+ * `pricedByPlan`, `plan`, `serviceDiscipline`, `patientActiveLinkedPlanDisciplines`.
+ * La agenda le pasa el `BookingDTO` ya expandido (`expandPlanFields`), así que
+ * con la proyección liviana `programId` es `string | null` (null = suelto) y
+ * `undefined` solo significa "esta proyección no trae C9" (no adivinar: la
+ * fila "Plan" de S19c no se muestra). La autorización de la OS nunca viene acá
+ * (E2): la renovación la carga su diálogo.
+ */
 
 /** Qué muestra el drawer para un turno (ver `bookingDrawerAccess`). */
 export type BookingDrawerAccess = {

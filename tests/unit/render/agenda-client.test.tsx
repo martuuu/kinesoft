@@ -31,6 +31,12 @@ vi.mock("@/components/ui/confirm-dialog", () => ({ useConfirm: () => vi.fn(async
 vi.mock("@/lib/preferences", () => proxy());
 vi.mock("@/lib/availability-actions", () => proxy());
 vi.mock("@/lib/bookings", () => proxy());
+// El drawer importa actions de Planes (S19c/S19d): sin mock, `cache` de React no existe fuera de RSC.
+vi.mock("@/lib/plans-move", () => proxy());
+vi.mock("@/lib/plans-read", () => proxy());
+vi.mock("@/lib/plans-adopt", () => proxy());
+vi.mock("@/lib/plans-edit", () => proxy());
+vi.mock("@/lib/sessions", () => proxy());
 vi.mock("@/lib/patients", () => proxy());
 vi.mock("@/lib/time-blocks", () => proxy());
 vi.mock("@/lib/exercises", () => proxy());
@@ -215,5 +221,87 @@ describe("AgendaClient render (B4.3)", () => {
     expect(r({ ...base, view: "list" }, "list")).toContain("Sobreturno");
     const rec = r({ ...base, view: "reception" }, "reception");
     expect(rec.length).toBeGreaterThan(1000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S19b (ES3): leyenda "Turnos: De plan · Sueltos" (resaltado, no filtro) y
+// "Turnos" del menú Vista. Solo con el módulo `planes` (VERTICALES §5).
+// ─────────────────────────────────────────────────────────────────────────────
+import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
+import { PlanLegend } from "@/components/agenda/plan-legend";
+import { ViewOptionsMenu, isViewFiltered } from "@/components/agenda/view-options-menu";
+import { DEFAULT_AGENDA_VISIBILITY } from "@/lib/agenda-filters";
+import { modulesFor } from "@/lib/tenant-modules";
+
+describe("[P3-S19b] leyenda y filtro de plan", () => {
+  beforeAll(async () => {
+    await Promise.all(dynamicLoads);
+  });
+  const withPlan = [...bookings, bk("p1", "16:00", { programId: "pg1", sessionId: "s1", plan: { discipline: "KINESIOLOGY", ordinal: 2, totalLive: 10, title: null } })];
+
+  it("Kine (default): leyenda Turnos con conteo del día sin cancelados, nada resaltado", () => {
+    const html = r({ ...base, bookings: withPlan }, "legend");
+    expect(html).toContain('aria-label="Resaltar turnos de plan o sueltos"');
+    // Día 2026-10-05: 7 turnos + 1 de plan, 1 cancelado → 1 de plan, 6 sueltos.
+    // F3a (a11y): el aria-label va en el <button>, con singular/plural.
+    expect(html).toMatch(/data-plan-scope="plan" aria-pressed="false" aria-label="De plan, 1 turno"/);
+    expect(html).toMatch(/data-plan-scope="loose" aria-pressed="false" aria-label="Sueltos, 6 turnos"/);
+    expect(html).not.toMatch(/data-plan-scope="\w+" aria-pressed="true"/);
+    // La leyenda de servicios sigue ahí, igual que antes.
+    expect(html).toContain("Servicios");
+  });
+
+  it("Semana: el conteo es de la semana", () => {
+    const html = r({ ...base, view: "week", bookings: withPlan }, "legend-week");
+    expect(html).toMatch(/data-plan-scope="loose"[^>]*aria-label="Sueltos, 8 turnos"/);
+  });
+
+  it("consultorio General (sin `planes`): sin leyenda de plan", () => {
+    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false }));
+    expect(general).not.toContain("planes");
+    const html = renderToStaticMarkup(
+      <TenantModulesProvider modules={general}>
+        <AgendaClient {...base} bookings={withPlan} />
+      </TenantModulesProvider>
+    );
+    expect(html).not.toContain("data-plan-scope");
+    expect(html).not.toContain("Resaltar turnos de plan o sueltos");
+    expect(html).toContain("Servicios");
+  });
+
+  it("sin servicios con color pero con planes: la fila muestra solo Turnos", () => {
+    const html = r({ ...base, services: base.services.map((s) => ({ ...s, color: null })) }, "no-color");
+    expect(html).not.toContain(">Servicios<");
+    expect(html).toContain('data-plan-scope="plan"');
+  });
+
+  it("PlanLegend: el ítem activo queda presionado; no hay título de plan", () => {
+    const html = renderToStaticMarkup(
+      <PlanLegend highlight={{ kind: "loose" }} onToggle={() => {}} counts={{ plan: 3, loose: 4 }} />
+    );
+    expect(html).toMatch(/data-plan-scope="loose" aria-pressed="true"/);
+    expect(html).toMatch(/data-plan-scope="plan" aria-pressed="false"/);
+    expect(html).toContain("Quitar resaltado");
+  });
+
+  it("menú Vista: el punto avisa un alcance de plan activo", () => {
+    expect(isViewFiltered(DEFAULT_AGENDA_VISIBILITY, "all")).toBe(false);
+    expect(isViewFiltered(DEFAULT_AGENDA_VISIBILITY, null)).toBe(false);
+    expect(isViewFiltered(DEFAULT_AGENDA_VISIBILITY, "loose")).toBe(true);
+    expect(isViewFiltered({ showCancelled: false, showNoShow: true }, "all")).toBe(true);
+    const menu = (planScope: "all" | "plan") =>
+      renderToStaticMarkup(
+        <ViewOptionsMenu
+          density="comfortable"
+          setDensity={() => {}}
+          visibility={DEFAULT_AGENDA_VISIBILITY}
+          setVisibility={() => {}}
+          planScope={planScope}
+          setPlanScope={() => {}}
+        />
+      );
+    expect(menu("plan")).toContain("Hay filtros activos");
+    expect(menu("all")).not.toContain("Hay filtros activos");
   });
 });

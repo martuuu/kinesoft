@@ -14,6 +14,21 @@ export const STATUS_TOAST: Partial<Record<BookingStatus, string>> = {
 };
 
 /**
+ * S19c (C13, PQ-05): descripción del toast al dejar un turno de PLAN en
+ * Ausente o Cancelado. El ausente ni consume la sesión ni se cobra: la sesión
+ * queda "sin turno" para reprogramar (PLANES §C4). `null` = turno suelto u otro
+ * estado (toast sin descripción, como antes).
+ */
+export function planStatusToastDescription(
+  status: BookingStatus,
+  plan: { isPlan: boolean; ordinal: number | null }
+): string | null {
+  if (!plan.isPlan || (status !== "NO_SHOW" && status !== "CANCELLED")) return null;
+  const session = plan.ordinal != null ? `La sesión ${plan.ordinal}` : "La sesión";
+  return `${session} queda sin turno para reprogramar.`;
+}
+
+/**
  * Grilla "Cambiar estado" (Confirmar / Realizado / Ausente / Cancelar).
  *
  * Contrato: solo presenta. `onSetStatus` es el `setStatus` del drawer, que lleva
@@ -22,13 +37,19 @@ export const STATUS_TOAST: Partial<Record<BookingStatus, string>> = {
  * (P0-S07u; antes `patientAccess !== "basic"`). La Secretaria con
  * `agenda.operateAll` la ve completa, Cancelar incluido; un PRACTITIONER en
  * básico no. Eliminar NO está acá: sigue la regla de siempre en `index.tsx`.
+ *
+ * S19c: `planSession` (turno de plan) suma la línea de ayuda de C13: Ausente y
+ * Cancelar no consumen la sesión, que queda "sin turno" para reprogramar.
  */
 export function StatusActions({
   pending,
   onSetStatus,
+  planSession,
 }: {
   pending: boolean;
   onSetStatus: (status: BookingStatus) => void;
+  /** Turno de plan: `ordinal` de la sesión (null si la proyección no lo trae). */
+  planSession?: { ordinal: number | null } | null;
 }) {
   return (
     <div>
@@ -67,6 +88,13 @@ export function StatusActions({
           Cancelar
         </Button>
       </div>
+      {planSession && (
+        <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 6 }}>
+          Ausente o Cancelar no consumen la sesión:{" "}
+          {planSession.ordinal != null ? `la sesión ${planSession.ordinal}` : "la sesión"} queda sin turno para
+          reprogramar.
+        </div>
+      )}
     </div>
   );
 }

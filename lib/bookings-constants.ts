@@ -47,6 +47,14 @@ export const CLINICAL_RELINK_ERROR = "Este turno tiene datos clínicos: pedile a
 export const SERVICE_DISABLED_ERROR = (serviceName: string) =>
   `Este profesional no tiene habilitado el servicio «${serviceName}». Elegí otro profesional o habilitalo en Configuración → Profesionales.`;
 export const BAD_LOCATION_ERROR = "Sede inválida o archivada. Elegí otra sede.";
+/**
+ * Caso `conflict` del core al MOVER un turno (sin la sugerencia de "próximo
+ * libre / sobreturno" del alta). P3.Z.0 (S22a → S27b): antes el literal estaba
+ * copiado en `lib/bookings.ts` (updateBooking), `lib/sessions.ts`
+ * (rescheduleSession) y `components/planes/plan-card.tsx`, que lo compara para
+ * ofrecer "Mover igual": una copia que divergía rompía esa comparación.
+ */
+export const PRACTITIONER_CONFLICT_ERROR = "El profesional ya tiene un turno en ese horario.";
 export const OUT_OF_HOURS_ERROR =
   "Ese horario está fuera del horario de atención del profesional. Podés elegir el próximo libre o cargarlo igual.";
 export const BLOCKED_ERROR = (reason: string | null) =>

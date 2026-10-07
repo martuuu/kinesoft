@@ -31,7 +31,48 @@ export type Preferences = {
   catalogPrefs: CatalogPrefs;
   // B4.2: estado de la agenda multi-profesional (`UserPreferences.agendaPrefs`).
   agendaView: AgendaViewPrefs;
+  // S14r (M3a): preferencias del dashboard (`UserPreferences.dashboardPrefs`).
+  dashboard: DashboardPrefs;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard (S14r, ES3) — `UserPreferences.dashboardPrefs`
+//
+// Mismo trato que `agendaPrefs`: blob JSON por usuario (un campo nuevo no pide
+// migración), lectura total por campo (`.catch`) y escritura estricta. La base
+// solo acepta NULL o un objeto (CHECK `UserPreferences_dashboardPrefs_object_check`
+// de M3a); para limpiar la columna se usa `Prisma.DbNull`, nunca `JsonNull`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Período del widget de ingresos: semana lunes→domingo AR o mes calendario AR. */
+export type RevenueRange = "week" | "month";
+export const REVENUE_RANGES: ReadonlyArray<RevenueRange> = ["week", "month"];
+export const RevenueRangeSchema = z.enum(["week", "month"]);
+
+export type DashboardPrefs = {
+  revenueRange: RevenueRange;
+};
+
+export const DEFAULT_DASHBOARD_PREFS: DashboardPrefs = {
+  // "Mes" = lo que mostraba el widget antes de S14r: un usuario que nunca
+  // eligió ve lo mismo que veía.
+  revenueRange: "month",
+};
+
+/** Lectura: blob no confiable (DB) → `DashboardPrefs` válido. Total, nunca tira. */
+export function sanitizeDashboardPrefs(raw: unknown): DashboardPrefs {
+  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return z
+    .object({ revenueRange: RevenueRangeSchema.catch(DEFAULT_DASHBOARD_PREFS.revenueRange) })
+    .parse(o);
+}
+
+/** Escritura: patch parcial, estricto (campo desconocido o fuera de dominio → error). */
+export const DashboardPrefsPatchSchema = z
+  .object({ revenueRange: RevenueRangeSchema })
+  .partial()
+  .strict();
+export type DashboardPrefsPatch = z.input<typeof DashboardPrefsPatchSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform catalog table (Plataforma → Ejercicios)
@@ -135,7 +176,7 @@ export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] 
   { key: "weekSessions", label: "Sesiones esta semana", description: "Confirmadas + completadas" },
   { key: "activePrograms", label: "Planes en curso", description: "Programs ACTIVE" },
   { key: "todayCount", label: "Turnos de hoy", description: "Sin contar cancelados" },
-  { key: "monthRevenue", label: "Ingresos del mes", description: "Pagos PAID" },
+  { key: "monthRevenue", label: "Ingresos del mes", description: "Mercado Pago + copagos cobrados" },
   { key: "adherence", label: "Adherencia semanal", description: "Realizadas / total" },
   { key: "nearingDischarge", label: "Cerca del alta", description: "Programas casi terminados" },
   { key: "newPatientsMonth", label: "Pacientes nuevos", description: "Altas este mes" },
@@ -271,4 +312,5 @@ export const DEFAULT_PREFERENCES: Preferences = {
   agendaShowSunday: true,
   catalogPrefs: DEFAULT_CATALOG_PREFS,
   agendaView: DEFAULT_AGENDA_VIEW_PREFS,
+  dashboard: DEFAULT_DASHBOARD_PREFS,
 };

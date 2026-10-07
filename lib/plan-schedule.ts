@@ -5,8 +5,8 @@
  * `lib/plan-editor-state.ts`, S18). Dos convenciones conviven a propósito:
  *   • `PlanScheduleV1.slots[].dow` = 0=Dom … 6=Sáb, como
  *     `PractitionerSchedule.dow` y `toARDow` (lo que guarda la base).
- *   • La UI, el multi-turno (`RecurrenceInput.daysOfWeek`) y Diagnóstico
- *     (`AssignInput.daysOfWeek`) usan 0=Lun … 6=Dom.
+ *   • La UI y el multi-turno (`RecurrenceInput.daysOfWeek`) usan 0=Lun … 6=Dom
+ *     (el alta legacy de Diagnóstico, retirada en S27b, también).
  * Nadie más convierte: si otro módulo necesita pasar de una a otra, importa
  * de acá. Mezclarlas corre los días uno (el lunes pasa a ser martes).
  *

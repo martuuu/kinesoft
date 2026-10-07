@@ -837,6 +837,11 @@ export function BookingModal({
               patientId={patientRefId}
               durationMin={durationOverride}
               locationId={locationId || null}
+              // S18b: "Crealo como plan…" exige `plans.manage` (falla cerrado sin
+              // capabilities) y un paciente ya guardado (el alta inline no tiene
+              // ficha hasta crear el turno).
+              capabilities={capabilities}
+              patientUnsaved={isGuest && !createdPatient}
             />
           )}
 

@@ -4,24 +4,130 @@ import type { CSSProperties } from "react";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge } from "@/lib/agenda-client-state";
+import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
+import { isOutOfPlan, planChip } from "@/lib/plan-display";
+import type { Discipline } from "@/lib/plans-constants";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { fmtHour, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "./practitioner-badge";
+
+// ─── Planes en la agenda (S19a, ES3 · V1-D18 · V2 de PLANES C13b) ────────────
+
+/**
+ * Lo que una tarjeta de turno muestra de Planes, en un solo lugar para que
+ * Día/Por profesional (esta card), Lista, el modal de Semana y Recepción no
+ * diverjan:
+ *   - `chip`: solo disciplina, ordinal y total vivo de C9 (`Kine · 3/10`). El
+ *     `title` del plan NO se copia (PHI, PD-11): aunque viniera en `b.plan`,
+ *     de acá no sale.
+ *   - `outOfPlan`: `isOutOfPlan` de `lib/plan-display.ts` (V2) tal cual; la
+ *     regla (suelto, no cancelado, con paciente, plan ACTIVE vinculado de la
+ *     misma disciplina) no se reimplementa acá.
+ * Sin el módulo `planes` los campos C9 vienen neutros (`plan` null, `[]`) y
+ * no se muestra nada; sin C9 (proyección completa, `undefined`) tampoco.
+ */
+export type BookingPlanMarks = {
+  chip: { discipline: Discipline | null; ordinal: number; totalLive: number } | null;
+  outOfPlan: boolean;
+};
+
+export function bookingPlanMarks(b: BookingDTO): BookingPlanMarks {
+  const p = b.plan;
+  return {
+    chip: p ? { discipline: p.discipline, ordinal: p.ordinal, totalLive: p.totalLive } : null,
+    outOfPlan: isOutOfPlan({
+      programId: b.programId,
+      status: b.status,
+      hasPatient: b.patientId != null,
+      serviceDiscipline: b.serviceDiscipline,
+      patientActiveLinkedPlanDisciplines: b.patientActiveLinkedPlanDisciplines,
+    }),
+  };
+}
+
+/** Texto de los marks para tooltips / aria (canal de texto, no solo el chip). */
+export function planMarksText(m: BookingPlanMarks): string | null {
+  if (m.chip) return planChip(m.chip).ariaLabel;
+  return m.outOfPlan ? "fuera de plan" : null;
+}
+
+/**
+ * Conteo partido de una celda de Semana (plan §3.4: "En Semana, conteo
+ * partido"). Solo cuenta lo que C9 dice: `programId` string = de plan, `null`
+ * = suelto; `undefined` (sin C9) no se cuenta en ninguno. Sin ningún turno de
+ * plan devuelve `null` y la celda queda como siempre (consultorio General,
+ * paciente sin plan).
+ *
+ * Los cancelados no cuentan (P3.Z F3a), con la misma regla que la leyenda
+ * (`countPlanScope`, `lib/agenda-filters.ts`): antes la celda decía "2 de
+ * plan" y la leyenda "1" para la misma semana.
+ */
+export function planLooseSplit(
+  bookings: readonly Pick<BookingDTO, "programId" | "status">[]
+): { plan: number; loose: number } | null {
+  let plan = 0;
+  let loose = 0;
+  for (const b of bookings) {
+    if (b.status === "CANCELLED") continue;
+    if (typeof b.programId === "string") plan += 1;
+    else if (b.programId === null) loose += 1;
+  }
+  return plan > 0 ? { plan, loose } : null;
+}
+
+export function planLooseSplitText(s: { plan: number; loose: number }): string {
+  const plan = `${s.plan} de plan`;
+  return s.loose > 0 ? `${plan} · ${s.loose} ${s.loose === 1 ? "suelto" : "sueltos"}` : plan;
+}
+
+/**
+ * "Fuera de plan" (V2): aviso en TEXTO (canal no cromático), borde punteado y
+ * neutro para no competir con el fondo de estado ni con "Sobreturno". Es un
+ * aviso, no un error: no bloquea nada.
+ */
+export function OutOfPlanTag({ style }: { style?: CSSProperties }) {
+  return (
+    <span data-badge="fuera-de-plan" style={{ ...miniBadge, ...outOfPlanStyle, ...style }}>
+      Fuera de plan
+    </span>
+  );
+}
+
+const outOfPlanStyle: CSSProperties = {
+  color: "var(--navy-700)",
+  background: "transparent",
+  border: "1px dashed rgba(15,30,51,0.4)",
+  lineHeight: "12px",
+};
+
+/** Chip + aviso juntos (Lista, modal de Semana, Recepción). `null` si no hay nada. */
+export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm" }) {
+  const m = bookingPlanMarks(b);
+  if (!m.chip && !m.outOfPlan) return null;
+  return (
+    <>
+      {m.chip && <DisciplineChip {...m.chip} size={size} />}
+      {m.outOfPlan && <OutOfPlanTag />}
+    </>
+  );
+}
 
 /**
  * Card de un turno en la grilla de la agenda (B1.5b: sale de
  * `views/timeline-view.tsx`).
  *
- * Hoy la usa solo la vista Día: la vista Semana pinta un chip con el conteo por
- * celda y abre la lista en un modal, así que no había duplicación que unificar.
- * Queda en `grid/` porque es la pieza que reusa la vista por profesional (B4).
+ * La usan la vista Día (`timeline-view`) y la vista por profesional
+ * (`grid/slot-cell`); la vista Semana pinta un chip con el conteo por celda y
+ * abre la lista en un modal.
  *
  * Código de color de la agenda (AGENTS §5): la barra lateral es el servicio, el
  * fondo es el estado y la opacidad es el filtro (leyenda de servicios).
  *
  * Contrato:
  * - `b`: el turno; `onEdit(b)` al click (abre el drawer).
- * - `highlightedServiceId`: con valor, la card de ese servicio se levanta y el
- *   resto se atenúa; `null` = sin filtro.
+ * - `highlight`: resaltado de la leyenda (`lib/agenda-highlight.ts`: servicio,
+ *   plan o suelto); con valor, la card que coincide se levanta y el resto se
+ *   atenúa; `null` = sin filtro.
  * - `compact`: densidad compacta (menos padding).
  * - `sizing`: cómo se acomoda en su contenedor flex (base / grow / shrink /
  *   min / max). El día usa `timelineCardSizing`; otra grilla (p. ej. una
@@ -34,7 +140,8 @@ import { PractitionerBadge } from "./practitioner-badge";
  *
  * Badges de B4.3 (todos con texto, no solo color): "Sobreturno"
  * (`isOverbooked`), recepción ("En sala 12′" / "En atención") y telemedicina
- * (ícono de cámara con `aria-label`). Con `clinicalHidden` (sin
+ * (ícono de cámara con `aria-label`). Planes (S19a): chip `Kine · 3/10` y
+ * "Fuera de plan" (`bookingPlanMarks`, arriba). Con `clinicalHidden` (sin
  * `clinical.read`) no se muestra título/descripción aunque viniera algo.
  */
 export type BookingCardSizing = Pick<
@@ -45,7 +152,7 @@ export type BookingCardSizing = Pick<
 export function BookingCard({
   b,
   onEdit,
-  highlightedServiceId,
+  highlight,
   compact,
   sizing,
   practitioner = null,
@@ -53,7 +160,7 @@ export function BookingCard({
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
-  highlightedServiceId: string | null;
+  highlight: AgendaHighlight | null;
   compact: boolean;
   sizing: BookingCardSizing;
   practitioner?: { initials: string; name: string } | null;
@@ -74,19 +181,24 @@ export function BookingCard({
   // Left bar = the service's colour (identity); state is conveyed by the
   // card's tint / opacity / strike-through.
   const barColor = b.serviceColor ?? SERVICE_COLOR_FALLBACK;
-  // Legend "filter": lift this card's service, dim the rest.
-  const isHighlighted = highlightedServiceId != null && b.serviceId === highlightedServiceId;
-  const dimmed = highlightedServiceId != null && b.serviceId !== highlightedServiceId;
+  // Legend "filter": lift the matching cards, dim the rest.
+  const hl = highlightState(highlight, b);
+  const isHighlighted = hl === "match";
+  const dimmed = hl === "dimmed";
   // Card subtitle: the mini-diagnosis (title), falling back to the longer
   // description — whichever the kine filled. Never the service name.
   // Sin `clinical.read` el server ya manda null; el gate se repite acá para que
   // un DTO de otra proyección nunca filtre contenido clínico a la Secretaria.
   const cardLabel = b.clinicalHidden ? null : b.title || b.description;
+  // Planes (S19a): chip en la primera línea (junto al paciente) y "Fuera de
+  // plan" en la segunda, con los otros badges de texto.
+  const marks = bookingPlanMarks(b);
   const extras = [
     b.isOverbooked ? "sobreturno" : null,
     reception?.label ?? null,
     b.isTelemedicine ? "telemedicina" : null,
     practitioner ? practitioner.name : null,
+    planMarksText(marks),
   ].filter(Boolean);
 
   return (
@@ -153,6 +265,7 @@ export function BookingCard({
             style={{
               fontSize: 12,
               fontWeight: 600,
+              minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -161,6 +274,11 @@ export function BookingCard({
             {b.patientName}
           </span>
           {b.isTelemedicine && <VideoIcon />}
+          {/* Chip del plan: no se encoge (el que cede es el nombre, con
+              ellipsis). En "Por profesional" es una pill con borde y
+              disciplina, distinta de la ocupación "2/3" de la celda (mono,
+              sin borde). */}
+          {marks.chip && <DisciplineChip {...marks.chip} size="xs" />}
           {practitioner && (
             <PractitionerBadge
               initials={practitioner.initials}
@@ -189,6 +307,7 @@ export function BookingCard({
               Sobreturno
             </span>
           )}
+          {marks.outOfPlan && <OutOfPlanTag />}
           {reception && (
             <span
               data-badge={reception.kind}

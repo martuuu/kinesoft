@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "reac
 import { Card } from "@/components/ui/card";
 import { nowOffset, type AgendaDayLayout, type AgendaZoom, type PractitionerColumn } from "@/lib/agenda-layout";
 import type { DayLockState } from "@/lib/availability/types";
+import { matchesHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { SlotCell, type PractitionerDayBooking } from "../grid/slot-cell";
 import { GUTTER_WIDTH, TimeGutterCell, rowMinHeight } from "../grid/time-gutter";
@@ -38,8 +39,13 @@ export type { PractitionerDayBooking } from "../grid/slot-cell";
  *   (`localToARIso`, igual que `onCreate` de la vista Día). No se dispara en
  *   celdas bloqueadas (ver `grid/slot-cell.tsx`).
  * - `onBookingClick(booking)`: click en una card → drawer del turno.
- * - `highlightServiceId?`: filtro de la leyenda (levanta ese servicio, atenúa el
- *   resto; opacidad = filtro).
+ * - `highlight?`: resaltado de la leyenda (`lib/agenda-highlight.ts`: servicio,
+ *   plan o suelto; levanta lo que coincide, atenúa el resto; opacidad = filtro).
+ *   S19e: en cada celda lo que coincide va primero y el "+N más" cuenta lo que
+ *   esconde (`denseOverflow`); el header de cada columna suma "· N resaltados"
+ *   (`columnHighlightCount`), así la Secretaria ve en qué profesional están los
+ *   turnos de plan sin recorrer la grilla. El chip de plan y "Fuera de plan"
+ *   son de la card (S19a).
  * - `lockStateByPractitioner?`: `dayLockState` del motor por profesional
  *   (abierto / parcial / bloqueado + motivo). Si falta para un profesional, el
  *   estado del header se DERIVA de sus celdas (`columnDayStatus`).
@@ -72,7 +78,7 @@ export type PractitionerDayViewProps<B extends PractitionerDayBooking = Practiti
   now: Date;
   onSlotClick: (practitionerId: string, iso: string) => void;
   onBookingClick: (booking: B) => void;
-  highlightServiceId?: string | null;
+  highlight?: AgendaHighlight | null;
   lockStateByPractitioner?: Readonly<Record<string, DayLockState | undefined>>;
   onDayLockClick?: (practitionerId: string) => void;
 };
@@ -117,6 +123,22 @@ export function columnDayStatus(
   return { status: "open", label: "Abierto", detail: null };
 }
 
+/**
+ * Turnos del día de la columna (no cancelados, mismo criterio que
+ * `bookingCount`) que coinciden con el resaltado. `null` sin resaltado.
+ */
+export function columnHighlightCount(
+  column: Pick<PractitionerColumn, "slots">,
+  highlight: AgendaHighlight | null
+): number | null {
+  if (highlight == null) return null;
+  let n = 0;
+  for (const s of column.slots) {
+    for (const b of s.bookings) if (b.status !== "CANCELLED" && matchesHighlight(highlight, b)) n += 1;
+  }
+  return n;
+}
+
 /** Filas donde ARRANCA un tramo bloqueado (ahí va el texto del motivo). */
 export function blockedRunStarts(column: Pick<PractitionerColumn, "slots">): Set<number> {
   const out = new Set<number>();
@@ -137,7 +159,7 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
   now,
   onSlotClick,
   onBookingClick,
-  highlightServiceId = null,
+  highlight = null,
   lockStateByPractitioner,
   onDayLockClick,
 }: PractitionerDayViewProps<B>) {
@@ -264,6 +286,7 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
                   subtitle={extra.get(col.practitionerId)?.subtitle ?? null}
                   status={columnDayStatus(col, lockStateByPractitioner?.[col.practitionerId])}
                   density={density}
+                  highlightCount={columnHighlightCount(col, highlight)}
                   onDayLockClick={onDayLockClick}
                 />
               ))}
@@ -301,7 +324,7 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
                       rowMin={rowMin}
                       density={density}
                       showBlockLabel={runStarts[c].has(r)}
-                      highlightServiceId={highlightServiceId}
+                      highlight={highlight}
                       onSlotClick={onSlotClick}
                       onBookingClick={onBookingClick}
                       onFocusCell={onFocusCell}
@@ -332,6 +355,7 @@ function ColumnHeader<B extends PractitionerDayBooking>({
   subtitle,
   status,
   density,
+  highlightCount,
   onDayLockClick,
 }: {
   column: PractitionerColumn<B>;
@@ -339,6 +363,8 @@ function ColumnHeader<B extends PractitionerDayBooking>({
   subtitle: string | null;
   status: ColumnDayStatus;
   density: "comfortable" | "compact";
+  /** Coincidencias del resaltado en la columna; `null` = sin resaltado. */
+  highlightCount: number | null;
   onDayLockClick?: (practitionerId: string) => void;
 }) {
   const compact = density === "compact";
@@ -405,6 +431,19 @@ function ColumnHeader<B extends PractitionerDayBooking>({
           <span className="k-mono" data-count={count} style={{ fontSize: 10.5, color: "var(--navy-500)" }}>
             {countLabel}
           </span>
+          {highlightCount != null && (
+            <span
+              className="k-mono"
+              data-highlight-count={highlightCount}
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                color: highlightCount > 0 ? "var(--navy-900)" : "var(--navy-300)",
+              }}
+            >
+              · {highlightCount} {highlightCount === 1 ? "resaltado" : "resaltados"}
+            </span>
+          )}
           {lockable ? (
             <button
               type="button"

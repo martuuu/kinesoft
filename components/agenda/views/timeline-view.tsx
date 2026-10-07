@@ -10,8 +10,10 @@ import {
   coveredSlots,
   type BookingDTO,
 } from "../agenda-utils";
+import type { AgendaHighlight } from "@/lib/agenda-highlight";
 import { BookingCard, type BookingCardSizing } from "../grid/booking-card";
 import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
+import { denseOverflow, overflowButtonText } from "../grid/slot-cell";
 
 /** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
 export type PractitionerInitialsMap = Readonly<Record<string, { initials: string; name: string }>>;
@@ -35,6 +37,13 @@ export type PractitionerInitialsMap = Readonly<Record<string, { initials: string
  * para TODOS (`blockedRows` de `lib/agenda-client-state`); `dayLocked` raya el
  * día entero. El click en una fila rayada igual abre el alta: el modal avisa y
  * pide confirmarlo como sobreturno (decisión 1 de B-pre), como hacía antes.
+ *
+ * S19e (Planes, ES3): el chip y "Fuera de plan" son de la card (S19a). Acá,
+ * con resaltado activo (servicio, plan o suelto) las cards que coinciden van
+ * primero en la fila y el "+N más" dice cuántas resaltadas o "Fuera de plan"
+ * esconde (`denseOverflow` de `grid/slot-cell`, compartido con Por
+ * profesional): con 10+ turnos en una franja del gimnasio, lo resaltado no
+ * puede quedar oculto. Sin resaltado el orden sigue siendo por hora.
  */
 const MAX_PER_ROW = 5;
 const CARD_MIN = 186;
@@ -59,7 +68,7 @@ export function TimelineView({
   onEdit,
   density,
   businessHours,
-  highlightedServiceId,
+  highlight,
   practitionerById = null,
   now,
   blockedRows = null,
@@ -74,8 +83,8 @@ export function TimelineView({
   onEdit: (b: BookingDTO) => void;
   density: "comfortable" | "compact";
   businessHours: { start: number; end: number; slotMinutes: number };
-  /** When set, cards of this service lift above the rest (legend "filter"). */
-  highlightedServiceId: string | null;
+  /** Resaltado de la leyenda (`lib/agenda-highlight.ts`): las cards que coinciden se levantan, el resto se atenúa. */
+  highlight: AgendaHighlight | null;
   /** B4.3: iniciales en las cards (null = un solo profesional en pantalla). */
   practitionerById?: PractitionerInitialsMap | null;
   /** B4.3: reloj de la agenda (se refresca cada minuto). */
@@ -126,7 +135,7 @@ export function TimelineView({
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
       <div className="k-scroll" style={{ flex: 1, overflowY: "auto" }}>
         {before.length > 0 && (
-          <OutOfRangeRow label="Antes del horario" items={before} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} {...cardExtras} />
+          <OutOfRangeRow label="Antes del horario" items={before} onEdit={onEdit} highlight={highlight} compact={density === "compact"} {...cardExtras} />
         )}
 
         {slots.map((slot, i) => {
@@ -148,7 +157,7 @@ export function TimelineView({
             dayKey={dayKey}
             onCreate={onCreate}
             onEdit={onEdit}
-            highlightedServiceId={highlightedServiceId}
+            highlight={highlight}
             compact={density === "compact"}
             rowMin={ROW_MIN}
             half={half}
@@ -157,7 +166,7 @@ export function TimelineView({
         })}
 
         {after.length > 0 && (
-          <OutOfRangeRow label="Después del horario" items={after} onEdit={onEdit} highlightedServiceId={highlightedServiceId} compact={density === "compact"} {...cardExtras} />
+          <OutOfRangeRow label="Después del horario" items={after} onEdit={onEdit} highlight={highlight} compact={density === "compact"} {...cardExtras} />
         )}
       </div>
     </Card>
@@ -171,7 +180,7 @@ function SlotRow({
   dayKey,
   onCreate,
   onEdit,
-  highlightedServiceId,
+  highlight,
   compact,
   rowMin,
   half,
@@ -186,7 +195,7 @@ function SlotRow({
   dayKey: string;
   onCreate: (iso: string) => void;
   onEdit: (b: BookingDTO) => void;
-  highlightedServiceId: string | null;
+  highlight: AgendaHighlight | null;
   compact: boolean;
   rowMin: number;
   half: boolean;
@@ -201,8 +210,9 @@ function SlotRow({
   const createIso = localToARIso(`${dayKey}T${label}`);
   const create = () => onCreate(createIso);
 
-  const shown = expanded ? items : items.slice(0, COLLAPSED_LIMIT);
-  const hidden = items.length - shown.length;
+  const overflow = denseOverflow(items, COLLAPSED_LIMIT, expanded, highlight);
+  const { shown, hidden } = overflow;
+  const more = overflowButtonText(overflow, highlight != null, `a las ${label}`);
   // Half-hour rows: the :30 label is muted so the hour still reads as the anchor.
   const isHalfLabel = half && slot % 60 !== 0;
 
@@ -268,7 +278,7 @@ function SlotRow({
               key={b.id}
               b={b}
               onEdit={onEdit}
-              highlightedServiceId={highlightedServiceId}
+              highlight={highlight}
               compact={compact}
               sizing={timelineCardSizing}
               practitioner={practitionerById?.[b.practitionerId] ?? null}
@@ -279,6 +289,9 @@ function SlotRow({
           {hidden > 0 && (
             <button
               onClick={() => setExpanded(true)}
+              aria-label={more.ariaLabel}
+              data-overflow-matches={overflow.hiddenMatches > 0 ? overflow.hiddenMatches : undefined}
+              data-overflow-out-of-plan={overflow.hiddenOutOfPlan > 0 ? overflow.hiddenOutOfPlan : undefined}
               style={{
                 alignSelf: "center",
                 border: "1px solid rgba(31,79,190,0.25)",
@@ -291,7 +304,7 @@ function SlotRow({
                 cursor: "pointer",
               }}
             >
-              +{hidden} más
+              {more.text}
             </button>
           )}
           {expanded && items.length > COLLAPSED_LIMIT && (
@@ -392,7 +405,7 @@ function OutOfRangeRow({
   label,
   items,
   onEdit,
-  highlightedServiceId,
+  highlight,
   compact,
   practitionerById = null,
   now,
@@ -400,7 +413,7 @@ function OutOfRangeRow({
   label: string;
   items: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
-  highlightedServiceId: string | null;
+  highlight: AgendaHighlight | null;
   compact: boolean;
   practitionerById?: PractitionerInitialsMap | null;
   now?: Date;
@@ -435,7 +448,7 @@ function OutOfRangeRow({
             key={b.id}
             b={b}
             onEdit={onEdit}
-            highlightedServiceId={highlightedServiceId}
+            highlight={highlight}
             compact={compact}
             sizing={timelineCardSizing}
             practitioner={practitionerById?.[b.practitionerId] ?? null}

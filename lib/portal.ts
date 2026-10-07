@@ -154,7 +154,7 @@ async function authedPatientByTenant(tenantSlug: string) {
  *   adopción de Planes) el `findFirst` sin `orderBy` devolvía el que Postgres
  *   leyera primero. Ahora es el ACTIVE más reciente por `startDate`, con
  *   `createdAt` e `id` de desempate. Se ordena por `startDate` y no solo por
- *   `createdAt` (que usa `getPatientProgramsLite`) porque un plan adoptado o
+ *   `createdAt` (que usaba `getPatientProgramsLite`, retirado en S27a) porque un plan adoptado o
  *   migrado se crea hoy con un inicio viejo: para el paciente "el plan
  *   actual" es el que empezó último.
  * - acotado al tenant del slug también en la query (el `patientId` ya lo

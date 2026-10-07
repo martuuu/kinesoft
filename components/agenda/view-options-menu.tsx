@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AgendaVisibility } from "@/lib/agenda-filters";
+import {
+  AGENDA_PLAN_SCOPES,
+  AGENDA_PLAN_SCOPE_LABEL,
+  type AgendaPlanScope,
+  type AgendaVisibility,
+} from "@/lib/agenda-filters";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 
 const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
@@ -14,6 +19,10 @@ const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 // El zoom solo se ofrece donde aplica (`zoom` presente = vista Por
 // profesional): Día y Semana siguen con `Tenant.agendaSlotMinutes` para no
 // cambiarle la grilla a quien no eligió nada.
+//
+// S19b (ES3): "Turnos: Todos / De plan / Sueltos". Es el mismo resaltado que
+// la leyenda "Turnos" de abajo de la agenda (no oculta: atenúa). Solo aparece
+// si `agenda-client` pasa `planScope` (módulo `planes`).
 // ──────────────────────────────────────────────────────────────────────
 
 export function ViewOptionsMenu({
@@ -23,6 +32,8 @@ export function ViewOptionsMenu({
   setVisibility,
   zoom,
   setZoom,
+  planScope,
+  setPlanScope,
 }: {
   density: "comfortable" | "compact";
   setDensity: (d: "comfortable" | "compact") => void;
@@ -32,8 +43,13 @@ export function ViewOptionsMenu({
   /** Franja de la grilla en minutos; sin valor no se muestra el control. */
   zoom?: AgendaViewZoom | null;
   setZoom?: (z: AgendaViewZoom) => void;
+  /** S19b: resaltado de plan/sueltos; sin valor (sin módulo `planes`) no se muestra. */
+  planScope?: AgendaPlanScope | null;
+  setPlanScope?: (s: AgendaPlanScope) => void;
 }) {
-  const filtering = !visibility.showCancelled || !visibility.showNoShow;
+  // El punto avisa que la agenda no se ve "entera": turnos ocultos o un
+  // resaltado de plan que atenúa al resto (se recuerda entre recargas).
+  const filtering = isViewFiltered(visibility, planScope);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -173,6 +189,51 @@ export function ViewOptionsMenu({
               </div>
             </>
           )}
+          {planScope != null && setPlanScope && (
+            <>
+              <div style={menuLabel}>Turnos</div>
+              <div
+                role="radiogroup"
+                aria-label="Resaltar turnos de plan o sueltos"
+                style={{
+                  display: "flex",
+                  padding: 3,
+                  borderRadius: 999,
+                  background: "rgba(15,30,51,0.04)",
+                  marginBottom: 4,
+                }}
+              >
+                {AGENDA_PLAN_SCOPES.map((sc) => {
+                  const on = planScope === sc;
+                  return (
+                    <button
+                      key={sc}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setPlanScope(sc)}
+                      style={{
+                        flex: 1,
+                        padding: "6px 8px",
+                        borderRadius: 999,
+                        border: "none",
+                        fontSize: 11.5,
+                        fontWeight: 600,
+                        background: on ? "#fff" : "transparent",
+                        color: on ? "var(--navy-900)" : "var(--navy-500)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {AGENDA_PLAN_SCOPE_LABEL[sc]}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--navy-300)", padding: "0 4px 10px", lineHeight: 1.4 }}>
+                Resalta esos turnos y atenúa el resto; no oculta ninguno.
+              </div>
+            </>
+          )}
           <div style={menuLabel}>Mostrar</div>
           <div style={{ display: "grid", gap: 2, marginBottom: 10 }}>
             <ToggleRow
@@ -193,6 +254,11 @@ export function ViewOptionsMenu({
       )}
     </div>
   );
+}
+
+/** ¿Hay algo que cambia lo que se ve? (punto del botón "Vista"). */
+export function isViewFiltered(visibility: AgendaVisibility, planScope?: AgendaPlanScope | null): boolean {
+  return !visibility.showCancelled || !visibility.showNoShow || (planScope != null && planScope !== "all");
 }
 
 function ToggleRow({

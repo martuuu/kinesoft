@@ -19,7 +19,15 @@ import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
 import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
-import type { KpiKey } from "@/lib/preferences-constants";
+import { RevenueRangeSchema, type KpiKey } from "@/lib/preferences-constants";
+import {
+  revenuePeriod,
+  summarizeRevenue,
+  type RevenueAmounts,
+  type RevenueRange,
+  type RevenueSummary,
+} from "@/lib/dashboard-revenue";
+import type { ActionResult } from "@/lib/validation";
 
 function startOfDay(d: Date) {
   // AR midnight of the AR day containing `d`, anchored to the business tz
@@ -79,10 +87,15 @@ export type DashboardData = {
     name: string;
     tag: string;
   }[];
-  monthRevenueCents: number;
-  revenuePrevMonthCents: number;
-  privateShare: number;
-  insurerShare: number;
+  /**
+   * S14r: ingresos del MES AR (KPI `monthRevenue`) = MP + copagos cobrados a
+   * mano, con la obra social aparte (`lib/dashboard-revenue.ts`). Antes:
+   * `monthRevenueCents`/`revenuePrevMonthCents`/`privateShare`/`insurerShare`,
+   * que solo sumaban los `Payment` de MP.
+   */
+  monthRevenue: RevenueSummary;
+  /** S14r: el widget en el período que eligió el usuario (`dashboardPrefs.revenueRange`). */
+  revenue: RevenueSummary;
   reminderDismissed: boolean;
   reminderKey: string;
 };
@@ -95,7 +108,7 @@ export type DashboardData = {
  */
 type DashboardCounts = Omit<
   DashboardData,
-  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey" | "recent" | "next"
+  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey" | "recent" | "next" | "revenue"
 > & {
   // Filas crudas: el enmascarado por acceso se aplica FUERA del cache, por
   // request. Si se hiciera adentro, un share revocado seguiría mostrando el
@@ -138,11 +151,7 @@ const _loadDashboardCounts = unstable_cache(
     const weekStart = new Date(today.getTime() - mondayOffset * DAY_MS);
     const nextWeekStart = new Date(weekStart.getTime() + 7 * DAY_MS);
     const ym = dayKey.slice(0, 7); // "YYYY-MM" in AR
-    const [yNum, mNum] = ym.split("-").map(Number);
     const monthStart = new Date(localToARIso(`${ym}-01T00:00:00`));
-    const prevYm =
-      mNum === 1 ? `${yNum - 1}-12` : `${yNum}-${String(mNum - 1).padStart(2, "0")}`;
-    const prevMonthStart = new Date(localToARIso(`${prevYm}-01T00:00:00`));
 
     const seesAll = scope === "all";
     const none = <T,>(v: T) => Promise.resolve(v);
@@ -160,9 +169,7 @@ const _loadDashboardCounts = unstable_cache(
       newPatientsMonth,
       recentSessions,
       nextAppts,
-      monthPayments,
-      prevMonthPayments,
-      insurerPayments,
+      monthRevenue,
     ] = await Promise.all([
       // Each query is wrapped in its own runWithRls so they still run in
       // parallel (one short tenant-scoped transaction / connection each) —
@@ -282,30 +289,9 @@ const _loadDashboardCounts = unstable_cache(
           service: true,
         },
       })),
-      runWithRls(tenantId, (tx) => tx.payment.aggregate({
-        where: {
-          booking: { tenantId },
-          status: "PAID",
-          createdAt: { gte: monthStart },
-        },
-        _sum: { amountCents: true },
-      })),
-      runWithRls(tenantId, (tx) => tx.payment.aggregate({
-        where: {
-          booking: { tenantId },
-          status: "PAID",
-          createdAt: { gte: prevMonthStart, lt: monthStart },
-        },
-        _sum: { amountCents: true },
-      })),
-      runWithRls(tenantId, (tx) => tx.payment.aggregate({
-        where: {
-          booking: { tenantId, patient: { coverages: { some: {} } } },
-          status: "PAID",
-          createdAt: { gte: monthStart },
-        },
-        _sum: { amountCents: true },
-      })),
+      // S14r: ingresos del mes AR (MP + copagos a mano, OS aparte). No
+      // depende del módulo `planes`: un consultorio General también cobra.
+      loadRevenue(tenantId, "month", today),
     ]);
 
     const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
@@ -325,16 +311,6 @@ const _loadDashboardCounts = unstable_cache(
     const weekSessions = bars.reduce((s, b) => s + b.c, 0);
     const totalSlots = weekSessions + bars.reduce((s, b) => s + b.a, 0);
     const adherencePct = totalSlots ? Math.round((weekSessions / totalSlots) * 100) : 100;
-
-    const monthCents = monthPayments._sum.amountCents ?? 0;
-    const prevCents = prevMonthPayments._sum.amountCents ?? 0;
-    const insurerCents = insurerPayments._sum.amountCents ?? 0;
-    const privateShare = monthCents
-      ? Math.round(((monthCents - insurerCents) / monthCents) * 100)
-      : 0;
-    const insurerShare = monthCents
-      ? Math.round((insurerCents / monthCents) * 100)
-      : 0;
 
     const particularCopago = await getParticularCopagoCents(tenantId);
 
@@ -400,10 +376,7 @@ const _loadDashboardCounts = unstable_cache(
           return [b.service.name, obraSocial, copago].filter(Boolean).join(" - ");
         })(),
       })),
-      monthRevenueCents: monthCents,
-      revenuePrevMonthCents: prevCents,
-      privateShare,
-      insurerShare,
+      monthRevenue,
     };
   },
   ["dashboard:counts"],
@@ -496,9 +469,16 @@ export async function getDashboardData(): Promise<DashboardData> {
     isReminderDismissed(reminderKey),
     getUserPreferences(),
   ]);
+  // S14r: el widget arranca en el período que el usuario dejó elegido. El mes
+  // ya viene en `counts` (KPI); la semana se pide solo si hace falta.
+  const revenue =
+    prefs.dashboard.revenueRange === "month"
+      ? counts.monthRevenue
+      : await cachedRevenue(actor.tenantId, prefs.dashboard.revenueRange, dayKey);
 
   return {
     ...counts,
+    revenue,
     recent: counts.recent.map((r) =>
       seesClinical(r.id)
         ? {
@@ -528,6 +508,119 @@ export async function getDashboardData(): Promise<DashboardData> {
     reminderDismissed,
     reminderKey,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// S14r · Ingresos del período (Mes/Semana) — ver `lib/dashboard-revenue.ts`
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Montos crudos de `[start, end)` para el tenant. Cada consulta en su propio
+ * `runWithRls` (mismo fan-out en paralelo que el resto del dashboard) y con
+ * `tenantId` a mano en el WHERE: en prod la conexión tiene BYPASSRLS y es la
+ * única barrera.
+ *
+ *   - MP: `Payment` PAID por `createdAt` (mismo criterio de fecha que tenía el
+ *     widget; el webhook no emite el tag `dashboard`, entra por TTL).
+ *   - Copagos a mano: `paymentStatus PAID` con `copagoPaidAt` en el período.
+ *     Un turno cuyo `Payment` de MP está PAID ya se contó arriba: se excluye
+ *     (el turnero marca `paymentStatus PAID` al acreditarse MP). Los cobros
+ *     marcados antes de M3a tienen `copagoPaidAt` NULL y no se cuentan: no hay
+ *     una fecha de cobro confiable que inventarles (cabecera de la migración).
+ *     El monto es `copagoCents`: al marcar cobrado, `setBookingCopagoPaid`
+ *     congela el copago resuelto (Q8), así que en una fila con fecha nunca es
+ *     null.
+ *   - Obra social (aparte): turnos con `insurerPaidAt` en el período × el
+ *     arancel (`Insurer.fixedFeeCents`) de la cobertura vigente del paciente
+ *     (la última por id, como `resolvePatientBilling` y la tab Facturación).
+ *     El arancel se resuelve al leer (no es una columna del turno: P11, arancel
+ *     retroactivo, sigue abierto). Se agrupa por paciente para no traer un
+ *     turno por fila: 2 consultas acotadas por pacientes distintos.
+ */
+async function loadRevenueAmounts(
+  tenantId: string,
+  start: Date,
+  end: Date,
+  withInsurer: boolean
+): Promise<RevenueAmounts> {
+  const [mp, manual, insurerCents] = await Promise.all([
+    runWithRls(tenantId, (tx) => tx.payment.aggregate({
+      where: { booking: { tenantId }, status: "PAID", createdAt: { gte: start, lt: end } },
+      _sum: { amountCents: true },
+    })),
+    runWithRls(tenantId, (tx) => tx.booking.aggregate({
+      where: {
+        tenantId,
+        paymentStatus: "PAID",
+        copagoPaidAt: { gte: start, lt: end },
+        NOT: { payment: { is: { status: "PAID" } } },
+      },
+      _sum: { copagoCents: true },
+    })),
+    withInsurer
+      ? runWithRls(tenantId, async (tx) => {
+          const perPatient = await tx.booking.groupBy({
+            by: ["patientId"],
+            where: { tenantId, patientId: { not: null }, insurerPaidAt: { gte: start, lt: end } },
+            _count: { _all: true },
+          });
+          if (perPatient.length === 0) return 0;
+          const coverages = await tx.coverage.findMany({
+            where: {
+              patientId: { in: perPatient.map((r) => r.patientId!) },
+              patient: { tenantId },
+            },
+            orderBy: { id: "desc" },
+            select: { patientId: true, insurerRef: { select: { fixedFeeCents: true, isParticular: true } } },
+          });
+          const fee = new Map<string, number>();
+          for (const c of coverages) {
+            if (fee.has(c.patientId)) continue; // la primera = la de id mayor = la vigente
+            // Particular / texto libre: ninguna OS paga (cuenta como privado).
+            fee.set(c.patientId, c.insurerRef && !c.insurerRef.isParticular ? c.insurerRef.fixedFeeCents : 0);
+          }
+          return perPatient.reduce((acc, r) => acc + r._count._all * (fee.get(r.patientId!) ?? 0), 0);
+        })
+      : Promise.resolve(0),
+  ]);
+  return {
+    mpCents: mp._sum.amountCents ?? 0,
+    manualCents: manual._sum.copagoCents ?? 0,
+    insurerCents,
+  };
+}
+
+/** Resumen del período AR que contiene `now`, con el anterior para el "vs". */
+async function loadRevenue(tenantId: string, range: RevenueRange, now: Date): Promise<RevenueSummary> {
+  const p = revenuePeriod(range, now);
+  const [current, previous] = await Promise.all([
+    loadRevenueAmounts(tenantId, p.start, p.end, true),
+    // Del anterior solo se compara el total (MP + copagos): la OS no entra en el "vs".
+    loadRevenueAmounts(tenantId, p.prevStart, p.prevEnd, false),
+  ]);
+  return summarizeRevenue(range, current, previous);
+}
+
+/** Cache por tenant + período + día AR, bajo el tag `dashboard` (lo invalidan las mutaciones de turnos y cobros). */
+function cachedRevenue(tenantId: string, range: RevenueRange, dayKey: string): Promise<RevenueSummary> {
+  return unstable_cache(
+    (t: string, r: RevenueRange, k: string) => loadRevenue(t, r, new Date(localToARIso(`${k}T00:00:00`))),
+    ["dashboard:revenue", tenantId, range, dayKey],
+    { tags: [tags.dashboard(tenantId)], revalidate: ttl.micro }
+  )(tenantId, range, dayKey);
+}
+
+/**
+ * S14r: el widget de ingresos al cambiar Mes/Semana (mismo patrón que
+ * `getSessionsChart`). Gate = el del resto del dashboard (`getActor`, tenant
+ * del Actor y `where: { tenantId }` a mano adentro). No persiste la elección:
+ * eso es `updateDashboardPrefs` (`lib/preferences.ts`), que la UI llama junto.
+ */
+export async function getRevenue(range: RevenueRange): Promise<ActionResult<RevenueSummary>> {
+  const actor = await getActor();
+  const parsed = RevenueRangeSchema.safeParse(range);
+  if (!parsed.success) return { ok: false, error: "Período inválido." };
+  return { ok: true, data: await cachedRevenue(actor.tenantId, parsed.data, toARDateKey(new Date())) };
 }
 
 // ──────────────────────────────────────────────────────────────────────

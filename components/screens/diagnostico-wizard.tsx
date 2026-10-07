@@ -4,74 +4,48 @@
  * Mobile diagnosis wizard — Phase 3.
  *
  * Same `rankSelection` engine as the desktop view, but presented as a
- * 6-step linear flow optimised for narrow screens. Step 6 assigns the
- * top diagnosis to a patient via `assignDiagnosisAndCreateProgram`.
+ * linear flow optimised for narrow screens.
+ *
+ * S23 (ES3 · C10): el último paso abre el editor único de planes
+ * (`DiagnosisPlanDoor`, lazy) prellenado con el diagnóstico confirmado, en vez
+ * de crear el plan directo con el alta legacy de Diagnóstico (8 sesiones a
+ * 2/semana fuera del motor: sin disponibilidad ni turnos). El paso "Paciente"
+ * del wizard se fue: lo elige el editor (`PatientPicker requireFull`), o viene
+ * fijo del deep-link `?patientId=` (`door`). Sin paciente en la URL no se
+ * preselecciona nadie.
  */
 
-import { useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Card } from "@/components/ui/card";
-import { Avatar } from "@/components/ui/avatar";
 import { IconArrow, IconChevL, IconCheck } from "@/components/ui/icons";
-import {
-  assignDiagnosisAndCreateProgram,
-  searchPatientsForAssignment,
-} from "@/lib/diagnosis";
 import {
   rankSelection,
   exercisesFor,
   type CatalogDTO,
-  type CaseSelection,
-  type Ranking,
 } from "@/lib/diagnosis-engine";
-import type { AssignInput } from "@/lib/diagnosis-types";
-import { toARDateKey } from "@/lib/datetime-ar";
+import {
+  DIAGNOSIS_DOOR_COPY,
+  DiagnosisDoorBanner,
+  DiagnosisPlanDoor,
+  NO_DIAGNOSIS_DOOR,
+  buildDiagnosisEditorRequest,
+  useDiagnosisPlanDoor,
+  wizardDiagnosisExerciseIds,
+  type DiagnosisDoor,
+} from "@/components/diagnostico/assign-plan-modal";
 
-type PatientPick = { id: string; name: string; hc: string; info: string };
-
-/**
- * Input de `assignDiagnosisAndCreateProgram` del wizard mobile. Puro y
- * exportado para testearlo sin DOM (P0-S02u-diag).
- *
- * `startDate` = hoy en AR: antes era `new Date().toISOString().slice(0,10)`,
- * que después de las 21:00 AR ya es mañana (UTC) y corría la sesión 1 un día.
- * El wizard no tiene picker de días: sin `daysOfWeek`, el server reparte las 8
- * sesiones a 2/semana desde hoy (contrato de S02d), como antes.
- */
-export function buildWizardAssignInput(args: {
-  patientId: string;
-  conditionSlug: string;
-  conditionName: string;
-  selection: CaseSelection;
-  ranking: Ranking[];
-  exerciseIds: string[];
-  now?: Date;
-}): AssignInput {
-  return {
-    patientId: args.patientId,
-    conditionSlug: args.conditionSlug,
-    selection: args.selection,
-    topRankings: args.ranking,
-    exerciseIds: args.exerciseIds,
-    totalSessions: 8,
-    frequency: 2,
-    startDate: toARDateKey(args.now ?? new Date()),
-    programTitle: `Plan ${args.conditionName}`,
-  };
-}
-
-const STEPS = ["Zona", "Síntoma", "Cuándo", "Intensidad", "Diagnóstico", "Paciente"] as const;
+export const WIZARD_STEPS = ["Zona", "Síntoma", "Cuándo", "Intensidad", "Diagnóstico"] as const;
+const STEPS = WIZARD_STEPS;
 
 export function DiagnosticoWizard({
   catalog,
-  initialPatients,
+  door = NO_DIAGNOSIS_DOOR,
 }: {
   catalog: CatalogDTO;
-  initialPatients: PatientPick[];
+  door?: DiagnosisDoor;
 }) {
-  const router = useRouter();
   const [step, setStep] = useState(0);
   const [regionSlug, setRegionSlug] = useState<string | null>(null);
   const [symptom, setSymptom] = useState<string | null>(null);
@@ -79,12 +53,7 @@ export function DiagnosticoWizard({
   const [phase, setPhase] = useState<string | null>(null);
   const [intensity, setIntensity] = useState(5);
   const [confirmedSlug, setConfirmedSlug] = useState<string | null>(null);
-  const [patientId, setPatientId] = useState<string | null>(null);
-  const [patients, setPatients] = useState(initialPatients);
-
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const editor = useDiagnosisPlanDoor();
 
   const selection = useMemo(
     () => ({
@@ -137,41 +106,19 @@ export function DiagnosticoWizard({
     (step === 1 && symptom) ||
     (step === 2 && trigger) ||
     step === 3 ||
-    (step === 4 && top) ||
-    (step === 5 && patientId);
+    (step === 4 && top);
 
-  const assign = () => {
-    if (!patientId || !top) {
-      setError("Faltan datos.");
-      return;
-    }
-    setError(null);
-    const exercises = exercisesFor(top.slug, catalog);
-    const exerciseIds = exercises.filter((e) => e.relation === "DIRECT").map((e) => e.exerciseId);
-    // Sin ejercicios DIRECT el server rechaza igual; se avisa acá con un
-    // mensaje que dice qué hacer en vez de mandar el request.
-    if (!exerciseIds.length) {
-      setError("Este diagnóstico no tiene ejercicios directos. Asignalo desde la vista de escritorio y elegí los ejercicios.");
-      return;
-    }
-    start(async () => {
-      const r = await assignDiagnosisAndCreateProgram(
-        buildWizardAssignInput({
-          patientId,
-          conditionSlug: top.slug,
-          conditionName: top.name,
-          selection,
-          ranking,
-          exerciseIds,
-        })
-      );
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      setSuccess("Plan asignado");
-      setTimeout(() => router.push(`/pacientes/${patientId}`), 700);
-    });
+  const openEditor = () => {
+    if (!top || !door.canAssign) return;
+    editor.openEditor(
+      buildDiagnosisEditorRequest({
+        conditionSlug: top.slug,
+        selection,
+        exerciseIds: wizardDiagnosisExerciseIds(exercisesFor(top.slug, catalog)),
+        patientId: door.patient?.id ?? null,
+        bookingId: door.bookingId,
+      })
+    );
   };
 
   return (
@@ -179,6 +126,7 @@ export function DiagnosticoWizard({
       <header style={{ display: "flex", alignItems: "center", gap: 10 }}>
         {step > 0 && (
           <button
+            type="button"
             aria-label="Atrás"
             onClick={back}
             style={{
@@ -202,6 +150,8 @@ export function DiagnosticoWizard({
         </div>
         <Tag tone="soft">Diagnóstico</Tag>
       </header>
+
+      <DiagnosisDoorBanner door={door} compact />
 
       <div style={{ display: "flex", gap: 4 }}>
         {STEPS.map((_, i) => (
@@ -237,32 +187,7 @@ export function DiagnosticoWizard({
           />
         )}
         {step === 4 && <RankingStep ranking={ranking} confirmedSlug={confirmedSlug ?? top?.slug ?? null} setConfirmed={setConfirmedSlug} catalog={catalog} />}
-        {step === 5 && (
-          <PatientStep
-            patients={patients}
-            setPatients={setPatients}
-            patientId={patientId}
-            setPatientId={setPatientId}
-            initial={initialPatients}
-          />
-        )}
       </main>
-
-      {(error || success) && (
-        <div
-          role={error ? "alert" : "status"}
-          style={{
-            padding: 10,
-            borderRadius: 10,
-            background: error ? "rgba(228,70,70,0.12)" : "rgba(180,233,74,0.2)",
-            color: error ? "#9F1F1F" : "var(--navy-900)",
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
-          {error ?? success}
-        </div>
-      )}
 
       <footer>
         {step < STEPS.length - 1 ? (
@@ -277,14 +202,17 @@ export function DiagnosticoWizard({
         ) : (
           <Button
             variant="primary"
-            onClick={assign}
-            disabled={!canAdvance || pending}
+            onClick={openEditor}
+            disabled={!canAdvance || !door.canAssign}
+            title={door.canAssign ? undefined : DIAGNOSIS_DOOR_COPY.cannotAssign}
             style={{ width: "100%", justifyContent: "center", padding: 14, fontSize: 14 }}
           >
-            {pending ? "Asignando…" : "Asignar plan a paciente"} <IconArrow size={14} />
+            Armar plan <IconArrow size={14} />
           </Button>
         )}
       </footer>
+
+      <DiagnosisPlanDoor request={editor.request} open={editor.open} onClose={editor.close} />
     </div>
   );
 }
@@ -456,105 +384,6 @@ function RankingStep({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function PatientStep({
-  patients,
-  setPatients,
-  patientId,
-  setPatientId,
-  initial,
-}: {
-  patients: PatientPick[];
-  setPatients: (v: PatientPick[]) => void;
-  patientId: string | null;
-  setPatientId: (id: string | null) => void;
-  initial: PatientPick[];
-}) {
-  const [q, setQ] = useState("");
-  const [searching, start] = useTransition();
-  // Guarda de secuencia: solo la respuesta de la última tecla actualiza la
-  // lista (si no, una respuesta vieja pisa a la nueva).
-  const seq = useRef(0);
-  const search = (v: string) => {
-    setQ(v);
-    const mine = ++seq.current;
-    start(async () => {
-      const r = await searchPatientsForAssignment(v);
-      if (mine !== seq.current) return;
-      setPatients(r);
-      // P0-S02u-diag: antes una búsqueda sin resultados volvía a mostrar la
-      // lista inicial y el paciente elegido podía quedar seleccionado aunque
-      // ya no estuviera a la vista. Si sale de los resultados, se deselecciona.
-      if (patientId && !r.some((p) => p.id === patientId)) setPatientId(null);
-    });
-  };
-  const list = q.trim() ? patients : patients.length ? patients : initial;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <input
-        value={q}
-        onChange={(e) => search(e.target.value)}
-        placeholder="Buscar paciente por nombre o DNI…"
-        // DB typeahead — keep the browser's name autofill from covering it.
-        autoComplete="new-password"
-        autoCorrect="off"
-        autoCapitalize="off"
-        spellCheck={false}
-        data-1p-ignore
-        data-lpignore="true"
-        data-form-type="other"
-        style={{
-          padding: "12px 14px",
-          borderRadius: 12,
-          border: "1px solid rgba(15,30,51,0.08)",
-          background: "rgba(255,255,255,0.8)",
-          fontSize: 14,
-        }}
-      />
-      {searching && (
-        <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Buscando…</div>
-      )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {list.map((p) => {
-          const on = p.id === patientId;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setPatientId(p.id)}
-              style={{
-                padding: 10,
-                borderRadius: 12,
-                border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.06)",
-                background: on ? "rgba(31,79,190,0.05)" : "#fff",
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                textAlign: "left",
-                cursor: "pointer",
-              }}
-            >
-              <Avatar name={p.name} size={36} tone={on ? "lime" : "sky"} />
-              <div>
-                <div style={{ fontWeight: 700 }}>{p.name}</div>
-                <div className="k-mono" style={{ fontSize: 10.5, color: "var(--sky-700)" }}>
-                  {p.hc}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>{p.info}</div>
-              </div>
-            </button>
-          );
-        })}
-        {list.length === 0 && (
-          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>
-            No encontramos pacientes que coincidan.
-          </div>
-        )}
-      </div>
     </div>
   );
 }

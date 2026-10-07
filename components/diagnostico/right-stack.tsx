@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { DISCIPLINE_TAG_SLUGS } from "@/lib/plans-constants";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
@@ -188,6 +189,8 @@ export function RightStack({
 
       <ExerciseSearchPicker
         open={pickerOpen}
+        // S18s/S23: Diagnóstico arma siempre planes de Kinesiología.
+        disciplineSlug={DISCIPLINE_TAG_SLUGS.KINESIOLOGY}
         title="Agregar al plan"
         description="Buscá entre ejercicios y maniobras manuales — se suman al plan como extras."
         existingIds={existingIds}

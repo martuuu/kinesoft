@@ -6,8 +6,10 @@ import { StatusTag } from "@/components/ui/status-tag";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge } from "@/lib/agenda-client-state";
+import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
+import { PlanMarks } from "../grid/booking-card";
 
 /** Shared column track for the Lista view header + rows (kept in one
  *  place so the two grids never drift): Hora · Paciente · Servicio ·
@@ -18,19 +20,20 @@ const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
  * B4.3: con más de un profesional en pantalla (`practitionerById`), la hora
  * lleva las iniciales del profesional (canal no cromático). Debajo del
  * paciente: "Sobreturno", recepción ("En sala 12′") y telemedicina, en texto.
+ * Junto al nombre (S19a): chip del plan `Kine · 3/10` o "Fuera de plan".
  * Sin `clinical.read` (`clinicalHidden`) no hay subtítulo clínico.
  */
 export function ListView({
   bookings,
   onEdit,
-  highlightedServiceId,
+  highlight,
   practitionerById = null,
   now,
 }: {
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
-  /** When set, rows of this service lift above the rest (legend "filter"). */
-  highlightedServiceId: string | null;
+  /** Resaltado de la leyenda (`lib/agenda-highlight.ts`): las filas que coinciden se levantan, el resto se atenúa. */
+  highlight: AgendaHighlight | null;
   practitionerById?: Readonly<Record<string, { initials: string; name: string }>> | null;
   now?: Date;
 }) {
@@ -68,13 +71,16 @@ export function ListView({
       </div>
       {bookings.map((b) => {
         const date = new Date(b.scheduledFor);
-        const isHighlighted =
-          highlightedServiceId != null && b.serviceId === highlightedServiceId;
-        const dimmed =
-          highlightedServiceId != null && b.serviceId !== highlightedServiceId;
-        // Per-turno diagnosis (title → description), falling back to the
-        // program condition — surfaced under the patient name for consistency.
-        const sub = b.clinicalHidden ? null : b.title || b.description || b.patientCondition;
+        const hl = highlightState(highlight, b);
+        const isHighlighted = hl === "match";
+        const dimmed = hl === "dimmed";
+        // Mini-diagnóstico del turno (title → description) debajo del paciente.
+        // S19a: ya no cae a `patientCondition`. La agenda siempre trae la
+        // proyección liviana, donde viene null (`AgendaBookingRow`), así que el
+        // fallback era código muerto; y en la completa salía del "plan ACTIVE
+        // take 1" sin orderBy (plan §3.4), que es justo lo que el chip de plan
+        // reemplaza.
+        const sub = b.clinicalHidden ? null : b.title || b.description;
         const prac = practitionerById?.[b.practitionerId] ?? null;
         const reception = receptionCardBadge(b, clock);
         const marks = [
@@ -112,8 +118,11 @@ export function ListView({
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Avatar name={b.patientName} size={32} tone="sky" />
-              <div>
-                <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{b.patientName}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {b.patientName}
+                  <PlanMarks b={b} />
+                </div>
                 {sub && (
                   <div style={{ fontSize: 11, color: "var(--navy-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{sub}</div>
                 )}

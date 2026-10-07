@@ -129,7 +129,7 @@ export function ActivityView({ patientId }: { patientId: string }) {
                       {humanizeAction(ev.action)}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                      {ev.entity}
+                      {entityLabel(ev.entity)}
                       {ev.actorName ? ` · ${ev.actorName}` : ""}
                     </div>
                   </div>
@@ -192,17 +192,59 @@ function humanizeAction(action: string): string {
     "booking.series.create": "Serie de turnos creada",
     "booking.plan.create": "Plan creado desde la agenda",
     "booking.public.create": "Reserva pública creada",
+    "booking.batch.create": "Turnos creados en lote",
+    "booking.plan_remove": "Turno sacado del plan",
+    "booking.cancel.plan": "Turno cancelado al cambiar el estado del plan",
+    "booking.cancel.replan": "Turno cancelado al re-planificar",
+    "booking.cancel.plan-session-archive": "Turno cancelado al archivar la sesión",
+    "booking.cancel.bulk": "Turno cancelado",
     "program.create": "Plan creado",
     "program.update": "Plan editado",
     "program.delete": "Plan eliminado",
     "program.status": "Estado del plan cambiado",
+    // S22b (ES3): acciones de Planes P2 (lib/plans-*.ts). El detalle del
+    // payload ya viene por allowlist del server; acá solo el nombre legible.
+    "program.archive": "Plan archivado",
+    "program.restore": "Plan restaurado",
+    "program.generate": "Turnos del plan agendados",
+    "program.move_series": "Turnos del plan movidos",
+    "program.replan": "Plan re-planificado",
+    "plan.replan": "Plan re-planificado",
+    "program.reprice": "Precio del plan cambiado",
+    "program.sessions.add": "Sesiones agregadas al plan",
+    "program.sessions.archive": "Sesiones del plan archivadas",
+    "program.session.restore": "Sesión del plan restaurada",
+    "program.link_booking": "Turno vinculado a una sesión del plan",
+    "program.adopt_series": "Turnos sumados al plan",
+    "program.authorization.renew": "Autorización de la obra social renovada",
+    "planTemplate.apply": "Plantilla aplicada",
+    "session.create": "Sesión agregada",
     "session.complete": "Sesión cerrada",
+    "session.evolution": "Evolución cargada",
+    "session.meta.update": "Sesión editada",
     "session.reschedule": "Sesión reprogramada",
     "session.delete": "Sesión eliminada",
+    "sessionExercise.create": "Ejercicio asignado",
+    "sessionExercise.update": "Ejercicio editado",
+    "sessionExercise.delete": "Ejercicio quitado",
     "sessionExercise.bulkCreate": "Ejercicios asignados en lote",
     "patientFile.upload": "Archivo subido",
     "patientFile.delete": "Archivo eliminado",
     "patientFile.download": "Archivo descargado",
   };
   return map[action] ?? action;
+}
+
+/** Entidad del audit → nombre en castellano (antes se mostraba el modelo de Prisma). */
+function entityLabel(entity: string): string {
+  const map: Record<string, string> = {
+    Patient: "Paciente",
+    Booking: "Turno",
+    TreatmentProgram: "Plan",
+    Session: "Sesión",
+    SessionExercise: "Ejercicio de la sesión",
+    PatientFile: "Archivo",
+    ProgramAuthorization: "Autorización de la OS",
+  };
+  return map[entity] ?? entity;
 }

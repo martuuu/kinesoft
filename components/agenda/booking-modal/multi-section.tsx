@@ -25,15 +25,158 @@
  *   • `hideToggle`: cuando el modo lo elige el selector «Turno · Varias
  *     sesiones · Bloquear horario» de B5.1, no hace falta el switch; el padre
  *     monta esta sección solo en ese modo y con `multiTurno` en true.
+ *
+ * S18b (ES3, PD-11 · §14.1 "puerta liviana"): "Varias sesiones" SIGUE creando
+ * turnos sueltos y suma el link "Crealo como plan…", que NAVEGA al perfil del
+ * paciente con el editor abierto y prellenado (`planDeepLinkHref` de
+ * `lib/plans-deeplink.ts`, contrato C10). El editor NO se monta acá: lo monta
+ * el shell del perfil (S22b). Props nuevas, opcionales y que fallan cerrado:
+ *   • `capabilities`: sin `plans.manage` (la Secretaria, PD-13) no se ve. Sin
+ *     capabilities (no llegaron) tampoco.
+ *   • `patientUnsaved`: alta inline todavía sin guardar → el link queda
+ *     deshabilitado con un hint (no hay a qué perfil navegar).
+ * El módulo se lee de `useTenantModules().has('planes')`: en un consultorio
+ * General no aparece (enmienda EV0 de S18b).
  */
+import { useRouter } from "next/navigation";
+import { useId } from "react";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { Button } from "@/components/ui/button";
 import type { RecurrencePreview } from "@/lib/availability-actions-types";
 import type { Frequency } from "@/lib/availability/types";
+import { capabilitySet } from "@/lib/agenda-client-state";
+import { planScheduleFromBatch } from "@/lib/plan-schedule";
+import { PlanEditorPrefillSchema, planDeepLinkHref, type PlanEditorPrefill } from "@/lib/plans-deeplink";
 import {
   SESSIONS_UI_MAX_COUNT,
   normalizeSessionsValue,
   type SessionsValue,
 } from "@/lib/sessions-mode-state";
 import { SessionsMode } from "./sessions-mode";
+
+// ─── "Crealo como plan…" (puro, testeado en tests/unit/render/multi-plan-link) ─
+
+/** Lo cargado en "Varias sesiones" que pasa al editor del plan. */
+export type CreateAsPlanInput = {
+  /** Primera sesión, ISO con zona. "" = sin fecha todavía. */
+  anchorIso: string;
+  practitionerId: string;
+  serviceId: string | null;
+  /** "" / null = según el horario del profesional (el editor elige). */
+  locationId?: string | null;
+  /** Solo si el usuario la tocó; si no, el editor toma la del profesional. */
+  durationMin?: number | null;
+  value: SessionsValue;
+};
+
+/**
+ * Prefill del editor (C10) con lo cargado: servicio, profesional, sede,
+ * duración, día de inicio, cantidad y horario (días + hora + frecuencia, vía
+ * `planScheduleFromBatch`, la única conversión 0=Lun → 0=Dom). Sin texto
+ * libre: título y notas NO viajan en la URL (historial, logs, Referer).
+ *
+ * Cada campo se valida por separado contra `PlanEditorPrefillSchema`: uno
+ * inválido (p. ej. una duración fuera de 15–240 tipeada a mano) se descarta y
+ * el resto viaja igual, en vez de perder todo el prefill.
+ */
+export function createAsPlanPrefill(q: CreateAsPlanInput): PlanEditorPrefill {
+  const raw: Record<string, unknown> = {
+    serviceId: q.serviceId || undefined,
+    practitionerId: q.practitionerId || undefined,
+    locationId: q.locationId || undefined,
+    durationMin: q.durationMin ?? undefined,
+    totalSessions: q.value.count,
+  };
+  const anchor = q.anchorIso ? new Date(q.anchorIso) : null;
+  if (anchor && !Number.isNaN(anchor.getTime())) {
+    const { schedule, startDayKey } = planScheduleFromBatch({
+      anchor,
+      daysOfWeek: q.value.daysOfWeek,
+      frequency: q.value.frequency,
+    });
+    raw.schedule = schedule;
+    raw.startDayKey = startDayKey;
+  }
+  const shape = PlanEditorPrefillSchema.shape;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === undefined) continue;
+    const field = shape[k as keyof typeof shape];
+    const parsed = field.safeParse(v);
+    if (parsed.success && parsed.data !== undefined) out[k] = parsed.data;
+  }
+  return out as PlanEditorPrefill;
+}
+
+export const CREATE_AS_PLAN_LABEL = "Crealo como plan…";
+export const CREATE_AS_PLAN_HINT = {
+  // C10 literal (PLANES §C10, "Desde el modal, sin paciente guardado").
+  unsaved: "Guardá el paciente para armar un plan",
+  noPatient: "Elegí un paciente para crearlo como plan.",
+  broken: "No pudimos pasar estos datos al plan. Revisá la fecha y la cantidad.",
+  ready: "Abre el perfil del paciente con el plan prellenado. No se crea ningún turno acá.",
+} as const;
+
+export type CreateAsPlanState =
+  | { kind: "hidden" }
+  | { kind: "disabled"; hint: string }
+  | { kind: "ready"; href: string; hint: string };
+
+/**
+ * Qué muestra la puerta. Oculta sin módulo `planes` o sin `plans.manage`
+ * (la Secretaria agenda sesiones pero no crea planes, PD-13). Deshabilitada
+ * con hint si no hay paciente guardado o si el link no se puede armar (nunca
+ * navega a un link que el perfil después tiraría).
+ */
+export function createAsPlanState(
+  q: CreateAsPlanInput & {
+    planesEnabled: boolean;
+    capabilities: readonly string[] | null | undefined;
+    patientId: string | null;
+    patientUnsaved?: boolean;
+  }
+): CreateAsPlanState {
+  if (!q.planesEnabled || !capabilitySet(q.capabilities).has("plans.manage")) return { kind: "hidden" };
+  if (q.patientUnsaved) return { kind: "disabled", hint: CREATE_AS_PLAN_HINT.unsaved };
+  if (!q.patientId) return { kind: "disabled", hint: CREATE_AS_PLAN_HINT.noPatient };
+  const href = planDeepLinkHref({ kind: "new", patientId: q.patientId, prefill: createAsPlanPrefill(q) });
+  if (!href) return { kind: "disabled", hint: CREATE_AS_PLAN_HINT.broken };
+  return { kind: "ready", href, hint: CREATE_AS_PLAN_HINT.ready };
+}
+
+/**
+ * El link en sí. Botón (no `<a>`) porque navega con el router del App Router
+ * y un `<a>` no se puede deshabilitar. El motivo va como texto visible al
+ * lado (`aria-describedby`), no en un `title`: se lee sin hover y en mobile.
+ * Navegar descarta el modal sin el dirty-guard a propósito: lo cargado viaja
+ * en el prefill (lo único que no viaja es el texto libre, que el editor pide).
+ */
+export function CreateAsPlanLink({ state }: { state: CreateAsPlanState }) {
+  const router = useRouter();
+  const hintId = useId();
+  if (state.kind === "hidden") return null;
+  return (
+    <div
+      data-testid="create-as-plan"
+      style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={state.kind === "disabled"}
+        aria-describedby={hintId}
+        onClick={() => {
+          if (state.kind === "ready") router.push(state.href);
+        }}
+      >
+        {CREATE_AS_PLAN_LABEL}
+      </Button>
+      <span id={hintId} style={{ fontSize: 11, color: "var(--navy-500)", flex: "1 1 200px", minWidth: 0 }}>
+        {state.hint}
+      </span>
+    </div>
+  );
+}
 
 export function MultiSection({
   multiTurno,
@@ -52,6 +195,8 @@ export function MultiSection({
   locationId,
   onPreview,
   hideToggle = false,
+  capabilities,
+  patientUnsaved = false,
 }: {
   multiTurno: boolean;
   onMultiTurnoChange: (on: boolean) => void;
@@ -72,7 +217,12 @@ export function MultiSection({
   locationId?: string | null;
   onPreview?: (p: RecurrencePreview | null) => void;
   hideToggle?: boolean;
+  /** Capabilities del actor (las mismas que recibe el modal). Sin ellas, sin puerta. */
+  capabilities?: readonly string[] | null;
+  /** Alta inline («Nuevo paciente») todavía sin guardar. */
+  patientUnsaved?: boolean;
 }) {
+  const modules = useTenantModules();
   const frequencyControlled =
     frequency !== undefined && onFrequencyChange !== undefined;
   const value = normalizeSessionsValue({
@@ -137,6 +287,22 @@ export function MultiSection({
           onChange={handleChange}
           onPreview={onPreview}
           showFrequency={frequencyControlled}
+          footer={
+            <CreateAsPlanLink
+              state={createAsPlanState({
+                planesEnabled: modules.has("planes"),
+                capabilities,
+                patientId,
+                patientUnsaved,
+                anchorIso,
+                practitionerId,
+                serviceId,
+                locationId,
+                durationMin,
+                value,
+              })}
+            />
+          }
         />
       )}
     </>

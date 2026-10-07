@@ -14,13 +14,15 @@
  * puede tener el catálogo importado: se compara por id, nunca por conteo).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { ForbiddenError } from "@/lib/session";
 import { listExercises, getExercise } from "@/lib/exercises";
 import { toggleFavourite } from "@/lib/favourites";
-import { applyPlanTemplate } from "@/lib/plan-templates";
-import { assignDiagnosisAndCreateProgram } from "@/lib/diagnosis";
-import type { AssignInput } from "@/lib/diagnosis-types";
+import { getTemplatePrefill } from "@/lib/plan-templates";
+import { createPlanFromDiagnosis } from "@/lib/diagnosis";
+import { createPlan, previewPlan } from "@/lib/plans";
+import type { PlanCreateInput, PlanPreview, PlanRowResolution } from "@/lib/plans-types";
 import { addSessionExercise, bulkAddSessionExercises } from "@/lib/sessions";
 import {
   createCustomCondition,
@@ -40,6 +42,29 @@ import {
 import { asUser, asAnonymous } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
+
+/** Lunes y jueves 10:00 AR (C6: 0=Dom). */
+const LUN_JUE_10 = {
+  v: 1 as const,
+  frequency: "weekly" as const,
+  slots: [
+    { dow: 1 as const, startMin: 600 },
+    { dow: 4 as const, startMin: 600 },
+  ],
+};
+
+function acceptDefaults(p: PlanPreview): PlanRowResolution[] {
+  return p.rows.map((r) => {
+    switch (r.defaultResolution) {
+      case "move":
+        return { index: r.index, kind: "move", at: r.suggestion };
+      case "adopt":
+        return { index: r.index, kind: "adopt", bookingId: r.flags.duplicate!.bookingId, expectedUpdatedAt: r.flags.duplicate!.updatedAt };
+      default:
+        return { index: r.index, kind: r.defaultResolution };
+    }
+  });
+}
 
 describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
   let db: PrismaClient;
@@ -97,6 +122,46 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
     return { programId: program.id, sessionId: session.id };
   }
 
+  /**
+   * Borrador del motor (P3.Z.0: las altas viejas de Diagnóstico y de
+   * plantillas se retiraron; todo plan nace por `createPlan` /
+   * `createPlanFromDiagnosis`).
+   */
+  const planDraft = (t: EphemeralTenant, patientId: string, over: Partial<PlanCreateInput> = {}): PlanCreateInput => ({
+    idempotencyKey: randomUUID(),
+    patientId,
+    discipline: "KINESIOLOGY",
+    practitionerId: t.practitionerId,
+    serviceId: t.serviceId,
+    locationId: null,
+    schedule: LUN_JUE_10,
+    startDayKey: "2030-01-07",
+    totalSessions: 2,
+    pricing: null,
+    rows: [],
+    stateToken: "x",
+    ...over,
+  });
+
+  /** preview real → borrador con stateToken y resoluciones por defecto. */
+  async function ready(p: PlanCreateInput): Promise<PlanCreateInput> {
+    const r = await previewPlan(p);
+    if (!r.ok) throw new Error(`preview: ${r.error}`);
+    return { ...p, stateToken: r.preview.stateToken, rows: acceptDefaults(r.preview) };
+  }
+
+  /** "Aplicar plantilla" como el editor: prefill → preview → createPlan. */
+  async function applyTemplate(t: EphemeralTenant, templateId: string, patientId: string) {
+    const pre = await getTemplatePrefill(templateId);
+    if (!pre.ok) return pre;
+    const draft = planDraft(t, patientId, {
+      totalSessions: pre.data.prefill.totalSessions ?? 2,
+      ...(pre.data.prefill.templateId ? { templateId: pre.data.prefill.templateId } : {}),
+      exercises: pre.data.exercises.map(({ exerciseId, sets, reps }) => ({ exerciseId, sets, reps })),
+    });
+    return createPlan(await ready(draft));
+  }
+
   const exerciseIdsOf = async (patientId: string) =>
     (
       await db.sessionExercise.findMany({
@@ -152,23 +217,25 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
     const pat = await addPatient(db, KFree);
     const s = uniqueSuffix();
     await db.condition.create({ data: { slug: `evg-cond-${s}`, name: `Cond ${s}`, tenantId: KFree.tenantId } });
-    const input: AssignInput = {
-      patientId: pat,
+    const diagnosis = {
       conditionSlug: `evg-cond-${s}`,
       selection: { regions: [], symptoms: [], triggers: [], phase: null, intensity: 5 },
-      topRankings: [],
-      exerciseIds: [own[KFree.tenantId], gBasic.id],
-      totalSessions: 2,
-      frequency: 2,
-      startDate: "2026-10-06",
     };
-    const r = await assignDiagnosisAndCreateProgram(input);
+    const ex = (id: string) => ({ exerciseId: id, sets: 3, reps: 12 });
+    const r = await createPlanFromDiagnosis({
+      plan: planDraft(KFree, pat, { exercises: [ex(own[KFree.tenantId]), ex(gBasic.id)] }),
+      diagnosis,
+    });
     expect(r.ok).toBe(false);
+    expect(r).not.toMatchObject({ kind: "stale-preview" }); // por el global, no por el token
     expect(await db.clinicalCase.count({ where: { patientId: pat } })).toBe(0);
     expect(await db.treatmentProgram.count({ where: { patientId: pat } })).toBe(0);
 
     // Control: solo con el propio, pasa (el rechazo de arriba es por el global).
-    const ok = await assignDiagnosisAndCreateProgram({ ...input, exerciseIds: [own[KFree.tenantId]] });
+    const ok = await createPlanFromDiagnosis({
+      plan: await ready(planDraft(KFree, pat, { exercises: [ex(own[KFree.tenantId])] })),
+      diagnosis,
+    });
     expect(ok.ok).toBe(true);
   });
 
@@ -196,7 +263,10 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
     asUser(KStarter.userId);
     const pat = await addPatient(db, KStarter);
     const tpl = await template(KStarter, [gBasic.id, own[KStarter.tenantId]]);
-    const r = await applyPlanTemplate({ templateId: tpl, patientId: pat, startDate: "2026-10-06" });
+    // El prefill descarta el global (y va sin templateId: el motor rechazaría la plantilla entera).
+    const pre = await getTemplatePrefill(tpl);
+    expect(pre.ok && pre.data.droppedExercises).toBe(1);
+    const r = await applyTemplate(KStarter, tpl, pat);
     expect(r.ok).toBe(true);
     const ids = await exerciseIdsOf(pat);
     expect(ids.length).toBe(2); // 2 sesiones × 1 ejercicio
@@ -214,8 +284,9 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
 
     const pat = await addPatient(db, KPro);
     const tpl = await template(KPro, [gBasic.id, gPro]);
-    const r = await applyPlanTemplate({ templateId: tpl, patientId: pat, startDate: "2026-10-06" });
+    const r = await applyTemplate(KPro, tpl, pat);
     expect(r.ok).toBe(true);
+    if (r.ok) expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: r.programId } })).templateId).toBe(tpl);
     expect(new Set(await exerciseIdsOf(pat))).toEqual(new Set([gBasic.id, gPro]));
   });
 
@@ -247,11 +318,12 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
     expect(await db.favorite.count({ where: { tenantId: G.tenantId } })).toBe(0);
   });
 
-  it("GENERAL: applyPlanTemplate rechazado sin crear plan", async () => {
+  it("GENERAL: aplicar plantilla (prefill o createPlan con templateId) rechazado sin crear plan", async () => {
     asUser(G.userId);
     const pat = await addPatient(db, G);
     const tpl = await template(G, [own[G.tenantId]]);
-    const r = await applyPlanTemplate({ templateId: tpl, patientId: pat, startDate: "2026-10-06" });
+    expect((await getTemplatePrefill(tpl)).ok).toBe(false);
+    const r = await createPlan(planDraft(G, pat, { templateId: tpl }));
     expect(r.ok).toBe(false);
     expect(await db.treatmentProgram.count({ where: { patientId: pat } })).toBe(0);
   });

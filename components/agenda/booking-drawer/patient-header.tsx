@@ -5,7 +5,15 @@ import { paymentHoldState } from "@/lib/agenda-filters";
 import { StatusTag } from "./status-tag";
 import type { DrawerBooking } from "./types";
 
-/** Encabezado del drawer: avatar, nombre, condición y pill de estado. */
+/**
+ * Encabezado del drawer: avatar, nombre y pill de estado.
+ *
+ * S19c: se fue el subtítulo `patientCondition`. La agenda siempre trae la
+ * proyección liviana, donde viene null (`AgendaBookingRow`), así que era código
+ * muerto; y en la completa salía del "plan ACTIVE take 1" sin orderBy (plan
+ * §3.4): un dato clínico elegido al azar que ahora cubre la fila Plan
+ * (`plan-row.tsx`) con el chip, sin título. Mismo retiro que S19a en Lista.
+ */
 export function PatientHeader({ booking }: { booking: DrawerBooking }) {
   return (
     <div
@@ -24,9 +32,6 @@ export function PatientHeader({ booking }: { booking: DrawerBooking }) {
         <div style={{ fontSize: 15, fontWeight: 700, color: "var(--navy-900)" }}>
           {booking.patientName}
         </div>
-        {booking.patientCondition && (
-          <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{booking.patientCondition}</div>
-        )}
       </div>
       <StatusTag s={booking.status} hold={paymentHoldState(booking, new Date())} />
     </div>

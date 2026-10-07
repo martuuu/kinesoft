@@ -144,9 +144,52 @@ export function agendaHref(p: { view: AgendaView; dayKey: DayKey; selectedIds?: 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Filtros (profesional + sede), del lado del cliente
+//
+// S19b (ES3, enmienda del 08-oct, plan §16.2): "el modelo de filtros de la
+// agenda tiene que ser extensible: un objeto de filtros con profesionales,
+// sede y, en el futuro, sala. SR le va a sumar la sala sin rehacerlo."
+//
+// Antes cada filtro era un argumento suelto y `agenda-client` encadenaba dos
+// `filterAgendaBookings` (uno para la sede, otro para los chips). Ahora hay un
+// objeto `AgendaFilters` y una tabla de dimensiones: cada dimensión sabe si
+// está activa y si un turno pasa. Para sumar la sala, SR agrega
+//   1. `roomId: string | null` a `AgendaFilters` (+ `EMPTY_AGENDA_FILTERS`),
+//   2. `roomId?: string | null` a `AgendaFilterable`,
+//   3. una entrada en `AGENDA_FILTER_DIMENSIONS`,
+// y el `satisfies` de abajo no compila hasta que la tabla tenga la clave nueva.
+// `applyAgendaFilters`, el conteo de los chips (`except`) y el aviso de "hay
+// filtros" (`activeAgendaFilterKeys`) no se tocan.
+//
+// Estos filtros SACAN turnos. El resaltado (servicio, plan/suelto: leyendas,
+// `lib/agenda-highlight.ts`) no es un filtro: atenúa y no oculta, y por eso no
+// vive acá. Dónde persiste cada uno: profesionales en la URL (`?pros=`, un
+// link conserva la vista de la secretaria), sede en `agendaPrefs.locationId`
+// (server, por usuario); la sala decide el suyo en SR.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Filterable = { practitionerId: string; locationId?: string | null };
+/** Lo mínimo del turno que miran los filtros (lo cumple `BookingDTO`). */
+export type AgendaFilterable = { practitionerId: string; locationId?: string | null };
+type Filterable = AgendaFilterable;
+
+/** Filtros que sacan turnos de la agenda. Vacío/null en cada clave = sin filtrar. */
+export type AgendaFilters = {
+  /** Profesionales elegidos (`?pros=`); vacío = todos. */
+  practitionerIds: ReadonlyArray<string>;
+  /** Sede (`agendaPrefs.locationId`); null = todas. */
+  locationId: string | null;
+};
+
+export type AgendaFilterKey = keyof AgendaFilters;
+
+export const EMPTY_AGENDA_FILTERS: AgendaFilters = { practitionerIds: [], locationId: null };
+
+/** Datos del consultorio que necesitan las dimensiones (no son filtros). */
+export type AgendaFilterContext = { primaryLocationId: string | null };
+
+type AgendaFilterDimension<K extends AgendaFilterKey> = {
+  isActive: (value: AgendaFilters[K]) => boolean;
+  matches: (b: AgendaFilterable, value: AgendaFilters[K], ctx: AgendaFilterContext) => boolean;
+};
 
 /**
  * ¿El turno es de la sede filtrada? `locationId` null en el turno = sede
@@ -163,15 +206,88 @@ export function matchesLocation(
   return (b.locationId ?? primaryLocationId) === locationId;
 }
 
-/** Turnos de los profesionales elegidos (vacío = todos) y de la sede elegida (null = todas). */
+/** Una entrada por clave de `AgendaFilters` (el `satisfies` obliga a no olvidarse ninguna). */
+export const AGENDA_FILTER_DIMENSIONS = {
+  practitionerIds: {
+    isActive: (ids) => ids.length > 0,
+    matches: (b, ids) => ids.includes(b.practitionerId),
+  },
+  locationId: {
+    isActive: (id) => id != null,
+    matches: (b, id, ctx) => matchesLocation(b, id, ctx.primaryLocationId),
+  },
+} satisfies { [K in AgendaFilterKey]: AgendaFilterDimension<K> };
+
+const FILTER_KEYS = Object.keys(AGENDA_FILTER_DIMENSIONS) as AgendaFilterKey[];
+
+function isFilterActive<K extends AgendaFilterKey>(key: K, filters: AgendaFilters): boolean {
+  return (AGENDA_FILTER_DIMENSIONS[key] as AgendaFilterDimension<K>).isActive(filters[key]);
+}
+
+function dimensionMatches<K extends AgendaFilterKey>(
+  key: K,
+  b: AgendaFilterable,
+  filters: AgendaFilters,
+  ctx: AgendaFilterContext
+): boolean {
+  return (AGENDA_FILTER_DIMENSIONS[key] as AgendaFilterDimension<K>).matches(b, filters[key], ctx);
+}
+
+/** Claves con un filtro puesto. */
+export function activeAgendaFilterKeys(filters: AgendaFilters): AgendaFilterKey[] {
+  return FILTER_KEYS.filter((k) => isFilterActive(k, filters));
+}
+
+/**
+ * Turnos que pasan TODOS los filtros activos. `except` saltea dimensiones:
+ * los chips de profesionales cuentan con `except: ["practitionerIds"]` (todos
+ * los profesionales, en la sede elegida; con sala, también en la sala).
+ */
+export function applyAgendaFilters<T extends AgendaFilterable>(
+  bookings: ReadonlyArray<T>,
+  filters: AgendaFilters,
+  ctx: AgendaFilterContext,
+  opts: { except?: ReadonlyArray<AgendaFilterKey> } = {}
+): T[] {
+  const keys = activeAgendaFilterKeys(filters).filter((k) => !opts.except?.includes(k));
+  if (keys.length === 0) return [...bookings];
+  return bookings.filter((b) => keys.every((k) => dimensionMatches(k, b, filters, ctx)));
+}
+
+/**
+ * Turnos de los profesionales elegidos (vacío = todos) y de la sede elegida
+ * (null = todas). Firma de B-pre: se mantiene para los callers y tests de
+ * antes; por dentro es `applyAgendaFilters`.
+ */
 export function filterAgendaBookings<T extends Filterable>(
   bookings: ReadonlyArray<T>,
   f: { selectedIds: ReadonlyArray<string>; locationId: string | null; primaryLocationId: string | null }
 ): T[] {
-  const sel = f.selectedIds.length > 0 ? new Set(f.selectedIds) : null;
-  return bookings.filter(
-    (b) => (sel == null || sel.has(b.practitionerId)) && matchesLocation(b, f.locationId, f.primaryLocationId)
+  return applyAgendaFilters(
+    bookings,
+    { practitionerIds: f.selectedIds, locationId: f.locationId },
+    { primaryLocationId: f.primaryLocationId }
   );
+}
+
+/**
+ * Turnos del server con los cambios optimistas encima (Recepción y drawer
+ * avisan la fila nueva antes del `router.refresh()`). `normalize` pasa la fila
+ * de la action por lo mismo que la del server (`expandPlanFields`): sin eso un
+ * turno suelto pierde `programId: null` y "Fuera de plan"/el resaltado de plan
+ * se apagan hasta el refresh (handoff de S19a, ES3). Sin overrides devuelve el
+ * mismo array (no rompe los `useMemo` de abajo).
+ */
+export function mergeBookingOverrides<T extends { id: string }, O extends { id: string } = T>(
+  server: ReadonlyArray<T>,
+  overrides: Readonly<Record<string, O>>,
+  normalize: (o: O) => T
+): ReadonlyArray<T> {
+  if (Object.keys(overrides).length === 0) return server;
+  return server.map((b) => {
+    const o = overrides[b.id];
+    return o ? normalize(o) : b;
+  });
 }
 
 /** Profesionales visibles en orden (vacío = todos). */

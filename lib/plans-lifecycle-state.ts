@@ -204,7 +204,7 @@ export function canRestoreProgram(role: Role | null | undefined): boolean {
 }
 
 /**
- * PD-10 / §2.4: `updateProgram` edita SOLO estos campos (con CAS). Cantidad →
+ * PD-10 / §2.4: `updatePlanDetails` edita SOLO estos campos (con CAS). Cantidad →
  * `plans-edit`; horario, profesional, servicio y sede → re-planificar (L7).
  */
 export const PROGRAM_EDITABLE_FIELDS = ["title", "notes"] as const;

@@ -658,14 +658,16 @@ conexión tiene BYPASSRLS: el `where: { tenantId }` a mano y las FKs compuestas 
     mover "este y los siguientes". La Secretaria sí.
   - **`plans.authorize`** = capability + (`full` o `agenda.operateAll`): renovar la autorización de la OS.
   - Paciente de otro tenant → `none` → Forbidden. Las primitivas del motor (`*InTx`) **no gatean**: gatea el export.
-    Quedan tres gates reimplementados en legacy (`rescheduleSession`, `createProgram`, `applyPlanTemplate`) que retira
-    S27a (AUDIT `gates-reimplementados-legacy`).
+    Desde ES3 no quedan gates reimplementados: `createProgram` y `applyPlanTemplate` se retiraron y `rescheduleSession`
+    usa `assertPlanScheduleInTx` + full (`lib/sessions.ts:649`; AUDIT `gates-reimplementados-legacy`). Un `templateId`
+    exige además el módulo `plantillas` (`lib/plans-engine-internal.ts:199`): la barrera se había perdido en el retiro.
 - **PHI del título.** El título de un plan o de una sesión es dato clínico. `planTitleFor(caps, access, title)`
   devuelve el real solo con `clinical.read` **y** acceso `full`; si no, `null`. Lo usan lecturas, dashboard y preview
   del motor. La agenda (C9) lleva disciplina, ordinal y total (`Kine · 3/10`), **nunca** el título para la
   Secretaria/BILLING/básico. `listSchedulablePlanSessions` devuelve una **allowlist** literal `{sessionId, ordinal,
-  totalLive, discipline, serviceId, practitionerId, locationId, sinTurno}`: sin título, notas, ejercicios, precios ni
-  `programId`.
+  totalLive, discipline, serviceId, practitionerId, locationId, sinTurno, programId}`: sin título, notas, ejercicios ni
+  precios. `programId` entró en ES3 (un id, no PHI): sin él la UI elegía mal el plan con 2 planes de la misma disciplina
+  (`lib/plans-read-types.ts:220-233`).
 - **Autorización de la OS** (código, autorizadas, vencimiento): la ve solo quien cumple
   `canSeePlanAuthorization(caps, access)` = `(full && clinical.read) || (plans.authorize con su regla de acceso) ||
   billing.manage`; nunca con `none`. Sale solo en el detalle del plan (`getPlanDetail`, `getPatientPlans`); **nunca** en

@@ -48,7 +48,7 @@ export type ExerciseCapabilities = {
  *
  * - **Con `db`** (una tx abierta): lee `{plan, vertical}` del tenant DENTRO de
  *   esa tx, la misma semántica de antes de EV0. La usan los write-paths que
- *   gatean en la tx que escribe (`lib/plan-templates.ts` `applyPlanTemplate`,
+ *   gatean en la tx que escribe (`lib/plan-templates.ts` la aplicación legacy de plantillas,
  *   `lib/diagnosis.ts`, `lib/sessions.ts`): un cambio de plan concurrente se ve
  *   en la misma foto que la escritura.
  * - **Sin `db`**: usa `actor.entitlements` (C-EV3), que `buildActor` ya leyó de

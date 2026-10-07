@@ -139,3 +139,74 @@ describe("paymentHoldState (reserva pública impaga, 30 min)", () => {
     expect(hasTickingPaymentHold([pub(agoIso(5), { publicReservation: false })], now)).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S19b (ES3): alcance De plan / Sueltos = resaltado (no oculta), persistido
+// por usuario como los toggles.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  AGENDA_PLAN_SCOPES,
+  AGENDA_PLAN_SCOPE_LABEL,
+  agendaPlanScopeStorageKey,
+  countPlanScope,
+  parseAgendaPlanScope,
+  planScopeHighlight,
+  planScopeOf,
+  serializeAgendaPlanScope,
+} from "@/lib/agenda-filters";
+import { highlightState, toggleHighlight } from "@/lib/agenda-highlight";
+
+describe("[P3-S19b] alcance de plan de la agenda", () => {
+  it("Todos / De plan / Sueltos ↔ resaltado, ida y vuelta", () => {
+    expect(AGENDA_PLAN_SCOPES.map((s) => AGENDA_PLAN_SCOPE_LABEL[s])).toEqual(["Todos", "De plan", "Sueltos"]);
+    for (const s of AGENDA_PLAN_SCOPES) expect(planScopeOf(planScopeHighlight(s))).toBe(s);
+    expect(planScopeHighlight("all")).toBeNull();
+    expect(planScopeHighlight("plan")).toEqual({ kind: "plan" });
+    expect(planScopeHighlight("loose")).toEqual({ kind: "loose" });
+  });
+
+  it("un resaltado de servicio (o de plan por disciplina) se ve como Todos", () => {
+    expect(planScopeOf({ kind: "service", serviceId: "s1" })).toBe("all");
+    expect(planScopeOf({ kind: "plan", discipline: "KINESIOLOGY" })).toBe("all");
+    expect(planScopeOf(null)).toBe("all");
+  });
+
+  it("el resaltado de plan atenúa y no oculta: el suelto queda dimmed, el de plan match", () => {
+    const h = planScopeHighlight("plan");
+    expect(highlightState(h, { serviceId: "s", programId: "pg1", plan: { discipline: null } })).toBe("match");
+    expect(highlightState(h, { serviceId: "s", programId: null })).toBe("dimmed");
+    // Sin C9 (proyección completa) no se adivina.
+    expect(highlightState(planScopeHighlight("loose"), { serviceId: "s" })).toBe("dimmed");
+    // Elegir un servicio después reemplaza al alcance (selección única) → Todos.
+    expect(planScopeOf(toggleHighlight(h, { kind: "service", serviceId: "s" }))).toBe("all");
+    // Mismo ítem otra vez = apagar.
+    expect(toggleHighlight(h, { kind: "plan" })).toBeNull();
+  });
+
+  it("persistencia: clave por usuario, lectura tolerante, Todos borra la clave", () => {
+    expect(agendaPlanScopeStorageKey("u1")).toBe("kinesoft:agenda-plan-scope:u1");
+    expect(agendaPlanScopeStorageKey(null)).toBe("kinesoft:agenda-plan-scope:default");
+    expect(agendaPlanScopeStorageKey("u1")).not.toBe(agendaVisibilityStorageKey("u1"));
+    expect(parseAgendaPlanScope("plan")).toBe("plan");
+    expect(parseAgendaPlanScope("loose")).toBe("loose");
+    for (const junk of [null, undefined, "", "all", "PLAN", '{"x":1}', "service"]) {
+      expect(parseAgendaPlanScope(junk)).toBe("all");
+    }
+    expect(serializeAgendaPlanScope("all")).toBeNull();
+    expect(serializeAgendaPlanScope("loose")).toBe("loose");
+  });
+
+  it("conteo de la leyenda: sin cancelados y sin adivinar los que no traen C9", () => {
+    expect(
+      countPlanScope([
+        { status: "CONFIRMED", programId: "pg1" },
+        { status: "COMPLETED", programId: "pg1" },
+        { status: "CANCELLED", programId: "pg1" },
+        { status: "PENDING", programId: null },
+        { status: "CANCELLED", programId: null },
+        { status: "NO_SHOW", programId: null },
+        { status: "CONFIRMED" },
+      ])
+    ).toEqual({ plan: 2, loose: 2 });
+  });
+});

@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { Button } from "@/components/ui/button";
 import { IconChevL, IconChevR, IconPlus } from "@/components/ui/icons";
-import type { AgendaVisibility } from "@/lib/agenda-filters";
+import type { AgendaPlanScope, AgendaVisibility } from "@/lib/agenda-filters";
 import type { ViewSegment } from "@/lib/agenda-client-state";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 import { ViewOptionsMenu } from "./view-options-menu";
@@ -74,6 +74,8 @@ export function AgendaToolbar({
   dayLock,
   zoom,
   onZoomChange,
+  planScope,
+  onPlanScopeChange,
 }: {
   anchor: Date;
   segment: ViewSegment;
@@ -98,6 +100,9 @@ export function AgendaToolbar({
   dayLock?: React.ReactNode;
   zoom?: AgendaViewZoom | null;
   onZoomChange?: (z: AgendaViewZoom) => void;
+  /** S19b: alcance De plan / Sueltos (null = sin módulo planes). */
+  planScope?: AgendaPlanScope | null;
+  onPlanScopeChange?: (s: AgendaPlanScope) => void;
 }) {
   return (
     <header style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -273,6 +278,8 @@ export function AgendaToolbar({
             setVisibility={onVisibilityChange}
             zoom={zoom}
             setZoom={onZoomChange}
+            planScope={planScope}
+            setPlanScope={onPlanScopeChange}
           />
 
           <a

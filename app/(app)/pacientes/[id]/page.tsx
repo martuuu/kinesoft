@@ -8,12 +8,14 @@ import {
   getPatientEvaScores,
   getPatientName,
 } from "@/lib/patients";
-import { getPatientProgramsLite } from "@/lib/programs";
-import { gatingForActor } from "@/lib/plan-gating";
+import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
 import { getCapabilities } from "@/lib/authz";
+import { capabilitiesFor } from "@/lib/capabilities";
 import { runWithRls } from "@/lib/rls";
+import { modulesFor } from "@/lib/tenant-modules";
+import { parseProfilePlanParams, type SearchParamsLike } from "@/lib/plans-deeplink";
 import type { PatientCoreWithAccess } from "@/lib/patients-types";
 import { PatientProfile, PatientAdminProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
@@ -25,8 +27,25 @@ export async function generateMetadata({ params }: { params: { id: string } }) {
   return { title: p ? `${p.firstName} ${p.lastName} · HC · KineSoft` : "Paciente · KineSoft" };
 }
 
-export default async function PatientPage({ params }: { params: { id: string } }) {
+/**
+ * S22b (ES3): los planes salen de `getPatientPlans` / `getPatientPlanBalances`
+ * (S14), que reemplazan a `getPatientProgramsLite`. Solo se piden con el
+ * módulo `planes` (enmienda EV0: un consultorio General no carga planes ni
+ * saldos); los EVA, solo con `evaluaciones`. El deep-link C10
+ * (`?tab=planes&programa=…`, `?tab=planes&nuevo=1&turno=…&prefill=…`, alias
+ * `?tab=plan`) se parsea acá con `parseProfilePlanParams` y el shell lo
+ * consume una vez.
+ */
+export default async function PatientPage({
+  params,
+  searchParams = {},
+}: {
+  params: { id: string };
+  searchParams?: SearchParamsLike;
+}) {
   const actor = await getActor();
+  const modules = modulesFor(actor.entitlements);
+  const plansEnabled = modules.has("planes");
   // First: a cheap auth probe via getPatientCore — returns the FULL
   // payload only if the actor owns / has been shared into / is OWNER+ADMIN.
   // Otherwise the call returns a basic projection and we short-circuit
@@ -41,11 +60,15 @@ export default async function PatientPage({ params }: { params: { id: string } }
   // BILLING). Va ANTES del corte de "no full": antes caía a la vista básica
   // ("Sin acceso") y la Secretaria no veía ni el teléfono. Solo se cargan
   // turnos (con estado de cobro) y capabilities; ningún slice clínico
-  // (programs, EVA, plantillas) se pide para este nivel.
+  // (EVA, plantillas) se pide para este nivel. Con el módulo `planes`, los
+  // planes en su proyección `admin` (sin título ni notas, S14) y los saldos,
+  // para agrupar Turnos por plan (H1 de S22f).
   if (core.access === "admin") {
-    const [bookingsPage, caps] = await Promise.all([
+    const [bookingsPage, caps, adminPlans, adminBalances] = await Promise.all([
       getPatientBookingsAll(params.id, 100),
       getCapabilities(),
+      plansEnabled ? getPatientPlans({ patientId: params.id }) : null,
+      plansEnabled ? getPatientPlanBalances({ patientId: params.id }) : null,
     ]);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -54,6 +77,8 @@ export default async function PatientPage({ params }: { params: { id: string } }
           patient={core}
           initialBookings={bookingsPage}
           canBook={caps.has("agenda.operateAll")}
+          plans={adminPlans?.ok ? adminPlans.data : null}
+          planBalances={adminBalances?.ok ? adminBalances.data : null}
         />
       </div>
     );
@@ -72,19 +97,22 @@ export default async function PatientPage({ params }: { params: { id: string } }
 
   // Full access — load the rest of the slices in parallel.
   const [
-    programsLite,
+    plansRes,
+    balancesRes,
     recentBookings,
     billableCount,
     evaScores,
     insurers,
     practitioners,
     membership,
-    gate,
   ] = await Promise.all([
-    getPatientProgramsLite(params.id),
+    plansEnabled ? getPatientPlans({ patientId: params.id }) : null,
+    plansEnabled ? getPatientPlanBalances({ patientId: params.id }) : null,
     getPatientBookingsSummary(params.id, 5),
     getPatientBillableCount(params.id),
-    getPatientEvaScores(params.id),
+    // Enmienda EV0 de S22b: sin `evaluaciones` no se piden EVA (y la pestaña
+    // Evolución no se muestra).
+    modules.has("evaluaciones") ? getPatientEvaScores(params.id) : [],
     listInsurers({ onlyActive: true }),
     runWithRls(actor.tenantId, (tx) =>
       tx.practitioner.findMany({
@@ -105,11 +133,14 @@ export default async function PatientPage({ params }: { params: { id: string } }
         select: { role: true },
       })
     ),
-    // P0-Cs: plan SaaS → plantillas, para que el Tab Plan sepa de antemano si
-    // "Aplicar plantilla" está disponible (hoy solo se entera al confirmar).
-    gatingForActor(),
   ]);
-  const canReassign = membership?.role === "OWNER" || membership?.role === "ADMIN";
+  const role = membership?.role ?? null;
+  const canReassign = role === "OWNER" || role === "ADMIN";
+  // Mismo cálculo que `getCapabilities()` sin otra query de membresía: el rol
+  // ya está acá. Plantillas: el shell usa el módulo `plantillas` (enmienda
+  // EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
+  const capabilities = Array.from(capabilitiesFor(role));
+  const { tab: initialTab, intent: planIntent } = parseProfilePlanParams(searchParams);
 
   // Strip the `access` discriminator field before passing to the legacy
   // PatientProfile prop shape — it's a discriminated-union marker that
@@ -121,7 +152,6 @@ export default async function PatientPage({ params }: { params: { id: string } }
       <Breadcrumbs name={`${core.firstName} ${core.lastName}`} />
       <PatientProfile
         patientCore={patientCore}
-        programsLite={programsLite}
         recentBookings={recentBookings}
         billableCount={billableCount}
         evaScores={evaScores}
@@ -133,7 +163,13 @@ export default async function PatientPage({ params }: { params: { id: string } }
           name: p.user.fullName ?? p.user.email,
         }))}
         canReassign={canReassign}
-        canUseTemplates={gate.canBuildTemplates}
+        capabilities={capabilities}
+        role={role}
+        initialPlans={plansRes?.ok ? plansRes.data : []}
+        initialPlanBalances={balancesRes?.ok ? balancesRes.data : null}
+        initialPlansError={plansRes && !plansRes.ok ? plansRes.error : null}
+        initialTab={initialTab}
+        planIntent={planIntent}
       />
     </div>
   );

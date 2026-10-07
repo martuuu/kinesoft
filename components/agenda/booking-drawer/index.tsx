@@ -40,6 +40,8 @@
  */
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { Drawer } from "@/components/ui/drawer";
 import {
   deleteBooking,
@@ -69,6 +71,22 @@ import {
   withForce,
 } from "@/lib/booking-force-flags";
 import { capabilitySet } from "@/lib/agenda-client-state";
+import { PLAN_PATIENT_CHANGE_ERROR } from "@/lib/bookings-constants";
+import { listSchedulablePlanSessions } from "@/lib/plans-read";
+import { removeBookingFromPlan } from "@/lib/plans-adopt";
+import type { SchedulablePlanSession } from "@/lib/plans-read-types";
+import { planSessionLabel } from "@/lib/plan-display";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { planUiPermissions } from "@/components/planes/plan-editor-types";
+import { ScheduleSessionModal } from "@/components/seguimiento/schedule-session-modal";
+import {
+  LinkSessionModal,
+  PlanRow,
+  drawerPlanModel,
+  pickNextPlanSession,
+  type PlanRowBooking,
+} from "./plan-row";
+import { planStatusToastDescription } from "./status-actions";
 import { ReceptionInfo } from "./reception-info";
 import {
   bookingDrawerAccess,
@@ -79,6 +97,14 @@ import {
 } from "./types";
 
 export type { DrawerBooking } from "./types";
+
+// P3.Z (F3a): el diálogo de renovación arrastra todo `plan-edit-dialogs` (los
+// diálogos de edición del plan) y en la agenda se abre muy de vez en cuando:
+// va en un chunk aparte para no inflar el bundle de /agenda.
+const RenewAuthorizationDialog = dynamic(
+  () => import("@/components/planes/plan-edit-dialogs").then((m) => m.RenewAuthorizationDialog),
+  { ssr: false }
+);
 
 /** Sin turno abierto no se muestra nada; el valor solo evita nulls abajo. */
 const CLOSED: BookingDrawerAccess = {
@@ -108,6 +134,7 @@ export function BookingDrawer({
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
+  const router = useRouter();
   // Reschedule sub-flow — opens an inline form that lets the user pick
   // a new datetime. Wires the existing `updateBooking` conflict response
   // (same shape as create-flow) into a sticky amber banner with the
@@ -136,6 +163,33 @@ export function BookingDrawer({
 
   const caps = useMemo(() => capabilitySet(capabilities), [capabilities]);
   const access = booking ? bookingDrawerAccess(booking, caps) : CLOSED;
+
+  // S19c · fila Plan. Permisos = espejo de UI de `plan-authz-internal` (la
+  // barrera es el server); sin el módulo `planes` (General) todo en false y la
+  // fila no aparece (enmienda EV0: puerta 4, Agendar y Vincular solo con
+  // `has('planes')`). `role` no hace falta: solo decide "restaurar plan".
+  const plansModule = useTenantModules().has("planes");
+  const planPerms = useMemo(
+    () =>
+      planUiPermissions({
+        caps,
+        access: booking?.patientId ? booking.patientAccess : "none",
+        role: null,
+        plansModule,
+        templatesModule: false,
+      }),
+    [caps, booking?.patientId, booking?.patientAccess, plansModule]
+  );
+  const planModel = booking ? drawerPlanModel(booking, planPerms, { plansModule }) : null;
+  const isPlanBooking = planModel?.kind === "plan";
+  const planOrdinal = booking?.plan?.ordinal ?? null;
+  const [nextSession, setNextSession] = useState<SchedulablePlanSession | null>(null);
+  // Diálogo de la fila Plan. Va FUERA del Drawer y con el drawer cerrado: el
+  // Modal del design system está en z-index 40, debajo del panel (46), y
+  // adentro del panel animado `position: fixed` queda relativo a él. Por eso
+  // guarda su propio blanco y no se resetea al cambiar `booking` (abrirlo
+  // cierra el drawer y `booking` pasa a null).
+  const [planDialog, setPlanDialog] = useState<PlanDialog | null>(null);
 
   // Reset reschedule state every time a different booking opens.
   // Uses AR-formatted Intl output instead of `Date.prototype.getHours()`
@@ -168,6 +222,19 @@ export function BookingDrawer({
         })
         .catch(() => {});
     }
+    // S19c: "Agendar próxima sesión" solo si el plan tiene una sesión "sin
+    // turno". UNA lectura (allowlist sin títulos, apta para la Secretaria) y
+    // solo en turnos de plan con `plans.schedule`; un error deja el botón
+    // oculto (no hay nada que hacer distinto desde acá).
+    setNextSession(null);
+    if (booking?.patientId && drawerPlanModel(booking, planPerms, { plansModule }).canSchedule) {
+      listSchedulablePlanSessions({ patientId: booking.patientId })
+        .then((r) => {
+          if (cancelled || !r.ok) return;
+          setNextSession(pickNextPlanSession(r.data, booking));
+        })
+        .catch(() => {});
+    }
     return () => {
       cancelled = true;
     };
@@ -195,9 +262,51 @@ export function BookingDrawer({
         toast.error("No pudimos actualizar el turno", { description: r.error });
         return;
       }
-      toast.success(STATUS_TOAST[status] ?? "Turno actualizado");
+      // S19c: en un turno de plan, Ausente / Cancelado avisan que la sesión
+      // queda "sin turno" (C13, PQ-05); el `notice` del core (p. ej. "la sesión
+      // queda realizada") manda si viene.
+      const description =
+        r.notice ?? planStatusToastDescription(status, { isPlan: isPlanBooking, ordinal: planOrdinal });
+      toast.success(STATUS_TOAST[status] ?? "Turno actualizado", description ? { description } : undefined);
       onSaved();
     });
+  };
+
+  // S19c · "Sacar del plan" (`plans.manage`): queda suelto, sin la cuota del
+  // plan, y su sesión "sin turno". Con cobro el server rechaza (PD-08).
+  const removeFromPlan = async () => {
+    if (!booking) return;
+    const session = planOrdinal != null ? `la sesión ${planOrdinal}` : "su sesión";
+    const ok = await confirm({
+      title: "¿Sacar este turno del plan?",
+      message: `Queda como turno suelto, sin la cuota del plan, y ${session} queda sin turno para reprogramar.`,
+      confirmLabel: "Sacar del plan",
+    });
+    if (!ok) return;
+    setError(null);
+    start(async () => {
+      const r = await removeBookingFromPlan({ bookingId: booking.id, expectedUpdatedAt: booking.updatedAt });
+      if (!r.ok) {
+        setError(r.error);
+        toast.error("No pudimos sacar el turno del plan", { description: r.error });
+        return;
+      }
+      toast.success("Turno fuera del plan", r.notice ? { description: r.notice } : undefined);
+      onSaved();
+    });
+  };
+
+  // S19c · "Cancelalo" en lugar de "Eliminar" (C13): un turno de plan no se
+  // borra (PLAN_DELETE_ERROR del server); se cancela y la sesión queda sin turno.
+  const cancelPlanBooking = async () => {
+    const session = planOrdinal != null ? `la sesión ${planOrdinal}` : "la sesión";
+    const ok = await confirm({
+      title: "¿Cancelar este turno?",
+      message: `Es de un plan: no se elimina. Lo cancelamos y ${session} queda sin turno para reprogramar.`,
+      confirmLabel: "Cancelar turno",
+      tone: "danger",
+    });
+    if (ok) setStatus("CANCELLED");
   };
 
   const remove = async () => {
@@ -265,7 +374,16 @@ export function BookingDrawer({
     if (access.clinicalWritable && editTitle !== (booking.title ?? "")) changes.title = editTitle;
     if (access.clinicalWritable && editDescription !== (booking.description ?? ""))
       changes.description = editDescription;
-    if (editPatient && editPatient.id !== booking.patientId) changes.patientId = editPatient.id;
+    if (editPatient && editPatient.id !== booking.patientId) {
+      // S19c · paciente bloqueado en un turno de plan (I1): el core lo rechaza
+      // (`plan-patient-change`); se frena acá con el MISMO copy para no hacer
+      // un viaje que va a rebotar. Sin C9 (`programId` undefined) decide el server.
+      if (typeof booking.programId === "string") {
+        setError(PLAN_PATIENT_CHANGE_ERROR);
+        return;
+      }
+      changes.patientId = editPatient.id;
+    }
     if (Object.keys(changes).length === 0) {
       setEditingDetails(false);
       resetEditFields();
@@ -301,6 +419,7 @@ export function BookingDrawer({
       }
       setEditingDetails(false);
       setEditPatient(undefined);
+      if (r.notice) toast.info("Turno actualizado", { description: r.notice });
       onSaved();
     });
   };
@@ -364,6 +483,7 @@ export function BookingDrawer({
         return;
       }
       setEditingWhen(false);
+      if (r.notice) toast.info("Turno reprogramado", { description: r.notice });
       onSaved();
     });
   };
@@ -397,7 +517,34 @@ export function BookingDrawer({
       (editingWhen && newWhenLocal !== isoToARLocalInput(booking.scheduledFor)));
 
 
+  /** Dirty-guard de las salidas de la fila Plan (diálogo o navegación). */
+  const confirmDiscard = async () => {
+    if (!dirty) return true;
+    return confirm({
+      title: "¿Descartar los cambios?",
+      message: "Tenés cambios del turno sin guardar. Si seguís, se pierden.",
+      confirmLabel: "Descartar",
+      cancelLabel: "Seguir editando",
+      tone: "danger",
+    });
+  };
+
+  const openPlanDialog = async (d: PlanDialog) => {
+    if (!(await confirmDiscard())) return;
+    setPlanDialog(d);
+    onClose();
+  };
+
+  // P3.Z (F3a): "Crear plan desde este turno" / "Ver plan" eran `<Link>` y
+  // salían de la agenda sin pasar por el dirty-guard.
+  const navigateFromPlanRow = async (href: string) => {
+    if (!(await confirmDiscard())) return;
+    onClose();
+    router.push(href);
+  };
+
   return (
+    <>
     <Drawer
       open={!!booking}
       onClose={onClose}
@@ -444,6 +591,31 @@ export function BookingDrawer({
             )}
           </div>
 
+          {planModel && (
+            <PlanRow
+              booking={booking}
+              model={planModel}
+              nextSession={nextSession}
+              pending={pending}
+              onSchedule={() => {
+                if (nextSession && typeof booking.programId === "string")
+                  void openPlanDialog({
+                    kind: "schedule",
+                    programId: booking.programId,
+                    sessionId: nextSession.sessionId,
+                    sessionLabel: planSessionLabel(nextSession.ordinal, nextSession.totalLive),
+                  });
+              }}
+              onRemove={removeFromPlan}
+              onLink={() => void openPlanDialog({ kind: "link", booking })}
+              onRenewAuthorization={() => {
+                if (booking.patientId && typeof booking.programId === "string")
+                  void openPlanDialog({ kind: "renew", programId: booking.programId, patientId: booking.patientId });
+              }}
+              onNavigate={(href) => void navigateFromPlanRow(href)}
+            />
+          )}
+
           {clinicalWritable && <RecentBookings recent={recent} patientId={booking.patientId} />}
 
           {canOperate && editingDetails && (
@@ -477,6 +649,14 @@ export function BookingDrawer({
 
           {canOperate && editingWhen && (
             <RescheduleForm
+              booking={booking}
+              capabilities={caps}
+              onSeriesMoved={() => {
+                // S19d H1: "Este y los siguientes" movió la serie por el motor.
+                setEditingWhen(false);
+                setReschConflict(null);
+                onSaved();
+              }}
               value={newWhenLocal}
               onChange={(v) => {
                 setNewWhenLocal(v);
@@ -518,7 +698,13 @@ export function BookingDrawer({
 
           <ShareActions booking={booking} />
 
-          {canOperate && <StatusActions pending={pending} onSetStatus={(s) => setStatus(s)} />}
+          {canOperate && (
+            <StatusActions
+              pending={pending}
+              onSetStatus={(s) => setStatus(s)}
+              planSession={isPlanBooking ? { ordinal: planOrdinal } : null}
+            />
+          )}
 
           {error && (
             <div
@@ -534,7 +720,35 @@ export function BookingDrawer({
             </div>
           )}
 
-          {canDelete && (
+          {canDelete &&
+            typeof booking.programId === "string" &&
+            (booking.status === "PENDING" || booking.status === "CONFIRMED") && (
+            // S19c · C13 "Cancelalo" en lugar de "Eliminar". Mismo permiso que
+            // Eliminar (la regla vigente); sin C9 queda Eliminar y decide el server.
+            // P3.Z (F3a): solo en un turno activo. En un Realizado o Ausente
+            // ofrecía cancelar un turno que ya pasó (y liberar su sesión).
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, fontSize: 12, color: "var(--navy-500)", marginTop: 4 }}>
+              <span>Es de un plan: no se elimina.</span>
+              <button
+                type="button"
+                onClick={cancelPlanBooking}
+                disabled={pending}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#9F1F1F",
+                  cursor: "pointer",
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  padding: 0,
+                }}
+              >
+                Cancelalo
+              </button>
+            </div>
+          )}
+
+          {canDelete && typeof booking.programId !== "string" && (
           <button
             type="button"
             onClick={remove}
@@ -557,5 +771,53 @@ export function BookingDrawer({
         </div>
       )}
     </Drawer>
+      {/* S19c: diálogos de la fila Plan (cada uno carga lo suyo al abrir; el
+          drawer no trae la autorización de la OS, E2). */}
+      {planDialog?.kind === "schedule" && (
+        <ScheduleSessionModal
+          open
+          onClose={() => setPlanDialog(null)}
+          onScheduled={() => {
+            setPlanDialog(null);
+            onSaved();
+          }}
+          programId={planDialog.programId}
+          sessionId={planDialog.sessionId}
+          sessionLabel={planDialog.sessionLabel}
+        />
+      )}
+      {planDialog?.kind === "link" && (
+        <LinkSessionModal
+          open
+          booking={planDialog.booking}
+          onClose={() => setPlanDialog(null)}
+          onLinked={() => {
+            setPlanDialog(null);
+            onSaved();
+          }}
+        />
+      )}
+      {planDialog?.kind === "renew" && (
+        <RenewAuthorizationDialog
+          open
+          programId={planDialog.programId}
+          patientId={planDialog.patientId}
+          onClose={() => setPlanDialog(null)}
+          onChanged={(done) => {
+            setPlanDialog(null);
+            // Contrato `PlanEditDone` (S22e): el éxito lo muestra el diálogo;
+            // el caller solo el `notice` (si no, salía dos veces).
+            if (done.notice) toast.info(done.notice);
+          }}
+          // Sin `current`, el diálogo se recarga solo y muestra el copy de stale.
+        />
+      )}
+    </>
   );
 }
+
+/** Diálogo abierto desde la fila Plan, con su blanco (el drawer ya se cerró). */
+type PlanDialog =
+  | { kind: "schedule"; programId: string; sessionId: string; sessionLabel: string }
+  | { kind: "link"; booking: PlanRowBooking }
+  | { kind: "renew"; programId: string; patientId: string };

@@ -1,112 +1,271 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { getPatientBookingsAll } from "@/lib/patients";
+import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
 import type {
   PatientCore,
   PatientAdminCore,
-  PatientProgramLite,
   PatientBookingSummary,
   PatientBookingFull,
 } from "@/lib/patients-types";
-import { toARDateKey } from "@/lib/datetime-ar";
+import type { PatientPlanBalances, PlanDTO } from "@/lib/plans-read-types";
+import type { Capability } from "@/lib/capabilities";
+import type { Role } from "@prisma/client";
 import { formatARS } from "@/lib/format";
+import { isProfileTabAllowed, type TenantModule } from "@/lib/tenant-modules";
+import { PLANS_TAB, normalizeProfileTab, stripPlanIntentParams, type ProfilePlanIntent } from "@/lib/plans-deeplink";
 import type { EvaScore } from "@prisma/client";
-import { ActivityView } from "@/components/patients/activity-view";
-import { ArchivosView } from "@/components/patients/archivos-view";
-import { PatientHero, PatientAdminHero, type HeroPlanState } from "@/components/patients/profile/hero";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { useToast } from "@/components/ui/toast";
+import { PatientHero, PatientAdminHero } from "@/components/patients/profile/hero";
 import { TabsBar } from "@/components/patients/profile/tabs-bar";
 import { ResumenView } from "@/components/patients/profile/views/resumen-view";
 import { TurnosView } from "@/components/patients/profile/views/turnos-view";
-import { SesionesView } from "@/components/patients/profile/views/sesiones-view";
-import { PlanView } from "@/components/patients/profile/views/plan-view";
-import { AntecedentesView } from "@/components/patients/profile/views/antecedentes-view";
-import { EvolucionView } from "@/components/patients/profile/views/evolucion-view";
-import { FacturacionView } from "@/components/patients/profile/views/facturacion-view";
+import {
+  heroPlanChips,
+  planUiPermissions,
+  type PlanEditorRequest,
+  type PlanEditorSaved,
+} from "@/components/planes/plan-editor-types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tag } from "@/components/ui/tag";
-import { BookingStatusTag, Detail, Grid2, Section } from "@/components/patients/profile/ui";
-import type {
-  InsurerOption,
-  PatientWithRelations,
-  PractitionerOption,
-  Tab,
+import { Detail, Grid2, Section } from "@/components/patients/profile/ui";
+import {
+  PROFILE_TABS,
+  type InsurerOption,
+  type PatientWithRelations,
+  type PractitionerOption,
+  type Tab,
 } from "@/components/patients/profile/types";
+
+/**
+ * S22b: el editor único de Planes (C10) se monta UNA vez en el shell y se
+ * carga recién cuando alguien lo pide (`next/dynamic`, sin SSR): son ~1.300
+ * líneas (form, horario, tabla de preview) que la mayoría de las visitas a una
+ * ficha no usa. Las superficies (PlanCard, Sesiones, Resumen, hero) solo piden
+ * abrirlo con `onOpenEditor(PlanEditorRequest)`.
+ */
+const PlanEditorDrawer = dynamic(
+  () => import("@/components/planes/plan-editor-drawer").then((m) => m.PlanEditorDrawer),
+  { ssr: false, loading: () => null }
+);
+
+/**
+ * P3.Z (gate de bundle de ES3): las pestañas que no se ven al abrir la ficha
+ * van lazy. La PlanCard arrastra los diálogos de edición y la tabla de preview
+ * (plata, cantidad, renovación) y `/pacientes/[id]` pasó de 194 a 241 kB gz
+ * con todo eager; Resumen y Turnos (las de entrada) siguen estáticas.
+ */
+function TabLoading() {
+  return <div aria-busy="true" style={{ minHeight: 120 }} />;
+}
+const ActivityView = dynamic(() => import("@/components/patients/activity-view").then((m) => m.ActivityView), { loading: TabLoading });
+const ArchivosView = dynamic(() => import("@/components/patients/archivos-view").then((m) => m.ArchivosView), { loading: TabLoading });
+const SesionesView = dynamic(() => import("@/components/patients/profile/views/sesiones-view").then((m) => m.SesionesView), { loading: TabLoading });
+const PlanView = dynamic(() => import("@/components/patients/profile/views/plan-view").then((m) => m.PlanView), { loading: TabLoading });
+const AntecedentesView = dynamic(() => import("@/components/patients/profile/views/antecedentes-view").then((m) => m.AntecedentesView), { loading: TabLoading });
+const EvolucionView = dynamic(() => import("@/components/patients/profile/views/evolucion-view").then((m) => m.EvolucionView), { loading: TabLoading });
+const FacturacionView = dynamic(() => import("@/components/patients/profile/views/facturacion-view").then((m) => m.FacturacionView), { loading: TabLoading });
 
 /** Tamaño de página de turnos del perfil (Turnos + Facturación). */
 const BOOKINGS_PAGE = 100;
 
+/** Copy del deep-link (C10): prefill roto/viejo y "nuevo" sin permiso. */
+export const PROFILE_PLAN_COPY = {
+  prefillInvalid: "El link traía datos del plan que ya no son válidos: completalos en el editor.",
+  cannotCreate: "No tenés permiso para crear planes para este paciente.",
+  plansUnavailable: "Los planes de tratamiento no están disponibles para tu tipo de consultorio.",
+  loadFailed: "No pudimos cargar los planes. Probá de nuevo.",
+} as const;
+
+// ─── Helpers puros (testeados en tests/unit/render/patient-profile-plans) ────
+
 /**
- * P0-S02u-perfil: qué plan muestra el perfil cuando el paciente tiene varios.
- *
- * Antes `activeProgram` era `find(ACTIVE) ?? programs[0]`: con solo planes
- * terminados caía al último COMPLETED/CANCELLED y el hero decía "Plan activo"
- * (AUDIT `hero-plan-activo-falso`); con dos ACTIVE se veía uno solo sin aviso
- * (parte de perfil de `varios-planes-activos-take1`); y el badge de Sesiones
- * sumaba las sesiones de todos los planes mientras la vista listaba solo las
- * del primero.
- *
- * - `activeProgram`: el ACTIVE más reciente por `createdAt` (no depende del
- *   orden en que llegue la lista), o null. Solo él habilita "Plan activo".
- * - `otherActiveCount`: los otros ACTIVE, para el "+N".
- * - `focusProgram`: lo que muestra Resumen. El activo; si no hay, el último
- *   plan (se muestra con su estado, nunca como vigente).
- * - `heroPlan`: el estado del chip del hero.
- * - `sessionGroups`: lo que lista Sesiones, un grupo por plan (el índice de
- *   sesión reinicia por plan), el foco primero y el resto del más nuevo al más
- *   viejo. El badge del tab cuenta exactamente estas filas.
+ * Pestañas del perfil completo que permite el consultorio (enmienda EV0 de
+ * S22b: `isProfileTabAllowed` + rol). El rol ya se resolvió antes: el perfil
+ * completo solo se monta con acceso `full`; la Secretaria/BILLING van a
+ * `PatientAdminProfile` (Datos y Turnos).
  */
-export function pickProfilePrograms(programs: PatientProgramLite[]) {
-  const byRecent = [...programs].sort(
-    (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)
-  );
-  const actives = byRecent.filter((p) => p.status === "ACTIVE");
-  const activeProgram = actives[0] ?? null;
-  const focusProgram = activeProgram ?? byRecent[0] ?? null;
-  const otherActiveCount = Math.max(actives.length - 1, 0);
-  const heroPlan: HeroPlanState = activeProgram
-    ? { kind: "active", otherActiveCount }
-    : byRecent.some((p) => p.status === "PAUSED")
-      ? { kind: "paused" }
-      : byRecent.length > 0
-        ? { kind: "ended" }
-        : { kind: "none" };
-  const sessionGroups = focusProgram
-    ? [focusProgram, ...byRecent.filter((p) => p.id !== focusProgram.id)]
-        .filter((p) => p.sessions.length > 0)
-        .map((p) => ({ id: p.id, title: p.title, status: p.status, sessions: p.sessions }))
-    : [];
-  const sessionCount = sessionGroups.reduce((acc, g) => acc + g.sessions.length, 0);
-  return { activeProgram, otherActiveCount, focusProgram, heroPlan, sessionGroups, sessionCount };
+export function profileTabsFor(modules: ReadonlySet<TenantModule>): Tab[] {
+  return PROFILE_TABS.filter((t) => isProfileTabAllowed(t, modules));
 }
+
+/**
+ * `?tab=` → pestaña inicial. Normaliza el alias (`plan` → `planes`) y cae a
+ * Resumen si la pestaña no existe o el consultorio no la tiene (un link a
+ * `?tab=planes` en un consultorio General no abre una pestaña oculta).
+ */
+export function resolveProfileTab(raw: string | null | undefined, allowed: readonly Tab[]): Tab {
+  const t = normalizeProfileTab(raw);
+  return t && (allowed as readonly string[]).includes(t) ? (t as Tab) : "resumen";
+}
+
+/**
+ * Qué plan muestra Resumen cuando el paciente tiene varios (heredado de
+ * P0-S02u-perfil, ahora sobre `PlanDTO`):
+ *   - `focusPlan`: el ACTIVE más reciente por `createdAt` (no depende del orden
+ *     en que llegue la lista); si no hay, el último plan (se muestra con su
+ *     estado, nunca como vigente). Los archivados no cuentan.
+ *   - `otherActiveCount`: los otros ACTIVE, para el "+N".
+ *   - `sessionCount`: sesiones vivas (no archivadas) de los planes no
+ *     archivados, el badge de la pestaña Sesiones.
+ */
+/**
+ * ¿El paciente tiene obra social de verdad? (P3.Z, F2 H2.) Solo con una
+ * cobertura vinculada al catálogo del consultorio y que no sea "Particular":
+ * un nombre libre sin `insurerId` cobra como particular (ver `Coverage`).
+ * La PlanCard lo usa para el "Sin autorización vigente" (falla cerrado).
+ */
+export function isInsured(
+  coverage: { insurerId: string | null; insurerRef?: { isParticular: boolean } | null } | null | undefined
+): boolean {
+  return !!coverage?.insurerId && coverage.insurerRef?.isParticular !== true;
+}
+
+export function pickProfilePlans(plans: readonly PlanDTO[]) {
+  const live = plans.filter((p) => p.archivedAt == null);
+  const byRecent = [...live].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+  const actives = byRecent.filter((p) => p.status === "ACTIVE");
+  const focusPlan = actives[0] ?? byRecent[0] ?? null;
+  const otherActiveCount = Math.max(actives.length - 1, 0);
+  const sessionCount = live.reduce(
+    (acc, p) => acc + p.sessions.filter((s) => s.state !== "archived").length,
+    0
+  );
+  return { focusPlan, otherActiveCount, sessionCount, livePlanCount: live.length };
+}
+
+export type PatientProfileProps = {
+  patientCore: PatientCore;
+  recentBookings: PatientBookingSummary[];
+  billableCount: number;
+  /** `[]` sin el módulo `evaluaciones` (la página ni siquiera los pide). */
+  evaScores: EvaScore[];
+  insurers?: InsurerOption[];
+  practitioners?: PractitionerOption[];
+  canReassign?: boolean;
+  /** Capabilities del actor (array: viaja de Server a Client Component). */
+  capabilities?: readonly Capability[];
+  role?: Role | null;
+  /** `getPatientPlans({patientId})` (data) del server; `[]` sin el módulo `planes`. */
+  initialPlans?: PlanDTO[];
+  /** `getPatientPlanBalances` (data) del server; `null` sin el módulo o si falló. */
+  initialPlanBalances?: PatientPlanBalances | null;
+  /** Error de `getPatientPlans` en el server (se muestra en la pestaña). */
+  initialPlansError?: string | null;
+  /** `?tab=` crudo (la página lo parsea con `parseProfilePlanParams`). */
+  initialTab?: string | null;
+  /** Intención de Planes del deep-link (C10). Se consume una vez y se limpia la URL. */
+  planIntent?: ProfilePlanIntent;
+};
 
 export function PatientProfile({
   patientCore,
-  programsLite,
   recentBookings,
   billableCount,
   evaScores,
   insurers = [],
   practitioners = [],
   canReassign = false,
-  canUseTemplates,
-}: {
-  patientCore: PatientCore;
-  programsLite: PatientProgramLite[];
-  recentBookings: PatientBookingSummary[];
-  billableCount: number;
-  evaScores: EvaScore[];
-  insurers?: InsurerOption[];
-  practitioners?: PractitionerOption[];
-  canReassign?: boolean;
-  /** P0-Cs: plan SaaS con plantillas (`gatingForActor`); pasa directo a PlanView. */
-  canUseTemplates?: boolean;
-}) {
-  const [tab, setTab] = useState<Tab>("resumen");
+  capabilities = [],
+  role = null,
+  initialPlans = [],
+  initialPlanBalances = null,
+  initialPlansError = null,
+  initialTab = null,
+  planIntent = { kind: "none" },
+}: PatientProfileProps) {
+  const modules = useTenantModules();
+  const toast = useToast();
+  const plansEnabled = modules.has("planes");
+  const allowedTabs = useMemo(() => profileTabsFor(modules.list), [modules.list]);
+  const [tab, setTab] = useState<Tab>(() => resolveProfileTab(initialTab, allowedTabs));
+
+  // ── Permisos de Planes (solo esconden; la barrera es el server) ──────────
+  const caps = useMemo(() => new Set<Capability>(capabilities), [capabilities]);
+  const permissions = useMemo(
+    () =>
+      planUiPermissions({
+        caps,
+        // El perfil completo solo se monta con acceso `full` (page.tsx).
+        access: "full",
+        role,
+        plansModule: plansEnabled,
+        templatesModule: modules.has("plantillas"),
+      }),
+    [caps, role, plansEnabled, modules]
+  );
+  // H1 de S22f: el título del plan es HC → full + `clinical.read`.
+  const showPlanTitles = caps.has("clinical.read");
+
+  // ── Planes y saldos (S14). Sin el módulo no se piden ni se guardan. ──────
+  const [plans, setPlans] = useState<PlanDTO[]>(plansEnabled ? initialPlans : []);
+  const [planBalances, setPlanBalances] = useState<PatientPlanBalances | null>(
+    plansEnabled ? initialPlanBalances : null
+  );
+  const [plansError, setPlansError] = useState<string | null>(plansEnabled ? initialPlansError : null);
+  const [plansLoading, setPlansLoading] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [focusProgramId, setFocusProgramId] = useState<string | null>(
+    planIntent.kind === "program" ? planIntent.programId : null
+  );
+  // Una respuesta vieja (dos recargas seguidas, o el toggle de archivados) no
+  // pisa a una más nueva.
+  const plansSeq = useRef(0);
+  const balancesSeq = useRef(0);
+
+  const reloadBalances = useCallback(async () => {
+    if (!plansEnabled) return;
+    const seq = ++balancesSeq.current;
+    try {
+      const r = await getPatientPlanBalances({ patientId: patientCore.id });
+      if (seq !== balancesSeq.current) return;
+      // Si falla, queda el saldo anterior: Turnos/Facturación siguen sin agrupar mal.
+      if (r.ok) setPlanBalances(r.data);
+    } catch (e) {
+      console.error("getPatientPlanBalances failed", e);
+    }
+  }, [plansEnabled, patientCore.id]);
+
+  const reloadPlans = useCallback(
+    async (opts: { includeArchived?: boolean } = {}) => {
+      if (!plansEnabled) return;
+      const includeArchived = opts.includeArchived ?? showArchived;
+      const seq = ++plansSeq.current;
+      setPlansLoading(true);
+      try {
+        const [r] = await Promise.all([
+          getPatientPlans({ patientId: patientCore.id, includeArchived }),
+          reloadBalances(),
+        ]);
+        if (seq !== plansSeq.current) return;
+        if (r.ok) {
+          setPlans(r.data);
+          setPlansError(null);
+        } else {
+          setPlansError(r.error);
+        }
+      } catch (e) {
+        console.error("getPatientPlans failed", e);
+        if (seq === plansSeq.current) setPlansError(PROFILE_PLAN_COPY.loadFailed);
+      } finally {
+        if (seq === plansSeq.current) setPlansLoading(false);
+      }
+    },
+    [plansEnabled, patientCore.id, showArchived, reloadBalances]
+  );
+
+  const onShowArchivedChange = useCallback(
+    (show: boolean) => {
+      setShowArchived(show);
+      void reloadPlans({ includeArchived: show });
+    },
+    [reloadPlans]
+  );
 
   // Lazy slice: the full bookings list is only needed for Turnos/Facturación.
   // While not loaded, `recentBookings` (5 rows) covers Resumen's "próxima
@@ -190,26 +349,107 @@ export function PatientProfile({
     });
   }, []);
 
-  // Synthesize the legacy composite shape used by sub-views. The
-  // `bookings` field swaps between recent (initial) and full (after
-  // Facturación opens). Both shapes have the scalar fields the views
-  // read (paymentStatus, scheduledFor, status, durationMin).
+  /**
+   * Después de una escritura de Planes: recarga planes + saldos y descarta la
+   * lista de turnos cacheada (crear, generar, mover o cancelar un plan crea y
+   * cancela turnos); se vuelve a pedir la próxima vez que se abra Turnos o
+   * Facturación.
+   */
+  const onPlansChanged = useCallback(() => {
+    setBookingsAll(null);
+    setNextCursor(null);
+    void reloadPlans();
+  }, [reloadPlans]);
+
+  // ── Editor único (C10) ────────────────────────────────────────────────────
+  const [editorReq, setEditorReq] = useState<PlanEditorRequest | null>(null);
+  const openEditor = useCallback(
+    (req: PlanEditorRequest) => {
+      if (!plansEnabled) return;
+      // Handoff S18: en `generate` va SIEMPRE el `patientId` (la Secretaria no
+      // tiene `getPlanDetail` para deducirlo). En esta ficha todo pedido es de
+      // este paciente, así que se completa en cualquier modo.
+      setEditorReq({ ...req, patientId: req.patientId ?? patientCore.id });
+    },
+    [plansEnabled, patientCore.id]
+  );
+  const closeEditor = useCallback(() => setEditorReq(null), []);
+  const onEditorSaved = useCallback(
+    (saved: PlanEditorSaved) => {
+      setEditorReq(null);
+      setFocusProgramId(saved.programId);
+      setTab(PLANS_TAB);
+      onPlansChanged();
+    },
+    [onPlansChanged]
+  );
+  const openPlan = useCallback(
+    (programId: string) => {
+      if (!plansEnabled) return;
+      setFocusProgramId(programId);
+      setTab(PLANS_TAB);
+    },
+    [plansEnabled]
+  );
+
+  // ── Deep-link (C10): se consume UNA vez y se limpia la URL ────────────────
+  // `?tab=planes&programa=` ya entró como `focusProgramId` inicial; `nuevo=1`
+  // abre el editor. `stripPlanIntentParams` saca `programa/nuevo/turno/prefill`
+  // (conserva `tab`) para que un refresh o "atrás" no lo vuelva a disparar
+  // (mismo patrón que `/agenda?new=1`).
+  const intentConsumed = useRef(false);
+  useEffect(() => {
+    if (intentConsumed.current) return;
+    intentConsumed.current = true;
+    if (planIntent.kind === "none") return;
+    try {
+      window.history.replaceState(window.history.state, "", stripPlanIntentParams(window.location.href));
+    } catch {
+      // Sin history (tests, navegadores raros): el intent igual se consume una vez.
+    }
+    if (!plansEnabled) {
+      toast.info(PROFILE_PLAN_COPY.plansUnavailable);
+      return;
+    }
+    if (planIntent.kind !== "new") return;
+    if (planIntent.prefillInvalid) toast.warning(PROFILE_PLAN_COPY.prefillInvalid);
+    if (!permissions.manage) {
+      toast.error(PROFILE_PLAN_COPY.cannotCreate);
+      return;
+    }
+    const prefill = planIntent.prefill ?? undefined;
+    openEditor({
+      mode: "create",
+      patientId: patientCore.id,
+      prefill,
+      fromBookingId: planIntent.fromBookingId ?? prefill?.fromBookingId,
+      templateId: prefill?.templateId,
+      discipline: prefill?.discipline,
+    });
+    // Solo al montar: el intent es de la URL con la que se entró.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Synthesize the composite shape used by sub-views. The `bookings` field
+  // swaps between recent (initial) and full (after Turnos/Facturación opens).
   const patient: PatientWithRelations = useMemo(
     () => ({
       ...patientCore,
-      programs: programsLite,
       bookings: bookingsAll ?? recentBookings,
       evaScores,
     }),
-    [patientCore, programsLite, bookingsAll, recentBookings, evaScores]
+    [patientCore, bookingsAll, recentBookings, evaScores]
   );
 
-  const { focusProgram, otherActiveCount, heroPlan, sessionGroups, sessionCount } = useMemo(
-    () => pickProfilePrograms(patient.programs),
-    [patient.programs]
+  const { focusPlan, otherActiveCount, sessionCount, livePlanCount } = useMemo(
+    () => pickProfilePlans(plans),
+    [plans]
   );
-  const diagnosis = focusProgram?.case?.diagnoses?.[0]?.condition ?? null;
-  const done = focusProgram?.sessions.filter((s) => s.completedAt).length ?? 0;
+  const heroChips = useMemo(() => (plansEnabled ? heroPlanChips(plans) : []), [plansEnabled, plans]);
+  // `PlanDTO` no trae el caso clínico (lo traía `PatientProgramLite.case`): el
+  // nombre del diagnóstico sale del paciente; si no hay, el título del plan
+  // (null sin `clinical.read`, nunca se inventa).
+  const diagnosisName = patientCore.diagnosisTitle ?? focusPlan?.title ?? null;
   const age = patient.dateOfBirth
     ? Math.floor((Date.now() - +patient.dateOfBirth) / (365.25 * 86_400_000))
     : null;
@@ -221,7 +461,9 @@ export function PatientProfile({
         patient={patient}
         age={age}
         coverageLabel={coverage ? `${coverage.insurer}${coverage.planName ? " " + coverage.planName : ""}` : "Particular"}
-        plan={heroPlan}
+        plans={heroChips}
+        plansEnabled={plansEnabled}
+        onOpenPlan={openPlan}
         insurers={insurers}
         practitioners={practitioners}
         canReassign={canReassign}
@@ -230,10 +472,11 @@ export function PatientProfile({
       <TabsBar
         active={tab}
         onChange={setTab}
+        only={allowedTabs}
         counts={{
           turnos: bookingsAll?.length,
           sesiones: sessionCount,
-          plan: patient.programs.length,
+          planes: livePlanCount,
           // Use the cheap aggregate count for the Facturación badge —
           // accurate even before the full bookings list is loaded.
           fact: billableCount,
@@ -254,10 +497,12 @@ export function PatientProfile({
           {tab === "resumen" && (
             <ResumenView
               patient={patient}
-              program={focusProgram}
+              plan={plansEnabled ? focusPlan : null}
               otherActiveCount={otherActiveCount}
-              diagnosisName={diagnosis?.name ?? focusProgram?.title ?? null}
-              done={done}
+              diagnosisName={diagnosisName}
+              permissions={permissions}
+              onOpenEditor={openEditor}
+              onOpenPlan={openPlan}
             />
           )}
           {tab === "turnos" && (
@@ -268,10 +513,36 @@ export function PatientProfile({
               patchBooking={patchBooking}
               dropBooking={dropBooking}
               restoreBooking={restoreBooking}
+              plansEnabled={plansEnabled}
+              plans={plans}
+              planBalances={planBalances}
+              showPlanTitles={showPlanTitles}
             />
           )}
-          {tab === "sesiones" && <SesionesView patient={patient} groups={sessionGroups} />}
-          {tab === "plan" && <PlanView patient={patient} canUseTemplates={canUseTemplates} canDelete={canReassign} />}
+          {tab === "sesiones" && (
+            <SesionesView
+              patient={patient}
+              plans={plans}
+              permissions={permissions}
+              onOpenEditor={openEditor}
+              onOpenPlan={openPlan}
+            />
+          )}
+          {tab === "planes" && plansEnabled && (
+            <PlanView
+              patientId={patient.id}
+              plans={plans}
+              permissions={permissions}
+              focusProgramId={focusProgramId}
+              loading={plansLoading}
+              error={plansError}
+              onOpenEditor={openEditor}
+              onChanged={onPlansChanged}
+              showArchived={showArchived}
+              onShowArchivedChange={onShowArchivedChange}
+              insured={isInsured(coverage)}
+            />
+          )}
           {tab === "archivos" && <ArchivosView patientId={patient.id} />}
           {tab === "antec" && <AntecedentesView patient={patient} />}
           {tab === "evol" && <EvolucionView patient={patient} />}
@@ -280,6 +551,11 @@ export function PatientProfile({
               bookings={bookingsAll}
               loading={loadingBookings}
               patchBooking={patchBooking}
+              plansEnabled={plansEnabled}
+              plans={plans}
+              planBalances={planBalances}
+              showPlanTitles={showPlanTitles}
+              onBillingChanged={reloadBalances}
             />
           )}
           {tab === "actividad" && <ActivityView patientId={patient.id} />}
@@ -313,9 +589,20 @@ export function PatientProfile({
           {moreError && <span style={{ color: "#9F1F1F" }}>{moreError}</span>}
         </div>
       )}
+
+      {plansEnabled && editorReq && (
+        <PlanEditorDrawer
+          {...editorReq}
+          open
+          onClose={closeEditor}
+          onSaved={onEditorSaved}
+          permissions={permissions}
+        />
+      )}
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // P0-S07v · Perfil administrativo (nivel `admin`, PD-13 / Planes E1)
@@ -351,20 +638,32 @@ export type AdminBookingsPage = {
  *  - Solo lectura: `updatePatient`, `setPatientCoverage` y los toggles de cobro
  *    exigen acceso `full` (lib/patients.ts, lib/bookings.ts). Operar un turno
  *    (estado, reprogramar, cancelar) se hace en la agenda: cada fila tiene
- *    "Abrir en agenda".
+ *    "Ver en agenda".
+ *  - S22b (handoff H1 de S22f): la tabla de turnos es la misma `TurnosView` del
+ *    perfil completo en modo `admin` (antes era una copia, `AdminTurnosView`).
+ *    Con el módulo `planes` agrupa por plan con la proyección administrativa
+ *    de `getPatientPlans` (sin título: `showPlanTitles` queda en false) y el
+ *    saldo del server.
  */
 export function PatientAdminProfile({
   patient,
   initialBookings,
   canBook,
   initialTab = "resumen",
+  plans = null,
+  planBalances = null,
 }: {
   patient: PatientAdminCore;
   initialBookings: AdminBookingsPage;
   /** `agenda.operateAll` (Secretaria sí, BILLING no): muestra "Agregar turno". */
   canBook: boolean;
   initialTab?: AdminTab;
+  /** `getPatientPlans` (proyección `admin`, sin títulos); `null` sin el módulo `planes`. */
+  plans?: PlanDTO[] | null;
+  /** `getPatientPlanBalances` (data); `null` sin el módulo `planes`. */
+  planBalances?: PatientPlanBalances | null;
 }) {
+  const plansEnabled = useTenantModules().has("planes");
   const [tab, setTab] = useState<AdminTab>(initialTab);
   const [bookings, setBookings] = useState<PatientBookingFull[]>(initialBookings.rows);
   const [nextCursor, setNextCursor] = useState<string | null>(
@@ -407,7 +706,19 @@ export function PatientAdminProfile({
       {tab === "resumen" && (
         <AdminDatosView patient={patient} bookings={bookings} partial={nextCursor !== null} />
       )}
-      {tab === "turnos" && <AdminTurnosView bookings={bookings} />}
+      {tab === "turnos" && (
+        <TurnosView
+          admin
+          patientId={patient.id}
+          bookings={bookings}
+          loading={false}
+          patchBooking={() => {}}
+          dropBooking={() => {}}
+          plansEnabled={plansEnabled}
+          plans={plansEnabled ? plans : null}
+          planBalances={plansEnabled ? planBalances : null}
+        />
+      )}
 
       {tab === "turnos" && nextCursor && (
         <div
@@ -437,6 +748,7 @@ export function PatientAdminProfile({
     </div>
   );
 }
+
 
 /** Mismo criterio que Facturación: solo los turnos que efectivamente facturan. */
 function isBillable(b: PatientBookingFull) {
@@ -528,124 +840,6 @@ function AdminDatosView({
         Profesional a cargo: <strong>{patient.assignedPractitionerName ?? "Consultorio común"}</strong>. Los datos
         del paciente y los cobros los actualiza el profesional a cargo.
       </p>
-    </Card>
-  );
-}
-
-/** Columnas: Fecha y hora · Servicio · Obra social · Copago · OS · Estado · agenda. */
-const ADMIN_TURNOS_COLS = "120px 1.2fr 1fr 1fr 1fr 96px 90px";
-
-function PaidLabel({ paid }: { paid: boolean }) {
-  return paid ? <Tag tone="lime">Cobrado</Tag> : <Tag tone="soft">Pendiente</Tag>;
-}
-
-function AdminTurnosView({ bookings }: { bookings: PatientBookingFull[] }) {
-  if (bookings.length === 0) {
-    return (
-      <Card style={{ padding: 28, textAlign: "center", color: "var(--navy-500)" }}>
-        Este paciente no tiene turnos cargados.
-      </Card>
-    );
-  }
-  // Mismo orden que el tab Turnos del perfil completo: próximos ascendente
-  // (el siguiente arriba), después los pasados del más nuevo al más viejo.
-  const now = Date.now();
-  const sorted = [...bookings].sort((a, b) => {
-    const ta = +new Date(a.scheduledFor);
-    const tb = +new Date(b.scheduledFor);
-    const aUp = ta >= now;
-    const bUp = tb >= now;
-    if (aUp && bUp) return ta - tb;
-    if (!aUp && !bUp) return tb - ta;
-    return aUp ? -1 : 1;
-  });
-  return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
-      <div
-        style={{
-          padding: "12px 18px",
-          display: "grid",
-          gridTemplateColumns: ADMIN_TURNOS_COLS,
-          gap: 14,
-          fontSize: 10,
-          fontWeight: 700,
-          color: "var(--navy-300)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          borderBottom: "1px solid rgba(15,30,51,0.06)",
-        }}
-      >
-        <span>Fecha y hora</span>
-        <span>Servicio</span>
-        <span>Obra social</span>
-        <span>Copago</span>
-        <span>OS</span>
-        <span>Estado</span>
-        <span />
-      </div>
-      {sorted.map((b) => {
-        const d = new Date(b.scheduledFor);
-        const billable = isBillable(b);
-        const hasOS = b.osAmountCents > 0;
-        return (
-          <div
-            key={b.id}
-            data-testid="admin-turno-row"
-            style={{
-              padding: "14px 18px",
-              display: "grid",
-              gridTemplateColumns: ADMIN_TURNOS_COLS,
-              gap: 14,
-              alignItems: "center",
-              fontSize: 13,
-              borderBottom: "1px solid rgba(15,30,51,0.04)",
-              opacity: b.status === "CANCELLED" ? 0.55 : 1,
-            }}
-          >
-            <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
-              {d.toLocaleString("es-AR", {
-                day: "2-digit",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-                timeZone: "America/Argentina/Buenos_Aires",
-              })}
-            </span>
-            <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {b.serviceName}
-            </span>
-            <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {b.obraSocial.toLowerCase() === "particular" ? "—" : b.obraSocial}
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
-                {formatARS(b.copagoCents)}
-              </span>
-              {billable && <PaidLabel paid={b.paymentStatus === "PAID"} />}
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              {hasOS ? (
-                <>
-                  <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>
-                    {formatARS(b.osAmountCents)}
-                  </span>
-                  {billable && <PaidLabel paid={!!b.insurerPaidAt} />}
-                </>
-              ) : (
-                <span style={{ fontSize: 12, color: "var(--navy-300)" }}>—</span>
-              )}
-            </span>
-            <BookingStatusTag status={b.status} />
-            <Link
-              href={`/agenda?view=timeline&date=${toARDateKey(d)}`}
-              style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none", justifySelf: "end" }}
-            >
-              Ver en agenda
-            </Link>
-          </div>
-        );
-      })}
     </Card>
   );
 }

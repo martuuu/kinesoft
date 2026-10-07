@@ -20,7 +20,6 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient, ProgramStatus } from "@prisma/client";
 import {
-  addCustomSession,
   addSessionExercise,
   bulkAddSessionExercises,
   completeSessionFromSeguimiento,
@@ -31,6 +30,9 @@ import {
   updateSessionExercise,
   updateSessionMeta,
 } from "@/lib/sessions";
+import { addPlanSessions, previewAddPlanSessions } from "@/lib/plans-edit";
+import type { AddPlanSessionsResult } from "@/lib/plans-edit-types";
+import { createPlan as createPlanFixture } from "@/tests/helpers/plan-factory";
 import { completeSessionInTx, reopenSessionIfUntouchedInTx } from "@/lib/sessions-internal";
 import { runWithRls } from "@/lib/rls";
 import { planPatientLockKey } from "@/lib/plan-lock";
@@ -297,7 +299,9 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
       await updateSessionMeta({ sessionId: s.id, notes: "intruso" }),
       await rescheduleSession({ sessionId: s.id, scheduledFor: new Date(Date.now() + 5 * DAY).toISOString() }),
       await updateSessionExercise({ sessionExerciseId: sx.id, status: "DONE" }),
-      await addCustomSession({ programId: program.id, title: "x" }),
+      // P3.Z.0: "agregar sesión a medida" va por el motor (la puerta vieja se retiró).
+      await addPlanSessions({ programId: program.id, kind: "custom", title: "x", rows: [], stateToken: "x" }),
+      await previewAddPlanSessions({ programId: program.id, kind: "custom", title: "x" }),
     ];
     for (const r of results) expect(r).toMatchObject({ ok: false });
 
@@ -313,39 +317,78 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
   // Planes P0 · S02s — internos (C8) y carreras
   // ────────────────────────────────────────────────────────────────────
 
-  it("[P0-S02s] 2 addCustomSession concurrentes no duplican index", async () => {
+  it("[P0-S02s] 2 altas «a medida» concurrentes (addPlanSessions custom) no duplican index", async () => {
+    // Re-afirmado en P3.Z.0 (S27b) sobre la puerta nueva antes de retirar la
+    // vieja. Historia: antes del fix de S02s las dos altas leían el último
+    // index y se frenaban recién en el INSERT; al soltar, las dos insertaban
+    // index 3 ([1,2,3,3]). Ahora el commit toma `lockPlanPatient` ANTES de
+    // leer y re-clasifica contra el `stateToken` del preview.
+    //
+    // Escenario: las dos previsualizan con el plan en el mismo estado (mismo
+    // `stateToken`) y un holder externo tiene el lock de estructura del
+    // paciente y la fila del plan; los dos commits se encolan detrás. Al
+    // soltar, cada uno termina en una fila con index nuevo o en un rechazo
+    // LIMPIO (`stale-preview` con preview fresco, nunca un throw ni un 23505).
+    // El que perdió reintenta con ese preview (lo que hace el editor) y entra.
     asUser(A.userId);
-    const p = await addPatient(db, A);
-    const { program } = await makeProgram(p, { n: 2 });
+    const p = await createPlanFixture(db, A, { sessions: 2, data: { schedule: { v: 1 } } });
+    // Con fecha explícita (como la pide el diálogo "a medida"); el caso sin fecha está en plans-sync-sessions ("[P3-S27b] 'a medida' sin fecha").
+    const AT = { "Extra A": "2030-03-04T13:00:00.000Z", "Extra B": "2030-03-05T13:00:00.000Z" } as const;
+    const custom = (title: keyof typeof AT) => ({ programId: p.programId, kind: "custom" as const, title, at: AT[title] });
+    /** La fila nueva sin turno (lo que el usuario elige si no quiere agendarla ya). */
+    const noneRow = (pv: { rows: Array<{ index: number; sessionId?: string | null }> }) =>
+      pv.rows.filter((r) => !r.sessionId).map((r) => ({ index: r.index, kind: "none" as const }));
 
-    // Un holder externo toma la fila del programa y el lock de estructura del
-    // paciente. Antes del fix (it.fails, verificado esperando a los backends bloqueados por el holder): las
-    // dos altas leían el último index y se frenaban recién en el INSERT (la FK
-    // de Session toma FOR KEY SHARE sobre el programa); al soltar, las dos
-    // insertaban index 3 ([1,2,3,3]). Ahora las dos esperan en
-    // `lockPlanPatient` ANTES de leer, y se serializan.
-    const key = planPatientLockKey({ tenantId: A.tenantId, patientId: p });
-    let calls: Promise<unknown>[] = [];
+    const pvA = await previewAddPlanSessions(custom("Extra A"));
+    const pvB = await previewAddPlanSessions(custom("Extra B"));
+    if (!pvA.ok || !pvB.ok) throw new Error("preview");
+    // (Los tokens difieren por el título pedido, pero los dos se tomaron con el
+    // plan en el mismo `updatedAt`: el primero que commitea deja viejo al otro.)
+
+    const thrown = (e: unknown) => ({ ok: false as const, thrown: String(e) });
+    const key = planPatientLockKey({ tenantId: A.tenantId, patientId: p.patientId });
+    let calls: Array<Promise<AddPlanSessionsResult | { ok: false; thrown: string }>> = [];
     await db.$transaction(
       async (htx) => {
-        await htx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${program.id} FOR UPDATE`;
+        await htx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${p.programId} FOR UPDATE`;
         await htx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
         calls = [
-          addCustomSession({ programId: program.id, title: "Extra A" }),
-          addCustomSession({ programId: program.id, title: "Extra B" }),
+          addPlanSessions({ ...custom("Extra A"), rows: noneRow(pvA.preview), stateToken: pvA.preview.stateToken }).catch(thrown),
+          addPlanSessions({ ...custom("Extra B"), rows: noneRow(pvB.preview), stateToken: pvB.preview.stateToken }).catch(thrown),
         ];
         await waitForAdvisoryWaiter(db, key, { minWaiters: 2 });
       },
       { timeout: 20_000 }
     );
     const results = await Promise.all(calls);
-    expect(results.every((r) => (r as { ok: boolean }).ok)).toBe(true);
+    // Ningún throw (ni P2002 ni deadlock que se escape).
+    expect(results.filter((r) => "thrown" in r)).toEqual([]);
+    const won = results.filter((r) => r.ok);
+    const lost = results.filter((r) => !r.ok) as Array<Extract<AddPlanSessionsResult, { ok: false }>>;
+    expect(won.length).toBeGreaterThanOrEqual(1);
+    for (const l of lost) expect(l).toMatchObject({ ok: false, kind: "stale-preview" });
 
-    const idx = (await db.session.findMany({ where: { programId: program.id }, select: { index: true } }))
-      .map((s) => s.index)
-      .sort((a, b) => a - b);
-    expect(idx).toEqual([1, 2, 3, 4]);
-    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).totalSessions).toBe(4);
+    const indexes = async () =>
+      (await db.session.findMany({ where: { programId: p.programId }, select: { index: true } }))
+        .map((s) => s.index)
+        .sort((a, b) => a - b);
+    // Sin colisión: índices únicos y contiguos, y la caché coincide.
+    expect(await indexes()).toEqual(Array.from({ length: 2 + won.length }, (_, i) => i + 1));
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: p.programId } })).totalSessions).toBe(2 + won.length);
+
+    // El perdedor reintenta con el preview fresco que le devolvió el stale.
+    const titles2 = ["Extra A", "Extra B"] as const;
+    for (const [i, r] of results.entries()) {
+      if (r.ok || !("kind" in r) || r.kind !== "stale-preview") continue;
+      const retry = await addPlanSessions({ ...custom(titles2[i]), rows: noneRow(r.preview), stateToken: r.preview.stateToken });
+      expect(retry.ok).toBe(true);
+    }
+    expect(await indexes()).toEqual([1, 2, 3, 4]);
+    const titles = (await db.session.findMany({ where: { programId: p.programId, index: { gt: 2 } }, select: { title: true } }))
+      .map((s) => s.title)
+      .sort();
+    expect(titles).toEqual(["Extra A", "Extra B"]);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: p.programId } })).totalSessions).toBe(4);
   });
 
   it("[P0-S02s] add/substitute/bulk rechazan ejercicios archivados", async () => {

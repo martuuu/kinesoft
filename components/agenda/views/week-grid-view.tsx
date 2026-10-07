@@ -11,7 +11,9 @@ import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
+import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
+import { PlanMarks, planLooseSplit, planLooseSplitText } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 
 /** Profesional visible con sus iniciales (orden de columnas/chips). */
@@ -95,13 +97,14 @@ function WeekSlotModal({
                 />
                 <Avatar name={b.patientName} size={32} tone="sky" />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     {b.patientName}
                     {b.isOverbooked && (
                       <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", color: "#9A5B00", background: "rgba(255,176,32,0.22)", borderRadius: 999, padding: "0 6px" }}>
                         Sobreturno
                       </span>
                     )}
+                    <PlanMarks b={b} />
                   </div>
                   <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
                     {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
@@ -141,7 +144,7 @@ export function WeekGridView({
   showHeader,
   showSaturday,
   showSunday,
-  highlightedServiceId,
+  highlight,
   practitioners = null,
   dayLocks,
   blockedByDay,
@@ -154,8 +157,8 @@ export function WeekGridView({
   showHeader: boolean;
   showSaturday: boolean;
   showSunday: boolean;
-  /** When set, cells containing this service lift; the rest dim. */
-  highlightedServiceId: string | null;
+  /** Resaltado de la leyenda: las celdas con algún turno que coincide se levantan; el resto se atenúa. */
+  highlight: AgendaHighlight | null;
   practitioners?: ReadonlyArray<WeekPractitioner> | null;
   dayLocks?: Readonly<Record<string, AggregatedDayLock | undefined>>;
   blockedByDay?: Readonly<Record<string, ReadonlyMap<number, string | null> | undefined>>;
@@ -339,16 +342,23 @@ export function WeekGridView({
             const count = cellBookings.length;
             // Varios profesionales en pantalla: el conteo se parte por iniciales.
             const split = practitionerById ? splitCountByPractitioner(cellBookings, practitioners ?? []) : null;
-            // Legend "filter": lift cells that contain the highlighted service,
+            // Legend "filter": lift cells that contain a highlighted booking,
             // dim the rest.
-            const hasMatch =
-              highlightedServiceId != null &&
-              cellBookings.some((b) => b.serviceId === highlightedServiceId);
-            const dimmed = highlightedServiceId != null && !hasMatch;
+            const hasMatch = highlight != null && anyHighlightMatch(highlight, cellBookings);
+            const dimmed = highlight != null && !hasMatch;
+            // Planes (S19a, plan §3.4 "En Semana, conteo partido"): con algún
+            // turno de plan en la celda, "2 de plan · 1 suelto". Sin profesionales
+            // partidos reemplaza la palabra "turnos" (la celda de 30 min mide 34 px
+            // y no entra una línea más); con el reparto por profesional va como
+            // tercera línea y, si no entra, queda en el tooltip y en el modal.
+            const planSplit = planLooseSplit(cellBookings);
+            const planSplitText = planSplit ? planLooseSplitText(planSplit) : null;
+            const multiSplit = split != null && split.length > 1;
 
             return (
               <button
                 key={cellKey}
+                title={planSplitText ? `${count} ${count === 1 ? "turno" : "turnos"} · ${planSplitText}` : undefined}
                 onClick={() =>
                   setOverflow({
                     bookings: cellBookings,
@@ -381,20 +391,30 @@ export function WeekGridView({
                 <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
                   {count}
                 </span>
-                {split && split.length > 1 ? (
+                {split && multiSplit ? (
                   <span
                     aria-label={split.map((x) => `${practitionerById?.get(x.id)?.name ?? x.initials}: ${x.count}`).join(", ")}
                     style={{ fontSize: 9, opacity: 0.9, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
                   >
                     {split.map((x) => `${x.initials} ${x.count}`).join(" · ")}
                   </span>
-                ) : split && split.length === 1 ? (
+                ) : planSplitText ? null : split && split.length === 1 ? (
                   <span style={{ fontSize: 9, opacity: 0.9, fontWeight: 600 }}>
                     {split[0].initials} · {count === 1 ? "turno" : "turnos"}
                   </span>
                 ) : (
                   <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
                     {count === 1 ? "turno" : "turnos"}
+                  </span>
+                )}
+                {planSplitText && (
+                  <span
+                    data-plan-split
+                    style={{ fontSize: 9, opacity: 0.95, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
+                  >
+                    {/* Un solo profesional en la celda: sus iniciales van en la misma línea. */}
+                    {!multiSplit && split?.length === 1 ? `${split[0].initials} · ` : ""}
+                    {planSplitText}
                   </span>
                 )}
               </button>

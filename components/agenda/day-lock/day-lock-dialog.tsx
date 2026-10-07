@@ -26,8 +26,10 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { applyDayLock, previewDayLock, removeDayLock } from "@/lib/time-blocks";
 import type {
+  DayLockAffected,
   DayLockApplyData,
   DayLockPreview,
   DayLockPreviewInput,
@@ -56,6 +58,77 @@ import {
 } from "@/lib/day-lock-state";
 
 type Step = "form" | "affected" | "done" | "unlocked";
+
+/**
+ * Aviso L11 (S18b, ES3): cancelar desde el candado un turno que es sesión de
+ * un plan NO borra la sesión: queda "sin turno" con su cuota y su fecha
+ * planificada (tabla C4, fila CANCELLED · candado), para reprogramarla desde
+ * el plan. Solo con el módulo `planes` (en un consultorio General no hay
+ * planes). Sin título del plan ni nada clínico: lo ve también la Secretaria
+ * (PD-13).
+ *
+ * P3.Z (F3a + F1 #9): `DayLockAffected.inPlan` (siempre presente) dice qué
+ * turno es sesión de un plan: el aviso cuenta esas sesiones y no sale si no
+ * hay ninguna (antes era un aviso genérico ante cualquier turno afectado).
+ */
+export function dayLockPlanNote(
+  planesEnabled: boolean,
+  affected: readonly Pick<DayLockAffected, "inPlan">[]
+): string | null {
+  if (!planesEnabled || affected.length === 0) return null;
+  const n = affected.filter((a) => a.inPlan).length;
+  if (n === 0) return null;
+  return n === 1
+    ? "1 de estos turnos es una sesión de un plan. Si lo cancelás, la sesión no se pierde: queda sin turno en el plan, para reprogramarla desde el perfil del paciente."
+    : `${n} de estos turnos son sesiones de un plan. Si los cancelás, las sesiones no se pierden: quedan sin turno en el plan, para reprogramarlas desde el perfil del paciente.`;
+}
+
+/**
+ * Lista del paso «affected»: hora · profesional · paciente, "Con cobro" y, con
+ * el módulo `planes`, un chip "Plan" (canal no cromático, AGENTS §5) en los
+ * turnos que son sesión de un plan. Nunca el título del plan (PD-13).
+ */
+export function DayLockAffectedList({
+  affected,
+  practitioners,
+  planesEnabled,
+}: {
+  affected: readonly DayLockAffected[];
+  practitioners: readonly { id: string; name: string }[];
+  planesEnabled: boolean;
+}) {
+  const inPlan = new Set(planesEnabled ? affected.filter((a) => a.inPlan).map((a) => a.id) : []);
+  return (
+    <ul style={listStyle} aria-label="Turnos en ese horario">
+      {affectedLines(affected, practitioners).map((l) => (
+        <li key={l.id} style={rowStyle}>
+          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
+          <span style={{ color: "var(--navy-500)", minWidth: 0, flex: "0 1 34%" }}>{l.practitioner}</span>
+          <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
+          {inPlan.has(l.id) && (
+            <span
+              data-testid="day-lock-plan-chip"
+              className="k-tag k-tag-soft"
+              title="Es una sesión de un plan: si lo cancelás, la sesión queda sin turno."
+              style={{ fontSize: 11 }}
+            >
+              Plan
+            </span>
+          )}
+          {l.hasPayment && (
+            <span
+              className="k-tag k-tag-soft"
+              title="Tiene un cobro registrado: no se cancela desde acá."
+              style={{ fontSize: 11 }}
+            >
+              Con cobro
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 const labelStyle: React.CSSProperties = {
   fontSize: 12,
@@ -190,6 +263,7 @@ export function DayLockDialog({
   onDone: () => void;
 }) {
   const confirm = useConfirm();
+  const planesEnabled = useTenantModules().has("planes");
   const ctx = useMemo(
     () => ({ practitioners, canBlockAll, ownPractitionerId: ownPractitionerId ?? null }),
     [practitioners, canBlockAll, ownPractitionerId]
@@ -661,24 +735,7 @@ export function DayLockDialog({
               : ` · de ${minutesLabel(scope.input.startMin ?? 0)} a ${minutesLabel(scope.input.endMin ?? 0)}`}
           </div>
           {preview.affected.length > 0 && (
-            <ul style={listStyle} aria-label="Turnos en ese horario">
-              {affectedLines(preview.affected, practitioners).map((l) => (
-                <li key={l.id} style={rowStyle}>
-                  <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 44 }}>{l.time}</span>
-                  <span style={{ color: "var(--navy-500)", minWidth: 0, flex: "0 1 34%" }}>{l.practitioner}</span>
-                  <span style={{ color: "var(--navy-900)", flex: 1 }}>{l.patient}</span>
-                  {l.hasPayment && (
-                    <span
-                      className="k-tag k-tag-soft"
-                      title="Tiene un cobro registrado: no se cancela desde acá."
-                      style={{ fontSize: 11 }}
-                    >
-                      Con cobro
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <DayLockAffectedList affected={preview.affected} practitioners={practitioners} planesEnabled={planesEnabled} />
           )}
           {preview.affected.length > 0 && (
             <div style={noteStyle}>
@@ -686,6 +743,10 @@ export function DayLockDialog({
               más adelante): avisale vos.
               {preview.affected.some((a) => a.hasPayment) &&
                 " Los que tienen un cobro registrado no se cancelan: quedan en la agenda para que los reprogrames o devuelvas el pago."}
+              {(() => {
+                const planNote = dayLockPlanNote(planesEnabled, preview.affected);
+                return planNote ? <span data-testid="day-lock-plan-note"> {planNote}</span> : null;
+              })()}
             </div>
           )}
 

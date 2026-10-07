@@ -9,12 +9,18 @@
  * EVA, turnos) a un profesional básico o a la Secretaria. Se borra; este test
  * evita que vuelva y fija que los lectores de HC que quedan cierran a `[]`
  * para básico y ASSISTANT.
+ *
+ * P3-S27a: los lectores de planes de la ficha (`getPatientProgramsLite/Full`,
+ * retirados) pasaron a `getPatientPlans` (S14). El gate equivalente: básico →
+ * rechazo sin datos; la Secretaria (ASSISTANT, nivel `admin` de PD-13) ve el
+ * plan para agendar pero SIN título, notas ni nada clínico de las sesiones.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import * as patientsModule from "@/lib/patients";
 import { getPatientEvaScores } from "@/lib/patients";
-import { getPatientProgramsFull, getPatientProgramsLite } from "@/lib/programs";
+import * as programsModule from "@/lib/programs";
+import { getPatientPlans } from "@/lib/plans-read";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -69,21 +75,39 @@ describe.skipIf(!RUN)("patients · superficie RPC (P0-S02a, E0)", () => {
     expect((patientsModule as Record<string, unknown>).getPatient).toBeUndefined();
   });
 
-  it.each([
-    ["profesional básico", () => basicKine.userId],
-    ["ASSISTANT sin Consultorio común", () => assistant.userId],
-  ])("los lectores de HC que quedan devuelven [] para %s", async (_label, who) => {
-    asUser(who());
-    expect(await getPatientProgramsLite(patientId)).toEqual([]);
-    expect(await getPatientProgramsFull(patientId)).toEqual([]);
+  it("[P3-S27a] los lectores viejos de planes ya no son actions", () => {
+    expect("getPatientProgramsLite" in programsModule).toBe(false);
+    expect("getPatientProgramsFull" in programsModule).toBe(false);
+  });
+
+  it("los lectores de HC que quedan no le dan nada al profesional básico", async () => {
+    asUser(basicKine.userId);
+    const plans = await getPatientPlans({ patientId });
+    expect(plans.ok).toBe(false);
+    expect(JSON.stringify(plans)).not.toMatch(/Plan con HC|Dolor lumbar/);
+    expect(await getPatientEvaScores(patientId)).toEqual([]);
+  });
+
+  it("[P3-S27a] ASSISTANT sin Consultorio común: ve el plan (nivel admin) sin título ni nada clínico", async () => {
+    asUser(assistant.userId);
+    const plans = await getPatientPlans({ patientId });
+    expect(plans.ok).toBe(true);
+    if (!plans.ok) return;
+    expect(plans.data).toHaveLength(1);
+    expect(plans.data[0].title).toBeNull();
+    expect(plans.data[0].notes).toBeNull();
+    // Ni el título ni las notas de la sesión, en ningún campo del payload.
+    expect(JSON.stringify(plans)).not.toMatch(/Plan con HC|Dolor lumbar/);
     expect(await getPatientEvaScores(patientId)).toEqual([]);
   });
 
   it("control: el OWNER (full) sí lee la HC por los mismos lectores", async () => {
     asUser(A.userId);
-    const full = await getPatientProgramsFull(patientId);
-    expect(full).toHaveLength(1);
-    expect(full[0].sessions[0].notes).toBe("Dolor lumbar");
+    const plans = await getPatientPlans({ patientId });
+    expect(plans.ok).toBe(true);
+    if (!plans.ok) return;
+    expect(plans.data).toHaveLength(1);
+    expect(plans.data[0].title).toBe("Plan con HC");
     expect(await getPatientEvaScores(patientId)).toHaveLength(1);
   });
 });

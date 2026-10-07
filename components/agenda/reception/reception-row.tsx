@@ -3,6 +3,8 @@
 import type { ReactNode } from "react";
 import { IconActivity, IconCheck, IconClock, IconUsers, IconX } from "@/components/ui/icons";
 import { PractitionerBadge } from "@/components/agenda/grid/practitioner-badge";
+import { bookingPlanMarks } from "@/components/agenda/grid/booking-card";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import {
   RECEPTION_ACTION_LABEL,
@@ -94,6 +96,7 @@ export function ReceptionRow({
   const who = `${b.patientName}, ${time}`;
   const wait = waitText(b, entry.state, now);
   const cancelled = entry.state === "cancelado";
+  const plan = bookingPlanMarks(b);
 
   return (
     <tr
@@ -117,6 +120,15 @@ export function ReceptionRow({
         </button>
         {guest && <span className="rcp-guest">Invitado</span>}
         {b.isOverbooked && <span className="rcp-guest">Sobreturno</span>}
+        {/* Planes (S19a): chip `Kine · 3/10` (sin título, también para la
+            Secretaria) o "Fuera de plan" con el pill de texto de la fila,
+            punteado para distinguirlo de Invitado/Sobreturno. */}
+        {plan.chip && <DisciplineChip {...plan.chip} size="xs" style={{ marginLeft: 6, verticalAlign: "middle" }} />}
+        {plan.outOfPlan && (
+          <span className="rcp-guest" data-badge="fuera-de-plan" style={{ borderStyle: "dashed" }}>
+            Fuera de plan
+          </span>
+        )}
       </th>
       <td data-label="Servicio">
         <span className="rcp-service">

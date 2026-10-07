@@ -111,6 +111,7 @@ Pure logic lives outside `"use server"` files so it can be unit-tested
 | `lib/form-dirty.ts` + `components/ui/use-form-dirty.ts` | dirty-check of uncontrolled forms (snapshot vs current) for the Drawer guard |
 | `components/ui/money-input.tsx` + `parseMoneyInput`/`formatMoneyInput` (`lib/format.ts`) | **the** control for typed ARS amounts: text + `inputMode="decimal"`, integer cents, string math (no float), invalid text blocks submit. Replaced every `type=number` money input |
 | `Drawer` `dirty` / `dirtyMessage` (`components/ui/drawer.tsx`) | Esc / backdrop / X ask for confirmation when the form is dirty; `ConfirmDialog` stops Esc in the capture phase so it doesn't close the drawer below |
+| `PlanDialogShell` (`components/planes/plan-edit-dialogs.tsx:276`, ES3) | `Modal` and `Drawer` of the design system **do not use a portal**: inside the booking drawer (framer-motion `transform`) a `position: fixed` child is pinned to the panel, and `Modal` (z 40) rendered under the drawer (z 46). The shell portals to `document.body` at z 60 (below `ConfirmDialog`, z 80), stops Esc in capture and reuses the Drawer's dirty-guard copy. Use it for a dialog that opens from inside a drawer |
 
 ## Modules added in Planes ES1 (04-oct-2026)
 
@@ -119,15 +120,15 @@ Pure logic lives outside `"use server"` files so it can be unit-tested
 | `lib/sessions-internal.ts` (`server-only`) | **The only door to close and reopen a plan session**: `completeSessionInTx` (doesn't gate, doesn't touch Booking, doesn't autocomplete; `'booking'` writes only `completedAt`) and `reopenSessionIfUntouchedInTx`. Seguimiento uses it today; the agenda sync (ES2b) reuses it. PLANES C8 |
 | `lib/storage-internal.ts` (`server-only`) | Supabase Storage via the **service role** only (upload / sign / remove, `{ error }` checked, fails closed without the env). `lib/files.ts` and exercise media go through it |
 | `lib/exercise-media-internal.ts` (`server-only`) | `signExerciseMedia(mediaId)`: signs the key stored in the row, never a client key |
-| `lib/patient-access-internal.ts` · `lib/programs.ts` | `hcAccessError` moved out of `patients.ts`; program actions (`createProgram` with zod + AR day, `updateProgram`, `setProgramStatus`, …) |
+| `lib/patient-access-internal.ts` · `lib/programs.ts` | `hcAccessError` moved out of `patients.ts`. `lib/programs.ts` only keeps `setProgramStatus`, `deleteProgram` and `deleteSession` (no app callers since ES3; retirement pending Martin's decision, recommended EV1). `createProgram`/`updateProgram` were retired in ES3 (S27a) |
 | `lib/booking-field-access.ts` · `lib/plan-lock.ts` · `lockCapacityMany` | field rule for bookings; plan-patient lock and one-statement capacity locks (PLANES C2) |
 | `lib/availability/plan.ts` · `lib/plan-schedule.ts` · `lib/plan-pricing.ts` · `lib/plan-display.ts` · `loadAvailabilityInputsForDays` | pure plan engine, schedule v1, money and display, and the per-day loader. Consumed by the ES2b engine (below) |
 | `lib/plans-dedupe*.ts` + `scripts/plans-dedupe-session-index.ts` | pre-M1 dedupe of `Session(programId, index)` (MIGRACIONES-RUNBOOK §2.3) |
 
-## Módulos de Planes ES2b (07-oct-2026, pendiente commit)
+## Módulos de Planes ES2b (07-oct-2026, commit `58ec36f`)
 
-Todo server: la UI vieja sigue llamando a los exports legacy de `lib/programs.ts`/`lib/sessions.ts`, que delegan
-hasta que ES3 cablee la UI nueva y S27a los retire. Firmas en [PLANES.md §4 C8](PLANES.md); orden de locks en
+Todo server. Desde ES3 la UI llama directo a estos módulos y las altas legacy (`createProgram`, `updateProgram`,
+`assignDiagnosisAndCreateProgram`, `applyPlanTemplate`, `addCustomSession`) se retiraron (S27a/S27b). Firmas en [PLANES.md §4 C8](PLANES.md); orden de locks en
 ADR-004. Regla común: los `*InTx` **no gatean ni emiten**; el export `"use server"` gatea (`assertPlan*InTx`), corre
 la tx con `withTxConflictRetry` y después del commit llama una vez a `afterBookingsCommitted(refs)`.
 
@@ -144,9 +145,26 @@ la tx con `withTxConflictRetry` y después del commit llama una vez a `afterBook
 | `lib/plan-invariants-internal.ts` | **Verificador** I1-I8: `assertProgramInvariantsInTx` al final de cada tx del motor (3 sentencias); una violación tira `ProgramInvariantViolation` (rollback + Sentry). No corre en los write-paths de turnos sueltos |
 | `lib/agenda-plan-projection-internal.ts` | Proyección C9 de la agenda (chip, ordinal, "Fuera de plan"): queries planas, sin módulo `planes` = neutra sin queries, nunca la autorización de la OS |
 | `lib/plan-authz-internal.ts` · `lib/plan-predicates.ts` · `lib/plans-schemas.ts` · `lib/plans-types.ts` | Gates de Planes; predicados Prisma únicos ("sin turno", vivo, vinculado, adoptable, con pago); zod; tipos re-exportados de `lib/availability/plan.ts` (una sola fuente) |
-| `lib/diagnosis-internal.ts` | `createPlanFromDiagnosis` por el motor (caso + diagnóstico + plan + turnos en una tx) y la rampa por fase |
+| `lib/diagnosis-internal.ts` | `createPlanFromDiagnosis` por el motor (caso + diagnóstico + plan + turnos en una tx) y la rampa por fase. La superficie RPC de `lib/diagnosis.ts` es una **lista blanca** testeada (`tests/integration/plans-doors-diagnosis-authz.test.ts:206-215`): un export nuevo es una RPC pública |
 | `lib/patient-search.ts` (P2-FX1) | `searchPatientsForBooking`: buscador del `PatientPicker` de la agenda (nombre + DNI, sin gate de módulo). El picker elige con `source` (`components/patients/patient-picker-search.ts`) |
 | `lib/services-discipline.ts` | Disciplina sugerida de un servicio desde las especialidades (puro) |
+
+## Módulos de Planes ES3 (08-oct-2026, pendiente commit)
+
+UI de Planes sobre el motor de ES2b. Contratos en [PLANES.md §4 C9/C10/C13](PLANES.md); decisiones en PLANES §11.
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/plans-deeplink.ts` | **Único parser** de los deep-links C10 (zod, `prefill` ≤ 2 kB, tab `planes` con alias `plan`). `PlanEditorPrefill` sin texto libre: sin `authorization` |
+| `lib/agenda-highlight.ts` · `lib/agenda-client-state.ts:175-210` | Resaltado de la agenda (`AgendaHighlight`: servicio / plan / sueltos; resalta, no filtra) y filtros extensibles `AgendaFilters` `{practitionerIds, locationId}` + `AGENDA_FILTER_DIMENSIONS` (SR suma `roomId`) |
+| `components/agenda/agenda-utils.ts` (`compactPlanFields` / `expandPlanFields`) | DTO compacto C9 en el cable: omite los neutros y la disciplina del servicio sale del catálogo en el cliente |
+| `components/planes/plan-editor-drawer.tsx` · `plan-form.tsx` · `lib/plan-editor-state.ts` | **Editor único** (Drawer 600 px, modos `create`/`generate`/`replan`) para las 4 puertas; estado puro testeable. Lo monta una vez el shell del perfil y lo abren Diagnóstico, `/planes` y la agenda por deep-link |
+| `components/planes/plan-preview-table.tsx` | "Revisá los turnos" (C13): estados, resoluciones, stale y ordinal (`ordinalOf`). La reusan el editor, los diálogos y el modal de Seguimiento |
+| `components/seguimiento/schedule-session-modal.tsx` | "Agendar" una sesión sin turno: modal de **una fila** sobre `previewGeneratePlanBookings`/`generatePlanBookings` (sin montar el editor) |
+| `lib/plan-templates.ts` (+ `-types`) | CRUD de plantillas (CAS opcional, autor o admin, módulo `plantillas`) y `getTemplatePrefill` para el editor |
+| `lib/dashboard-revenue.ts` · `getRevenue` (`lib/dashboard.ts:619`) · `updateDashboardPrefs` (`lib/preferences.ts:158`) | Ingresos reales (S14r): MP + copagos manuales por `copagoPaidAt` + OS aparte por `insurerPaidAt`; Mes/Semana en `UserPreferences.dashboardPrefs` (M3a) |
+| `components/planes/plan-balance.tsx` · `plan-booking-groups.ts` | Turnos y Facturación agrupados por plan con el saldo del server |
+| `components/patients/archive-patient-dialog.tsx` | Diálogo L9 (archivar paciente → pausar/cancelar planes) |
 
 ## Timezone (a core invariant)
 
@@ -168,13 +186,16 @@ through `dbDateToDayKey`/`dayKeyToDbDate` (`lib/availability/day.ts`).
 **Scheduling.** `Booking` is the turno — `scheduledFor`, `durationMin`,
 `status` (PENDING/CONFIRMED/COMPLETED/NO_SHOW/CANCELLED), `copagoCents`
 (per-turno override), `insurerPaidAt` (OS reimbursement confirmation),
+`copagoPaidAt` (M3a, ES3: when the copago was marked paid by hand; written and
+cleared only by `toggleBilling`/`setBookingCopagoPaid`, kept on re-mark; with
+`insurerPaidAt`, it is the date the dashboard revenue widget counts by),
 `seriesId` (groups a multi-turno batch), `title` / `description` (per-turno
 mini-diagnosis, defaulted from `Patient.diagnosisTitle` / `diagnosisNote`),
 `idempotencyKey`, `updatedAt` (optimistic-concurrency token). Since M1
 (`plans_booking_link`, ES2a, 04-oct-2026; local only until the end-of-B deploy)
 a booking can belong to a plan: `programId` + `sessionId` (both or neither),
 `pricedByPlan`. Without `programId` it is a standalone ("fuera de plan")
-booking. No action writes the link yet: ES2b does (ADR-001).
+booking. Only the plan engine writes the link (ES2b, ADR-001; AUDIT §5.38).
 
 **Plans after M1 (summary; SQL in [PLANES.md](PLANES.md) §3).**
 - `TreatmentProgram`: `discipline` (KINESIOLOGY/OSTEOPATHY), responsible
@@ -590,9 +611,9 @@ platform tier**:
 
 - **Context.** The owner requires that *every plan generates its bookings* and
   that, for the same patient, in-plan vs out-of-plan bookings are
-  distinguishable. Today the three plan entry points (`createProgram`,
-  `assignDiagnosisAndCreateProgram`, `applyPlanTemplate`) create `Session`s at
-  midnight with no `Booking`. The only bridge was a ±2h heuristic in
+  distinguishable. At the time, the three plan entry points (`createProgram`,
+  `assignDiagnosisAndCreateProgram`, `applyPlanTemplate`; all retired in ES3)
+  created `Session`s at midnight with no `Booking`. The only bridge was a ±2h heuristic in
   `rescheduleSession` that moved unrelated bookings (audit 2026-09-23); A2a
   removed it (30-sep-2026): rescheduling moves only the session and reports a
   same-day booking with a link to the agenda.

@@ -279,11 +279,18 @@ export const DayLockRemove = z.object({
 });
 export type DayLockRemoveInput = z.input<typeof DayLockRemove>;
 
-/** Turno afectado por el candado: lo de `AffectedBooking` + si tiene cobro. */
+/** Turno afectado por el candado: lo de `AffectedBooking` + si tiene cobro y si es de plan. */
 export type DayLockAffected = AffectedBooking & {
   status: "PENDING" | "CONFIRMED";
   /** Cobro registrado (criterio de `cancelBookingsInTx`): no se cancela en lote. */
   hasPayment: boolean;
+  /**
+   * Turno de un plan (`Booking.programId` no nulo). S18b H2 (P3.Z): el diálogo
+   * cuenta cuántos son de plan para la nota precisa ("cancelarlo deja la
+   * sesión sin turno") y marca la fila con un chip no cromático. Solo el
+   * booleano: ni título ni id del plan (PD-13: la Secretaria opera el candado).
+   */
+  inPlan: boolean;
 };
 
 export type DayLockPreview = {

@@ -23,6 +23,12 @@ vi.mock("@/components/ui/toast", () => ({
 }));
 vi.mock("@/components/ui/confirm-dialog", () => ({ useConfirm: () => vi.fn(async () => true) }));
 vi.mock("@/lib/bookings", () => proxy());
+// El drawer importa actions de Planes (S19c/S19d): sin mock, `cache` de React no existe fuera de RSC.
+vi.mock("@/lib/plans-move", () => proxy());
+vi.mock("@/lib/plans-read", () => proxy());
+vi.mock("@/lib/plans-adopt", () => proxy());
+vi.mock("@/lib/plans-edit", () => proxy());
+vi.mock("@/lib/sessions", () => proxy());
 vi.mock("@/lib/patients", () => proxy());
 vi.mock("@/lib/diagnosis", () => proxy());
 vi.mock("@/lib/availability-actions", () => proxy());

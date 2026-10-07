@@ -23,41 +23,52 @@ import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
 import type { PayerPlanOption } from "@/lib/catalog-schemas";
 import type { PatientAdminCore } from "@/lib/patients-types";
 import { SharePatientButton } from "@/components/patients/share-patient-button";
+import {
+  ArchivePatientDialog,
+  shouldAskArchivePlans,
+  type ArchivePatientResult,
+} from "@/components/patients/archive-patient-dialog";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
+import type { HeroPlanChip, PatientHeroProps } from "@/components/planes/plan-editor-types";
+import { disciplineLabel } from "@/lib/plan-display";
+import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
 import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 /**
- * P0-S02u-perfil: estado del chip de plan del hero. Antes era un booleano
- * `active` que llegaba en true con cualquier plan (también terminado), así que
- * el hero decía "Plan activo" a un paciente dado de alta. Lo calcula
- * `pickProfilePrograms` (patient-profile.tsx).
+ * Hero del perfil `full`. S22h (ES3): el chip único de plan
+ * (`HeroPlanState`, P0-S02u-perfil) pasa a un chip POR PLAN VIVO con su
+ * disciplina (`heroPlanChips`: ACTIVE antes que PAUSED). Un paciente puede
+ * tener Kine y Osteo en paralelo, y "Plan activo +1" no decía cuál.
+ * "Plan" significa tres cosas: el plan de la OBRA SOCIAL sigue siendo
+ * `coverageLabel` (fact "Cobertura"), nunca un chip de acá.
+ * Los chips no llevan título (PHI, PD-11): `HeroPlanChip` no lo trae.
  */
-export type HeroPlanState =
-  | { kind: "active"; otherActiveCount: number }
-  | { kind: "paused" }
-  | { kind: "ended" }
-  | { kind: "none" };
-
 export function PatientHero({
   patient,
   age,
   coverageLabel,
-  plan,
+  plans,
   insurers,
   practitioners,
   canReassign,
-}: {
-  patient: PatientWithRelations;
-  age: number | null;
-  coverageLabel: string;
-  plan: HeroPlanState;
-  insurers: InsurerOption[];
-  practitioners: PractitionerOption[];
-  canReassign: boolean;
-}) {
+  plansEnabled,
+  onOpenPlan,
+}: PatientHeroProps) {
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
   const [editing, setEditing] = useState(false);
+  const [askPlans, setAskPlans] = useState(false);
+  const router = useRouter();
+  const livePlanCount = plansEnabled ? plans.length : 0;
+
+  // L9: el diálogo junta la elección; la action va acá (single, no bulk).
+  const archiveWithPlans = async (plansAction: PatientArchivePlansAction): Promise<ArchivePatientResult> => {
+    const r = await setPatientArchived({ id: patient.id, archived: true, plansAction });
+    if (!r.ok) return { ok: false, error: r.error };
+    router.refresh();
+    return { ok: true };
+  };
 
   return (
     <>
@@ -78,7 +89,7 @@ export function PatientHero({
             >
               HC-{patient.id.slice(-6).toUpperCase()}
             </span>
-            <HeroPlanTag plan={plan} />
+            {plansEnabled && <HeroPlanChips plans={plans} onOpenPlan={onOpenPlan} />}
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
             <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
@@ -108,9 +119,20 @@ export function PatientHero({
           insurers={insurers}
           practitioners={practitioners}
           canReassign={canReassign}
+          livePlanCount={livePlanCount}
+          plansEnabled={plansEnabled}
+          onAskArchivePlans={() => setAskPlans(true)}
           onEdit={() => setEditing(true)}
         />
       </Card>
+
+      <ArchivePatientDialog
+        open={askPlans}
+        onClose={() => setAskPlans(false)}
+        patientName={`${patient.firstName} ${patient.lastName}`}
+        livePlanCount={livePlanCount}
+        onConfirm={archiveWithPlans}
+      />
 
       {/* Modals rendered as siblings of the Card, not inside it.
           This avoids backdrop-filter creating a new stacking context
@@ -192,12 +214,20 @@ export function PatientAdminHero({
 function PatientHeroActions({
   patient,
   practitioners,
+  livePlanCount,
+  plansEnabled,
+  onAskArchivePlans,
   onEdit,
 }: {
   patient: PatientWithRelations;
   insurers: InsurerOption[];
   practitioners: PractitionerOption[];
   canReassign: boolean;
+  /** Planes vivos (ACTIVE/PAUSED) del paciente: decide si archivar pregunta L9. */
+  livePlanCount: number;
+  plansEnabled: boolean;
+  /** Abre el diálogo L9 (vive fuera del Card glass, como el de Editar). */
+  onAskArchivePlans: () => void;
   onEdit: () => void;
 }) {
   const router = useRouter();
@@ -210,6 +240,14 @@ function PatientHeroActions({
   // — borraba en cascada turnos, cobros, planes y archivos sin retorno. Queda
   // Archivar: oculta la ficha del listado y se revierte desde "archivados".
   const toggleArchive = async () => {
+    // L9 (PD-10): con planes vivos, archivar pregunta qué hacer con ellos
+    // (pausar por default o cancelar los turnos futuros). Sin planes sigue el
+    // confirm de siempre, y el server aplica su default (`pause`, no-op).
+    if (!isArchived && shouldAskArchivePlans({ plansEnabled, livePlanCount })) {
+      setArchiveError(null);
+      onAskArchivePlans();
+      return;
+    }
     const ok = await confirm(
       isArchived
         ? {
@@ -775,28 +813,81 @@ function HeroFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function HeroPlanTag({ plan }: { plan: HeroPlanState }) {
-  if (plan.kind === "active") {
-    const n = plan.otherActiveCount;
-    return (
-      <>
-        <Tag tone="lime">Plan activo</Tag>
-        {/* "+N": hay más de un plan ACTIVE (p. ej. Kine y Osteo en paralelo). El
-            número solo no se entiende con lector de pantalla: `role="img"` + aria
-            (un aria-label en un span genérico se ignora). */}
-        {n > 0 && (
-          <span
-            role="img"
-            aria-label={`Y ${n} ${n === 1 ? "plan activo más" : "planes activos más"}`}
-            title={`${n} ${n === 1 ? "plan activo más" : "planes activos más"}: miralos en el tab Plan`}
-          >
-            <Tag tone="lime">+{n}</Tag>
-          </span>
-        )}
-      </>
-    );
-  }
-  if (plan.kind === "paused") return <Tag tone="soft">Plan pausado</Tag>;
-  if (plan.kind === "ended") return <Tag tone="soft">Sin plan activo</Tag>;
-  return <Tag tone="soft">Sin plan</Tag>;
+/**
+ * Texto del chip de un plan vivo en el hero (puro, lo usa el render test).
+ * "3/10" = realizadas / sesiones vivas (`done`/`totalLive`), NO "Sesión 3 de
+ * 10": por eso no se usa el modo contador de `DisciplineChip` (ese es el
+ * ordinal de UNA sesión). El aria lo dice entero, con la disciplina, porque el
+ * color no puede ser el único canal (AGENTS §5).
+ */
+export function heroPlanChipText(chip: HeroPlanChip): { progress: string; ariaLabel: string } {
+  const disc = chip.discipline ? `Plan de ${disciplineLabel(chip.discipline)}` : "Plan";
+  const paused = chip.status === "PAUSED" ? ", pausado" : "";
+  return {
+    progress: `${chip.done}/${chip.totalLive}`,
+    ariaLabel: `${disc}: ${chip.done} de ${chip.totalLive} ${chip.totalLive === 1 ? "sesión realizada" : "sesiones realizadas"}${paused}`,
+  };
+}
+
+function HeroPlanChips({
+  plans,
+  onOpenPlan,
+}: {
+  plans: HeroPlanChip[];
+  onOpenPlan?: (programId: string) => void;
+}) {
+  if (plans.length === 0) return <Tag tone="soft">Sin plan activo</Tag>;
+  return (
+    <ul
+      aria-label="Planes en curso"
+      style={{ display: "flex", gap: 6, flexWrap: "wrap", listStyle: "none", margin: 0, padding: 0 }}
+    >
+      {plans.map((p) => {
+        const { progress, ariaLabel } = heroPlanChipText(p);
+        const paused = p.status === "PAUSED";
+        const body = (
+          <>
+            <DisciplineChip discipline={p.discipline} />
+            <span className="k-mono" aria-hidden style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-700)" }}>
+              {progress}
+            </span>
+            {paused && (
+              <span aria-hidden style={{ fontSize: 10.5, fontWeight: 600, color: "var(--navy-500)" }}>
+                Pausado
+              </span>
+            )}
+          </>
+        );
+        const boxStyle: React.CSSProperties = {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          padding: "2px 8px 2px 3px",
+          borderRadius: 999,
+          background: paused ? "rgba(15,30,51,0.04)" : "#fff",
+          border: "1px solid rgba(15,30,51,0.08)",
+          opacity: paused ? 0.85 : 1,
+          font: "inherit",
+        };
+        return (
+          <li key={p.programId} data-testid="hero-plan-chip" data-status={p.status}>
+            {onOpenPlan ? (
+              <button
+                type="button"
+                onClick={() => onOpenPlan(p.programId)}
+                aria-label={`${ariaLabel}. Ver el plan`}
+                style={{ ...boxStyle, cursor: "pointer" }}
+              >
+                {body}
+              </button>
+            ) : (
+              <span role="group" aria-label={ariaLabel} style={boxStyle}>
+                {body}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }

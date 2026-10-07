@@ -206,7 +206,9 @@ export type PatientPlanBalanceRow = {
 
 export type PatientPlanBalances = {
   plans: PatientPlanBalanceRow[];
-  /** Σ de los planes NO cancelados ni archivados (pendiente y a favor ya recortados por plan). */
+  /** Σ de TODOS los planes del paciente, incluidos cancelados y archivados: un
+   *  plan cancelado que todavía debe (o tiene plata a favor) tiene que sumar en
+   *  el "Pendiente" de Facturación (S22f). Pendiente y a favor ya recortados por plan. */
   totals: { pendingCents: number; creditCents: number; collectedCents: number; inProcessCents: number };
 };
 
@@ -217,6 +219,10 @@ export type PatientPlanBalances = {
  */
 export type SchedulablePlanSession = {
   sessionId: string;
+  /** ES3 (S19c/S21): el plan de la sesión. Un id, no PHI; sin él la UI
+   *  adivinaba el plan por disciplina + total y elegía mal con 2 planes de la
+   *  misma disciplina. El server igual valida sesión ↔ plan al agendar. */
+  programId: string;
   ordinal: number;
   totalLive: number;
   discipline: Discipline | null;

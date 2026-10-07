@@ -22,7 +22,8 @@ import {
   guardModuleSegment,
 } from "@/lib/authz";
 import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
-import { ownerClient, createEphemeralTenant, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { ownerClient, createEphemeralTenant, addPatient, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { getPatientEvaScores, recordEvaScore } from "@/lib/patients";
 import { asUser, asAnonymous } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -124,6 +125,25 @@ describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
     } finally {
       await T.cleanup();
     }
+  });
+
+  it("[P3-S22b] EVA exige `evaluaciones`: GENERAL lee [] y no escribe; KINE sí", async () => {
+    const gPatient = await addPatient(db, G);
+    const kPatient = await addPatient(db, K);
+
+    asUser(G.userId);
+    const err = await recordEvaScore({ patientId: gPatient, value: 5 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(await db.evaScore.count({ where: { patientId: gPatient } })).toBe(0);
+    // Una EVA cargada por otro camino (p. ej. el tenant era Kine antes) no sale.
+    await db.evaScore.create({ data: { patientId: gPatient, value: 7 } });
+    expect(await getPatientEvaScores(gPatient)).toEqual([]);
+
+    // Control contra el falso verde: el mismo camino en KINE escribe y lee.
+    asUser(K.userId);
+    const ok = await recordEvaScore({ patientId: kPatient, value: 4 });
+    expect(ok.ok).toBe(true);
+    expect((await getPatientEvaScores(kPatient)).map((e) => e.value)).toEqual([4]);
   });
 
   it("guardModuleSegment: GENERAL redirige a /dashboard; KINE pasa; sin sesión no-op", async () => {

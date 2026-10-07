@@ -61,6 +61,14 @@ export function BulkAssignModal({
   // Default `fromIndex` to next-uncompleted-ish session of the chosen
   // program. We don't have completedAt here so just default to
   // completedSessions + 1 (clamped).
+  //
+  // S20 (M13): el usuario lee "Desde la sesión N" como el ORDINAL (por
+  // fecha entre las vivas), pero `bulkAddSessionExercises` filtra por
+  // `index >= N`, y el `index` no se renumera al archivar ni al mover. En un
+  // plan sin archivadas ni sesiones movidas fuera de orden coinciden; si no,
+  // el rango se corre. Pendiente server (handoff S20 → `lib/sessions.ts`):
+  // `range: {kind:'fromOrdinal'}` resuelto con `planSessionOrdinals`. Acá no
+  // se reimplementa el ordinal: el modal no tiene las fechas.
   useEffect(() => {
     if (selected && rangeMode === "fromCurrent") {
       setFromIndex(Math.max(1, selected.completedSessions + 1));
@@ -162,7 +170,7 @@ export function BulkAssignModal({
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{p.title}</div>
                     <div style={{ fontSize: 11, opacity: 0.85 }}>
-                      {p.patientName} · {p.completedSessions}/{p.totalSessions} sesiones
+                      {p.patientName} · {p.completedSessions}/{p.totalSessions} realizadas
                     </div>
                   </div>
                   {p.status === "PAUSED" && <Tag tone="soft">Pausado</Tag>}
@@ -191,7 +199,7 @@ export function BulkAssignModal({
                 checked={rangeMode === "all"}
                 onChange={() => setRangeMode("all")}
               />
-              Todas las sesiones del plan
+              Todas las sesiones pendientes del plan
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
               <input

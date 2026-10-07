@@ -768,13 +768,15 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Planes y fechas
 - [ ] 🔴 Crear un plan desde la Tab Plan a las 22:30 AR → la sesión 1 cae **hoy** (no ayer a las 21:00).
-- [ ] Tab Plan: 6 y 7 sesiones por semana se aceptan; más de 60 sesiones → error visible; "Aplicar plantilla" en
-  gris con aviso en FREE; cambiar el estado pide confirmación y un error se ve; "Eliminar" solo para admin.
-- [ ] Diagnóstico → Asignar plan: fecha de hoy AR, sin paciente preseleccionado; lun/jue → sesiones solo lun y jue;
-  1 día × 60 sesiones → error "máximo 58" visible; sin días → error; wizard con "No encontramos…" si no hay match.
-- [ ] Plantilla con ejercicios sin dosis → crea 3×12; un PRACTITIONER en básico no aplica plantilla ni crea plan
-  (ni desde Diagnóstico); borrar la plantilla de otro sin ser admin → rechazo.
-- [ ] Doble click en "Sesión a medida" → una sola sesión nueva.
+> ⚠️ **Obsoletos desde ES3** (la Tab Plan vieja, el modal viejo de Diagnóstico, `applyPlanTemplate` y
+> `addCustomSession` se retiraron): los 4 ítems tachados se prueban sobre el editor nuevo en [§Planes P3](#planes-p3-es3--ui-de-planes-ingresos-reales-y-retiro-08-oct-2026).
+- [ ] ~~Tab Plan: 6 y 7 sesiones por semana se aceptan; más de 60 sesiones → error visible; "Aplicar plantilla" en
+  gris con aviso en FREE; cambiar el estado pide confirmación y un error se ve; "Eliminar" solo para admin.~~
+- [ ] ~~Diagnóstico → Asignar plan: fecha de hoy AR, sin paciente preseleccionado; lun/jue → sesiones solo lun y jue;
+  1 día × 60 sesiones → error "máximo 58" visible; sin días → error; wizard con "No encontramos…" si no hay match.~~
+- [ ] ~~Plantilla con ejercicios sin dosis → crea 3×12; un PRACTITIONER en básico no aplica plantilla ni crea plan
+  (ni desde Diagnóstico); borrar la plantilla de otro sin ser admin → rechazo.~~
+- [ ] ~~Doble click en "Sesión a medida" → una sola sesión nueva.~~
 - [ ] Bulk de ejercicios no toca sesiones realizadas; reprogramar una sesión de un plan cancelado → rechazo; un
   ejercicio archivado no se puede asignar.
 - [ ] Cerrar desde Seguimiento la última sesión → plan COMPLETED y aparece en Actividad. **Cerrar desde dos pestañas
@@ -843,7 +845,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   `/reportes` escritos a mano → `/dashboard`.
 - [ ] Configuración en General: sin pestaña Diagnósticos; la card "Funciones del consultorio" muestra tipo y plan de
   solo lectura.
-- [ ] ~~Perfil del paciente sin Plan/Sesiones en General~~ → llega con ES3 (S22b); en EV0 no se verifica.
+- [ ] ~~Perfil del paciente sin Plan/Sesiones en General~~ → se prueba en [§Planes P3](#planes-p3-es3--ui-de-planes-ingresos-reales-y-retiro-08-oct-2026) (General).
 - [ ] Volver a **Kinesiología** y recargar: todo vuelve. Atajos ⌘K "Inicio" y "Ejercicios" (mismos nombres que el nav).
 
 ### Catálogo de ejercicios por plan
@@ -903,13 +905,14 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   C1). Los filtros de tags solo muestran tags usados por ejercicios globales o propios (un tag creado en otro
   consultorio no aparece).
 
-**Tab Plan vieja (legacy delegando en S15/S12b)**
-- [ ] Editar un plan: solo se guarda el título (total, frecuencia e inicio ya no cambian las sesiones).
-- [ ] "Eliminar sesión" → *"archivala desde el plan"*; "Eliminar" (admin) un plan ACTIVE → rechazo ("primero hay que cancelarlo"); uno CANCELLED/COMPLETED →
-  desaparece de la lista (archivado, no borrado).
-- [ ] Cambiar el estado (pausar/cancelar) → los turnos quedan como estaban (la UI vieja manda "mantener").
-- [ ] "Sesión a medida" en un plan con precio **Paquete** → rechazo con copy accionable; en un plan COMPLETED →
-  rechazo; como Secretaria → no puede. En un plan sin precio → se agrega con su título y "Deshacer Atendido" la reabre.
+**~~Tab Plan vieja (legacy delegando en S15/S12b)~~** — obsoleto desde ES3: la Tab Plan vieja, "Eliminar sesión" y
+`addCustomSession` se retiraron. Lo equivalente está en [§Planes P3](#planes-p3-es3--ui-de-planes-ingresos-reales-y-retiro-08-oct-2026) (perfil).
+- [ ] ~~Editar un plan: solo se guarda el título (total, frecuencia e inicio ya no cambian las sesiones).~~
+- [ ] ~~"Eliminar sesión" → *"archivala desde el plan"*; "Eliminar" (admin) un plan ACTIVE → rechazo ("primero hay que cancelarlo"); uno CANCELLED/COMPLETED →
+  desaparece de la lista (archivado, no borrado).~~
+- [ ] ~~Cambiar el estado (pausar/cancelar) → los turnos quedan como estaban (la UI vieja manda "mantener").~~
+- [ ] ~~"Sesión a medida" en un plan con precio **Paquete** → rechazo con copy accionable; en un plan COMPLETED →
+  rechazo; como Secretaria → no puede. En un plan sin precio → se agrega con su título y "Deshacer Atendido" la reabre.~~
 - [ ] Reprogramar una sesión que tiene turno: mueve el turno por el core (con los avisos de cupo/bloqueo); a un
   horario donde el paciente ya tiene turno → mensaje, no 500.
 
@@ -927,6 +930,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   General no consulta planes (0).
 
 ### (B) Para el QA de ES3 (hoy solo con tests de integración)
+
+> Desde ES3 se ven en la UI: se prueban junto con [§Planes P3](#planes-p3-es3--ui-de-planes-ingresos-reales-y-retiro-08-oct-2026).
 
 - [ ] Crear un plan con "Revisá los turnos" (TZ=UTC): 10 sesiones lun/jue caen en el día AR correcto; keys `plan:`; un
   bloqueo nunca se fuerza; stale si la agenda cambió.
@@ -950,3 +955,84 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   (30/11 23:00 AR no vencida); no aparece en agenda, ICS ni portal; un PRACTITIONER básico no la ve.
 - [ ] Diagnóstico → plan por el motor (caso + plan + turnos en una tx; un stale no deja nada).
 - [ ] Saldo del plan: pactado, devengado, cobrado (la OS pagada no suma; C0), pendiente y a favor nunca negativos.
+
+---
+
+## Planes P3 (ES3) — UI de Planes, ingresos reales y retiro (08-oct-2026)
+
+> **1 migración nueva: M3a `20261008120000_billing_paid_at`.** Correr con `TZ=UTC npm run dev` contra el Docker local
+> con M1, M2 y M3a aplicadas (`dotenv -e .env.local -- npx prisma migrate deploy`). Usuarios: OWNER, PRACTITIONER con
+> un paciente ajeno (básico), Secretaria (ASSISTANT) y BILLING; un consultorio Kine PRO, uno Kine FREE y uno General.
+> Servicios con disciplina cargada. Contexto en [PLANES.md §11](PLANES.md) y [AUDIT.md §Ronda 18](AUDIT.md).
+> Incluye lo pendiente de [§Planes P2 (B)](#b-para-el-qa-de-es3-hoy-solo-con-tests-de-integración).
+
+### Editor (crear / generar / re-planificar)
+- [ ] 🔴 "Nuevo plan" desde la Tab Planes: Drawer de 600 px, orden C13 (disciplina → servicio → responsable → sede →
+  inicio, cantidad y horario → precio → notas). 10 sesiones lun/jue → "Revisá los turnos" con las fechas AR correctas,
+  resumen y "Crear plan y N turnos". Conflictos: "Sobreturno", "Bloqueado: <motivo>", "Ya tiene un turno a esa hora".
+- [ ] 🔴 Stale: con el editor abierto, ocupar un horario desde otra pestaña → al confirmar, aviso C13 y las filas
+  marcadas (no se borra solo).
+- [ ] Red caída (DevTools offline) al revisar → *"No pudimos revisar la agenda. Probá de nuevo."*; no queda trabado en
+  "Buscando turnos…".
+- [ ] "Generar turnos para pendientes" en un plan de 10 con la 3 archivada → la columna "#" muestra el ordinal (no el
+  índice). Solo aparece con más de 1 pendiente.
+- [ ] "Editar desde la sesión N" (re-planificar) con cambio de profesional; lo cobrado no se mueve.
+
+### Agenda y drawer
+- [ ] Chip `Kine · 3/10` en Día, Semana, Lista, Por profesional y Recepción; sin título para Secretaria/BILLING/básico.
+  "Fuera de plan" en un turno suelto del mismo paciente y disciplina.
+- [ ] Leyenda De plan / Sueltos resalta (no filtra) y se recuerda al recargar; el conteo de Semana coincide con la
+  leyenda (sin cancelados).
+- [ ] Drawer de un turno de plan: fila Plan con "Sesión n de N"; "Agendar próxima sesión" (también la Secretaria, sin
+  título); "Sacar del plan" (`plans.manage`); "Renovar autorización" (ASSISTANT sí, BILLING no). Turno Fuera de plan:
+  "Vincular a una sesión" y "Crear plan desde este turno" (puerta 4).
+- [ ] "Cancelalo" solo en PENDING/CONFIRMED. Con el drawer sucio, un link de la fila Plan pide confirmación.
+- [ ] Reprogramar un turno de plan → "Solo este / Este y los siguientes"; "Copago (plan)"; recordatorio impreso con
+  "Sesión 3 de 10".
+- [ ] Ausente → *"la sesión 3 queda sin turno para reprogramar"*.
+- [ ] Candado del día con 2 sesiones de plan y 1 suelto → aviso *"2 de estos turnos son sesiones de un plan…"* y chip
+  "Plan" en esas 2 filas, sin título. Sin sesiones de plan, no hay aviso.
+- [ ] Modal "Varias sesiones" → "Crealo como plan…"; con paciente sin guardar, deshabilitado con *"Guardá el paciente
+  para armar un plan"*.
+
+### Seguimiento
+- [ ] Bucket "Sin turno" → "Agendar" abre un modal de **una fila** (no el editor); stale → aviso y reintento.
+- [ ] Atendido sin evolución → tag "Sin evolución" → "Cargar evolución". Título de la pestaña "Sesión n de N" (ordinal).
+- [ ] Cerrar la última sesión → banner de alta (no completa solo). Entrar con `?agendar=1` → abre el modal y la URL
+  queda sin el parámetro.
+
+### Perfil del paciente
+- [ ] `?tab=plan` abre la pestaña Planes (alias); `?tab=planes&programa=<id>` enfoca el plan.
+- [ ] PlanCard: estados de sesión, línea de autorización (solo a quien la ve), historial, "Aplicar plantilla" por el
+  editor. Cambiar estado → diálogo D7 (cancelar recomendado; los cobrados no se tocan); "Cancelar" en rojo. Un plan
+  COMPLETED dice "Finalizado".
+- [ ] 🔴 Plata con CAS: cantidad 10→12 y bajar a 8; precio con turnos cobrados (*"M quedan como están"*); PACKAGE
+  "mantener total / precio por sesión"; sesión a medida; archivar y restaurar sesión. Dos pestañas → la segunda recibe
+  stale y recarga.
+- [ ] Hero: un chip por disciplina, sin título. Archivar el paciente con un plan ACTIVE o PAUSED → diálogo L9.
+- [ ] Turnos y Facturación agrupados por plan con el saldo del server (pactado, devengado, cobrado, OS aparte); los
+  cancelados con cobro se ven en el grupo. A 360 px, las tablas scrollean adentro y "Ver en agenda" no se corta.
+- [ ] 🔴 Secretaria: perfil administrativo con turnos y facturación por plan **sin títulos** de plan.
+
+### `/planes/[disciplina]` y plantillas
+- [ ] Pestañas solo de disciplinas con un servicio activo; otra disciplina en la URL → 404. "Nuevo plan" con
+  `plans.manage`.
+- [ ] "Sesiones sin turno" (la Secretaria también, sin título) → Agendar.
+- [ ] Plantillas: CRUD en STARTER+; en FREE deshabilitadas con aviso. 🔴 FREE no puede crear un plan con plantilla (ni
+  por RPC). Plantilla con un ejercicio archivado después → el plan se crea igual, sin ese ejercicio; ejercicios sin
+  dosis toman la dosis por defecto del ejercicio.
+
+### Diagnóstico
+- [ ] `/diagnostico?patientId=&bookingId=` → "Asignar plan" abre el editor prellenado, sin paciente preseleccionado
+  cuando no viene en el link; fecha de hoy AR; la nota de ejercicios muestra la rampa ("Sesiones 1-3 · Activación ·
+  2 ejercicios"). El wizard (mobile) abre el mismo editor.
+
+### Dashboard (S14r + M3a)
+- [ ] 🔴 Cobrar un copago a mano hoy → aparece en "Semana" y en "Mes"; desmarcarlo → desaparece. Re-marcarlo otro día
+  no lo muda de mes.
+- [ ] Un pago de MP no se duplica; lo de la obra social se ve aparte. El selector Mes/Semana se recuerda al recargar.
+  Borde: un cobro el domingo 23:30 AR cuenta en esa semana.
+
+### Consultorio General
+- [ ] 🔴 Nada de Planes, Diagnóstico ni EVA: sin pestaña Planes, Resumen sin "Plan de tratamiento" ni "Diagnóstico
+  principal", sin slot de EVA; agenda sin leyenda ni chip; drawer sin fila Plan; candado sin aviso de plan.

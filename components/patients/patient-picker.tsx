@@ -13,12 +13,40 @@
  * `diagnostico`) y la Secretaria, un kine en básico o un consultorio GENERAL
  * no encontraban pacientes al dar un turno. El despacho vive en
  * `patient-picker-search.ts` (testeado contra la DB).
+ *
+ * S18s (ES3):
+ *  - `requireFull` (C13: el editor de planes usa `PatientPicker requireFull`)
+ *    es un alias de `source="assignment"`; default false, así el modal y el
+ *    drawer de turnos siguen eligiendo pacientes básicos.
+ *  - Teclado: ↑/↓ recorren la lista, Enter elige, Escape cierra
+ *    (combobox + listbox con `aria-activedescendant`).
+ *  - El `<label>` ya no envuelve el botón "Cambiar": un label con un botón
+ *    adentro le reenvía cualquier click (tocar el nombre borraba la selección).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { searchForPicker, type PatientPickerSource } from "@/components/patients/patient-picker-search";
 
 export type PickedPatient = { id: string; name: string };
+
+/** Búsqueda efectiva: `requireFull` fuerza la de asignación (solo `full`). */
+export function patientPickerSourceOf(o: { source?: PatientPickerSource; requireFull?: boolean }): PatientPickerSource {
+  return o.requireFull ? "assignment" : (o.source ?? "booking");
+}
+
+/** Índice activo tras una flecha (con vuelta). -1 = ninguno. */
+export function nextPickerIndex(current: number, key: "ArrowDown" | "ArrowUp", length: number): number {
+  if (length <= 0) return -1;
+  if (key === "ArrowDown") return current < 0 || current >= length - 1 ? 0 : current + 1;
+  return current <= 0 ? length - 1 : current - 1;
+}
+
+/** Texto cuando no hay resultados para un término (depende de la búsqueda). */
+export function patientPickerEmptyHint(source: PatientPickerSource): string {
+  return source === "assignment"
+    ? "Para un plan solo aparecen pacientes con la historia clínica completa a tu alcance."
+    : "Si es un paciente nuevo, activá el switch “Nuevo paciente” arriba para registrarlo.";
+}
 
 export function PatientPicker({
   name,
@@ -27,7 +55,8 @@ export function PatientPicker({
   onChange,
   /** Optional label override — defaults to "Paciente". */
   label,
-  source = "booking",
+  source,
+  requireFull = false,
 }: {
   /** Hidden input name used when the picker lives inside a form. */
   name?: string;
@@ -42,7 +71,16 @@ export function PatientPicker({
    *  turnos. "assignment" (Planes/Diagnóstico): solo pacientes con acceso
    *  `full` (`searchPatientsForAssignment({ requireFull: true })`). */
   source?: PatientPickerSource;
+  /** C13 (editor de planes): solo pacientes con acceso `full`. Equivale a
+   *  `source="assignment"`. Default false. */
+  requireFull?: boolean;
 }) {
+  const effectiveSource = patientPickerSourceOf({ source, requireFull });
+  const uid = useId().replace(/:/g, "");
+  const inputId = `pp-${uid}-input`;
+  const listId = `pp-${uid}-list`;
+  const optionId = (i: number) => `pp-${uid}-opt-${i}`;
+  const [active, setActive] = useState(-1);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<{ id: string; name: string; hc: string }[]>([]);
@@ -71,12 +109,13 @@ export function PatientPicker({
     const term = q.trim();
     const seq = ++seqRef.current;
     const t = setTimeout(async () => {
-      const r = await searchForPicker(source, term);
+      const r = await searchForPicker(effectiveSource, term);
       if (seq !== seqRef.current) return;
       setHits(r);
+      setActive(-1);
     }, 200);
     return () => clearTimeout(t);
-  }, [q, open, source]);
+  }, [q, open, effectiveSource]);
 
   const pick = (p: PickedPatient) => {
     setSelected(p);
@@ -93,11 +132,35 @@ export function PatientPicker({
   };
 
   const showLabel = label !== null;
+  const listOpen = open && !selected;
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) setOpen(true);
+      setActive((i) => nextPickerIndex(i, e.key as "ArrowDown" | "ArrowUp", hits.length));
+    } else if (e.key === "Enter") {
+      // Dentro de un form, Enter sin opción activa no debe mandarlo.
+      if (listOpen && active >= 0 && hits[active]) {
+        e.preventDefault();
+        pick(hits[active]);
+      }
+    } else if (e.key === "Escape" && open) {
+      // Que el Escape cierre la lista y no el Drawer/Modal que la contiene.
+      e.stopPropagation();
+      setOpen(false);
+      setActive(-1);
+    }
+  };
 
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
-      <label style={{ display: "block", fontSize: 12 }}>
-        {showLabel && <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>{label ?? "Paciente"}</span>}
+      <div style={{ display: "block", fontSize: 12 }}>
+        {showLabel && (
+          <label htmlFor={selected ? undefined : inputId} style={{ fontWeight: 600, color: "var(--navy-500)" }}>
+            {label ?? "Paciente"}
+          </label>
+        )}
         {name && <input type="hidden" name={name} value={selected?.id ?? ""} />}
         {selected ? (
           <div
@@ -117,7 +180,7 @@ export function PatientPicker({
             <button
               type="button"
               onClick={clear}
-              aria-label="Cambiar paciente"
+              aria-label={`Cambiar paciente (${selected.name})`}
               style={{
                 background: "transparent",
                 border: "none",
@@ -132,10 +195,12 @@ export function PatientPicker({
           </div>
         ) : (
           <input
+            id={inputId}
             type="text"
             // La búsqueda de la agenda no mira el email (P2-FX1: sería un
             // oráculo de un dato que el nivel basic no muestra).
-            placeholder={source === "booking" ? "Buscá por nombre o DNI…" : "Buscá por nombre, DNI o email…"}
+            placeholder={effectiveSource === "booking" ? "Buscá por nombre o DNI…" : "Buscá por nombre, DNI o email…"}
+            aria-label={showLabel ? undefined : "Buscar paciente"}
             value={q}
             // Kill the browser's own autofill so it doesn't cover our DB
             // typeahead. Chrome IGNORES autoComplete="off" on fields it heuristically
@@ -145,7 +210,10 @@ export function PatientPicker({
             // the password-manager opt-outs cover 1Password/LastPass/Dashlane too.
             role="combobox"
             aria-autocomplete="list"
-            aria-expanded={open}
+            aria-expanded={listOpen}
+            aria-controls={listId}
+            aria-activedescendant={listOpen && active >= 0 && hits[active] ? optionId(active) : undefined}
+            onKeyDown={onKeyDown}
             autoComplete="new-password"
             autoCorrect="off"
             autoCapitalize="off"
@@ -171,10 +239,13 @@ export function PatientPicker({
             }}
           />
         )}
-      </label>
+      </div>
 
-      {open && !selected && (
+      {listOpen && (
         <div
+          id={listId}
+          role="listbox"
+          aria-label="Pacientes encontrados"
           className="k-glass-strong k-scroll"
           style={{
             position: "absolute",
@@ -193,26 +264,33 @@ export function PatientPicker({
         >
           {hits.length === 0 ? (
             q.trim() ? (
-              <div style={{ padding: 12, display: "grid", gap: 8 }}>
+              <div role="status" style={{ padding: 12, display: "grid", gap: 8 }}>
                 <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
                   No encontramos a <strong>{q.trim()}</strong>.
                 </div>
                 <div style={{ fontSize: 10.5, color: "var(--navy-300)", lineHeight: 1.4 }}>
-                  Si es un paciente nuevo, activá el switch
-                  <strong> “Nuevo paciente”</strong> arriba para registrarlo.
+                  {patientPickerEmptyHint(effectiveSource)}
                 </div>
               </div>
             ) : (
-              <div style={{ padding: 14, fontSize: 12.5, color: "var(--navy-500)", textAlign: "center" }}>
+              <div role="status" style={{ padding: 14, fontSize: 12.5, color: "var(--navy-500)", textAlign: "center" }}>
                 Empezá a tipear el nombre del paciente.
               </div>
             )
           ) : (
-            hits.map((p) => (
-              <button
+            hits.map((p, i) => (
+              <div
                 key={p.id}
-                type="button"
-                onClick={() => pick(p)}
+                id={optionId(i)}
+                role="option"
+                aria-selected={i === active}
+                // El foco queda en el input (aria-activedescendant); el mouse
+                // elige con mousedown para no perder el blur antes del click.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pick(p);
+                }}
+                onMouseEnter={() => setActive(i)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -225,14 +303,13 @@ export function PatientPicker({
                   cursor: "pointer",
                   textAlign: "left",
                   fontSize: 13,
+                  ...(i === active ? { background: "rgba(15,30,51,0.06)" } : null),
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(15,30,51,0.04)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
                 <Avatar name={p.name} size={28} tone="sky" />
                 <span style={{ flex: 1, fontWeight: 600 }}>{p.name}</span>
                 {p.hc && <span className="k-mono" style={{ fontSize: 11, color: "var(--navy-300)" }}>{p.hc}</span>}
-              </button>
+              </div>
             ))
           )}
         </div>

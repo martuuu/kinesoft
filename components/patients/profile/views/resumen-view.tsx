@@ -1,133 +1,276 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { recordEvaScore } from "@/lib/patients";
-import { CreateProgramModal } from "./plan-view";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
+import { PLAN_STATUS_LABEL } from "@/components/planes/plan-booking-groups";
+import { sessionCounterLabel } from "@/components/seguimiento/seguimiento-model";
+import type { PlanDTO, ResumenViewProps } from "@/components/planes/plan-editor-types";
 import type { PatientWithRelations } from "../types";
-
-const STATUS_LABEL: Record<PatientWithRelations["programs"][number]["status"], string> = {
-  ACTIVE: "Activo",
-  PAUSED: "Pausado",
-  COMPLETED: "Completado",
-  CANCELLED: "Cancelado",
-};
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 /**
- * P0-S02u-perfil: `program` es el plan en foco (`pickProfilePrograms`): el
- * ACTIVE más reciente o, si no hay, el último plan. Antes un plan terminado se
- * mostraba como si fuera el vigente y "Crear plan" desaparecía; ahora lleva su
- * estado y, sin plan activo, se ofrece crear uno.
+ * Resumen del perfil. Historia:
+ *   - P0-S02u-perfil: `plan` es el plan en foco (el ACTIVE más reciente o, si
+ *     no hay, el último). Un plan terminado se mostraba como el vigente y
+ *     "Crear plan" desaparecía; ahora lleva su estado y, sin plan activo, se
+ *     ofrece crear uno.
+ *   - S22h (ES3): consume `PlanDTO` (`getPatientPlans`). El progreso es
+ *     `done`/`totalLive` (sesiones vivas), no `totalSessions`; la próxima
+ *     sesión dice "Sesión n de N" con el ORDINAL. "Crear plan" y "Agendar"
+ *     abren el editor único (`onOpenEditor`) según `permissions`: ya no usa
+ *     el `CreateProgramModal` legacy (el alta legacy, que retira S27a).
  */
+
+/** Lo que muestra la tarjeta del plan (puro, lo usa el render test). */
+export function resumenPlanSummary(plan: PlanDTO): {
+  progress: string;
+  percent: number;
+  next: string | null;
+} {
+  const percent = plan.totalLive > 0 ? Math.min((plan.done / plan.totalLive) * 100, 100) : 0;
+  const next = plan.nextSession
+    ? `${sessionCounterLabel(plan.nextSession.ordinal, plan.totalLive)} · ${new Date(
+        plan.nextSession.at,
+      ).toLocaleString("es-AR", {
+        weekday: "short",
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Argentina/Buenos_Aires",
+      })}`
+    : null;
+  return {
+    progress: `${plan.done} de ${plan.totalLive} ${plan.totalLive === 1 ? "realizada" : "realizadas"}`,
+    percent,
+    next,
+  };
+}
+
 export function ResumenView({
   patient,
-  program,
+  plan,
   otherActiveCount = 0,
   diagnosisName,
-  done,
-}: {
-  patient: PatientWithRelations;
-  program: PatientWithRelations["programs"][number] | null;
-  otherActiveCount?: number;
-  diagnosisName: string | null;
-  done: number;
-}) {
-  const router = useRouter();
-  const [creating, setCreating] = useState(false);
-  const isActive = program?.status === "ACTIVE";
+  permissions,
+  onOpenEditor,
+  onOpenPlan,
+}: ResumenViewProps) {
+  // P3.Z (F3b): en un consultorio General (sin `planes` / `diagnostico`) el
+  // Resumen mostraba la card de Plan y "Diagnóstico principal": la UI tiene que
+  // esconder lo que el server ya rechaza (VERTICALES, C-EV8), como `EvaScoreSlot`.
+  const { has } = useTenantModules();
+  const plansEnabled = has("planes");
+  const diagnosisEnabled = has("diagnostico");
+  const isActive = plan?.status === "ACTIVE";
+  const summary = plan ? resumenPlanSummary(plan) : null;
+  const canGenerate = !!plan && isActive && permissions.schedule && plan.sinTurno > 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 320px", gap: 14 }}>
-      <Card style={{ padding: 16 }}>
-        <div className="k-display" style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
-          Plan
-        </div>
-        {program && (
-          <>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13, color: "var(--navy-700)" }}>{program.title}</span>
-              {!isActive && <Tag tone="soft">{STATUS_LABEL[program.status]}</Tag>}
-            </div>
-            <div className="k-mono" style={{ fontSize: 12, color: "var(--sky-700)", marginTop: 4 }}>
-              {done} / {program.totalSessions}
-            </div>
-            <div
-              style={{
-                height: 6,
-                borderRadius: 3,
-                background: "rgba(15,30,51,0.06)",
-                overflow: "hidden",
-                marginTop: 10,
-              }}
-            >
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+        gap: 14,
+      }}
+    >
+      {plansEnabled && (
+        <Card style={{ padding: 16 }}>
+          <div className="k-display" style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
+            Plan de tratamiento
+          </div>
+          {plan && summary && (
+            <>
               <div
                 style={{
-                  width: `${program.totalSessions ? Math.min((done / program.totalSessions) * 100, 100) : 0}%`,
-                  height: "100%",
-                  background: isActive
-                    ? "linear-gradient(90deg, var(--sky-500), var(--lime-400))"
-                    : "var(--navy-300)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  flexWrap: "wrap",
                 }}
-              />
-            </div>
-            {isActive && otherActiveCount > 0 && (
-              <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "10px 0 0" }}>
-                +{otherActiveCount}{" "}
-                {otherActiveCount === 1 ? "plan activo más" : "planes activos más"} en el tab Plan.
+              >
+                <DisciplineChip discipline={plan.discipline} label="long" />
+                {plan.title && <span style={{ fontSize: 13, color: "var(--navy-700)" }}>{plan.title}</span>}
+                {!isActive && <Tag tone="soft">{PLAN_STATUS_LABEL[plan.status]}</Tag>}
+              </div>
+              <div className="k-mono" style={{ fontSize: 12, color: "var(--sky-700)", marginTop: 6 }}>
+                {summary.progress}
+              </div>
+              <div
+                role="progressbar"
+                aria-label="Sesiones realizadas"
+                aria-valuemin={0}
+                aria-valuemax={plan.totalLive}
+                aria-valuenow={plan.done}
+                style={{
+                  height: 6,
+                  borderRadius: 3,
+                  background: "rgba(15,30,51,0.06)",
+                  overflow: "hidden",
+                  marginTop: 10,
+                }}
+              >
+                <div
+                  style={{
+                    width: `${summary.percent}%`,
+                    height: "100%",
+                    background: isActive
+                      ? "linear-gradient(90deg, var(--sky-500), var(--lime-400))"
+                      : "var(--navy-300)",
+                  }}
+                />
+              </div>
+              {isActive && summary.next && (
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "var(--navy-700)",
+                    margin: "10px 0 0",
+                  }}
+                >
+                  Próxima: {summary.next}
+                </p>
+              )}
+              {isActive && plan.sinTurno > 0 && (
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "var(--navy-500)",
+                    margin: "6px 0 0",
+                  }}
+                >
+                  {plan.sinTurno} {plan.sinTurno === 1 ? "sesión sin turno" : "sesiones sin turno"}
+                </p>
+              )}
+              {isActive && otherActiveCount > 0 && (
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "var(--navy-500)",
+                    margin: "10px 0 0",
+                  }}
+                >
+                  +{otherActiveCount} {otherActiveCount === 1 ? "plan activo más" : "planes activos más"} en el tab
+                  Planes.
+                </p>
+              )}
+              {(canGenerate || onOpenPlan) && (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    marginTop: 12,
+                  }}
+                >
+                  {canGenerate && (
+                    <Button
+                      variant="primary"
+                      onClick={() =>
+                        onOpenEditor({
+                          mode: "generate",
+                          patientId: patient.id,
+                          programId: plan.id,
+                        })
+                      }
+                      style={{ fontSize: 12, padding: "8px 12px" }}
+                    >
+                      Agendar sesiones sin turno
+                    </Button>
+                  )}
+                  {onOpenPlan && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => onOpenPlan(plan.id)}
+                      style={{ fontSize: 12, padding: "8px 12px" }}
+                    >
+                      Ver plan
+                    </Button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          {!isActive && (
+            <>
+              <p
+                style={{
+                  fontSize: 12.5,
+                  color: "var(--navy-500)",
+                  marginTop: plan ? 12 : undefined,
+                }}
+              >
+                {plan ? "No tiene un plan activo." : "Este paciente todavía no tiene un plan de tratamiento."}
               </p>
-            )}
-          </>
-        )}
-        {!isActive && (
-          <>
-            <p style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: program ? 12 : undefined }}>
-              {program
-                ? "No tiene un plan activo."
-                : "Este paciente todavía no tiene un plan de tratamiento."}
-            </p>
-            <Button variant="primary" onClick={() => setCreating(true)} style={{ width: "100%", justifyContent: "center" }}>
-              <IconPlus size={14} /> Crear plan
-            </Button>
-          </>
-        )}
-      </Card>
+              {permissions.manage && (
+                <Button
+                  variant="primary"
+                  onClick={() => onOpenEditor({ mode: "create", patientId: patient.id })}
+                  style={{ width: "100%", justifyContent: "center" }}
+                >
+                  <IconPlus size={14} /> Crear plan
+                </Button>
+              )}
+            </>
+          )}
+        </Card>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <Card style={{ padding: 18 }}>
-          <div style={{ fontSize: 10, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase" }}>
-            Diagnóstico principal
-          </div>
-          <div className="k-display" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
-            {diagnosisName ?? "Aún no asignado"}
-          </div>
-        </Card>
+        {diagnosisEnabled && (
+          <Card style={{ padding: 18 }}>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--navy-300)",
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              Diagnóstico principal
+            </div>
+            <div className="k-display" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+              {diagnosisName ?? "Aún no asignado"}
+            </div>
+          </Card>
+        )}
         <Card style={{ padding: 18 }}>
           <div className="k-display" style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
             Notas clínicas
           </div>
-          <p style={{ fontSize: 13, color: "var(--navy-700)", margin: 0, whiteSpace: "pre-wrap" }}>
+          <p
+            style={{
+              fontSize: 13,
+              color: "var(--navy-700)",
+              margin: 0,
+              whiteSpace: "pre-wrap",
+            }}
+          >
             {patient.notes ?? "Sin notas. Editá el paciente para agregar antecedentes relevantes."}
           </p>
         </Card>
       </div>
 
-      <EvaScoreSide patient={patient} />
-
-      {creating && (
-        <CreateProgramModal
-          patientId={patient.id}
-          onClose={() => setCreating(false)}
-          onCreated={() => {
-            setCreating(false);
-            router.refresh();
-          }}
-        />
-      )}
+      <EvaScoreSlot patient={patient} />
     </div>
   );
+}
+
+/**
+ * Enmienda EV0 (S22b): la carga de EVA es del módulo `evaluaciones`. Un
+ * consultorio General no la ve (el server además la rechaza: `recordEvaScore`
+ * con `requireModule`). Componente aparte para no cortar los hooks de
+ * `EvaScoreSide` con un return condicional.
+ */
+function EvaScoreSlot({ patient }: { patient: PatientWithRelations }) {
+  const { has } = useTenantModules();
+  return has("evaluaciones") ? <EvaScoreSide patient={patient} /> : null;
 }
 
 function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
@@ -172,7 +315,14 @@ function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
             ))}
           </svg>
         ) : (
-          <div style={{ fontSize: 12, color: "var(--navy-300)", textAlign: "center", paddingTop: 24 }}>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--navy-300)",
+              textAlign: "center",
+              paddingTop: 24,
+            }}
+          >
             Sin registros aún
           </div>
         )}

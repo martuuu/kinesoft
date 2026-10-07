@@ -6,7 +6,10 @@
  *  - N1: `lib/programs.ts` no gateaba el módulo `planes` (C-EV4): un consultorio
  *    General podía crear/editar/borrar planes por RPC aunque la UI no los muestre.
  *    Escrituras → `ForbiddenError(MODULE_DENIED_COPY.planes)`; lecturas del perfil
- *    del paciente → `[]`.
+ *    del paciente → `[]`. P3-S27a retiró el alta, la edición y las lecturas
+ *    viejas: los mismos casos se re-afirman sobre las puertas que las
+ *    reemplazan (`createPlan`, `updatePlanDetails`, `getPatientPlans`), que
+ *    devuelven el copy del módulo como `{ ok: false }` en vez de tirar.
  *  - N2: `createExercise` / `ensureTag` (lib/exercises.ts) sin `gate.canCreate`:
  *    General creaba ejercicios propios y tags globales.
  *  - P1 (preexistente, bloque A): `loadFilterFacets` leía `Condition` sin where
@@ -23,15 +26,11 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { ForbiddenError } from "@/lib/session";
 import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
-import {
-  createProgram,
-  updateProgram,
-  setProgramStatus,
-  deleteProgram,
-  deleteSession,
-  getPatientProgramsLite,
-  getPatientProgramsFull,
-} from "@/lib/programs";
+import { setProgramStatus, deleteProgram, deleteSession } from "@/lib/programs";
+import { createPlan, previewPlan } from "@/lib/plans";
+import { updatePlanDetails } from "@/lib/plans-lifecycle";
+import { getPatientPlans } from "@/lib/plans-read";
+import type { PlanCreateInput } from "@/lib/plans-types";
 import { createExercise, ensureTag, loadFilterFacets } from "@/lib/exercises";
 import { loadPublicBookingPage } from "@/lib/public-booking-internal";
 import {
@@ -52,6 +51,23 @@ describe.skipIf(!RUN)("EV0-Z · fixes de seguridad del revisor (a)", () => {
   let G: EphemeralTenant; // consultorio General (PRO: el plan no le da módulos de Kine)
   let gPatient: string;
   let gProgram: { id: string; sessionId: string };
+
+  /** Borrador de `createPlan` (P3-S27a): 2 sesiones los lunes 10:00 AR. */
+  const draft = (t: EphemeralTenant, patientId: string, title: string): PlanCreateInput => ({
+    idempotencyKey: randomUUID(),
+    patientId,
+    discipline: "KINESIOLOGY",
+    practitionerId: t.practitionerId,
+    serviceId: t.serviceId,
+    locationId: null,
+    title,
+    schedule: { v: 1, frequency: "weekly", slots: [{ dow: 1, startMin: 600 }] },
+    startDayKey: "2030-11-04",
+    totalSessions: 2,
+    pricing: null,
+    rows: [],
+    stateToken: "sin-preview",
+  });
 
   beforeAll(async () => {
     db = ownerClient();
@@ -93,18 +109,24 @@ describe.skipIf(!RUN)("EV0-Z · fixes de seguridad del revisor (a)", () => {
 
   // ── N1 ──────────────────────────────────────────────────────────────
   describe("N1 · planes sin el módulo", () => {
-    it("[EV0-Z] General: createProgram tira Forbidden y no escribe", async () => {
+    it("[EV0-Z → P3-S27a] General: createPlan (y su preview) rechazan con el copy del módulo y no escriben", async () => {
       asUser(G.userId);
       const before = await db.treatmentProgram.count({ where: { tenantId: G.tenantId } });
-      await expect(
-        createProgram({ patientId: gPatient, title: "Nuevo", totalSessions: 3, frequency: 2, startDate: "2026-11-02" }),
-      ).rejects.toThrow(new ForbiddenError(MODULE_DENIED_COPY.planes));
+      // El copy exacto del módulo: un `stale-preview` (token inventado) o un
+      // rechazo de validación también serían `ok: false` sin probar el gate.
+      expect(await createPlan(draft(G, gPatient, "Nuevo"))).toEqual({ ok: false, error: MODULE_DENIED_COPY.planes });
+      expect(await previewPlan(draft(G, gPatient, "Nuevo"))).toMatchObject({ ok: false, error: MODULE_DENIED_COPY.planes });
       expect(await db.treatmentProgram.count({ where: { tenantId: G.tenantId } })).toBe(before);
+      expect(await db.booking.count({ where: { tenantId: G.tenantId } })).toBe(0);
     });
 
     it("[EV0-Z] General: update/status/delete de plan y sesión tiran y no tocan filas", async () => {
       asUser(G.userId);
-      await expect(updateProgram({ id: gProgram.id, title: "Cambiado" })).rejects.toBeInstanceOf(ForbiddenError);
+      const expectedUpdatedAt = (await db.treatmentProgram.findUniqueOrThrow({ where: { id: gProgram.id } })).updatedAt.toISOString();
+      expect(await updatePlanDetails({ programId: gProgram.id, expectedUpdatedAt, title: "Cambiado" })).toMatchObject({
+        ok: false,
+        error: MODULE_DENIED_COPY.planes,
+      });
       await expect(setProgramStatus({ id: gProgram.id, status: "PAUSED" })).rejects.toBeInstanceOf(ForbiddenError);
       await expect(deleteSession(gProgram.sessionId)).rejects.toBeInstanceOf(ForbiddenError);
       await expect(deleteProgram(gProgram.id)).rejects.toBeInstanceOf(ForbiddenError);
@@ -118,19 +140,27 @@ describe.skipIf(!RUN)("EV0-Z · fixes de seguridad del revisor (a)", () => {
       expect(row?._count.sessions).toBe(2);
     });
 
-    it("[EV0-Z] General: las lecturas del perfil devuelven [] aunque haya filas", async () => {
+    it("[EV0-Z → P3-S27a] General: getPatientPlans vacío aunque haya filas (incluidos archivados)", async () => {
       asUser(G.userId);
-      expect(await getPatientProgramsLite(gPatient)).toEqual([]);
-      expect(await getPatientProgramsFull(gPatient)).toEqual([]);
+      expect(await getPatientPlans({ patientId: gPatient })).toEqual({ ok: true, data: [] });
+      expect(await getPatientPlans({ patientId: gPatient, includeArchived: true })).toEqual({ ok: true, data: [] });
     });
 
-    it("control: Kine crea y lee su plan", async () => {
+    it("control: Kine crea (preview → commit) y lee su plan", async () => {
       const patientId = await addPatient(db, K);
       asUser(K.userId);
-      const res = await createProgram({ patientId, title: "Kine", totalSessions: 2, frequency: 2, startDate: "2026-11-02" });
-      expect(res.ok).toBe(true);
-      const lite = await getPatientProgramsLite(patientId);
-      expect(lite.map((p) => p.title)).toEqual(["Kine"]);
+      const input = draft(K, patientId, "Kine");
+      const pv = await previewPlan(input);
+      expect(pv.ok).toBe(true);
+      if (!pv.ok) return;
+      const res = await createPlan({
+        ...input,
+        stateToken: pv.preview.stateToken,
+        rows: pv.preview.rows.map((r) => ({ index: r.index, kind: "create" as const })),
+      });
+      expect(res).toMatchObject({ ok: true });
+      const plans = await getPatientPlans({ patientId });
+      expect(plans.ok && plans.data.map((p) => p.title)).toEqual(["Kine"]);
     });
   });
 

@@ -45,7 +45,7 @@ function ausentePill(html: string): string {
 describe("[P0-S04b] StatusTag único", () => {
   it("Ausente en ámbar en la Lista", () => {
     const html = renderToStaticMarkup(
-      <ListView bookings={[dto("a", "09:00", { status: "NO_SHOW" })]} onEdit={() => {}} highlightedServiceId={null} now={NOW} />,
+      <ListView bookings={[dto("a", "09:00", { status: "NO_SHOW" })]} onEdit={() => {}} highlight={null} now={NOW} />,
     );
     const pill = ausentePill(html);
     expect(pill).toContain("Ausente");

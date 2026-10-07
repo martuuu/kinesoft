@@ -27,13 +27,10 @@ import {
   bulkArchivePatients,
   getPatientActivity,
 } from "@/lib/patients";
-import {
-  createProgram,
-  updateProgram,
-  setProgramStatus,
-  deleteProgram,
-  deleteSession,
-} from "@/lib/programs";
+import { setProgramStatus, deleteProgram, deleteSession } from "@/lib/programs";
+import { createPlan } from "@/lib/plans";
+import { updatePlanDetails } from "@/lib/plans-lifecycle";
+import type { PlanCreateInput } from "@/lib/plans-types";
 import { exportPatientsCsv as exportPatientsCsvFor } from "@/lib/patients-export-internal";
 import { getActor } from "@/lib/session";
 import { listPatientFiles, uploadPatientFile, deletePatientFile, getDownloadUrl } from "@/lib/files";
@@ -61,6 +58,7 @@ type Ctx = {
   bookingB: string;
   fileB: string;
   programB: string;
+  programBUpdatedAt: string;
   sessionB: string;
 };
 type Row = {
@@ -73,6 +71,36 @@ type Row = {
 };
 
 const when = (d: string) => new Date(localToARIso(`${d}T10:00:00`)).toISOString();
+
+/**
+ * P3-S27a: las filas del alta y la edición de planes pasaron de las puertas
+ * viejas de `lib/programs.ts` (retiradas) a `createPlan` / `updatePlanDetails`.
+ * `createPlan` sin preview lleva un `stateToken` inventado: si el gate NO
+ * cortara, el commit devolvería `stale-preview`, que también es `ok: false`.
+ * `gateCut` hace fallar ese caso para que el verde sea del gate y no del token.
+ */
+function planDraft(t: EphemeralTenant, patientId: string, title: string): PlanCreateInput {
+  return {
+    idempotencyKey: randomUUID(),
+    patientId,
+    discipline: "KINESIOLOGY",
+    practitionerId: t.practitionerId,
+    serviceId: t.serviceId,
+    locationId: null,
+    title,
+    schedule: { v: 1, frequency: "weekly", slots: [{ dow: 1, startMin: 600 }] },
+    startDayKey: "2030-01-07",
+    totalSessions: 2,
+    pricing: null,
+    rows: [],
+    stateToken: "sin-preview",
+  };
+}
+async function gateCut(r: Promise<{ ok: boolean; kind?: string }>): Promise<{ ok: boolean }> {
+  const out = await r;
+  if (!out.ok && out.kind === "stale-preview") throw new Error("stale-preview: el gate no cortó antes del motor");
+  return out;
+}
 
 /** FormData con un PDF chico (el gate tiene que cortar antes del storage). */
 function pdfForm(name: string): FormData {
@@ -117,7 +145,12 @@ async function seedHc(db: PrismaClient, t: EphemeralTenant, patientId: string) {
   await db.auditEvent.create({
     data: { tenantId: t.tenantId, action: "patient.update", entity: "Patient", entityId: patientId },
   });
-  return { programId: program.id, sessionId: program.sessions[0].id, fileId: file.id };
+  return {
+    programId: program.id,
+    programUpdatedAt: program.updatedAt.toISOString(),
+    sessionId: program.sessions[0].id,
+    fileId: file.id,
+  };
 }
 
 const ROWS: Row[] = [
@@ -192,8 +225,8 @@ const ROWS: Row[] = [
     untouched: (c, db) => db.patient.count({ where: { id: c.patB, diagnosisTitle: "Pisado por A" } }),
   },
   {
-    name: "createProgram para un paciente de B",
-    act: (c) => createProgram({ patientId: c.patB, title: "Colado por A", totalSessions: 2, frequency: 1, startDate: "2030-01-06" }),
+    name: "createPlan para un paciente de B",
+    act: (c) => gateCut(createPlan(planDraft(c.A, c.patB, "Colado por A"))),
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.patB, title: "Colado por A" } }),
   },
   {
@@ -202,8 +235,8 @@ const ROWS: Row[] = [
     untouched: (c, db) => db.evaScore.count({ where: { patientId: c.patB, source: "colado-a" } }),
   },
   {
-    name: "updateProgram de un plan de B",
-    act: (c) => updateProgram({ id: c.programB, title: "Pisado por A" }),
+    name: "updatePlanDetails de un plan de B",
+    act: (c) => updatePlanDetails({ programId: c.programB, expectedUpdatedAt: c.programBUpdatedAt, title: "Pisado por A" }),
     untouched: (c, db) => db.treatmentProgram.count({ where: { id: c.programB, title: "Pisado por A" } }),
   },
   {
@@ -270,6 +303,7 @@ for (const who of ["OWNER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
     const hcB = await seedHc(db, ctx.B, ctx.patB);
     ctx.fileB = hcB.fileId;
     ctx.programB = hcB.programId;
+    ctx.programBUpdatedAt = hcB.programUpdatedAt;
     ctx.sessionB = hcB.sessionId;
     asUser(who === "OWNER" ? ctx.A.userId : (await addPractitioner(db, ctx.A, "ASSISTANT")).userId);
   });
@@ -318,6 +352,7 @@ type BasicCtx = {
   pat: string;
   fileId: string;
   programId: string;
+  programUpdatedAt: string;
   sessionId: string;
 };
 type BasicRow = {
@@ -348,8 +383,8 @@ const BASIC_ROWS: BasicRow[] = [
     untouched: (c, db) => db.patient.count({ where: { id: c.pat, diagnosisTitle: "Pisado por básico" } }),
   },
   {
-    name: "createProgram",
-    act: (c) => createProgram({ patientId: c.pat, title: "Colado por básico", totalSessions: 2, frequency: 1, startDate: "2030-01-06" }),
+    name: "createPlan",
+    act: (c) => gateCut(createPlan(planDraft(c.T, c.pat, "Colado por básico"))),
     untouched: (c, db) => db.treatmentProgram.count({ where: { patientId: c.pat, title: "Colado por básico" } }),
   },
   {
@@ -358,8 +393,8 @@ const BASIC_ROWS: BasicRow[] = [
     untouched: (c, db) => db.evaScore.count({ where: { patientId: c.pat, source: "colado-basico" } }),
   },
   {
-    name: "updateProgram",
-    act: (c) => updateProgram({ id: c.programId, title: "Pisado por básico" }),
+    name: "updatePlanDetails",
+    act: (c) => updatePlanDetails({ programId: c.programId, expectedUpdatedAt: c.programUpdatedAt, title: "Pisado por básico" }),
     untouched: (c, db) => db.treatmentProgram.count({ where: { id: c.programId, title: "Pisado por básico" } }),
   },
   {
@@ -418,6 +453,7 @@ for (const who of ["PRACTITIONER", "ASSISTANT"] as const) describe.skipIf(!RUN)(
     const hc = await seedHc(db, ctx.T, ctx.pat);
     ctx.fileId = hc.fileId;
     ctx.programId = hc.programId;
+    ctx.programUpdatedAt = hc.programUpdatedAt;
     ctx.sessionId = hc.sessionId;
     asUser(ctx.basicUserId);
   });

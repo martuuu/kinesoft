@@ -11,12 +11,19 @@ import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import { dayWindow, instantAt } from "@/lib/availability/day";
 import {
   DEFAULT_AGENDA_VISIBILITY,
+  agendaPlanScopeStorageKey,
   agendaVisibilityStorageKey,
   applyAgendaVisibility,
   countHidden,
+  countPlanScope,
   hasTickingPaymentHold,
   hiddenCountLabel,
+  parseAgendaPlanScope,
   parseAgendaVisibility,
+  planScopeHighlight,
+  planScopeOf,
+  serializeAgendaPlanScope,
+  type AgendaPlanScope,
   type AgendaVisibility,
 } from "@/lib/agenda-filters";
 import {
@@ -44,14 +51,15 @@ import {
 import {
   agendaHref,
   aggregateDayLock,
+  applyAgendaFilters,
   availabilityMatches,
   blockedRows,
   canOpenDayLock,
   capabilitySet,
   countByPractitioner,
   dayLockInitialScope,
-  filterAgendaBookings,
   isDayScoped,
+  mergeBookingOverrides,
   segmentOf,
   shiftDayKey,
   showModeToggle,
@@ -59,13 +67,19 @@ import {
   viewForSegment,
   visiblePractitioners,
   weekDayKeys,
+  type AgendaFilterContext,
+  type AgendaFilters,
   type AgendaView,
   type AggregatedDayLock,
   type ViewSegment,
 } from "@/lib/agenda-client-state";
 import type { DayLockState } from "@/lib/availability/types";
-import type { BookingDTO } from "./agenda-utils";
+import { sameHighlight, toggleHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
+import type { Discipline } from "@/lib/plans-constants";
+import { expandPlanFields, serviceDisciplineMap, type BookingDTO } from "./agenda-utils";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
+import { PlanLegend } from "./plan-legend";
 import { ModeToggle } from "./mode-toggle";
 import { PractitionerChips } from "./practitioner-chips";
 import { LocationFilter } from "./location-filter";
@@ -112,9 +126,14 @@ function prefetchAgendaChunks() {
  *   (`agendaPrefs.mode`, toggle Por día ↔ Por profesional).
  *
  * Filtros, todos del lado del cliente (los turnos de la semana vienen enteros
- * de `listAgendaBookings`): chips de profesionales (`?pros=`, vacío = todos),
- * sede (`agendaPrefs.locationId`) y los toggles de cancelados/ausentes
+ * de `listAgendaBookings`): un objeto `AgendaFilters` extensible (S19b:
+ * profesionales en `?pros=`, vacío = todos; sede en `agendaPrefs.locationId`;
+ * la sala de SR se suma ahí) y los toggles de cancelados/ausentes
  * (localStorage, como siempre).
+ *
+ * Resaltado (no oculta, atenúa): leyenda de servicios y, con el módulo
+ * `planes`, leyenda "Turnos: De plan · Sueltos" (S19b). El alcance de plan se
+ * recuerda por usuario en localStorage; el de servicio, no (como siempre).
  *
  * Preferencias de agenda (`agendaPrefs`: modo, zoom, densidad, favoritos,
  * sede) se aplican al instante y se guardan con `updateAgendaViewPrefs`
@@ -140,7 +159,20 @@ export type Props = {
   /** Chips elegidos al cargar (`?pros=` o el `?practitioner=` viejo); vacío = todos. */
   initialSelectedIds?: string[];
   bookings: BookingDTO[];
-  services: { id: string; name: string; durationMin: number; priceCents: number; color: string | null }[];
+  /**
+   * `discipline` (P3-C, C9): la disciplina del servicio. Con ella el cliente
+   * resuelve `serviceDiscipline` de cada turno (`expandPlanFields`), que ya no
+   * viaja por turno (DTO compacto). Opcional: sin ella "Fuera de plan" no se
+   * muestra (falla hacia no avisar).
+   */
+  services: {
+    id: string;
+    name: string;
+    durationMin: number;
+    priceCents: number;
+    color: string | null;
+    discipline?: Discipline | null;
+  }[];
   practitioners: { id: string; name: string }[];
   patients: { id: string; name: string }[];
   /** Active tenant insurers (Obras Sociales) for the inline new-patient coverage select. */
@@ -221,7 +253,38 @@ export function AgendaClient(props: Props) {
   }, []);
   // Color legend "filter": clicking a service highlights (lifts) all its cards.
   // Single-select; clicking the active one clears. Purely visual (no filtering).
-  const [highlightedServiceId, setHighlightedServiceId] = useState<string | null>(null);
+  // P3-C: `AgendaHighlight` (servicio, plan o suelto; `lib/agenda-highlight.ts`).
+  const [highlight, setHighlightState] = useState<AgendaHighlight | null>(null);
+  // S19b: leyenda/filtro de plan solo con el módulo `planes` (VERTICALES §5).
+  const plansEnabled = useTenantModules().has("planes");
+  // El alcance De plan / Sueltos se recuerda por usuario (como los toggles de
+  // cancelados/ausentes): primer render sin resaltado (hidratación) y lo
+  // guardado se aplica después de montar. Sin el módulo no se lee.
+  const planScopeKey = agendaPlanScopeStorageKey(props.viewer?.userId);
+  useEffect(() => {
+    if (!plansEnabled) return;
+    try {
+      const stored = planScopeHighlight(parseAgendaPlanScope(window.localStorage.getItem(planScopeKey)));
+      if (stored) setHighlightState((prev) => prev ?? stored);
+    } catch {
+      /* storage no disponible: sin resaltado */
+    }
+  }, [plansEnabled, planScopeKey]);
+  const setHighlight = (next: AgendaHighlight | null) => {
+    setHighlightState(next);
+    if (!plansEnabled) return;
+    // Se guarda el alcance de plan que queda (elegir un servicio = "Todos").
+    try {
+      const v = serializeAgendaPlanScope(planScopeOf(next));
+      if (v == null) window.localStorage.removeItem(planScopeKey);
+      else window.localStorage.setItem(planScopeKey, v);
+    } catch {
+      /* no persiste, pero el resaltado funciona en esta pestaña */
+    }
+  };
+  const toggleLegend = (own: AgendaHighlight) => setHighlight(toggleHighlight(highlight, own));
+  const planScope: AgendaPlanScope | null = plansEnabled ? planScopeOf(highlight) : null;
+  const setPlanScope = (scope: AgendaPlanScope) => setHighlight(planScopeHighlight(scope));
   // Server-backed per-user agenda preferences, controlled from the Tweaks
   // panel + /configuracion. `agendaShowWeekHeader` drives the day-header
   // chrome — the day strip (every view) AND the week-grid header row.
@@ -357,17 +420,34 @@ export function AgendaClient(props: Props) {
   // en otra sesión"); se pisa acá al instante y `router.refresh()` re-lista.
   const [overrides, setOverrides] = useState<Record<string, BookingDTO>>({});
   useEffect(() => setOverrides({}), [props.bookings]);
-  const allBookings = useMemo(
-    () => (Object.keys(overrides).length ? props.bookings.map((b) => overrides[b.id] ?? b) : props.bookings),
-    [props.bookings, overrides]
+  // C9 compacto en el cable (`toBookingDTO`): acá vuelven los neutros y la
+  // disciplina del servicio, así las vistas y el drawer leen `programId: null`
+  // (suelto) y no `undefined` ("esta proyección no trae C9").
+  const disciplineByService = useMemo(() => serviceDisciplineMap(props.services), [props.services]);
+  const serverBookings = useMemo(
+    () => props.bookings.map((b) => expandPlanFields(b, disciplineByService)),
+    [props.bookings, disciplineByService]
   );
+  // Handoff de S19a: la fila que devuelve la action (Recepción, drawer) viene
+  // SIN expandir; pisarla tal cual hacía que un suelto perdiera `programId:
+  // null`/`serviceDiscipline` hasta el `router.refresh()` y se apagara "Fuera
+  // de plan" (y el resaltado De plan / Sueltos). Se expande igual que lo del server.
+  const allBookings = useMemo(
+    () => mergeBookingOverrides(serverBookings, overrides, (b) => expandPlanFields(b, disciplineByService)),
+    [serverBookings, overrides, disciplineByService]
+  );
+  // S19b: un solo objeto de filtros (SR suma `roomId` acá y en la tabla de
+  // `AGENDA_FILTER_DIMENSIONS`, sin tocar lo de abajo).
+  const filters: AgendaFilters = useMemo(() => ({ practitionerIds: selectedIds, locationId }), [selectedIds, locationId]);
+  const filterCtx: AgendaFilterContext = useMemo(() => ({ primaryLocationId }), [primaryLocationId]);
+  // Base de los chips de profesionales: todos los filtros menos el de profesionales.
   const locBookings = useMemo(
-    () => filterAgendaBookings(allBookings, { selectedIds: EMPTY, locationId, primaryLocationId }),
-    [allBookings, locationId, primaryLocationId]
+    () => applyAgendaFilters(allBookings, filters, filterCtx, { except: ["practitionerIds"] }),
+    [allBookings, filters, filterCtx]
   );
   const filteredBookings = useMemo(
-    () => filterAgendaBookings(locBookings, { selectedIds, locationId: null, primaryLocationId }),
-    [locBookings, selectedIds, primaryLocationId]
+    () => applyAgendaFilters(allBookings, filters, filterCtx),
+    [allBookings, filters, filterCtx]
   );
   const visibleBookings = useMemo(
     () => applyAgendaVisibility(filteredBookings, visibility),
@@ -408,6 +488,16 @@ export function AgendaClient(props: Props) {
       : filteredBookings;
     return hiddenCountLabel(countHidden(scope, visibility));
   }, [filteredBookings, view, dayKey, visibility]);
+
+  // Conteo de la leyenda "Turnos" (S19b): lo que se ve en la vista (el día, o
+  // la semana en Semana), sin cancelados.
+  const planCounts = useMemo(() => {
+    if (!plansEnabled) return null;
+    const scope = isDayScoped(view)
+      ? visibleBookings.filter((b) => toARDateKey(b.scheduledFor) === dayKey)
+      : visibleBookings;
+    return countPlanScope(scope);
+  }, [plansEnabled, visibleBookings, view, dayKey]);
 
   // Conteo de los chips: el día (o la semana en Semana), en la sede elegida.
   const chipCounts = useMemo(() => {
@@ -587,6 +677,7 @@ export function AgendaClient(props: Props) {
     persistPrefs({ locationId: id });
   };
 
+  const hasServiceLegend = props.services.some((s) => s.color);
   const anchorDate = useMemo(() => instantAt(dayKey, 12 * 60), [dayKey]);
   const multi = practitionerCount > 1;
 
@@ -638,6 +729,8 @@ export function AgendaClient(props: Props) {
         }
         zoom={view === "practitioner" ? prefs.zoom : null}
         onZoomChange={(zoom) => persistPrefs({ zoom })}
+        planScope={planScope}
+        onPlanScopeChange={setPlanScope}
       />
 
       {showDayHeader && (
@@ -669,7 +762,7 @@ export function AgendaClient(props: Props) {
                 onEdit={setEditing}
                 density={prefs.density}
                 businessHours={hours}
-                highlightedServiceId={highlightedServiceId}
+                highlight={highlight}
                 practitionerById={initialsById}
                 now={now}
                 blockedRows={todayBlocked}
@@ -686,7 +779,7 @@ export function AgendaClient(props: Props) {
                 now={now}
                 onSlotClick={(practitionerId, iso) => setCreating({ defaultISO: iso, practitionerId })}
                 onBookingClick={setEditing}
-                highlightServiceId={highlightedServiceId}
+                highlight={highlight}
                 lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
                 onDayLockClick={canLockAny && availability ? (pid) => openDayLock(dayKey, pid) : undefined}
               />
@@ -700,7 +793,7 @@ export function AgendaClient(props: Props) {
                 showHeader={agenda.agendaShowWeekHeader}
                 showSaturday={agenda.agendaShowSaturday}
                 showSunday={agenda.agendaShowSunday}
-                highlightedServiceId={highlightedServiceId}
+                highlight={highlight}
                 practitioners={initialsById ? visiblePracs : null}
                 dayLocks={weekLocks}
                 blockedByDay={weekBlocked}
@@ -711,7 +804,7 @@ export function AgendaClient(props: Props) {
               <ListView
                 bookings={todayList}
                 onEdit={setEditing}
-                highlightedServiceId={highlightedServiceId}
+                highlight={highlight}
                 practitionerById={initialsById}
                 now={now}
               />
@@ -734,7 +827,7 @@ export function AgendaClient(props: Props) {
         </AnimatePresence>
       </div>
 
-      {props.services.some((s) => s.color) && (
+      {(hasServiceLegend || plansEnabled) && (
         <div
           style={{
             display: "flex",
@@ -744,29 +837,30 @@ export function AgendaClient(props: Props) {
             alignItems: "center",
           }}
         >
-          <span
-            style={{
-              fontSize: 10.5,
-              fontWeight: 700,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              color: "var(--navy-300)",
-              marginRight: 4,
-            }}
-          >
-            Servicios
-          </span>
+          {hasServiceLegend && (
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--navy-300)",
+                marginRight: 4,
+              }}
+            >
+              Servicios
+            </span>
+          )}
           {props.services
             .filter((s) => s.color)
             .map((s) => {
-              const active = highlightedServiceId === s.id;
+              const own: AgendaHighlight = { kind: "service", serviceId: s.id };
+              const active = sameHighlight(highlight, own);
               return (
                 <button
                   key={s.id}
                   type="button"
-                  onClick={() =>
-                    setHighlightedServiceId((prev) => (prev === s.id ? null : s.id))
-                  }
+                  onClick={() => toggleLegend(own)}
                   title={active ? "Quitar resaltado" : "Resaltar estos turnos"}
                   style={{
                     display: "inline-flex",
@@ -796,6 +890,17 @@ export function AgendaClient(props: Props) {
                 </button>
               );
             })}
+          {plansEnabled && (
+            <>
+              {hasServiceLegend && (
+                <span
+                  aria-hidden="true"
+                  style={{ width: 1, height: 16, background: "rgba(15,30,51,0.12)", margin: "0 4px" }}
+                />
+              )}
+              <PlanLegend highlight={highlight} onToggle={toggleLegend} counts={planCounts} />
+            </>
+          )}
         </div>
       )}
 

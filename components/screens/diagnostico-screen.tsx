@@ -6,13 +6,15 @@
  * Server-data driven: the page passes the full Prisma-backed catalog as
  * props. The matching algorithm (`rankSelection`) runs live in the
  * browser as the practitioner refines the case, so the UI is instant.
- * When the practitioner clicks "Asignar diagnóstico y armar plan", the
- * modal calls `assignDiagnosisAndCreateProgram` which persists the case,
- * top-N diagnoses, treatment program and per-session exercises.
+ *
+ * S23 (ES3 · C10): "Asignar diagnóstico y armar plan" abre el editor único de
+ * planes (`DiagnosisPlanDoor`, lazy) prellenado con el caso, en vez del modal
+ * viejo que llamaba a el alta legacy de Diagnóstico (sesiones fuera del
+ * motor). El paciente lo elige el editor (`PatientPicker requireFull`) salvo
+ * que venga del deep-link `?patientId=` (`door`).
  */
 
 import { useEffect, useMemo, useState } from "react";
-import type { ExerciseRelation, ProgramPhase } from "@prisma/client";
 import type { ExerciseRow } from "@/lib/exercises-types";
 import {
   exercisesFor,
@@ -23,14 +25,22 @@ import {
 import { BodyMapPanel } from "@/components/diagnostico/body-map-panel";
 import { RefinementPanel } from "@/components/diagnostico/refinement-panel";
 import { RightStack, ActionBar } from "@/components/diagnostico/right-stack";
-import { AssignPlanModal, type PatientPick } from "@/components/diagnostico/assign-plan-modal";
+import {
+  DiagnosisDoorBanner,
+  DiagnosisPlanDoor,
+  NO_DIAGNOSIS_DOOR,
+  buildDiagnosisEditorRequest,
+  desktopDiagnosisExerciseIds,
+  useDiagnosisPlanDoor,
+  type DiagnosisDoor,
+} from "@/components/diagnostico/assign-plan-modal";
 
 export function DiagnosticoScreen({
   catalog,
-  initialPatients,
+  door = NO_DIAGNOSIS_DOOR,
 }: {
   catalog: CatalogDTO;
-  initialPatients: PatientPick[];
+  door?: DiagnosisDoor;
 }) {
   const [view, setView] = useState<"FRONT" | "BACK">("FRONT");
   const [selectedRegions, setSelectedRegions] = useState<string[]>([]);
@@ -45,7 +55,7 @@ export function DiagnosticoScreen({
   // picker that are not part of the condition's suggested catalogue.
   // Persisted as DIRECT/ACTIVATION links by the server action.
   const [extraExercises, setExtraExercises] = useState<ExerciseRow[]>([]);
-  const [showAssign, setShowAssign] = useState(false);
+  const editor = useDiagnosisPlanDoor();
 
   const selection: CaseSelection = useMemo(
     () => ({
@@ -91,141 +101,122 @@ export function DiagnosticoScreen({
 
   const relatedRegions = activeRanking?.relatedRegions ?? [];
 
+  const openEditor = () => {
+    if (!activeRanking || !door.canAssign) return;
+    editor.openEditor(
+      buildDiagnosisEditorRequest({
+        conditionSlug: activeRanking.slug,
+        selection,
+        exerciseIds: desktopDiagnosisExerciseIds({
+          conditionExerciseIds: activeExercises.map((e) => e.exerciseId),
+          extraExerciseIds: extraExercises.map((e) => e.id),
+          selectedExerciseIds,
+        }),
+        patientId: door.patient?.id ?? null,
+        bookingId: door.bookingId,
+      })
+    );
+  };
+
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "320px 1fr 360px",
-        gap: 14,
-        minHeight: "calc(100vh - 90px)",
-        paddingBottom: 80, // room for the floating action bar
-      }}
-    >
-      <BodyMapPanel
-        catalog={catalog}
-        view={view}
-        setView={setView}
-        selectedRegions={selectedRegions}
-        relatedRegions={relatedRegions}
-        active={activeRegion}
-        onToggleRegion={(slug) => {
-          setSelectedRegions((s) => (s.includes(slug) ? s.filter((x) => x !== slug) : [...s, slug]));
-          setActiveRegion(slug);
-        }}
-        onSelectRegion={setActiveRegion}
-      />
-
-      <RefinementPanel
-        catalog={catalog}
-        activeRegionLabel={
-          activeRegion ? catalog.regions.find((r) => r.slug === activeRegion)?.label ?? activeRegion : null
-        }
-        symptoms={symptoms}
-        toggleSymptom={(v) =>
-          setSymptoms((s) => (s.includes(v) ? s.filter((x) => x !== v) : [...s, v]))
-        }
-        triggers={triggers}
-        toggleTrigger={(v) =>
-          setTriggers((s) => (s.includes(v) ? s.filter((x) => x !== v) : [...s, v]))
-        }
-        phase={phase}
-        setPhase={setPhase}
-        intensity={intensity}
-        setIntensity={setIntensity}
-      />
-
-      <RightStack
-        ranking={topRanking}
-        confirmedSlug={effectiveConfirmedSlug}
-        onConfirm={setConfirmedSlug}
-        exercises={activeExercises}
-        selectedExerciseIds={selectedExerciseIds}
-        toggleExercise={(id) =>
-          setSelectedExerciseIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
-        }
-        catalog={catalog}
-        extraExercises={extraExercises}
-        onAddExtra={(ex) => {
-          setExtraExercises((s) => (s.some((e) => e.id === ex.id) ? s : [...s, ex]));
-          setSelectedExerciseIds((s) => (s.includes(ex.id) ? s : [...s, ex.id]));
-        }}
-        onRemoveExtra={(id) => {
-          setExtraExercises((s) => s.filter((e) => e.id !== id));
-          setSelectedExerciseIds((s) => s.filter((x) => x !== id));
-        }}
-      />
-
-      <ActionBar
-        zonesCount={selectedRegions.length}
-        activeRanking={activeRanking ?? null}
-        exsCount={selectedExerciseIds.length}
-        onAssign={() => setShowAssign(true)}
-        canAssign={!!activeRanking && selectedExerciseIds.length > 0}
-      />
-
-      {/* Screen-reader live region — announces the top diagnosis whenever
-          the matching engine re-ranks. Visually hidden. */}
+    <>
+      <DiagnosisDoorBanner door={door} style={{ marginBottom: 12 }} />
       <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
         style={{
-          position: "absolute",
-          width: 1,
-          height: 1,
-          margin: -1,
-          padding: 0,
-          overflow: "hidden",
-          clip: "rect(0,0,0,0)",
-          whiteSpace: "nowrap",
-          border: 0,
+          display: "grid",
+          gridTemplateColumns: "320px 1fr 360px",
+          gap: 14,
+          minHeight: "calc(100vh - 90px)",
+          paddingBottom: 80, // room for the floating action bar
         }}
       >
-        {activeRanking
-          ? `Diagnóstico sugerido: ${activeRanking.name}, ${Math.round(activeRanking.matchScore * 100)}% de coincidencia. ${selectedExerciseIds.length} ejercicios seleccionados.`
-          : "Marcá una zona del cuerpo para ver diagnósticos sugeridos."}
-      </div>
-
-      {showAssign && activeRanking && (
-        <AssignPlanModal
-          // Re-mount when the user changes their exercise selection so the
-          // modal's local `orderedIds` reflects the new prop. This
-          // replaces a `useState(prop)` + `useEffect(setState, [prop])`
-          // double-render anti-pattern.
-          key={selectedExerciseIds.join("|")}
-          condition={catalog.conditions.find((c) => c.slug === activeRanking.slug)!}
-          ranking={topRanking}
-          selectedExercises={[
-            ...activeExercises.filter((e) => selectedExerciseIds.includes(e.exerciseId)),
-            // "Extras" added by the kine from the unified picker. They get
-            // synthetic DIRECT/ACTIVATION links — the server action treats
-            // them like any other selected exercise.
-            ...extraExercises
-              .filter((ex) => selectedExerciseIds.includes(ex.id))
-              .map((ex) => ({
-                exerciseId: ex.id,
-                slug: ex.slug,
-                name: ex.name,
-                relation: "DIRECT" as ExerciseRelation,
-                phase: "ACTIVATION" as ProgramPhase,
-                weight: 1,
-                rationale:
-                  ex.kind === "MANUAL_THERAPY"
-                    ? "Maniobra de terapia manual agregada por el kinesiólogo."
-                    : "Ejercicio agregado por el kinesiólogo.",
-                muscleGroups: ex.muscleGroups,
-                equipment: ex.equipment,
-                defaultSets: ex.defaultSets ?? 3,
-                defaultReps: ex.defaultReps ?? 12,
-                difficulty: ex.difficulty,
-              })),
-          ]}
-          selectedExerciseIds={selectedExerciseIds}
-          selection={selection}
-          initialPatients={initialPatients}
-          onClose={() => setShowAssign(false)}
+        <BodyMapPanel
+          catalog={catalog}
+          view={view}
+          setView={setView}
+          selectedRegions={selectedRegions}
+          relatedRegions={relatedRegions}
+          active={activeRegion}
+          onToggleRegion={(slug) => {
+            setSelectedRegions((s) => (s.includes(slug) ? s.filter((x) => x !== slug) : [...s, slug]));
+            setActiveRegion(slug);
+          }}
+          onSelectRegion={setActiveRegion}
         />
-      )}
-    </div>
+
+        <RefinementPanel
+          catalog={catalog}
+          activeRegionLabel={
+            activeRegion ? catalog.regions.find((r) => r.slug === activeRegion)?.label ?? activeRegion : null
+          }
+          symptoms={symptoms}
+          toggleSymptom={(v) =>
+            setSymptoms((s) => (s.includes(v) ? s.filter((x) => x !== v) : [...s, v]))
+          }
+          triggers={triggers}
+          toggleTrigger={(v) =>
+            setTriggers((s) => (s.includes(v) ? s.filter((x) => x !== v) : [...s, v]))
+          }
+          phase={phase}
+          setPhase={setPhase}
+          intensity={intensity}
+          setIntensity={setIntensity}
+        />
+
+        <RightStack
+          ranking={topRanking}
+          confirmedSlug={effectiveConfirmedSlug}
+          onConfirm={setConfirmedSlug}
+          exercises={activeExercises}
+          selectedExerciseIds={selectedExerciseIds}
+          toggleExercise={(id) =>
+            setSelectedExerciseIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+          }
+          catalog={catalog}
+          extraExercises={extraExercises}
+          onAddExtra={(ex) => {
+            setExtraExercises((s) => (s.some((e) => e.id === ex.id) ? s : [...s, ex]));
+            setSelectedExerciseIds((s) => (s.includes(ex.id) ? s : [...s, ex.id]));
+          }}
+          onRemoveExtra={(id) => {
+            setExtraExercises((s) => s.filter((e) => e.id !== id));
+            setSelectedExerciseIds((s) => s.filter((x) => x !== id));
+          }}
+        />
+
+        <ActionBar
+          zonesCount={selectedRegions.length}
+          activeRanking={activeRanking ?? null}
+          exsCount={selectedExerciseIds.length}
+          onAssign={openEditor}
+          canAssign={door.canAssign && !!activeRanking && selectedExerciseIds.length > 0}
+        />
+
+        {/* Screen-reader live region — announces the top diagnosis whenever
+            the matching engine re-ranks. Visually hidden. */}
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            margin: -1,
+            padding: 0,
+            overflow: "hidden",
+            clip: "rect(0,0,0,0)",
+            whiteSpace: "nowrap",
+            border: 0,
+          }}
+        >
+          {activeRanking
+            ? `Diagnóstico sugerido: ${activeRanking.name}, ${Math.round(activeRanking.matchScore * 100)}% de coincidencia. ${selectedExerciseIds.length} ejercicios seleccionados.`
+            : "Marcá una zona del cuerpo para ver diagnósticos sugeridos."}
+        </div>
+
+        <DiagnosisPlanDoor request={editor.request} open={editor.open} onClose={editor.close} />
+      </div>
+    </>
   );
 }

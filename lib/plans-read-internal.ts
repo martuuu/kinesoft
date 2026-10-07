@@ -208,6 +208,9 @@ export function balanceOf(p: RawPlan): PlanBalanceDTO {
     pricing: pricingOf(p),
     sessions: live.map((s) => ({ priceCents: s.priceCents, completed: s.completedAt != null })),
     bookings: p.bookings,
+    // S14r (08-oct): en un plan CANCELLED el pactado = devengado (no cuenta las
+    // sesiones canceladas que el paciente ya no va a hacer).
+    programStatus: p.status,
   });
   return { ...b, insurerPaidBookings: p.bookings.filter((x) => x.insurerPaidAt != null).length };
 }
@@ -362,6 +365,7 @@ export function schedulableSessionsOf(p: RawPlan): SchedulablePlanSession[] {
     if (ordinal == null || s.completedAt != null) continue;
     out.push({
       sessionId: s.id,
+      programId: p.id,
       ordinal,
       totalLive,
       discipline: p.discipline,

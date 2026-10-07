@@ -20,7 +20,7 @@
  * batch al enviar (eso es lo que decide; el preview puede quedar viejo si
  * otro usuario carga un turno mientras tanto).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FormField } from "@/components/ui/form-field";
 import { previewRecurrence } from "@/lib/availability-actions";
 import type { RecurrencePreview } from "@/lib/availability-actions-types";
@@ -84,6 +84,7 @@ export function SessionsMode({
   durationMin,
   locationId,
   showFrequency = true,
+  footer,
 }: {
   /** Primera sesión (ISO con zona). "" = todavía sin fecha válida. */
   anchorIso: string;
@@ -101,6 +102,10 @@ export function SessionsMode({
    *  selector (y el padre pasa siempre "weekly") para que el preview no
    *  muestre algo distinto de lo que se crea. Compat de `multi-section`. */
   showFrequency?: boolean;
+  /** Debajo del resumen (S18b, ES3): la puerta "Crealo como plan…" que arma
+   *  `multi-section`. Va acá y no afuera para quedar pegada a las fechas que
+   *  resume, que son lo que pasa al editor. */
+  footer?: ReactNode;
 }) {
   const [preview, setPreview] = useState<PreviewState>({ kind: "idle" });
   const seq = useRef(0);
@@ -385,6 +390,7 @@ export function SessionsMode({
           </ul>
         )}
       </div>
+      {footer}
     </div>
   );
 }

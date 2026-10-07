@@ -1,6 +1,7 @@
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import { formatARS } from "@/lib/format";
-import type { AgendaBookingRow, BookingRow } from "@/lib/bookings-types";
+import type { AgendaBookingRow, AgendaPlanFields, BookingRow } from "@/lib/bookings-types";
+import type { Discipline } from "@/lib/plans-constants";
 
 export type BookingDTO = {
   id: string;
@@ -69,7 +70,19 @@ export type BookingDTO = {
    */
   canOperate?: boolean;
   clinicalWritable?: boolean;
-};
+} & Partial<AgendaPlanFields>;
+/*
+ * C9 (Planes, PLANES.md §4) en el DTO: `programId`, `sessionId`,
+ * `pricedByPlan`, `plan` (chip: disciplina, ordinal, total vivo y título, este
+ * último null sin `clinical.read`), `serviceDiscipline` y
+ * `patientActiveLinkedPlanDisciplines`. Todos OPCIONALES (patrón B4.1): la
+ * proyección completa no los trae y los componentes tienen que verse como
+ * antes sin ellos.
+ *
+ * En el cable viajan COMPACTOS (`toBookingDTO`) y en el cliente se EXPANDEN
+ * (`expandPlanFields`): ver abajo. Quien lea C9 en la agenda (S19a/S19b/S19c)
+ * lee el DTO ya expandido, con los neutros de vuelta.
+ */
 
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 
@@ -115,7 +128,77 @@ export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
     telemedicineUrl: row.telemedicineUrl,
     clinicalHidden: row.clinicalHidden,
     ...serverPermissions(row),
+    ...compactPlanFields(row),
   };
+}
+
+/**
+ * C9 compacto para el cable (handoff de ES2b/S12p, decisión del orquestador
+ * en PLANES C9): un turno suelto pesaba 777 B en el DTO base y el bloque C9
+ * neutro entero le sumaba +133 B (+17 %), contra un presupuesto de +5 % del
+ * payload semanal medido sobre turnos SUELTOS. Así que se omiten los neutros:
+ * `programId`/`sessionId`/`plan` null, `pricedByPlan` false y
+ * `patientActiveLinkedPlanDisciplines` `[]`. Un suelto de un paciente sin plan
+ * no suma ni un byte; los turnos de plan crecen (es información nueva).
+ *
+ * `serviceDiscipline` NO viaja nunca: es un dato del servicio, no del turno, y
+ * el cliente ya tiene el catálogo de servicios (`services[].discipline`);
+ * `expandPlanFields` lo resuelve de ahí.
+ *
+ * Se lee por forma (no por el tipo) para tolerar una fila sin C9 (la completa,
+ * o un mock viejo): sin la clave, no se emite nada.
+ */
+function compactPlanFields(row: object): Partial<AgendaPlanFields> {
+  const r = row as Partial<AgendaPlanFields>;
+  const out: Partial<AgendaPlanFields> = {};
+  if (typeof r.programId === "string") out.programId = r.programId;
+  if (typeof r.sessionId === "string") out.sessionId = r.sessionId;
+  if (r.pricedByPlan === true) out.pricedByPlan = true;
+  if (r.plan) out.plan = r.plan;
+  if (r.patientActiveLinkedPlanDisciplines && r.patientActiveLinkedPlanDisciplines.length > 0) {
+    out.patientActiveLinkedPlanDisciplines = r.patientActiveLinkedPlanDisciplines;
+  }
+  return out;
+}
+
+/** Disciplina por servicio, solo de los servicios que la traen (clave presente). */
+export type ServiceDisciplineMap = ReadonlyMap<string, Discipline | null>;
+
+export function serviceDisciplineMap(
+  services: readonly { id: string; discipline?: Discipline | null }[]
+): ServiceDisciplineMap {
+  const out = new Map<string, Discipline | null>();
+  for (const s of services) if (s.discipline !== undefined) out.set(s.id, s.discipline);
+  return out;
+}
+
+/**
+ * Inversa de `compactPlanFields`, en el cliente: devuelve los neutros C9 a un
+ * DTO de la proyección LIVIANA (la que trae `isOverbooked`; con la completa no
+ * hay C9 y el DTO vuelve igual) y resuelve `serviceDiscipline` del catálogo.
+ * Así `isOutOfPlan`, el chip y el resaltado ven `programId: null` (suelto) y
+ * no `undefined` ("no sé"), que es lo que distinguen.
+ *
+ * Sin el servicio en el mapa (catálogo sin `discipline`), `serviceDiscipline`
+ * queda ausente y `isOutOfPlan` da `false`: falla hacia no mostrar el aviso.
+ * Nota: sin el módulo `planes` el server mandaba `serviceDiscipline: null`;
+ * acá sale la del servicio, pero sin plan vinculado (`[]`) no cambia nada de lo
+ * que se muestra.
+ */
+export function expandPlanFields(dto: BookingDTO, disciplines: ServiceDisciplineMap | null): BookingDTO {
+  if (dto.isOverbooked === undefined) return dto;
+  const out: BookingDTO = {
+    ...dto,
+    programId: dto.programId ?? null,
+    sessionId: dto.sessionId ?? null,
+    pricedByPlan: dto.pricedByPlan ?? false,
+    plan: dto.plan ?? null,
+    patientActiveLinkedPlanDisciplines: dto.patientActiveLinkedPlanDisciplines ?? [],
+  };
+  if (dto.serviceDiscipline === undefined && disciplines?.has(dto.serviceId)) {
+    out.serviceDiscipline = disciplines.get(dto.serviceId) ?? null;
+  }
+  return out;
 }
 
 /**

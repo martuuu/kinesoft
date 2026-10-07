@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -18,19 +19,39 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
 import { BookingStatusTag } from "../ui";
 import type { PatientBookingFull } from "@/lib/patients-types";
+import type { PatientPlanBalances, PlanDTO } from "@/lib/plans-read-types";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
+import { PlanBalance, PlanGroupHeader } from "@/components/planes/plan-balance";
+import {
+  bookingPlanOrdinal,
+  canDeleteFromProfile,
+  groupBookingsByPlan,
+  isBillableBooking,
+  planGroupMetas,
+  shouldGroupByPlan,
+  type PlanGroupMeta,
+} from "@/components/planes/plan-booking-groups";
 
 /** Turnos tab columns: Fecha+hora · Servicio · Obra social · Copago · Duración · Estado · acciones. */
 const TURNOS_COLS = "120px 1.2fr 1fr 90px 72px 96px 40px";
+/** Nivel `admin`: copago y OS con su estado de cobro, y "Ver en agenda" en vez del menú. */
+const TURNOS_COLS_ADMIN = "120px 1.2fr 1.1fr 1.1fr 72px 96px 90px";
+/**
+ * P3.Z (F3b): con 7 columnas la grilla superaba los 360 px de un teléfono
+ * dentro de una Card con `overflow:hidden` y "Ver en agenda" quedaba cortado.
+ * La tabla scrollea DENTRO de la card (como Sesiones), la página no (AGENTS §5).
+ */
+const TURNOS_MIN_WIDTH = 720;
+const TURNOS_MIN_WIDTH_ADMIN = 780;
 
-export function TurnosView({
-  patientId,
-  bookings,
-  loading,
-  patchBooking,
-  dropBooking,
-  restoreBooking,
-  readOnly = false,
-}: {
+/**
+ * S22f (ES3 P3.1): con el módulo `planes` y algún turno de plan cargado, la
+ * lista se agrupa por plan (chip de disciplina, nunca el título sin permiso,
+ * saldo compacto del server) + "Turnos sueltos". Sin módulo o sin turnos de
+ * plan → la vista de siempre. Los turnos de plan no tienen "Eliminar": se
+ * cancelan (el server además rechaza borrar un turno con cobro).
+ */
+export type TurnosViewProps = {
   patientId: string;
   bookings: PatientBookingFull[] | null;
   loading: boolean;
@@ -48,7 +69,37 @@ export function TurnosView({
    * el prop deja la vista lista para cuando se muestre en otro contexto.
    */
   readOnly?: boolean;
-}) {
+  /**
+   * Nivel `admin` (Secretaria / Facturación, PD-13): solo lectura, con el
+   * estado de cobro (copago y OS) en cada fila y el link a la agenda. Sin
+   * datos clínicos: la fila nunca muestra título ni notas del turno.
+   */
+  admin?: boolean;
+  /** `useTenantModules().has('planes')`. Sin módulo: nunca se agrupa. */
+  plansEnabled?: boolean;
+  /** `getPatientPlans` (data). Da disciplina, estado y "Sesión n de N". */
+  plans?: readonly PlanDTO[] | null;
+  /** `getPatientPlanBalances` (data). Saldo P7 del server (incluye archivados). */
+  planBalances?: PatientPlanBalances | null;
+  /** Acceso full + `clinical.read`. Sin esto el grupo muestra la disciplina, nunca el título. */
+  showPlanTitles?: boolean;
+};
+
+export function TurnosView({
+  patientId,
+  bookings,
+  loading,
+  patchBooking,
+  dropBooking,
+  restoreBooking,
+  readOnly: readOnlyProp = false,
+  admin = false,
+  plansEnabled = false,
+  plans = null,
+  planBalances = null,
+  showPlanTitles = false,
+}: TurnosViewProps) {
+  const readOnly = readOnlyProp || admin;
   const toast = useToast();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -121,6 +172,8 @@ export function TurnosView({
         const r = await setBookingStatus(b.id, status, expected, force);
         if (r.ok) {
           patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
+          // S12/C4: aviso no bloqueante de la sincronía con la sesión del plan.
+          if (r.notice) toast.info(r.notice);
           return;
         }
         const prompt = nextForcePrompt(r, force);
@@ -161,45 +214,121 @@ export function TurnosView({
     });
   };
 
+  const grouped = shouldGroupByPlan(plansEnabled, sorted);
+  const groups = grouped
+    ? groupBookingsByPlan(sorted, planGroupMetas({ plans, planBalances, showPlanTitles }))
+    : null;
+
+  const cols = admin ? TURNOS_COLS_ADMIN : TURNOS_COLS;
+  const columnsHeader = (
+    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: cols, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+      <span>Fecha y hora</span>
+      <span>Servicio</span>
+      <span>Obra social</span>
+      <span>Copago</span>
+      <span>Duración</span>
+      <span>Estado</span>
+      <span />
+    </div>
+  );
+  const table = (children: React.ReactNode) => (
+    <div data-testid="profile-table-scroll" style={{ overflowX: "auto" }}>
+      <div style={{ minWidth: admin ? TURNOS_MIN_WIDTH_ADMIN : TURNOS_MIN_WIDTH }}>{children}</div>
+    </div>
+  );
+  const row = (b: PatientBookingFull, plan: PlanGroupMeta | null) => {
+    const d = new Date(b.scheduledFor);
+    const cancelled = b.status === "CANCELLED";
+    const ord = plan ? bookingPlanOrdinal(b, plan) : null;
+    const billable = isBillableBooking(b);
+    return (
+      <div
+        key={b.id}
+        data-testid="turno-row"
+        data-plan={b.programId ?? undefined}
+        style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: cols, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
+      >
+        <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
+          {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Argentina/Buenos_Aires" })}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          {ord && plan && (
+            <DisciplineChip discipline={plan.discipline} ordinal={ord.ordinal} totalLive={ord.totalLive} size="xs" />
+          )}
+          <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", color: "var(--navy-500)", fontSize: 12, minWidth: 0 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {b.obraSocial.toLowerCase() === "particular" ? "—" : b.obraSocial}
+          </span>
+          {admin && billable && b.osAmountCents > 0 && (
+            <Tag tone={b.insurerPaidAt ? "lime" : "soft"}>{b.insurerPaidAt ? "OS cobrada" : "OS pendiente"}</Tag>
+          )}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>{formatARS(b.copagoCents)}</span>
+          {admin && (billable || b.paymentStatus === "PAID") && (
+            <Tag tone={b.paymentStatus === "PAID" ? "lime" : "soft"}>{b.paymentStatus === "PAID" ? "Cobrado" : "Pendiente"}</Tag>
+          )}
+        </span>
+        <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
+        <BookingStatusTag status={b.status} />
+        {readOnly ? (
+          admin ? (
+            <Link
+              href={`/agenda?view=timeline&date=${toARDateKey(d)}`}
+              style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)", textDecoration: "none", justifySelf: "end" }}
+            >
+              Ver en agenda
+            </Link>
+          ) : (
+            <span />
+          )
+        ) : (
+          <TurnoActionsMenu
+            booking={b}
+            onStatus={(s) => setStatus(b, s)}
+            onDelete={canDeleteFromProfile(b) ? () => void remove(b) : undefined}
+            disabled={pending}
+          />
+        )}
+      </div>
+    );
+  };
+
+  if (groups) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {header}
+        {groups.map((g) => (
+          <Card key={g.key} data-testid="turnos-group" style={{ padding: 0, overflow: "hidden" }}>
+            <PlanGroupHeader
+              plan={g.kind === "plan" ? g.plan : null}
+              count={g.bookings.length}
+              aside={g.kind === "plan" && g.plan.balance ? <PlanBalance balance={g.plan.balance} variant="compact" /> : undefined}
+            />
+            {table(
+              <>
+                {columnsHeader}
+                {g.bookings.map((b) => row(b, g.kind === "plan" ? g.plan : null))}
+              </>
+            )}
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {header}
       <Card style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: TURNOS_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
-        <span>Fecha y hora</span>
-        <span>Servicio</span>
-        <span>Obra social</span>
-        <span>Copago</span>
-        <span>Duración</span>
-        <span>Estado</span>
-        <span />
-      </div>
-      {sorted.map((b) => {
-        const d = new Date(b.scheduledFor);
-        const cancelled = b.status === "CANCELLED";
-        return (
-          <div
-            key={b.id}
-            style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: TURNOS_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
-          >
-            <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
-              {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Argentina/Buenos_Aires" })}
-            </span>
-            <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
-            <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {b.obraSocial.toLowerCase() === "particular" ? "—" : b.obraSocial}
-            </span>
-            <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", fontWeight: 600 }}>{formatARS(b.copagoCents)}</span>
-            <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>{b.durationMin} min</span>
-            <BookingStatusTag status={b.status} />
-            {readOnly ? (
-              <span />
-            ) : (
-              <TurnoActionsMenu booking={b} onStatus={(s) => setStatus(b, s)} onDelete={() => void remove(b)} disabled={pending} />
-            )}
-          </div>
-        );
-      })}
+        {table(
+          <>
+            {columnsHeader}
+            {sorted.map((b) => row(b, null))}
+          </>
+        )}
       </Card>
     </div>
   );
@@ -213,7 +342,8 @@ function TurnoActionsMenu({
 }: {
   booking: PatientBookingFull;
   onStatus: (s: PatientBookingFull["status"]) => void;
-  onDelete: () => void;
+  /** Ausente = sin "Eliminar" (turno de plan, `canDeleteFromProfile`). */
+  onDelete?: () => void;
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -264,8 +394,12 @@ function TurnoActionsMenu({
           <Link href={`/agenda?view=timeline&date=${dateKey}`} style={itemStyle} onClick={() => setOpen(false)}>
             Abrir en agenda
           </Link>
-          <div style={{ height: 1, background: "rgba(15,30,51,0.08)", margin: "2px 0" }} />
-          <Item label="Eliminar" onClick={onDelete} danger />
+          {onDelete && (
+            <>
+              <div style={{ height: 1, background: "rgba(15,30,51,0.08)", margin: "2px 0" }} />
+              <Item label="Eliminar" onClick={onDelete} danger />
+            </>
+          )}
         </div>
       )}
     </div>

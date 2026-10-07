@@ -173,7 +173,7 @@ export type ChangePlanStatusData = {
 export type ChangePlanStatusResult = PlanWriteResult<ChangePlanStatusData>;
 
 /**
- * `updateProgram` (PD-10): SOLO título y notas, con CAS. Strict: un
+ * `updatePlanDetails` (PD-10): SOLO título y notas, con CAS. Strict: un
  * `totalSessions` (o cualquier otro campo estructural) se rechaza — cantidad
  * va por `plans-edit`, horario/profesional/servicio/sede por re-planificar.
  * El título es NOT NULL (vacío = rechazo); las notas se limpian con "" o null.

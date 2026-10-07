@@ -296,3 +296,104 @@ describe("cards", () => {
     ]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S19b (ES3, plan §16.2): objeto de filtros extensible (profesionales, sede;
+// sala en SR) + handoff de S19a (overrides expandidos).
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  AGENDA_FILTER_DIMENSIONS,
+  EMPTY_AGENDA_FILTERS,
+  activeAgendaFilterKeys,
+  applyAgendaFilters,
+  mergeBookingOverrides,
+  type AgendaFilters,
+} from "@/lib/agenda-client-state";
+import { expandPlanFields, serviceDisciplineMap, type BookingDTO } from "@/components/agenda/agenda-utils";
+
+describe("[P3-S19b] objeto de filtros de la agenda", () => {
+  const rows = [
+    { id: "1", practitionerId: "a", locationId: null }, // principal (L1)
+    { id: "2", practitionerId: "b", locationId: "L2" },
+    { id: "3", practitionerId: "a", locationId: "L2" },
+    { id: "4", practitionerId: "c" }, // proyección vieja: sin locationId
+  ];
+  const ctx = { primaryLocationId: "L1" };
+
+  it("una dimensión por clave del objeto (SR suma la sala acá)", () => {
+    expect(Object.keys(AGENDA_FILTER_DIMENSIONS).sort()).toEqual(Object.keys(EMPTY_AGENDA_FILTERS).sort());
+    expect(Object.keys(EMPTY_AGENDA_FILTERS).sort()).toEqual(["locationId", "practitionerIds"]);
+  });
+
+  it("vacío = todo, y devuelve una copia", () => {
+    const out = applyAgendaFilters(rows, EMPTY_AGENDA_FILTERS, ctx);
+    expect(out.map((b) => b.id)).toEqual(["1", "2", "3", "4"]);
+    expect(out).not.toBe(rows);
+    expect(activeAgendaFilterKeys(EMPTY_AGENDA_FILTERS)).toEqual([]);
+  });
+
+  it("profesionales + sede combinados (AND); igual que la firma vieja", () => {
+    const f: AgendaFilters = { practitionerIds: ["a"], locationId: "L2" };
+    expect(applyAgendaFilters(rows, f, ctx).map((b) => b.id)).toEqual(["3"]);
+    expect(activeAgendaFilterKeys(f)).toEqual(["practitionerIds", "locationId"]);
+    expect(filterAgendaBookings(rows, { selectedIds: ["a"], locationId: "L2", primaryLocationId: "L1" })).toEqual(
+      applyAgendaFilters(rows, f, ctx)
+    );
+    // Sede principal: null en el turno = principal; sin campo no se esconde.
+    expect(applyAgendaFilters(rows, { practitionerIds: [], locationId: "L1" }, ctx).map((b) => b.id)).toEqual([
+      "1",
+      "4",
+    ]);
+  });
+
+  it("except: los chips cuentan con todos los filtros menos el de profesionales", () => {
+    const f: AgendaFilters = { practitionerIds: ["b"], locationId: "L2" };
+    expect(applyAgendaFilters(rows, f, ctx, { except: ["practitionerIds"] }).map((b) => b.id)).toEqual(["2", "3", "4"]); // 4: sin sede, no se esconde
+    expect(applyAgendaFilters(rows, f, ctx, { except: ["practitionerIds", "locationId"] })).toHaveLength(4);
+  });
+});
+
+describe("[P3-S19a→S19b] overrides de Recepción/drawer expandidos como lo del server", () => {
+  const dto = (over: Partial<BookingDTO> = {}): BookingDTO =>
+    ({
+      id: "b1",
+      scheduledFor: "2026-10-05T12:00:00.000Z",
+      durationMin: 45,
+      status: "CONFIRMED",
+      serviceId: "svc-kine",
+      serviceName: "Kinesio",
+      serviceColor: null,
+      practitionerId: "p1",
+      patientId: "pt1",
+      patientName: "Paciente",
+      patientCondition: null,
+      obraSocial: null,
+      copagoCents: null,
+      updatedAt: "2026-10-05T11:00:00.000Z",
+      notes: null,
+      title: null,
+      description: null,
+      patientAccess: "full",
+      isOverbooked: false,
+      ...over,
+    }) as BookingDTO;
+  const disc = serviceDisciplineMap([{ id: "svc-kine", discipline: "KINESIOLOGY" }]);
+  const expand = (b: BookingDTO) => expandPlanFields(b, disc);
+
+  it("la fila compacta de la action vuelve con programId null y la disciplina del servicio", () => {
+    const server = [expand(dto()), expand(dto({ id: "b2" }))];
+    // La action devuelve el DTO compacto (sin C9 neutros), ya En sala.
+    const fromAction = dto({ arrivedAt: "2026-10-05T11:55:00.000Z" } as Partial<BookingDTO>);
+    expect(fromAction.programId).toBeUndefined();
+    const merged = mergeBookingOverrides(server, { b1: fromAction }, expand);
+    expect(merged[0].programId).toBeNull();
+    expect(merged[0].serviceDiscipline).toBe("KINESIOLOGY");
+    expect(merged[0].arrivedAt).toBe("2026-10-05T11:55:00.000Z");
+    expect(merged[1]).toBe(server[1]);
+  });
+
+  it("sin overrides devuelve el mismo array (memo estable)", () => {
+    const server = [expand(dto())];
+    expect(mergeBookingOverrides(server, {}, expand)).toBe(server);
+  });
+});

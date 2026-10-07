@@ -1488,6 +1488,10 @@ async function toggleBilling(
         // P2-Z · B-M3: cobro previo de un turno de plan cancelado/ausente.
         status: true,
         sessionId: true,
+        // P3.Z: re-marcar un copago ya PAID no mueve `copagoPaidAt`.
+        paymentStatus: true,
+        // P3.Z: idem `insurerPaidAt` (la OS se cuenta por esa fecha).
+        insurerPaidAt: true,
       },
     });
     if (!row) return { kind: "notfound" as const };
@@ -1535,9 +1539,23 @@ async function toggleBilling(
         }),
       };
     }
+    // P3.Z (revisor b · B1): `copagoPaidAt` es la fecha con la que el widget
+    // de ingresos cuenta el cobro en la semana/mes. Si el turno YA estaba PAID,
+    // re-marcarlo (otra pestaña, la Facturación agrupada, un doble click con el
+    // `updatedAt` nuevo) la reescribía con `new Date()` y el cobro se mudaba de
+    // mes. Ya PAID → no se toca (tampoco si quedó null de antes de M3a: no
+    // se le inventa una fecha). Desmarcar la sigue limpiando.
+    const write: Prisma.BookingUpdateManyMutationInput = { ...data };
+    if (data.paymentStatus === "PAID" && row.paymentStatus === "PAID") delete write.copagoPaidAt;
+    // Mismo bug en la OS (hallazgo de F1): el widget cuenta lo que pagó la obra
+    // social por `insurerPaidAt`. Re-marcar una OS ya cobrada no la muda de mes.
+    // Se reescribe la MISMA fecha (no se borra la clave): un `updateMany` sin
+    // datos devuelve count 0 y se leería como stale.
+    if (data.insurerPaidAt instanceof Date && row.insurerPaidAt != null) write.insurerPaidAt = row.insurerPaidAt;
     const res = await tx.booking.updateMany({
+      // El CAS por `updatedAt` ata la decisión de arriba a ESTA versión de la fila.
       where: { id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
-      data: { ...data, ...(frozen ?? {}) },
+      data: { ...write, ...(frozen ?? {}) },
     });
     if (res.count === 0) return { kind: "stale" as const };
     const after = await tx.booking.findFirst({
@@ -1690,6 +1708,14 @@ export async function setBookingInsurerPaid(
  * flipping `Booking.paymentStatus` between PAID and UNPAID. Complements the
  * OS confirmation so the Facturación tab tracks both sides. Same lock
  * contract as `setBookingInsurerPaid`.
+ *
+ * S14r (M3a): `copagoPaidAt` = cuándo se marcó cobrado. Es la fecha con la que
+ * el widget de ingresos del dashboard cuenta el copago en la semana/mes (antes
+ * solo contaba MP: el cobro en mano no aparecía). Desmarcar la limpia, así el
+ * cobro deja de contar en el período. Va en el mismo `updateMany` con CAS que
+ * el `paymentStatus` (y la re-sincronización del cobro previo de P2-Z sigue
+ * igual en `toggleBilling`): o cambian los dos o ninguno. Re-marcar uno que ya
+ * estaba PAID no mueve la fecha (P3.Z, en `toggleBilling`).
  */
 export async function setBookingCopagoPaid(
   id: string,
@@ -1698,7 +1724,7 @@ export async function setBookingCopagoPaid(
 ): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
   return toggleBilling(
     id,
-    { paymentStatus: paid ? "PAID" : "UNPAID" },
+    { paymentStatus: paid ? "PAID" : "UNPAID", copagoPaidAt: paid ? new Date() : null },
     expectedUpdatedAt,
     paid ? "booking.copago_paid" : "booking.copago_unpaid",
     { freezeCopago: paid }

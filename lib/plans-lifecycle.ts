@@ -91,7 +91,7 @@ export async function changePlanStatus(raw: ChangePlanStatusInput): Promise<Chan
   return finish(actor.tenantId, flow);
 }
 
-/** Título y notas, con CAS (lo único que edita `updateProgram`, PD-10). */
+/** Título y notas, con CAS (lo único que edita `updatePlanDetails`, PD-10). */
 export async function updatePlanDetails(raw: UpdatePlanDetailsInput): Promise<UpdatePlanDetailsResult> {
   const actor = await getActor();
   const parsed = UpdatePlanDetailsSchema.safeParse(raw);

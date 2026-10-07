@@ -8,12 +8,18 @@
  * This file only exports **async server actions**:
  *
  *   1. `loadCatalog` — reads anatomy + conditions + tag-kind chips.
- *   2. `assignDiagnosisAndCreateProgram` — Plan Builder mutation (legacy;
- *      S27b la retira cuando la UI de ES3 use `createPlanFromDiagnosis`).
- *   3. `searchPatientsForAssignment` — debounced patient picker.
- *   4. `getDiagnosisPlanPrefill` — prefill del editor de planes (rampa por fase).
- *   5. `createPlanFromDiagnosis` — caso + diagnóstico + plan + turnos en UNA
+ *   2. `searchPatientsForAssignment` — debounced patient picker.
+ *   3. `getDiagnosisPlanPrefill` — prefill del editor de planes (rampa por fase).
+ *   4. `createPlanFromDiagnosis` — caso + diagnóstico + plan + turnos en UNA
  *      tx, por el motor de Planes (`createPlanInTx` con el hook `clinicalCase`).
+ *      Es la ÚNICA alta de planes desde Diagnóstico.
+ *
+ * P3.Z.0 (S27b) retiró el alta vieja del Plan Builder: creaba caso + plan +
+ * N sesiones a mano, fuera del motor (sin disponibilidad, sin conflictos, sin
+ * turnos ni locks). Sus gates (acceso full, condición y ejercicios del
+ * consultorio, tope de 60, días AR) se re-afirmaron sobre
+ * `createPlanFromDiagnosis` en `tests/integration/plans-doors-diagnosis-authz.test.ts`
+ * antes de borrarla.
  *
  * Verticales (enmienda S17d): TODOS los exports exigen el módulo
  * `diagnostico` — las lecturas devuelven vacío sin él, las escrituras dan
@@ -26,7 +32,7 @@
  * Los tipos viven en `lib/diagnosis-types.ts` (un "use server" no exporta tipos).
  */
 import { revalidatePath, unstable_cache } from "next/cache";
-import { NotificationKind, Prisma, ProgramPhase, ProgramStatus } from "@prisma/client";
+import { NotificationKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { ForbiddenError, getActor, type Actor } from "@/lib/session";
@@ -34,15 +40,10 @@ import { auditInTx } from "@/lib/audit";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
 import { hcAccessError } from "@/lib/patient-access-internal";
-import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
-import { expandDates } from "@/lib/availability/recurrence";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { tags as cacheTags, ttl } from "@/lib/cache-tags";
-import { localToARIso } from "@/lib/datetime-ar";
-import type { ActionResult } from "@/lib/validation";
 import { diagnosisRampSteps, rankSelection } from "@/lib/diagnosis-engine";
 import type {
-  AssignInput,
   CatalogDTO,
   CreatePlanFromDiagnosisInput,
   CreatePlanFromDiagnosisResult,
@@ -104,7 +105,8 @@ export async function loadCatalog(): Promise<CatalogDTO> {
         runWithRls(actor.tenantId, (tx) => tx.condition.findMany({
           // Sprint 17: include global rows + this tenant's custom
           // conditions. Custom rows have no anatomy/tag/exercise
-          // links but still show up in the AssignPlanModal picker.
+          // links but still show up as pickable confirmed diagnoses
+          // in the Diagnóstico door (S23, editor de planes).
           where: {
             OR: [{ tenantId: null }, { tenantId: actor.tenantId }],
           },
@@ -114,8 +116,8 @@ export async function loadCatalog(): Promise<CatalogDTO> {
             // Filter included exercises by the tenant's plan — FREE/STARTER
             // tenants only see basic + own private exercises through the
             // diagnosis suggestions. P0-S02d: `assignable` (además, no
-            // archivados), el mismo filtro con que el assign valida los ids;
-            // si no, el wizard sugería un archivado y el assign lo rechazaba.
+            // archivados), el mismo filtro con que el alta valida los ids;
+            // si no, el wizard sugería un archivado y el alta lo rechazaba.
             exercises: {
               where: { exercise: assignableExerciseWhere(gate) },
               include: { exercise: true },
@@ -217,242 +219,6 @@ function buildCatalogDTO(
     triggers: triggers.map((s) => ({ slug: s.slug, label: s.label })),
     phases: phases.map((s) => ({ slug: s.slug, label: s.label })),
   };
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Plan Builder mutation
-// ──────────────────────────────────────────────────────────────────────
-
-const DAY_MS = 86_400_000;
-
-/**
- * Fechas de las N sesiones, a las 00:00 AR (P0-S02d).
- *
- * - Con `daysOfWeek` (0=Lun … 6=Dom): `expandDates` weekly desde el inicio,
- *   así "lun/jue" genera sesiones solo lunes y jueves AR. Antes el server
- *   ignoraba los días elegidos en el modal y repartía por frecuencia desde
- *   el día de inicio (un inicio en martes daba martes/viernes). OJO: weekly
- *   con un solo día devuelve a lo sumo 58 (tope heredado de
- *   `expandBatchDates`, ver `lib/availability/recurrence.ts`); el caller
- *   rechaza si vuelven menos de N en lugar de crear un plan más corto.
- * - Sin días (el wizard de un solo paso no los manda): reparto legacy por
- *   frecuencia, `inicio + floor(i·7/frecuencia)` días. Se suma en ms (AR no
- *   tiene DST) en vez de `Date#setDate`, que dependía de la TZ del host.
- */
-function sessionDates(
-  start: Date,
-  count: number,
-  frequency: number,
-  daysOfWeek: number[] | undefined
-): Date[] {
-  if (daysOfWeek && daysOfWeek.length > 0) {
-    return expandDates({ anchor: start, count, frequency: "weekly", daysOfWeek });
-  }
-  return Array.from(
-    { length: count },
-    (_, i) => new Date(start.getTime() + Math.floor((i * 7) / frequency) * DAY_MS)
-  );
-}
-
-/**
- * Writes ClinicalCase → top-N Diagnosis → TreatmentProgram → N Sessions →
- * SessionExercises in a single transaction. Re-ranks server-side so the
- * persisted match scores are authoritative.
- *
- * P0-S02d — gates (antes solo se chequeaba que el paciente fuera del tenant):
- *  - acceso **full** al paciente (`hcAccessError`) DENTRO de la tx del write:
- *    acceso básico = solo ver (decisión A2b-S-vis), y Diagnóstico era la
- *    única puerta de creación de planes que lo salteaba;
- *  - condición global o del tenant, con el filtro a mano: `Condition.slug`
- *    es único global y en prod la conexión tiene BYPASSRLS, así que el slug
- *    de una condición custom de otro consultorio se aceptaba;
- *  - ejercicios `assignableExerciseWhere` (plan SaaS + no archivado). Si
- *    falta CUALQUIERA de los pedidos se rechaza todo: antes, con uno válido,
- *    los de otro tenant / PRO en FREE / archivados se colaban por id;
- *  - tope `PLAN_MAX_SESSIONS` (60, PD-04; antes 64) y días elegidos.
- * El audit va en la misma tx (`auditInTx`): existe si y solo si el plan existe.
- */
-export async function assignDiagnosisAndCreateProgram(
-  input: AssignInput
-): Promise<ActionResult<{ caseId: string; programId: string }>> {
-  const actor = await getActor();
-  // S17d: el gate de módulo también en la puerta legacy (P2.Z(b): ningún
-  // export de Diagnóstico sin gate) hasta que S27b la retire.
-  if (!hasDiagnosis(actor)) return { ok: false, error: MODULE_DENIED_COPY.diagnostico };
-
-  if (!input.patientId) return { ok: false, error: "Elegí un paciente." };
-  if (!input.conditionSlug) return { ok: false, error: "Elegí un diagnóstico." };
-  const exerciseIds = Array.from(new Set(input.exerciseIds ?? []));
-  if (!exerciseIds.length)
-    return { ok: false, error: "El plan necesita al menos un ejercicio." };
-  if (
-    !Number.isInteger(input.totalSessions) ||
-    input.totalSessions < 1 ||
-    input.totalSessions > PLAN_MAX_SESSIONS
-  )
-    return { ok: false, error: `Las sesiones deben estar entre 1 y ${PLAN_MAX_SESSIONS}.` };
-  if (!Number.isInteger(input.frequency) || input.frequency < 1 || input.frequency > 7)
-    return { ok: false, error: "La frecuencia debe estar entre 1 y 7 por semana." };
-  const daysOfWeek = input.daysOfWeek
-    ? Array.from(new Set(input.daysOfWeek))
-    : undefined;
-  if (daysOfWeek?.some((d) => !Number.isInteger(d) || d < 0 || d > 6))
-    return { ok: false, error: "Días de la semana inválidos." };
-
-  // `input.startDate` is an AR calendar day ("YYYY-MM-DD"). Anchor it to AR
-  // midnight so session 1 lands on the intended AR day (parsing it bare
-  // yields UTC midnight = the previous day at 21:00 AR).
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.startDate ?? ""))
-    return { ok: false, error: "Fecha inválida." };
-  const startDate = new Date(localToARIso(`${input.startDate}T00:00:00`));
-  if (Number.isNaN(startDate.getTime())) return { ok: false, error: "Fecha inválida." };
-
-  const N = input.totalSessions;
-  const dates = sessionDates(startDate, N, input.frequency, daysOfWeek);
-  if (dates.length < N)
-    return {
-      ok: false,
-      error: `Con los días elegidos entran hasta ${dates.length} sesiones. Sumá un día o bajá la cantidad.`,
-    };
-
-  // Re-rank server-side as the authoritative source for persisted scores.
-  // Fuera de la tx: `loadCatalog` abre la suya y va por `unstable_cache`.
-  const catalog = await loadCatalog();
-  const ranked = rankSelection(input.selection, catalog).slice(0, 4);
-
-  const outcome = await runWithRls(actor.tenantId, async (tx) => {
-    const denied = await hcAccessError(actor, input.patientId, tx);
-    if (denied) return { ok: false as const, error: denied };
-
-    const condition = await tx.condition.findFirst({
-      where: {
-        slug: input.conditionSlug,
-        OR: [{ tenantId: null }, { tenantId: actor.tenantId }],
-      },
-      select: { id: true, name: true },
-    });
-    if (!condition) return { ok: false as const, error: "Diagnóstico desconocido." };
-
-    const gate = await gatingForActor(tx);
-    const exercises = await tx.exercise.findMany({
-      where: { AND: [{ id: { in: exerciseIds } }, assignableExerciseWhere(gate)] },
-      include: { conditions: { where: { conditionId: condition.id } } },
-    });
-    if (exercises.length !== exerciseIds.length)
-      return {
-        ok: false as const,
-        error: "Hay ejercicios que no están disponibles en tu plan o fueron archivados.",
-      };
-
-    // Bucket by phase so we can ramp the program activation → progression.
-    const byPhase: Record<ProgramPhase, typeof exercises> = {
-      ACTIVATION: [],
-      STABILITY: [],
-      LOAD: [],
-      PROGRESSION: [],
-    };
-    for (const ex of exercises) {
-      const link = ex.conditions[0];
-      const phase: ProgramPhase = link?.phase ?? "ACTIVATION";
-      byPhase[phase].push(ex);
-    }
-
-    const sessionsData = dates.map((scheduledFor, i) => {
-      const phaseIdx = Math.min(3, Math.floor((i / N) * 4));
-      const phasePool = [
-        ...byPhase.ACTIVATION,
-        ...(phaseIdx >= 1 ? byPhase.STABILITY : []),
-        ...(phaseIdx >= 2 ? byPhase.LOAD : []),
-        ...(phaseIdx >= 3 ? byPhase.PROGRESSION : []),
-      ];
-      const seen = new Set<string>();
-      const unique = phasePool.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)));
-      return { unique, scheduledFor };
-    });
-
-    const c = await tx.clinicalCase.create({
-      data: {
-        tenantId: actor.tenantId,
-        authorId: actor.practitionerId,
-        patientId: input.patientId,
-        selectedZones: input.selection.regions,
-        refinements: {
-          symptoms: input.selection.symptoms,
-          triggers: input.selection.triggers,
-          phase: input.selection.phase,
-          intensity: input.selection.intensity,
-        },
-      },
-    });
-
-    for (let i = 0; i < ranked.length; i++) {
-      const r = ranked[i];
-      await tx.diagnosis.create({
-        data: {
-          caseId: c.id,
-          conditionId: r.conditionId,
-          matchScore: r.matchScore,
-          confirmed: r.slug === input.conditionSlug,
-          rank: i + 1,
-        },
-      });
-    }
-
-    const program = await tx.treatmentProgram.create({
-      data: {
-        tenantId: actor.tenantId,
-        patientId: input.patientId,
-        caseId: c.id,
-        title: input.programTitle ?? `Plan ${condition.name}`,
-        totalSessions: N,
-        frequency: input.frequency,
-        startDate,
-        status: ProgramStatus.ACTIVE,
-        sessions: {
-          create: sessionsData.map((s, i) => ({
-            practitionerId: actor.practitionerId,
-            index: i + 1,
-            scheduledFor: s.scheduledFor,
-            exercises: {
-              create: s.unique.map((ex, order) => ({
-                exerciseId: ex.id,
-                order: order + 1,
-                // Dosis opcional en Exercise: el plan arranca en 3×12.
-                sets: ex.defaultSets ?? 3,
-                reps: ex.defaultReps ?? 12,
-              })),
-            },
-          })),
-        },
-      },
-    });
-
-    // Payload sin PHI (C8): ids, no el nombre del diagnóstico.
-    await auditInTx(tx, {
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "diagnosis.assign",
-      entity: "ClinicalCase",
-      entityId: c.id,
-      payload: {
-        conditionId: condition.id,
-        programId: program.id,
-        totalSessions: N,
-        exerciseCount: exercises.length,
-      },
-    });
-
-    return { ok: true as const, data: { caseId: c.id, programId: program.id } };
-  });
-
-  if (!outcome.ok) return outcome;
-
-  revalidatePath("/diagnostico");
-  revalidatePath(`/pacientes/${input.patientId}`);
-  revalidatePath("/pacientes");
-  revalidatePath("/dashboard");
-
-  return outcome;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -651,7 +417,7 @@ export async function getDiagnosisPlanPrefill(
         conditionSlug: input.conditionSlug,
         conditionName: condition.name,
         discipline: "KINESIOLOGY",
-        // Mismo título que el alta vieja; ≤ 120 (tope de `title` en el zod del plan).
+        // Mismo título que tenía el alta vieja (S27b la retiró); ≤ 120 (tope de `title` en el zod del plan).
         title: `Plan ${condition.name}`.slice(0, 120),
         totalSessions,
         exercises,

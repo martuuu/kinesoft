@@ -11,8 +11,9 @@
  * Esconder una entrada es UX: la barrera es `assertModule`/`requireModule` en
  * cada action y `guardModuleSegment` en el layout del segmento (`lib/authz.ts`).
  *
- * "Planes" NO va acá todavía: la suma S21 (ES3) junto con su
- * `app/(app)/planes/layout.tsx`. "Plataforma" tampoco: depende de
+ * "Planes" (S21, ES3 · PD-11): UNA entrada con pestañas por disciplina
+ * (`/planes` lleva a `/planes/kinesiologia` u `/planes/osteopatia`); su guard
+ * es `app/(app)/planes/layout.tsx`. "Plataforma" no va acá: depende de
  * `actor.isPlatformAdmin`, no de módulos ni de capabilities del tenant, y la
  * sigue resolviendo el sidebar (EV-S / EV-P2).
  */
@@ -66,6 +67,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
     capability: "agenda.reception",
   },
   { href: "/pacientes", label: "Pacientes", icon: "users", module: "pacientes", shortcut: "Pacientes" },
+  // Planes (S21): sin capability a propósito, así también es atajo de ⌘K.
+  // La Secretaria entra (filtro "Sesiones sin turno", sin títulos: PD-13);
+  // lo que cada rol ve lo recorta `listPlans` en el server. Ícono: reusa
+  // `bookmark` hasta que el sidebar sume uno propio (`NAV_ICONS` es exhaustivo).
+  { href: "/planes", label: "Planes", icon: "bookmark", module: "planes", shortcut: "Planes" },
   {
     href: "/diagnostico",
     label: "Diagnóstico",

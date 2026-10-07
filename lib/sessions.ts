@@ -43,11 +43,10 @@
 import { revalidatePath } from "next/cache";
 import { Prisma, type SessionExerciseStatus } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import type { z } from "zod";
 import { ForbiddenError, getActor, type Actor } from "@/lib/session";
 import { audit, auditInTx } from "@/lib/audit";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
-import { lockPlanPatient, withTxConflictRetry } from "@/lib/plan-lock";
+import { withTxConflictRetry } from "@/lib/plan-lock";
 import { bulkPatientAccess, patientAccessFor, visibilityForActor } from "@/lib/visibility";
 import { dayKeyOf, dayWindow } from "@/lib/availability/day";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
@@ -59,6 +58,7 @@ import {
   sessionWithoutActiveBookingWhere,
 } from "@/lib/plan-predicates";
 import {
+  actorCapsInTx,
   applyBookingUpdateInTx,
   notifyPlanNearingDischarge,
   resolveBookingUpdateUniqueViolation,
@@ -74,28 +74,13 @@ import {
   PATIENT_OVERLAP_ERROR,
   PLAN_SESSION_NOT_PENDING_ERROR,
   PLAN_SESSION_TAKEN_ERROR,
+  PRACTITIONER_CONFLICT_ERROR,
   STALE_ERROR,
   UPDATE_SAME_INSTANT_ERROR,
 } from "@/lib/bookings-constants";
 import { completeSessionInTx, recordSessionEvolutionInTx } from "@/lib/sessions-internal";
-import { assertPlanManageInTx } from "@/lib/plan-authz-internal";
-import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
-import { PlanRejected, StalePlanPreview } from "@/lib/plans-engine-internal";
+import { assertPlanScheduleInTx } from "@/lib/plan-authz-internal";
 import {
-  addSessionsInTx,
-  PLAN_EDIT_COPY,
-  PlanEditNeedsConfirmation,
-  PlanEditStale,
-  previewAddSessionsInTx,
-  roleAndCapsInTx,
-} from "@/lib/plans-edit-internal";
-import {
-  AddPlanSessionsCommitSchema,
-  AddPlanSessionsPreviewSchema,
-  type PackageCountPricing,
-} from "@/lib/plans-edit-types";
-import {
-  AddCustomSessionInput,
   BulkAddSessionExercisesInput,
   LoadSessionEvolutionInput,
   RescheduleSessionInput,
@@ -222,6 +207,8 @@ async function sessionExerciseForWrite(tx: DbClient, actor: Actor, sessionExerci
 /** Fila del hidratado del landing (una sentencia: sesión + plan + paciente + ordinal + ejercicios). */
 type OpenSessionHydrated = {
   id: string;
+  programId: string;
+  title: string | null;
   index: number;
   scheduledFor: Date;
   completedAt: Date | null;
@@ -248,6 +235,8 @@ function toOpenSessionRow(s: OpenSessionHydrated): OpenSessionRow {
     totalSessions: s.totalSessions,
     exerciseCount: s.exerciseCount,
     doneCount: s.doneCount,
+    programId: s.programId,
+    title: s.title,
     // M13: "Sesión n de N" por ordinal entre las vivas (no `index`/`totalSessions`).
     ...(s.ordinal != null ? { ordinal: s.ordinal } : {}),
     ...(s.totalLive != null ? { totalLive: s.totalLive } : {}),
@@ -425,7 +414,7 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
             SELECT x."sessionId", count(*)::int AS n, (count(*) FILTER (WHERE x.status = 'DONE'))::int AS done
             FROM "SessionExercise" x WHERE x."sessionId" = ANY(${allIds}) GROUP BY x."sessionId"
           )
-          SELECT s.id, s.index, s."scheduledFor", s."completedAt", tp."patientId", tp.title AS "programTitle",
+          SELECT s.id, s."programId", s.title, s.index, s."scheduledFor", s."completedAt", tp."patientId", tp.title AS "programTitle",
             tp."totalSessions", p."firstName", p."lastName", l.ordinal, l."totalLive",
             COALESCE(ex.n, 0) AS "exerciseCount", COALESCE(ex.done, 0) AS "doneCount"
           FROM "Session" s
@@ -510,6 +499,8 @@ export async function getSessionDetail(id: string) {
               select: {
                 id: true,
                 index: true,
+                // S20: el nombre de la sesión a medida en la lista del plan.
+                title: true,
                 scheduledFor: true,
                 completedAt: true,
                 paInPre: true,
@@ -592,7 +583,7 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
     case "out-of-hours":
       return OUT_OF_HOURS_ERROR;
     case "conflict":
-      return "El profesional ya tiene un turno en ese horario.";
+      return PRACTITIONER_CONFLICT_ERROR;
     case "plan-session-not-pending":
       return PLAN_SESSION_NOT_PENDING_ERROR(o.ordinal);
     default:
@@ -648,6 +639,19 @@ export async function rescheduleSession(input: {
   const res = await denied(() => withTxConflictRetry(() => runWithRls(actor.tenantId, async (tx) => {
     triedBookingId = null;
     const g = await sessionForWrite(tx, actor, sessionId);
+    // P3.Z.0 (S27a → S27b): la regla de "quién agenda/mueve sesiones de un
+    // plan" es UNA (`assertPlanScheduleInTx`: módulo `planes` + `plans.schedule`
+    // + full u `agenda.operateAll`), no una copia local. `sessionForWrite` se
+    // queda delante: Seguimiento es superficie clínica y exige full (A2a-S03),
+    // más estricto que la regla de agenda (la Secretaria mueve el TURNO desde
+    // la agenda, no la sesión desde acá). El módulo `sesiones` sigue arriba.
+    try {
+      await assertPlanScheduleInTx(tx, actor, await actorCapsInTx(tx, actor), g.program.patientId);
+    } catch (e) {
+      // `denied()` solo traduce `Denied`; un ForbiddenError saldría como 500.
+      if (e instanceof ForbiddenError) throw new Denied(e.message);
+      throw e;
+    }
     if (g.archivedAt) throw new Denied(ARCHIVED_SESSION);
     if (parsed.data.practitionerId && parsed.data.practitionerId !== g.practitionerId) {
       throw new Denied("Reprogramar no cambia el profesional: cambialo desde la agenda.");
@@ -1198,230 +1202,15 @@ export async function removeSessionExercise(id: string): Promise<ActionResult> {
   return { ok: true, data: undefined };
 }
 
-/**
- * "Agregar sesión a medida" desde la vista vieja del plan (`plan-view.tsx`).
- *
- * Historia:
- *   - S02s: dos altas concurrentes duplicaban `index` → `lockPlanPatient` +
- *     fila del plan antes de leer el máximo.
- *   - S12b: el nombre va en `Session.title`, no en `notes` (evolución clínica).
- *   - P2.Z (H-a3 / B-M1 de la revisión ES2b): creaba la Session SIN cuota, sin
- *     mirar estado/archivado/tope ni correr el verificador, con un gate propio
- *     y el audit fuera de la tx. En un PACKAGE vinculado dejaba I6 roto y el
- *     plan TRABADO (toda escritura posterior hacía rollback en el verificador);
- *     en PER_SESSION la sesión nacía sin precio y el turno se cobraba por la
- *     precedencia de copago en vez de por el plan.
- *
- * Ahora hay UN solo camino de "agregar" con plata y orden C2: si el plan tiene
- * responsable y servicio (lo que el motor necesita), delega en
- * `addSessionsInTx` (`kind:'custom'`, `lib/plans-edit-internal.ts`): gate
- * `plans.manage` (módulo planes incluido) → `lockPlanPatient` → preview →
- * re-clasificación con su `stateToken` → filas → cuota por el precio del plan
- * → caché `totalSessions` → verificador → `auditInTx`. Sin fecha queda "sin
- * turno" (resolución `none` forzada por el server); con fecha también, como
- * antes: la vista vieja nunca agendaba (agendar es "Generar turnos").
- * En un PAQUETE sin `packagePricing` → rechazo accionable (la vista vieja no
- * puede preguntar "¿mantenemos el total o el precio por sesión?").
- *
- * R-LEGACY (sin responsable o sin servicio, el motor no los opera): mismo gate,
- * mismo lock, rechazo de archivado/CANCELLED, tope `PLAN_MAX_SESSIONS`, cuota
- * PER_SESSION estampada, verificador y `auditInTx`; un paquete se rechaza igual.
- *
- * Firma pública intacta (`{ programId, title?, scheduledFor? }` →
- * `{ sessionId }`); `packagePricing?` es aditivo.
- */
-export async function addCustomSession(input: {
-  programId: string;
-  title?: string;
-  scheduledFor?: string; // ISO
-  packagePricing?: PackageCountPricing;
-}): Promise<ActionResult<{ sessionId: string }>> {
-  const actor = await getActor();
-  const off = sessionsModuleOff(actor);
-  if (off) return off;
-  const parsed = AddCustomSessionInput.safeParse(input);
-  if (!parsed.success) {
-    const fieldErrors = parsed.error.flatten().fieldErrors;
-    return { ok: false, error: fieldErrors.scheduledFor ? "Fecha inválida." : "Datos inválidos.", fieldErrors };
-  }
-  const data = parsed.data;
-  const now = new Date();
-
-  let r: { sessionId: string; patientId: string; refs: BookingChangeRef[] };
-  try {
-    r = await withTxConflictRetry(() =>
-      runWithRls(
-        actor.tenantId,
-        async (tx) => {
-          const head = await tx.treatmentProgram.findFirst({
-            where: { id: data.programId, tenantId: actor.tenantId },
-            select: { id: true, patientId: true, practitionerId: true, serviceId: true, pricingMode: true },
-          });
-          if (!head) throw new Denied("Plan no encontrado.");
-          const { caps } = await roleAndCapsInTx(tx, actor);
-          // C2: gate ANTES del lock de estructura (sin permiso no se encola a nadie).
-          await assertPlanManageInTx(tx, actor, caps, head.patientId);
-          if (head.pricingMode === "PACKAGE" && !data.packagePricing) throw new Denied(CUSTOM_SESSION_USE_PLAN);
-          await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: head.patientId });
-          return head.practitionerId && head.serviceId
-            ? addCustomByEngineInTx(tx, actor, caps, data, now)
-            : addCustomLegacyInTx(tx, actor, head, data);
-        },
-        ADD_CUSTOM_TX
-      )
-    );
-  } catch (e) {
-    const error = addCustomRejection(e);
-    if (error === null) throw e;
-    return { ok: false, error };
-  }
-
-  if (r.refs.length > 0) await afterBookingsCommitted(actor.tenantId, r.refs);
-  revalidatePath(`/pacientes/${r.patientId}`);
-  revalidatePath(`/seguimiento`);
-  return { ok: true, data: { sessionId: r.sessionId } };
-}
-
-/** Mismo presupuesto que las escrituras del motor en `lib/plans-edit.ts` (preview + commit en una tx). */
-const ADD_CUSTOM_TX = { timeout: 15_000, maxWait: 5_000 };
-
-const CUSTOM_SESSION_USE_PLAN =
-  "Este plan es por paquete: usá «Agregar sesión a medida» del plan para elegir cómo queda el precio.";
-const CUSTOM_SESSION_STALE = "El plan cambió mientras agregabas la sesión. Reintentá.";
-const CUSTOM_SESSION_REOPEN =
-  "El plan está completado: usá «Agregar sesión a medida» del plan (te pide confirmar que se reabre).";
-
-/** Rechazos esperables → copy; `null` = inesperado (se propaga). */
-function addCustomRejection(e: unknown): string | null {
-  if (e instanceof Denied || e instanceof PlanRejected || e instanceof ForbiddenError) return e.message;
-  if (e instanceof ProgramInvariantViolation) return INVARIANT_ERROR;
-  if (e instanceof PlanEditNeedsConfirmation) return CUSTOM_SESSION_REOPEN;
-  if (e instanceof StalePlanPreview || e instanceof PlanEditStale) return CUSTOM_SESSION_STALE;
-  // Único parcial de `index` vivo pese al lock del paciente: el plan cambió.
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return CUSTOM_SESSION_STALE;
-  return null;
-}
-
-type AddCustomParsed = z.output<typeof AddCustomSessionInput>;
-
-/**
- * Camino del motor. Gate y `lockPlanPatient` ya tomados por el caller; el
- * preview corre BAJO el lock, así su `stateToken` (plan `updatedAt` + target)
- * es el que la re-clasificación de `addSessionsInTx` vuelve a calcular: no hay
- * stale espurio por una carrera (la segunda alta espera el lock y previsualiza
- * ya con la primera adentro). `addSessionsInTx` re-gatea y re-toma el lock
- * (advisory reentrante en la misma tx): son dos sentencias baratas a cambio de
- * no tocar el interno.
- */
-async function addCustomByEngineInTx(
-  tx: DbClient,
-  actor: Actor,
-  caps: Awaited<ReturnType<typeof roleAndCapsInTx>>["caps"],
-  data: AddCustomParsed,
-  now: Date
-): Promise<{ sessionId: string; patientId: string; refs: BookingChangeRef[] }> {
-  const base = {
-    programId: data.programId,
-    kind: "custom" as const,
-    // El schema del plan acota el título a 120 (el de Seguimiento recortaba a 4000).
-    ...(data.title ? { title: data.title.slice(0, 120) } : {}),
-    ...(data.scheduledFor ? { at: data.scheduledFor } : {}),
-    ...(data.packagePricing ? { packagePricing: data.packagePricing } : {}),
-  };
-  const previewInput = AddPlanSessionsPreviewSchema.safeParse(base);
-  if (!previewInput.success) throw new Denied(previewInput.error.issues[0]?.message ?? "Datos inválidos.");
-  const preview = await previewAddSessionsInTx(tx, actor, caps, previewInput.data, now);
-
-  // Con fecha: la vista vieja solo fijaba la fecha planificada, nunca agendaba.
-  // Se conserva con la resolución `none` (sin turno) para la fila nueva.
-  const rows: Array<{ index: number; kind: "none" }> = [];
-  if (data.scheduledFor) {
-    const row = preview.rows.find((x) => !x.sessionId);
-    if (!row || !row.allowedResolutions.includes("none")) throw new Denied(CUSTOM_SESSION_STALE);
-    rows.push({ index: row.index, kind: "none" });
-  }
-  const commit = AddPlanSessionsCommitSchema.safeParse({ ...base, rows, stateToken: preview.stateToken });
-  if (!commit.success) throw new Denied(commit.error.issues[0]?.message ?? "Datos inválidos.");
-  const out = await addSessionsInTx(tx, actor, caps, commit.data, now);
-  const sessionId = out.sessionIds[0];
-  if (!sessionId) throw new Denied(CUSTOM_SESSION_STALE);
-  return { sessionId, patientId: out.patientId, refs: out.refs };
-}
-
-/**
- * R-LEGACY (plan sin responsable o sin servicio: el motor lo rechaza). Gate y
- * `lockPlanPatient` ya tomados. Fila del plan con `FOR NO KEY UPDATE` (C2 (3),
- * acá no hay Booking ni Session que lockear; NO KEY alcanza para serializar
- * dos altas y no choca con las FKs), relectura bajo lock, reglas de estado y
- * tope, cuota PER_SESSION, verificador y audit en la tx.
- */
-async function addCustomLegacyInTx(
-  tx: DbClient,
-  actor: Actor,
-  head: { id: string; patientId: string },
-  data: AddCustomParsed
-): Promise<{ sessionId: string; patientId: string; refs: BookingChangeRef[] }> {
-  const tenantId = actor.tenantId;
-  await tx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${head.id} AND "tenantId" = ${tenantId} FOR NO KEY UPDATE`;
-
-  // Releído DESPUÉS de los locks: es lo que hace que la segunda alta vea la primera.
-  const program = await tx.treatmentProgram.findFirstOrThrow({
-    where: { id: head.id, tenantId },
-    select: {
-      id: true,
-      patientId: true,
-      status: true,
-      archivedAt: true,
-      pricingMode: true,
-      pricePerSessionCents: true,
-      frequency: true,
-      startDate: true,
-      // Máximo sobre TODAS (también archivadas): `restoreSession` no choca (M13).
-      sessions: { orderBy: { index: "desc" }, take: 1, select: { index: true, scheduledFor: true } },
-      _count: { select: { sessions: { where: { archivedAt: null } } } },
-    },
-  });
-  if (program.archivedAt) throw new Denied(PLAN_EDIT_COPY.archived);
-  if (program.status === "CANCELLED") throw new Denied(PLAN_EDIT_COPY.cancelled);
-  // Re-chequeado bajo lock (el de afuera es para fallar antes de encolarse).
-  if (program.pricingMode === "PACKAGE") throw new Denied(CUSTOM_SESSION_USE_PLAN);
-  if (program._count.sessions + 1 > PLAN_MAX_SESSIONS) throw new Denied(PLAN_EDIT_COPY.tooMany);
-
-  const lastIndex = program.sessions[0]?.index ?? 0;
-  const lastSched = program.sessions[0]?.scheduledFor ?? program.startDate;
-  const cadenceDays = Math.max(1, Math.floor(7 / program.frequency));
-  // Suma en ms (AR sin DST), no `setDate` del host.
-  const scheduledFor = data.scheduledFor ? new Date(data.scheduledFor) : new Date(lastSched.getTime() + cadenceDays * DAY_MS);
-
-  const sess = await tx.session.create({
-    data: {
-      programId: program.id,
-      practitionerId: actor.practitionerId,
-      index: lastIndex + 1,
-      scheduledFor,
-      // S12b: el nombre va en `Session.title` (M1). Antes iba en `notes`, que
-      // es evolución clínica: la sesión nacía "tocada", aparecía con notas en
-      // Seguimiento y "Deshacer Atendido" nunca la reabría.
-      title: data.title,
-      // D5: la cuota la decide el plan. Sin precio → null (lo cobra el copago).
-      priceCents: program.pricingMode === "PER_SESSION" ? program.pricePerSessionCents : null,
-    },
-  });
-  await tx.treatmentProgram.updateMany({
-    where: { id: program.id, tenantId },
-    data: { totalSessions: { increment: 1 } },
-  });
-  await assertProgramInvariantsInTx(tx, { tenantId, programId: program.id });
-  await auditInTx(tx, {
-    tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.create",
-    entity: "Session",
-    entityId: sess.id,
-    payload: { programId: program.id, index: sess.index, source: "custom" },
-  });
-  return { sessionId: sess.id, patientId: program.patientId, refs: [] };
-}
+// P3.Z.0 (S27b): se retiró el alta vieja de sesión a medida. "Agregar sesión a medida" va
+// solo por el motor (`addPlanSessions` / `previewAddPlanSessions` con
+// `kind:'custom'`, `lib/plans-edit.ts`): gate `plans.manage`, lock del
+// paciente, cuota del plan, verificador y audit en la tx. La carrera de dos
+// altas concurrentes (S02s) y los casos de plata (P2.Z H-a3/B-M1) se
+// re-afirmaron sobre esa puerta en `tests/integration/sessions.test.ts` y
+// `tests/integration/plans-sync-sessions.test.ts` antes de borrarla. Un plan
+// R-LEGACY (sin responsable o sin servicio) ya no acepta sesiones a medida:
+// el motor lo rechaza con copy (`PLAN_ENGINE_COPY.program`).
 
 /**
  * Swap one exercise in a session for another, keeping the order slot
@@ -1547,10 +1336,9 @@ export async function listAssignablePrograms(): Promise<
  *
  *   - `"all"`        → every session
  *   - `{ fromIndex }` → from session N to the end
- *   - `{ phases: [...] }` → only sessions whose phase matches (uses
- *     each session's `index` modulo program length to bucket into
- *     ACTIVATION / STABILITY / LOAD / PROGRESSION — same convention as
- *     `assignDiagnosisAndCreateProgram`)
+ * (Un rango `{ phases }` figuraba acá pero nunca existió en el schema; se
+ * borró de la doc en P3.Z.0. `{ fromOrdinal }` por "Sesión n de N" entre las
+ * vivas quedó para C1: necesita el schema de `lib/sessions-schemas.ts`.)
  *
  * For each target session, every chosen exercise is appended at the end
  * (max order + 1). Default sets/reps come from the Exercise row.

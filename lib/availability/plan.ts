@@ -312,6 +312,9 @@ export type PlanPreviewRow = {
   defaultResolution: PlanResolutionKind;
   allowedResolutions: PlanResolutionKind[];
   priceCents: number | null;
+  /** Motivo del bloqueo ("Feriado", "Congreso") para "Bloqueado: <motivo>" en
+   *  la tabla del editor (S18p). Es administrativo, no PHI. */
+  blockReason?: string | null;
 };
 
 /** Conteos para el resumen de "Revisá los turnos" (C13). `bookings` = turnos
@@ -804,6 +807,7 @@ export function toPlanPreviewRow(c: PlanRowClassification, priceCents: number | 
     defaultResolution: c.defaultResolution,
     allowedResolutions: c.allowedResolutions,
     priceCents,
+    ...(c.blockReason ? { blockReason: c.blockReason } : {}),
   };
 }
 

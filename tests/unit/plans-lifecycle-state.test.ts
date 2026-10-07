@@ -179,7 +179,7 @@ describe("P2-C2 · archivar y restaurar el plan", () => {
     }
   });
 
-  it("updateProgram edita solo título y notas", () => {
+  it("updatePlanDetails edita solo título y notas", () => {
     expect([...PROGRAM_EDITABLE_FIELDS]).toEqual(["title", "notes"]);
   });
 });

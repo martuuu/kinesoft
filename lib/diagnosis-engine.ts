@@ -47,7 +47,7 @@ export type CatalogConditionDTO = {
    * Sprint 17: `true` when this condition was authored by a practitioner
    * via /configuracion (tenantId != null). Custom rows don't participate
    * in the matching engine (no tags/anatomy/exercises) but are pickable
-   * as the confirmed diagnosis in the AssignPlanModal.
+   * as the confirmed diagnosis in the Diagnóstico door (editor de planes, S23).
    */
   isCustom: boolean;
   tags: { slug: string; label: string; kind: string; weight: number }[];
@@ -206,7 +206,7 @@ export const RAMP_PHASES: readonly ProgramPhase[] = ["ACTIVATION", "STABILITY", 
 /**
  * Escalón de la sesión `index0` (0-based) de `total`: el plan se parte en
  * cuartos y cada cuarto habilita una fase más (0 = solo activación … 3 =
- * todas). Es la fórmula del alta vieja (`assignDiagnosisAndCreateProgram`,
+ * todas). Es la fórmula del alta vieja del Plan Builder (retirada en P3.Z.0,
  * `min(3, floor(i/N·4))`) pero en aritmética entera: `(i/N)*4` en coma
  * flotante puede caer en 0.999… y bajar un escalón en el borde.
  */

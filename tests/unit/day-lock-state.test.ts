@@ -188,6 +188,7 @@ describe("formato AR", () => {
         patientName: "Juana Pérez",
         status: "CONFIRMED",
         hasPayment: true,
+        inPlan: true,
       },
       {
         id: "b2",
@@ -197,6 +198,7 @@ describe("formato AR", () => {
         patientName: null,
         status: "PENDING",
         hasPayment: false,
+        inPlan: false,
       },
     ];
     expect(affectedLines(a, practitioners)).toEqual([
@@ -217,6 +219,7 @@ describe("resultado", () => {
     patientName: "X",
     status: "CONFIRMED",
     hasPayment: false,
+    inPlan: false,
   });
   const base = { ids: ["t"], groupId: null, startsAt: "", endsAt: "", reused: false };
   it("cancelar: cancelados y los que tenían cobro", () => {

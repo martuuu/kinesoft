@@ -197,8 +197,10 @@ describe("nav único (C-EV2)", () => {
     expect(new Set(hrefs(NAV_ITEMS)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("no incluye Planes (lo suma S21 en ES3)", () => {
-    expect(NAV_ITEMS.some((i) => i.href.startsWith("/planes"))).toBe(false);
+  it("Planes (S21, ES3) solo con el módulo planes: General no lo ve", () => {
+    expect(NAV_ITEMS.some((i) => i.href === "/planes")).toBe(true);
+    expect(hrefs(navFor(general, ownerCaps))).not.toContain("/planes");
+    expect(shortcutsFor(general).some((s) => s.href === "/planes")).toBe(false);
   });
 
   it("General: sin Diagnóstico/Seguimiento/Ejercicios/Terapia manual/Reportes; con Sala de espera", () => {
@@ -215,6 +217,7 @@ describe("nav único (C-EV2)", () => {
       "/agenda",
       "/agenda?view=reception",
       "/pacientes",
+      "/planes",
       "/diagnostico",
       "/seguimiento",
       "/biblioteca",
@@ -235,6 +238,7 @@ describe("nav único (C-EV2)", () => {
       { id: "nav:dashboard", category: "shortcut", label: "Inicio", href: "/dashboard" },
       { id: "nav:agenda", category: "shortcut", label: "Agenda", href: "/agenda" },
       { id: "nav:pacientes", category: "shortcut", label: "Pacientes", href: "/pacientes" },
+      { id: "nav:planes", category: "shortcut", label: "Planes", href: "/planes" },
       { id: "nav:diagnostico", category: "shortcut", label: "Diagnóstico", href: "/diagnostico" },
       { id: "nav:seguimiento", category: "shortcut", label: "Seguimiento", href: "/seguimiento" },
       { id: "nav:biblioteca", category: "shortcut", label: "Ejercicios", href: "/biblioteca" },

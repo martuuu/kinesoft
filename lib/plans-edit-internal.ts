@@ -41,7 +41,7 @@ import { planSessionOrdinals } from "@/lib/plan-display";
 import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
 import { PlanScheduleV1Schema } from "@/lib/plans-schemas";
 import { canRestoreProgram, PLAN_LIFECYCLE_COPY } from "@/lib/plans-lifecycle-state";
-import { addDays, dayKeyOf, dayKeyToDbDate } from "@/lib/availability/day";
+import { addDays, dayKeyOf, dayKeyToDbDate, instantAt, minutesOfDayAR } from "@/lib/availability/day";
 import { expandPlanDates, type PlanPreview, type PlanRowResolution } from "@/lib/availability/plan";
 import {
   bookingHasMoney,
@@ -366,10 +366,19 @@ function buildAdd(
     dates = [new Date(input.at)];
   } else {
     // "A medida" sin fecha: queda sin turno (resolución `none` forzada). Su
-    // fecha planificada es el próximo hueco del horario (o una semana después
-    // de la última), para que ordene al final en Seguimiento.
+    // fecha planificada es el próximo hueco del horario o, sin horario, el día
+    // AR de `floor` + 7 a la hora de pared de la última sesión viva (00:00 si
+    // no hay), para que ordene al final en Seguimiento.
+    //
+    // P3.Z (F1): antes era `floor + 7 días` crudo. Con todas las sesiones en
+    // el pasado `floor` es `now` (con milisegundos): el preview y el commit
+    // corren con `now` distintos → otra fecha → otro `stateToken` → stale
+    // SIEMPRE, también en el reintento del editor. Anclado al día AR es
+    // determinístico dentro del día (cruzar la medianoche AR entre preview y
+    // commit da un stale legítimo, una vez). Con la última sesión en el futuro
+    // da lo mismo que antes (su día + 7 a su hora).
     const next = schedule ? appendDates(schedule, extras.startDate, floor, 1, now)[0] : undefined;
-    dates = [next ?? new Date(floor.getTime() + 7 * 24 * 60 * 60_000)];
+    dates = [next ?? instantAt(addDays(dayKeyOf(floor), 7), lastAt > 0 ? minutesOfDayAR(new Date(lastAt)) : 0)];
     forced.push({ index: extras.maxIndex + 1, kind: "none" });
   }
   const newRows = dates.map((at, i) => ({ index: extras.maxIndex + 1 + i, at }));

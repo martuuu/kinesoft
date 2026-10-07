@@ -5,9 +5,11 @@
 > prompts:** los contratos C-EV1..C-EV9 y las enmiendas de §5 van **literales**, sin parafrasear.
 > Planes sigue en [PLANES.md](PLANES.md); las enmiendas de §5 también están copiadas al tope de PLANES §10, §11 y §12.
 >
-> **Estado (07-oct):** **EV0 ✅ ejecutada en develop, pendiente commit de Martin** (V.0 → V.0b → V.1 → V.2 → V.Z con 2
-> revisores y fixer). M2 aplicada solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en
-> [QA.md §EV0](QA.md), diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md). **Siguiente: ES2b** con las enmiendas de §5.
+> **Estado (08-oct):** EV0 ✅ (`ddfdff3`), ES2b ✅ (`58ec36f`) y ES3 ✅ (08-oct, pendiente commit; M3a solo en local).
+> M2 y M3a aplicadas solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md) y §Ronda 18, QA en
+> [QA.md §EV0](QA.md), diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md). Las enmiendas de §5 para ES3 se aplicaron
+> (S22b: EVA con el módulo `evaluaciones` en server y UI). **Siguiente: SR** (M4, a confirmar por Martin) → SV (M5) →
+> ES4 → EV1 (§2).
 
 ## 0. Contexto: decisiones de Martin del 07-oct
 
@@ -67,13 +69,16 @@ AUDIT: `data-api-anon-sin-rls` (bloque A, crítico): código cerrado; **la acci�
 
 | # | Corrida | Qué | Migración |
 |---|---|---|---|
-| 1 | **EV0** ✅ (pendiente commit) | Tipo de consultorio + matriz de módulos + guards + nav único + turnero con switch + onboarding con vertical + /plataforma de consultorios + REVOKE de la Data API | **M2 `tenant_verticals`** (sola, V.0) |
-| 2 | ES2b (P2) | Como está planificada + simplificaciones del reset (§6) + enmiendas (§5) | — |
-| 3 | ES3 (P3) | Ídem | — |
-| 4 | **SV** (nueva) | Sala de Espera realtime (transporte, "Llamar", aviso al profesional, `/sala`, agenda en vivo) | **M3 `reception_call_realtime`** (sola) |
+| 1 | **EV0** ✅ (`ddfdff3`) | Tipo de consultorio + matriz de módulos + guards + nav único + turnero con switch + onboarding con vertical + /plataforma de consultorios + REVOKE de la Data API | **M2 `tenant_verticals`** (sola, V.0) |
+| 2 | ES2b (P2) ✅ (`58ec36f`) | Como está planificada + simplificaciones del reset (§6) + enmiendas (§5) | — |
+| 3 | ES3 (P3) ✅ (08-oct, pendiente commit) | Ídem + S14r (ingresos reales del dashboard, Mes/Semana; decisión 6 del 08-oct, [PLANES §11](PLANES.md)) | **M3a `billing_paid_at`** (sola, P3.0.0) |
+| 3b | **SR** (08-oct) | Salas/Consultorios: sala por franja y por turno, conflicto de sala, filtro y vista "Por sala" ([ROADMAP §SR](ROADMAP.md)) | **M4 `rooms`** (sola) |
+| 4 | **SV** (nueva) | Sala de Espera realtime (transporte, "Llamar", aviso al profesional, `/sala`, agenda en vivo); el evento y "Llamar" llevan `roomId` | **M5 `reception_call_realtime`** (sola; antes "M3") |
 | 5 | ES4 (P4) | Ídem, sin las sesiones de legacy; S26a/S26b cubren verticales y realtime | — |
 | 6 | **EV1** (nueva) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional | — |
-| 7 | Deploy único de B | Reset de prod → `migrate deploy` desde vacío (cadena completa) → bootstrap (§8) | — |
+| 7 | Deploy único de B | Reset de prod → `migrate deploy` desde vacío (cadena completa hasta M5) → bootstrap (§9) | — |
+
+**Orden vigente (08-oct):** ES3 → SR → SV → ES4 → EV1 → reset + deploy. SR va antes de SV para que el evento y "Llamar" ya nazcan con la sala.
 
 SV va entre ES3 y ES4 porque necesita `lib/bookings.ts` (S12, ES2b), `agenda-client.tsx` y `reception-row.tsx` (ES3)
 ya cerrados, y así la matriz authz y el E2E de ES4 la cubren. No comparte archivos con ES4 salvo
@@ -202,10 +207,13 @@ verificado** contra la API de MP (nunca del body ni de la query).
   viejas), las invariantes I1-I8, precheck (0) rol con BYPASSRLS, (17) Storage privado, P3009 liviano, el SQL de M1 tal
   cual (commiteado).
 - **R-LEGACY:** se deja como está en ES2b/ES3 (es barato y protege `develop` mientras conviven las altas viejas); EV1 lo
-  limpia después de S27a/b, opcional.
+  limpia después de S27a/b, opcional. **ES3:** S27a/b ya retiraron las altas viejas; efecto nuevo: un plan sin
+  responsable/servicio ya no acepta sesión "a medida" ("Plan inválido."). Decisión de Martin pendiente (recomendado
+  dejarlo por el reset; PLANES §11 «Decisiones de ES3»). En EV1 también se recomienda retirar los sobrevivientes de
+  `lib/programs.ts` (`setProgramStatus`, `deleteProgram`, `deleteSession`).
 - **Prechecks:** (1) pasa a "base vacía"; (11) y (12) pasan a post-checks después del bootstrap.
 
-## 7. Corrida SV · Sala de Espera realtime (después de ES3)
+## 7. Corrida SV · Sala de Espera realtime (después de ES3 y SR)
 
 **Transporte:** Supabase Realtime **Broadcast privado** por tenant (`tenant:<id>:agenda`).
 - El server publica **después del commit** por el endpoint REST de broadcast con la service key: 1 POST por commit,
@@ -215,7 +223,7 @@ verificado** contra la API de MP (nunca del body ni de la query).
   el access token real, porque las cookies httpOnly del A3 se mantienen.
 - La policy sobre `realtime.messages` usa una función pura testeable localmente; queda guardada, así que en el Docker
   local no hace nada.
-- **Mensajes sin PHI** (`{v, kind, bookingId?, practitionerId, day, prev?, at}`). El cliente **nunca confía en el
+- **Mensajes sin PHI** (`{v, kind, bookingId?, practitionerId, roomId?, day, prev?, at}`; `roomId` desde SR). El cliente **nunca confía en el
   payload**: re-pide con las mismas actions de la página (`listAgendaBookings`), con debounce y coalescer.
 - **Fallback:** polling cada 60 s **solo** si el canal no está suscripto, más resync al reconectar, al volver la
   pestaña visible o al volver online.
@@ -223,7 +231,7 @@ verificado** contra la API de MP (nunca del body ni de la query).
 - **Descartados:** canal público (cualquiera con la anon key publica), SSE en Vercel (`maxDuration` 30 s), Pusher/Ably
   (proveedor nuevo con datos de salud) y trigger SQL (invisible en local).
 
-**M3 `reception_call_realtime`** (sola): `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada.
+**M5 `reception_call_realtime`** (sola; antes "M3", renombrada el 08-oct por M3a y M4): `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada.
 
 **Estado nuevo:** `llamado` (`arrivedAt` + `calledAt`), retrocompatible. La acción `llamar` es solo para hoy;
 "Deshacer" limpia `calledAt`.
@@ -231,14 +239,14 @@ verificado** contra la API de MP (nunca del body ni de la query).
 **UI:**
 - **`/sala`**: tablero por profesional (En atención · Llamado · En sala con espera · Próximos/Demorados) y lista.
   Capability `agenda.reception` (BILLING afuera). PD-13: solo datos administrativos.
-- **"Llamar"**: el profesional en sus filas; la Secretaria también, en nombre del profesional.
+- **"Llamar"**: el profesional en sus filas; la Secretaria también, en nombre del profesional. Con la sala del turno (SR) anuncia "Pase al Consultorio 2"; `/sala` se puede agrupar por sala.
 - **Aviso al profesional en cualquier página**: toast "Llegó María G. · 10:30" con "Ver sala", chime corto, título de
   la pestaña y preferencia `arrivalAlert` (sonido/visual/off) dentro del blob de `agendaPrefs`, sin migración.
 - **La agenda (día/profesional) y la vista Recepción quedan en vivo.** La nav "Sala de espera" pasa a `/sala`.
 
 | Ola | Sesiones |
 |---|---|
-| SV0 (sola) | SV01 migración M3 + test de la tabla de verdad del predicado |
+| SV0 (sola) | SV01 migración M5 + test de la tabla de verdad del predicado |
 | SV1.0 | SV02 contratos puros + env (`REALTIME_DRIVER`) · SV03 estado `llamado` · SV04a publisher (+ fake para integración) · SV04b token + bootstrap |
 | SV1.1 | SV05 cableado en `bookings.ts` + `llamar` (único dueño) · SV06 otros writes (turnero, webhook MP aplicado, candado del día) · SV07 provider cliente + SSE local + CSP `wss` · SV08 tests de emisión de planes + guard estático |
 | SV2 | SV09 agenda en vivo · SV10 `/sala` · SV11a nav (`lib/nav.ts`) · SV11b avisos (toast con acción, sonido, preferencia) |
@@ -257,7 +265,7 @@ verificado** contra la API de MP (nunca del body ni de la query).
 (`/agenda` sin crecer el first-load) y QA multi-pestaña con el driver `local`. La verificación V1-V6 en staging la hace
 Martin.
 
-**Diferido:** pantalla TV (topic propio + boxes/consultorios), notificaciones persistidas y campana en vivo, presencia,
+**Diferido:** pantalla TV (topic propio; fase D, usa la sala de SR), notificaciones persistidas y campana en vivo, presencia,
 perfil/facturación/dashboard en vivo.
 
 ## 8. Decisiones con default (rigen si Martin no dice otra cosa)
@@ -277,7 +285,7 @@ perfil/facturación/dashboard en vivo.
 
 ## 9. Bootstrap después del reset (orden de prod)
 
-1. `migrate deploy` desde vacío (cadena completa hasta M3).
+1. `migrate deploy` desde vacío (cadena completa: … `catalog_global` → `agenda_foundations` → M1 → M2 → M3a → M4 → M5).
 2. Roles SQL.
 3. Import del catálogo global.
 4. `create-tenant --vertical kinesiologia` (casa de la plataforma).

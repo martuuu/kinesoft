@@ -13,12 +13,15 @@ import { getActor } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 import {
   AgendaViewPrefsPatchSchema,
+  DashboardPrefsPatchSchema,
   DEFAULT_PREFERENCES,
   KPI_OPTIONS,
   mergeAgendaViewPrefs,
   sanitizeAgendaViewPrefs,
   sanitizeCatalogPrefs,
+  sanitizeDashboardPrefs,
   type AgendaViewPrefs,
+  type DashboardPrefs,
   type KpiKey,
   type Palette,
   type Preferences,
@@ -45,6 +48,8 @@ export async function getUserPreferences(): Promise<Preferences> {
     catalogPrefs: sanitizeCatalogPrefs(row.catalogPrefs),
     // B4.2: estado de la agenda multi-profesional; mismo trato (total, por campo).
     agendaView: sanitizeAgendaViewPrefs(row.agendaPrefs),
+    // S14r: mismo trato (total, por campo). NULL (fila previa a M3a) → default.
+    dashboard: sanitizeDashboardPrefs(row.dashboardPrefs),
   };
 }
 
@@ -77,6 +82,10 @@ export async function updateUserPreferences(
     ...current,
     ...patch,
     agendaView: agendaPatch ? mergeAgendaViewPrefs(current.agendaView, agendaPatch) : current.agendaView,
+    // S14r: `dashboardPrefs` tiene su propia action (`updateDashboardPrefs`) y
+    // este flujo no la escribe; si un patch lo trae, se ignora (no se devuelve
+    // un valor que no quedó guardado).
+    dashboard: current.dashboard,
   };
   const writable = {
     palette: merged.palette,
@@ -134,6 +143,34 @@ export async function updateAgendaViewPrefs(
     where: { userId: actor.userId },
     create: { userId: actor.userId, tenantId: actor.tenantId, agendaPrefs: next },
     update: { agendaPrefs: next },
+  });
+  return { ok: true, data: next };
+}
+
+/**
+ * S14r (ES3): guarda un patch de `UserPreferences.dashboardPrefs` (hoy solo el
+ * período del widget de ingresos, Mes/Semana). Escribe SOLO esa columna, con
+ * merge contra lo guardado en la fila — mismo criterio que
+ * `updateAgendaViewPrefs`: no pisa paleta/KPIs de un `updateUserPreferences`
+ * concurrente. Sin `revalidatePath`: el widget ya cambió en vivo y el próximo
+ * render del dashboard lee la preferencia de la base.
+ */
+export async function updateDashboardPrefs(
+  patch: unknown
+): Promise<ActionResult<DashboardPrefs>> {
+  const actor = await getActor();
+  if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  const parsed = DashboardPrefsPatchSchema.safeParse(patch);
+  if (!parsed.success) return { ok: false, error: "Preferencias del dashboard inválidas." };
+  const row = await prisma.userPreferences.findUnique({
+    where: { userId: actor.userId },
+    select: { dashboardPrefs: true },
+  });
+  const next: DashboardPrefs = sanitizeDashboardPrefs({ ...sanitizeDashboardPrefs(row?.dashboardPrefs), ...parsed.data });
+  await prisma.userPreferences.upsert({
+    where: { userId: actor.userId },
+    create: { userId: actor.userId, tenantId: actor.tenantId, dashboardPrefs: next },
+    update: { dashboardPrefs: next },
   });
   return { ok: true, data: next };
 }

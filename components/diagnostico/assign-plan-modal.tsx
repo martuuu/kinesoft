@@ -1,680 +1,241 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+/**
+ * Puerta Diagnóstico → editor de planes (S23, ES3 P3.2 · C10).
+ *
+ * Antes este archivo era un modal propio (`AssignPlanModal`) que armaba el
+ * plan a mano y llamaba a el alta legacy de Diagnóstico: sesiones fuera
+ * del motor (sin disponibilidad, sin conflictos, sin turnos), su propio picker
+ * de días y su propio buscador de pacientes. Ahora "Asignar plan" (escritorio)
+ * y el wizard (mobile) abren el editor ÚNICO (`PlanEditorDrawer`, S18) en modo
+ * `create` con `diagnosis`:
+ *   - el editor pide el prefill (`getDiagnosisPlanPrefill`: disciplina Kine,
+ *     título, cantidad y ejercicios con su fase y dosis);
+ *   - previsualiza con `previewPlan(plan)` y commitea con
+ *     `createPlanFromDiagnosis({plan, diagnosis})`: caso clínico + plan +
+ *     sesiones (rampa por fase en el server) + turnos, en una tx del motor.
+ *
+ * El editor se carga lazy (`next/dynamic`, sin SSR): el bundle de
+ * `/diagnostico` no carga el editor hasta el primer click (y deja de cargar
+ * framer-motion + SortableList del modal viejo).
+ *
+ * Deep-link C10 `/diagnostico?patientId=&bookingId=` (`parseDiagnosisDeepLink`):
+ * con paciente, el editor arranca con ese paciente y, si vino un turno, con
+ * `fromBookingId` (el turno cuenta como la sesión 1). **Sin paciente en la URL
+ * no se preselecciona nadie** (P0-S02u-diag: un click distraído le creaba el
+ * plan, y le escribía la HC, al primero de la lista); el editor muestra
+ * `PatientPicker requireFull`.
+ *
+ * Lo puro (pedido al editor, ids de ejercicios, contexto del deep-link) está
+ * exportado para testearlo sin DOM (`tests/unit/render/diagnostico-door.test.tsx`).
+ */
+import { useState, type CSSProperties } from "react";
+import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
-import { backdropVariants, modalVariants } from "@/lib/motion";
-import type { ProgramPhase } from "@prisma/client";
-import { Tag } from "@/components/ui/tag";
-import { Button } from "@/components/ui/button";
-import { Avatar } from "@/components/ui/avatar";
-import { SortableList } from "@/components/ui/sortable-list";
-import { IconArrow, IconCheck, IconUsers, IconX } from "@/components/ui/icons";
-import {
-  assignDiagnosisAndCreateProgram,
-  searchPatientsForAssignment,
-} from "@/lib/diagnosis";
-import {
-  exercisesFor,
-  type CatalogDTO,
-  type CaseSelection,
-  type Ranking,
-} from "@/lib/diagnosis-engine";
-import type { AssignInput } from "@/lib/diagnosis-types";
-import { toARDateKey } from "@/lib/datetime-ar";
-import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
-import { phaseLabel, relationLabel } from "./labels";
+import type { PlanEditorRequest, PlanEditorSaved } from "@/components/planes/plan-editor-types";
+import type { CaseSelection, CatalogConditionDTO } from "@/lib/diagnosis-engine";
 
-export type PatientPick = { id: string; name: string; hc: string; info: string };
+const PlanEditorDrawer = dynamic(
+  () => import("@/components/planes/plan-editor-drawer").then((m) => m.PlanEditorDrawer),
+  { ssr: false, loading: () => null }
+);
+
+// ─── Contexto del deep-link ─────────────────────────────────────────────────
+
+export type DiagnosisDoorPatient = { id: string; name: string };
 
 /**
- * Arma el input de `assignDiagnosisAndCreateProgram` a partir del estado del
- * modal. Puro y exportado para testearlo sin DOM (P0-S02u-diag).
- *
- * Antes el picker de días era decorativo: solo viajaba `frequency =
- * dows.length` y el server repartía desde `startDate` por frecuencia, así que
- * "lun/jue" podía caer martes/viernes. Ahora los días viajan como
- * `daysOfWeek` (0=Lun … 6=Dom, la misma convención del picker y de
- * `expandDates`) y el server genera las sesiones solo esos días AR (S02d).
- * `frequency` se sigue mandando = cantidad de días porque el server la valida
- * (1..7) y la persiste en el plan.
+ * Lo que la página resuelve en el server y le pasa a las dos pantallas
+ * (escritorio y wizard). Lo arma `app/(app)/diagnostico/page.tsx` inline: un
+ * helper exportado de este módulo "use client" no se puede llamar desde el
+ * Server Component.
+ *  - `patient`: el de `?patientId=` si existe en el consultorio; si no, null.
+ *  - `bookingId`: solo con paciente (un turno suelto no dice para quién es).
+ *  - `patientNotFound`: vino un `patientId` que no resolvió (borrado, de otro
+ *    consultorio o mal copiado): se avisa en vez de ignorarlo en silencio.
+ *  - `canAssign`: `plans.manage` + `clinical.read` (matriz E1; la Secretaria
+ *    y Facturación exploran pero no arman planes). Solo esconde UI: el server
+ *    rechaza igual (`assertPlanManageInTx`).
  */
-export function buildAssignInput(args: {
-  patientId: string;
+export type DiagnosisDoor = {
+  patient: DiagnosisDoorPatient | null;
+  bookingId: string | null;
+  patientNotFound: boolean;
+  canAssign: boolean;
+};
+
+export const NO_DIAGNOSIS_DOOR: DiagnosisDoor = {
+  patient: null,
+  bookingId: null,
+  patientNotFound: false,
+  canAssign: true,
+};
+
+export const DIAGNOSIS_DOOR_COPY = {
+  cannotAssign: "Podés explorar el diagnóstico, pero armar el plan le corresponde al profesional que atiende al paciente.",
+  patientNotFound: "No encontramos el paciente del enlace. Elegilo cuando armes el plan.",
+  changePatient: "Elegir otro paciente",
+} as const;
+
+// ─── Pedido al editor ───────────────────────────────────────────────────────
+
+/** Ids sin repetir, en el orden en que vinieron (el orden manda dentro de cada fase de la rampa). */
+function uniqueIds(ids: ReadonlyArray<string>): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
+/**
+ * Pedido al editor único (C10): `mode:'create'`, disciplina Kine (Diagnóstico
+ * es de kinesiología: `DiagnosisPlanPrefill.discipline`), el caso clínico y,
+ * del deep-link, paciente y turno. No manda fecha de inicio ni cantidad: los
+ * pone el editor (hoy AR con `planEditorToday`, C11) y el prefill del server.
+ *
+ * `exerciseIds` vacío o ausente = el server sugiere los vínculos asignables
+ * de la condición.
+ */
+export function buildDiagnosisEditorRequest(args: {
   conditionSlug: string;
-  conditionName: string;
   selection: CaseSelection;
-  ranking: Ranking[];
-  orderedIds: string[];
-  selectedExerciseIds: string[];
-  totalSessions: number;
-  dows: number[];
-  startDate: string;
-}): AssignInput {
-  const daysOfWeek = Array.from(new Set(args.dows)).sort((a, b) => a - b);
+  exerciseIds?: ReadonlyArray<string>;
+  patientId?: string | null;
+  bookingId?: string | null;
+}): PlanEditorRequest {
+  const ids = uniqueIds(args.exerciseIds ?? []);
+  const patientId = args.patientId || null;
   return {
-    patientId: args.patientId,
-    conditionSlug: args.conditionSlug,
-    selection: args.selection,
-    topRankings: args.ranking,
-    // Persist in the practitioner-chosen order.
-    exerciseIds: args.orderedIds.length ? args.orderedIds : args.selectedExerciseIds,
-    totalSessions: args.totalSessions,
-    frequency: Math.max(1, daysOfWeek.length),
-    daysOfWeek,
-    startDate: args.startDate,
-    programTitle: `Plan ${args.conditionName}`,
+    mode: "create",
+    discipline: "KINESIOLOGY",
+    diagnosis: {
+      conditionSlug: args.conditionSlug,
+      selection: args.selection,
+      ...(ids.length ? { exerciseIds: ids } : {}),
+    },
+    ...(patientId ? { patientId } : {}),
+    ...(patientId && args.bookingId ? { fromBookingId: args.bookingId } : {}),
   };
 }
 
-export function AssignPlanModal({
-  condition,
-  ranking,
-  selectedExercises,
-  selectedExerciseIds,
-  selection,
-  initialPatients,
+/**
+ * Escritorio: los ejercicios elegidos, primero los de la condición (en el
+ * orden de `exercisesFor`: DIRECT → INDIRECT, fase, peso) y después los
+ * agregados a mano desde el picker. El server les asigna la fase de su
+ * vínculo con la condición (sin vínculo = activación).
+ */
+export function desktopDiagnosisExerciseIds(args: {
+  conditionExerciseIds: ReadonlyArray<string>;
+  extraExerciseIds: ReadonlyArray<string>;
+  selectedExerciseIds: ReadonlyArray<string>;
+}): string[] {
+  const selected = new Set(args.selectedExerciseIds);
+  return uniqueIds([...args.conditionExerciseIds, ...args.extraExerciseIds].filter((id) => selected.has(id)));
+}
+
+/**
+ * Wizard mobile (no tiene paso de ejercicios): los DIRECT de la condición,
+ * como antes. Sin ninguno → `undefined` y el server sugiere los asignables de
+ * la condición (antes el wizard frenaba con "asignalo desde escritorio").
+ */
+export function wizardDiagnosisExerciseIds(
+  exercises: ReadonlyArray<Pick<CatalogConditionDTO["exercises"][number], "exerciseId" | "relation">>
+): string[] | undefined {
+  const ids = uniqueIds(exercises.filter((e) => e.relation === "DIRECT").map((e) => e.exerciseId));
+  return ids.length ? ids : undefined;
+}
+
+// ─── UI ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Estado de la puerta: el último pedido queda montado con `open=false` al
+ * cerrar, así el Drawer hace su salida y el dirty-guard del editor funciona
+ * (desmontarlo de golpe se saltearía las dos cosas). El editor arma una
+ * instancia nueva (estado e `idempotencyKey` nuevos) en cada apertura.
+ */
+export function useDiagnosisPlanDoor() {
+  const [state, setState] = useState<{ request: PlanEditorRequest | null; open: boolean }>({
+    request: null,
+    open: false,
+  });
+  return {
+    request: state.request,
+    open: state.open,
+    openEditor: (request: PlanEditorRequest) => setState({ request, open: true }),
+    close: () => setState((s) => ({ ...s, open: false })),
+  };
+}
+
+export function DiagnosisPlanDoor({
+  request,
+  open,
   onClose,
 }: {
-  condition: CatalogDTO["conditions"][number];
-  ranking: Ranking[];
-  selectedExercises: ReturnType<typeof exercisesFor>;
-  selectedExerciseIds: string[];
-  selection: CaseSelection;
-  initialPatients: PatientPick[];
+  request: PlanEditorRequest | null;
+  open: boolean;
   onClose: () => void;
 }) {
   const router = useRouter();
-  const [pending, start] = useTransition();
-  const [patients, setPatients] = useState<PatientPick[]>(initialPatients);
-  // Sin preselección (P0-S02u-diag): antes arrancaba con el primer paciente de
-  // la lista marcado y un click distraído en "Asignar" le creaba el plan (y le
-  // escribía la HC) a quien no era. El profesional tiene que elegirlo.
-  const [patientId, setPatientId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [searching, startSearch] = useTransition();
-  // Default to 10 sessions per the latest brief. Practitioner can override.
-  const [totalSessions, setTotalSessions] = useState(10);
-  // Day-of-week picker (0=Mon..6=Sun). Default Mon/Wed/Fri.
-  const [dows, setDows] = useState<number[]>([0, 2, 4]);
-  // Hoy en AR, no la fecha UTC del host: después de las 21:00 AR
-  // `toISOString().slice(0,10)` ya es mañana y la sesión 1 caía un día tarde.
-  // `toARDateKey` es estable en cualquier TZ del navegador/host.
-  const [startDate, setStartDate] = useState(() => toARDateKey(new Date()));
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  // El aviso vive al pie de un modal con scroll: sin esto, un rechazo del
-  // server (p. ej. "con los días elegidos entran hasta 58 sesiones") quedaba
-  // fuera de vista y parecía que el botón no hacía nada.
-  const feedbackRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (error || success) feedbackRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [error, success]);
-
-  // Local order of exercises (sortable below). The modal is re-mounted
-  // by its parent via `key=selectedExerciseIds.join("|")`, so the prop
-  // is always fresh on mount — no useEffect-sync needed.
-  const [orderedIds, setOrderedIds] = useState<string[]>(
-    selectedExercises.map((e) => e.exerciseId)
-  );
-
-  // Sequence-guard rapid keystrokes — only the latest invocation's
-  // response is allowed to update state.
-  const searchSeq = useRef(0);
-  const onSearch = (q: string) => {
-    setSearch(q);
-    const mySeq = ++searchSeq.current;
-    startSearch(async () => {
-      const r = await searchPatientsForAssignment(q);
-      if (mySeq !== searchSeq.current) return;
-      setPatients(r);
-      // Si el elegido ya no está en los resultados se deselecciona; nunca se
-      // auto-elige el primero (misma razón que el estado inicial).
-      if (!r.find((p) => p.id === patientId)) setPatientId(null);
-    });
+  if (!request) return null;
+  const onSaved = async (saved: PlanEditorSaved) => {
+    // Lazy: el armado de links trae zod y no hace falta hasta guardar.
+    const { planDeepLinkHref } = await import("@/lib/plans-deeplink");
+    const href =
+      planDeepLinkHref({ kind: "program", patientId: saved.patientId, programId: saved.programId }) ??
+      `/pacientes/${saved.patientId}`;
+    router.push(href);
+    router.refresh();
   };
+  return <PlanEditorDrawer {...request} open={open} onClose={onClose} onSaved={(s) => void onSaved(s)} />;
+}
 
-  const submit = () => {
-    setError(null);
-    setSuccess(null);
-    if (!patientId) {
-      setError("Elegí un paciente.");
-      return;
-    }
-    // Vacío el server repartiría por frecuencia (1/semana), que no es lo que
-    // muestra el picker: se pide al menos un día.
-    if (!dows.length) {
-      setError("Elegí al menos un día de la semana.");
-      return;
-    }
-    if (!startDate) {
-      setError("Elegí la fecha de la primera sesión.");
-      return;
-    }
-    start(async () => {
-      const result = await assignDiagnosisAndCreateProgram(
-        buildAssignInput({
-          patientId,
-          conditionSlug: condition.slug,
-          conditionName: condition.name,
-          selection,
-          ranking,
-          orderedIds,
-          selectedExerciseIds,
-          totalSessions,
-          dows,
-          startDate,
-        })
-      );
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      setSuccess("Plan asignado correctamente. Abriendo HC del paciente…");
-      setTimeout(() => {
-        router.push(`/pacientes/${patientId}`);
-        router.refresh();
-      }, 700);
-    });
-  };
-
-  // Bucket exercises by phase for the preview.
-  const byPhase: Record<ProgramPhase, typeof selectedExercises> = {
-    ACTIVATION: [],
-    STABILITY: [],
-    LOAD: [],
-    PROGRESSION: [],
-  };
-  for (const e of selectedExercises) byPhase[e.phase].push(e);
-
+/**
+ * Para quién es el diagnóstico (deep-link) o por qué no se puede armar el
+ * plan. Sin paciente ni avisos no renderiza nada.
+ */
+export function DiagnosisDoorBanner({
+  door,
+  compact = false,
+  style,
+}: {
+  door: DiagnosisDoor;
+  compact?: boolean;
+  style?: CSSProperties;
+}) {
+  const notes: string[] = [];
+  if (door.patientNotFound) notes.push(DIAGNOSIS_DOOR_COPY.patientNotFound);
+  if (!door.canAssign) notes.push(DIAGNOSIS_DOOR_COPY.cannotAssign);
+  if (!door.patient && notes.length === 0) return null;
   return (
-    <motion.div
-      role="dialog"
-      aria-modal
-      onClick={pending ? undefined : onClose}
-      variants={backdropVariants}
-      initial="initial"
-      animate="animate"
-      exit="exit"
+    <div
+      data-testid="diagnosis-door-banner"
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 40,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
+        flexDirection: "column",
+        gap: 4,
+        padding: compact ? "10px 12px" : "10px 16px",
+        borderRadius: 14,
+        background: "rgba(255,255,255,0.7)",
+        border: "1px solid rgba(15,30,51,0.06)",
+        fontSize: 13,
+        color: "var(--navy-700)",
+        minWidth: 0,
+        ...style,
       }}
     >
-      <motion.div
-        className="k-glass-strong"
-        onClick={(e) => e.stopPropagation()}
-        variants={modalVariants}
-        style={{
-          width: "min(980px, 100%)",
-          maxHeight: "90vh",
-          padding: 28,
-          borderRadius: 24,
-          display: "flex",
-          flexDirection: "column",
-          gap: 20,
-          overflowY: "auto",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <Tag tone="lime">Asignar diagnóstico</Tag>
-              {condition.isCustom && (
-                <Tag tone="sky">Personalizado</Tag>
-              )}
-            </div>
-            <h2 className="k-display" style={{ fontSize: 26, margin: "8px 0 4px", letterSpacing: "-0.02em" }}>
-              {condition.name}
-            </h2>
-            <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
-              {condition.cie10 && <>CIE-10 {condition.cie10} · </>}
-              {condition.recoveryWeeksMin && condition.recoveryWeeksMax
-                ? `Recuperación ${condition.recoveryWeeksMin}-${condition.recoveryWeeksMax} sem.`
-                : ""}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Cerrar"
-            disabled={pending}
-            style={{
-              border: "none",
-              background: "rgba(255,255,255,0.7)",
-              width: 36,
-              height: 36,
-              borderRadius: 12,
-              cursor: pending ? "not-allowed" : "pointer",
-              color: "var(--navy-700)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <IconX size={16} />
-          </button>
+      {door.patient && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>
+            Diagnóstico para <strong style={{ color: "var(--navy-900)" }}>{door.patient.name}</strong>
+          </span>
+          <Link href="/diagnostico" style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }}>
+            {DIAGNOSIS_DOOR_COPY.changePatient}
+          </Link>
         </div>
-
-        <Step number={1} title="Paciente">
-          <div
-            className="k-glass"
-            style={{
-              padding: "8px 14px",
-              borderRadius: 999,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontSize: 13,
-              color: "var(--navy-300)",
-            }}
-          >
-            <IconUsers size={14} />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => onSearch(e.target.value)}
-              placeholder="Buscar paciente por nombre o DNI…"
-              // DB typeahead — suppress the browser's own name autofill.
-              autoComplete="new-password"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              data-1p-ignore
-              data-lpignore="true"
-              data-form-type="other"
-              style={{
-                flex: 1,
-                border: "none",
-                outline: "none",
-                background: "transparent",
-                fontSize: 13,
-                color: "var(--navy-900)",
-              }}
-            />
-            {searching && <span style={{ fontSize: 11 }}>Buscando…</span>}
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
-            {patients.map((p) => {
-              const on = p.id === patientId;
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => setPatientId(p.id)}
-                  style={{
-                    padding: 10,
-                    borderRadius: 12,
-                    border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.06)",
-                    background: on ? "rgba(31,79,190,0.05)" : "#fff",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    textAlign: "left",
-                  }}
-                  aria-pressed={on}
-                >
-                  <Avatar name={p.name} size={36} tone={on ? "lime" : "sky"} />
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
-                    <div className="k-mono" style={{ fontSize: 10.5, color: "var(--sky-700)" }}>
-                      {p.hc}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--navy-500)" }}>{p.info}</div>
-                  </div>
-                </button>
-              );
-            })}
-            {patients.length === 0 && (
-              <span style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--navy-300)" }}>
-                No encontramos pacientes que coincidan.
-              </span>
-            )}
-          </div>
-        </Step>
-
-        <Step number={2} title="Configuración del plan">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-            <NumberField
-              label="Sesiones totales"
-              value={totalSessions}
-              onChange={setTotalSessions}
-              min={1}
-              max={PLAN_MAX_SESSIONS}
-            />
-            <div>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "var(--navy-300)",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                }}
-              >
-                Primera sesión
-              </div>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                style={{
-                  width: "100%",
-                  marginTop: 6,
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(15,30,51,0.08)",
-                  background: "rgba(255,255,255,0.7)",
-                }}
-              />
-            </div>
-          </div>
-          <DayOfWeekPicker dows={dows} onChange={setDows} />
-        </Step>
-
-        <Step number={3} title={`Distribución automática · ${selectedExercises.length} ejercicios`}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            {(["ACTIVATION", "STABILITY", "LOAD", "PROGRESSION"] as ProgramPhase[]).map((p) => (
-              <div
-                key={p}
-                style={{
-                  padding: 12,
-                  borderRadius: 14,
-                  background: "rgba(246,249,253,0.7)",
-                  border: "1px solid rgba(15,30,51,0.06)",
-                }}
-              >
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--sky-700)" }}>
-                  {phaseLabel(p)}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-                  {byPhase[p].map((e) => (
-                    <div
-                      key={e.exerciseId}
-                      style={{ fontSize: 11.5, color: "var(--navy-700)", fontWeight: 600 }}
-                    >
-                      <IconCheck size={10} stroke={3} /> {e.name}{" "}
-                      <span style={{ color: "var(--navy-300)", fontWeight: 500 }}>
-                        ({relationLabel(e.relation)})
-                      </span>
-                    </div>
-                  ))}
-                  {!byPhase[p].length && (
-                    <div style={{ fontSize: 11, color: "var(--navy-300)" }}>—</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 10, marginBottom: 0 }}>
-            Las sesiones avanzan automáticamente: arranca con activación y suma estabilidad, carga
-            y progresión a medida que progresa el plan.
-          </p>
-        </Step>
-
-        <Step number={4} title="Orden de ejercicios">
-          <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "0 0 10px" }}>
-            Arrastrá ⋮⋮ para ajustar la secuencia. Es el orden con el que se cargarán en cada sesión.
-          </p>
-          <SortableList
-            items={orderedIds
-              .map((id) => selectedExercises.find((e) => e.exerciseId === id))
-              .filter(Boolean)
-              .map((e) => ({ id: e!.exerciseId, ex: e! }))}
-            onReorder={(ids) => setOrderedIds(ids)}
-            emptyLabel="Volvé a la pantalla anterior y marcá ejercicios."
-            renderRow={(item, i) => (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "28px 1fr auto",
-                  gap: 10,
-                  alignItems: "center",
-                  fontSize: 13,
-                }}
-              >
-                <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)" }}>
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{item.ex.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                    {item.ex.muscleGroups ?? "—"} · {item.ex.defaultSets}×{item.ex.defaultReps}
-                  </div>
-                </div>
-                <Tag tone={item.ex.relation === "DIRECT" ? "sky" : "lime"}>{item.ex.relation}</Tag>
-              </div>
-            )}
-          />
-        </Step>
-
-        <div ref={feedbackRef}>
-        {error && (
-          <div
-            role="alert"
-            style={{
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(228,70,70,0.1)",
-              color: "#9F1F1F",
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
-        {success && (
-          <div
-            style={{
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(180,233,74,0.18)",
-              color: "var(--navy-900)",
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
-            {success}
-          </div>
-        )}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancelar
-          </Button>
-          <Button type="button" variant="primary" onClick={submit} disabled={pending || !patientId}>
-            {pending ? "Guardando…" : (<>Asignar a paciente <IconArrow size={14} /></>)}
-          </Button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-function Step({
-  number,
-  title,
-  children,
-}: {
-  number: number;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        padding: 16,
-        borderRadius: 16,
-        background: "rgba(255,255,255,0.55)",
-        border: "1px solid rgba(255,255,255,0.6)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <span
-          style={{
-            width: 24,
-            height: 24,
-            borderRadius: "50%",
-            background: "var(--sky-700)",
-            color: "#fff",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 11,
-            fontWeight: 700,
-          }}
-        >
-          {number}
-        </span>
-        <h3 className="k-display" style={{ fontSize: 15, margin: 0, fontWeight: 700 }}>
-          {title}
-        </h3>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-const DOW_LABELS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-
-function DayOfWeekPicker({
-  dows,
-  onChange,
-}: {
-  dows: number[];
-  onChange: (next: number[]) => void;
-}) {
-  const toggle = (d: number) => {
-    onChange(dows.includes(d) ? dows.filter((x) => x !== d) : [...dows, d].sort((a, b) => a - b));
-  };
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: "var(--navy-300)",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          marginBottom: 6,
-        }}
-      >
-        Días de la semana
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {DOW_LABELS.map((label, i) => {
-          const on = dows.includes(i);
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => toggle(i)}
-              aria-pressed={on}
-              style={{
-                width: 56,
-                height: 36,
-                borderRadius: 12,
-                border: on ? "1px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.08)",
-                background: on ? "var(--sky-700)" : "rgba(255,255,255,0.7)",
-                color: on ? "#fff" : "var(--navy-700)",
-                fontSize: 12.5,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
-        {dows.length === 0
-          ? "Elegí al menos un día."
-          : `${dows.length} ${dows.length === 1 ? "día" : "días"} por semana`}
-      </div>
+      )}
+      {notes.map((n) => (
+        <p key={n} role="note" style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          {n}
+        </p>
+      ))}
     </div>
   );
 }
-
-function NumberField({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-}) {
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: "var(--navy-300)",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-        <button
-          onClick={() => onChange(Math.max(min, value - 1))}
-          style={btnSquare}
-          aria-label="Restar"
-        >
-          −
-        </button>
-        <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
-          style={{
-            width: 60,
-            textAlign: "center",
-            padding: "8px",
-            borderRadius: 10,
-            border: "1px solid rgba(15,30,51,0.08)",
-            background: "rgba(255,255,255,0.7)",
-            fontWeight: 700,
-          }}
-        />
-        <button
-          onClick={() => onChange(Math.min(max, value + 1))}
-          style={btnSquare}
-          aria-label="Sumar"
-        >
-          +
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const btnSquare: React.CSSProperties = {
-  width: 32,
-  height: 32,
-  borderRadius: 10,
-  border: "1px solid rgba(15,30,51,0.08)",
-  background: "rgba(255,255,255,0.7)",
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 14,
-  color: "var(--navy-700)",
-};

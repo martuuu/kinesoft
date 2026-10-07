@@ -53,6 +53,7 @@ import { adoptableBookingWhere } from "@/lib/plan-predicates";
 import { distributePackage, priorPaidStamp, type PricingBooking } from "@/lib/plan-pricing";
 import { assignableExerciseWhere, resolveCapabilities } from "@/lib/plan-gating";
 import { disciplineLabel } from "@/lib/plan-display";
+import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { PLAN_KEY_PREFIX, PLAN_MAX_DURATION, PLAN_MIN_DURATION, type Discipline } from "@/lib/plans-constants";
 import { BAD_LOCATION_ERROR } from "@/lib/bookings-constants";
 import { buildBookingCreateData, defaultLocationFor, practitionerServiceRule } from "@/lib/bookings-core";
@@ -157,8 +158,22 @@ export type PlanRefsOk = {
   /** Cupo efectivo (PS override o el del servicio); null = ilimitado. */
   cap: number | null;
   locationId: string | null;
-  template: { id: string; exerciseIds: string[] } | null;
+  /**
+   * `exerciseIds` = los de la plantilla que HOY son asignables, en su orden
+   * (P3.Z: los que se archivaron o salieron del catálogo después de guardarla
+   * se saltean, no rechazan el alta). `exercises` = esos mismos con la dosis
+   * por defecto del ejercicio `?? 3×12` (C8), para un alta sin `exercises`.
+   */
+  template: {
+    id: string;
+    exerciseIds: string[];
+    exercises: Array<{ exerciseId: string; sets: number; reps: number }>;
+  } | null;
 };
+
+/** Dosis por defecto cuando el ejercicio no trae series/reps (C8 · `?? 3/12`, como el prefill). */
+const DEFAULT_SETS = 3;
+const DEFAULT_REPS = 12;
 
 /**
  * Valida (dentro de la tx) TODO id que el plan va a escribir en
@@ -172,6 +187,18 @@ export type PlanRefsOk = {
  */
 export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: PlanRefsInput): Promise<PlanRefsOk> {
   const tenantId = actor.tenantId;
+  // Visibilidad del catálogo y módulos por los entitlements del actor (C-EV3,
+  // sin query): `buildActor` ya leyó la fila de Tenant en este request.
+  const gate = resolveCapabilities(actor.entitlements.plan, tenantId, actor.entitlements.vertical);
+  // P3.Z (F1): plantillas solo con el módulo `plantillas` (enmienda EV0,
+  // literal: "plantillas solo por canBuildTemplates / has('plantillas')").
+  // Antes lo cortaba el "aplicar" viejo (`[P0-S02t] FREE no aplica`); al
+  // retirarlo, un FREE o un STARTER que bajó de plan con filas viejas la
+  // aplicaba por RPC con `createPlan({ templateId })`. Va antes de leer la
+  // plantilla: sin el módulo no importa si existe (no oráculo).
+  if (refs.templateId && !gate.canBuildTemplates) {
+    throw new PlanRejected(MODULE_DENIED_COPY.plantillas, "templateId");
+  }
   const [prac, service, location, template] = await Promise.all([
     tx.practitioner.findFirst({
       where: { id: refs.practitionerId, tenantId },
@@ -217,24 +244,40 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
   const templateExerciseIds = template && Array.isArray(template.exerciseIds)
     ? (template.exerciseIds as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
-  const exerciseIds = Array.from(new Set([...(refs.exerciseIds ?? []), ...templateExerciseIds]));
+  const clientIds = Array.from(new Set(refs.exerciseIds ?? []));
+  const exerciseIds = Array.from(new Set([...clientIds, ...templateExerciseIds]));
+  const assignable = new Map<string, { defaultSets: number | null; defaultReps: number | null }>();
   if (exerciseIds.length) {
-    // Visibilidad del catálogo por los entitlements del actor (C-EV3, sin
-    // query) + no archivado. Un ejercicio de otro consultorio no matchea.
-    const gate = resolveCapabilities(actor.entitlements.plan, tenantId, actor.entitlements.vertical);
+    // Asignable = visible por el plan SaaS + no archivado. Un ejercicio de
+    // otro consultorio no matchea.
     const ok = await tx.exercise.findMany({
       where: { AND: [{ id: { in: exerciseIds } }, assignableExerciseWhere(gate)] },
-      select: { id: true },
+      select: { id: true, defaultSets: true, defaultReps: true },
     });
-    if (ok.length !== exerciseIds.length) throw new PlanRejected(PLAN_ENGINE_COPY.exercises, "exercises");
+    for (const e of ok) assignable.set(e.id, e);
+    // Solo se rechazan los ids que manda el CLIENTE. Los de la plantilla se
+    // filtran (P3.Z): antes un ejercicio archivado después de guardarla
+    // mataba el alta entera, y el prefill omitía `templateId` para esquivarlo
+    // (el plan perdía el vínculo con su plantilla).
+    if (clientIds.some((id) => !assignable.has(id))) throw new PlanRejected(PLAN_ENGINE_COPY.exercises, "exercises");
   }
+  const templateAssignable = templateExerciseIds.filter((id) => assignable.has(id));
   return {
     practitioner: { id: prac.id, userId: prac.userId },
     service: { id: service.id, name: service.name, discipline: service.discipline },
     durationMin,
     cap: rule.cap,
     locationId: refs.locationId,
-    template: template ? { id: template.id, exerciseIds: templateExerciseIds } : null,
+    template: template
+      ? {
+          id: template.id,
+          exerciseIds: templateAssignable,
+          exercises: templateAssignable.map((exerciseId) => {
+            const e = assignable.get(exerciseId)!;
+            return { exerciseId, sets: e.defaultSets ?? DEFAULT_SETS, reps: e.defaultReps ?? DEFAULT_REPS };
+          }),
+        }
+      : null,
   };
 }
 
@@ -1089,11 +1132,10 @@ export async function createPlanInTx(
     });
   }
 
-  // Ejercicios: los explícitos o, si no vinieron, los de la plantilla con la
-  // dosis por defecto 3×12 (C8 · `?? 3/12`).
-  const exercises = input.exercises?.length
-    ? input.exercises
-    : (refs.template?.exerciseIds ?? []).map((exerciseId) => ({ exerciseId, sets: 3, reps: 12 }));
+  // Ejercicios: los explícitos o, si no vinieron, los asignables de la
+  // plantilla con la dosis por defecto DEL EJERCICIO `?? 3×12` (C8). P3.Z:
+  // antes era 3×12 fijo, distinto de lo que proponía el prefill.
+  const exercises = input.exercises?.length ? input.exercises : (refs.template?.exercises ?? []);
 
   const written = await commitPlanRowsInTx(tx, actor, {
     program: {

@@ -10,6 +10,17 @@ import type { Tab } from "./types";
  * renombrar Resumen → "Datos". Las pestañas clínicas no se ocultan con CSS ni
  * se deshabilitan: directamente no se renderizan, así no hay un botón que
  * monte una vista de HC aunque el server la devolviera vacía.
+ *
+ * S22b (ES3): el perfil completo pasa en `only` las pestañas que permite el
+ * consultorio (`isProfileTabAllowed`: sin `planes` no hay Planes, sin
+ * `sesiones` no hay Sesiones, sin `evaluaciones` no hay Evolución). La pestaña
+ * "Plan" pasa a "Planes" (`?tab=planes`, alias `plan`).
+ *
+ * P3.Z (F3b, a11y): era `role="tablist"`/`role="tab"` sin `aria-controls` ni
+ * flechas/Home/End: un patrón tabs a medias (el lector anunciaba "pestaña 2 de
+ * 9" y el teclado no respondía como tal). Completarlo exige `role="tabpanel"`
+ * con ids en el shell; se eligió lo más simple que queda correcto: botones
+ * nativos (Tab/Enter/Espacio) en un `<nav>` con `aria-current` en la activa.
  */
 export function TabsBar({
   active,
@@ -20,7 +31,7 @@ export function TabsBar({
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
-  counts: { turnos?: number; sesiones?: number; plan?: number; fact?: number };
+  counts: { turnos?: number; sesiones?: number; planes?: number; fact?: number };
   only?: readonly Tab[];
   labels?: Partial<Record<Tab, string>>;
 }) {
@@ -28,7 +39,7 @@ export function TabsBar({
     { id: "resumen", label: "Resumen" },
     { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
-    { id: "plan", label: "Plan", count: counts.plan || undefined },
+    { id: "planes", label: "Planes", count: counts.planes || undefined },
     { id: "archivos", label: "Archivos" },
     { id: "antec", label: "Antecedentes" },
     { id: "evol", label: "Evolución" },
@@ -39,7 +50,8 @@ export function TabsBar({
     .filter((t) => !only || only.includes(t.id))
     .map((t) => (labels?.[t.id] ? { ...t, label: labels[t.id]! } : t));
   return (
-    <div
+    <nav
+      aria-label="Secciones de la ficha"
       style={{
         display: "flex",
         alignItems: "center",
@@ -55,6 +67,8 @@ export function TabsBar({
           <button
             key={t.id}
             type="button"
+            data-profile-tab={t.id}
+            aria-current={on ? "true" : undefined}
             onClick={() => onChange(t.id)}
             style={{
               padding: "12px 18px",
@@ -102,6 +116,6 @@ export function TabsBar({
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }

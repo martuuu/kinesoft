@@ -12,6 +12,7 @@
  * de pantalla, no un dato). La lectura tolera basura y storage bloqueado.
  */
 import { isUnpaidPublicPending, publicHoldExpired } from "@/lib/booking-capacity";
+import type { AgendaHighlight } from "@/lib/agenda-highlight";
 
 export type AgendaVisibility = {
   showCancelled: boolean;
@@ -82,6 +83,88 @@ export function parseAgendaVisibility(raw: string | null | undefined): AgendaVis
   } catch {
     return { ...DEFAULT_AGENDA_VISIBILITY };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Turnos de plan / sueltos (S19b, ES3 · plan §3.4: "Leyenda Plan/Suelto que
+// reusa el resaltado").
+//
+// No es un filtro que saque turnos: es el MISMO resaltado que la leyenda de
+// servicios (`AgendaHighlight` de `lib/agenda-highlight.ts`, kinds `plan` y
+// `loose`). Los que coinciden se levantan y el resto se atenúa (AGENTS §5: la
+// opacidad es el filtro), así ningún turno desaparece ni deja un hueco que parezca
+// libre. El "Todos / De plan / Sueltos" del menú Vista y la leyenda "Turnos"
+// manejan el mismo estado: `planScopeOf(highlight)`.
+//
+// Se persiste como los toggles de cancelados/ausentes: `localStorage` por
+// usuario (preferencia de pantalla, sin migración; tolera basura y storage
+// bloqueado). Solo se guarda el alcance de plan: el resaltado por servicio
+// sigue siendo de la pestaña, como siempre. Sin el módulo `planes` no se lee
+// ni se ofrece (VERTICALES §5: leyenda/filtro de plan solo con `has('planes')`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AgendaPlanScope = "all" | "plan" | "loose";
+
+export const AGENDA_PLAN_SCOPES: ReadonlyArray<AgendaPlanScope> = ["all", "plan", "loose"];
+
+export const AGENDA_PLAN_SCOPE_LABEL: Record<AgendaPlanScope, string> = {
+  all: "Todos",
+  plan: "De plan",
+  loose: "Sueltos",
+};
+
+/** El resaltado que corresponde a un alcance (`all` = sin resaltado). */
+export function planScopeHighlight(scope: AgendaPlanScope): AgendaHighlight | null {
+  if (scope === "plan") return { kind: "plan" };
+  if (scope === "loose") return { kind: "loose" };
+  return null;
+}
+
+/**
+ * Alcance que muestra el menú para el resaltado actual. Un resaltado por
+ * servicio (o uno de plan acotado a una disciplina, que esta leyenda no
+ * ofrece) no es "De plan" ni "Sueltos": el menú dice "Todos".
+ */
+export function planScopeOf(h: AgendaHighlight | null): AgendaPlanScope {
+  if (h?.kind === "loose") return "loose";
+  if (h?.kind === "plan" && h.discipline === undefined) return "plan";
+  return "all";
+}
+
+/** Misma convención que `agendaVisibilityStorageKey`: por usuario. */
+export function agendaPlanScopeStorageKey(viewerId?: string | null): string {
+  return `kinesoft:agenda-plan-scope:${viewerId || "default"}`;
+}
+
+/** Lee lo guardado; cualquier cosa rara → "all" (no resaltar nada). */
+export function parseAgendaPlanScope(raw: string | null | undefined): AgendaPlanScope {
+  return raw === "plan" || raw === "loose" ? raw : "all";
+}
+
+/** Valor a guardar (`null` = borrar la clave: "Todos" es el default). */
+export function serializeAgendaPlanScope(scope: AgendaPlanScope): string | null {
+  return scope === "all" ? null : scope;
+}
+
+export type PlanScopeCounts = { plan: number; loose: number };
+
+/**
+ * Conteo de la leyenda: turnos de plan y sueltos, sin cancelados (mismo
+ * criterio que los chips de profesionales). Un turno sin campos C9
+ * (`programId === undefined`) no se cuenta en ninguno: no se adivina (misma
+ * regla que `matchesHighlight`).
+ */
+export function countPlanScope(
+  bookings: ReadonlyArray<{ status: string; programId?: string | null }>
+): PlanScopeCounts {
+  let plan = 0;
+  let loose = 0;
+  for (const b of bookings) {
+    if (b.status === "CANCELLED") continue;
+    if (typeof b.programId === "string") plan++;
+    else if (b.programId === null) loose++;
+  }
+  return { plan, loose };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

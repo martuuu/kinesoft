@@ -15,8 +15,10 @@
  *     sin evolución" y la sugerencia de alta; ordinal M13 entre las vivas;
  *   - "Cargar evolución" sobre una sesión realizada por "Atendido";
  *   - `reopenSessionIfUntouchedInTx` mira la EVA por `sessionId`;
- *   - `addCustomSession` guarda el título en `Session.title` (antes `notes`:
- *     nunca quedaba "untouched" y "Deshacer Atendido" no la reabría);
+ *   - la sesión "a medida" guarda el título en `Session.title` (antes `notes`:
+ *     nunca quedaba "untouched" y "Deshacer Atendido" no la reabría). Desde
+ *     P3.Z.0 (S27b) se agrega solo por el motor (`addPlanSessions` con
+ *     `kind:'custom'`): los casos de la puerta vieja se re-afirmaron acá;
  *   - `listAssignablePrograms` / `bulkAddSessionExercises` excluyen archivados;
  *   - sin el módulo `sesiones` (consultorio General) todo export rechaza o
  *     devuelve vacío.
@@ -29,7 +31,6 @@ import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { UPDATE_SAME_INSTANT_ERROR } from "@/lib/bookings-constants";
 import {
-  addCustomSession,
   bulkAddSessionExercises,
   completeSessionFromSeguimiento,
   getSessionDetail,
@@ -40,6 +41,8 @@ import {
   updateSessionMeta,
 } from "@/lib/sessions";
 import { markReceptionAction } from "@/lib/bookings";
+import { addPlanSessions, previewAddPlanSessions } from "@/lib/plans-edit";
+import type { AddPlanSessionsInput, AddPlanSessionsResult } from "@/lib/plans-edit-types";
 import { reopenSessionIfUntouchedInTx } from "@/lib/sessions-internal";
 import { runWithRls } from "@/lib/rls";
 import {
@@ -86,6 +89,32 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
   const session = (id: string) => db.session.findUniqueOrThrow({ where: { id } });
   const program = (id: string) => db.treatmentProgram.findUniqueOrThrow({ where: { id } });
   const ver = async (id: string) => (await booking(id)).updatedAt.toISOString();
+
+  /**
+   * "Agregar sesión a medida" como el editor (P3.Z.0): preview → commit con la
+   * fila nueva SIN turno (`none`). Con fecha explícita (como la pide el
+   * diálogo); el caso sin fecha tiene su test propio ("[P3-S27b] 'a medida' sin fecha").
+   */
+  let customDay = 0;
+  async function addCustom(
+    programId: string,
+    title: string,
+    extra: Partial<Pick<AddPlanSessionsInput, "packagePricing" | "at">> = {}
+  ): Promise<AddPlanSessionsResult> {
+    customDay += 1;
+    const req = {
+      programId,
+      kind: "custom" as const,
+      title,
+      at: new Date(Date.parse("2030-06-03T13:00:00Z") + customDay * DAY).toISOString(),
+      ...extra,
+    };
+    const pv = await previewAddPlanSessions(req);
+    if (!pv.ok) return pv;
+    const rows = pv.preview.rows.filter((r) => !r.sessionId).map((r) => ({ index: r.index, kind: "none" as const }));
+    return addPlanSessions({ ...req, rows, stateToken: pv.preview.stateToken });
+  }
+  const newSessionId = (r: AddPlanSessionsResult) => (r.ok ? r.data.sessionIds[0] : "");
 
   /** Un instante de HOY (Recepción solo opera turnos del día AR). */
   let todayMinute = 0;
@@ -231,11 +260,11 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
     expect((await session(sid)).completedAt).not.toBeNull();
   });
 
-  it("addCustomSession guarda el título en Session.title y 'Deshacer Atendido' la reabre", async () => {
+  it("la sesión a medida (addPlanSessions custom) guarda el título en Session.title y 'Deshacer Atendido' la reabre", async () => {
     const p = await createPlan(db, T, { sessions: 1 });
-    const r = await addCustomSession({ programId: p.programId, title: "Control post-alta" });
+    const r = await addCustom(p.programId, "Control post-alta");
     expect(r.ok).toBe(true);
-    const sid = r.ok ? r.data.sessionId : "";
+    const sid = newSessionId(r);
     const s = await session(sid);
     expect(s.title).toBe("Control post-alta");
     expect(s.notes).toBeNull();
@@ -582,15 +611,16 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
   });
 
   it("[P2-Z] PACKAGE + 'agregar sesión a medida' sin elegir el precio: rechazo accionable, I6 sano y el plan sigue operable", async () => {
-    // H-a3 / B-M1: `addCustomSession` creaba la sesión sin cuota en un
+    // H-a3 / B-M1: el alta vieja de sesión a medida la creaba sin cuota en un
     // paquete vinculado → I6 roto → toda escritura posterior del plan (cerrar,
     // reprogramar, agregar) hacía rollback en el verificador: plan trabado.
     const p = await createPlan(db, T, {
       sessions: 2,
       data: { schedule: { v: 1 }, pricingMode: "PACKAGE", pricePerSessionCents: null, totalPriceCents: 1_000_000 },
     });
-    const r = await addCustomSession({ programId: p.programId, title: "Extra" });
-    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/Agregar sesión a medida/) });
+    // Por el motor: sin elegir cómo queda el precio del paquete no agrega.
+    const r = await addCustom(p.programId, "Extra");
+    expect(r.ok).toBe(false);
     expect(await db.session.count({ where: { programId: p.programId, archivedAt: null } })).toBe(2);
 
     const c = await completeSessionFromSeguimiento(p.sessionIds[0]);
@@ -602,15 +632,15 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
       sessions: 2,
       data: { schedule: { v: 1 }, pricingMode: "PACKAGE", pricePerSessionCents: null, totalPriceCents: 1_000_000 },
     });
-    const r = await addCustomSession({ programId: p.programId, title: "Extra", packagePricing: "keep-total" });
+    const r = await addCustom(p.programId, "Extra", { packagePricing: "keep-total" });
     expect(r.ok).toBe(true);
-    const sid = r.ok ? r.data.sessionId : "";
+    const sid = newSessionId(r);
     const live = await db.session.findMany({ where: { programId: p.programId, archivedAt: null } });
     expect(live).toHaveLength(3);
     expect(live.reduce((a, s) => a + (s.priceCents ?? NaN), 0)).toBe(1_000_000);
     expect(live.find((s) => s.id === sid)).toMatchObject({ title: "Extra", notes: null });
     expect((await program(p.programId)).totalSessions).toBe(3);
-    // Sin fecha: queda "sin turno" (no crea turno).
+    // Fila nueva con resolución `none`: queda "sin turno" (no crea turno).
     expect(await db.booking.count({ where: { sessionId: sid } })).toBe(0);
     expect(
       await db.auditEvent.count({ where: { tenantId: T.tenantId, action: "program.sessions.add", entityId: p.programId } })
@@ -620,57 +650,76 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
 
   it("[P2-Z] PER_SESSION: la sesión a medida nace con la cuota del plan", async () => {
     const p = await createPlan(db, T, { sessions: 1, data: { schedule: { v: 1 } } });
-    const r = await addCustomSession({ programId: p.programId, title: "Control" });
+    const r = await addCustom(p.programId, "Control");
     expect(r.ok).toBe(true);
-    const s = await session(r.ok ? r.data.sessionId : "");
+    const s = await session(newSessionId(r));
     expect(s).toMatchObject({ priceCents: 500_000, title: "Control", index: 2 });
   });
 
-  it("[P2-Z] 2 'a medida' concurrentes por el motor: las dos entran, sin index repetido ni stale espurio", async () => {
-    // El preview corre BAJO `lockPlanPatient`: la segunda alta espera y
-    // previsualiza con la primera adentro, así el `stateToken` coincide.
-    const p = await createPlan(db, T, { sessions: 2, data: { schedule: { v: 1 } } });
-    const key = planPatientLockKey({ tenantId: T.tenantId, patientId: p.patientId });
-    let calls: Array<ReturnType<typeof addCustomSession>> = [];
-    await db.$transaction(
-      async (htx) => {
-        await htx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
-        calls = [
-          addCustomSession({ programId: p.programId, title: "A" }).catch(thrown),
-          addCustomSession({ programId: p.programId, title: "B" }).catch(thrown),
-        ];
-        await waitForAdvisoryWaiter(db, key, { minWaiters: 2 });
-      },
-      { timeout: 20_000 }
-    );
-    const rs = await Promise.all(calls);
-    expect(rs.map((r) => r.ok)).toEqual([true, true]);
-    const idx = (await db.session.findMany({ where: { programId: p.programId }, select: { index: true } }))
-      .map((s) => s.index)
-      .sort((a, b) => a - b);
-    expect(idx).toEqual([1, 2, 3, 4]);
-    expect((await program(p.programId)).totalSessions).toBe(4);
+  // La carrera de 2 "a medida" concurrentes (holder del lock del paciente +
+  // `waitForAdvisoryWaiter`, stale limpio y reintento) vive en
+  // tests/integration/sessions.test.ts, "[P0-S02s] 2 altas «a medida» concurrentes".
+
+  // P3.Z (F1): "a medida" SIN fecha en un plan sin horario válido y con todas
+  // las sesiones pasadas → `buildAdd` usaba `now + 7 días` con milisegundos
+  // como fecha de la fila nueva; preview y commit corren con `now` distintos →
+  // `stateToken` distinto → stale SIEMPRE (también el reintento del editor).
+  // Ahora la fecha se ancla al día AR (`now` + 7, a la hora de la última sesión
+  // viva): determinística dentro del día.
+  it("[P3-S27b] 'a medida' sin fecha en un plan con sesiones pasadas y sin horario: preview → commit entra", async () => {
+    const p = await createPlan(db, T, { sessions: 1, data: { schedule: { v: 1 } } });
+    const past = new Date(Date.now() - 3 * DAY);
+    past.setUTCSeconds(0, 0);
+    await db.session.update({ where: { id: p.sessionIds[0] }, data: { scheduledFor: past } });
+    const req = { programId: p.programId, kind: "custom" as const, title: "Sin fecha" };
+    const pv = await previewAddPlanSessions(req);
+    expect(pv.ok).toBe(true);
+    if (!pv.ok) return;
+    // Un milisegundo después: el token del commit tiene que ser el mismo.
+    await new Promise((r) => setTimeout(r, 5));
+    const r = await addPlanSessions({ ...req, rows: [], stateToken: pv.preview.stateToken });
+    expect(r).toMatchObject({ ok: true });
+    if (!r.ok) return;
+    const s = await session(newSessionId(r));
+    expect(s).toMatchObject({ title: "Sin fecha", index: 2 });
+    // A la hora de pared de la última sesión, 7 días AR después de hoy.
+    expect(s.scheduledFor.getTime()).toBeGreaterThan(Date.now());
+    expect(s.scheduledFor.getUTCHours() * 60 + s.scheduledFor.getUTCMinutes()).toBe(past.getUTCHours() * 60 + past.getUTCMinutes());
+    expect(s.scheduledFor.getUTCSeconds() + s.scheduledFor.getUTCMilliseconds()).toBe(0);
+    expect(await db.booking.count({ where: { sessionId: s.id } })).toBe(0);
   });
 
-  it("[P2-Z] legacy: plan CANCELLED o archivado rechaza; agregar audita en la tx", async () => {
-    const cancelled = await createLegacyPlan(db, T);
+  it("[P2-Z] plan CANCELLED o archivado rechaza; R-LEGACY (sin responsable) ya no acepta 'a medida' (P3.Z.0)", async () => {
+    // CANCELLED/archivado: con un plan que el motor opera (con responsable y
+    // servicio), el rechazo es por estado, no por ser legacy.
+    const cancelled = await createPlan(db, T, { sessions: 3 });
     await db.treatmentProgram.update({ where: { id: cancelled.programId }, data: { status: "CANCELLED" } });
-    const r1 = await addCustomSession({ programId: cancelled.programId, title: "x" });
+    const r1 = await addCustom(cancelled.programId, "x");
     expect(r1.ok).toBe(false);
     expect(await db.session.count({ where: { programId: cancelled.programId } })).toBe(3);
 
-    const archived = await createLegacyPlan(db, T);
+    const archived = await createPlan(db, T, { sessions: 3 });
     await db.treatmentProgram.update({ where: { id: archived.programId }, data: { archivedAt: new Date() } });
-    const r2 = await addCustomSession({ programId: archived.programId, title: "x" });
+    const r2 = await addCustom(archived.programId, "x");
     expect(r2.ok).toBe(false);
     expect(await db.session.count({ where: { programId: archived.programId } })).toBe(3);
 
-    const ok = await createLegacyPlan(db, T);
-    const r3 = await addCustomSession({ programId: ok.programId, title: "Extra" });
-    expect(r3.ok).toBe(true);
-    const sid = r3.ok ? r3.data.sessionId : "";
-    expect(await session(sid)).toMatchObject({ index: 4, title: "Extra" });
-    expect(await db.auditEvent.count({ where: { tenantId: T.tenantId, action: "session.create", entityId: sid } })).toBe(1);
+    // Decisión P3.Z.0: el camino R-LEGACY del alta vieja se fue con ella. Un
+    // plan sin responsable no lo opera el motor → rechazo con copy, sin filas.
+    const legacy = await createLegacyPlan(db, T);
+    const before = await db.session.count({ where: { programId: legacy.programId } });
+    const r3 = await addCustom(legacy.programId, "Extra");
+    expect(r3).toMatchObject({ ok: false, error: "Plan inválido." });
+    expect(await db.session.count({ where: { programId: legacy.programId } })).toBe(before);
+
+    // Control positivo: un plan operable agrega y audita en la tx.
+    const ok = await createPlan(db, T, { sessions: 3 });
+    const r4 = await addCustom(ok.programId, "Extra");
+    expect(r4.ok).toBe(true);
+    expect(await session(newSessionId(r4))).toMatchObject({ index: 4, title: "Extra" });
+    expect(
+      await db.auditEvent.count({ where: { tenantId: T.tenantId, action: "program.sessions.add", entityId: ok.programId } })
+    ).toBe(1);
   });
 
   // ── Módulo `sesiones` (EV0) ─────────────────────────────────────────────────
@@ -688,10 +737,11 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
         await completeSessionFromSeguimiento(p.sessionIds[0]),
         await updateSessionMeta({ sessionId: p.sessionIds[0], notes: "x" }),
         await rescheduleSession({ sessionId: p.sessionIds[0], scheduledFor: new Date(Date.now() + DAY).toISOString() }),
-        await addCustomSession({ programId: p.programId, title: "x" }),
         await loadSessionEvolution(p.sessionIds[0], { notes: "x" }),
       ];
       for (const w of writes) expect(w).toMatchObject({ ok: false, error: expect.stringMatching(/seguimiento/i) });
+      // "A medida" ahora es de Planes (módulo `planes`, que General tampoco tiene).
+      expect(await addCustom(p.programId, "x")).toMatchObject({ ok: false });
       const s = await session(p.sessionIds[0]);
       expect(s).toMatchObject({ completedAt: null, notes: null });
       expect(await db.session.count({ where: { programId: p.programId } })).toBe(1);

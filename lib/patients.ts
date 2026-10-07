@@ -14,7 +14,8 @@ import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
+import { getMembershipRole, requireModule } from "@/lib/authz";
+import { modulesFor } from "@/lib/tenant-modules";
 import { isTenantAdminRole, capabilitiesFor, canWriteClinical } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
@@ -535,7 +536,10 @@ export async function getPatientCore(id: string): Promise<PatientCoreWithAccess 
         // Deterministic order so `coverages[0]` is always the latest/active
         // one (the app keeps a single active coverage; ordering is defence
         // in depth in case 2+ rows ever exist). cuid `id` is time-sortable.
-        coverages: { orderBy: { id: "desc" } },
+        // `insurerRef.isParticular` (ES3, P3.Z): la PlanCard muestra "Obra
+        // social: Sin autorización vigente" solo a quien tiene OS de verdad;
+        // un Particular (o un nombre libre sin catálogo) no tiene orden.
+        coverages: { orderBy: { id: "desc" }, include: { insurerRef: { select: { isParticular: true } } } },
         emergency: true,
       },
     })
@@ -756,6 +760,9 @@ export async function getPatientBookingsAll(patientId: string, take = 100, curso
  */
 export async function getPatientEvaScores(patientId: string) {
   const actor = await getActor();
+  // Enmienda EV0 (S22b): EVA es del módulo `evaluaciones`; un consultorio
+  // General no la tiene. Lectura compartida → vacío, no error (C-EV4).
+  if (!modulesFor(actor.entitlements).has("evaluaciones")) return [];
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   return runWithRls(actor.tenantId, (tx) => tx.evaScore.findMany({
@@ -770,7 +777,7 @@ export async function getPatientEvaScores(patientId: string) {
 // siendo un endpoint con action-id en un chunk público, y sin gate de acceso
 // (`patientWhere = {}`): un profesional básico o la Secretaria leían la HC
 // completa por RPC. No se reemplaza: cada pantalla usa su lector con gate
-// (`getPatientCore`, `getPatientProgramsLite/Full`, `getPatientEvaScores`…).
+// (`getPatientCore`, `getPatientPlans`, `getPatientEvaScores`…).
 // `tests/integration/patients-rpc-surface.test.ts` impide que vuelva.
 
 /**
@@ -1148,7 +1155,8 @@ export async function recordEvaScore(input: {
   value: number;
   source?: string;
 }): Promise<ActionResult<{ id: string }>> {
-  const actor = await getActor();
+  // Enmienda EV0 (S22b): escritura sin el módulo `evaluaciones` → tira (C-EV4).
+  const actor = await requireModule("evaluaciones");
   // Gate + insert en la misma tx (antes eran dos: check y escritura separados).
   const row = await runWithRls(actor.tenantId, async (tx) => {
     const denied = await hcAccessError(actor, input.patientId, tx);

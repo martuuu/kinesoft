@@ -220,6 +220,8 @@ async function findAffectedBookings(
       patientId: true,
       idempotencyKey: true,
       guestName: true,
+      // S18b H2 (P3.Z): solo para `inPlan`; no sale al cable.
+      programId: true,
       patient: { select: { firstName: true, lastName: true } },
       payment: { select: { status: true } },
     },
@@ -242,6 +244,7 @@ async function findAffectedBookings(
         MONEY.has(b.paymentStatus) ||
         b.insurerPaidAt != null ||
         (b.payment != null && MONEY.has(b.payment.status)),
+      inPlan: b.programId != null,
     }));
 }
 

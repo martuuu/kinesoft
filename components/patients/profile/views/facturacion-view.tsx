@@ -8,9 +8,35 @@ import { setBookingInsurerPaid, setBookingCopagoPaid } from "@/lib/bookings";
 import { formatARS } from "@/lib/format";
 import { Summary, BookingStatusTag } from "../ui";
 import type { PatientBookingFull } from "@/lib/patients-types";
+import type { PatientPlanBalances, PlanDTO } from "@/lib/plans-read-types";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
+import { PlanBalance, PlanGroupHeader } from "@/components/planes/plan-balance";
+import {
+  billingSummary,
+  bookingPlanOrdinal,
+  groupBookingsByPlan,
+  isBillingVisible,
+  planGroupMetas,
+  shouldGroupByPlan,
+  type PlanGroupMeta,
+} from "@/components/planes/plan-booking-groups";
 
 /** Facturación columns: Fecha · Servicio · Obra social · OS · Copago · Turno. */
 const FACT_COLS = "92px 1fr 0.9fr 1.25fr 1.25fr 96px";
+/**
+ * P3.Z (F3b): la grilla superaba los 360 px de un teléfono dentro de una Card
+ * con `overflow:hidden` y los toggles de cobro quedaban cortados. La tabla
+ * scrollea DENTRO de la card (como Sesiones), la página no (AGENTS §5).
+ */
+const FACT_MIN_WIDTH = 720;
+
+function TableScroll({ children }: { children: React.ReactNode }) {
+  return (
+    <div data-testid="profile-table-scroll" style={{ overflowX: "auto" }}>
+      <div style={{ minWidth: FACT_MIN_WIDTH }}>{children}</div>
+    </div>
+  );
+}
 
 /** Money + a "Confirmar / Cobrado" toggle for one billing side (OS or copago). */
 function PaidCell({
@@ -56,15 +82,45 @@ function PaidCell({
   );
 }
 
+/**
+ * S22f (ES3 P3.1): con el módulo `planes` y algún turno de plan cargado,
+ * Facturación se agrupa por plan, cada plan con su saldo P7 DEL SERVER
+ * (`PlanBalance`: pactado, realizado, cobrado, en proceso, pendiente / a
+ * favor; la OS pagada aparte), más "Turnos sueltos". En ese modo los
+ * cancelados y ausentes CON cobro se muestran (siguen sumando en "cobrado").
+ * Sin módulo o sin turnos de plan → exactamente la vista de siempre.
+ *
+ * Los toggles devuelven `notice?` (P2.Z, B-M3: marcar/desmarcar el cobro de
+ * un turno previo re-estampa el reemplazo de la sesión) → toast informativo.
+ * El saldo del plan no se recalcula en el cliente después de un toggle: el
+ * caller (perfil) re-pide `getPatientPlanBalances` con `onBillingChanged`.
+ */
+export type FacturacionViewProps = {
+  bookings: PatientBookingFull[] | null;
+  loading: boolean;
+  patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
+  /** `useTenantModules().has('planes')`. Sin módulo: nunca se agrupa. */
+  plansEnabled?: boolean;
+  /** `getPatientPlans` (data): disciplina, estado y "Sesión n de N". */
+  plans?: readonly PlanDTO[] | null;
+  /** `getPatientPlanBalances` (data): saldo P7 por plan y totales. */
+  planBalances?: PatientPlanBalances | null;
+  /** Acceso full + `clinical.read`. Sin esto el grupo muestra la disciplina, nunca el título. */
+  showPlanTitles?: boolean;
+  /** Después de un toggle de cobro OK: el perfil vuelve a pedir el saldo al server. */
+  onBillingChanged?: () => void;
+};
+
 export function FacturacionView({
   bookings,
   loading,
   patchBooking,
-}: {
-  bookings: PatientBookingFull[] | null;
-  loading: boolean;
-  patchBooking: (id: string, partial: Partial<PatientBookingFull>) => void;
-}) {
+  plansEnabled = false,
+  plans = null,
+  planBalances = null,
+  showPlanTitles = false,
+  onBillingChanged,
+}: FacturacionViewProps) {
   const toast = useToast();
   const [pending, start] = useTransition();
 
@@ -76,14 +132,11 @@ export function FacturacionView({
     );
   }
 
-  // "Ya confirmado" → solo turnos que efectivamente facturan.
-  const billable = bookings.filter((b) => b.status === "CONFIRMED" || b.status === "COMPLETED");
-  const osPaid = billable.reduce((s, b) => s + (b.insurerPaidAt ? b.osAmountCents : 0), 0);
-  const copagoPaid = billable.reduce((s, b) => s + (b.paymentStatus === "PAID" ? b.copagoCents : 0), 0);
-  const pendingTotal = billable.reduce(
-    (s, b) => s + (b.insurerPaidAt ? 0 : b.osAmountCents) + (b.paymentStatus === "PAID" ? 0 : b.copagoCents),
-    0
-  );
+  const grouped = shouldGroupByPlan(plansEnabled, bookings);
+  // "Ya confirmado" → solo turnos que efectivamente facturan; agrupada, más
+  // los cancelados/ausentes con cobro (S22f).
+  const visible = bookings.filter((b) => isBillingVisible(b, grouped));
+  const summary = billingSummary(bookings, { grouped, planBalances });
 
   // Optimistic lock (A2a-S06): each toggle sends the row version it was
   // rendered with and patches back the NEW `updatedAt` the server returns.
@@ -99,6 +152,8 @@ export function FacturacionView({
         return;
       }
       patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
+      if (r.data.notice) toast.info(r.data.notice);
+      onBillingChanged?.();
     });
   };
   const confirmCopago = (b: PatientBookingFull, next: boolean) => {
@@ -111,59 +166,134 @@ export function FacturacionView({
         return;
       }
       patchBooking(b.id, { updatedAt: new Date(r.data.updatedAt) });
+      if (r.data.notice) toast.info(r.data.notice);
+      onBillingChanged?.();
     });
   };
 
+  const columnsHeader = (
+    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+      <span>Fecha</span>
+      <span>Servicio</span>
+      <span>Obra social</span>
+      <span>OS (prestadora)</span>
+      <span>Copago (paciente)</span>
+      <span style={{ textAlign: "right" }}>Turno</span>
+    </div>
+  );
+  const row = (b: PatientBookingFull, plan: PlanGroupMeta | null) => {
+    const hasOS = b.obraSocial.toLowerCase() !== "particular" && b.osAmountCents > 0;
+    const ord = plan ? bookingPlanOrdinal(b, plan) : null;
+    const offStatus = b.status === "CANCELLED" || b.status === "NO_SHOW";
+    return (
+      <div
+        key={b.id}
+        data-testid="fact-row"
+        data-plan={b.programId ?? undefined}
+        style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: offStatus ? 0.75 : 1 }}
+      >
+        <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
+          {new Date(b.scheduledFor).toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          {ord && plan && (
+            <DisciplineChip discipline={plan.discipline} ordinal={ord.ordinal} totalLive={ord.totalLive} size="xs" />
+          )}
+          <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
+        </span>
+        <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {hasOS ? b.obraSocial : "Particular"}
+        </span>
+        <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
+        <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <BookingStatusTag status={b.status} />
+        </div>
+      </div>
+    );
+  };
+
+  const summaryCard = (
+    <Card glass style={{ padding: 18, display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+      <Summary label="OS percibido" value={formatARS(summary.osPaidCents)} tone="lime" />
+      <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+      <Summary label="Copago percibido" value={formatARS(summary.copagoPaidCents)} tone="lime" />
+      <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+      <Summary label="Pendiente de cobro" value={formatARS(summary.pendingCents)} tone="sky" />
+      {summary.creditCents > 0 && (
+        <>
+          <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+          <Summary label="A favor del paciente" value={formatARS(summary.creditCents)} tone="sky" />
+        </>
+      )}
+      <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
+      <Summary label="Turnos facturados" value={String(summary.billableCount)} />
+    </Card>
+  );
+
+  const footnote = (
+    <div style={{ fontSize: 11, color: "var(--navy-300)", paddingLeft: 4, lineHeight: 1.5 }}>
+      <strong>OS</strong> = monto que reintegra la obra social al consultorio · <strong>Copago</strong> = lo que abona el paciente. Tocá «Confirmar» en cada lado cuando lo cobres.
+      {grouped && (
+        <> En cada plan, «Pendiente» es lo realizado que falta cobrar; lo que paga la obra social va aparte.</>
+      )}
+    </div>
+  );
+
+  if (grouped) {
+    const groups = groupBookingsByPlan(visible, planGroupMetas({ plans, planBalances, showPlanTitles }), {
+      includeBalanceOnly: true,
+    });
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {summaryCard}
+        {groups.map((g) => {
+          const plan = g.kind === "plan" ? g.plan : null;
+          return (
+            <Card key={g.key} data-testid="fact-group" style={{ padding: 0, overflow: "hidden" }}>
+              <PlanGroupHeader plan={plan} count={g.bookings.length} />
+              {plan?.balance && (
+                <div style={{ padding: "12px 18px", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+                  <PlanBalance balance={plan.balance} status={plan.status} />
+                </div>
+              )}
+              {g.bookings.length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", color: "var(--navy-300)", fontSize: 12.5 }}>
+                  {plan ? "Sin turnos para facturar entre los cargados." : "Sin turnos sueltos para facturar."}
+                </div>
+              ) : (
+                <TableScroll>
+                  {columnsHeader}
+                  {g.bookings.map((b) => row(b, plan))}
+                </TableScroll>
+              )}
+            </Card>
+          );
+        })}
+        {footnote}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Card glass style={{ padding: 18, display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
-        <Summary label="OS percibido" value={formatARS(osPaid)} tone="lime" />
-        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
-        <Summary label="Copago percibido" value={formatARS(copagoPaid)} tone="lime" />
-        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
-        <Summary label="Pendiente de cobro" value={formatARS(pendingTotal)} tone="sky" />
-        <span style={{ width: 1, height: 32, background: "rgba(15,30,51,0.08)" }} />
-        <Summary label="Turnos facturados" value={String(billable.length)} />
-      </Card>
-
+      {summaryCard}
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
-          <span>Fecha</span>
-          <span>Servicio</span>
-          <span>Obra social</span>
-          <span>OS (prestadora)</span>
-          <span>Copago (paciente)</span>
-          <span style={{ textAlign: "right" }}>Turno</span>
-        </div>
-        {billable.length === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)", fontSize: 13 }}>
-            Sin turnos confirmados para facturar todavía.
-          </div>
+        {visible.length === 0 ? (
+          <>
+            {columnsHeader}
+            <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)", fontSize: 13 }}>
+              Sin turnos confirmados para facturar todavía.
+            </div>
+          </>
         ) : (
-          billable.map((b) => {
-            const hasOS = b.obraSocial.toLowerCase() !== "particular" && b.osAmountCents > 0;
-            return (
-              <div key={b.id} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)" }}>
-                <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
-                  {b.scheduledFor.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })}
-                </span>
-                <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
-                <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {hasOS ? b.obraSocial : "Particular"}
-                </span>
-                <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
-                <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <BookingStatusTag status={b.status} />
-                </div>
-              </div>
-            );
-          })
+          <TableScroll>
+            {columnsHeader}
+            {visible.map((b) => row(b, null))}
+          </TableScroll>
         )}
       </Card>
-      <div style={{ fontSize: 11, color: "var(--navy-300)", paddingLeft: 4, lineHeight: 1.5 }}>
-        <strong>OS</strong> = monto que reintegra la obra social al consultorio · <strong>Copago</strong> = lo que abona el paciente. Tocá «Confirmar» en cada lado cuando lo cobres.
-      </div>
+      {footnote}
     </div>
   );
 }

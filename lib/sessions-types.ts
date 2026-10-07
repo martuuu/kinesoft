@@ -18,6 +18,13 @@ export type OpenSessionRow = {
    */
   ordinal?: number;
   totalLive?: number;
+  /**
+   * S20 → S27b (aditivo, opcional): el plan de la sesión (Seguimiento abre
+   * "Agendar" / el plan sin otra lectura) y el título de una sesión a medida
+   * (`Session.title`, M1; null en las del horario).
+   */
+  programId?: string;
+  title?: string | null;
 };
 
 /**

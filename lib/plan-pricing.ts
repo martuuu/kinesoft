@@ -340,7 +340,10 @@ export function priorPaidStamp(
 // ─── P7 · saldo ──────────────────────────────────────────────────────────────
 
 export type PlanBalance = {
-  /** Paquete, o precio × sesiones vivas. `null` = plan sin precio. */
+  /**
+   * Paquete, o precio × sesiones vivas. `null` = plan sin precio. Plan
+   * CANCELLED: = devengado (S14r), porque lo que no se hizo ya no se pacta.
+   */
   agreedCents: number | null;
   /** Σ cuotas de las sesiones realizadas. */
   accruedCents: number;
@@ -362,20 +365,33 @@ export type PlanBalance = {
  *
  * pendiente y a favor se devuelven recortados en 0: son las dos caras de la
  * misma resta y la UI muestra la que no es cero.
+ *
+ * S14r (plan §16.2) · pactado de un plan CANCELLED = devengado. Antes el
+ * pactado seguía siendo el paquete entero (o precio × sesiones vivas), y un
+ * plan cancelado a mitad de camino mostraba como "pactadas" las sesiones que
+ * ya nunca se iban a hacer (decisión 3 del §16.1: cancelar no genera cargo).
+ * Solo cambia `agreedCents`: pendiente y a favor ya salían del devengado.
+ * `programStatus` es opcional para no romper callers; el saldo de un plan
+ * cancelado (S22f, `balanceOf`) lo tiene que pasar. Un plan sin precio sigue
+ * en `null` aunque esté cancelado (no hay cifra honesta que mostrar).
  */
 export function planBalance(input: {
   pricing: PlanPricing;
   sessions: readonly { priceCents: number | null; completed: boolean }[];
   bookings: readonly { status: PricingBookingStatus; paymentStatus: PricingPaymentStatus; copagoCents: number | null }[];
+  /** `TreatmentProgram.status`. Solo CANCELLED cambia algo (pactado = devengado). */
+  programStatus?: "ACTIVE" | "COMPLETED" | "PAUSED" | "CANCELLED";
 }): PlanBalance {
   const { pricing, sessions, bookings } = input;
+  const accruedCents = sessions.reduce((a, s) => a + (s.completed ? s.priceCents ?? 0 : 0), 0);
   const agreedCents =
     pricing == null
       ? null
-      : pricing.mode === "PACKAGE"
-        ? pricing.totalPriceCents
-        : pricing.pricePerSessionCents * sessions.length;
-  const accruedCents = sessions.reduce((a, s) => a + (s.completed ? s.priceCents ?? 0 : 0), 0);
+      : input.programStatus === "CANCELLED"
+        ? accruedCents
+        : pricing.mode === "PACKAGE"
+          ? pricing.totalPriceCents
+          : pricing.pricePerSessionCents * sessions.length;
   let collectedCents = 0;
   let inProcessCents = 0;
   for (const b of bookings) {

@@ -132,7 +132,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       )}
       viewer={{ userId: actor.userId, practitionerId: actor.practitionerId }}
       bookings={bookings.map(toBookingDTO)}
-      services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color }))}
+      // `discipline` (P3-C, C9): el cliente resuelve `serviceDiscipline` de cada
+      // turno desde acá; ya no viaja por turno (DTO compacto, `toBookingDTO`).
+      services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color, discipline: s.discipline }))}
       practitioners={practitioners.map((p) => ({
         id: p.id,
         name: p.user.fullName ?? p.user.email,

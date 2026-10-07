@@ -13,7 +13,9 @@
  *   - authz: PRACTITIONER solo sobre su agenda; "todos" exige manageBlocks;
  *   - desbloquear (soft) y aviso de lo que queda;
  *   - el motor deja de ofrecer slots ese día (staff y turnero) y un bloqueo
- *     parcial respeta las franjas.
+ *     parcial respeta las franjas;
+ *   - S18b H2 (P3.Z): cada afectado dice si es de plan (`inPlan`), para la nota
+ *     precisa del diálogo ("el candado deja la sesión sin turno").
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { PrismaClient } from "@prisma/client";
@@ -32,6 +34,7 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+import { createPlan, addPlanBooking } from "@/tests/helpers/plan-factory";
 import { revalidatePathSpy, revalidateTagSpy } from "@/tests/helpers/integration-setup";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -190,6 +193,31 @@ describe.skipIf(!RUN)("candado de día (B4.4)", () => {
     expect(rows[0].startsAt.toISOString()).toBe("2027-03-10T12:00:00.000Z");
     for (const id of [b1.id, b2.id]) {
       expect((await db.booking.findUniqueOrThrow({ where: { id } })).status).toBe("CONFIRMED");
+    }
+  });
+
+  it("[P3-Z] preview: `inPlan` marca los turnos de plan y no los sueltos (sin título ni datos del plan)", async () => {
+    const DAY = "2027-03-30";
+    asUser(A.userId);
+    const loose = await bookingAt(A.practitionerId, DAY, "10:00");
+    const plan = await createPlan(db, A, { sessions: 1, bookings: 0 });
+    const inPlan = await addPlanBooking(db, A, {
+      patientId: plan.patientId,
+      programId: plan.programId,
+      sessionId: plan.sessionIds[0],
+      scheduledFor: new Date(at(DAY, "11:00")),
+    });
+    const p = await previewDayLock({ dayKey: DAY, practitionerIds: [A.practitionerId], allDay: true });
+    if (!p.ok) throw new Error(p.error);
+    expect(p.data.affected.map((a) => [a.id, a.inPlan])).toEqual([
+      [loose.id, false],
+      [inPlan, true],
+    ]);
+    // Sin PHI del plan en el cable: ni título ni programId.
+    for (const a of p.data.affected) {
+      expect(Object.keys(a).sort()).toEqual(
+        ["durationMin", "hasPayment", "id", "inPlan", "patientName", "practitionerId", "scheduledFor", "status"]
+      );
     }
   });
 

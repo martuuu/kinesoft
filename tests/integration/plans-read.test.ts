@@ -387,11 +387,12 @@ describe.skipIf(!RUN)("S14 · lecturas de Planes", () => {
   // ─── listSchedulablePlanSessions ───────────────────────────────────────────
 
   it("ASSISTANT pide listSchedulablePlanSessions → allowlist exacta, sin título ni notas", async () => {
+    // `programId` (ES3, S19c): un id, no PHI; la UI elige la sesión del plan exacto.
     asUser(users.ASSISTANT);
     const rows = ok(await listSchedulablePlanSessions({ patientId }));
     for (const r of rows) {
       expect(Object.keys(r).sort()).toEqual(
-        ["discipline", "locationId", "ordinal", "practitionerId", "serviceId", "sessionId", "sinTurno", "totalLive"].sort()
+        ["discipline", "locationId", "ordinal", "practitionerId", "programId", "serviceId", "sessionId", "sinTurno", "totalLive"].sort()
       );
     }
     // Vivas sin cerrar de planes ACTIVE vinculados: ni la realizada, ni la archivada, ni el legacy.
@@ -399,6 +400,7 @@ describe.skipIf(!RUN)("S14 · lecturas de Planes", () => {
     const unbooked = rows.find((r) => r.sessionId === A.s.unbooked)!;
     expect(unbooked).toEqual({
       sessionId: A.s.unbooked,
+      programId: A.programId,
       ordinal: 2,
       totalLive: 4,
       discipline: "KINESIOLOGY",

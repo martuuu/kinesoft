@@ -1056,6 +1056,11 @@ model Booking {
   // received (manual confirmation from the Facturación tab). Null = the OS
   // hasn't paid yet. The copago side is tracked via `paymentStatus`.
   insurerPaidAt   DateTime?
+  // M3a (ES3, plan §16.2): cuándo se marcó cobrado el copago A MANO (no MP).
+  // Lo escribe/limpia solo toggleBilling/setBookingCopagoPaid (marcar → now(),
+  // desmarcar → null) y lo lee el widget de ingresos del dashboard por semana/
+  // mes AR. No usar `updatedAt` para eso (lo mueve cualquier edición).
+  copagoPaidAt    DateTime?
   // Groups the turnos created together in one multi-turno batch (the agenda
   // "Repetir / Múltiples turnos" flow). Null for single bookings. Lets a
   // future "plan" entity regroup a batch indirectly without a destructive
@@ -1225,6 +1230,11 @@ model UserPreferences {
   // ({mode, zoom 15|30|60, density, favoritePractitionerIds, locationId}).
   // Mismo patrón que `catalogPrefs`: blob validado al leer (lib/preferences.ts).
   agendaPrefs          Json?
+  // M3a (ES3, plan §16.2): preferencias del dashboard ({revenueRange: 'month'|'week'}).
+  // Blob validado al leer, como `agendaPrefs`. CHECK en la base
+  // (UserPreferences_dashboardPrefs_object_check): NULL o un objeto JSON. Para
+  // limpiarlo se escribe `Prisma.DbNull`; `Prisma.JsonNull` (null JSON) lo rechaza el CHECK.
+  dashboardPrefs       Json?
   updatedAt    DateTime @updatedAt
 }
 

@@ -32,7 +32,10 @@ import {
   getPatientBillableCount,
   getPatientEvaScores,
 } from "@/lib/patients";
-import { getPatientProgramsLite, createProgram } from "@/lib/programs";
+import { createPlan, previewPlan } from "@/lib/plans";
+import { getPatientPlans, getPatientPlanBalances } from "@/lib/plans-read";
+import type { PlanCreateInput, PlanRowResolution } from "@/lib/plans-types";
+import { addDays } from "@/lib/availability/day";
 import { listInsurers } from "@/lib/insurers";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { getDashboardData, getMonthBookingDays } from "@/lib/dashboard";
@@ -169,7 +172,10 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
       const actor = await getActor();
       await getPatientCore(id);
       await Promise.all([
-        getPatientProgramsLite(id),
+        // P3-S27a: la ficha lee planes y saldos por S14 (S22b), no por los
+        // lectores viejos de `lib/programs.ts` (retirados).
+        getPatientPlans({ patientId: id }),
+        getPatientPlanBalances({ patientId: id }),
         getPatientBookingsSummary(id, 5),
         getPatientBillableCount(id),
         getPatientEvaScores(id),
@@ -217,10 +223,41 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
     );
   });
 
-  it("POST createProgram (16 sesiones, Tab Plan)", async () => {
+  it("POST createPlan (16 sesiones, motor: preview afuera, se mide el commit)", async () => {
+    // P3-S27a: reemplaza al escenario del alta vieja (16 sesiones sin turno).
+    // `createPlan` crea sesiones Y turnos en una tx con locks y verificador:
+    // los números no son comparables con el escenario viejo.
+    // El preview (que da el `stateToken`) se arma ANTES y fuera de la medición;
+    // cada corrida usa otro paciente y otro bloque de 10 semanas (2/semana = 8
+    // semanas por plan), así un commit no vuelve stale el preview del siguiente.
+    const inputs: PlanCreateInput[] = [];
+    for (let k = 0; k < 4; k++) {
+      const draft: PlanCreateInput = {
+        idempotencyKey: randomUUID(),
+        patientId: T.patientIds[500 + k],
+        discipline: "KINESIOLOGY",
+        practitionerId: T.practitionerId,
+        serviceId: T.serviceId,
+        locationId: null,
+        title: "Plan perf",
+        schedule: { v: 1, frequency: "weekly", slots: [{ dow: 1, startMin: 600 }, { dow: 4, startMin: 600 }] },
+        startDayKey: addDays("2028-03-06", k * 70), // lunes
+        totalSessions: 16,
+        pricing: null,
+        rows: [],
+        stateToken: "x",
+      };
+      const pv = await previewPlan(draft);
+      if (!pv.ok) throw new Error(`preview falló: ${pv.error}`);
+      const rows = pv.preview.rows.map((r) =>
+        r.defaultResolution === "move" ? { index: r.index, kind: "move", at: r.suggestion } : { index: r.index, kind: r.defaultResolution },
+      ) as PlanRowResolution[];
+      inputs.push({ ...draft, stateToken: pv.preview.stateToken, rows });
+    }
     let i = 0;
-    await bench("createProgram.16", () =>
-      createProgram({ patientId: T.patientIds[500 + i++], title: "Plan perf", totalSessions: 16, frequency: 2, startDate: "2028-03-01" }),
-    );
+    await bench("createPlan.16", async () => {
+      const r = await createPlan(inputs[i++]);
+      if (!r.ok) throw new Error(`createPlan falló: ${"kind" in r ? r.kind : r.error}`);
+    });
   });
 });

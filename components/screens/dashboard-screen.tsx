@@ -28,15 +28,9 @@ import { MiniCalendar } from "@/components/dashboard/mini-calendar";
 import { SessionsChart } from "@/components/dashboard/sessions-chart";
 import { RecentPatients } from "@/components/dashboard/recent-patients";
 import { PinKpiButton } from "@/components/dashboard/pin-kpi-button";
+import { RevenueCard } from "@/components/dashboard/revenue-card";
+import { formatARS } from "@/lib/format";
 import { ProfileMenu } from "@/components/global/profile-menu";
-
-function fmtARS(cents: number) {
-  return new Intl.NumberFormat("es-AR", {
-    style: "currency",
-    currency: "ARS",
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
-}
 
 export function DashboardScreen({
   data,
@@ -69,7 +63,7 @@ export function DashboardScreen({
           nearingDischarge={data.pinned.nearingDischarge}
           reminderKey={data.reminderKey}
         />
-        <PinnedRow pinned={data.pinned} pinnedKpis={data.pinnedKpis} todayCount={data.todayCount} monthCents={data.monthRevenueCents} />
+        <PinnedRow pinned={data.pinned} pinnedKpis={data.pinnedKpis} todayCount={data.todayCount} monthRevenue={data.monthRevenue} />
         <BottomRow bars={data.weeklyBars} recent={data.recent} />
       </div>
 
@@ -82,12 +76,7 @@ export function DashboardScreen({
         )}
         <MiniCalendar initialBookingDays={initialBookingDays} />
         <NextAppts items={data.next} />
-        <RevenueCard
-          cents={data.monthRevenueCents}
-          prev={data.revenuePrevMonthCents}
-          privateShare={data.privateShare}
-          insurerShare={data.insurerShare}
-        />
+        <RevenueCard initial={data.revenue} month={data.monthRevenue} />
       </aside>
     </div>
   );
@@ -364,12 +353,12 @@ function PinnedRow({
   pinned,
   pinnedKpis,
   todayCount,
-  monthCents,
+  monthRevenue,
 }: {
   pinned: DashboardData["pinned"];
   pinnedKpis: KpiKey[];
   todayCount: number;
-  monthCents: number;
+  monthRevenue: DashboardData["monthRevenue"];
 }) {
   const all: Record<KpiKey, { ic: typeof IconUsers; n: string; l: string; delta: string; tone: "sky" | "lime" | "soft" }> = {
     activePatients: {
@@ -402,9 +391,11 @@ function PinnedRow({
     },
     monthRevenue: {
       ic: IconChart,
-      n: new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(monthCents / 100),
+      // S14r: MP + copagos cobrados a mano (antes "Sólo pagos PAID" de MP). La
+      // obra social va aparte, como en el widget.
+      n: formatARS(monthRevenue.totalCents),
       l: "Ingresos del mes",
-      delta: "Sólo pagos PAID",
+      delta: monthRevenue.insurerCents ? `+ ${formatARS(monthRevenue.insurerCents)} de obras sociales` : "MP + copagos",
       tone: "lime",
     },
     adherence: {
@@ -605,105 +596,6 @@ function NextAppts({ items }: { items: DashboardData["next"] }) {
           Ver agenda completa →
         </Button>
       </Link>
-    </Card>
-  );
-}
-
-function RevenueCard({
-  cents,
-  prev,
-  privateShare,
-  insurerShare,
-}: {
-  cents: number;
-  prev: number;
-  privateShare: number;
-  insurerShare: number;
-}) {
-  const delta = prev ? Math.round(((cents - prev) / prev) * 100) : null;
-  const upward = (delta ?? 0) >= 0;
-  return (
-    <Card
-      style={{
-        padding: 18,
-        background: "linear-gradient(160deg, var(--navy-900), var(--navy-700))",
-        color: "#fff",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              color: "rgba(255,255,255,0.6)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              fontWeight: 600,
-            }}
-          >
-            Ingresos del mes
-          </div>
-          <div className="k-display" style={{ fontSize: 28, marginTop: 4, fontWeight: 600 }}>
-            {fmtARS(cents)}
-          </div>
-        </div>
-        {delta != null && (
-          <span
-            style={{
-              padding: "4px 8px",
-              borderRadius: 8,
-              background: upward ? "rgba(180,233,74,0.2)" : "rgba(228,70,70,0.2)",
-              color: upward ? "var(--lime-300)" : "#FFC0C0",
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            {upward ? "+" : ""}{delta}%{" "}
-            {upward && <IconArrowUp size={10} style={{ display: "inline-block", verticalAlign: -2 }} />}
-          </span>
-        )}
-      </div>
-      <div
-        style={{
-          display: "flex",
-          height: 6,
-          borderRadius: 3,
-          overflow: "hidden",
-          background: "rgba(255,255,255,0.1)",
-        }}
-      >
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${privateShare}%` }}
-          transition={{ duration: DUR.slow, ease: EASE_OUT }}
-          style={{ background: "var(--lime-400)" }}
-        />
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${insurerShare}%` }}
-          transition={{ duration: DUR.slow, ease: EASE_OUT, delay: 0.06 }}
-          style={{ background: "var(--sky-500)" }}
-        />
-      </div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginTop: 10,
-          fontSize: 11,
-          color: "rgba(255,255,255,0.7)",
-        }}
-      >
-        <span>Consultas privadas · {privateShare}%</span>
-        <span>Obras sociales · {insurerShare}%</span>
-      </div>
     </Card>
   );
 }

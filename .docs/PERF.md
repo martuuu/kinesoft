@@ -28,7 +28,8 @@
 - `EXPLAIN (ANALYZE, BUFFERS)` automático de la query más lenta de cada escenario; se reportan los Seq Scan de más de
   500 filas.
 - Resultados crudos: `tests/perf/baseline.json` y `tests/perf/pool-pressure.json`. `baseline.json` es el de A1 y
-  **no se regrabó** al cierre del Bloque A: sigue siendo la referencia de los presupuestos de C1.
+  **no se regrabó** (ni al cierre del Bloque A ni en ES3): sigue siendo la referencia de los presupuestos de C1. Conserva
+  la clave `createProgram.16` como histórico (§ES3).
 
 ## Baseline (2026-09-30, rol `kinesoft_app` con RLS, Docker local)
 
@@ -156,6 +157,44 @@ El layout compartido creció 10-16 % (columna "vs baseline" del reporte: casi to
 La carga diferida de modal, drawer, candado, Recepción y Por profesional bajó `/agenda` de 238 a 195 kB. El reporte
 de CI sigue siendo informativo; el recorte va a C1 (`bundle-sobre-presupuesto-bpre`).
 
+## ES3 — Planes P3 (08-oct-2026)
+
+Gate en solitario sobre el Docker local, con `PERF_OUT_DIR` (medir fuera del árbol) + `tests/perf/compare.ts` contra
+los versionados. **Sin regresiones fuera de umbral** en los 28 escenarios. Los versionados **no se regrabaron**.
+
+- **Escenario nuevo `createPlan.16`** (alta de un plan de 16 sesiones por el motor): **36 statements / 1 tx**. Reemplaza
+  a `createProgram.16`, que se retiró con `createProgram` (S27a). `tests/perf/baseline.json` **conserva la clave
+  `createProgram.16`** como histórico (es versionado y no se edita; el grep del gate de retiro lo excluye) y
+  `compare.ts` reporta `createPlan.16` como "new". Las filas `createProgram` de las tablas de arriba son historia.
+- **Informativos** (contra el versionado que compara `compare.ts`; crecen por lectores nuevos, no por regresión):
+
+| Escenario | Statements versionado → ES3 | Por qué |
+|---|---|---|
+| `listAgendaBookings` (semana) | 16 (= ES2b) | igual: el DTO compacto C9 no suma queries |
+| GET /dashboard | 45 → 52 | ingresos reales (S14r: MP + copagos manuales + OS aparte) |
+| GET /pacientes/[id] | 63 → 84 | lectores de planes y saldos (`getPatientPlans` / `getPatientPlanBalances`) |
+| GET /seguimiento | 8 → 20 | buckets "Sin turno" / "Sin evolución" y ordinal |
+
+- **Payload de la agenda ≤ +5 %:** no se midió aparte. El DTO compacto (C9, `components/agenda/agenda-utils.ts`)
+  omite los neutros y los statements quedaron igual que en ES2b.
+
+**Bundle** (first-load gzip). La columna ES2b se midió compilando `58ec36f` con `git archive` en un directorio aparte
+(scratchpad), no desde un reporte viejo:
+
+| Ruta | ES2b (`58ec36f`) | ES3 | Criterio de PLANES §11 |
+|---|---|---|---|
+| `/pacientes/[id]` | 198,9 kB | **205 kB** (240,6 antes de la carga diferida) | no empeora → **no cumplido** |
+| `/agenda` | 196,6 kB | **202 kB** | no empeora → **no cumplido** |
+| `/diagnostico` | 182,1 kB | 180,1 kB | no empeora → cumplido |
+| `/seguimiento/[sessionId]` | 177 kB | 184,9 kB | — |
+| `/dashboard` | 180,3 kB | 184 kB | — |
+| `/planes` | — | **184,5 kB** | ≤ 180 → **no cumplido** |
+
+Lo que se difirió para llegar acá: pestañas no default del perfil, el editor (`next/dynamic`) y el modal de agendar de
+Seguimiento. El chunk compartido de zod (13 kB) ya estaba en el layout. **Decisión de Martin** (recomendado: aceptar,
+es lo que piden C9/S22f; el presupuesto bloqueante está diferido a C1 por §14.4). Fila `bundle-es3-sobre-criterio` en
+AUDIT; el split de helpers de `slot-cell` es C1.
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |
@@ -163,7 +202,7 @@ de CI sigue siendo informativo; el recorte va a C1 (`bundle-sobre-presupuesto-bp
 | `runwithrls-interactive-tx-per-read` (P) | **Confirmado.** Una tx interactiva por lectura: 15 tx en el dashboard, 14 en el perfil y 9 en la agenda. Con un pool chico todo se serializa, y una query lenta tira P2028 al resto | C1 |
 | `bulk-writes-one-tx-per-row` / `write-paths-tx-secuenciales` | **Confirmado.** `createBooking` abre 7 tx para 1 turno; el batch, 23 tx para 20 turnos, en serie | C1 (y el motor de Planes de B lo hace en 1 tx) |
 | `agenda-loads-full-patient-directory` | **Confirmado.** `listPatients()` sola cuesta más wall-clock (135 ms) que los turnos de la semana (69 ms) con 1.000 pacientes, y hace un Seq Scan de Booking. Crece con el directorio | C1 |
-| **NUEVO** `session-exercise-count-full-scan` | El `_count` de ejercicios por sesión del perfil (`getPatientProgramsLite`) agrega la tabla `SessionExercise` **entera** (de todos los tenants), con RLS fila por fila, antes de filtrar: 250-380 ms con 24k filas. **Crece con el tamaño de la plataforma**, no del paciente | C1 |
+| **NUEVO** `session-exercise-count-full-scan` | El `_count` de ejercicios por sesión del perfil (`getPatientProgramsLite`, **retirada en ES3**; falta re-verificar los lectores nuevos) agrega la tabla `SessionExercise` **entera** (de todos los tenants), con RLS fila por fila, antes de filtrar: 250-380 ms con 24k filas. **Crece con el tamaño de la plataforma**, no del paciente | C1 |
 | `missing-fk-indexes` (`Coverage.patientId`) | **Confirmado** en el plan de la suma de "OS percibido": Seq Scan de `Coverage` por cada turno | C1 (migración chica de índices) |
 | Dashboard ~1 s | **Refutado como problema de prod:** era un artefacto de estadísticas vacías (sin `ANALYZE` el planner arrancaba por los 10k turnos). Con estadísticas reales, 43 ms. Queda como lección: después de imports masivos, correr `ANALYZE` | — |
 | `service-channel-direct-url-pool-prod` (P) | Sin medir: depende del `DATABASE_URL` real de Vercel (tarea A0a del dueño). El test de pool da el mecanismo | A0a → C1 |

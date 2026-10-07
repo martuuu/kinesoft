@@ -3,6 +3,8 @@
 import { useState, type KeyboardEvent } from "react";
 import type { SlotCell as SlotCellData } from "@/lib/agenda-layout";
 import { localToARIso } from "@/lib/datetime-ar";
+import { matchesHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
+import { isOutOfPlan } from "@/lib/plan-display";
 import type { BookingDTO } from "../agenda-utils";
 import { BookingCard, type BookingCardSizing } from "./booking-card";
 import { UnavailableOverlay } from "./unavailable-overlay";
@@ -30,6 +32,15 @@ import { UnavailableOverlay } from "./unavailable-overlay";
  * "Nuevo turno" del toolbar, donde el modal pide confirmarlo como sobreturno
  * (decisión 1 de B-pre). Fuera de horario y lleno SÍ abren el alta: el modal
  * avisa (decisión 2) y el staff decide.
+ *
+ * Planes (S19e, ES3): el chip de sesión ("Kine · 2/3") y "Fuera de plan" van
+ * DENTRO de la card (S19a, `BookingCard`). La ocupación de la celda ("2/3") es
+ * otra cosa y se ve distinta a propósito (C13b V1-D18): mono, sin borde,
+ * arriba a la derecha y `aria-hidden` (la dice el botón de la celda), contra
+ * el chip con borde y `role="img"` dentro de la card. Con resaltado activo las
+ * cards que coinciden van primero y el "+N más" cuenta lo que esconde
+ * (`denseOverflow`). Sin el módulo `planes` no cambia nada: el resaltado de
+ * plan no se ofrece y el DTO trae C9 neutro.
  */
 
 /** Alias: B4.1 sumó `isOverbooked`/`arrivedAt`/`attendingAt` a `BookingDTO` (B4.3). */
@@ -62,6 +73,89 @@ export function slotStateText(cell: Pick<SlotCellData, "state" | "used" | "cap" 
   }
 }
 
+/**
+ * "Fuera de plan" de un turno del DTO de la agenda: la MISMA regla que la card
+ * (S19a, `isOutOfPlan` de `lib/plan-display.ts`, V2 de C13b), con
+ * `hasPatient = patientId !== null`. Sin el módulo `planes` el DTO trae
+ * `patientActiveLinkedPlanDisciplines: []` (C9 neutro) → siempre `false`.
+ */
+export function bookingOutOfPlan(b: BookingDTO): boolean {
+  return isOutOfPlan({ ...b, hasPatient: b.patientId !== null });
+}
+
+export type DenseOverflow<B> = {
+  /** Cards a dibujar, en orden (con resaltado, primero las que coinciden). */
+  shown: B[];
+  /** Cuántas quedan detrás del "+N más". */
+  hidden: number;
+  /** De las ocultas, cuántas coinciden con el resaltado activo (0 sin resaltado). */
+  hiddenMatches: number;
+  /** De las ocultas, cuántas son "Fuera de plan". */
+  hiddenOutOfPlan: number;
+};
+
+/**
+ * Qué cards se ven en una franja densa (S19e, ES3). Lo comparten la celda de
+ * "Por profesional" y la fila de la vista Día.
+ *
+ * Problema que resuelve: en el gimnasio de kinesio hay 5-10 turnos por franja
+ * y solo se ven 3-4 (Por profesional) o 10 (Día) antes del "+N más". El
+ * resaltado de la leyenda (servicio, plan, suelto) NO filtra: levanta lo que
+ * coincide y atenúa el resto. Si lo que coincide quedaba detrás del "+N más",
+ * la Secretaria apretaba "Plan" y la franja se veía toda atenuada aunque
+ * hubiera turnos de plan. Por eso, con resaltado activo, las cards que
+ * coinciden pasan ADELANTE (partición estable: dentro de cada grupo se
+ * conserva el orden del caller, que es por hora). Sin resaltado, el orden no
+ * se toca.
+ *
+ * Lo que igual queda oculto se cuenta (coincidencias y "Fuera de plan") para
+ * que el botón "+N más" lo diga: un aviso no se puede esconder detrás de un
+ * contador mudo.
+ */
+export function denseOverflow<B extends BookingDTO>(
+  bookings: readonly B[],
+  limit: number,
+  expanded: boolean,
+  highlight: AgendaHighlight | null
+): DenseOverflow<B> {
+  const ordered =
+    highlight == null
+      ? bookings.slice()
+      : [...bookings.filter((b) => matchesHighlight(highlight, b)), ...bookings.filter((b) => !matchesHighlight(highlight, b))];
+  const shown = expanded ? ordered : ordered.slice(0, limit);
+  const rest = ordered.slice(shown.length);
+  return {
+    shown,
+    hidden: rest.length,
+    hiddenMatches: highlight == null ? 0 : rest.filter((b) => matchesHighlight(highlight, b)).length,
+    hiddenOutOfPlan: rest.filter(bookingOutOfPlan).length,
+  };
+}
+
+/**
+ * Texto del botón "+N más". Visible corto (la columna compacta mide 164 px):
+ * con resaltado activo dice cuántas de las ocultas coinciden; si no, cuántas
+ * son "Fuera de plan". El aria-label dice todo.
+ */
+export function overflowButtonText(
+  o: Pick<DenseOverflow<unknown>, "hidden" | "hiddenMatches" | "hiddenOutOfPlan">,
+  highlightActive: boolean,
+  where: string
+): { text: string; ariaLabel: string } {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  let suffix = "";
+  if (highlightActive && o.hiddenMatches > 0) suffix = ` · ${plural(o.hiddenMatches, "resaltado", "resaltados")}`;
+  else if (o.hiddenOutOfPlan > 0) suffix = ` · ${o.hiddenOutOfPlan} fuera de plan`;
+  const details = [
+    highlightActive && o.hiddenMatches > 0 ? plural(o.hiddenMatches, "resaltado", "resaltados") : null,
+    o.hiddenOutOfPlan > 0 ? `${o.hiddenOutOfPlan} fuera de plan` : null,
+  ].filter(Boolean);
+  return {
+    text: `+${o.hidden} más${suffix}`,
+    ariaLabel: `Ver ${plural(o.hidden, "turno más", "turnos más")} ${where}${details.length ? ` (${details.join(", ")})` : ""}`,
+  };
+}
+
 const STATE_BG: Record<SlotCellData["state"], string> = {
   libre: "transparent",
   parcial: "rgba(31,79,190,0.035)",
@@ -91,7 +185,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
   rowMin,
   density,
   showBlockLabel,
-  highlightServiceId,
+  highlight,
   onSlotClick,
   onBookingClick,
   onFocusCell,
@@ -109,7 +203,8 @@ export function SlotCell<B extends PractitionerDayBooking>({
   density: "comfortable" | "compact";
   /** Primera celda de un tramo bloqueado: lleva el texto del motivo. */
   showBlockLabel: boolean;
-  highlightServiceId: string | null;
+  /** Resaltado de la leyenda (`lib/agenda-highlight.ts`); `null` = sin filtro. */
+  highlight: AgendaHighlight | null;
   onSlotClick: (practitionerId: string, iso: string) => void;
   onBookingClick: (booking: B) => void;
   onFocusCell: (rowIndex: number, colIndex: number) => void;
@@ -118,8 +213,17 @@ export function SlotCell<B extends PractitionerDayBooking>({
   const [expanded, setExpanded] = useState(false);
   const compact = density === "compact";
   const limit = visibleCardLimit(density);
-  const shown = expanded ? cell.bookings : cell.bookings.slice(0, limit);
-  const hidden = cell.bookings.length - shown.length;
+  const overflow = denseOverflow(cell.bookings, limit, expanded, highlight);
+  const { shown, hidden } = overflow;
+  const more = overflowButtonText(overflow, highlight != null, `de ${practitionerName} a las ${cell.time}`);
+  // Resaltado a nivel celda (solo con turnos): una franja sin coincidencias
+  // atenúa también su ocupación, así la columna se lee de un vistazo.
+  const cellHighlight =
+    highlight == null || cell.bookings.length === 0
+      ? undefined
+      : cell.bookings.some((b) => matchesHighlight(highlight, b))
+        ? "match"
+        : "dimmed";
   const blocked = cell.state === "bloqueado";
   const unavailable = cell.state === "bloqueado" || cell.state === "fuera-de-horario";
   const stateText = slotStateText(cell);
@@ -134,6 +238,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
       data-state={cell.state}
       data-practitioner={practitionerId}
       data-time={cell.time}
+      data-highlight={cellHighlight}
       title={blocked ? `Bloqueado${cell.blockReason ? ` · ${cell.blockReason}` : ""}` : undefined}
       style={{
         position: "relative",
@@ -196,6 +301,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
             gap: 4,
             pointerEvents: "none",
             minHeight: 14,
+            opacity: cellHighlight === "dimmed" ? 0.45 : 1,
           }}
         >
           {cell.overbooked && (
@@ -241,7 +347,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
               key={b.id}
               b={b}
               onEdit={() => onBookingClick(b)}
-              highlightedServiceId={highlightServiceId}
+              highlight={highlight}
               compact
               sizing={stackedCardSizing}
             />
@@ -254,11 +360,9 @@ export function SlotCell<B extends PractitionerDayBooking>({
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          aria-label={
-            expanded
-              ? `Ver menos turnos de ${practitionerName} a las ${cell.time}`
-              : `Ver ${hidden} turnos más de ${practitionerName} a las ${cell.time}`
-          }
+          aria-label={expanded ? `Ver menos turnos de ${practitionerName} a las ${cell.time}` : more.ariaLabel}
+          data-overflow-matches={!expanded && overflow.hiddenMatches > 0 ? overflow.hiddenMatches : undefined}
+          data-overflow-out-of-plan={!expanded && overflow.hiddenOutOfPlan > 0 ? overflow.hiddenOutOfPlan : undefined}
           style={{
             position: "relative",
             zIndex: 2,
@@ -271,9 +375,13 @@ export function SlotCell<B extends PractitionerDayBooking>({
             fontSize: 10.5,
             fontWeight: 700,
             cursor: "pointer",
+            maxWidth: "100%",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
-          {expanded ? "Ver menos" : `+${hidden} más`}
+          {expanded ? "Ver menos" : more.text}
         </button>
       )}
 

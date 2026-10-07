@@ -6,6 +6,7 @@
  * Cero dependencias: se abre en una ventana nueva y se auto-imprime, así el
  * propio navegador ofrece "Guardar como PDF". No usa IA ni librerías.
  */
+import { planSessionLabel } from "@/lib/plan-display";
 
 /** Shape mínimo que consume el recordatorio. Compatible estructuralmente
  *  con el `BookingDTO` del drawer (no se exporta, así que definimos lo
@@ -19,7 +20,23 @@ export type RecordatorioBooking = {
   durationMin: number;
   title: string | null;
   description: string | null;
+  /**
+   * S19d (C9 expandido, opcional): "Sesión 3 de 10". Solo se leen `ordinal` y
+   * `totalLive`; el título del plan NO sale en el recordatorio aunque venga en
+   * el objeto (PHI, C13b: el título nunca sale del chip). Sin C9 o con
+   * `plan: null` (suelto / sesión archivada) no se muestra nada.
+   */
+  plan?: { ordinal: number; totalLive: number } | null;
 };
+
+/** "Sesión 3 de 10" del turno, o null si no es de un plan (o el C9 no vino). */
+export function recordatorioSessionLabel(booking: Pick<RecordatorioBooking, "plan">): string | null {
+  const p = booking.plan;
+  if (!p || !Number.isInteger(p.ordinal) || !Number.isInteger(p.totalLive) || p.ordinal < 1 || p.totalLive < 1) {
+    return null;
+  }
+  return planSessionLabel(p.ordinal, p.totalLive);
+}
 
 /** Escape HTML para que texto libre (paciente, servicio, diagnóstico) no
  *  rompa el documento ni permita inyección de markup. */
@@ -56,6 +73,7 @@ function fechaAR(iso: string): string {
 export function recordatorioHtml(booking: RecordatorioBooking): string {
   const color = booking.serviceColor || "#1F4FBE";
   const fecha = fechaAR(booking.scheduledFor);
+  const sesion = recordatorioSessionLabel(booking);
 
   const diagnosticoRows =
     booking.title || booking.description
@@ -148,7 +166,12 @@ export function recordatorioHtml(booking: RecordatorioBooking): string {
       <div class="section-title">Fecha y hora</div>
       <div class="value strong">${esc(fecha)}</div>
     </div>
-
+${sesion ? `
+    <div class="section">
+      <div class="section-title">Tratamiento</div>
+      <div class="value">${esc(sesion)}</div>
+    </div>
+` : ""}
     <div class="section">
       <div class="section-title">Duración</div>
       <div class="value">${booking.durationMin} min</div>

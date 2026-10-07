@@ -7,7 +7,8 @@
  * The schema shares the table with the global catalog; visibility is
  * decided per-row by `tenantId`. Custom conditions don't link into
  * anatomy / tag / matching-engine relations — they're a "manual
- * override" surfaced in the diagnostico AssignPlanModal.
+ * override" surfaced as a pickable diagnosis in the Diagnóstico door
+ * (editor de planes, S23).
  *
  * Auth model:
  *   - Any practitioner of the tenant can create / update / delete

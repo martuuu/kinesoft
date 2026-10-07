@@ -2,9 +2,21 @@
 
 import { Button } from "@/components/ui/button";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
+import { PLAN_PATIENT_CHANGE_ERROR } from "@/lib/bookings-constants";
 import { ConflictBanner } from "./conflict-banner";
 import { fieldLabel, miniGhostBtn } from "./styles";
 import type { DrawerBooking, ForcePrompt } from "./types";
+
+/**
+ * S19d (C4 / I1): un turno de plan no cambia de paciente. El core lo rechaza
+ * (`plan-patient-change` → `PLAN_PATIENT_CHANGE_ERROR`; la FK compuesta
+ * `Booking_plan_patient_fkey` es la red), así que el picker no se ofrece: se
+ * muestra el paciente y el mismo texto del server. Sin C9 (`programId`
+ * ausente) el picker queda como siempre y el server sigue siendo la barrera.
+ */
+export function patientLockedByPlan(booking: Pick<DrawerBooking, "programId" | "patientId">): boolean {
+  return !!booking.programId && !!booking.patientId;
+}
 
 /** Valores del formulario "Editar" (los guarda `index.tsx`). */
 export type EditDetailsValues = {
@@ -21,6 +33,7 @@ export type EditDetailsValues = {
  * Contrato: controlado. Todo el estado vive en `index.tsx` (alimenta el
  * dirty-guard y el envío de SOLO lo que cambió, A2a-S06). Acá se presenta:
  * - `onPatientChange`: selección del picker (`null` = lo vació sin elegir otro).
+ *   En un turno de plan no hay picker (`patientLockedByPlan`): nunca se llama.
  * - `onChange(patch)`: cambio de un campo.
  * - `onApplyAsPatientDiagnosis`: solo si el turno tiene paciente y
  *   `clinicalWritable`.
@@ -77,16 +90,24 @@ export function EditDetailsForm({
           Clearing replaces with a search input; user can pick
           a different patient or create one inline (firstName +
           lastName fields). */}
-      <PatientPicker
-        label="Paciente del turno"
-        initialPatientId={booking.patientId ?? null}
-        initialPatients={
-          booking.patientId
-            ? [{ id: booking.patientId, name: booking.patientName }]
-            : []
-        }
-        onChange={onPatientChange}
-      />
+      {patientLockedByPlan(booking) ? (
+        <div style={{ display: "grid", gap: 4 }}>
+          <span style={fieldLabel}>Paciente del turno</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>{booking.patientName}</span>
+          <span style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{PLAN_PATIENT_CHANGE_ERROR}</span>
+        </div>
+      ) : (
+        <PatientPicker
+          label="Paciente del turno"
+          initialPatientId={booking.patientId ?? null}
+          initialPatients={
+            booking.patientId
+              ? [{ id: booking.patientId, name: booking.patientName }]
+              : []
+          }
+          onChange={onPatientChange}
+        />
+      )}
       <label style={fieldLabel}>Duración (min)</label>
       <input
         type="number"

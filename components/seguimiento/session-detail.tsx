@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import type { Prisma, SessionExerciseStatus } from "@prisma/client";
+import { useEffect, useState, useTransition } from "react";
+import type { SessionExerciseStatus } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
@@ -12,35 +14,58 @@ import { SortableList } from "@/components/ui/sortable-list";
 import {
   addSessionExercise,
   completeSessionFromSeguimiento,
+  loadSessionEvolution,
   removeSessionExercise,
   reorderSessionExercises,
   updateSessionExercise,
   updateSessionMeta,
+  type getSessionDetail,
 } from "@/lib/sessions";
+import { DISCIPLINE_TAG_SLUGS } from "@/lib/plans-constants";
+import { planDeepLinkHref } from "@/lib/plans-deeplink";
 import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useUnsavedGuard } from "@/components/seguimiento/use-unsaved-guard";
+import { DisciplineChip } from "@/components/planes/discipline-chip";
+import {
+  AGENDAR_PARAM,
+  SEGUIMIENTO_COPY,
+  dischargeCopy,
+  isSessionWithoutEvolution,
+  sessionCounterLabel,
+  sessionHeading,
+  sortByOrdinal,
+} from "@/components/seguimiento/seguimiento-model";
 
-type SessionDTO = Prisma.SessionGetPayload<{
-  include: {
-    program: {
-      include: {
-        patient: true;
-        case: { include: { diagnoses: { include: { condition: true } } } };
-        sessions: {
-          select: {
-            id: true;
-            index: true;
-            completedAt: true;
-            paInPre: true;
-            paInPost: true;
-          };
-        };
-      };
-    };
-    exercises: { include: { exercise: true } };
-  };
-}>;
+/**
+ * P3.Z (gate de bundle de ES3): "Agendar" (S20) arrastra la tabla de preview
+ * del motor; `/seguimiento/[sessionId]` pasó de 177 a 191 kB gz con el modal
+ * eager. Lazy: solo se descarga al abrirlo (o con `?agendar=1`).
+ */
+const ScheduleSessionModal = dynamic(
+  () => import("@/components/seguimiento/schedule-session-modal").then((m) => m.ScheduleSessionModal),
+  { ssr: false, loading: () => null }
+);
+
+/**
+ * El DTO es el de `getSessionDetail` tal cual (no una copia a mano del
+ * `include`): S12b le sumó `ordinal`/`totalLive` y `scheduledFor` en las
+ * sesiones del plan, y una copia vieja no lo veía.
+ */
+export type SessionDTO = NonNullable<Awaited<ReturnType<typeof getSessionDetail>>>;
+
+/**
+ * P3.Z (F3b): `?agendar=1` (bucket "Sin turno") quedaba en la URL después de
+ * abrir el modal: recargar, volver atrás o compartir el link lo reabría. Puro:
+ * la URL relativa sin el param (conserva el resto y el hash), o `null` si no
+ * hay nada que limpiar.
+ */
+export function urlWithoutAgendarParam(href: string): string | null {
+  const url = new URL(href);
+  if (!url.searchParams.has(AGENDAR_PARAM)) return null;
+  url.searchParams.delete(AGENDAR_PARAM);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
 
 /**
  * Borrador de las anotaciones del kine. Vive en `SessionDetail` (no en el
@@ -85,22 +110,59 @@ function sameDraft(a: MetaDraft, b: MetaDraft) {
 export function SessionDetail({
   session,
   scheduledLabel,
+  canSchedule = false,
+  autoOpenSchedule = false,
 }: {
   session: SessionDTO;
   /** Pre-formatted on the server — see the note in the page component. */
   scheduledLabel: string;
+  /**
+   * "Agendar" (S20): la sesión es "sin turno" y el actor puede agendarla
+   * (`listSchedulablePlanSessions` en la página: módulo `planes` +
+   * `plans.schedule`). La barrera real es `generatePlanBookings`.
+   */
+  canSchedule?: boolean;
+  /** `?agendar=1` desde el bucket "Sin turno": abre el modal al entrar. */
+  autoOpenSchedule?: boolean;
 }) {
   const router = useRouter();
   const completed = !!session.completedAt;
+  // "Sin evolución": la cerró la agenda ("Atendido") y no tiene nada cargado.
+  // Se habilita el panel de anotaciones para "Cargar evolución".
+  const withoutEvolution = isSessionWithoutEvolution(session);
+  const editable = !completed || withoutEvolution;
   const diagnosis = session.program.case?.diagnoses?.[0]?.condition?.name ?? null;
+  const discipline = session.program.discipline ?? null;
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  // D22: el cierre devolvió `suggestDischarge` → banner "¿Le das el alta?".
+  // Nunca se autocompleta el plan: el alta se da desde la tab Planes.
+  const [dischargeSuggested, setDischargeSuggested] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(autoOpenSchedule && canSchedule && !completed);
+  // Se limpia al montar (una vez): el modal ya quedó abierto por el estado
+  // inicial. `history.replaceState` con el `state` actual no dispara una
+  // navegación ni un refetch del RSC (Next 14 lo sincroniza con el router).
+  useEffect(() => {
+    if (!autoOpenSchedule) return;
+    const next = urlWithoutAgendarParam(window.location.href);
+    if (next) window.history.replaceState(window.history.state, "", next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const confirm = useConfirm();
   const [draft, setDraft] = useState<MetaDraft>(() => draftFrom(session));
   // Base = lo persistido (props). Tras guardar, `router.refresh()` trae las
   // props nuevas y el borrador vuelve a coincidir → deja de estar sucio.
-  const dirty = !completed && !sameDraft(draft, draftFrom(session));
+  const dirty = editable && !sameDraft(draft, draftFrom(session));
   useUnsavedGuard(dirty);
+  const counter = sessionCounterLabel(session.ordinal, session.totalLive);
+  const heading = sessionHeading({ ordinal: session.ordinal, totalLive: session.totalLive, title: session.title });
+  const rail = sortByOrdinal(session.program.sessions);
+  const planHref = planDeepLinkHref({
+    kind: "program",
+    patientId: session.program.patientId,
+    programId: session.programId,
+  });
 
   const finish = async () => {
     setError(null);
@@ -112,8 +174,33 @@ export function SessionDetail({
     if (!ok) return;
     start(async () => {
       const r = await completeSessionFromSeguimiento(session.id, draftToMeta(draft));
-      if (!r.ok) setError(r.error);
-      else router.refresh();
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      if (r.data.suggestDischarge) setDischargeSuggested(true);
+      router.refresh();
+    });
+  };
+
+  const loadEvolution = () => {
+    setError(null);
+    setInfo(null);
+    const meta = draftToMeta(draft);
+    if (Object.values(meta).every((v) => v == null)) {
+      setError(SEGUIMIENTO_COPY.evolutionEmpty);
+      return;
+    }
+    start(async () => {
+      const r = await loadSessionEvolution(session.id, meta);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      // `loaded:false` = ya tenía evolución (p. ej. una EVA que el DTO no trae):
+      // el server no pisa y se avisa en vez de fingir que se guardó.
+      if (!r.data.loaded) setInfo(SEGUIMIENTO_COPY.evolutionAlreadyLoaded);
+      router.refresh();
     });
   };
 
@@ -124,17 +211,22 @@ export function SessionDetail({
         <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
           {session.program.title}
         </div>
-        <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
-          {session.program.sessions.filter((x) => x.completedAt).length} /{" "}
-          {session.program.totalSessions}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {discipline && <DisciplineChip discipline={discipline} size="xs" />}
+          <span className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)" }}>
+            {/* M13: realizadas / vivas (no `totalSessions`, que en un legacy no coincide con las filas). */}
+            {rail.filter((x) => x.completedAt).length} / {session.totalLive}
+          </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-          {session.program.sessions.map((s) => {
+          {rail.map((s, i) => {
             const on = s.id === session.id;
             return (
               <a
                 key={s.id}
                 href={`/seguimiento/${s.id}`}
+                aria-current={on ? "page" : undefined}
+                title={sessionCounterLabel(i + 1, rail.length)}
                 style={{
                   textDecoration: "none",
                   display: "flex",
@@ -149,8 +241,9 @@ export function SessionDetail({
                   fontWeight: on ? 700 : 500,
                 }}
               >
+                {/* Posición en el riel ordenado por fecha = ordinal (M13), no el `index` crudo. */}
                 <span className="k-mono" style={{ width: 28 }}>
-                  #{s.index}
+                  #{i + 1}
                 </span>
                 <span style={{ flex: 1 }}>
                   {s.completedAt
@@ -176,34 +269,66 @@ export function SessionDetail({
             size={48}
             tone="sky"
           />
-          <div style={{ flex: 1 }}>
-            <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-              {session.program.patient.firstName} {session.program.patient.lastName} · Sesión{" "}
-              {session.index}
-            </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
+              {session.program.patient.firstName} {session.program.patient.lastName} · {heading}
+            </h1>
             <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {scheduledLabel}
               {diagnosis ? ` · ${diagnosis}` : ""}
             </div>
           </div>
           {completed ? (
-            <Tag tone="lime">
-              <IconCheck size={10} stroke={3} /> Realizada
-            </Tag>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <Tag tone="lime">
+                <IconCheck size={10} stroke={3} /> Realizada
+              </Tag>
+              {withoutEvolution && <Tag tone="soft">{SEGUIMIENTO_COPY.sinEvolucionTag}</Tag>}
+            </div>
           ) : (
-            <Button variant="primary" onClick={finish} disabled={pending}>
-              {pending ? "Cerrando…" : "Cerrar sesión"} <IconArrow size={12} />
-            </Button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {canSchedule && (
+                <Button variant="ghost" onClick={() => setScheduleOpen(true)} disabled={pending}>
+                  {SEGUIMIENTO_COPY.agendar}
+                </Button>
+              )}
+              <Button variant="primary" onClick={finish} disabled={pending}>
+                {pending ? "Cerrando…" : "Cerrar sesión"} <IconArrow size={12} />
+              </Button>
+            </div>
           )}
         </Card>
 
-        <PainTimeline
-          sessions={session.program.sessions}
-          currentIndex={session.index}
-        />
+        {dischargeSuggested && (
+          <Card
+            role="status"
+            style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+          >
+            <div style={{ flex: 1, minWidth: 180, fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
+              {dischargeCopy(session.totalLive)}
+            </div>
+            {planHref && (
+              <Link
+                href={planHref}
+                style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none" }}
+              >
+                {SEGUIMIENTO_COPY.dischargeAction}
+              </Link>
+            )}
+          </Card>
+        )}
+
+        <PainTimeline sessions={rail} currentIndex={session.index} />
+
+        {info && (
+          <div role="status" style={{ padding: 10, borderRadius: 12, background: "rgba(31,79,190,0.06)", fontSize: 13 }}>
+            {info}
+          </div>
+        )}
 
         {error && (
           <div
+            role="alert"
             style={{
               padding: 10,
               borderRadius: 12,
@@ -226,6 +351,7 @@ export function SessionDetail({
           sessionId={session.id}
           exercises={session.exercises}
           disabled={completed}
+          disciplineSlug={discipline ? DISCIPLINE_TAG_SLUGS[discipline] : null}
         />
       </main>
 
@@ -234,8 +360,23 @@ export function SessionDetail({
         draft={draft}
         onChange={setDraft}
         dirty={dirty}
-        disabled={completed}
+        disabled={!editable}
+        evolution={withoutEvolution ? { onLoad: loadEvolution, pending } : null}
       />
+
+      {canSchedule && !completed && (
+        <ScheduleSessionModal
+          open={scheduleOpen}
+          onClose={() => setScheduleOpen(false)}
+          onScheduled={() => {
+            setScheduleOpen(false);
+            router.refresh();
+          }}
+          programId={session.programId}
+          sessionId={session.id}
+          sessionLabel={counter}
+        />
+      )}
     </div>
   );
 }
@@ -251,10 +392,13 @@ function ExerciseSequencer({
   sessionId,
   exercises,
   disabled,
+  disciplineSlug,
 }: {
   sessionId: string;
   exercises: SessionDTO["exercises"];
   disabled: boolean;
+  /** Filtra el picker por la disciplina del plan (S18s · `DISCIPLINE_TAG_SLUGS`). */
+  disciplineSlug: string | null;
 }) {
   const router = useRouter();
   const confirm = useConfirm();
@@ -347,6 +491,7 @@ function ExerciseSequencer({
       <ExerciseSearchPicker
         open={picker}
         existingIds={new Set(local.map((sx) => sx.exerciseId))}
+        disciplineSlug={disciplineSlug}
         onClose={() => setPicker(false)}
         onPick={(ex) => {
           setError(null);
@@ -620,12 +765,19 @@ function SessionNotes({
   onChange,
   dirty,
   disabled,
+  evolution,
 }: {
   session: SessionDTO;
   draft: MetaDraft;
   onChange: (d: MetaDraft) => void;
   dirty: boolean;
   disabled: boolean;
+  /**
+   * Sesión realizada "Sin evolución" (S12b): el botón pasa a ser "Cargar
+   * evolución" (`loadSessionEvolution`), que además marca los ejercicios
+   * pendientes como hechos y registra la EVA post, igual que el cierre.
+   */
+  evolution?: { onLoad: () => void; pending: boolean } | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -686,12 +838,20 @@ function SessionNotes({
       )}
       {dirty && !error && (
         <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-          Cambios sin guardar. También se guardan al cerrar la sesión.
+          {evolution
+            ? "Cambios sin guardar. Se guardan al apretar «Cargar evolución»."
+            : "Cambios sin guardar. También se guardan al cerrar la sesión."}
         </div>
       )}
-      <Button variant="ghost" onClick={save} disabled={pending || disabled || !dirty}>
-        {pending ? "Guardando…" : "Guardar anotaciones"}
-      </Button>
+      {evolution ? (
+        <Button variant="primary" onClick={evolution.onLoad} disabled={evolution.pending || !dirty}>
+          {evolution.pending ? "Guardando…" : SEGUIMIENTO_COPY.cargarEvolucion}
+        </Button>
+      ) : (
+        <Button variant="ghost" onClick={save} disabled={pending || disabled || !dirty}>
+          {pending ? "Guardando…" : "Guardar anotaciones"}
+        </Button>
+      )}
       {session.program.case?.diagnoses?.[0]?.condition && (
         <div
           style={{

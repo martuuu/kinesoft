@@ -11,6 +11,20 @@ function osLabel(obraSocial: string): string {
 }
 
 /**
+ * C13 "Copago (plan)" (S19d): el turno lo estampó el motor con la cuota de su
+ * sesión (`pricedByPlan`, C5: `Session.priceCents` es la fuente y
+ * `Booking.copagoCents` su espejo). Ese monto no se edita en el turno: el
+ * drawer no tiene editor de copago (`updateBooking` no acepta `copagoCents`) y
+ * el precio cambia desde el plan (reprecio, `plans.manage`). Sin C9
+ * (`pricedByPlan` ausente) es "Copago" como siempre: no se adivina.
+ */
+export function copagoLabel(booking: Pick<DrawerBooking, "pricedByPlan">): string {
+  return booking.pricedByPlan === true ? "Copago (plan)" : "Copago";
+}
+
+export const COPAGO_PLAN_HINT = "Es la cuota de la sesión del plan: se cambia desde el precio del plan.";
+
+/**
  * Filas de detalle del turno: Cuándo, Duración, Servicio, Obra social, Copago,
  * Diagnóstico, Descripción y Notas. Fragmento: el contenedor (y lo que va
  * debajo, como el aviso de acceso básico) lo pone `index.tsx`.
@@ -49,10 +63,15 @@ export function BillingRows({ booking }: { booking: DrawerBooking }) {
       )}
       {/* `formatARS` (P0-S04b): el drawer tenía su propio `fmtMoney` con
           `toLocaleString`; ahora es el mismo formateo que Lista y semana. */}
-      <Row label="Copago">
+      <Row label={copagoLabel(booking)}>
         <span style={{ fontWeight: 700, color: "var(--navy-900)" }}>
           {formatARS(booking.copagoCents)}
         </span>
+        {booking.pricedByPlan === true && (
+          <span style={{ display: "block", fontSize: 11.5, fontWeight: 500, color: "var(--navy-500)" }}>
+            {COPAGO_PLAN_HINT}
+          </span>
+        )}
       </Row>
       {booking.title && <Row label="Diagnóstico">{booking.title}</Row>}
       {booking.description && <Row label="Descripción">{booking.description}</Row>}

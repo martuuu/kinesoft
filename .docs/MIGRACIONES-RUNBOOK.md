@@ -29,13 +29,32 @@ FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 ```
 
 **Cadena de migraciones del go-live** (todas se aplican desde vacío, en orden de timestamp, con `migrate deploy`):
+Orden de corridas (08-oct): ES3 (M3a ✅ local) → SR (M4) → SV (M5) → ES4 → EV1 → reset + deploy único. Cada migración va sola, encabezando su ola, y sus timestamps tienen que quedar en ese orden: M4 y M5 van con timestamp **posterior a `20261008120000`**.
 
 | Migración | Corrida | Estado |
 |---|---|---|
 | … todas las anteriores (tabla de §2, #1-#12) | A, B-pre | commiteadas |
 | `20261004120000_plans_booking_link` (M1) | ES2a | commiteada (`0edb0c8`); el SQL no se toca |
-| `20261007120000_tenant_verticals` (**M2**) | EV0 (ola V.0, sola) | **escrita y aplicada solo en el Docker local (07-oct), pendiente commit**. sha256 de `migration.sql` = `29649aa7fb7f4c1bc25eea9e5591a630569b632295961c315c6206c653cc8bb3`. `Tenant.vertical` (enum `TenantVertical`, default `KINESIOLOGY`), `Tenant.publicBookingEnabled` (default `false`) + bloque **guardado** `REVOKE … FROM anon, authenticated` (tablas, secuencias, rutinas y default privileges; en local no hay esos roles → NOTICE + no-op). `lock_timeout` 5 s |
-| `…_reception_call_realtime` (**M3**) | SV (ola SV0, sola) | **futura**: `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada sobre `realtime.messages` |
+| `20261007120000_tenant_verticals` (**M2**) | EV0 (ola V.0, sola) | **escrita y aplicada solo en el Docker local (07-oct), commiteada (`ddfdff3`)**. sha256 de `migration.sql` = `29649aa7fb7f4c1bc25eea9e5591a630569b632295961c315c6206c653cc8bb3`. `Tenant.vertical` (enum `TenantVertical`, default `KINESIOLOGY`), `Tenant.publicBookingEnabled` (default `false`) + bloque **guardado** `REVOKE … FROM anon, authenticated` (tablas, secuencias, rutinas y default privileges; en local no hay esos roles → NOTICE + no-op). `lock_timeout` 5 s |
+| `20261008120000_billing_paid_at` (**M3a**) | ES3 (P3.0.0, sola) | **escrita y aplicada solo en el Docker local (08-oct), pendiente commit**. sha256 de `migration.sql` = `23a785a64586b6f8c481631620253790de7287fcf17f4ca9b7836f3bd8a75474`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.copagoPaidAt TIMESTAMP(3) NULL` (fecha del cobro manual del copago; la escribe y limpia solo `toggleBilling`/`setBookingCopagoPaid`) + `UserPreferences.dashboardPrefs JSONB NULL` (`{revenueRange: 'month'\|'week'}`) con CHECK `UserPreferences_dashboardPrefs_object_check` (objeto o NULL). Verificada objeto por objeto; `migrate status` al día (30). Sin tabla nueva ni GRANTs. Orden para prod abajo («M3a») |
+| `…_rooms` (**M4**) | SR (sola) | **futura**: tabla `Room` (RLS ENABLE + FORCE + policy, FK compuesta `(locationId, tenantId)`) + `PractitionerSchedule.roomId?`, `Booking.roomId?` (FK RESTRICT, misma sede), opcional `TimeBlock.roomId?`. Detalle en su planning ([ROADMAP «SR»](ROADMAP.md)); tiene que pasar `guard:isolation` |
+| `…_reception_call_realtime` (**M5**, antes "M3") | SV (ola SV0, sola) | **futura**: `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada sobre `realtime.messages` |
+
+**M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
+cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
+aplicarla **antes** del reset, el orden es:
+1. Precheck de solo lectura (las 2 columnas no existen todavía; tiene que dar 0 filas):
+   ```sql
+   SELECT to_regclass('"Booking"') IS NOT NULL AS booking_ok;
+   SELECT table_name, column_name FROM information_schema.columns
+   WHERE table_schema = 'public'
+     AND ((table_name = 'Booking' AND column_name = 'copagoPaidAt')
+       OR (table_name = 'UserPreferences' AND column_name = 'dashboardPrefs'));
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. Staging primero.
+4. Prod con el merge. Es aditiva, así que puede ir **antes** que el código (el código viejo no lee las columnas). Sin
+   backfill: los copagos ya cobrados quedan con `copagoPaidAt` NULL y el widget no los cuenta.
 
 **Orden del go-live** (staging primero, desde vacío, con QA completo; después prod):
 
@@ -44,7 +63,7 @@ FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 3. **Reset** de prod (acción de Martin en la consola de Supabase). Precheck (1) → **base vacía**:
    `SELECT count(*) FROM pg_tables WHERE schemaname='public';` = 0. Precheck (0): el rol de `DIRECT_URL` tiene
    `rolbypassrls = t`.
-4. `migrate deploy` desde vacío (cadena completa hasta M3): `npm run db:prod:deploy` y `npm run db:prod:status` →
+4. `migrate deploy` desde vacío (cadena completa hasta M5): `npm run db:prod:deploy` y `npm run db:prod:status` →
    "Database schema is up to date!". O merge a `main` y el build de Production aplica la cadena antes de servir.
 5. **Roles SQL** (`prisma/roles.supabase.sql`, ver §2 "Tareas de prod que van una sola vez", punto a) → en Vercel
    `DATABASE_URL` al rol app y `DATABASE_URL_SERVICE` a `kinesoft_service`.
@@ -58,7 +77,7 @@ FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 10. **Data API desactivada** (arriba) y **Storage privado** (precheck (17): buckets `public = false`, ninguna policy de
     `storage.objects` para `anon`/`authenticated`; `SUPABASE_SERVICE_ROLE_KEY` en Vercel).
 11. **Post-checks:** los de M1 (§2.4 "Post-checks", objeto por objeto), (11) tags DISCIPLINE = 2 y (12) vertical/plan del
-    tenant ([PLANES.md §16](PLANES.md)), RLS de las tablas nuevas y **grants de M2** (tiene que dar 0 filas):
+    tenant ([PLANES.md §16](PLANES.md)), RLS de las tablas nuevas (incluida `Room` de M4) y **grants de M2** (tiene que dar 0 filas):
 
     ```sql
     SELECT c.relname
@@ -212,7 +231,9 @@ En orden. Todas aplicadas y verificadas en local:
 | 12 | `20261001090000_agenda_foundations` | sedes, franjas, excepciones, bloqueos, PS/PP, Booking expand + **backfill** | B-pre — **ver §2.2** |
 | 13 | `20261004120000_plans_booking_link` | M1 de Planes: FK turno↔plan/sesión, 2 tablas con RLS, `Patient_userId_key` por consultorio + **backfill** | ES2a — **ver §2.3 y §2.4** |
 | 14 | `20261007120000_tenant_verticals` | M2: `Tenant.vertical` + `Tenant.publicBookingEnabled` + REVOKE guardado de `anon`/`authenticated` | EV0 — **ver «Go-live con reset»** |
-| 15 | `…_reception_call_realtime` (futura) | M3: `Booking.calledAt` + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
+| 15 | `20261008120000_billing_paid_at` | M3a: `Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs` (+ CHECK de objeto) | ES3 — **ver «Go-live con reset»** |
+| 16 | `…_rooms` (futura) | M4: `Room` con RLS + `roomId` en franja, turno y (opcional) bloqueo | SR — **ver «Go-live con reset»** |
+| 17 | `…_reception_call_realtime` (futura) | M5 (antes "M3"): `Booking.calledAt` + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
