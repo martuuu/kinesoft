@@ -31,6 +31,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { dayKeyToDbDate } from "@/lib/schedule-validate";
 // Lock exclusivo de sedes (ver cabecera); módulo único desde el integrador B2.
 import { lockTenantLocations } from "@/lib/location-lock";
+import { liveProgramWhere } from "@/lib/plan-predicates";
 import {
   LocationId,
   LocationInput,
@@ -233,7 +234,8 @@ export async function setPrimaryLocation(id: string): Promise<ActionResult> {
 /**
  * Archiva (desactiva) una sede. Se niega, devolviendo conteos para que la UI
  * diga qué falta mover, si: es la principal, tiene franjas vigentes, turnos
- * futuros no cancelados o excepciones de horario futuras que la usan.
+ * futuros no cancelados, excepciones de horario futuras que la usan o planes
+ * ACTIVE vivos con esa sede (S13g).
  * Conteos y archivado en la misma tx con lock exclusivo (ver cabecera).
  */
 export async function archiveLocation(id: string): Promise<ArchiveLocationResult> {
@@ -252,7 +254,7 @@ export async function archiveLocation(id: string): Promise<ArchiveLocationResult
       if (!loc) return { kind: "notFound" as const };
       if (!loc.active) return { kind: "done" as const, name: loc.name, already: true };
       if (loc.isPrimary) return { kind: "primary" as const };
-      const [activeSchedules, futureBookings, futureExceptions] = await Promise.all([
+      const [activeSchedules, futureBookings, futureExceptions, activePlans] = await Promise.all([
         tx.practitionerSchedule.count({
           where: {
             tenantId: actor.tenantId,
@@ -276,10 +278,18 @@ export async function archiveLocation(id: string): Promise<ArchiveLocationResult
             ranges: { array_contains: [{ locationId: loc.id }] },
           },
         }),
+        // S13g (I7): `TreatmentProgram.locationId` es RESTRICT desde M1, pero
+        // archivar no borra la sede, así que la FK no frena nada. Sin esta
+        // guarda un plan ACTIVE quedaba atado a una sede donde el motor ya no
+        // ofrece slots (sus sesiones "sin turno" no se podrían agendar). Solo
+        // ACTIVE y vivos (`liveProgramWhere`): cerrados y archivados son historia.
+        tx.treatmentProgram.count({
+          where: { tenantId: actor.tenantId, locationId: loc.id, ...liveProgramWhere, status: "ACTIVE" },
+        }),
       ]);
       const blockers: LocationArchiveBlockers = { activeSchedules, futureBookings, futureExceptions };
-      if (activeSchedules + futureBookings + futureExceptions > 0) {
-        return { kind: "blocked" as const, blockers };
+      if (activeSchedules + futureBookings + futureExceptions + activePlans > 0) {
+        return { kind: "blocked" as const, blockers, activePlans };
       }
       await tx.location.updateMany({
         where: { id: loc.id, tenantId: actor.tenantId },
@@ -303,10 +313,21 @@ export async function archiveLocation(id: string): Promise<ArchiveLocationResult
           b.futureExceptions
             ? `${b.futureExceptions} día${b.futureExceptions === 1 ? "" : "s"} con horario especial`
             : null,
+          res.activePlans
+            ? `${res.activePlans} plan${res.activePlans === 1 ? "" : "es"} activo${res.activePlans === 1 ? "" : "s"}`
+            : null,
         ].filter(Boolean);
+        // `activePlans` va en el mensaje y no en `blockers`: el tipo vive en
+        // `locations-schemas.ts` (otra sesión); el handoff de S13g lo suma.
+        const others = b.activeSchedules + b.futureBookings + b.futureExceptions > 0;
+        const action = !res.activePlans
+          ? "Movelos a otra sede primero."
+          : others
+            ? "Movelos a otra sede y cambiá la sede de esos planes (o cerralos) primero."
+            : "Cambiá la sede de esos planes (o cerralos) primero.";
         return {
           ok: false,
-          error: `No se puede archivar: la sede todavía tiene ${parts.join(", ")}. Movelos a otra sede primero.`,
+          error: `No se puede archivar: la sede todavía tiene ${parts.join(", ")}. ${action}`,
           blockers: b,
         };
       }

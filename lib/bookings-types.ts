@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
 import type { ReceptionAction, ReceptionState } from "@/lib/reception-state";
+import type { Discipline } from "@/lib/plans-constants";
+import type { LinkedPlanDiscipline } from "@/lib/plan-display";
 
 export type BookingRow = {
   id: string;
@@ -165,6 +167,44 @@ export type AgendaBookingRow = BookingRow & {
    * paciente siguen a esto; en un guest siguen a `canOperate` (son del staff).
    */
   clinicalWritable: boolean;
+} & AgendaPlanFields;
+
+/**
+ * Chip del plan en la agenda (C9 · V1-D18): disciplina, ordinal entre las
+ * sesiones vivas y total vivo. `title` es null sin `clinical.read` o sin
+ * acceso full al paciente (`planTitleFor`): el chip nunca muestra el título.
+ */
+export type AgendaPlanChip = {
+  discipline: Discipline | null;
+  ordinal: number;
+  totalLive: number;
+  title: string | null;
+};
+
+/**
+ * C9 · Campos de agenda de Planes (P2-C1, contrato literal de PLANES.md §4).
+ * Es el valor del `Map` que devuelve `loadAgendaPlanProjection`
+ * (`lib/agenda-plan-projection-internal.ts`, S12p) por turno.
+ *
+ * - Salen de queries planas (S12p) y solo los trae la proyección LIVIANA
+ *   (`listAgendaBookings`). La completa (`listBookingsInRange`) no los trae:
+ *   `bookings-reception.test.ts:380` sigue verde sin cambios.
+ * - **La autorización de la OS nunca va acá** (E2): ni código, ni sesiones
+ *   autorizadas, ni vencimiento.
+ * - `patientActiveLinkedPlanDisciplines`: R-LEGACY; `[]` = sin plan vinculado
+ *   activo; `"NONE"` = plan vinculado sin disciplina (`activeLinkedPlanDisciplines`).
+ *
+ * En `AgendaBookingRow` son requeridos (C9): S12 cableó
+ * `loadAgendaPlanProjection` en `listAgendaBookings` (P2-C1 los había dejado
+ * `Partial<…>` hasta ese cableado).
+ */
+export type AgendaPlanFields = {
+  programId: string | null;
+  sessionId: string | null;
+  pricedByPlan: boolean;
+  plan: AgendaPlanChip | null;
+  serviceDiscipline: Discipline | null;
+  patientActiveLinkedPlanDisciplines: LinkedPlanDiscipline[];
 };
 
 /** Tope del rango de `listAgendaBookings` (una vista de mes + márgenes). */
@@ -210,4 +250,10 @@ export type ReceptionActionResult = {
   attendingAt: string | null;
   /** Estado de recepción resultante (`receptionState` con el reloj del server). */
   state: ReceptionState;
+  /**
+   * S12 (C4): aviso no bloqueante de la sincronía con la sesión del plan, p. ej.
+   * "Deshacer Atendido" con evolución cargada (la sesión queda realizada).
+   * Ausente / null = nada que avisar.
+   */
+  notice?: string | null;
 };

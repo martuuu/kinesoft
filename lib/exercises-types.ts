@@ -1,4 +1,5 @@
-import type { ExerciseKind } from "@prisma/client";
+import type { ExerciseKind, TagKind } from "@prisma/client";
+import { DISCIPLINE_TAG_SLUGS } from "@/lib/plans-constants";
 
 export type ExerciseRow = {
   id: string;
@@ -38,7 +39,31 @@ export type ExerciseFilters = {
    * library). Pass `MANUAL_THERAPY` for the maniobras page, or `"all"`
    * for the unified picker used in session modals. */
   kind?: ExerciseKind | "all";
+  /** Planes P2 (S13x): slug de un tag `DISCIPLINE` (`kinesiologia` /
+   * `osteopatia`, ver `DISCIPLINE_TAG_SLUGS`). Devuelve los ejercicios con ese
+   * tag **o** sin ninguno de los dos (los genéricos sirven para ambas
+   * disciplinas). Un slug que no es un tag DISCIPLINE existente no filtra. */
+  disciplineSlug?: string;
 };
+
+/**
+ * Kinds de tag que un consultorio puede crear en la tabla GLOBAL `Tag` (S13x):
+ * los que usa la UI de la biblioteca (`ensureTag` → GOAL, auto-tags de
+ * `createExercise` → MUSCLE_GROUP / EQUIPMENT). Afuera quedan DISCIPLINE (lo
+ * curan M1 / Plataforma: filtra la biblioteca de todos) y los de diagnóstico
+ * (ZONE, SYMPTOM, …), que alimentan el wizard de todos los consultorios.
+ */
+export const TENANT_CREATABLE_TAG_KINDS = ["GOAL", "MUSCLE_GROUP", "EQUIPMENT"] as const satisfies readonly TagKind[];
+
+/**
+ * Slugs reservados: los de los tags DISCIPLINE del catálogo global. Si un
+ * consultorio creara "Kinesiología" como GOAL antes de M1, el INSERT del tag de
+ * disciplina chocaba con el slug; y si ya existe, el upsert sin update lo
+ * vincularía como disciplina desde un campo de texto libre.
+ */
+export function isReservedTagSlug(slug: string): boolean {
+  return (Object.values(DISCIPLINE_TAG_SLUGS) as string[]).includes(slug);
+}
 
 export type FilterFacets = {
   muscleGroups: string[];

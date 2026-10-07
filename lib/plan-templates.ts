@@ -15,6 +15,7 @@ import { ProgramStatus } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { modulesFor } from "@/lib/tenant-modules";
 import { getMembershipRole } from "@/lib/authz";
 import { capabilitiesFor, canWriteClinical, isTenantAdminRole } from "@/lib/capabilities";
 import { audit, auditInTx } from "@/lib/audit";
@@ -28,6 +29,11 @@ import type { PlanTemplateRow } from "@/lib/plan-templates-types";
 
 export async function listPlanTemplates(): Promise<PlanTemplateRow[]> {
   const actor = await getActor();
+  // P2-Z · B-L2: lectura sin el módulo `plantillas` → vacío (convención de
+  // VERTICALES: escrituras rechazan, lecturas devuelven []). Antes listaba las
+  // plantillas de un consultorio que bajó de plan o es General, y la UI
+  // ofrecía aplicarlas aunque `applyPlanTemplate` después lo rechace.
+  if (!modulesFor(actor.entitlements).has("plantillas")) return [];
   const rows = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.findMany({
     where: { tenantId: actor.tenantId },
     orderBy: { updatedAt: "desc" },

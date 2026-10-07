@@ -9,7 +9,7 @@
  * joined. Mutations are intentionally narrow: create, reschedule, change
  * status (confirm / cancel / mark no-show / complete).
  */
-import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
+import { revalidatePath, unstable_cache } from "next/cache";
 import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { runWithRls } from "@/lib/rls";
@@ -18,58 +18,80 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
-import { isHoldingCapacity, isPublicReservation, overlapBlocks, patientDayStatus } from "@/lib/booking-capacity";
+import { isPublicReservation, overlapBlocks } from "@/lib/booking-capacity";
 import { toARDateKey } from "@/lib/datetime-ar";
-import type { BatchSlotStatus } from "@/lib/booking-schedule";
-import {
-  addDays,
-  arWallOf,
-  classifyBatchInstant,
-  classifyInstant,
-  dayKeyOf,
-  dayWindow,
-  expandDates,
-  fitsInRanges,
-  nextFreeSlot,
-  resolvePractitionerService,
-  scheduledRanges,
-  NEXT_FREE_HORIZON_DAYS,
-  NO_LOCATION_ID,
-  type AvailabilityInput,
-  type InstantClassification,
-  type RangesFor,
-  type ResolvedPractitionerService,
-} from "@/lib/availability";
+import { lockPlanPatient } from "@/lib/plan-lock";
+import { bookingHasMoney, priorPaidStamp } from "@/lib/plan-pricing";
+import { formatARS } from "@/lib/format";
+import { classifyBatchInstant, dayKeyOf, expandDates } from "@/lib/availability";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
-import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { lockCapacityWindow } from "@/lib/booking-cap-lock";
-import { bulkPatientAccess, patientAccessFor } from "@/lib/visibility";
+import { bulkPatientAccess } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
 import { getMembershipRole, requireCapability } from "@/lib/authz";
-import {
-  canOperateBooking,
-  canWriteClinical,
-  capabilitiesFor,
-  type Capability,
-  type PatientAccessLevel,
-} from "@/lib/capabilities";
-import { bookingFieldAccess, type BookingFieldAccess, type BookingFieldMode } from "@/lib/booking-field-access";
-import { PLAN_KEY_PREFIX } from "@/lib/plans-constants";
+import { canOperateBooking, canWriteClinical, capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
 import type { ForceFlags } from "@/lib/booking-force-flags";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
-
-/**
- * Wipe every booking-derived cache slot for a tenant. Called after any
- * create/update/delete of a Booking — both the agenda calendar dots and
- * the dashboard KPIs depend on bookings, so invalidating one without
- * the other surfaces stale data.
- */
-function invalidateBookingDerivedCaches(tenantId: string) {
-  revalidateTag(tags.bookingDays(tenantId));
-  revalidateTag(tags.dashboard(tenantId));
-}
+import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
+// S07c (ES2b P2.0): los helpers de los write-paths y el cuerpo de la tx de
+// `updateBooking` viven en el core server-only (`lib/bookings-core.ts`), para
+// que Planes (P2.1) los llame dentro de su propia tx con los mismos gates y
+// locks. Este archivo queda como wrapper de las actions: getActor → zod →
+// runWithRls(core) → traducir el outcome → audit/notify/revalidate →
+// `afterBookingsCommitted` (enmienda Realtime: una vez, después del commit y
+// fuera de `runWithRls`; reemplaza a `invalidateBookingDerivedCaches`).
+import {
+  acceptClientKey,
+  applyBookingUpdateInTx,
+  bookingRefsError,
+  buildBookingCreateData,
+  checkPatientOverlap,
+  classifyForWrite,
+  countCapacityOverlaps,
+  defaultLocationFor,
+  guestOperable,
+  hasFullAccess,
+  liveBlocksInTx,
+  loadInstantAvailability,
+  lockActiveLocation,
+  lockPlanReactivationInTx,
+  notifyPlanNearingDischarge,
+  activeForSession,
+  planStampData,
+  practitionerLabel,
+  rangesForInput,
+  resolveBookingUpdateUniqueViolation,
+  resolveUniqueViolation,
+  suggestNextFreeSlot,
+  syncPlanSessionAfterBookingWriteInTx,
+  validateBookingRefsInTx,
+  writableFields,
+  type PlanReactivationStamp,
+  type PlanSyncResult,
+} from "@/lib/bookings-core";
+import { loadAgendaPlanProjection } from "@/lib/agenda-plan-projection-internal";
+import {
+  BASIC_ACCESS_ERROR,
+  BAD_LOCATION_ERROR,
+  BLOCKED_ERROR,
+  CLINICAL_RELINK_ERROR,
+  OUT_OF_HOURS_ERROR,
+  PATIENT_OVERLAP_ERROR,
+  PLAN_DELETE_ERROR,
+  PLAN_PAID_CANCEL_ERROR,
+  PLAN_PATIENT_CHANGE_ERROR,
+  PLAN_SESSION_NOT_PENDING_ERROR,
+  PLAN_SESSION_TAKEN_ERROR,
+  SESSION_KEPT_DONE_NOTICE,
+  RECEPTION_FORBIDDEN_ERROR,
+  RECEPTION_OTHER_PRACTITIONER_ERROR,
+  SAME_INSTANT_ERROR,
+  STALE_ERROR,
+  UPDATE_SAME_INSTANT_ERROR,
+} from "@/lib/bookings-constants";
 import {
   BookingBatchCreate,
   BookingCreate,
@@ -92,593 +114,6 @@ import {
   type ReceptionActionResult,
 } from "@/lib/bookings-types";
 import type { ReceptionAction } from "@/lib/reception-state";
-
-type Tx = Prisma.TransactionClient;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Guards compartidos por los write-paths (A2a-S06). Privados: un archivo
-// "use server" solo exporta funciones async, y estos no son actions.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Acceso básico = solo ver (decisión del dueño, 30-sep). Un PRACTITIONER sin
- * acceso completo al paciente VE el turno pero no lo modifica: ni estado,
- * reprogramación, borrado, cobros o notas, ni crea turnos para ese paciente.
- * Antes solo lo "reflejaba" la UI (y ni eso: el drawer mostraba Editar), y el
- * servidor aceptaba todo — un kine con acceso básico podía pisar las notas o
- * borrar el turno de un paciente ajeno.
- */
-const BASIC_ACCESS_ERROR =
-  "Tenés acceso básico a este paciente: podés ver el turno pero no modificarlo. Pedile al profesional a cargo que te lo comparta.";
-
-const SAME_INSTANT_ERROR =
-  "El paciente ya tiene un turno que arranca exactamente a esa hora. Movelo aunque sea unos minutos para poder cargarlo.";
-
-const STALE_ERROR = "El turno cambió en otra sesión. Refrescá la agenda y reintentá.";
-
-/**
- * Con paciente, exige acceso `full`. Guest (sin paciente): `guestOperable`
- * (P0.Z, H-b3): BILLING no; la Secretaria y los kines, como hasta hoy.
- *
- * Planes E1 (S07sb): ya NO es el gate de create/batch/update/status/cancelar
- * (eso es `bookingGateInTx`). Queda para lo que sigue exigiendo full: borrar
- * el turno, los toggles de cobro (la matriz de cobros es de C0) y la recepción
- * de un PRACTITIONER sobre turnos ajenos.
- */
-async function hasFullAccess(actor: Actor, patientId: string | null, tx: Tx): Promise<boolean> {
-  if (!patientId) return guestOperable(await actorCapsInTx(tx, actor));
-  return (await patientAccessFor(actor, patientId, tx)) === "full";
-}
-
-/**
- * ¿Opera (crea, mueve, cambia estado, borra, marca cobros de) un turno guest?
- * P0.Z (H-b3, revisor (b) de ES1): antes el guest se evaluaba como "full" para
- * cualquier rol, así que BILLING (sin `agenda.operateAll` ni `clinical.read`)
- * creaba turnos guest con copago arbitrario, los borraba y les marcaba cobros.
- * Ahora: `agenda.operateAll` (OWNER, ADMIN, Secretaria) o `clinical.read`
- * (cualquier kine: hoy opera los guest de todos y la recepción de un guest
- * ajeno sigue igual). Que la Secretaria fije el copago de un guest es
- * intencional (lo cobra en recepción). Una sola regla para el gate de escritura
- * (`bookingGateInTx`), `hasFullAccess` y el `canOperate` de la agenda.
- */
-function guestOperable(caps: ReadonlySet<Capability>): boolean {
-  return caps.has("agenda.operateAll") || caps.has("clinical.read");
-}
-
-/**
- * Re-vínculo de paciente sin `clinical.read` (E1, PLANES §S07sb): mover un
- * turno de un paciente a otro arrastra su título, descripción y notas, que
- * pueden ser clínicos y que la Secretaria ni ve. Solo se permite si están
- * vacíos; si no, que lo cambie el profesional.
- */
-const CLINICAL_RELINK_ERROR = "Este turno tiene datos clínicos: pedile al profesional que lo cambie";
-
-/**
- * Capabilities del actor leídas DENTRO de la tx abierta. No se usa
- * `getMembershipRole` (lib/authz.ts) porque abre su propia `runWithRls`: desde
- * adentro de otra tx serían dos conexiones del pool a la vez por request.
- */
-async function actorCapsInTx(tx: Tx, actor: Actor): Promise<ReadonlySet<Capability>> {
-  const m = await tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  });
-  return capabilitiesFor(m?.role);
-}
-
-/** Lee las capabilities a lo sumo una vez por tx, y solo si hacen falta. */
-function lazyCapsInTx(tx: Tx, actor: Actor): () => Promise<ReadonlySet<Capability>> {
-  let p: Promise<ReadonlySet<Capability>> | undefined;
-  return () => (p ??= actorCapsInTx(tx, actor));
-}
-
-/**
- * Qué puede hacer el actor sobre un turno (o un alta) de `patientId`.
- * - `canOperate`: crear, mover, cambiar estado y cancelar
- *   (`canOperateBooking` = full || `agenda.operateAll`; E1/C8).
- * - `fields`: qué campos de texto escribe (`bookingFieldAccess`, la MISMA regla
- *   con la que `listAgendaBookings` los lee).
- * - `full`: acceso full real (guest: cuenta como full si `guestOperable`,
- *   igual que `hasFullAccess(actor, null)`). Decide si el `copagoCents` del
- *   actor vale.
- * - `clinical`: el rol tiene `clinical.read` (regla de re-vínculo).
- */
-type BookingGate = {
-  level: PatientAccessLevel;
-  canOperate: boolean;
-  fields: BookingFieldAccess;
-  full: boolean;
-  clinical: boolean;
-};
-
-/**
- * `patientId` null = guest: se opera si `guestOperable` (P0.Z: BILLING no) y los campos
- * salen de la regla de guest (título/descripción con `clinical.read`; las notas
- * son del staff). El paciente tiene que venir YA validado contra el tenant
- * (`patientAccessFor` devuelve "none" para uno ajeno, y `agenda.operateAll` no
- * mira el nivel: el chequeo de tenant es del caller, antes de esto).
- *
- * Sin query de rol cuando el acceso es full: por PD-13 (S02p, `isAdminOnlyRole`
- * en lib/visibility.ts, derivado de la matriz) `full` solo lo alcanza un rol
- * CON `clinical.read`, y con full `canOperateBooking` no mira capabilities. El
- * camino de siempre (profesional con su paciente) no suma ni una sentencia:
- * `createBooking`/`updateBooking`/el batch tienen techo estricto de statements
- * (tests/perf/compare.ts, C14).
- */
-async function bookingGateInTx(
-  tx: Tx,
-  actor: Actor,
-  patientId: string | null,
-  caps: () => Promise<ReadonlySet<Capability>>
-): Promise<BookingGate> {
-  const level: PatientAccessLevel = patientId ? await patientAccessFor(actor, patientId, tx) : "full";
-  if (patientId && level === "full") {
-    return {
-      level,
-      canOperate: true,
-      fields: bookingFieldAccess({ clinical: true, access: "full", hasPatient: true }),
-      full: true,
-      clinical: true,
-    };
-  }
-  const c = await caps();
-  const clinical = c.has("clinical.read");
-  // Guest: `level` vale "full" solo para `bookingFieldAccess` (la regla de
-  // guest no mira el nivel); operar y el copago propio van por `guestOperable`.
-  const canOperate = patientId ? canOperateBooking(c, level) : guestOperable(c);
-  return {
-    level,
-    canOperate,
-    fields: bookingFieldAccess({ clinical, access: level, hasPatient: !!patientId }),
-    full: patientId ? level === "full" : canOperate,
-    clinical,
-  };
-}
-
-/** Un campo es escribible solo si lo es en los dos lados (re-vínculo: el turno antes y después). */
-function intersectFields(a: BookingFieldAccess, b: BookingFieldAccess): BookingFieldAccess {
-  const m = (x: BookingFieldMode, y: BookingFieldMode): BookingFieldMode => (x === "rw" && y === "rw" ? "rw" : "hidden");
-  return { title: m(a.title, b.title), description: m(a.description, b.description), notes: m(a.notes, b.notes) };
-}
-
-/**
- * Saca del patch los campos de texto que el actor no puede leer (E1: "un campo
- * se escribe si y solo si se puede leer"). Va ANTES del write y del audit: el
- * drawer con los campos ocultos (null) mandaba vacíos y borraba el título de un
- * guest, o la Secretaria pisaba notas clínicas que no ve.
- */
-function writableFields<P extends { title?: string; description?: string; notes?: string }>(
-  patch: P,
-  fields: BookingFieldAccess
-): P {
-  const out = { ...patch };
-  if (fields.title !== "rw") delete out.title;
-  if (fields.description !== "rw") delete out.description;
-  if (fields.notes !== "rw") delete out.notes;
-  return out;
-}
-
-/** ¿El turno trae algo clínico? Notas = sin el prefijo automático "[SOBRETURNO]". */
-function hasClinicalText(b: { title: string | null; description: string | null; notes: string | null }): boolean {
-  const notes = (b.notes ?? "").replace(/^\[SOBRETURNO\]/, "").trim();
-  return !!(b.title?.trim() || b.description?.trim() || notes);
-}
-
-/**
- * Nombre del profesional para el aviso de conflicto. Del TENANT (antes era un
- * `findUnique` por id pelado) y nunca el email: el fallback es genérico.
- */
-async function practitionerLabel(tx: Tx, tenantId: string, practitionerId: string): Promise<string> {
-  const prac = await tx.practitioner.findFirst({
-    where: { id: practitionerId, tenantId },
-    select: { user: { select: { fullName: true } } },
-  });
-  return prac?.user.fullName ?? "El profesional";
-}
-
-/**
- * Key de idempotencia que manda el cliente (UUID por instancia de modal), o
- * null si no sirve (el caller cae a una al azar). Se descarta también una key
- * con prefijo `pub:`: es el espacio de las reservas públicas y
- * `isPublicReservation` (lib/booking-capacity.ts) la usa para saber qué turno
- * puede vencer a los 30 min — un turno de la agenda nunca tiene que parecerlo.
- *
- * Planes C3 (S07k): tampoco `plan:` (`PLAN_KEY_PREFIX`), el espacio de los
- * turnos que genera un plan (`plan:<generationId>:<index>`). La key es
- * `@unique` global: aceptarla haría que el upsert de `createBooking` encuentre
- * el turno del plan y entre a su rama `update` (resetea copago, status, notas
- * y sede de un turno que el cliente no creó). Igual que con `pub:`, se descarta
- * y el alta cae a una key al azar: fila nueva, el turno del plan intacto. Un
- * cliente legítimo manda UUIDs, así que descartar no le cambia nada.
- */
-function acceptClientKey(k: unknown): string | null {
-  if (typeof k !== "string" || k.length < 8 || k.length > 64) return null;
-  if (k.startsWith("pub:") || k.startsWith(PLAN_KEY_PREFIX)) return null;
-  return k;
-}
-
-/**
- * Cuántos turnos del MISMO profesional + servicio se superponen con
- * [start, end) y todavía sostienen el cupo (`isHoldingCapacity`: una reserva
- * pública impaga vencida ya no cuenta). Trae los candidatos de la ventana de
- * 240 min hacia atrás (una sesión larga previa igual puede superponerse) y
- * cuenta los solapes reales — un findFirst podía perderlos.
- */
-async function countCapacityOverlaps(
-  tx: Tx,
-  o: {
-    tenantId: string;
-    practitionerId: string;
-    serviceId: string;
-    start: Date;
-    end: Date;
-    now: Date;
-    excludeId?: string;
-    excludeKey?: string | null;
-  }
-): Promise<number> {
-  const candidates = await tx.booking.findMany({
-    where: {
-      tenantId: o.tenantId,
-      practitionerId: o.practitionerId,
-      serviceId: o.serviceId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { lt: o.end, gte: new Date(o.start.getTime() - 240 * 60_000) },
-      ...(o.excludeId ? { id: { not: o.excludeId } } : {}),
-      // Un reintento idempotente (misma key) no choca consigo mismo.
-      ...(o.excludeKey ? { idempotencyKey: { not: o.excludeKey } } : {}),
-    },
-    select: {
-      scheduledFor: true,
-      durationMin: true,
-      status: true,
-      paymentStatus: true,
-      createdAt: true,
-      patientId: true,
-      idempotencyKey: true,
-    },
-  });
-  return candidates.filter(
-    (c) =>
-      isHoldingCapacity(c, o.now) &&
-      c.scheduledFor < o.end &&
-      new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > o.start
-  ).length;
-}
-
-/**
- * Guard a nivel PACIENTE, ortogonal al cupo del profesional. Mira los turnos
- * no cancelados del paciente (de cualquier profesional) en el día AR del nuevo
- * turno UNIDO a 240 min hacia atrás, así una sesión larga que cruza la
- * medianoche AR igual se detecta. Lo usan createBooking y (desde A2a-S06)
- * updateBooking, que antes reprogramaba o cambiaba de paciente sin mirarlo.
- *
- *   - `sameInstant`: arranca exactamente a la misma hora → el índice único
- *     parcial lo rechaza igual; no se ofrece confirmar.
- *   - `overlapISO`: el primer turno propio que se superpone (confirmable:
- *     dos servicios en paralelo es normal en kinesiología).
- *   - `sameDayStarts`: turnos del mismo día AR (para el aviso suave de create).
- * Excluye la fila propia (`excludeId` al editar, `excludeKey` en un reintento).
- */
-async function checkPatientOverlap(
-  tx: Tx,
-  o: {
-    tenantId: string;
-    patientId: string;
-    start: Date;
-    end: Date;
-    excludeId?: string;
-    excludeKey?: string | null;
-  }
-): Promise<{ sameInstant: boolean; overlapISO: string | null; sameDayStarts: Date[] }> {
-  // Día AR del turno como instantes. B3.1: antes era el literal
-  // `${dayKey}T03:00:00Z` (medianoche AR a mano); ahora el único puente día ↔
-  // instante del motor (`dayWindow`, sobre `lib/datetime-ar.ts`).
-  const { start: dayStart, end: dayEnd } = dayWindow(dayKeyOf(o.start));
-  const windowStart = new Date(Math.min(dayStart.getTime(), o.start.getTime() - 240 * 60_000));
-  // Hasta el fin del día AR o del turno nuevo (un turno de 23:30 que cruza la
-  // medianoche también puede pisar uno del día siguiente).
-  const windowEnd = new Date(Math.max(dayEnd.getTime(), o.end.getTime()));
-  const rows = await tx.booking.findMany({
-    where: {
-      tenantId: o.tenantId,
-      patientId: o.patientId,
-      status: { notIn: ["CANCELLED"] },
-      scheduledFor: { gte: windowStart, lt: windowEnd },
-      ...(o.excludeId ? { id: { not: o.excludeId } } : {}),
-      ...(o.excludeKey ? { idempotencyKey: { not: o.excludeKey } } : {}),
-    },
-    select: { scheduledFor: true, durationMin: true },
-  });
-  const sameInstant = rows.some((c) => +c.scheduledFor === +o.start);
-  let overlapISO: string | null = null;
-  if (patientDayStatus(rows, o.start, o.end) === "overlap") {
-    const first = rows
-      .filter(
-        (c) =>
-          c.scheduledFor < o.end &&
-          new Date(c.scheduledFor.getTime() + c.durationMin * 60_000) > o.start
-      )
-      .sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime())[0];
-    overlapISO = first.scheduledFor.toISOString();
-  }
-  // Aviso suave solo para un segundo turno del MISMO día AR; un arrastre del
-  // día anterior que trajo la ventana hacia atrás no lo dispara.
-  const sameDayStarts = rows
-    .map((c) => c.scheduledFor)
-    .filter((d) => d >= dayStart && d < dayEnd)
-    .sort((a, b) => a.getTime() - b.getTime());
-  return { sameInstant, overlapISO, sameDayStarts };
-}
-
-/**
- * P2002 al escribir un turno, resuelto sin depender de `meta.target`.
- *
- * Bajo RLS (rol `kinesoft_app`: local hoy, prod tras el flip) Postgres NO
- * informa qué índice violó el INSERT: `meta.target` llega `null` y el catch
- * viejo caía a "Turno duplicado." (hallazgo A1.1). Por eso se decide por los
- * DATOS, en una transacción NUEVA (la que falló quedó abortada, no admite más
- * queries):
- *   - existe una fila VIVA de este tenant con esta `idempotencyKey` → es el
- *     mismo intento (reintento, doble click o dos upserts concurrentes con la
- *     misma key que se cruzaron en el índice del paciente) → éxito idempotente
- *     con esa fila;
- *   - si no, target `null` o el índice paciente+instante → el paciente ya
- *     tiene un turno activo que arranca exactamente a esa hora;
- *   - cualquier otra cosa → error genérico (el caller loguea).
- * Una fila con la key pero CANCELLED no es éxito: el upsert quiso reactivarla
- * y chocó con otro turno del paciente en ese instante.
- */
-async function resolveUniqueViolation(
-  tenantId: string,
-  e: unknown,
-  idempotencyKey: string
-): Promise<{ kind: "existing"; id: string } | { kind: "patient-slot" } | { kind: "other" }> {
-  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") {
-    return { kind: "other" };
-  }
-  const row = await runWithRls(tenantId, (tx) =>
-    tx.booking.findFirst({
-      where: { tenantId, idempotencyKey },
-      select: { id: true, status: true },
-    })
-  );
-  if (row && row.status !== "CANCELLED") return { kind: "existing", id: row.id };
-  const rawTarget = e.meta?.target;
-  const target = Array.isArray(rawTarget) ? rawTarget.join(",") : String(rawTarget ?? "");
-  if (
-    rawTarget == null ||
-    target === "" ||
-    target.includes("patient_slot") ||
-    (target.includes("patientId") && target.includes("scheduledFor"))
-  ) {
-    return { kind: "patient-slot" };
-  }
-  return { kind: "other" };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Motor de disponibilidad (B3.1 AV-bookings). La lógica es pura
-// (`lib/availability/*`); acá solo la carga (`loadAvailabilityInputs` con el tx
-// de runWithRls) y la traducción a los avisos blandos del alta/edición.
-// Lo que NO se movió al motor, a propósito: el cupo del write
-// (`countCapacityOverlaps`) y el guard del paciente (`checkPatientOverlap`)
-// siguen con sus queries propias — son el contrato de AUDIT §5 (preservar) y
-// los cubre la caracterización de bookings-write; el motor aporta franjas,
-// bloqueos, la regla por profesional y la sugerencia.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const SERVICE_DISABLED_ERROR = (serviceName: string) =>
-  `Este profesional no tiene habilitado el servicio «${serviceName}». Elegí otro profesional o habilitalo en Configuración → Profesionales.`;
-const BAD_LOCATION_ERROR = "Sede inválida o archivada. Elegí otra sede.";
-const OUT_OF_HOURS_ERROR =
-  "Ese horario está fuera del horario de atención del profesional. Podés elegir el próximo libre o cargarlo igual.";
-const BLOCKED_ERROR = (reason: string | null) =>
-  `La agenda del profesional está bloqueada en ese horario${reason ? ` (${reason})` : ""}. Podés elegir el próximo libre o cargarlo igual como sobreturno.`;
-
-type ServiceForRule = { id: string; durationMin: number; maxConcurrent: number | null; practitionerId: string | null };
-
-/**
- * Regla efectiva del profesional para el servicio (`PractitionerService`):
- * habilitado, duración propia y cupo (override). Sin fila, el default de
- * Configuración: habilitado si el servicio es del consultorio o de ese
- * profesional (`resolvePractitionerService`). Tenant-scoped a mano.
- */
-async function practitionerServiceRule(
-  tx: Tx,
-  tenantId: string,
-  practitionerId: string,
-  service: ServiceForRule
-): Promise<ResolvedPractitionerService> {
-  const row = await tx.practitionerService.findFirst({
-    where: { tenantId, practitionerId, serviceId: service.id },
-    select: {
-      practitionerId: true,
-      serviceId: true,
-      enabled: true,
-      visibility: true,
-      durationMin: true,
-      minLeadMinutes: true,
-      maxLeadDays: true,
-      concurrencyOverride: true,
-      maxConcurrent: true,
-    },
-  });
-  return resolvePractitionerService(row ?? undefined, service, practitionerId);
-}
-
-/** Franjas SIN restar bloqueos (contrato de `classify`: si recibiera
- *  `workingRanges`, un instante bloqueado saldría además fuera de horario). */
-const rangesForInput = (input: AvailabilityInput): RangesFor => (pid, dayKey) => scheduledRanges(pid, dayKey, input);
-
-/** Lo que el motor necesita para clasificar [start, end) de un profesional:
- *  el día AR del inicio (y el siguiente si el turno cruza la medianoche). */
-function loadInstantAvailability(
-  tx: Tx,
-  o: { tenantId: string; practitionerId: string; serviceId: string; start: Date; end: Date }
-) {
-  const from = dayKeyOf(o.start);
-  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
-  return loadAvailabilityInputs(tx, {
-    tenantId: o.tenantId,
-    practitionerIds: [o.practitionerId],
-    serviceId: o.serviceId,
-    from,
-    to,
-  });
-}
-
-/** Franjas/bloqueos del instante. `locationId` null = cualquier sede (la
- *  deciden las franjas). Patient = null: el guard del paciente es aparte. */
-function classifyForWrite(
-  input: AvailabilityInput,
-  o: {
-    when: Date;
-    durationMin: number;
-    practitionerId: string;
-    serviceId: string;
-    locationId: string | null;
-    cap: number | null;
-    now: Date;
-    excludeBookingId?: string;
-  }
-): InstantClassification & { blockReason: string | null } {
-  const c = classifyInstant({
-    ...o,
-    patientId: null,
-    rangesFor: rangesForInput(input),
-    blocks: input.blocks,
-    bookings: input.bookings,
-  });
-  const blockReason = input.blocks.find((b) => c.blockIds.includes(b.id) && b.reason)?.reason ?? null;
-  return { ...c, blockReason };
-}
-
-/**
- * Bloqueos vivos que pueden pisar [start, end) del profesional, leídos DENTRO
- * del tx de escritura (integrador final de B-pre, handoff de B4.4).
- *
- * El bug: el alta y el batch clasificaban el bloqueo en un tx PREVIO (y la
- * edición, antes del lock de cupo), así que un `applyDayLock` que commiteaba
- * en el medio dejaba entrar el turno como normal: sin aviso `blocked` y sin
- * marcarlo sobreturno. `applyDayLock` toma los locks de cupo
- * (`lib/booking-cap-lock.ts`) de cada (profesional, servicio) del día; el
- * write-path toma el mismo lock y RECIÉN DESPUÉS llama a esto: en READ
- * COMMITTED la sentencia ve el bloqueo ya commiteado (o el candado espera a
- * que commiteemos y su recálculo de afectados ve nuestro turno → `changed`).
- *
- * Mismo filtro y ventana que `loadAvailabilityInputs` sin sede (los días AR
- * que toca el turno), para que la re-clasificación sea idéntica a la del
- * motor salvo por los bloqueos nuevos. Una sola query: no se recarga todo.
- */
-async function liveBlocksInTx(
-  tx: Tx,
-  o: { tenantId: string; practitionerId: string; start: Date; end: Date }
-): Promise<AvailabilityInput["blocks"]> {
-  const from = dayKeyOf(o.start);
-  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
-  return tx.timeBlock.findMany({
-    where: {
-      tenantId: o.tenantId,
-      deletedAt: null,
-      startsAt: { lt: dayWindow(to).end },
-      endsAt: { gt: dayWindow(from).start },
-      OR: [{ practitionerId: null }, { practitionerId: o.practitionerId }],
-    },
-    select: {
-      id: true,
-      practitionerId: true,
-      locationId: true,
-      startsAt: true,
-      endsAt: true,
-      allDay: true,
-      reason: true,
-      groupId: true,
-    },
-    orderBy: [{ startsAt: "asc" }, { id: "asc" }],
-  });
-}
-
-/**
- * Sede por defecto de un turno sin sede elegida: la de la franja del
- * profesional donde entra el turno (o la que contiene el inicio); si no cae en
- * ninguna, la principal. null = sin sede principal (tenant sin Location: el
- * turno queda con null = "principal" como hasta ahora).
- */
-function defaultLocationFor(input: AvailabilityInput, practitionerId: string, when: Date, durationMin: number): string | null {
-  const { dayKey, startMin } = arWallOf(when);
-  const ranges = scheduledRanges(practitionerId, dayKey, input);
-  const hit =
-    ranges.find((r) => fitsInRanges(ranges, startMin, durationMin, r.locationId)) ??
-    ranges.find((r) => r.startMin <= startMin && startMin < r.endMin);
-  const loc = hit?.locationId ?? input.primaryLocationId;
-  return loc && loc !== NO_LOCATION_ID ? loc : null;
-}
-
-/**
- * Lock COMPARTIDO de las sedes del tenant y RECIÉN DESPUÉS la validación (patrón
- * de `lib/location-lock.ts`): así `archiveLocation` no puede intercalarse
- * entre "la sede está activa" y la fila que la referencia. Dentro del tx.
- */
-async function lockActiveLocation(tx: Tx, tenantId: string, locationId: string): Promise<boolean> {
-  await lockTenantLocationsShared(tx, tenantId);
-  const loc = await tx.location.findFirst({
-    where: { id: locationId, tenantId, active: true },
-    select: { id: true },
-  });
-  return !!loc;
-}
-
-/**
- * Próximo hueco libre para la sugerencia de los avisos (`conflict`,
- * `outOfHours`, `blocked`). B3.1: `nextFreeSlot` del motor en vez de
- * `findNextFreeSlot` (lun-sáb + businessHours del tenant). Ahora respeta las
- * franjas del profesional, excepciones y bloqueos, y ve los turnos EN CURSO
- * (el loader trae desde `from − BOOKING_LOOKBACK_MIN`; el suggest viejo
- * cargaba desde `from + 15` y podía proponer un hueco ocupado, hallazgo de
- * B1.6). Con `patientId` tampoco propone un horario donde el paciente ya está.
- * Lectura consultiva: su propio runWithRls, fuera del tx del write.
- */
-async function suggestNextFreeSlot(
-  tenantId: string,
-  o: {
-    practitionerId: string;
-    serviceId: string;
-    from: Date;
-    durationMin: number;
-    cap: number | null;
-    patientId?: string | null;
-    locationId?: string | null;
-    excludeBookingId?: string;
-  }
-): Promise<string | null> {
-  const fromKey = dayKeyOf(o.from);
-  const input = await runWithRls(tenantId, (tx) =>
-    loadAvailabilityInputs(tx, {
-      tenantId,
-      practitionerIds: [o.practitionerId],
-      serviceId: o.serviceId,
-      patientId: o.patientId ?? undefined,
-      from: fromKey,
-      // +1: el horizonte (14 días) corre desde `from + 15 min`.
-      to: addDays(fromKey, NEXT_FREE_HORIZON_DAYS + 1),
-    })
-  );
-  return nextFreeSlot({
-    from: o.from,
-    durationMin: o.durationMin,
-    patientId: o.patientId ?? null,
-    practitionerId: o.practitionerId,
-    serviceId: o.serviceId,
-    locationId: o.locationId ?? null,
-    cap: o.cap,
-    rangesFor: rangesForInput(input),
-    blocks: input.blocks,
-    bookings: input.bookings,
-    now: new Date(),
-    excludeBookingId: o.excludeBookingId ?? null,
-  });
-}
 
 export async function listBookingsInRange(opts: {
   from: Date;
@@ -911,12 +346,32 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         telemedicineUrl: true,
         arrivedAt: true,
         attendingAt: true,
-        service: { select: { name: true, color: true, priceCents: true } },
+        // C9 (S12): vínculo con el plan, para la proyección de abajo.
+        programId: true,
+        sessionId: true,
+        // `discipline` para C9: así la proyección no vuelve a leer Service.
+        service: { select: { name: true, color: true, priceCents: true, discipline: true } },
         patient: { select: { firstName: true, lastName: true } },
       },
     });
     const patientIds = [...new Set(rows.map((b) => b.patientId).filter((id): id is string => !!id))];
     const access = await bulkPatientAccess(actor, patientIds, tx);
+    // C9 (Planes): chip del plan, disciplina y "Fuera de plan", con queries
+    // planas sobre las filas ya filtradas por tenant (S12p; sin el módulo
+    // `planes`, neutro y sin queries).
+    const c9 = await loadAgendaPlanProjection(
+      tx,
+      actor,
+      rows.map((r) => ({
+        id: r.id,
+        patientId: r.patientId,
+        serviceId: r.serviceId,
+        programId: r.programId,
+        sessionId: r.sessionId,
+        serviceDiscipline: r.service.discipline,
+      })),
+      caps
+    );
     // PD-13 (S07sb): cobertura/copago también para `admin` (Secretaria y
     // Facturación ven obra social y estado de cobro); nunca para `basic`.
     const billingIds = patientIds.filter((id) => {
@@ -939,7 +394,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         : Promise.resolve([]),
       getParticularCopagoCents(tenantId, tx),
     ]);
-    return { locations, rows, access, coverages, particularCopago };
+    return { locations, rows, access, coverages, particularCopago, c9 };
   });
   if (!loaded) return [];
 
@@ -1010,6 +465,8 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       clinicalHidden: fields.title !== "rw",
       canOperate,
       clinicalWritable,
+      // La proyección devuelve una entrada por cada fila que recibe.
+      ...loaded.c9.get(b.id)!,
     };
   });
 }
@@ -1135,64 +592,24 @@ export async function createBooking(
   // (`PractitionerService`: habilitado + duración + cupo) y las entradas del
   // motor de disponibilidad para clasificar el horario.
   const pre = await runWithRls(actor.tenantId, async (tx) => {
-    const [patient, service, prac, location] = await Promise.all([
-      data.patientId
-        ? tx.patient.findFirst({
-            where: { id: data.patientId, tenantId: actor.tenantId },
-            select: { id: true, diagnosisTitle: true, diagnosisNote: true },
-          })
-        : Promise.resolve(null),
-      tx.service.findFirst({
-        where: { id: data.serviceId, tenantId: actor.tenantId },
-        select: { id: true, durationMin: true, name: true, maxConcurrent: true, practitionerId: true },
-      }),
-      tx.practitioner.findFirst({
-        where: { id: data.practitionerId, tenantId: actor.tenantId },
-        select: { id: true },
-      }),
-      data.locationId
-        ? tx.location.findFirst({
-            where: { id: data.locationId, tenantId: actor.tenantId, active: true },
-            select: { id: true },
-          })
-        : Promise.resolve(null),
-    ]);
-    if (data.patientId && !patient) return { kind: "foreign-patient" as const };
-    if (!prac) return { kind: "foreign-practitioner" as const };
-    if (!service) return { kind: "bad-service" as const };
-    if (data.locationId && !location) return { kind: "bad-location" as const };
-    // E1 (S07sb): operar = full || `agenda.operateAll` (la Secretaria, que
-    // desde PD-13 nunca tiene full). PRACTITIONER en básico y BILLING siguen
-    // afuera. Guest: `guestOperable` (P0.Z, H-b3): BILLING tampoco crea guests
-    // (antes contaba como full y fijaba copago). El paciente ya se validó
-    // contra el tenant arriba.
-    const gate = await bookingGateInTx(tx, actor, patient?.id ?? null, lazyCapsInTx(tx, actor));
-    if (!gate.canOperate) return { kind: "basic" as const };
-    // Decisión de B3.1: servicio deshabilitado para ESE profesional → rechazo
-    // simple, también para OWNER/ADMIN (se habilita en Configuración). Sin un
-    // `allowDisabledService`: el cupo, la duración y el turnero ya leen esta
-    // regla, y un turno "por afuera" quedaría inconsistente con todos ellos.
-    const rule = await practitionerServiceRule(tx, actor.tenantId, prac.id, service);
-    if (!rule.enabled) return { kind: "service-disabled" as const, serviceName: service.name };
+    // Refs del tenant + gate E1 + regla del profesional (S07c: compartido con
+    // el batch, `validateBookingRefsInTx`).
+    const refs = await validateBookingRefsInTx(tx, actor, data);
+    if (refs.kind !== "ok") return refs;
     // Duración: la explícita del caller gana; si no, la del profesional para
     // ese servicio (`PractitionerService.durationMin`) o la del servicio.
-    const duration = data.durationMin ?? rule.durationMin;
+    const duration = data.durationMin ?? refs.rule.durationMin;
     const end = new Date(data.scheduledFor.getTime() + duration * 60_000);
     const input = await loadInstantAvailability(tx, {
       tenantId: actor.tenantId,
-      practitionerId: prac.id,
-      serviceId: service.id,
+      practitionerId: refs.practitionerId,
+      serviceId: refs.service.id,
       start: data.scheduledFor,
       end,
     });
-    return { kind: "ok" as const, patient, service, rule, duration, end, input, gate };
+    return { ...refs, duration, end, input };
   });
-  if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
-  if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
-  if (pre.kind === "bad-service") return { ok: false, error: "Servicio inválido." };
-  if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
-  if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
-  if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
+  if (pre.kind !== "ok") return { ok: false, error: bookingRefsError(pre) };
   const { service, rule, duration, end, input, gate } = pre;
   const patientDiag = pre.patient;
   // E1 (S07sb): lo que el actor no puede leer no lo escribe (título,
@@ -1278,7 +695,7 @@ export async function createBooking(
     if (!raw.allowPatientOverlap && pat.overlapISO) {
       return {
         ok: false,
-        error: "El paciente ya tiene un turno que se superpone con ese horario.",
+        error: PATIENT_OVERLAP_ERROR,
         patientOverlap: { existingISO: pat.overlapISO },
       };
     }
@@ -1330,9 +747,16 @@ export async function createBooking(
       // invisible here and the ON CONFLICT update fails the policy instead.)
       const holder = await tx.booking.findUnique({
         where: { idempotencyKey },
-        select: { tenantId: true },
+        select: { tenantId: true, id: true, programId: true },
       });
       if (holder && holder.tenantId !== actor.tenantId) return { kind: "foreign-key" as const };
+      // C3 (S12): el turno de esta key ya lo adoptó un plan. El reintento del
+      // alta (respuesta perdida, doble click tardío) es el MISMO intento →
+      // éxito idempotente SIN update: la rama `update` del upsert le pisaría
+      // copago, estado, notas y sede a un turno que ahora es del plan (y el
+      // copago de un `pricedByPlan` es la cuota, I6). Mismo escalar, sin
+      // sentencia extra.
+      if (holder?.programId) return { kind: "adopted" as const, id: holder.id };
 
       // Overlap capacity check, scoped to the SAME practitioner + SAME service.
       // Overlaps are allowed up to the cupo (null = ilimitado, el caso normal
@@ -1411,7 +835,8 @@ export async function createBooking(
           guestEmail: data.guestEmail,
           guestPhone: data.guestPhone,
         },
-        create: {
+        // S07c: los mismos datos de fila que el batch (`buildBookingCreateData`).
+        create: buildBookingCreateData({
           tenantId: actor.tenantId,
           practitionerId: data.practitionerId,
           serviceId: service.id,
@@ -1429,9 +854,8 @@ export async function createBooking(
           telemedicineUrl,
           title,
           description,
-          status: data.patientId ? "CONFIRMED" : "PENDING",
           idempotencyKey,
-        },
+        }),
       });
       return { kind: "ok" as const, row };
     });
@@ -1452,6 +876,8 @@ export async function createBooking(
       };
     }
     if (w.kind === "foreign-key") return { ok: false, error: "No pudimos crear el turno." };
+    // Éxito idempotente: no se escribió nada → ni audit ni `afterBookingsCommitted`.
+    if (w.kind === "adopted") return { ok: true, data: { id: w.id } };
     if (w.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
     const b = w.row;
     await audit({
@@ -1492,7 +918,11 @@ export async function createBooking(
     revalidatePath("/agenda");
     revalidatePath("/dashboard");
     if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
-    invalidateBookingDerivedCaches(actor.tenantId);
+    // Del row que devolvió el upsert: en un reintento con la misma key (rama
+    // `update`) el horario y el profesional son los de la fila que ya existía.
+    await afterBookingsCommitted(actor.tenantId, [
+      { bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, kind: "booking" },
+    ]);
     return { ok: true, data: { id: b.id } };
   } catch (e) {
     // The partial unique index (tenant+patient+slot, non-cancelled) is the
@@ -1520,6 +950,11 @@ type UpdateBookingResult = ActionResult<{ updatedAt: Date }> & {
   // B3.1: mismos avisos blandos que createBooking (re-llamar con el flag).
   outOfHours?: BookingOutOfHoursPrompt;
   blocked?: BookingBlockedPrompt;
+  /**
+   * S12 (C4): aviso no bloqueante de la sincronía con la sesión del plan (p.
+   * ej. salir de COMPLETED con evolución cargada: la sesión queda realizada).
+   */
+  notice?: string;
 };
 
 export async function updateBooking(
@@ -1539,243 +974,46 @@ export async function updateBooking(
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
-  const { id, locationId: patchLocationId, isTelemedicine: patchTele, telemedicineUrl: patchTeleUrl, ...patch } =
-    parsed.data;
+  const { id, locationId: patchLocationId } = parsed.data;
+  const patch = parsed.data;
   const now = new Date();
 
   // Ownership lookup + optimistic-concurrency check + access + patient re-bind
   // validation + conflict re-check + the write, all under the tenant GUC in
-  // one transaction. The prac-name + next-free suggestion (read-only,
-  // advisory) are fetched outside on conflict.
-  const outcome = await runWithRls(actor.tenantId, async (tx) => {
-    const before = await tx.booking.findFirst({
-      where: { id, tenantId: actor.tenantId },
-      select: {
-        id: true,
-        patientId: true,
-        status: true,
-        scheduledFor: true,
-        durationMin: true,
-        practitionerId: true,
-        serviceId: true,
-        locationId: true,
-        isTelemedicine: true,
-        service: { select: { id: true, durationMin: true, maxConcurrent: true, practitionerId: true } },
-        updatedAt: true,
-        // S07sb: regla de re-vínculo sin `clinical.read` (¿trae algo clínico?).
-        title: true,
-        description: true,
-        notes: true,
-        patient: { select: { firstName: true, lastName: true } },
+  // one transaction (S07c: el cuerpo es `applyBookingUpdateInTx`, con el gate
+  // de la Secretaria y `bookingFieldAccess` ADENTRO). The prac-name +
+  // next-free suggestion (read-only, advisory) are fetched outside on conflict.
+  const outcome = await runWithRls(actor.tenantId, (tx) =>
+    applyBookingUpdateInTx(
+      tx,
+      actor,
+      {
+        patch: parsed.data,
+        expectedUpdatedAt: raw.expectedUpdatedAt,
+        force: {
+          allowOverbooking: raw.allowOverbooking,
+          allowPatientOverlap: raw.allowPatientOverlap,
+          allowOutOfHours: raw.allowOutOfHours,
+          allowBlocked: raw.allowBlocked,
+        },
       },
-    });
-    if (!before) return { kind: "notfound" as const };
-    // Optimistic concurrency: reject if the row changed since the client
-    // (e.g. the BookingDrawer) loaded it — prevents acting on a stale view.
-    if (raw.expectedUpdatedAt && +before.updatedAt !== +new Date(raw.expectedUpdatedAt)) {
-      return { kind: "stale" as const };
-    }
-    // E1 (S07sb, contrato Secretaria de C8): operar = full ||
-    // `agenda.operateAll`. Acceso básico sin operateAll (PRACTITIONER ajeno,
-    // BILLING) = solo ver: ni estado, ni reprogramar, ni notas. S07c mueve
-    // este gate ADENTRO de `applyBookingUpdateInTx`, no al wrapper.
-    const caps = lazyCapsInTx(tx, actor);
-    const gate = await bookingGateInTx(tx, actor, before.patientId, caps);
-    if (!gate.canOperate) return { kind: "basic" as const };
-    // Tenant-scope + access check on the re-bound patient (`undefined` = leave
-    // alone) — atomic with the update. S07sb: el destino pasa por el MISMO
-    // gate (no `hasFullAccess`): la Secretaria asigna paciente a un guest.
-    const patientChanged = patch.patientId !== undefined && patch.patientId !== before.patientId;
-    let fields = gate.fields;
-    if (patientChanged) {
-      const owned = await tx.patient.findFirst({
-        where: { id: patch.patientId, tenantId: actor.tenantId },
-        select: { id: true },
-      });
-      if (!owned) return { kind: "foreign-patient" as const };
-      const target = await bookingGateInTx(tx, actor, owned.id, caps);
-      if (!target.canOperate) return { kind: "basic" as const };
-      // Sin `clinical.read`: guest → paciente sí; paciente → paciente solo si
-      // el turno no trae nada clínico (lo arrastraría a otra HC sin verlo).
-      if (!gate.clinical && before.patientId && hasClinicalText(before)) {
-        return { kind: "clinical-relink" as const };
-      }
-      // Escribible solo si lo es antes Y después del re-vínculo: la nota de
-      // un guest (del staff) pasa a ser de un paciente (clínica).
-      fields = intersectFields(gate.fields, target.fields);
-    }
-    // Lo que el actor no lee no se escribe ni se audita (E1).
-    const written = writableFields(patch, fields);
-
-    // Parity with createBooking (A2a-S06). Before, only a slot MOVE re-checked
-    // capacity: lengthening the turno or reactivating a CANCELLED one over a
-    // full cupo went through silently, and the patient's own overlap was never
-    // looked at on edit.
-    const newWhen = patch.scheduledFor ?? before.scheduledFor;
-    const newDuration = patch.durationMin ?? before.durationMin;
-    const end = new Date(newWhen.getTime() + newDuration * 60_000);
-    // Guest (nace PENDING) al que se le asigna paciente → CONFIRMED, paridad con
-    // createBooking con paciente (revisión A2). Antes quedaba PENDING/UNPAID
-    // con paciente: idéntico a una reserva pública, "vencía" a los 30 min y
-    // liberaba el cupo. Solo si el patch no pide otro estado.
-    const promoteGuest =
-      before.patientId == null && patch.patientId != null && (patch.status ?? before.status) === "PENDING";
-    const finalStatus = promoteGuest ? "CONFIRMED" : (patch.status ?? before.status);
-    const finalPatientId = patch.patientId ?? before.patientId;
-    const slotChanged = patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
-    const durationChanged = patch.durationMin != null && patch.durationMin !== before.durationMin;
-    const reactivating = before.status === "CANCELLED" && finalStatus !== "CANCELLED";
-    const windowChanged = slotChanged || durationChanged || reactivating;
-    const locationChanged = patchLocationId !== undefined && patchLocationId !== before.locationId;
-
-    // B3.1: lo que la edición escribe además del patch. `undefined` = no se toca.
-    let newLocationId: string | null | undefined = undefined;
-    let isOverbooked: boolean | undefined = undefined;
-    let cap: number | null = before.service.maxConcurrent;
-
-    if (finalStatus !== "CANCELLED") {
-      const pat =
-        finalPatientId && (windowChanged || patientChanged)
-          ? await checkPatientOverlap(tx, {
-              tenantId: actor.tenantId,
-              patientId: finalPatientId,
-              start: newWhen,
-              end,
-              excludeId: id,
-            })
-          : null;
-      if (pat?.sameInstant) return { kind: "patient-slot" as const };
-
-      // B3.1: franjas y bloqueos (motor), solo si cambia el horario o la sede
-      // — editar notas de un turno ya cargado fuera de horario no re-pregunta.
-      // Reactivar un CANCELLED también re-pregunta (p. ej. lo canceló un
-      // candado de día). Sede de la clasificación: la elegida; si se mueve de
-      // horario sin elegir, cualquiera (y se recalcula la de por defecto); si
-      // no, la que ya tenía.
-      let blocked = false;
-      if (windowChanged || locationChanged) {
-        // Integrador final de B-pre: el lock de cupo de los días del horario
-        // NUEVO se toma ANTES de cargar franjas/bloqueos (antes se tomaba recién
-        // para contar el cupo): así la carga de bloqueos de abajo ya ve un
-        // `applyDayLock` commiteado en el medio, que toma el mismo lock (ver
-        // `liveBlocksInTx`). También con solo cambio de sede: un bloqueo de la
-        // sede nueva entra por el mismo camino. Mismo orden de locks: cupo →
-        // sedes (`lockActiveLocation` más abajo).
-        await lockCapacityWindow(tx, {
-          tenantId: actor.tenantId,
-          practitionerId: before.practitionerId,
-          serviceId: before.serviceId,
-          start: newWhen,
-          end,
-        });
-        const rule = await practitionerServiceRule(tx, actor.tenantId, before.practitionerId, before.service);
-        cap = rule.cap;
-        const input = await loadInstantAvailability(tx, {
-          tenantId: actor.tenantId,
-          practitionerId: before.practitionerId,
-          serviceId: before.serviceId,
-          start: newWhen,
-          end,
-        });
-        const cls = classifyForWrite(input, {
-          when: newWhen,
-          durationMin: newDuration,
-          practitionerId: before.practitionerId,
-          serviceId: before.serviceId,
-          locationId: patchLocationId ?? (slotChanged ? null : before.locationId),
-          cap,
-          now,
-          excludeBookingId: id,
-        });
-        const prompt = { before, newWhen, newDuration, cap, finalPatientId };
-        if (cls.blocked && !raw.allowBlocked) {
-          return { kind: "blocked" as const, reason: cls.blockReason, ...prompt };
-        }
-        if (cls.outOfHours && !raw.allowOutOfHours) return { kind: "out-of-hours" as const, ...prompt };
-        blocked = cls.blocked;
-        if (patchLocationId === undefined && slotChanged) {
-          newLocationId = defaultLocationFor(input, before.practitionerId, newWhen, newDuration);
-        }
-      }
-
-      if (pat?.overlapISO && !raw.allowPatientOverlap) {
-        return { kind: "patient-overlap" as const, existingISO: pat.overlapISO };
-      }
-      let capacityReached = false;
-      if (windowChanged) {
-        // B3.1 (TOCTOU): el lock de cupo de los días del horario NUEVO ya se
-        // tomó arriba (antes de clasificar); el conteo y el update van en este
-        // mismo tx.
-        const overlapCount = await countCapacityOverlaps(tx, {
-          tenantId: actor.tenantId,
-          practitionerId: before.practitionerId,
-          serviceId: before.serviceId,
-          start: newWhen,
-          end,
-          now,
-          excludeId: id,
-        });
-        capacityReached = overlapBlocks(overlapCount, cap);
-        if (capacityReached && !raw.allowOverbooking) {
-          return { kind: "conflict" as const, before, newWhen, newDuration, cap, finalPatientId };
-        }
-      }
-      // B3.1: `isOverbooked` refleja el horario NUEVO: forzado (cupo o
-      // bloqueo) → true; movido a un hueco libre → false. Sin cambio de
-      // horario no se toca (salvo que un cambio de sede lo deje sobre un
-      // bloqueo forzado). El prefijo "[SOBRETURNO]" de notes no se toca acá
-      // (como antes: el update nunca lo escribió).
-      if (windowChanged) isOverbooked = capacityReached || blocked;
-      else if (blocked) isOverbooked = true;
-    }
-
-    // Sede elegida: lock compartido + activa en este tx (carrera con
-    // archiveLocation); siempre, aunque el turno esté cancelado — la FK saltea
-    // RLS. La de por defecto (reprogramación) archivada en el medio → no se toca.
-    if (patchLocationId !== undefined) {
-      if (!(await lockActiveLocation(tx, actor.tenantId, patchLocationId))) return { kind: "bad-location" as const };
-      newLocationId = patchLocationId;
-    } else if (newLocationId) {
-      if (!(await lockActiveLocation(tx, actor.tenantId, newLocationId))) newLocationId = undefined;
-    }
-
-    // Telemedicina: `isTelemedicine: false` borra la URL; la URL solo se
-    // guarda si el turno queda como telemedicina.
-    const finalTele = patchTele ?? before.isTelemedicine;
-    const tele: Prisma.BookingUncheckedUpdateInput = {
-      ...(patchTele !== undefined ? { isTelemedicine: patchTele } : {}),
-      ...(!finalTele
-        ? patchTele === false
-          ? { telemedicineUrl: null }
-          : {}
-        : patchTeleUrl !== undefined
-          ? { telemedicineUrl: patchTeleUrl }
-          : {}),
-    };
-
-    // `updatedAt` in the where makes the optimistic lock atomic: a concurrent
-    // write between the read above and here → P2025 → "stale" (below), instead
-    // of last-write-wins.
-    const after = await tx.booking.update({
-      where: { id, tenantId: actor.tenantId, updatedAt: before.updatedAt },
-      data: {
-        ...written,
-        ...(promoteGuest ? { status: "CONFIRMED" as const } : {}),
-        ...(newLocationId !== undefined ? { locationId: newLocationId } : {}),
-        ...(isOverbooked !== undefined ? { isOverbooked } : {}),
-        ...tele,
-      },
-      select: { updatedAt: true },
-    });
-    return { kind: "ok" as const, before, updatedAt: after.updatedAt, written };
-  }).catch((e) => {
+      { now }
+    )
+  ).catch(async (e) => {
     // A reschedule that lands the turno on a slot the SAME patient already
-    // occupies trips the partial unique index (patient+slot, non-cancelled) —
-    // the only unique an update can hit (idempotencyKey is never patched), so
-    // a P2002 here means that even when RLS hides `meta.target`.
+    // occupies trips the partial unique index (patient+slot, non-cancelled).
+    // S12: desde M1 hay un segundo único que una edición puede pisar,
+    // `Booking_session_active_key` (I2: reactivar un turno de plan cuya sesión
+    // ya tiene otro activo). Bajo RLS `meta.target` llega null, así que se
+    // decide por los datos en una tx nueva. El core no lo atrapa: un P2002
+    // aborta la tx de Postgres (C8).
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const r = await resolveBookingUpdateUniqueViolation(actor.tenantId, id);
+      if (r.kind === "plan-session-taken") return { kind: "plan-session-taken" as const, ordinal: r.ordinal };
       return { kind: "patient-slot" as const };
     }
+    // El core ya traduce el P2025 del update a `stale`; queda por si otra
+    // sentencia lo tira.
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
     }
@@ -1788,20 +1026,26 @@ export async function updateBooking(
   if (outcome.kind === "patient-slot") {
     return {
       ok: false,
-      error:
-        "El paciente ya tiene un turno que se superpone con ese horario: arranca exactamente a esa hora. Movelo aunque sea unos minutos.",
+      error: UPDATE_SAME_INSTANT_ERROR,
     };
   }
   if (outcome.kind === "patient-overlap") {
     return {
       ok: false,
-      error: "El paciente ya tiene un turno que se superpone con ese horario.",
+      error: PATIENT_OVERLAP_ERROR,
       patientOverlap: { existingISO: outcome.existingISO },
     };
   }
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
   if (outcome.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
+  // S12 (C4): variantes de Planes del core.
+  if (outcome.kind === "plan-session-not-pending") {
+    return { ok: false, error: PLAN_SESSION_NOT_PENDING_ERROR(outcome.ordinal) };
+  }
+  if (outcome.kind === "plan-session-taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
+  if (outcome.kind === "plan-paid-cancel") return { ok: false, error: PLAN_PAID_CANCEL_ERROR };
+  if (outcome.kind === "plan-patient-change") return { ok: false, error: PLAN_PATIENT_CHANGE_ERROR };
   if (outcome.kind === "conflict" || outcome.kind === "blocked" || outcome.kind === "out-of-hours") {
     const [practitionerName, nextFreeISO] = await Promise.all([
       runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, outcome.before.practitionerId)),
@@ -1882,8 +1126,16 @@ export async function updateBooking(
   if (patch.patientId && patch.patientId !== before.patientId) {
     revalidatePath(`/pacientes/${patch.patientId}`);
   }
-  invalidateBookingDerivedCaches(actor.tenantId);
-  return { ok: true, data: { updatedAt: outcome.updatedAt } };
+  await afterBookingsCommitted(actor.tenantId, outcome.refs);
+  // S12 (C4): alta próxima, post-commit (la notificación nunca tira).
+  if (outcome.plan?.discharge) {
+    await notifyPlanNearingDischarge(actor.tenantId, outcome.plan.discharge, actor.userId ?? null);
+  }
+  return {
+    ok: true,
+    data: { updatedAt: outcome.updatedAt },
+    ...(outcome.plan?.sessionKeptDone ? { notice: SESSION_KEPT_DONE_NOTICE } : {}),
+  };
 }
 
 /**
@@ -1905,10 +1157,6 @@ export async function setBookingStatus(
   if (status === "PENDING") return { ok: false, error: "Datos inválidos" };
   return updateBooking({ id, status, expectedUpdatedAt, ...force });
 }
-
-const RECEPTION_FORBIDDEN_ERROR = "No tenés permiso para operar la recepción.";
-const RECEPTION_OTHER_PRACTITIONER_ERROR =
-  "Solo podés marcar la recepción de tus turnos o de pacientes que tenés a cargo.";
 
 /**
  * Recepción (B4.1; decisión 3 de B-pre: timestamps, no BookingStatus nuevos).
@@ -1975,6 +1223,9 @@ export async function markReceptionAction(
         paymentStatus: true,
         idempotencyKey: true,
         patient: { select: { firstName: true, lastName: true } },
+        // S12 (C4): vínculo con el plan (escalares: sin sentencia extra).
+        sessionId: true,
+        pricedByPlan: true,
       },
     });
     if (!row) return { kind: "notfound" as const };
@@ -1988,15 +1239,54 @@ export async function markReceptionAction(
     if (+row.updatedAt !== +expected) return { kind: "stale" as const };
     const t = applyReceptionAction(row, input.action, now);
     if (!t.ok) return { kind: "invalid" as const, error: t.error };
+    // S12 (C4): "Deshacer Ausente" de un turno de plan es una reactivación
+    // (NO_SHOW → activo): mismas reglas que el drawer, con Booking → Session
+    // lockeados antes de escribir.
+    const finalStatus = t.patch.status ?? row.status;
+    const reactivating = !!row.sessionId && !activeForSession(row.status) && activeForSession(finalStatus);
+    let stamp: PlanReactivationStamp | null = null;
+    if (reactivating) {
+      const r = await lockPlanReactivationInTx(tx, {
+        tenantId: actor.tenantId,
+        bookingId: row.id,
+        sessionId: row.sessionId!,
+        expectedUpdatedAt: row.updatedAt,
+        pricedByPlan: row.pricedByPlan,
+      });
+      if (r.kind === "stale") return { kind: "stale" as const };
+      if (r.kind === "plan-session-not-pending") return { kind: "not-pending" as const, ordinal: r.ordinal };
+      stamp = r.stamp;
+    }
     const after = await tx.booking.update({
       where: { id: row.id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
-      data: t.patch,
+      data: { ...t.patch, ...planStampData(stamp) },
       select: { updatedAt: true, status: true, arrivedAt: true, attendingAt: true },
     });
-    return { kind: "ok" as const, row, transition: t, after };
-  }).catch((e) => {
+    // "Atendido" cierra la sesión (solo `completedAt`); "Deshacer Atendido" la
+    // reabre si está untouched; "Deshacer Ausente" re-alinea la fecha (I3).
+    const plan: PlanSyncResult | null = row.sessionId
+      ? await syncPlanSessionAfterBookingWriteInTx(tx, {
+          tenantId: actor.tenantId,
+          actorId: actor.userId ?? null,
+          sessionId: row.sessionId,
+          beforeStatus: row.status,
+          finalStatus,
+          writeThroughAt: reactivating ? row.scheduledFor : null,
+          now,
+        })
+      : null;
+    return { kind: "ok" as const, row, transition: t, after, plan };
+  }).catch(async (e) => {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
+    }
+    // S12 (C4): "Deshacer Ausente" con otro turno activo en la sesión pisa
+    // `Booking_session_active_key` (I2). Antes era un 500.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const r = await resolveBookingUpdateUniqueViolation(actor.tenantId, input.bookingId);
+      return r.kind === "plan-session-taken"
+        ? { kind: "taken" as const, ordinal: r.ordinal }
+        : { kind: "invalid" as const, error: UPDATE_SAME_INSTANT_ERROR };
     }
     throw e;
   });
@@ -2005,8 +1295,10 @@ export async function markReceptionAction(
   if (outcome.kind === "forbidden") return { ok: false, error: RECEPTION_OTHER_PRACTITIONER_ERROR };
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "invalid") return { ok: false, error: outcome.error };
+  if (outcome.kind === "not-pending") return { ok: false, error: PLAN_SESSION_NOT_PENDING_ERROR(outcome.ordinal) };
+  if (outcome.kind === "taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
 
-  const { row, transition, after } = outcome;
+  const { row, transition, after, plan } = outcome;
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -2038,8 +1330,16 @@ export async function markReceptionAction(
     // El estado (atendido/ausente) cuenta en el dashboard y en la ficha.
     revalidatePath("/dashboard");
     if (row.patientId) revalidatePath(`/pacientes/${row.patientId}`);
-    invalidateBookingDerivedCaches(actor.tenantId);
   }
+  // Enmienda Realtime: TODA acción OK de recepción emite (SV muestra "llegó" /
+  // "en atención" en la sala de espera), pero los caches derivados (puntos de
+  // la agenda, KPIs) solo cambian con el estado, como antes.
+  await afterBookingsCommitted(
+    actor.tenantId,
+    [{ bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "reception" }],
+    { invalidateCaches: !!transition.patch.status }
+  );
+  if (plan?.discharge) await notifyPlanNearingDischarge(actor.tenantId, plan.discharge, actor.userId ?? null);
   return {
     ok: true,
     data: {
@@ -2048,6 +1348,7 @@ export async function markReceptionAction(
       arrivedAt: after.arrivedAt?.toISOString() ?? null,
       attendingAt: after.attendingAt?.toISOString() ?? null,
       state: transition.to,
+      ...(plan?.sessionKeptDone ? { notice: SESSION_KEPT_DONE_NOTICE } : {}),
     },
   };
 }
@@ -2070,6 +1371,10 @@ export async function deleteBooking(
         paymentStatus: true,
         insurerPaidAt: true,
         payment: { select: { status: true } },
+        // Para el `BookingChangeRef` post-commit (misma sentencia, sin round-trip).
+        practitionerId: true,
+        scheduledFor: true,
+        programId: true,
       },
     });
     if (!row) return { kind: "notfound" as const };
@@ -2077,6 +1382,11 @@ export async function deleteBooking(
       return { kind: "stale" as const };
     }
     if (!(await hasFullAccess(actor, row.patientId, tx))) return { kind: "basic" as const };
+    // S12 (C4, I7): un turno de plan no se borra en duro (la FK de la sesión
+    // es RESTRICT y el turno es historia de la sesión): se cancela y la
+    // sesión queda "sin turno". Después del gate: quien no opera el turno no
+    // se entera de que es de un plan.
+    if (row.programId) return { kind: "plan-delete" as const };
     // Payment FK is onDelete: Restrict, so a paid turno can't be silently
     // wiped. Refuse the delete if a real payment is attached; for an
     // abandoned checkout (UNPAID/FAILED) clean up the orphan payment first
@@ -2102,7 +1412,13 @@ export async function deleteBooking(
     // `updatedAt` in the where: a concurrent edit → P2025 → rollback (the
     // orphan-payment cleanup above too) → "stale".
     await tx.booking.delete({ where: { id, tenantId: actor.tenantId, updatedAt: row.updatedAt } });
-    return { kind: "ok" as const, patientId: row.patientId };
+    const ref: BookingChangeRef = {
+      bookingId: row.id,
+      practitionerId: row.practitionerId,
+      scheduledFor: row.scheduledFor,
+      kind: "booking",
+    };
+    return { kind: "ok" as const, patientId: row.patientId, ref };
   }).catch((e) => {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
@@ -2112,6 +1428,7 @@ export async function deleteBooking(
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
+  if (outcome.kind === "plan-delete") return { ok: false, error: PLAN_DELETE_ERROR };
   if (outcome.kind === "has-payment") {
     return {
       ok: false,
@@ -2134,7 +1451,7 @@ export async function deleteBooking(
   });
   revalidatePath("/agenda");
   if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
-  invalidateBookingDerivedCaches(actor.tenantId);
+  await afterBookingsCommitted(actor.tenantId, [outcome.ref]);
   return { ok: true, data: undefined };
 }
 
@@ -2151,29 +1468,91 @@ async function toggleBilling(
   id: string,
   data: Prisma.BookingUpdateManyMutationInput,
   expectedUpdatedAt: string | undefined,
-  action: string
-): Promise<ActionResult<{ updatedAt: Date }>> {
+  action: string,
+  opts: { freezeCopago?: boolean } = {}
+): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
   const actor = await getActor();
   const outcome = await runWithRls(actor.tenantId, async (tx) => {
     const row = await tx.booking.findFirst({
       where: { id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, updatedAt: true },
+      // practitionerId/scheduledFor: para el `BookingChangeRef` post-commit.
+      // copagoCents/serviceId: Q8 (escalares, sin sentencia extra).
+      select: {
+        id: true,
+        patientId: true,
+        updatedAt: true,
+        practitionerId: true,
+        scheduledFor: true,
+        copagoCents: true,
+        serviceId: true,
+        // P2-Z · B-M3: cobro previo de un turno de plan cancelado/ausente.
+        status: true,
+        sessionId: true,
+      },
     });
     if (!row) return { kind: "notfound" as const };
     if (expectedUpdatedAt && +row.updatedAt !== +new Date(expectedUpdatedAt)) {
       return { kind: "stale" as const };
     }
     if (!(await hasFullAccess(actor, row.patientId, tx))) return { kind: "basic" as const };
+    // P2-Z · B-M3: marcar/desmarcar el cobro de un turno de plan CANCELLED o
+    // NO_SHOW cambia si la cuota de su sesión "ya se pagó" (cobro previo,
+    // `priorPaidStamp`). El turno que la reemplaza tiene que acompañar en la
+    // MISMA tx: si no, desmarcar dejaba el reemplazo en $0 para siempre y
+    // marcar después de estampar a precio pleno cobraba la sesión dos veces.
+    // Lock del paciente PRIMERO (C2: va antes que cualquier fila; la lectura
+    // de arriba no lockea) — serializa con el reprecio y el motor, que deciden
+    // la plata de la misma sesión. Los turnos activos o sueltos no pagan nada.
+    const planPrior = row.sessionId != null && row.patientId != null && (row.status === "CANCELLED" || row.status === "NO_SHOW");
+    if (planPrior) await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: row.patientId! });
+    // Q8 (C5, cierra parcialmente AUDIT:940): un turno fuera de plan sin copago
+    // propio (`copagoCents` null) se COBRA por el copago resuelto en lectura
+    // (precedencia §5.5 de lib/copago.ts, la misma que la agenda). Si no se
+    // congela, cambiar después la cobertura o el precio del servicio cambiaba
+    // retroactivamente cuánto "se cobró". Un turno de plan nunca entra acá
+    // (`pricedByPlan` ⇒ copago no nulo, CHECK). Solo al marcar cobrado.
+    let frozen: { copagoCents: number } | null = null;
+    if (opts.freezeCopago && row.copagoCents == null) {
+      const [coverage, particularCopago, service] = await Promise.all([
+        row.patientId
+          ? tx.coverage.findFirst({
+              where: { patientId: row.patientId, patient: { tenantId: actor.tenantId } },
+              orderBy: { id: "desc" },
+              select: { insurer: true, copagoCents: true, insurerRef: { select: { copagoCents: true } } },
+            })
+          : Promise.resolve(null),
+        getParticularCopagoCents(actor.tenantId, tx),
+        tx.service.findFirst({ where: { id: row.serviceId, tenantId: actor.tenantId }, select: { priceCents: true } }),
+      ]);
+      frozen = {
+        copagoCents: resolveBookingCopagoCents({
+          bookingOverride: null,
+          coverageOverride: coverage?.copagoCents ?? null,
+          hasCoverage: !!coverage,
+          insurerCopago: coverage?.insurerRef ? coverage.insurerRef.copagoCents : null,
+          particularCopago,
+          servicePriceCents: service?.priceCents ?? 0,
+        }),
+      };
+    }
     const res = await tx.booking.updateMany({
       where: { id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
-      data,
+      data: { ...data, ...(frozen ?? {}) },
     });
     if (res.count === 0) return { kind: "stale" as const };
     const after = await tx.booking.findFirst({
       where: { id, tenantId: actor.tenantId },
       select: { updatedAt: true },
     });
-    return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt };
+    const refs: BookingChangeRef[] = [
+      { bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "booking" },
+    ];
+    const sync = planPrior ? await syncPriorPaidReplacementInTx(tx, actor.tenantId, row.sessionId!, new Date()) : null;
+    if (sync?.ref) refs.push(sync.ref);
+    return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt, refs, notice: sync?.notice ?? null };
+  }).catch((e) => {
+    if (e instanceof BillingReplacementStale) return { kind: "stale" as const };
+    throw e;
   });
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
@@ -2186,8 +1565,104 @@ async function toggleBilling(
     entityId: id,
   });
   if (outcome.patientId) revalidatePath(`/pacientes/${outcome.patientId}`);
-  invalidateBookingDerivedCaches(actor.tenantId);
-  return { ok: true, data: { updatedAt: outcome.updatedAt } };
+  await afterBookingsCommitted(actor.tenantId, outcome.refs);
+  return { ok: true, data: { updatedAt: outcome.updatedAt, ...(outcome.notice ? { notice: outcome.notice } : {}) } };
+}
+
+/** El reemplazo cambió entre la lectura y el CAS: rollback de TODO el toggle (C5: conteo esperado o nada). */
+class BillingReplacementStale extends Error {}
+
+const ddmm = (d: Date) => {
+  const k = toARDateKey(d); // YYYY-MM-DD en hora AR
+  return `${k.slice(8, 10)}/${k.slice(5, 7)}`;
+};
+
+/**
+ * P2-Z · B-M3. Después de marcar/desmarcar el cobro de un turno previo
+ * (CANCELLED/NO_SHOW) de la sesión, recalcula `priorPaidStamp` y lo aplica al
+ * turno ACTIVO de esa sesión si todavía es "estampable" — el mismo criterio
+ * que la reactivación (`lockPlanReactivationInTx`) y el reprecio:
+ * PENDING/CONFIRMED, `pricedByPlan` (I8: acá nunca se escribe
+ * `pricedByPlan=true`, solo copago o el desestampado), UNPAID sin plata
+ * (`bookingHasMoney`, con el `Payment` de MP) y futuro. Si no lo es (ya se
+ * cobró, se realizó, pasó o tiene copago manual), la plata de ese turno no se
+ * toca y se avisa para que lo revisen a mano. Sin cambio necesario, no hace
+ * nada. CAS del copago sobre `updatedAt` + los valores leídos; si no pega,
+ * rollback completo (el caller lo traduce a stale).
+ *
+ * Corre sin gate de módulo: es consistencia de datos (misma decisión que la
+ * sincronía turno↔sesión de S12).
+ */
+async function syncPriorPaidReplacementInTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  sessionId: string,
+  now: Date
+): Promise<{ ref: BookingChangeRef | null; notice: string } | null> {
+  const session = await tx.session.findFirst({
+    where: { id: sessionId, program: { tenantId } },
+    select: {
+      priceCents: true,
+      bookings: {
+        where: { tenantId },
+        select: {
+          id: true,
+          status: true,
+          paymentStatus: true,
+          insurerPaidAt: true,
+          copagoCents: true,
+          pricedByPlan: true,
+          scheduledFor: true,
+          updatedAt: true,
+          practitionerId: true,
+          payment: { select: { status: true } },
+        },
+      },
+    },
+  });
+  if (!session) return null;
+  const active = session.bookings.find((b) => b.status === "PENDING" || b.status === "CONFIRMED" || b.status === "COMPLETED");
+  if (!active) return null; // sin reemplazo: el próximo turno se estampa con el cobro previo (motor)
+  const stamp = priorPaidStamp({ priceCents: session.priceCents }, session.bookings);
+  if (active.copagoCents === stamp.copagoCents && active.pricedByPlan === stamp.pricedByPlan) return null;
+
+  const when = ddmm(active.scheduledFor);
+  const stampable =
+    active.pricedByPlan &&
+    (active.status === "PENDING" || active.status === "CONFIRMED") &&
+    active.paymentStatus === "UNPAID" &&
+    !bookingHasMoney(active) &&
+    active.scheduledFor.getTime() > now.getTime();
+  if (!stampable) {
+    return {
+      ref: null,
+      notice: stamp.priorPaid
+        ? `La sesión ya quedó paga con este turno, pero el turno del ${when} no se puede ajustar (ya está cobrado, realizado o pasó): revisá su cobro a mano.`
+        : `La sesión ya no tiene un pago previo, pero el turno del ${when} no se puede ajustar (ya está cobrado, realizado o pasó): revisá su cobro a mano.`,
+    };
+  }
+  const res = await tx.booking.updateMany({
+    where: {
+      id: active.id,
+      tenantId,
+      updatedAt: active.updatedAt,
+      status: active.status,
+      paymentStatus: "UNPAID",
+      insurerPaidAt: null,
+      pricedByPlan: true,
+      copagoCents: active.copagoCents,
+    },
+    data: planStampData({ copagoCents: stamp.copagoCents, pricedByPlan: stamp.pricedByPlan }) as Prisma.BookingUpdateManyMutationInput,
+  });
+  if (res.count !== 1) throw new BillingReplacementStale();
+  return {
+    ref: { bookingId: active.id, practitionerId: active.practitionerId, scheduledFor: active.scheduledFor, kind: "booking" },
+    notice: stamp.priorPaid
+      ? `La sesión ya quedó paga con este turno: el turno del ${when} pasa a ${formatARS(0)}.`
+      : stamp.copagoCents != null
+        ? `La sesión ya no tiene un pago previo: el turno del ${when} vuelve a la cuota del plan (${formatARS(stamp.copagoCents)}).`
+        : `La sesión ya no tiene un pago previo: el turno del ${when} vuelve a quedar sin precio del plan.`,
+  };
 }
 
 /**
@@ -2201,7 +1676,7 @@ export async function setBookingInsurerPaid(
   id: string,
   paid: boolean,
   expectedUpdatedAt?: string
-): Promise<ActionResult<{ updatedAt: Date }>> {
+): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
   return toggleBilling(
     id,
     { insurerPaidAt: paid ? new Date() : null },
@@ -2220,12 +1695,13 @@ export async function setBookingCopagoPaid(
   id: string,
   paid: boolean,
   expectedUpdatedAt?: string
-): Promise<ActionResult<{ updatedAt: Date }>> {
+): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
   return toggleBilling(
     id,
     { paymentStatus: paid ? "PAID" : "UNPAID" },
     expectedUpdatedAt,
-    paid ? "booking.copago_paid" : "booking.copago_unpaid"
+    paid ? "booking.copago_paid" : "booking.copago_unpaid",
+    { freezeCopago: paid }
   );
 }
 
@@ -2309,46 +1785,8 @@ export async function createBookingsBatch(
   // paciente con acceso `full`. Un dryRun también se rechaza: el preflight
   // expone la ocupación del paciente. B3.1: + sede elegida y servicio
   // habilitado para el profesional (mismo rechazo que createBooking).
-  const pre = await runWithRls(actor.tenantId, async (tx) => {
-    const [patient, service, prac, location] = await Promise.all([
-      data.patientId
-        ? tx.patient.findFirst({
-            where: { id: data.patientId, tenantId: actor.tenantId },
-            select: { id: true, diagnosisTitle: true, diagnosisNote: true },
-          })
-        : Promise.resolve(null),
-      tx.service.findFirst({
-        where: { id: data.serviceId, tenantId: actor.tenantId },
-        select: { id: true, name: true, durationMin: true, maxConcurrent: true, practitionerId: true },
-      }),
-      tx.practitioner.findFirst({
-        where: { id: data.practitionerId, tenantId: actor.tenantId },
-        select: { id: true },
-      }),
-      data.locationId
-        ? tx.location.findFirst({
-            where: { id: data.locationId, tenantId: actor.tenantId, active: true },
-            select: { id: true },
-          })
-        : Promise.resolve(null),
-    ]);
-    if (data.patientId && !patient) return { kind: "foreign-patient" as const };
-    if (!prac) return { kind: "foreign-practitioner" as const };
-    if (!service) return { kind: "bad-service" as const };
-    if (data.locationId && !location) return { kind: "bad-location" as const };
-    // E1 (S07sb): mismo gate que createBooking (también para el dryRun).
-    const gate = await bookingGateInTx(tx, actor, patient?.id ?? null, lazyCapsInTx(tx, actor));
-    if (!gate.canOperate) return { kind: "basic" as const };
-    const rule = await practitionerServiceRule(tx, actor.tenantId, prac.id, service);
-    if (!rule.enabled) return { kind: "service-disabled" as const, serviceName: service.name };
-    return { kind: "ok" as const, patient, service, rule, gate };
-  });
-  if (pre.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del tenant." };
-  if (pre.kind === "foreign-practitioner") return { ok: false, error: "Profesional inválido." };
-  if (pre.kind === "bad-service") return { ok: false, error: "Servicio inválido." };
-  if (pre.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
-  if (pre.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
-  if (pre.kind === "service-disabled") return { ok: false, error: SERVICE_DISABLED_ERROR(pre.serviceName) };
+  const pre = await runWithRls(actor.tenantId, (tx) => validateBookingRefsInTx(tx, actor, data));
+  if (pre.kind !== "ok") return { ok: false, error: bookingRefsError(pre) };
   const { service, rule, gate } = pre;
   const duration = data.durationMin ?? rule.durationMin;
   // E1 (S07sb): mismas reglas que createBooking — campos que el actor no lee
@@ -2453,6 +1891,9 @@ export async function createBookingsBatch(
   let sobreturnos = 0;
   let omitted = 0;
   let duplicatesHit = duplicates;
+  // Turnos que ESTA corrida escribió, para `afterBookingsCommitted` al final
+  // (una vez, fuera de las tx por fecha).
+  const refs: BookingChangeRef[] = [];
 
   for (const slot of plan) {
     const { when } = slot;
@@ -2521,10 +1962,12 @@ export async function createBookingsBatch(
         }
         // Same tagging the single-create path uses, so reports can tell them apart.
         const notes = isOverbook ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
-        await tx.booking.upsert({
+        // `update: {}`: un reintento con la misma key converge a la fila que ya
+        // existe sin pisarla. S07c: los mismos datos de fila que el alta simple.
+        const row = await tx.booking.upsert({
           where: { idempotencyKey },
           update: {},
-          create: {
+          create: buildBookingCreateData({
             tenantId: actor.tenantId,
             practitionerId: data.practitionerId,
             serviceId: service.id,
@@ -2542,18 +1985,19 @@ export async function createBookingsBatch(
             telemedicineUrl,
             title,
             description,
-            status: data.patientId ? "CONFIRMED" : "PENDING",
             seriesId,
             idempotencyKey,
-          },
+          }),
+          select: { id: true, practitionerId: true, scheduledFor: true },
         });
-        return { kind: "ok" as const, isOverbook };
+        return { kind: "ok" as const, isOverbook, row };
       });
       if (w.kind === "omitted") {
         omitted++;
         continue;
       }
       created++;
+      refs.push({ bookingId: w.row.id, practitionerId: w.row.practitionerId, scheduledFor: w.row.scheduledFor, kind: "booking" });
       if (w.isOverbook) sobreturnos++;
     } catch (e) {
       // A patient+instant collision that the preflight missed (someone else
@@ -2598,7 +2042,8 @@ export async function createBookingsBatch(
   });
   revalidatePath("/agenda");
   if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
-  invalidateBookingDerivedCaches(actor.tenantId);
+  // Como antes, se invalida aunque no se haya creado nada (refs vacío).
+  await afterBookingsCommitted(actor.tenantId, refs);
   return {
     ok: true,
     data: {

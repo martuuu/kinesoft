@@ -25,7 +25,8 @@
   - E3: portal ampliado e identidad multi-consultorio (`PatientChangeRequest`, `Patient.userId` único por consultorio, ola P4.0).
 - **ES1 (P0) ejecutada el 04-oct** en develop, sin migraciones: §8 con las enmiendas de abajo (§5, C2, C5, C8, S11e, P2-C1, V1-D18/V2/M13). Commit `d7ac75f`. **Pendiente:** QA de staging ([QA.md §Planes P0](QA.md)). Cierres y hallazgos en AUDIT §Ronda 14.
 - **ES2a (P1) ejecutada el 04-oct** en develop: M1 `plans_booking_link` escrita, aplicada y verificada **solo en el Docker local** (§9). Commit `0edb0c8`. **C1 enmendado en P1.Z (F1):** los dos CHECK de pricing usan `IS NOT DISTINCT FROM` en vez de `=` (con `pricingMode` NULL, `=` da NULL y el CHECK dejaba pasar un precio sin modo); decisión del orquestador, avisada a Martin. El bloque SQL de §3 ya es idéntico al archivo (sha256 `7a0e2797…45cd`). Deploy: con el reset del 07-oct, M1 se aplica desde vacío dentro de la cadena completa ([MIGRACIONES-RUNBOOK §"Go-live con reset"](MIGRACIONES-RUNBOOK.md)); el down-script y la ventana sin uso de §2.4 quedaron obsoletos. Cierres y hallazgos en AUDIT §Ronda 15.
-- **EV0 ejecutada el 07-oct** en develop (verticales, /plataforma de consultorios, turnero con switch, REVOKE de la Data API), **pendiente commit de Martin**. M2 `tenant_verticals` aplicada solo en el Docker local. La revisión sumó enmiendas a S14, S15/S27a, S17d y S22b (copiadas abajo en §10 y §11) y a SV01 ([VERTICALES.md §5](VERTICALES.md)). Cierres en AUDIT §Ronda 16. **Siguiente: ES2b.**
+- **EV0 ejecutada el 07-oct** en develop (verticales, /plataforma de consultorios, turnero con switch, REVOKE de la Data API). Commit `ddfdff3`. M2 `tenant_verticals` aplicada solo en el Docker local. La revisión sumó enmiendas a S14, S15/S27a, S17d y S22b (copiadas abajo en §10 y §11) y a SV01 ([VERTICALES.md §5](VERTICALES.md)). Cierres en AUDIT §Ronda 16.
+- **ES2b (P2) ejecutada el 07-oct** en develop sobre `ddfdff3`, **pendiente commit de Martin**. **Sin migraciones nuevas.** Todo server (core de turnos, motor, sincronía, lecturas, ciclo de vida, mover/re-planificar, cantidad y precio, autorización de la OS, Diagnóstico, adopción) + P2-FX1 (buscador de la agenda). Firmas en §4 C8; decisiones y handoffs para ES3 al final de §10; cierres en AUDIT §Ronda 17; ADR-004. **Siguiente: ES3.**
 - **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → EV0 → ES2b → ES3 → SV → ES4 → EV1, orden del 07-oct), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
 - **Una sola migración en todo Planes:** M1 `plans_booking_link`. Ahora suma 2 tablas con RLS y la relajación de `Patient_userId_key`, una excepción a "todo aditivo" que Martin aprobó el 03-oct. Fuera de Planes, en el mismo bloque B: M2 `tenant_verticals` (EV0) y M3 `reception_call_realtime` (SV), cada una sola en su ola.
 - **Abierto para Martin** (el Paso 0 no lo resuelve):
@@ -693,7 +694,10 @@ S10 lo prueba corriendo toda la integración con el cliente viejo sobre el schem
 > - El CAS del `updatedAt` del programa va al final.
 > - Toda escritura multi-fila (reprecio, redistribución, desestampado, cancelar futuros) hace antes `SELECT … FOR UPDATE ORDER BY id` de las candidatas.
 > - Cerrar en Seguimiento lockea primero el Booking activo vinculado.
-> - **ES1 (fixer de P0.Z):** el cierre en Seguimiento (`completeSessionFromSeguimiento`, antes de contar para autocompletar) y `rescheduleSession` toman Session → `TreatmentProgram` con `FOR UPDATE`. Sin eso, dos cierres concurrentes de las últimas sesiones nunca autocompletaban y el reschedule era check-then-write.
+> - **ES1 (fixer de P0.Z):** el cierre en Seguimiento (`completeSessionFromSeguimiento`, antes de contar para autocompletar) y `rescheduleSession` toman Session → `TreatmentProgram`. Sin eso, dos cierres concurrentes de las últimas sesiones nunca autocompletaban y el reschedule era check-then-write.
+> - **Enmienda ES2b (P2.Z, H-a2):** ese lock del plan es **`FOR NO KEY UPDATE`**, no `FOR UPDATE` (el INSERT de un turno con FK al plan pide `FOR KEY SHARE`, que choca con `FOR UPDATE` y daba 40P01 contra re-planificar/vincular/adoptar), con `withTxConflictRetry` en cierre y reschedule.
+> - **Enmienda ES2b (P2.Z, H-a1):** el motor lockea las sesiones que escribe (`lockWrittenSessionsInTx`, `FOR UPDATE ORDER BY id`) y exige que sigan abiertas (si no, stale); Seguimiento re-cuenta los turnos activos después del claim. Toda escritura de `Session` va antes de los INSERT de `Booking` con FK.
+> - **Desvío de re-planificar (S16a):** si cambian las refs, el plan se escribe antes de re-clasificar (el motor lee las refs del plan), con las sesiones de la selección ya lockeadas id asc; los futuros impagos se cancelan después de re-clasificar y antes del commit. Detalle en ADR-004.
 > - "Este y los siguientes" pre-lockea todos los Booking en id asc antes de llamar al core por fila (`capLocksHeld:true`).
 > - `cancelBookingsInTx` no toma cupo.
 >
@@ -769,6 +773,7 @@ S10 lo prueba corriendo toda la integración con el cliente viejo sobre el schem
 - El monto de una fila bloqueada queda como su `Session.priceCents` y el resto se reparte entre las libres.
 - Si no hay filas libres y el total nuevo difiere de lo bloqueado → rechazo: *"No quedan sesiones sin cobrar para repartir la diferencia"*.
 - Si el total nuevo es menor que lo bloqueado o devengado → rechazo.
+- **Enmienda ES2b (P2.Z, B-M2) · `locked-unpriced`:** si el plan pasa a PACKAGE y alguna fila bloqueada (realizada, cobrada o pasada) no tiene cuota (`priceCents` null, plan "sin precio"), `repricePlan` (puro, `lib/plan-pricing.ts`) rechaza con `code: 'locked-unpriced'` y copy accionable, en el preview y en el commit. Antes el commit tiraba I6 → 500. Además `ProgramInvariantViolation` se mapea a error de dominio en todos los `rejection()`.
 
 **Reprecio y estampado** (CAS por fila, con conteo esperado conjunto):
 - (a) **Re-estampar:** `{id, tenantId, programId, pricedByPlan:true, copagoCents: esperado, paymentStatus:'UNPAID', status in [PENDING,CONFIRMED], scheduledFor > now, payment null|UNPAID|FAILED}`.
@@ -779,7 +784,8 @@ S10 lo prueba corriendo toda la integración con el cliente viejo sobre el schem
 
 **Cobro previo:** si una sesión tiene un turno previo (CANCELLED/NO_SHOW) **cobrado de verdad**, el turno nuevo de esa sesión se estampa con `copagoCents=0` y `pricedByPlan=true`. El preview lo marca: *"Ya pagada en el turno del dd/mm"*.
 - **Enmienda ES1 (revisor (a), A1):** "cobro previo" = `bookingWasCollected` (`lib/plan-pricing.ts`): `paymentStatus` PAID, `insurerPaidAt`, o `Payment` PAID. **REFUNDED y AUTHORIZED no cuentan** (reemplazo con la cuota normal). Antes usaba `bookingHasMoney` y daba $0 con un previo REFUNDED mientras `planBalance` no lo contaba como cobrado. `bookingHasMoney` queda para la fila bloqueada.
-- **Para S14:** `planBalance` no ve `insurerPaidAt`: con la OS pagada el reemplazo sale $0 pero no suma en "cobrado" (es copago vs OS). Decidir en S14 si se muestra. S14 suma además el test de paridad `bookingHasMoney` ↔ `cancelBookingsInTx` ↔ `bookingHasPaymentWhere`.
+- **Decisión S14 (ES2b):** la OS pagada (`insurerPaidAt`) **no** suma en "cobrado" (es copago vs OS); el saldo expone `insurerPaidBookings` (conteo) y el borde "cancelado con OS pagada" va a C0. Test de paridad `bookingHasMoney` ↔ `cancelBookingsInTx` ↔ `bookingHasPaymentWhere` hecho.
+- **Enmienda ES2b (P2.Z, B-M3):** marcar o desmarcar Cobrado en el turno previo (CANCELLED/NO_SHOW) re-estampa en la misma tx el turno activo de la sesión (CAS + `notice`); si no es estampable, solo avisa.
 
 **Saldo (P7):**
 - **pactado** = paquete, o precio × sesiones vivas;
@@ -882,6 +888,16 @@ CreatePlanResult = {ok:true, programId, idempotent:boolean} | {ok:false, kind:'s
 
 S16a, S16b y S25a **solo consumen** estas primitivas. Cualquier cambio a `plans-engine-internal` o `plans-load-internal` en P2.2 va por handoff.
 
+**ES2b publicado (07-oct; congelado para ES3, que solo agrega).** Resumen; la fuente son los archivos:
+- **P2-C1:** `lib/plans-types.ts` (re-exporta `@/lib/availability/plan` + `Discipline`), `lib/plans-schemas.ts` (zod de C6/C7, `PlanIdempotencyKey` 8..64 sin `pub:`/`plan:`, `PlanPreviewInputSchema`), `lib/plan-predicates.ts` (`liveSessionWhere`, `liveProgramWhere`, `linkedProgramWhere`, `sessionWithoutActiveBookingWhere`, `bookingHasPaymentWhere`, `adoptableBookingWhere`), `lib/plan-authz-internal.ts` (`assertPlanManageInTx`/`ScheduleInTx`/`AuthorizeInTx(tx, actor, caps, patientId) → PatientAccessLevel`, `planTitleFor`, `canSeePlanAuthorization`, `PLAN_FORBIDDEN_COPY`), `lib/booking-events-internal.ts` (`BookingChangeRef`, `afterBookingsCommitted(tenantId, refs, opts?)`).
+- **Core (S07c + S12, `lib/bookings-core.ts`):** `applyBookingUpdateInTx(tx, actor, {patch, expectedUpdatedAt?, force}, {now, capLocksHeld?}) → BookingUpdateTxOutcome` = `notfound | stale | basic | foreign-patient | clinical-relink | patient-slot | blocked | out-of-hours | patient-overlap | conflict | bad-location | plan-session-not-pending{ordinal} | plan-paid-cancel | plan-patient-change | ok{before, updatedAt, written, refs, plan}`; P2002 se propaga, P2025 → stale. `validateBookingRefsInTx`, `buildBookingCreateData`, `resolveBookingUpdateUniqueViolation`, `syncPlanSessionAfterBookingWriteInTx`. `UpdateBookingResult.notice?` y `ReceptionActionResult.notice?`. `AgendaBookingRow = … & AgendaPlanFields` (requeridos).
+- **Motor (S11e + fixer):** `previewPlan(raw)`, `createPlan(raw) → CreatePlanResult`; `previewProgramRowsInTx`, `reclassifyOrThrowStaleInTx(tx, actor, {programId, rows, resolutions, now, mode?, stateToken?})`, `commitPlanRowsInTx(tx, actor, {program, rows, mode, now, exercises?}) → {refs, sessionIds, createdBookings, adoptedBookings, generationId}`, `createPlanInTx(tx, actor, input, {now, clinicalCase?, caps?, origin?})`, `validatePlanRefsInTx`, `StalePlanPreview{preview|null, reason:'rows'|'draft'|'write-conflict'}`, `PlanRejected`, `programStateToken`, `legacyFrequency`. `PlanEngineRow.currentAt?` (P2.Z).
+- **Verificador (S11v):** `assertProgramInvariantsInTx(tx, {tenantId, programId})` tira `ProgramInvariantViolation`; `checkProgramInvariants(snapshot)` puro. I6 no exige espejo `copagoCents = priceCents` (copago manual y cobro previo $0 son legítimos).
+- **Proyección (S12p):** `loadAgendaPlanProjection(tx, actor, rows, caps)`; `AgendaPlanProjectionRow.serviceDiscipline?` (aditivo del orquestador).
+- **Lecturas (S14, `lib/plans-read.ts`):** `listPlans`, `getPlanDetail`, `getPatientPlans`, `getPatientPlanBalances`, `getPlanHistory`, `listSchedulablePlanSessions` → `PlanReadResult<T> = {ok:true, data} | {ok:false, error}`.
+- **P2-C2 (`lib/plans-edit-types.ts`, `lib/plans-lifecycle-state.ts`):** resultados `PlanWriteResult<T>` (`ok | stale | needs-confirmation | fail`) y `PlanEngineWriteResult<T>` (+ `stale-preview{preview}`); preview por motor con `rows` default `[]` + `stateToken?`, commit con `rows` + `stateToken` obligatorios; ops del motor sin `expectedUpdatedAt` (el `stateToken` incluye `program.updatedAt`), ops sin motor con `expectedUpdatedAt`. `OpenSessionBuckets.sinTurno?/realizadasSinEvolucion?/suggestDischarge?`, `OpenSessionRow.ordinal?/totalLive?`.
+- **Actions de P2.2:** `lib/plans-lifecycle.ts` (`previewPlanStatusChange`, `changePlanStatus`, `updatePlanDetails`, `archivePlan`, `restoreProgram`); `lib/plans-move.ts` (`previewMovePlanSeries`, `movePlanSeries`, `previewReplanPlan`, `replanPlan`); `lib/plans-edit.ts` (`previewAddPlanSessions`, `addPlanSessions`, `archivePlanSessions`, `restoreSession`, `previewRepricePlan`, `repricePlan`, `renewPlanAuthorization`); `lib/plans-adopt.ts` (`previewGeneratePlanBookings`, `generatePlanBookings`, `linkBookingToSession`, `adoptBookingSeries`, `removeBookingFromPlan`); `lib/diagnosis.ts` (`createPlanFromDiagnosis({plan, diagnosis})`, `getDiagnosisPlanPrefill`, `searchPatientsForAssignment(q, {requireFull?})`); `lib/sessions.ts` (`loadSessionEvolution`, `CompleteSessionResult.suggestDischarge?`); `lib/patients.ts` (`setPatientArchived`/`bulkArchivePatients({…, plansAction?: 'pause'|'cancel'})`, default `pause`); `lib/patient-search.ts` (`searchPatientsForBooking(q)`); `setBookingCopagoPaid`/`InsurerPaid` → `notice?`.
+
 ### C9 · Campos de agenda
 
 En `AgendaBookingRow` son requeridos. En `BookingDTO` y `DrawerBooking` son **opcionales**, con el patrón B4.1: solo los trae la proyección liviana.
@@ -897,6 +913,7 @@ patientActiveLinkedPlanDisciplines?: Array<'KINESIOLOGY'|'OSTEOPATHY'|'NONE'>;  
 - Presupuesto del payload semanal: ≤ +5 %.
 - **La autorización de la OS nunca va en C9** (E2): ni código, ni sesiones autorizadas, ni vencimiento.
 - La proyección completa (`listBookingsInRange`) **no** los trae (`bookings-reception.test.ts:380` sigue verde sin cambios).
+- **Medición ES2b (S12p) y decisión del orquestador:** un turno suelto pesa 777 B en el DTO base y el bloque C9 neutro entero le suma +133 B (los turnos de plan crecen ~200 B, es información nueva). El presupuesto de +5 % se mide **sobre turnos sueltos**. Para cumplirlo, **ES3 (P3-C, dueño de `toBookingDTO` en `components/agenda/agenda-utils.ts`) arma un DTO compacto**: omite los neutros (`programId`/`sessionId`/`plan` null, `pricedByPlan` false, `[]`) y resuelve `serviceDiscipline` en el cliente desde el catálogo de servicios. La agenda quedó en 16 statements (techo 16) con `service.discipline` en `listAgendaBookings`. Sin módulo `planes`: C9 neutro y sin queries.
 
 ### C10 · Deep-links y editor
 
@@ -930,7 +947,7 @@ Cantidad y precio no van en el editor: tienen diálogos propios (S22e).
 
 ### C12 · Preservar AUDIT §5 (literal en cada prompt del área)
 
-1 (rls), 4 (webhook MP intacto), 5 (copago), 6 (visibility/título), 7 (`expectedUpdatedAt`), 11 (datetime-ar), 12 (`*-internal` server-only), 14 (audit-extension), 17 (`seriesId`), 18 (`isHoldingCapacity`), 24 (exports por ruta), 27 (motor y paridad), 28 (**con la enmienda C2**), 29 (`isOverbooked` + prefijo), 30 (backfill idempotente y `updatedAt` de Booking), 31 (catálogo GLOBAL_READONLY), 33 (defaults PS), 34 (`NO_LOCATION_ID`), 35 (capabilities fallan cerrado).
+1 (rls), 4 (webhook MP intacto), 5 (copago), 6 (visibility/título), 7 (`expectedUpdatedAt`), 11 (datetime-ar), 12 (`*-internal` server-only), 14 (audit-extension), 17 (`seriesId`), 18 (`isHoldingCapacity`), 24 (exports por ruta), 27 (motor y paridad), 28 (**con la enmienda C2**), 29 (`isOverbooked` + prefijo), 30 (backfill idempotente y `updatedAt` de Booking), 31 (catálogo GLOBAL_READONLY), 33 (defaults PS), 34 (`NO_LOCATION_ID`), 35 (capabilities fallan cerrado). **Desde ES2b también** 36 (keys `plan:`), 37 ("sin turno" derivado), 38 (I8: solo el motor vincula), 39 (nada vinculado se borra) y 40 (orden de locks de Planes).
 
 Según el área:
 - **6** (visibility): S02p lo enmienda con el nivel `admin` (E1); el resto de §5.6 se preserva. La enmienda se asienta en AUDIT §5 en P0.Z.
@@ -1792,6 +1809,8 @@ git add -A && git commit -m "Planes P1 (ES2a): migración plans_booking_link (so
 
 ### P2.Z · Cierre de ES2b
 
+> ✅ Ejecutado el 07-oct (pendiente commit). Docs del punto 5 hechos; resultado del gate en AUDIT §Ronda 17.
+
 1. Integrador.
 2. **2 revisores de solo lectura:**
    - (a) concurrencia, locks C2, sincronía C4, RLS/tenant y extracción del core;
@@ -1812,6 +1831,57 @@ git add -A && git commit -m "Planes P2 (ES2b): core de turnos server-only (con e
 ```
 
 **No se mergea a main.**
+
+### Decisiones de ES2b (07-oct; Martin las puede revisar)
+
+- **P2-C2:** D1 ACTIVE → COMPLETED (el alta) también pregunta qué hacer con los futuros (D7 de PD-10, default
+  cancelar); D3 las operaciones del motor no llevan `expectedUpdatedAt` (el `stateToken` ya incluye
+  `program.updatedAt`); D4 "mover en serie" recibe un **instante absoluto**; D5 `addPlanSessions` no recibe la cuota
+  del cliente (la calcula el server); D6 el título del plan es NOT NULL (default "<Disciplina> · N sesiones"). (D2 no
+  quedó asentada en los handoffs.) Transiciones: PAUSED → ACTIVE y COMPLETED → ACTIVE (con confirmación) revalidan
+  sede activa y responsable con `plans.manage`; CANCELLED es terminal; solo título y notas son editables sin motor.
+- **Responsable del plan** = miembro aceptado con `plans.manage` (nunca Secretaria ni BILLING);
+  `PROGRAM_NEARING_DISCHARGE` le llega a él (D17), con el actor como fallback.
+- **Sincronía turno↔sesión sin gate de módulo** (es consistencia de datos); el verificador corre solo en el motor, no
+  en los write-paths de turnos sueltos.
+- **Seguimiento:** cerrar la última sesión **no** completa el plan (D22): devuelve `suggestDischarge`.
+  `rescheduleSession` nunca cambia el profesional.
+- **`addCustomSession`** (UI vieja) delega en el motor (`addSessionsInTx`, `plans.manage`): la Secretaria ya no agrega
+  sesiones a medida; en PACKAGE sin `packagePricing` y en COMPLETED rechaza con copy.
+- **Legacy de `lib/programs.ts`** hasta ES3: `updateProgram` solo título; `setProgramStatus` delega con D7 = mantener
+  (el diálogo viejo dice "Los turnos no se tocan"); `deleteProgram` archiva solo CANCELLED/COMPLETED; `deleteSession`
+  rechaza.
+- **Adopción (S25a):** al sacar del plan, `copagoCents = null` solo si `pricedByPlan`; un turno COMPLETED no se saca
+  (deshacer primero); vincular/adoptar en planes ACTIVE o PAUSED, generar solo en ACTIVE; disciplina distinta →
+  rechazo; un PACKAGE no crece por adopción; sin aviso de alta al adoptar la última (ES3/C).
+- **Saldo:** la OS pagada no suma en "cobrado" (C5; borde → C0). **L9:** archivar un paciente pausa sus planes por
+  default.
+
+### Handoffs para ES3 (literal para los prompts de P3)
+
+- **`plan-view.tsx` (S22a/S22e):** pasar a `changePlanStatus` + diálogo D7, `updatePlanDetails`, `archivePlan`,
+  `restoreProgram`; sacar total/frecuencia/inicio del drawer y "Eliminar sesión"; `plan-form-defaults.ts`
+  `programStatusConfirm` sin "reactivar CANCELLED". "Agregar sesión" → `previewAddPlanSessions`/`addPlanSessions` (o
+  mandar `packagePricing`). Reprogramar: `bookingOnDay` null cuando hay turno; mostrar los rechazos del core y reenviar
+  con `force`.
+- **S20 Seguimiento:** bucket "Sin turno", "Sin evolución" → "Cargar evolución" (`loadSessionEvolution`), banner de
+  alta (`suggestDischarge`), "Sesión n de N" (ordinal/totalLive), `Session.title`. La página
+  `seguimiento/[sessionId]` todavía muestra el índice crudo (`dashboard-session-index-crudo`).
+- **S23 Diagnóstico:** el editor previsualiza con `previewPlan(plan)` y commitea con
+  `createPlanFromDiagnosis({plan, diagnosis})`; rampa en el cliente con `diagnosisRamp`/`diagnosisRampSteps`.
+  `assignDiagnosisAndCreateProgram` legacy la retira S27b.
+- **Notices:** `UpdateBookingResult.notice`, `ReceptionActionResult.notice` y `setBookingCopagoPaid`/`InsurerPaid`
+  `notice` se muestran como toast en drawer, Recepción y facturación.
+- **L9:** diálogo en hero / `patient-row-actions` / bulk-select (S22h/S32a) que pasa `plansAction` ('pause' |
+  'cancel').
+- **P3-C `toBookingDTO` compacto** (C9): omitir neutros y resolver `serviceDiscipline` en el cliente.
+- **S18s:** `components/ui/exercise-search-picker.tsx` (~:69) pasa `disciplineSlug` a `listExercises`.
+- **S27a:** retirar o migrar a `assertPlan*InTx` los gates reimplementados de `rescheduleSession`, `createProgram` y
+  `applyPlanTemplate`; los sobrevivientes de `programs.ts` mantienen `requireModule('planes')`.
+- **Opcionales del motor** (sin dueño todavía): `skipTotalSessionsCache?` en modo `add` (S25a commitea en `replan` por
+  eso), `exercisesForIndex?` en `commitPlanRowsInTx`, `LocationArchiveBlockers.activePlans`.
+- ✅ **Verificado en el gate de ES2b:** "cierre ∥ generar" cubierto en los dos órdenes (`plans-engine-fixes.test.ts`,
+  cierre primero; `plans-sync-sessions.test.ts`, turno primero).
 
 ---
 

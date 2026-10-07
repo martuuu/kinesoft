@@ -536,6 +536,8 @@ the Membership — `Actor` still doesn't carry it):
 | `plans.manage` | ✅ | ✅ (with full, checked in the action) | — | — |
 | `plans.schedule` / `plans.authorize` | ✅ | ✅ (with full) | ✅ | — |
 
+Applied since ES2b by `assertPlan*InTx` (§15).
+
 - **Patient access level `admin`** (`lib/visibility.ts`, PD-13): a role without
   `clinical.read` (ASSISTANT, BILLING) always gets exactly `admin` on every
   patient of the tenant — never `full` (not even with `sharedPatientView`, a
@@ -635,3 +637,49 @@ Diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md); contratos en [VERTICALES.
   "Turnos online no disponibles" (`noindex`) **sin leer la sesión ni el prefill**; slots `[]` y el submit se rechaza
   **sin escribir**. El estado de un turno ya reservado sigue consultable. Portal y turnero leen los módulos con
   `getTenantModulesById` (sin Actor; tenant inexistente = set vacío, falla cerrado).
+
+## 15. Planes (ES2b, 07-oct-2026; en código, sin deploy hasta cerrar B)
+
+Contratos en [PLANES.md §2.6 y §4](PLANES.md); orden de locks en [ARCHITECTURE.md ADR-004](ARCHITECTURE.md). En prod la
+conexión tiene BYPASSRLS: el `where: { tenantId }` a mano y las FKs compuestas son la barrera, RLS es la segunda capa.
+
+- **FKs compuestas como red bajo BYPASSRLS** (M1, ADR-001): `Booking_plan_tenant_fkey` (`programId, tenantId`),
+  `Booking_plan_patient_fkey` (`programId, patientId`) y `Booking_session_program_fkey` (`sessionId, programId`). Aunque
+  una action tuviera un bug, la base no deja vincular un turno a un plan de otro consultorio, de otro paciente ni a una
+  sesión de otro plan. Lo que **no** es compuesto (`TreatmentProgram.locationId`/`practitionerId`/`serviceId`, FKs
+  simples) se valida a mano contra el tenant en `validatePlanRefsInTx` / `validateBookingRefsInTx` antes de escribir.
+  Los tests de esa red corren con el rol owner (`skipIf(!BYPASS)` con aviso; TESTING.md).
+- **Capabilities de Planes** (matriz en §13) se aplican **solo** con `assertPlanManageInTx` /
+  `assertPlanScheduleInTx` / `assertPlanAuthorizeInTx` (`lib/plan-authz-internal.ts`), dentro de la tx. Orden:
+  `assertModule('planes')` → capability → `patientAccessFor` → regla:
+  - **`plans.manage`** = capability + acceso `full` + `clinical.read`: crear, título/notas, precio, cantidad, estados,
+    archivar, re-planificar, vincular, adoptar, sacar del plan, agregar sesión a medida. La Secretaria y BILLING no.
+  - **`plans.schedule`** = capability + (`full` **o** `agenda.operateAll`): generar turnos de sesiones pendientes y
+    mover "este y los siguientes". La Secretaria sí.
+  - **`plans.authorize`** = capability + (`full` o `agenda.operateAll`): renovar la autorización de la OS.
+  - Paciente de otro tenant → `none` → Forbidden. Las primitivas del motor (`*InTx`) **no gatean**: gatea el export.
+    Quedan tres gates reimplementados en legacy (`rescheduleSession`, `createProgram`, `applyPlanTemplate`) que retira
+    S27a (AUDIT `gates-reimplementados-legacy`).
+- **PHI del título.** El título de un plan o de una sesión es dato clínico. `planTitleFor(caps, access, title)`
+  devuelve el real solo con `clinical.read` **y** acceso `full`; si no, `null`. Lo usan lecturas, dashboard y preview
+  del motor. La agenda (C9) lleva disciplina, ordinal y total (`Kine · 3/10`), **nunca** el título para la
+  Secretaria/BILLING/básico. `listSchedulablePlanSessions` devuelve una **allowlist** literal `{sessionId, ordinal,
+  totalLive, discipline, serviceId, practitionerId, locationId, sinTurno}`: sin título, notas, ejercicios, precios ni
+  `programId`.
+- **Autorización de la OS** (código, autorizadas, vencimiento): la ve solo quien cumple
+  `canSeePlanAuthorization(caps, access)` = `(full && clinical.read) || (plans.authorize con su regla de acceso) ||
+  billing.manage`; nunca con `none`. Sale solo en el detalle del plan (`getPlanDetail`, `getPatientPlans`); **nunca** en
+  la agenda (C9), el ICS, el CSV, las notificaciones ni el portal. Un PRACTITIONER en básico no la ve aunque tenga la
+  capability.
+- **Buscador de pacientes de la agenda** (`searchPatientsForBooking`, `lib/patient-search.ts`, P2-FX1): sin gate de
+  módulo (la agenda existe en todas las verticales) y sin filtro por nivel, porque nombre + DNI es lo que ya muestran
+  las proyecciones `basic` y `admin`. DTO mínimo `{id, firstName, lastName, documentId}`; **no** busca por email (sería
+  un oráculo de un dato que `basic` no ve, como H-b1); archivados fuera; `where: { tenantId }` a mano. Operar el turno
+  lo sigue decidiendo el server de turnos. El picker del Plan Builder usa otra búsqueda (`searchPatientsForAssignment`,
+  módulo `diagnostico`, solo pacientes con acceso `full`, sin archivados).
+- **Tags globales filtrados por uso** (`listAllTags`, B-L1): `Tag` no tiene `tenantId` y un consultorio puede crear
+  tags de texto libre; devolverlos todos filtraba el texto de otros consultorios. Ahora solo los usados por ejercicios
+  o condiciones globales o propias, `[]` sin el módulo `ejercicios`; el superadmin ve todos. `ensureTag` solo crea
+  kinds de la allowlist y reserva los slugs de disciplina.
+- **Sincronía turno↔sesión sin gate de módulo** (decisión de S12): es consistencia de datos, no una feature; si un
+  consultorio baja de vertical, cancelar un turno de plan sigue dejando la sesión coherente.

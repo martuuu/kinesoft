@@ -30,6 +30,14 @@ import { env } from "@/lib/env";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
+import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
+import { ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
+import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
+import {
+  DEFAULT_PATIENT_ARCHIVE_PLANS_ACTION,
+  PATIENT_ARCHIVE_PLANS_ACTIONS,
+  type PatientArchivePlansAction,
+} from "@/lib/plans-lifecycle-state";
 import {
   PatientCreate,
   PatientCreateOptions,
@@ -310,6 +318,26 @@ export async function listPatients(opts: {
 }
 
 /**
+ * L9: `plansAction` llega por RPC sin tipo: lo que no sea `pause`/`cancel` se
+ * rechaza (null) antes de abrir la tx. Ausente = default `pause`.
+ */
+function parsePlansAction(v: unknown): PatientArchivePlansAction | null {
+  if (v === undefined || v === null) return DEFAULT_PATIENT_ARCHIVE_PLANS_ACTION;
+  return (PATIENT_ARCHIVE_PLANS_ACTIONS as readonly unknown[]).includes(v) ? (v as PatientArchivePlansAction) : null;
+}
+
+/** Rechazos de L9 que hicieron rollback del archivado entero → resultado, no 500. */
+function patientArchivePlansRejection(e: unknown): { ok: false; error: string } | null {
+  if (e instanceof PlanLifecycleStale) {
+    return { ok: false, error: "Un plan del paciente cambió mientras lo archivabas. Probá de nuevo." };
+  }
+  if (e instanceof ProgramInvariantViolation) {
+    return { ok: false, error: "Un plan del paciente tiene datos inconsistentes y no se pudo archivar. Ya avisamos al equipo técnico." };
+  }
+  return null;
+}
+
+/**
  * Archivar / desarchivar.
  *
  * A2b-S-vis (30-sep) — gate `full`: archivar se trata como mutación de la
@@ -322,18 +350,37 @@ export async function listPatients(opts: {
 export async function setPatientArchived(input: {
   id: string;
   archived: boolean;
+  /**
+   * L9 (P2-S15): qué pasa con sus planes vivos al ARCHIVAR. Opcional, default
+   * `pause` (ACTIVE → PAUSED sin tocar turnos): los callers de antes no
+   * cambian. `cancel` = CANCELLED con los futuros impagos cancelados.
+   */
+  plansAction?: PatientArchivePlansAction;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  const denied = await runWithRls(actor.tenantId, async (tx) => {
-    const err = await hcAccessError(actor, input.id, tx);
-    if (err) return err;
-    await tx.patient.update({
-      where: { id: input.id, tenantId: actor.tenantId },
-      data: { archivedAt: input.archived ? new Date() : null },
+  const plansAction = parsePlansAction(input.plansAction);
+  if (!plansAction) return { ok: false, error: "Acción sobre los planes inválida." };
+  let outcome: { denied: string | null; refs: BookingChangeRef[] };
+  try {
+    outcome = await runWithRls(actor.tenantId, async (tx) => {
+      const err = await hcAccessError(actor, input.id, tx);
+      if (err) return { denied: err, refs: [] };
+      // L9 antes del UPDATE del paciente: `lockPlanPatient` va primero (C2 (0)).
+      const plans = input.archived
+        ? await applyPatientArchivePlansInTx(tx, actor, { patientIds: [input.id], action: plansAction, now: new Date() })
+        : null;
+      await tx.patient.update({
+        where: { id: input.id, tenantId: actor.tenantId },
+        data: { archivedAt: input.archived ? new Date() : null },
+      });
+      return { denied: null, refs: plans?.refs ?? [] };
     });
-    return null;
-  });
-  if (denied) return { ok: false, error: denied };
+  } catch (e) {
+    const r = patientArchivePlansRejection(e);
+    if (r) return r;
+    throw e;
+  }
+  if (outcome.denied) return { ok: false, error: outcome.denied };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
@@ -341,6 +388,8 @@ export async function setPatientArchived(input: {
     entity: "Patient",
     entityId: input.id,
   });
+  // Post-commit, una vez (enmienda Realtime): solo si L9 canceló turnos.
+  if (outcome.refs.length) await afterBookingsCommitted(actor.tenantId, outcome.refs);
   revalidatePath("/pacientes");
   revalidatePath(`/pacientes/${input.id}`);
   return { ok: true, data: undefined };
@@ -1634,8 +1683,12 @@ export async function sendPatientPortalInvite(input: {
 export async function bulkArchivePatients(input: {
   ids: string[];
   archived: boolean;
+  /** L9 (P2-S15): igual que en `setPatientArchived`; default `pause`. */
+  plansAction?: PatientArchivePlansAction;
 }): Promise<ActionResult<{ updated: number }>> {
   const actor = await getActor();
+  const plansAction = parsePlansAction(input.plansAction);
+  if (!plansAction) return { ok: false, error: "Acción sobre los planes inválida." };
   if (input.ids.length === 0) return { ok: true, data: { updated: 0 } };
   if (input.ids.length > 200) {
     return { ok: false, error: "Demasiados pacientes a la vez (máx 200)." };
@@ -1645,18 +1698,33 @@ export async function bulkArchivePatients(input: {
   // archiva NINGUNO y se dice cuántos fallaron. Antes los ids ajenos se
   // descartaban en silencio y los básicos se archivaban.
   const ids = Array.from(new Set(input.ids));
-  const outcome = await runWithRls(actor.tenantId, async (tx) => {
-    const access = await bulkPatientAccess(actor, ids, tx);
-    const missing = ids.filter((id) => !access.has(id)).length;
-    const basic = ids.filter((id) => access.has(id) && access.get(id) !== "full").length;
-    if (missing > 0) return { kind: "missing" as const, n: missing };
-    if (basic > 0) return { kind: "basic" as const, n: basic };
-    const r = await tx.patient.updateMany({
-      where: { id: { in: ids }, tenantId: actor.tenantId },
-      data: { archivedAt: input.archived ? new Date() : null },
+  let outcome:
+    | { kind: "missing"; n: number }
+    | { kind: "basic"; n: number }
+    | { kind: "ok"; count: number; refs: BookingChangeRef[] };
+  try {
+    outcome = await runWithRls(actor.tenantId, async (tx) => {
+      const access = await bulkPatientAccess(actor, ids, tx);
+      const missing = ids.filter((id) => !access.has(id)).length;
+      const basic = ids.filter((id) => access.has(id) && access.get(id) !== "full").length;
+      if (missing > 0) return { kind: "missing" as const, n: missing };
+      if (basic > 0) return { kind: "basic" as const, n: basic };
+      // L9: todos los `lockPlanPatient` en una sentencia, ordenados, antes de
+      // cualquier fila (C2 (0)); todo-o-nada con el archivado.
+      const plans = input.archived
+        ? await applyPatientArchivePlansInTx(tx, actor, { patientIds: ids, action: plansAction, now: new Date() })
+        : null;
+      const r = await tx.patient.updateMany({
+        where: { id: { in: ids }, tenantId: actor.tenantId },
+        data: { archivedAt: input.archived ? new Date() : null },
+      });
+      return { kind: "ok" as const, count: r.count, refs: plans?.refs ?? [] };
     });
-    return { kind: "ok" as const, count: r.count };
-  });
+  } catch (e) {
+    const r = patientArchivePlansRejection(e);
+    if (r) return r;
+    throw e;
+  }
   if (outcome.kind === "missing") {
     return { ok: false, error: "Algunos pacientes no se encontraron. Recargá la lista." };
   }
@@ -1676,6 +1744,7 @@ export async function bulkArchivePatients(input: {
     entity: "Patient",
     payload: { count: outcome.count, ids: ids.slice(0, 50) },
   });
+  if (outcome.refs.length) await afterBookingsCommitted(actor.tenantId, outcome.refs);
   revalidatePath("/pacientes");
   return { ok: true, data: { updated: outcome.count } };
 }

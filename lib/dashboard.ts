@@ -8,7 +8,12 @@
 import { unstable_cache } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { getMembershipRole } from "@/lib/authz";
+import { capabilitiesFor } from "@/lib/capabilities";
+import { modulesFor } from "@/lib/tenant-modules";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
+import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
+import { planSessionOrdinals } from "@/lib/plan-display";
 import { isReminderDismissed } from "@/lib/notifications";
 import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
@@ -47,6 +52,14 @@ export type DashboardData = {
    * A2b-S-vis: `access` por fila. Las filas "basic" (paciente ni asignado
    * ni compartido) llegan SIN diagnóstico ni progreso del plan (`cond: ""`,
    * 0/0) y sin id del próximo turno: el QuickMenu es de solo lectura.
+   *
+   * S14: "full" acá exige además `clinical.read` (`planTitleFor`): la
+   * condición y el título del plan son clínicos. La Secretaria (nivel `admin`
+   * de PD-13) recibe la fila "basic". `cond` vacío ("") = el "nulo" de §10
+   * S14: se mantiene `string` para no cambiar el contrato de la UI.
+   * `sessionsDone`/`sessionsTotal` = ordinal de la sesión cerrada entre las
+   * vivas / sesiones vivas (M13, mismo número que el chip `Kine · 3/10`), no
+   * `Session.index` / `totalSessions`.
    */
   recent: {
     id: string;
@@ -107,7 +120,11 @@ const _loadDashboardCounts = unstable_cache(
   async (
     tenantId: string,
     scope: "all" | string, // "all" or a practitionerId
-    dayKey: string // ISO yyyy-mm-dd, anchors the date ranges
+    dayKey: string, // ISO yyyy-mm-dd, anchors the date ranges
+    // S14 (enmienda EV0): sin el módulo `planes` (consultorio General) no se
+    // consulta TreatmentProgram ni Session y esos KPIs valen 0. Va como
+    // argumento porque adentro del cache no hay actor.
+    withPlans: boolean
   ): Promise<DashboardCounts> => {
     // `dayKey` is the AR "YYYY-MM-DD"; anchor every period boundary to the
     // AR wall-clock so ranges don't drift into the prev/next day on a UTC
@@ -128,6 +145,7 @@ const _loadDashboardCounts = unstable_cache(
     const prevMonthStart = new Date(localToARIso(`${prevYm}-01T00:00:00`));
 
     const seesAll = scope === "all";
+    const none = <T,>(v: T) => Promise.resolve(v);
     const bookingWhere = seesAll ? {} : { practitionerId: scope };
     const patientWhere = seesAll
       ? {}
@@ -166,28 +184,37 @@ const _loadDashboardCounts = unstable_cache(
         },
         select: { scheduledFor: true, status: true },
       })),
-      runWithRls(tenantId, (tx) => tx.patient.count({
-        where: {
-          tenantId,
-          ...patientWhere,
-          programs: { some: { status: "ACTIVE" } },
-        },
-      })),
-      runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
-        where: {
-          tenantId,
-          status: "ACTIVE",
-          ...(seesAll ? {} : { patient: patientWhere }),
-        },
-      })),
-      runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
-        where: {
-          tenantId,
-          status: "ACTIVE",
-          sessions: { some: { completedAt: { not: null } } },
-          ...(seesAll ? {} : { patient: patientWhere }),
-        },
-      })),
+      // "Activo" = ACTIVE **y** no archivado (`liveProgramWhere`, §2.4).
+      withPlans
+        ? runWithRls(tenantId, (tx) => tx.patient.count({
+            where: {
+              tenantId,
+              ...patientWhere,
+              programs: { some: { status: "ACTIVE", ...liveProgramWhere } },
+            },
+          }))
+        : none(0),
+      withPlans
+        ? runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
+            where: {
+              tenantId,
+              status: "ACTIVE",
+              ...liveProgramWhere,
+              ...(seesAll ? {} : { patient: patientWhere }),
+            },
+          }))
+        : none(0),
+      withPlans
+        ? runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
+            where: {
+              tenantId,
+              status: "ACTIVE",
+              ...liveProgramWhere,
+              sessions: { some: { ...liveSessionWhere, completedAt: { not: null } } },
+              ...(seesAll ? {} : { patient: patientWhere }),
+            },
+          }))
+        : none(0),
       runWithRls(tenantId, (tx) => tx.patient.count({
         where: {
           tenantId,
@@ -195,9 +222,13 @@ const _loadDashboardCounts = unstable_cache(
           createdAt: { gte: monthStart },
         },
       })),
-      runWithRls(tenantId, (tx) => tx.session.findMany({
+      // Sesión viva de un plan vivo: una archivada (o de un plan archivado)
+      // no es "reciente" ni tiene ordinal (M13).
+      withPlans
+        ? runWithRls(tenantId, (tx) => tx.session.findMany({
         where: {
-          program: { tenantId },
+          ...liveSessionWhere,
+          program: { tenantId, ...liveProgramWhere },
           completedAt: { not: null },
         },
         orderBy: { completedAt: "desc" },
@@ -205,6 +236,11 @@ const _loadDashboardCounts = unstable_cache(
         include: {
           program: {
             include: {
+              // Para el ordinal (M13) y el total de vivas, como el chip de la agenda.
+              sessions: {
+                where: liveSessionWhere,
+                select: { id: true, index: true, scheduledFor: true, archivedAt: true },
+              },
               patient: {
                 include: {
                   bookings: {
@@ -230,7 +266,8 @@ const _loadDashboardCounts = unstable_cache(
             },
           },
         },
-      })),
+      }))
+        : none([]),
       runWithRls(tenantId, (tx) => tx.booking.findMany({
         where: {
           tenantId,
@@ -316,8 +353,10 @@ const _loadDashboardCounts = unstable_cache(
         id: s.program.patient.id,
         name: `${s.program.patient.firstName} ${s.program.patient.lastName}`,
         cond: s.program.case?.diagnoses[0]?.condition?.name ?? s.program.title,
-        sessionsDone: s.index,
-        sessionsTotal: s.program.totalSessions,
+        // [P2-S14] antes: `s.index` / `totalSessions`, que con sesiones
+        // archivadas (index fijo) no coincidía con el chip de la agenda.
+        sessionsDone: planSessionOrdinals(s.program.sessions).get(s.id) ?? 0,
+        sessionsTotal: s.program.sessions.length,
         nextBookingId: s.program.patient.bookings[0]?.id ?? null,
         nextBookingAt: s.program.patient.bookings[0]?.scheduledFor ?? null,
         nextBookingUpdatedAt: s.program.patient.bookings[0]?.updatedAt ?? null,
@@ -372,6 +411,9 @@ const _loadDashboardCounts = unstable_cache(
   // dashboard mutations (createBooking, etc.) calling
   // `revalidateTag(tags.dashboard(tenantId))`. The wrapper itself is keyed
   // by tenantId in `keyParts` so different tenants get separate slots.
+  // Anidado en el `taggedFetcher` de abajo: cuando el de afuera se recalcula,
+  // Next corre este callback con `fetchCache: "force-no-store"` y este cache se
+  // saltea (next 14.2 `unstable-cache.js`), así que el tag de afuera manda.
   { revalidate: ttl.micro }
 );
 
@@ -399,19 +441,32 @@ export async function getDashboardData(): Promise<DashboardData> {
   const now = new Date();
   const dayKey = toARDateKey(now);
   const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId;
+  const withPlans = modulesFor(actor.entitlements).has("planes");
 
   // Per-tenant cache via dynamically tagged wrapper. The static
   // `_loadDashboardCounts` provides the underlying compute; this thin
   // wrapper attaches the tenant-scoped tag so `revalidateTag` from a
   // mutation only nukes one tenant's slot, not all.
+  //
+  // S14 (enmienda EV0): la clave explícita NO lleva los módulos. Un cambio de
+  // vertical/plan lo escribe `applyTenantEntitlementsInTx` y su caller revalida
+  // `tenantEntitlementTags(tenantId)`, que incluye `tags.dashboard(tenantId)`
+  // (el tag de este cache): el slot viejo muere con el cambio y no se sirve
+  // un dashboard de General con planes (o al revés) durante el TTL. Ojo: el
+  // `withPlans` igual termina en la clave efectiva porque `unstable_cache`
+  // serializa los argumentos (`${keyParts}-${JSON.stringify(args)}`); no es
+  // la barrera, es un efecto del runtime. La barrera es el tag.
   const taggedFetcher = unstable_cache(
-    (tenantId: string, s: "all" | string, k: string) =>
-      _loadDashboardCounts(tenantId, s, k),
+    (tenantId: string, s: "all" | string, k: string, plans: boolean) =>
+      _loadDashboardCounts(tenantId, s, k, plans),
     ["dashboard:counts", actor.tenantId, scope, dayKey],
     { tags: [tags.dashboard(actor.tenantId)], revalidate: ttl.micro }
   );
 
-  const counts = await taggedFetcher(actor.tenantId, scope, dayKey);
+  const [counts, caps] = await Promise.all([
+    taggedFetcher(actor.tenantId, scope, dayKey, withPlans),
+    getMembershipRole(actor).then(capabilitiesFor),
+  ]);
 
   // A2b-S-vis: "recientes" sale de las sesiones de TODO el tenant y
   // "próximos" puede incluir pacientes asignados a otro profesional. Se
@@ -425,6 +480,11 @@ export async function getDashboardData(): Promise<DashboardData> {
   );
   const accessMap = await bulkPatientAccess(actor, patientIds);
   const isFull = (id: string) => accessMap.get(id) === "full";
+  // S14: la condición/título del plan es clínica → misma regla que
+  // `planTitleFor` (full **y** `clinical.read`). Hoy full ⇒ clinical.read
+  // (PD-13), pero si un rol nuevo rompiera esa implicación, la fila igual
+  // sale sin dato clínico.
+  const seesClinical = (id: string) => caps.has("clinical.read") && isFull(id);
   // `unstable_cache` serializa a JSON: en un hit las fechas vuelven como
   // string. Se rehidratan acá para que el cliente reciba `Date` de verdad.
   const toDate = (d: Date | string | null) => (d ? new Date(d) : null);
@@ -440,7 +500,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   return {
     ...counts,
     recent: counts.recent.map((r) =>
-      isFull(r.id)
+      seesClinical(r.id)
         ? {
             ...r,
             nextBookingAt: toDate(r.nextBookingAt),
@@ -481,6 +541,18 @@ export type ChartBar = { label: string; done: number; missed: number };
 export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
   const actor = await getActor();
   const now = new Date();
+  // S14 (enmienda EV0, revisión): sin el módulo `sesiones` (consultorio
+  // General) el gráfico devuelve 0 SIN consultar. Se arman los mismos
+  // buckets (mismas etiquetas) con `rows = []` para que la UI no cambie de
+  // forma; `load` es el único lugar que toca la base.
+  const withSessions = modulesFor(actor.entitlements).has("sesiones");
+  const load = (start: Date, end: Date) =>
+    withSessions
+      ? runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
+          where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
+          select: { scheduledFor: true, status: true },
+        }))
+      : Promise.resolve([] as { scheduledFor: Date; status: string }[]);
 
   const DAY_MS = 86_400_000;
   const nowKey = toARDateKey(now); // "YYYY-MM-DD" in AR
@@ -488,10 +560,7 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
   if (range === "week") {
     const weekStart = startOfWeek(now); // AR Monday midnight
     const end = new Date(weekStart.getTime() + 7 * DAY_MS);
-    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: { tenantId: actor.tenantId, scheduledFor: { gte: weekStart, lt: end } },
-      select: { scheduledFor: true, status: true },
-    }));
+    const rows = await load(weekStart, end);
     const labels = ["L", "M", "M", "J", "V", "S", "D"];
     return labels.map((label, i) => {
       const ds = new Date(weekStart.getTime() + i * DAY_MS);
@@ -506,10 +575,7 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     const start = new Date(localToARIso(`${ym}-01T00:00:00`));
     const nextYm = mm === 12 ? `${my + 1}-01` : `${my}-${String(mm + 1).padStart(2, "0")}`;
     const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
-    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
-      select: { scheduledFor: true, status: true },
-    }));
+    const rows = await load(start, end);
     // Bucket by ISO-week within the month.
     const buckets: ChartBar[] = [];
     let cur = new Date(start);
@@ -535,10 +601,7 @@ export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
     const start = new Date(localToARIso(`${startYm}-01T00:00:00`));
     const nextYm = sm === 11 ? `${sy + 1}-01` : `${sy}-${String(sm + 2).padStart(2, "0")}`;
     const end = new Date(localToARIso(`${nextYm}-01T00:00:00`));
-    const rows = await runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-      where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
-      select: { scheduledFor: true, status: true },
-    }));
+    const rows = await load(start, end);
     buckets.push(
       countBookings(
         rows,

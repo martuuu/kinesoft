@@ -12,6 +12,9 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { MoneyInput } from "@/components/ui/money-input";
 import { formatARS } from "@/lib/format";
 import { SERVICE_COLORS } from "@/lib/service-colors";
+import { DISCIPLINES, type Discipline } from "@/lib/plans-constants";
+import { disciplineLabel } from "@/lib/plan-display";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import type { ServiceRow } from "@/lib/services-types";
 import {
   createService,
@@ -30,6 +33,9 @@ export function ServicesPanel({
 }) {
   const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [creating, setCreating] = useState(false);
+  // Enmienda EV0 de S13: la disciplina solo existe con `planes`. Esconderla es
+  // UX; la barrera es `createService`/`updateService`.
+  const hasPlanes = useTenantModules().has("planes");
   return (
     <Card style={{ padding: 0, overflow: "hidden" }}>
       <header
@@ -90,6 +96,11 @@ export function ServicesPanel({
                 {s.practiceName && (
                   <div style={{ fontSize: 11, color: "var(--navy-300)" }}>Práctica: {s.practiceName}</div>
                 )}
+                {hasPlanes && s.discipline && (
+                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+                    Disciplina: {disciplineLabel(s.discipline)}
+                  </div>
+                )}
               </div>
               <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
                 {s.practitionerName ?? "Todos los kinesiólogos"}
@@ -111,10 +122,19 @@ export function ServicesPanel({
         </ul>
       )}
       {creating && (
-        <ServiceModal practitioners={practitioners} onClose={() => setCreating(false)} />
+        <ServiceModal
+          practitioners={practitioners}
+          hasPlanes={hasPlanes}
+          onClose={() => setCreating(false)}
+        />
       )}
       {editing && (
-        <ServiceModal practitioners={practitioners} service={editing} onClose={() => setEditing(null)} />
+        <ServiceModal
+          practitioners={practitioners}
+          hasPlanes={hasPlanes}
+          service={editing}
+          onClose={() => setEditing(null)}
+        />
       )}
     </Card>
   );
@@ -122,10 +142,12 @@ export function ServicesPanel({
 
 function ServiceModal({
   practitioners,
+  hasPlanes,
   service,
   onClose,
 }: {
   practitioners: { id: string; name: string }[];
+  hasPlanes: boolean;
   service?: ServiceRow;
   onClose: () => void;
 }) {
@@ -150,6 +172,17 @@ function ServiceModal({
   const suggestedDuration = practice?.defaultDurationMin ?? null;
   const showDurationSuggestion =
     suggestedDuration != null && String(suggestedDuration) !== durationMin;
+  // S13 · PQ-11: disciplina sugerida por el catálogo, igual que la duración:
+  // se ofrece y el admin la confirma; nunca se aplica sola. Solo se conoce la
+  // de la práctica GUARDADA (viene en la fila): si se elige otra práctica en
+  // el drawer, no hay sugerencia hasta guardar.
+  const [discipline, setDiscipline] = useState<Discipline | "">(service?.discipline ?? "");
+  const suggestedDiscipline =
+    service?.suggestedDiscipline && practice?.id === service.practiceId
+      ? service.suggestedDiscipline
+      : null;
+  const showDisciplineSuggestion =
+    hasPlanes && suggestedDiscipline != null && suggestedDiscipline !== discipline;
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -167,6 +200,9 @@ function ServiceModal({
         practitionerId: String(formData.get("practitionerId") ?? ""),
         maxConcurrent: String(formData.get("maxConcurrent") ?? ""),
         color: String(formData.get("color") ?? ""),
+        // Sin `planes` el campo no existe y NO se manda: ausente = la action no
+        // toca la disciplina (mandar "" la borraría).
+        ...(hasPlanes ? { discipline } : {}),
       };
       const r = service
         ? await updateService(service.id, payload)
@@ -229,7 +265,7 @@ function ServiceModal({
             onInvalidChange={setPriceInvalid}
             hint={
               priceChanged
-                ? "Afecta los turnos no cobrados sin copago propio."
+                ? "Solo cambia lo que se cobra en turnos sin cobrar que no tengan copago propio, de la obra social, del precio Particular ni del plan."
                 : undefined
             }
           />
@@ -260,6 +296,40 @@ function ServiceModal({
               }}
             >
               Usar {suggestedDuration} min
+            </button>
+          </div>
+        )}
+        {hasPlanes && (
+          <FormField
+            as="select"
+            label="Disciplina"
+            name="discipline"
+            value={discipline}
+            onChange={(v) => setDiscipline(v as Discipline | "")}
+            options={[
+              { value: "", label: "Sin disciplina" },
+              ...DISCIPLINES.map((d) => ({ value: d, label: disciplineLabel(d) })),
+            ]}
+            hint="Los planes de esa disciplina ofrecen este servicio. Sin disciplina, lo ofrecen todos."
+          />
+        )}
+        {showDisciplineSuggestion && suggestedDiscipline && (
+          <div style={{ fontSize: 12, color: "var(--navy-500)", marginTop: -4 }}>
+            Por la práctica, sugerimos {disciplineLabel(suggestedDiscipline)}.{" "}
+            <button
+              type="button"
+              onClick={() => setDiscipline(suggestedDiscipline)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--sky-700)",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                padding: 0,
+              }}
+            >
+              Usar {disciplineLabel(suggestedDiscipline)}
             </button>
           </div>
         )}

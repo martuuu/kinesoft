@@ -4,7 +4,8 @@
  */
 import { z } from "zod";
 import { isDayKey } from "@/lib/availability/day";
-import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
+import { DISCIPLINES, PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
+import { CatalogId } from "@/lib/catalog-schemas";
 
 /**
  * Email de paciente normalizado (A2a-S08): trim + minúsculas ANTES de validar
@@ -359,6 +360,41 @@ export const ProgramStatusSet = z.object({
   }),
 });
 export type ProgramStatusSetInput = z.input<typeof ProgramStatusSet>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Servicios del consultorio (`lib/services.ts`). Vivía adentro de la action;
+// S13 (ES2b) lo trae acá para testear el parseo de `discipline` sin DB.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ServiceInput = z.object({
+  name: z.string().trim().min(1, "Nombre requerido").max(80),
+  description: z.string().trim().max(500).optional().or(z.literal("")),
+  color: z.string().max(9).optional().or(z.literal("")),
+  durationMin: z.coerce.number().int().min(5).max(480).default(45),
+  priceCents: z.coerce.number().int().min(0).max(100_000_000).default(0),
+  practitionerId: z.string().optional().or(z.literal("")),
+  // Cupos simultáneos por horario. Vacío → null = ilimitado (kinesiología).
+  maxConcurrent: z
+    .preprocess(
+      (v) => (v === "" || v === undefined || v === null ? null : v),
+      z.coerce.number().int().min(1, "Mínimo 1").max(50).nullable()
+    )
+    .optional(),
+  // Práctica del catálogo global (opcional). "" = sin práctica. Se valida
+  // contra la DB dentro de la tx de escritura (la FK saltea RLS).
+  practiceId: z
+    .union([CatalogId, z.literal(""), z.null()])
+    .transform((v) => (v ? v : null))
+    .optional(),
+  // Planes M1 (D10) · S13: disciplina del servicio. "" (select vacío) o null =
+  // sin disciplina; AUSENTE = no se toca (un update de precio no la borra, y la
+  // UI de un consultorio sin `planes` no la manda). Un valor no nulo exige el
+  // módulo `planes`: lo chequea la action, no el schema (depende del actor).
+  discipline: z
+    .preprocess((v) => (v === "" ? null : v), z.enum(DISCIPLINES).nullable())
+    .optional(),
+});
+export type ServiceInputType = z.input<typeof ServiceInput>;
 
 export type ActionResult<T = void> =
   | { ok: true; data: T }

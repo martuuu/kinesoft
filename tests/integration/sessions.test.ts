@@ -8,6 +8,9 @@
  *   - los buckets incluyen las vencidas y excluyen los planes CANCELLED;
  *   - un actor básico recibe rechazo.
  *
+ * S12b (D22): el cierre ya no autocompleta el plan; sugiere el alta. Los tests
+ * de autocompletado pasaron a afirmar la sugerencia y que el plan sigue ACTIVE.
+ *
  * Llama a las server actions REALES de `lib/sessions.ts` (getActor real, solo
  * la sesión de Supabase mockeada). Las fixtures (programa, sesiones,
  * ejercicios, turnos) se crean con el owner client: `tenant-factory` no tiene
@@ -114,7 +117,7 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     });
 
     const r = await completeSessionFromSeguimiento(s.id, { notes: "Respondió bien", paInPre: 6, paInPost: 3, rpe: 5 });
-    expect(r).toEqual({ ok: true, data: { alreadyCompleted: false, programCompleted: false } });
+    expect(r).toEqual({ ok: true, data: { alreadyCompleted: false, programCompleted: false, suggestDischarge: false } });
 
     const row = await db.session.findUniqueOrThrow({ where: { id: s.id } });
     expect(row.completedAt).not.toBeNull();
@@ -161,19 +164,23 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     expect(row.notes).toBeNull();
   });
 
-  it("el plan se autocompleta por CONTEO de sesiones cerradas, no por index == total", async () => {
+  // S12b (D22/PQ-09): cambia la expectativa de A2. El plan ya NO se
+  // autocompleta: cerrar la última pendiente SUGIERE el alta (y sigue siendo por
+  // CONTEO de vivas realizadas, no por `index == total`).
+  it("[P2-S12b] el alta se sugiere por CONTEO de sesiones cerradas, no por index == total, y no autocompleta", async () => {
     asUser(A.userId);
     const p = await addPatient(db, A);
     const { program, sessions } = await makeProgram(p, { n: 3 });
     // Cerrar la última primero: antes esto completaba el plan con 2 pendientes.
     const last = await completeSessionFromSeguimiento(sessions[2].id);
-    expect(last.ok && last.data.programCompleted).toBe(false);
+    expect(last.ok && last.data.suggestDischarge).toBe(false);
     expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("ACTIVE");
 
     await completeSessionFromSeguimiento(sessions[0].id);
     const fin = await completeSessionFromSeguimiento(sessions[1].id);
-    expect(fin.ok && fin.data.programCompleted).toBe(true);
-    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("COMPLETED");
+    expect(fin.ok && fin.data.suggestDischarge).toBe(true);
+    expect(fin.ok && fin.data.programCompleted).toBe(false);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("ACTIVE");
   });
 
   it("un plan CANCELLED no se revive como COMPLETED al cerrar su última sesión", async () => {
@@ -182,6 +189,7 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     const { program, sessions } = await makeProgram(p, { n: 1, status: "CANCELLED" });
     const r = await completeSessionFromSeguimiento(sessions[0].id);
     expect(r.ok && r.data.programCompleted).toBe(false);
+    expect(r.ok && r.data.suggestDischarge).toBe(false);
     expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("CANCELLED");
   });
 
@@ -256,7 +264,7 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     const paused = await makeProgram(p, { n: 1, status: "PAUSED", start: new Date(now + 2 * DAY) });
 
     const b = await listOpenSessions();
-    const ids = (k: keyof typeof b) => b[k].rows.map((r) => r.id);
+    const ids = (k: "overdue" | "today" | "upcoming" | "recent") => b[k].rows.map((r) => r.id);
     expect(ids("overdue")).toContain(active.sessions[0].id);
     expect(ids("today")).toContain(active.sessions[1].id);
     expect(ids("upcoming")).toContain(active.sessions[2].id);
@@ -529,7 +537,8 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     }
   }
 
-  it("[P0-Z] dos cierres concurrentes de las últimas sesiones autocompletan el plan", async () => {
+  // S12b (D22): misma carrera, ahora sobre la sugerencia de alta en vez del autocompletado.
+  it("[P0-Z] dos cierres concurrentes de las últimas sesiones: exactamente uno sugiere el alta", async () => {
     asUser(A.userId);
     const p = await addPatient(db, A);
     const { program, sessions } = await makeProgram(p, { n: 3 });
@@ -556,11 +565,12 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
     );
     const results = await Promise.all(calls);
     expect(results.every((r) => r.ok)).toBe(true);
-    expect(results.filter((r) => r.ok && r.data.programCompleted)).toHaveLength(1);
-    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("COMPLETED");
+    expect(results.filter((r) => r.ok && r.data.suggestDischarge)).toHaveLength(1);
+    expect(results.filter((r) => r.ok && r.data.programCompleted)).toHaveLength(0);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: program.id } })).status).toBe("ACTIVE");
     expect(
       await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.status", entityId: program.id } })
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it("[P0-Z] reprogramar vs. cierre concurrente: una sesión realizada no se mueve", async () => {
@@ -600,7 +610,8 @@ describe.skipIf(!RUN)("sesiones · Seguimiento (A2a-S03)", () => {
       async (htx) => {
         await htx.treatmentProgram.update({ where: { id: program.id }, data: { status: "CANCELLED" } });
         call = rescheduleSession({ sessionId: s.id, scheduledFor: new Date(s.scheduledFor.getTime() + 2 * DAY).toISOString() });
-        await waitForRowLockWaiters('%"TreatmentProgram"%FOR UPDATE%', 1);
+        // P2.Z (H-a2): el plan se lockea con FOR NO KEY UPDATE (sigue esperando el UPDATE del holder).
+        await waitForRowLockWaiters('%"TreatmentProgram"%FOR%UPDATE%', 1);
       },
       { timeout: 20_000 }
     );

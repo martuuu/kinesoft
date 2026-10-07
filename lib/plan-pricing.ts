@@ -193,7 +193,7 @@ export type RepriceResult =
       };
       lockedCents: number;
     }
-  | { ok: false; code: "invalid-amount" | "below-locked" | "no-free-rows"; error: string };
+  | { ok: false; code: "invalid-amount" | "below-locked" | "no-free-rows" | "locked-unpriced"; error: string };
 
 const fmt = (cents: number) => formatARS(cents);
 
@@ -207,7 +207,15 @@ const fmt = (cents: number) => formatARS(cents);
  * por fecha y después por `index` (el "resto en las primeras" es por fecha,
  * que es lo que ve el paciente; el index puede tener huecos). Rechazos:
  *   - total nuevo < bloqueado (que incluye lo devengado) → `below-locked`;
- *   - sin filas libres y total ≠ bloqueado → `no-free-rows`, texto literal.
+ *   - sin filas libres y total ≠ bloqueado → `no-free-rows`, texto literal;
+ *   - alguna fila bloqueada SIN cuota (`priceCents` null: el plan venía "sin
+ *     precio" y esa sesión ya se realizó, cobró o pasó) → `locked-unpriced`.
+ *     La fila bloqueada no se re-precia nunca, así que quedaría una sesión
+ *     viva sin cuota en un paquete: I6 (Σ cuotas vivas = total) fallaba recién
+ *     en el verificador, al commitear, con un 500 — y el preview decía OK
+ *     (P2-Z · B-M2). Se rechaza acá para que preview y commit digan lo mismo.
+ *     PER_SESSION no tiene ese problema (I6 es solo de paquetes): por eso el
+ *     copy ofrece "precio por sesión" como salida.
  */
 export function repricePlan(input: {
   pricing: PlanPricing;
@@ -227,6 +235,17 @@ export function repricePlan(input: {
   const newPrice = new Map<string, number | null>();
 
   if (pricing?.mode === "PACKAGE") {
+    const unpriced = sessions.filter((s, i) => locks[i] !== null && s.priceCents == null).length;
+    if (unpriced > 0) {
+      return {
+        ok: false,
+        code: "locked-unpriced",
+        error:
+          unpriced === 1
+            ? "Hay 1 sesión realizada, cobrada o ya pasada sin precio, y su monto no se puede cambiar: no se puede armar un paquete. Usá precio por sesión."
+            : `Hay ${unpriced} sesiones realizadas, cobradas o ya pasadas sin precio, y su monto no se puede cambiar: no se puede armar un paquete. Usá precio por sesión.`,
+      };
+    }
     const free = sessions
       .filter((_, i) => locks[i] === null)
       .sort((a, b) => ms(a.scheduledFor) - ms(b.scheduledFor) || a.index - b.index);

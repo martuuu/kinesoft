@@ -12,20 +12,35 @@
  */
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
-import { z } from "zod";
+import type { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
+import type { Actor } from "@/lib/session";
+import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
+import { suggestDisciplineFromSpecialties } from "@/lib/services-discipline";
 import { findActivePractice } from "@/lib/catalog-validate";
 import { enableServiceForPractitioners } from "@/lib/agenda-defaults";
-import { CatalogId } from "@/lib/catalog-schemas";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
-import type { ActionResult } from "@/lib/validation";
+import { ServiceInput, type ActionResult } from "@/lib/validation";
 import type { ServiceRow } from "@/lib/services-types";
 
 const ADMIN_MSG = "Solo OWNER/ADMIN pueden modificar el catálogo de servicios.";
+
+/**
+ * Enmienda EV0 de S13: "disciplina del servicio solo con `planes` (UI y
+ * server)". La disciplina solo sirve a Planes (filtro del editor, chip y
+ * "Fuera de plan" de la agenda); un consultorio General no la puede fijar ni
+ * llamando a la action a mano (la UI esconde el campo, la barrera es esta).
+ * Limpiarla (null) sí se deja: no habilita nada y permite sanear un servicio
+ * que quedó con disciplina tras un cambio de vertical.
+ */
+function disciplineDenied(actor: Actor, discipline: string | null | undefined): string | null {
+  if (discipline == null) return null;
+  return modulesFor(actor.entitlements).has("planes") ? null : MODULE_DENIED_COPY.planes;
+}
 
 export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   const actor = await getActor();
@@ -36,7 +51,11 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         orderBy: { name: "asc" },
         include: {
           practitioner: { include: { user: { select: { fullName: true, email: true } } } },
-          practice: { select: { name: true } },
+          // S13: las especialidades de la práctica alimentan la disciplina
+          // SUGERIDA (PQ-11); solo se lee el catálogo, nunca se guarda sola.
+          practice: {
+            select: { name: true, specialties: { select: { specialty: { select: { slug: true } } } } },
+          },
           _count: { select: { bookings: true } },
         },
       }));
@@ -55,35 +74,20 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         bookingsCount: s._count.bookings,
         practiceId: s.practiceId,
         practiceName: s.practice?.name ?? null,
+        discipline: s.discipline,
+        suggestedDiscipline: s.practice
+          ? suggestDisciplineFromSpecialties(s.practice.specialties.map((ps) => ps.specialty.slug))
+          : null,
       }));
     },
-    ["services:list-counts", actor.tenantId],
+    // v2 (S13): la fila suma `discipline`/`suggestedDiscipline`. La data cache
+    // de Vercel sobrevive al deploy: con la clave vieja se servirían filas sin
+    // esos campos hasta el TTL.
+    ["services:list-counts:v2", actor.tenantId],
     { tags: [tags.services(actor.tenantId)], revalidate: ttl.short }
   );
   return fetcher(actor.tenantId);
 }
-
-const ServiceInput = z.object({
-  name: z.string().trim().min(1, "Nombre requerido").max(80),
-  description: z.string().trim().max(500).optional().or(z.literal("")),
-  color: z.string().max(9).optional().or(z.literal("")),
-  durationMin: z.coerce.number().int().min(5).max(480).default(45),
-  priceCents: z.coerce.number().int().min(0).max(100_000_000).default(0),
-  practitionerId: z.string().optional().or(z.literal("")),
-  // Cupos simultáneos por horario. Vacío → null = ilimitado (kinesiología).
-  maxConcurrent: z
-    .preprocess(
-      (v) => (v === "" || v === undefined || v === null ? null : v),
-      z.coerce.number().int().min(1, "Mínimo 1").max(50).nullable()
-    )
-    .optional(),
-  // Práctica del catálogo global (opcional). "" = sin práctica. Se valida
-  // contra la DB dentro de la tx de escritura (la FK saltea RLS).
-  practiceId: z
-    .union([CatalogId, z.literal(""), z.null()])
-    .transform((v) => (v ? v : null))
-    .optional(),
-});
 
 export async function createService(
   raw: z.input<typeof ServiceInput>
@@ -97,6 +101,8 @@ export async function createService(
     };
   }
   const actor = await requireTenantAdmin(ADMIN_MSG);
+  const deniedCreate = disciplineDenied(actor, parsed.data.discipline);
+  if (deniedCreate) return { ok: false, error: deniedCreate };
   // Validate practitioner belongs to the tenant if supplied.
   if (parsed.data.practitionerId) {
     const owned = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
@@ -122,6 +128,7 @@ export async function createService(
           practitionerId: parsed.data.practitionerId || null,
           maxConcurrent: parsed.data.maxConcurrent ?? null,
           practiceId: parsed.data.practiceId ?? null,
+          discipline: parsed.data.discipline ?? null,
         },
       });
       // B2.3 (decisión 7, = backfill (3)): con profesional → solo ese; sin
@@ -175,6 +182,8 @@ export async function updateService(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
+  const deniedUpdate = disciplineDenied(actor, parsed.data.discipline);
+  if (deniedUpdate) return { ok: false, error: deniedUpdate };
   if (parsed.data.practitionerId) {
     const ownedPrac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
       where: { id: parsed.data.practitionerId, tenantId: actor.tenantId },
@@ -190,7 +199,7 @@ export async function updateService(
     changes = await runWithRls(actor.tenantId, async (tx) => {
       const { practitionerId: ownerBefore, ...before } = await tx.service.findFirstOrThrow({
         where: { id, tenantId: actor.tenantId },
-        select: { name: true, priceCents: true, practiceId: true, practitionerId: true },
+        select: { name: true, priceCents: true, practiceId: true, discipline: true, practitionerId: true },
       });
       // La FK practiceId saltea RLS: práctica existente y no archivada, acá.
       // Solo si CAMBIA: si Plataforma archiva la práctica que el servicio ya
@@ -211,7 +220,7 @@ export async function updateService(
           practitionerId:
             parsed.data.practitionerId === "" ? null : parsed.data.practitionerId,
         },
-        select: { name: true, priceCents: true, practiceId: true, practitionerId: true },
+        select: { name: true, priceCents: true, practiceId: true, discipline: true, practitionerId: true },
       });
       // B2.3: si el pedido trae el profesional (asignarlo o pasarlo a
       // compartido), el nuevo dueño / todos los aceptados quedan habilitados.
@@ -258,7 +267,7 @@ export async function updateService(
     action: "service.update",
     entity: "Service",
     entityId: id,
-    // Solo nombre, monto y práctica, y solo si cambiaron: el precio es plata (entra en
+    // Solo nombre, monto, práctica y disciplina (S13), y solo si cambiaron: el precio es plata (entra en
     // el fallback del copago) y hasta A2 el audit no decía de cuánto a cuánto.
     ...(changes ? { payload: changes } : {}),
   });
@@ -286,20 +295,41 @@ function auditDiff<T extends Record<string, unknown>>(before: T, after: T): Audi
   return Object.keys(b).length ? { before: b, after: a } : null;
 }
 
+const DELETE_IN_USE_MSG =
+  "No se puede borrar: hay turnos o planes de tratamiento que usan este servicio. Editá el nombre o el precio si querés actualizarlo.";
+
 export async function deleteService(id: string): Promise<ActionResult> {
   const actor = await requireTenantAdmin(ADMIN_MSG);
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.service.findFirst({
-    where: { id, tenantId: actor.tenantId },
-    include: { _count: { select: { bookings: true } } },
-  }));
-  if (!owned) return { ok: false, error: "Servicio no encontrado." };
-  if (owned._count.bookings > 0) {
-    return {
-      ok: false,
-      error: "No se puede borrar: hay turnos asociados. Editá el nombre/precio si querés actualizarlo.",
-    };
+  // ES2a → S13: M1 dejó `TreatmentProgram.serviceId` en RESTRICT (un plan no
+  // puede quedar sin servicio en silencio) y `Booking.serviceId` ya lo era.
+  // Antes se contaban solo los turnos: un servicio con planes y sin turnos
+  // llegaba al DELETE y Postgres lo rechazaba (P2003 → 500 genérico). Se
+  // cuentan todos los planes, archivados y cancelados incluidos: la FK no mira
+  // el estado. `PlanTemplate.serviceId` es SET NULL: una plantilla no bloquea,
+  // queda sin servicio y el editor lo pide al usarla.
+  let outcome: "not-found" | "in-use" | "deleted";
+  try {
+    outcome = await runWithRls(actor.tenantId, async (tx) => {
+      const owned = await tx.service.findFirst({
+        where: { id, tenantId: actor.tenantId },
+        select: { _count: { select: { bookings: true, programs: true } } },
+      });
+      if (!owned) return "not-found" as const;
+      if (owned._count.bookings > 0 || owned._count.programs > 0) return "in-use" as const;
+      await tx.service.delete({ where: { id } });
+      return "deleted" as const;
+    });
+  } catch (e) {
+    // Conteo y DELETE van en la misma tx pero sin lock: un turno o plan creado
+    // entre los dos igual dispara la FK. Mismo mensaje en vez de un 500.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      outcome = "in-use";
+    } else {
+      throw e;
+    }
   }
-  await runWithRls(actor.tenantId, (tx) => tx.service.delete({ where: { id } }));
+  if (outcome === "not-found") return { ok: false, error: "Servicio no encontrado." };
+  if (outcome === "in-use") return { ok: false, error: DELETE_IN_USE_MSG };
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId,

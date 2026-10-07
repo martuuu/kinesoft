@@ -23,11 +23,40 @@ import type {
   ExerciseFilters,
   FilterFacets,
 } from "@/lib/exercises-types";
+import { TENANT_CREATABLE_TAG_KINDS, isReservedTagSlug } from "@/lib/exercises-types";
+import { DISCIPLINE_TAG_SLUGS } from "@/lib/plans-constants";
+
+/**
+ * Planes P2 (S13x): fragmento `where` del filtro por disciplina. Con ese tag
+ * **o** sin ninguno de los dos tags DISCIPLINE (un ejercicio genérico sirve
+ * para kine y para osteo). Si el slug no es un tag DISCIPLINE existente (M1 no
+ * aplicada, slug inventado o de otro kind) no filtra: mejor la biblioteca
+ * completa que una vacía por un parámetro roto.
+ */
+async function disciplineWhere(
+  tenantId: string,
+  disciplineSlug: string | undefined,
+): Promise<Prisma.ExerciseWhereInput> {
+  if (!disciplineSlug) return {};
+  const all = Object.values(DISCIPLINE_TAG_SLUGS) as string[];
+  if (!all.includes(disciplineSlug)) return {};
+  const tag = await runWithRls(tenantId, (tx) =>
+    tx.tag.findFirst({ where: { slug: disciplineSlug, kind: "DISCIPLINE" }, select: { id: true } }),
+  );
+  if (!tag) return {};
+  return {
+    OR: [
+      { tags: { some: { tagId: tag.id } } },
+      { tags: { none: { tag: { slug: { in: all }, kind: "DISCIPLINE" } } } },
+    ],
+  };
+}
 
 export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRow[]> {
   const actor = await getActor();
   const gate = await gatingForActor();
   const q = f.q?.trim();
+  const discipline = await disciplineWhere(actor.tenantId, f.disciplineSlug);
 
   // Default to EXERCISE-only so existing callers (Biblioteca) don't
   // suddenly start seeing manual-therapy maneuvers mixed in. The unified
@@ -43,6 +72,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
     AND: [
       gate.visibility,
       kindFilter,
+      discipline,
       q
         ? {
             OR: [
@@ -125,7 +155,10 @@ export async function getExercise(slug: string) {
           article: true,
         },
       })),
-    ["exercise:slug", slug, actor.tenantId, gate.hasFullCatalog ? "full" : "basic"],
+    // Enmienda EV0 (S13x): el alcance de 3 valores. Con `full ? "full" :
+    // "basic"`, "none" (General) y "own" (Kine base) compartían slot y tras un
+    // cambio de vertical desde /plataforma se servía el del otro alcance.
+    ["exercise:slug", slug, actor.tenantId, gate.catalogScope],
     {
       tags: [cacheTags.exercises(actor.tenantId), cacheTags.catalog()],
       revalidate: ttl.long,
@@ -144,7 +177,9 @@ export async function loadFilterFacets(): Promise<FilterFacets> {
   // EV0 V.Z (P1): el combo de condiciones es del módulo `diagnostico`; va en la
   // clave para que un cambio de vertical desde /plataforma no sirva el slot viejo.
   const hasDiagnostico = modulesFor(actor.entitlements).has("diagnostico");
-  const gateKey = JSON.stringify({ p: actor.tenantId, full: gate.hasFullCatalog, dx: hasDiagnostico });
+  // S13x: `catalogScope` (none/own/full) en lugar de `hasFullCatalog`, mismo
+  // motivo que en `getExercise`.
+  const gateKey = JSON.stringify({ p: actor.tenantId, scope: gate.catalogScope, dx: hasDiagnostico });
   const fetcher = unstable_cache(
     async (): Promise<FilterFacets> => {
       // Facets come from the structured MUSCLE_GROUP / EQUIPMENT tags (the
@@ -227,25 +262,79 @@ export async function ensureTag(
   // escribir en la tabla GLOBAL de tags por RPC. Escritura → tira (C-EV4).
   const gate = await gatingForActor();
   if (!gate.canCreate) throw new ForbiddenError(MODULE_DENIED_COPY.ejercicios);
+  // Planes P2 (S13x): `Tag` es GLOBAL. Solo los kinds que usa la UI de la
+  // biblioteca; DISCIPLINE (filtra la biblioteca de todos) y los de
+  // diagnóstico los cura Plataforma (`lib/catalog-tags.ts`).
+  if (!(TENANT_CREATABLE_TAG_KINDS as readonly TagKind[]).includes(kind)) {
+    throw new Error("No se pueden crear etiquetas de ese tipo.");
+  }
   const trimmed = label.trim();
   if (!trimmed) throw new Error("Tag label empty");
   const slug = slugify(trimmed);
+  if (!slug) throw new Error("Tag label empty");
+  // Slugs de disciplina reservados: el upsert sin `update` devolvería el tag
+  // DISCIPLINE y la UI lo vincularía como si fuera un objetivo.
+  if (isReservedTagSlug(slug)) {
+    throw new Error("Ese nombre está reservado para las disciplinas.");
+  }
   const row = await prisma.tag.upsert({
     where: { slug },
     create: { slug, label: trimmed, kind },
     update: {},
-    select: { slug: true, label: true },
+    select: { slug: true, label: true, kind: true },
   });
-  return row;
+  // Un DISCIPLINE ajeno a los 2 de M1 (no debería existir; el post-check (11)
+  // del runbook lo busca) tampoco se entrega como tag creable.
+  if (row.kind === "DISCIPLINE") {
+    throw new Error("Ese nombre está reservado para las disciplinas.");
+  }
+  return { slug: row.slug, label: row.label };
 }
 
+/**
+ * Tags para el combo de la biblioteca / terapia manual (y el editor de
+ * /plataforma).
+ *
+ * P2-Z · B-L1: antes era `tag.findMany()` sin where ni gate. `Tag` es GLOBAL
+ * (no tiene `tenantId`) y `ensureTag` lo crea desde texto libre de cualquier
+ * consultorio: la lista exponía a todos lo que escribió cada uno. Ahora:
+ *   - Plataforma (`isPlatformAdmin`): todos — es la superficie de curado.
+ *   - Sin el módulo `ejercicios` (consultorio General): `[]`.
+ *   - Si no: solo los tags USADOS por contenido que el consultorio puede
+ *     tener a la vista — ejercicios globales (curados por la plataforma) o
+ *     propios, y condiciones globales o propias. Un tag de texto libre de otro
+ *     consultorio solo cuelga de SUS ejercicios privados: no aparece. Un tag
+ *     creado y nunca vinculado tampoco (ni siquiera el propio: `ensureTag` ya
+ *     se lo devuelve a la UI al crearlo, y al vincularlo pasa a "usado").
+ *   Se descartó filtrar por kind (los "no creables" como curados): antes de
+ *   S13x `ensureTag` aceptaba cualquier kind, así que el kind no prueba quién
+ *   lo creó. Los globales se muestran aunque el scope sea "own" (sin el
+ *   catálogo de la plataforma): el label de un tag curado no es contenido
+ *   pago ni dato de nadie, y da el vocabulario común para los propios.
+ * `tenantId` a mano en cada rama (en prod la conexión es BYPASSRLS).
+ */
 export async function listAllTags(): Promise<{ slug: string; label: string }[]> {
-  await getActor();
-  const rows = await prisma.tag.findMany({
-    orderBy: [{ kind: "asc" }, { label: "asc" }],
-    select: { slug: true, label: true },
-  });
-  return rows;
+  const actor = await getActor();
+  if (actor.isPlatformAdmin) {
+    return prisma.tag.findMany({
+      orderBy: [{ kind: "asc" }, { label: "asc" }],
+      select: { slug: true, label: true },
+    });
+  }
+  if (!modulesFor(actor.entitlements).has("ejercicios")) return [];
+  const mineOrGlobal = { OR: [{ tenantId: null }, { tenantId: actor.tenantId }] };
+  return runWithRls(actor.tenantId, (tx) =>
+    tx.tag.findMany({
+      where: {
+        OR: [
+          { exercises: { some: { exercise: mineOrGlobal } } },
+          { conditions: { some: { condition: mineOrGlobal } } },
+        ],
+      },
+      orderBy: [{ kind: "asc" }, { label: "asc" }],
+      select: { slug: true, label: true },
+    })
+  );
 }
 
 export async function createExercise(input: {
@@ -295,7 +384,9 @@ export async function createExercise(input: {
   ] as const) {
     for (const label of (text ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
       const s = slugify(label);
-      if (!s) continue;
+      // S13x: "Kinesiología" escrito como grupo muscular no crea ni vincula el
+      // tag de disciplina (mismo motivo que en `ensureTag`).
+      if (!s || isReservedTagSlug(s)) continue;
       await prisma.tag.upsert({ where: { slug: s }, create: { slug: s, label, kind }, update: {} });
       if (!autoTagSlugs.includes(s)) autoTagSlugs.push(s);
     }

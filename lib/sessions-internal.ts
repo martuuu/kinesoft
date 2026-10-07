@@ -16,9 +16,8 @@ import "server-only";
  *     en la misma tx, antes de llamar.
  *   - NO tocan Booking: la sincronía turno↔sesión (C4) la orquesta el caller,
  *     que ya tiene el Booking lockeado si corresponde (Booking → Session).
- *   - NO autocompletan el plan: el autocompletado por conteo sigue en
- *     `completeSessionFromSeguimiento` hasta P2 (D22 lo reemplaza por "sugerir
- *     el alta").
+ *   - NO autocompletan el plan. Desde P2 (S12b, D22/PQ-09) nadie lo hace:
+ *     `completeSessionFromSeguimiento` SUGIERE el alta y el kine decide.
  *   - Todo `where` lleva `program: { tenantId }` a mano: en prod la conexión
  *     es BYPASSRLS y esa es la única barrera (AUDIT §5.1).
  *
@@ -104,11 +103,7 @@ export async function completeSessionInTx(
       const fresh = await tx.session.findUniqueOrThrow({ where: { id: p.sessionId }, select: { paInPost: true } });
       post = fresh.paInPost;
     }
-    if (post != null) {
-      await tx.evaScore.create({
-        data: { patientId: s.program.patientId, value: post, source: `session-${s.index}-post`, takenAt: p.now },
-      });
-    }
+    if (post != null) await createSessionEvaInTx(tx, { patientId: s.program.patientId, sessionId: p.sessionId, index: s.index, value: post, now: p.now });
   }
 
   // En la misma tx: el evento existe si y solo si el cierre existe. Puntajes
@@ -128,13 +123,58 @@ export async function completeSessionInTx(
   return { claimed: true, programId: s.programId };
 }
 
+/**
+ * EVA post de una sesión. S12b: además del `source` de siempre
+ * (`session-<index>-post`, que nadie lee por index y es ambiguo si el plan se
+ * re-planifica) llena `EvaScore.sessionId` (M1): es lo que mira "untouched" y
+ * lo que va a leer la curva de EVA por sesión. `note` queda null a propósito:
+ * es el texto del check-in del paciente (portal, S24); copiar ahí las notas de
+ * la sesión sacaría HC del registro clínico a un dato que ve el paciente.
+ */
+async function createSessionEvaInTx(
+  tx: DbClient,
+  o: { patientId: string; sessionId: string; index: number; value: number; now: Date }
+): Promise<void> {
+  await tx.evaScore.create({
+    data: { patientId: o.patientId, value: o.value, source: `session-${o.index}-post`, sessionId: o.sessionId, takenAt: o.now },
+  });
+}
+
 export type ReopenSessionReason = "not-found" | "not-completed" | "touched";
 
 /**
+ * Estado de "evolución" de una sesión, con la fila de Session lockeada
+ * (`FOR UPDATE`; el caller ya tiene el Booking si corresponde, orden C2 (3)).
+ *
+ * "Untouched" (C4, literal): `notes`, `rpe`, `paInPre` y `paInPost` en null,
+ * sin EvaScore con ese `sessionId` (desde P2, S12b) y sin `SessionExercise` en
+ * un estado distinto de PENDING. Una sola sentencia (los dos `EXISTS` van en
+ * la misma fila): `reopenSessionIfUntouchedInTx` corre dentro de
+ * `updateBooking`/Recepción, que tienen techo estricto de sentencias.
+ * `Session.title` NO cuenta: es el nombre de la sesión, no evolución.
+ */
+async function lockSessionEvolutionStateInTx(
+  tx: DbClient,
+  tenantId: string,
+  sessionId: string
+): Promise<{ completedAt: Date | null; touched: boolean } | null> {
+  const rows = await tx.$queryRaw<{ completedAt: Date | null; touched: boolean }[]>`
+    SELECT s."completedAt",
+      (s.notes IS NOT NULL OR s.rpe IS NOT NULL OR s."paInPre" IS NOT NULL OR s."paInPost" IS NOT NULL
+        OR EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
+        OR EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
+      ) AS touched
+    FROM "Session" s
+    JOIN "TreatmentProgram" tp ON tp.id = s."programId"
+    WHERE s.id = ${sessionId} AND tp."tenantId" = ${tenantId}
+    FOR UPDATE OF s`;
+  return rows[0] ?? null;
+}
+
+/**
  * Reabre una sesión realizada SOLO si nadie le cargó evolución ("untouched",
- * C4): `notes`, `rpe`, `paInPre` y `paInPost` en null y ningún
- * `SessionExercise` en un estado distinto de PENDING. Desde P2 (S12b) suma
- * "sin EvaScore con ese `sessionId`" (la columna llega con M1).
+ * C4; ver `lockSessionEvolutionStateInTx`). Desde P2 (S12b) una EvaScore con
+ * ese `sessionId` también cuenta como evolución.
  *
  * Por qué no reabre siempre: "Deshacer Atendido" o pasar un turno COMPLETED a
  * CANCELLED desde el drawer no pueden borrar una evolución clínica cargada. Si
@@ -147,31 +187,77 @@ export type ReopenSessionReason = "not-found" | "not-completed" | "touched";
  * DONE en paralelo no toma el lock de Session; en el peor caso queda una
  * sesión abierta con un ejercicio hecho, que también es un estado válido.
  *
- * `now` es parte de la firma congelada (C8) para los chequeos de P2; hoy no se usa.
+ * `now` es parte de la firma congelada (C8); hoy no se usa.
  */
 export async function reopenSessionIfUntouchedInTx(
   tx: DbClient,
   p: { tenantId: string; sessionId: string; now: Date }
 ): Promise<{ reopened: boolean; reason?: ReopenSessionReason }> {
-  const rows = await tx.$queryRaw<
-    { completedAt: Date | null; notes: string | null; rpe: number | null; paInPre: number | null; paInPost: number | null }[]
-  >`
-    SELECT s."completedAt", s.notes, s.rpe, s."paInPre", s."paInPost"
-    FROM "Session" s
-    JOIN "TreatmentProgram" tp ON tp.id = s."programId"
-    WHERE s.id = ${p.sessionId} AND tp."tenantId" = ${p.tenantId}
-    FOR UPDATE OF s`;
-  const s = rows[0];
+  const s = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId);
   if (!s) return { reopened: false, reason: "not-found" };
   if (s.completedAt === null) return { reopened: false, reason: "not-completed" };
-  if (s.notes !== null || s.rpe !== null || s.paInPre !== null || s.paInPost !== null) {
-    return { reopened: false, reason: "touched" };
-  }
-  const worked = await tx.sessionExercise.count({
-    where: { sessionId: p.sessionId, status: { not: "PENDING" } },
-  });
-  if (worked > 0) return { reopened: false, reason: "touched" };
+  if (s.touched) return { reopened: false, reason: "touched" };
 
   await tx.session.update({ where: { id: p.sessionId }, data: { completedAt: null } });
   return { reopened: true };
+}
+
+export type RecordEvolutionReason = "not-found" | "not-completed" | "touched";
+
+/**
+ * "Cargar evolución" (S12b, C4: "Si ya estaba realizada → Cargar evolución").
+ * Una sesión que cerró la agenda ("Atendido", o el turno a COMPLETED en el
+ * drawer) quedó realizada con SOLO `completedAt` (`source:'booking'`). Esto
+ * le carga lo que el cierre de Seguimiento hubiera escrito: meta, ejercicios
+ * PENDING → DONE y EVA post (con `sessionId`), en la tx del caller.
+ *
+ * Solo sobre una sesión realizada y "untouched": si ya tiene evolución, no
+ * pisa nada (`touched`) — se edita por "Guardar anotaciones". Eso también la
+ * hace idempotente: un doble click o un reintento no duplica la EVA (el
+ * primero la deja tocada, y el segundo espera el lock de la fila y lo ve).
+ *
+ * Mismas reglas que `completeSessionInTx`: no gatea, no toca Booking, no
+ * autocompleta; el audit (`session.evolution`) va en la misma tx.
+ */
+export async function recordSessionEvolutionInTx(
+  tx: DbClient,
+  p: { tenantId: string; sessionId: string; actorId: string | null; meta: SessionMetaParsed; now: Date }
+): Promise<{ recorded: boolean; reason?: RecordEvolutionReason }> {
+  const st = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId);
+  if (!st) return { recorded: false, reason: "not-found" };
+  if (st.completedAt === null) return { recorded: false, reason: "not-completed" };
+  if (st.touched) return { recorded: false, reason: "touched" };
+
+  const s = await tx.session.findFirstOrThrow({
+    where: { id: p.sessionId, program: { tenantId: p.tenantId } },
+    select: { index: true, program: { select: { patientId: true } } },
+  });
+  const m = p.meta;
+  const hasMeta = m.notes != null || m.paInPre != null || m.paInPost != null || m.rpe != null;
+  if (hasMeta) {
+    await tx.session.update({
+      where: { id: p.sessionId },
+      data: { notes: m.notes, paInPre: m.paInPre, paInPost: m.paInPost, rpe: m.rpe },
+    });
+  }
+  const ex = await tx.sessionExercise.updateMany({
+    where: { sessionId: p.sessionId, status: "PENDING" },
+    data: { status: "DONE" },
+  });
+  // Untouched ⇒ `paInPost` guardado es null: la EVA sale solo de lo que llegó.
+  if (m.paInPost != null) {
+    await createSessionEvaInTx(tx, { patientId: s.program.patientId, sessionId: p.sessionId, index: s.index, value: m.paInPost, now: p.now });
+  }
+  // Nada que cargar (sin meta ni ejercicios): no-op, sin audit.
+  if (!hasMeta && ex.count === 0) return { recorded: false };
+
+  await auditInTx(tx, {
+    tenantId: p.tenantId,
+    actorId: p.actorId ?? undefined,
+    action: "session.evolution",
+    entity: "Session",
+    entityId: p.sessionId,
+    payload: { paInPre: m.paInPre, paInPost: m.paInPost, rpe: m.rpe, exercisesDone: ex.count },
+  });
+  return { recorded: true };
 }

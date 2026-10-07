@@ -1,3 +1,5 @@
+import type { Discipline } from "@/lib/plans-constants";
+
 export type ServiceRow = {
   id: string;
   name: string;
@@ -13,4 +15,12 @@ export type ServiceRow = {
   /** Práctica del catálogo global que representa (B1.4); null = servicio libre. */
   practiceId: string | null;
   practiceName: string | null;
+  /** Planes M1 (D10): disciplina del servicio; null = sin disciplina. */
+  discipline: Discipline | null;
+  /**
+   * S13 · PQ-11: disciplina que sugiere el catálogo por la práctica
+   * (`suggestDisciplineFromSpecialties`). Solo se ofrece en la UI; nunca se
+   * guarda sola. null = la práctica no la implica (o es ambigua).
+   */
+  suggestedDiscipline: Discipline | null;
 };

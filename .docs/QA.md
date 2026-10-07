@@ -619,7 +619,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 - [ ] Copago de $50 → el turno se crea (antes bloqueaba por el step de 100).
 - [ ] "1.500,50" y "1500.5" en precio → se guarda $1.500,50; "abc" bloquea Guardar.
-- [ ] Editar precio/copago → aviso "Afecta los turnos no cobrados sin copago propio."
+- [ ] Editar precio/copago → aviso "Solo cambia lo que se cobra en turnos sin cobrar que no tengan copago propio, de la
+  obra social, del precio Particular ni del plan." (copy de ES2b/S13).
 - [ ] Quitar un kine con turnos futuros → error con el conteo; sin turnos → desaparece de la agenda.
 - [ ] Cambio de rol → confirmación; transferir OWNER → doble confirmación.
 - [ ] Editar servicio/OS → `AuditEvent` con antes/después.
@@ -872,3 +873,80 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Data API (Martin, consola de prod)
 - [ ] Precheck de solo lectura de VERTICALES §1 y desactivar la Data API (o sacar `public`).
+
+---
+
+## Planes P2 (ES2b) — core de turnos y dominio server (07-oct-2026)
+
+> **Sin migraciones nuevas.** Correr con `TZ=UTC npm run dev` contra el Docker local (M1 y M2 aplicadas). ES2b es todo
+> server: la UI de Planes llega con ES3, así que acá va (A) lo que ya se ve desde la UI vieja y (B) lo que queda para
+> el QA de ES3. Usuarios: OWNER, PRACTITIONER con un paciente ajeno (básico), Secretaria (ASSISTANT), BILLING; un
+> consultorio Kine y uno General. Contexto en [PLANES.md §10](PLANES.md) y [AUDIT.md §Ronda 17](AUDIT.md).
+
+### (A) Desde la UI de hoy
+
+**Buscador de pacientes de la agenda (P2-FX1)**
+- [ ] 🔴 Modal de turno nuevo y drawer, como **Secretaria**: el buscador encuentra pacientes por nombre, apellido,
+  "Juan Pérez" y DNI (también tipeado "30.123.456"). Placeholder "Buscá por nombre o DNI…". No muestra edad, plan
+  ni email. Un archivado no aparece.
+- [ ] Mismo buscador como PRACTITIONER (encuentra a un paciente ajeno en básico) y en un consultorio **General**.
+- [ ] El picker del Plan Builder / Diagnóstico sigue mostrando solo pacientes propios o compartidos (full).
+
+**Configuración y guardas (S13, S13g)**
+- [ ] Servicios: con módulo `planes`, el modal tiene "Disciplina" con el hint "Los planes de esa disciplina ofrecen
+  este servicio. Sin disciplina, lo ofrecen todos." y la lista muestra "Disciplina: …"; en General no aparece.
+- [ ] Borrar un servicio usado por un plan → mensaje claro (no 500). Archivar una sede con un plan ACTIVE y quitar
+  del equipo al responsable de un plan ACTIVE → mensaje con el motivo.
+
+**Biblioteca (S13x, B-L1)**
+- [ ] Crear el tag "Kinesiología" o "Osteopatía" → no se crea (el error no se ve en prod: `onCreateTag-sin-error`,
+  C1). Los filtros de tags solo muestran tags usados por ejercicios globales o propios (un tag creado en otro
+  consultorio no aparece).
+
+**Tab Plan vieja (legacy delegando en S15/S12b)**
+- [ ] Editar un plan: solo se guarda el título (total, frecuencia e inicio ya no cambian las sesiones).
+- [ ] "Eliminar sesión" → *"archivala desde el plan"*; "Eliminar" (admin) un plan ACTIVE → rechazo ("primero hay que cancelarlo"); uno CANCELLED/COMPLETED →
+  desaparece de la lista (archivado, no borrado).
+- [ ] Cambiar el estado (pausar/cancelar) → los turnos quedan como estaban (la UI vieja manda "mantener").
+- [ ] "Sesión a medida" en un plan con precio **Paquete** → rechazo con copy accionable; en un plan COMPLETED →
+  rechazo; como Secretaria → no puede. En un plan sin precio → se agrega con su título y "Deshacer Atendido" la reabre.
+- [ ] Reprogramar una sesión que tiene turno: mueve el turno por el core (con los avisos de cupo/bloqueo); a un
+  horario donde el paciente ya tiene turno → mensaje, no 500.
+
+**Seguimiento (S12b)**
+- [ ] Cerrar una sesión con turno PENDING/CONFIRMED → el turno pasa a Atendido en la agenda.
+- [ ] Cerrar la última sesión → el plan **no** se completa solo (D22: queda la sugerencia de alta para ES3).
+- [ ] Cerrar desde dos pestañas la misma sesión → una gana y la otra recibe un mensaje (no 500).
+- [ ] En General: `/seguimiento` redirige; Seguimiento vacío sin el módulo `sesiones`.
+
+**Pacientes, cobros y dashboard**
+- [ ] Archivar un paciente con un plan ACTIVE → el plan queda PAUSED y sus turnos siguen en la agenda (L9).
+- [ ] Turno suelto sin copago propio: marcar Cobrado y después cambiar la cobertura del paciente → el monto cobrado no
+  cambia (Q8).
+- [ ] Dashboard: "sesión n" muestra el ordinal entre vivas, no el índice; como Secretaria, sin título ni condición; en
+  General no consulta planes (0).
+
+### (B) Para el QA de ES3 (hoy solo con tests de integración)
+
+- [ ] Crear un plan con "Revisá los turnos" (TZ=UTC): 10 sesiones lun/jue caen en el día AR correcto; keys `plan:`; un
+  bloqueo nunca se fuerza; stale si la agenda cambió.
+- [ ] Chip `Kine · 3/10` en la agenda, sin título para Secretaria/BILLING/básico; "Fuera de plan" en turnos sueltos del
+  mismo paciente y disciplina.
+- [ ] Drawer/Recepción sobre turnos de plan: reprogramar mueve la sesión; Ausente deja la sesión "sin turno"; cancelar
+  con cobro → *"Tiene un cobro registrado: reprogramalo"*; borrar → *"cancelalo y la sesión queda sin turno"*; Deshacer
+  Ausente con otro turno activo → mensaje; los `notice` se ven como toast.
+- [ ] Ciclo de vida: diálogo D7 (cancelar/mantener futuros; los cobrados no se tocan), archivar, restaurar
+  (OWNER/ADMIN), reactivar revalida sede y responsable.
+- [ ] Mover "este y los siguientes" (+1 h en una tx; un conflicto = stale entero) y re-planificar desde la sesión N con
+  cambio de profesional; lo cobrado queda intacto.
+- [ ] Cantidad y precio: 10→12, reducir archiva las últimas sin cobro, reprecio solo en futuros impagos, PACKAGE
+  "mantener total / precio por sesión", "sin precio" con sesiones realizadas → PACKAGE rechaza con copy
+  (`locked-unpriced`).
+- [ ] Cobro previo: Ausente cobrado → el turno nuevo de esa sesión sale $0; desmarcar el cobro del previo re-estampa el
+  reemplazo con aviso.
+- [ ] Generar turnos de pendientes (la Secretaria puede, con una sesión puntual), vincular un turno suelto, adoptar
+  una serie, sacar del plan (con cobro → rechazo).
+- [ ] Autorización de la OS: alta con el plan, renovación (ASSISTANT sí, BILLING no), avisos de exceso y vencimiento
+  (30/11 23:00 AR no vencida); no aparece en agenda, ICS ni portal; un PRACTITIONER básico no la ve.
+- [ ] Diagnóstico → plan por el motor (caso + plan + turnos en una tx; un stale no deja nada).
+- [ ] Saldo del plan: pactado, devengado, cobrado (la OS pagada no suma; C0), pendiente y a favor nunca negativos.

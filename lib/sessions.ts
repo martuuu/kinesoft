@@ -20,24 +20,88 @@
  * serializa por paciente y programa; los ejercicios asignables excluyen los
  * archivados; el bulk no toca sesiones realizadas; reprogramar rechaza planes
  * CANCELLED/COMPLETED.
+ *
+ * Planes P2 · S12b (sincronía lado sesión, PLANES.md C4):
+ *   - módulo `sesiones` (EV0): cada export lo exige. Lecturas vacías (`null`,
+ *     `[]`, buckets vacíos) y escrituras `{ok:false}` con el copy del módulo:
+ *     la UI de un consultorio General esconde Seguimiento, pero una action se
+ *     puede llamar por RPC igual;
+ *   - cerrar en Seguimiento lockea primero el turno activo vinculado y lo pasa
+ *     a COMPLETED en la misma tx (Booking → Session → TreatmentProgram, C2 (3));
+ *     si la sesión ya estaba realizada (por "Atendido"), lo tipeado se carga
+ *     como evolución en vez de perderse;
+ *   - D22 / PQ-09: ya no autocompleta el plan; sugiere el alta;
+ *   - `rescheduleSession` con turno activo mueve el turno por el core de la
+ *     agenda (L5) y la sesión le sigue (I3); nunca cambia el profesional;
+ *   - buckets "Sin turno" (R-LEGACY), "Realizadas sin evolución" y la
+ *     sugerencia de alta; "Sesión n de N" por ordinal entre las vivas (M13);
+ *   - archivados (plan o sesión) fuera de todo listado y del bulk;
+ *   - toda escritura de turno emite `afterBookingsCommitted` una vez, después
+ *     del commit; el verificador de invariantes corre al final de la tx donde
+ *     se cierra o se mueve una sesión.
  */
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
+import { Prisma, type SessionExerciseStatus } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import { getActor, type Actor } from "@/lib/session";
+import type { z } from "zod";
+import { ForbiddenError, getActor, type Actor } from "@/lib/session";
 import { audit, auditInTx } from "@/lib/audit";
-import { notify } from "@/lib/notifications-internal";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
-import { lockPlanPatient } from "@/lib/plan-lock";
+import { lockPlanPatient, withTxConflictRetry } from "@/lib/plan-lock";
 import { bulkPatientAccess, patientAccessFor, visibilityForActor } from "@/lib/visibility";
 import { dayKeyOf, dayWindow } from "@/lib/availability/day";
-import { completeSessionInTx } from "@/lib/sessions-internal";
+import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
+import { planSessionOrdinals } from "@/lib/plan-display";
+import {
+  linkedProgramWhere,
+  liveProgramWhere,
+  liveSessionWhere,
+  sessionWithoutActiveBookingWhere,
+} from "@/lib/plan-predicates";
+import {
+  applyBookingUpdateInTx,
+  notifyPlanNearingDischarge,
+  resolveBookingUpdateUniqueViolation,
+  type PlanDischarge,
+} from "@/lib/bookings-core";
+import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
+import { assertProgramInvariantsInTx, ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
+import {
+  BAD_LOCATION_ERROR,
+  BASIC_ACCESS_ERROR,
+  BLOCKED_ERROR,
+  OUT_OF_HOURS_ERROR,
+  PATIENT_OVERLAP_ERROR,
+  PLAN_SESSION_NOT_PENDING_ERROR,
+  PLAN_SESSION_TAKEN_ERROR,
+  STALE_ERROR,
+  UPDATE_SAME_INSTANT_ERROR,
+} from "@/lib/bookings-constants";
+import { completeSessionInTx, recordSessionEvolutionInTx } from "@/lib/sessions-internal";
+import { assertPlanManageInTx } from "@/lib/plan-authz-internal";
+import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
+import { PlanRejected, StalePlanPreview } from "@/lib/plans-engine-internal";
+import {
+  addSessionsInTx,
+  PLAN_EDIT_COPY,
+  PlanEditNeedsConfirmation,
+  PlanEditStale,
+  previewAddSessionsInTx,
+  roleAndCapsInTx,
+} from "@/lib/plans-edit-internal";
+import {
+  AddPlanSessionsCommitSchema,
+  AddPlanSessionsPreviewSchema,
+  type PackageCountPricing,
+} from "@/lib/plans-edit-types";
 import {
   AddCustomSessionInput,
   BulkAddSessionExercisesInput,
+  LoadSessionEvolutionInput,
   RescheduleSessionInput,
 } from "@/lib/sessions-schemas";
 import {
+  BookingUpdate,
   SessionExerciseUpdate,
   SessionMeta,
   SessionMetaUpdate,
@@ -45,11 +109,11 @@ import {
   type SessionMetaInput,
   type SessionMetaUpdateInput,
 } from "@/lib/validation";
-import { NotificationKind, type SessionExerciseStatus } from "@prisma/client";
 
 import {
   OPEN_SESSIONS_BUCKET_LIMIT,
   type CompleteSessionResult,
+  type DischargeSuggestionRow,
   type OpenSessionBucket,
   type OpenSessionBuckets,
   type OpenSessionRow,
@@ -58,6 +122,24 @@ import {
 
 const NO_ACCESS = "No tenés acceso completo a este paciente.";
 const DAY_MS = 86_400_000;
+const ARCHIVED_SESSION = "La sesión está archivada.";
+/** H-a1: apareció un turno activo de la sesión mientras se cerraba (rollback total). */
+const SESSION_CHANGED_WHILE_CLOSING = "La sesión cambió mientras la cerrabas: reintentá.";
+/**
+ * El verificador (`assertProgramInvariantsInTx`) ya mandó el diff a Sentry y
+ * la tx hizo rollback: es un bug nuestro, no un error del usuario. Sin esto,
+ * la action tiraba y Next mostraba un 500 genérico.
+ */
+const INVARIANT_ERROR = "No pudimos guardar el cambio porque el plan quedaría inconsistente. Ya nos llegó el aviso.";
+
+/**
+ * Módulo `sesiones` (EV0, enmienda S12b): sin él, `{ok:false}` con el copy del
+ * módulo. No tira `ForbiddenError` (como `requireModule`) porque estas actions
+ * devuelven `ActionResult` y en prod Next enmascara el mensaje de un throw.
+ */
+function sessionsModuleOff(actor: Actor): { ok: false; error: string } | null {
+  return modulesFor(actor.entitlements).has("sesiones") ? null : { ok: false, error: MODULE_DENIED_COPY.sesiones };
+}
 
 /**
  * Día AR [start, end) de un instante. Delegado al motor (`lib/availability/day`,
@@ -81,6 +163,7 @@ async function denied<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } |
     return { ok: true, value: await fn() };
   } catch (e) {
     if (e instanceof Denied) return { ok: false, error: e.message };
+    if (e instanceof ProgramInvariantViolation) return { ok: false, error: INVARIANT_ERROR };
     throw e;
   }
 }
@@ -100,6 +183,7 @@ async function sessionForWrite(tx: DbClient, actor: Actor, sessionId: string) {
       practitionerId: true,
       paInPre: true,
       paInPost: true,
+      archivedAt: true,
       program: {
         select: {
           id: true,
@@ -135,27 +219,42 @@ async function sessionExerciseForWrite(tx: DbClient, actor: Actor, sessionExerci
 // Landing
 // ──────────────────────────────────────────────────────────────────────
 
-const openSessionInclude = {
-  program: { select: { patientId: true, title: true, totalSessions: true, patient: { select: { firstName: true, lastName: true } } } },
-  exercises: { select: { status: true } },
-} satisfies Prisma.SessionInclude;
+/** Fila del hidratado del landing (una sentencia: sesión + plan + paciente + ordinal + ejercicios). */
+type OpenSessionHydrated = {
+  id: string;
+  index: number;
+  scheduledFor: Date;
+  completedAt: Date | null;
+  patientId: string;
+  programTitle: string;
+  totalSessions: number;
+  firstName: string;
+  lastName: string;
+  ordinal: number | null;
+  totalLive: number | null;
+  exerciseCount: number;
+  doneCount: number;
+};
 
-type OpenSessionDbRow = Prisma.SessionGetPayload<{ include: typeof openSessionInclude }>;
-
-function toOpenSessionRow(s: OpenSessionDbRow): OpenSessionRow {
+function toOpenSessionRow(s: OpenSessionHydrated): OpenSessionRow {
   return {
     id: s.id,
     index: s.index,
     scheduledFor: s.scheduledFor,
     completedAt: s.completedAt,
-    patientId: s.program.patientId,
-    patientName: `${s.program.patient.firstName} ${s.program.patient.lastName}`,
-    programTitle: s.program.title,
-    totalSessions: s.program.totalSessions,
-    exerciseCount: s.exercises.length,
-    doneCount: s.exercises.filter((e) => e.status === "DONE").length,
+    patientId: s.patientId,
+    patientName: `${s.firstName} ${s.lastName}`,
+    programTitle: s.programTitle,
+    totalSessions: s.totalSessions,
+    exerciseCount: s.exerciseCount,
+    doneCount: s.doneCount,
+    // M13: "Sesión n de N" por ordinal entre las vivas (no `index`/`totalSessions`).
+    ...(s.ordinal != null ? { ordinal: s.ordinal } : {}),
+    ...(s.totalLive != null ? { totalLive: s.totalLive } : {}),
   };
 }
+
+const EMPTY_BUCKET: OpenSessionBucket = { rows: [], total: 0 };
 
 /**
  * Landing de Seguimiento (A2a-S03 ítem 5). Cambios vs. la versión anterior:
@@ -166,19 +265,44 @@ function toOpenSessionRow(s: OpenSessionDbRow): OpenSessionRow {
  *     realizadas, y las vencidas sin cerrar no aparecían en ningún lado;
  *   - buckets abiertos (vencidas/hoy/próximas) solo de planes ACTIVE: un plan
  *     CANCELLED o PAUSED no tiene que pedir que cierres sus sesiones.
- *     "Realizadas" incluye COMPLETED (si no, la sesión que autocompleta el plan
- *     desaparecería de la lista en el mismo click);
+ *     "Realizadas" incluye COMPLETED;
  *   - solo pacientes con acceso `full`: se filtra en SQL (para que tope y
  *     conteo sean reales) y se re-verifica con `bulkPatientAccess`, que es la
  *     fuente de verdad del modelo de acceso.
+ *
+ * S12b:
+ *   - sin el módulo `sesiones`, buckets vacíos sin consultar;
+ *   - planes y sesiones archivados fuera de todos los buckets;
+ *   - buckets nuevos: "Sin turno" (C4, predicado único; solo planes ACTIVE
+ *     VINCULADOS — R-LEGACY: un alta vieja no tiene turnos que faltar),
+ *     "Realizadas sin evolución" (mismo criterio que "untouched", últimos 14
+ *     días como "Realizadas") y la sugerencia de alta (D22). Son lentes, no
+ *     particiones: una sesión "sin turno" de mañana también está en "Próximas";
+ *   - cada bucket trae SOLO ids (una sentencia escalar) y todas las filas se
+ *     hidratan juntas en UNA sentencia con el ordinal por ventana. Antes cada
+ *     bucket hacía 4 sentencias (sesión, plan, paciente, ejercicios: Prisma 5
+ *     sin `relationJoins` emite una por relación) y sumar dos buckets más con
+ *     ese patrón llevaba el landing de 28 a ~40 sentencias.
  */
 export async function listOpenSessions(now: Date = new Date()): Promise<OpenSessionBuckets> {
   const actor = await getActor();
+  if (sessionsModuleOff(actor)) {
+    return {
+      overdue: EMPTY_BUCKET,
+      today: EMPTY_BUCKET,
+      upcoming: EMPTY_BUCKET,
+      recent: EMPTY_BUCKET,
+      sinTurno: EMPTY_BUCKET,
+      realizadasSinEvolucion: EMPTY_BUCKET,
+      suggestDischarge: { rows: [], total: 0 },
+    };
+  }
   const today = arDayBounds(now);
   const recentSince = new Date(today.start.getTime() - 14 * DAY_MS);
   const take = OPEN_SESSIONS_BUCKET_LIMIT;
+  const tenantId = actor.tenantId;
 
-  return runWithRls(actor.tenantId, async (tx) => {
+  return runWithRls(tenantId, async (tx) => {
     const vis = await visibilityForActor(actor, tx);
     const patientAccessWhere: Prisma.PatientWhereInput = vis.seesAll
       ? {}
@@ -189,7 +313,8 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
           ],
         };
     const programWhere = (statuses: ("ACTIVE" | "COMPLETED" | "PAUSED")[]): Prisma.TreatmentProgramWhereInput => ({
-      tenantId: actor.tenantId,
+      tenantId,
+      ...liveProgramWhere,
       status: { in: statuses },
       patient: patientAccessWhere,
     });
@@ -197,14 +322,16 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
     const bucket = async (
       where: Prisma.SessionWhereInput,
       orderBy: Prisma.SessionOrderByWithRelationInput
-    ): Promise<{ rows: OpenSessionDbRow[]; total: number }> => {
-      const rows = await tx.session.findMany({ where, orderBy, include: openSessionInclude, take });
+    ): Promise<{ ids: string[]; total: number }> => {
+      const full: Prisma.SessionWhereInput = { AND: [liveSessionWhere, where] };
+      const rows = await tx.session.findMany({ where: full, orderBy: [orderBy, { id: "asc" }], select: { id: true }, take });
       // Solo contamos cuando el tope cortó: el caso común es 1 query.
-      const total = rows.length < take ? rows.length : await tx.session.count({ where });
-      return { rows, total };
+      const total = rows.length < take ? rows.length : await tx.session.count({ where: full });
+      return { ids: rows.map((r) => r.id), total };
     };
 
     const open = programWhere(["ACTIVE"]);
+    const closedAny = programWhere(["ACTIVE", "COMPLETED", "PAUSED"]);
     const overdue = await bucket(
       { program: open, completedAt: null, scheduledFor: { lt: today.start } },
       // Las más recientes primero: son las que todavía se pueden cerrar con memoria fresca.
@@ -218,27 +345,139 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
       { program: open, completedAt: null, scheduledFor: { gte: today.end } },
       { scheduledFor: "asc" }
     );
-    const recent = await bucket(
-      { program: programWhere(["ACTIVE", "COMPLETED", "PAUSED"]), completedAt: { gte: recentSince } },
-      { completedAt: "desc" }
+    const recent = await bucket({ program: closedAny, completedAt: { gte: recentSince } }, { completedAt: "desc" });
+    const sinTurno = await bucket(
+      { ...sessionWithoutActiveBookingWhere, program: { AND: [open, linkedProgramWhere] } },
+      { scheduledFor: "asc" }
     );
+    // "Untouched" (C4), espejo de `lockSessionEvolutionStateInTx`. SQL crudo a
+    // propósito: el `none` de Prisma sobre `exercises`/`evaScores` compila a
+    // `NOT IN (SELECT … FROM "SessionExercise" …)` sobre TODA la tabla, y bajo
+    // RLS (`kinesoft_app`) la policy de SessionExercise (EXISTS por fila) se
+    // evalúa para cada fila: medido ~600 ms con el fixture de volumen (24k
+    // ejercicios) contra ~4 ms como owner. Con `NOT EXISTS` correlacionado la
+    // policy corre solo sobre los ejercicios de las candidatas, por índice.
+    // `count(*) OVER ()` da el total antes del LIMIT en la misma sentencia.
+    const accessSql = vis.seesAll
+      ? Prisma.sql`TRUE`
+      : Prisma.sql`(pa."assignedPractitionerId" = ${actor.practitionerId} OR EXISTS (
+          SELECT 1 FROM "PatientShare" sh WHERE sh."patientId" = pa.id AND sh."practitionerId" = ${actor.practitionerId}))`;
+    const sinEvRows = await tx.$queryRaw<{ id: string; total: number }[]>`
+      SELECT s.id, count(*) OVER ()::int AS total
+      FROM "Session" s
+      JOIN "TreatmentProgram" tp ON tp.id = s."programId"
+      JOIN "Patient" pa ON pa.id = tp."patientId"
+      WHERE tp."tenantId" = ${tenantId} AND tp."archivedAt" IS NULL
+        AND tp.status IN ('ACTIVE', 'COMPLETED', 'PAUSED') AND ${accessSql}
+        AND s."archivedAt" IS NULL AND s."completedAt" >= ${recentSince}
+        AND s.notes IS NULL AND s.rpe IS NULL AND s."paInPre" IS NULL AND s."paInPost" IS NULL
+        AND NOT EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
+        AND NOT EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
+      ORDER BY s."completedAt" DESC, s.id ASC
+      LIMIT ${take}`;
+    const sinEvolucion = { ids: sinEvRows.map((r) => r.id), total: sinEvRows[0]?.total ?? 0 };
 
-    const all = [overdue, todayB, upcoming, recent].flatMap((b) => b.rows);
+    // D22: planes ACTIVE con al menos una sesión viva y ninguna viva pendiente.
+    const dischargeWhere: Prisma.TreatmentProgramWhereInput = {
+      ...open,
+      sessions: { some: liveSessionWhere, none: { archivedAt: null, completedAt: null } },
+    };
+    const dischargePrograms = await tx.treatmentProgram.findMany({
+      where: dischargeWhere,
+      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+      select: { id: true, patientId: true, title: true, discipline: true, totalSessions: true },
+      take,
+    });
+    const dischargeTotal =
+      dischargePrograms.length < take ? dischargePrograms.length : await tx.treatmentProgram.count({ where: dischargeWhere });
+    const dischargeIds = dischargePrograms.map((p) => p.id);
+    const dischargeAgg = dischargeIds.length
+      ? await tx.$queryRaw<
+          { id: string; firstName: string; lastName: string; lastCompletedAt: Date; totalLive: number; linked: boolean }[]
+        >`
+          SELECT tp.id, p."firstName", p."lastName", max(s."completedAt") AS "lastCompletedAt",
+            count(s.id)::int AS "totalLive",
+            (tp.schedule IS NOT NULL OR EXISTS (
+              SELECT 1 FROM "Booking" b WHERE b."programId" = tp.id AND b."tenantId" = ${tenantId})) AS linked
+          FROM "TreatmentProgram" tp
+          JOIN "Patient" p ON p.id = tp."patientId" AND p."tenantId" = ${tenantId}
+          JOIN "Session" s ON s."programId" = tp.id AND s."archivedAt" IS NULL
+          WHERE tp.id = ANY(${dischargeIds}) AND tp."tenantId" = ${tenantId}
+          GROUP BY tp.id, p."firstName", p."lastName"`
+      : [];
+    const aggById = new Map(dischargeAgg.map((a) => [a.id, a]));
+
+    // Hidratado único de todas las filas de sesión.
+    const allIds = [...new Set([overdue, todayB, upcoming, recent, sinTurno, sinEvolucion].flatMap((b) => b.ids))];
+    const hydrated = allIds.length
+      ? await tx.$queryRaw<OpenSessionHydrated[]>`
+          WITH progs AS (
+            SELECT DISTINCT s."programId" FROM "Session" s WHERE s.id = ANY(${allIds})
+          ), live AS (
+            SELECT s.id,
+              row_number() OVER (PARTITION BY s."programId" ORDER BY s."scheduledFor", s.index)::int AS ordinal,
+              count(*) OVER (PARTITION BY s."programId")::int AS "totalLive"
+            FROM "Session" s
+            WHERE s."programId" IN (SELECT "programId" FROM progs) AND s."archivedAt" IS NULL
+          ), ex AS (
+            -- Un solo barrido por índice (no dos subconsultas por fila: bajo RLS
+            -- cada fila de SessionExercise paga su policy).
+            SELECT x."sessionId", count(*)::int AS n, (count(*) FILTER (WHERE x.status = 'DONE'))::int AS done
+            FROM "SessionExercise" x WHERE x."sessionId" = ANY(${allIds}) GROUP BY x."sessionId"
+          )
+          SELECT s.id, s.index, s."scheduledFor", s."completedAt", tp."patientId", tp.title AS "programTitle",
+            tp."totalSessions", p."firstName", p."lastName", l.ordinal, l."totalLive",
+            COALESCE(ex.n, 0) AS "exerciseCount", COALESCE(ex.done, 0) AS "doneCount"
+          FROM "Session" s
+          JOIN "TreatmentProgram" tp ON tp.id = s."programId" AND tp."tenantId" = ${tenantId}
+          JOIN "Patient" p ON p.id = tp."patientId" AND p."tenantId" = ${tenantId}
+          LEFT JOIN live l ON l.id = s.id
+          LEFT JOIN ex ON ex."sessionId" = s.id
+          WHERE s.id = ANY(${allIds})`
+      : [];
+    const byId = new Map(hydrated.map((h) => [h.id, h]));
+
     const access = await bulkPatientAccess(
       actor,
-      [...new Set(all.map((s) => s.program.patientId))],
+      [...new Set([...hydrated.map((h) => h.patientId), ...dischargePrograms.map((p) => p.patientId)])],
       tx
     );
-    const finalize = (b: { rows: OpenSessionDbRow[]; total: number }): OpenSessionBucket => {
-      const rows = b.rows.filter((s) => access.get(s.program.patientId) === "full");
-      return { rows: rows.map(toOpenSessionRow), total: b.total - (b.rows.length - rows.length) };
+    const finalize = (b: { ids: string[]; total: number }): OpenSessionBucket => {
+      const rows = b.ids
+        .map((id) => byId.get(id))
+        .filter((h): h is OpenSessionHydrated => !!h && access.get(h.patientId) === "full");
+      return { rows: rows.map(toOpenSessionRow), total: b.total - (b.ids.length - rows.length) };
     };
+
+    const dischargeRows: DischargeSuggestionRow[] = [];
+    for (const p of dischargePrograms) {
+      const a = aggById.get(p.id);
+      if (!a || access.get(p.patientId) !== "full") continue;
+      // R-LEGACY: un alta vieja dice "8 sesiones" con 3 filas cargadas; ahí
+      // manda el contador (lo que hacía el autocompletado de antes), no las filas.
+      if (!a.linked && a.totalLive < p.totalSessions) continue;
+      dischargeRows.push({
+        programId: p.id,
+        patientId: p.patientId,
+        patientName: `${a.firstName} ${a.lastName}`,
+        programTitle: p.title,
+        discipline: p.discipline,
+        totalLive: a.totalLive,
+        lastCompletedAt: a.lastCompletedAt,
+      });
+    }
 
     return {
       overdue: finalize(overdue),
       today: finalize(todayB),
       upcoming: finalize(upcoming),
       recent: finalize(recent),
+      sinTurno: finalize(sinTurno),
+      realizadasSinEvolucion: finalize(sinEvolucion),
+      suggestDischarge: {
+        rows: dischargeRows,
+        total: dischargeTotal - (dischargePrograms.length - dischargeRows.length),
+      },
     };
   });
 }
@@ -246,10 +485,15 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
 /**
  * Detalle de una sesión. `null` si no existe en el tenant **o** si el actor
  * no tiene acceso `full` al paciente (la página responde 404 en ambos casos:
- * no se filtra que la sesión existe).
+ * no se filtra que la sesión existe), o sin el módulo `sesiones`.
+ *
+ * S12b: `program.sessions` solo trae las vivas (una archivada está oculta) y
+ * el resultado suma `ordinal`/`totalLive` (M13: "Sesión n de N" por fecha
+ * entre las vivas; `null` si la sesión pedida está archivada).
  */
 export async function getSessionDetail(id: string) {
   const actor = await getActor();
+  if (sessionsModuleOff(actor)) return null;
   return runWithRls(actor.tenantId, async (tx) => {
     const s = await tx.session.findFirst({
       where: { id, program: { tenantId: actor.tenantId } },
@@ -261,10 +505,12 @@ export async function getSessionDetail(id: string) {
               include: { diagnoses: { include: { condition: true }, take: 1, orderBy: { rank: "asc" } } },
             },
             sessions: {
+              where: liveSessionWhere,
               orderBy: { index: "asc" },
               select: {
                 id: true,
                 index: true,
+                scheduledFor: true,
                 completedAt: true,
                 paInPre: true,
                 paInPost: true,
@@ -280,7 +526,8 @@ export async function getSessionDetail(id: string) {
     });
     if (!s) return null;
     if ((await patientAccessFor(actor, s.program.patientId, tx)) !== "full") return null;
-    return s;
+    const ordinals = planSessionOrdinals(s.program.sessions.map((x) => ({ ...x, archivedAt: null })));
+    return { ...s, ordinal: ordinals.get(s.id) ?? null, totalLive: s.program.sessions.length };
   });
 }
 
@@ -292,6 +539,8 @@ export async function updateSessionExercise(input: {
   notes?: string;
 }): Promise<ActionResult> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = SessionExerciseUpdate.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos.", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -320,62 +569,142 @@ export async function updateSessionExercise(input: {
   return { ok: true, data: undefined };
 }
 
+/** Turno activo de una sesión (I2: a lo sumo uno), para decidir el camino. */
+type ActiveSessionBooking = { id: string; status: string; practitionerId: string; scheduledFor: Date; updatedAt: Date };
+
+/** Traduce un rechazo del core de turnos a copy (mismo copy que `updateBooking`). */
+function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUpdateInTx>>, { kind: "ok" }>): string {
+  switch (o.kind) {
+    case "notfound":
+      return "Turno no encontrado.";
+    case "basic":
+      return BASIC_ACCESS_ERROR;
+    case "stale":
+      return STALE_ERROR;
+    case "patient-slot":
+      return UPDATE_SAME_INSTANT_ERROR;
+    case "patient-overlap":
+      return PATIENT_OVERLAP_ERROR;
+    case "bad-location":
+      return BAD_LOCATION_ERROR;
+    case "blocked":
+      return BLOCKED_ERROR(o.reason);
+    case "out-of-hours":
+      return OUT_OF_HOURS_ERROR;
+    case "conflict":
+      return "El profesional ya tiene un turno en ese horario.";
+    case "plan-session-not-pending":
+      return PLAN_SESSION_NOT_PENDING_ERROR(o.ordinal);
+    default:
+      // foreign-patient / clinical-relink / plan-paid-cancel / plan-patient-change:
+      // un patch de solo `scheduledFor` no los puede producir.
+      return "No se pudo mover el turno de la sesión.";
+  }
+}
+
 /**
- * Reprogramar UNA sesión del plan (A2a-S03 ítem 4).
+ * Reprogramar UNA sesión del plan (A2a-S03 ítem 4; S12b, L5 de C4).
  *
- * Mueve solo la sesión. Antes buscaba un turno del mismo paciente y
- * profesional a ±2 h del horario original y lo movía también: con dos turnos
- * cercanos (o uno que no tenía nada que ver con el plan) movía el equivocado,
- * sin optimistic lock ni chequeo de capacidad, y el copy de la UI prometía
- * "el turno asociado se mueve automáticamente". Sesión y turno no tienen FK
- * entre sí: la heurística no tiene arreglo sin modelar el vínculo (Bloque B).
+ * Historia: antes de P2 sesión y turno no tenían FK; se movía solo la sesión
+ * y se informaba el turno del paciente de ese día para moverlo a mano (la
+ * heurística ±2 h movía el turno equivocado). Desde M1 el vínculo existe:
+ *   - **con turno activo** (`sessionId`, `status ∉ {CANCELLED, NO_SHOW}`): se
+ *     mueve el TURNO por el core de la agenda (`applyBookingUpdateInTx`: gate
+ *     de la Secretaria, franjas, bloqueos, cupo, superposición, lock
+ *     optimista) y el core arrastra la sesión (write-through I3). Orden C2:
+ *     cupo → sedes → Booking → Session (lo toma el core) → TreatmentProgram
+ *     (acá, después). Un rechazo forzable vuelve como error; `force` lo pasa;
+ *   - **sin turno**: se mueve solo la fecha planificada de la sesión
+ *     (Session → TreatmentProgram FOR UPDATE, cierre de ES1) y se informa el
+ *     turno suelto del paciente ese día, como antes.
+ * Nunca cambia el profesional: si llega otro `practitionerId`, rechazo (el
+ * profesional de un turno se cambia desde la agenda). Plan CANCELLED/COMPLETED
+ * o sesión realizada/archivada → rechazo, re-chequeado bajo lock.
  *
- * Ahora solo informa: si el paciente tiene un turno (no cancelado) ese mismo
- * día AR, lo devuelve para que la UI linkee a la agenda y el kine lo mueva a
- * mano con todos los guards de `updateBooking`.
- *
- * S02s: entrada con zod (`RescheduleSessionInput`: ISO con hora y offset; un
- * "2027-03-10" pelado lo leía el host como 00:00 UTC = 21:00 AR del día
- * anterior) y rechazo si el plan está CANCELLED o COMPLETED: mover una sesión
- * de un plan terminado la hacía reaparecer como pendiente en el perfil sin que
- * nada la pudiera cerrar (Seguimiento solo lista planes ACTIVE).
+ * Post-commit: `afterBookingsCommitted` una vez si se movió un turno. Al final
+ * de la tx, el verificador de invariantes del plan.
  */
 export async function rescheduleSession(input: {
   sessionId: string;
   scheduledFor: string; // ISO
   practitionerId?: string;
+  force?: { allowOverbooking?: boolean; allowPatientOverlap?: boolean; allowOutOfHours?: boolean; allowBlocked?: boolean };
 }): Promise<ActionResult<RescheduleSessionResult>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = RescheduleSessionInput.safeParse(input);
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors;
     return { ok: false, error: fieldErrors.scheduledFor ? "Fecha inválida." : "Datos inválidos.", fieldErrors };
   }
   const newDate = new Date(parsed.data.scheduledFor);
-  input = parsed.data;
+  const { sessionId } = parsed.data;
+  const now = new Date();
 
-  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
-    const g = await sessionForWrite(tx, actor, input.sessionId);
+  // H-a4: id del turno que se intentó mover, para resolver un P2002 afuera
+  // de la tx (la tx abortada ya no admite queries).
+  let triedBookingId: string | null = null;
+  const res = await denied(() => withTxConflictRetry(() => runWithRls(actor.tenantId, async (tx) => {
+    triedBookingId = null;
+    const g = await sessionForWrite(tx, actor, sessionId);
+    if (g.archivedAt) throw new Denied(ARCHIVED_SESSION);
+    if (parsed.data.practitionerId && parsed.data.practitionerId !== g.practitionerId) {
+      throw new Denied("Reprogramar no cambia el profesional: cambialo desde la agenda.");
+    }
 
-    // Chequeos bajo lock (hallazgo A5, cierre de ES1). Antes se miraban
-    // `completedAt` y el estado del plan sobre la lectura de `sessionForWrite`
-    // (snapshot) y después se escribía por id: un cierre o una cancelación del
-    // plan que commiteaba en el medio quedaba pisado (sesión realizada con la
-    // fecha movida). Ahora: Session FOR UPDATE → TreatmentProgram FOR UPDATE
-    // (orden C2 (3)), y se decide sobre lo que devuelven esas lecturas, que
-    // en READ COMMITTED son la última versión commiteada.
+    // Lectura SIN lock para elegir el camino: con turno, el primer lock tiene
+    // que ser el de cupo (lo toma el core), no la fila del turno ni la sesión.
+    const active = await tx.booking.findFirst({
+      where: { tenantId: actor.tenantId, sessionId, status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+      select: { id: true, status: true, practitionerId: true, scheduledFor: true, updatedAt: true },
+    });
+
+    let refs: BookingChangeRef[] = [];
+    let movedBookingId: string | null = null;
+    if (active) {
+      // Falla rápido con el snapshot (sin tocar el cupo); se re-chequea abajo bajo lock.
+      if (g.completedAt) throw new Denied("La sesión ya fue realizada: no se puede reprogramar.");
+      if (g.program.status === "CANCELLED" || g.program.status === "COMPLETED") {
+        throw new Denied(
+          g.program.status === "CANCELLED"
+            ? "El plan está cancelado: no se pueden reprogramar sus sesiones."
+            : "El plan está completado: no se pueden reprogramar sus sesiones."
+        );
+      }
+      triedBookingId = active.id;
+      const outcome = await applyBookingUpdateInTx(
+        tx,
+        actor,
+        {
+          patch: BookingUpdate.parse({ id: active.id, scheduledFor: newDate.toISOString() }),
+          expectedUpdatedAt: active.updatedAt.toISOString(),
+          force: parsed.data.force ?? {},
+        },
+        { now }
+      );
+      if (outcome.kind !== "ok") throw new Denied(bookingOutcomeError(outcome));
+      refs = outcome.refs;
+      movedBookingId = active.id;
+    }
+
+    // Chequeos bajo lock (hallazgo A5, cierre de ES1): Session FOR UPDATE →
+    // TreatmentProgram FOR UPDATE (orden C2 (3)); en READ COMMITTED devuelven
+    // la última versión commiteada. Con turno, la fila de Session ya la tiene
+    // esta tx (write-through del core) y un rechazo acá deshace el turno movido.
     const locked = await tx.$queryRaw<{ completedAt: Date | null; scheduledFor: Date }[]>`
       SELECT s."completedAt", s."scheduledFor"
       FROM "Session" s
       JOIN "TreatmentProgram" tp ON tp.id = s."programId"
-      WHERE s.id = ${input.sessionId} AND tp."tenantId" = ${actor.tenantId}
+      WHERE s.id = ${sessionId} AND tp."tenantId" = ${actor.tenantId}
       FOR UPDATE OF s`;
+    // H-a2: `FOR NO KEY UPDATE` sobre el plan (mismo porqué que en el cierre:
+    // no chocar con el FOR KEY SHARE de las FKs de replan/vincular/adoptar).
     const programRow = await tx.$queryRaw<{ status: string }[]>`
       SELECT status::text AS status FROM "TreatmentProgram"
       WHERE id = ${g.program.id} AND "tenantId" = ${actor.tenantId}
-      FOR UPDATE`;
+      FOR NO KEY UPDATE`;
     if (!locked[0] || !programRow[0]) throw new Denied("Sesión no encontrada.");
-    const session = { ...g, completedAt: locked[0].completedAt, scheduledFor: locked[0].scheduledFor };
     const programStatus = programRow[0].status;
     if (programStatus === "CANCELLED") {
       throw new Denied("El plan está cancelado: no se pueden reprogramar sus sesiones.");
@@ -383,40 +712,50 @@ export async function rescheduleSession(input: {
     if (programStatus === "COMPLETED") {
       throw new Denied("El plan está completado: no se pueden reprogramar sus sesiones.");
     }
-    if (session.completedAt) throw new Denied("La sesión ya fue realizada: no se puede reprogramar.");
+    if (locked[0].completedAt) throw new Denied("La sesión ya fue realizada: no se puede reprogramar.");
 
-    const targetPractitioner = input.practitionerId ?? session.practitionerId;
-    if (targetPractitioner !== session.practitionerId) {
-      const ownedPrac = await tx.practitioner.findFirst({
-        where: { id: targetPractitioner, tenantId: actor.tenantId },
-        select: { id: true },
+    let bookingOnDay: RescheduleSessionResult["bookingOnDay"] = null;
+    if (!active) {
+      // Un turno de la sesión que apareció entre la lectura y el lock dejaría
+      // la sesión movida y el turno no (I3): se pide reintentar.
+      const appeared = await tx.booking.count({
+        where: { tenantId: actor.tenantId, sessionId, status: { notIn: ["CANCELLED", "NO_SHOW"] } },
       });
-      if (!ownedPrac) throw new Denied("Profesional fuera del tenant.");
+      if (appeared > 0) throw new Denied("La sesión cambió mientras la reprogramabas. Reintentá.");
+      await tx.session.update({ where: { id: sessionId }, data: { scheduledFor: newDate } });
+
+      const day = arDayBounds(newDate);
+      const booking = await tx.booking.findFirst({
+        where: {
+          tenantId: actor.tenantId,
+          patientId: g.program.patientId,
+          scheduledFor: { gte: day.start, lt: day.end },
+          status: { not: "CANCELLED" },
+        },
+        orderBy: { scheduledFor: "asc" },
+        select: { id: true, scheduledFor: true },
+      });
+      bookingOnDay = booking ? { ...booking, dateKey: day.key } : null;
     }
 
-    await tx.session.update({
-      where: { id: input.sessionId },
-      data: { scheduledFor: newDate, practitionerId: targetPractitioner },
-    });
-
-    const day = arDayBounds(newDate);
-    const booking = await tx.booking.findFirst({
-      where: {
-        tenantId: actor.tenantId,
-        patientId: session.program.patientId,
-        scheduledFor: { gte: day.start, lt: day.end },
-        status: { not: "CANCELLED" },
-      },
-      orderBy: { scheduledFor: "asc" },
-      select: { id: true, scheduledFor: true },
-    });
-
-    return {
-      session,
-      targetPractitioner,
-      bookingOnDay: booking ? { ...booking, dateKey: day.key } : null,
-    } as const;
-  }));
+    await assertProgramInvariantsInTx(tx, { tenantId: actor.tenantId, programId: g.program.id });
+    return { session: { ...g, scheduledFor: locked[0].scheduledFor }, from: g.scheduledFor, bookingOnDay, refs, movedBookingId } as const;
+  }))).catch(async (e) => {
+    // H-a4 (revisión ES2b): mover el turno a un instante que el MISMO paciente
+    // ocupa en una tx concurrente (no visible para el chequeo del core) pisa
+    // el único parcial paciente+instante y Postgres tira P2002 al commit del
+    // otro. El core no lo atrapa (un P2002 aborta la tx, C8); antes salía como
+    // 500. Mismo tratamiento que `updateBooking`: se decide por los datos en
+    // una tx nueva.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002" && triedBookingId) {
+      const u = await resolveBookingUpdateUniqueViolation(actor.tenantId, triedBookingId);
+      return {
+        ok: false as const,
+        error: u.kind === "plan-session-taken" ? PLAN_SESSION_TAKEN_ERROR(u.ordinal) : UPDATE_SAME_INSTANT_ERROR,
+      };
+    }
+    throw e;
+  });
   if (!res.ok) return res;
   const r = res.value;
 
@@ -425,18 +764,32 @@ export async function rescheduleSession(input: {
     actorId: actor.userId ?? undefined,
     action: "session.reschedule",
     entity: "Session",
-    entityId: input.sessionId,
+    entityId: sessionId,
     payload: {
-      from: r.session.scheduledFor.toISOString(),
+      from: r.from.toISOString(),
       to: newDate.toISOString(),
-      practitionerId: r.targetPractitioner,
+      practitionerId: r.session.practitionerId,
+      bookingMoved: r.movedBookingId,
       bookingOnDay: r.bookingOnDay?.id ?? null,
     },
   });
+  if (r.movedBookingId) {
+    await audit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "booking.update",
+      entity: "Booking",
+      entityId: r.movedBookingId,
+      payload: { scheduledFor: newDate.toISOString(), source: "session.reschedule", sessionId },
+    });
+    revalidatePath("/agenda");
+    await afterBookingsCommitted(actor.tenantId, r.refs);
+  }
 
   revalidatePath(`/pacientes/${r.session.program.patientId}`);
   revalidatePath(`/seguimiento`);
-  revalidatePath(`/seguimiento/${input.sessionId}`);
+  revalidatePath(`/seguimiento/${sessionId}`);
+  // Con turno: el turno se movió con la sesión, no hay "turno que quedó" que avisar.
   return { ok: true, data: { bookingOnDay: r.bookingOnDay } };
 }
 
@@ -446,6 +799,8 @@ export async function rescheduleSession(input: {
  */
 export async function updateSessionMeta(input: SessionMetaUpdateInput): Promise<ActionResult> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = SessionMetaUpdate.safeParse(input);
   if (!parsed.success) {
     return {
@@ -484,46 +839,73 @@ export async function updateSessionMeta(input: SessionMetaUpdateInput): Promise<
 }
 
 /**
+ * Sesiones vivas pendientes de un plan, con el TreatmentProgram ya lockeado
+ * por el caller (C2 (3): va último). R-LEGACY: en un alta vieja (sin
+ * `schedule` ni turnos) `totalSessions` puede decir 8 con 3 filas; ahí cuenta
+ * el contador, como el autocompletado de antes. En un vinculado manda I5
+ * (vivas).
+ */
+async function programPendingInTx(
+  tx: DbClient,
+  tenantId: string,
+  programId: string
+): Promise<{ pending: number; totalLive: number; status: string } | null> {
+  const rows = await tx.$queryRaw<
+    { live: number; done: number; totalSessions: number; status: string; linked: boolean }[]
+  >`
+    SELECT count(s.id)::int AS live, count(s."completedAt")::int AS done, tp."totalSessions", tp.status::text AS status,
+      (tp.schedule IS NOT NULL OR EXISTS (
+        SELECT 1 FROM "Booking" b WHERE b."programId" = tp.id AND b."tenantId" = ${tenantId})) AS linked
+    FROM "TreatmentProgram" tp
+    LEFT JOIN "Session" s ON s."programId" = tp.id AND s."archivedAt" IS NULL
+    WHERE tp.id = ${programId} AND tp."tenantId" = ${tenantId}
+    GROUP BY tp.id`;
+  const r = rows[0];
+  if (!r) return null;
+  if (r.linked) return { pending: r.live - r.done, totalLive: r.live, status: r.status };
+  const total = Math.max(r.live, r.totalSessions);
+  return { pending: Math.max(r.live - r.done, r.totalSessions - r.done), totalLive: total, status: r.status };
+}
+
+/**
  * Cierre de sesión desde Seguimiento (H3, A2a-S03 ítem 1).
  *
  * Bug que lo motivó: "Cerrar sesión" solo mandaba el id; las notas y EVA
  * tipeadas en el panel sin apretar "Guardar anotaciones" se perdían, y la
  * EvaScore se armaba con el `paInPost` viejo leído antes. Además eran 4
- * transacciones sueltas (una caída a mitad dejaba la sesión cerrada sin
- * ejercicios marcados ni EVA) y un doble click duplicaba EvaScore y
- * notificación.
+ * transacciones sueltas y un doble click duplicaba EvaScore y notificación.
  *
- * Ahora:
- *   - `meta` (notas, EVA pre/post, RPE) llega validada con zod y se guarda en
- *     el mismo UPDATE que cierra;
- *   - todo va en UNA `runWithRls`: gate `full`, cierre, ejercicios PENDING →
- *     DONE, EvaScore y autocompletado del plan;
- *   - idempotente: el cierre es un `updateMany … WHERE completedAt IS NULL`.
- *     Si otro request ya la cerró (doble click, dos pestañas), `count = 0` y
- *     se devuelve ok sin efectos (ni meta, ni EVA, ni notificación). Con dos
- *     tx concurrentes, Postgres re-evalúa el WHERE de la segunda después del
- *     commit de la primera (READ COMMITTED), así que solo una "gana";
- *   - el plan se autocompleta por CONTEO de sesiones completadas vs.
- *     `totalSessions`, no por `index == total`: cerrar la última sesión antes
- *     que una intermedia completaba el plan con sesiones pendientes, y cerrar
- *     la última de un plan con una sesión a medida agregada no lo completaba.
+ * Todo en UNA `runWithRls`, idempotente (el claim es un `updateMany … WHERE
+ * completedAt IS NULL`: con dos tx concurrentes solo una gana).
  *
- * La notificación va después del commit con `notify()` (fire-and-forget por
- * contrato: una falla del aviso no puede deshacer un cierre clínico), y solo
- * la emite el request que ganó el cierre.
- *
- * S02s: el claim, la meta, los ejercicios, la EVA y el audit `session.complete`
- * los hace `completeSessionInTx({source:'seguimiento'})` (C8), dentro de esta
- * misma tx. El autocompletado del plan se CONSERVA acá hasta P2 (D22 lo cambia
- * por "sugerir el alta"); su cambio de estado se audita como `program.status`
- * en la misma tx (antes viajaba como `programCompleted` en el payload del
- * cierre, fuera de la tx).
+ * S12b (C4 "Escrituras de sesión que propagan al turno", C2 (3)):
+ *   1. el turno ACTIVO vinculado se lockea primero (`FOR UPDATE`): mismo orden
+ *      que "Atendido" en Recepción y que el drawer (Booking → Session), así un
+ *      "Atendido" y un "Cerrar" simultáneos se encolan en vez de trabarse;
+ *   2. claim de la sesión (`completeSessionInTx`, `source:'seguimiento'`);
+ *   3. si el turno estaba PENDING/CONFIRMED → CAS a COMPLETED en la misma tx
+ *      (sin esto la agenda seguía mostrando "por atender" una sesión cerrada,
+ *      y el turno quedaba para cobrar/marcar ausente);
+ *   4. si la sesión YA estaba realizada (la cerró "Atendido", que escribe solo
+ *      `completedAt`), lo tipeado se carga como evolución si todavía no tiene
+ *      (`recordSessionEvolutionInTx`): antes se descartaba en silencio — el
+ *      mismo bug de H3 por otro camino;
+ *   5. TreatmentProgram `FOR UPDATE` → conteo de vivas pendientes. D22/PQ-09:
+ *      ya NO autocompleta el plan (`programCompleted` siempre false); si no
+ *      quedan pendientes, `suggestDischarge` y la UI pregunta "¿Le das el
+ *      alta?". El lock sigue: sin él, dos cierres concurrentes de las dos
+ *      últimas veían una pendiente cada uno y nadie sugería el alta;
+ *   6. verificador de invariantes del plan al final de la tx.
+ * Post-commit: `afterBookingsCommitted` si cambió el turno, y el aviso
+ * PROGRAM_NEARING_DISCHARGE (al responsable del plan, D17) si quedan ≤ 1.
  */
 export async function completeSessionFromSeguimiento(
   sessionId: string,
   meta?: SessionMetaInput
 ): Promise<ActionResult<CompleteSessionResult>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = SessionMeta.safeParse(meta ?? {});
   if (!parsed.success) {
     return {
@@ -534,12 +916,24 @@ export async function completeSessionFromSeguimiento(
   }
   const m = parsed.data;
   const now = new Date();
+  const tenantId = actor.tenantId;
 
-  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+  const res = await denied(() => withTxConflictRetry(() => runWithRls(tenantId, async (tx) => {
     const s = await sessionForWrite(tx, actor, sessionId);
+    if (s.archivedAt) throw new Denied(ARCHIVED_SESSION);
 
+    // (1) C2 (3): el turno activo vinculado, primero. El WHERE se re-evalúa
+    // después de esperar el lock: si otro lo canceló, ya no viene.
+    const booked = await tx.$queryRaw<ActiveSessionBooking[]>`
+      SELECT id, status::text AS status, "practitionerId", "scheduledFor", "updatedAt"
+      FROM "Booking"
+      WHERE "tenantId" = ${tenantId} AND "sessionId" = ${sessionId} AND status NOT IN ('CANCELLED', 'NO_SHOW')
+      ORDER BY id
+      FOR UPDATE`;
+
+    // (2)
     const { claimed } = await completeSessionInTx(tx, {
-      tenantId: actor.tenantId,
+      tenantId,
       sessionId,
       actorId: actor.userId ?? null,
       source: "seguimiento",
@@ -547,64 +941,80 @@ export async function completeSessionFromSeguimiento(
       now,
     });
     if (!claimed) {
-      return { s, alreadyCompleted: true, programCompleted: false, remaining: null, total: null } as const;
+      // (4) "Cargar evolución" implícito: ya realizada (por la agenda) y sin evolución.
+      await recordSessionEvolutionInTx(tx, { tenantId, sessionId, actorId: actor.userId ?? null, meta: m, now });
+      return { s, alreadyCompleted: true, refs: [] as BookingChangeRef[], discharge: null, suggest: false } as const;
     }
 
-    // Lock del programa ANTES de contar (hallazgo A4, cierre de ES1). Sin él,
-    // dos cierres concurrentes de las dos últimas sesiones contaban cada uno
-    // sin ver el cierre (todavía sin commitear) del otro: los dos veían una
-    // pendiente y el plan quedaba ACTIVE con todas realizadas. Con el FOR
-    // UPDATE el segundo espera el commit del primero y su `count` (sentencia
-    // nueva en READ COMMITTED) ya lo ve. Orden C2 (3): la Session ya está
-    // lockeada por el claim → recién ahora TreatmentProgram.
-    await tx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${s.program.id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
-    const done = await tx.session.count({ where: { programId: s.program.id, completedAt: { not: null } } });
-    const program = await tx.treatmentProgram.findUniqueOrThrow({
-      where: { id: s.program.id },
-      select: { totalSessions: true },
-    });
-    const remaining = Math.max(0, program.totalSessions - done);
-    let programCompleted = false;
-    if (remaining === 0) {
-      // Un plan CANCELLED no se "revive" como COMPLETED.
-      const u = await tx.treatmentProgram.updateMany({
-        where: { id: s.program.id, tenantId: actor.tenantId, status: { in: ["ACTIVE", "PAUSED"] } },
+    // (2b) H-a1 (revisión ES2b): `booked` se leyó ANTES del claim. Si vino
+    // vacío, un "generar turnos" / vincular / adoptar / replan concurrente
+    // pudo colgar un turno activo de esta sesión entre esa lectura y el claim
+    // (insertar un Booking con `sessionId` toma FOR KEY SHARE sobre la sesión,
+    // que NO choca con el lock del claim). Sin esta relectura la sesión quedaba
+    // "realizada" con un turno CONFIRMED futuro por cobrar / marcar ausente.
+    // Bajo el lock de la sesión (el claim) se re-cuenta; si apareció uno,
+    // rollback total y que el kine reintente (la segunda vuelta lo encuentra
+    // en (1) y lo completa). El caso inverso (el motor crea el turno DESPUÉS de
+    // este claim) lo cierra el motor re-chequeando `completedAt IS NULL` con
+    // `FOR UPDATE` de la sesión antes de crear/adoptar (fixer del motor, P2.Z).
+    if (booked.length === 0) {
+      const appeared = await tx.booking.count({
+        where: { tenantId, sessionId, status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+      });
+      if (appeared > 0) throw new Denied(SESSION_CHANGED_WHILE_CLOSING);
+    }
+
+    // (3) CAS del turno: filtro escalar (el WHERE se re-evalúa bajo el lock de fila).
+    const refs: BookingChangeRef[] = [];
+    const b = booked[0];
+    if (b && (b.status === "PENDING" || b.status === "CONFIRMED")) {
+      const u = await tx.booking.updateMany({
+        where: { id: b.id, tenantId, status: { in: ["PENDING", "CONFIRMED"] } },
         data: { status: "COMPLETED" },
       });
-      programCompleted = u.count > 0;
-      if (programCompleted) {
+      if (u.count === 1) {
+        refs.push({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, prev: null, kind: "booking" });
         await auditInTx(tx, {
-          tenantId: actor.tenantId,
+          tenantId,
           actorId: actor.userId ?? undefined,
-          action: "program.status",
-          entity: "TreatmentProgram",
-          entityId: s.program.id,
-          payload: { from: s.program.status, to: "COMPLETED", auto: true, sessionId },
+          action: "booking.update",
+          entity: "Booking",
+          entityId: b.id,
+          payload: { status: "COMPLETED", from: b.status, source: "seguimiento", sessionId },
         });
       }
     }
-    return { s, alreadyCompleted: false, programCompleted, remaining, total: program.totalSessions } as const;
-  }));
+
+    // (5) H-a2: `FOR NO KEY UPDATE`, no `FOR UPDATE`. Sigue serializando dos
+    // cierres del mismo plan (NO KEY UPDATE choca consigo mismo, que es lo que
+    // necesita el conteo de pendientes), pero ya no choca con el FOR KEY SHARE
+    // que toman las FKs (`Booking.programId`, `Session.programId`) de un
+    // replan / vincular / adoptar que insertan o mueven filas del plan: con
+    // FOR UPDATE esos caminos (plan antes que sesión) cerraban un ciclo con
+    // este (sesión antes que plan) → 40P01. Lo que quede de ciclo (un UPDATE
+    // real del plan del otro lado) lo cubre `withTxConflictRetry`.
+    await tx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${s.program.id} AND "tenantId" = ${tenantId} FOR NO KEY UPDATE`;
+    const left = await programPendingInTx(tx, tenantId, s.program.id);
+    const suggest = !!left && left.pending === 0 && (left.status === "ACTIVE" || left.status === "PAUSED");
+    const discharge: PlanDischarge | null =
+      left && left.pending <= 1 && left.status !== "CANCELLED"
+        ? { programId: s.program.id, pending: left.pending, totalLive: left.totalLive }
+        : null;
+
+    // (6)
+    await assertProgramInvariantsInTx(tx, { tenantId, programId: s.program.id });
+    return { s, alreadyCompleted: false, refs, discharge, suggest } as const;
+  })));
   if (!res.ok) return res;
   const r = res.value;
 
   const patientId = r.s.program.patientId;
-  if (!r.alreadyCompleted) {
-    // Señal de alta próxima: al quedar 1 pendiente y al completar el plan.
-    const patientName = `${r.s.program.patient.firstName} ${r.s.program.patient.lastName}`;
-    if (actor.userId && (r.remaining === 1 || r.programCompleted)) {
-      await notify({
-        tenantId: actor.tenantId,
-        userId: actor.userId,
-        kind: NotificationKind.PROGRAM_NEARING_DISCHARGE,
-        title: r.programCompleted ? `Plan completado · ${patientName}` : `Última sesión próxima · ${patientName}`,
-        body: r.programCompleted
-          ? `Programá el alta o la continuidad.`
-          : `Sesión ${r.total} de ${r.total} pendiente.`,
-        link: `/pacientes/${patientId}`,
-      });
-    }
+  if (r.refs.length > 0) {
+    revalidatePath("/agenda");
+    await afterBookingsCommitted(tenantId, r.refs);
   }
+  // Solo el request que ganó el cierre avisa (el doble click no duplica).
+  if (r.discharge) await notifyPlanNearingDischarge(tenantId, r.discharge, actor.userId ?? null);
 
   revalidatePath(`/seguimiento`);
   revalidatePath(`/seguimiento/${sessionId}`);
@@ -612,8 +1022,59 @@ export async function completeSessionFromSeguimiento(
   revalidatePath(`/dashboard`);
   return {
     ok: true,
-    data: { alreadyCompleted: r.alreadyCompleted, programCompleted: r.programCompleted },
+    data: { alreadyCompleted: r.alreadyCompleted, programCompleted: false, suggestDischarge: r.suggest },
   };
+}
+
+/**
+ * "Cargar evolución" sobre una sesión realizada (S12b; Seguimiento: tag "Sin
+ * evolución" → "Cargar evolución"). Una sesión que cerró la agenda
+ * ("Atendido") tiene solo `completedAt`; esto le carga meta, ejercicios
+ * PENDING → DONE y EVA post (con `sessionId`). No toca el turno (ya está
+ * COMPLETED) ni el plan.
+ *
+ * `loaded:false` = ya tenía evolución (no pisa: se edita con "Guardar
+ * anotaciones") o no llegó nada que cargar; también hace idempotente el doble
+ * click. Sobre una sesión abierta, rechazo: eso es "Cerrar sesión".
+ */
+export async function loadSessionEvolution(
+  sessionId: string,
+  meta: SessionMetaInput
+): Promise<ActionResult<{ loaded: boolean }>> {
+  const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
+  const id = LoadSessionEvolutionInput.safeParse({ sessionId });
+  const parsed = SessionMeta.safeParse(meta ?? {});
+  if (!id.success || !parsed.success) {
+    return {
+      ok: false,
+      error: "EVA y RPE tienen que ser enteros entre 0 y 10.",
+      fieldErrors: parsed.success ? undefined : parsed.error.flatten().fieldErrors,
+    };
+  }
+  const now = new Date();
+
+  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    const s = await sessionForWrite(tx, actor, sessionId);
+    if (s.archivedAt) throw new Denied(ARCHIVED_SESSION);
+    const ev = await recordSessionEvolutionInTx(tx, {
+      tenantId: actor.tenantId,
+      sessionId,
+      actorId: actor.userId ?? null,
+      meta: parsed.data,
+      now,
+    });
+    if (ev.reason === "not-completed") throw new Denied("La sesión todavía no se realizó: cerrala desde Seguimiento.");
+    if (ev.reason === "not-found") throw new Denied("Sesión no encontrada.");
+    return { s, loaded: ev.recorded } as const;
+  }));
+  if (!res.ok) return res;
+
+  revalidatePath(`/seguimiento`);
+  revalidatePath(`/seguimiento/${sessionId}`);
+  revalidatePath(`/pacientes/${res.value.s.program.patientId}`);
+  return { ok: true, data: { loaded: res.value.loaded } };
 }
 
 /**
@@ -629,6 +1090,8 @@ export async function reorderSessionExercises(input: {
   orderedIds: string[];
 }): Promise<ActionResult> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
     const g = await sessionForWrite(tx, actor, input.sessionId);
     const exercises = await tx.sessionExercise.findMany({
@@ -662,6 +1125,8 @@ export async function addSessionExercise(input: {
   notes?: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   // Gate by plan — a FREE tenant can't sneak a PRO-only exercise by
   // POSTing its id directly.
   const gate = await gatingForActor();
@@ -712,6 +1177,8 @@ export async function addSessionExercise(input: {
 
 export async function removeSessionExercise(id: string): Promise<ActionResult> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
     const g = await sessionExerciseForWrite(tx, actor, id);
     await tx.sessionExercise.delete({ where: { id } });
@@ -732,92 +1199,228 @@ export async function removeSessionExercise(id: string): Promise<ActionResult> {
 }
 
 /**
- * Append a custom session to an existing program with a free-form name.
- * Date defaults to "next slot in the cadence" if not provided.
+ * "Agregar sesión a medida" desde la vista vieja del plan (`plan-view.tsx`).
  *
- * S02s · carrera: el index nuevo es `max(index) + 1` leído en la tx. Dos altas
- * concurrentes (doble click, dos pestañas) leían el mismo máximo y creaban dos
- * sesiones con el mismo index (no hay UNIQUE (programId, index) hasta M1; el
- * dedupe de lo que ya hay en prod es S02x). Ahora, antes de leer:
- *   1. `lockPlanPatient` (C2 (0): agregar sesiones cambia la estructura del
- *      plan y este lock va siempre primero);
- *   2. `SELECT … FOR UPDATE` de la fila del programa (C2 (3): TreatmentProgram
- *      es la última fila del orden; acá no hay Booking ni Session que lockear).
- * La segunda alta espera y lee el máximo ya incrementado.
+ * Historia:
+ *   - S02s: dos altas concurrentes duplicaban `index` → `lockPlanPatient` +
+ *     fila del plan antes de leer el máximo.
+ *   - S12b: el nombre va en `Session.title`, no en `notes` (evolución clínica).
+ *   - P2.Z (H-a3 / B-M1 de la revisión ES2b): creaba la Session SIN cuota, sin
+ *     mirar estado/archivado/tope ni correr el verificador, con un gate propio
+ *     y el audit fuera de la tx. En un PACKAGE vinculado dejaba I6 roto y el
+ *     plan TRABADO (toda escritura posterior hacía rollback en el verificador);
+ *     en PER_SESSION la sesión nacía sin precio y el turno se cobraba por la
+ *     precedencia de copago en vez de por el plan.
+ *
+ * Ahora hay UN solo camino de "agregar" con plata y orden C2: si el plan tiene
+ * responsable y servicio (lo que el motor necesita), delega en
+ * `addSessionsInTx` (`kind:'custom'`, `lib/plans-edit-internal.ts`): gate
+ * `plans.manage` (módulo planes incluido) → `lockPlanPatient` → preview →
+ * re-clasificación con su `stateToken` → filas → cuota por el precio del plan
+ * → caché `totalSessions` → verificador → `auditInTx`. Sin fecha queda "sin
+ * turno" (resolución `none` forzada por el server); con fecha también, como
+ * antes: la vista vieja nunca agendaba (agendar es "Generar turnos").
+ * En un PAQUETE sin `packagePricing` → rechazo accionable (la vista vieja no
+ * puede preguntar "¿mantenemos el total o el precio por sesión?").
+ *
+ * R-LEGACY (sin responsable o sin servicio, el motor no los opera): mismo gate,
+ * mismo lock, rechazo de archivado/CANCELLED, tope `PLAN_MAX_SESSIONS`, cuota
+ * PER_SESSION estampada, verificador y `auditInTx`; un paquete se rechaza igual.
+ *
+ * Firma pública intacta (`{ programId, title?, scheduledFor? }` →
+ * `{ sessionId }`); `packagePricing?` es aditivo.
  */
 export async function addCustomSession(input: {
   programId: string;
   title?: string;
   scheduledFor?: string; // ISO
+  packagePricing?: PackageCountPricing;
 }): Promise<ActionResult<{ sessionId: string }>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = AddCustomSessionInput.safeParse(input);
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors;
     return { ok: false, error: fieldErrors.scheduledFor ? "Fecha inválida." : "Datos inválidos.", fieldErrors };
   }
-  const { programId, title } = parsed.data;
-  const explicit = parsed.data.scheduledFor ? new Date(parsed.data.scheduledFor) : null;
+  const data = parsed.data;
+  const now = new Date();
 
-  const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
-    const owner = await tx.treatmentProgram.findFirst({
-      where: { id: programId, tenantId: actor.tenantId },
-      select: { id: true, patientId: true },
-    });
-    if (!owner) throw new Denied("Plan no encontrado.");
-    if ((await patientAccessFor(actor, owner.patientId, tx)) !== "full") {
-      throw new Denied(NO_ACCESS);
-    }
+  let r: { sessionId: string; patientId: string; refs: BookingChangeRef[] };
+  try {
+    r = await withTxConflictRetry(() =>
+      runWithRls(
+        actor.tenantId,
+        async (tx) => {
+          const head = await tx.treatmentProgram.findFirst({
+            where: { id: data.programId, tenantId: actor.tenantId },
+            select: { id: true, patientId: true, practitionerId: true, serviceId: true, pricingMode: true },
+          });
+          if (!head) throw new Denied("Plan no encontrado.");
+          const { caps } = await roleAndCapsInTx(tx, actor);
+          // C2: gate ANTES del lock de estructura (sin permiso no se encola a nadie).
+          await assertPlanManageInTx(tx, actor, caps, head.patientId);
+          if (head.pricingMode === "PACKAGE" && !data.packagePricing) throw new Denied(CUSTOM_SESSION_USE_PLAN);
+          await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: head.patientId });
+          return head.practitionerId && head.serviceId
+            ? addCustomByEngineInTx(tx, actor, caps, data, now)
+            : addCustomLegacyInTx(tx, actor, head, data);
+        },
+        ADD_CUSTOM_TX
+      )
+    );
+  } catch (e) {
+    const error = addCustomRejection(e);
+    if (error === null) throw e;
+    return { ok: false, error };
+  }
 
-    await lockPlanPatient(tx, { tenantId: actor.tenantId, patientId: owner.patientId });
-    await tx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${owner.id} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
-
-    // Releído DESPUÉS de los locks: es lo que hace que la segunda alta vea la primera.
-    const program = await tx.treatmentProgram.findFirstOrThrow({
-      where: { id: owner.id, tenantId: actor.tenantId },
-      select: {
-        id: true,
-        patientId: true,
-        frequency: true,
-        startDate: true,
-        sessions: { orderBy: { index: "desc" }, take: 1, select: { index: true, scheduledFor: true } },
-      },
-    });
-
-    const lastIndex = program.sessions[0]?.index ?? 0;
-    const lastSched = program.sessions[0]?.scheduledFor ?? program.startDate;
-    const cadenceDays = Math.max(1, Math.floor(7 / program.frequency));
-    // Suma en ms (AR sin DST), no `setDate` del host.
-    const scheduledFor = explicit ?? new Date(lastSched.getTime() + cadenceDays * DAY_MS);
-
-    const sess = await tx.session.create({
-      data: {
-        programId: program.id,
-        practitionerId: actor.practitionerId,
-        index: lastIndex + 1,
-        scheduledFor,
-        notes: title,
-      },
-    });
-    await tx.treatmentProgram.update({
-      where: { id: program.id },
-      data: { totalSessions: { increment: 1 } },
-    });
-    return { sessionId: sess.id, patientId: program.patientId } as const;
-  }));
-  if (!res.ok) return res;
-  const r = res.value;
-
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.create",
-    entity: "Session",
-    entityId: r.sessionId,
-  });
+  if (r.refs.length > 0) await afterBookingsCommitted(actor.tenantId, r.refs);
   revalidatePath(`/pacientes/${r.patientId}`);
   revalidatePath(`/seguimiento`);
   return { ok: true, data: { sessionId: r.sessionId } };
+}
+
+/** Mismo presupuesto que las escrituras del motor en `lib/plans-edit.ts` (preview + commit en una tx). */
+const ADD_CUSTOM_TX = { timeout: 15_000, maxWait: 5_000 };
+
+const CUSTOM_SESSION_USE_PLAN =
+  "Este plan es por paquete: usá «Agregar sesión a medida» del plan para elegir cómo queda el precio.";
+const CUSTOM_SESSION_STALE = "El plan cambió mientras agregabas la sesión. Reintentá.";
+const CUSTOM_SESSION_REOPEN =
+  "El plan está completado: usá «Agregar sesión a medida» del plan (te pide confirmar que se reabre).";
+
+/** Rechazos esperables → copy; `null` = inesperado (se propaga). */
+function addCustomRejection(e: unknown): string | null {
+  if (e instanceof Denied || e instanceof PlanRejected || e instanceof ForbiddenError) return e.message;
+  if (e instanceof ProgramInvariantViolation) return INVARIANT_ERROR;
+  if (e instanceof PlanEditNeedsConfirmation) return CUSTOM_SESSION_REOPEN;
+  if (e instanceof StalePlanPreview || e instanceof PlanEditStale) return CUSTOM_SESSION_STALE;
+  // Único parcial de `index` vivo pese al lock del paciente: el plan cambió.
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return CUSTOM_SESSION_STALE;
+  return null;
+}
+
+type AddCustomParsed = z.output<typeof AddCustomSessionInput>;
+
+/**
+ * Camino del motor. Gate y `lockPlanPatient` ya tomados por el caller; el
+ * preview corre BAJO el lock, así su `stateToken` (plan `updatedAt` + target)
+ * es el que la re-clasificación de `addSessionsInTx` vuelve a calcular: no hay
+ * stale espurio por una carrera (la segunda alta espera el lock y previsualiza
+ * ya con la primera adentro). `addSessionsInTx` re-gatea y re-toma el lock
+ * (advisory reentrante en la misma tx): son dos sentencias baratas a cambio de
+ * no tocar el interno.
+ */
+async function addCustomByEngineInTx(
+  tx: DbClient,
+  actor: Actor,
+  caps: Awaited<ReturnType<typeof roleAndCapsInTx>>["caps"],
+  data: AddCustomParsed,
+  now: Date
+): Promise<{ sessionId: string; patientId: string; refs: BookingChangeRef[] }> {
+  const base = {
+    programId: data.programId,
+    kind: "custom" as const,
+    // El schema del plan acota el título a 120 (el de Seguimiento recortaba a 4000).
+    ...(data.title ? { title: data.title.slice(0, 120) } : {}),
+    ...(data.scheduledFor ? { at: data.scheduledFor } : {}),
+    ...(data.packagePricing ? { packagePricing: data.packagePricing } : {}),
+  };
+  const previewInput = AddPlanSessionsPreviewSchema.safeParse(base);
+  if (!previewInput.success) throw new Denied(previewInput.error.issues[0]?.message ?? "Datos inválidos.");
+  const preview = await previewAddSessionsInTx(tx, actor, caps, previewInput.data, now);
+
+  // Con fecha: la vista vieja solo fijaba la fecha planificada, nunca agendaba.
+  // Se conserva con la resolución `none` (sin turno) para la fila nueva.
+  const rows: Array<{ index: number; kind: "none" }> = [];
+  if (data.scheduledFor) {
+    const row = preview.rows.find((x) => !x.sessionId);
+    if (!row || !row.allowedResolutions.includes("none")) throw new Denied(CUSTOM_SESSION_STALE);
+    rows.push({ index: row.index, kind: "none" });
+  }
+  const commit = AddPlanSessionsCommitSchema.safeParse({ ...base, rows, stateToken: preview.stateToken });
+  if (!commit.success) throw new Denied(commit.error.issues[0]?.message ?? "Datos inválidos.");
+  const out = await addSessionsInTx(tx, actor, caps, commit.data, now);
+  const sessionId = out.sessionIds[0];
+  if (!sessionId) throw new Denied(CUSTOM_SESSION_STALE);
+  return { sessionId, patientId: out.patientId, refs: out.refs };
+}
+
+/**
+ * R-LEGACY (plan sin responsable o sin servicio: el motor lo rechaza). Gate y
+ * `lockPlanPatient` ya tomados. Fila del plan con `FOR NO KEY UPDATE` (C2 (3),
+ * acá no hay Booking ni Session que lockear; NO KEY alcanza para serializar
+ * dos altas y no choca con las FKs), relectura bajo lock, reglas de estado y
+ * tope, cuota PER_SESSION, verificador y audit en la tx.
+ */
+async function addCustomLegacyInTx(
+  tx: DbClient,
+  actor: Actor,
+  head: { id: string; patientId: string },
+  data: AddCustomParsed
+): Promise<{ sessionId: string; patientId: string; refs: BookingChangeRef[] }> {
+  const tenantId = actor.tenantId;
+  await tx.$queryRaw`SELECT id FROM "TreatmentProgram" WHERE id = ${head.id} AND "tenantId" = ${tenantId} FOR NO KEY UPDATE`;
+
+  // Releído DESPUÉS de los locks: es lo que hace que la segunda alta vea la primera.
+  const program = await tx.treatmentProgram.findFirstOrThrow({
+    where: { id: head.id, tenantId },
+    select: {
+      id: true,
+      patientId: true,
+      status: true,
+      archivedAt: true,
+      pricingMode: true,
+      pricePerSessionCents: true,
+      frequency: true,
+      startDate: true,
+      // Máximo sobre TODAS (también archivadas): `restoreSession` no choca (M13).
+      sessions: { orderBy: { index: "desc" }, take: 1, select: { index: true, scheduledFor: true } },
+      _count: { select: { sessions: { where: { archivedAt: null } } } },
+    },
+  });
+  if (program.archivedAt) throw new Denied(PLAN_EDIT_COPY.archived);
+  if (program.status === "CANCELLED") throw new Denied(PLAN_EDIT_COPY.cancelled);
+  // Re-chequeado bajo lock (el de afuera es para fallar antes de encolarse).
+  if (program.pricingMode === "PACKAGE") throw new Denied(CUSTOM_SESSION_USE_PLAN);
+  if (program._count.sessions + 1 > PLAN_MAX_SESSIONS) throw new Denied(PLAN_EDIT_COPY.tooMany);
+
+  const lastIndex = program.sessions[0]?.index ?? 0;
+  const lastSched = program.sessions[0]?.scheduledFor ?? program.startDate;
+  const cadenceDays = Math.max(1, Math.floor(7 / program.frequency));
+  // Suma en ms (AR sin DST), no `setDate` del host.
+  const scheduledFor = data.scheduledFor ? new Date(data.scheduledFor) : new Date(lastSched.getTime() + cadenceDays * DAY_MS);
+
+  const sess = await tx.session.create({
+    data: {
+      programId: program.id,
+      practitionerId: actor.practitionerId,
+      index: lastIndex + 1,
+      scheduledFor,
+      // S12b: el nombre va en `Session.title` (M1). Antes iba en `notes`, que
+      // es evolución clínica: la sesión nacía "tocada", aparecía con notas en
+      // Seguimiento y "Deshacer Atendido" nunca la reabría.
+      title: data.title,
+      // D5: la cuota la decide el plan. Sin precio → null (lo cobra el copago).
+      priceCents: program.pricingMode === "PER_SESSION" ? program.pricePerSessionCents : null,
+    },
+  });
+  await tx.treatmentProgram.updateMany({
+    where: { id: program.id, tenantId },
+    data: { totalSessions: { increment: 1 } },
+  });
+  await assertProgramInvariantsInTx(tx, { tenantId, programId: program.id });
+  await auditInTx(tx, {
+    tenantId,
+    actorId: actor.userId ?? undefined,
+    action: "session.create",
+    entity: "Session",
+    entityId: sess.id,
+    payload: { programId: program.id, index: sess.index, source: "custom" },
+  });
+  return { sessionId: sess.id, patientId: program.patientId, refs: [] };
 }
 
 /**
@@ -830,6 +1433,8 @@ export async function substituteSessionExercise(input: {
   newExerciseId: string;
 }): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const gate = await gatingForActor();
 
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
@@ -873,6 +1478,9 @@ export async function substituteSessionExercise(input: {
  * Biblioteca. We list every ACTIVE / PAUSED program in the tenant the
  * actor has access to (owner or shared); the picker UI filters by
  * patient as the user types.
+ *
+ * S12b: sin el módulo `sesiones`, `[]`; planes archivados fuera
+ * (`liveProgramWhere`): un plan archivado está oculto en todos lados.
  */
 export async function listAssignablePrograms(): Promise<
   {
@@ -886,9 +1494,11 @@ export async function listAssignablePrograms(): Promise<
   }[]
 > {
   const actor = await getActor();
+  if (sessionsModuleOff(actor)) return [];
   const rows = await runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
     where: {
       tenantId: actor.tenantId,
+      ...liveProgramWhere,
       status: { in: ["ACTIVE", "PAUSED"] },
     },
     select: {
@@ -905,7 +1515,8 @@ export async function listAssignablePrograms(): Promise<
         },
       },
       _count: {
-        select: { sessions: { where: { completedAt: { not: null } } } },
+        // S12b: realizadas VIVAS (una archivada no cuenta para "n de N").
+        select: { sessions: { where: { ...liveSessionWhere, completedAt: { not: null } } } },
       },
     },
     orderBy: [{ status: "asc" }, { createdAt: "desc" }],
@@ -963,6 +1574,8 @@ export async function bulkAddSessionExercises(input: {
   range: { kind: "all" } | { kind: "fromIndex"; fromIndex: number };
 }): Promise<ActionResult<{ created: number; skipped: number }>> {
   const actor = await getActor();
+  const off = sessionsModuleOff(actor);
+  if (off) return off;
   const parsed = BulkAddSessionExercisesInput.safeParse(input);
   if (!parsed.success) {
     const fieldErrors = parsed.error.flatten().fieldErrors;
@@ -971,8 +1584,9 @@ export async function bulkAddSessionExercises(input: {
   const { programId, exerciseIds, range } = parsed.data;
 
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
+    // S12b: un plan archivado no recibe ejercicios (está oculto).
     const program = await tx.treatmentProgram.findFirst({
-      where: { id: programId, tenantId: actor.tenantId },
+      where: { id: programId, tenantId: actor.tenantId, ...liveProgramWhere },
       select: { id: true, patientId: true },
     });
     if (!program) throw new Denied("Plan no encontrado.");
@@ -992,6 +1606,7 @@ export async function bulkAddSessionExercises(input: {
     const sessions = await tx.session.findMany({
       where: {
         programId: program.id,
+        ...liveSessionWhere,
         completedAt: null,
         ...(range.kind === "fromIndex" ? { index: { gte: range.fromIndex } } : {}),
       },

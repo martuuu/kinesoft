@@ -121,8 +121,32 @@ Pure logic lives outside `"use server"` files so it can be unit-tested
 | `lib/exercise-media-internal.ts` (`server-only`) | `signExerciseMedia(mediaId)`: signs the key stored in the row, never a client key |
 | `lib/patient-access-internal.ts` · `lib/programs.ts` | `hcAccessError` moved out of `patients.ts`; program actions (`createProgram` with zod + AR day, `updateProgram`, `setProgramStatus`, …) |
 | `lib/booking-field-access.ts` · `lib/plan-lock.ts` · `lockCapacityMany` | field rule for bookings; plan-patient lock and one-statement capacity locks (PLANES C2) |
-| `lib/availability/plan.ts` · `lib/plan-schedule.ts` · `lib/plan-pricing.ts` · `lib/plan-display.ts` · `loadAvailabilityInputsForDays` | pure plan engine, schedule v1, money and display, and the per-day loader. No callers until ES2b |
+| `lib/availability/plan.ts` · `lib/plan-schedule.ts` · `lib/plan-pricing.ts` · `lib/plan-display.ts` · `loadAvailabilityInputsForDays` | pure plan engine, schedule v1, money and display, and the per-day loader. Consumed by the ES2b engine (below) |
 | `lib/plans-dedupe*.ts` + `scripts/plans-dedupe-session-index.ts` | pre-M1 dedupe of `Session(programId, index)` (MIGRACIONES-RUNBOOK §2.3) |
+
+## Módulos de Planes ES2b (07-oct-2026, pendiente commit)
+
+Todo server: la UI vieja sigue llamando a los exports legacy de `lib/programs.ts`/`lib/sessions.ts`, que delegan
+hasta que ES3 cablee la UI nueva y S27a los retire. Firmas en [PLANES.md §4 C8](PLANES.md); orden de locks en
+ADR-004. Regla común: los `*InTx` **no gatean ni emiten**; el export `"use server"` gatea (`assertPlan*InTx`), corre
+la tx con `withTxConflictRetry` y después del commit llama una vez a `afterBookingsCommitted(refs)`.
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/bookings-core.ts` (`server-only`) | **Core de turnos** extraído de `lib/bookings.ts` (S07c, S12): gate de la Secretaria y `bookingFieldAccess` **adentro** de `applyBookingUpdateInTx` (así "mover", "este y los siguientes" y la sincronía no lo saltean), `validateBookingRefsInTx`, `buildBookingCreateData` (nunca escribe el vínculo), sincronía turno→sesión (`syncPlanSessionAfterBookingWriteInTx`, I3, reactivación, `planStampData`). Devuelve outcomes, nunca tira por stale ni emite. Copys en `lib/bookings-constants.ts` |
+| `lib/booking-events-internal.ts` (`server-only`) | `afterBookingsCommitted(tenantId, refs)`: único post-commit de un write-path que toca `Booking` (revalida días y dashboard; nunca tira). SV le suma el publish realtime sin cambiar la firma |
+| `lib/plans.ts` + `lib/plans-engine-internal.ts` + `lib/plans-load-internal.ts` | **Motor**: `previewPlan`/`createPlan`; primitivas `previewProgramRowsInTx` → `reclassifyOrThrowStaleInTx` → `commitPlanRowsInTx` (modos `create`/`generate`/`replan`/`add`), `createPlanInTx` (con hook `clinicalCase` para Diagnóstico), `validatePlanRefsInTx` (la FK `locationId`/`practitionerId`/`serviceId` es simple: validar contra el tenant es obligatorio). Keys `plan:<generationId>:<index>`. Solo `createPlanInTx` gatea |
+| `lib/plans-read.ts` (+ `-internal`, `-types`) | Lecturas: `listPlans`, `getPlanDetail`/`getPlanHistory` (solo full), `getPatientPlans`, `getPatientPlanBalances` (saldo P7 en el server), `listSchedulablePlanSessions` (allowlist sin título). Devuelven `PlanReadResult<T>` |
+| `lib/plans-lifecycle.ts` (+ `-internal`, `-state` puro) | Estados (D7: futuros impagos cancelar/mantener), `updatePlanDetails` (título y notas, CAS), `archivePlan`, `restoreProgram`; L9 (archivar paciente → pausa sus planes) |
+| `lib/plans-move.ts` (+ `-internal`) | "Este y los siguientes" (`movePlanSeries`, `plans.schedule`) y re-planificar desde la sesión N (`replanPlan`, `plans.manage`) |
+| `lib/plans-edit.ts` (+ `-internal`, `lib/plan-pricing-internal.ts`) | Agregar/archivar/restaurar sesiones, reprecio C5 de dos ramas con CAS por fila, renovar la autorización de la OS |
+| `lib/plans-adopt.ts` (+ `-internal`) | Generar turnos de sesiones pendientes (`plans.schedule`), vincular un turno suelto, adoptar una serie, sacar del plan |
+| `lib/plan-invariants-internal.ts` | **Verificador** I1-I8: `assertProgramInvariantsInTx` al final de cada tx del motor (3 sentencias); una violación tira `ProgramInvariantViolation` (rollback + Sentry). No corre en los write-paths de turnos sueltos |
+| `lib/agenda-plan-projection-internal.ts` | Proyección C9 de la agenda (chip, ordinal, "Fuera de plan"): queries planas, sin módulo `planes` = neutra sin queries, nunca la autorización de la OS |
+| `lib/plan-authz-internal.ts` · `lib/plan-predicates.ts` · `lib/plans-schemas.ts` · `lib/plans-types.ts` | Gates de Planes; predicados Prisma únicos ("sin turno", vivo, vinculado, adoptable, con pago); zod; tipos re-exportados de `lib/availability/plan.ts` (una sola fuente) |
+| `lib/diagnosis-internal.ts` | `createPlanFromDiagnosis` por el motor (caso + diagnóstico + plan + turnos en una tx) y la rampa por fase |
+| `lib/patient-search.ts` (P2-FX1) | `searchPatientsForBooking`: buscador del `PatientPicker` de la agenda (nombre + DNI, sin gate de módulo). El picker elige con `source` (`components/patients/patient-picker-search.ts`) |
+| `lib/services-discipline.ts` | Disciplina sugerida de un servicio desde las especialidades (puro) |
 
 ## Timezone (a core invariant)
 
@@ -434,6 +458,9 @@ Booking.locationId? ──► Location (RESTRICT; null = primary)
      it exclusive);
   3. **rows** — count, upsert, block rows.
 
+  Planes (ES2b) extends this order with the patient lock first and Booking → Session → TreatmentProgram for rows:
+  ADR-004.
+
 ### Capabilities / authz
 
 `lib/capabilities.ts` (pure matrix) + `lib/authz.ts` (`getMembershipRole`,
@@ -595,7 +622,7 @@ platform tier**:
   Docker only; staging/prod go in the single end-of-B deploy
   (MIGRACIONES-RUNBOOK §2.4). Review amendment F1: the pricing CHECKs use
   `IS NOT DISTINCT FROM` (with `=`, a NULL mode made the CHECK pass with a
-  price). The link columns have no writers until ES2b.
+  price). Since ES2b the only writer of the link (`programId`/`sessionId`/`pricedByPlan=true`) is the plan engine (I8).
 
 ### ADR-002 — Sentry on server/edge only, no client SDK (status: ACCEPTED, 30-sep-2026)
 
@@ -616,9 +643,44 @@ platform tier**:
 
 See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
 
-### ADR-004 — reservado
+### ADR-004 — Orden de locks de Planes (status: ACCEPTED, ES2b, 07-oct-2026)
 
-Orden de locks de Planes (PLANES §4 C2); lo escribe ES2b.
+- **Contexto.** B-pre fijó "cupo → sedes → filas" para un turno por tx (AUDIT §5.28). Planes escribe N turnos, N
+  sesiones y el plan en una tx, y compite con la agenda, Seguimiento, el candado por día y el reprecio. Sin un orden
+  global, dos tx que se cruzan dan 40P01; y sin lock sobre la sesión, "cerrar en Seguimiento" y "darle un turno" no se
+  serializaban (sesión realizada con un turno activo futuro = cobro doble, H-a1 de la revisión).
+- **Decisión** (contrato literal en [PLANES.md §4 C2](PLANES.md); enmienda de AUDIT §5.28 y §5.40):
+  1. **Paciente:** `lockPlanPatient` (`lib/plan-lock.ts:39`), siempre primero, solo en operaciones que cambian la
+     estructura de un plan. Varios pacientes (L9): `lockPlanPatientsInTx`, claves ordenadas en una sentencia. Nada que
+     ya tenga un lock de cupo lo pide; `applyBookingUpdateInTx` nunca.
+  2. **Cupos:** `lockCapacityMany`, todas las claves `(profesional, servicio, día AR)` deduplicadas y ordenadas en
+     **una** sentencia (incluye el día siguiente si cruza la medianoche AR).
+  3. **Sedes:** `lockTenantLocationsShared` una vez y recién después validar la sede `{id, tenantId, active}`.
+  4. **Filas:** `Booking` (`FOR UPDATE`, id asc) → `Session` → `TreatmentProgram`. El CAS del `updatedAt` del plan
+     va al final. Toda escritura multi-fila hace antes `SELECT … FOR UPDATE ORDER BY id` de sus candidatas.
+  - **Seguimiento y `rescheduleSession`** lockean el plan con **`FOR NO KEY UPDATE`** (`lib/sessions.ts:706,996`),
+    no `FOR UPDATE`: el INSERT de un turno con FK al plan pide `FOR KEY SHARE` sobre el plan, que choca con
+    `FOR UPDATE` pero no con `FOR NO KEY UPDATE`. Sigue serializando dos cierres concurrentes (A4 de ES1).
+  - **El motor lockea las sesiones que escribe:** `lockWrittenSessionsInTx` (`lib/plans-engine-internal.ts:737`)
+    hace `FOR UPDATE ORDER BY id` de las sesiones que crea, mueve, adopta o marca, y exige que sigan abiertas; si
+    Seguimiento cerró antes → `StalePlanPreview('write-conflict')`. Del otro lado, Seguimiento re-cuenta los turnos
+    activos después del claim y hace rollback si apareció uno.
+  - **Reintento:** P2034/40P01 → **un** reintento de la tx completa (`withTxConflictRetry`, `lib/plan-lock.ts:75`) en
+    todas las escrituras de Planes, en el cierre de Seguimiento y en `rescheduleSession`.
+- **Desvíos documentados (re-planificar, `replanInTx`, `lib/plans-move-internal.ts:678`):**
+  - Si cambian profesional, servicio o sede, el plan se escribe (`writeRefsKeepingStampInTx`) **antes** de
+    re-clasificar, porque el motor lee las refs del plan. Para que eso no invierta Session → Program, las sesiones
+    de la selección se lockean id asc **antes** de esa escritura (`:719`); el commit las vuelve a pedir (reentrante).
+  - Los futuros impagos se cancelan **después** de re-clasificar y antes del commit (`:748`): un cobro que entró en
+    el medio deja la selección distinta → stale.
+  - Toda escritura de `Session` va antes de los INSERT de `Booking` con FK a plan/sesión.
+  - `stateToken` compuesto `<motor>.<hash del pedido>`.
+- **Agregar sesiones** toma Booking → Session → Program en dos tandas ordenadas (`lockProgramRowsInTx`), no un orden
+  global único; el reintento cubre el resto.
+- **Consecuencias.** El invariante es el orden global, no "un turno por tx". Cualquier write-path nuevo sobre
+  turnos o planes respeta (1)-(4) o documenta su desvío acá. **Pendiente:** `applyDayLock`, `createTimeBlock` y
+  `createBooking` no reintentan P2034/40P01 y tapan la excepción con un error genérico (AUDIT, C0/C1). Las carreras
+  están cubiertas por `tests/integration/plans-concurrency.test.ts` y `plans-engine-fixes.test.ts` (TESTING.md).
 
 ### ADR-005 — Verticales y módulos (status: ACCEPTED, EV0, 07-oct-2026)
 

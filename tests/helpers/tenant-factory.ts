@@ -49,6 +49,25 @@ export interface EphemeralTenant {
 /** Ordered teardown of everything that references the tenant (see header). */
 export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Promise<void> {
   const users = await db.membership.findMany({ where: { tenantId }, select: { userId: true } });
+  // Planes M1: las FKs simples TreatmentProgram → Location/Service/Practitioner
+  // dejan que un test arme A PROPÓSITO un plan de OTRO tenant que apunta a algo
+  // de este (para probar que el motor lo rechaza). Ese plan ajeno es RESTRICT y
+  // bloquea el cascade de este tenant: el sweep de huérfanos fallaba para todos
+  // los archivos que lo usan. Se borran primero (con sus turnos y autorizaciones).
+  const foreignPrograms = await db.treatmentProgram.findMany({
+    where: {
+      tenantId: { not: tenantId },
+      OR: [{ location: { tenantId } }, { service: { tenantId } }, { practitioner: { tenantId } }],
+    },
+    select: { id: true },
+  });
+  if (foreignPrograms.length) {
+    const programIds = foreignPrograms.map((p) => p.id);
+    await db.payment.deleteMany({ where: { booking: { programId: { in: programIds } } } });
+    await db.booking.deleteMany({ where: { programId: { in: programIds } } });
+    await db.programAuthorization.deleteMany({ where: { programId: { in: programIds } } });
+    await db.treatmentProgram.deleteMany({ where: { id: { in: programIds } } });
+  }
   await db.payment.deleteMany({ where: { booking: { tenantId } } });
   // Planes M1: Booking → TreatmentProgram/Session es RESTRICT; los turnos se
   // borran antes que los planes (ya era así).

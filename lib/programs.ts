@@ -19,20 +19,33 @@
  * podían invocar por RPC y escribían igual. Escrituras → `requireModule`
  * (tira `ForbiddenError`); lecturas del perfil del paciente → `[]` (las usa la
  * ficha, que es común a las dos verticales y no tiene que romperse).
+ *
+ * P2-S15 (ES2b): `updateProgram`, `setProgramStatus` y `deleteProgram`
+ * DELEGAN en los flujos de `lib/plans-lifecycle-internal.ts` (los mismos de
+ * las actions nuevas de `lib/plans-lifecycle.ts`) para no romper a
+ * `plan-view.tsx` hasta ES3; `deleteSession` rechaza ("archivala"). Mantienen
+ * `requireModule('planes')` (enmienda EV0: mover código no se lleva el gate).
+ * S27a los retira.
  */
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
 import type { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
 import { getMembershipRole, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
 import { isTenantAdminRole } from "@/lib/capabilities";
-import { audit, auditInTx } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { addDays, dayWindow } from "@/lib/availability/day";
 import { patientAccessFor } from "@/lib/visibility";
 import { hcAccessError } from "@/lib/patient-access-internal";
-import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
+import {
+  afterLifecycleCommit,
+  archiveProgramFlow,
+  changeProgramStatusFlow,
+  updateProgramDetailsFlow,
+} from "@/lib/plans-lifecycle-internal";
 import {
   ProgramCreate,
   ProgramStatusSet,
@@ -56,6 +69,18 @@ function invalidInput(err: z.ZodError): { ok: false; error: string; fieldErrors:
   };
 }
 
+/** Copy de los rechazos legacy (no exportado: "use server" solo exporta async). */
+const LEGACY_EDIT_COPY = {
+  count: "La cantidad de sesiones se cambia agregando o archivando sesiones del plan.",
+  schedule: "El horario del plan se cambia re-planificando desde una sesión.",
+  deleteSession: "Las sesiones no se borran: archivala desde el plan.",
+} as const;
+
+/** Resultado del flujo nuevo → `ActionResult` legacy (el Tab Plan solo lee `ok`/`error`). */
+function legacyResult(r: { ok: true } | { ok: false; error: string }): ActionResult {
+  return r.ok ? { ok: true, data: undefined } : { ok: false, error: r.error };
+}
+
 /**
  * Lite list of patient's programs — programs + minimal session metadata
  * (id, index, completedAt, scheduledFor, notes, exercise count) but
@@ -73,8 +98,11 @@ export async function getPatientProgramsLite(patientId: string) {
   if (!modulesFor(actor.entitlements).has("planes")) return [];
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
+  // P2-S15: sin archivados (planes ni sesiones): "Eliminar" ahora archiva,
+  // y un plan archivado seguía en la ficha como si el click no hubiera hecho
+  // nada. Restaurarlos es de OWNER/ADMIN (`restoreProgram`), con UI en ES3.
   return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
-    where: { patientId },
+    where: { patientId, tenantId: actor.tenantId, ...liveProgramWhere },
     select: {
       id: true,
       title: true,
@@ -84,6 +112,7 @@ export async function getPatientProgramsLite(patientId: string) {
       startDate: true,
       createdAt: true,
       sessions: {
+        where: liveSessionWhere,
         orderBy: { index: "asc" },
         select: {
           id: true,
@@ -119,9 +148,10 @@ export async function getPatientProgramsFull(patientId: string) {
   const access = await patientAccessFor(actor, patientId);
   if (access !== "full") return [];
   return runWithRls(actor.tenantId, (tx) => tx.treatmentProgram.findMany({
-    where: { patientId },
+    where: { patientId, tenantId: actor.tenantId, ...liveProgramWhere },
     include: {
       sessions: {
+        where: liveSessionWhere,
         orderBy: { index: "asc" },
         include: {
           exercises: { include: { exercise: true }, orderBy: { order: "asc" } },
@@ -219,179 +249,99 @@ export async function createProgram(raw: ProgramCreateInput): Promise<ActionResu
 // ──────────────────────────────────────────────────────────────────────
 
 /**
- * Edición legacy (título, total, frecuencia, inicio). La conducta se mantiene
- * hasta P2-S15, que la deja en título y notas con CAS: todavía NO crea, archiva
- * ni mueve sesiones al cambiar el total o el inicio (slug
- * `updateProgram-desincroniza-total`, lo cierra S15).
+ * Edición legacy del Tab Plan (`plan-view.tsx` manda SIEMPRE título, total,
+ * frecuencia e inicio). P2-S15: delega en `updateProgramDetailsFlow`
+ * (`lib/plans-lifecycle-internal.ts`) y edita SOLO el título (PD-10).
  *
- * P0-S02a: zod (`ProgramUpdate`) antes de la base, y lectura + gate + write +
- * audit en UNA tx. Antes el chequeo a mano dejaba pasar `NaN` (`NaN < 1` y
- * `NaN > 64` son false) hasta Prisma (500), y el write iba en otra tx que la
- * lectura del gate, con el audit por fuera.
+ * Antes un total nuevo se escribía en `totalSessions` sin crear ni archivar
+ * sesiones (slug `updateProgram-desincroniza-total`: "10 sesiones" con 4
+ * filas, I5 roto) y frecuencia/inicio movían el plan sin mover sesiones ni
+ * turnos. Ahora: los campos estructurales iguales a los actuales se ignoran
+ * (el Drawer los reenvía), y uno DISTINTO se rechaza con a dónde ir —
+ * cantidad → agregar/archivar sesiones (S16b), horario → re-planificar (L7).
+ *
+ * Sin CAS: este caller no conoce el `updatedAt` (la action nueva
+ * `updatePlanDetails` sí lo exige). ES3/S27a retira este export.
  */
 export async function updateProgram(raw: ProgramUpdateInput): Promise<ActionResult> {
   const actor = await requireModule("planes");
   const parsed = ProgramUpdate.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
-  const result = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
+  const row = await runWithRls(actor.tenantId, (tx) =>
+    tx.treatmentProgram.findFirst({
       where: { id: input.id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, totalSessions: true },
-    });
-    if (!row) return { error: "Plan no encontrado." };
-    const denied = await hcAccessError(actor, row.patientId, tx);
-    if (denied) return { error: denied };
-
-    const patch: Prisma.TreatmentProgramUpdateInput = {};
-    if (input.title !== undefined) patch.title = input.title;
-    // El Drawer reenvía siempre el total actual: igual = no se toca (y un
-    // legacy de 61..64 sesiones se puede renombrar). Un total NUEVO respeta
-    // el tope de PD-04.
-    if (input.totalSessions !== undefined && input.totalSessions !== row.totalSessions) {
-      if (input.totalSessions > PLAN_MAX_SESSIONS) {
-        return { error: `Sesiones entre 1 y ${PLAN_MAX_SESSIONS}.` };
-      }
-      patch.totalSessions = input.totalSessions;
-    }
-    if (input.frequency !== undefined) patch.frequency = input.frequency;
-    // Medianoche AR del día elegido (C11), como `createProgram`.
-    if (input.startDate !== undefined) patch.startDate = dayWindow(input.startDate).start;
-    const fields = Object.keys(patch);
-    if (fields.length === 0) return { patientId: row.patientId, changed: false };
-
-    await tx.treatmentProgram.update({ where: { id: row.id }, data: patch });
-    await auditInTx(tx, {
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "program.update",
-      entity: "TreatmentProgram",
-      entityId: row.id,
-      // Solo nombres de campo, nunca valores (AuditParams: sin PHI).
-      payload: { fields },
-    });
-    return { patientId: row.patientId, changed: true };
-  });
-  if (result.error) return { ok: false, error: result.error };
-  if (result.changed) revalidatePath(`/pacientes/${result.patientId}`);
-  return { ok: true, data: undefined };
+      select: { totalSessions: true, frequency: true, startDate: true },
+    })
+  );
+  if (!row) return { ok: false, error: "Plan no encontrado." };
+  if (input.totalSessions !== undefined && input.totalSessions !== row.totalSessions) {
+    return { ok: false, error: LEGACY_EDIT_COPY.count, fieldErrors: { totalSessions: [LEGACY_EDIT_COPY.count] } };
+  }
+  // El Drawer arma el inicio con `startDate.toISOString().slice(0,10)`: en un
+  // plan nuevo (03:00Z) es el día AR; en un legacy (00:00Z) es el día UTC. Las
+  // dos lecturas cuentan como "sin cambio".
+  const sameStart =
+    input.startDate === undefined ||
+    input.startDate === toARDateKey(row.startDate) ||
+    input.startDate === row.startDate.toISOString().slice(0, 10);
+  if ((input.frequency !== undefined && input.frequency !== row.frequency) || !sameStart) {
+    return { ok: false, error: LEGACY_EDIT_COPY.schedule };
+  }
+  if (input.title === undefined) return { ok: true, data: undefined };
+  const flow = await updateProgramDetailsFlow(actor, { programId: input.id, expectedUpdatedAt: null, title: input.title });
+  if (flow.commit) await afterLifecycleCommit(actor.tenantId, flow.commit);
+  return legacyResult(flow.result);
 }
 
 /**
- * Cambio de estado legacy (sin D7: no toca turnos ni sesiones; eso llega con
- * P2). P0-S02a: el estado se valida con zod (antes un string cualquiera por
- * RPC llegaba a Prisma como enum inválido → 500) y lectura + gate + write +
- * audit van en una tx.
+ * Cambio de estado legacy. P2-S15: delega en `changeProgramStatusFlow` (tabla
+ * de transiciones + lock del paciente + CAS + verificador + audit). Antes
+ * aceptaba cualquier estado → cualquier estado (un CANCELLED volvía a ACTIVE).
+ *
+ * D7 = `keep` a propósito: el `useConfirm` del Tab Plan de hoy le dice al
+ * usuario "Los turnos de la agenda no se tocan" (`programStatusConfirm`). El
+ * default `cancel` de PD-10 es el de la UI nueva (S22a), que pregunta.
+ * `confirm: true` porque ese mismo diálogo ya confirmó la reapertura.
  */
 export async function setProgramStatus(raw: ProgramStatusSetInput): Promise<ActionResult> {
   const actor = await requireModule("planes");
   const parsed = ProgramStatusSet.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
-  const input = parsed.data;
-  const result = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
-      where: { id: input.id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, status: true },
-    });
-    if (!row) return { error: "Plan no encontrado." };
-    const denied = await hcAccessError(actor, row.patientId, tx);
-    if (denied) return { error: denied };
-    if (row.status === input.status) return { patientId: row.patientId, changed: false };
-    await tx.treatmentProgram.update({ where: { id: row.id }, data: { status: input.status } });
-    await auditInTx(tx, {
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "program.status",
-      entity: "TreatmentProgram",
-      entityId: row.id,
-      payload: { from: row.status, to: input.status },
-    });
-    return { patientId: row.patientId, changed: true };
-  });
-  if (result.error) return { ok: false, error: result.error };
-  if (result.changed) {
-    revalidatePath(`/pacientes/${result.patientId}`);
-    revalidatePath("/seguimiento");
-  }
-  return { ok: true, data: undefined };
+  const flow = await changeProgramStatusFlow(
+    actor,
+    { programId: parsed.data.id, expectedUpdatedAt: null, to: parsed.data.status, futureBookings: "keep", confirm: true },
+    new Date()
+  );
+  if (flow.commit) await afterLifecycleCommit(actor.tenantId, flow.commit);
+  return legacyResult(flow.result);
 }
 
 /**
- * Hard-delete a TreatmentProgram + all its Sessions + SessionExercises.
- * Bookings that referenced sessions remain in place (no FK to delete
- * cascade). Audit log records the loss.
+ * "Eliminar plan" legacy (OWNER/ADMIN). P2-S15: ya NO borra en duro, archiva
+ * (`archiveProgramFlow`). El DELETE daba P2003 (500) con turnos vinculados o
+ * una `ProgramAuthorization` (RESTRICT de M1) y, sin ellos, perdía la
+ * historia (I7: nada vinculado se borra). Un plan abierto se rechaza con
+ * "primero hay que cancelarlo": este botón nunca cancela turnos de rebote.
+ * Restaurar: `restoreProgram` (`lib/plans-lifecycle.ts`).
  */
 export async function deleteProgram(id: string): Promise<ActionResult> {
   const actor = await requireModule("planes");
   const denied = await requireAdminRole(actor);
   if (denied) return denied;
-  // RLS Etapa 2: cascade delete (sessions + sessionExercises) traverses
-  // FKs the app-layer extension can't reach. The GUC ensures Postgres
-  // policies guard every cascaded row.
-  const program = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.treatmentProgram.findFirst({
-      where: { id, tenantId: actor.tenantId },
-      select: { id: true, patientId: true, title: true, totalSessions: true },
-    });
-    if (!row) return null;
-    // A2b-S-vis: OWNER/ADMIN ya implica `full`; el gate queda explícito para
-    // que no dependa de que `requireAdminRole` siga siendo el único filtro.
-    if (await hcAccessError(actor, row.patientId, tx)) return null;
-    await tx.treatmentProgram.delete({ where: { id } });
-    return row;
-  });
-  if (!program) return { ok: false, error: "Plan no encontrado." };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "program.delete",
-    entity: "TreatmentProgram",
-    entityId: id,
-    payload: { title: program.title, totalSessions: program.totalSessions },
-  });
-  revalidatePath(`/pacientes/${program.patientId}`);
-  return { ok: true, data: undefined };
+  if (typeof id !== "string" || id.length === 0 || id.length > 64) return { ok: false, error: "Plan no encontrado." };
+  const flow = await archiveProgramFlow(actor, { programId: id, expectedUpdatedAt: null }, new Date());
+  if (flow.commit) await afterLifecycleCommit(actor.tenantId, flow.commit);
+  return legacyResult(flow.result);
 }
 
-export async function deleteSession(id: string): Promise<ActionResult> {
-  const actor = await requireModule("planes");
-  const denied = await requireAdminRole(actor);
-  if (denied) return denied;
-  const session = await runWithRls(actor.tenantId, async (tx) => {
-    const row = await tx.session.findFirst({
-      where: { id, program: { tenantId: actor.tenantId } },
-      select: {
-        id: true,
-        index: true,
-        program: { select: { id: true, patientId: true, totalSessions: true } },
-      },
-    });
-    // A2b-S-vis: mismo gate explícito que deleteProgram (OWNER/ADMIN ⇒ full).
-    if (!row || (await hcAccessError(actor, row.program.patientId, tx))) return null;
-    return row;
-  });
-  if (!session) return { ok: false, error: "Sesión no encontrada." };
-
-  await runWithRls(actor.tenantId, async (tx) => {
-    await tx.session.delete({ where: { id } });
-    // Decrement totalSessions so progress bars stay accurate. Atomic
-    // decrement (vs. read-modify-write) avoids racing a concurrent edit.
-    // The `> 1` guard keeps the counter from ever reaching 0.
-    if (session.program.totalSessions > 1) {
-      await tx.treatmentProgram.update({
-        where: { id: session.program.id },
-        data: { totalSessions: { decrement: 1 } },
-      });
-    }
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.delete",
-    entity: "Session",
-    entityId: id,
-    payload: { index: session.index },
-  });
-  revalidatePath(`/pacientes/${session.program.patientId}`);
-  return { ok: true, data: undefined };
+/**
+ * P2-S15: las sesiones no se borran en duro (I7). El DELETE + decremento de
+ * `totalSessions` daba P2003 con un turno vinculado y, sin él, rompía la
+ * numeración estable (`index` fijo) y el saldo del plan. Archivar una sesión
+ * es `archivePlanSessions` (S16b, `plans.manage`); la UI llega en ES3.
+ */
+export async function deleteSession(_id: string): Promise<ActionResult> {
+  await requireModule("planes");
+  return { ok: false, error: LEGACY_EDIT_COPY.deleteSession };
 }

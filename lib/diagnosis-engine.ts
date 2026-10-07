@@ -196,6 +196,80 @@ export function rankSelection(
   return ranked.filter((r) => r.matchScore > 0).sort((a, b) => b.matchScore - a.matchScore);
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Rampa por fase (S17d, PQ-12: "Plantilla = misma lista; Diagnóstico = rampa")
+// ──────────────────────────────────────────────────────────────────────
+
+/** Fases en orden de progresión (el índice es el escalón de la rampa). */
+export const RAMP_PHASES: readonly ProgramPhase[] = ["ACTIVATION", "STABILITY", "LOAD", "PROGRESSION"];
+
+/**
+ * Escalón de la sesión `index0` (0-based) de `total`: el plan se parte en
+ * cuartos y cada cuarto habilita una fase más (0 = solo activación … 3 =
+ * todas). Es la fórmula del alta vieja (`assignDiagnosisAndCreateProgram`,
+ * `min(3, floor(i/N·4))`) pero en aritmética entera: `(i/N)*4` en coma
+ * flotante puede caer en 0.999… y bajar un escalón en el borde.
+ */
+export function rampPhaseIndex(index0: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(3, Math.floor((Math.max(0, index0) * 4) / total));
+}
+
+export type RampExercise = { exerciseId: string; phase: ProgramPhase };
+
+/**
+ * Ejercicios de cada sesión de un plan de Diagnóstico (rampa acumulativa):
+ * la sesión del escalón `p` lleva los ejercicios de fase ≤ `p`, ordenados por
+ * fase y, dentro de la fase, en el orden en que vinieron (el que eligió el
+ * profesional). Devuelve un array por sesión (posición 0 = sesión 1).
+ *
+ * Decisión S17d: si no hay ejercicios de las fases tempranas (p. ej. todos
+ * son de carga), las primeras sesiones arrancan con la fase más temprana
+ * presente en vez de quedar vacías — el alta vieja dejaba sesiones sin
+ * ejercicios, y la regla del plan es "al menos un ejercicio". Ids repetidos
+ * cuentan una vez (la primera aparición manda la fase).
+ */
+export function diagnosisRamp<T extends RampExercise>(exercises: ReadonlyArray<T>, total: number): T[][] {
+  const seen = new Set<string>();
+  const unique = exercises.filter((e) => (seen.has(e.exerciseId) ? false : (seen.add(e.exerciseId), true)));
+  // Orden estable por fase (Array#sort es estable desde ES2019).
+  const sorted = [...unique].sort((a, b) => PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase]);
+  const minPresent = sorted.length ? PHASE_ORDER[sorted[0].phase] : 0;
+  return Array.from({ length: Math.max(0, total) }, (_, i) => {
+    const step = Math.max(rampPhaseIndex(i, total), minPresent);
+    return sorted.filter((e) => PHASE_ORDER[e.phase] <= step);
+  });
+}
+
+export type RampStep = {
+  /** Fase que se suma en este tramo. */
+  phase: ProgramPhase;
+  /** Sesiones del tramo, 1-based e inclusivas. */
+  fromSession: number;
+  toSession: number;
+  /** Cuántos ejercicios lleva cada sesión del tramo (acumulado). */
+  exerciseCount: number;
+};
+
+/**
+ * Resumen de la rampa por tramos (para el editor: "Sesiones 1-3 · Activación
+ * · 2 ejercicios"). El tramo se rotula con la fase más alta que la sesión
+ * REALMENTE lleva: un cuarto que no suma ejercicios (no hay de esa fase) se
+ * funde con el anterior en vez de mostrar "Progresión" con la misma lista.
+ */
+export function diagnosisRampSteps(exercises: ReadonlyArray<RampExercise>, total: number): RampStep[] {
+  const perSession = diagnosisRamp(exercises, total);
+  const steps: RampStep[] = [];
+  perSession.forEach((list, i) => {
+    const top = list.reduce((m, e) => Math.max(m, PHASE_ORDER[e.phase]), -1);
+    const phase = RAMP_PHASES[top >= 0 ? top : rampPhaseIndex(i, total)];
+    const last = steps[steps.length - 1];
+    if (last && last.phase === phase) last.toSession = i + 1;
+    else steps.push({ phase, fromSession: i + 1, toSession: i + 1, exerciseCount: list.length });
+  });
+  return steps;
+}
+
 /** Exercises for a confirmed condition, sorted DIRECT→INDIRECT, then by phase, then by weight. */
 export function exercisesFor(
   conditionSlug: string,

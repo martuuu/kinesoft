@@ -7,10 +7,16 @@
  * booking modal's "Nuevo paciente" switch (firstName + lastName + DNI +
  * phone), not here — keeping this component a pure selector so the
  * BookingDrawer edit flow can reuse it to swap a booking's patient.
+ *
+ * P2-FX1: `source` elige la búsqueda. Antes era siempre
+ * `searchPatientsForAssignment` (Plan Builder: solo `full` + módulo
+ * `diagnostico`) y la Secretaria, un kine en básico o un consultorio GENERAL
+ * no encontraban pacientes al dar un turno. El despacho vive en
+ * `patient-picker-search.ts` (testeado contra la DB).
  */
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
-import { searchPatientsForAssignment } from "@/lib/diagnosis";
+import { searchForPicker, type PatientPickerSource } from "@/components/patients/patient-picker-search";
 
 export type PickedPatient = { id: string; name: string };
 
@@ -21,6 +27,7 @@ export function PatientPicker({
   onChange,
   /** Optional label override — defaults to "Paciente". */
   label,
+  source = "booking",
 }: {
   /** Hidden input name used when the picker lives inside a form. */
   name?: string;
@@ -31,6 +38,10 @@ export function PatientPicker({
   onChange?: (patient: PickedPatient | null) => void;
   /** Pass null to suppress the label entirely (when the parent renders its own). */
   label?: string | null;
+  /** "booking" (default, agenda): nombre + DNI, cualquier rol que opere
+   *  turnos. "assignment" (Planes/Diagnóstico): solo pacientes con acceso
+   *  `full` (`searchPatientsForAssignment({ requireFull: true })`). */
+  source?: PatientPickerSource;
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -60,12 +71,12 @@ export function PatientPicker({
     const term = q.trim();
     const seq = ++seqRef.current;
     const t = setTimeout(async () => {
-      const r = await searchPatientsForAssignment(term);
+      const r = await searchForPicker(source, term);
       if (seq !== seqRef.current) return;
-      setHits(r.map((p) => ({ id: p.id, name: p.name, hc: p.hc ?? "" })));
+      setHits(r);
     }, 200);
     return () => clearTimeout(t);
-  }, [q, open]);
+  }, [q, open, source]);
 
   const pick = (p: PickedPatient) => {
     setSelected(p);
@@ -122,7 +133,9 @@ export function PatientPicker({
         ) : (
           <input
             type="text"
-            placeholder="Buscá por nombre, DNI o email…"
+            // La búsqueda de la agenda no mira el email (P2-FX1: sería un
+            // oráculo de un dato que el nivel basic no muestra).
+            placeholder={source === "booking" ? "Buscá por nombre o DNI…" : "Buscá por nombre, DNI o email…"}
             value={q}
             // Kill the browser's own autofill so it doesn't cover our DB
             // typeahead. Chrome IGNORES autoComplete="off" on fields it heuristically

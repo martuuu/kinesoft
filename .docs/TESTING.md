@@ -140,6 +140,37 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
 - **M2 con roles temporales:** `tenant-verticals-m2.test.ts` extrae el bloque `>>> REVOKE_DATA_API` del SQL y lo corre
   contra roles `anon`/`authenticated` creados en el test (el Docker no los tiene). Los marcadores no se mueven.
 
+### Patrones nuevos de ES2b (Planes P2, 07-oct-2026)
+
+- **Carreras con orden de llegada fijo: `raceBehind`** (`tests/integration/plans-concurrency.test.ts:147`). Un
+  "holder" (tx del owner) toma la clave advisory por la que se compite; cada competidor se lanza **de a uno** y se espera
+  a que entre a la cola (`waitForAdvisoryWaiter(db, key, {minWaiters: i+1})`) antes de lanzar el siguiente; recién
+  ahí se suelta el holder. La cola de un lock exclusivo de Postgres es **FIFO**, así que cada orden de llegada es un
+  caso determinista (`it.each` sobre los órdenes) y se afirman **los dos lados**: quién gana, que el otro no escribió
+  nada y que nadie terminó en error genérico; más los invariantes que valen en cualquier orden (cupo 1, sin turnos
+  duplicados del paciente). Sin sleeps.
+- **Carreras de filas con `pg_blocking_pids`, transitivo.** Para locks de fila (no advisory) se espera con
+  `waitBlockedBy(pid, n)` sobre `pg_blocking_pids`. Ojo: el segundo que espera **la misma fila** figura bloqueado por el
+  **primer waiter**, no por el holder; la query lo cubre con el `EXISTS` de un nivel
+  (`plans-concurrency.test.ts:112-115`, `plans-engine-fixes.test.ts:96-99`). Filtrar solo por el pid del holder deja
+  el test colgado o falso verde.
+- **"Sin 40P01" se prueba por el resultado.** `applyDayLock`, `createTimeBlock`, `createBooking` y `updateBooking` no
+  reintentan y tapan cualquier excepción con un error genérico: que terminen con un resultado de dominio prueba que
+  ningún deadlock los tocó. Las escrituras de Planes reintentan una vez (`withTxConflictRetry`): que terminen bien cubre
+  "40P01 no persistente". Los tests de carrera de S11x corren en los **dos roles**, con un tenant propio de un
+  profesional y un servicio con cupo 1 y días futuros distintos por test.
+- **`plan-factory`** (`tests/helpers/plan-factory.ts`, de ES2a) siembra planes, sesiones y turnos vinculados por
+  **INSERT directo**, nunca por las actions que se testean, y trae el fixture legacy (R-LEGACY). `nextSlot()` da un
+  instante único por turno para que el único paciente-instante no interfiera con lo que se mide. **Cambio de ES2b:**
+  `deleteTenantDeep` (`tenant-factory.ts`) borra antes los planes de **otros** tenants que apuntan a sede, servicio o
+  profesional del tenant (FKs simples): sin eso el sweep fallaba.
+- **Tests post-integración** (C14): los que ejecutan código de otra sesión de la misma ola (motor contra el verificador
+  real, core con la sincronía) se corren en la mini-integración, no en el gate de la sesión.
+- **Presupuesto de statements** con `tests/helpers/query-counter.ts`: el alta de un plan de 20 filas es un test
+  (≤ 60, `plans-create.test.ts:460`); mover, re-planificar y el dashboard miden con el mismo helper. Medidos en ES2b:
+  agenda 16 (techo), Seguimiento 20, Biblioteca 35. Un fix que suma una sentencia lo dice en el comentario (fixer del
+  motor: replan +1, generar/vincular/adoptar +1).
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

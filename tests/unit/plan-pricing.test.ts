@@ -239,6 +239,25 @@ describe("repricePlan", () => {
     expect(same.ok && same.stamps).toEqual([]);
   });
 
+  it("[P2-Z] PACKAGE con una fila bloqueada SIN cuota → locked-unpriced (no un I6 al commitear)", () => {
+    // "Sin precio" con la sesión 1 realizada: su cuota es null y no se puede
+    // re-preciar (devengada). Antes el reparto la contaba como $0 y dejaba una
+    // sesión viva sin cuota en un paquete → el verificador tiraba I6 → 500.
+    const rows = [
+      session({ id: "s1", completedAt: PAST, scheduledFor: PAST, priceCents: null }),
+      session({ id: "s2", index: 2, bookings: [booking({ id: "b2" })] }),
+    ];
+    const r = repricePlan({ pricing: { mode: "PACKAGE", totalPriceCents: 10_000_000 }, sessions: rows, now: NOW });
+    expect(r).toMatchObject({ ok: false, code: "locked-unpriced" });
+    expect(!r.ok && r.error).toMatch(/precio por sesión/);
+    // PER_SESSION sí se puede: la fila bloqueada queda sin cuota (I6 es solo de paquetes).
+    const per = repricePlan({ pricing: { mode: "PER_SESSION", pricePerSessionCents: 300_000 }, sessions: rows, now: NOW });
+    expect(per.ok && per.sessions.map((s) => s.priceCents)).toEqual([null, 300_000]);
+    // Una fila bloqueada CON cuota sigue funcionando como antes.
+    const priced = [{ ...rows[0], priceCents: 0 }, rows[1]];
+    expect(repricePlan({ pricing: { mode: "PACKAGE", totalPriceCents: 10_000_000 }, sessions: priced, now: NOW }).ok).toBe(true);
+  });
+
   it("PER_SESSION: las libres toman el precio nuevo, las bloqueadas quedan", () => {
     const rows = [session({ id: "s1", scheduledFor: PAST, priceCents: 400_000 }), stamped("s2", 2, 400_000)];
     const r = repricePlan({ pricing: { mode: "PER_SESSION", pricePerSessionCents: 450_000 }, sessions: rows, now: NOW });

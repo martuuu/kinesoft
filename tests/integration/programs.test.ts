@@ -18,7 +18,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { createProgram, updateProgram, setProgramStatus } from "@/lib/programs";
+import { createProgram, updateProgram, setProgramStatus, deleteSession } from "@/lib/programs";
 import { listPatients } from "@/lib/patients";
 import { toARDateKey } from "@/lib/datetime-ar";
 import {
@@ -132,26 +132,30 @@ describe.skipIf(!RUN)("programas · server (P0-S02a)", () => {
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.update", entityId: prog.id } })).toBe(0);
   });
 
-  it("updateProgram válido: fecha en día AR, write + audit en la misma tx; 0 o 61 sesiones → rechazo", async () => {
+  it("updateProgram válido: solo el título (P2-S15); frecuencia o inicio distintos → rechazo; inválidos → zod", async () => {
     asUser(A.userId);
     const p = await addPatient(db, A);
     const prog = await makeProgram(p, { title: "Original" });
-    const r = await updateProgram({ id: prog.id, title: "  Nuevo  ", frequency: 3, startDate: "2030-02-04" });
+    // El Drawer reenvía frecuencia e inicio actuales: iguales = sin cambio.
+    const r = await updateProgram({ id: prog.id, title: "  Nuevo  ", frequency: 2, startDate: "2030-01-07", totalSessions: 4 });
     expect(r).toEqual({ ok: true, data: undefined });
     const row = await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } });
-    expect(row).toMatchObject({ title: "Nuevo", frequency: 3, totalSessions: 4 });
-    expect(row.startDate.toISOString()).toBe("2030-02-04T03:00:00.000Z");
+    expect(row).toMatchObject({ title: "Nuevo", frequency: 2, totalSessions: 4 });
+    expect(row.startDate.toISOString()).toBe("2030-01-07T03:00:00.000Z");
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.update", entityId: prog.id } })).toBe(1);
 
+    // P2-S15: horario → re-planificar (antes movía el plan sin mover sesiones).
+    for (const bad of [{ frequency: 3 }, { startDate: "2030-02-04" }]) {
+      const rr = await updateProgram({ id: prog.id, ...bad });
+      expect(rr, JSON.stringify(bad)).toMatchObject({ ok: false });
+    }
     for (const bad of [{ totalSessions: 0 }, { totalSessions: 61 }, { frequency: 8 }, { title: "   " }, { startDate: "2030-02-30" }]) {
       const rr = await updateProgram({ id: prog.id, ...bad });
       expect(rr, JSON.stringify(bad)).toMatchObject({ ok: false });
     }
-    expect(await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } })).toMatchObject({
-      title: "Nuevo",
-      frequency: 3,
-      totalSessions: 4,
-    });
+    const after = await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } });
+    expect(after).toMatchObject({ title: "Nuevo", frequency: 2, totalSessions: 4 });
+    expect(after.startDate.toISOString()).toBe("2030-01-07T03:00:00.000Z");
   });
 
   it("updateProgram de un legacy con 64 sesiones: reenviar el mismo total no bloquea editar el título", async () => {
@@ -170,6 +174,7 @@ describe.skipIf(!RUN)("programas · server (P0-S02a)", () => {
     });
     const r2 = await updateProgram({ id: prog.id, totalSessions: 63 });
     expect(r2).toMatchObject({ ok: false });
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } })).totalSessions).toBe(64);
   });
 
   it("setProgramStatus: estado inválido → rechazo; válido → write + audit con from/to", async () => {
@@ -183,10 +188,48 @@ describe.skipIf(!RUN)("programas · server (P0-S02a)", () => {
     expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } })).status).toBe("PAUSED");
     const evs = await db.auditEvent.findMany({ where: { tenantId: A.tenantId, action: "program.status", entityId: prog.id } });
     expect(evs).toHaveLength(1);
-    expect(evs[0].payload).toEqual({ from: "ACTIVE", to: "PAUSED" });
+    // P2-S15: delega en el flujo nuevo; el legacy pausa con D7 = "keep".
+    expect(evs[0].payload).toMatchObject({ from: "ACTIVE", to: "PAUSED", futureBookings: "keep" });
     // Mismo estado: no-op, sin audit nuevo.
     expect(await setProgramStatus({ id: prog.id, status: "PAUSED" })).toEqual({ ok: true, data: undefined });
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.status", entityId: prog.id } })).toBe(1);
+  });
+
+  // ── P2-S15 (ES2b): exports legacy que delegan en `lib/plans-lifecycle` ──
+
+  it("[P2-S15] updateProgram con totalSessions → rechazo y sesiones vivas intactas", async () => {
+    // PD-10: `updateProgram` edita SOLO título y notas. Antes un total nuevo
+    // se escribía en `totalSessions` sin crear ni archivar sesiones (I5 roto:
+    // "10 sesiones" con 4 filas). La cantidad va por `plans-edit` (S16b).
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const prog = await makeProgram(p, { title: "Kine" });
+    for (let i = 1; i <= 4; i++) {
+      await db.session.create({
+        data: { programId: prog.id, practitionerId: A.practitionerId, index: i, scheduledFor: new Date(Date.UTC(2030, 0, 7 + i, 3)) },
+      });
+    }
+    const r = await updateProgram({ id: prog.id, title: "Kine", totalSessions: 6 });
+    expect(r).toMatchObject({ ok: false });
+    expect(await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } })).toMatchObject({ totalSessions: 4 });
+    expect(await db.session.count({ where: { programId: prog.id, archivedAt: null } })).toBe(4);
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "program.update", entityId: prog.id } })).toBe(0);
+  });
+
+  it("[P2-S15] deleteSession borra en duro → rechazo \"archivala\"", async () => {
+    // I7: nada vinculado se borra en duro. `deleteSession` hacía DELETE + el
+    // decremento de `totalSessions`; ahora rechaza con "archivala".
+    asUser(A.userId);
+    const p = await addPatient(db, A);
+    const prog = await makeProgram(p);
+    const s = await db.session.create({
+      data: { programId: prog.id, practitionerId: A.practitionerId, index: 1, scheduledFor: new Date("2030-01-07T03:00:00.000Z") },
+    });
+    const r = await deleteSession(s.id);
+    expect(r).toMatchObject({ ok: false });
+    if (!r.ok) expect(r.error).toMatch(/archivala/i);
+    expect(await db.session.count({ where: { id: s.id } })).toBe(1);
+    expect((await db.treatmentProgram.findUniqueOrThrow({ where: { id: prog.id } })).totalSessions).toBe(4);
   });
 
   it("[P0-S02a] listPatients con 2 ACTIVE elige el más reciente", async () => {

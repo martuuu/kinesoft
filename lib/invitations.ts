@@ -23,7 +23,9 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { Role } from "@prisma/client";
 import { z } from "zod";
-import { runWithRls } from "@/lib/rls";
+import { runWithRls, type DbClient } from "@/lib/rls";
+import { capabilitiesFor } from "@/lib/capabilities";
+import { liveProgramWhere } from "@/lib/plan-predicates";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
@@ -47,6 +49,33 @@ async function requireOwner() {
     throw new Error("Solo el OWNER puede gestionar usuarios.");
   }
   return actor;
+}
+
+/**
+ * S13g (I7): planes ACTIVE vivos de los que el usuario es responsable
+ * (`TreatmentProgram.practitionerId`, D17) en este consultorio.
+ *
+ * `practitionerId` es RESTRICT desde M1, pero ni quitar a alguien (borra la
+ * Membership; el Practitioner queda por historial) ni cambiarle el rol tocan
+ * esa fila, así que la FK no frena nada: el plan quedaba a cargo de alguien
+ * que ya no entra o que ya no puede gestionarlo. Solo ACTIVE: un plan cerrado
+ * conserva su responsable como historia. `practitioner.userId` + `tenantId`
+ * a mano: el Practitioner es por tenant y en prod (BYPASSRLS) el filtro
+ * explícito es la única barrera.
+ */
+function countActivePlansAsResponsible(tx: DbClient, tenantId: string, userId: string) {
+  return tx.treatmentProgram.count({
+    where: {
+      tenantId,
+      practitioner: { userId, tenantId },
+      ...liveProgramWhere,
+      status: "ACTIVE",
+    },
+  });
+}
+
+function activePlansCopy(n: number) {
+  return `es responsable de ${n} plan${n === 1 ? "" : "es"} activo${n === 1 ? "" : "s"}`;
 }
 
 function inviteUrl(token: string) {
@@ -394,6 +423,23 @@ export async function changeMemberRole(
     return { ok: false, error: "No podés cambiar tu propio rol de OWNER." };
   }
   if (m.role === role) return { ok: true, data: undefined };
+  // S13g: el responsable de un plan tiene que poder gestionarlo
+  // (`plans.manage`); ASSISTANT y BILLING no. Pasar a alguien a esos roles
+  // con planes ACTIVE a cargo dejaba planes que nadie del lado clínico
+  // "posee". El conteo va en su propia tx antes del update: el cambio de rol
+  // no toma lock, igual que el resto de esta action (OWNER-only, sin carrera
+  // realista con el alta de un plan del mismo profesional).
+  if (!capabilitiesFor(role).has("plans.manage")) {
+    const activePlans = await runWithRls(actor.tenantId, (tx) =>
+      countActivePlansAsResponsible(tx, actor.tenantId, m.userId)
+    );
+    if (activePlans > 0) {
+      return {
+        ok: false,
+        error: `No se puede cambiar el rol: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`,
+      };
+    }
+  }
   if (role === "OWNER" && m.userId !== actor.userId) {
     // El OWNER no se transfiere a una membresía que nunca se aceptó: el
     // consultorio quedaría sin nadie que pueda entrar como dueño.
@@ -441,6 +487,7 @@ export async function changeMemberRole(
  * entrar. Ahora se rechaza, con conteo, mientras tenga turnos futuros activos
  * (PENDING/CONFIRMED) o pacientes asignados sin archivar: hay que
  * reasignarlos primero. El conteo y el borrado van en la misma transacción.
+ * S13g suma al mismo rechazo los planes ACTIVE de los que es responsable.
  */
 export async function removeMember(membershipId: string): Promise<ActionResult> {
   const actor = await requireOwner();
@@ -458,7 +505,7 @@ export async function removeMember(membershipId: string): Promise<ActionResult> 
       select: { id: true },
     });
     if (prac) {
-      const [futureBookings, assignedPatients] = await Promise.all([
+      const [futureBookings, assignedPatients, activePlans] = await Promise.all([
         tx.booking.count({
           where: {
             tenantId: actor.tenantId,
@@ -474,9 +521,11 @@ export async function removeMember(membershipId: string): Promise<ActionResult> 
             archivedAt: null,
           },
         }),
+        // S13g: planes ACTIVE a cargo (ver `countActivePlansAsResponsible`).
+        countActivePlansAsResponsible(tx, actor.tenantId, m.userId),
       ]);
-      if (futureBookings > 0 || assignedPatients > 0) {
-        return { futureBookings, assignedPatients };
+      if (futureBookings > 0 || assignedPatients > 0 || activePlans > 0) {
+        return { futureBookings, assignedPatients, activePlans };
       }
     }
     // Soft remove: delete the Membership but leave the UserProfile +
@@ -493,9 +542,14 @@ export async function removeMember(membershipId: string): Promise<ActionResult> 
     if (blocked.assignedPatients > 0) {
       parts.push(`${blocked.assignedPatients} paciente${blocked.assignedPatients === 1 ? "" : "s"} asignado${blocked.assignedPatients === 1 ? "" : "s"}`);
     }
+    // "tiene X y Y" (A2b) + "es responsable de N planes activos" (S13g):
+    // "No se puede quitar: tiene 1 paciente asignado y es responsable de 2 planes activos."
+    const clauses: string[] = [];
+    if (parts.length) clauses.push(`tiene ${parts.join(" y ")}`);
+    if (blocked.activePlans > 0) clauses.push(activePlansCopy(blocked.activePlans));
     return {
       ok: false,
-      error: `No se puede quitar: tiene ${parts.join(" y ")}. Reasignalos primero.`,
+      error: `No se puede quitar: ${clauses.join(" y ")}. Reasignalos primero.`,
     };
   }
   await audit({
