@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { nextRadioValue } from "@/lib/agenda-client-state";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import type { AgendaMode } from "@/lib/preferences-constants";
 
@@ -14,19 +15,34 @@ import type { AgendaMode } from "@/lib/preferences-constants";
  * `MotionConfig reducedMotion="user"`: con movimiento reducido la pastilla
  * aparece directo en su lugar, y el estado activo también se lee por
  * `aria-checked` y por el texto en blanco.
+ *
+ * SR-U3: N opciones. El caller arma `options` con `availableAgendaModes`
+ * (lib/agenda-client-state) → `AGENDA_MODE_OPTIONS[m]`; sin `options` quedan
+ * las 2 de B4.2 (no regresión). Las flechas recorren las N con vuelta (antes
+ * alternaban entre 2 a ciegas). Roving tabindex: un solo botón tabulable, el
+ * marcado; si el modo no está entre las opciones, el primero.
  */
-const OPTIONS: ReadonlyArray<{ value: AgendaMode; label: string; hint: string }> = [
-  { value: "day", label: "Por día", hint: "Turnos del día en una sola línea de tiempo" },
-  { value: "practitioner", label: "Por profesional", hint: "Una columna por profesional" },
-];
+export type ModeOption = { value: AgendaMode; label: string; hint: string };
+
+export const AGENDA_MODE_OPTIONS: Readonly<Record<AgendaMode, ModeOption>> = {
+  day: { value: "day", label: "Por día", hint: "Turnos del día en una sola línea de tiempo" },
+  practitioner: { value: "practitioner", label: "Por profesional", hint: "Una columna por profesional" },
+  room: { value: "room", label: "Por sala", hint: "Una columna por sala" },
+};
+
+const DEFAULT_OPTIONS: ReadonlyArray<ModeOption> = [AGENDA_MODE_OPTIONS.day, AGENDA_MODE_OPTIONS.practitioner];
 
 export function ModeToggle({
   mode,
+  options = DEFAULT_OPTIONS,
   onChange,
 }: {
   mode: AgendaMode;
+  options?: ReadonlyArray<ModeOption>;
   onChange: (mode: AgendaMode) => void;
 }) {
+  const values = options.map((o) => o.value);
+  const focusable = values.includes(mode) ? mode : values[0];
   return (
     <div
       role="radiogroup"
@@ -34,7 +50,7 @@ export function ModeToggle({
       className="k-glass"
       style={{ display: "inline-flex", alignItems: "center", borderRadius: 999, padding: 3, height: 36 }}
     >
-      {OPTIONS.map((o) => {
+      {options.map((o) => {
         const on = mode === o.value;
         return (
           <motion.button
@@ -42,16 +58,16 @@ export function ModeToggle({
             type="button"
             role="radio"
             aria-checked={on}
-            tabIndex={on ? 0 : -1}
+            tabIndex={o.value === focusable ? 0 : -1}
             title={o.hint}
             whileTap={{ scale: 0.95 }}
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => {
-              // Radiogroup: las flechas cambian la opción (patrón WAI-ARIA).
-              if (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+              // Radiogroup: las flechas cambian la opción (patrón WAI-ARIA), con vuelta entre N.
+              const next = nextRadioValue(values, mode, e.key);
+              if (next) {
                 e.preventDefault();
-                const next = mode === "day" ? "practitioner" : "day";
-                onChange(next);
+                if (next !== mode) onChange(next);
                 const group = e.currentTarget.parentElement;
                 requestAnimationFrame(() =>
                   group?.querySelector<HTMLElement>(`[data-mode="${next}"]`)?.focus()

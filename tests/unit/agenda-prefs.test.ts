@@ -155,3 +155,68 @@ describe("nextSelection (chips de profesionales)", () => {
     expect(nextSelection(["p1"], [], "p1")).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SR-U3: modo "Por sala" y filtro de sala (`agendaPrefs.roomId`, D2).
+// `roomId` se OMITE del blob cuando es null (= todas): un usuario sin salas ve
+// exactamente las mismas prefs que antes de SR (los tests de arriba no cambian).
+// Una sala ajena o archivada se trata como "todas" al leer contra el catálogo
+// (`effectiveRoomFilter` de lib/agenda-client-state); acá solo la forma.
+// ─────────────────────────────────────────────────────────────────────────────
+import { AGENDA_MODES } from "@/lib/preferences-constants";
+
+describe("[SR-U3] agendaPrefs: mode room + roomId", () => {
+  it('AGENDA_MODES suma "room"', () => {
+    expect(AGENDA_MODES).toEqual(["day", "practitioner", "room"]);
+  });
+
+  it("sanitize: mode room y roomId válidos pasan", () => {
+    const out = sanitizeAgendaViewPrefs({ mode: "room", roomId: "R1", locationId: "L1" });
+    expect(out.mode).toBe("room");
+    expect(out.roomId).toBe("R1");
+    expect(sanitizeAgendaViewPrefs({ roomId: "none" }).roomId).toBe("none");
+  });
+
+  it("sanitize: roomId null/ausente/inválido → se omite (= todas), sin tocar los demás", () => {
+    for (const roomId of [null, undefined, 7, "", "x".repeat(65), ["R1"]]) {
+      const out = sanitizeAgendaViewPrefs({ mode: "practitioner", roomId });
+      expect(out).not.toHaveProperty("roomId");
+      expect(out.mode).toBe("practitioner");
+    }
+    expect(sanitizeAgendaViewPrefs({})).toEqual(DEFAULT_AGENDA_VIEW_PREFS);
+  });
+
+  it("patch: acepta mode room y roomId (string | null), rechaza fuera de dominio", () => {
+    expect(AgendaViewPrefsPatchSchema.parse({ mode: "room", roomId: "R1" })).toEqual({ mode: "room", roomId: "R1" });
+    expect(AgendaViewPrefsPatchSchema.parse({ roomId: null })).toEqual({ roomId: null });
+    expect(AgendaViewPrefsPatchSchema.parse({ roomId: "none" })).toEqual({ roomId: "none" });
+    for (const bad of [{ roomId: "" }, { roomId: 3 }, { roomId: "x".repeat(65) }, { mode: "sala" }]) {
+      expect(AgendaViewPrefsPatchSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("merge: roomId null limpia el filtro (se omite)", () => {
+    const current = sanitizeAgendaViewPrefs({ locationId: "L1", roomId: "R1" });
+    const next = mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ roomId: null }));
+    expect(next).not.toHaveProperty("roomId");
+    expect(next.locationId).toBe("L1");
+  });
+
+  it("merge (D2): cambiar de sede limpia la sala", () => {
+    const current = sanitizeAgendaViewPrefs({ locationId: "L1", roomId: "R1", mode: "room" });
+    const toL2 = mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ locationId: "L2" }));
+    expect(toL2).not.toHaveProperty("roomId");
+    expect(toL2.mode).toBe("room");
+    const toAll = mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ locationId: null }));
+    expect(toAll).not.toHaveProperty("roomId");
+  });
+
+  it("merge (D2): misma sede o sala nueva en el mismo patch → se respeta", () => {
+    const current = sanitizeAgendaViewPrefs({ locationId: "L1", roomId: "R1" });
+    expect(mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ locationId: "L1" })).roomId).toBe("R1");
+    expect(mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ zoom: 15 })).roomId).toBe("R1");
+    expect(
+      mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ locationId: "L2", roomId: "R3" })).roomId
+    ).toBe("R3");
+  });
+});

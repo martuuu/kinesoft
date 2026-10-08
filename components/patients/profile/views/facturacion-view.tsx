@@ -86,9 +86,9 @@ function PaidCell({
  * S22f (ES3 P3.1): con el módulo `planes` y algún turno de plan cargado,
  * Facturación se agrupa por plan, cada plan con su saldo P7 DEL SERVER
  * (`PlanBalance`: pactado, realizado, cobrado, en proceso, pendiente / a
- * favor; la OS pagada aparte), más "Turnos sueltos". En ese modo los
- * cancelados y ausentes CON cobro se muestran (siguen sumando en "cobrado").
- * Sin módulo o sin turnos de plan → exactamente la vista de siempre.
+ * favor; la OS pagada aparte), más "Turnos sueltos". Sin módulo o sin turnos
+ * de plan → lista plana. En los dos modos los cancelados y ausentes CON cobro
+ * se muestran y suman en "percibido" (SR-D4F, Martin 08-oct).
  *
  * Los toggles devuelven `notice?` (P2.Z, B-M3: marcar/desmarcar el cobro de
  * un turno previo re-estampa el reemplazo de la sesión) → toast informativo.
@@ -133,9 +133,8 @@ export function FacturacionView({
   }
 
   const grouped = shouldGroupByPlan(plansEnabled, bookings);
-  // "Ya confirmado" → solo turnos que efectivamente facturan; agrupada, más
-  // los cancelados/ausentes con cobro (S22f).
-  const visible = bookings.filter((b) => isBillingVisible(b, grouped));
+  // Turnos que facturan + cancelados/ausentes con cobro (SR-D4F).
+  const visible = bookings.filter(isBillingVisible);
   const summary = billingSummary(bookings, { grouped, planBalances });
 
   // Optimistic lock (A2a-S06): each toggle sends the row version it was

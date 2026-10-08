@@ -20,6 +20,7 @@ import type { DayKey, DayLockState } from "@/lib/availability/types";
 import { canManageBlocksFor, CAPABILITIES, type Capability } from "@/lib/capabilities";
 import type { AgendaMode } from "@/lib/preferences-constants";
 import { receptionState, waitingMinutes, type ReceptionBooking } from "@/lib/reception-state";
+import type { RoomOption } from "@/lib/rooms-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vista
@@ -31,9 +32,11 @@ import { receptionState, waitingMinutes, type ReceptionBooking } from "@/lib/rec
  * - `practitioner`: Día por profesional (columnas). Es el "modo" Por
  *   profesional de `agendaPrefs.mode`, que solo aplica al Día.
  * - `reception`: Recepción del día (lista operativa de todos).
+ * - `room` (SR-U3): Día por sala (columnas = salas de la sede). Es el modo
+ *   "Por sala"; solo existe si hay al menos una sala activa en el alcance.
  */
-export type AgendaView = "timeline" | "week" | "list" | "practitioner" | "reception";
-export const AGENDA_VIEWS: ReadonlyArray<AgendaView> = ["timeline", "week", "list", "practitioner", "reception"];
+export type AgendaView = "timeline" | "week" | "list" | "practitioner" | "reception" | "room";
+export const AGENDA_VIEWS: ReadonlyArray<AgendaView> = ["timeline", "week", "list", "practitioner", "reception", "room"];
 
 export type ViewContext = {
   /** `agendaPrefs.mode` del usuario (cómo prefiere ver el Día). */
@@ -42,6 +45,12 @@ export type ViewContext = {
   practitionerCount: number;
   /** `agenda.reception`. */
   canReception: boolean;
+  /**
+   * Salas activas en el alcance (`roomsInScope(...).length`). "room" es válido
+   * solo con ≥1. Opcional a propósito: ausente = 0 = la agenda de antes de SR
+   * (los callers que todavía no lo pasan no cambian de comportamiento).
+   */
+  roomCount?: number;
 };
 
 /** ¿El consultorio tiene más de un profesional? Con uno, la agenda se ve como siempre. */
@@ -49,9 +58,35 @@ export function isMultiPractitioner(practitionerCount: number): boolean {
   return practitionerCount > 1;
 }
 
-/** El "Día" que corresponde al modo guardado. Con un solo profesional, siempre el de siempre. */
-export function dayViewFor(mode: AgendaMode, practitionerCount: number): "timeline" | "practitioner" {
+/** ¿Hay salas para armar el Día "Por sala"? (SR-U3) */
+export function hasRooms(roomCount: number | undefined): boolean {
+  return (roomCount ?? 0) >= 1;
+}
+
+/**
+ * El "Día" que corresponde al modo guardado. Con un solo profesional, siempre
+ * el de siempre; "Por sala" sin salas en el alcance (las archivaron, o se
+ * cambió a una sede sin salas), también.
+ */
+export function dayViewFor(
+  mode: AgendaMode,
+  practitionerCount: number,
+  roomCount = 0
+): "timeline" | "practitioner" | "room" {
+  if (mode === "room") return hasRooms(roomCount) ? "room" : "timeline";
   return mode === "practitioner" && isMultiPractitioner(practitionerCount) ? "practitioner" : "timeline";
+}
+
+/**
+ * Modos que ofrece el toggle, en orden: "Por día" siempre; "Por profesional"
+ * con varios profesionales; "Por sala" con ≥1 sala en el alcance. Con uno solo
+ * no hay toggle.
+ */
+export function availableAgendaModes(practitionerCount: number, roomCount = 0): AgendaMode[] {
+  const out: AgendaMode[] = ["day"];
+  if (isMultiPractitioner(practitionerCount)) out.push("practitioner");
+  if (hasRooms(roomCount)) out.push("room");
+  return out;
 }
 
 /**
@@ -61,10 +96,11 @@ export function dayViewFor(mode: AgendaMode, practitionerCount: number): "timeli
  * Día de siempre: un link viejo o compartido nunca deja la pantalla vacía.
  */
 export function resolveAgendaView(raw: string | null | undefined, ctx: ViewContext): AgendaView {
-  const fallback = dayViewFor(ctx.mode, ctx.practitionerCount);
+  const fallback = dayViewFor(ctx.mode, ctx.practitionerCount, ctx.roomCount);
   if (!raw || !(AGENDA_VIEWS as ReadonlyArray<string>).includes(raw)) return fallback;
   const v = raw as AgendaView;
   if (v === "practitioner" && !isMultiPractitioner(ctx.practitionerCount)) return "timeline";
+  if (v === "room" && !hasRooms(ctx.roomCount)) return "timeline";
   if (v === "reception" && !ctx.canReception) return fallback;
   return v;
 }
@@ -77,19 +113,42 @@ export function isDayScoped(v: AgendaView): boolean {
 /** Segmento activo del selector Día / Semana / Lista / Recepción. */
 export type ViewSegment = "day" | "week" | "list" | "reception";
 export function segmentOf(v: AgendaView): ViewSegment {
-  if (v === "timeline" || v === "practitioner") return "day";
+  if (v === "timeline" || v === "practitioner" || v === "room") return "day";
   return v;
 }
 
 /** Vista a la que lleva un segmento: "Día" respeta el modo guardado. */
-export function viewForSegment(seg: ViewSegment, ctx: Pick<ViewContext, "mode" | "practitionerCount">): AgendaView {
-  if (seg === "day") return dayViewFor(ctx.mode, ctx.practitionerCount);
+export function viewForSegment(
+  seg: ViewSegment,
+  ctx: Pick<ViewContext, "mode" | "practitionerCount" | "roomCount">
+): AgendaView {
+  if (seg === "day") return dayViewFor(ctx.mode, ctx.practitionerCount, ctx.roomCount);
   return seg;
 }
 
-/** El toggle Por día ↔ Por profesional solo tiene sentido en el Día y con varios profesionales. */
-export function showModeToggle(v: AgendaView, practitionerCount: number): boolean {
-  return segmentOf(v) === "day" && isMultiPractitioner(practitionerCount);
+/**
+ * El toggle de modo solo tiene sentido en el Día y con más de un modo posible
+ * (varios profesionales, o al menos una sala). Sin salas = la regla de B4.2.
+ */
+export function showModeToggle(v: AgendaView, practitionerCount: number, roomCount = 0): boolean {
+  return segmentOf(v) === "day" && availableAgendaModes(practitionerCount, roomCount).length > 1;
+}
+
+/**
+ * Radiogroup (WAI-ARIA): a qué valor llevan las flechas, con vuelta. Home/End
+ * van al primero/último. Si el valor actual no está en la lista (un modo
+ * guardado que ya no aplica), adelante = el primero y atrás = el último. Otra
+ * tecla → null (el caller no hace nada). Lo usan `ModeToggle` y `RoomFilter`.
+ */
+export function nextRadioValue<T>(values: ReadonlyArray<T>, current: T, key: string): T | null {
+  const n = values.length;
+  if (n === 0) return null;
+  if (key === "Home") return values[0];
+  if (key === "End") return values[n - 1];
+  const i = values.indexOf(current);
+  if (key === "ArrowRight" || key === "ArrowDown") return values[i < 0 ? 0 : (i + 1) % n];
+  if (key === "ArrowLeft" || key === "ArrowUp") return values[i < 0 ? n - 1 : (i - 1 + n) % n];
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -165,10 +224,19 @@ export function agendaHref(p: { view: AgendaView; dayKey: DayKey; selectedIds?: 
 // vive acá. Dónde persiste cada uno: profesionales en la URL (`?pros=`, un
 // link conserva la vista de la secretaria), sede en `agendaPrefs.locationId`
 // (server, por usuario); la sala decide el suyo en SR.
+//
+// SR-U3: la sala persiste en `agendaPrefs.roomId` (D2: se limpia al cambiar de
+// sede). `roomId` es opcional en `AgendaFilters` para que un objeto armado
+// antes de SR (`{ practitionerIds, locationId }`) siga compilando y siga
+// significando "todas las salas".
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Lo mínimo del turno que miran los filtros (lo cumple `BookingDTO`). */
-export type AgendaFilterable = { practitionerId: string; locationId?: string | null };
+/**
+ * Lo mínimo del turno que miran los filtros (lo cumple `BookingDTO`).
+ * `roomId`: undefined = "no sé" (proyección sin sala) → ningún filtro de sala
+ * lo esconde; null = sin sala.
+ */
+export type AgendaFilterable = { practitionerId: string; locationId?: string | null; roomId?: string | null };
 type Filterable = AgendaFilterable;
 
 /** Filtros que sacan turnos de la agenda. Vacío/null en cada clave = sin filtrar. */
@@ -177,11 +245,19 @@ export type AgendaFilters = {
   practitionerIds: ReadonlyArray<string>;
   /** Sede (`agendaPrefs.locationId`); null = todas. */
   locationId: string | null;
+  /**
+   * Sala (`agendaPrefs.roomId`, ya pasada por `effectiveRoomFilter`): un id,
+   * `ROOM_FILTER_NONE` (= "Sin sala") o null/ausente = todas.
+   */
+  roomId?: string | null;
 };
 
 export type AgendaFilterKey = keyof AgendaFilters;
 
-export const EMPTY_AGENDA_FILTERS: AgendaFilters = { practitionerIds: [], locationId: null };
+/** Valor del filtro de sala para "Sin sala" (mismo que `AgendaBookingsQuery.roomId`). */
+export const ROOM_FILTER_NONE = "none";
+
+export const EMPTY_AGENDA_FILTERS: AgendaFilters = { practitionerIds: [], locationId: null, roomId: null };
 
 /** Datos del consultorio que necesitan las dimensiones (no son filtros). */
 export type AgendaFilterContext = { primaryLocationId: string | null };
@@ -215,6 +291,11 @@ export const AGENDA_FILTER_DIMENSIONS = {
   locationId: {
     isActive: (id) => id != null,
     matches: (b, id, ctx) => matchesLocation(b, id, ctx.primaryLocationId),
+  },
+  // SR-U3, contrato literal: sin el campo (undefined) no se esconde; "none" = sin sala.
+  roomId: {
+    isActive: (id) => id != null,
+    matches: (b, id) => b.roomId === undefined || (id === ROOM_FILTER_NONE ? b.roomId === null : b.roomId === id),
   },
 } satisfies { [K in AgendaFilterKey]: AgendaFilterDimension<K> };
 
@@ -309,6 +390,72 @@ export function countByPractitioner(
     out[b.practitionerId] = (out[b.practitionerId] ?? 0) + 1;
   }
   return out;
+}
+
+/**
+ * Conteo por sala para el `RoomFilter` (sin cancelados). `null` → "none" (Sin
+ * sala); sin el campo no cuenta (no se sabe dónde es). Pasarle los turnos con
+ * `applyAgendaFilters(..., { except: ["roomId"] })`.
+ */
+export function countByRoom(
+  bookings: ReadonlyArray<{ roomId?: string | null; status: string }>
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const b of bookings) {
+    if (b.status === "CANCELLED" || b.roomId === undefined) continue;
+    const k = b.roomId ?? ROOM_FILTER_NONE;
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Salas (SR-U3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Salas del alcance de la agenda: las de la sede filtrada; con "Todas las
+ * sedes", las de la sede principal (D4: la vista "Por sala" usa la principal y
+ * lo dice). Sin sede principal conocida, todas. Conserva el orden del catálogo
+ * (`listRoomOptions`: por sede y `sortOrder`). `rooms` ya son solo activas.
+ */
+export function roomsInScope<R extends Pick<RoomOption, "locationId">>(
+  rooms: ReadonlyArray<R>,
+  locationId: string | null,
+  primaryLocationId: string | null
+): R[] {
+  const scope = locationId ?? primaryLocationId;
+  if (!scope) return [...rooms];
+  return rooms.filter((r) => r.locationId === scope);
+}
+
+/**
+ * Filtro de sala que efectivamente se aplica, a partir de `agendaPrefs.roomId`
+ * y las salas del alcance (D3: el filtro existe solo con ≥2 salas en la sede).
+ * Una sala ajena, archivada o de otra sede → null (= todas): nunca se esconde
+ * un turno por un filtro que no se ve en pantalla.
+ */
+export function effectiveRoomFilter(
+  roomId: string | null | undefined,
+  scopeRooms: ReadonlyArray<Pick<RoomOption, "id">>
+): string | null {
+  if (!roomId || scopeRooms.length < 2) return null;
+  if (roomId === ROOM_FILTER_NONE) return ROOM_FILTER_NONE;
+  return scopeRooms.some((r) => r.id === roomId) ? roomId : null;
+}
+
+/**
+ * ¿La tarjeta muestra la sala ("· Consultorio 2")? Solo si en pantalla puede
+ * haber ≥2 salas distintas y la vista no es "Por sala" (ahí la columna ya lo
+ * dice). Filtrado a una sala o a "Sin sala", todas dirían lo mismo: no.
+ * `roomCount` = salas que pueden aparecer en pantalla (con "Todas las sedes",
+ * las del consultorio; con una sede, las de esa sede). Densidad (riesgo del
+ * relevamiento): la agenda de la Secretaria no suma texto que no distingue.
+ */
+export function showRoomOnCards(p: { view: AgendaView; roomCount: number; roomFilter: string | null }): boolean {
+  if (p.view === "room") return false;
+  if (p.roomFilter != null) return false;
+  return p.roomCount >= 2;
 }
 
 /** La disponibilidad cargada, ¿es la de esta semana y esta sede? Si no, hay que pedirla. */

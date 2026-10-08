@@ -44,14 +44,20 @@
  *   (prop `slotPicker`) + aviso en vivo (`classify`).
  * - `multi-section.tsx` + `sessions-mode.tsx` (B5.3): «Varias sesiones».
  * - `block-mode.tsx` (B5.4): «Bloquear horario», con sus propios botones.
- * - `telemedicine-section.tsx`: sede (>1 activa) + telemedicina.
+ * - `telemedicine-section.tsx`: sede (>1 activa) + sala (SR-U5c, solo con
+ *   salas) + telemedicina.
  * - `conflict-prompts.tsx`: prompts (las acciones de cada botón son de acá).
  * - `types.ts`: payloads y estados de prompts compartidos.
  *
  * Orden en el DOM (no cambiarlo sin QA): modo, profesional, servicio,
  * paciente, copago, título, fecha/duración (+ slots), varias sesiones,
  * sede/telemedicina, descripción, notas, error, prompts (batch → bloqueado →
- * fuera de horario → superposición → mismo día → sobreturno), footer.
+ * fuera de horario → superposición → mismo día → sobreturno → sala), footer.
+ *
+ * SR-U5c (salas): props `rooms` (catálogo del bootstrap) y `defaultRoomId`
+ * (click en una celda de "Por sala": id = esa sala, null = columna "Sin
+ * sala"). Estado `roomChoice` ("" = según el horario → `roomId` no viaja;
+ * "none" → null; id). Sin salas, el modal y el payload quedan idénticos.
  *
  * Handoff (B4.3, `agenda-client.tsx`): pasar `enabledServiceIds`
  * (`initialAvailability?.enabledServiceIds`), `locations`, `capabilities`
@@ -73,19 +79,29 @@ import { capabilitySet } from "@/lib/agenda-client-state";
 import { classifyBookingInstant } from "@/lib/availability-actions";
 import { isoToARLocalInput, localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import type { Frequency } from "@/lib/availability/types";
+import type { InstantCheck } from "@/lib/availability-actions-types";
+import type { RoomOption } from "@/lib/rooms-types";
 import { toBatchFields } from "@/lib/sessions-mode-state";
 import { todayDayKey } from "@/lib/slot-picker-state";
 import {
   BOOKING_MODAL_MODE_LABEL,
   availableModes,
+  batchNeedsPrompt,
+  batchRunInput,
   blockPermission,
   buildBatchPayload,
   buildCreatePayload,
   coerceMode,
   displayDuration,
+  effectiveLocationId,
+  initialRoomChoice,
   isBatchSubmit,
   isServiceEnabledFor,
+  reconcileRoomOnLocationChange,
   reconcileServiceOnPractitionerChange,
+  roomBusyOf,
+  roomPayloadValue,
+  roomsForModal,
   servicesForPractitioner,
   submitLabel,
   telemedicineUrlError,
@@ -111,7 +127,10 @@ import {
   ConflictPrompt,
   OutOfHoursPrompt,
   PatientOverlapPrompt,
+  RoomBusyPrompt,
+  focusRoomSelect,
   SamePatientPrompt,
+  type RoomBusyState,
 } from "./conflict-prompts";
 import { usePatientBilling } from "./use-patient-billing";
 import type {
@@ -156,6 +175,8 @@ export function BookingModal({
   capabilities,
   viewerPractitionerId,
   defaultLocationId,
+  rooms,
+  defaultRoomId,
 }: {
   defaultISO?: string;
   defaultPatientId?: string | null;
@@ -179,6 +200,12 @@ export function BookingModal({
    *  Solo si está entre las `locations` activas (una pref vieja con una sede
    *  archivada no debe terminar en "Sede inválida" al guardar). */
   defaultLocationId?: string | null;
+  /** SR: salas activas del consultorio (`AgendaBootstrapProps.rooms`). Sin
+   *  salas (o sin la prop) no aparece el select "Sala" ni viaja `roomId`. */
+  rooms?: RoomOption[] | null;
+  /** SR: sala de la celda clickeada en "Por sala" (null = columna "Sin
+   *  sala"; ausente = según el horario del profesional). */
+  defaultRoomId?: string | null;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -204,6 +231,8 @@ export function BookingModal({
   // B5.1: sobre un bloqueo de agenda / fuera de la franja del profesional.
   const [blockedPrompt, setBlockedPrompt] = useState<BlockedState | null>(null);
   const [outOfHoursPrompt, setOutOfHoursPrompt] = useState<OutOfHoursState | null>(null);
+  // SR-U5c: la sala está llena o bloqueada (re-llamar con `allowRoomConflict`).
+  const [roomBusyPrompt, setRoomBusyPrompt] = useState<RoomBusyState | null>(null);
   const clearPrompts = () => {
     setConflict(null);
     setSamePatient(null);
@@ -211,15 +240,16 @@ export function BookingModal({
     setBatchConflict(null);
     setBlockedPrompt(null);
     setOutOfHoursPrompt(null);
+    setRoomBusyPrompt(null);
   };
   // Every prompt renders below the form fields inside a scrolling drawer, so
   // bring whichever one appears into view instead of leaving it off-screen.
   const promptRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (conflict || samePatient || patientOverlap || batchConflict || blockedPrompt || outOfHoursPrompt) {
+    if (conflict || samePatient || patientOverlap || batchConflict || blockedPrompt || outOfHoursPrompt || roomBusyPrompt) {
       promptRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
-  }, [conflict, samePatient, patientOverlap, batchConflict, blockedPrompt, outOfHoursPrompt]);
+  }, [conflict, samePatient, patientOverlap, batchConflict, blockedPrompt, outOfHoursPrompt, roomBusyPrompt]);
 
   // Stable idempotency key for THIS create attempt (one per modal instance):
   // a double-submit / retry converges to one turno, while a deliberate new
@@ -359,6 +389,38 @@ export function BookingModal({
   const [locationId, setLocationId] = useState(() =>
     defaultLocationId && (locations ?? []).some((l) => l.id === defaultLocationId) ? defaultLocationId : ""
   );
+  // ── Sala (SR-U5c) ──────────────────────────────────────────────────────────
+  // "" = según el horario del profesional (no viaja), "none" = Sin sala, id.
+  const [roomChoice, setRoomChoice] = useState(() => initialRoomChoice(defaultRoomId, rooms));
+  // Sala de la franja según el último chequeo en vivo (`InstantCheck.defaultRoomId`):
+  // nombra la opción "Según el horario del profesional (Consultorio 2)" y
+  // define la sede de las salas ofrecidas con sede "Según el horario".
+  const [checkDefaultRoomId, setCheckDefaultRoomId] = useState<string | null | undefined>(undefined);
+  const onInstantStatus = (c: InstantCheck | null) => {
+    if (!c) return setCheckDefaultRoomId(undefined);
+    // Ausente = el server no la calculó: se conserva la anterior.
+    if (c.defaultRoomId !== undefined) setCheckDefaultRoomId(c.defaultRoomId);
+  };
+  const onLocationChange = (id: string) => {
+    setLocationId(id);
+    // Una sala de otra sede se limpia (vuelve a "según el horario").
+    setRoomChoice((cur) => reconcileRoomOnLocationChange(cur, rooms, id));
+  };
+  const roomOptions = useMemo(
+    () =>
+      roomsForModal(rooms, {
+        locationId,
+        locations,
+        defaultRoomId: checkDefaultRoomId,
+        keepRoomId: roomChoice,
+      }),
+    [rooms, locationId, locations, checkDefaultRoomId, roomChoice]
+  );
+  const roomIdValue = roomPayloadValue(roomChoice, rooms);
+  // Sede que viaja (y que miran el aviso en vivo y los slots): la elegida, o
+  // la de la sala elegida con "Según el horario" (ver `effectiveLocationId`).
+  const effLocationId = effectiveLocationId(locationId, roomChoice, rooms);
+
   const [isTelemedicine, setIsTelemedicine] = useState(false);
   const [telemedicineUrl, setTelemedicineUrl] = useState("");
   // El error del link se muestra recién después de intentar enviar (no mientras tipea).
@@ -404,6 +466,7 @@ export function BookingModal({
     durationOverride,
     instantIso,
     locationId,
+    roomChoice,
     isTelemedicine,
     telemedicineUrl,
     copagoEdited,
@@ -487,6 +550,14 @@ export function BookingModal({
         setError(null);
         return;
       }
+      // SR: la sala va ÚLTIMA (`FORCE_PROMPT_ORDER`): el server la chequea
+      // después del cupo y del paciente.
+      const roomBusy = roomBusyOf(result);
+      if (roomBusy) {
+        setRoomBusyPrompt({ ...roomBusy, payload });
+        setError(null);
+        return;
+      }
       if (result.fieldErrors?.telemedicineUrl?.[0]) setShowUrlError(true);
       setError(result.error);
       toast.error("No pudimos crear el turno", { description: result.error });
@@ -500,8 +571,9 @@ export function BookingModal({
   };
 
   /** Execute the batch after the user picked what to do with the conflicts. */
-  const runBatch = async (payload: BatchPayload, allowOverbooking: boolean) => {
-    const r = await createBookingsBatch({ ...payload, allowOverbooking });
+  const runBatch = async (payload: BatchPayload, allowOverbooking: boolean, allowRoomConflict = false) => {
+    // SR-D7: sin `allowRoomConflict`, las fechas con la sala ocupada se omiten.
+    const r = await createBookingsBatch(batchRunInput(payload, { allowOverbooking, allowRoomConflict }));
     if (!r.ok) {
       setError(r.error);
       toast.error("No pudimos crear los turnos", { description: r.error });
@@ -609,7 +681,8 @@ export function BookingModal({
         // Per-turno copago override — only when the kine actually changed
         // it from the patient's pre-established value.
         copago: !isGuest && billing ? { inputCents: copagoInput, suggestedCents: billing.copagoCents } : null,
-        locationId,
+        locationId: effLocationId,
+        roomId: roomIdValue,
         isTelemedicine,
         telemedicineUrl,
       });
@@ -629,8 +702,8 @@ export function BookingModal({
           return;
         }
         const p = preview.data;
-        const needsPrompt =
-          p.conflicted > 0 || p.duplicates > 0 || p.dates.some((d) => d.outOfHours || d.blocked);
+        // SR-D7: una fecha con la sala ocupada también pregunta (sin forzar se omite).
+        const needsPrompt = batchNeedsPrompt(p);
         // Nothing in the way → just create.
         if (!needsPrompt) {
           await runBatch(batchPayload, false);
@@ -792,8 +865,10 @@ export function BookingModal({
               practitionerId: practitionerId || null,
               serviceId: serviceId || null,
               patientId: patientRefId,
-              locationId: locationId || null,
+              locationId: effLocationId || null,
+              roomId: roomIdValue,
             }}
+            onInstantStatus={onInstantStatus}
             // En «Bloquear horario» el form queda oculto: no pedir slots.
             slotPicker={
               mode === "block" ? null : serviceId ? (
@@ -802,7 +877,7 @@ export function BookingModal({
                   serviceId={serviceId}
                   dayKey={pickerDay}
                   onDayChange={setPickerDay}
-                  locationId={locationId || null}
+                  locationId={effLocationId || null}
                   patientId={patientRefId}
                   insurerId={insurerForSlots}
                   durationMin={durationOverride ?? undefined}
@@ -836,7 +911,7 @@ export function BookingModal({
               serviceId={serviceId || null}
               patientId={patientRefId}
               durationMin={durationOverride}
-              locationId={locationId || null}
+              locationId={effLocationId || null}
               // S18b: "Crealo como plan…" exige `plans.manage` (falla cerrado sin
               // capabilities) y un paciente ya guardado (el alta inline no tiene
               // ficha hasta crear el turno).
@@ -848,7 +923,12 @@ export function BookingModal({
           <TelemedicineSection
             locations={locations}
             locationId={locationId}
-            onLocationChange={setLocationId}
+            onLocationChange={onLocationChange}
+            rooms={rooms}
+            roomOptions={roomOptions}
+            roomChoice={roomChoice}
+            onRoomChange={setRoomChoice}
+            defaultRoomId={checkDefaultRoomId}
             isTelemedicine={isTelemedicine}
             onTelemedicineChange={setIsTelemedicine}
             telemedicineUrl={telemedicineUrl}
@@ -883,8 +963,8 @@ export function BookingModal({
               promptRef={promptRef}
               batchConflict={batchConflict}
               pending={pending}
-              onCreateAll={() => start(async () => { await runBatch(batchConflict.payload, true); })}
-              onCreateFreeOnly={() => start(async () => { await runBatch(batchConflict.payload, false); })}
+              onCreateAll={(forceRoom) => start(async () => { await runBatch(batchConflict.payload, true, forceRoom); })}
+              onCreateFreeOnly={(forceRoom) => start(async () => { await runBatch(batchConflict.payload, false, forceRoom); })}
               onBack={() => setBatchConflict(null)}
             />
           )}
@@ -936,6 +1016,18 @@ export function BookingModal({
               onUseSuggestedSlot={() => applyNextFree(conflict.payload, conflict.nextFreeISO)}
               onForceOverbooking={() => confirmWith(conflict.payload, "overbooking")}
               onBack={() => setConflict(null)}
+            />
+          )}
+          {roomBusyPrompt && (
+            <RoomBusyPrompt
+              promptRef={promptRef}
+              roomBusy={roomBusyPrompt}
+              pending={pending}
+              onForce={() => confirmWith(roomBusyPrompt.payload, "roomConflict")}
+              onBack={() => {
+                setRoomBusyPrompt(null);
+                focusRoomSelect(formRef.current);
+              }}
             />
           )}
           {/* Footer apilado y full-width, como el drawer lateral. */}

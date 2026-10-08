@@ -137,6 +137,10 @@ export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm
  *   cromático (AGENTS §5): el color ya es del servicio y del estado.
  * - `now` (B4.3): reloj del caller (se refresca cada minuto) para "En sala 12′"
  *   y la reserva pública vencida. Sin él, `new Date()` al render (como antes).
+ * - `room` (SR): sala del turno, "· Consultorio 2" en la segunda línea (aria
+ *   "en Consultorio 2"). Solo texto, sin color nuevo (canal no cromático). El
+ *   caller la pasa SOLO cuando aporta (`showRoomOnCards`: 2 o más salas, fuera
+ *   de "Por sala" y sin filtro de sala); sin ella el markup es el de siempre.
  *
  * Badges de B4.3 (todos con texto, no solo color): "Sobreturno"
  * (`isOverbooked`), recepción ("En sala 12′" / "En atención") y telemedicina
@@ -157,6 +161,7 @@ export function BookingCard({
   sizing,
   practitioner = null,
   now,
+  room = null,
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
@@ -165,6 +170,7 @@ export function BookingCard({
   sizing: BookingCardSizing;
   practitioner?: { initials: string; name: string } | null;
   now?: Date;
+  room?: { name: string } | null;
 }) {
   const date = new Date(b.scheduledFor);
   const clock = now ?? new Date();
@@ -198,6 +204,7 @@ export function BookingCard({
     reception?.label ?? null,
     b.isTelemedicine ? "telemedicina" : null,
     practitioner ? practitioner.name : null,
+    room ? `en ${room.name}` : null,
     planMarksText(marks),
   ].filter(Boolean);
 
@@ -302,6 +309,16 @@ export function BookingCard({
           {/* Duration FIRST and unshrinkable: card height is no longer
               proportional to it, and putting it last let the ellipsis eat it. */}
           <span className="k-mono" style={{ flexShrink: 0 }}>{b.durationMin}′</span>
+          {room && (
+            <span
+              data-room
+              style={{ flexShrink: 1, minWidth: 0, maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              <span aria-hidden="true">· </span>
+              <span style={visuallyHidden}>en </span>
+              {room.name}
+            </span>
+          )}
           {b.isOverbooked && (
             <span data-badge="sobreturno" style={{ ...miniBadge, color: "#9A5B00", background: "rgba(255,176,32,0.22)" }}>
               Sobreturno
@@ -341,6 +358,19 @@ export function BookingCard({
     </button>
   );
 }
+
+/** Texto solo para lectores de pantalla ("en Consultorio 2" en vez de "punto Consultorio 2"). */
+const visuallyHidden: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
 
 const miniBadge: CSSProperties = {
   flexShrink: 0,

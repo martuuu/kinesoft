@@ -148,6 +148,19 @@ const isValidDate = (d: Date | undefined) => d === undefined || !Number.isNaN(d.
 const bookingLocationId = z.string().trim().min(1).max(64).optional().or(z.literal("").transform(() => undefined));
 
 /**
+ * Sala del turno (corrida SR). TRES estados, a propósito distintos:
+ *   - `undefined` (ausente) = la sala por defecto: la de la franja del
+ *     profesional que contiene el turno (`defaultRoomFor`), o ninguna;
+ *   - `null` = "Sin sala" EXPLÍCITO (el usuario la sacó; no se recalcula);
+ *   - un id = esa sala; el server la valida contra el tenant, la sede final
+ *     del turno y `active` (las FK saltean RLS) → si no, BAD_ROOM_ERROR.
+ * El drawer manda `null` al elegir "Sin sala": colapsarlo a `undefined` (como
+ * el `""` de `locationId`) haría que un turno movido recupere la sala que el
+ * usuario le sacó.
+ */
+const bookingRoomId = z.string().trim().min(1).max(64).nullable().optional();
+
+/**
  * Link de la videollamada (B3.1, decisión 9: URL por turno). Solo https: el
  * link se muestra como `<a href>` y un `javascript:` / `http:` no puede entrar.
  * Se guarda solo con `isTelemedicine: true` (sin el flag se ignora).
@@ -182,6 +195,7 @@ export const BookingCreate = z.object({
   guestEmail: z.string().email().optional().or(z.literal("").transform(() => undefined)),
   guestPhone: z.string().max(30).optional().or(z.literal("").transform(() => undefined)),
   locationId: bookingLocationId,
+  roomId: bookingRoomId,
   isTelemedicine: z.boolean().optional(),
   telemedicineUrl: telemedicineUrl.optional().or(z.literal("").transform(() => undefined)),
 });
@@ -213,6 +227,9 @@ export const BookingUpdate = z.object({
   // B3.1: sede y telemedicina editables. Ausente = no se toca. `telemedicineUrl`
   // "" = borrar el link; `isTelemedicine: false` también lo borra.
   locationId: z.string().trim().min(1).max(64).optional(),
+  // SR: ausente = la sala por defecto si cambia el horario o la sede (si no,
+  // no se toca); null = "Sin sala"; id = esa sala (ver `bookingRoomId`).
+  roomId: bookingRoomId,
   isTelemedicine: z.boolean().optional(),
   telemedicineUrl: telemedicineUrl.optional().or(z.literal("").transform(() => null)),
 });

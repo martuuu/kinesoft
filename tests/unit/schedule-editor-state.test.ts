@@ -26,6 +26,17 @@ import {
   weekSignature,
   type DraftRange,
 } from "@/lib/schedule-editor-state";
+import {
+  exceptionPayloadRanges,
+  rangePillLabel,
+  rangesSignature,
+  roomLabel,
+  roomsForLocation,
+  validityLabel,
+  withLocation,
+  type RoomCatalogEntry,
+} from "@/lib/schedule-editor-state";
+import type { RoomUsageRow } from "@/lib/room-schedule-validate";
 import { rangeErrorsToFieldErrors, validateWeekRanges, MAX_RANGES_PER_DAY } from "@/lib/schedule-validate";
 
 const L1 = "loc-1";
@@ -35,6 +46,9 @@ const r = (startMin: number, endMin: number, locationId = L1, key = `k${startMin
   startMin,
   endMin,
   locationId,
+  roomId: null,
+  validFrom: null,
+  validUntil: null,
 });
 
 describe("draftFromView", () => {
@@ -208,5 +222,231 @@ describe("meses y días", () => {
     expect(rangesLabel([{ startMin: 900, endMin: 1140 }, { startMin: 540, endMin: 780 }])).toBe(
       "09:00–13:00, 15:00–19:00"
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [SR-U2] Sala y vigencia por franja
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ROOMS: RoomCatalogEntry[] = [
+  { id: "c1", locationId: L1, name: "Consultorio 1", kind: "CONSULTORIO", capacity: 1, active: true },
+  { id: "c2", locationId: L1, name: "Consultorio 2", kind: "CONSULTORIO", capacity: 1, active: true },
+  { id: "gym", locationId: L1, name: "Gimnasio", kind: "GIMNASIO", capacity: 2, active: true },
+  { id: "b1", locationId: L2, name: "Box 1", kind: "BOX", capacity: 1, active: true },
+  { id: "old", locationId: L1, name: "Viejo", kind: "SALA", capacity: 1, active: false },
+];
+const withRoom = (row: DraftRange, p: Partial<DraftRange>): DraftRange => ({ ...row, ...p });
+const usage = (p: Partial<RoomUsageRow>): RoomUsageRow => ({
+  roomId: "c2",
+  practitionerId: "ana",
+  practitionerName: "Ana Pérez",
+  dow: 1,
+  startMin: 540,
+  endMin: 780,
+  validFrom: null,
+  validUntil: null,
+  ...p,
+});
+
+describe("[SR-U2] firma del draft (dirty-guard)", () => {
+  it("cambiar solo la sala o solo la vigencia cambia la firma", () => {
+    const base = emptyWeek();
+    base[1] = [r(540, 780, L1, "a")];
+    const sig = weekSignature(base);
+    const room = emptyWeek();
+    room[1] = [withRoom(r(540, 780, L1, "a"), { roomId: "c2" })];
+    const from = emptyWeek();
+    from[1] = [withRoom(r(540, 780, L1, "a"), { validFrom: "2026-11-01" })];
+    const until = emptyWeek();
+    until[1] = [withRoom(r(540, 780, L1, "a"), { validUntil: "2026-11-30" })];
+    expect(weekSignature(room)).not.toBe(sig);
+    expect(weekSignature(from)).not.toBe(sig);
+    expect(weekSignature(until)).not.toBe(sig);
+    expect(weekSignature(from)).not.toBe(weekSignature(until));
+  });
+
+  it("rangesSignature (excepciones) incluye la sala", () => {
+    expect(rangesSignature([r(540, 600)])).not.toBe(rangesSignature([withRoom(r(540, 600), { roomId: "c1" })]));
+  });
+});
+
+describe("[SR-U2] draftToPayload manda sala y vigencia (sin pérdida)", () => {
+  it("leer → guardar sin cambios conserva sala y vigencia de cada franja", () => {
+    const viewRanges = [
+      { dow: 1, startMin: 540, endMin: 780, locationId: L1, roomId: "c2", validFrom: null, validUntil: "2026-11-30" },
+      { dow: 1, startMin: 540, endMin: 780, locationId: L1, roomId: "gym", validFrom: "2026-12-01", validUntil: null },
+      { dow: 3, startMin: 600, endMin: 720, locationId: L2, roomId: null, validFrom: "2026-11-01", validUntil: "2026-11-30" },
+      { dow: 5, startMin: 480, endMin: 600, locationId: L1, validFrom: null, validUntil: null }, // sin roomId (onboarding)
+    ];
+    const w = draftFromView({ ranges: viewRanges, isFallback: false, tenantHours: { startMin: 480, endMin: 1200 } }, L1);
+    const { ranges } = draftToPayload(w);
+    const norm = (x: (typeof viewRanges)[number]) => ({ ...x, roomId: x.roomId ?? null });
+    const key = (x: { dow: number; startMin: number; roomId?: string | null }) => `${x.dow}-${x.startMin}-${x.roomId ?? ""}`;
+    expect([...ranges].sort((a, b) => key(a).localeCompare(key(b)))).toEqual(
+      viewRanges.map(norm).sort((a, b) => key(a).localeCompare(key(b)))
+    );
+    for (const x of ranges) {
+      expect(x).toHaveProperty("roomId");
+      expect(x).toHaveProperty("validFrom");
+      expect(x).toHaveProperty("validUntil");
+    }
+  });
+
+  it("fallback: precarga sin sala y siempre", () => {
+    const w = draftFromView({ ranges: [], isFallback: true, tenantHours: { startMin: 480, endMin: 1200 } }, L1);
+    expect(w[1][0]).toMatchObject({ roomId: null, validFrom: null, validUntil: null });
+  });
+});
+
+describe("[SR-U2] copyDay / nextRange / withLocation", () => {
+  it("copyDay copia la sala y la vigencia", () => {
+    const w = emptyWeek();
+    w[1] = [withRoom(r(540, 780, L1, "a"), { roomId: "c2", validUntil: "2026-11-30" })];
+    const out = copyDay(w, 1, [2, 3]);
+    for (const d of [2, 3]) {
+      expect(out[d][0]).toMatchObject({ roomId: "c2", validUntil: "2026-11-30", locationId: L1 });
+      expect(out[d][0].key).not.toBe("a");
+    }
+  });
+
+  it("nextRange hereda la sala de la última franja (no la vigencia)", () => {
+    const n = nextRange([withRoom(r(480, 780, L1, "a"), { roomId: "c2", validFrom: "2026-11-01" })], {
+      startMin: 480,
+      endMin: 1200,
+      locationId: L1,
+    });
+    expect(n).toMatchObject({ startMin: 780, roomId: "c2", validFrom: null, validUntil: null });
+    expect(nextRange([], { startMin: 480, endMin: 1200, locationId: L1 })).toMatchObject({ roomId: null });
+  });
+
+  it("cambiar de sede limpia una sala de otra sede y conserva una de la misma", () => {
+    const row = withRoom(r(540, 780, L1, "a"), { roomId: "c2" });
+    expect(withLocation(row, L2, ROOMS)).toMatchObject({ locationId: L2, roomId: null });
+    expect(withLocation(row, L1, ROOMS)).toMatchObject({ locationId: L1, roomId: "c2" });
+  });
+});
+
+describe("[SR-U2] roomsForLocation (select filtrado por sede)", () => {
+  it("solo las activas de esa sede; sin salas en la sede → no se muestra", () => {
+    const a = roomsForLocation(ROOMS, L1, null);
+    expect(a.show).toBe(true);
+    expect(a.options.map((x) => x.id)).toEqual(["c1", "c2", "gym"]);
+    expect(roomsForLocation(ROOMS, L2, null).options.map((x) => x.id)).toEqual(["b1"]);
+    expect(roomsForLocation(ROOMS, "loc-3", null).show).toBe(false);
+    expect(roomsForLocation([], L1, null).show).toBe(false);
+  });
+  it("una sala archivada ya asignada sigue a la vista (rotulada) para no perderla en silencio", () => {
+    const a = roomsForLocation(ROOMS, L1, "old");
+    expect(a.options.map((x) => x.id)).toContain("old");
+    expect(roomLabel(ROOMS, "old")).toBe("Viejo (archivada)");
+    expect(roomLabel(ROOMS, "c2")).toBe("Consultorio 2");
+  });
+});
+
+describe("[SR-U2] validateDraft con sala", () => {
+  const check = (u: RoomUsageRow[]) => ({ rooms: ROOMS, usage: u, practitionerId: "beto", today: "2026-10-07" });
+
+  it("roomScheduleConflicts devuelve el error en la fila correcta", () => {
+    const w = emptyWeek();
+    w[0] = [r(540, 600, L1, "dom")];
+    w[1] = [r(480, 540, L1, "lun-libre"), withRoom(r(600, 660, L1, "lun-choca"), { roomId: "c2" })];
+    const errs = validateDraft(w, new Set([L1, L2]), check([usage({})]));
+    expect(Object.keys(errs)).toEqual(["lun-choca"]);
+    expect(errs["lun-choca"]).toBe(
+      "Esa sala ya la usa Ana Pérez los lunes de 9:00 a 13:00. Elegí otra sala o cambiá el horario."
+    );
+  });
+
+  it("vigencias disjuntas no chocan; el mismo profesional tampoco", () => {
+    const w = emptyWeek();
+    w[1] = [withRoom(r(600, 660, L1, "x"), { roomId: "c2", validFrom: "2026-12-01" })];
+    expect(validateDraft(w, undefined, check([usage({ validUntil: "2026-11-30" })]))).toEqual({});
+    expect(validateDraft(w, undefined, check([usage({ practitionerId: "beto" })]))).toEqual({});
+  });
+
+  it("gimnasio de capacidad 2: con uno más entra", () => {
+    const w = emptyWeek();
+    w[1] = [withRoom(r(600, 660, L1, "x"), { roomId: "gym" })];
+    expect(validateDraft(w, undefined, check([usage({ roomId: "gym" })]))).toEqual({});
+  });
+
+  it("sala de otra sede o archivada → error por fila", () => {
+    const w = emptyWeek();
+    w[1] = [withRoom(r(600, 660, L2, "x"), { roomId: "c2" }), withRoom(r(700, 760, L1, "y"), { roomId: "old" })];
+    const errs = validateDraft(w, undefined, check([]));
+    expect(errs.x).toBe("Esa sala no está disponible en esa sede.");
+    expect(errs.y).toBe("Esa sala no está disponible en esa sede.");
+  });
+
+  it("[SRZ-FX3] una franja VENCIDA con sala archivada no bloquea guardar (par de badRoomErrors del server)", () => {
+    // Bug: guardar la semana fallaba por una franja vieja (validUntil < hoy AR)
+    // cuya sala se archivó después; esa franja ya no ocupa nada. La que vence
+    // HOY sigue vigente (inclusive) y se valida.
+    const w = emptyWeek();
+    w[1] = [
+      withRoom(r(600, 660, L1, "vieja"), { roomId: "old", validUntil: "2026-10-06" }),
+      withRoom(r(700, 760, L1, "hoy"), { roomId: "old", validUntil: "2026-10-07" }),
+      withRoom(r(800, 860, L2, "otraSede"), { roomId: "c2", validFrom: "2026-09-01", validUntil: "2026-09-30" }),
+    ];
+    const errs = validateDraft(w, undefined, check([]));
+    expect(errs.vieja).toBeUndefined();
+    expect(errs.otraSede).toBeUndefined();
+    expect(errs.hoy).toBe("Esa sala no está disponible en esa sede.");
+  });
+
+  it("los errores propios (solape, vigencia) tienen prioridad sobre la sala", () => {
+    const w = emptyWeek();
+    w[1] = [withRoom(r(600, 660, L1, "x"), { roomId: "c2", validFrom: "2026-12-01", validUntil: "2026-11-01" })];
+    expect(validateDraft(w, undefined, check([usage({})])).x).toBe(
+      "La fecha de fin tiene que ser igual o posterior a la de inicio."
+    );
+  });
+});
+
+describe("[SR-U2] solape propio con vigencia", () => {
+  it("dos franjas del mismo horario solo chocan si sus vigencias se cruzan", () => {
+    const w = emptyWeek();
+    w[1] = [
+      withRoom(r(540, 780, L1, "a"), { roomId: "c2", validUntil: "2026-11-30" }),
+      withRoom(r(540, 780, L1, "b"), { roomId: "gym", validFrom: "2026-12-01" }),
+    ];
+    expect(validateDraft(w)).toEqual({});
+    w[1] = [w[1][0], withRoom(w[1][1], { validFrom: "2026-11-15" })];
+    const errs = validateDraft(w);
+    expect(errs.a).toMatch(/mismas fechas/);
+    expect(errs.b).toMatch(/mismas fechas/);
+  });
+});
+
+describe("[SR-U2] etiquetas", () => {
+  it("vigencia plegada", () => {
+    expect(validityLabel(null, null)).toBe("Siempre");
+    expect(validityLabel("2026-11-01", "2026-11-30")).toBe("Del 01/11 al 30/11");
+    expect(validityLabel("2026-11-01", null)).toBe("Desde el 01/11");
+    expect(validityLabel(null, "2026-11-30")).toBe("Hasta el 30/11");
+  });
+  it("pastilla: hora · sede · sala · vigencia (sin sala ni vigencia = como antes)", () => {
+    expect(
+      rangePillLabel(
+        { startMin: 540, endMin: 780, validFrom: null, validUntil: "2026-11-30" },
+        { locationName: "Centro", roomName: "Consultorio 2" }
+      )
+    ).toBe("09:00–13:00 · Centro · Consultorio 2 · hasta el 30/11");
+    expect(rangePillLabel({ startMin: 540, endMin: 780, validFrom: null, validUntil: null }, {})).toBe("09:00–13:00");
+    expect(
+      rangePillLabel({ startMin: 540, endMin: 780, validFrom: "2026-11-01", validUntil: "2026-11-30" }, {})
+    ).toBe("09:00–13:00 · del 01/11 al 30/11");
+  });
+});
+
+describe("[SR-U2] exceptionPayloadRanges", () => {
+  it("manda la sala por franja; la excepción de todo el consultorio nunca lleva sala", () => {
+    const rows = [withRoom(r(540, 600, L1, "a"), { roomId: "c1" }), r(600, 660, L1, "b")];
+    expect(exceptionPayloadRanges(rows, "practitioner")).toEqual([
+      { startMin: 540, endMin: 600, locationId: L1, roomId: "c1" },
+      { startMin: 600, endMin: 660, locationId: L1, roomId: null },
+    ]);
+    expect(exceptionPayloadRanges(rows, "tenant").every((x) => x.roomId === null)).toBe(true);
   });
 });

@@ -57,7 +57,13 @@ export type RangesOptions = {
 // Piezas internas
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Franjas de la plantilla (o del fallback) para ese día, sin excepciones ni bloqueos. */
+/**
+ * Franjas de la plantilla (o del fallback) para ese día, sin excepciones ni
+ * bloqueos. SR (SR1a): conserva `roomId` (solo si la franja tiene sala, así la
+ * forma de una franja sin sala no cambia). `normalize` la descarta igual, así
+ * que `scheduledRanges`/`workingRanges` no se mueven (paridad §5.27, con test);
+ * la lee `roomRangesFor`.
+ */
 function templateRanges(practitionerId: string, dayKey: DayKey, input: RangesInput): ScheduleRange[] {
   const dow = dowOfDayKey(dayKey);
   const tpl = input.templates.find((t) => t.practitionerId === practitionerId);
@@ -78,7 +84,9 @@ function templateRanges(practitionerId: string, dayKey: DayKey, input: RangesInp
         (r.validFrom == null || r.validFrom <= dayKey) &&
         (r.validUntil == null || dayKey <= r.validUntil)
     )
-    .map(({ startMin, endMin, locationId }) => ({ startMin, endMin, locationId }));
+    .map(({ startMin, endMin, locationId, roomId }) =>
+      roomId != null ? { startMin, endMin, locationId, roomId } : { startMin, endMin, locationId }
+    );
 }
 
 /** La excepción que manda ese día: la del profesional, si no la del consultorio. */
@@ -218,6 +226,59 @@ export function scheduledRanges(
   opts: RangesOptions = {}
 ): ScheduleRange[] {
   return baseRanges(practitionerId, dayKey, input, opts).ranges;
+}
+
+/**
+ * SR (SR1a): franjas CRUDAS de un profesional en un día AR, con su sala: la
+ * plantilla vigente (o el fallback, que nunca tiene sala) o, si hay, la
+ * excepción que manda (CLOSED → []). Sin `normalize` (que fusiona por sede y
+ * DESCARTA `roomId`), sin restar bloqueos (ni de profesional ni de sala: un
+ * bloqueo no cambia qué sala tiene asignada la franja, §17.5) y sin filtro de
+ * sede (lo aplica el caller). Solo se recortan a [0, 1440) y se descartan las
+ * vacías, como `normalize`. `roomId` sale siempre: string o null.
+ *
+ * Orden: (startMin, endMin, locationId, roomId; null al final). Lo consumen
+ * `defaultRoomFor` y `roomAssignmentsFor` (`lib/availability/rooms.ts`), NUNCA
+ * `scheduledRanges`.
+ *
+ * OJO con el orden de los argumentos: `(input, practitionerId, dayKey)`, como
+ * lo publicó el contrato de SR (las demás funciones de este archivo reciben el
+ * input al final).
+ */
+export function roomRangesFor(
+  input: RangesInput,
+  practitionerId: string,
+  dayKey: DayKey
+): Array<ScheduleRange & { roomId: string | null }> {
+  const exception = winningException(practitionerId, dayKey, input);
+  const raw = exception
+    ? exception.kind === "CLOSED"
+      ? []
+      : (exception.ranges ?? [])
+    : templateRanges(practitionerId, dayKey, input);
+  return raw
+    .map((r) => ({
+      startMin: Math.max(0, r.startMin),
+      endMin: Math.min(MINUTES_PER_DAY, r.endMin),
+      locationId: r.locationId,
+      roomId: r.roomId ?? null,
+    }))
+    .filter((r) => r.startMin < r.endMin)
+    .sort(
+      (a, b) =>
+        a.startMin - b.startMin ||
+        a.endMin - b.endMin ||
+        a.locationId.localeCompare(b.locationId) ||
+        compareRoomId(a.roomId, b.roomId)
+    );
+}
+
+/** null al final: ante dos franjas iguales, gana la que tiene sala. */
+function compareRoomId(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return a.localeCompare(b);
 }
 
 /** Franjas efectivas de un profesional en un día AR (ver cabecera). */

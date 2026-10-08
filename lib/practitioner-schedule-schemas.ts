@@ -9,6 +9,7 @@
 import { z } from "zod";
 import type { DayKey } from "@/lib/availability/types";
 import { isValidDayKey, MAX_RANGES_PER_DAY, MAX_RANGES_PER_WEEK } from "@/lib/schedule-validate";
+import type { RoomUsageRow } from "@/lib/room-schedule-validate";
 
 export const EntityId = z.string().trim().min(1).max(64);
 
@@ -18,14 +19,35 @@ export const DayKeySchema = z
 
 const Minute = z.coerce.number().int("Minutos enteros");
 
+/**
+ * SR1c: sala de la franja. Omitida / null / "" = sin sala (lo que mandaban el
+ * editor y el onboarding antes de SR). Que exista, sea del tenant, esté activa
+ * y sea de la MISMA sede que la franja lo valida la action dentro de la tx.
+ */
+const RoomIdField = z
+  .union([z.string().trim().max(64), z.null()])
+  .optional()
+  .transform((v) => (v ? v : null));
+
+/** DayKey opcional (vigencia): omitida / null / "" = abierta. */
+const OptionalDayKey = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((v) => (v ? v : null))
+  .pipe(DayKeySchema.nullable());
+
 export const ScheduleRangeSchema = z.object({
   startMin: Minute,
   endMin: Minute,
   locationId: z.string().trim().max(64),
+  roomId: RoomIdField,
 });
 
 export const WeekRangeSchema = ScheduleRangeSchema.extend({
   dow: z.coerce.number().int(),
+  /** SR1c: vigencia de la franja (inclusive). `validUntil >= validFrom` lo marca `validateWeekRanges` por fila. */
+  validFrom: OptionalDayKey,
+  validUntil: OptionalDayKey,
 });
 
 export const SaveWeekInput = z.object({
@@ -78,9 +100,22 @@ export type ScheduleRangeRow = {
   startMin: number;
   endMin: number;
   locationId: string;
+  /**
+   * SR1c: sala de la franja (null = sin sala). Opcional en el TIPO solo para
+   * no romper a quien arma la vista a mano (`lib/onboarding-internal.ts`);
+   * `getPractitionerSchedule` siempre lo manda.
+   */
+  roomId?: string | null;
   validFrom: DayKey | null;
   validUntil: DayKey | null;
 };
+
+/**
+ * SR1c: franja de OTRO profesional del consultorio que usa una sala (plantilla
+ * vigente hoy o a futuro). Sin datos clínicos: lo justo para validar en el
+ * cliente con `roomScheduleConflicts` y nombrar a quién la usa.
+ */
+export type { RoomUsageRow } from "@/lib/room-schedule-validate";
 
 export type PractitionerScheduleView = {
   practitionerId: string;
@@ -90,6 +125,11 @@ export type PractitionerScheduleView = {
   /** Sin franjas: el motor usa el horario del consultorio lun-sáb en la sede principal. */
   isFallback: boolean;
   tenantHours: { startMin: number; endMin: number };
+  /**
+   * SR1c: franjas con sala de los DEMÁS profesionales (ver `RoomUsageRow`),
+   * ordenadas por (dow, startMin). Opcional por la misma razón que `roomId`.
+   */
+  roomUsage?: RoomUsageRow[];
 };
 
 export type PractitionerScheduleSummaryRow = {
@@ -108,6 +148,7 @@ export type ScheduleExceptionRow = {
   practitionerId: string | null;
   date: DayKey;
   kind: "CLOSED" | "CUSTOM_HOURS";
-  ranges: Array<{ startMin: number; endMin: number; locationId: string }> | null;
+  /** SR1c: `roomId` null = sin sala (excepciones viejas no lo traen). */
+  ranges: Array<{ startMin: number; endMin: number; locationId: string; roomId: string | null }> | null;
   reason: string | null;
 };

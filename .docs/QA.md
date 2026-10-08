@@ -1011,7 +1011,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   stale y recarga.
 - [ ] Hero: un chip por disciplina, sin título. Archivar el paciente con un plan ACTIVE o PAUSED → diálogo L9.
 - [ ] Turnos y Facturación agrupados por plan con el saldo del server (pactado, devengado, cobrado, OS aparte); los
-  cancelados con cobro se ven en el grupo. A 360 px, las tablas scrollean adentro y "Ver en agenda" no se corta.
+  cancelados con cobro se ven (desde SR, también sin agrupar: §Salas (SR)). A 360 px, las tablas scrollean adentro y "Ver en agenda" no se corta.
 - [ ] 🔴 Secretaria: perfil administrativo con turnos y facturación por plan **sin títulos** de plan.
 
 ### `/planes/[disciplina]` y plantillas
@@ -1036,3 +1036,67 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Consultorio General
 - [ ] 🔴 Nada de Planes, Diagnóstico ni EVA: sin pestaña Planes, Resumen sin "Plan de tratamiento" ni "Diagnóstico
   principal", sin slot de EVA; agenda sin leyenda ni chip; drawer sin fila Plan; candado sin aviso de plan.
+
+## Salas (SR) — salas y consultorios, Facturación e ingresos por rol (08-oct-2026)
+
+> **1 migración nueva: M4 `20261009120000_rooms`.** Correr con `TZ=UTC npm run dev` contra el Docker local con M1-M4
+> aplicadas (`dotenv -e .env.local -- npx prisma migrate deploy`). Usuarios: OWNER, dos PRACTITIONER (AP y BF), Secretaria
+> (ASSISTANT) y BILLING; dos sedes. Contexto en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md) y
+> [AUDIT.md §Ronda 19](AUDIT.md).
+
+### Sin salas (el consultorio del cliente vivo)
+- [ ] 🔴 Día, Por profesional, Semana, Lista y Recepción iguales que antes: sin filtro de sala, sin "Por sala", sin
+  "· Sala" en las tarjetas, sin columna Sala. Candado igual que antes. Alta y edición como siempre.
+- [ ] Editor de horarios ("Editar semana") sin la línea de vigencia. En Sedes solo aparece "· Sin salas" y el link
+  "Salas".
+
+### OWNER: Configuración
+- [ ] Configuración › Sedes › Salas: en la principal "Consultorio 1" (capacidad 1) y "Gimnasio" (3); en otra sede
+  "Box A". Ayuda de capacidad: "Profesionales a la vez". Nombre repetido en la misma sede → error en el campo.
+- [ ] Franja de AP 9–13 en Consultorio 1 y de BF 14–18. 🔴 Darle a BF 12–15 en Consultorio 1 → choque, no guarda. Con
+  vigencia que no se pisa ("Solo por un período"), guarda.
+- [ ] Una franja vencida con una sala que después se archiva → la semana guarda igual.
+- [ ] Archivar una sala con franjas, turnos futuros o excepciones futuras → se niega y dice por qué. Sin eso, archiva y
+  sus bloqueos futuros desaparecen.
+
+### Secretaria: agenda
+- [ ] Día con "Todas las sedes": filtro "Todas las salas / Consultorio 1 / Gimnasio / Sin sala" con conteos del día;
+  tarjetas "· Consultorio 1" (lector: "en Consultorio 1").
+- [ ] Elegir "Gimnasio": solo sus turnos, sin la sala en las tarjetas; se recuerda al refrescar. Cambiar a la otra
+  sede: el filtro vuelve a "Todas" (una sola sala → no hay filtro).
+- [ ] Toggle Día / Por profesional / Por sala: flechas con vuelta; columnas en el orden de Configuración, header
+  "Asignada: AP 9–13" (nunca "?"), "Sin sala" al final solo con turnos de esa sede. En "Por sala" no hay chips de
+  profesionales.
+- [ ] Click (o Enter) en una celda libre del Gimnasio a las 10:00 → modal con Gimnasio y 10:00. En "Sin sala", sin
+  sala.
+- [ ] 🔴 Dos profesionales en Consultorio 1 a la misma hora → celda 2/1, el modal pide "Agendar igual"; el turno
+  **no** queda como `[SOBRETURNO]`. El mismo profesional con dos pacientes en su sala no choca consigo mismo.
+- [ ] Turno de 6 h (servicio de 360 min) en Consultorio 1 a las 8:00 → otro profesional a las 12:30 en la misma sala:
+  avisa ocupada.
+- [ ] 🔴 Candado › "Una sala" › Consultorio 1, 11–12, "Mantenimiento": en "Por sala" solo esa columna rayada y sin
+  alta; en Por profesional la agenda de AP sigue libre (el bloqueo de sala **no cambia la agenda de nadie**). Alta en
+  esa sala a las 11:30 → "bloqueado (Mantenimiento)" con opción de asignar igual. Al reabrir el candado aparece
+  "11:00–12:00 · Consultorio 1 · Mantenimiento"; "Desbloquear" lo quita.
+- [ ] Recepción: columna "Sala" entre Profesional y Estado ("—" sin sala, "Sala archivada" si la archivaron). A 360 px,
+  "SALA · Consultorio 1" sin scroll horizontal.
+- [ ] Drawer › fila Sala › Cambiar: si está ocupada, "Asignar igual"; el foco vuelve a "Cambiar". En el modal, el
+  select Sala solo aparece si la sede elegida tiene salas.
+- [ ] Turno a las 23:30 AR: se ve a las 23:30 y "continúa" el día siguiente.
+- [ ] Varias sesiones (batch) con una fecha en sala ocupada → esa fecha se omite salvo tildar la casilla aparte.
+
+### PRACTITIONER y Planes
+- [ ] Ve el filtro y "Por sala"; el candado no ofrece "Una sala" y un bloqueo de sala sale deshabilitado ("Es un
+  bloqueo de sala.").
+- [ ] Turno de plan en "Por sala": chip de sesión, nunca el título del plan.
+- [ ] PlanCard › reprogramar una sesión a una hora con la sala por defecto ocupada → "Moverlo igual (sala ocupada)".
+
+### Facturación (SR-D4F) e ingresos por rol (SR-D5I)
+- [ ] 🔴 Turno suelto cancelado (y uno ausente) con copago cobrado → aparece en Facturación sin agrupar y agrupada, y
+  suma en "percibido".
+- [ ] 🔴 OWNER y BILLING: "Ingresos del mes" de todo el consultorio. PRACTITIONER: "Tus ingresos del mes", solo sus
+  turnos (dos profesionales seguidos en la misma ventana del cache: cada uno ve lo suyo). Secretaria: sin widget ni
+  KPI, y el picker de KPI no ofrece ingresos.
+
+### Cierre
+- [ ] Guardar "Por sala" y archivar todas las salas → la agenda abre en el Día de siempre.
+- [ ] A 360 px, filtro y toggle envuelven sin scroll horizontal.

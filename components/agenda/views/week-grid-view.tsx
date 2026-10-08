@@ -8,7 +8,7 @@ import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { dowOfDayKey } from "@/lib/availability/day";
 import { splitCountByPractitioner, type AggregatedDayLock } from "@/lib/agenda-client-state";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
-import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
+import { DAYS, fmtHour, fmtMoney, osLabel, buildSlots, roomNameOf, slotLabel, slotOf, type BookingDTO } from "../agenda-utils";
 import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
@@ -26,12 +26,14 @@ function WeekSlotModal({
   onEdit,
   onClose,
   practitionerById,
+  roomById,
 }: {
   bookings: BookingDTO[];
   label: string;
   onEdit: (b: BookingDTO) => void;
   onClose: () => void;
   practitionerById: ReadonlyMap<string, WeekPractitioner> | null;
+  roomById: Readonly<Record<string, { name: string }>> | null;
 }) {
   return (
     <div
@@ -74,6 +76,7 @@ function WeekSlotModal({
             const isCancelled = b.status === "CANCELLED";
             const isDone = b.status === "COMPLETED";
             const prac = practitionerById?.get(b.practitionerId) ?? null;
+            const roomName = roomNameOf(roomById, b);
             return (
               <button
                 key={b.id}
@@ -108,6 +111,7 @@ function WeekSlotModal({
                   </div>
                   <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
                     {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
+                    {roomName && <span data-room> · {roomName}</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "var(--navy-400)", marginTop: 1 }}>
                     {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
@@ -135,6 +139,10 @@ function WeekSlotModal({
  *   parcial → solo las filas bloqueadas para todos los visibles.
  * - `renderDayLock(dayKey)`: el candado del header de cada día (lo arma
  *   `agenda-client` con el `DayLockButton` de B4.4 según capability).
+ * - `roomById` (SR): catálogo de salas; con él, el modal de la celda suma la
+ *   sala como texto ("10:00 · Kinesiología · 45 min · Consultorio 2"). La
+ *   celda (solo conteo) no cambia. El caller lo pasa solo cuando la sala
+ *   aporta (`showRoomOnCards`).
  */
 export function WeekGridView({
   weekDays,
@@ -149,6 +157,7 @@ export function WeekGridView({
   dayLocks,
   blockedByDay,
   renderDayLock,
+  roomById = null,
 }: {
   weekDays: ReadonlyArray<string>;
   bookings: BookingDTO[];
@@ -163,6 +172,7 @@ export function WeekGridView({
   dayLocks?: Readonly<Record<string, AggregatedDayLock | undefined>>;
   blockedByDay?: Readonly<Record<string, ReadonlyMap<number, string | null> | undefined>>;
   renderDayLock?: (dayKey: string) => ReactNode;
+  roomById?: Readonly<Record<string, { name: string }>> | null;
 }) {
   const practitionerById = useMemo(
     () => (practitioners && practitioners.length > 1 ? new Map(practitioners.map((p) => [p.id, p])) : null),
@@ -430,6 +440,7 @@ export function WeekGridView({
           onEdit={onEdit}
           onClose={() => setOverflow(null)}
           practitionerById={practitionerById}
+          roomById={roomById}
         />
       )}
     </>

@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { IconCheck, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
-  KPI_OPTIONS,
+  kpiOptionsFor,
+  pinnableKpis,
   type KpiKey,
+  type KpiRevenueScope,
   type Palette,
   type Preferences,
 } from "@/lib/preferences-constants";
@@ -27,13 +29,18 @@ const PALETTES: { value: Palette; swatch: [string, string, string]; label: strin
  * Click → dropdown with the practitioner name + "Ajustes" + "Cerrar
  * sesión". Ajustes opens a modal with palette picker (mirrors Tweaks,
  * but persisted server-side) + pinned KPIs picker.
+ *
+ * SRZ-FX3 (B8): `revenueScope` (SR-D5I) decide si el picker ofrece la KPI de
+ * ingresos y con qué rótulo (`kpiOptionsFor`). Default `tenant` = lo de antes.
  */
 export function ProfileMenu({
   name,
   preferences,
+  revenueScope = "tenant",
 }: {
   name: string;
   preferences: Preferences;
+  revenueScope?: KpiRevenueScope;
 }) {
   const [open, setOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -137,7 +144,11 @@ export function ProfileMenu({
       )}
 
       {showSettings && (
-        <SettingsModal preferences={preferences} onClose={() => setShowSettings(false)} />
+        <SettingsModal
+          preferences={preferences}
+          revenueScope={revenueScope}
+          onClose={() => setShowSettings(false)}
+        />
       )}
     </div>
   );
@@ -178,17 +189,21 @@ function MenuItem({
   );
 }
 
-function SettingsModal({
+/** Exportado para el test de render (tests/unit/render/kpi-picker.test.tsx). */
+export function SettingsModal({
   preferences,
   onClose,
+  revenueScope = "tenant",
 }: {
   preferences: Preferences;
   onClose: () => void;
+  revenueScope?: KpiRevenueScope;
 }) {
   const router = useRouter();
   const { set } = useTweaks();
+  const kpiOptions = kpiOptionsFor(revenueScope);
   const [palette, setPalette] = useState<Palette>(preferences.palette);
-  const [pinned, setPinned] = useState<KpiKey[]>(preferences.pinnedKpis);
+  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(preferences.pinnedKpis, revenueScope));
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -318,7 +333,7 @@ function SettingsModal({
               gap: 6,
             }}
           >
-            {KPI_OPTIONS.map((opt) => {
+            {kpiOptions.map((opt) => {
               const on = pinned.includes(opt.key);
               return (
                 <button

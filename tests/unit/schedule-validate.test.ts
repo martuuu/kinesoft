@@ -103,6 +103,57 @@ describe("validateWeekRanges", () => {
   });
 });
 
+describe("validateWeekRanges · vigencia (SR1c)", () => {
+  const v = (dow: number, s: number, e: number, validFrom: string | null, validUntil: string | null, loc = L1) => ({
+    ...r(dow, s, e, loc),
+    validFrom,
+    validUntil,
+  });
+
+  it("dos franjas del mismo día con vigencias disjuntas no se pisan (un reemplazo por unas semanas)", () => {
+    expect(
+      validateWeekRanges([v(1, 540, 780, null, "2030-03-31"), v(1, 540, 780, "2030-04-01", null)])
+    ).toEqual({ ok: true });
+  });
+
+  it("vigencias que se cruzan → solape con el copy de SR en las dos filas", () => {
+    const res = validateWeekRanges([v(1, 540, 720, null, null), v(1, 600, 780, "2030-03-01", "2030-03-31")]);
+    expect(res).toEqual({
+      ok: false,
+      errors: [
+        { index: 0, message: "Se superpone con otra franja en las mismas fechas (10:00-12:00)." },
+        { index: 1, message: "Se superpone con otra franja en las mismas fechas (10:00-12:00)." },
+      ],
+    });
+  });
+
+  it("copy literal con hora sin cero a la izquierda", () => {
+    const res = validateWeekRanges([r(2, 540, 660), r(2, 540, 600)]);
+    expect(res.ok ? "" : res.errors[0].message).toBe("Se superpone con otra franja en las mismas fechas (9:00-10:00).");
+  });
+
+  it("se cruzan las fechas pero ninguna es ese día de la semana → no se pisan", () => {
+    // vie 2030-03-01 a dom 2030-03-03 contra "desde el 1/3": la intersección no tiene lunes.
+    expect(
+      validateWeekRanges([v(1, 540, 780, "2030-02-01", "2030-03-03"), v(1, 540, 780, "2030-03-01", null)]).ok
+    ).toBe(true);
+  });
+
+  it("fin antes del inicio → error de la fila con el copy literal", () => {
+    expect(validateWeekRanges([v(1, 540, 780, "2030-03-10", "2030-03-01")])).toEqual({
+      ok: false,
+      errors: [{ index: 0, message: "La fecha de fin tiene que ser igual o posterior a la de inicio." }],
+    });
+    // Igual es válido (un solo día).
+    expect(validateWeekRanges([v(1, 540, 780, "2030-03-04", "2030-03-04")]).ok).toBe(true);
+  });
+
+  it("vigencia con formato inválido → error de la fila", () => {
+    const res = validateWeekRanges([v(1, 540, 780, "2030-02-30", null)]);
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("validateDayRanges (excepción CUSTOM_HOURS)", () => {
   it("mismas reglas sin dow", () => {
     expect(validateDayRanges([{ startMin: 540, endMin: 720, locationId: L1 }]).ok).toBe(true);

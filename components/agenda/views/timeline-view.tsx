@@ -8,6 +8,7 @@ import {
   slotLabel,
   slotOf,
   coveredSlots,
+  roomNameOf,
   type BookingDTO,
 } from "../agenda-utils";
 import type { AgendaHighlight } from "@/lib/agenda-highlight";
@@ -17,6 +18,15 @@ import { denseOverflow, overflowButtonText } from "../grid/slot-cell";
 
 /** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
 export type PractitionerInitialsMap = Readonly<Record<string, { initials: string; name: string }>>;
+
+/** SR: catálogo de salas → nombre. El caller lo pasa solo cuando la sala aporta (`showRoomOnCards`). */
+export type RoomNameMap = Readonly<Record<string, { name: string }>>;
+
+/** Sala de la card (SR-U5a): null sin catálogo o sin sala; una sala fuera del catálogo llega como "Sala archivada" (agenda-client, `withArchivedRooms`). */
+function cardRoom(roomById: RoomNameMap | null, b: BookingDTO): { name: string } | null {
+  const name = roomNameOf(roomById, b);
+  return name ? { name } : null;
+}
 
 /**
  * Day timeline — one row per SLOT (60 or 30 minutes, per `Tenant.agendaSlotMinutes`),
@@ -73,6 +83,7 @@ export function TimelineView({
   now,
   blockedRows = null,
   dayLocked = null,
+  roomById = null,
 }: {
   bookings: BookingDTO[];
   // AR date key ("YYYY-MM-DD") of the day this timeline is showing. Used to
@@ -93,9 +104,15 @@ export function TimelineView({
   blockedRows?: ReadonlyMap<number, string | null> | null;
   /** B4.3: día entero bloqueado (motivo en `detail`). */
   dayLocked?: { detail: string | null } | null;
+  /**
+   * SR-U6: salas para la card ("· Consultorio 2"). null/ausente = sin sala en
+   * las cards (consultorio sin salas, una sola sala o filtro de sala activo):
+   * markup idéntico al de antes de SR.
+   */
+  roomById?: RoomNameMap | null;
 }) {
   const { start, end, slotMinutes } = businessHours;
-  const cardExtras = { practitionerById, now };
+  const cardExtras = { practitionerById, now, roomById };
   const half = slotMinutes === 30;
   // Half-hour rows double the row count, so they get a shorter minimum height
   // to keep the day scannable without doubling the page length.
@@ -188,6 +205,7 @@ function SlotRow({
   blockLabel = null,
   practitionerById = null,
   now,
+  roomById = null,
 }: {
   slot: number;
   items: BookingDTO[];
@@ -204,6 +222,7 @@ function SlotRow({
   blockLabel?: string | null;
   practitionerById?: PractitionerInitialsMap | null;
   now?: Date;
+  roomById?: RoomNameMap | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const label = slotLabel(slot);
@@ -282,6 +301,7 @@ function SlotRow({
               compact={compact}
               sizing={timelineCardSizing}
               practitioner={practitionerById?.[b.practitionerId] ?? null}
+              room={cardRoom(roomById, b)}
               now={now}
             />
           ))}
@@ -409,6 +429,7 @@ function OutOfRangeRow({
   compact,
   practitionerById = null,
   now,
+  roomById = null,
 }: {
   label: string;
   items: BookingDTO[];
@@ -417,6 +438,7 @@ function OutOfRangeRow({
   compact: boolean;
   practitionerById?: PractitionerInitialsMap | null;
   now?: Date;
+  roomById?: RoomNameMap | null;
 }) {
   return (
     <div
@@ -452,6 +474,7 @@ function OutOfRangeRow({
             compact={compact}
             sizing={timelineCardSizing}
             practitioner={practitionerById?.[b.practitionerId] ?? null}
+            room={cardRoom(roomById, b)}
             now={now}
           />
         ))}

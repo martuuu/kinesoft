@@ -61,6 +61,11 @@
  *      libre (cuyo último turno terminó a esa hora o antes) o abre uno nuevo.
  *      `laneCount` = carriles del grupo de turnos que se solapan entre sí
  *      (transitivamente): el ancho de cada card es 1/laneCount de la columna.
+ *
+ * La vista "Por sala" (SR-U4, `buildRoomColumns`) reusa la misma celda con
+ * otra noción de cupo: profesionales a la vez en la sala. Vive en
+ * `lib/agenda-layout-rooms.ts` (SRZ FX2a): este archivo está en el first load
+ * de /agenda y webpack no separa un módulo por export. No re-exportarla acá.
  */
 import { minuteInDay, dayKeyOf, dayWindow, formatWallTime } from "@/lib/availability/day";
 import { resolvePractitionerService } from "@/lib/availability/next-free";
@@ -184,36 +189,38 @@ export type AgendaDayLayout<T extends LayoutBooking = LayoutBooking> = {
 export type CapOf = (practitionerId: string, serviceId: string) => number | null;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers internos
+// Helpers (exportados SOLO para `lib/agenda-layout-rooms.ts`, SRZ FX2a: la
+// vista "Por sala" vive en su propio módulo para no entrar al first load de
+// /agenda; los reusa en vez de duplicarlos. No son API de las vistas.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const toDate = (d: Date | string): Date => (d instanceof Date ? d : new Date(d));
 
-function normalizeZoom(zoom: number | undefined): AgendaZoom {
+export function normalizeZoom(zoom: number | undefined): AgendaZoom {
   return AGENDA_ZOOMS.includes(zoom as AgendaZoom) ? (zoom as AgendaZoom) : DEFAULT_AGENDA_ZOOM;
 }
 
 /** [inicio, fin) del turno en minutos del día (puede salirse de 0..1440). */
-function bookingSpan(dayKey: DayKey, b: { scheduledFor: Date | string; durationMin: number }) {
+export function bookingSpan(dayKey: DayKey, b: { scheduledFor: Date | string; durationMin: number }) {
   const start = minuteInDay(dayKey, toDate(b.scheduledFor));
   // Duración 0 (dato roto) igual ocupa un minuto: si no, el turno no se ve.
   return { start, end: start + Math.max(1, b.durationMin) };
 }
 
 /** ¿El turno toca el día AR? */
-function touchesDay(dayKey: DayKey, b: { scheduledFor: Date | string; durationMin: number }): boolean {
+export function touchesDay(dayKey: DayKey, b: { scheduledFor: Date | string; durationMin: number }): boolean {
   const { start, end } = bookingSpan(dayKey, b);
   return start < MINUTES_PER_DAY && end > 0;
 }
 
 /** Regla 2: ¿sostiene cupo con lo que llega al cliente? */
-function holdsCapacity(b: LayoutBooking, now: Date): boolean {
+export function holdsCapacity(b: LayoutBooking, now: Date): boolean {
   if (b.status === "CANCELLED") return false;
   return paymentHoldState(b, now) !== "vencida";
 }
 
 /** Bloqueo en minutos del día (mismo redondeo HACIA AFUERA y allDay que `ranges.ts`). */
-function blockSpan(dayKey: DayKey, b: LayoutBlock): { start: number; end: number } {
+export function blockSpan(dayKey: DayKey, b: LayoutBlock): { start: number; end: number } {
   const rawStart = toDate(b.startsAt);
   const rawEnd = toDate(b.endsAt);
   let startsAt = rawStart;
@@ -230,7 +237,7 @@ function blockSpan(dayKey: DayKey, b: LayoutBlock): { start: number; end: number
 }
 
 /** Pico de simultaneidad de intervalos recortados a [from, to). */
-function peakConcurrency(spans: ReadonlyArray<{ start: number; end: number }>, from: number, to: number): number {
+export function peakConcurrency(spans: ReadonlyArray<{ start: number; end: number }>, from: number, to: number): number {
   const clipped = spans
     .map((s) => ({ start: Math.max(s.start, from), end: Math.min(s.end, to) }))
     .filter((s) => s.start < s.end);
@@ -249,10 +256,10 @@ function compareUsage(a: ServiceUsage, b: ServiceUsage): number {
   return ratio(b) - ratio(a) || b.used - a.used || a.serviceId.localeCompare(b.serviceId);
 }
 
-const capLabel = (used: number, cap: number | null) => `${used}/${cap == null ? "∞" : cap}`;
+export const capLabel = (used: number, cap: number | null) => `${used}/${cap == null ? "∞" : cap}`;
 
 /** Carriles greedy (regla 5). */
-function assignLanes(dayKey: DayKey, bookings: ReadonlyArray<LayoutBooking>): Record<string, LaneAssignment> {
+export function assignLanes(dayKey: DayKey, bookings: ReadonlyArray<LayoutBooking>): Record<string, LaneAssignment> {
   const items = bookings
     .map((b) => ({ id: b.id, ...bookingSpan(dayKey, b) }))
     .sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start) || a.id.localeCompare(b.id));
@@ -282,7 +289,7 @@ function assignLanes(dayKey: DayKey, bookings: ReadonlyArray<LayoutBooking>): Re
   return out;
 }
 
-function rowsOf(window: MinuteWindow, zoom: AgendaZoom): AgendaRow[] {
+export function rowsOf(window: MinuteWindow, zoom: AgendaZoom): AgendaRow[] {
   const rows: AgendaRow[] = [];
   for (let m = window.startMin; m < window.endMin; m += zoom) {
     rows.push({ startMin: m, endMin: m + zoom, time: formatWallTime(m) });

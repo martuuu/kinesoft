@@ -70,6 +70,21 @@ export type BookingDTO = {
    */
   canOperate?: boolean;
   clinicalWritable?: boolean;
+  /**
+   * SR (salas): sala del turno. En el CABLE viaja compacta (como C9): solo si
+   * es un id; `null` ("Sin sala") se omite, así un turno de un consultorio sin
+   * salas no suma ni un byte. En el cliente `expandPlanFields` (vía
+   * `expandRoomFields`) la devuelve a `null` en la proyección LIVIANA.
+   *
+   * Tres valores, a propósito:
+   * - `string`: la sala (el nombre sale del catálogo del bootstrap,
+   *   `roomNameOf`; el server no lo manda);
+   * - `null`: "Sin sala", sabido (proyección liviana expandida);
+   * - `undefined`: "no sé" (proyección completa `listBookingsInRange`, o un DTO
+   *   sin expandir). El filtro de sala no lo descarta y `buildRoomColumns` lo
+   *   pone en "Sin sala"; por eso la agenda SIEMPRE expande.
+   */
+  roomId?: string | null;
 } & Partial<AgendaPlanFields>;
 /*
  * C9 (Planes, PLANES.md §4) en el DTO: `programId`, `sessionId`,
@@ -128,8 +143,19 @@ export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
     telemedicineUrl: row.telemedicineUrl,
     clinicalHidden: row.clinicalHidden,
     ...serverPermissions(row),
+    ...compactRoomField(row),
     ...compactPlanFields(row),
   };
+}
+
+/**
+ * SR: `roomId` compacto en el cable (mismo criterio que C9, abajo): viaja solo
+ * si es un id. Se lee por forma porque `AgendaBookingRow.roomId` es opcional
+ * hasta que SR3a lo selecciona: sin la clave (o en null) no se emite nada.
+ */
+function compactRoomField(row: object): Pick<BookingDTO, "roomId"> {
+  const r = row as { roomId?: unknown };
+  return typeof r.roomId === "string" ? { roomId: r.roomId } : {};
 }
 
 /**
@@ -189,6 +215,7 @@ export function expandPlanFields(dto: BookingDTO, disciplines: ServiceDiscipline
   if (dto.isOverbooked === undefined) return dto;
   const out: BookingDTO = {
     ...dto,
+    ...expandRoomFields(dto),
     programId: dto.programId ?? null,
     sessionId: dto.sessionId ?? null,
     pricedByPlan: dto.pricedByPlan ?? false,
@@ -199,6 +226,63 @@ export function expandPlanFields(dto: BookingDTO, disciplines: ServiceDiscipline
     out.serviceDiscipline = disciplines.get(dto.serviceId) ?? null;
   }
   return out;
+}
+
+/**
+ * SR: inversa de `compactRoomField`, como parche para spread. En la proyección LIVIANA (la que trae
+ * `isOverbooked`) un `roomId` ausente es "Sin sala" sabido → `null`. Tiene que
+ * ser `null` y no `undefined`: el filtro de sala (`AGENDA_FILTER_DIMENSIONS.
+ * roomId`) deja pasar `undefined` como "no sé", así que sin expandir el filtro
+ * "Consultorio 2" mostraría también los turnos sin sala (y "Sin sala" no
+ * encontraría ninguno). Con la completa (sin `isOverbooked`) no se toca: ahí
+ * `undefined` es honesto. La llama `expandPlanFields`, que es el único punto
+ * de entrada de los DTO a la agenda (`agenda-client`, props y overrides): por
+ * eso no hace falta un segundo `map`.
+ */
+export function expandRoomFields(dto: BookingDTO): Pick<BookingDTO, "roomId"> {
+  if (dto.isOverbooked === undefined) return {};
+  return { roomId: dto.roomId ?? null };
+}
+
+/**
+ * Rótulo de un turno cuya sala ya no está en el catálogo (SRZ B5). El catálogo
+ * del bootstrap trae solo salas activas de sedes activas, y `archiveRoom`
+ * rechaza salas con turnos futuros (SR-D8): esto aparece solo en turnos
+ * pasados. Mismo texto que la fila Sala del drawer.
+ */
+export const ARCHIVED_ROOM_LABEL = "Sala archivada";
+
+/**
+ * Catálogo de nombres de sala + "Sala archivada" para los `roomId` de los
+ * turnos que no están en él (SRZ B5, decisión del orquestador). Sin esto,
+ * tarjetas, Lista y Recepción mostraban un turno de una sala archivada como
+ * uno sin sala (nada, o "—"), mientras el drawer decía "Sala archivada". Se
+ * resuelve en el catálogo y no en cada vista para que Día, Por profesional,
+ * Semana, Lista y Recepción digan lo mismo sin tocar sus `roomNameOf`.
+ * Sin ids desconocidos devuelve el MISMO objeto (no invalida memos).
+ */
+export function withArchivedRooms<M extends Readonly<Record<string, { name: string }>>>(
+  roomById: M,
+  bookings: ReadonlyArray<{ roomId?: string | null }>
+): M | Record<string, { name: string }> {
+  const has = (m: object, k: string) => Object.prototype.hasOwnProperty.call(m, k);
+  let out: Record<string, { name: string }> | null = null;
+  for (const b of bookings) {
+    const id = b.roomId;
+    if (typeof id !== "string" || has(out ?? roomById, id)) continue;
+    out ??= { ...roomById };
+    out[id] = { name: ARCHIVED_ROOM_LABEL };
+  }
+  return out ?? roomById;
+}
+
+/** Nombre de la sala del turno, del catálogo del cliente; null sin sala o si no está (archivada). */
+export function roomNameOf(
+  roomById: Readonly<Record<string, { name: string }>> | null | undefined,
+  b: Pick<BookingDTO, "roomId">
+): string | null {
+  if (!roomById || typeof b.roomId !== "string") return null;
+  return roomById[b.roomId]?.name ?? null;
 }
 
 /**

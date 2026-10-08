@@ -200,7 +200,9 @@ describe.skipIf(!RUN)("core de turnos (S07c)", () => {
           bookingId: b.id,
           practitionerId: T.practitionerId,
           scheduledFor: new Date(ar("2027-11-05", "11:00")),
-          prev: { practitionerId: T.practitionerId, scheduledFor: new Date(ar("2027-11-05", "10:00")) },
+          // SR (SR2a): la sala de después y la de antes; null = sin sala.
+          roomId: null,
+          prev: { practitionerId: T.practitionerId, scheduledFor: new Date(ar("2027-11-05", "10:00")), roomId: null },
           kind: "booking",
         },
       ]);

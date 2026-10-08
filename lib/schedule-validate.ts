@@ -20,14 +20,34 @@
  *      no puede estar en dos sedes a la vez, y el motor (`workingRanges`) suma
  *      franjas sin deduplicar → un solape duplicaría slots.
  *   4. `locationId` presente (y, si se pasa el set, entre las sedes activas).
+ *   5. (SR1c) Vigencia por franja (`validFrom`/`validUntil`, DayKeys inclusive,
+ *      null = abierta): fin >= inicio, y el solape de la regla 3 solo cuenta si
+ *      las vigencias se cruzan en una fecha de ese día de la semana. Así se
+ *      carga "los lunes en el Consultorio 2 hasta el 31/3 y desde el 1/4 en el
+ *      Gimnasio" como dos franjas del mismo horario sin que choquen.
+ *   La sala NO se valida acá: el choque entre profesionales vive en
+ *   `lib/room-schedule-validate.ts` (necesita las franjas de los demás).
  */
-import type { Dow, ScheduleRange } from "@/lib/availability/types";
+import type { DayKey, Dow, ScheduleRange } from "@/lib/availability/types";
+import { formatClock, windowsMeetOnDow } from "@/lib/room-schedule-validate";
+import { isDayKey } from "@/lib/availability/day";
 
 export const SCHEDULE_STEP_MIN = 5;
 export const MAX_RANGES_PER_WEEK = 70; // 10 por día alcanza y sobra
 export const MAX_RANGES_PER_DAY = 10;
 
-export type WeekRangeInput = ScheduleRange & { dow: number };
+/**
+ * Franja de la semana como la manda la UI. `roomId` y la vigencia son
+ * opcionales (SR1c): omitidos = sin sala y siempre (lo que escribían el editor
+ * y el onboarding antes de SR).
+ */
+export type WeekRangeInput = ScheduleRange & {
+  dow: number;
+  validFrom?: DayKey | null;
+  validUntil?: DayKey | null;
+};
+
+export const VALIDITY_ORDER_ERROR = "La fecha de fin tiene que ser igual o posterior a la de inicio.";
 
 /** Error de una fila: `index` = posición en el array que mandó la UI. */
 export type RangeRowError = { index: number; message: string };
@@ -69,12 +89,29 @@ function checkOne(r: { startMin: number; endMin: number; locationId: string }): 
   return null;
 }
 
+/** Vigencia (SR1c): DayKeys válidas y fin >= inicio (mismo CHECK que la base). */
+function checkValidity(r: { validFrom?: DayKey | null; validUntil?: DayKey | null }): string | null {
+  if ((r.validFrom && !isDayKey(r.validFrom)) || (r.validUntil && !isDayKey(r.validUntil))) {
+    return "Fecha inválida (AAAA-MM-DD).";
+  }
+  if (r.validFrom && r.validUntil && r.validUntil < r.validFrom) return VALIDITY_ORDER_ERROR;
+  return null;
+}
+
 /**
  * Solapes dentro de un grupo (un día). Marca AMBAS filas: la UI resalta las dos.
  * Semiabierto: `a.end <= b.start` no es solape.
  */
 function overlapErrors(
-  rows: ReadonlyArray<{ index: number; startMin: number; endMin: number; locationId: string }>,
+  dow: number,
+  rows: ReadonlyArray<{
+    index: number;
+    startMin: number;
+    endMin: number;
+    locationId: string;
+    validFrom?: DayKey | null;
+    validUntil?: DayKey | null;
+  }>,
   out: Map<number, string>
 ): void {
   const sorted = [...rows].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
@@ -83,11 +120,20 @@ function overlapErrors(
       const a = sorted[i];
       const b = sorted[j];
       if (b.startMin >= a.endMin) break; // ordenadas por inicio: ninguna siguiente solapa con a
-      const span = `${formatHHMM(Math.max(a.startMin, b.startMin))}-${formatHHMM(Math.min(a.endMin, b.endMin))}`;
+      // SR1c: con vigencias que no comparten ninguna fecha de este dow, no rigen juntas.
+      if (
+        !windowsMeetOnDow(dow, [
+          { from: a.validFrom, until: a.validUntil },
+          { from: b.validFrom, until: b.validUntil },
+        ])
+      ) {
+        continue;
+      }
+      const span = `${formatClock(Math.max(a.startMin, b.startMin))}-${formatClock(Math.min(a.endMin, b.endMin))}`;
       const msg =
         a.locationId !== b.locationId
           ? `Se superpone (${span}) con una franja en otra sede: no se puede atender en dos sedes a la vez.`
-          : `Se superpone con otra franja (${span}).`;
+          : `Se superpone con otra franja en las mismas fechas (${span}).`;
       if (!out.has(a.index)) out.set(a.index, msg);
       if (!out.has(b.index)) out.set(b.index, msg);
     }
@@ -118,7 +164,7 @@ export function validateWeekRanges(
       errs.set(index, "Día de la semana inválido.");
       return;
     }
-    const e = checkOne(r);
+    const e = checkOne(r) ?? checkValidity(r);
     if (e) {
       errs.set(index, e);
       return;
@@ -131,7 +177,7 @@ export function validateWeekRanges(
     list.push({ ...r, index });
     byDow.set(r.dow, list);
   });
-  for (const rows of byDow.values()) overlapErrors(rows, errs);
+  for (const [dow, rows] of byDow) overlapErrors(dow, rows, errs);
   return finish(errs);
 }
 

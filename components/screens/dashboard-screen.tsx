@@ -63,7 +63,13 @@ export function DashboardScreen({
           nearingDischarge={data.pinned.nearingDischarge}
           reminderKey={data.reminderKey}
         />
-        <PinnedRow pinned={data.pinned} pinnedKpis={data.pinnedKpis} todayCount={data.todayCount} monthRevenue={data.monthRevenue} />
+        <PinnedRow
+          pinned={data.pinned}
+          pinnedKpis={data.pinnedKpis}
+          todayCount={data.todayCount}
+          monthRevenue={data.monthRevenue}
+          revenueScope={data.revenueScope}
+        />
         <BottomRow bars={data.weeklyBars} recent={data.recent} />
       </div>
 
@@ -71,12 +77,15 @@ export function DashboardScreen({
         {useSidebar && (
           <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
             <NotificationsBell />
-            <ProfileMenu name={data.greetingName} preferences={preferences} />
+            <ProfileMenu name={data.greetingName} preferences={preferences} revenueScope={data.revenueScope} />
           </div>
         )}
         <MiniCalendar initialBookingDays={initialBookingDays} />
         <NextAppts items={data.next} />
-        <RevenueCard initial={data.revenue} month={data.monthRevenue} />
+        {/* SR-D5I: `revenue` null = el rol no ve ingresos (Secretaria): sin widget. */}
+        {data.revenue && data.revenueScope !== "none" && (
+          <RevenueCard initial={data.revenue} month={data.monthRevenue ?? undefined} scope={data.revenueScope} />
+        )}
       </aside>
     </div>
   );
@@ -354,13 +363,18 @@ function PinnedRow({
   pinnedKpis,
   todayCount,
   monthRevenue,
+  revenueScope,
 }: {
   pinned: DashboardData["pinned"];
   pinnedKpis: KpiKey[];
   todayCount: number;
   monthRevenue: DashboardData["monthRevenue"];
+  revenueScope: DashboardData["revenueScope"];
 }) {
-  const all: Record<KpiKey, { ic: typeof IconUsers; n: string; l: string; delta: string; tone: "sky" | "lime" | "soft" }> = {
+  type Kpi = { ic: typeof IconUsers; n: string; l: string; delta: string; tone: "sky" | "lime" | "soft" };
+  // SR-D5I: sin ingresos para este rol (Secretaria) la KPI fijada no se
+  // muestra: ni un "$0" que parezca dato. La preferencia guardada no se toca.
+  const all: Record<KpiKey, Kpi | null> = {
     activePatients: {
       ic: IconUsers,
       n: pinned.activePatients.toString(),
@@ -389,15 +403,19 @@ function PinnedRow({
       delta: "Sin cancelados",
       tone: "sky",
     },
-    monthRevenue: {
-      ic: IconChart,
-      // S14r: MP + copagos cobrados a mano (antes "Sólo pagos PAID" de MP). La
-      // obra social va aparte, como en el widget.
-      n: formatARS(monthRevenue.totalCents),
-      l: "Ingresos del mes",
-      delta: monthRevenue.insurerCents ? `+ ${formatARS(monthRevenue.insurerCents)} de obras sociales` : "MP + copagos",
-      tone: "lime",
-    },
+    monthRevenue: monthRevenue
+      ? {
+          ic: IconChart,
+          // S14r: MP + copagos cobrados a mano (antes "Sólo pagos PAID" de MP). La
+          // obra social va aparte, como en el widget.
+          n: formatARS(monthRevenue.totalCents),
+          l: revenueScope === "own" ? "Tus ingresos del mes" : "Ingresos del mes",
+          delta: monthRevenue.insurerCents
+            ? `+ ${formatARS(monthRevenue.insurerCents)} de obras sociales`
+            : "MP + copagos",
+          tone: "lime",
+        }
+      : null,
     adherence: {
       ic: IconActivity,
       n: `${pinned.adherencePct}%`,
@@ -420,7 +438,7 @@ function PinnedRow({
       tone: "sky",
     },
   };
-  const items = pinnedKpis.map((k) => all[k]).filter(Boolean).slice(0, 6);
+  const items = pinnedKpis.map((k) => all[k]).filter((x): x is Kpi => !!x).slice(0, 6);
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -436,7 +454,7 @@ function PinnedRow({
         >
           <IconBookmark size={14} /> Indicadores fijados
         </div>
-        <PinKpiButton currentPinned={pinnedKpis} />
+        <PinKpiButton currentPinned={pinnedKpis} revenueScope={revenueScope} />
       </div>
       <motion.div
         variants={staggerList}

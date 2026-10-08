@@ -7,7 +7,7 @@ import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge } from "@/lib/agenda-client-state";
 import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
-import { fmtHour, fmtMoney, osLabel, type BookingDTO } from "../agenda-utils";
+import { fmtHour, fmtMoney, osLabel, roomNameOf, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { PlanMarks } from "../grid/booking-card";
 
@@ -22,6 +22,11 @@ const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
  * paciente: "Sobreturno", recepción ("En sala 12′") y telemedicina, en texto.
  * Junto al nombre (S19a): chip del plan `Kine · 3/10` o "Fuera de plan".
  * Sin `clinical.read` (`clinicalHidden`) no hay subtítulo clínico.
+ *
+ * SR: con `roomById` (el caller lo pasa solo cuando la sala aporta,
+ * `showRoomOnCards`) la sala va como texto en una línea propia debajo del
+ * paciente ("Sala: Consultorio 2" para el lector, "Consultorio 2" a la vista).
+ * Sin `roomById`, o sin sala, la fila es la de siempre.
  */
 export function ListView({
   bookings,
@@ -29,6 +34,7 @@ export function ListView({
   highlight,
   practitionerById = null,
   now,
+  roomById = null,
 }: {
   bookings: BookingDTO[];
   onEdit: (b: BookingDTO) => void;
@@ -36,6 +42,7 @@ export function ListView({
   highlight: AgendaHighlight | null;
   practitionerById?: Readonly<Record<string, { initials: string; name: string }>> | null;
   now?: Date;
+  roomById?: Readonly<Record<string, { name: string }>> | null;
 }) {
   const clock = now ?? new Date();
   if (!bookings.length) {
@@ -82,6 +89,7 @@ export function ListView({
         // reemplaza.
         const sub = b.clinicalHidden ? null : b.title || b.description;
         const prac = practitionerById?.[b.practitionerId] ?? null;
+        const roomName = roomNameOf(roomById, b);
         const reception = receptionCardBadge(b, clock);
         const marks = [
           b.isOverbooked ? "Sobreturno" : null,
@@ -131,6 +139,15 @@ export function ListView({
                     {marks.join(" · ")}
                   </div>
                 )}
+                {roomName && (
+                  <div
+                    data-room
+                    style={{ fontSize: 11, color: "var(--navy-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}
+                  >
+                    <span style={visuallyHidden}>Sala: </span>
+                    {roomName}
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--navy-700)", minWidth: 0 }}>
@@ -163,6 +180,19 @@ export function ListView({
     </Card>
   );
 }
+
+/** Texto solo para lectores de pantalla. */
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+} as const;
 
 // El pill de estado vive en `components/ui/status-tag.tsx` (P0-S04b: una sola
 // paleta `--st-*` para Lista, drawer, perfil y semana). Se re-exporta para no

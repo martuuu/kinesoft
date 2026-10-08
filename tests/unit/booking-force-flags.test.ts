@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FORCE_FLAG_BY_KIND,
+  FORCE_PROMPT_ORDER,
   forcePromptActionLabel,
   forcePromptConfirm,
   forcePromptHeadline,
@@ -66,6 +67,70 @@ describe("nextForcePrompt", () => {
     expect(nextForcePrompt({ outOfHours }, { allowOutOfHours: true })).toBeNull();
     expect(nextForcePrompt({ conflict }, { allowOverbooking: true })).toBeNull();
     expect(nextForcePrompt({ patientOverlap }, { allowPatientOverlap: true })).toBeNull();
+    expect(nextForcePrompt({ roomBusy }, { allowRoomConflict: true })).toBeNull();
+  });
+});
+
+// SR1.0: la sala ocupada o bloqueada es un aviso forzable PROPIO (SR-D2), el
+// último del orden, y nunca sobreturno.
+const roomBusy = { roomName: "Consultorio 2", nextFreeISO: null };
+const roomBlocked = { roomName: "Consultorio 2", nextFreeISO: null, blocked: { reason: "Mantenimiento" } };
+
+describe("roomBusy (SR)", () => {
+  it("ORDER: roomBusy va último y con el flag allowRoomConflict", () => {
+    expect(FORCE_PROMPT_ORDER).toEqual(["blocked", "outOfHours", "conflict", "patientOverlap", "roomBusy"]);
+    expect(FORCE_FLAG_BY_KIND.roomBusy).toBe("allowRoomConflict");
+    const all: ForceableResult = { blocked, outOfHours, conflict, patientOverlap, roomBusy };
+    expect(nextForcePrompt(all)?.kind).toBe("blocked");
+    expect(
+      nextForcePrompt(all, {
+        allowBlocked: true,
+        allowOutOfHours: true,
+        allowOverbooking: true,
+        allowPatientOverlap: true,
+      })?.kind
+    ).toBe("roomBusy");
+    // Forzar la sala no fuerza el cupo, ni al revés.
+    expect(nextForcePrompt({ conflict, roomBusy }, { allowRoomConflict: true })?.kind).toBe("conflict");
+    expect(nextForcePrompt({ conflict, roomBusy }, { allowOverbooking: true })?.kind).toBe("roomBusy");
+  });
+
+  it("prompt con sala, motivo del bloqueo de sala y sin próximo libre", () => {
+    expect(nextForcePrompt({ roomBusy })).toEqual({
+      kind: "roomBusy",
+      flag: "allowRoomConflict",
+      practitionerName: "",
+      reason: null,
+      nextFreeISO: null,
+      roomName: "Consultorio 2",
+      roomBlocked: false,
+    });
+    expect(nextForcePrompt({ roomBusy: roomBlocked })).toMatchObject({ reason: "Mantenimiento", roomBlocked: true });
+    expect(nextForcePrompt({ roomBusy: null })).toBeNull();
+  });
+
+  it("copy: ocupado / bloqueado; 'Cargar igual' o 'Asignar igual', nunca sobreturno", () => {
+    const p = nextForcePrompt({ roomBusy })!;
+    const pb = nextForcePrompt({ roomBusy: roomBlocked })!;
+    expect(forcePromptHeadline(p)).toBe("Consultorio 2 está ocupado a esa hora.");
+    expect(forcePromptHeadline(pb)).toBe("Consultorio 2 está bloqueado a esa hora (Mantenimiento).");
+    expect(forcePromptHeadline(nextForcePrompt({ roomBusy: { ...roomBlocked, blocked: { reason: null } } })!)).toBe(
+      "Consultorio 2 está bloqueado a esa hora."
+    );
+    expect(forcePromptActionLabel(p, "edit")).toBe("Cargar igual");
+    expect(forcePromptActionLabel(p, "reschedule")).toBe("Cargar igual");
+    expect(forcePromptActionLabel(p, "assignRoom")).toBe("Asignar igual");
+    expect(forcePromptActionLabel(p, "reactivate")).toBe("Reactivar igual");
+    for (const a of ["edit", "reschedule", "assignRoom", "reactivate"] as const) {
+      const c = forcePromptConfirm(pb, a);
+      expect(c.confirmLabel).not.toMatch(/sobreturno/i);
+      expect(c.message).not.toMatch(/sobreturno/i);
+    }
+    expect(forcePromptConfirm(pb, "assignRoom")).toEqual({
+      title: "Consultorio 2 está bloqueado a esa hora (Mantenimiento).",
+      message: "¿Asignar igual?",
+      confirmLabel: "Asignar igual",
+    });
   });
 });
 

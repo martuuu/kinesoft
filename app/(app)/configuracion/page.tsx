@@ -9,6 +9,7 @@ import { listServicesWithCounts } from "@/lib/services";
 import { listTeamMembers, listPendingInvitations } from "@/lib/invitations";
 import { listCustomConditions } from "@/lib/conditions";
 import { listLocations } from "@/lib/locations";
+import { listRooms } from "@/lib/rooms";
 import { getPractitionerScheduleSummary } from "@/lib/practitioner-schedule";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 
@@ -27,7 +28,8 @@ export default async function ConfiguracionPage() {
   // B1.7: rol desde `lib/authz` (cacheado por request) y criterio de
   // `lib/capabilities`: el mismo que exigen las actions (`requireTenantAdmin`).
   const role = await getMembershipRole(actor);
-  if (!role || !(await getCapabilities()).has("tenant.admin")) {
+  const caps = await getCapabilities();
+  if (!role || !caps.has("tenant.admin")) {
     redirect("/dashboard");
   }
 
@@ -41,6 +43,7 @@ export default async function ConfiguracionPage() {
     customConditions,
     locations,
     scheduleSummary,
+    rooms,
   ] = await Promise.all([
     getTenantSettings(),
     listInsurers(),
@@ -65,6 +68,11 @@ export default async function ConfiguracionPage() {
     // de Sedes las lista aparte para poder restaurarlas.
     listLocations({ includeArchived: true }),
     getPractitionerScheduleSummary(),
+    // SR-U1: salas de todas las sedes, archivadas incluidas (el panel de Sedes
+    // las muestra por sede y las archivadas aparte). `includeArchived` exige
+    // `schedule.configure`; hoy `tenant.admin` lo implica (OWNER/ADMIN), pero
+    // si la matriz cambia, mejor una lista vacía que un 500 de la página.
+    caps.has("schedule.configure") ? listRooms({ includeArchived: true }) : Promise.resolve([]),
   ]);
 
   // EV0 (EV-K): los módulos salen de `actor.entitlements` (C-EV3, sin query
@@ -87,6 +95,7 @@ export default async function ConfiguracionPage() {
       }))}
       customConditions={customConditions}
       locations={locations}
+      rooms={rooms}
       scheduleSummary={scheduleSummary}
     />
   );

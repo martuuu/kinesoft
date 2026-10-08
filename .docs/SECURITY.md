@@ -525,6 +525,7 @@ the Membership — `Actor` still doesn't carry it):
   content.
 - **`billing.manage`** is not yet required by any charge action; before
   enforcing it the owner decides whether the practitioner charges (ROADMAP).
+  Since SR it **does** decide who sees the whole clinic's revenue (§16).
 - Known gap (C0): `buildActor` requires a `Practitioner` row
   (`lib/session.ts:91-97`), so a Secretaria (ASSISTANT) can't log in without one.
 **Planes ES1 (04-oct-2026, in code; not deployed until block B closes).** Detail in
@@ -685,3 +686,40 @@ conexión tiene BYPASSRLS: el `where: { tenantId }` a mano y las FKs compuestas 
   kinds de la allowlist y reserva los slugs de disciplina.
 - **Sincronía turno↔sesión sin gate de módulo** (decisión de S12): es consistencia de datos, no una feature; si un
   consultorio baja de vertical, cancelar un turno de plan sigue dejando la sesión coherente.
+
+## 16. Salas e ingresos por rol (SR, 08-oct-2026; en código, sin deploy hasta cerrar B)
+
+Diseño en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); orden de locks en ADR-004 (C2 (1b)).
+
+- **Quién lee las salas:** cualquier miembro del consultorio, **solo las activas** de sedes activas
+  (`listRoomOptions`, `lib/rooms.ts:156`, bootstrap de la agenda; `listRooms` sin `includeArchived`, `:111`). Son
+  nombres de lugares, no PHI. Con `includeArchived` (Configuración) pide `schedule.configure`.
+- **Quién las escribe:** `createRoom`/`updateRoom`/`archiveRoom`/`restoreRoom` piden `schedule.configure`
+  (OWNER/ADMIN), toman las sedes en exclusivo y auditan con `auditInTx`. La sede se valida `{id, tenantId, active}`.
+- **Sala en turnos, franjas, excepciones y bloqueos:** se valida contra el tenant y la sede (`lockActiveRoomInTx`,
+  `lib/booking-rooms-internal.ts:63`) y además lo garantizan las FKs compuestas `(roomId, tenantId)` y
+  `(roomId, locationId)` de M4: bajo BYPASSRLS (prod) una sala de otro consultorio o de otra sede no entra aunque la
+  action tuviera un bug. `Room` tiene RLS ENABLE + FORCE + policy (test en `rls-isolation`, 2 roles). Cambiar la sala de
+  un turno sigue `canOperateBooking` (la Secretaria sí, con `agenda.operateAll`).
+- **Bloqueo de sala:** `agenda.manageBlocks` (OWNER/ADMIN/Secretaria; `lib/time-blocks.ts:209`), la misma regla que el
+  candado de "todos". El PRACTITIONER no ve el alcance "Una sala" y un bloqueo de sala le sale deshabilitado ("Es un
+  bloqueo de sala."). `deleteTimeBlock` exige `manageBlocks`.
+- **Ingresos del dashboard por rol (SR-D5I, decisión de Martin del 08-oct).** `revenueScopeFor(caps, practitionerId)`
+  (`lib/dashboard-revenue.ts:152`) sale de las **capabilities**, no de `seesAll`:
+
+  | Rol | Capability que decide | Scope | Qué ve |
+  |---|---|---|---|
+  | OWNER / ADMIN / BILLING | `billing.manage` | `tenant` | "Ingresos del mes/semana" de todo el consultorio |
+  | PRACTITIONER | `clinical.read` | `own` | "Tus ingresos del mes/semana": turnos donde es el profesional **actual** |
+  | ASSISTANT (Secretaria) | ninguna | `none` | nada: widget y KPI ocultos, el picker de KPI no ofrece ingresos, `getRevenue` → error **sin consultar** Payment |
+
+  - La clave de `unstable_cache` lleva el scope explícito (`revenueScopeKey`, `lib/dashboard.ts:679`): sin él, dos
+    profesionales del mismo consultorio compartían la entrada durante el TTL. `monthRevenue` salió del cache de counts
+    (que se comparte por visibilidad de pacientes). Test de fuga con cache real (`useRealUnstableCache()`, afirma los
+    `keyParts`; TESTING.md).
+  - Atribución al profesional **actual** del turno: si un turno cobrado se reasigna, la plata se muda con él (no hay
+    "cobrado por" congelado). El filtro del OWNER por profesional → C0.
+  - Si la Secretaria guarda el picker de KPI, pierde una `monthRevenue` fijada (nunca la vio). `/reportes` es un
+    placeholder sin datos; los "próximos turnos" muestran el copago por turno (operativo, no se tocó).
+- **Facturación (SR-D4F):** los cancelados/ausentes con cobro se ven siempre y suman en "percibido"
+  (`isBillingVisible`, `components/planes/plan-booking-groups.ts:242`). No cambia quién ve la pestaña.

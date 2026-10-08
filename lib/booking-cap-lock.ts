@@ -40,8 +40,9 @@ import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
  * `lockCapacityMany`.
  *
  * Orden respecto de los otros locks (C2): `lockPlanPatient` (lib/plan-lock.ts)
- * SIEMPRE antes que el cupo; el cupo antes que `lockTenantLocationsShared`; y
- * recién después las filas (Booking FOR UPDATE id asc → Session →
+ * SIEMPRE antes que el cupo; el cupo antes que la SALA (SR, enmienda C2 (1b),
+ * ver el bloque de salas abajo); la sala antes que `lockTenantLocationsShared`;
+ * y recién después las filas (Booking FOR UPDATE id asc → Session →
  * TreatmentProgram).
  *
  * Alcance de transacción: se suelta solo en COMMIT/ROLLBACK. Llamarlo fuera
@@ -132,7 +133,16 @@ export async function lockCapacity(tx: DbClient, o: CapacityLockKey): Promise<vo
  * Lista vacía: no-op sin ida a la base.
  */
 export async function lockCapacityMany(tx: DbClient, keys: readonly CapacityLockKey[]): Promise<void> {
-  const ordered = orderedCapacityLockKeys(keys);
+  await lockOrderedKeys(tx, orderedCapacityLockKeys(keys));
+}
+
+/**
+ * La sentencia literal de C2 (1) sobre un array YA ordenado. Privada: el único
+ * lugar donde vive el SQL, para que `lockCapacityMany` y
+ * `lockCapacityAndRoomsMany` (SR, enmienda C2 (1b)) no puedan divergir.
+ * Lista vacía: no-op sin ida a la base.
+ */
+async function lockOrderedKeys(tx: DbClient, ordered: string[]): Promise<void> {
   if (ordered.length === 0) return;
   await tx.$executeRaw`SELECT count(pg_advisory_xact_lock(hashtextextended(k, 0))) FROM (SELECT k FROM unnest(${ordered}::text[]) WITH ORDINALITY u(k, o) ORDER BY o) s`;
 }
@@ -149,4 +159,100 @@ export async function lockCapacityWindow(
   o: { tenantId: string; practitionerId: string; serviceId: string; start: Date; end: Date }
 ): Promise<void> {
   await lockCapacityMany(tx, capacityKeysForWindow(o));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Salas (corrida SR, enmienda C2 (1b)): paciente → cupo → SALA → sedes → filas
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// El bug que evita: `Room.capacity` = cuántos PROFESIONALES atienden a la vez
+// en la sala (SR-D1). El chequeo (`countRoomOverlapsInTx`, SR1d) es un SELECT
+// seguido del INSERT/UPDATE, igual que el cupo: dos altas simultáneas de
+// profesionales DISTINTOS en un consultorio de capacidad 1 leían las dos "0
+// ocupados" y escribían las dos. El lock de cupo no las serializa porque su
+// clave es por profesional + servicio, y acá los profesionales son distintos.
+//
+// Por eso hay una clave por (tenant, sala, día AR), con el mismo razonamiento
+// de días que el cupo: si dos turnos se solapan en la sala, comparten al menos
+// un día AR de los que cubren.
+//
+// Orden (C2 (1b)): la sala va DESPUÉS del cupo y ANTES de las sedes. Cupo y
+// sala se toman en UNA sola sentencia (`lockCapacityAndRoomsMany`): el array
+// es `orderedCapacityLockKeys(cap) ++ orderedRoomLockKeys(rooms)`, con la
+// misma SQL `WITH ORDINALITY … ORDER BY o`. Así el statement count del alta con
+// sala no suma una ida por el lock, y el orden global (todo cupo antes que toda
+// sala) es el mismo para cualquier tx: dos tx nunca se esperan en ciclo.
+//
+// Sin sala, los callers siguen con `lockCapacityWindow`: 0 statements nuevos
+// (perf estricto de createBooking/updateBooking/batch intacto). Los prefijos
+// "kinesoft:cap:" y "kinesoft:room:" no se pisan, y tampoco con
+// "kinesoft:room-schedule:<tenantId>" (Configuración, SR1c), que NUNCA toma un
+// write-path de turnos.
+//
+// Quién NO toma la clave de sala (SR-D3): Planes, "este y los siguientes" y el
+// turnero estampan la sala por defecto sin chequear ocupación.
+
+/** Una clave de sala: (sala, día AR) dentro de un tenant. */
+export type RoomLockKey = { tenantId: string; roomId: string; dayKey: string };
+
+/** La clave textual del advisory lock de sala (exportada para los tests de carrera). */
+export const roomLockKey = (o: RoomLockKey) => `kinesoft:room:${o.tenantId}:${o.roomId}:${o.dayKey}`;
+
+/**
+ * Las claves de sala de una ventana [start, end): el día AR del inicio y, si
+ * cruza la medianoche AR, el siguiente (mismo criterio que
+ * `capacityKeysForWindow`).
+ */
+export function roomKeysForWindow(o: { tenantId: string; roomId: string; start: Date; end: Date }): RoomLockKey[] {
+  const from = dayKeyOf(o.start);
+  const to = dayKeyOf(new Date(Math.max(o.start.getTime(), o.end.getTime() - 1)));
+  return dayKeyRange(from, to).map((dayKey) => ({ tenantId: o.tenantId, roomId: o.roomId, dayKey }));
+}
+
+/**
+ * Claves de sala deduplicadas y ordenadas por (tenantId, roomId, dayKey),
+ * POR COMPONENTE (mismo motivo que `orderedCapacityLockKeys`: ids de largo
+ * distinto no invierten el orden).
+ */
+export function orderedRoomLockKeys(keys: readonly RoomLockKey[]): string[] {
+  const sorted = [...keys].sort(
+    (a, b) => cmp(a.tenantId, b.tenantId) || cmp(a.roomId, b.roomId) || cmp(a.dayKey, b.dayKey)
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of sorted) {
+    const s = roomLockKey(k);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * El array exacto que bloquea `lockCapacityAndRoomsMany`: todo el cupo
+ * ordenado y después todas las salas ordenadas. Exportado para el unit test
+ * de orden y para los tests de carrera (`pg_locks`).
+ */
+export function orderedCapacityAndRoomLockKeys(
+  cap: readonly CapacityLockKey[],
+  rooms: readonly RoomLockKey[]
+): string[] {
+  return [...orderedCapacityLockKeys(cap), ...orderedRoomLockKeys(rooms)];
+}
+
+/**
+ * Cupo + sala en UNA sentencia (enmienda C2 (1b)). Lo usan los write-paths que
+ * chequean ocupación de sala (alta y edición sueltas, `rescheduleSession` vía
+ * el core) SOLO cuando el turno tiene sala; sin sala, `lockCapacityWindow`.
+ * También sirve con `cap` vacío (p. ej. un bloqueo de sala que tiene que
+ * serializarse contra las altas en esa sala): sigue siendo una sentencia.
+ * Ambas listas vacías: no-op sin ida a la base.
+ */
+export async function lockCapacityAndRoomsMany(
+  tx: DbClient,
+  cap: readonly CapacityLockKey[],
+  rooms: readonly RoomLockKey[]
+): Promise<void> {
+  await lockOrderedKeys(tx, orderedCapacityAndRoomLockKeys(cap, rooms));
 }

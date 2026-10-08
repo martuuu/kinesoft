@@ -7,7 +7,14 @@
  * que se colara daría distinto en los dos husos.
  */
 import { describe, expect, it } from "vitest";
-import { revenuePeriod, summarizeRevenue, revenueTitle } from "@/lib/dashboard-revenue";
+import {
+  revenuePeriod,
+  revenueScopeFor,
+  revenueScopeKey,
+  summarizeRevenue,
+  revenueTitle,
+} from "@/lib/dashboard-revenue";
+import { capabilitiesFor } from "@/lib/capabilities";
 import {
   DashboardPrefsPatchSchema,
   DEFAULT_DASHBOARD_PREFS,
@@ -79,6 +86,38 @@ describe("summarizeRevenue", () => {
   it("títulos literales del plan", () => {
     expect(revenueTitle("week")).toBe("Ingresos de la semana");
     expect(revenueTitle("month")).toBe("Ingresos del mes");
+  });
+  it("[SR-D5I] con scope propio el título dice 'Tus ingresos…'", () => {
+    expect(revenueTitle("week", "own")).toBe("Tus ingresos de la semana");
+    expect(revenueTitle("month", "own")).toBe("Tus ingresos del mes");
+    expect(revenueTitle("month", "tenant")).toBe("Ingresos del mes");
+  });
+});
+
+describe("[SR-D5I] revenueScopeFor · quién ve qué ingresos", () => {
+  const P = "prac-1";
+  it("billing.manage (OWNER, ADMIN, BILLING) → todo el consultorio", () => {
+    for (const role of ["OWNER", "ADMIN", "BILLING"] as const) {
+      expect(revenueScopeFor(capabilitiesFor(role), P)).toEqual({ kind: "tenant" });
+    }
+  });
+
+  it("PRACTITIONER → solo lo suyo (su practitionerId)", () => {
+    expect(revenueScopeFor(capabilitiesFor("PRACTITIONER"), P)).toEqual({ kind: "own", practitionerId: P });
+  });
+
+  it("ASSISTANT (Secretaria) y sin membresía → nada (falla cerrado)", () => {
+    expect(revenueScopeFor(capabilitiesFor("ASSISTANT"), P)).toEqual({ kind: "none" });
+    expect(revenueScopeFor(capabilitiesFor(null), P)).toEqual({ kind: "none" });
+  });
+
+  it("la clave de cache es distinta por profesional y por scope", () => {
+    const a = revenueScopeKey({ kind: "own", practitionerId: "A" });
+    const b = revenueScopeKey({ kind: "own", practitionerId: "B" });
+    const t = revenueScopeKey({ kind: "tenant" });
+    expect(new Set([a, b, t, revenueScopeKey({ kind: "none" })]).size).toBe(4);
+    // Un id que se llame "tenant" no colisiona con el scope del consultorio.
+    expect(revenueScopeKey({ kind: "own", practitionerId: "tenant" })).not.toBe(t);
   });
 });
 

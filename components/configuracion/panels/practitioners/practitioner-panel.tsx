@@ -23,6 +23,7 @@ import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
+import type { RoomCatalogEntry } from "@/lib/schedule-editor-state";
 import { ScheduleEditor } from "./schedule-editor";
 import { ExceptionsEditor } from "./exceptions-editor";
 import { ServicesEditor } from "./services-editor";
@@ -39,10 +40,17 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
 export function PractitionerPanel({
   summary,
   locations,
+  rooms,
   onDirtyChange,
 }: {
   summary: PractitionerScheduleSummaryRow[];
   locations: LocationRow[];
+  /**
+   * SR-U2: catálogo de salas (`listRooms({ includeArchived: true })`). Las
+   * archivadas solo rotulan franjas viejas; el select y las capacidades usan
+   * las activas. Sin salas, Horarios y Excepciones se ven igual que antes.
+   */
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
   /** Hay cambios sin guardar en una sub-pestaña en línea (para frenar el cambio de pestaña de arriba). */
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -215,6 +223,7 @@ export function PractitionerPanel({
                 practitionerId={selected.practitionerId}
                 practitionerName={selected.name}
                 locations={locations}
+                rooms={rooms}
               />
             )}
             {sub === "excepciones" && (
@@ -223,6 +232,7 @@ export function PractitionerPanel({
                 practitionerId={selected.practitionerId}
                 practitionerName={selected.name}
                 locations={locations}
+                rooms={rooms}
               />
             )}
             {sub === "servicios" && (

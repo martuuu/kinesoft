@@ -17,6 +17,13 @@
  *     plano): `fieldErrorsToRowErrors` los devuelve a la fila que los causó.
  *   • Semana vacía se rechaza: sin franjas el motor aplica el horario del
  *     consultorio (no "no atiende"). Para no atender un día: Excepciones.
+ *   • SR-U2: cada franja lleva sala (`roomId`) y vigencia (`validFrom`/
+ *     `validUntil`). Como el guardado REEMPLAZA la semana, el draft las
+ *     arrastra siempre (si no, guardar sin tocar borraba la sala). El select
+ *     de sala solo aparece si la sede de la fila tiene salas: sin salas
+ *     cargadas la pantalla queda igual que antes de SR. El choque de sala con
+ *     otros profesionales se marca en la fila antes de ir al server
+ *     (`validateDraft` + `roomUsage`); la action lo vuelve a validar bajo lock.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -30,6 +37,8 @@ import type { LocationRow } from "@/lib/locations-schemas";
 import type { PractitionerScheduleView } from "@/lib/practitioner-schedule-schemas";
 import { getPractitionerSchedule, savePractitionerWeek } from "@/lib/practitioner-schedule";
 import { formatHHMM, MAX_RANGES_PER_DAY } from "@/lib/schedule-validate";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { NO_ROOM_LABEL } from "@/lib/rooms-constants";
 import {
   DOW_LONG,
   WEEK_ORDER,
@@ -38,10 +47,16 @@ import {
   draftToPayload,
   fieldErrorsToRowErrors,
   nextRange,
+  rangeDetailLabel,
+  roomLabel,
+  roomsForLocation,
   timeOptions,
   validateDraft,
+  validityLabel,
   weekSignature,
+  withLocation,
   type DraftRange,
+  type RoomCatalogEntry,
   type WeekDraft,
 } from "@/lib/schedule-editor-state";
 import { ErrorBox } from "../../controls";
@@ -103,6 +118,18 @@ export function locationName(locations: ReadonlyArray<LocationRow>, id: string):
 // Filas de franjas (un día). Lo reusa el editor de excepciones.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Copy de Horarios (SR-U2, literal del relevamiento de UI). */
+export const SCHEDULE_ROOM_COPY = {
+  room: "Sala",
+  always: "Siempre",
+  onlyPeriod: "Solo por un período",
+  change: "Cambiar",
+  backToAlways: "Volver a siempre",
+  from: "Desde",
+  until: "Hasta (opcional)",
+  help: "Para un reemplazo o un cambio de consultorio por unas semanas.",
+} as const;
+
 export function RangeRowsEditor({
   rows,
   onChange,
@@ -112,6 +139,8 @@ export function RangeRowsEditor({
   defaults,
   disabled,
   dayLabel,
+  rooms,
+  showValidity = false,
 }: {
   rows: DraftRange[];
   onChange: (rows: DraftRange[]) => void;
@@ -122,9 +151,26 @@ export function RangeRowsEditor({
   defaults: { startMin: number; endMin: number; locationId: string };
   disabled?: boolean;
   dayLabel: string;
+  /** SR-U2: catálogo de salas (archivadas incluidas). Sin salas en la sede de la fila, no hay select. */
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
+  /**
+   * SR-U2: vigencia por franja (solo la semana; una excepción ya es un día).
+   * SRZ-FX3 (M3): la semana lo pasa solo con salas; una franja que YA tiene
+   * vigencia la muestra igual (nunca se esconde un dato cargado).
+   */
+  showValidity?: boolean;
 }) {
   const active = locations.filter((l) => l.active);
   const canAdd = !disabled && nextRange(rows, defaults) !== null;
+  // Vigencia plegada: se abre a pedido ("Solo por un período" / "Cambiar").
+  const [openValidity, setOpenValidity] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleValidity = (key: string, open: boolean) =>
+    setOpenValidity((s) => {
+      const n = new Set(s);
+      if (open) n.add(key);
+      else n.delete(key);
+      return n;
+    });
   const patch = (key: string, p: Partial<DraftRange>) =>
     onChange(rows.map((r) => (r.key === key ? { ...r, ...p } : r)));
 
@@ -135,8 +181,11 @@ export function RangeRowsEditor({
         const locOpts = active.some((l) => l.id === r.locationId)
           ? active
           : [...active, ...locations.filter((l) => l.id === r.locationId)];
+        const roomSel = roomsForLocation(rooms, r.locationId, r.roomId);
+        const validityOpen = openValidity.has(r.key);
+        const hasValidity = !!(r.validFrom || r.validUntil);
         return (
-          <div key={r.key}>
+          <div key={r.key} data-range-row={r.key}>
             <div
               style={{
                 display: "flex",
@@ -181,13 +230,31 @@ export function RangeRowsEditor({
                   aria-label={`${dayLabel}, franja ${i + 1}: sede`}
                   value={r.locationId}
                   disabled={disabled}
-                  onChange={(e) => patch(r.key, { locationId: e.target.value })}
+                  onChange={(e) =>
+                    onChange(rows.map((x) => (x.key === r.key ? withLocation(x, e.target.value, rooms) : x)))
+                  }
                   style={{ ...selectStyle, flex: "1 1 140px", maxWidth: 260 }}
                 >
                   {!r.locationId && <option value="">Elegí la sede</option>}
                   {locOpts.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.active ? l.name : `${l.name} (archivada)`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {roomSel.show && (
+                <select
+                  aria-label={`${dayLabel}, franja ${i + 1}: sala`}
+                  value={r.roomId ?? ""}
+                  disabled={disabled}
+                  onChange={(e) => patch(r.key, { roomId: e.target.value || null })}
+                  style={{ ...selectStyle, flex: "1 1 140px", maxWidth: 220 }}
+                >
+                  <option value="">{NO_ROOM_LABEL}</option>
+                  {roomSel.options.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {roomLabel(rooms, o.id)}
                     </option>
                   ))}
                 </select>
@@ -210,6 +277,18 @@ export function RangeRowsEditor({
                 <IconX size={14} />
               </button>
             </div>
+            {(showValidity || hasValidity) && (
+              <ValidityEditor
+                row={r}
+                index={i}
+                dayLabel={dayLabel}
+                open={validityOpen}
+                hasValidity={hasValidity}
+                disabled={disabled}
+                onOpen={(o) => toggleValidity(r.key, o)}
+                onPatch={(p) => patch(r.key, p)}
+              />
+            )}
             {err && (
               <div role="alert" style={{ fontSize: 12, color: "#9F1F1F", padding: "2px 8px 0" }}>
                 {err}
@@ -240,6 +319,117 @@ export function RangeRowsEditor({
   );
 }
 
+/**
+ * Vigencia de una franja, plegada: "Siempre · Solo por un período" o
+ * "Del 01/11 al 30/11 · Cambiar". Abierta: "Desde" / "Hasta (opcional)" con
+ * `<input type="date">` (da "YYYY-MM-DD" = DayKey tal cual, la excepción de
+ * TZ permitida). Vacío = abierta en ese extremo.
+ */
+function ValidityEditor({
+  row,
+  index,
+  dayLabel,
+  open,
+  hasValidity,
+  disabled,
+  onOpen,
+  onPatch,
+}: {
+  row: DraftRange;
+  index: number;
+  dayLabel: string;
+  open: boolean;
+  hasValidity: boolean;
+  disabled?: boolean;
+  onOpen: (open: boolean) => void;
+  onPatch: (p: Partial<DraftRange>) => void;
+}) {
+  const label = `${dayLabel}, franja ${index + 1}`;
+  if (!open) {
+    return (
+      <div
+        style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, padding: "0 8px", fontSize: 12 }}
+      >
+        <span style={{ color: hasValidity ? "var(--navy-700)" : "var(--navy-300)", fontWeight: hasValidity ? 600 : 400 }}>
+          {validityLabel(row.validFrom, row.validUntil)}
+        </span>
+        <span aria-hidden style={{ color: "var(--navy-300)" }}>·</span>
+        <button
+          type="button"
+          style={{ ...linkBtn, minHeight: 28, padding: "2px 4px", fontSize: 12 }}
+          disabled={disabled}
+          aria-label={`${label}: ${hasValidity ? "cambiar el período" : SCHEDULE_ROOM_COPY.onlyPeriod.toLowerCase()}`}
+          onClick={() => onOpen(true)}
+        >
+          {hasValidity ? SCHEDULE_ROOM_COPY.change : SCHEDULE_ROOM_COPY.onlyPeriod}
+        </button>
+      </div>
+    );
+  }
+  const dateStyle: React.CSSProperties = { ...selectStyle, width: "100%", minWidth: 0, boxSizing: "border-box" };
+  return (
+    <div
+      style={{
+        margin: "2px 6px 4px",
+        padding: 8,
+        borderRadius: 10,
+        background: "rgba(15,30,51,0.04)",
+        display: "grid",
+        gap: 6,
+      }}
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <label style={{ display: "grid", gap: 2, flex: "1 1 130px", minWidth: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          {SCHEDULE_ROOM_COPY.from}
+          <input
+            type="date"
+            aria-label={`${label}: desde la fecha`}
+            value={row.validFrom ?? ""}
+            disabled={disabled}
+            onChange={(e) => onPatch({ validFrom: e.target.value || null })}
+            style={dateStyle}
+          />
+        </label>
+        <label style={{ display: "grid", gap: 2, flex: "1 1 130px", minWidth: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          {SCHEDULE_ROOM_COPY.until}
+          <input
+            type="date"
+            aria-label={`${label}: hasta la fecha`}
+            value={row.validUntil ?? ""}
+            min={row.validFrom ?? undefined}
+            disabled={disabled}
+            onChange={(e) => onPatch({ validUntil: e.target.value || null })}
+            style={dateStyle}
+          />
+        </label>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{SCHEDULE_ROOM_COPY.help}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {hasValidity && (
+          <button
+            type="button"
+            style={{ ...linkBtn, minHeight: 28, padding: "2px 4px", fontSize: 12 }}
+            disabled={disabled}
+            onClick={() => {
+              onPatch({ validFrom: null, validUntil: null });
+              onOpen(false);
+            }}
+          >
+            {SCHEDULE_ROOM_COPY.backToAlways}
+          </button>
+        )}
+        <button
+          type="button"
+          style={{ ...linkBtn, minHeight: 28, padding: "2px 4px", fontSize: 12 }}
+          onClick={() => onOpen(false)}
+        >
+          Listo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Sub-tab Horarios
 // ─────────────────────────────────────────────────────────────────────────────
@@ -248,10 +438,13 @@ export function ScheduleEditor({
   practitionerId,
   practitionerName,
   locations,
+  rooms,
 }: {
   practitionerId: string;
   practitionerName: string;
   locations: LocationRow[];
+  /** SR-U2: catálogo de salas (archivadas incluidas, para rotular). Opcional: sin salas, todo igual que antes. */
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
 }) {
   const [view, setView] = useState<PractitionerScheduleView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -300,8 +493,19 @@ export function ScheduleEditor({
     ranges: view.isFallback
       ? dow === 0
         ? []
-        : [{ startMin: view.tenantHours.startMin, endMin: view.tenantHours.endMin, locationId: primary?.id ?? "" }]
-      : view.ranges.filter((r) => r.dow === dow).sort((a, b) => a.startMin - b.startMin),
+        : [
+            {
+              startMin: view.tenantHours.startMin,
+              endMin: view.tenantHours.endMin,
+              locationId: primary?.id ?? "",
+              roomId: null as string | null | undefined,
+              validFrom: null as string | null,
+              validUntil: null as string | null,
+            },
+          ]
+      : view.ranges
+          .filter((r) => r.dow === dow)
+          .sort((a, b) => a.startMin - b.startMin || (a.validFrom ?? "").localeCompare(b.validFrom ?? "")),
   }));
 
   return (
@@ -373,11 +577,16 @@ export function ScheduleEditor({
                     }}
                   >
                     {formatHHMM(r.startMin)}–{formatHHMM(r.endMin)}
-                    {multiLocation && (
-                      <span style={{ fontFamily: "inherit", color: "var(--navy-500)" }}>
-                        {" "}· {locationName(locations, r.locationId)}
-                      </span>
-                    )}
+                    {(() => {
+                      // SR-U2: "· Centro · Consultorio 2 · hasta el 30/11". Sin sala ni vigencia, igual que antes.
+                      const detail = rangeDetailLabel(r, {
+                        locationName: multiLocation ? locationName(locations, r.locationId) : null,
+                        roomName: r.roomId ? roomLabel(rooms, r.roomId) : null,
+                      });
+                      return detail ? (
+                        <span style={{ fontFamily: "inherit", color: "var(--navy-500)" }}> · {detail}</span>
+                      ) : null;
+                    })()}
                   </span>
                 ))}
               </span>
@@ -392,6 +601,7 @@ export function ScheduleEditor({
           practitionerId={practitionerId}
           practitionerName={practitionerName}
           locations={locations}
+          rooms={rooms}
           primaryLocationId={primary.id}
           reload={load}
           onClose={() => setEditing(false)}
@@ -411,11 +621,13 @@ export function ScheduleEditor({
 
 const CONFLICT_CHECK_EVERY_MS = 5_000;
 
-function WeekDrawer({
+/** Exportado para el test de render (tests/unit/render/schedule-editor-rooms.test.tsx). */
+export function WeekDrawer({
   view,
   practitionerId,
   practitionerName,
   locations,
+  rooms,
   primaryLocationId,
   reload,
   onClose,
@@ -425,6 +637,7 @@ function WeekDrawer({
   practitionerId: string;
   practitionerName: string;
   locations: LocationRow[];
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
   primaryLocationId: string;
   reload: () => Promise<PractitionerScheduleView | null>;
   onClose: () => void;
@@ -444,13 +657,23 @@ function WeekDrawer({
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
   const [copyTargets, setCopyTargets] = useState<Set<number>>(new Set());
   const [attempted, setAttempted] = useState(false);
+  const [roomUsage, setRoomUsage] = useState(view.roomUsage ?? []);
 
   const activeSet = useMemo(
     () => new Set(locations.filter((l) => l.active).map((l) => l.id)),
     [locations]
   );
   const showLocation = activeSet.size > 1 || draft.some((d) => d.some((r) => !activeSet.has(r.locationId)));
-  const liveErrors = useMemo(() => validateDraft(draft, activeSet), [draft, activeSet]);
+  // SR-U2: la sala se valida en el cliente con el roomUsage de la última
+  // lectura (franjas con sala de los DEMÁS) y "hoy AR"; el server repite todo bajo lock.
+  const roomCheck = useMemo(
+    () =>
+      rooms && rooms.length > 0
+        ? { rooms, usage: roomUsage, practitionerId, today: toARDateKey(new Date()) }
+        : undefined,
+    [rooms, roomUsage, practitionerId]
+  );
+  const liveErrors = useMemo(() => validateDraft(draft, activeSet, roomCheck), [draft, activeSet, roomCheck]);
   const dirty = weekSignature(draft) !== baseline;
   const defaults = { ...tenantHours, locationId: primaryLocationId };
 
@@ -525,6 +748,7 @@ function WeekDrawer({
     setBaseline(weekSignature(d));
     setVersion(fresh.version);
     setTenantHours(fresh.tenantHours);
+    setRoomUsage(fresh.roomUsage ?? []);
     setServerErrors({});
     setFormError(null);
     setConflict(false);
@@ -550,6 +774,13 @@ function WeekDrawer({
       const r = await savePractitionerWeek(practitionerId, ranges, version);
       if (r.ok) {
         toast.success(`Horario de ${practitionerName} guardado`);
+        // SR1c: choques con horarios especiales futuros de otros = aviso, se guarda igual.
+        const warnings = r.data?.warnings ?? [];
+        if (warnings.length > 0) {
+          toast.warning(warnings.length === 1 ? "Revisá un día" : `Revisá ${warnings.length} días`, {
+            description: warnings.join(" "),
+          });
+        }
         onSaved();
         router.refresh();
         return;
@@ -745,6 +976,13 @@ function WeekDrawer({
                     defaults={defaults}
                     disabled={pending}
                     dayLabel={label}
+                    rooms={rooms}
+                    // SRZ-FX3 (M3): sin salas la línea de vigencia no sale (el
+                    // cliente vivo, sin salas, veía ~12 líneas "Siempre · Solo por
+                    // un período" de más). Su caso de uso es "cambio de
+                    // consultorio": sin salas no hace falta. Una franja con
+                    // vigencia ya cargada la muestra igual (ver RangeRowsEditor).
+                    showValidity={rooms != null && rooms.length > 0}
                   />
                 </div>
               </section>

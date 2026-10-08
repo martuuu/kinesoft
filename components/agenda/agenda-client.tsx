@@ -38,6 +38,7 @@ import {
   layoutBlocks,
   rangesForDay,
   type AgendaAvailability,
+  type AgendaBlockView,
   type AgendaBootstrapProps,
 } from "@/lib/availability-actions-types";
 import { getAgendaAvailability } from "@/lib/availability-actions";
@@ -52,18 +53,24 @@ import {
   agendaHref,
   aggregateDayLock,
   applyAgendaFilters,
+  availableAgendaModes,
   availabilityMatches,
   blockedRows,
   canOpenDayLock,
   capabilitySet,
   countByPractitioner,
+  countByRoom,
   dayLockInitialScope,
+  dayViewFor,
+  effectiveRoomFilter,
   isDayScoped,
   mergeBookingOverrides,
+  roomsInScope,
   segmentOf,
   shiftDayKey,
   showModeToggle,
   showPractitionerInitials,
+  showRoomOnCards,
   viewForSegment,
   visiblePractitioners,
   weekDayKeys,
@@ -76,11 +83,11 @@ import {
 import type { DayLockState } from "@/lib/availability/types";
 import { sameHighlight, toggleHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import type { Discipline } from "@/lib/plans-constants";
-import { expandPlanFields, serviceDisciplineMap, type BookingDTO } from "./agenda-utils";
+import { expandPlanFields, serviceDisciplineMap, withArchivedRooms, type BookingDTO } from "./agenda-utils";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
 import { PlanLegend } from "./plan-legend";
-import { ModeToggle } from "./mode-toggle";
+import { AGENDA_MODE_OPTIONS, ModeToggle } from "./mode-toggle";
 import { PractitionerChips } from "./practitioner-chips";
 import { LocationFilter } from "./location-filter";
 import { DayLockButton } from "./day-lock/day-lock-button";
@@ -109,6 +116,12 @@ const ReceptionView = dynamic(() => import("./reception/reception-view").then((m
 const PractitionerDayView = dynamic(() =>
   import("./views/practitioner-day-view").then((m) => m.PractitionerDayView<BookingDTO>)
 );
+// SR-U6: la vista "Por sala" (con su layout) y el filtro de sala solo existen
+// en consultorios con salas (el cliente vivo no tiene): fuera del first load,
+// como Recepción y Por profesional. Con SSR (default) la vista inicial igual
+// llega renderizada.
+const RoomDayPanel = dynamic(() => import("./views/room-day-panel").then((m) => m.RoomDayPanel));
+const RoomFilter = dynamic(() => import("./room-filter").then((m) => m.RoomFilter));
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -128,8 +141,9 @@ function prefetchAgendaChunks() {
  * Filtros, todos del lado del cliente (los turnos de la semana vienen enteros
  * de `listAgendaBookings`): un objeto `AgendaFilters` extensible (S19b:
  * profesionales en `?pros=`, vacío = todos; sede en `agendaPrefs.locationId`;
- * la sala de SR se suma ahí) y los toggles de cancelados/ausentes
- * (localStorage, como siempre).
+ * sala en `agendaPrefs.roomId`, SR-U6) y los toggles de cancelados/ausentes
+ * (localStorage, como siempre). En "Por sala" el filtro de profesionales no
+ * aplica (SRZ M2): la ocupación de la sala es de todos.
  *
  * Resaltado (no oculta, atenúa): leyenda de servicios y, con el módulo
  * `planes`, leyenda "Turnos: De plan · Sueltos" (S19b). El alcance de plan se
@@ -224,6 +238,45 @@ function useMinuteClock(): Date {
 }
 
 const EMPTY: never[] = [];
+
+/** Alta desde una celda de "Por sala" (SR-U4 → SR-U5c): la sala de la columna;
+ *  "Sin sala" (`"none"`) abre el modal sin sala. */
+export function roomSlotCreating(roomId: string, iso: string): { defaultISO: string; defaultRoomId: string | null } {
+  return { defaultISO: iso, defaultRoomId: roomId === "none" ? null : roomId };
+}
+
+/** Bloqueo existente del día para el candado (`DayLockDialog.existingBlocks`). */
+export type DayLockExistingBlock = Pick<
+  AgendaBlockView,
+  "id" | "groupId" | "practitionerId" | "startsAt" | "endsAt" | "allDay" | "reason"
+> & { roomId?: string };
+
+/**
+ * Bloqueos que tocan el día del candado. SR-BU (§17.5): los de SALA viajan
+ * aparte (`availability.roomBlocks`, el loader los separa de `blocks`); sin
+ * sumarlos acá no se listaban ni se podían desbloquear. Van con
+ * `practitionerId: null` + `roomId` y el diálogo los rotula con la sala (nunca
+ * "Todo el equipo"). Sin salas el resultado es el de siempre (sin `roomId`).
+ */
+export function dayLockExistingBlocks(availability: AgendaAvailability, dayKey: string): DayLockExistingBlock[] {
+  const { start, end } = dayWindow(dayKey);
+  const touches = (b: { startsAt: string; endsAt: string }) => new Date(b.startsAt) < end && new Date(b.endsAt) > start;
+  const people = availability.blocks.filter(touches).map((b) => ({
+    id: b.id,
+    groupId: b.groupId,
+    practitionerId: b.practitionerId,
+    startsAt: b.startsAt,
+    endsAt: b.endsAt,
+    allDay: b.allDay,
+    reason: b.reason,
+  }));
+  // `AgendaRoomBlockView` = { id, roomId, startsAt, endsAt, reason }; `allDay`
+  // false: el rótulo detecta "Todo el día" por la ventana.
+  const rooms = (availability.roomBlocks ?? [])
+    .filter(touches)
+    .map((b) => ({ ...b, groupId: null, practitionerId: null, allDay: false }));
+  return [...people, ...rooms];
+}
 /** Reloj fijo para cálculos sin turnos (filas bloqueadas): el "ahora" solo
  *  importa para la reserva pública vencida, y ahí no hay turnos. */
 const NO_CLOCK = new Date(0);
@@ -232,12 +285,18 @@ export function AgendaClient(props: Props) {
   const router = useRouter();
   const toast = useToast();
   const now = useMinuteClock();
-  const { view, dayKey, weekStartKey } = props;
+  const { dayKey, weekStartKey } = props;
+  // SR-U6: "Por sala" sin catálogo de salas (se archivaron todas con la página
+  // abierta, o un link viejo) es el Día de siempre. El server ya lo resuelve
+  // así (`resolveAgendaView` con `roomCount`); esto cubre lo que llega igual.
+  const view: AgendaView = props.view === "room" && !props.rooms?.length ? "timeline" : props.view;
   const [creating, setCreating] = useState<null | {
     defaultISO?: string;
     defaultPatientId?: string | null;
     /** Alta rápida desde una columna: ese profesional. */
     practitionerId?: string | null;
+    /** SR-U5c: alta desde una columna de "Por sala": esa sala (null = "Sin sala"). */
+    defaultRoomId?: string | null;
   }>(null);
   const [editing, setEditing] = useState<BookingDTO | null>(null);
   // Chunks diferidos (modal/drawer/candado): precarga cuando el navegador
@@ -349,6 +408,8 @@ export function AgendaClient(props: Props) {
   const ownPractitionerId = props.viewer?.practitionerId ?? null;
   const canReception = caps.has("agenda.reception");
   const canLockAny = caps.has("agenda.manageBlocks") || caps.has("agenda.manageOwnBlocks");
+  // Quién puede cargar salas (Configuración › Sedes): copy del vacío de "Por sala" (SRZ B3).
+  const canConfigureRooms = caps.has("tenant.admin") || caps.has("schedule.configure");
   const practitionerCount = props.practitioners.length;
 
   const badges = useMemo(
@@ -377,6 +438,13 @@ export function AgendaClient(props: Props) {
         ? Object.fromEntries(visiblePracs.map((p) => [p.id, { initials: p.initials, name: p.name }]))
         : null,
     [visiblePracs]
+  );
+  // "Por sala" (SRZ M1): iniciales de TODOS los profesionales. `initialsById`
+  // es null con un solo profesional visible y trae solo los elegidos, así que
+  // el header decía "Asignada: ? 14–18" para la sala de otro profesional.
+  const roomPractitionerById = useMemo(
+    () => Object.fromEntries(ordered.map((p) => [p.id, { initials: p.initials, name: p.name }])),
+    [ordered]
   );
 
   // ── Disponibilidad (franjas, candado, bloqueos) ────────────────────────────
@@ -415,6 +483,29 @@ export function AgendaClient(props: Props) {
   const primaryLocationId =
     availability?.primaryLocationId ?? props.locations?.find((l) => l.isPrimary)?.id ?? null;
 
+  // ── Salas (SR) ─────────────────────────────────────────────────────────────
+  // Catálogo del bootstrap (activas de sedes activas); el nombre de `roomId` se
+  // resuelve acá, no viaja por turno (C9 compacto). Sin salas: todo lo de abajo
+  // da vacío/null y la agenda es la de antes de SR.
+  const rooms = props.rooms ?? EMPTY;
+  // D4: con "Todas las sedes", las salas de la sede principal.
+  const scopeRooms = useMemo(
+    () => roomsInScope(rooms, locationId, primaryLocationId),
+    [rooms, locationId, primaryLocationId]
+  );
+  const roomCount = scopeRooms.length;
+  // SRZ B4: parado en "Por sala" en una sede sin salas (se cambió de sede con
+  // la página abierta), el toggle igual ofrece "Por sala" marcado y la salida
+  // a "Por día"; si no, quedaban opciones sin marcar (o ningún toggle con un
+  // solo profesional). Al elegir "Por día", `dayViewFor` lleva al Día.
+  const toggleRoomCount = view === "room" ? Math.max(roomCount, 1) : roomCount;
+  // D3: sala ajena/archivada/de otra sede, o menos de 2 salas → todas.
+  const roomId = effectiveRoomFilter(prefs.roomId, scopeRooms);
+  const roomCatalog = useMemo(
+    () => Object.fromEntries(rooms.map((r) => [r.id, { name: r.name }])) as Record<string, { name: string }>,
+    [rooms]
+  );
+
   // ── Turnos: recepción optimista + filtros ──────────────────────────────────
   // `ReceptionView` avisa cada cambio con la fila nueva (o la vieja si "cambió
   // en otra sesión"); se pisa acá al instante y `router.refresh()` re-lista.
@@ -436,18 +527,37 @@ export function AgendaClient(props: Props) {
     () => mergeBookingOverrides(serverBookings, overrides, (b) => expandPlanFields(b, disciplineByService)),
     [serverBookings, overrides, disciplineByService]
   );
-  // S19b: un solo objeto de filtros (SR suma `roomId` acá y en la tabla de
-  // `AGENDA_FILTER_DIMENSIONS`, sin tocar lo de abajo).
-  const filters: AgendaFilters = useMemo(() => ({ practitionerIds: selectedIds, locationId }), [selectedIds, locationId]);
+  // S19b: un solo objeto de filtros. SR-U6: la sala se filtra en el CLIENTE,
+  // igual que la sede: `listAgendaBookings` trae la semana entera (todas las
+  // sedes y salas) y cambiar de sala no vuelve al server; los conteos del
+  // filtro (`except: ["roomId"]`) salen de lo mismo. `listAgendaBookings`
+  // acepta `roomId`, pero usarlo acá sumaría un viaje por cambio de chip.
+  const filters: AgendaFilters = useMemo(
+    () => ({ practitionerIds: selectedIds, locationId, roomId }),
+    [selectedIds, locationId, roomId]
+  );
   const filterCtx: AgendaFilterContext = useMemo(() => ({ primaryLocationId }), [primaryLocationId]);
   // Base de los chips de profesionales: todos los filtros menos el de profesionales.
   const locBookings = useMemo(
     () => applyAgendaFilters(allBookings, filters, filterCtx, { except: ["practitionerIds"] }),
     [allBookings, filters, filterCtx]
   );
+  // SRZ M2 (decisión del orquestador): en "Por sala" la base es la de los
+  // chips (todos los profesionales): la ocupación de una sala no puede
+  // depender de qué chips están puestos. Por eso ahí no se muestran los chips
+  // (no hay "resaltado" por profesional) y el conteo de ocultos y la leyenda
+  // cuentan lo mismo que se ve. Sin salas la vista "room" no existe.
   const filteredBookings = useMemo(
-    () => applyAgendaFilters(allBookings, filters, filterCtx),
-    [allBookings, filters, filterCtx]
+    () => (view === "room" ? locBookings : applyAgendaFilters(allBookings, filters, filterCtx)),
+    [view, locBookings, allBookings, filters, filterCtx]
+  );
+  // Sala archivada (SRZ B5): el `roomId` de un turno que no está en el
+  // catálogo se rotula "Sala archivada" en tarjetas, Lista y Recepción (antes,
+  // nada o "—", igual que un turno sin sala). Sin salas, el catálogo vacío de
+  // siempre (y Recepción/tarjetas no lo reciben).
+  const roomById = useMemo(
+    () => (rooms.length > 0 ? withArchivedRooms(roomCatalog, allBookings) : roomCatalog),
+    [rooms.length, roomCatalog, allBookings]
   );
   const visibleBookings = useMemo(
     () => applyAgendaVisibility(filteredBookings, visibility),
@@ -504,6 +614,25 @@ export function AgendaClient(props: Props) {
     const scope = isDayScoped(view) ? locBookings.filter((b) => toARDateKey(b.scheduledFor) === dayKey) : locBookings;
     return countByPractitioner(scope);
   }, [locBookings, view, dayKey]);
+  // Conteos del filtro de sala: todos los filtros menos el de sala, con el
+  // mismo alcance que los chips (el día, o la semana en Semana).
+  // B1 (SRZ): "Todas las salas" = los no cancelados de esa base, no la suma
+  // de las opciones (con "Todas las sedes" hay turnos en salas de otra sede).
+  const roomCounts = useMemo(() => {
+    if (roomCount < 2) return null;
+    const base = applyAgendaFilters(allBookings, filters, filterCtx, { except: ["roomId"] });
+    const scoped = isDayScoped(view) ? base.filter((b) => toARDateKey(b.scheduledFor) === dayKey) : base;
+    return { counts: countByRoom(scoped), total: scoped.filter((b) => b.status !== "CANCELLED").length };
+  }, [roomCount, allBookings, filters, filterCtx, view, dayKey]);
+  // Sala en las tarjetas: solo si aporta (2+ salas visibles, fuera de "Por
+  // sala" y sin filtro de sala). Con "Todas las sedes" se ven turnos de todas.
+  const cardRooms = showRoomOnCards({
+    view,
+    roomCount: locationId == null ? rooms.length : roomCount,
+    roomFilter: roomId,
+  })
+    ? roomById
+    : null;
 
   // ── Grilla: ventana, franjas y bloqueos ────────────────────────────────────
   const hours = props.businessHours ?? AGENDA_HOURS_FALLBACK;
@@ -625,21 +754,10 @@ export function AgendaClient(props: Props) {
       />
     );
   };
-  const lockDialogBlocks = useMemo(() => {
-    if (!lockDialog || !availability) return [];
-    const { start, end } = dayWindow(lockDialog.dayKey);
-    return availability.blocks
-      .filter((b) => new Date(b.startsAt) < end && new Date(b.endsAt) > start)
-      .map((b) => ({
-        id: b.id,
-        groupId: b.groupId,
-        practitionerId: b.practitionerId,
-        startsAt: b.startsAt,
-        endsAt: b.endsAt,
-        allDay: b.allDay,
-        reason: b.reason,
-      }));
-  }, [lockDialog, availability]);
+  const lockDialogBlocks = useMemo(
+    () => (lockDialog && availability ? dayLockExistingBlocks(availability, lockDialog.dayKey) : []),
+    [lockDialog, availability]
+  );
 
   // ── Turno nuevo ────────────────────────────────────────────────────────────
   // Profesional por defecto: el de la columna clickeada; si no, el único chip
@@ -671,10 +789,12 @@ export function AgendaClient(props: Props) {
   const segments: ViewSegment[] = canReception ? ["day", "week", "list", "reception"] : ["day", "week", "list"];
   const onModeChange = (mode: AgendaMode) => {
     if (mode !== prefs.mode) persistPrefs({ mode });
-    go({ view: mode === "practitioner" ? "practitioner" : "timeline" });
+    go({ view: dayViewFor(mode, practitionerCount, roomCount) });
   };
   const onLocationChange = (id: string | null) => {
-    persistPrefs({ locationId: id });
+    // D2: el server limpia la sala al cambiar de sede; acá también, para el
+    // estado optimista. Sin sala guardada el patch es el de siempre.
+    persistPrefs(prefs.roomId != null ? { locationId: id, roomId: null } : { locationId: id });
   };
 
   const hasServiceLegend = props.services.some((s) => s.color);
@@ -687,12 +807,14 @@ export function AgendaClient(props: Props) {
         anchor={anchorDate}
         segment={segment}
         segments={segments}
-        onSegmentChange={(s) => go({ view: viewForSegment(s, { mode: prefs.mode, practitionerCount }) })}
+        onSegmentChange={(s) => go({ view: viewForSegment(s, { mode: prefs.mode, practitionerCount, roomCount }) })}
         hiddenLabel={hiddenLabel}
         onShowAll={() => setVisibility(DEFAULT_AGENDA_VISIBILITY)}
         onNavigateWeeks={(w) => go({ dayKey: shiftDayKey(dayKey, w * 7) })}
         onToday={() => go({ dayKey: toARDateKey(new Date()) })}
-        practitioners={props.practitioners}
+        // SRZ M2: en "Por sala" ni chips ni el select de respaldo (filtrarían
+        // lo que la sala tiene que mostrar entero).
+        practitioners={view === "room" ? EMPTY : props.practitioners}
         practitionerFilterId={selectedIds.length === 1 ? selectedIds[0] : null}
         onPractitionerFilterChange={(val) => setSelectedIds(val ? [val] : [])}
         density={prefs.density}
@@ -702,12 +824,21 @@ export function AgendaClient(props: Props) {
         exportFromKey={weekStartKey}
         onCreate={() => setCreating({})}
         modeToggle={
-          showModeToggle(view, practitionerCount) ? (
-            <ModeToggle mode={view === "practitioner" ? "practitioner" : "day"} onChange={onModeChange} />
+          showModeToggle(view, practitionerCount, toggleRoomCount) ? (
+            <ModeToggle
+              mode={view === "room" ? "room" : view === "practitioner" ? "practitioner" : "day"}
+              // Sin salas: las 2 opciones de siempre (markup idéntico).
+              options={
+                toggleRoomCount > 0
+                  ? availableAgendaModes(practitionerCount, toggleRoomCount).map((m) => AGENDA_MODE_OPTIONS[m])
+                  : undefined
+              }
+              onChange={onModeChange}
+            />
           ) : null
         }
         practitionerChips={
-          multi ? (
+          multi && view !== "room" ? (
             <PractitionerChips
               practitioners={ordered.map((p) => ({ ...p, count: chipCounts[p.id] ?? 0 }))}
               selectedIds={selectedIds}
@@ -720,14 +851,25 @@ export function AgendaClient(props: Props) {
           ) : null
         }
         locationFilter={
-          <LocationFilter locations={props.locations ?? EMPTY} value={locationId} onChange={onLocationChange} />
+          <>
+            <LocationFilter locations={props.locations ?? EMPTY} value={locationId} onChange={onLocationChange} />
+            {roomCount >= 2 && (
+              <RoomFilter
+                rooms={scopeRooms}
+                value={roomId}
+                onChange={(id) => persistPrefs({ roomId: id })}
+                counts={roomCounts?.counts}
+                total={roomCounts?.total}
+              />
+            )}
+          </>
         }
         dayLock={
-          view === "timeline" || view === "list" || view === "practitioner"
+          view === "timeline" || view === "list" || view === "practitioner" || view === "room"
             ? renderDayLock(dayKey, todayLock, false)
             : null
         }
-        zoom={view === "practitioner" ? prefs.zoom : null}
+        zoom={view === "practitioner" || view === "room" ? prefs.zoom : null}
         onZoomChange={(zoom) => persistPrefs({ zoom })}
         planScope={planScope}
         onPlanScopeChange={setPlanScope}
@@ -767,6 +909,7 @@ export function AgendaClient(props: Props) {
                 now={now}
                 blockedRows={todayBlocked}
                 dayLocked={todayLock?.status === "locked" ? { detail: todayLock.detail } : null}
+                roomById={cardRooms}
               />
             )}
             {view === "practitioner" && practitionerLayout && (
@@ -782,6 +925,32 @@ export function AgendaClient(props: Props) {
                 highlight={highlight}
                 lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
                 onDayLockClick={canLockAny && availability ? (pid) => openDayLock(dayKey, pid) : undefined}
+                roomById={cardRooms}
+              />
+            )}
+            {view === "room" && (
+              <RoomDayPanel
+                dayKey={dayKey}
+                scopeRooms={scopeRooms}
+                roomId={roomId}
+                bookings={visibleBookings}
+                availability={availability}
+                blocks={blocks}
+                locationId={locationId}
+                primaryLocationId={primaryLocationId}
+                zoom={prefs.zoom}
+                density={prefs.density}
+                now={now}
+                layoutNow={layoutNow}
+                fallback={tenantWindow}
+                onSlotClick={(id, iso) => setCreating(roomSlotCreating(id, iso))}
+                onBookingClick={setEditing}
+                highlight={highlight}
+                practitionerById={roomPractitionerById}
+                canConfigureRooms={canConfigureRooms}
+                fallbackLocationName={
+                  locationId == null ? (props.locations?.find((l) => l.id === primaryLocationId)?.name ?? null) : null
+                }
               />
             )}
             {view === "week" && (
@@ -798,6 +967,7 @@ export function AgendaClient(props: Props) {
                 dayLocks={weekLocks}
                 blockedByDay={weekBlocked}
                 renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
+                roomById={cardRooms}
               />
             )}
             {view === "list" && (
@@ -807,6 +977,7 @@ export function AgendaClient(props: Props) {
                 highlight={highlight}
                 practitionerById={initialsById}
                 now={now}
+                roomById={cardRooms}
               />
             )}
             {view === "reception" && (
@@ -816,6 +987,9 @@ export function AgendaClient(props: Props) {
                 practitioners={visiblePracs}
                 now={now}
                 canOperate={canReception}
+                // La columna "Sala" depende solo de que haya salas (la Secretaria
+                // deriva al paciente aunque haya un solo consultorio).
+                roomById={rooms.length > 0 ? roomById : null}
                 onOpenBooking={setEditing}
                 onChanged={(b) => {
                   setOverrides((o) => ({ ...o, [b.id]: b }));
@@ -920,6 +1094,8 @@ export function AgendaClient(props: Props) {
             capabilities={props.capabilities ?? null}
             viewerPractitionerId={ownPractitionerId}
             defaultLocationId={locationId}
+            rooms={props.rooms ?? null}
+            defaultRoomId={creating.defaultRoomId}
             onClose={() => setCreating(null)}
             onSaved={() => {
               setCreating(null);
@@ -932,6 +1108,8 @@ export function AgendaClient(props: Props) {
       <BookingDrawer
         booking={editing}
         capabilities={props.capabilities ?? null}
+        rooms={rooms}
+        primaryLocationId={primaryLocationId}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -949,6 +1127,7 @@ export function AgendaClient(props: Props) {
           canBlockAll={caps.has("agenda.manageBlocks")}
           ownPractitionerId={ownPractitionerId}
           existingBlocks={lockDialogBlocks}
+          rooms={props.rooms}
           onClose={() => setLockDialog(null)}
           onDone={() => {
             setLockDialog(null);

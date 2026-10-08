@@ -8,15 +8,18 @@ import { getActor } from "@/lib/session";
 import { getCapabilities } from "@/lib/authz";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { listLocations } from "@/lib/locations";
+import { listRoomOptions } from "@/lib/rooms";
 import { getAgendaAvailability } from "@/lib/availability-actions";
 import { getUserPreferences } from "@/lib/preferences";
 import { DEFAULT_AGENDA_VIEW_PREFS } from "@/lib/preferences-constants";
 import { addDays, dayWindow } from "@/lib/availability/day";
 import { practitionerInitials, practitionerOrder } from "@/lib/agenda-layout";
 import {
+  effectiveRoomFilter,
   parseDayKeyParam,
   parseSelectedPractitioners,
   resolveAgendaView,
+  roomsInScope,
   weekStartKey,
 } from "@/lib/agenda-client-state";
 import { logger } from "@/lib/logger";
@@ -54,6 +57,13 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   // viejo no tenga sede principal.
   const locationsP = listLocations().catch((e) => {
     logger.warn("agenda.bootstrap.listLocations_failed", { err: errMsg(e) });
+    return [];
+  });
+  // SR: catálogo de salas (activas de sedes activas). Una sentencia aparte,
+  // fuera de `listAgendaBookings` (su presupuesto de statements no se mueve).
+  // Falla suelta como las sedes: sin catálogo, la agenda de antes de SR.
+  const roomsP = listRoomOptions().catch((e) => {
+    logger.warn("agenda.bootstrap.listRoomOptions_failed", { err: errMsg(e) });
     return [];
   });
   const prefsP = getUserPreferences()
@@ -98,25 +108,36 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
     listInsurers({ onlyActive: true }),
     getTenantSettings(),
   ]);
-  const [locations, rawPrefs, capabilities, availability] = await Promise.all([
+  const [locations, rawPrefs, capabilities, availability, rooms] = await Promise.all([
     locationsP,
     prefsP,
     capsP,
     availabilityP,
+    roomsP,
   ]);
 
   // Preferencias contra lo que existe hoy: un favorito dado de baja o una sede
   // archivada no se arrastran (el JSON se guardó en otro momento).
   const practitionerIds = practitioners.map((p) => p.id);
+  const { roomId: rawRoomId, ...prefsNoRoom } = rawPrefs;
+  const locationId = locations.some((l) => l.id === rawPrefs.locationId) ? rawPrefs.locationId : null;
+  // SR-U3 (D3/D4): salas visibles en la sede elegida ("Todas" = la principal) y
+  // una sala guardada que ya no está ahí (archivada, de otra sede, menos de 2)
+  // no se arrastra. Sin sala válida la clave se omite (blob de antes de SR).
+  const primaryLocationId = locations.find((l) => l.isPrimary)?.id ?? null;
+  const scopeRooms = roomsInScope(rooms, locationId, primaryLocationId);
+  const roomId = effectiveRoomFilter(rawRoomId, scopeRooms);
   const agendaPrefs = {
-    ...rawPrefs,
+    ...prefsNoRoom,
     favoritePractitionerIds: rawPrefs.favoritePractitionerIds.filter((id) => practitionerIds.includes(id)),
-    locationId: locations.some((l) => l.id === rawPrefs.locationId) ? rawPrefs.locationId : null,
+    locationId,
+    ...(roomId != null ? { roomId } : {}),
   };
   const view = resolveAgendaView(searchParams.view, {
     mode: agendaPrefs.mode,
     practitionerCount: practitioners.length,
     canReception: capabilities.includes("agenda.reception"),
+    roomCount: scopeRooms.length,
   });
 
   return (
@@ -155,6 +176,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       }}
       locations={locations.map((l) => ({ id: l.id, name: l.name, isPrimary: l.isPrimary }))}
       agendaPrefs={agendaPrefs}
+      rooms={rooms}
       initialAvailability={availability}
       capabilities={capabilities}
     />

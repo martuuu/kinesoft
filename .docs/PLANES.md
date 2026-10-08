@@ -6,10 +6,15 @@
 
 ## Estado y decisiones firmadas (03-oct, actualizado 08-oct)
 
-- **ES3 (P3) ejecutada el 08-oct** en develop sobre `58ec36f`, **sin commitear hasta que Martin commitee**. M3a
-  `20261008120000_billing_paid_at` aplicada **solo en el Docker local**. Detalle abajo (bullet de ES3) y en §11.
-  **Siguiente corrida: SR** (Salas, M4 `rooms`), antes de SV, según el plan §16.4. **Pendiente de confirmación de
-  Martin**; su planning detallado va antes del arranque.
+- **SR (Salas/Consultorios) ejecutada el 08-oct** en develop sobre `ad50059` (ES3), **sin commitear hasta que Martin
+  commitee**. **1 migración:** M4 `20261009120000_rooms` (SR0, sola), aplicada y verificada **solo en el Docker local**
+  (31 migraciones al día). Planning: plan vigente §17 + §17.5 (respuestas de Martin). Entraron también las decisiones
+  4 y 5 del cierre de ES3 (SR-D4F Facturación, SR-D5I ingresos por rol; ver §11 «Decididas por Martin»). Locks: enmienda
+  **C2 (1b)** (§4). Arquitectura en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); cierres en AUDIT §Ronda 19; QA en
+  [QA.md §Salas (SR)](QA.md).
+  **Siguiente corrida: SV** (M5 `reception_call_realtime`; el evento realtime y "Llamar" ya llevan la sala:
+  `BookingChangeRef.roomId?` existe desde SR, el publish lo hace SV). Después ES4 → EV1 → reset + deploy único.
+- **ES3 (P3)** commiteada (`ad50059`). M3a `20261008120000_billing_paid_at` aplicada solo en el Docker local.
 - **Decisiones de Martin del 08-oct** (fuente: plan vigente §16.1; también van al §9 del plan):
 
   | # | Tema | Decisión |
@@ -22,7 +27,7 @@
   | 6 | Widget de ingresos | Se **arregla**: suma MP + copagos cobrados a mano, con la obra social aparte, y tiene un selector **Mes/Semana** recordado por usuario. |
   | 7 | Salas/Consultorios | Corrida propia **SR**, después de ES3 y antes de SV. |
 
-- **Orden vigente de corridas (08-oct):** ES3 (con M3a y S14r) → **SR** (M4 `rooms`, spec en [ROADMAP](ROADMAP.md) §SR) → **SV** (M5 `reception_call_realtime`; su evento y "Llamar" llevan la sala) → ES4 → EV1 → reset de prod + deploy único de B.
+- **Orden vigente de corridas (08-oct):** ES3 ✅ (con M3a y S14r) → SR ✅ (M4 `rooms`) → **SV** (M5 `reception_call_realtime`; su evento y "Llamar" llevan la sala) → ES4 → EV1 → reset de prod + deploy único de B.
 - **Migraciones nuevas del bloque B después de M2:** **M3a** `billing_paid_at` (ES3, P3.0.0, sola), **M4** `rooms` (SR, sola) y **M5** `reception_call_realtime` (SV, sola; antes se llamaba "M3").
 - **Decisiones de Martin del 07-oct** (detalle y contratos en [VERTICALES.md](VERTICALES.md); fuente: plan vigente §15):
   1. **Prod se resetea antes del go-live** (reset total; el cliente vuelve a cargar). No hay datos de prod que preservar:
@@ -45,7 +50,7 @@
 - **ES2a (P1) ejecutada el 04-oct** en develop: M1 `plans_booking_link` escrita, aplicada y verificada **solo en el Docker local** (§9). Commit `0edb0c8`. **C1 enmendado en P1.Z (F1):** los dos CHECK de pricing usan `IS NOT DISTINCT FROM` en vez de `=` (con `pricingMode` NULL, `=` da NULL y el CHECK dejaba pasar un precio sin modo); decisión del orquestador, avisada a Martin. El bloque SQL de §3 ya es idéntico al archivo (sha256 `7a0e2797…45cd`). Deploy: con el reset del 07-oct, M1 se aplica desde vacío dentro de la cadena completa ([MIGRACIONES-RUNBOOK §"Go-live con reset"](MIGRACIONES-RUNBOOK.md)); el down-script y la ventana sin uso de §2.4 quedaron obsoletos. Cierres y hallazgos en AUDIT §Ronda 15.
 - **EV0 ejecutada el 07-oct** en develop (verticales, /plataforma de consultorios, turnero con switch, REVOKE de la Data API). Commit `ddfdff3`. M2 `tenant_verticals` aplicada solo en el Docker local. La revisión sumó enmiendas a S14, S15/S27a, S17d y S22b (copiadas abajo en §10 y §11) y a SV01 ([VERTICALES.md §5](VERTICALES.md)). Cierres en AUDIT §Ronda 16.
 - **ES2b (P2) ejecutada el 07-oct** en develop sobre `ddfdff3`, **commit `58ec36f`**. **Sin migraciones nuevas.** Todo server (core de turnos, motor, sincronía, lecturas, ciclo de vida, mover/re-planificar, cantidad y precio, autorización de la OS, Diagnóstico, adopción) + P2-FX1 (buscador de la agenda). Firmas en §4 C8; decisiones y handoffs para ES3 al final de §10; cierres en AUDIT §Ronda 17; ADR-004.
-- **ES3 (P3) ejecutada el 08-oct** en develop sobre `58ec36f`, **pendiente commit de Martin**. **1 migración:** M3a
+- **ES3 (P3) ejecutada el 08-oct** en develop sobre `58ec36f`, **commit `ad50059`**. **1 migración:** M3a
   `billing_paid_at` (P3.0.0, sola), aplicada y verificada solo en el Docker local. Olas P3.0.0 → P3.0 (P3-C) → P3.1 (10)
   → P3.2 (10) → P3.Z.0 (retiro S27a/S27b) → P3.Z (2 revisores, 4 fixers, integrador, gate). UI completa de Planes
   (editor único y 4 puertas, agenda, drawer, Seguimiento, perfil, `/planes/[disciplina]`, plantillas) + ingresos
@@ -729,6 +734,24 @@ S10 lo prueba corriendo toda la integración con el cliente viejo sobre el schem
 >
 > **Reintento:** P2034/40P01 → **un** reintento de la tx completa.
 > **Comentario:** S07i corrige `lib/booking-cap-lock.ts:28-30`. El invariante es el orden global lexicográfico, no "un turno por tx".
+
+**Enmienda C2 (1b) · Sala (SR, 08-oct; plan §17.1, ADR-004).** El orden pasa a ser **paciente → cupo → sala → sedes →
+filas**:
+- **(1b) Sala:** claves `kinesoft:room:<tenantId>:<roomId>:<dayKey AR>` (`roomLockKey`/`roomKeysForWindow`,
+  `lib/booking-cap-lock.ts:199,206`). Cupo y sala van en **una** sentencia (`lockCapacityAndRoomsMany`,
+  `lib/booking-cap-lock.ts:252`): dedupe y orden en JS, los prefijos `cap:` y `room:` no se pisan. Sin sala, el array es
+  el de antes y no hay statements nuevos.
+- En la edición con **sala por defecto** (`roomDefaulted`), la sala se conoce recién después de leer las franjas: va en
+  una 2.ª sentencia, después del cupo y **antes** de las sedes. Solo cambio de sala: la clave sola, antes de las sedes.
+- La sala se valida (`lockActiveRoomInTx`, `lib/booking-rooms-internal.ts:63`; null = `bad-room`) **después** de
+  `lockTenantLocationsShared`, y se cuenta (`countRoomOverlapsInTx`, `:193`) solo con la clave tomada.
+- **Configuración:** sedes compartido → `kinesoft:room-schedule:<tenantId>` (exclusivo, solo si el guardado tiene
+  sala) → `schedule:<pracId>` / `schedexc:…` (`lib/practitioner-schedule.ts:184-196`). Ningún write-path de turnos
+  toma `room-schedule`.
+- **Bloqueo de sala:** clave de sala (`lockCapacityAndRoomsMany(tx, [], roomKeysForWindow(…))`) → sedes → validar sala
+  (`lib/time-blocks.ts:189-203`). `archiveRoom`/`updateRoom`/`restoreRoom`: sedes **exclusivo**.
+- **Sin clave de sala (SR-D3):** Planes, "este y los siguientes" (`capLocksHeld`) y el turnero estampan la sala sin
+  chequear ocupación; no se tocan C6/C7 ni se suma riesgo de deadlock.
 
 ### C3 · Keys
 
@@ -1996,7 +2019,7 @@ git add -A && git commit -m "Planes P2 (ES2b): core de turnos server-only (con e
 | ✅ **S19b** Leyenda y filtro (medio) | `agenda-client.tsx`, `plan-legend.tsx`*, `view-options-menu.tsx`, `lib/agenda-filters.ts`, `lib/agenda-client-state.ts`, `tests/unit/agenda-filters.test.ts`, `tests/unit/agenda-client-state.test.ts`, `tests/unit/render/agenda-client.test.tsx` | Plan/suelto por resaltado |
 | ✅ **S19e** Vistas densas (medio) | `grid/slot-cell.tsx`, `views/practitioner-day-view.tsx`, `views/timeline-view.tsx`, `tests/unit/render/practitioner-day-view.test.tsx` | Resaltado y chip en Día y Por profesional |
 | ✅ **S20** Seguimiento (medio) | `app/(app)/seguimiento/page.tsx`, `app/(app)/seguimiento/[sessionId]/page.tsx`, `components/seguimiento/session-detail.tsx`, `components/biblioteca/bulk-assign-modal.tsx`, `tests/unit/render/seguimiento.test.tsx`* | "Sin turno", "Sin evolución", "Cargar evolución", ordinal (no `s.index`), banner de alta |
-| ✅ **S22f** Turnos y Facturación (alto, plata) | `turnos-view.tsx`, `facturacion-view.tsx`, `components/planes/plan-balance.tsx`*, `tests/unit/render/facturacion-plan.test.tsx`* | Agrupada por plan con el saldo del server, cancelados con cobro visibles, sin "Eliminar" en turnos de plan |
+| ✅ **S22f** Turnos y Facturación (alto, plata) | `turnos-view.tsx`, `facturacion-view.tsx`, `components/planes/plan-balance.tsx`*, `tests/unit/render/facturacion-plan.test.tsx`* | Agrupada por plan con el saldo del server, cancelados con cobro visibles (desde SR, **siempre**, agrupada o no: SR-D4F), sin "Eliminar" en turnos de plan |
 | ✅ **S17t** Plantillas server (medio) | `lib/plan-templates.ts`, `lib/plan-templates-types.ts`, `tests/integration/plan-templates.test.ts`* | CRUD con disciplina, servicio, schedule, precio y archivedAt; autor o admin; STARTER+; `getTemplatePrefill`; `serviceId` por `validatePlanRefsInTx`; `it` cross-tenant con el rol owner |
 
 **Mini-integración P3.1.**
@@ -2100,19 +2123,20 @@ El checklist manual completo, por superficie, está en [QA.md §Planes P3](QA.md
   ejercicios"; las pestañas del perfil son `nav` + `aria-current` (no `tablist`); `/planes` solo lista disciplinas con un
   servicio activo y "Sesiones sin turno" solo de planes ACTIVE; las plantillas solo con `plans.manage`.
 
-**Abiertas para Martin** (con recomendación; filas en AUDIT §Ronda 18):
-1. **Bundle:** el criterio "agenda/perfil no empeoran; `/planes` ≤ 180 kB" no se cumplió del todo (PERF §ES3).
-   Recomendado: aceptar (es lo que piden C9/S22f) y seguir en C1.
-2. Retirar `setProgramStatus`/`deleteProgram`/`deleteSession` (sobreviven en `lib/programs.ts` sin callers de app;
-   los usa `plans-lifecycle.test`) migrando ese test a `changePlanStatus`/`archivePlan`. Recomendado: EV1.
-3. **R-LEGACY:** un plan sin responsable/servicio ya no acepta sesión "a medida" ("Plan inválido."). Recomendado:
-   dejarlo (prod se resetea).
-4. Facturación: los cancelados con cobro se ven solo en modo agrupado. Recomendado: mostrarlos siempre → C0.
-5. Ingresos del dashboard visibles para cualquier rol del consultorio (como antes). Evaluar gate `billing.manage` /
-   `tenant.admin` → C0.
-6. "Diagnóstico" del Resumen: mostrar la condición requiere `diagnosisName` en `PlanDTO` → C1.
-7. "Renovar autorización" aparece en todo turno de plan con `plans.authorize` (C9 no dice si el plan tiene OS). Un flag
-   fuera de C9 si molesta → C1.
+**Decididas por Martin (08-oct, al cerrar ES3; antes "abiertas", filas en AUDIT §Ronda 18):**
+1. **Bundle:** se acepta el crecimiento de ES3 (C9/S22f); el bundle bloqueante sigue en C1.
+2. `setProgramStatus`/`deleteProgram`/`deleteSession` (sobrevivientes de `lib/programs.ts`, gate `planes`, sin bypass
+   del motor) **se quedan**: no se retiran en EV1.
+3. **R-LEGACY:** un plan sin responsable/servicio no acepta sesión "a medida" ("Plan inválido."). Se deja así.
+4. **Facturación:** los turnos cancelados/ausentes con cobro se muestran **siempre** (no solo en modo agrupado) y suman
+   en "percibido". ✅ **Ejecutada en SR** (SR-D4F): `isBillingVisible` sin `grouped`
+   (`components/planes/plan-booking-groups.ts:242`); REFUNDED/AUTHORIZED visibles.
+5. **Ingresos del dashboard restringidos:** cada profesional ve **sus** ingresos (turnos donde es el profesional);
+   la vista del consultorio queda para los roles de administración/cobros. ✅ **Ejecutada en SR** (SR-D5I):
+   `revenueScopeFor` (`lib/dashboard-revenue.ts:152`), `billing.manage` todo, PRACTITIONER lo suyo, Secretaria nada;
+   tabla en [SECURITY.md §16](SECURITY.md).
+6. "Diagnóstico" del Resumen con la condición (`diagnosisName` en `PlanDTO`) → C1 (sin cambios).
+7. "Renovar autorización" en todo turno de plan con `plans.authorize` → C1 si molesta (sin cambios).
 
 ---
 

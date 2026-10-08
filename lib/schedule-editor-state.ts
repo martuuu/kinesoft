@@ -26,8 +26,41 @@ import {
   type WeekRangeInput,
 } from "@/lib/schedule-validate";
 import type { DayKey } from "@/lib/availability/types";
+import {
+  dayKeyShortLabel,
+  roomConflictsToRowErrors,
+  roomScheduleConflicts,
+  type RoomUsageRow,
+} from "@/lib/room-schedule-validate";
+import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
+import type { RoomOption } from "@/lib/rooms-types";
 
-export type DraftRange = { key: string; startMin: number; endMin: number; locationId: string };
+/**
+ * SR-U2: `roomId` y la vigencia (`validFrom`/`validUntil`, DayKeys inclusive,
+ * null = abierta) son REQUERIDOS en el draft a propósito: `savePractitionerWeek`
+ * reemplaza la semana entera, así que una fila que no los arrastre desde
+ * `draftFromView` hasta `draftToPayload` BORRA la sala y la vigencia al
+ * guardar sin tocar nada (lo cubre el test "sin pérdida"). En una excepción
+ * (un solo día) la vigencia queda siempre en null.
+ */
+export type DraftRange = {
+  key: string;
+  startMin: number;
+  endMin: number;
+  locationId: string;
+  roomId: string | null;
+  validFrom: DayKey | null;
+  validUntil: DayKey | null;
+};
+
+/**
+ * Sala del catálogo de Configuración: `RoomRow` (con `active`) o `RoomOption`
+ * (sin `active` = activa). Las archivadas solo sirven para rotular una franja
+ * vieja; nunca se ofrecen ni cuentan capacidad.
+ */
+export type RoomCatalogEntry = RoomOption & { active?: boolean };
+
+const isActiveRoom = (r: RoomCatalogEntry) => r.active !== false;
 /** Índice = dow (0=Dom … 6=Sáb). Siempre 7 entradas. */
 export type WeekDraft = DraftRange[][];
 
@@ -56,7 +89,15 @@ export function emptyWeek(): WeekDraft {
  */
 export function draftFromView(
   view: {
-    ranges: ReadonlyArray<{ dow: number; startMin: number; endMin: number; locationId: string }>;
+    ranges: ReadonlyArray<{
+      dow: number;
+      startMin: number;
+      endMin: number;
+      locationId: string;
+      roomId?: string | null;
+      validFrom?: DayKey | null;
+      validUntil?: DayKey | null;
+    }>;
     isFallback: boolean;
     tenantHours: { startMin: number; endMin: number };
   },
@@ -70,48 +111,81 @@ export function draftFromView(
         startMin: view.tenantHours.startMin,
         endMin: view.tenantHours.endMin,
         locationId: primaryLocationId,
+        roomId: null,
+        validFrom: null,
+        validUntil: null,
       });
     }
     return week;
   }
   for (const r of view.ranges) {
     if (r.dow < 0 || r.dow > 6) continue;
-    week[r.dow].push({ key: newRangeKey(), startMin: r.startMin, endMin: r.endMin, locationId: r.locationId });
+    week[r.dow].push({
+      key: newRangeKey(),
+      startMin: r.startMin,
+      endMin: r.endMin,
+      locationId: r.locationId,
+      roomId: r.roomId ?? null,
+      validFrom: r.validFrom ?? null,
+      validUntil: r.validUntil ?? null,
+    });
   }
-  for (const day of week) day.sort((a, b) => a.startMin - b.startMin);
+  for (const day of week) day.sort(byTimeThenValidity);
   return week;
 }
 
-/** Aplana en orden Lun…Dom y fila; `keys[i]` es la fila de `ranges[i]`. */
+/** Orden estable de un día: hora, después vigencia (dos franjas iguales con períodos sucesivos). */
+function byTimeThenValidity(a: DraftRange, b: DraftRange): number {
+  return (
+    a.startMin - b.startMin ||
+    a.endMin - b.endMin ||
+    (a.validFrom ?? "").localeCompare(b.validFrom ?? "") ||
+    (a.validUntil ?? "").localeCompare(b.validUntil ?? "")
+  );
+}
+
+/** Aplana en orden Lun…Dom y fila; `keys[i]` es la fila de `ranges[i]`. Manda sala y vigencia SIEMPRE. */
 export function draftToPayload(week: WeekDraft): { ranges: WeekRangeInput[]; keys: string[] } {
   const ranges: WeekRangeInput[] = [];
   const keys: string[] = [];
   for (const dow of WEEK_ORDER) {
     for (const r of week[dow] ?? []) {
-      ranges.push({ dow, startMin: r.startMin, endMin: r.endMin, locationId: r.locationId });
+      ranges.push({
+        dow,
+        startMin: r.startMin,
+        endMin: r.endMin,
+        locationId: r.locationId,
+        roomId: r.roomId,
+        validFrom: r.validFrom,
+        validUntil: r.validUntil,
+      });
       keys.push(r.key);
     }
   }
   return { ranges, keys };
 }
 
-/** Firma comparable de la semana (sin keys, días ordenados): base del dirty-guard. */
-export function weekSignature(week: WeekDraft): string {
-  return week
-    .map((day) =>
-      [...day]
-        .sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin)
-        .map((r) => `${r.startMin}-${r.endMin}@${r.locationId}`)
-        .join(",")
-    )
-    .join("|");
+type SignableRange = {
+  startMin: number;
+  endMin: number;
+  locationId: string;
+  roomId?: string | null;
+  validFrom?: DayKey | null;
+  validUntil?: DayKey | null;
+};
+
+/** Una franja como texto: hora, sede, sala y vigencia (SR-U2: sin sala/vigencia el dirty-guard no veía el cambio). */
+function rangeSig(r: SignableRange): string {
+  return `${r.startMin}-${r.endMin}@${r.locationId}#${r.roomId ?? ""}[${r.validFrom ?? ""}~${r.validUntil ?? ""}]`;
 }
 
-export function rangesSignature(ranges: ReadonlyArray<{ startMin: number; endMin: number; locationId: string }>): string {
-  return [...ranges]
-    .sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin)
-    .map((r) => `${r.startMin}-${r.endMin}@${r.locationId}`)
-    .join(",");
+/** Firma comparable de la semana (sin keys, días ordenados): base del dirty-guard. */
+export function weekSignature(week: WeekDraft): string {
+  return week.map((day) => rangesSignature(day)).join("|");
+}
+
+export function rangesSignature(ranges: ReadonlyArray<SignableRange>): string {
+  return ranges.map(rangeSig).sort().join(",");
 }
 
 /** `{ "ranges.3": ["…"] }` + `keys` → `{ [rowKey]: "…" }`. Ignora claves que no son de fila. */
@@ -137,17 +211,145 @@ export function fieldErrorsToRowErrors(
  */
 export function validateDraft(
   week: WeekDraft,
-  activeLocationIds?: ReadonlySet<string>
+  activeLocationIds?: ReadonlySet<string>,
+  roomCheck?: DraftRoomCheck
 ): Record<string, string> {
   const { ranges, keys } = draftToPayload(week);
   const res = validateWeekRanges(ranges, activeLocationIds ? { activeLocationIds } : {});
-  if (res.ok) return {};
   const out: Record<string, string> = {};
-  for (const e of res.errors) {
+  if (!res.ok) {
+    for (const e of res.errors) {
+      const key = keys[e.index];
+      if (key) out[key] = e.message;
+    }
+  }
+  if (!roomCheck) return out;
+  // SR-U2: la sala, con los MISMOS validadores que la action (badRoomErrors +
+  // roomScheduleConflicts desde hoy AR). Un error propio de la fila (solape,
+  // vigencia al revés) gana: se arregla primero ese.
+  const catalog = new Map(roomCheck.rooms.map((r) => [r.id, r]));
+  ranges.forEach((x, i) => {
+    if (!x.roomId || out[keys[i]]) return;
+    // SRZ-FX3: una franja VENCIDA (validUntil < hoy AR; inclusive, la que vence
+    // hoy sigue vigente) no ocupa nada: su sala archivada o movida no bloquea
+    // guardar la semana. Par del `badRoomErrors` del server (SRZ-FX1).
+    if (x.validUntil && x.validUntil < roomCheck.today) return;
+    const room = catalog.get(x.roomId);
+    if (!room || !isActiveRoom(room) || room.locationId !== x.locationId) out[keys[i]] = BAD_ROOM_ERROR;
+  });
+  const conflicts = roomScheduleConflicts(ranges, roomCheck.usage, activeRoomCapacities(roomCheck.rooms), {
+    practitionerId: roomCheck.practitionerId,
+    from: roomCheck.today,
+  });
+  for (const e of roomConflictsToRowErrors(conflicts)) {
     const key = keys[e.index];
-    if (key) out[key] = e.message;
+    if (key && !out[key]) out[key] = e.message;
   }
   return out;
+}
+
+/** Lo que `validateDraft` necesita para validar la sala en el cliente. */
+export type DraftRoomCheck = {
+  /** Catálogo de salas (archivadas incluidas: una franja VIGENTE con sala archivada se marca; una vencida no). */
+  rooms: ReadonlyArray<RoomCatalogEntry>;
+  /** `PractitionerScheduleView.roomUsage`: franjas con sala de los DEMÁS. */
+  usage: ReadonlyArray<RoomUsageRow>;
+  practitionerId: string;
+  /** Hoy AR (`toARDateKey(new Date())`): el pasado no choca, como en el server. */
+  today: DayKey;
+};
+
+/** `{ roomId: capacity }` de las salas activas (las desconocidas valen 1 en `roomScheduleConflicts`). */
+export function activeRoomCapacities(rooms: ReadonlyArray<RoomCatalogEntry>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of rooms) if (isActiveRoom(r)) out[r.id] = r.capacity;
+  return out;
+}
+
+/**
+ * Opciones del select de sala de una fila: las activas de SU sede (en el orden
+ * del catálogo) y, si la fila ya tiene una sala que no está entre ellas
+ * (archivada o de otra sede), también esa, para no cambiarla en silencio.
+ * `show` = hay algo para elegir: sin salas en la sede, el select no aparece.
+ */
+export function roomsForLocation(
+  rooms: ReadonlyArray<RoomCatalogEntry> | undefined,
+  locationId: string,
+  currentRoomId: string | null
+): { show: boolean; options: RoomCatalogEntry[] } {
+  const list = rooms ?? [];
+  const options = list.filter((r) => isActiveRoom(r) && r.locationId === locationId);
+  if (currentRoomId && !options.some((r) => r.id === currentRoomId)) {
+    const cur = list.find((r) => r.id === currentRoomId);
+    if (cur) options.push(cur);
+  }
+  return { show: options.length > 0 || !!currentRoomId, options };
+}
+
+/** Nombre de la sala para mostrar ("Consultorio 2", "Viejo (archivada)"). */
+export function roomLabel(rooms: ReadonlyArray<RoomCatalogEntry> | undefined, id: string): string {
+  const r = (rooms ?? []).find((x) => x.id === id);
+  if (!r) return "Sala desconocida";
+  return isActiveRoom(r) ? r.name : `${r.name} (archivada)`;
+}
+
+/** Cambiar la sede de una fila: la sala se conserva solo si es de la nueva sede. */
+export function withLocation(
+  row: DraftRange,
+  locationId: string,
+  rooms: ReadonlyArray<RoomCatalogEntry> | undefined
+): DraftRange {
+  const room = row.roomId ? (rooms ?? []).find((r) => r.id === row.roomId) : undefined;
+  return { ...row, locationId, roomId: room && room.locationId === locationId ? row.roomId : null };
+}
+
+/** Vigencia plegada: "Siempre" / "Del 01/11 al 30/11" / "Desde el 01/11" / "Hasta el 30/11". */
+export function validityLabel(from: DayKey | null, until: DayKey | null): string {
+  if (from && until) return `Del ${dayKeyShortLabel(from)} al ${dayKeyShortLabel(until)}`;
+  if (from) return `Desde el ${dayKeyShortLabel(from)}`;
+  if (until) return `Hasta el ${dayKeyShortLabel(until)}`;
+  return "Siempre";
+}
+
+/**
+ * Pastilla de solo lectura: "09:00–13:00 · Centro · Consultorio 2 · hasta el 30/11".
+ * Sin sede/sala/vigencia queda igual que antes de SR ("09:00–13:00").
+ */
+export function rangePillLabel(
+  r: { startMin: number; endMin: number; validFrom: DayKey | null; validUntil: DayKey | null },
+  o: { locationName?: string | null; roomName?: string | null }
+): string {
+  const detail = rangeDetailLabel(r, o);
+  const time = `${formatHHMM(r.startMin)}–${formatHHMM(r.endMin)}`;
+  return detail ? `${time} · ${detail}` : time;
+}
+
+/** Lo que va después de la hora en la pastilla ("Centro · Consultorio 2 · hasta el 30/11"); "" si nada. */
+export function rangeDetailLabel(
+  r: { validFrom: DayKey | null; validUntil: DayKey | null },
+  o: { locationName?: string | null; roomName?: string | null }
+): string {
+  const parts: string[] = [];
+  if (o.locationName) parts.push(o.locationName);
+  if (o.roomName) parts.push(o.roomName);
+  if (r.validFrom || r.validUntil) {
+    const v = validityLabel(r.validFrom, r.validUntil);
+    parts.push(v[0].toLowerCase() + v.slice(1));
+  }
+  return parts.join(" · ");
+}
+
+/** Franjas de una excepción para `upsertException`. Todo el consultorio no lleva sala (el server lo rechaza). */
+export function exceptionPayloadRanges(
+  rows: ReadonlyArray<DraftRange>,
+  scope: "practitioner" | "tenant"
+): Array<{ startMin: number; endMin: number; locationId: string; roomId: string | null }> {
+  return rows.map((x) => ({
+    startMin: x.startMin,
+    endMin: x.endMin,
+    locationId: x.locationId,
+    roomId: scope === "tenant" ? null : x.roomId,
+  }));
 }
 
 /** Igual que `validateDraft` pero para las franjas de UN día (excepción CUSTOM_HOURS). */
@@ -176,7 +378,7 @@ export function nextRange(
 ): DraftRange | null {
   if (day.length >= MAX_RANGES_PER_DAY) return null;
   if (day.length === 0) {
-    return { key: newRangeKey(), ...defaults };
+    return { key: newRangeKey(), ...defaults, roomId: null, validFrom: null, validUntil: null };
   }
   const last = [...day].sort((a, b) => a.endMin - b.endMin)[day.length - 1];
   const start = last.endMin;
@@ -186,10 +388,15 @@ export function nextRange(
     startMin: start,
     endMin: Math.min(start + 240, 1440),
     locationId: last.locationId || defaults.locationId,
+    // SR-U2: la franja siguiente suele ser en la misma sala; la vigencia no se
+    // hereda (un período es una decisión explícita de esa franja).
+    roomId: last.locationId ? last.roomId : null,
+    validFrom: null,
+    validUntil: null,
   };
 }
 
-/** Copia las franjas de `fromDow` a cada día de `toDows` (reemplaza; keys nuevas). */
+/** Copia las franjas de `fromDow` a cada día de `toDows` (reemplaza; keys nuevas). Copia sala y vigencia. */
 export function copyDay(week: WeekDraft, fromDow: number, toDows: ReadonlyArray<number>): WeekDraft {
   const src = week[fromDow] ?? [];
   return week.map((day, dow) =>

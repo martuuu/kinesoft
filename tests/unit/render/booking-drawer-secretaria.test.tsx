@@ -122,6 +122,22 @@ describe("[P0-S07u] drawer: la Secretaria opera pero no ve clínica", () => {
     expect(html).not.toContain("Notas");
   });
 
+  it("[SR-U5b] la Secretaria ve «Cambiar» en la sala (dato operativo, no clínico: sigue a canOperate)", () => {
+    const rooms = [
+      { id: "r1", locationId: "loc1", name: "Consultorio 1", kind: "CONSULTORIO" as const, capacity: 1 },
+      { id: "r2", locationId: "loc1", name: "Consultorio 2", kind: "CONSULTORIO" as const, capacity: 1 },
+    ];
+    const row = { ...secretariaRow, locationId: "loc1", locationName: "Centro", roomId: "r2" };
+    const html = renderToStaticMarkup(
+      <BookingDrawer booking={row} onClose={() => {}} onSaved={() => {}} capabilities={ASSISTANT} rooms={rooms} />
+    );
+    expect(html).toContain("Consultorio 2");
+    expect(html).toContain('aria-label="Cambiar la sala"');
+    // Sigue sin clínica ni Eliminar.
+    expect(html).not.toContain("Eliminar turno");
+    expect(html).not.toContain("Últimos turnos");
+  });
+
   it("el form Editar sin clinicalWritable no tiene título, descripción, notas ni «Usar como diagnóstico» (que borraba el diagnóstico)", () => {
     const html = editForm(secretariaRow, false, false);
     expect(html).toContain("Duración");

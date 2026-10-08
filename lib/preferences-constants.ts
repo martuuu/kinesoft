@@ -182,6 +182,43 @@ export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] 
   { key: "newPatientsMonth", label: "Pacientes nuevos", description: "Altas este mes" },
 ];
 
+/**
+ * SR-D5I / SRZ-FX3 (B8): de quién son los ingresos que ve el rol. Mismo dominio
+ * que `RevenueScopeKind` de `lib/dashboard-revenue.ts`, repetido acá como unión
+ * literal para no arrastrar ese módulo (y `datetime-ar`) al bundle de cada
+ * pantalla que lee preferencias; `tsc` chequea que coincidan donde se cruzan
+ * (`DashboardData.revenueScope` → props de los pickers).
+ */
+export type KpiRevenueScope = "tenant" | "own" | "none";
+
+/**
+ * Las opciones del selector de KPIs fijados según el scope de ingresos.
+ *   - `tenant` (billing.manage): la lista de siempre, sin cambios.
+ *   - `own` (PRACTITIONER): la KPI se rotula "Tus ingresos del mes", igual que
+ *     la tarjeta fijada del dashboard (antes el picker decía "Ingresos del mes"
+ *     y la KPI otra cosa).
+ *   - `none` (Secretaria): sin la opción. Antes la podía fijar y la KPI nunca se
+ *     dibujaba: si fijaba solo esa, la fila quedaba vacía.
+ * El server (`updateUserPreferences`) sigue aceptando la clave para cualquier
+ * rol: es una preferencia de pantalla, no un dato; lo que filtra la plata es
+ * `revenueScopeFor` en `lib/dashboard.ts`.
+ */
+export function kpiOptionsFor(scope: KpiRevenueScope): typeof KPI_OPTIONS {
+  if (scope === "tenant") return KPI_OPTIONS;
+  if (scope === "none") return KPI_OPTIONS.filter((o) => o.key !== "monthRevenue");
+  return KPI_OPTIONS.map((o) => (o.key === "monthRevenue" ? { ...o, label: "Tus ingresos del mes" } : o));
+}
+
+/**
+ * El borrador inicial del picker: lo fijado que el rol puede ver. Una KPI
+ * oculta (ingresos para la Secretaria) no cuenta para el "N de 6" ni se
+ * re-guarda: al guardar desde el picker se cae, porque ese rol nunca la ve.
+ */
+export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope): KpiKey[] {
+  const keys = new Set(kpiOptionsFor(scope).map((o) => o.key));
+  return pinned.filter((k) => keys.has(k));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Agenda multi-profesional (B4.2 AG-resource) — `UserPreferences.agendaPrefs`
 //
@@ -199,11 +236,26 @@ export const KPI_OPTIONS: { key: KpiKey; label: string; description: string }[] 
 // contra el tenant al guardar porque no escriben datos de dominio; al leer, la
 // UI los cruza con la lista visible (`practitionerOrder` ignora los ajenos y
 // un `locationId` que no está en las sedes del tenant se trata como "todas").
+//
+// SR-U3 (salas): `mode: "room"` (Día "Por sala") y `roomId` (filtro de sala).
+// `roomId` es igual que `locationId`: preferencia de pantalla, no FK. Una sala
+// ajena, archivada o de otra sede se trata como "todas" al leer contra el
+// catálogo del bootstrap (`effectiveRoomFilter` en lib/agenda-client-state).
+// Null (= todas) NO se guarda en el blob: se omite. Así un consultorio sin
+// salas tiene exactamente las mismas prefs que antes de SR (no regresión, y los
+// tests de B4.2 quedan sin cambios). "none" = el filtro "Sin sala".
+// D2: cambiar de sede limpia la sala (`mergeAgendaViewPrefs`), porque una sala
+// es de UNA sede; si no, al volver a "Todas las sedes" quedaría filtrando una
+// sala que no se ve en el selector.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** "Por día" (vistas de siempre) ↔ "Por profesional" (columnas = profesionales). */
-export type AgendaMode = "day" | "practitioner";
-export const AGENDA_MODES: ReadonlyArray<AgendaMode> = ["day", "practitioner"];
+/**
+ * "Por día" (vistas de siempre) ↔ "Por profesional" (columnas = profesionales)
+ * ↔ "Por sala" (columnas = salas de la sede; SR-U3, solo con ≥1 sala activa).
+ */
+export type AgendaMode = "day" | "practitioner" | "room";
+export const AGENDA_MODES: ReadonlyArray<AgendaMode> = ["day", "practitioner", "room"];
+const modeSchema = z.enum(["day", "practitioner", "room"]);
 /** Mismo dominio que `AgendaZoom` de `lib/agenda-layout.ts` (no se importa para no
  *  arrastrar el motor al bundle de cada pantalla que lee preferencias). */
 export type AgendaViewZoom = 15 | 30 | 60;
@@ -221,6 +273,11 @@ export type AgendaViewPrefs = {
   favoritePractitionerIds: string[];
   /** Filtro de sede; null = todas. */
   locationId: string | null;
+  /**
+   * Filtro de sala (SR-U3): un id, "none" (= Sin sala) o ausente/null (=
+   * todas). Se omite del objeto cuando es "todas" (ver arriba).
+   */
+  roomId?: string | null;
 };
 
 export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
@@ -257,7 +314,7 @@ export function sanitizeAgendaViewPrefs(
 ): AgendaViewPrefs {
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const schema = z.object({
-    mode: z.enum(["day", "practitioner"]).catch(defaults.mode),
+    mode: modeSchema.catch(defaults.mode),
     zoom: zoomSchema.catch(defaults.zoom),
     density: z.enum(["comfortable", "compact"]).catch(defaults.density),
     favoritePractitionerIds: z.unknown().transform(cleanIds),
@@ -269,13 +326,15 @@ export function sanitizeAgendaViewPrefs(
     favoritePractitionerIds: "favoritePractitionerIds" in o ? o.favoritePractitionerIds : defaults.favoritePractitionerIds,
     locationId: "locationId" in o ? o.locationId : defaults.locationId,
   });
-  return parsed;
+  // `roomId` fuera del schema de arriba: null/ausente/inválido = todas = se omite.
+  const room = idSchema.safeParse("roomId" in o ? o.roomId : defaults.roomId);
+  return room.success ? { ...parsed, roomId: room.data } : parsed;
 }
 
 /** Escritura: patch parcial, estricto (campos desconocidos o fuera de dominio → error). */
 export const AgendaViewPrefsPatchSchema = z
   .object({
-    mode: z.enum(["day", "practitioner"]),
+    mode: modeSchema,
     zoom: zoomSchema,
     density: z.enum(["comfortable", "compact"]),
     favoritePractitionerIds: z
@@ -283,6 +342,7 @@ export const AgendaViewPrefsPatchSchema = z
       .max(AGENDA_MAX_FAVORITES)
       .transform((ids) => Array.from(new Set(ids))),
     locationId: idSchema.nullable(),
+    roomId: idSchema.nullable(),
   })
   .partial()
   .strict();
@@ -293,7 +353,12 @@ export function mergeAgendaViewPrefs(
   current: AgendaViewPrefs,
   patch: z.output<typeof AgendaViewPrefsPatchSchema>
 ): AgendaViewPrefs {
-  return sanitizeAgendaViewPrefs({ ...current, ...patch });
+  const next: Record<string, unknown> = { ...current, ...patch };
+  // D2: la sala es de una sede. Un patch que cambia la sede sin traer sala la limpia.
+  const locationChanged =
+    patch.locationId !== undefined && (patch.locationId ?? null) !== (current.locationId ?? null);
+  if (locationChanged && patch.roomId === undefined) delete next.roomId;
+  return sanitizeAgendaViewPrefs(next);
 }
 
 /** Marca/desmarca un profesional como favorito (puro; el nuevo va al final). */

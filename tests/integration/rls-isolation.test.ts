@@ -21,6 +21,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import {
+  addRoom,
   createEphemeralTenant,
   sweepOrphanTestTenants,
   type EphemeralTenant,
@@ -704,6 +705,110 @@ describe.skipIf(!RUN || BYPASS)("RLS Planes M1 (ProgramAuthorization / PatientCh
     const n = await runWithRls(A.tenantId, async (tx) => [
       (await tx.programAuthorization.deleteMany({ where: { id: created.auth.id } })).count,
       (await tx.patientChangeRequest.deleteMany({ where: { id: created.req.id } })).count,
+    ]);
+    expect(n).toEqual([1, 1]);
+  });
+});
+
+// ── SR M4 (20261009120000_rooms) · SR-M ─────────────────────────────────
+// Room: ENABLE + FORCE + UNA policy `Room_tenant_isolation`. A no ve, no
+// inserta, no modifica ni borra las salas de B (y no puede mudar una propia a
+// B); sin GUC no se ve ni entra nada; y A sí opera las propias (la policy no es
+// un deny-all). Las FKs compuestas, los CHECK y el único parcial (red bajo
+// BYPASSRLS) se prueban en rooms-m4.test.ts.
+describe.skipIf(!RUN || BYPASS)("RLS Room (SR M4, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let locA: string;
+  let locB: string;
+  let roomA: string;
+  let roomB: string;
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    ({ roomId: roomA, locationId: locA } = await addRoom(prismaOwner, A, { name: "Consultorio A" }));
+    ({ roomId: roomB, locationId: locB } = await addRoom(prismaOwner, B, { name: "Consultorio B" }));
+  });
+
+  afterAll(async () => {
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("catálogo: relrowsecurity y relforcerowsecurity en true, una sola policy Room_tenant_isolation", async () => {
+    const rel = await prismaOwner.$queryRaw<{ rls: boolean; force: boolean }[]>`
+      SELECT relrowsecurity AS rls, relforcerowsecurity AS force
+      FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'Room'`;
+    expect(rel).toEqual([{ rls: true, force: true }]);
+    const pol = await prismaOwner.$queryRaw<{ policyname: string; cmd: string; qual: string; with_check: string }[]>`
+      SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'Room'`;
+    expect(pol.map((p) => [p.policyname, p.cmd])).toEqual([["Room_tenant_isolation", "ALL"]]);
+    expect(pol[0].qual).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+    expect(pol[0].with_check).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+  });
+
+  it("lectura: A ve su sala y no la de B (y B no ve la de A)", async () => {
+    const seenByA = await runWithRls(A.tenantId, (tx) =>
+      tx.room.findMany({ where: { id: { in: [roomA, roomB] } }, select: { id: true } })
+    );
+    expect(seenByA.map((r) => r.id)).toEqual([roomA]);
+    const seenByB = await runWithRls(B.tenantId, (tx) => tx.room.count({ where: { locationId: locA } }));
+    expect(seenByB).toBe(0);
+  });
+
+  it("INSERT con el tenantId de B desde A → rechazado por el WITH CHECK", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.room.create({ data: { tenantId: B.tenantId, locationId: locB, name: "Cruzada" } })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    expect(await prismaOwner.room.count({ where: { tenantId: B.tenantId } })).toBe(1);
+  });
+
+  it("UPDATE / DELETE desde A sobre la sala de B afectan 0 filas y la de B queda intacta", async () => {
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.room.updateMany({ where: { id: roomB }, data: { name: "Pisada", active: false } })).count,
+      (await tx.room.deleteMany({ where: { id: roomB } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    const b = await prismaOwner.room.findUniqueOrThrow({ where: { id: roomB } });
+    expect(b).toMatchObject({ name: "Consultorio B", active: true, tenantId: B.tenantId });
+  });
+
+  it("A no puede mudar su sala al tenant de B (WITH CHECK en UPDATE)", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.room.update({ where: { id: roomA }, data: { tenantId: B.tenantId } }))
+    ).rejects.toThrow(/row-level security/i);
+    expect((await prismaOwner.room.findUniqueOrThrow({ where: { id: roomA } })).tenantId).toBe(A.tenantId);
+  });
+
+  it("sin GUC (fuera de runWithRls): 0 salas visibles y ningún INSERT entra", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.room.count({ where: { id: { in: [roomA, roomB] } } })).toBe(0);
+      await expect(
+        app.room.create({ data: { tenantId: A.tenantId, locationId: locA, name: "Sin GUC" } })
+      ).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+    expect(await prismaOwner.room.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("intra-tenant: A crea, edita, archiva y borra sus salas (la policy no es deny-all)", async () => {
+    const created = await runWithRls(A.tenantId, (tx) =>
+      tx.room.create({ data: { tenantId: A.tenantId, locationId: locA, name: "Box propio", kind: "BOX", capacity: 2 } })
+    );
+    expect(created).toMatchObject({ tenantId: A.tenantId, kind: "BOX", capacity: 2, active: true });
+    const n = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.room.updateMany({ where: { id: created.id }, data: { name: "Box 2", active: false } })).count,
+      (await tx.room.deleteMany({ where: { id: created.id } })).count,
     ]);
     expect(n).toEqual([1, 1]);
   });

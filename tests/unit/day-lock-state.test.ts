@@ -10,6 +10,7 @@ import {
   applySummary,
   arTimeOf,
   buildDayLockScope,
+  canLockRoom,
   dayKeyLongLabel,
   dayLockTooltip,
   initialDayLockForm,
@@ -18,10 +19,14 @@ import {
   lockStatusOf,
   minutesLabel,
   removableBlocks,
+  removeDayLockRequests,
   removeScopeFor,
   removeSummary,
   sameIdSet,
   dayLockThrownMessage,
+  roomNameOf,
+  withRoomScope,
+  ROOM_SCOPE_NOTE,
 } from "@/lib/day-lock-state";
 import {
   DayLockApply,
@@ -294,7 +299,7 @@ describe("desbloquear", () => {
   });
   it("aviso de lo que queda", () => {
     expect(removeSummary(1, [])).toEqual({ headline: "Se quitó 1 bloqueo.", detail: null });
-    const rem = blocks.map((x) => ({ ...x, groupId: null, locationId: null, createdById: "u", multiDay: x.id === "vac" }));
+    const rem = blocks.map((x) => ({ ...x, groupId: null, locationId: null, roomId: null, createdById: "u", multiDay: x.id === "vac" }));
     expect(removeSummary(0, rem.slice(1)).detail).toBe(
       "Ese día sigue teniendo 1 bloqueo de una franja, 1 bloqueo de varios días."
     );
@@ -304,5 +309,161 @@ describe("desbloquear", () => {
       "Solo podés bloquear tu propia agenda."
     );
     expect(dayLockThrownMessage(new Error("An error occurred in the Server Components render"))).toMatch(/permiso/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SR-BU (§17.5 "Bloquear sala"): alcance "Una sala" en el formulario, el
+// payload de preview/apply/remove y el rótulo de los bloqueos de sala.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("[SR-BU] alcance Una sala", () => {
+  const rooms = [
+    { id: "r1", locationId: "L1", name: "Consultorio 2", kind: "CONSULTORIO" as const, capacity: 1 },
+    { id: "r2", locationId: "L2", name: "Gimnasio", kind: "GIMNASIO" as const, capacity: 3 },
+  ];
+  const adminR = { ...admin, rooms };
+  const pracR = { ...prac, rooms };
+
+  it("el form arranca sin sala y la sala entra en el dirty", () => {
+    const a = initialDayLockForm(null, adminR);
+    expect(a).toMatchObject({ who: "all", roomId: null });
+    expect(isDayLockFormDirty(a, { ...a, who: "room" })).toBe(true);
+    const r = { ...a, who: "room" as const, roomId: "r1" };
+    expect(isDayLockFormDirty(r, { ...r, roomId: "r2" })).toBe(true);
+    // Fuera del alcance sala, un roomId olvidado no ensucia.
+    expect(isDayLockFormDirty(a, { ...a, roomId: "r1" })).toBe(false);
+  });
+
+  it("solo se ofrece con salas y con agenda.manageBlocks", () => {
+    expect(canLockRoom(adminR)).toBe(true);
+    expect(canLockRoom(admin)).toBe(false);
+    expect(canLockRoom({ ...adminR, rooms: [] })).toBe(false);
+    expect(canLockRoom(pracR)).toBe(false);
+  });
+
+  it("elegir 'Una sala' preselecciona la única sala; con varias, ninguna", () => {
+    const a = initialDayLockForm(["p1"], adminR);
+    expect(withRoomScope(a, rooms)).toMatchObject({ who: "room", roomId: null });
+    expect(withRoomScope(a, [rooms[0]])).toMatchObject({ who: "room", roomId: "r1" });
+    // Una sala ya elegida y vigente se respeta.
+    expect(withRoomScope({ ...a, roomId: "r2" }, rooms)).toMatchObject({ roomId: "r2" });
+  });
+
+  it("payload de preview/apply: practitionerIds null, la sala y su sede", () => {
+    const a = initialDayLockForm(["p1", "p2"], adminR);
+    const r = buildDayLockScope(DAY, { ...a, who: "room", roomId: "r2", reason: " Mantenimiento " }, adminR);
+    expect(r).toEqual({
+      ok: true,
+      reason: "Mantenimiento",
+      scope: { dayKey: DAY, practitionerIds: null, roomId: "r2", locationId: "L2", allDay: true },
+    });
+    // El zod del server lo acepta tal cual (preview y apply).
+    expect(r.ok && DayLockPreviewQuery.safeParse(r.scope).success).toBe(true);
+    expect(
+      r.ok &&
+        DayLockApply.safeParse({ ...r.scope, reason: r.reason, bookingsDecision: "keep", expectedAffectedIds: [] })
+          .success
+    ).toBe(true);
+    const f = buildDayLockScope(
+      DAY,
+      { ...a, who: "room", roomId: "r1", span: "range", startMin: 600, endMin: 720 },
+      adminR
+    );
+    expect(f.ok && f.scope).toEqual({
+      dayKey: DAY,
+      practitionerIds: null,
+      roomId: "r1",
+      locationId: "L1",
+      allDay: false,
+      startMin: 600,
+      endMin: 720,
+    });
+  });
+
+  it("validación: sin sala, sala desconocida o sin permiso → error; nunca sala + profesionales", () => {
+    const a = initialDayLockForm(null, adminR);
+    expect(buildDayLockScope(DAY, { ...a, who: "room", roomId: null }, adminR)).toMatchObject({
+      ok: false,
+      errors: { roomId: "Elegí la sala." },
+    });
+    expect(buildDayLockScope(DAY, { ...a, who: "room", roomId: "zz" }, adminR)).toMatchObject({
+      ok: false,
+      errors: { roomId: "Elegí la sala." },
+    });
+    const p = initialDayLockForm(null, pracR);
+    expect(buildDayLockScope(DAY, { ...p, who: "room", roomId: "r1" }, pracR)).toMatchObject({
+      ok: false,
+      errors: { roomId: expect.any(String) },
+    });
+    // Los profesionales que hubiera en el form NO viajan con la sala.
+    const withIds = buildDayLockScope(DAY, { ...a, who: "room", roomId: "r1", practitionerIds: ["p1"] }, adminR);
+    expect(withIds.ok && withIds.scope.practitionerIds).toBe(null);
+    // Contrato del server: sala + profesionales = rechazo.
+    expect(
+      DayLockPreviewQuery.safeParse({ dayKey: DAY, practitionerIds: ["p1"], roomId: "r1", allDay: true }).success
+    ).toBe(false);
+  });
+
+  const roomBlock = {
+    id: "rb",
+    practitionerId: null,
+    roomId: "r1",
+    startsAt: "2027-03-09T03:00:00.000Z",
+    endsAt: "2027-03-10T03:00:00.000Z",
+    allDay: true,
+    reason: "Mantenimiento",
+  };
+  const allBlock = {
+    id: "all",
+    practitionerId: null,
+    startsAt: "2027-03-09T12:00:00.000Z",
+    endsAt: "2027-03-09T15:00:00.000Z",
+    allDay: false,
+    reason: "Feriado",
+  };
+
+  it("un bloqueo de sala se rotula con la sala, no como 'Todo el equipo'", () => {
+    const r = removableBlocks([roomBlock, allBlock], DAY, adminR);
+    expect(r.find((x) => x.block.id === "rb")!.label).toBe("Todo el día · Consultorio 2 · Mantenimiento");
+    expect(r.find((x) => x.block.id === "rb")!.removable).toBe(true);
+    expect(r.find((x) => x.block.id === "all")!.label).toBe("09:00 a 12:00 · Todo el equipo · Feriado");
+    // Sala fuera del catálogo (archivada): rótulo genérico, nunca "Todo el equipo".
+    expect(removableBlocks([roomBlock], DAY, admin)[0].label).toBe("Todo el día · Sala · Mantenimiento");
+    // Sin agenda.manageBlocks no se quita.
+    const p = removableBlocks([roomBlock], DAY, pracR)[0];
+    expect(p.removable).toBe(false);
+    expect(p.why).toBe("Es un bloqueo de sala.");
+  });
+
+  it("desbloquear: una llamada por sala con { practitionerId: null, roomId } y otra para el resto", () => {
+    const room2 = { ...roomBlock, id: "rb2", roomId: "r2" };
+    const mine = { ...allBlock, id: "mine", practitionerId: "p1" };
+    expect(removeDayLockRequests(DAY, [allBlock, roomBlock, room2, mine], adminR)).toEqual([
+      { dayKey: DAY, practitionerId: null, blockIds: ["all", "mine"] },
+      { dayKey: DAY, practitionerId: null, roomId: "r1", blockIds: ["rb"] },
+      { dayKey: DAY, practitionerId: null, roomId: "r2", blockIds: ["rb2"] },
+    ]);
+    expect(removeDayLockRequests(DAY, [roomBlock], adminR)).toEqual([
+      { dayKey: DAY, practitionerId: null, roomId: "r1", blockIds: ["rb"] },
+    ]);
+    // PRACTITIONER: su alcance, como siempre.
+    expect(removeDayLockRequests(DAY, [{ ...mine, practitionerId: "p2" }], prac)).toEqual([
+      { dayKey: DAY, practitionerId: "p2", blockIds: ["mine"] },
+    ]);
+    for (const req of removeDayLockRequests(DAY, [allBlock, roomBlock], adminR)) {
+      expect(DayLockRemove.safeParse(req).success).toBe(true);
+    }
+  });
+
+  it("copy de sala: titular del preview y resultado", () => {
+    expect(affectedHeadline(2, true, "Consultorio 2")).toBe("Hay 2 turnos en Consultorio 2 ese día.");
+    expect(affectedHeadline(1, false, "Consultorio 2")).toBe("Hay 1 turno en Consultorio 2 en esa franja.");
+    expect(affectedHeadline(0, true, "Consultorio 2")).toBe("No hay turnos en Consultorio 2 ese día.");
+    const base = { ids: ["t"], groupId: null, startsAt: "", endsAt: "", decision: "keep" as const, kept: [], cancelled: [], skipped: [] };
+    expect(applySummary({ ...base, reused: false }, { room: true }).headline).toBe("Listo, la sala quedó bloqueada.");
+    expect(applySummary({ ...base, reused: true }, { room: true }).headline).toBe("La sala ya estaba bloqueada así.");
+    expect(roomNameOf("r1", rooms)).toBe("Consultorio 2");
+    expect(roomNameOf("zz", rooms)).toBe("Sala");
+    expect(ROOM_SCOPE_NOTE).toBe("Bloqueás solo la sala: los profesionales siguen con su horario.");
   });
 });

@@ -65,7 +65,13 @@ import { canArchiveProgramStatus, type ProgramStatusValue } from "@/lib/plans-li
 import { rescheduleSession } from "@/lib/sessions";
 import { isoToARLocalInput, localToARIso } from "@/lib/datetime-ar";
 import { disciplineLabel } from "@/lib/plan-display";
-import { BLOCKED_ERROR, OUT_OF_HOURS_ERROR, PATIENT_OVERLAP_ERROR } from "@/lib/bookings-constants";
+import {
+  BLOCKED_ERROR,
+  OUT_OF_HOURS_ERROR,
+  PATIENT_OVERLAP_ERROR,
+  ROOM_BLOCKED_ERROR,
+  ROOM_BUSY_ERROR,
+} from "@/lib/bookings-constants";
 import type {
   PlanAuthorizationDTO,
   PlanDTO,
@@ -218,16 +224,42 @@ export function planSessionWhen(s: Pick<PlanSessionDTO, "scheduledFor" | "bookin
  * igual" y reenviar (handoff S12b). Los no forzables (stale, sesión
  * realizada, plan cancelado…) devuelven `null`: solo se muestra el error.
  */
-export type RescheduleForceFlag = "allowOutOfHours" | "allowBlocked" | "allowPatientOverlap" | "allowOverbooking";
+export type RescheduleForceFlag =
+  | "allowOutOfHours"
+  | "allowBlocked"
+  | "allowPatientOverlap"
+  | "allowOverbooking"
+  | "allowRoomConflict";
 export type RescheduleForce = Partial<Record<RescheduleForceFlag, boolean>>;
 
 const BLOCKED_PREFIX = (() => {
   const b = BLOCKED_ERROR(null);
   return b.slice(0, b.indexOf("."));
 })();
-/** Literal de `bookingOutcomeError` (`lib/sessions.ts`, caso `conflict`): no está exportado. */
+/**
+ * Sufijo común de `ROOM_BUSY_ERROR` y `ROOM_BLOCKED_ERROR` (SR-FX2b, revisión a
+ * MEDIA): `rescheduleSession` recalcula la sala por defecto y la chequea
+ * (SR-D3), así que puede volver "Sala ocupada/bloqueada". Sin este mapeo el
+ * usuario leía "…asignalo igual." y no tenía botón para hacerlo. Se deriva de
+ * las constantes (son funciones del nombre de la sala) para no copiar el
+ * literal: si cambia el copy, el mapeo lo sigue.
+ */
+const ROOM_FORCE_SUFFIX = (() => {
+  const busy = ROOM_BUSY_ERROR("");
+  const blocked = ROOM_BLOCKED_ERROR("", null);
+  let i = 0;
+  while (i < busy.length && i < blocked.length && busy[busy.length - 1 - i] === blocked[blocked.length - 1 - i]) i++;
+  // El sufijo común crudo arranca en " a esa hora. …", pero el bloqueo puede
+  // traer " (motivo)" antes del punto: se corta en la última oración.
+  const common = busy.slice(busy.length - i);
+  const dot = common.indexOf(". ");
+  return dot >= 0 ? common.slice(dot + 2) : common;
+})();
 
+/** Literal de `bookingOutcomeError` (`lib/sessions.ts`, caso `conflict`): no está exportado. */
 export function rescheduleForceFor(error: string): RescheduleForceFlag | null {
+  // Sala llena o bloqueada: forzar la SALA, que no es sobreturno (SR-D2).
+  if (ROOM_FORCE_SUFFIX.length > 0 && error.endsWith(ROOM_FORCE_SUFFIX)) return "allowRoomConflict";
   if (error === OUT_OF_HOURS_ERROR) return "allowOutOfHours";
   if (error.startsWith(BLOCKED_PREFIX)) return "allowBlocked";
   if (error === PATIENT_OVERLAP_ERROR) return "allowPatientOverlap";
@@ -240,6 +272,7 @@ export const RESCHEDULE_FORCE_LABEL: Readonly<Record<RescheduleForceFlag, string
   allowBlocked: "Moverlo igual (como sobreturno)",
   allowPatientOverlap: "Moverlo igual (se superpone)",
   allowOverbooking: "Moverlo igual (sobreturno)",
+  allowRoomConflict: "Moverlo igual (sala ocupada)",
 };
 
 // ─── Card ────────────────────────────────────────────────────────────────────

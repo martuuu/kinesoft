@@ -17,6 +17,7 @@
  * (`lib/dashboard.ts`) arma los períodos y el resumen con esto y la UI usa los
  * títulos. Se testea unit en TZ=UTC y TZ=AR.
  */
+import type { Capability } from "@/lib/capabilities";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import type { RevenueRange } from "@/lib/preferences-constants";
 
@@ -125,8 +126,51 @@ export function summarizeRevenue(
   };
 }
 
-/** Título del widget (copy literal del plan §16.2). */
-export function revenueTitle(range: RevenueRange): string {
+/**
+ * SR-D5I · qué ingresos ve el actor (decisión de Martin, 08-oct: "Ingresos del
+ * dashboard restringidos: cada Profesional ve sus ingresos").
+ *
+ *   - `tenant`: todo el consultorio. `billing.manage` = OWNER, ADMIN, BILLING.
+ *   - `own`: solo los turnos cuyo `Booking.practitionerId` es el del actor
+ *     (PRACTITIONER: tiene `clinical.read` y no `billing.manage`).
+ *   - `none`: nada (ASSISTANT / Secretaria): el widget y la KPI no se
+ *     renderizan y `getRevenue` devuelve error. Sin membresía (caps vacías)
+ *     también cae acá: falla cerrado.
+ *
+ * NO se deriva de `visibilityForActor`: con `Tenant.sharedPatientView` esa
+ * función le da `seesAll` a un PRACTITIONER (es visibilidad de PACIENTES, no
+ * de plata) y le mostraría la caja de todo el consultorio.
+ *
+ * Atribución: el ingreso va al profesional ACTUAL del turno. Si un turno
+ * cobrado se reasigna a otro profesional, la plata ya cobrada se muda con él
+ * (no hay un "cobrado por" congelado al cobrar). El filtro de OWNER por
+ * profesional quedó para C0.
+ */
+export type RevenueScope = { kind: "tenant" } | { kind: "own"; practitionerId: string } | { kind: "none" };
+export type RevenueScopeKind = RevenueScope["kind"];
+
+export function revenueScopeFor(caps: ReadonlySet<Capability>, practitionerId: string): RevenueScope {
+  if (caps.has("billing.manage")) return { kind: "tenant" };
+  if (caps.has("clinical.read")) return { kind: "own", practitionerId };
+  return { kind: "none" };
+}
+
+/**
+ * Token del scope para la clave de `unstable_cache`. Va EXPLÍCITO en los
+ * `keyParts` (además de viajar en los argumentos): sin él, dos profesionales
+ * del mismo consultorio compartirían la entrada y el segundo vería la plata
+ * del primero durante el TTL.
+ */
+export function revenueScopeKey(s: RevenueScope): string {
+  return s.kind === "own" ? `own:${s.practitionerId}` : s.kind;
+}
+
+/**
+ * Título del widget (copy literal del plan §16.2). Con scope `own` (SR-D5I) el
+ * título aclara que son los ingresos del profesional, no los del consultorio.
+ */
+export function revenueTitle(range: RevenueRange, scope: RevenueScopeKind = "tenant"): string {
+  if (scope === "own") return range === "week" ? "Tus ingresos de la semana" : "Tus ingresos del mes";
   return range === "week" ? "Ingresos de la semana" : "Ingresos del mes";
 }
 

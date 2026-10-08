@@ -27,7 +27,7 @@
 | Bloque | Qué | Estado |
 |---|---|---|
 | **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅** (`3ff2e50`, Ronda 13; QA de staging e import del catálogo en el go-live) · **Planes: planning firmado (03-oct)** (**ES1 ✅** `d7ac75f` · **ES2a ✅** `0edb0c8` · **ES2b ✅** `58ec36f` · **ES3 ✅** 08-oct, pendiente commit, M3a solo en local). **Verticales y Sala de Espera (07-oct):** corridas nuevas EV0 (**✅** `ddfdff3`), SV y EV1 ([VERTICALES.md](VERTICALES.md)); **Salas/Consultorios (08-oct):** corrida SR. Orden: **SR (siguiente, a confirmar por Martin)** → **SV** → ES4 → **EV1** → reset de prod + deploy único de todo B desde vacío — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅** (`3ff2e50`, Ronda 13; QA de staging e import del catálogo en el go-live) · **Planes: planning firmado (03-oct)** (**ES1 ✅** `d7ac75f` · **ES2a ✅** `0edb0c8` · **ES2b ✅** `58ec36f` · **ES3 ✅** `ad50059`, M3a solo en local). **Verticales y Sala de Espera (07-oct):** corridas nuevas EV0 (**✅** `ddfdff3`), SV y EV1 ([VERTICALES.md](VERTICALES.md)); **Salas/Consultorios (08-oct):** corrida SR **✅** (pendiente commit, M4 solo en local). Orden: **SV (siguiente)** → ES4 → **EV1** → reset de prod + deploy único de todo B desde vacío — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
 | **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio, ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, email transaccional + invitación de pacientes + identidad del paciente, fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, soporte, adjuntos, portal v2, etc.; el realtime de la agenda pasó a la corrida SV de B el 07-oct) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
@@ -80,10 +80,10 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **B4** | proyección liviana + recepción ∥ vista Por profesional ∥ integración de la agenda ∥ candado por día ∥ Recepción ∥ perf multi-profesional | ✅ |
 | **B5** | modal (Turno / Varias sesiones / Bloquear horario, slot picker, telemedicina) ∥ onboarding (Sede, Tu horario) ∥ turnero (sede, cobertura, primer turno) | ✅ |
 | **Cierre** | integrador → revisor → fixer → docs → gate | ✅ código (fixes de la revisión en AUDIT §Ronda 13) |
-| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**: **ES1 ✅ (`d7ac75f`, sin migración)** → **ES2a ✅ (`0edb0c8`, M1 `plans_booking_link`, solo en local)** → **ES2b ✅ (`58ec36f`, sin migración; [AUDIT §Ronda 17](AUDIT.md), ADR-004)** → **ES3 ✅ (08-oct, pendiente commit; M3a `billing_paid_at` solo en local + S14r; [AUDIT §Ronda 18](AUDIT.md))** → SR → SV → ES4, con las enmiendas EV0/SV del 07-oct al tope de PLANES §10-§12. Sin sesiones de legacy (S25L/S25n/S25b eliminadas por el reset) |
+| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**: **ES1 ✅ (`d7ac75f`, sin migración)** → **ES2a ✅ (`0edb0c8`, M1 `plans_booking_link`, solo en local)** → **ES2b ✅ (`58ec36f`, sin migración; [AUDIT §Ronda 17](AUDIT.md), ADR-004)** → **ES3 ✅ (`ad50059`; M3a `billing_paid_at` solo en local + S14r; [AUDIT §Ronda 18](AUDIT.md))** → SR ✅ → SV → ES4, con las enmiendas EV0/SV del 07-oct al tope de PLANES §10-§12. Sin sesiones de legacy (S25L/S25n/S25b eliminadas por el reset) |
 | **EV0** (07-oct) | Tipo de consultorio (General / Kinesiología), matriz de módulos, guards de segmento, nav único, turnero con switch, onboarding con vertical, /plataforma de consultorios, REVOKE de la Data API. **Migración M2 `20261007120000_tenant_verticals`** (sola) | ✅ **ejecutada (07-oct), commit `ddfdff3`**; M2 solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en [QA.md §EV0](QA.md), ADR-005 |
-| **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, filtro y vista "Por sala". **Migración M4 `rooms`** (sola). Va entre ES3 y SV (spec abajo, «SR · Salas/Consultorios») | ⏳ **siguiente** (plan §16.4, a confirmar por Martin); planning detallado antes del arranque |
-| **SV** (07-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado `llamado`, `/sala`, aviso al profesional, agenda en vivo; evento y "Llamar" con `roomId`. **Migración M5 `reception_call_realtime`** (sola; antes "M3"). Va entre SR y ES4 | ⏳ ([VERTICALES.md §7](VERTICALES.md)) |
+| **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, bloqueo de sala, filtro y vista "Por sala"; Facturación con cancelados cobrados e ingresos por rol. **Migración M4 `20261009120000_rooms`** (sola) | ✅ **ejecutada (08-oct), pendiente commit**; M4 solo en el Docker local. Cierres en [AUDIT.md §Ronda 19](AUDIT.md), QA en [QA.md §Salas (SR)](QA.md), resumen abajo («SR · Salas/Consultorios») |
+| **SV** (07-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado `llamado`, `/sala`, aviso al profesional, agenda en vivo; evento y "Llamar" con `roomId`. **Migración M5 `reception_call_realtime`** (sola; antes "M3"). Va entre SR y ES4 | ⏳ **siguiente** ([VERTICALES.md §7](VERTICALES.md)) |
 | **EV1** (07-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral, lista de pacientes, Plataforma "Común/Pro" muerto) + limpieza R-LEGACY opcional | ⏳ después de ES4 |
 | **Go-live de B** | **Reset de prod** (decisión del 07-oct: no hay datos que preservar) → `migrate deploy` de la cadena completa desde vacío → bootstrap | ⏳ [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md) |
 
@@ -95,30 +95,23 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 > olas de Planes. Migraciones del bloque B: M1 = `plans_booking_link`, M2 = `tenant_verticals` (EV0), **M3a** =
 > `billing_paid_at` (ES3), **M4** = `rooms` (SR), **M5** = `reception_call_realtime` (SV; antes "M3").
 
-#### SR · Salas/Consultorios (08-oct; corrida propia después de ES3 y antes de SV)
+#### SR · Salas/Consultorios ✅ (08-oct, pendiente commit; M4 `rooms`, solo en local)
 
-Fuente: plan vigente §16.3 (decisión 7 de Martin, 08-oct). **Antes del arranque se hace su planning detallado.**
-Hoy las salas **no existen**: solo hay sedes (`Location`); el turno toma la sede de la franja (`defaultLocationFor`,
-`lib/bookings-core.ts:561`); `PractitionerSchedule.validFrom/validUntil` existen pero la UI no los usa; nada impide
-que dos profesionales usen el mismo lugar a la misma hora (AUDIT `salas-inexistentes`).
+Planning: plan vigente §17 + §17.5 (decisión 7 de Martin; spec original §16.3). Antes solo había sedes y nada impedía
+que dos profesionales usaran el mismo lugar a la misma hora (AUDIT `salas-inexistentes`, cerrado).
 
-- **Modelo, migración M4 `rooms` (sola):**
-  - `Room {id, tenantId, locationId, name ("Consultorio 2"), kind CONSULTORIO|BOX|GIMNASIO|SALA, capacity Int default 1 (gimnasio N), active, sortOrder, timestamps}`, con RLS ENABLE + FORCE + policy y FK compuesta `(locationId, tenantId)`.
-  - `PractitionerSchedule.roomId?`: la franja del profesional puede llevar su sala ("este profesional atiende en el Consultorio 2 los lunes de 9 a 13"). Se habilitan en la UI las fechas de **vigencia** que ya existen (`validFrom`/`validUntil`) para asignaciones por período.
-  - `ScheduleException.ranges[].roomId?`.
-  - `Booking.roomId?`, con FK RESTRICT y la sala en la misma sede del turno.
-  - Opcional: `TimeBlock.roomId?`, para bloquear una sala (por ejemplo, mantenimiento).
-- **Reglas:**
-  - El turno toma la sala de la franja que lo contiene (`defaultRoomFor`, junto a `defaultLocationFor`). La Secretaria puede cambiarla en el modal y en el drawer.
-  - **En Configuración:** dos profesionales no pueden tener la misma sala en franjas que se pisan, salvo que la capacidad lo permita (gimnasio). La validación es entre profesionales, en el editor de horarios.
-  - **En el turno:** si la sala está ocupada (cuenta contra `capacity`), se avisa y se puede forzar, igual que el sobreturno. Es un cambio de contrato del motor (`lib/availability/types.ts`) y se acuerda en su planning.
-- **UI:**
-  - Configuración → Sedes → **Salas** de cada sede (alta, edición y archivo).
-  - En el editor de horarios, la sala por franja y la vigencia.
-  - **Agenda:** filtro por sala (chips, junto al de sede; entra en el objeto de filtros extensible de S19b), vista **"Por sala"** (columnas = salas) y la sala en las tarjetas, el drawer, el modal y Recepción.
-- **Integración con SV:** el evento realtime suma `roomId`. "Llamar" anuncia "Pase al Consultorio 2", el tablero `/sala` se puede agrupar por sala, y la **pantalla TV** (fase D) va a usar la sala.
-- **Archivos:** Configuración, sedes y horarios están libres hoy. El core (`bookings-core.ts`, `bookings.ts`), el motor de disponibilidad (contrato) y los archivos de agenda los toma SR **después** de ES3.
-- **Verificación:** la define su planning (RLS de `Room` en los 2 roles, sala por defecto desde la franja, conflicto de sala, filtro y vista "Por sala" con TZ=UTC).
+- **Modelo (M4 `20261009120000_rooms`, sola):** `Room` por sede (`capacity` = profesionales a la vez), `roomId` en
+  franja, turno y bloqueo, con FKs compuestas y CHECKs. Detalle en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md).
+- **Qué quedó:** Configuración › Sedes › Salas; sala y vigencia por franja con choque duro entre profesionales; sala
+  por defecto desde la franja, conflicto de sala con aviso y forzado (no es sobreturno); bloqueo de sala; agenda con
+  filtro de sala, vista "Por sala" y la sala en tarjetas, lista, semana, Recepción, drawer y modal. Planes, serie y
+  turnero estampan la sala sin chequear (SR-D3). Sin salas, todo igual que antes.
+- **Entraron también** las decisiones 4 y 5 del cierre de ES3: Facturación con cancelados cobrados siempre visible
+  (SR-D4F) e ingresos del dashboard por rol (SR-D5I, [SECURITY.md §16](SECURITY.md)).
+- Evidencia en [AUDIT.md §Ronda 19](AUDIT.md); QA en [QA.md §Salas (SR)](QA.md); perf y bundle en
+  [PERF.md §SR](PERF.md); deploy en [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md).
+- **Para SV:** `BookingChangeRef.roomId?` ya existe; el publish realtime con sala, "Llamar" con "Pase al Consultorio 2"
+  y `/sala` agrupable por sala los hace SV. La pantalla TV (fase D) usa la sala.
 - **Diferido a C2:** recursos agendables y equipos (camilla, magnetoterapia).
 
 
@@ -132,8 +125,8 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
 **Próximos pasos** (actualizado 08-oct):
 1. **Martin, ya (bloque A, independiente de todo):** revisar la Data API de Supabase en prod
    (`data-api-anon-sin-rls`, [VERTICALES.md §1](VERTICALES.md)).
-2. **Orden de corridas (08-oct):** EV0 (✅ `ddfdff3`) → ES2b (✅ `58ec36f`) → ES3 (✅ 08-oct, pendiente commit; M3a) →
-   **SR** (siguiente, M4; a confirmar por Martin) → **SV** (M5) → ES4 → **EV1** → reset + deploy, todo en develop con commit de Martin entre corridas. Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
+2. **Orden de corridas (08-oct):** EV0 (✅ `ddfdff3`) → ES2b (✅ `58ec36f`) → ES3 (✅ `ad50059`; M3a) → SR (✅ 08-oct,
+   pendiente commit; M4) → **SV** (siguiente, M5) → ES4 → **EV1** → reset + deploy único, todo en develop con commit de Martin entre corridas. Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
    línea de [VERTICALES.md §5](VERTICALES.md) (copiadas al tope de PLANES §10-§12).
    - **ES1 ✅** (`d7ac75f`): fugas E0 cerradas en código, Secretaria, fixes de planes y cimientos. Evidencia en
      [AUDIT.md §Ronda 14](AUDIT.md).
@@ -148,13 +141,17 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
      [QA.md §Planes P2](QA.md); orden de locks en ADR-004.
      Hallazgos nuevos ya clasificados (AUDIT §2 «Hallazgos de ES2b»): reintento P2034 en candado/bloqueos/alta de
      turno (C0/C1), `afterBookingsCommitted` en turnero/MP/bloqueos (SV06), gates legacy y payload C9 (cerrados en ES3).
-   - **ES3 ✅** (08-oct, pendiente commit; **M3a `20261008120000_billing_paid_at`**, solo en local): UI completa de
+   - **ES3 ✅** (`ad50059`; **M3a `20261008120000_billing_paid_at`**, solo en local): UI completa de
      Planes (editor único y 4 puertas, agenda con chip/Fuera de plan/leyenda, drawer con fila Plan y mover en serie,
      Seguimiento, perfil con Tab Planes y Turnos/Facturación por plan, `/planes/[disciplina]`, plantillas), ingresos
      reales del dashboard con Mes/Semana (S14r) y retiro de las altas que salteaban el motor. Evidencia en
      [AUDIT.md §Ronda 18](AUDIT.md); QA en [QA.md §Planes P3](QA.md); perf y bundle en [PERF.md §ES3](PERF.md).
-     Decisiones abiertas para Martin en [PLANES.md §11 «Decisiones de ES3»](PLANES.md) (bundle, sobrevivientes de
-     `programs.ts`, R-LEGACY, Facturación, quién ve los ingresos).
+     Decisiones de Martin del 08-oct en [PLANES.md §11](PLANES.md): bundle aceptado, sobrevivientes de `programs.ts`
+     se quedan, R-LEGACY se deja; Facturación e ingresos por rol entraron en SR.
+   - **SR ✅** (08-oct, pendiente commit; **M4 `20261009120000_rooms`**, solo en local): salas y consultorios (arriba,
+     §SR). Evidencia en [AUDIT.md §Ronda 19](AUDIT.md). **Decisión para Martin:** bundle de `/agenda` y
+     `/configuracion` sobre el criterio de +1 kB (recomendado aceptar; mejora en C1).
+   - **Siguiente: SV** (M5 `reception_call_realtime`, timestamp posterior a M4; [VERTICALES.md §7](VERTICALES.md)).
    - **No se usa `classifyBatchInstant`** (colapsa "bloqueado" y "superposición" en "sobreturno"): va `classifyPlanRows`
      (`lib/availability/plan.ts`, ADR-003).
 3. **Go-live del bloque B, una sola vez:** prod se **resetea** (decisión del 07-oct: el cliente vuelve a cargar, no hay
@@ -174,7 +171,8 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
 - (C0) El profesional de un usuario BILLING aparece en "cualquier profesional" y en la agenda → recomendado
   excluirlo en C0 junto con el login de Secretaria.
 - `billing.manage` no está en PRACTITIONER → decidir antes de exigirlo en cobros si el profesional cobra en el
-  consultorio (hoy ninguna action lo exige: no cambia nada).
+  consultorio (ninguna action de cobro lo exige; desde SR decide quién ve los ingresos de todo el consultorio,
+  SR-D5I).
 - Zoom por usuario (`agendaPrefs.zoom`) vs `Tenant.agendaSlotMinutes` para Día/Semana → C1; recomendado: el del
   usuario manda, el del tenant es el default.
 - Las 14 decisiones tomadas por el dev senior en B-pre (bloqueo blando para el staff y duro en turnero/Planes;

@@ -10,6 +10,7 @@ import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
 import type { TenantSettings } from "@/lib/tenant-settings";
 import type { TenantModule } from "@/lib/tenant-modules";
 import type { LocationRow } from "@/lib/locations-schemas";
+import type { RoomRow } from "@/lib/rooms-types";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
 import { TabsBar, type Tab } from "./controls";
 import { GeneralPanel } from "./panels/general-panel";
@@ -33,6 +34,8 @@ type Props = {
   customConditions: import("@/lib/conditions").CustomConditionRow[];
   /** Todas las sedes, archivadas incluidas (B3.4). */
   locations: LocationRow[];
+  /** Todas las salas, archivadas incluidas (SR-U1): se muestran dentro de cada sede. */
+  rooms: RoomRow[];
   scheduleSummary: PractitionerScheduleSummaryRow[];
 };
 
@@ -72,11 +75,12 @@ export function ConfiguracionClient(props: Props) {
       <TabsBar tab={tab} setTab={(t) => void setTab(t)} role={props.role} modules={props.modules} />
 
       {tab === "general" && <GeneralPanel tenant={props.tenant} role={props.role} />}
-      {tab === "sedes" && <LocationsPanel locations={props.locations} />}
+      {tab === "sedes" && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
       {tab === "profesionales" && (
         <PractitionerPanel
           summary={props.scheduleSummary}
           locations={props.locations}
+          rooms={props.rooms}
           onDirtyChange={setPractitionerDirty}
         />
       )}

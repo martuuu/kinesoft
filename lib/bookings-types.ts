@@ -106,6 +106,13 @@ export type BatchDateOutcome = {
   status: BatchSlotStatus;
   outOfHours: boolean;
   blocked: boolean;
+  /**
+   * SR (SR-D7): la sala del turno está llena o bloqueada en esa fecha. Flag
+   * extra como `blocked` (no cambia `status` ni los conteos de
+   * `BatchSlotStatus`); sin `allowRoomConflict` la fecha se OMITE. Opcional
+   * hasta que SR3a lo llene (ausente = false).
+   */
+  roomBusy?: boolean;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +153,14 @@ export type AgendaBookingRow = BookingRow & {
    * sede ya no existe.
    */
   locationName: string | null;
+  /**
+   * SR (M4): sala del turno; null = sin sala. El NOMBRE no viaja: el cliente lo
+   * resuelve con el catálogo del bootstrap (`AgendaBootstrapProps.rooms`), así
+   * `listAgendaBookings` no suma queries (techo de 16 statements). En el DTO
+   * compacto (C9) se omite cuando es null (al expandir vuelve como null).
+   * Requerida desde SR3a (`listAgendaBookings` la selecciona).
+   */
+  roomId: string | null;
   isTelemedicine: boolean;
   telemedicineUrl: string | null;
   /** Recepción (decisión 3): llegó a la sala / pasó a atención. */
@@ -220,6 +235,12 @@ export const AgendaBookingsQuery = z
     practitionerIds: z.array(z.string().min(1).max(64)).max(AGENDA_BOOKINGS_MAX_PRACTITIONERS).optional(),
     /** Ausente / null = todas las sedes. La principal incluye `locationId` null. */
     locationId: z.string().min(1).max(64).nullable().optional(),
+    /**
+     * SR: ausente / null = todas las salas; `"none"` = solo los turnos SIN sala
+     * (filtro "Sin sala"; un id de sala es un cuid, nunca "none"); un id = esa
+     * sala. Lo implementa SR3a en el `where`, sin queries nuevas.
+     */
+    roomId: z.union([z.literal("none"), z.string().min(1).max(64)]).nullable().optional(),
     /** Default true (la agenda muestra los cancelados tachados). */
     includeCancelled: z.boolean().optional(),
   })

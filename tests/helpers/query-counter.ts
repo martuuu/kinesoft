@@ -27,13 +27,26 @@ function instrumented(url: string | undefined, client: QueryEvent["client"]): Pr
   return c;
 }
 
+// Gate de SR (SRZ): los clientes se reusan en todo el proceso, como el
+// singleton de `lib/db.ts`. Antes cada archivo que mockeaba `@/lib/db` creaba
+// 2 clientes nuevos (con su pool) que nunca se cerraban; con los ~7 archivos
+// de SR que miden statements (varios con tests de concurrencia, que abren
+// muchas conexiones a la vez) la integración completa agotaba las 100 de
+// Postgres ("remaining connection slots are reserved…") y fallaban tests ajenos.
+// El recorder ya es global, así que un listener por cliente alcanza.
+const clients = globalThis as unknown as {
+  __kineCountedClients?: { prisma: PrismaClient; prismaService: PrismaClient };
+};
+
 export function installQueryCounter() {
-  const prisma = instrumented(process.env.DATABASE_URL, "app");
-  const prismaService = instrumented(
-    process.env.DATABASE_URL_SERVICE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL,
-    "service",
-  );
-  return { prisma, prismaService };
+  clients.__kineCountedClients ??= {
+    prisma: instrumented(process.env.DATABASE_URL, "app"),
+    prismaService: instrumented(
+      process.env.DATABASE_URL_SERVICE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL,
+      "service",
+    ),
+  };
+  return clients.__kineCountedClients;
 }
 
 export type Measurement = {

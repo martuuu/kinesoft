@@ -195,14 +195,21 @@ describe("[S22f] agrupado por plan (puro)", () => {
     expect(shouldGroupByPlan(true, bks)).toBe(true);
   });
 
-  it("cancelados/ausentes con cobro visibles solo agrupada; sin plata, nunca", () => {
+  // SR-D4F (decisión de Martin, 08-oct): los cancelados/ausentes con cobro se
+  // ven SIEMPRE, no solo agrupada. Antes, en la vista plana (General o sin
+  // turnos de plan) un cancelado cobrado desaparecía y su plata no figuraba en
+  // ningún lado del perfil.
+  it("[SR-D4F] cancelados/ausentes con cobro visibles siempre; sin plata, nunca", () => {
     const paid = booking({ scheduledFor: "2026-10-02T13:00:00Z", status: "CANCELLED", paymentStatus: "PAID" });
     const osPaid = booking({ scheduledFor: "2026-10-02T13:00:00Z", status: "NO_SHOW", insurerPaidAt: new Date() });
+    const refunded = booking({ scheduledFor: "2026-10-02T13:00:00Z", status: "CANCELLED", paymentStatus: "REFUNDED" });
+    const authorized = booking({ scheduledFor: "2026-10-02T13:00:00Z", status: "CANCELLED", paymentStatus: "AUTHORIZED" });
     const unpaid = booking({ scheduledFor: "2026-10-02T13:00:00Z", status: "CANCELLED" });
-    expect(isBillingVisible(paid, true)).toBe(true);
-    expect(isBillingVisible(osPaid, true)).toBe(true);
-    expect(isBillingVisible(paid, false)).toBe(false);
-    expect(isBillingVisible(unpaid, true)).toBe(false);
+    expect(isBillingVisible(paid)).toBe(true);
+    expect(isBillingVisible(osPaid)).toBe(true);
+    expect(isBillingVisible(refunded)).toBe(true);
+    expect(isBillingVisible(authorized)).toBe(true);
+    expect(isBillingVisible(unpaid)).toBe(false);
   });
 
   it("sin 'Eliminar' en turnos de plan", () => {
@@ -221,10 +228,41 @@ describe("[S22f] agrupado por plan (puro)", () => {
     const s = billingSummary(bks, { grouped: true, planBalances: bal });
     expect(s.pendingCents).toBe(30 + 100 + 1_000_000 + 400); // OS + suelto + suelto OSDE (copago default) + plan
     expect(s.copagoPaidCents).toBe(50); // el cancelado cobrado es plata que entró
-    // Sin agrupar: la cuenta de siempre (copago de todos los facturables, sin cancelados).
+    // Sin agrupar: pendiente = copago de todos los facturables (sin cancelados).
     const flat = billingSummary(bks, { grouped: false });
     expect(flat.pendingCents).toBe(100 + 9_999 + 30 + 1_000_000);
-    expect(flat.copagoPaidCents).toBe(0);
+  });
+
+  it("[SR-D4F] sin agrupar: el cancelado cobrado suma en percibido", () => {
+    const bks = [
+      booking({ scheduledFor: "2026-10-02T13:00:00Z", copagoCents: 100 }),
+      booking({ scheduledFor: "2026-10-04T13:00:00Z", programId: "p1", status: "CANCELLED", paymentStatus: "PAID", copagoCents: 50 }),
+    ];
+    expect(billingSummary(bks, { grouped: false }).copagoPaidCents).toBe(50);
+  });
+
+  it("[SR-D4F] sin agrupar: percibido suma cancelado PAID y ausente con OS pagada; REFUNDED/AUTHORIZED en 0; pendiente y conteo igual", () => {
+    const billable = [
+      booking({ scheduledFor: "2026-10-01T13:00:00Z", copagoCents: 100 }), // suelto impago
+      booking({ scheduledFor: "2026-10-02T13:00:00Z", copagoCents: 7, paymentStatus: "PAID" }), // suelto cobrado
+      booking({ scheduledFor: "2026-10-03T13:00:00Z", obraSocial: "OSDE", osAmountCents: 30, copagoCents: 0 }), // OS pendiente
+    ];
+    const before = billingSummary(billable, { grouped: false });
+    const withOff = [
+      ...billable,
+      booking({ scheduledFor: "2026-10-04T13:00:00Z", status: "CANCELLED", paymentStatus: "PAID", copagoCents: 50 }),
+      booking({ scheduledFor: "2026-10-05T13:00:00Z", status: "NO_SHOW", obraSocial: "OSDE", osAmountCents: 400, insurerPaidAt: new Date(), copagoCents: 0 }),
+      booking({ scheduledFor: "2026-10-06T13:00:00Z", status: "CANCELLED", paymentStatus: "REFUNDED", copagoCents: 2_000 }),
+      booking({ scheduledFor: "2026-10-07T13:00:00Z", status: "CANCELLED", paymentStatus: "AUTHORIZED", copagoCents: 3_000 }),
+      booking({ scheduledFor: "2026-10-08T13:00:00Z", status: "CANCELLED", copagoCents: 5_000 }), // sin plata: invisible
+    ];
+    const s = billingSummary(withOff, { grouped: false });
+    expect(s.copagoPaidCents).toBe(7 + 50); // REFUNDED y AUTHORIZED se ven pero suman 0
+    expect(s.osPaidCents).toBe(400);
+    expect(s.pendingCents).toBe(before.pendingCents);
+    expect(s.pendingCents).toBe(100 + 30);
+    expect(s.billableCount).toBe(before.billableCount);
+    expect(s.billableCount).toBe(3);
   });
 });
 
@@ -288,15 +326,32 @@ describe("[S22f] FacturacionView", () => {
     expect(html).toContain(SECRET_TITLE);
   });
 
-  it("sin módulo planes (General): la vista de siempre", () => {
+  it("sin módulo planes (General): sin grupos ni saldo de plan", () => {
     const html = wrap(
       <FacturacionView bookings={bks} loading={false} patchBooking={noop} plans={plans} planBalances={bal} showPlanTitles />
     );
     expect(html).not.toContain("plan-group-header");
     expect(html).not.toContain("plan-balance");
-    expect(html).not.toContain("Cancelado cobrado");
+    expect(html).not.toContain("Cancelado sin plata");
     expect(html).not.toContain(SECRET_TITLE);
     expect(html).toContain("Consulta suelta");
+  });
+
+  it("[SR-D4F] General (plana): el suelto cancelado y cobrado tiene su fila, tag Cancelado y suma en Copago percibido", () => {
+    const flatBks = [
+      booking({ scheduledFor: "2026-09-20T13:00:00Z", serviceName: "Consulta suelta" }),
+      booking({ scheduledFor: "2026-09-22T13:00:00Z", status: "CANCELLED", paymentStatus: "PAID", copagoCents: 1_234_500, serviceName: "Suelto cancelado cobrado" }),
+    ];
+    const html = wrap(<FacturacionView bookings={flatBks} loading={false} patchBooking={noop} />);
+    expect(html).not.toContain("plan-group-header");
+    const rows = html.split('data-testid="fact-row"').slice(1);
+    expect(rows).toHaveLength(2);
+    const cancelledRow = rows.find((r) => r.includes("Suelto cancelado cobrado"));
+    expect(cancelledRow).toBeDefined();
+    expect(cancelledRow).toContain("Cancelado");
+    // `Summary` pinta la cifra y abajo la etiqueta: la cifra es el texto justo antes.
+    const percibido = html.match(/>([^<]*)<\/div><div[^>]*>Copago percibido</)?.[1];
+    expect(percibido).toBe(formatARS(1_234_500));
   });
 });
 

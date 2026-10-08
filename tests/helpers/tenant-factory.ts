@@ -1,4 +1,4 @@
-import { PrismaClient, type Role, type TenantPlan, type TenantVertical } from "@prisma/client";
+import { PrismaClient, type Role, type RoomKind, type TenantPlan, type TenantVertical } from "@prisma/client";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -93,6 +93,11 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   await db.userPreferences.deleteMany({ where: { tenantId } });
   // Membership, Practitioner, Insurer, Invitation, custom Condition/Exercise,
   // Favorite and PlanTemplate cascade from Tenant.
+  // SR M4: Location → Room → TimeBlock cascadean; PractitionerSchedule → Room es
+  // NO ACTION pero la franja cascadea DIRECTO desde Tenant y desde Location, y esas
+  // cascadas quedan encoladas antes que el chequeo de la sala borrada: no hace
+  // falta borrar nada a mano (lo prueba rooms-m4.test.ts por la cascada real).
+  // Booking → Room es RESTRICT y los turnos ya se borraron arriba.
   await db.tenant.delete({ where: { id: tenantId } });
   const ids = users.map((u) => u.userId).filter((id) => id.startsWith("test-user-"));
   if (ids.length) {
@@ -244,6 +249,46 @@ export async function addInsurer(
     },
   });
   return ins.id;
+}
+
+/**
+ * SR M4: sala de una sede del tenant (owner, BYPASSRLS). Sin `locationId` usa la
+ * sede principal y la crea si el tenant no tiene ("Principal", isPrimary): la
+ * factory no crea sedes y un turno con sala exige sede EXPLÍCITA
+ * (Booking_room_location_check), así que el caller necesita el id de vuelta.
+ */
+export async function addRoom(
+  prisma: PrismaClient,
+  t: EphemeralTenant,
+  data: {
+    locationId?: string;
+    name?: string;
+    kind?: RoomKind;
+    capacity?: number;
+    active?: boolean;
+  } = {}
+): Promise<{ roomId: string; locationId: string }> {
+  let locationId = data.locationId;
+  if (!locationId) {
+    const primary = await prisma.location.findFirst({
+      where: { tenantId: t.tenantId, isPrimary: true },
+      select: { id: true },
+    });
+    locationId =
+      primary?.id ??
+      (await prisma.location.create({ data: { tenantId: t.tenantId, name: "Principal", isPrimary: true } })).id;
+  }
+  const room = await prisma.room.create({
+    data: {
+      tenantId: t.tenantId,
+      locationId,
+      name: data.name ?? `Consultorio ${uniqueSuffix()}`,
+      kind: data.kind,
+      capacity: data.capacity,
+      active: data.active,
+    },
+  });
+  return { roomId: room.id, locationId };
 }
 
 /**

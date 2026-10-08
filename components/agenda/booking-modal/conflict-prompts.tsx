@@ -16,14 +16,26 @@
  *   "Cargar como sobreturno" (`allowBlocked`) / "Usar próximo libre" / "Volver".
  * - `OutOfHoursPrompt` (B5.1): fuera de la franja del profesional →
  *   "Cargar igual" (`allowOutOfHours`) / "Usar próximo libre" / "Volver".
+ * - `RoomBusyPrompt` (SR-U5c): la sala está llena (profesionales a la vez) o
+ *   bloqueada → "Agendar igual" (`allowRoomConflict`, NO es sobreturno,
+ *   SR-D2) / "Elegir otra sala". Sin "próximo libre": el motor no busca sala.
  *
  * Orden en que el server los devuelve (lib/bookings.ts#createBooking):
  * bloqueado > fuera de horario > superposición del paciente > mismo día >
- * cupo. Uno confirmado puede destapar el siguiente; `index.tsx` acumula los
- * flags en el payload guardado (`withConfirmation`).
+ * cupo > sala (`FORCE_PROMPT_ORDER`, `roomBusy` último). Uno confirmado puede
+ * destapar el siguiente; `index.tsx` acumula los flags en el payload guardado
+ * (`withConfirmation`).
  */
-import type { CSSProperties, MutableRefObject } from "react";
+import { useState, type CSSProperties, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  BATCH_ROOM_BUSY_DETAIL,
+  BATCH_ROOM_BUSY_LABEL,
+  batchCreatableCounts,
+  batchRoomBusyCounts,
+  roomBusyCopy,
+  type RoomBusyResult,
+} from "@/lib/booking-modal-state";
 import {
   countSessionStates,
   countsLine,
@@ -37,7 +49,11 @@ import type {
   OutOfHoursState,
   PatientOverlapState,
   SamePatientState,
+  CreatePayload,
 } from "./types";
+
+/** SR-U5c: sala llena o bloqueada (re-llamar con `allowRoomConflict`). */
+export type RoomBusyState = RoomBusyResult & { payload: CreatePayload };
 
 type PromptRef = MutableRefObject<HTMLDivElement | null>;
 
@@ -75,13 +91,21 @@ export function BatchConflictPrompt({
   promptRef: PromptRef;
   batchConflict: BatchConflictState;
   pending: boolean;
-  /** Crear todas: libres + sobreturnos + bloqueadas como sobreturno (`allowOverbooking: true`). */
-  onCreateAll: () => void;
+  /** Crear todas: libres + sobreturnos + bloqueadas como sobreturno (`allowOverbooking: true`).
+   *  `forceRoom` = agendar igual las fechas con la sala ocupada (`allowRoomConflict`, SR-D7). */
+  onCreateAll: (forceRoom: boolean) => void;
   /** Crear solo las libres (`allowOverbooking: false`). */
-  onCreateFreeOnly: () => void;
+  onCreateFreeOnly: (forceRoom: boolean) => void;
   onBack: () => void;
 }) {
   const plan = batchConflict.plan;
+  // SR-D7: las fechas con la sala ocupada se OMITEN salvo que el usuario
+  // marque agendarlas igual. Es un flag aparte del sobreturno (SR-D2), por
+  // eso va como casilla y no se mezcla con "Crear todas". Sin salas
+  // (`roomBusy` ausente en todas) no se dibuja nada nuevo.
+  const [forceRoom, setForceRoom] = useState(false);
+  const roomBusy = batchRoomBusyCounts(plan);
+  const creatable = batchCreatableCounts(plan, forceRoom);
   // Mismo vocabulario que el preview del modo Sesiones (B5.3,
   // `lib/sessions-mode-state`): estado principal por fecha (duplicado >
   // bloqueado > fuera de horario > sobreturno) y la línea de conteos.
@@ -90,16 +114,18 @@ export function BatchConflictPrompt({
   // cuentan como libres y se crean igual con cualquiera de los dos botones.
   const counts = countSessionStates(plan.dates);
   const line = countsLine(counts);
-  const problems = plan.dates.filter((d) => sessionDateState(d) !== "libre");
+  const problems = plan.dates.filter((d) => sessionDateState(d) !== "libre" || d.roomBusy === true);
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
       <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
         {problems.length} de {plan.requested} sesiones con aviso{line ? ` · ${line}` : ""}
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
-        {plan.free} se crean sin conflicto
+        {creatable.freeOnly} se crean sin conflicto
         {counts["fuera-de-horario"] > 0 && " (incluye las fuera de horario: es solo un aviso)"}
         {plan.duplicates > 0 && ` · ${plan.duplicates} ya existen y no se pueden duplicar`}
+        {roomBusy.total > 0 &&
+          ` · ${roomBusy.total} con la sala ocupada${forceRoom ? "" : " (se omiten)"}`}
         .
       </div>
       <div
@@ -114,29 +140,45 @@ export function BatchConflictPrompt({
       >
         {problems.map((d) => {
           const desc = describeSessionDate(d);
+          // Sala ocupada sola (fecha libre): es el estado de la fila. Con otro
+          // aviso, va como aviso secundario.
+          const roomOnly = d.roomBusy === true && desc.state === "libre";
           return (
             <div key={d.iso}>
-              <span className="k-mono">{fmtSlot(d.iso)}</span> · <strong>{desc.label}</strong>
-              {desc.detail ? ` — ${desc.detail}` : ""}
+              <span className="k-mono">{fmtSlot(d.iso)}</span> ·{" "}
+              <strong>{roomOnly ? BATCH_ROOM_BUSY_LABEL : desc.label}</strong>
+              {roomOnly ? ` — ${BATCH_ROOM_BUSY_DETAIL}` : desc.detail ? ` — ${desc.detail}` : ""}
               {desc.extra ? ` (${desc.extra.toLowerCase()})` : ""}
+              {d.roomBusy === true && !roomOnly ? ` (${BATCH_ROOM_BUSY_LABEL.toLowerCase()})` : ""}
             </div>
           );
         })}
       </div>
+      {roomBusy.total > 0 && (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "var(--navy-700)" }}>
+          <input
+            type="checkbox"
+            checked={forceRoom}
+            disabled={pending}
+            onChange={(e) => setForceRoom(e.target.checked)}
+          />
+          Agendar igual {roomBusy.total === 1 ? "la fecha" : `las ${roomBusy.total} fechas`} con la sala ocupada
+        </label>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {plan.conflicted > 0 ? (
           <>
-            <Button type="button" variant="primary" disabled={pending} onClick={onCreateAll}>
-              Crear todas ({plan.free + plan.conflicted}, bloqueadas y sobreturnos como sobreturno)
+            <Button type="button" variant="primary" disabled={pending} onClick={() => onCreateAll(forceRoom)}>
+              Crear todas ({creatable.all}, bloqueadas y sobreturnos como sobreturno)
             </Button>
             <Button
               type="button"
               variant="ghost"
-              disabled={pending || plan.free === 0}
-              onClick={onCreateFreeOnly}
+              disabled={pending || creatable.freeOnly === 0}
+              onClick={() => onCreateFreeOnly(forceRoom)}
               style={WARN_GHOST}
             >
-              Crear solo las libres ({plan.free})
+              Crear solo las libres ({creatable.freeOnly})
             </Button>
           </>
         ) : (
@@ -145,10 +187,10 @@ export function BatchConflictPrompt({
           <Button
             type="button"
             variant="primary"
-            disabled={pending || plan.free === 0}
-            onClick={onCreateFreeOnly}
+            disabled={pending || creatable.freeOnly === 0}
+            onClick={() => onCreateFreeOnly(forceRoom)}
           >
-            Crear {plan.free === 1 ? "la sesión" : `las ${plan.free} sesiones`}
+            Crear {creatable.freeOnly === 1 ? "la sesión" : `las ${creatable.freeOnly} sesiones`}
           </Button>
         )}
         <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
@@ -423,6 +465,52 @@ export function OutOfHoursPrompt({
         </Button>
         <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
           Volver
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * B2 (revisión b de SR): "Elegir otra sala" desmonta el aviso, que tenía el
+ * foco; sin esto caía al body del modal. Lo lleva al select "Sala" del form
+ * (`TelemedicineSection`, `name="roomId"`). `Select` de `../controls` no expone
+ * ref, así que se busca por nombre dentro del form. Sin select, no hace nada.
+ */
+export function focusRoomSelect(root: Pick<ParentNode, "querySelector"> | null | undefined): void {
+  root?.querySelector<HTMLSelectElement>('select[name="roomId"]')?.focus();
+}
+
+/**
+ * SR-U5c: la sala del turno está llena (profesionales a la vez, SR-D1) o
+ * bloqueada (`TimeBlock.roomId`, §17.5). Forzar NO es sobreturno (SR-D2):
+ * "Agendar igual" re-llama con `allowRoomConflict`. "Elegir otra sala" cierra
+ * el aviso y deja el select "Sala" a mano.
+ */
+export function RoomBusyPrompt({
+  promptRef,
+  roomBusy,
+  pending,
+  onForce,
+  onBack,
+}: {
+  promptRef: PromptRef;
+  roomBusy: RoomBusyResult;
+  pending: boolean;
+  onForce: () => void;
+  onBack: () => void;
+}) {
+  const copy = roomBusyCopy(roomBusy);
+  return (
+    <div ref={promptRef} role="alert" style={WARN_BOX}>
+      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>{copy.title}</div>
+      <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>{copy.detail}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <Button type="button" variant="ghost" onClick={onForce} disabled={pending} style={WARN_GHOST}>
+          {copy.confirmLabel}
+        </Button>
+        <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
+          {copy.backLabel}
         </Button>
       </div>
     </div>

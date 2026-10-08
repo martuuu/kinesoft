@@ -10,7 +10,8 @@ import { BookingCard, type BookingCardSizing } from "./booking-card";
 import { UnavailableOverlay } from "./unavailable-overlay";
 
 /**
- * Celda (profesional × franja) de la vista "Día por profesional" (B4.2).
+ * Celda (columna × franja) de las vistas "Día por profesional" (B4.2) y
+ * "Por sala" (SR-U4): la columna es un profesional o una sala.
  * Presentacional: todo el cálculo (cupo, estado, carriles) viene hecho en
  * `SlotCell` de `lib/agenda-layout.ts`; acá solo se dibuja.
  *
@@ -174,11 +175,28 @@ const stackedCardSizing: BookingCardSizing = {
   maxWidth: "100%",
 };
 
+/**
+ * Qué es la columna de la celda (SR-U4: la misma celda sirve a "Por
+ * profesional" y a "Por sala"). Define el atributo `data-practitioner` /
+ * `data-room` y la preposición del "+N más" ("de Ana Pérez" / "en Consultorio 2").
+ */
+export type SlotColumnKind = "practitioner" | "room";
+
+/** aria del botón de alta por defecto (vista por profesional, B4.2). */
+export function practitionerCreateAriaLabel(columnLabel: string) {
+  return (time: string, stateText: string) => `Nuevo turno con ${columnLabel} a las ${time} (${stateText})`;
+}
+
 export function SlotCell<B extends PractitionerDayBooking>({
   cell,
   dayKey,
-  practitionerId,
-  practitionerName,
+  columnId,
+  columnLabel,
+  columnKind = "practitioner",
+  createAriaLabel,
+  stateTextOf = slotStateText,
+  practitionerOf,
+  roomOf,
   rowIndex,
   colIndex,
   tabbable,
@@ -193,8 +211,26 @@ export function SlotCell<B extends PractitionerDayBooking>({
 }: {
   cell: SlotCellData<B>;
   dayKey: string;
-  practitionerId: string;
-  practitionerName: string;
+  /** Id de la columna: profesional o sala (`"none"` = "Sin sala"). Va a `onSlotClick`. */
+  columnId: string;
+  /** Nombre visible de la columna (aria de la celda y del "+N más"). */
+  columnLabel: string;
+  columnKind?: SlotColumnKind;
+  /** aria del botón de alta; default "Nuevo turno con <columna> a las HH:MM (estado)". */
+  createAriaLabel?: (time: string, stateText: string) => string;
+  /** Texto del estado; default `slotStateText` (la sala cambia "fuera de horario"). */
+  stateTextOf?: (cell: SlotCellData<B>) => string;
+  /**
+   * Iniciales del profesional de cada card (vista "Por sala"). Sin valor, las
+   * cards no llevan iniciales (vista por profesional: la columna ya lo dice).
+   */
+  practitionerOf?: (b: B) => { initials: string; name: string } | null;
+  /**
+   * SR-U6 (handoff de SR-U5a): sala de cada card ("· Consultorio 2"). Solo la
+   * pasa "Por profesional" cuando la sala aporta (`showRoomOnCards`); en "Por
+   * sala" no, porque la columna ya es la sala. Sin valor, la card es la de siempre.
+   */
+  roomOf?: (b: B) => { name: string } | null;
   rowIndex: number;
   colIndex: number;
   /** Roving tabindex: solo una celda de la grilla está en el orden de Tab. */
@@ -205,7 +241,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
   showBlockLabel: boolean;
   /** Resaltado de la leyenda (`lib/agenda-highlight.ts`); `null` = sin filtro. */
   highlight: AgendaHighlight | null;
-  onSlotClick: (practitionerId: string, iso: string) => void;
+  onSlotClick: (columnId: string, iso: string) => void;
   onBookingClick: (booking: B) => void;
   onFocusCell: (rowIndex: number, colIndex: number) => void;
   onGridKeyDown: (e: KeyboardEvent<HTMLElement>, rowIndex: number, colIndex: number) => void;
@@ -215,7 +251,8 @@ export function SlotCell<B extends PractitionerDayBooking>({
   const limit = visibleCardLimit(density);
   const overflow = denseOverflow(cell.bookings, limit, expanded, highlight);
   const { shown, hidden } = overflow;
-  const more = overflowButtonText(overflow, highlight != null, `de ${practitionerName} a las ${cell.time}`);
+  const where = `${columnKind === "room" ? "en" : "de"} ${columnLabel} a las ${cell.time}`;
+  const more = overflowButtonText(overflow, highlight != null, where);
   // Resaltado a nivel celda (solo con turnos): una franja sin coincidencias
   // atenúa también su ocupación, así la columna se lee de un vistazo.
   const cellHighlight =
@@ -226,7 +263,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
         : "dimmed";
   const blocked = cell.state === "bloqueado";
   const unavailable = cell.state === "bloqueado" || cell.state === "fuera-de-horario";
-  const stateText = slotStateText(cell);
+  const stateText = stateTextOf(cell);
   // Instante de la franja en pared AR (mismo formato que el alta de la vista Día).
   const iso = localToARIso(`${dayKey}T${cell.time}`);
   const continuingNames = cell.continuing.filter((b) => b.status !== "CANCELLED").map((b) => b.patientName);
@@ -236,7 +273,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
       role="gridcell"
       aria-colindex={colIndex + 2}
       data-state={cell.state}
-      data-practitioner={practitionerId}
+      {...{ [columnKind === "room" ? "data-room" : "data-practitioner"]: columnId }}
       data-time={cell.time}
       data-highlight={cellHighlight}
       title={blocked ? `Bloqueado${cell.blockReason ? ` · ${cell.blockReason}` : ""}` : undefined}
@@ -267,11 +304,11 @@ export function SlotCell<B extends PractitionerDayBooking>({
         aria-disabled={blocked || undefined}
         aria-label={
           blocked
-            ? `${cell.time}, ${practitionerName}: ${stateText}`
-            : `Nuevo turno con ${practitionerName} a las ${cell.time} (${stateText})`
+            ? `${cell.time}, ${columnLabel}: ${stateText}`
+            : (createAriaLabel ?? practitionerCreateAriaLabel(columnLabel))(cell.time, stateText)
         }
         onClick={() => {
-          if (!blocked) onSlotClick(practitionerId, iso);
+          if (!blocked) onSlotClick(columnId, iso);
         }}
         onFocus={() => onFocusCell(rowIndex, colIndex)}
         onKeyDown={(e) => onGridKeyDown(e, rowIndex, colIndex)}
@@ -350,6 +387,8 @@ export function SlotCell<B extends PractitionerDayBooking>({
               highlight={highlight}
               compact
               sizing={stackedCardSizing}
+              practitioner={practitionerOf?.(b) ?? null}
+              room={roomOf?.(b) ?? null}
             />
           ))}
         </div>
@@ -360,7 +399,7 @@ export function SlotCell<B extends PractitionerDayBooking>({
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          aria-label={expanded ? `Ver menos turnos de ${practitionerName} a las ${cell.time}` : more.ariaLabel}
+          aria-label={expanded ? `Ver menos turnos ${where}` : more.ariaLabel}
           data-overflow-matches={!expanded && overflow.hiddenMatches > 0 ? overflow.hiddenMatches : undefined}
           data-overflow-out-of-plan={!expanded && overflow.hiddenOutOfPlan > 0 ? overflow.hiddenOutOfPlan : undefined}
           style={{

@@ -24,6 +24,7 @@ import {
   revenuePrevLabel,
   revenueTitle,
   type RevenueRange,
+  type RevenueScopeKind,
   type RevenueSummary,
 } from "@/lib/dashboard-revenue";
 
@@ -32,8 +33,12 @@ const RANGES: { value: RevenueRange; label: string }[] = [
   { value: "month", label: "Mes" },
 ];
 
-/** Textos del widget, puros (render test). */
-export function revenueCardView(s: RevenueSummary) {
+/**
+ * Textos del widget, puros (render test). SR-D5I: con scope `own` el título
+ * dice "Tus ingresos…" (son los turnos del profesional, no la caja del
+ * consultorio). Con `none` el widget no se monta (`DashboardScreen`).
+ */
+export function revenueCardView(s: RevenueSummary, scope: RevenueScopeKind = "tenant") {
   const delta =
     s.deltaPct == null
       ? null
@@ -43,7 +48,7 @@ export function revenueCardView(s: RevenueSummary) {
           label: `${s.deltaPct >= 0 ? "+" : ""}${s.deltaPct}% ${revenuePrevLabel(s.range)}`,
         };
   return {
-    title: revenueTitle(s.range),
+    title: revenueTitle(s.range, scope),
     total: formatARS(s.totalCents),
     delta,
     breakdown: `Copagos ${formatARS(s.manualCents)} · Mercado Pago ${formatARS(s.mpCents)}`,
@@ -80,11 +85,17 @@ export function revenueRangeAfterFetch(
 export function RevenueCard({
   initial,
   month,
+  scope = "tenant",
 }: {
   /** El período que el usuario dejó elegido (`dashboardPrefs.revenueRange`). */
   initial: RevenueSummary;
   /** El mes ya calculado para la KPI: cambiar a "Mes" se ve sin esperar. */
   month?: RevenueSummary;
+  /**
+   * SR-D5I: de quién son los números (`DashboardData.revenueScope`). Solo
+   * cambia el título: el filtro real lo hace `getRevenue` con el actor.
+   */
+  scope?: Exclude<RevenueScopeKind, "none">;
 }) {
   const toast = useToast();
   const [range, setRange] = useState<RevenueRange>(initial.range);
@@ -119,7 +130,7 @@ export function RevenueCard({
 
   // Mientras llega el período nuevo se sigue viendo el último que hay.
   const shown = revenueShown(byRange, range, initial);
-  const v = revenueCardView(shown);
+  const v = revenueCardView(shown, scope);
 
   return (
     <Card

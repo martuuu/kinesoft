@@ -21,7 +21,7 @@ import {
   type ReceptionFilter,
   type ReceptionOverrides,
 } from "@/lib/reception-view-state";
-import type { BookingDTO } from "../agenda-utils";
+import { roomNameOf, type BookingDTO } from "../agenda-utils";
 import { ReceptionRow } from "./reception-row";
 
 /**
@@ -47,6 +47,11 @@ import { ReceptionRow } from "./reception-row";
  *   o más nueva (`mergeReceptionOverrides`).
  * - `canOperate=false` (sin `agenda.reception`): solo lectura, sin columna de
  *   acciones. El server lo hace cumplir igual.
+ * - `roomById` (SR): catálogo de salas del consultorio. La columna "Sala"
+ *   aparece solo si tiene entradas; sin salas la tabla es la de siempre. A
+ *   diferencia de las tarjetas no depende de `showRoomOnCards`: en la tabla
+ *   una columna no agrega ruido y la Secretaria la usa para mandar al
+ *   paciente al consultorio.
  */
 export function ReceptionView({
   dayKey,
@@ -56,6 +61,7 @@ export function ReceptionView({
   canOperate,
   onOpenBooking,
   onChanged,
+  roomById = null,
 }: {
   dayKey: string;
   bookings: BookingDTO[];
@@ -64,6 +70,7 @@ export function ReceptionView({
   canOperate: boolean;
   onOpenBooking: (b: BookingDTO) => void;
   onChanged: (b: BookingDTO) => void;
+  roomById?: Readonly<Record<string, { name: string }>> | null;
 }) {
   const toast = useToast();
   const [filter, setFilter] = useState<ReceptionFilter>("todos");
@@ -100,6 +107,7 @@ export function ReceptionView({
   const shown = useMemo(() => filterEntries(entries, filter), [entries, filter]);
   const byPractitioner = useMemo(() => new Map(practitioners.map((p) => [p.id, p])), [practitioners]);
   const isToday = dayKey === dayKeyOf(clock);
+  const showRoom = roomById != null && Object.keys(roomById).length > 0;
 
   async function handleAction(b: BookingDTO, action: ReceptionAction) {
     if (!canOperate) return;
@@ -204,6 +212,7 @@ export function ReceptionView({
                 <th scope="col">Paciente</th>
                 <th scope="col">Servicio</th>
                 <th scope="col">Profesional</th>
+                {showRoom && <th scope="col">Sala</th>}
                 <th scope="col">Estado</th>
                 <th scope="col">Espera</th>
                 {canOperate && (
@@ -225,6 +234,7 @@ export function ReceptionView({
                   pending={!!overrides[e.row.id]?.pending}
                   onAction={handleAction}
                   onOpen={onOpenBooking}
+                  room={showRoom ? roomOf(roomById, e.row) : undefined}
                 />
               ))}
             </tbody>
@@ -233,6 +243,11 @@ export function ReceptionView({
       )}
     </section>
   );
+}
+
+function roomOf(roomById: Readonly<Record<string, { name: string }>> | null, b: BookingDTO): { name: string } | null {
+  const name = roomNameOf(roomById, b);
+  return name ? { name } : null;
 }
 
 function Counter({ label, value, hint, warn = false }: { label: string; value: string; hint?: string; warn?: boolean }) {

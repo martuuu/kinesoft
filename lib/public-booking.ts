@@ -35,6 +35,8 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import { lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
+import { defaultRoomFor } from "@/lib/availability/rooms";
 import { acceptsInsurer, addDays, eligiblePractitioners, isDayKey, resolvePractitionerService } from "@/lib/availability";
 import {
   PUBLIC_FIRST_FREE_HORIZON_DAYS,
@@ -577,6 +579,22 @@ export async function submitPublicBooking(
           });
           if (!loc) throw new PublicLocationGoneError();
         }
+        // SR (SR2b, SR-D3): la sala por defecto de la franja del slot, con la
+        // grilla FRESCA (la de esta tx) y en la sede del slot. Se valida
+        // DESPUÉS del lock compartido de sedes (`archiveRoom` toma el
+        // exclusivo): archivada → el turno queda sin sala, no es error (el
+        // paciente no la eligió). Sin chequeo de ocupación ni lock de sala:
+        // el turnero no la toma (la barrera es la validación de Configuración).
+        // Sin sala en la franja → 0 statements nuevos. `slotLocationId` null =
+        // el tenant no tiene sedes → tampoco salas.
+        const defaultRoomId = slotLocationId
+          ? defaultRoomFor(fresh, data.practitionerId, scheduledFor, offer.durationMin, slotLocationId)
+          : null;
+        const roomId =
+          defaultRoomId && slotLocationId
+            ? ((await lockActiveRoomInTx(tx, { tenantId: tenant.id, roomId: defaultRoomId, locationId: slotLocationId }))?.id ??
+              null)
+            : null;
         const released = await releaseOwnExpiredPublicHold(tx, {
           tenantId: tenant.id,
           patientId: resolution.patientId,
@@ -593,6 +611,8 @@ export async function submitPublicBooking(
             // Override del profesional (PractitionerService.durationMin) o la del servicio.
             durationMin: offer.durationMin,
             locationId: slotLocationId,
+            // Con sala, `slotLocationId` es explícito (CHECK SR-D6).
+            roomId,
             notes: notes || null,
             title: data.patient.title || null,
             description: data.patient.description || null,

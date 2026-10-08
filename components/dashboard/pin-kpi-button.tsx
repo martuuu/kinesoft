@@ -6,7 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { IconCheck, IconPlus } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
-import { KPI_OPTIONS, type KpiKey } from "@/lib/preferences-constants";
+import {
+  kpiOptionsFor,
+  pinnableKpis,
+  type KpiKey,
+  type KpiRevenueScope,
+} from "@/lib/preferences-constants";
 
 /**
  * The "+ Agregar" button on the pinned-KPIs row.
@@ -14,8 +19,17 @@ import { KPI_OPTIONS, type KpiKey } from "@/lib/preferences-constants";
  * Same picker as the Profile menu's Settings modal, but scoped to KPIs
  * only — so a practitioner mid-flow can tweak the row without leaving
  * the dashboard.
+ *
+ * SRZ-FX3 (B8): `revenueScope` (SR-D5I) decide si se ofrece la KPI de
+ * ingresos y con qué rótulo (`kpiOptionsFor`). Default `tenant` = lo de antes.
  */
-export function PinKpiButton({ currentPinned }: { currentPinned: KpiKey[] }) {
+export function PinKpiButton({
+  currentPinned,
+  revenueScope = "tenant",
+}: {
+  currentPinned: KpiKey[];
+  revenueScope?: KpiRevenueScope;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -38,22 +52,31 @@ export function PinKpiButton({ currentPinned }: { currentPinned: KpiKey[] }) {
       >
         <IconPlus size={12} /> Agregar
       </button>
-      <PinKpiModal open={open} currentPinned={currentPinned} onClose={() => setOpen(false)} />
+      <PinKpiModal
+        open={open}
+        currentPinned={currentPinned}
+        revenueScope={revenueScope}
+        onClose={() => setOpen(false)}
+      />
     </>
   );
 }
 
-function PinKpiModal({
+/** Exportado para el test de render (tests/unit/render/kpi-picker.test.tsx). */
+export function PinKpiModal({
   open,
   currentPinned,
   onClose,
+  revenueScope = "tenant",
 }: {
   open: boolean;
   currentPinned: KpiKey[];
   onClose: () => void;
+  revenueScope?: KpiRevenueScope;
 }) {
   const router = useRouter();
-  const [pinned, setPinned] = useState<KpiKey[]>(currentPinned);
+  const options = kpiOptionsFor(revenueScope);
+  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(currentPinned, revenueScope));
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -62,7 +85,7 @@ function PinKpiModal({
   // exit animation).
   useEffect(() => {
     if (open) {
-      setPinned(currentPinned);
+      setPinned(pinnableKpis(currentPinned, revenueScope));
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,7 +116,7 @@ function PinKpiModal({
       description="Elegí hasta 6. El orden de selección define el orden en la grilla."
     >
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-          {KPI_OPTIONS.map((opt) => {
+          {options.map((opt) => {
             const on = pinned.includes(opt.key);
             const idx = pinned.indexOf(opt.key);
             return (

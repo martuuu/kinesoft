@@ -12,6 +12,8 @@
  * `setHours`/`getDate` del host (en Vercel el host es UTC).
  */
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
+import type { AgendaRoomBlockView } from "@/lib/availability-actions-types";
 import { AR_OFFSET, toARDateKey } from "@/lib/datetime-ar";
 
 /** Tope de un bloqueo: más largo que esto es una licencia, no un candado. */
@@ -60,19 +62,30 @@ export function normalizeBlockWindow(input: {
   };
 }
 
+/** Copy del alcance "Una sala" (SR-B, §17.5) cuando además vienen profesionales. */
+export const ROOM_SCOPE_WITH_PRACTITIONERS_ERROR = "Un bloqueo de sala no lleva profesionales.";
+
 /**
  * Alta de bloqueo. Destino (excluyentes):
  *   - `practitionerIds` (≥1) → una fila por profesional; con 2+ comparten
  *     `groupId` (decisión 8: subconjunto = N filas con groupId);
  *   - si no, `practitionerId`: un id = su agenda; `null` = "todos" (una fila
- *     con practitionerId null, alcanza también a profesionales futuros).
- * `locationId` opcional: null/ausente = todas las sedes.
+ *     con practitionerId null, alcanza también a profesionales futuros);
+ *   - `roomId` (SR-B, §17.5 "Bloquear sala"): UNA fila de esa sala, con
+ *     `practitionerId` null y `locationId` = la sede de la sala (lo exige el
+ *     CHECK `TimeBlock_room_scope_check` de M4). Bloquea SOLO la sala, nunca a
+ *     los profesionales: por eso no admite `practitionerId(s)` — un null ahí
+ *     se tolera porque es lo que guarda la fila.
+ * `locationId` opcional: null/ausente = todas las sedes. Con `roomId`, si
+ * viene, tiene que ser la sede de la sala (si no, se rechaza: el server la
+ * deriva de la sala).
  */
 export const TimeBlockCreate = z
   .object({
     practitionerId: Id.nullable().optional(),
     practitionerIds: z.array(Id).min(1).max(100).optional(),
     locationId: Id.nullable().optional(),
+    roomId: Id.nullable().optional(),
     startsAt: IsoInstant,
     endsAt: IsoInstant,
     allDay: z.boolean().default(false),
@@ -85,14 +98,22 @@ export const TimeBlockCreate = z
       .transform((v) => (v ? v : null)),
   })
   .superRefine((v, ctx) => {
-    if (v.practitionerIds && v.practitionerId !== undefined) {
+    if (v.roomId) {
+      if (v.practitionerIds || (v.practitionerId !== undefined && v.practitionerId !== null)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["roomId"],
+          message: ROOM_SCOPE_WITH_PRACTITIONERS_ERROR,
+        });
+      }
+    } else if (v.practitionerIds && v.practitionerId !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["practitionerIds"],
         message: "Indicá un profesional, varios o todos; no ambos.",
       });
     }
-    if (!v.practitionerIds && v.practitionerId === undefined) {
+    if (!v.roomId && !v.practitionerIds && v.practitionerId === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["practitionerId"],
@@ -113,13 +134,19 @@ export const TimeBlockCreate = z
 
 export type TimeBlockCreateInput = z.input<typeof TimeBlockCreate>;
 
-/** Listado por ventana de días AR inclusiva (como `AvailabilityInput.from/to`). */
+/**
+ * Listado por ventana de días AR inclusiva (como `AvailabilityInput.from/to`).
+ * SR-B: sin `roomIds` salen solo los bloqueos de profesionales / "todos" (los
+ * de sala tienen `practitionerId` null y, mezclados, se leerían como "todo el
+ * equipo"); con `roomIds` salen SOLO los bloqueos de esas salas.
+ */
 export const TimeBlockList = z
   .object({
     from: DayKey,
     to: DayKey,
     practitionerIds: z.array(Id).max(100).optional(),
     locationId: Id.nullable().optional(),
+    roomIds: z.array(Id).min(1).max(100).optional(),
   })
   .superRefine((v, ctx) => {
     const span = (arDayStart(v.to).getTime() - arDayStart(v.from).getTime()) / DAY_MS;
@@ -153,8 +180,80 @@ export type TimeBlockRow = {
   allDay: boolean;
   reason: string | null;
   groupId: string | null;
+  /** SR-B: sala bloqueada (§17.5); null = bloqueo de profesional(es) / "todos". */
+  roomId: string | null;
   createdById: string;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bloqueos de SALA (SR-B, §17.5): helpers puros de lectura para la agenda.
+// Viven acá (y no en `lib/time-blocks.ts`) porque ese archivo es "use server":
+// todo export sería una action, y estos los usa el server DENTRO de su tx
+// (`getAgendaAvailability`, SR3a; el loader, SR1a).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Filtro que deja afuera los bloqueos de sala. Todo lector de `TimeBlock` que
+ * interpreta `practitionerId: null` como "todos los profesionales" lo TIENE
+ * que sumar: un bloqueo de sala también tiene `practitionerId` null (CHECK de
+ * M4) y no bloquea a nadie.
+ */
+export const NOT_ROOM_BLOCK = { roomId: null } as const satisfies Prisma.TimeBlockWhereInput;
+
+/**
+ * `where` de los bloqueos de sala vivos que tocan [start, end) (semiabierto,
+ * como el resto de las ventanas de bloqueo). `roomIds` acota a esas salas;
+ * `locationId` a las salas de esa sede (la fila de sala SIEMPRE tiene su sede).
+ */
+export function roomBlocksWhere(o: {
+  tenantId: string;
+  start: Date;
+  end: Date;
+  roomIds?: readonly string[] | null;
+  locationId?: string | null;
+}): Prisma.TimeBlockWhereInput {
+  return {
+    tenantId: o.tenantId,
+    deletedAt: null,
+    roomId: o.roomIds ? { in: [...o.roomIds] } : { not: null },
+    ...(o.locationId ? { locationId: o.locationId } : {}),
+    startsAt: { lt: o.end },
+    endsAt: { gt: o.start },
+  };
+}
+
+export const ROOM_BLOCK_SELECT = {
+  id: true,
+  roomId: true,
+  startsAt: true,
+  endsAt: true,
+  reason: true,
+} as const satisfies Prisma.TimeBlockSelect;
+
+/** Orden estable (por inicio e id), el mismo que `RoomBlock` en el motor. */
+export const ROOM_BLOCK_ORDER: Prisma.TimeBlockOrderByWithRelationInput[] = [{ startsAt: "asc" }, { id: "asc" }];
+
+/**
+ * Filas de `ROOM_BLOCK_SELECT` → DTO serializable de la agenda
+ * (`AgendaAvailability.roomBlocks`). Descarta las filas sin sala (no deberían
+ * llegar con `roomBlocksWhere`, pero el tipo de Prisma no lo sabe).
+ */
+export function toAgendaRoomBlockViews(
+  rows: readonly { id: string; roomId: string | null; startsAt: Date; endsAt: Date; reason: string | null }[]
+): AgendaRoomBlockView[] {
+  const out: AgendaRoomBlockView[] = [];
+  for (const b of rows) {
+    if (!b.roomId) continue;
+    out.push({
+      id: b.id,
+      roomId: b.roomId,
+      startsAt: b.startsAt.toISOString(),
+      endsAt: b.endsAt.toISOString(),
+      reason: b.reason,
+    });
+  }
+  return out;
+}
 
 /**
  * Turno activo (PENDING/CONFIRMED que sigue ocupando cupo) que cae, aunque
@@ -219,19 +318,35 @@ const DayLockScopeShape = {
   dayKey: DayKey,
   /** null = "todos" (una fila con practitionerId null, decisión 8). */
   practitionerIds: z.array(Id).min(1).max(DAY_LOCK_MAX_PRACTITIONERS).nullable(),
-  /** null/ausente = todas las sedes. */
+  /** null/ausente = todas las sedes. Con `roomId`: la sede de la sala o ausente. */
   locationId: Id.nullable().optional(),
+  /**
+   * SR-B (§17.5): alcance "Una sala". Exige `practitionerIds: null` (el
+   * bloqueo es de la sala, no de profesionales); null/ausente = el candado
+   * de profesionales de siempre.
+   */
+  roomId: Id.nullable().optional(),
   allDay: z.boolean(),
   startMin: MinOfDay.optional(),
   endMin: MinOfDay.optional(),
 };
 
 function refineDayLockScope(
-  v: { dayKey: string; allDay: boolean; startMin?: number; endMin?: number },
+  v: {
+    dayKey: string;
+    allDay: boolean;
+    startMin?: number;
+    endMin?: number;
+    roomId?: string | null;
+    practitionerIds: string[] | null;
+  },
   ctx: z.RefinementCtx
 ) {
   if (!isRealDayKey(v.dayKey)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dayKey"], message: "Día inválido." });
+  }
+  if (v.roomId && v.practitionerIds !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["roomId"], message: ROOM_SCOPE_WITH_PRACTITIONERS_ERROR });
   }
   if (v.allDay) return;
   if (v.startMin === undefined || v.endMin === undefined) {
@@ -271,12 +386,23 @@ export type DayLockApplyInput = z.input<typeof DayLockApply>;
  * o null = todo el consultorio (todas las filas del día, incluidas las de
  * "todos" y las de cada profesional). `blockIds` opcional acota a los que el
  * usuario tildó en el diálogo.
+ *
+ * SR-B: `roomId` = desbloquear ESA sala (solo sus bloqueos; exige
+ * `practitionerId: null`). Sin `roomId` los bloqueos de sala no se tocan ni
+ * se listan en `remaining`: no son de la agenda de nadie.
  */
-export const DayLockRemove = z.object({
-  dayKey: DayKey.refine(isRealDayKey, "Día inválido."),
-  practitionerId: Id.nullable(),
-  blockIds: z.array(Id).min(1).max(200).optional(),
-});
+export const DayLockRemove = z
+  .object({
+    dayKey: DayKey.refine(isRealDayKey, "Día inválido."),
+    practitionerId: Id.nullable(),
+    roomId: Id.nullable().optional(),
+    blockIds: z.array(Id).min(1).max(200).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.roomId && v.practitionerId !== null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["roomId"], message: ROOM_SCOPE_WITH_PRACTITIONERS_ERROR });
+    }
+  });
 export type DayLockRemoveInput = z.input<typeof DayLockRemove>;
 
 /** Turno afectado por el candado: lo de `AffectedBooking` + si tiene cobro y si es de plan. */

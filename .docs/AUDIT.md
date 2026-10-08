@@ -740,7 +740,7 @@ PLANES §10 «Handoffs para ES3»). Arquitectura en [ARCHITECTURE.md §Módulos 
   motor y exige `plans.manage` (la Secretaria ya no agrega sesiones a medida); la OS pagada no suma en "cobrado".
 - **Gate de ES2b (orquestador, en solitario sobre el Docker):** `migrate deploy` re-aplicado = no-op y `migrate status` al día (29); `tsc` 0 (app y scripts); unit 1667/1667 en TZ=UTC y TZ=AR; guard OK; `next build` OK; `perf:bundle` sin excesos; integración completa 1025 + 19 skip (`kinesoft_app`) y 1018 + 26 skip (owner); perf + `compare.ts` sin regresiones (agenda 16 statements, techo 16); 0 `it.fails` pendientes. La carrera "cierre ∥ generar" está cubierta en los dos órdenes (`plans-engine-fixes.test.ts` cierre primero; `plans-sync-sessions.test.ts` turno primero).
 
-**Ronda 18 — Planes P3 (ES3): UI de Planes, ingresos reales y retiro de las altas viejas (08-oct-2026) ✅ (pendiente commit):**
+**Ronda 18 — Planes P3 (ES3): UI de Planes, ingresos reales y retiro de las altas viejas (08-oct-2026) ✅ (commit `ad50059`):**
 ejecutada en develop sobre `58ec36f` según [PLANES.md §11](PLANES.md), con las enmiendas EV0/SV y las del 08-oct.
 **1 migración nueva**, M3a `20261008120000_billing_paid_at` (`Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs`
 con CHECK de objeto), aplicada y verificada **solo en el Docker local**; va desde vacío en el deploy único de B
@@ -766,23 +766,82 @@ agenda, F3b perfil; integrador). Decisiones que cambiaron el contrato en PLANES 
   `SchedulablePlanSession`; `authorization` en el prefill de URL; aviso L11 genérico; "Cancelalo" en cualquier estado;
   Links de la fila Plan sin dirty-guard; conteo de Semana ≠ leyenda; a11y; mobile; `?agendar=1` sin limpiar; copy
   "Completado"/"Finalizado"; tests que no podían fallar (títulos secretos).
-- **Nuevos abiertos** (clasificados en el momento, filas en §2 «Hallazgos de ES3»): C0 `ingresos-visibles-a-todo-rol`,
-  `facturacion-cancelados-con-cobro`; C1 `bulk-exercises-rango-por-index`, `recordatorio-whatsapp-sin-ordinal`,
+- **Nuevos abiertos** (clasificados en el momento, filas en §2 «Hallazgos de ES3»): `ingresos-visibles-a-todo-rol` y
+  `facturacion-cancelados-con-cobro` (cerrados en SR, Ronda 19); C1 `bulk-exercises-rango-por-index`, `recordatorio-whatsapp-sin-ordinal`,
   `slot-cell-helpers-bundle`, `plan-template-prefill-doble`, `label-codigo-de-la-orden`,
   `tabs-perfil-patron-incompleto`, `diagnosis-name-en-plandto`, `renovar-autorizacion-sin-os`,
   `bundle-es3-sobre-criterio`; ES4 `archivar-paciente-lista-sin-L9`; EV1 `programs-sobrevivientes`; nota
   `bookings-conflict-literal`.
-- **Decisiones para Martin** (con recomendación; también en PLANES §11): (1) bundle → aceptar y seguir en C1;
-  (2) retirar los sobrevivientes de `programs.ts` → EV1; (3) R-LEGACY sin "a medida" → dejarlo (reset de prod);
-  (4) cancelados con cobro solo en Facturación agrupada → mostrarlos siempre, C0; (5) ingresos visibles a cualquier rol →
-  evaluar gate en C0; (6) `diagnosisName` en `PlanDTO` → C1; (7) "Renovar autorización" sin saber si el plan tiene OS →
-  flag fuera de C9, C1. Aceptada por el orquestador: la concurrencia de "a medida" es "stale-preview limpio + entra al
+- **Decisiones de Martin (08-oct, al cerrar ES3; PLANES §11):** (1) bundle aceptado, sigue en C1; (2) los
+  sobrevivientes de `programs.ts` se quedan; (3) R-LEGACY sin "a medida" se deja; (4) cancelados con cobro siempre
+  visibles y (5) ingresos por rol → **ejecutadas en SR** (Ronda 19); (6) `diagnosisName` en `PlanDTO` → C1;
+  (7) "Renovar autorización" sin saber si el plan tiene OS → C1 si molesta. Aceptada por el orquestador: la concurrencia de "a medida" es "stale-preview limpio + entra al
   reintentar".
 - **Gate de ES3 (en solitario, Docker local):** `migrate deploy` re-aplicado sin pendientes, `migrate status` al día
   (30 migraciones); `tsc` 0 (app y `tsconfig.scripts.json`); `next build` OK; unit 102 archivos / 2114 tests en TZ=UTC y
   TZ=AR; guard OK; integración completa `kinesoft_app` 84 archivos / 1074 ✓ (19 skip) y owner 83 ✓ + 1 skip / 1067 ✓
   (26 skip), 0 fallas; 0 `it.fails` de ES3 sin dar vuelta; perf + `compare.ts` sin regresiones fuera de umbral (28
   escenarios, 1 nuevo); bundle en [PERF.md §ES3](PERF.md).
+
+**Ronda 19 — SR: Salas/Consultorios, Facturación con cancelados cobrados e ingresos por rol (08-oct-2026) ✅ (pendiente commit):**
+ejecutada en develop sobre `ad50059` según el plan vigente §17 + §17.5 (respuestas de Martin). **1 migración nueva**, M4
+`20261009120000_rooms` (sola en SR0), aplicada y verificada **solo en el Docker local** (31 migraciones); va en la
+cadena del deploy único después de M3a y antes de M5 ([MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md)).
+Olas SR0 (SR-M) → SR1.0 (SR-C, contratos) → SR1 (SR1a motor, SR1b CRUD, SR1c horarios, SR1d ocupación, SR-D4F, SR-D5I)
+→ SR2 (SR2a core, SR2b Planes + turnero, SR-B bloqueos, SR-U1..U4) → SR3 (SR3a `lib/bookings.ts`, SR-U5a/b/c, SR-BU) →
+SR4 (SR-U6 agenda) → SRZ (2 revisores de solo lectura, fixers FX1/FX2a/FX2b/FX3, gate en solitario). Arquitectura en
+[ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); locks C2 (1b) en ADR-004.
+
+- 🟢 **Qué entró:**
+  - **Server:** CRUD de salas (`lib/rooms.ts`); horarios con sala y vigencia y choque duro entre profesionales
+    (`lib/practitioner-schedule.ts`, `lib/room-schedule-validate.ts`, lock `room-schedule` condicional); motor puro
+    (`lib/availability/rooms.ts`) y loader con `roomBlocks` aparte; ocupación server-only en una sentencia
+    (`lib/booking-rooms-internal.ts`); core con sala (`applyBookingUpdateInTx` recalcula, valida y cuenta;
+    `room-busy`/`bad-room`); alta, batch, agenda y clasificación con sala; Planes y turnero estampan sin chequear (SR-D3);
+    bloqueos de sala (`lib/time-blocks*.ts`).
+  - **UI:** Configuración › Sedes › Salas; editor de horarios con sala y vigencia; agenda con filtro de sala, vista
+    "Por sala", sala en tarjetas, lista, semana y Recepción; drawer (fila Sala, "Asignar igual"); modal (select Sala,
+    "Agendar igual", batch con casilla aparte); candado "Una sala"; PlanCard "Moverlo igual (sala ocupada)". Sin salas,
+    todo igual que en `ad50059` (agenda 15/15 byte a byte, editor verificado contra HEAD).
+  - **Decisiones 4 y 5 de Martin del cierre de ES3:** SR-D4F y SR-D5I (filas abajo).
+- 🟢 **Cerrados** (filas en §2): `salas-inexistentes`, `ingresos-visibles-a-todo-rol` (SR-D5I),
+  `facturacion-cancelados-con-cobro` (SR-D4F).
+- 🟢 **Bugs de la revisión, cerrados en SRZ** (filas en §2 «Hallazgos de SR»). Revisor (a) server: 0 altos; MEDIA
+  reprogramar una sesión de plan a una sala ocupada no tenía salida (FX2b: "Moverlo igual (sala ocupada)",
+  `components/planes/plan-card.tsx:260-270`); lookback de sala 240 → 480; franjas vencidas con sala archivada
+  impedían guardar; test flaky del índice único y test de fuga de cache que no fijaba la clave. Revisor (b) UI: 0 altos;
+  MEDIA "Asignada: ?", ocupación de "Por sala" filtrada por los chips, vigencia visible sin salas, "Sin sala" mezclando
+  sedes; bajas de total del filtro, foco, copy del vacío por rol, toggle sin opción marcada, sala archivada, select de
+  sala sin salas en la sede, `aria-describedby` del candado, picker de KPI de la Secretaria.
+- 🟢 **Fixes del gate** (orquestador):
+  - **Fuga de conexiones en tests:** `tests/helpers/query-counter.ts` creaba 2 clientes Prisma por archivo sin
+    cerrarlos; con los tests de SR la integración completa agotaba las 100 conexiones. Ahora reusa un singleton por
+    proceso (`:31-50`); pico medido 60.
+  - **Pool del dashboard (riesgo real en prod):** `getDashboardData` abría 6 tx interactivas de ingresos en paralelo
+    con las de los counts → "Unable to start a transaction in the given time" intermitente. `loadRevenue` es ahora
+    **una** tx con las lecturas en serie (`revenueAmountsInTx`, `lib/dashboard.ts:585,642`): 19 → 15 tx, mismas
+    sentencias.
+  - **`todaySlot` de Recepción** (tests de ES2b `plans-sync-bookings`, `plans-sync-sessions`): "una hora antes de
+    ahora" caía AYER entre 00:00 y 01:30 AR; ahora con piso en el inicio del día AR.
+  - **`liveBlocksInTx`** (`lib/bookings-core.ts:534-550`) suma `roomId: null`: un bloqueo de sala bloqueaba el alta de
+    **todos** los profesionales. Test que falla sin el fix (`day-lock.test`, «[SR-B] un bloqueo de sala no bloquea el
+    alta…»).
+- **Nuevos abiertos** (clasificados en el momento, filas en §2 «Hallazgos de SR»): C1 `copy-sala-ocupada-genero`,
+  `delete-exception-sin-reaviso`, `golden-sin-salas`, `room-filter-densidad`, `por-sala-filtro-sin-sala`,
+  `aviso-sala-sin-profesional`, `bundle-sr-sobre-criterio` (WeekDrawer lazy); C1 perf `dashboard-counts-tx-paralelas`;
+  C0 `ingresos-filtro-owner-por-profesional`.
+- **Decisiones de las sesiones** (firmadas por Martin el 08-oct o con default; ARCHITECTURE §Salas): SR-D1..D9 +
+  §17.5; elegir sala no cambia la sede (otra sede → `bad-room`); sala por defecto archivada → sin sala; "Por sala" sin
+  filtro de profesionales; "Sin sala" por sede del alcance; la Secretaria que guarda el picker de KPI pierde
+  `monthRevenue` fijada (nunca la ve); ingresos atribuidos al profesional **actual** del turno; la vigencia de la franja
+  solo se ve con salas o si ya está cargada.
+- **Decisión para Martin** (con recomendación): **bundle** — el criterio "≤ +1 kB" no se cumplió en `/agenda`
+  (~202 → 204,5 kB) ni en `/configuracion` (~212,5 → 216,2 kB) (PERF §SR). Recomendado: **aceptar** (el bundle
+  bloqueante está en C1) y, como mejora concreta, cargar el `WeekDrawer` del editor de horarios con `dynamic` (C1).
+- **Gate de SR (en solitario, Docker local):** `migrate status` al día (31); `tsc` 0 (app y `tsconfig.scripts.json`);
+  `next build` OK; guard OK; unit 114 archivos / 2417 tests en TZ=UTC y TZ=AR; integración completa `kinesoft_app` 95
+  archivos / 1228 ✓ (19 skip) y owner 94 + 1 skip / 1214 ✓ (33 skip), 0 fallas; perf + `compare.ts` sin regresiones
+  fuera de umbral (28 escenarios; `f.createBooking` 35 = base); bundle en [PERF.md §SR](PERF.md).
 
 ## Cómo leer la severidad
 
@@ -1442,12 +1501,12 @@ Contexto y contratos en [VERTICALES.md](VERTICALES.md) (plan vigente §15). Corr
 
 ### Hallazgos y decisiones del 08-oct (post-ES2b, antes de ES3)
 
-Fuente: plan vigente §16 (decisiones de Martin en [PLANES.md «Estado»](PLANES.md)). Orden: ES3 (M3a) → SR (M4) → SV (M5) → ES4 → EV1.
+Fuente: plan vigente §16 (decisiones de Martin en [PLANES.md «Estado»](PLANES.md)). Orden: ES3 ✅ (M3a) → SR ✅ (M4) → SV (M5) → ES4 → EV1.
 
 | Slug | Sev | Bloque | Ubicación | Estado | Sesión dueña / cierre |
 |---|---|---|---|---|---|
-| ingresos-dashboard-solo-mp | media | B (era C0, P11) | `lib/dashboard.ts:525-619` (`getRevenue`) · `lib/dashboard-revenue.ts` · `components/dashboard/revenue-card.tsx` · `lib/bookings.ts:1549,1554,1727` | 🟢 ES3 (Ronda 18) | Sumaba **solo** los `Payment` de MP. **M3a + S14r:** MP + copagos marcados a mano por `copagoPaidAt` (sin duplicar los de MP), OS aparte por `insurerPaidAt`, selector Mes/Semana en `dashboardPrefs`; pactado de un plan CANCELLED = devengado. Re-marcar un copago u OS ya cobrado no muda la fecha de mes (P3.Z). Los copagos marcados antes de M3a quedan con fecha NULL y no cuentan (irrelevante con el reset). Abierto: quién lo ve → C0 (fila `ingresos-visibles-a-todo-rol`) |
-| salas-inexistentes | media | B (SR) | `lib/bookings-core.ts:561` (`defaultLocationFor`) · `PractitionerSchedule` | 🔴 | **SR** (M4 `rooms`) — solo hay sedes; nada impide que dos profesionales usen el mismo lugar a la misma hora; `validFrom`/`validUntil` sin UI. Spec en [ROADMAP «SR · Salas/Consultorios»](ROADMAP.md) (decisión 7) |
+| ingresos-dashboard-solo-mp | media | B (era C0, P11) | `lib/dashboard.ts:525-619` (`getRevenue`) · `lib/dashboard-revenue.ts` · `components/dashboard/revenue-card.tsx` · `lib/bookings.ts:1549,1554,1727` | 🟢 ES3 (Ronda 18) | Sumaba **solo** los `Payment` de MP. **M3a + S14r:** MP + copagos marcados a mano por `copagoPaidAt` (sin duplicar los de MP), OS aparte por `insurerPaidAt`, selector Mes/Semana en `dashboardPrefs`; pactado de un plan CANCELLED = devengado. Re-marcar un copago u OS ya cobrado no muda la fecha de mes (P3.Z). Los copagos marcados antes de M3a quedan con fecha NULL y no cuentan (irrelevante con el reset). Quién lo ve: cerrado en SR (fila `ingresos-visibles-a-todo-rol`, SR-D5I) |
+| salas-inexistentes | media | B (SR) | `lib/rooms.ts` · `lib/availability/rooms.ts` · `lib/booking-rooms-internal.ts` · M4 | 🟢 SR (Ronda 19) | **SR** (M4 `rooms`, decisión 7): salas por sede, sala por franja con vigencia (la UI ahora usa `validFrom`/`validUntil`), choque duro entre profesionales en Configuración, conflicto de sala en el turno con aviso y forzado, bloqueo de sala, vista "Por sala". [ARCHITECTURE §Salas](ARCHITECTURE.md) |
 | cargo-cancelacion-tardia | baja | D | saldo del plan (`planBalance`) | 🔴 | **D**, junto con el cargo por ausencia (decisión 3): cancelar no genera cargo; hay que modelar "cargos" en el saldo para que no aparezcan como plata a favor del paciente |
 
 ### Hallazgos de ES3 (P3.Z, 08-oct-2026)
@@ -1477,9 +1536,9 @@ cerraron los fixers F1-F3b o el integrador, con test primero, y se verificó en 
 | perfil-seguimiento-ux-es3 | baja | B | turnos-view / facturacion-view · tabs-bar.tsx · components/seguimiento/session-detail.tsx:149 | 🟢 | F3b — tablas de Turnos/Facturación con scroll interno en mobile; pestañas del perfil como `nav` + `aria-current`; `?agendar=1` se limpia al montar |
 | copy-completado-finalizado | baja | B | components/planes/plan-booking-groups.ts:193 | 🟢 | F2 — "Completado" vs "Finalizado": unificado en "Finalizado" (PLANES C13) |
 | tests-titulo-no-podian-fallar | baja | B (tests) | plan-card.test · planes.test · facturacion-plan.test | 🟢 | F2 + F3b — los tests de "sin título" para la Secretaria usaban fixtures sin título; ahora con un título secreto que no tiene que aparecer |
-| ingresos-visibles-a-todo-rol | baja | C0 | lib/dashboard.ts:619 (`getRevenue`) | 🔴 | **C0** — los ingresos del dashboard los ve cualquier rol del consultorio (como antes de ES3). Evaluar gate `billing.manage` / `tenant.admin` (decisión 5 de Martin) |
-| facturacion-cancelados-con-cobro | baja | C0 | components/patients/profile/views/facturacion-view.tsx | 🔴 | **C0** — los cancelados con cobro se ven solo en modo agrupado por plan; un suelto cancelado y cobrado no aparece y "percibido" queda corto. Recomendado mostrarlos siempre (decisión 4) |
-| programs-sobrevivientes | baja | B (EV1) | lib/programs.ts (`setProgramStatus`, `deleteProgram`, `deleteSession`) | 🔴 | **EV1** (recomendado, decisión 2) — sin callers de app; migrar `plans-lifecycle.test` a `changePlanStatus`/`archivePlan` y retirarlos |
+| ingresos-visibles-a-todo-rol | baja | B (SR; era C0) | lib/dashboard-revenue.ts:152 (`revenueScopeFor`) · lib/dashboard.ts:679 | 🟢 SR (Ronda 19) | **SR-D5I** (decisión 5 de Martin): `billing.manage` ve todo el consultorio, PRACTITIONER lo suyo, la Secretaria nada (widget, KPI y picker ocultos; `getRevenue` → error sin consultar). Clave de cache con el scope; test de fuga con cache real que afirma los `keyParts`. Filtro del OWNER por profesional → C0 |
+| facturacion-cancelados-con-cobro | baja | B (SR; era C0) | components/planes/plan-booking-groups.ts:242 (`isBillingVisible`) · facturacion-view.tsx | 🟢 SR (Ronda 19) | **SR-D4F** (decisión 4 de Martin): cancelados y ausentes con cobro visibles **siempre**, agrupada o no, y en "percibido" (REFUNDED/AUTHORIZED visibles) |
+| programs-sobrevivientes | baja | B | lib/programs.ts (`setProgramStatus`, `deleteProgram`, `deleteSession`) | ⚪ decidido | Decisión 2 de Martin (08-oct): **se quedan** (gate `planes`, sin bypass del motor, sin callers de app); no se retiran en EV1 |
 | bulk-exercises-rango-por-index | baja | C1 | lib/sessions.ts (`bulkAddSessionExercises`) | 🔴 | **C1** — el rango filtra por `index`, no por ordinal (`fromOrdinal`); `firstSinTurno` de `PlanListRow` ya no hace falta |
 | recordatorio-whatsapp-sin-ordinal | baja | C1 | share-actions (WhatsApp) · `recordatorioSessionLabel` | 🔴 | **C1** — el recordatorio impreso dice "Sesión n de N"; el de WhatsApp todavía no |
 | slot-cell-helpers-bundle | baja | C1 | components/agenda/grid/slot-cell.tsx | 🔴 | **C1** — separar los helpers para bajar el bundle de la agenda |
@@ -1488,10 +1547,43 @@ cerraron los fixers F1-F3b o el integrador, con test primero, y se verificó en 
 | tabs-perfil-patron-incompleto | baja | C1 | components/patients/profile/tabs-bar.tsx | 🔴 | **C1** — hoy `nav` + `aria-current` (correcto); el patrón tabs completo con flechas queda para C1 |
 | diagnosis-name-en-plandto | baja | C1 | lib/plans-read-types.ts (`PlanDTO`) · resumen-view | 🔴 | **C1** (decisión 6) — el Resumen muestra `diagnosisTitle ?? título del plan`; la condición requiere `diagnosisName` |
 | renovar-autorizacion-sin-os | baja | C1 | booking-drawer (fila Plan) | 🔴 | **C1** (decisión 7) — "Renovar autorización" aparece en todo turno de plan con `plans.authorize`; C9 no dice si el plan tiene OS |
-| bundle-es3-sobre-criterio | baja | C1 | `/planes` 184,5 kB · `/agenda` 202 · `/pacientes/[id]` 205 | 🔴 | **C1** (decisión 1) — el criterio de §11 no se cumplió del todo; ver [PERF.md §ES3](PERF.md) |
+| bundle-es3-sobre-criterio | baja | C1 | `/planes` 184,5 kB · `/agenda` 202 · `/pacientes/[id]` 205 | 🔴 | **C1** — decisión 1 de Martin (08-oct): crecimiento de ES3 **aceptado**; el bundle bloqueante sigue en C1. Ver [PERF.md §ES3](PERF.md) |
 | archivar-paciente-lista-sin-L9 | baja | B (ES4) | patient-row-actions · bulk-select | 🔴 | **ES4 (S32a)** — reusar `ArchivePatientDialog` + `shouldAskArchivePlans` (en bulk `livePlanCount` es null) |
 | bookings-conflict-literal | baja | B | lib/bookings.ts:1075 | 🔴 | nota — el literal del conflicto → `PRACTITIONER_CONFLICT_ERROR` (`lib/bookings-constants.ts`) cuando se reabra el archivo |
-| r-legacy-sin-a-medida | baja | B | motor (`addPlanSessions`) | ⚪ decisión | Decisión 3 de Martin — un plan sin responsable/servicio ya no acepta "a medida" ("Plan inválido."). Recomendado dejarlo (prod se resetea) |
+| r-legacy-sin-a-medida | baja | B | motor (`addPlanSessions`) | ⚪ decidido | Decisión 3 de Martin (08-oct): un plan sin responsable/servicio no acepta "a medida" ("Plan inválido."). **Se deja** (prod se resetea) |
+
+### Hallazgos de SR (SRZ, 08-oct-2026)
+
+Ronda 19. Revisor (a): server (locks C2 (1b), RLS, FKs compuestas, M4, SR-D1..D8 + §17.5, plata). Revisor (b): UI densa
+de la Secretaria, a11y, PHI y "sin salas = igual". Todo lo 🟢 lo cerraron los fixers (FX1 server/tests, FX2a agenda,
+FX2b drawer/modal/PlanCard, FX3 editor y KPI) o el orquestador en el gate, y se verificó en el archivo.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| reprogramar-plan-sala-ocupada-sin-salida | media | B | components/planes/plan-card.tsx:260-270 (`rescheduleForceFor`) | 🟢 | FX2b — el server devolvía `ROOM_BUSY_ERROR`/`ROOM_BLOCKED_ERROR` y aceptaba `allowRoomConflict`, pero la UI no ofrecía forzar. Ahora "Moverlo igual (sala ocupada)", sin decir "sobreturno" (SR-D2) |
+| room-lookback-240 | media | B | lib/booking-rooms-internal.ts:23 (`ROOM_LOOKBACK_MIN`) | 🟢 | FX1 — heredaba 240 min del cupo; un turno de > 4 h de otro profesional (gimnasio) no contaba. 480 = máximo de `Service.durationMin`, solo en la carga de sala (con índice) |
+| franja-vencida-sala-archivada | media | B | lib/practitioner-schedule.ts:244 (`badRoomErrors`) · editor de horarios | 🟢 | FX1 + FX3 — una franja vieja con sala archivada impedía guardar la semana; server y cliente ignoran las vencidas (`validUntil` < hoy AR) |
+| dashboard-revenue-flaky-unique | baja | B (tests) | tests/integration/dashboard-revenue-scope.test.ts:90-104 | 🟢 | FX1 — 3 turnos del mismo paciente con `new Date()` chocaban con el índice único parcial en el mismo ms; ahora escalonados (los ingresos no cuentan por `scheduledFor`) |
+| test-fuga-cache-sin-clave | media | B (tests) | tests/helpers/integration-setup.ts:43 · dashboard-revenue-scope.test.ts | 🟢 | FX1 — el test seguía verde si se borraba el scope de los `keyParts` (el mock armaba la clave con los argumentos). `useRealUnstableCache()` devuelve los `keyParts` y el test afirma `own:<pid>`/`tenant` (mutación detectada) |
+| por-sala-asignada-interrogacion | media | B | components/agenda/agenda-client.tsx:445 (`roomPractitionerById`) | 🟢 | FX2a — "Asignada: ? 9–13" con un solo profesional o con un chip puesto; ahora con todos los profesionales |
+| por-sala-ocupacion-filtrada-por-chips | media | B | components/agenda/agenda-client.tsx:551,817 | 🟢 | FX2a — con un chip, una sala ocupada por otro profesional se veía libre y la Secretaria forzaba sin saber por qué. "Por sala" no aplica el filtro de profesionales y oculta los chips |
+| vigencia-visible-sin-salas | media | B | components/configuracion/panels/practitioners/schedule-editor.tsx | 🟢 | FX3 — el cliente vivo (sin salas) veía una línea más por franja; ahora solo con salas o si la franja ya tiene vigencia (nunca se esconde un dato cargado) |
+| sin-sala-mezcla-sedes | media | B | components/agenda/views/room-day-panel.tsx | 🟢 | FX2a — con "Todas las sedes", "Sin sala" mostraba turnos de otras sedes; ahora filtra a la sede del alcance |
+| sr-ui-bajas | baja | B | room-filter.tsx · room-row.tsx · room-day-view.tsx · agenda-client.tsx · telemedicine-section.tsx · day-lock-dialog.tsx | 🟢 | FX2a/FX2b — total de "Todas las salas"; foco del drawer y del modal; copy del vacío según capability; toggle siempre con opción marcada; "Sala archivada" en tarjetas/Recepción (`withArchivedRooms`, `components/agenda/agenda-utils.ts:253-274`); select de sala solo con salas en la sede; `aria-describedby` del error del candado |
+| kpi-picker-secretaria-ingresos | baja | B | lib/preferences-constants.ts:206,217 (`kpiOptionsFor`, `pinnableKpis`) | 🟢 | FX3 — el picker le ofrecía "Ingresos del mes" a la Secretaria (fijarla dejaba la fila vacía); el PRACTITIONER ve "Tus ingresos del mes" |
+| tests-conexiones-agotadas | media | B (tests) | tests/helpers/query-counter.ts:31-50 (`installQueryCounter`) | 🟢 | Gate — 2 clientes Prisma por archivo sin cerrar agotaban las 100 conexiones; singleton por proceso (pico 60) |
+| dashboard-revenue-pool | media | B | lib/dashboard.ts:585,642 (`revenueAmountsInTx`, `loadRevenue`) | 🟢 | Gate — 6 tx interactivas de ingresos en paralelo con los counts → timeout de pool intermitente (riesgo real en prod). Una tx en serie; 19 → 15 tx |
+| today-slot-ayer | baja | B (tests) | tests/integration/plans-sync-bookings.test.ts:74 · plans-sync-sessions | 🟢 | Gate — "una hora antes de ahora" caía ayer entre 00:00 y 01:30 AR; piso en el inicio del día AR |
+| bloqueo-sala-bloquea-a-todos | media | B | lib/bookings-core.ts:534-550 (`liveBlocksInTx`) | 🟢 | Gate — un bloqueo de sala (con `practitionerId` null por CHECK) se leía como "todo el equipo" en el alta y el batch. `roomId: null` + test que falla sin el fix (§5.42) |
+| copy-sala-ocupada-genero | baja | C1 | lib/bookings-constants.ts:62 (`ROOM_BUSY_ERROR`) · booking-force-flags · booking-modal-state | 🔴 | **C1** — "Sala A está ocupado/bloqueado": concordancia de género; salida neutra "Ya hay alguien en X a esa hora." |
+| aviso-sala-sin-profesional | baja | C1 | outcome `room-busy` | 🔴 | **C1** — el aviso no dice con quién está ocupada ("turno con Ana Pérez"): el server no manda el profesional |
+| delete-exception-sin-reaviso | baja | C1 | lib/practitioner-schedule.ts (`deleteException`) | 🔴 | **C1** — borrar un CLOSED rehabilita una plantilla con sala que puede chocar con la excepción de otro; SR-D4 dice aviso, hoy no avisa |
+| golden-sin-salas | baja | C1 (tests) | tests/unit/render/agenda-client.test.tsx | 🔴 | **C1** — "sin salas = igual" compara `rooms` ausente contra `[]` con el código nuevo; la comparación contra HEAD se hizo con un test temporal. Dejar un golden fijo de las 5 vistas |
+| room-filter-densidad | baja | C1 | components/agenda/room-filter.tsx | 🔴 | **C1** — con > 4 salas los chips parten el toolbar en 2 líneas; pasar a `<select>` como el fallback de profesionales |
+| por-sala-filtro-sin-sala | baja | C1 | components/agenda/views/room-day-panel.tsx | 🔴 | **C1** — con el filtro "Sin sala", "Por sala" dibuja las salas vacías más "Sin sala"; mostrar solo esa columna |
+| bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🔴 | **Decisión de Martin** (recomendado aceptar, C1) — criterio "≤ +1 kB" no cumplido; mejora concreta: `WeekDrawer` del editor de horarios con `dynamic`. [PERF.md §SR](PERF.md) |
+| dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts:153-300 (`_loadDashboardCounts`) | 🔴 | **C1 perf** — sigue abriendo ~8 `runWithRls` en paralelo, el mismo patrón que daba timeout de pool en ingresos |
+| ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) | 🔴 | **C0** — el OWNER ve el total del consultorio; filtrar por profesional queda para C0 (SR-D5I) |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -1685,7 +1777,8 @@ era intencional.
     fuera de la tx (reabre el TOCTOU de cupo y abre deadlocks). **Enmienda ES2b (§5.40, ADR-004):** el invariante es
     el **orden global**, no "un turno por tx": una tx puede tomar los cupos de N turnos si los ordena
     (`lockCapacityMany`); Planes antepone `lockPlanPatient` y fija el orden de filas Booking → Session →
-    TreatmentProgram.
+    TreatmentProgram. **Enmienda SR (C2 (1b), ADR-004):** la sala va entre cupo y sedes, en la misma sentencia que el
+    cupo (`lockCapacityAndRoomsMany`).
 29. **`Booking.isOverbooked` + prefijo `[SOBRETURNO]` hasta el contract.** `isOverbooked` es la fuente; los
     write-paths **siguen escribiendo** el prefijo en `notes` (el código viejo que convive durante el deploy y las
     notas que ve el usuario lo usan) hasta la migración contract posterior a B-pre. No dejar de escribirlo ni borrarlo de las notas existentes.
@@ -1751,6 +1844,23 @@ era intencional.
     `rescheduleSession` lockean el plan con `FOR NO KEY UPDATE`; el motor lockea las sesiones que escribe; un
     reintento de la tx ante P2034/40P01. No invertir Program/Session ni escribir `Session` después de un INSERT de
     `Booking` con FK al plan (era el deadlock H-a2).
+41. **Forzar sala ≠ sobreturno (SR-D2).** El conflicto de sala se fuerza con su propio flag `allowRoomConflict`
+    (`lib/booking-force-flags.ts:36`), que **no** toca `isOverbooked` ni escribe `[SOBRETURNO]`
+    (`lib/bookings-core.ts:1395,1712`). Copy "Asignar igual" / "Agendar igual" / "Moverlo igual (sala ocupada)", nunca
+    "sobreturno". No unificarlo con `allowOverbooking`: el sobreturno es del cupo del profesional; la sala, del lugar.
+42. **Un bloqueo de sala nunca es "todos" (§17.5).** `TimeBlock.roomId` lleva `practitionerId` null por CHECK
+    (`TimeBlock_room_scope_check`), y `practitionerId` null también significa "todo el equipo". Todo lector de
+    `TimeBlock` excluye los de sala: `liveBlocksInTx` (`lib/bookings-core.ts:534-550`), el loader (`roomBlocks`
+    aparte), `listTimeBlocks`, `removeDayLock` y el reuso del candado (`NOT_ROOM_BLOCK`,
+    `lib/time-blocks-schemas.ts:201`). Un bloqueo de sala no cambia los slots de nadie: para la ocupación cuenta como
+    sala llena. Un lector nuevo de `TimeBlock` suma el filtro (el gate de SR encontró uno que bloqueaba a todos).
+43. **El mismo profesional no ocupa su sala dos veces (SR-D1).** `capacity` = profesionales a la vez; `roomOccupancyAt`
+    (`lib/availability/rooms.ts:107-140`) cuenta profesionales **distintos** del que pide. Los pacientes simultáneos
+    siguen en el cupo del servicio. No contar turnos: un kine con varios pacientes chocaría consigo mismo.
+44. **Planes, serie y turnero no chequean sala (SR-D3).** El motor de Planes, "este y los siguientes"
+    (`capLocksHeld`) y el turnero **estampan** la sala por defecto (`defaultRoomFor`; archivada → sin sala) sin contar
+    ocupación ni tomar clave de sala. La barrera es la validación dura de Configuración (SR-D4). No sumarles el chequeo:
+    toca C6/C7 y agrega riesgo de deadlock. `rescheduleSession` y las ediciones sueltas sí chequean.
 
 ---
 

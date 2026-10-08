@@ -6,7 +6,7 @@
 "use server";
 
 import { unstable_cache } from "next/cache";
-import { runWithRls } from "@/lib/rls";
+import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { getMembershipRole } from "@/lib/authz";
 import { capabilitiesFor } from "@/lib/capabilities";
@@ -22,9 +22,13 @@ import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
 import { RevenueRangeSchema, type KpiKey } from "@/lib/preferences-constants";
 import {
   revenuePeriod,
+  revenueScopeFor,
+  revenueScopeKey,
   summarizeRevenue,
   type RevenueAmounts,
   type RevenueRange,
+  type RevenueScope,
+  type RevenueScopeKind,
   type RevenueSummary,
 } from "@/lib/dashboard-revenue";
 import type { ActionResult } from "@/lib/validation";
@@ -92,10 +96,19 @@ export type DashboardData = {
    * mano, con la obra social aparte (`lib/dashboard-revenue.ts`). Antes:
    * `monthRevenueCents`/`revenuePrevMonthCents`/`privateShare`/`insurerShare`,
    * que solo sumaban los `Payment` de MP.
+   *
+   * SR-D5I: acotado por `revenueScope`. `null` = el rol no ve ingresos
+   * (Secretaria): la UI no renderiza ni la KPI ni el widget.
    */
-  monthRevenue: RevenueSummary;
-  /** S14r: el widget en el período que eligió el usuario (`dashboardPrefs.revenueRange`). */
-  revenue: RevenueSummary;
+  monthRevenue: RevenueSummary | null;
+  /** S14r: el widget en el período que eligió el usuario (`dashboardPrefs.revenueRange`). `null` como `monthRevenue`. */
+  revenue: RevenueSummary | null;
+  /**
+   * SR-D5I: de quién son los ingresos de arriba (`revenueScopeFor`): `tenant`
+   * (todo el consultorio), `own` (los turnos del profesional: la UI titula
+   * "Tus ingresos…") o `none`. Solo el tipo: el id del profesional no viaja.
+   */
+  revenueScope: RevenueScopeKind;
   reminderDismissed: boolean;
   reminderKey: string;
 };
@@ -108,7 +121,15 @@ export type DashboardData = {
  */
 type DashboardCounts = Omit<
   DashboardData,
-  "greetingName" | "pinnedKpis" | "reminderDismissed" | "reminderKey" | "recent" | "next" | "revenue"
+  | "greetingName"
+  | "pinnedKpis"
+  | "reminderDismissed"
+  | "reminderKey"
+  | "recent"
+  | "next"
+  | "revenue"
+  | "monthRevenue"
+  | "revenueScope"
 > & {
   // Filas crudas: el enmascarado por acceso se aplica FUERA del cache, por
   // request. Si se hiciera adentro, un share revocado seguiría mostrando el
@@ -169,7 +190,6 @@ const _loadDashboardCounts = unstable_cache(
       newPatientsMonth,
       recentSessions,
       nextAppts,
-      monthRevenue,
     ] = await Promise.all([
       // Each query is wrapped in its own runWithRls so they still run in
       // parallel (one short tenant-scoped transaction / connection each) —
@@ -289,9 +309,11 @@ const _loadDashboardCounts = unstable_cache(
           service: true,
         },
       })),
-      // S14r: ingresos del mes AR (MP + copagos a mano, OS aparte). No
-      // depende del módulo `planes`: un consultorio General también cobra.
-      loadRevenue(tenantId, "month", today),
+      // SR-D5I: los ingresos del mes (S14r) ya NO van acá. Este cache se
+      // comparte por `scope` de VISIBILIDAD de pacientes ("all" para OWNER/
+      // ADMIN y para cualquier rol con `sharedPatientView`), que no es el
+      // scope de la plata: un PRACTITIONER con `sharedPatientView` caía en la
+      // entrada "all" del OWNER. Salen de `cachedRevenue`, con su propia clave.
     ]);
 
     const bars = ["L", "M", "M", "J", "V", "S", "D"].map((d, i) => {
@@ -376,7 +398,6 @@ const _loadDashboardCounts = unstable_cache(
           return [b.service.name, obraSocial, copago].filter(Boolean).join(" - ");
         })(),
       })),
-      monthRevenue,
     };
   },
   ["dashboard:counts"],
@@ -436,9 +457,17 @@ export async function getDashboardData(): Promise<DashboardData> {
     { tags: [tags.dashboard(actor.tenantId)], revalidate: ttl.micro }
   );
 
-  const [counts, caps] = await Promise.all([
+  // SR-D5I: el scope de los ingresos sale de las capabilities del rol (no de
+  // `v.seesAll`, ver `revenueScopeFor`). `getMembershipRole` está memoizado
+  // por request: es la misma lectura que ya se hacía para `seesClinical`. El
+  // mes va en paralelo con los counts; con scope `none` no se consulta nada.
+  const capsP = getMembershipRole(actor).then(capabilitiesFor);
+  const revenueScopeP = capsP.then((c) => revenueScopeFor(c, actor.practitionerId));
+  const [counts, caps, revenueScope, monthRevenue] = await Promise.all([
     taggedFetcher(actor.tenantId, scope, dayKey, withPlans),
-    getMembershipRole(actor).then(capabilitiesFor),
+    capsP,
+    revenueScopeP,
+    revenueScopeP.then((s) => (s.kind === "none" ? null : cachedRevenue(actor.tenantId, s, "month", dayKey))),
   ]);
 
   // A2b-S-vis: "recientes" sale de las sesiones de TODO el tenant y
@@ -470,15 +499,19 @@ export async function getDashboardData(): Promise<DashboardData> {
     getUserPreferences(),
   ]);
   // S14r: el widget arranca en el período que el usuario dejó elegido. El mes
-  // ya viene en `counts` (KPI); la semana se pide solo si hace falta.
+  // ya está (KPI); la semana se pide solo si hace falta, con el mismo scope.
   const revenue =
-    prefs.dashboard.revenueRange === "month"
-      ? counts.monthRevenue
-      : await cachedRevenue(actor.tenantId, prefs.dashboard.revenueRange, dayKey);
+    revenueScope.kind === "none"
+      ? null
+      : prefs.dashboard.revenueRange === "month"
+        ? monthRevenue
+        : await cachedRevenue(actor.tenantId, revenueScope, prefs.dashboard.revenueRange, dayKey);
 
   return {
     ...counts,
+    monthRevenue,
     revenue,
+    revenueScope: revenueScope.kind,
     recent: counts.recent.map((r) =>
       seesClinical(r.id)
         ? {
@@ -515,7 +548,11 @@ export async function getDashboardData(): Promise<DashboardData> {
 // ──────────────────────────────────────────────────────────────────────
 
 /**
- * Montos crudos de `[start, end)` para el tenant. Cada consulta en su propio
+ * Montos crudos de `[start, end)` para el tenant, o solo los turnos de
+ * `practitionerId` (SR-D5I, scope `own`; `null` = todo el consultorio). Las
+ * tres fuentes filtran por el `Booking.practitionerId` ACTUAL del turno: si un
+ * turno cobrado se reasigna, su plata se muda con él (decisión documentada en
+ * `revenueScopeFor`). Cada consulta en su propio
  * `runWithRls` (mismo fan-out en paralelo que el resto del dashboard) y con
  * `tenantId` a mano en el WHERE: en prod la conexión tiene BYPASSRLS y es la
  * única barrera.
@@ -537,52 +574,63 @@ export async function getDashboardData(): Promise<DashboardData> {
  *     retroactivo, sigue abierto). Se agrupa por paciente para no traer un
  *     turno por fila: 2 consultas acotadas por pacientes distintos.
  */
-async function loadRevenueAmounts(
+// Gate de SR (SRZ): antes cada período abría 3 `runWithRls` en paralelo y
+// `loadRevenue` pedía 2 períodos = 6 transacciones interactivas por llamada.
+// Desde SR-D5I el mes corre EN PARALELO con los counts del dashboard (que ya
+// abren las suyas), y con el pool chico la integración completa daba "Unable to
+// start a transaction in the given time" (maxWait 2 s): el mismo riesgo en prod
+// con varios usuarios a la vez. Ahora es UNA transacción por resumen, con las
+// lecturas en serie adentro (en una tx interactiva comparten la conexión: el
+// `Promise.all` no ganaba nada salvo conexiones). Mismas sentencias, 1 BEGIN.
+async function revenueAmountsInTx(
+  tx: DbClient,
   tenantId: string,
   start: Date,
   end: Date,
-  withInsurer: boolean
+  withInsurer: boolean,
+  practitionerId: string | null
 ): Promise<RevenueAmounts> {
-  const [mp, manual, insurerCents] = await Promise.all([
-    runWithRls(tenantId, (tx) => tx.payment.aggregate({
-      where: { booking: { tenantId }, status: "PAID", createdAt: { gte: start, lt: end } },
-      _sum: { amountCents: true },
-    })),
-    runWithRls(tenantId, (tx) => tx.booking.aggregate({
-      where: {
-        tenantId,
-        paymentStatus: "PAID",
-        copagoPaidAt: { gte: start, lt: end },
-        NOT: { payment: { is: { status: "PAID" } } },
-      },
-      _sum: { copagoCents: true },
-    })),
-    withInsurer
-      ? runWithRls(tenantId, async (tx) => {
-          const perPatient = await tx.booking.groupBy({
-            by: ["patientId"],
-            where: { tenantId, patientId: { not: null }, insurerPaidAt: { gte: start, lt: end } },
-            _count: { _all: true },
-          });
-          if (perPatient.length === 0) return 0;
-          const coverages = await tx.coverage.findMany({
-            where: {
-              patientId: { in: perPatient.map((r) => r.patientId!) },
-              patient: { tenantId },
-            },
-            orderBy: { id: "desc" },
-            select: { patientId: true, insurerRef: { select: { fixedFeeCents: true, isParticular: true } } },
-          });
-          const fee = new Map<string, number>();
-          for (const c of coverages) {
-            if (fee.has(c.patientId)) continue; // la primera = la de id mayor = la vigente
-            // Particular / texto libre: ninguna OS paga (cuenta como privado).
-            fee.set(c.patientId, c.insurerRef && !c.insurerRef.isParticular ? c.insurerRef.fixedFeeCents : 0);
-          }
-          return perPatient.reduce((acc, r) => acc + r._count._all * (fee.get(r.patientId!) ?? 0), 0);
-        })
-      : Promise.resolve(0),
-  ]);
+  // `tenantId` a mano SIEMPRE; el profesional se suma encima, nunca lo reemplaza.
+  const own = practitionerId ? { practitionerId } : {};
+  const mp = await tx.payment.aggregate({
+    where: { booking: { tenantId, ...own }, status: "PAID", createdAt: { gte: start, lt: end } },
+    _sum: { amountCents: true },
+  });
+  const manual = await tx.booking.aggregate({
+    where: {
+      tenantId,
+      ...own,
+      paymentStatus: "PAID",
+      copagoPaidAt: { gte: start, lt: end },
+      NOT: { payment: { is: { status: "PAID" } } },
+    },
+    _sum: { copagoCents: true },
+  });
+  let insurerCents = 0;
+  if (withInsurer) {
+    const perPatient = await tx.booking.groupBy({
+      by: ["patientId"],
+      where: { tenantId, ...own, patientId: { not: null }, insurerPaidAt: { gte: start, lt: end } },
+      _count: { _all: true },
+    });
+    if (perPatient.length > 0) {
+      const coverages = await tx.coverage.findMany({
+        where: {
+          patientId: { in: perPatient.map((r) => r.patientId!) },
+          patient: { tenantId },
+        },
+        orderBy: { id: "desc" },
+        select: { patientId: true, insurerRef: { select: { fixedFeeCents: true, isParticular: true } } },
+      });
+      const fee = new Map<string, number>();
+      for (const c of coverages) {
+        if (fee.has(c.patientId)) continue; // la primera = la de id mayor = la vigente
+        // Particular / texto libre: ninguna OS paga (cuenta como privado).
+        fee.set(c.patientId, c.insurerRef && !c.insurerRef.isParticular ? c.insurerRef.fixedFeeCents : 0);
+      }
+      insurerCents = perPatient.reduce((acc, r) => acc + r._count._all * (fee.get(r.patientId!) ?? 0), 0);
+    }
+  }
   return {
     mpCents: mp._sum.amountCents ?? 0,
     manualCents: manual._sum.copagoCents ?? 0,
@@ -591,23 +639,46 @@ async function loadRevenueAmounts(
 }
 
 /** Resumen del período AR que contiene `now`, con el anterior para el "vs". */
-async function loadRevenue(tenantId: string, range: RevenueRange, now: Date): Promise<RevenueSummary> {
+async function loadRevenue(
+  tenantId: string,
+  practitionerId: string | null,
+  range: RevenueRange,
+  now: Date
+): Promise<RevenueSummary> {
   const p = revenuePeriod(range, now);
-  const [current, previous] = await Promise.all([
-    loadRevenueAmounts(tenantId, p.start, p.end, true),
+  return runWithRls(tenantId, async (tx) => {
+    const current = await revenueAmountsInTx(tx, tenantId, p.start, p.end, true, practitionerId);
     // Del anterior solo se compara el total (MP + copagos): la OS no entra en el "vs".
-    loadRevenueAmounts(tenantId, p.prevStart, p.prevEnd, false),
-  ]);
-  return summarizeRevenue(range, current, previous);
+    const previous = await revenueAmountsInTx(tx, tenantId, p.prevStart, p.prevEnd, false, practitionerId);
+    return summarizeRevenue(range, current, previous);
+  });
 }
 
-/** Cache por tenant + período + día AR, bajo el tag `dashboard` (lo invalidan las mutaciones de turnos y cobros). */
-function cachedRevenue(tenantId: string, range: RevenueRange, dayKey: string): Promise<RevenueSummary> {
+/**
+ * Cache por tenant + SCOPE + período + día AR, bajo el tag `dashboard` (lo
+ * invalidan las mutaciones de turnos y cobros; el tag es por tenant y alcanza
+ * a todos los scopes).
+ *
+ * SR-D5I: el scope va EXPLÍCITO en los `keyParts` (`revenueScopeKey`). Antes
+ * la clave era `[tenantId, range, dayKey]`: con ingresos por profesional, A y
+ * B compartirían la entrada y el segundo vería la plata del primero hasta el
+ * TTL. Que Next también serialice los argumentos es un efecto del runtime, no
+ * la barrera. Lo prueba `tests/integration/dashboard-revenue-scope.test.ts`
+ * con un Map real (A → B → OWNER → A). El caller nunca pasa `none`.
+ */
+function cachedRevenue(
+  tenantId: string,
+  scope: Exclude<RevenueScope, { kind: "none" }>,
+  range: RevenueRange,
+  dayKey: string
+): Promise<RevenueSummary> {
+  const practitionerId = scope.kind === "own" ? scope.practitionerId : null;
   return unstable_cache(
-    (t: string, r: RevenueRange, k: string) => loadRevenue(t, r, new Date(localToARIso(`${k}T00:00:00`))),
-    ["dashboard:revenue", tenantId, range, dayKey],
+    (t: string, pid: string | null, r: RevenueRange, k: string) =>
+      loadRevenue(t, pid, r, new Date(localToARIso(`${k}T00:00:00`))),
+    ["dashboard:revenue", tenantId, revenueScopeKey(scope), range, dayKey],
     { tags: [tags.dashboard(tenantId)], revalidate: ttl.micro }
-  )(tenantId, range, dayKey);
+  )(tenantId, practitionerId, range, dayKey);
 }
 
 /**
@@ -615,12 +686,17 @@ function cachedRevenue(tenantId: string, range: RevenueRange, dayKey: string): P
  * `getSessionsChart`). Gate = el del resto del dashboard (`getActor`, tenant
  * del Actor y `where: { tenantId }` a mano adentro). No persiste la elección:
  * eso es `updateDashboardPrefs` (`lib/preferences.ts`), que la UI llama junto.
+ *
+ * SR-D5I: el scope sale del ACTOR (rol → capabilities), nunca de un parámetro
+ * del cliente. Sin acceso (Secretaria) devuelve error sin consultar nada.
  */
 export async function getRevenue(range: RevenueRange): Promise<ActionResult<RevenueSummary>> {
   const actor = await getActor();
   const parsed = RevenueRangeSchema.safeParse(range);
   if (!parsed.success) return { ok: false, error: "Período inválido." };
-  return { ok: true, data: await cachedRevenue(actor.tenantId, parsed.data, toARDateKey(new Date())) };
+  const scope = revenueScopeFor(capabilitiesFor(await getMembershipRole(actor)), actor.practitionerId);
+  if (scope.kind === "none") return { ok: false, error: "No tenés acceso a los ingresos del consultorio." };
+  return { ok: true, data: await cachedRevenue(actor.tenantId, scope, parsed.data, toARDateKey(new Date())) };
 }
 
 // ──────────────────────────────────────────────────────────────────────

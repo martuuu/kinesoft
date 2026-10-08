@@ -95,6 +95,14 @@ export type ScheduleRange = {
   startMin: number;
   endMin: number;
   locationId: string;
+  /**
+   * SR (M4): sala de la franja ("atiende en el Consultorio 2"). Ausente o null
+   * = sin sala. OJO: `normalize`/`scheduledRanges` la DESCARTAN a propósito
+   * (el horario se resuelve por sede y la paridad de AUDIT §5.27 no se mueve);
+   * la sala por defecto (`defaultRoomFor`) sale de las franjas crudas
+   * (`roomRangesFor`, SR1a), nunca de `scheduledRanges`.
+   */
+  roomId?: string | null;
 };
 
 /** Fila de `PractitionerSchedule` ya normalizada. Vigencia inclusive en ambos
@@ -193,6 +201,53 @@ export type PractitionerPayerRule = {
 export type AvailabilityBooking = BatchExistingBooking & {
   id: string;
   locationId: string;
+  /** SR: sala del turno (null = sin sala; ausente = el loader no la trajo). */
+  roomId?: string | null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Salas (corrida SR, M4). `capacity` = PROFESIONALES a la vez (SR-D1): el cupo
+// de pacientes sigue en `Service.maxConcurrent` y el mismo profesional nunca
+// choca consigo mismo en su sala.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Lo que el motor necesita de una `Room` activa. */
+export type RoomInfo = {
+  id: string;
+  locationId: string;
+  name: string;
+  /** 1..50 (CHECK de M4): profesionales simultáneos. */
+  capacity: number;
+};
+
+/**
+ * Bloqueo de SALA (`TimeBlock` con `roomId`, §17.5). No bloquea profesionales:
+ * el loader lo saca de `AvailabilityInput.blocks` (donde `practitionerId` null
+ * significaría "todos") y lo expone aparte en `roomBlocks`. Para la ocupación
+ * cuenta como sala llena (aviso forzable con `allowRoomConflict`).
+ */
+export type RoomBlock = {
+  id: string;
+  roomId: string;
+  startsAt: Date;
+  endsAt: Date;
+  reason: string | null;
+};
+
+/**
+ * Ocupación de una sala en [when, when + dur) (`roomOccupancyAt`, SR1a).
+ *   • used = profesionales DISTINTOS del pedido con un turno en la sala que
+ *     solapa (semiabierto) y que `isHoldingCapacity` (§5.18);
+ *   • atCapacity = `overlapBlocks(used, capacity)` O la tapa un bloqueo de sala;
+ *   • practitionerIds = esos profesionales (para el copy "turno con …");
+ *   • blocked = el bloqueo de sala que la tapa (el primero por inicio), o null.
+ */
+export type RoomOccupancy = {
+  used: number;
+  capacity: number;
+  atCapacity: boolean;
+  practitionerIds: string[];
+  blocked: { blockId: string; reason: string | null } | null;
 };
 
 /** Todo lo que el loader carga para una ventana de días y un set de
@@ -212,8 +267,13 @@ export type AvailabilityInput = {
   templates: ReadonlyArray<PractitionerTemplate>;
   /** Del profesional y de consultorio (practitionerId null) dentro de la ventana. */
   exceptions: ReadonlyArray<ScheduleExceptionInput>;
-  /** Vigentes que tocan la ventana. */
+  /** Vigentes que tocan la ventana. SIN los bloqueos de sala (SR, §17.5). */
   blocks: ReadonlyArray<TimeBlockInput>;
+  /**
+   * SR: bloqueos de sala vigentes que tocan la ventana (`TimeBlock.roomId` no
+   * null). Opcional: ausente = ninguno. Nunca restan franjas de profesionales.
+   */
+  roomBlocks?: ReadonlyArray<RoomBlock>;
   /** No cancelados desde `from − BOOKING_LOOKBACK_MIN` hasta el fin de `to`. */
   bookings: ReadonlyArray<AvailabilityBooking>;
   practitionerServices: ReadonlyArray<PractitionerServiceRule>;

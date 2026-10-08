@@ -171,6 +171,33 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   agenda 16 (techo), Seguimiento 20, Biblioteca 35. Un fix que suma una sentencia lo dice en el comentario (fixer del
   motor: replan +1, generar/vincular/adoptar +1).
 
+### Patrones nuevos de SR (Salas, 08-oct-2026)
+
+- **Cache real opt-in y la clave afirmada:** `useRealUnstableCache()` (`tests/helpers/integration-setup.ts:43`) prende
+  un Map real con la clave que arma Next 14.2 y **devuelve `{ keyParts }`**, el registro de los `keyParts` de cada
+  llamada. Los tests de cache **afirman la clave** (`own:<pid>` / `tenant`, `dashboard-revenue-scope.test.ts:223-240`),
+  no solo "cada actor ve su número": el mock también serializa los argumentos y `practitionerId` viaja como argumento,
+  así que el test viejo seguía verde aunque se borrara el scope de los `keyParts` (revisión (a) de SR). Es opt-in: un
+  cache real en toda la suite volvería stale las lecturas de los tests que escriben y leen sin revalidar.
+  `usePassthroughUnstableCache()` lo apaga.
+- **`installQueryCounter()` reusa un singleton por proceso** (`tests/helpers/query-counter.ts:31-50`), como `lib/db.ts`.
+  Motivo: antes cada archivo que mockeaba `@/lib/db` creaba 2 clientes Prisma (con su pool) que nunca se cerraban; con
+  los tests de SR que miden statements (varios con concurrencia) la integración completa agotaba las 100 conexiones de
+  Postgres y fallaban tests ajenos. Pico medido después: 60. No crear clientes Prisma por archivo en un helper.
+- **Tests "de hoy" con piso en el inicio del día AR.** Un instante "una hora antes de ahora" cae **ayer** entre las
+  00:00 y las 01:30 AR, y Recepción (con razón) rechaza un turno de otro día. `todaySlot` usa
+  `max(now − 1 h, dayWindow(toARDateKey(now)).start)` (`plans-sync-bookings.test.ts:74-82`). Todo fixture relativo a
+  "hoy" lleva ese piso.
+- **Sin salas = igual, contra HEAD.** Los cambios de UI que tienen que dejar igual a un consultorio sin salas se
+  compararon contra el markup de `ad50059` con tests temporales (agenda 15/15 byte a byte) y el test de
+  `practitioner-day-view` quedó sin diff. El golden fijo queda en C1 (AUDIT `golden-sin-salas`).
+- **Módulo aislado por bundle con test:** `tests/unit/agenda-layout.test.ts:533-539` afirma que `agenda-layout.ts` no
+  re-exporta `buildRoomColumns` (si vuelve, el first load de `/agenda` lo paga).
+- **Concurrencia de sala:** holder con la clave de sala o de sedes + `waitForAdvisoryWaiter({minWaiters: 2})` para alta
+  contra alta, bloqueo de sala contra alta, `archiveRoom` contra alta y guardados de Configuración simultáneos
+  (`locks-room`, `bookings-rooms`, `bookings-core-rooms`, `locations-schedule-rooms`). Los índices únicos parciales
+  muerden fixtures con `new Date()`: escalonar los instantes (`dashboard-revenue-scope.test.ts:90-104`).
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

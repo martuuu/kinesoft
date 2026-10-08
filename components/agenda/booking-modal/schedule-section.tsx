@@ -32,6 +32,10 @@
  *     superpuesto / Duplicado. Sin `classify` (o con "any" sin resolver) no
  *     muestra nada. Se eligió calcularlo adentro (y no recibir un
  *     `instantStatus`) para que index no repita debounce/secuencia.
+ *     SR-U5c: `classify.roomId` = la sala del select (undefined = según el
+ *     horario: el server chequea la de la franja y la devuelve en
+ *     `defaultRoomId`; null = "Sin sala": no se chequea). Si la sala está
+ *     ocupada o bloqueada (`roomBusy`) se suma una línea al aviso.
  *   • `onInstantStatus?: (c: InstantCheck | null) => void` — el último
  *     resultado, por si index quiere usarlo (p. ej. preparar el prompt de
  *     bloqueado/fuera de horario). Es un aviso: la decisión final es del
@@ -42,6 +46,7 @@ import { FormField } from "@/components/ui/form-field";
 import { classifyBookingInstant } from "@/lib/availability-actions";
 import type { InstantCheck } from "@/lib/availability-actions-types";
 import { isoToARLocalInput, localToARIso } from "@/lib/datetime-ar";
+import { roomBusyLiveLine } from "@/lib/booking-modal-state";
 import {
   SLOT_QUERY_DEBOUNCE_MS,
   createSequencer,
@@ -57,6 +62,11 @@ export type ScheduleClassifyContext = {
   locationId?: string | null;
   /** Edición: el turno que se mueve no cuenta contra sí mismo. */
   excludeBookingId?: string | null;
+  /**
+   * SR: sala a chequear. undefined = según el horario (NO viaja: el server usa
+   * la de la franja); null = "Sin sala" (no chequea ocupación); un id = esa.
+   */
+  roomId?: string | null;
 };
 
 const LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -120,8 +130,11 @@ export function ScheduleSection({
   const pid = classify?.practitionerId && classify.practitionerId !== "any" ? classify.practitionerId : null;
   const sid = classify?.serviceId ?? null;
   const dur = sanitizeDuration(durationMin);
+  // Sala en la clave: "" = según el horario (no viaja), "-" = Sin sala, o el id.
+  const roomId = classify?.roomId;
+  const roomKey = roomId === undefined ? "" : roomId === null ? "-" : roomId;
   const key = pid && sid && iso
-    ? [pid, sid, iso, dur ?? "", classify?.patientId ?? "", classify?.locationId ?? "", classify?.excludeBookingId ?? ""].join("|")
+    ? [pid, sid, iso, dur ?? "", classify?.patientId ?? "", classify?.locationId ?? "", classify?.excludeBookingId ?? "", roomKey].join("|")
     : null;
 
   const [live, setLive] = useState<LiveState>({ status: "idle" });
@@ -137,6 +150,8 @@ export function ScheduleSection({
           patientId: classify?.patientId ?? null,
           locationId: classify?.locationId ?? null,
           excludeBookingId: classify?.excludeBookingId ?? null,
+          // Ausente = según el horario (contrato `ClassifyInstantQuery.roomId`).
+          ...(roomId !== undefined ? { roomId } : {}),
         }
       : null;
   const statusCb = useRef(onInstantStatus);
@@ -230,12 +245,17 @@ function InstantStatusLine({ live }: { live: LiveState }) {
 
 function InstantStatusBox({ check }: { check: InstantCheck }) {
   const view = instantStatusView(check);
+  // SR-U5c: sala llena o bloqueada. Solo aviso (se puede agendar igual), así
+  // que un "Libre" del profesional pasa a tono de aviso; nunca a "danger".
+  const roomLine = roomBusyLiveLine(check.roomBusy);
+  const tone: InstantTone = roomLine && view.tone === "ok" ? "warn" : view.tone;
   return (
-    <div style={{ ...TONE_STYLE[view.tone], borderRadius: 8, padding: "6px 8px", fontSize: 12, lineHeight: 1.4 }}>
+    <div style={{ ...TONE_STYLE[tone], borderRadius: 8, padding: "6px 8px", fontSize: 12, lineHeight: 1.4 }}>
       <div style={{ fontWeight: 700 }}>{view.title}</div>
       {view.details.map((d) => (
         <div key={d}>{d}</div>
       ))}
+      {roomLine && <div>{roomLine}</div>}
     </div>
   );
 }

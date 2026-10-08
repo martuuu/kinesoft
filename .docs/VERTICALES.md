@@ -5,11 +5,11 @@
 > prompts:** los contratos C-EV1..C-EV9 y las enmiendas de §5 van **literales**, sin parafrasear.
 > Planes sigue en [PLANES.md](PLANES.md); las enmiendas de §5 también están copiadas al tope de PLANES §10, §11 y §12.
 >
-> **Estado (08-oct):** EV0 ✅ (`ddfdff3`), ES2b ✅ (`58ec36f`) y ES3 ✅ (08-oct, pendiente commit; M3a solo en local).
-> M2 y M3a aplicadas solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md) y §Ronda 18, QA en
-> [QA.md §EV0](QA.md), diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md). Las enmiendas de §5 para ES3 se aplicaron
-> (S22b: EVA con el módulo `evaluaciones` en server y UI). **Siguiente: SR** (M4, a confirmar por Martin) → SV (M5) →
-> ES4 → EV1 (§2).
+> **Estado (08-oct):** EV0 ✅ (`ddfdff3`), ES2b ✅ (`58ec36f`), ES3 ✅ (`ad50059`) y SR ✅ (08-oct, pendiente commit).
+> M2, M3a y M4 aplicadas solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), §Ronda 18 y §Ronda 19, QA
+> en [QA.md §EV0](QA.md), diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md). Las enmiendas de §5 para ES3 se aplicaron
+> (S22b: EVA con el módulo `evaluaciones` en server y UI). **Siguiente: SV** (M5, timestamp posterior a M4) → ES4 →
+> EV1 (§2).
 
 ## 0. Contexto: decisiones de Martin del 07-oct
 
@@ -71,14 +71,14 @@ AUDIT: `data-api-anon-sin-rls` (bloque A, crítico): código cerrado; **la acci�
 |---|---|---|---|
 | 1 | **EV0** ✅ (`ddfdff3`) | Tipo de consultorio + matriz de módulos + guards + nav único + turnero con switch + onboarding con vertical + /plataforma de consultorios + REVOKE de la Data API | **M2 `tenant_verticals`** (sola, V.0) |
 | 2 | ES2b (P2) ✅ (`58ec36f`) | Como está planificada + simplificaciones del reset (§6) + enmiendas (§5) | — |
-| 3 | ES3 (P3) ✅ (08-oct, pendiente commit) | Ídem + S14r (ingresos reales del dashboard, Mes/Semana; decisión 6 del 08-oct, [PLANES §11](PLANES.md)) | **M3a `billing_paid_at`** (sola, P3.0.0) |
-| 3b | **SR** (08-oct) | Salas/Consultorios: sala por franja y por turno, conflicto de sala, filtro y vista "Por sala" ([ROADMAP §SR](ROADMAP.md)) | **M4 `rooms`** (sola) |
+| 3 | ES3 (P3) ✅ (`ad50059`) | Ídem + S14r (ingresos reales del dashboard, Mes/Semana; decisión 6 del 08-oct, [PLANES §11](PLANES.md)) | **M3a `billing_paid_at`** (sola, P3.0.0) |
+| 3b | **SR** ✅ (08-oct, pendiente commit) | Salas/Consultorios: sala por franja y por turno, conflicto y bloqueo de sala, filtro y vista "Por sala" ([ARCHITECTURE §Salas](ARCHITECTURE.md)). **Aplica a General y Kinesiología sin módulo nuevo**: la agenda existe en las dos verticales y un consultorio sin salas cargadas ve todo igual que antes | **M4 `20261009120000_rooms`** (sola) |
 | 4 | **SV** (nueva) | Sala de Espera realtime (transporte, "Llamar", aviso al profesional, `/sala`, agenda en vivo); el evento y "Llamar" llevan `roomId` | **M5 `reception_call_realtime`** (sola; antes "M3") |
 | 5 | ES4 (P4) | Ídem, sin las sesiones de legacy; S26a/S26b cubren verticales y realtime | — |
 | 6 | **EV1** (nueva) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional | — |
 | 7 | Deploy único de B | Reset de prod → `migrate deploy` desde vacío (cadena completa hasta M5) → bootstrap (§9) | — |
 
-**Orden vigente (08-oct):** ES3 → SR → SV → ES4 → EV1 → reset + deploy. SR va antes de SV para que el evento y "Llamar" ya nazcan con la sala.
+**Orden vigente (08-oct):** ES3 ✅ → SR ✅ → **SV** → ES4 → EV1 → reset + deploy. SR fue antes de SV para que el evento y "Llamar" ya nazcan con la sala: `BookingChangeRef.roomId?` y `prev.roomId` ya existen (`lib/booking-events-internal.ts:50-52`); el publish con sala lo hace SV.
 
 SV va entre ES3 y ES4 porque necesita `lib/bookings.ts` (S12, ES2b), `agenda-client.tsx` y `reception-row.tsx` (ES3)
 ya cerrados, y así la matriz authz y el E2E de ES4 la cubren. No comparte archivos con ES4 salvo
@@ -111,6 +111,11 @@ Invariantes con test: sesiones ⇔ planes; plantillas ⇒ planes; favoritos/ejer
 monótono FREE ⊆ STARTER ⊆ PRO; GENERAL sin módulos Kine. **Cambio de comportamiento:** FREE/STARTER dejan de ver los
 globales `isBasic` (Biblioteca arranca vacía → empty state "Creá tu primer ejercicio · PRO suma el catálogo de la
 plataforma").
+
+**Salas (SR, 08-oct):** no son un módulo. Van con `agenda` (y Configuración › Sedes), así que aplican igual a General y
+Kinesiología en cualquier plan; la barrera es la capability (`schedule.configure` para escribir salas,
+`agenda.manageBlocks` para bloquearlas), no `modulesFor`. Lo único de Planes que toca la sala (estampar la sala por
+defecto al generar turnos) ya está detrás del módulo `planes`.
 
 ### 3.2 Contratos literales (van tal cual a los prompts)
 

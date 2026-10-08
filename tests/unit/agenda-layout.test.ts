@@ -6,6 +6,7 @@
  * huso del host.
  */
 import { describe, expect, it } from "vitest";
+import * as agendaLayout from "@/lib/agenda-layout";
 import {
   buildPractitionerColumns,
   capResolver,
@@ -18,6 +19,8 @@ import {
   type LayoutBlock,
   type SlotCell,
 } from "@/lib/agenda-layout";
+// SRZ (FX2a #8): lo de "Por sala" vive aparte, fuera del first load de /agenda.
+import { buildRoomColumns, NO_ROOM_COLUMN_ID, type RoomLayoutBooking } from "@/lib/agenda-layout-rooms";
 
 // 2026-10-05 es lunes. 08:00 AR = 11:00Z.
 const DAY = "2026-10-05";
@@ -518,5 +521,179 @@ describe("nowOffset", () => {
       offsetMin: 1320,
       ratio: 1320 / 1440,
     });
+  });
+});
+
+// ─── SR-U4 · vista "Por sala" ────────────────────────────────────────────────
+// capacity = PROFESIONALES a la vez (SR-D1, §17.5). TZ=UTC: el reloj del host
+// no puede correr nada (23:30 AR = 02:30Z del día siguiente).
+
+describe("[SRZ-FX2a] bundle: 'Por sala' fuera de agenda-layout", () => {
+  // `agenda-layout.ts` está en el first load de /agenda (vista Día, Semana).
+  // webpack no separa un módulo por export: si `buildRoomColumns` vuelve a
+  // vivir (o a re-exportarse) ahí, el consultorio sin salas lo paga igual.
+  it("agenda-layout no exporta nada de salas; agenda-layout-rooms sí", () => {
+    for (const name of ["buildRoomColumns", "peakDistinctPractitioners", "NO_ROOM_COLUMN_ID"]) {
+      expect(name in agendaLayout).toBe(false);
+    }
+    expect(typeof buildRoomColumns).toBe("function");
+    expect(NO_ROOM_COLUMN_ID).toBe("none");
+  });
+});
+
+describe("buildRoomColumns · capacidad, estados y 'Sin sala'", () => {
+  const C1 ={ id: "r-c1", name: "Consultorio 1", kind: "CONSULTORIO" as const, capacity: 1, locationId: MAIN };
+  const GYM = { id: "r-gym", name: "Gimnasio", kind: "GIMNASIO" as const, capacity: 3, locationId: MAIN };
+  const allDay = (pid: string) => ({ practitionerId: pid, startMin: 8 * 60, endMin: 19 * 60 });
+  const assignments = { [C1.id]: [allDay("p1"), allDay("p2")], [GYM.id]: [allDay("p3")] };
+  const inRoom = (roomId: string | null, hhmm: string, over: Partial<LayoutBooking> = {}) => ({ ...bk(hhmm, over), roomId });
+  const build = (list: RoomLayoutBooking[], extra: Partial<Parameters<typeof buildRoomColumns>[2]> = {}) =>
+    buildRoomColumns([C1, GYM], list, { dayKey: DAY, zoom: 30, now: NOW, assignments, ...extra });
+
+  it("consultorio cap 1 vs gimnasio cap 3: cuenta profesionales distintos, no pacientes", () => {
+    const list = [
+      // Consultorio 1 a las 10: dos turnos del MISMO profesional → 1/1 lleno (no choca consigo mismo)
+      inRoom(C1.id, "10:00", { practitionerId: "p1", durationMin: 30 }),
+      inRoom(C1.id, "10:00", { practitionerId: "p1", durationMin: 30 }),
+      // Gimnasio a las 10: 4 pacientes de p3 + 1 de p4 → 2 profesionales de 3 → parcial
+      ...[0, 1, 2, 3].map(() => inRoom(GYM.id, "10:00", { practitionerId: "p3", durationMin: 30 })),
+      inRoom(GYM.id, "10:00", { practitionerId: "p4", durationMin: 30 }),
+      // Gimnasio a las 11: 3 profesionales → lleno
+      ...["p3", "p4", "p5"].map((pid) => inRoom(GYM.id, "11:00", { practitionerId: pid, durationMin: 30 })),
+    ];
+    const { columns } = build(list);
+    expect(columns.map((c) => c.roomId)).toEqual([C1.id, GYM.id]); // sin "Sin sala": no hay turnos sin sala
+    const [c1, gym] = columns;
+    expect(cell(c1.slots, "10:00")).toMatchObject({ used: 1, cap: 1, label: "1/1", state: "lleno", total: 2, byService: [] });
+    expect(cell(gym.slots, "10:00")).toMatchObject({ used: 2, cap: 3, label: "2/3", state: "parcial", total: 5 });
+    expect(cell(gym.slots, "11:00")).toMatchObject({ used: 3, cap: 3, state: "lleno" });
+    expect(cell(gym.slots, "12:00")).toMatchObject({ used: 0, label: null, state: "libre" });
+    expect(c1).toMatchObject({ name: "Consultorio 1", kind: "CONSULTORIO", capacity: 1, bookingCount: 2, maxLanes: 2 });
+    expect(gym.bookingCount).toBe(8);
+  });
+
+  it("sobreturno cuando used > capacity; isOverbooked del turno NO marca la sala (SR-D2)", () => {
+    const list = [
+      inRoom(C1.id, "10:00", { practitionerId: "p1", durationMin: 30 }),
+      inRoom(C1.id, "10:00", { practitionerId: "p2", durationMin: 30 }),
+      inRoom(C1.id, "12:00", { practitionerId: "p1", durationMin: 30, isOverbooked: true }),
+    ];
+    const [c1] = build(list).columns;
+    expect(cell(c1.slots, "10:00")).toMatchObject({ used: 2, cap: 1, label: "2/1", state: "sobreturno", overbooked: true });
+    expect(cell(c1.slots, "12:00")).toMatchObject({ used: 1, state: "lleno", overbooked: false });
+  });
+
+  it("pico de simultaneidad: dos profesionales consecutivos en zoom 60 son 1/1, no 2/1", () => {
+    const list = [
+      inRoom(C1.id, "10:00", { practitionerId: "p1", durationMin: 30 }),
+      inRoom(C1.id, "10:30", { practitionerId: "p2", durationMin: 30 }),
+    ];
+    const [c1] = buildRoomColumns([C1], list, { dayKey: DAY, zoom: 60, now: NOW, assignments }).columns;
+    expect(cell(c1.slots, "10:00")).toMatchObject({ used: 1, state: "lleno" });
+  });
+
+  it("'sin profesional asignado' (fuera-de-horario) donde nadie tiene la sala; con un turno igual se ve", () => {
+    const only = { [C1.id]: [{ practitionerId: "p1", startMin: 9 * 60, endMin: 13 * 60 }] };
+    const list = [inRoom(C1.id, "15:00", { practitionerId: "p2", durationMin: 30 })];
+    const { columns, window } = buildRoomColumns([C1, GYM], list, {
+      dayKey: DAY,
+      zoom: 30,
+      now: NOW,
+      assignments: only,
+    });
+    expect(window).toEqual({ startMin: 9 * 60, endMin: 15 * 60 + 30 });
+    const [c1, gym] = columns;
+    expect(cell(c1.slots, "09:00")).toMatchObject({ state: "libre", outOfHours: false });
+    expect(cell(c1.slots, "14:00")).toMatchObject({ state: "fuera-de-horario", outOfHours: true });
+    expect(cell(c1.slots, "15:00")).toMatchObject({ state: "fuera-de-horario", used: 1, label: "1/1" });
+    expect(gym.slots.every((s) => s.state === "fuera-de-horario")).toBe(true);
+    expect(c1.assignments).toEqual(only[C1.id]);
+    expect(gym.assignments).toEqual([]);
+  });
+
+  it("assignments se ordenan por (startMin, practitionerId) y descartan franjas vacías", () => {
+    const messy = {
+      [C1.id]: [
+        { practitionerId: "p2", startMin: 14 * 60, endMin: 18 * 60 },
+        { practitionerId: "p9", startMin: 10 * 60, endMin: 10 * 60 },
+        { practitionerId: "p1", startMin: 9 * 60, endMin: 13 * 60 },
+      ],
+    };
+    const [c1] = buildRoomColumns([C1], [], { dayKey: DAY, zoom: 30, now: NOW, assignments: messy }).columns;
+    expect(c1.assignments.map((a) => a.practitionerId)).toEqual(["p1", "p2"]);
+  });
+
+  it("bloqueo de sala: pinta SOLO esa sala; un bloqueo de profesional no; uno de todos sí (por sede)", () => {
+    const roomBlocks = [{ id: "rb-1", roomId: C1.id, startsAt: ar("10:00"), endsAt: ar("11:00"), reason: "Mantenimiento" }];
+    const blocks: LayoutBlock[] = [
+      { id: "pb-1", practitionerId: "p3", startsAt: ar("12:00"), endsAt: ar("13:00"), reason: "Trámite" },
+      { id: "tb-1", practitionerId: null, locationId: MAIN, startsAt: ar("16:00"), endsAt: ar("17:00"), reason: "Corte de luz" },
+      { id: "tb-2", practitionerId: null, locationId: "loc-otra", startsAt: ar("18:00"), endsAt: ar("19:00"), reason: "Otra" },
+    ];
+    const list = [inRoom(C1.id, "10:00", { practitionerId: "p1", durationMin: 30 })];
+    const [c1, gym] = build(list, { roomBlocks, blocks }).columns;
+    expect(cell(c1.slots, "10:00")).toMatchObject({ state: "bloqueado", blocked: true, blockIds: ["rb-1"], blockReason: "Mantenimiento", used: 1 });
+    expect(cell(c1.slots, "10:30").state).toBe("bloqueado");
+    expect(cell(c1.slots, "11:00").state).toBe("libre");
+    expect(cell(gym.slots, "10:00").state).toBe("libre");
+    expect(cell(gym.slots, "12:00").state).toBe("libre"); // bloqueo de p3 no pinta la sala
+    expect(cell(c1.slots, "16:00")).toMatchObject({ state: "bloqueado", blockReason: "Corte de luz" });
+    expect(cell(gym.slots, "16:00").state).toBe("bloqueado");
+    expect(cell(gym.slots, "18:00").state).toBe("libre"); // bloqueo de otra sede
+  });
+
+  it("'Sin sala' aparece solo si hay turnos sin sala; va al final, sin cap ni horario", () => {
+    expect(build([inRoom(C1.id, "10:00")]).columns.map((c) => c.roomId)).toEqual([C1.id, GYM.id]);
+    const list: RoomLayoutBooking[] = [
+      inRoom(null, "10:00", { practitionerId: "p1" }),
+      { ...bk("10:00", { practitionerId: "p2" }) }, // roomId ausente (proyección sin sala) = sin sala
+      inRoom("r-otra-sede", "10:00"), // sala fuera del catálogo: no se dibuja
+    ];
+    const { columns } = build(list);
+    expect(columns.map((c) => c.roomId)).toEqual([C1.id, GYM.id, "none"]);
+    const none = columns[2];
+    expect(none).toMatchObject({ name: "Sin sala", kind: null, capacity: null, bookingCount: 2, assignments: [] });
+    expect(cell(none.slots, "10:00")).toMatchObject({ used: 2, cap: null, label: null, state: "parcial", outOfHours: false });
+    expect(cell(none.slots, "08:00").state).toBe("libre");
+    expect(columns[0].bookingCount + columns[1].bookingCount).toBe(0);
+    expect(build(list, { includeUnassigned: false }).columns.map((c) => c.roomId)).toEqual([C1.id, GYM.id]);
+  });
+
+  it("orden de columnas = orden de entrada (el bootstrap ya viene por sortOrder)", () => {
+    const { columns } = buildRoomColumns([GYM, C1], [], { dayKey: DAY, zoom: 30, now: NOW, assignments });
+    expect(columns.map((c) => c.name)).toEqual(["Gimnasio", "Consultorio 1"]);
+  });
+
+  it("borde de las 23:30 AR (02:30Z del día siguiente) en TZ=UTC: cae en su día AR y continúa al otro", () => {
+    const late = { [C1.id]: [{ practitionerId: "p1", startMin: 22 * 60, endMin: 24 * 60 }] };
+    const b = inRoom(C1.id, "23:30", { practitionerId: "p1", durationMin: 60 });
+    expect((b.scheduledFor as Date).toISOString()).toBe("2026-10-06T02:30:00.000Z");
+    const today = buildRoomColumns([C1], [b], { dayKey: DAY, zoom: 30, now: NOW, assignments: late });
+    expect(today.window).toEqual({ startMin: 22 * 60, endMin: 24 * 60 });
+    const c = cell(today.columns[0].slots, "23:30");
+    expect(c.bookings.map((x) => x.id)).toEqual([b.id]);
+    expect(c).toMatchObject({ used: 1, state: "lleno" });
+    // Al día siguiente: arranca a las 00:00 como "continúa" y la sala no tiene asignación.
+    const next = buildRoomColumns([C1], [b], { dayKey: "2026-10-06", zoom: 30, now: NOW, assignments: {} });
+    const first = cell(next.columns[0].slots, "00:00");
+    expect(first.continuing.map((x) => x.id)).toEqual([b.id]);
+    expect(first).toMatchObject({ bookings: [], state: "fuera-de-horario", used: 1 });
+  });
+
+  it("cancelados y reservas públicas vencidas se dibujan pero no ocupan la sala", () => {
+    const list = [
+      inRoom(C1.id, "10:00", { practitionerId: "p1", status: "CANCELLED", durationMin: 30 }),
+      inRoom(C1.id, "10:00", {
+        practitionerId: "p2",
+        durationMin: 30,
+        status: "PENDING",
+        publicReservation: true,
+        paymentStatus: "UNPAID",
+        createdAt: new Date(NOW.getTime() - 31 * 60_000),
+      }),
+    ];
+    const c = cell(build(list).columns[0].slots, "10:00");
+    expect(c.bookings).toHaveLength(2);
+    expect(c).toMatchObject({ used: 0, state: "libre", total: 0 });
   });
 });

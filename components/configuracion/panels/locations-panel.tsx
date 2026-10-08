@@ -13,8 +13,15 @@
  *     días especiales, la action devuelve los conteos y acá se muestran con
  *     el camino para resolverlo;
  *   • restaurar existe porque archivar por error no puede no tener vuelta.
+ *
+ * Salas (corrida SR, SR-U1): cada sede activa muestra "N salas" y un
+ * disclosure que monta `RoomsSection`. Se carga con `dynamic()` recién al
+ * abrirlo: `/configuracion` ya pasa el presupuesto de bundle y la mayoría de
+ * los consultorios no carga salas (sin salas, todo se ve como antes salvo la
+ * línea "Sin salas" y el link).
  */
 import { useRef, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +34,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import type { LocationArchiveBlockers, LocationRow } from "@/lib/locations-schemas";
+import type { RoomRow } from "@/lib/rooms-types";
 import {
   archiveLocation,
   createLocation,
@@ -35,6 +43,20 @@ import {
   updateLocation,
 } from "@/lib/locations";
 import { ErrorBox } from "../controls";
+
+const RoomsSection = dynamic(() => import("./rooms-section").then((m) => m.RoomsSection), {
+  ssr: false,
+  loading: () => <div style={{ fontSize: 12, color: "var(--navy-300)", padding: "6px 0" }}>Cargando salas…</div>,
+});
+
+/**
+ * "N salas" de la línea de la sede. Duplica `roomCountText` de
+ * `rooms-section.tsx` a propósito: importarlo de ahí metería ese módulo en el
+ * bundle inicial y anularía el `dynamic()` de arriba.
+ */
+function roomCountLine(n: number): string {
+  return n <= 0 ? "Sin salas" : `${n} sala${n === 1 ? "" : "s"}`;
+}
 
 const linkBtn: React.CSSProperties = {
   background: "transparent",
@@ -53,7 +75,14 @@ function addressLine(l: LocationRow): string {
   return [street, place, l.postalCode ? `CP ${l.postalCode}` : null].filter(Boolean).join(" · ");
 }
 
-export function LocationsPanel({ locations }: { locations: LocationRow[] }) {
+export function LocationsPanel({
+  locations,
+  rooms = [],
+}: {
+  locations: LocationRow[];
+  /** Todas las salas del consultorio, archivadas incluidas (SR-U1). */
+  rooms?: RoomRow[];
+}) {
   const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
@@ -61,6 +90,17 @@ export function LocationsPanel({ locations }: { locations: LocationRow[] }) {
   const [editing, setEditing] = useState<LocationRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  // Sedes con el disclosure de salas abierto.
+  const [openRooms, setOpenRooms] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleRooms = (id: string) =>
+    setOpenRooms((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const activeRoomCount = (locationId: string) =>
+    rooms.filter((r) => r.locationId === locationId && r.active).length;
   // Bloqueos del último intento de archivar, por sede (se muestran en su fila).
   const [blocked, setBlocked] = useState<{ id: string; error: string; blockers?: LocationArchiveBlockers } | null>(
     null
@@ -92,7 +132,7 @@ export function LocationsPanel({ locations }: { locations: LocationRow[] }) {
     const ok = await confirm({
       title: `¿Archivar "${l.name}"?`,
       message:
-        "Deja de ofrecerse en la agenda y en el turnero. Los turnos pasados siguen mostrando esta sede. Podés restaurarla cuando quieras.",
+        "Deja de ofrecerse en la agenda y en el turnero, junto con sus salas. Los turnos pasados siguen mostrando esta sede. Podés restaurarla cuando quieras.",
       confirmLabel: "Archivar",
       tone: "danger",
     });
@@ -187,11 +227,22 @@ export function LocationsPanel({ locations }: { locations: LocationRow[] }) {
                     {l.scheduleCount === 0
                       ? "Sin franjas de horario"
                       : `${l.scheduleCount} franja${l.scheduleCount === 1 ? "" : "s"} de horario`}
+                    {` · ${roomCountLine(activeRoomCount(l.id))}`}
                   </div>
                 </button>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                   <button type="button" style={linkBtn} onClick={() => setEditing(l)} disabled={pending}>
                     Editar
+                  </button>
+                  <button
+                    type="button"
+                    style={linkBtn}
+                    onClick={() => toggleRooms(l.id)}
+                    aria-expanded={openRooms.has(l.id)}
+                    aria-controls={`rooms-of-${l.id}`}
+                    aria-label={`${openRooms.has(l.id) ? "Ocultar" : "Ver"} salas de ${l.name}`}
+                  >
+                    {openRooms.has(l.id) ? "Ocultar salas" : "Salas"}
                   </button>
                   {!l.isPrimary && (
                     <>
@@ -213,6 +264,20 @@ export function LocationsPanel({ locations }: { locations: LocationRow[] }) {
               {blocked?.id === l.id && (
                 <div style={{ marginTop: 10 }}>
                   <ArchiveBlockers error={blocked.error} blockers={blocked.blockers} onDismiss={() => setBlocked(null)} />
+                </div>
+              )}
+              {openRooms.has(l.id) && (
+                <div
+                  id={`rooms-of-${l.id}`}
+                  style={{
+                    marginTop: 10,
+                    padding: "12px 12px 10px",
+                    borderRadius: "var(--r-md)",
+                    background: "rgba(15,30,51,0.03)",
+                    minWidth: 0,
+                  }}
+                >
+                  <RoomsSection locationId={l.id} locationName={l.name} rooms={rooms} />
                 </div>
               )}
             </li>

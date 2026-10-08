@@ -39,6 +39,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import {
   dayKeyLabel,
   dowOfDayKey,
+  exceptionPayloadRanges,
   fieldErrorsToRowErrors,
   monthLabel,
   monthOf,
@@ -47,8 +48,10 @@ import {
   rangesLabel,
   rangesSignature,
   shiftMonth,
+  roomLabel,
   validateDayDraft,
   type DraftRange,
+  type RoomCatalogEntry,
 } from "@/lib/schedule-editor-state";
 import { isValidDayKey } from "@/lib/schedule-validate";
 import { FALLBACK_TENANT_HOURS } from "@/lib/availability/types";
@@ -64,10 +67,13 @@ export function ExceptionsEditor({
   practitionerId,
   practitionerName,
   locations,
+  rooms,
 }: {
   practitionerId: string;
   practitionerName: string;
   locations: LocationRow[];
+  /** SR-U2: catálogo de salas (archivadas incluidas). Sin salas, todo igual que antes. */
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -227,6 +233,15 @@ export function ExceptionsEditor({
                           · {[...new Set(r.ranges.map((x) => locationName(locations, x.locationId)))].join(", ")}
                         </span>
                       )}
+                      {r.ranges.some((x) => x.roomId) && (
+                        <span style={{ fontFamily: "inherit", color: "var(--navy-500)" }}>
+                          {" "}
+                          ·{" "}
+                          {[...new Set(r.ranges.filter((x) => x.roomId).map((x) => roomLabel(rooms, x.roomId!)))].join(
+                            ", "
+                          )}
+                        </span>
+                      )}
                     </div>
                   )}
                   {r.reason && <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{r.reason}</div>}
@@ -256,6 +271,7 @@ export function ExceptionsEditor({
           practitionerId={practitionerId}
           practitionerName={practitionerName}
           locations={locations}
+          rooms={rooms}
           template={template}
           known={rows ?? []}
           defaultDate={month === monthOf(today) ? today : `${month}-01`}
@@ -277,6 +293,7 @@ function ExceptionDrawer({
   practitionerId,
   practitionerName,
   locations,
+  rooms,
   template,
   known,
   defaultDate,
@@ -287,6 +304,7 @@ function ExceptionDrawer({
   practitionerId: string;
   practitionerName: string;
   locations: LocationRow[];
+  rooms?: ReadonlyArray<RoomCatalogEntry>;
   template: PractitionerScheduleView | null;
   /** Excepciones ya cargadas (mes visible): para avisar que se va a reemplazar. */
   known: ScheduleExceptionRow[];
@@ -311,14 +329,43 @@ function ExceptionDrawer({
     (dayKey: string): DraftRange[] => {
       if (!isValidDayKey(dayKey)) return [];
       const dow = dowOfDayKey(dayKey);
-      const src =
+      const src: ReadonlyArray<{
+        startMin: number;
+        endMin: number;
+        locationId: string;
+        roomId?: string | null;
+        validFrom?: string | null;
+        validUntil?: string | null;
+      }> =
         template && !template.isFallback
           ? template.ranges.filter((r) => r.dow === dow)
           : dow === 0
             ? []
             : [{ ...tenantHours, locationId: primary?.id ?? "" }];
-      const out = src.map((r) => ({ key: newRangeKey(), startMin: r.startMin, endMin: r.endMin, locationId: r.locationId }));
-      return out.length ? out : [{ key: newRangeKey(), ...tenantHours, locationId: primary?.id ?? "" }];
+      // SR-U2: precarga la sala de la plantilla de ese día (solo franjas vigentes ese día).
+      const out: DraftRange[] = src
+        .filter((r) => (!r.validFrom || r.validFrom <= dayKey) && (!r.validUntil || r.validUntil >= dayKey))
+        .map((r) => ({
+          key: newRangeKey(),
+          startMin: r.startMin,
+          endMin: r.endMin,
+          locationId: r.locationId,
+          roomId: r.roomId ?? null,
+          validFrom: null,
+          validUntil: null,
+        }));
+      return out.length
+        ? out
+        : [
+            {
+              key: newRangeKey(),
+              ...tenantHours,
+              locationId: primary?.id ?? "",
+              roomId: null,
+              validFrom: null,
+              validUntil: null,
+            },
+          ];
     },
     [template, tenantHours, primary?.id]
   );
@@ -328,7 +375,9 @@ function ExceptionDrawer({
       date: edit?.date ?? defaultDate,
       scope: (edit && edit.practitionerId === null ? "tenant" : "practitioner") as Scope,
       kind: (edit?.kind ?? "CLOSED") as Kind,
-      rows: (edit?.ranges ?? []).map((r) => ({ key: newRangeKey(), ...r })),
+      rows: (edit?.ranges ?? []).map(
+        (r): DraftRange => ({ key: newRangeKey(), ...r, roomId: r.roomId ?? null, validFrom: null, validUntil: null })
+      ),
       reason: edit?.reason ?? "",
     }),
     // foto al abrir
@@ -398,10 +447,8 @@ function ExceptionDrawer({
         practitionerId: scope === "tenant" ? null : practitionerId,
         date,
         kind,
-        ranges:
-          kind === "CUSTOM_HOURS"
-            ? rows.map((x) => ({ startMin: x.startMin, endMin: x.endMin, locationId: x.locationId }))
-            : null,
+        // SR-U2: la sala viaja por franja; la de todo el consultorio va sin sala.
+        ranges: kind === "CUSTOM_HOURS" ? exceptionPayloadRanges(rows, scope) : null,
         reason,
       });
       if (!r.ok) {
@@ -512,6 +559,8 @@ function ExceptionDrawer({
             defaults={{ ...tenantHours, locationId: primary?.id ?? "" }}
             disabled={pending}
             dayLabel={isValidDayKey(date) ? dayKeyLabel(date) : "Ese día"}
+            // SR1c: un horario especial de todo el consultorio no lleva sala (el server lo rechaza).
+            rooms={scope === "tenant" ? undefined : rooms}
           />
         )}
 

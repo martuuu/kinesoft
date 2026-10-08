@@ -46,11 +46,14 @@ import {
   dayKeyRange,
   dayLockState,
   dayWindow,
+  defaultRoomFor,
   eligiblePractitioners,
   acceptsInsurer,
   expandDates,
   firstFreeAcrossPractitioners,
   resolvePractitionerService,
+  roomAssignmentsFor,
+  roomOccupancyAt,
   scheduledRanges,
   summarizeRange,
   workingRanges,
@@ -61,6 +64,9 @@ import {
   type SlotResult,
 } from "@/lib/availability";
 import { formatWallTime, minutesOfDayAR } from "@/lib/availability/day";
+import { defaultLocationFor } from "@/lib/bookings-core";
+import { loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
+import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
 import {
   AgendaAvailabilityQuery,
   ClassifyInstantQuery,
@@ -70,6 +76,7 @@ import {
   type AgendaAvailability,
   type AgendaAvailabilityQueryInput,
   type AgendaBlockView,
+  type AgendaRoomBlockView,
   type AnyPractitionerSlot,
   type ClassifyInstantQueryInput,
   type InstantCheck,
@@ -253,7 +260,16 @@ export async function getAgendaAvailability(
       };
     }
     const clinic = dayLockState(null, dayKey, input, opts);
-    return { dayKey, clinic: { ...clinic, blockIds: [...clinic.blockIds] }, byPractitioner };
+    // SR, vista "Por sala": quién tiene cada sala ese día (franjas CRUDAS con
+    // sala, SR1a). Sale del mismo `input` (0 sentencias); ausente = nadie con
+    // sala, así un consultorio sin salas recibe la misma forma que antes.
+    const roomAssignments = roomAssignmentsFor(input, dayKey, pracIds);
+    return {
+      dayKey,
+      clinic: { ...clinic, blockIds: [...clinic.blockIds] },
+      byPractitioner,
+      ...(Object.keys(roomAssignments).length ? { roomAssignments } : {}),
+    };
   });
 
   const capOf: AgendaAvailability["capOf"] = {};
@@ -278,10 +294,23 @@ export async function getAgendaAvailability(
     reason: b.reason,
     groupId: b.groupId,
   }));
+  // SR (§17.5): bloqueos de SALA, aparte de `blocks` (no bloquean
+  // profesionales). Se eligió `input.roomBlocks` del loader (SR1a, ya separados
+  // de `blocks` y filtrados por sede) en vez de los helpers de SR-B
+  // (`roomBlocksWhere` + `ROOM_BLOCK_SELECT`): esos son otra query, y esto sale
+  // de la MISMA sentencia de TimeBlock que ya corría. Ausente = ninguno.
+  const roomBlocks: AgendaRoomBlockView[] = input.roomBlocks.map((b) => ({
+    id: b.id,
+    roomId: b.roomId,
+    startsAt: b.startsAt.toISOString(),
+    endsAt: b.endsAt.toISOString(),
+    reason: b.reason,
+  }));
 
   return {
     ok: true,
     data: {
+      ...(roomBlocks.length ? { roomBlocks } : {}),
       from,
       to,
       locationId,
@@ -470,6 +499,8 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
   const patientId = q.patientId ?? null;
   const when = new Date(q.scheduledFor);
 
+  const now = new Date();
+
   const loaded = await runWithRls(tenantId, async (tx) => {
     const err = await checkTenantIds(tx, tenantId, {
       practitionerIds: [q.practitionerId],
@@ -491,13 +522,57 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
       from: fromKey,
       to: toKey,
     });
-    return { err: null, input } as const;
+    const eff = ruleFor(input, q.practitionerId, q.serviceId)!;
+    const durationMin = q.durationMin ?? eff.durationMin;
+
+    // ── SR: sala ───────────────────────────────────────────────────────────
+    // Misma resolución que `createBooking`: sede = la elegida o la de la franja
+    // (null = principal); sala por defecto = `defaultRoomFor` en esa sede.
+    // `q.roomId` ausente = la por defecto; null/"" = "Sin sala" (no se chequea);
+    // un id = esa sala, que tiene que ser de la sede final (si no, el alta daría
+    // BAD_ROOM_ERROR: se avisa igual acá).
+    const loc = locationId ?? defaultLocationFor(input, q.practitionerId, when, durationMin);
+    const roomLoc = loc ?? input.primaryLocationId;
+    let defaultRoomId = defaultRoomFor(input, q.practitionerId, when, durationMin, loc);
+    const target = q.roomId === undefined ? defaultRoomId : q.roomId;
+    // El loader trae solo los turnos de ESTE profesional: la sala la ocupan
+    // otros, así que la ocupación sale de una carga propia de la sala
+    // (`loadRoomBookingsInTx`, una sentencia con turnos + bloqueos de sala) y
+    // del MISMO predicado que el write-path (`roomOccupancyAt`). Solo si hay
+    // sala: sin sala, 0 sentencias nuevas. Con sala, +2 (sala + ocupación).
+    let roomBusy: InstantCheck["roomBusy"] = null;
+    if (target) {
+      const room = roomLoc ? await lockActiveRoomInTx(tx, { tenantId, roomId: target, locationId: roomLoc }) : null;
+      if (!room) {
+        if (q.roomId !== undefined) return { err: BAD_ROOM_ERROR, input: null } as const;
+        // La por defecto archivada: el alta la deja sin sala.
+        defaultRoomId = null;
+      } else {
+        const end = new Date(when.getTime() + durationMin * MIN_MS);
+        const occ = await loadRoomBookingsInTx(tx, { tenantId, roomId: room.id, from: when, to: end });
+        const o = roomOccupancyAt(
+          occ.bookings,
+          {
+            roomId: room.id,
+            practitionerId: q.practitionerId,
+            when,
+            durationMin,
+            capacity: room.capacity,
+            now,
+            excludeBookingId: q.excludeBookingId ?? null,
+          },
+          occ.blocks
+        );
+        if (o.atCapacity) {
+          roomBusy = { roomName: room.name, blocked: o.blocked ? { reason: o.blocked.reason } : null };
+        }
+      }
+    }
+    return { err: null, input, eff, durationMin, defaultRoomId, roomBusy } as const;
   });
   if (loaded.err !== null) return { ok: false, error: loaded.err };
-  const { input } = loaded;
+  const { input, eff, durationMin } = loaded;
 
-  const eff = ruleFor(input, q.practitionerId, q.serviceId)!;
-  const durationMin = q.durationMin ?? eff.durationMin;
   const c = classifyInstant({
     when,
     durationMin,
@@ -509,7 +584,7 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
     rangesFor: (pid, dayKey) => scheduledRanges(pid, dayKey, input, { locationId }),
     blocks: input.blocks,
     bookings: input.bookings,
-    now: new Date(),
+    now,
     excludeBookingId: q.excludeBookingId ?? null,
   });
   return {
@@ -524,6 +599,8 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
       cap: c.cap,
       durationMin,
       serviceEnabled: eff.enabled,
+      defaultRoomId: loaded.defaultRoomId,
+      roomBusy: loaded.roomBusy,
     },
   };
 }

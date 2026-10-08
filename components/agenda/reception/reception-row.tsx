@@ -14,7 +14,7 @@ import {
   type ReceptionState,
 } from "@/lib/reception-state";
 import { stateTagText, waitText } from "@/lib/reception-view-state";
-import { fmtHour, type BookingDTO } from "../agenda-utils";
+import { ARCHIVED_ROOM_LABEL, fmtHour, type BookingDTO } from "../agenda-utils";
 
 /**
  * Una fila del modo Recepción (B4.5). Es un `<tr>` de la tabla de
@@ -24,6 +24,11 @@ import { fmtHour, type BookingDTO } from "../agenda-utils";
  * Color nunca es el único canal (AGENTS §5): el estado lleva ícono + texto,
  * el profesional va con iniciales + nombre, y el servicio con su punto de
  * color + nombre escrito.
+ *
+ * SR: `room` decide la columna "Sala". `undefined` = la vista no la muestra
+ * (consultorio sin salas: la fila es la de siempre); `null` = columna presente
+ * y el turno sin sala ("—"); `{ name }` = la sala, como texto. Con `null` y un
+ * `roomId` en el turno (sala fuera del catálogo), "Sala archivada" (SRZ B5).
  */
 
 type StateStyle = { icon: ReactNode; bg: string; fg: string; border?: string };
@@ -77,6 +82,7 @@ export function ReceptionRow({
   pending,
   onAction,
   onOpen,
+  room,
 }: {
   entry: ReceptionEntry<BookingDTO>;
   /** Acciones a mostrar (ya filtradas por día con `visibleActions`). */
@@ -89,6 +95,7 @@ export function ReceptionRow({
   pending: boolean;
   onAction: (b: BookingDTO, action: ReceptionAction) => void;
   onOpen: (b: BookingDTO) => void;
+  room?: { name: string } | null;
 }) {
   const b = entry.row;
   const time = fmtHour(new Date(b.scheduledFor));
@@ -150,6 +157,21 @@ export function ReceptionRow({
           <span style={{ color: "var(--navy-300)" }}>—</span>
         )}
       </td>
+      {room !== undefined && (
+        <td data-label="Sala">
+          {room ? (
+            <span className="rcp-ellipsis" style={{ display: "inline-block", maxWidth: 160, color: "var(--navy-700)", verticalAlign: "middle" }}>
+              {room.name}
+            </span>
+          ) : typeof b.roomId === "string" ? (
+            // SRZ B5: el turno tiene sala pero no está en el catálogo (archivada,
+            // solo turnos pasados). "—" diría "sin sala", que es otra cosa.
+            <span style={{ color: "var(--navy-500)" }}>{ARCHIVED_ROOM_LABEL}</span>
+          ) : (
+            <span style={{ color: "var(--navy-300)" }}>—</span>
+          )}
+        </td>
+      )}
       <td data-label="Estado">
         <ReceptionStateTag entry={entry} />
       </td>

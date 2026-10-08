@@ -88,6 +88,8 @@ model Tenant {
   // Planes M1 (plans_booking_link)
   programAuthorizations   ProgramAuthorization[]
   patientChangeRequests   PatientChangeRequest[]
+  // SR M4 (rooms)
+  rooms                   Room[]
 
   @@index([slug])
 }
@@ -1097,6 +1099,11 @@ model Booking {
   programId       String?
   sessionId       String?
   pricedByPlan    Boolean       @default(false)
+  // SR M4 (rooms). Sala del turno; null = sin sala. Con sala, `locationId` es
+  // explícito (Booking_room_location_check, SR-D6) y la sala es de ESA sede y de
+  // este tenant (FKs compuestas, ver "SR M4: DRIFT ACEPTADO" al final). Quien
+  // cambia la sede recalcula o limpia la sala en el mismo UPDATE (si no, 23503).
+  roomId          String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -1108,6 +1115,8 @@ model Booking {
   payment      Payment?
   program      TreatmentProgram? @relation(fields: [programId], references: [id], onDelete: Restrict)
   session      Session?          @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  // RESTRICT: una sala con turnos no se borra (se archiva con `active`).
+  room         Room?             @relation(fields: [roomId], references: [id], onDelete: Restrict, map: "Booking_roomId_fkey")
 
   @@index([tenantId, scheduledFor])
   @@index([practitionerId, scheduledFor])
@@ -1120,6 +1129,8 @@ model Booking {
   @@index([tenantId, programId], map: "Booking_tenantId_programId_idx")
   // Chequeo RESTRICT al borrar una Session y "sin turno" derivado.
   @@index([sessionId], map: "Booking_sessionId_idx")
+  // SR M4: ocupación de la sala, vista "Por sala" y chequeo del RESTRICT.
+  @@index([tenantId, roomId, scheduledFor], map: "Booking_tenantId_roomId_scheduledFor_idx")
 }
 
 enum BookingStatus {
@@ -1446,7 +1457,10 @@ model Location {
   bookings   Booking[]
   // Planes M1: sede del plan (RESTRICT).
   programs   TreatmentProgram[]
+  // SR M4: salas de la sede (CASCADE por la FK compuesta Room_location_tenant_fkey).
+  rooms      Room[]
 
+  @@unique([id, tenantId], map: "Location_id_tenantId_key")
   @@index([tenantId])
 }
 
@@ -1468,6 +1482,10 @@ model PractitionerSchedule {
   endMin         Int
   validFrom      DateTime? @db.Date
   validUntil     DateTime? @db.Date
+  // SR M4 (rooms): sala de la franja ("Consultorio 2 los lunes de 9 a 13"); null
+  // = sin sala. La sala es de la sede de la franja y de este tenant (FKs
+  // compuestas, ver "SR M4: DRIFT ACEPTADO").
+  roomId         String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1476,8 +1494,13 @@ model PractitionerSchedule {
   // Cascade: la franja no existe sin su sede (las sedes se desactivan, no se
   // borran; un borrado real ya lo frena el RESTRICT de Booking.locationId).
   location     Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  // NoAction: una franja no se borra en silencio porque se borró su sala (las
+  // salas se archivan). El borrado del tenant o de la sede no falla: lo prueba
+  // tests/integration/rooms-m4.test.ts (ver la cabecera de la migración).
+  room         Room?        @relation(fields: [roomId], references: [id], onDelete: NoAction, map: "PractitionerSchedule_roomId_fkey")
 
   @@index([tenantId, practitionerId, dow])
+  @@index([tenantId, roomId], map: "PractitionerSchedule_tenantId_roomId_idx")
 }
 
 enum ScheduleExceptionKind {
@@ -1513,6 +1536,9 @@ model ScheduleException {
 // null = todos los profesionales, incluidos los futuros (decisión 8); un
 // subconjunto = N filas con el mismo `groupId`. `locationId` null = todas las
 // sedes. Soft delete con `deletedAt`. CHECK en SQL: startsAt < endsAt.
+// SR M4 (§17.5 "Bloquear sala"): con `roomId` el bloqueo es SOLO de esa sala y
+// NO bloquea profesionales; el CHECK TimeBlock_room_scope_check exige
+// `locationId` explícito y `practitionerId` null (null acá NO es "todos").
 model TimeBlock {
   id             String    @id @default(cuid())
   tenantId       String
@@ -1523,6 +1549,7 @@ model TimeBlock {
   allDay         Boolean   @default(false)
   reason         String?
   groupId        String?
+  roomId         String?
   createdById    String // UserProfile.id, sin FK (ver ScheduleException)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -1532,9 +1559,49 @@ model TimeBlock {
   practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
   // Cascade y no SetNull: null = "todas las sedes", ampliaría el bloqueo.
   location     Location?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  // Cascade (§17.5): un bloqueo de una sala que se borra no tiene sentido.
+  room         Room?         @relation(fields: [roomId], references: [id], onDelete: Cascade, map: "TimeBlock_roomId_fkey")
 
   @@index([tenantId, startsAt])
   @@index([practitionerId, startsAt])
+  @@index([tenantId, roomId, startsAt], map: "TimeBlock_tenantId_roomId_startsAt_idx")
+}
+
+enum RoomKind {
+  CONSULTORIO
+  BOX
+  GIMNASIO
+  SALA
+}
+
+// SR (M4 rooms, 20261009120000_rooms). Sala de una sede: consultorio, box,
+// gimnasio o sala. `capacity` = cuántos PROFESIONALES atienden a la vez en la
+// sala (SR-D1, §17.5; CHECK 1..50); el cupo de pacientes sigue en
+// Service.maxConcurrent y el mismo profesional nunca choca consigo mismo. Se
+// archiva con `active`, no se borra. Nombre único por sede entre las activas
+// (índice parcial, SR-D9). Drift aceptado: ver "SR M4: DRIFT ACEPTADO" al final.
+model Room {
+  id         String   @id @default(cuid())
+  tenantId   String
+  locationId String
+  name       String
+  kind       RoomKind @default(CONSULTORIO)
+  capacity   Int      @default(1)
+  active     Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "Room_tenantId_fkey")
+  // FK compuesta: bajo BYPASSRLS (prod) la sala es de una sede del MISMO tenant.
+  location   Location               @relation(fields: [locationId, tenantId], references: [id, tenantId], onDelete: Cascade, onUpdate: NoAction, map: "Room_location_tenant_fkey")
+  schedules  PractitionerSchedule[]
+  bookings   Booking[]
+  timeBlocks TimeBlock[]
+
+  @@unique([id, tenantId], map: "Room_id_tenantId_key")
+  @@unique([id, locationId], map: "Room_id_locationId_key")
+  @@index([tenantId, locationId], map: "Room_tenantId_locationId_idx")
 }
 
 enum PracticeVisibility {
@@ -1665,3 +1732,20 @@ model PatientChangeRequest {
 // PlanTemplate.schedule) se usa Prisma.DbNull, NUNCA Prisma.JsonNull: JsonNull
 // guarda un JSON null, jsonb_typeof('null') = 'null' viola el CHECK object y la
 // action revienta con 23514. Precedente: lib/practitioner-schedule.ts.
+
+// ── SR M4: DRIFT ACEPTADO ────────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261009120000_rooms y Prisma no
+// los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO se borran
+// (y `migrate dev` está prohibido en este repo):
+//   • Único PARCIAL + expresión (SR-D9):
+//       Room_locationId_name_active_key  ON Room(locationId, lower(btrim(name))) WHERE active
+//   • FKs COMPUESTAS (las FK saltean RLS y prod es BYPASSRLS → "misma empresa" y "misma sede" en la base):
+//       Booking_room_tenant_fkey               (roomId, tenantId)   → Room(id, tenantId)   ON DELETE RESTRICT
+//       Booking_room_location_fkey             (roomId, locationId) → Room(id, locationId) ON DELETE RESTRICT
+//       PractitionerSchedule_room_tenant_fkey  (roomId, tenantId)   → Room(id, tenantId)   ON DELETE NO ACTION
+//       PractitionerSchedule_room_location_fkey (roomId, locationId) → Room(id, locationId) ON DELETE NO ACTION
+//       TimeBlock_room_tenant_fkey             (roomId, tenantId)   → Room(id, tenantId)   ON DELETE CASCADE
+//       TimeBlock_room_location_fkey           (roomId, locationId) → Room(id, locationId) ON DELETE CASCADE
+//   • CHECKs: Room_{name,capacity,sortOrder}_check, Booking_room_location_check (sala ⇒ sede explícita, SR-D6),
+//       TimeBlock_room_scope_check (sala ⇒ sede explícita y sin profesional, §17.5).
+//   • Policy RLS: Room_tenant_isolation.

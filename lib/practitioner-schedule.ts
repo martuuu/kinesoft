@@ -46,7 +46,18 @@ import {
   summarizeWeek,
   validateDayRanges,
   validateWeekRanges,
+  type RangeRowError,
 } from "@/lib/schedule-validate";
+import {
+  dayKeyShortLabel,
+  effectiveRoomRowsOn,
+  formatClock,
+  roomConflictsToRowErrors,
+  roomScheduleConflicts,
+  type RoomUsageRow,
+} from "@/lib/room-schedule-validate";
+import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
+import { dowOfDayKey } from "@/lib/availability/day";
 import {
   EntityId,
   ExceptionRangeInput,
@@ -58,12 +69,14 @@ import {
   type ScheduleExceptionRow,
   type UpsertExceptionRaw,
 } from "@/lib/practitioner-schedule-schemas";
-import { FALLBACK_WORKING_DOWS, type ScheduleRange } from "@/lib/availability/types";
+import { FALLBACK_WORKING_DOWS, type DayKey, type ScheduleRange } from "@/lib/availability/types";
 import type { ActionResult } from "@/lib/validation";
 
 const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
 const PRAC_NOT_FOUND = "Profesional no encontrado.";
+const TENANT_WIDE_ROOM_ERROR =
+  "Un horario especial de todo el consultorio no lleva sala. Asignala en el horario especial de cada profesional.";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internos (no exportados: un "use server" solo exporta actions)
@@ -98,6 +111,35 @@ async function tenantHours(tx: DbClient, tenantId: string) {
   };
 }
 
+/**
+ * `tenantHours` + "¿el consultorio tiene alguna sala activa?" en UNA sentencia
+ * (el `_count` de Prisma va como subconsulta agregada del mismo SELECT).
+ *
+ * SRZ (FX1): `getPractitionerSchedule` corría `loadRoomUsage` siempre, +1 query
+ * aunque el consultorio no tuviera salas (revisión (a) de SR). Con esto, un
+ * consultorio sin salas lee lo mismo que antes de SR (0 sentencias nuevas) y
+ * uno con salas paga solo la de `roomUsage`. Una sala ARCHIVADA no cuenta:
+ * `archiveRoom` se niega mientras haya franjas vigentes en ella (SR-D8) y
+ * `loadRoomUsage` solo trae vigentes, así que no habría nada que mostrar.
+ */
+async function tenantHoursAndRooms(tx: DbClient, tenantId: string) {
+  const t = await tx.tenant.findFirst({
+    where: { id: tenantId },
+    select: {
+      businessHoursStart: true,
+      businessHoursEnd: true,
+      _count: { select: { rooms: { where: { tenantId, active: true } } } },
+    },
+  });
+  return {
+    hours: {
+      startMin: (t?.businessHoursStart ?? 8) * 60,
+      endMin: (t?.businessHoursEnd ?? 19) * 60,
+    },
+    hasActiveRooms: (t?._count.rooms ?? 0) > 0,
+  };
+}
+
 async function versionOf(tx: DbClient, tenantId: string, practitionerId: string): Promise<string | null> {
   const agg = await tx.practitionerSchedule.aggregate({
     where: { tenantId, practitionerId },
@@ -114,15 +156,251 @@ class Abort extends Error {
 }
 
 /** `ranges` JSON de la base → forma tipada (defensivo: la base solo garantiza "array"). */
-function parseStoredRanges(v: Prisma.JsonValue | null): ScheduleRange[] | null {
+function parseStoredRanges(
+  v: Prisma.JsonValue | null
+): Array<ScheduleRange & { roomId: string | null }> | null {
   if (!Array.isArray(v)) return null;
   return v.flatMap((r) => {
     if (!r || typeof r !== "object" || Array.isArray(r)) return [];
     const o = r as Record<string, unknown>;
     return typeof o.startMin === "number" && typeof o.endMin === "number" && typeof o.locationId === "string"
-      ? [{ startMin: o.startMin, endMin: o.endMin, locationId: o.locationId }]
+      ? [
+          {
+            startMin: o.startMin,
+            endMin: o.endMin,
+            locationId: o.locationId,
+            // SR1c: las excepciones previas a SR no lo traen = sin sala.
+            roomId: typeof o.roomId === "string" && o.roomId ? o.roomId : null,
+          },
+        ]
       : [];
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Salas en franjas y excepciones (SR1c)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Lock `kinesoft:room-schedule:<tenantId>` (EXCLUSIVO, alcance de tx): serializa
+// las escrituras de Configuración que ASIGNAN sala (semana y excepciones), para
+// que dos profesionales no tomen la misma sala a la vez entre el "leo las
+// franjas de los demás" y el "escribo la mía" (sin él, dos guardados
+// simultáneos ven la sala libre y entran los dos). Orden fijo, sin ciclos:
+//   sedes COMPARTIDO → room-schedule → `schedule:<pracId>` / `schedexc:…`.
+// Solo se toma si el payload trae alguna sala: guardar un horario sin salas no
+// se serializa contra el resto del consultorio. NINGÚN write-path de turnos lo
+// toma (enmienda C2 1b): no entra en el orden paciente → cupo → sala → sedes.
+// `archiveRoom` (SR1b) toma el de sedes EXCLUSIVO, así que la sala validada acá
+// (después del compartido) no se archiva antes del COMMIT.
+
+const roomScheduleLockKey = (tenantId: string) => `kinesoft:room-schedule:${tenantId}`;
+
+type RoomInfoRow = { id: string; locationId: string; capacity: number; name: string };
+
+/** Salas ACTIVAS del tenant (en sede activa) dentro de `ids`. Va DESPUÉS del lock compartido de sedes. */
+async function activeRoomMap(tx: DbClient, tenantId: string, ids: string[]): Promise<Map<string, RoomInfoRow>> {
+  if (ids.length === 0) return new Map();
+  const rows = await tx.room.findMany({
+    where: { tenantId, active: true, location: { active: true }, id: { in: [...new Set(ids)] } },
+    select: { id: true, locationId: true, capacity: true, name: true },
+  });
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+/** Franja VENCIDA: su `validUntil` (inclusive) ya pasó en el día AR de hoy. */
+function isExpiredRange(r: { validUntil?: DayKey | null }, today: DayKey): boolean {
+  return r.validUntil != null && r.validUntil < today;
+}
+
+/**
+ * Sede de las salas del tenant dentro de `ids`, ACTIVAS O NO (solo para
+ * franjas vencidas, ver `badRoomErrors`). Solo corre si hay alguna franja
+ * vencida con una sala que no está activa: guardar una semana normal no suma
+ * sentencias.
+ */
+async function tenantRoomLocations(tx: DbClient, tenantId: string, ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await tx.room.findMany({
+    where: { tenantId, id: { in: [...new Set(ids)] } },
+    select: { id: true, locationId: true },
+  });
+  return new Map(rows.map((r) => [r.id, r.locationId]));
+}
+
+/**
+ * Errores por fila de sala: inexistente, ajena, archivada o de OTRA sede que
+ * la franja (las FKs compuestas también lo frenarían, pero con un 23503 en vez
+ * del error por fila).
+ *
+ * SRZ (FX1): una franja VENCIDA (`validUntil` < hoy AR) no se valida contra las
+ * salas ACTIVAS. El bug: el editor re-manda todas las franjas (reemplazo
+ * atómico), así que una franja vieja cuya sala se archivó después (archiveRoom
+ * lo permite: ya no está vigente) dejaba la semana sin poder guardarse nunca
+ * más. La vencida no rige ni choca con nadie (`roomScheduleConflicts` la
+ * saltea). Igual se exige que la sala sea del tenant y de la misma sede
+ * (`expiredRooms`): si no, la FK compuesta tira un 23503 → "No pudimos guardar".
+ * El cliente hace lo mismo en `validateDraft` (FX3).
+ */
+function badRoomErrors(
+  ranges: ReadonlyArray<{ locationId: string; roomId?: string | null; validUntil?: DayKey | null }>,
+  rooms: ReadonlyMap<string, RoomInfoRow>,
+  expired?: { today: DayKey; roomLocations: ReadonlyMap<string, string> }
+): RangeRowError[] {
+  const out: RangeRowError[] = [];
+  ranges.forEach((r, index) => {
+    if (!r.roomId) return;
+    const locationId =
+      rooms.get(r.roomId)?.locationId ??
+      (expired && isExpiredRange(r, expired.today) ? expired.roomLocations.get(r.roomId) : undefined);
+    if (locationId !== r.locationId) out.push({ index, message: BAD_ROOM_ERROR });
+  });
+  return out;
+}
+
+function nameOfUser(u: { fullName: string | null; email: string }): string {
+  return u.fullName ?? u.email;
+}
+
+const ROOM_USAGE_SELECT = {
+  practitionerId: true,
+  roomId: true,
+  dow: true,
+  startMin: true,
+  endMin: true,
+  validFrom: true,
+  validUntil: true,
+  practitioner: { select: { user: { select: { fullName: true, email: true } } } },
+} satisfies Prisma.PractitionerScheduleSelect;
+
+/**
+ * Franjas con sala de los DEMÁS profesionales, vigentes hoy o a futuro (las
+ * vencidas no chocan con nada). `roomIds` acota a esas salas (validación);
+ * omitido = todas (lectura para la UI).
+ */
+async function loadRoomUsage(
+  tx: DbClient,
+  tenantId: string,
+  o: { excludePractitionerId: string; today: DayKey; roomIds?: string[] }
+): Promise<RoomUsageRow[]> {
+  const rows = await tx.practitionerSchedule.findMany({
+    where: {
+      tenantId,
+      practitionerId: { not: o.excludePractitionerId },
+      roomId: o.roomIds ? { in: o.roomIds } : { not: null },
+      OR: [{ validUntil: null }, { validUntil: { gte: dayKeyToDbDate(o.today) } }],
+    },
+    orderBy: [{ dow: "asc" }, { startMin: "asc" }, { practitionerId: "asc" }],
+    select: ROOM_USAGE_SELECT,
+  });
+  return rows.map((r) => ({
+    roomId: r.roomId!,
+    practitionerId: r.practitionerId,
+    practitionerName: nameOfUser(r.practitioner.user),
+    dow: r.dow,
+    startMin: r.startMin,
+    endMin: r.endMin,
+    validFrom: r.validFrom ? dbDateToDayKey(r.validFrom) : null,
+    validUntil: r.validUntil ? dbDateToDayKey(r.validUntil) : null,
+  }));
+}
+
+/** Nombres de profesionales del tenant (para el copy de choques con excepciones). */
+async function practitionerNames(tx: DbClient, tenantId: string, ids: string[]): Promise<Record<string, string>> {
+  if (ids.length === 0) return {};
+  const rows = await tx.practitioner.findMany({
+    where: { tenantId, id: { in: [...new Set(ids)] } },
+    select: { id: true, user: { select: { fullName: true, email: true } } },
+  });
+  return Object.fromEntries(rows.map((r) => [r.id, nameOfUser(r.user)]));
+}
+
+/** Tope de excepciones futuras de otros que se revisan para avisos (perf de Configuración). */
+const WARN_EXCEPTIONS_MAX = 200;
+
+/**
+ * SR-D4: una plantilla contra EXCEPCIONES futuras de otros profesionales no es
+ * error, es aviso (la excepción es puntual y la puede haber cargado otro; el
+ * día efectivo de cada uno lo vuelve a validar `upsertException`). Para cada
+ * fecha con una excepción con sala de las mías, se arma el día efectivo de
+ * los demás (excepción > consultorio > plantilla) y se cruzan mis franjas de
+ * ese dow vigentes ese día.
+ */
+async function futureExceptionWarnings(
+  tx: DbClient,
+  tenantId: string,
+  o: {
+    practitionerId: string;
+    today: DayKey;
+    mine: ReadonlyArray<{ dow: number; startMin: number; endMin: number; roomId: string | null; validFrom: DayKey | null; validUntil: DayKey | null }>;
+    rooms: ReadonlyMap<string, RoomInfoRow>;
+    templates: ReadonlyArray<RoomUsageRow>;
+  }
+): Promise<string[]> {
+  const roomIds = [...new Set(o.mine.flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  if (roomIds.length === 0) return [];
+  const withRoom = await tx.scheduleException.findMany({
+    where: {
+      tenantId,
+      kind: "CUSTOM_HOURS",
+      date: { gte: dayKeyToDbDate(o.today) },
+      practitionerId: { not: o.practitionerId },
+      AND: [{ practitionerId: { not: null } }],
+      OR: roomIds.map((id) => ({ ranges: { array_contains: [{ roomId: id }] } })),
+    },
+    orderBy: { date: "asc" },
+    take: WARN_EXCEPTIONS_MAX,
+    select: { date: true },
+  });
+  const dates = [...new Set(withRoom.map((e) => dbDateToDayKey(e.date)))];
+  if (dates.length === 0) return [];
+  const sameDays = await tx.scheduleException.findMany({
+    where: { tenantId, date: { in: dates.map(dayKeyToDbDate) } },
+    select: { date: true, practitionerId: true, kind: true, ranges: true },
+  });
+  const names = await practitionerNames(
+    tx,
+    tenantId,
+    sameDays.flatMap((e) => (e.practitionerId ? [e.practitionerId] : []))
+  );
+  const capacities = new Map([...o.rooms.values()].map((r) => [r.id, r.capacity]));
+  const warnings: string[] = [];
+  for (const date of dates) {
+    const dayExc = sameDays
+      .filter((e) => dbDateToDayKey(e.date) === date && e.practitionerId !== o.practitionerId)
+      .map((e) => ({ practitionerId: e.practitionerId, kind: e.kind, ranges: parseStoredRanges(e.ranges) }));
+    // Si yo tengo excepción ese día, mi plantilla no rige: la valida upsertException.
+    if (sameDays.some((e) => dbDateToDayKey(e.date) === date && e.practitionerId === o.practitionerId)) continue;
+    // Ni la plantilla de nadie si el consultorio entero tiene excepción ese día.
+    if (dayExc.some((e) => e.practitionerId == null)) continue;
+    const others = effectiveRoomRowsOn(date, o.templates, dayExc, {
+      excludePractitionerId: o.practitionerId,
+      names,
+    });
+    // Solo interesan los choques en los que entra una EXCEPCIÓN (plantilla vs
+    // plantilla ya es error duro).
+    const fromExceptions = new Set(dayExc.flatMap((e) => (e.practitionerId ? [e.practitionerId] : [])));
+    // Mi franja "ese día": la ventana de un solo día si su vigencia lo contiene;
+    // si no, sin sala (no participa del cruce).
+    const mineThatDay = o.mine.map((r) =>
+      (r.validFrom == null || r.validFrom <= date) && (r.validUntil == null || date <= r.validUntil)
+        ? { ...r, validFrom: date, validUntil: date }
+        : { ...r, roomId: null }
+    );
+    const conflicts = roomScheduleConflicts(
+      mineThatDay,
+      others,
+      capacities,
+      { practitionerId: o.practitionerId, mode: "day" }
+    );
+    for (const c of conflicts) {
+      if (!c.practitionerIds.some((p) => fromExceptions.has(p))) continue;
+      const room = o.rooms.get(c.roomId);
+      warnings.push(
+        `El ${dayKeyShortLabel(date)}, ${room?.name ?? "esa sala"} ya la ${c.practitionerNames.length > 1 ? "usan" : "usa"} ${c.practitionerNames.join(" y ")} de ${formatClock(c.startMin)} a ${formatClock(c.endMin)} (horario especial). Revisá ese día.`
+      );
+    }
+  }
+  return [...new Set(warnings)];
 }
 
 function revalidateAll() {
@@ -152,6 +430,7 @@ export async function getPractitionerSchedule(
         startMin: true,
         endMin: true,
         locationId: true,
+        roomId: true,
         validFrom: true,
         validUntil: true,
         updatedAt: true,
@@ -160,6 +439,7 @@ export async function getPractitionerSchedule(
     const version = rows.length
       ? new Date(Math.max(...rows.map((r) => r.updatedAt.getTime()))).toISOString()
       : null;
+    const tenant = await tenantHoursAndRooms(tx, actor.tenantId);
     return {
       practitionerId: id.data,
       ranges: rows.map((r) => ({
@@ -168,12 +448,21 @@ export async function getPractitionerSchedule(
         startMin: r.startMin,
         endMin: r.endMin,
         locationId: r.locationId,
+        roomId: r.roomId,
         validFrom: r.validFrom ? dbDateToDayKey(r.validFrom) : null,
         validUntil: r.validUntil ? dbDateToDayKey(r.validUntil) : null,
       })),
       version,
       isFallback: rows.length === 0,
-      tenantHours: await tenantHours(tx, actor.tenantId),
+      tenantHours: tenant.hours,
+      // SR1c: para que la UI valide la sala en el cliente con roomScheduleConflicts.
+      // SRZ (FX1): sin salas activas no se consulta (ver `tenantHoursAndRooms`).
+      roomUsage: tenant.hasActiveRooms
+        ? await loadRoomUsage(tx, actor.tenantId, {
+            excludePractitionerId: id.data,
+            today: toARDateKey(new Date()),
+          })
+        : [],
     };
   });
 }
@@ -187,15 +476,30 @@ export async function getPractitionerSchedule(
  * seguridad permanente de B-pre), así que guardar "nada" haría lo contrario
  * de lo que el usuario cree. Para no atender un día: excepción CLOSED.
  *
- * Las franjas guardadas acá no llevan vigencia (`validFrom/validUntil` null):
- * el editor de B3.4 edita la plantilla vigente. Reemplazar borra también
- * franjas con vigencia que hubiera (hoy nadie las escribe).
+ * SR1c: cada franja lleva `roomId` y vigencia (`validFrom`/`validUntil`)
+ * opcionales; omitidos = sin sala y siempre (lo que mandaban el editor y el
+ * onboarding antes de SR: reemplazar sigue borrando lo que no viene). Con sala:
+ *   • la sala es del tenant, está activa y es de la MISMA sede que la franja
+ *     (error por fila `BAD_ROOM_ERROR`);
+ *   • SR-D4: choque DURO contra las plantillas de los demás profesionales
+ *     (mismo dow, horario que se pisa, vigencias que se cruzan desde hoy) si
+ *     los profesionales distintos a la vez superan `Room.capacity`; error por
+ *     fila "Esa sala ya la usa …";
+ *   • contra excepciones futuras de otros: solo `warnings` (se guarda igual).
  */
 export async function savePractitionerWeek(
   practitionerId: string,
-  ranges: ReadonlyArray<{ dow: number; startMin: number; endMin: number; locationId: string }>,
+  ranges: ReadonlyArray<{
+    dow: number;
+    startMin: number;
+    endMin: number;
+    locationId: string;
+    roomId?: string | null;
+    validFrom?: string | null;
+    validUntil?: string | null;
+  }>,
   expectedUpdatedAt?: string | null
-): Promise<ActionResult<{ version: string | null }>> {
+): Promise<ActionResult<{ version: string | null; warnings?: string[] }>> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = SaveWeekInput.safeParse({ practitionerId, ranges, expectedUpdatedAt });
   if (!parsed.success) {
@@ -214,9 +518,14 @@ export async function savePractitionerWeek(
     return { ok: false, error: "Revisá las franjas marcadas.", fieldErrors: rangeErrorsToFieldErrors(shape.errors) };
   }
 
+  const roomIds = [...new Set(input.ranges.flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  const today = toARDateKey(new Date());
+
   try {
     const res = await runWithRls(actor.tenantId, async (tx) => {
       await lockTenantLocationsShared(tx, actor.tenantId);
+      // Orden fijo: sedes compartido → room-schedule → schedule:<prac> (ver "Salas en franjas").
+      if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedule:${input.practitionerId}`);
       if (!(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
@@ -227,11 +536,49 @@ export async function savePractitionerWeek(
         input.ranges.map((r) => r.locationId)
       );
       const full = validateWeekRanges(input.ranges, { activeLocationIds: active });
-      if (!full.ok) {
+      // Sala validada DESPUÉS del lock compartido de sedes (archiveRoom toma el exclusivo).
+      const rooms = await activeRoomMap(tx, actor.tenantId, roomIds);
+      const staleRoomIds = input.ranges.flatMap((r) =>
+        r.roomId && !rooms.has(r.roomId) && isExpiredRange(r, today) ? [r.roomId] : []
+      );
+      const roomErrs = badRoomErrors(input.ranges, rooms, {
+        today,
+        roomLocations: await tenantRoomLocations(tx, actor.tenantId, staleRoomIds),
+      });
+      if (!full.ok || roomErrs.length > 0) {
+        const shapeErrs = full.ok ? [] : full.errors;
+        const taken = new Set(shapeErrs.map((e) => e.index));
         throw new Abort({
           ok: false,
           error: "Revisá las franjas marcadas.",
-          fieldErrors: rangeErrorsToFieldErrors(full.errors),
+          fieldErrors: rangeErrorsToFieldErrors([...shapeErrs, ...roomErrs.filter((e) => !taken.has(e.index))]),
+        });
+      }
+      let warnings: string[] = [];
+      if (roomIds.length > 0) {
+        const others = await loadRoomUsage(tx, actor.tenantId, {
+          excludePractitionerId: input.practitionerId,
+          today,
+          roomIds,
+        });
+        const capacities = new Map([...rooms.values()].map((r) => [r.id, r.capacity]));
+        const conflicts = roomScheduleConflicts(input.ranges, others, capacities, {
+          practitionerId: input.practitionerId,
+          from: today,
+        });
+        if (conflicts.length > 0) {
+          throw new Abort({
+            ok: false,
+            error: "Revisá las franjas marcadas.",
+            fieldErrors: rangeErrorsToFieldErrors(roomConflictsToRowErrors(conflicts)),
+          });
+        }
+        warnings = await futureExceptionWarnings(tx, actor.tenantId, {
+          practitionerId: input.practitionerId,
+          today,
+          mine: input.ranges,
+          rooms,
+          templates: others,
         });
       }
       const current = await versionOf(tx, actor.tenantId, input.practitionerId);
@@ -253,12 +600,15 @@ export async function savePractitionerWeek(
           tenantId: actor.tenantId,
           practitionerId: input.practitionerId,
           locationId: r.locationId,
+          roomId: r.roomId,
           dow: r.dow,
           startMin: r.startMin,
           endMin: r.endMin,
+          validFrom: r.validFrom ? dayKeyToDbDate(r.validFrom) : null,
+          validUntil: r.validUntil ? dayKeyToDbDate(r.validUntil) : null,
         })),
       });
-      return { before, version: await versionOf(tx, actor.tenantId, input.practitionerId) };
+      return { before, warnings, version: await versionOf(tx, actor.tenantId, input.practitionerId) };
     });
     await audit({
       tenantId: actor.tenantId,
@@ -270,10 +620,15 @@ export async function savePractitionerWeek(
         before: summarizeWeek(res.before),
         after: summarizeWeek(input.ranges),
         locations: [...new Set(input.ranges.map((r) => r.locationId))],
+        ...(roomIds.length > 0 ? { rooms: roomIds } : {}),
+        ...(input.ranges.some((r) => r.validFrom || r.validUntil) ? { withValidity: true } : {}),
       },
     });
     revalidateAll();
-    return { ok: true, data: { version: res.version } };
+    return {
+      ok: true,
+      data: { version: res.version, ...(res.warnings.length > 0 ? { warnings: res.warnings } : {}) },
+    };
   } catch (e) {
     if (e instanceof Abort) return e.result;
     logger.error("schedule.saveWeek.failed", { err: e instanceof Error ? e.message : String(e) });
@@ -399,10 +754,25 @@ export async function upsertException(raw: UpsertExceptionRaw): Promise<ActionRe
     }
   }
   const date = dayKeyToDbDate(input.date);
+  const roomIds = [...new Set((ranges ?? []).flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  // SR1c: una excepción de TODO el consultorio no asigna sala: la usarían todos
+  // los profesionales a la vez y chocaría consigo misma. La sala va en la
+  // excepción de cada profesional.
+  if (ranges && input.practitionerId == null && roomIds.length > 0) {
+    return {
+      ok: false,
+      error: "Revisá las franjas marcadas.",
+      fieldErrors: rangeErrorsToFieldErrors(
+        ranges.flatMap((r, index) => (r.roomId ? [{ index, message: TENANT_WIDE_ROOM_ERROR }] : []))
+      ),
+    };
+  }
 
   try {
     const res = await runWithRls(actor.tenantId, async (tx) => {
       await lockTenantLocationsShared(tx, actor.tenantId);
+      // Orden fijo: sedes compartido → room-schedule → schedexc (ver "Salas en franjas").
+      if (roomIds.length > 0) await lockKey(tx, roomScheduleLockKey(actor.tenantId));
       await lockKey(tx, `kinesoft:schedexc:${actor.tenantId}:${input.practitionerId ?? "*"}:${input.date}`);
       if (input.practitionerId && !(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
@@ -410,12 +780,82 @@ export async function upsertException(raw: UpsertExceptionRaw): Promise<ActionRe
       if (ranges) {
         const active = await activeLocationSet(tx, actor.tenantId, ranges.map((r) => r.locationId));
         const full = validateDayRanges(ranges, { activeLocationIds: active });
-        if (!full.ok) {
+        const rooms = await activeRoomMap(tx, actor.tenantId, roomIds);
+        const roomErrs = badRoomErrors(ranges, rooms);
+        if (!full.ok || roomErrs.length > 0) {
+          const shapeErrs = full.ok ? [] : full.errors;
+          const taken = new Set(shapeErrs.map((e) => e.index));
           throw new Abort({
             ok: false,
             error: "Revisá las franjas marcadas.",
-            fieldErrors: rangeErrorsToFieldErrors(full.errors),
+            fieldErrors: rangeErrorsToFieldErrors([...shapeErrs, ...roomErrs.filter((e) => !taken.has(e.index))]),
           });
+        }
+        if (roomIds.length > 0 && input.practitionerId) {
+          // SR-D4: choque DURO contra el día EFECTIVO de los demás (su
+          // excepción de ese día > la del consultorio > su plantilla vigente).
+          const dow = dowOfDayKey(input.date);
+          const [templates, dayExc] = await Promise.all([
+            tx.practitionerSchedule.findMany({
+              where: {
+                tenantId: actor.tenantId,
+                practitionerId: { not: input.practitionerId },
+                roomId: { in: roomIds },
+                dow,
+                AND: [
+                  { OR: [{ validFrom: null }, { validFrom: { lte: date } }] },
+                  { OR: [{ validUntil: null }, { validUntil: { gte: date } }] },
+                ],
+              },
+              select: ROOM_USAGE_SELECT,
+            }),
+            tx.scheduleException.findMany({
+              // OR explícito: `{ not: X }` en SQL también descarta los NULL (la del consultorio).
+              where: {
+                tenantId: actor.tenantId,
+                date,
+                OR: [{ practitionerId: null }, { practitionerId: { not: input.practitionerId } }],
+              },
+              select: { practitionerId: true, kind: true, ranges: true },
+            }),
+          ]);
+          const tplRows: RoomUsageRow[] = templates.map((r) => ({
+            roomId: r.roomId!,
+            practitionerId: r.practitionerId,
+            practitionerName: nameOfUser(r.practitioner.user),
+            dow: r.dow,
+            startMin: r.startMin,
+            endMin: r.endMin,
+            validFrom: r.validFrom ? dbDateToDayKey(r.validFrom) : null,
+            validUntil: r.validUntil ? dbDateToDayKey(r.validUntil) : null,
+          }));
+          const exc = dayExc.map((e) => ({
+            practitionerId: e.practitionerId,
+            kind: e.kind,
+            ranges: parseStoredRanges(e.ranges),
+          }));
+          const names = await practitionerNames(
+            tx,
+            actor.tenantId,
+            exc.flatMap((e) => (e.practitionerId && e.ranges?.some((r) => r.roomId) ? [e.practitionerId] : []))
+          );
+          const others = effectiveRoomRowsOn(input.date, tplRows, exc, {
+            excludePractitionerId: input.practitionerId,
+            names,
+          });
+          const conflicts = roomScheduleConflicts(
+            ranges.map((r) => ({ ...r, dow, validFrom: input.date, validUntil: input.date })),
+            others,
+            new Map([...rooms.values()].map((r) => [r.id, r.capacity])),
+            { practitionerId: input.practitionerId, mode: "day" }
+          );
+          if (conflicts.length > 0) {
+            throw new Abort({
+              ok: false,
+              error: "Revisá las franjas marcadas.",
+              fieldErrors: rangeErrorsToFieldErrors(roomConflictsToRowErrors(conflicts)),
+            });
+          }
         }
       }
       const data = {

@@ -27,6 +27,29 @@
  * sedes del tenant (`lib/location-lock.ts`) y DESPUÉS validar que la sede sea
  * del tenant y esté activa — así `archiveLocation` (exclusivo) no se intercala
  * y no nace un bloqueo colgado de una sede archivada.
+ *
+ * Bloqueo de SALA (SR-B, §17.5 "Bloquear sala"): `roomId` en `createTimeBlock`
+ * y en el candado (preview / apply / desbloquear).
+ *   - Una fila con `roomId`, `locationId` = sede de la sala y `practitionerId`
+ *     null (CHECK `TimeBlock_room_scope_check` de M4). Bloquea SOLO la sala:
+ *     para el alta cuenta como sala llena (aviso + forzar, SR1d/SR2a), nunca
+ *     saca slots a un profesional (el loader, SR1a, lo excluye de "todos").
+ *   - Authz: la regla del candado para "todos" (`canManageBlocksFor(…, null)`
+ *     = `agenda.manageBlocks`: OWNER/ADMIN/Secretaria). El profesional no
+ *     bloquea salas: una sala es de todo el equipo.
+ *   - Locks (C2 1b, handoff de SR-C): la clave de sala de CADA día AR de la
+ *     ventana (`lockCapacityAndRoomsMany(tx, [], roomKeysForWindow(…))`, una
+ *     sentencia, deduplicada y ordenada) ANTES del compartido de sedes; recién
+ *     después se valida la sala (activa, de la sede, del tenant) — el mismo
+ *     orden que el alta con sala (paciente → cupo → sala → sedes → filas), y
+ *     `archiveRoom` toma el exclusivo de sedes. Sin claves de cupo: un bloqueo
+ *     de sala no cambia la disponibilidad de nadie, solo la ocupación de la
+ *     sala, que el alta cuenta con la clave de sala tomada.
+ *   - Afectados: los turnos activos de ESA sala (mismo `DayLockAffected`).
+ *     Mantener o cancelar sigue la regla del candado; mantener NO les saca la
+ *     sala.
+ *   - Todo lo que interpreta `practitionerId: null` como "todos" (listar,
+ *     desbloquear, el reuso del candado) suma `NOT_ROOM_BLOCK`.
  */
 import { randomUUID } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
@@ -37,7 +60,8 @@ import { getMembershipRole, requireCapability } from "@/lib/authz";
 import { canManageBlocksFor, capabilitiesFor, type Capability } from "@/lib/capabilities";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
-import { lockCapacity } from "@/lib/booking-cap-lock";
+import { lockCapacity, lockCapacityAndRoomsMany, roomKeysForWindow } from "@/lib/booking-cap-lock";
+import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
 import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
 import { cancelBookingsInTx } from "@/lib/bookings-cancel-internal";
 import { tags } from "@/lib/cache-tags";
@@ -49,6 +73,7 @@ import {
   DayLockApply,
   DayLockPreviewQuery,
   DayLockRemove,
+  NOT_ROOM_BLOCK,
   TIME_BLOCK_MAX_DAYS,
   TimeBlockCreate,
   TimeBlockDelete,
@@ -76,6 +101,7 @@ const DAY_MS = 24 * 60 * 60_000;
 const FORBIDDEN_OTHERS = "Solo podés bloquear tu propia agenda.";
 const FORBIDDEN_DELETE = "Solo podés quitar bloqueos de tu propia agenda.";
 const VIEW_MSG = "No tenés permiso para ver la agenda del equipo.";
+const FORBIDDEN_ROOM = "Solo el equipo de administración o recepción puede bloquear una sala.";
 // Ventana hacia atrás para encontrar turnos que EMPEZARON antes del bloqueo y
 // lo pisan: el tope de duración de un servicio (`Service.durationMin` ≤ 480).
 const MAX_BOOKING_MIN = 480;
@@ -95,6 +121,7 @@ function toRow(b: {
   allDay: boolean;
   reason: string | null;
   groupId: string | null;
+  roomId: string | null;
   createdById: string;
 }): TimeBlockRow {
   return {
@@ -106,6 +133,7 @@ function toRow(b: {
     allDay: b.allDay,
     reason: b.reason,
     groupId: b.groupId,
+    roomId: b.roomId,
     createdById: b.createdById,
   };
 }
@@ -133,6 +161,56 @@ async function lockAndCheckLocation(
   if (!loc) return { ok: false, error: "Sede no encontrada." };
   if (!loc.active) return { ok: false, error: "La sede está archivada." };
   return { ok: true, isPrimary: loc.isPrimary };
+}
+
+/**
+ * Sala de un bloqueo de sala (SR-B): activa, de una sede activa, del tenant y
+ * — si el caller mandó sede — de ESA sede. Devuelve la sede de la sala, que es
+ * la que se guarda (CHECK de M4: sala ⇒ sede). Sala ajena, archivada o de otra
+ * sede: el mismo `BAD_ROOM_ERROR` (no se distingue "no existe" de "no es tuya").
+ */
+async function findActiveRoom(
+  tx: DbClient,
+  o: { tenantId: string; roomId: string; locationId: string | null }
+): Promise<{ ok: true; locationId: string } | { ok: false; error: string }> {
+  const room = await tx.room.findFirst({
+    where: { id: o.roomId, tenantId: o.tenantId, active: true, location: { active: true } },
+    select: { locationId: true },
+  });
+  if (!room || (o.locationId !== null && room.locationId !== o.locationId)) {
+    return { ok: false, error: BAD_ROOM_ERROR };
+  }
+  return { ok: true, locationId: room.locationId };
+}
+
+/**
+ * Locks de un bloqueo de sala y RECIÉN DESPUÉS validar la sala (ver cabecera):
+ *   1. la clave de sala de CADA día AR de [start, end) en UNA sentencia
+ *      (`lockCapacityAndRoomsMany` con cupo vacío: dedup + orden de C2 1b).
+ *      Es la clave que toma el alta con sala ANTES de contar la ocupación:
+ *      o el alta entró antes (la esperamos y sale en los afectados) o espera
+ *      nuestro COMMIT y su conteo ve el bloqueo (`room-busy` con `blocked`);
+ *   2. el compartido de sedes (`archiveRoom` / `archiveLocation` toman el
+ *      exclusivo: la sala no se archiva entre la validación y el INSERT).
+ */
+async function lockAndCheckRoom(
+  tx: DbClient,
+  o: { tenantId: string; roomId: string; locationId: string | null; start: Date; end: Date }
+): Promise<{ ok: true; locationId: string } | { ok: false; error: string }> {
+  await lockCapacityAndRoomsMany(
+    tx,
+    [],
+    roomKeysForWindow({ tenantId: o.tenantId, roomId: o.roomId, start: o.start, end: o.end })
+  );
+  await lockTenantLocationsShared(tx, o.tenantId);
+  return findActiveRoom(tx, o);
+}
+
+/** Bloquear / desbloquear una sala: la regla del candado para "todos" (`agenda.manageBlocks`). */
+function assertCanManageRoom(caps: ReadonlySet<Capability>, actorPractitionerId: string): void {
+  if (!canManageBlocksFor(caps, actorPractitionerId, null)) {
+    throw new ForbiddenError(caps.has("agenda.manageOwnBlocks") ? FORBIDDEN_ROOM : "No tenés permiso para bloquear la agenda.");
+  }
 }
 
 /**
@@ -176,7 +254,10 @@ const MONEY = new Set(["PAID", "AUTHORIZED", "REFUNDED"]);
  * (handoff de B2.4b) para que `applyDayLock` lo RECALCULE dentro de su tx.
  *   - `practitionerIds` null = todos los profesionales;
  *   - `locationId` acota a esa sede (`Booking.locationId` null = principal,
- *     contrato de M-agenda); null = todas.
+ *     contrato de M-agenda); null = todas;
+ *   - `roomId` (SR-B): SOLO los turnos de esa sala, de cualquier profesional
+ *     (ignora `practitionerIds` y la sede: un turno con sala tiene su sede
+ *     explícita por el CHECK de M4).
  * Ordenados por hora e id. Sin límite: el caller recorta si muestra.
  */
 async function findAffectedBookings(
@@ -188,6 +269,7 @@ async function findAffectedBookings(
     practitionerIds: string[] | null;
     locationId: string | null;
     locationIsPrimary: boolean;
+    roomId?: string | null;
     now: Date;
   }
 ): Promise<DayLockAffected[]> {
@@ -198,12 +280,16 @@ async function findAffectedBookings(
       gte: new Date(o.startsAt.getTime() - MAX_BOOKING_MIN * 60_000),
       lt: o.endsAt,
     },
-    ...(o.practitionerIds ? { practitionerId: { in: o.practitionerIds } } : {}),
-    ...(o.locationId
-      ? {
-          OR: [{ locationId: o.locationId }, ...(o.locationIsPrimary ? [{ locationId: null }] : [])],
-        }
-      : {}),
+    ...(o.roomId
+      ? { roomId: o.roomId }
+      : {
+          ...(o.practitionerIds ? { practitionerId: { in: o.practitionerIds } } : {}),
+          ...(o.locationId
+            ? {
+                OR: [{ locationId: o.locationId }, ...(o.locationIsPrimary ? [{ locationId: null }] : [])],
+              }
+            : {}),
+        }),
   };
   const candidates = await tx.booking.findMany({
     where,
@@ -256,14 +342,17 @@ export async function listTimeBlocks(
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
-  const { from, to, practitionerIds, locationId } = parsed.data;
+  const { from, to, practitionerIds, locationId, roomIds } = parsed.data;
   const tenantId = actor.tenantId;
   const fromStart = arDayStart(from);
   const toEnd = new Date(arDayStart(to).getTime() + DAY_MS);
 
   const and: Prisma.TimeBlockWhereInput[] = [];
+  // SR-B: o solo los de esas salas, o ninguno de sala (con practitionerId null
+  // se leerían como "todo el equipo").
+  and.push(roomIds ? { roomId: { in: roomIds } } : NOT_ROOM_BLOCK);
   // "todos" (null) aplica a cualquier profesional pedido; idem "todas las sedes".
-  if (practitionerIds) {
+  if (practitionerIds && !roomIds) {
     and.push({ OR: [{ practitionerId: { in: practitionerIds } }, { practitionerId: null }] });
   }
   if (locationId) {
@@ -294,16 +383,24 @@ export async function createTimeBlock(
   const input = parsed.data;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
+  // SR-B: bloqueo de sala = una fila con practitionerId null (no es "todos").
+  const roomId = input.roomId ?? null;
 
   // Destinos: null = "todos" (una sola fila). Duplicados colapsados.
-  const targets: (string | null)[] = input.practitionerIds
-    ? [...new Set(input.practitionerIds)]
-    : [input.practitionerId ?? null];
-  for (const t of targets) {
-    if (!canManageBlocksFor(caps, actor.practitionerId, t)) {
-      throw new ForbiddenError(
-        caps.has("agenda.manageOwnBlocks") ? FORBIDDEN_OTHERS : "No tenés permiso para bloquear la agenda."
-      );
+  const targets: (string | null)[] = roomId
+    ? [null]
+    : input.practitionerIds
+      ? [...new Set(input.practitionerIds)]
+      : [input.practitionerId ?? null];
+  if (roomId) {
+    assertCanManageRoom(caps, actor.practitionerId);
+  } else {
+    for (const t of targets) {
+      if (!canManageBlocksFor(caps, actor.practitionerId, t)) {
+        throw new ForbiddenError(
+          caps.has("agenda.manageOwnBlocks") ? FORBIDDEN_OTHERS : "No tenés permiso para bloquear la agenda."
+        );
+      }
     }
   }
 
@@ -326,35 +423,55 @@ export async function createTimeBlock(
 
   type TxOut =
     | { kind: "error"; error: string }
-    | { kind: "ok"; ids: string[]; affected: CreateTimeBlockResult["affected"] };
+    | {
+        kind: "ok";
+        ids: string[];
+        locationId: string | null;
+        affected: CreateTimeBlockResult["affected"];
+      };
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
-      if (pracIds.length) {
-        const found = await tx.practitioner.count({ where: { tenantId, id: { in: pracIds } } });
-        if (found !== pracIds.length) return { kind: "error", error: "Profesional no encontrado." };
-      }
-      // Revisión de B-pre: los locks de cupo del alcance, como `applyDayLock`.
-      // Sin ellos, un alta EN VUELO (ya re-chequeó bloqueos con su lock
-      // tomado, todavía sin COMMIT) no veía este bloqueo y este bloqueo no la
-      // veía a ella: el turno entraba sin marca de sobreturno y sin figurar en
-      // `affected`. Con ellos: o el alta entró antes (esperamos su COMMIT y
-      // `findAffectedBookings` la reporta) o espera el nuestro y ve el bloqueo.
-      await lockCapacityScope(tx, {
-        tenantId,
-        practitionerIds: targets.includes(null)
-          ? (await tx.practitioner.findMany({ where: { tenantId }, select: { id: true } })).map((p) => p.id)
-          : pracIds,
-        dayKeys: dayKeyRange(
-          dayKeyOf(win.startsAt),
-          dayKeyOf(new Date(Math.max(win.startsAt.getTime(), win.endsAt.getTime() - 1)))
-        ),
-      });
+      let locationId = input.locationId ?? null;
       let locationIsPrimary = false;
-      if (input.locationId) {
-        const loc = await lockAndCheckLocation(tx, tenantId, input.locationId);
-        if (!loc.ok) return { kind: "error", error: loc.error };
-        locationIsPrimary = loc.isPrimary;
+      if (roomId) {
+        // Sala → sedes → validar (ver `lockAndCheckRoom`). Sin locks de cupo:
+        // el bloqueo de sala no toca la disponibilidad de ningún profesional.
+        const room = await lockAndCheckRoom(tx, {
+          tenantId,
+          roomId,
+          locationId,
+          start: win.startsAt,
+          end: win.endsAt,
+        });
+        if (!room.ok) return { kind: "error", error: room.error };
+        locationId = room.locationId;
+      } else {
+        if (pracIds.length) {
+          const found = await tx.practitioner.count({ where: { tenantId, id: { in: pracIds } } });
+          if (found !== pracIds.length) return { kind: "error", error: "Profesional no encontrado." };
+        }
+        // Revisión de B-pre: los locks de cupo del alcance, como `applyDayLock`.
+        // Sin ellos, un alta EN VUELO (ya re-chequeó bloqueos con su lock
+        // tomado, todavía sin COMMIT) no veía este bloqueo y este bloqueo no la
+        // veía a ella: el turno entraba sin marca de sobreturno y sin figurar en
+        // `affected`. Con ellos: o el alta entró antes (esperamos su COMMIT y
+        // `findAffectedBookings` la reporta) o espera el nuestro y ve el bloqueo.
+        await lockCapacityScope(tx, {
+          tenantId,
+          practitionerIds: targets.includes(null)
+            ? (await tx.practitioner.findMany({ where: { tenantId }, select: { id: true } })).map((p) => p.id)
+            : pracIds,
+          dayKeys: dayKeyRange(
+            dayKeyOf(win.startsAt),
+            dayKeyOf(new Date(Math.max(win.startsAt.getTime(), win.endsAt.getTime() - 1)))
+          ),
+        });
+        if (locationId) {
+          const loc = await lockAndCheckLocation(tx, tenantId, locationId);
+          if (!loc.ok) return { kind: "error", error: loc.error };
+          locationIsPrimary = loc.isPrimary;
+        }
       }
 
       const ids: string[] = [];
@@ -363,7 +480,8 @@ export async function createTimeBlock(
           data: {
             tenantId,
             practitionerId,
-            locationId: input.locationId ?? null,
+            locationId,
+            roomId,
             startsAt: win.startsAt,
             endsAt: win.endsAt,
             allDay: input.allDay,
@@ -382,8 +500,9 @@ export async function createTimeBlock(
         startsAt: win.startsAt,
         endsAt: win.endsAt,
         practitionerIds: targets.includes(null) ? null : pracIds,
-        locationId: input.locationId ?? null,
+        locationId,
         locationIsPrimary,
+        roomId,
         now,
       });
       const bookings: AffectedBooking[] = hit.slice(0, AFFECTED_LIST_LIMIT).map((b) => ({
@@ -393,7 +512,7 @@ export async function createTimeBlock(
         durationMin: b.durationMin,
         patientName: b.patientName,
       }));
-      return { kind: "ok", ids, affected: { count: hit.length, bookings } };
+      return { kind: "ok", ids, locationId, affected: { count: hit.length, bookings } };
     });
   } catch (e) {
     logger.error("timeBlock.create.failed", { err: e instanceof Error ? e.message : String(e) });
@@ -411,7 +530,8 @@ export async function createTimeBlock(
       ids: out.ids,
       groupId,
       practitionerIds: targets,
-      locationId: input.locationId ?? null,
+      locationId: out.locationId,
+      roomId,
       startsAt: win.startsAt.toISOString(),
       endsAt: win.endsAt.toISOString(),
       allDay: input.allDay,
@@ -564,8 +684,10 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
   const input = parsed.data;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
+  const roomId = input.roomId ?? null;
   const targets = dayLockTargets(input.practitionerIds);
-  assertCanManageTargets(caps, actor.practitionerId, targets);
+  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
   const win = dayLockWindow(input.dayKey, input);
 
@@ -573,6 +695,22 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
+      if (roomId) {
+        // Solo lectura: sin locks (el apply los toma y vuelve a validar).
+        const room = await findActiveRoom(tx, { tenantId, roomId, locationId: input.locationId ?? null });
+        if (!room.ok) return { kind: "error", error: room.error };
+        const affected = await findAffectedBookings(tx, {
+          tenantId,
+          startsAt: win.startsAt,
+          endsAt: win.endsAt,
+          practitionerIds: null,
+          locationId: room.locationId,
+          locationIsPrimary: false,
+          roomId,
+          now: new Date(),
+        });
+        return { kind: "ok", affected };
+      }
       if (pracIds.length) {
         const found = await tx.practitioner.count({ where: { tenantId, id: { in: pracIds } } });
         if (found !== pracIds.length) return { kind: "error", error: "Profesional no encontrado." };
@@ -624,11 +762,14 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
   const input = parsed.data;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
+  const roomId = input.roomId ?? null;
   const targets = dayLockTargets(input.practitionerIds);
-  assertCanManageTargets(caps, actor.practitionerId, targets);
+  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
   const win = dayLockWindow(input.dayKey, input);
-  const locationId = input.locationId ?? null;
+  // Con sala se reemplaza por la sede de la sala (validada en la tx).
+  let locationId = input.locationId ?? null;
   const now = new Date();
 
   type TxOut =
@@ -638,30 +779,43 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
-      // 1. Profesionales del alcance (validados contra el tenant: las FK saltean RLS).
-      let lockPracIds: string[];
-      if (pracIds.length) {
-        const found = await tx.practitioner.findMany({
-          where: { tenantId, id: { in: pracIds } },
-          select: { id: true },
-        });
-        if (found.length !== pracIds.length) return { kind: "error", error: "Profesional no encontrado." };
-        lockPracIds = found.map((p) => p.id);
-      } else {
-        lockPracIds = (
-          await tx.practitioner.findMany({ where: { tenantId }, select: { id: true } })
-        ).map((p) => p.id);
-      }
-
-      // 2. Locks de cupo del día (ver cabecera de la sección), en orden fijo.
-      await lockCapacityScope(tx, { tenantId, practitionerIds: lockPracIds, dayKeys: [input.dayKey] });
-
-      // 3. Sede: lock compartido y después validar.
       let locationIsPrimary = false;
-      if (locationId) {
-        const loc = await lockAndCheckLocation(tx, tenantId, locationId);
-        if (!loc.ok) return { kind: "error", error: loc.error };
-        locationIsPrimary = loc.isPrimary;
+      if (roomId) {
+        // 1-3 (sala, SR-B): clave de sala del día → sedes → validar la sala.
+        const room = await lockAndCheckRoom(tx, {
+          tenantId,
+          roomId,
+          locationId,
+          start: win.startsAt,
+          end: win.endsAt,
+        });
+        if (!room.ok) return { kind: "error", error: room.error };
+        locationId = room.locationId;
+      } else {
+        // 1. Profesionales del alcance (validados contra el tenant: las FK saltean RLS).
+        let lockPracIds: string[];
+        if (pracIds.length) {
+          const found = await tx.practitioner.findMany({
+            where: { tenantId, id: { in: pracIds } },
+            select: { id: true },
+          });
+          if (found.length !== pracIds.length) return { kind: "error", error: "Profesional no encontrado." };
+          lockPracIds = found.map((p) => p.id);
+        } else {
+          lockPracIds = (
+            await tx.practitioner.findMany({ where: { tenantId }, select: { id: true } })
+          ).map((p) => p.id);
+        }
+
+        // 2. Locks de cupo del día (ver cabecera de la sección), en orden fijo.
+        await lockCapacityScope(tx, { tenantId, practitionerIds: lockPracIds, dayKeys: [input.dayKey] });
+
+        // 3. Sede: lock compartido y después validar.
+        if (locationId) {
+          const loc = await lockAndCheckLocation(tx, tenantId, locationId);
+          if (!loc.ok) return { kind: "error", error: loc.error };
+          locationIsPrimary = loc.isPrimary;
+        }
       }
 
       // 4. Recalcular afectados: si no es lo que vio el usuario, no aplicar.
@@ -672,6 +826,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
         practitionerIds: input.practitionerIds ? pracIds : null,
         locationId,
         locationIsPrimary,
+        roomId,
         now,
       });
       if (!sameIds(affected.map((a) => a.id), input.expectedAffectedIds)) {
@@ -680,6 +835,8 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
 
       // 5. Bloqueo(s). Idempotente: si cada destino ya tiene un bloqueo vivo
       //    idéntico (doble click, reintento tras un timeout), se reusa.
+      //    SR-B: `roomId` en el filtro — sin él, un candado "todos" de una
+      //    sede reusaría el bloqueo de UNA sala (también practitionerId null).
       const existing = await tx.timeBlock.findMany({
         where: {
           tenantId,
@@ -687,6 +844,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
           startsAt: win.startsAt,
           endsAt: win.endsAt,
           locationId,
+          roomId,
           practitionerId: input.practitionerIds ? { in: pracIds } : null,
         },
         select: { id: true, practitionerId: true, groupId: true },
@@ -711,6 +869,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
               tenantId,
               practitionerId,
               locationId,
+              roomId,
               startsAt: win.startsAt,
               endsAt: win.endsAt,
               allDay: input.allDay,
@@ -733,7 +892,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
         const res = await cancelBookingsInTx(tx, {
           tenantId,
           bookingIds: affected.map((a) => a.id),
-          reason: `Candado del día ${input.dayKey}${input.reason ? `: ${input.reason}` : ""}`,
+          reason: `${roomId ? "Bloqueo de sala" : "Candado"} del día ${input.dayKey}${input.reason ? `: ${input.reason}` : ""}`,
           actorId: actor.userId,
           auditAction: "booking.cancel.dayLock",
         });
@@ -792,6 +951,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
       reused: data.reused,
       practitionerIds: targets,
       locationId,
+      roomId,
       allDay: input.allDay,
       startsAt: data.startsAt,
       endsAt: data.endsAt,
@@ -827,9 +987,11 @@ export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResu
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const { dayKey, practitionerId, blockIds } = parsed.data;
+  const roomId = parsed.data.roomId ?? null;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
-  assertCanManageTargets(caps, actor.practitionerId, [practitionerId]);
+  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  else assertCanManageTargets(caps, actor.practitionerId, [practitionerId]);
   const dayStart = arDayStart(dayKey);
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);
 
@@ -846,6 +1008,8 @@ export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResu
           deletedAt: null,
           startsAt: { lt: dayEnd },
           endsAt: { gt: dayStart },
+          // SR-B: o ESA sala, o nada de salas (no son de la agenda de nadie).
+          ...(roomId ? { roomId } : NOT_ROOM_BLOCK),
           ...(practitionerId ? { OR: [{ practitionerId }, { practitionerId: null }] } : {}),
         },
         orderBy: [{ startsAt: "asc" }, { id: "asc" }],
@@ -893,6 +1057,7 @@ export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResu
       payload: {
         dayKey,
         practitionerId,
+        roomId,
         ids: out.deletedIds,
         remainingIds: out.remaining.map((b) => b.id),
       },

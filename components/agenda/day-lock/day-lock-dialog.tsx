@@ -8,8 +8,12 @@
  *      los filtrados en la agenda; "Todo el equipo" solo con
  *      `agenda.manageBlocks`), sede (si hay más de una) y motivo con chips.
  *      Si el día ya tiene bloqueos, arriba se pueden quitar (desbloquear).
+ *      SR-BU (§17.5 "Bloquear sala"): con salas cargadas y
+ *      `agenda.manageBlocks`, el alcance "Una sala" + select de salas. Bloquea
+ *      SOLO la sala (no se eligen profesionales); sin salas, todo igual que antes.
  *   2. «affected» (solo si hay turnos debajo): lista hora · profesional ·
- *      paciente y la decisión: Mantenerlos / Cancelarlos / Volver.
+ *      paciente y la decisión: Mantenerlos / Cancelarlos / Volver. Con "Una
+ *      sala" el server devuelve solo los turnos de ESA sala.
  *   3. «done» / «unlocked»: resultado (cancelados, los que no se pudieron
  *      cancelar por tener cobro, lo que queda bloqueado).
  *
@@ -33,8 +37,10 @@ import type {
   DayLockApplyData,
   DayLockPreview,
   DayLockPreviewInput,
+  DayLockRemainingBlock,
   RemoveDayLockData,
 } from "@/lib/time-blocks-schemas";
+import type { RoomOption } from "@/lib/rooms-types";
 import {
   DAY_LOCK_REASONS,
   DAY_LOCK_REASON_MAX,
@@ -44,20 +50,32 @@ import {
   affectedLines,
   applySummary,
   buildDayLockScope,
+  canLockRoom,
   dayKeyLongLabel,
   dayLockThrownMessage,
   initialDayLockForm,
   isDayLockFormDirty,
   minutesLabel,
   removableBlocks,
-  removeScopeFor,
+  removeDayLockRequests,
   removeSummary,
+  roomNameOf,
+  withRoomScope,
+  ROOM_SCOPE_NOTE,
   type DayLockFormErrors,
   type DayLockFormState,
   type ExistingDayBlock,
 } from "@/lib/day-lock-state";
 
 type Step = "form" | "affected" | "done" | "unlocked";
+
+/** Título del modal por paso. `room` = el alcance aplicado es "Una sala" (SR-BU). */
+export function dayLockTitle(step: Step, room: boolean): string {
+  if (step === "affected") return room ? "Hay turnos en esa sala" : "Hay turnos en ese horario";
+  if (step === "done") return room ? "Sala bloqueada" : "Día bloqueado";
+  if (step === "unlocked") return "Día desbloqueado";
+  return "Bloquear el día";
+}
 
 /**
  * Aviso L11 (S18b, ES3): cancelar desde el candado un turno que es sesión de
@@ -239,6 +257,72 @@ function TimeSelect({
   );
 }
 
+/**
+ * Select de "Una sala" (SR-BU): las salas activas del catálogo de la agenda.
+ * Con salas de más de una sede, agrupadas por sede (`optgroup`): la sede la
+ * define la sala, por eso en este alcance no se muestra el select de Sede.
+ */
+export function DayLockRoomPicker({
+  rooms,
+  locations,
+  value,
+  onChange,
+  error,
+  disabled,
+}: {
+  rooms: readonly RoomOption[];
+  locations?: readonly { id: string; name: string }[];
+  value: string | null;
+  onChange: (roomId: string | null) => void;
+  error?: string;
+  disabled?: boolean;
+}) {
+  const locIds = [...new Set(rooms.map((r) => r.locationId))];
+  const grouped = locIds.length > 1;
+  const locName = (id: string) => locations?.find((l) => l.id === id)?.name ?? "Sede";
+  const option = (r: RoomOption) => (
+    <option key={r.id} value={r.id}>
+      {r.name}
+    </option>
+  );
+  return (
+    <div style={{ marginTop: 10 }}>
+      <label htmlFor="day-lock-room" style={{ ...labelStyle, display: "block" }}>
+        Sala
+      </label>
+      <select
+        id="day-lock-room"
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        disabled={disabled}
+        style={{ ...selectStyle, minWidth: 200, maxWidth: "100%" }}
+        aria-invalid={error ? true : undefined}
+        // B7 (revisión b de SR): el error se anuncia con el select, no solo se ve.
+        aria-describedby={error ? "day-lock-room-error day-lock-room-note" : "day-lock-room-note"}
+      >
+        <option value="" disabled>
+          Elegí la sala
+        </option>
+        {grouped
+          ? locIds.map((lid) => (
+              <optgroup key={lid} label={locName(lid)}>
+                {rooms.filter((r) => r.locationId === lid).map(option)}
+              </optgroup>
+            ))
+          : rooms.map(option)}
+      </select>
+      {error && (
+        <div id="day-lock-room-error" style={errorStyle}>
+          {error}
+        </div>
+      )}
+      <div id="day-lock-room-note" style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 6 }}>
+        {ROOM_SCOPE_NOTE}
+      </div>
+    </div>
+  );
+}
+
 export function DayLockDialog({
   open,
   dayKey,
@@ -248,6 +332,7 @@ export function DayLockDialog({
   canBlockAll,
   ownPractitionerId,
   existingBlocks,
+  rooms,
   onClose,
   onDone,
 }: {
@@ -259,14 +344,19 @@ export function DayLockDialog({
   canBlockAll: boolean;
   ownPractitionerId?: string | null;
   existingBlocks?: ExistingDayBlock[];
+  /**
+   * SR-BU: salas activas (`AgendaBootstrapProps.rooms`). Opcional: sin salas
+   * el diálogo queda idéntico al de antes (no hay alcance "Una sala").
+   */
+  rooms?: RoomOption[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const confirm = useConfirm();
   const planesEnabled = useTenantModules().has("planes");
   const ctx = useMemo(
-    () => ({ practitioners, canBlockAll, ownPractitionerId: ownPractitionerId ?? null }),
-    [practitioners, canBlockAll, ownPractitionerId]
+    () => ({ practitioners, canBlockAll, ownPractitionerId: ownPractitionerId ?? null, rooms: rooms ?? [] }),
+    [practitioners, canBlockAll, ownPractitionerId, rooms]
   );
   // Inicial por apertura: los ids filtrados se comparan por valor (un array
   // nuevo del padre en cada render no debe resetear lo que se está cargando).
@@ -345,14 +435,23 @@ export function DayLockDialog({
 
   const togglePractitioner = (id: string) => {
     setForm((f) => {
-      const has = f.practitionerIds.includes(id);
+      // Desde "Una sala" se arranca de cero: los ids que quedaron en el form
+      // no se veían marcados y sumarlos sería una sorpresa.
+      const base = f.who === "room" ? [] : f.practitionerIds;
+      const has = base.includes(id);
       return {
         ...f,
         who: "some",
-        practitionerIds: has ? f.practitionerIds.filter((x) => x !== id) : [...f.practitionerIds, id],
+        practitionerIds: has ? base.filter((x) => x !== id) : [...base, id],
       };
     });
-    setErrors((e) => ({ ...e, practitionerIds: undefined }));
+    setErrors((e) => ({ ...e, practitionerIds: undefined, roomId: undefined }));
+    setError(null);
+  };
+
+  const chooseRoomScope = () => {
+    setForm((f) => (f.who === "room" ? { ...f, who: "some" } : withRoomScope(f, ctx.rooms)));
+    setErrors((e) => ({ ...e, practitionerIds: undefined, roomId: undefined }));
     setError(null);
   };
 
@@ -456,21 +555,31 @@ export function DayLockDialog({
   };
 
   const submitRemove = () => {
-    const ids = blocks.filter((b) => b.removable && toRemove.has(b.block.id)).map((b) => b.block.id);
-    if (ids.length === 0) {
+    const selected = blocks.filter((b) => b.removable && toRemove.has(b.block.id)).map((b) => b.block);
+    if (selected.length === 0) {
       setError("Elegí qué bloqueo querés quitar.");
       return;
     }
     setError(null);
+    // SR-BU: el server desbloquea por alcance (sin sala no toca las salas; con
+    // `roomId` solo esa sala) → una llamada por alcance, en serie. Si una
+    // falla después de otra que ya quitó algo, se avisa y al cerrar se refresca.
+    const requests = removeDayLockRequests(dayKey, selected, ctx);
     start(async () => {
+      let deleted = 0;
+      const remaining = new Map<string, DayLockRemainingBlock>();
       try {
-        const r = await removeDayLock({ dayKey, practitionerId: removeScopeFor(ctx), blockIds: ids });
-        if (!r.ok) {
-          setError(r.error);
-          return;
+        for (const req of requests) {
+          const r = await removeDayLock(req);
+          if (!r.ok) {
+            setError(r.error);
+            return;
+          }
+          wrote.current = true;
+          deleted += r.data.deleted;
+          for (const b of r.data.remaining) remaining.set(b.id, b);
         }
-        wrote.current = true;
-        setRemoved(r.data);
+        setRemoved({ deleted, remaining: [...remaining.values()] });
         setStep("unlocked");
       } catch (e) {
         setError(dayLockThrownMessage(e));
@@ -485,15 +594,13 @@ export function DayLockDialog({
       : ids.map((id) => practitioners.find((p) => p.id === id)?.name ?? "Profesional").join(", ");
   const multiLocation = (locations?.length ?? 0) > 1;
   const removable = blocks.filter((b) => b.removable);
+  const roomOffered = canLockRoom(ctx);
+  const roomMode = roomOffered && form.who === "room";
+  // Alcance YA enviado (preview/apply): manda sobre el form para el copy.
+  const scopeRoomId = scope?.input.roomId ?? null;
+  const scopeRoomName = scopeRoomId ? roomNameOf(scopeRoomId, ctx.rooms) : null;
 
-  const title =
-    step === "affected"
-      ? "Hay turnos en ese horario"
-      : step === "done"
-        ? "Día bloqueado"
-        : step === "unlocked"
-          ? "Día desbloqueado"
-          : "Bloquear el día";
+  const title = dayLockTitle(step, scopeRoomId !== null && step !== "form");
 
   return (
     <Modal open={open} onClose={() => void requestClose()} title={title} description={dayLabel} width={560}>
@@ -611,6 +718,17 @@ export function DayLockDialog({
                 >
                   Todo el equipo
                 </button>
+                {roomOffered && (
+                  <button
+                    type="button"
+                    aria-pressed={form.who === "room"}
+                    style={chipStyle(form.who === "room")}
+                    onClick={chooseRoomScope}
+                    disabled={pending}
+                  >
+                    Una sala
+                  </button>
+                )}
                 {practitioners.map((p) => {
                   const on = form.who === "some" && form.practitionerIds.includes(p.id);
                   return (
@@ -638,10 +756,20 @@ export function DayLockDialog({
               </div>
             )}
             {errors.practitionerIds && <div style={errorStyle}>{errors.practitionerIds}</div>}
+            {roomMode && (
+              <DayLockRoomPicker
+                rooms={ctx.rooms}
+                locations={locations}
+                value={form.roomId}
+                onChange={(v) => set("roomId", v)}
+                error={errors.roomId}
+                disabled={pending}
+              />
+            )}
           </div>
 
-          {/* Sede */}
-          {multiLocation && (
+          {/* Sede (con "Una sala" la define la sala) */}
+          {multiLocation && !roomMode && (
             <div>
               <label htmlFor="day-lock-location" style={{ ...labelStyle, display: "block" }}>
                 Sede
@@ -712,7 +840,13 @@ export function DayLockDialog({
               Cancelar
             </Button>
             <Button type="button" onClick={submitForm} disabled={pending}>
-              {pending ? "Revisando…" : form.span === "allDay" ? "Bloquear el día" : "Bloquear la franja"}
+              {pending
+                ? "Revisando…"
+                : roomMode
+                  ? "Bloquear la sala"
+                  : form.span === "allDay"
+                    ? "Bloquear el día"
+                    : "Bloquear la franja"}
             </Button>
           </div>
         </div>
@@ -726,10 +860,10 @@ export function DayLockDialog({
             </div>
           )}
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>
-            {affectedHeadline(preview.affected.length, preview.allDay)}
+            {affectedHeadline(preview.affected.length, preview.allDay, scopeRoomName)}
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-            {practitionerLine(scope.input.practitionerIds)}
+            {scopeRoomName ?? practitionerLine(scope.input.practitionerIds)}
             {preview.allDay
               ? " · todo el día"
               : ` · de ${minutesLabel(scope.input.startMin ?? 0)} a ${minutesLabel(scope.input.endMin ?? 0)}`}
@@ -786,7 +920,7 @@ export function DayLockDialog({
       {step === "done" && applied && (
         <div style={{ display: "grid", gap: 12 }} role="status">
           {(() => {
-            const s = applySummary(applied);
+            const s = applySummary(applied, { room: scopeRoomId !== null });
             return (
               <>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "var(--navy-900)" }}>{s.headline}</div>

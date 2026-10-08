@@ -40,6 +40,7 @@ import {
   arWallOf,
   classifyInstant,
   dayKeyOf,
+  defaultRoomFor,
   dayWindow,
   fitsInRanges,
   nextFreeSlot,
@@ -54,7 +55,13 @@ import {
 } from "@/lib/availability";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
-import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  lockCapacityAndRoomsMany,
+  lockCapacityWindow,
+  roomKeysForWindow,
+} from "@/lib/booking-cap-lock";
+import { countRoomOverlapsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { patientAccessFor } from "@/lib/visibility";
 import type { Actor } from "@/lib/session";
 import { canOperateBooking, capabilitiesFor, type Capability, type PatientAccessLevel } from "@/lib/capabilities";
@@ -536,6 +543,11 @@ export async function liveBlocksInTx(
       deletedAt: null,
       startsAt: { lt: dayWindow(to).end },
       endsAt: { gt: dayWindow(from).start },
+      // SR (§17.5): un bloqueo de SALA tiene practitionerId null por CHECK
+      // pero NO es "todos": bloquea la sala, no al profesional. Sin esto,
+      // bloquear el Consultorio 2 reclasificaba como bloqueada cualquier
+      // alta de cualquier profesional en esa ventana.
+      roomId: null,
       OR: [{ practitionerId: null }, { practitionerId: o.practitionerId }],
     },
     select: {
@@ -769,6 +781,13 @@ export function buildBookingCreateData(o: {
   notes?: string | null;
   isOverbooked: boolean;
   locationId: string | null;
+  /**
+   * SR: sala ya resuelta y validada por el caller (`defaultRoomFor` +
+   * `lockActiveRoomInTx`). Ausente/null = sin sala. Con sala, `locationId`
+   * TIENE que ser explícito (SR-D6, CHECK `Booking_room_location_check` de M4):
+   * el caller resuelve null → id de la sede principal ANTES de llamar.
+   */
+  roomId?: string | null;
   isTelemedicine: boolean;
   telemedicineUrl: string | null;
   title: string | null;
@@ -776,6 +795,11 @@ export function buildBookingCreateData(o: {
   idempotencyKey: string;
   seriesId?: string;
 }): Prisma.BookingUncheckedCreateInput {
+  if (o.roomId && !o.locationId) {
+    // Error de programación, no de datos: sin esto el INSERT revienta con un
+    // 23514 opaco del CHECK de M4 (y dentro de un batch, la tx entera).
+    throw new Error("buildBookingCreateData: un turno con sala necesita la sede explícita (SR-D6)");
+  }
   return {
     tenantId: o.tenantId,
     practitionerId: o.practitionerId,
@@ -790,6 +814,8 @@ export function buildBookingCreateData(o: {
     notes: o.notes,
     isOverbooked: o.isOverbooked,
     locationId: o.locationId,
+    // Solo si viene: la forma de la fila sin sala queda idéntica a la de antes.
+    ...(o.roomId ? { roomId: o.roomId } : {}),
     isTelemedicine: o.isTelemedicine,
     telemedicineUrl: o.telemedicineUrl,
     title: o.title,
@@ -1111,6 +1137,10 @@ const UPDATE_BEFORE_SELECT = {
   practitionerId: true,
   serviceId: true,
   locationId: true,
+  // SR: escalar (sin sentencia nueva). La sala vieja: si se cambia la sede y
+  // no es de la nueva, el UPDATE la recalcula o la limpia (si no, 23503 por la
+  // FK compuesta (roomId, locationId) de M4); y `prev.roomId` de los refs.
+  roomId: true,
   isTelemedicine: true,
   service: { select: { id: true, durationMin: true, maxConcurrent: true, practitionerId: true } },
   updatedAt: true,
@@ -1135,7 +1165,10 @@ export type BookingUpdateBefore = Prisma.BookingGetPayload<{ select: typeof UPDA
 export type BookingUpdatePatch = z.output<typeof BookingUpdate>;
 
 /** El patch que efectivamente se escribe (y se audita) después de `bookingFieldAccess`. */
-export type BookingUpdateWritten = Omit<BookingUpdatePatch, "id" | "locationId" | "isTelemedicine" | "telemedicineUrl">;
+export type BookingUpdateWritten = Omit<
+  BookingUpdatePatch,
+  "id" | "locationId" | "roomId" | "isTelemedicine" | "telemedicineUrl"
+>;
 
 /** Datos para los avisos forzables (el caller arma el nombre del profesional y la sugerencia, fuera de la tx). */
 export type BookingUpdatePrompt = {
@@ -1178,6 +1211,14 @@ export type BookingUpdateTxOutcome =
   | { kind: "patient-overlap"; existingISO: string }
   | ({ kind: "conflict" } & BookingUpdatePrompt)
   | { kind: "bad-location" }
+  // SR (contrato literal de SR-C): la sala final está llena (profesionales
+  // DISTINTOS ≥ capacity, SR-D1) o bloqueada (§17.5, `blocked`). Forzable con
+  // `allowRoomConflict`, que NO es sobreturno (SR-D2). Copy: ROOM_BUSY_ERROR /
+  // ROOM_BLOCKED_ERROR.
+  | { kind: "room-busy"; roomName: string; used: number; capacity: number; blocked?: { reason: string | null } | null }
+  // SR: la sala elegida no es de la sede final del turno, es de otro tenant,
+  // está archivada o su sede lo está. Copy: BAD_ROOM_ERROR.
+  | { kind: "bad-room" }
   | { kind: "plan-session-not-pending"; ordinal: number }
   | { kind: "plan-paid-cancel" }
   | { kind: "plan-patient-change" }
@@ -1188,12 +1229,33 @@ export type BookingUpdateTxOutcome =
       written: BookingUpdateWritten;
       refs: BookingChangeRef[];
       plan: PlanSyncResult | null;
+      /**
+       * SR: la sala que quedó escrita si la edición la cambió (undefined = no
+       * se tocó; null = quedó sin sala). Para el audit del caller: `written`
+       * no la trae porque la sala no es un campo del patch que se copie tal
+       * cual (se recalcula, se valida y se limpia).
+       */
+      roomId?: string | null;
     };
 
 /**
  * Edita/mueve/cambia el estado de UN turno dentro de la tx del caller (C8):
  * lookup por tenant → lock optimista → gate E1 → re-vínculo → guard del
- * paciente → lock de cupo + franjas/bloqueos (motor) → cupo → sede → update.
+ * paciente → lock de cupo (+ sala) + franjas/bloqueos (motor) → cupo → sede →
+ * sala (validar + ocupación, SR) → update.
+ *
+ * Sala (corrida SR, enmienda C2 (1b): paciente → cupo → SALA → sedes → filas):
+ *   - con la sala conocida de antemano (elegida o la que tenía) la clave va en
+ *     la MISMA sentencia que el cupo (`lockCapacityAndRoomsMany`); la por
+ *     defecto sale de las franjas, que se leen después del lock de cupo, y va
+ *     en una segunda sentencia, solo si hay sala;
+ *   - sin sala: `lockCapacityWindow` como siempre, 0 statements nuevos (techo
+ *     estricto de `updateBooking`); con sala, +2 (clave de sala y conteo; la
+ *     validación de la sala reemplaza la de la sede por defecto);
+ *   - `room-busy` sale último de los avisos (FORCE_PROMPT_ORDER) y se fuerza
+ *     con `allowRoomConflict`, que no marca `isOverbooked` (SR-D2);
+ *   - `capLocksHeld` (SR-D3) estampa la sala por defecto sin chequear ni
+ *     tomar la clave de sala.
  *
  * Contrato Secretaria (E1, literal de C8): el gate `canOperateBooking(caps,
  * access)` y el filtrado de `bookingFieldAccess` viven ACÁ adentro, no solo en
@@ -1225,8 +1287,14 @@ export async function applyBookingUpdateInTx(
   input: { patch: BookingUpdatePatch; expectedUpdatedAt?: string; force: ForceFlags },
   opts: { now: Date; capLocksHeld?: boolean }
 ): Promise<BookingUpdateTxOutcome> {
-  const { id, locationId: patchLocationId, isTelemedicine: patchTele, telemedicineUrl: patchTeleUrl, ...patch } =
-    input.patch;
+  const {
+    id,
+    locationId: patchLocationId,
+    roomId: patchRoomId,
+    isTelemedicine: patchTele,
+    telemedicineUrl: patchTeleUrl,
+    ...patch
+  } = input.patch;
   const { force } = input;
   const { now } = opts;
 
@@ -1296,6 +1364,42 @@ export async function applyBookingUpdateInTx(
   const windowChanged = slotChanged || durationChanged || reactivating;
   const locationChanged = patchLocationId !== undefined && patchLocationId !== before.locationId;
 
+  // ── SR: sala final del turno ──────────────────────────────────────────────
+  // Tres fuentes (lib/validation.ts `bookingRoomId`):
+  //   - elegida (`roomPinned`, un id): esa, validada contra la sede FINAL. Elegir
+  //     sala nunca cambia la sede: sin `locationId` en el patch, la sede queda la
+  //     que tenía (no se recalcula la de la franja), y una sala de otra sede es
+  //     `bad-room`;
+  //   - "Sin sala" (null): ninguna, sin chequeos;
+  //   - por defecto (ausente): si se mueve el horario o cambia la sede, la de la
+  //     franja que contiene el turno en la sede final (`defaultRoomFor`, SR1a);
+  //     si no, la que ya tenía (`before.roomId`).
+  // Por qué recalcular al mover: la sala sale de la franja (SR §17.1). Un turno
+  // movido de las 10 (Consultorio 1) a las 16 (Gimnasio) que se quedara en el
+  // Consultorio 1 ocuparía una sala que a esa hora es de otro profesional. Y al
+  // cambiar de sede, la sala vieja no puede quedar: la FK compuesta
+  // (roomId, locationId) de M4 revienta con 23503 (contrato de SR0).
+  const roomPinned = typeof patchRoomId === "string";
+  const roomDefaulted = patchRoomId === undefined && (slotChanged || locationChanged);
+  /** Sala que va a quedar en la fila (provisional: la por defecto se decide después de cargar las franjas). */
+  let targetRoomId: string | null = patchRoomId !== undefined ? patchRoomId : before.roomId;
+  /** ¿El UPDATE escribe `roomId`? (solo si cambia: sin sala, la sentencia queda idéntica a la de antes). */
+  // El drawer reenvía la sala que ya tenía al guardar notas: misma sala, misma
+  // sede → nada que validar ni escribir (la fila ya cumple las FKs).
+  let roomTouched =
+    roomDefaulted || (patchRoomId !== undefined && !(patchRoomId === before.roomId && !locationChanged));
+  // SR-D1/D2/D3: la ocupación se chequea en el alta/edición suelta con sala, no
+  // en un turno cancelado, no con `capLocksHeld` (Planes, "este y los
+  // siguientes": estampan sin chequear ni tomar la clave de sala) y no si el
+  // usuario ya confirmó "Asignar igual" (`allowRoomConflict`).
+  const roomCheckable = finalStatus !== "CANCELLED" && !opts.capLocksHeld && !force.allowRoomConflict;
+  /** Ya se tomó la clave de sala de la ventana nueva (fusionada con el cupo o sola). */
+  let roomKeyHeld = false;
+  /** La sala validada (`lockActiveRoomInTx`) con su capacidad y nombre, para el conteo. */
+  let roomRow: { id: string; capacity: number; name: string; locationId: string } | null = null;
+  let avail: Awaited<ReturnType<typeof loadInstantAvailability>> | null = null;
+  const roomKeys = (roomId: string) => roomKeysForWindow({ tenantId: actor.tenantId, roomId, start: newWhen, end });
+
   // S12 (C4, P6): cancelar un turno de plan con cobro deja la plata colgada de
   // una sesión "sin turno"; se reprograma. Ausente con cobro SÍ se permite (la
   // sesión queda "con cobro previo" y su próximo turno va en $0, C5).
@@ -1346,17 +1450,28 @@ export async function applyBookingUpdateInTx(
       // sedes (`lockActiveLocation` más abajo). Con `capLocksHeld` el caller
       // ya los tomó (ordenados, C2).
       if (!opts.capLocksHeld) {
-        await lockCapacityWindow(tx, {
+        const capWindow = {
           tenantId: actor.tenantId,
           practitionerId: before.practitionerId,
           serviceId: before.serviceId,
           start: newWhen,
           end,
-        });
+        };
+        if (roomCheckable && !roomDefaulted && targetRoomId) {
+          // SR, enmienda C2 (1b): la sala ya se conoce (elegida o la que tenía)
+          // → cupo y sala en UNA sentencia (cupo → sala → sedes → filas). Misma
+          // cantidad de statements que `lockCapacityWindow`.
+          await lockCapacityAndRoomsMany(tx, capacityKeysForWindow(capWindow), roomKeys(targetRoomId));
+          roomKeyHeld = true;
+        } else {
+          // Sin sala (o la por defecto, que sale de las franjas que se cargan
+          // DESPUÉS de este lock): lo de siempre, 0 statements nuevos.
+          await lockCapacityWindow(tx, capWindow);
+        }
       }
       const rule = await practitionerServiceRule(tx, actor.tenantId, before.practitionerId, before.service);
       cap = rule.cap;
-      const avail = await loadInstantAvailability(tx, {
+      avail = await loadInstantAvailability(tx, {
         tenantId: actor.tenantId,
         practitionerId: before.practitionerId,
         serviceId: before.serviceId,
@@ -1368,7 +1483,9 @@ export async function applyBookingUpdateInTx(
         durationMin: newDuration,
         practitionerId: before.practitionerId,
         serviceId: before.serviceId,
-        locationId: patchLocationId ?? (slotChanged ? null : before.locationId),
+        // SR: con sala elegida la sede no se recalcula (ver arriba): se
+        // clasifica en la que va a quedar.
+        locationId: patchLocationId ?? (slotChanged && !roomPinned ? null : before.locationId),
         cap,
         now,
         excludeBookingId: id,
@@ -1379,9 +1496,33 @@ export async function applyBookingUpdateInTx(
       }
       if (cls.outOfHours && !force.allowOutOfHours) return { kind: "out-of-hours", ...prompt };
       blocked = cls.blocked;
-      if (patchLocationId === undefined && slotChanged) {
+      if (patchLocationId === undefined && slotChanged && !roomPinned) {
         newLocationId = defaultLocationFor(avail, before.practitionerId, newWhen, newDuration);
       }
+      if (roomDefaulted) {
+        // Sede final (la elegida, la por defecto recién calculada o la que
+        // tenía); null = la principal, que `defaultRoomFor` ya resuelve.
+        const roomLoc = patchLocationId ?? (newLocationId !== undefined ? newLocationId : before.locationId);
+        targetRoomId = defaultRoomFor(avail, before.practitionerId, newWhen, newDuration, roomLoc);
+        if (targetRoomId && roomCheckable && !opts.capLocksHeld) {
+          // La sala por defecto depende de las franjas, que se leen DESPUÉS del
+          // lock de cupo (así ven un `applyDayLock` commiteado en el medio). Por
+          // eso acá no se puede fusionar: la clave de sala va en una segunda
+          // sentencia, recién ahora y solo si hay sala. El orden global sigue
+          // siendo C2 (1b) (todo el cupo de esta tx ya está tomado, las sedes
+          // todavía no), así que no hay ciclo posible con el alta, que las toma
+          // fusionadas. Los +2 statements con sala se mantienen porque la
+          // validación de la sala reemplaza a la de la sede (ver abajo).
+          await lockCapacityAndRoomsMany(tx, [], roomKeys(targetRoomId));
+          roomKeyHeld = true;
+        }
+      }
+    }
+    if (roomCheckable && !roomKeyHeld && targetRoomId && targetRoomId !== before.roomId) {
+      // Solo cambia la sala (mismo horario, misma sede): el cupo no se mueve,
+      // así que solo la clave de sala (C2 (1b): sigue antes de las sedes).
+      await lockCapacityAndRoomsMany(tx, [], roomKeys(targetRoomId));
+      roomKeyHeld = true;
     }
 
     if (pat?.overlapISO && !force.allowPatientOverlap) {
@@ -1418,12 +1559,112 @@ export async function applyBookingUpdateInTx(
   // Sede elegida: lock compartido + activa en este tx (carrera con
   // archiveLocation); siempre, aunque el turno esté cancelado — la FK saltea
   // RLS. La de por defecto (reprogramación) archivada en el medio → no se toca.
+  if (finalStatus === "CANCELLED" && roomDefaulted) {
+    // Cancelado: no se cargaron franjas (no ocupa nada). Con cambio de sede la
+    // sala vieja no puede quedar (23503); con solo un cambio de horario, queda.
+    if (locationChanged) targetRoomId = null;
+    else roomTouched = false;
+  }
+  let sedesLocked = false;
   if (patchLocationId !== undefined) {
     if (!(await lockActiveLocation(tx, actor.tenantId, patchLocationId))) return { kind: "bad-location" };
     newLocationId = patchLocationId;
+    sedesLocked = true;
   } else if (newLocationId) {
-    if (!(await lockActiveLocation(tx, actor.tenantId, newLocationId))) newLocationId = undefined;
+    if (roomDefaulted && targetRoomId) {
+      // SR: la sala por defecto de la sede por defecto. `lockActiveRoomInTx`
+      // exige sala activa DE esa sede y sede activa: valida las dos en una
+      // query (reemplaza a la de la sede, por eso con sala son +2 y no +3).
+      await lockTenantLocationsShared(tx, actor.tenantId);
+      sedesLocked = true;
+      roomRow = await lockActiveRoomInTx(tx, {
+        tenantId: actor.tenantId,
+        roomId: targetRoomId,
+        locationId: newLocationId,
+      });
+      if (!roomRow) {
+        // Sala archivada en el medio (o su sede): el turno queda sin sala,
+        // como el turnero (SR2b); la sede se valida sola, como siempre.
+        targetRoomId = null;
+        const loc = await tx.location.findFirst({
+          where: { id: newLocationId, tenantId: actor.tenantId, active: true },
+          select: { id: true },
+        });
+        if (!loc) newLocationId = undefined;
+      }
+    } else {
+      if (!(await lockActiveLocation(tx, actor.tenantId, newLocationId))) newLocationId = undefined;
+      sedesLocked = true;
+    }
   }
+
+  // SR: validar la sala que todavía no se validó (elegida, la que tenía con
+  // el horario cambiado, o la por defecto con la sede elegida o la de antes),
+  // DESPUÉS del lock compartido de sedes (`archiveRoom` toma el exclusivo: con
+  // el compartido tomado, la sala no se archiva antes del UPDATE).
+  if (roomTouched || roomKeyHeld) {
+    if (targetRoomId && !roomRow) {
+      let roomLoc = newLocationId !== undefined ? newLocationId : before.locationId;
+      let stampedPrimary = false;
+      if (!roomLoc) {
+        // SR-D6: turno con sala ⇒ sede explícita (CHECK de M4). null = la
+        // principal: se resuelve y se ESTAMPA.
+        roomLoc =
+          avail?.primaryLocationId ??
+          (
+            await tx.location.findFirst({
+              where: { tenantId: actor.tenantId, isPrimary: true },
+              select: { id: true },
+            })
+          )?.id ??
+          null;
+        stampedPrimary = roomLoc != null;
+      }
+      if (!sedesLocked) {
+        await lockTenantLocationsShared(tx, actor.tenantId);
+        sedesLocked = true;
+      }
+      roomRow = roomLoc
+        ? await lockActiveRoomInTx(tx, { tenantId: actor.tenantId, roomId: targetRoomId, locationId: roomLoc })
+        : null;
+      if (!roomRow) {
+        // Elegida → rechazo sin escribir. La por defecto o la que tenía
+        // (archivada, o la franja apunta a una sala de otra sede) → sin sala.
+        if (roomPinned) return { kind: "bad-room" };
+        targetRoomId = null;
+        roomTouched = true;
+      } else if (stampedPrimary) {
+        newLocationId = roomLoc;
+      }
+    }
+    // Ocupación (SR-D1/D2): después de cupo+sala (claves tomadas) y de validar
+    // la sala. Profesionales DISTINTOS en la sala que se solapan, o un bloqueo
+    // de sala (§17.5) → aviso forzable; el mismo profesional nunca choca
+    // consigo mismo (sus pacientes en paralelo son el cupo del servicio).
+    if (roomKeyHeld && roomRow) {
+      const occ = await countRoomOverlapsInTx(tx, {
+        tenantId: actor.tenantId,
+        roomId: roomRow.id,
+        practitionerId: before.practitionerId,
+        start: newWhen,
+        end,
+        now,
+        capacity: roomRow.capacity,
+        excludeId: id,
+      });
+      if (occ.atCapacity) {
+        return {
+          kind: "room-busy",
+          roomName: roomRow.name,
+          used: occ.used,
+          capacity: occ.capacity,
+          blocked: occ.blocked ? { reason: occ.blocked.reason } : null,
+        };
+      }
+    }
+  }
+  const finalRoomId = roomTouched ? targetRoomId : before.roomId;
+  const roomWrite = roomTouched && targetRoomId !== before.roomId;
 
   // Telemedicina: `isTelemedicine: false` borra la URL; la URL solo se
   // guarda si el turno queda como telemedicina.
@@ -1466,6 +1707,10 @@ export async function applyBookingUpdateInTx(
         ...written,
         ...(promoteGuest ? { status: "CONFIRMED" as const } : {}),
         ...(newLocationId !== undefined ? { locationId: newLocationId } : {}),
+        // SR: en el MISMO UPDATE que la sede (si no, 23503 por la FK compuesta
+        // (roomId, locationId)). Solo si cambia: sin sala, la sentencia es la
+        // de antes. Forzar la sala NO toca `isOverbooked` (SR-D2).
+        ...(roomWrite ? { roomId: targetRoomId } : {}),
         ...(isOverbooked !== undefined ? { isOverbooked } : {}),
         ...tele,
         ...planStampData(stamp),
@@ -1490,16 +1735,28 @@ export async function applyBookingUpdateInTx(
       })
     : null;
   // El profesional de un turno no cambia por edición (BookingUpdate no lo
-  // trae): `prev` solo cuando se movió de horario, para que SV avise también
-  // a la franja vieja.
+  // trae): `prev` solo cuando se movió de horario o de sala, para que SV avise
+  // también a la franja (y a la sala) vieja.
   const refs: BookingChangeRef[] = [
     {
       bookingId: id,
       practitionerId: before.practitionerId,
       scheduledFor: newWhen,
-      prev: slotChanged ? { practitionerId: before.practitionerId, scheduledFor: before.scheduledFor } : null,
+      roomId: finalRoomId,
+      prev:
+        slotChanged || roomWrite
+          ? { practitionerId: before.practitionerId, scheduledFor: before.scheduledFor, roomId: before.roomId }
+          : null,
       kind: "booking",
     },
   ];
-  return { kind: "ok", before, updatedAt: after.updatedAt, written, refs, plan };
+  return {
+    kind: "ok",
+    before,
+    updatedAt: after.updatedAt,
+    written,
+    refs,
+    plan,
+    ...(roomWrite ? { roomId: targetRoomId } : {}),
+  };
 }

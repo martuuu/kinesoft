@@ -11,6 +11,7 @@
  *   recurrence  fechas semanal / cada 2 semanas / mensual (B2.1b)
  *   plan        motor puro de Planes: expandPlanDates, classifyPlanRows,
  *               suggestRowSlot, stateToken y tipos C6/C7 (S07p, ES1)
+ *   rooms       salas (SR1a): defaultRoomFor, roomOccupancyAt, roomAssignmentsFor
  */
 export * from "@/lib/availability/types";
 export * from "@/lib/availability/day";
@@ -20,3 +21,4 @@ export * from "@/lib/availability/classify";
 export * from "@/lib/availability/next-free";
 export * from "@/lib/availability/recurrence";
 export * from "@/lib/availability/plan";
+export * from "@/lib/availability/rooms";

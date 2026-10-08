@@ -31,6 +31,7 @@ import {
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
 import type { CapOf, LayoutBlock, LayoutRange } from "@/lib/agenda-layout";
 import type { AgendaViewPrefs } from "@/lib/preferences-constants";
+import type { RoomOption } from "@/lib/rooms-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -131,6 +132,13 @@ export const ClassifyInstantQuery = z.object({
   patientId: OptId,
   /** Edición: el turno que se mueve no cuenta contra sí mismo. */
   excludeBookingId: OptId,
+  /**
+   * SR: sala a chequear. AUSENTE (undefined) = la sala por defecto de la franja
+   * (`defaultRoomFor`), que vuelve en `InstantCheck.defaultRoomId`; null (o "")
+   * = "Sin sala" explícito: no se chequea ocupación. El modal NO manda el campo
+   * con "Según el horario del profesional". Hasta SR3a la action lo ignora.
+   */
+  roomId: OptId,
 });
 export type ClassifyInstantQueryInput = z.input<typeof ClassifyInstantQuery>;
 
@@ -183,6 +191,27 @@ export type AgendaAvailabilityDay = {
   clinic: DayLockState;
   /** Por `practitionerId` (todos los de `practitioners`). */
   byPractitioner: Record<string, PractitionerDayAvailability>;
+  /**
+   * SR, vista "Por sala": quién tiene asignada cada sala ese día, por
+   * `roomId` → franjas CRUDAS con sala (plantilla vigente o la excepción que
+   * manda; sin restar bloqueos), ordenadas por (startMin, practitionerId). Es
+   * el `assignments` de `buildRoomColumns` (SR-U4). Solo de los profesionales
+   * de `practitioners`. Opcional: ausente o `{}` = nadie con sala (o el server
+   * todavía no la llena: SR3a en `getAgendaAvailability`).
+   */
+  roomAssignments?: Record<string, RoomAssignment[]>;
+};
+
+/** Una franja con sala de un profesional en un día (minutos de pared AR, semiabierta). */
+export type RoomAssignment = { practitionerId: string; startMin: number; endMin: number };
+
+/** Bloqueo de SALA (`TimeBlock.roomId`, §17.5) serializable, para pintar la columna en "Por sala". */
+export type AgendaRoomBlockView = {
+  id: string;
+  roomId: string;
+  startsAt: string;
+  endsAt: string;
+  reason: string | null;
 };
 
 export type AgendaAvailability = {
@@ -197,7 +226,10 @@ export type AgendaAvailability = {
    *  `isFallback` = sin franjas propias: hereda el horario del consultorio. */
   practitioners: { practitionerId: string; isFallback: boolean }[];
   days: AgendaAvailabilityDay[];
+  /** Bloqueos de profesionales/consultorio. NO incluye los de sala (§17.5). */
   blocks: AgendaBlockView[];
+  /** SR: bloqueos de sala que tocan la ventana. Ausente = ninguno (o todavía no se cargan). */
+  roomBlocks?: AgendaRoomBlockView[];
   /** Cupo efectivo por profesional × servicio (null = ilimitado), con la regla
    *  del motor (`resolvePractitionerService`). Ver `capOfFromAvailability`. */
   capOf: Record<string, Record<string, number | null>>;
@@ -265,6 +297,19 @@ export type InstantCheck = {
   cap: number | null;
   durationMin: number;
   serviceEnabled: boolean;
+  /**
+   * SR: sala que tomaría el turno según la franja (`defaultRoomFor` con la sede
+   * resuelta); null = la franja no tiene sala (o fallback). Ausente = el server
+   * no la calculó. El modal la muestra como "Según el horario del profesional
+   * (Consultorio 2)".
+   */
+  defaultRoomId?: string | null;
+  /**
+   * SR: la sala chequeada (la pedida o la por defecto) está llena o bloqueada
+   * en ese instante. Solo aviso: el alta se puede forzar con
+   * `allowRoomConflict` (no es sobreturno). null/ausente = libre o sin sala.
+   */
+  roomBusy?: { roomName: string; blocked?: { reason: string | null } | null } | null;
 };
 
 export type RecurrencePreviewItem = {
@@ -303,6 +348,13 @@ export type AgendaBootstrapProps = {
   locations: { id: string; name: string; isPrimary: boolean }[];
   /** Profesionales con iniciales (identidad no cromática), favoritos primero. */
   practitionerBadges: { id: string; name: string; initials: string }[];
+  /**
+   * SR: catálogo de salas ACTIVAS de sedes activas, por sede y `sortOrder`
+   * (`listRooms` en `agenda/page.tsx`, fuera del presupuesto de
+   * `listAgendaBookings`). Vacío = el consultorio no cargó salas: la agenda se
+   * ve igual que hoy. El cliente resuelve acá el nombre de `roomId`.
+   */
+  rooms: RoomOption[];
   /** `getUserPreferences().agendaView` (B4.2), con favoritos y sede cruzados
    *  contra lo que existe hoy. B4.3 unificó acá el sanitizador provisorio de
    *  B3.3 (`sanitizeAgendaPrefs`/`getAgendaPrefs`, borrados). */

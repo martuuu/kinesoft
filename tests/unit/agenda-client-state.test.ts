@@ -322,7 +322,8 @@ describe("[P3-S19b] objeto de filtros de la agenda", () => {
 
   it("una dimensión por clave del objeto (SR suma la sala acá)", () => {
     expect(Object.keys(AGENDA_FILTER_DIMENSIONS).sort()).toEqual(Object.keys(EMPTY_AGENDA_FILTERS).sort());
-    expect(Object.keys(EMPTY_AGENDA_FILTERS).sort()).toEqual(["locationId", "practitionerIds"]);
+    // [SR-U3] la sala se sumó como tercera dimensión (lo anticipaba este test).
+    expect(Object.keys(EMPTY_AGENDA_FILTERS).sort()).toEqual(["locationId", "practitionerIds", "roomId"]);
   });
 
   it("vacío = todo, y devuelve una copia", () => {
@@ -395,5 +396,192 @@ describe("[P3-S19a→S19b] overrides de Recepción/drawer expandidos como lo del
   it("sin overrides devuelve el mismo array (memo estable)", () => {
     const server = [expand(dto())];
     expect(mergeBookingOverrides(server, {}, expand)).toBe(server);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SR-U3 (corrida SR): sala en los filtros, la vista "Por sala" y las tarjetas.
+// Contrato: AGENDA_FILTER_DIMENSIONS.roomId.matches =
+//   (b,id) => b.roomId === undefined || (id==="none" ? b.roomId===null : b.roomId===id)
+// Sin salas cargadas todo queda igual que hoy (los describe de arriba no cambian).
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  AGENDA_VIEWS,
+  availableAgendaModes,
+  countByRoom,
+  effectiveRoomFilter,
+  roomsInScope,
+  showRoomOnCards,
+} from "@/lib/agenda-client-state";
+
+describe("[SR-U3] dimensión roomId", () => {
+  const rows = [
+    { id: "1", practitionerId: "a", locationId: "L1", roomId: "R1" },
+    { id: "2", practitionerId: "b", locationId: "L1", roomId: "R2" },
+    { id: "3", practitionerId: "a", locationId: "L1", roomId: null }, // sin sala
+    { id: "4", practitionerId: "c", locationId: "L2" }, // proyección sin sala: "no sé" → no se esconde
+    { id: "5", practitionerId: "b", locationId: "L2", roomId: "R3", status: "CANCELLED" },
+  ].map((r) => ({ status: "CONFIRMED", ...r }));
+  const ctx = { primaryLocationId: "L1" };
+  const ids = (xs: { id: string }[]) => xs.map((b) => b.id);
+
+  it("roomId null/ausente = no filtra (igual que hoy)", () => {
+    expect(ids(applyAgendaFilters(rows, { ...EMPTY_AGENDA_FILTERS, roomId: null }, ctx))).toEqual(["1", "2", "3", "4", "5"]);
+    expect(ids(applyAgendaFilters(rows, { practitionerIds: [], locationId: null }, ctx))).toHaveLength(5);
+    expect(activeAgendaFilterKeys({ practitionerIds: [], locationId: null })).toEqual([]);
+    expect(activeAgendaFilterKeys(EMPTY_AGENDA_FILTERS)).toEqual([]);
+  });
+
+  it("una sala: sus turnos + los que no traen el campo (undefined no filtra)", () => {
+    const f: AgendaFilters = { practitionerIds: [], locationId: null, roomId: "R1" };
+    expect(ids(applyAgendaFilters(rows, f, ctx))).toEqual(["1", "4"]);
+    expect(activeAgendaFilterKeys(f)).toEqual(["roomId"]);
+  });
+
+  it('"none" = Sin sala: solo roomId === null (más los que no traen el campo)', () => {
+    const f: AgendaFilters = { practitionerIds: [], locationId: null, roomId: "none" };
+    expect(ids(applyAgendaFilters(rows, f, ctx))).toEqual(["3", "4"]);
+  });
+
+  it("contrato literal de matches", () => {
+    const m = AGENDA_FILTER_DIMENSIONS.roomId.matches;
+    expect(m({ practitionerId: "a" }, "R1")).toBe(true);
+    expect(m({ practitionerId: "a", roomId: null }, "none")).toBe(true);
+    expect(m({ practitionerId: "a", roomId: "R1" }, "none")).toBe(false);
+    expect(m({ practitionerId: "a", roomId: null }, "R1")).toBe(false);
+    expect(m({ practitionerId: "a", roomId: "R1" }, "R1")).toBe(true);
+  });
+
+  it("AND con profesionales y sede", () => {
+    const f: AgendaFilters = { practitionerIds: ["a"], locationId: "L1", roomId: "none" };
+    expect(ids(applyAgendaFilters(rows, f, ctx))).toEqual(["3"]);
+  });
+
+  it("chips: profesionales cuentan dentro de la sala; salas cuentan con except roomId", () => {
+    const f: AgendaFilters = { practitionerIds: ["b"], locationId: "L1", roomId: "R1" };
+    // chips de profesionales: todos los profesionales, en la sede y la sala elegidas
+    expect(ids(applyAgendaFilters(rows, f, ctx, { except: ["practitionerIds"] }))).toEqual(["1"]);
+    // chips de salas: todas las salas, para el profesional y la sede elegidos
+    const forRooms = applyAgendaFilters(rows, f, ctx, { except: ["roomId"] });
+    expect(ids(forRooms)).toEqual(["2"]);
+    expect(countByRoom(applyAgendaFilters(rows, { ...f, practitionerIds: [] }, ctx, { except: ["roomId"] }))).toEqual({
+      R1: 1,
+      R2: 1,
+      none: 1,
+    });
+  });
+
+  it("countByRoom: sin cancelados, null → none, sin campo no cuenta", () => {
+    expect(countByRoom(rows)).toEqual({ R1: 1, R2: 1, none: 1 });
+  });
+});
+
+describe("[SR-U3] vista Por sala", () => {
+  const one = { mode: "day" as const, practitionerCount: 1, canReception: true };
+  const many = { mode: "practitioner" as const, practitionerCount: 6, canReception: true };
+
+  it('AGENDA_VIEWS incluye "room" y es un Día', () => {
+    expect(AGENDA_VIEWS).toContain("room");
+    expect(segmentOf("room")).toBe("day");
+    expect(isDayScoped("room")).toBe(true);
+  });
+
+  it('resolveAgendaView("room") cae a timeline con roomCount 0 (o ausente)', () => {
+    expect(resolveAgendaView("room", { ...many, roomCount: 0 })).toBe("timeline");
+    expect(resolveAgendaView("room", many)).toBe("timeline");
+    expect(resolveAgendaView("room", { ...one, roomCount: 0 })).toBe("timeline");
+  });
+
+  it('resolveAgendaView("room") con ≥1 sala en el alcance', () => {
+    expect(resolveAgendaView("room", { ...many, roomCount: 1 })).toBe("room");
+    expect(resolveAgendaView("room", { ...one, roomCount: 3 })).toBe("room");
+  });
+
+  it('mode "room" guardado: Día por sala si hay salas; si no, el de siempre', () => {
+    expect(resolveAgendaView(undefined, { ...many, mode: "room", roomCount: 2 })).toBe("room");
+    expect(resolveAgendaView(undefined, { ...many, mode: "room", roomCount: 0 })).toBe("timeline");
+    expect(resolveAgendaView(undefined, { ...one, mode: "room" })).toBe("timeline");
+    expect(dayViewFor("room", 1, 1)).toBe("room");
+    expect(dayViewFor("room", 4)).toBe("timeline");
+    expect(viewForSegment("day", { mode: "room", practitionerCount: 1, roomCount: 2 })).toBe("room");
+    expect(viewForSegment("day", { mode: "room", practitionerCount: 3 })).toBe("timeline");
+  });
+
+  it("modos disponibles y toggle", () => {
+    expect(availableAgendaModes(1, 0)).toEqual(["day"]);
+    expect(availableAgendaModes(3, 0)).toEqual(["day", "practitioner"]);
+    expect(availableAgendaModes(1, 2)).toEqual(["day", "room"]);
+    expect(availableAgendaModes(3, 1)).toEqual(["day", "practitioner", "room"]);
+    expect(showModeToggle("timeline", 1, 1)).toBe(true);
+    expect(showModeToggle("room", 1, 1)).toBe(true);
+    expect(showModeToggle("timeline", 1, 0)).toBe(false);
+    expect(showModeToggle("week", 3, 3)).toBe(false);
+    // sin salas = hoy
+    expect(showModeToggle("timeline", 2, 0)).toBe(showModeToggle("timeline", 2));
+  });
+});
+
+describe("[SR-U3] salas del alcance y filtro efectivo", () => {
+  const rooms = [
+    { id: "R1", locationId: "L1", name: "Consultorio 1", kind: "CONSULTORIO" as const, capacity: 1 },
+    { id: "R2", locationId: "L1", name: "Gimnasio", kind: "GIMNASIO" as const, capacity: 4 },
+    { id: "R3", locationId: "L2", name: "Box", kind: "BOX" as const, capacity: 1 },
+  ];
+
+  it("roomsInScope: la sede elegida; Todas las sedes → la principal (D4); conserva el orden", () => {
+    expect(roomsInScope(rooms, "L1", "L1").map((r) => r.id)).toEqual(["R1", "R2"]);
+    expect(roomsInScope(rooms, "L2", "L1").map((r) => r.id)).toEqual(["R3"]);
+    expect(roomsInScope(rooms, null, "L1").map((r) => r.id)).toEqual(["R1", "R2"]);
+    expect(roomsInScope(rooms, null, "L2").map((r) => r.id)).toEqual(["R3"]);
+    expect(roomsInScope(rooms, "L9", "L1")).toEqual([]);
+    expect(roomsInScope([], null, "L1")).toEqual([]);
+  });
+
+  it("al cambiar de sede la sala de la otra sede deja de valer (→ todas)", () => {
+    expect(effectiveRoomFilter("R1", roomsInScope(rooms, "L1", "L1"))).toBe("R1");
+    expect(effectiveRoomFilter("R1", roomsInScope(rooms, "L2", "L1"))).toBeNull();
+  });
+
+  it("filtro efectivo: ajena/archivada → todas; con <2 salas no hay filtro; none solo con ≥2", () => {
+    const l1 = roomsInScope(rooms, "L1", "L1");
+    expect(effectiveRoomFilter(null, l1)).toBeNull();
+    expect(effectiveRoomFilter(undefined, l1)).toBeNull();
+    expect(effectiveRoomFilter("none", l1)).toBe("none");
+    expect(effectiveRoomFilter("R-archivada", l1)).toBeNull();
+    expect(effectiveRoomFilter("R3", l1)).toBeNull();
+    expect(effectiveRoomFilter("R3", roomsInScope(rooms, "L2", "L1"))).toBeNull(); // 1 sala: sin filtro
+    expect(effectiveRoomFilter("none", [])).toBeNull();
+  });
+
+  it("showRoomOnCards: ≥2 salas visibles y fuera de Por sala", () => {
+    expect(showRoomOnCards({ view: "timeline", roomCount: 2, roomFilter: null })).toBe(true);
+    expect(showRoomOnCards({ view: "practitioner", roomCount: 3, roomFilter: null })).toBe(true);
+    expect(showRoomOnCards({ view: "room", roomCount: 3, roomFilter: null })).toBe(false);
+    expect(showRoomOnCards({ view: "timeline", roomCount: 1, roomFilter: null })).toBe(false);
+    expect(showRoomOnCards({ view: "timeline", roomCount: 0, roomFilter: null })).toBe(false);
+    // filtrado a una sala (o a Sin sala) todas las tarjetas dirían lo mismo
+    expect(showRoomOnCards({ view: "list", roomCount: 3, roomFilter: "R1" })).toBe(false);
+    expect(showRoomOnCards({ view: "list", roomCount: 3, roomFilter: "none" })).toBe(false);
+  });
+});
+
+describe("[SR-U3] radiogroup con N opciones (flechas)", () => {
+  it("avanza/retrocede con vuelta; Home/End; otra tecla → null", async () => {
+    const { nextRadioValue } = await import("@/lib/agenda-client-state");
+    const two = ["day", "practitioner"] as const;
+    const three = ["day", "practitioner", "room"] as const;
+    expect(nextRadioValue(two, "day", "ArrowRight")).toBe("practitioner");
+    expect(nextRadioValue(two, "practitioner", "ArrowRight")).toBe("day");
+    expect(nextRadioValue(two, "day", "ArrowLeft")).toBe("practitioner");
+    expect(nextRadioValue(three, "day", "ArrowDown")).toBe("practitioner");
+    expect(nextRadioValue(three, "practitioner", "ArrowRight")).toBe("room");
+    expect(nextRadioValue(three, "room", "ArrowRight")).toBe("day");
+    expect(nextRadioValue(three, "day", "ArrowUp")).toBe("room");
+    expect(nextRadioValue(three, "room", "Home")).toBe("day");
+    expect(nextRadioValue(three, "day", "End")).toBe("room");
+    expect(nextRadioValue(three, "day", "Enter")).toBeNull();
+    // valor fuera de la lista (modo guardado que ya no aplica): adelante = el primero, atrás = el último
+    expect(nextRadioValue(two, "room" as never, "ArrowRight")).toBe("day");
+    expect(nextRadioValue(two, "room" as never, "ArrowLeft")).toBe("practitioner");
   });
 });

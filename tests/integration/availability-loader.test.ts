@@ -39,6 +39,12 @@ import {
   type AvailabilityInput,
 } from "@/lib/availability/types";
 import { eligiblePractitioners, resolvePractitionerService } from "@/lib/availability/next-free";
+import { dayLockState, scheduledRanges, workingRanges } from "@/lib/availability/ranges";
+import { buildSlots } from "@/lib/availability/slots";
+import { dayKeyRange } from "@/lib/availability/day";
+import { defaultRoomFor, roomOccupancyAt } from "@/lib/availability/rooms";
+import { addRoom } from "@/tests/helpers/tenant-factory";
+import { PrismaClient as RawPrismaClient } from "@prisma/client";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -465,5 +471,188 @@ describe.skipIf(!RUN)("loadAvailabilityInputs (B2.2)", () => {
   it("rechaza ventanas inválidas", async () => {
     await expect(loadAvailabilityInputs(prismaService, { tenantId: A.tenantId, from: "2027-02-30", to: TO })).rejects.toThrow(/from inválido/);
     await expect(loadAvailabilityInputs(prismaService, { tenantId: A.tenantId, from: TO, to: FROM })).rejects.toThrow(/from .* > to/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SR1a (corrida SR, M4): salas en el loader. Tenant propio para no mover los
+// fixtures de arriba. Misma ventana lun 01/03/2027 → dom 07/03/2027.
+// ─────────────────────────────────────────────────────────────────────────────
+describe.skipIf(!RUN)("loadAvailabilityInputs: salas (SR1a)", () => {
+  let owner: PrismaClient;
+  let D: EphemeralTenant;
+  let p2: string;
+  const L: Record<string, string> = {};
+  const R: Record<string, string> = {};
+  const ids: Record<string, string> = {};
+
+  beforeAll(async () => {
+    owner = ownerClient();
+    D = await createEphemeralTenant(owner);
+    p2 = (await addPractitioner(owner, D)).practitionerId;
+    L.main = (await owner.location.create({ data: { tenantId: D.tenantId, name: "Principal", isPrimary: true } })).id;
+    L.norte = (await owner.location.create({ data: { tenantId: D.tenantId, name: "Norte", isPrimary: false } })).id;
+    R.c1 = (await addRoom(owner, D, { locationId: L.main, name: "Consultorio 1" })).roomId;
+    R.c2 = (await addRoom(owner, D, { locationId: L.main, name: "Consultorio 2" })).roomId;
+    R.n1 = (await addRoom(owner, D, { locationId: L.norte, name: "Box Norte" })).roomId;
+
+    const sched = (practitionerId: string, locationId: string, dow: number, startMin: number, endMin: number, roomId: string | null) =>
+      owner.practitionerSchedule.create({ data: { tenantId: D.tenantId, practitionerId, locationId, dow, startMin, endMin, roomId } });
+    await sched(D.practitionerId, L.main, 1, 540, 780, R.c1); // lun 9-13 Consultorio 1
+    await sched(D.practitionerId, L.main, 1, 900, 1140, null); // lun 15-19 sin sala
+    await sched(p2, L.main, 1, 540, 780, R.c2); // lun 9-13 Consultorio 2
+    await sched(p2, L.norte, 4, 540, 780, R.n1); // jue 9-13 Box Norte
+
+    const exception = (practitionerId: string | null, date: string, ranges: unknown) =>
+      owner.scheduleException
+        .create({
+          data: { tenantId: D.tenantId, practitionerId, date: new Date(`${date}T00:00:00Z`), kind: "CUSTOM_HOURS", ranges: ranges as object, createdById: D.userId },
+        })
+        .then((e) => e.id);
+    ids.exRoom = await exception(D.practitionerId, "2027-03-02", [
+      { startMin: 600, endMin: 720, locationId: L.main, roomId: R.c2 },
+      { startMin: 780, endMin: 840 },
+    ]);
+    // roomId con forma inválida (escritor viejo / dato roto): el día NO se cierra, la franja queda sin sala.
+    ids.exBadRoom = await exception(D.practitionerId, "2027-03-03", [{ startMin: 600, endMin: 720, roomId: 123 }]);
+
+    const booking = (practitionerId: string, at: Date, roomId: string | null, locationId: string | null) =>
+      owner.booking
+        .create({
+          data: {
+            tenantId: D.tenantId, practitionerId, serviceId: D.serviceId, patientId: null, scheduledFor: at, durationMin: 60,
+            status: "CONFIRMED", locationId, roomId, idempotencyKey: randomUUID(),
+          },
+        })
+        .then((b) => b.id);
+    ids.bRoom = await booking(D.practitionerId, ar("2027-03-01T10:00"), R.c1, L.main);
+    ids.bOtherRoom = await booking(p2, ar("2027-03-01T10:00"), R.c2, L.main);
+    ids.bNoRoom = await booking(p2, ar("2027-03-01T11:00"), null, null);
+
+    // Bloqueo "de todos" común (no de sala): tiene que seguir en `blocks`.
+    ids.blkAll = await owner.timeBlock
+      .create({ data: { tenantId: D.tenantId, createdById: D.userId, startsAt: ar("2027-03-03T10:00"), endsAt: ar("2027-03-03T11:00"), reason: "Reunión" } })
+      .then((b) => b.id);
+  });
+
+  afterAll(async () => {
+    await D?.cleanup();
+    await owner?.$disconnect();
+  });
+
+  /** Bloqueo de SALA (CHECK: locationId explícito, practitionerId null). */
+  const roomBlock = (roomId: string, locationId: string, startsAt: Date, endsAt: Date, reason: string | null) =>
+    owner.timeBlock
+      .create({ data: { tenantId: D.tenantId, createdById: D.userId, practitionerId: null, locationId, roomId, startsAt, endsAt, reason } })
+      .then((b) => b.id);
+
+  it("roomId en franjas (solo si tiene sala), en las excepciones y en los turnos", async () => {
+    const r = await loadBoth({ tenantId: D.tenantId, from: FROM, to: TO });
+    expect(r.templates.find((t) => t.practitionerId === D.practitionerId)!.ranges).toEqual([
+      { dow: 1, startMin: 540, endMin: 780, locationId: L.main, roomId: R.c1, validFrom: null, validUntil: null },
+      { dow: 1, startMin: 900, endMin: 1140, locationId: L.main, validFrom: null, validUntil: null },
+    ]);
+    expect(r.exceptions.find((e) => e.id === ids.exRoom)!.ranges).toEqual([
+      { startMin: 600, endMin: 720, locationId: L.main, roomId: R.c2 },
+      { startMin: 780, endMin: 840, locationId: L.main },
+    ]);
+    // Dato roto en roomId: la franja sigue abierta, sin sala.
+    expect(r.exceptions.find((e) => e.id === ids.exBadRoom)!.ranges).toEqual([{ startMin: 600, endMin: 720, locationId: L.main }]);
+    expect(r.bookings.map((b) => [b.id, b.roomId])).toEqual([
+      [ids.bRoom, R.c1],
+      [ids.bOtherRoom, R.c2],
+      [ids.bNoRoom, null],
+    ]);
+    expect(r.roomBlocks).toEqual([]);
+
+    // De punta a punta con el motor: sala por defecto y ocupación.
+    expect(defaultRoomFor(r, D.practitionerId, ar("2027-03-01T10:00"), 45, null)).toBe(R.c1);
+    expect(defaultRoomFor(r, D.practitionerId, ar("2027-03-02T10:30"), 45, L.main)).toBe(R.c2); // la excepción manda
+    expect(defaultRoomFor(r, D.practitionerId, ar("2027-03-01T16:00"), 45, null)).toBeNull();
+    const occ = roomOccupancyAt(r.bookings, {
+      roomId: R.c2, practitionerId: D.practitionerId, when: ar("2027-03-01T10:30"), durationMin: 60, capacity: 1, now: WINDOW_START,
+    });
+    expect(occ).toMatchObject({ used: 1, atCapacity: true, practitionerIds: [p2], blocked: null });
+  });
+
+  it("bloqueo de sala: sale de `blocks`, va a `roomBlocks` y no cambia los slots de NINGÚN profesional (no regresión §17.5)", async () => {
+    const before = await loadBoth({ tenantId: D.tenantId, from: FROM, to: TO });
+    const rb = await roomBlock(R.c1, L.main, ar("2027-03-01T09:00"), ar("2027-03-01T13:00"), "Mantenimiento");
+    const rbAllDay = await roomBlock(R.n1, L.norte, ar("2027-03-04T00:00"), ar("2027-03-05T00:00"), null);
+    try {
+      const after = await loadBoth({ tenantId: D.tenantId, from: FROM, to: TO });
+      // Los bloqueos de profesionales/consultorio, idénticos (y el de "todos" sigue).
+      expect(after.blocks).toEqual(before.blocks);
+      expect(after.blocks.map((b) => b.id)).toEqual([ids.blkAll]);
+      expect(after.roomBlocks).toEqual([
+        { id: rb, roomId: R.c1, startsAt: ar("2027-03-01T09:00"), endsAt: ar("2027-03-01T13:00"), reason: "Mantenimiento" },
+        { id: rbAllDay, roomId: R.n1, startsAt: ar("2027-03-04T00:00"), endsAt: ar("2027-03-05T00:00"), reason: null },
+      ]);
+      // Nada de la fila de sala se cuela en `blocks` (practitionerId null = "todos").
+      expect(JSON.stringify(after.blocks)).not.toContain(rb);
+
+      // Franjas, candado y grilla de turnos de todos, día por día: idénticos.
+      for (const day of dayKeyRange(FROM, TO)) {
+        for (const pid of [D.practitionerId, p2]) {
+          expect(scheduledRanges(pid, day, after)).toEqual(scheduledRanges(pid, day, before));
+          expect(workingRanges(pid, day, after)).toEqual(workingRanges(pid, day, before));
+          expect(dayLockState(pid, day, after)).toEqual(dayLockState(pid, day, before));
+          const slots = (input: LoadedAvailabilityInput) =>
+            buildSlots({
+              dayKey: day, ranges: workingRanges(pid, day, input), stepMin: 15, durationMin: 45,
+              lead: { minMinutes: 0, maxDays: null }, now: WINDOW_START,
+              bookings: input.bookings.filter((b) => b.practitionerId === pid), cap: 1,
+            });
+          expect(slots(after)).toEqual(slots(before));
+        }
+        expect(dayLockState(null, day, after)).toEqual(dayLockState(null, day, before));
+      }
+      // Y la sala sí queda llena por el bloqueo; la sala por defecto no se mueve.
+      expect(defaultRoomFor(after, D.practitionerId, ar("2027-03-01T10:00"), 45, null)).toBe(R.c1);
+      expect(
+        roomOccupancyAt([], { roomId: R.c1, practitionerId: D.practitionerId, when: ar("2027-03-01T10:00"), durationMin: 45, capacity: 5, now: WINDOW_START }, after.roomBlocks)
+      ).toMatchObject({ atCapacity: true, blocked: { blockId: rb, reason: "Mantenimiento" } });
+
+      // Con filtro de sede: solo los bloqueos de sala de esa sede.
+      const norte = await loadBoth({ tenantId: D.tenantId, locationId: L.norte, from: FROM, to: TO });
+      expect(norte.roomBlocks!.map((b) => b.id)).toEqual([rbAllDay]);
+      expect(norte.blocks.map((b) => b.id)).toEqual([ids.blkAll]);
+    } finally {
+      await owner.timeBlock.deleteMany({ where: { id: { in: [rb, rbAllDay] } } });
+    }
+  });
+
+  it("no suma statements: las salas viajan como columnas de las mismas sentencias y nadie consulta Room", async () => {
+    const url = process.env.DATABASE_URL_SERVICE ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+    const counted = new RawPrismaClient({ ...(url ? { datasources: { db: { url } } } : {}), log: [{ emit: "event", level: "query" }] });
+    const sql: string[] = [];
+    counted.$on("query" as never, (e: { query: string }) => sql.push(e.query));
+    const rb = await roomBlock(R.c1, L.main, ar("2027-03-01T09:00"), ar("2027-03-01T13:00"), "Conteo");
+    try {
+      const count = async (p: LoadAvailabilityParams) => {
+        sql.length = 0;
+        await loadAvailabilityInputs(counted, p);
+        return [...sql];
+      };
+      const full = await count({ tenantId: D.tenantId, from: FROM, to: TO });
+      // Ninguna sentencia a la tabla Room (ni join ni query de relación).
+      expect(full.some((q) => /"Room"/.test(q))).toBe(false);
+      // roomId se pide en las sentencias que ya existían.
+      const roomIdIn = (table: string) => full.filter((q) => q.includes(`FROM "public"."${table}"`) && q.includes(`"${table}"."roomId"`)).length;
+      expect(roomIdIn("PractitionerSchedule")).toBe(1);
+      expect(roomIdIn("TimeBlock")).toBe(1);
+      expect(roomIdIn("Booking")).toBe(1);
+      // Una sentencia por tabla de la fase 2 (con el bloqueo de sala adentro, igual que sin él).
+      for (const table of ["PractitionerSchedule", "ScheduleException", "TimeBlock", "Booking"]) {
+        expect(full.filter((q) => q.includes(`FROM "public"."${table}"`)).length).toBe(1);
+      }
+      // Mismo número que sin bloqueos de sala: el bloqueo de sala no agrega nada.
+      await owner.timeBlock.update({ where: { id: rb }, data: { deletedAt: new Date() } });
+      const withoutRoomBlock = await count({ tenantId: D.tenantId, from: FROM, to: TO });
+      expect(withoutRoomBlock.length).toBe(full.length);
+    } finally {
+      await owner.timeBlock.deleteMany({ where: { id: rb } });
+      await counted.$disconnect();
+    }
   });
 });

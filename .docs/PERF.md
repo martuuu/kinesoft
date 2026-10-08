@@ -191,9 +191,45 @@ los versionados. **Sin regresiones fuera de umbral** en los 28 escenarios. Los v
 | `/planes` | — | **184,5 kB** | ≤ 180 → **no cumplido** |
 
 Lo que se difirió para llegar acá: pestañas no default del perfil, el editor (`next/dynamic`) y el modal de agendar de
-Seguimiento. El chunk compartido de zod (13 kB) ya estaba en el layout. **Decisión de Martin** (recomendado: aceptar,
-es lo que piden C9/S22f; el presupuesto bloqueante está diferido a C1 por §14.4). Fila `bundle-es3-sobre-criterio` en
-AUDIT; el split de helpers de `slot-cell` es C1.
+Seguimiento. El chunk compartido de zod (13 kB) ya estaba en el layout. **Aceptado por Martin el 08-oct** (es lo que
+piden C9/S22f; el presupuesto bloqueante sigue en C1 por §14.4). Fila `bundle-es3-sobre-criterio` en AUDIT; el split de
+helpers de `slot-cell` es C1.
+
+## SR — Salas/Consultorios (08-oct-2026)
+
+Gate en solitario sobre el Docker local, `compare.ts` contra los versionados (no se regrabaron). **Sin regresiones
+fuera de umbral** en los 28 escenarios. Los estrictos quedan iguales: `f.createBooking` 35 = base, `f.createBookingsBatch.20`
+186 = base (sin salas en el fixture).
+
+- **Sin sala = 0 sentencias nuevas** en create, update, batch y `listAgendaBookings`: todas las queries de sala son
+  condicionales. Lo fijan los tests de statements de `bookings-rooms` y `bookings-core-rooms`.
+- **Con sala** (medido por las sesiones, no en `compare.ts`): alta +1 con sede explícita (+3 con sede null: con sala
+  corren `lockTenantLocationsShared`, la validación de la sala y el conteo, que antes no corrían); edición +2
+  (SR3a: 30 → 32). El cupo y la sala se lockean en **una** sentencia (C2 (1b)); la ocupación es una sentencia UNION
+  ALL; el batch carga los turnos de la sala una vez.
+- **Bootstrap de `/agenda`:** +1 sentencia / +1 tx (`listRoomOptions`, aparte de `listAgendaBookings`; escenarios
+  `agenda` 48 → 49 y `a.page.*` +1). Configuración: `getPractitionerSchedule` sin salas = 0 queries nuevas, con salas +3.
+- **Dashboard 19 → 15 tx, mismas sentencias (52).** `getDashboardData` abría 6 tx interactivas de ingresos en
+  paralelo con las de los counts → "Unable to start a transaction in the given time" intermitente (riesgo real en
+  prod, con el pool chico de Vercel). Ahora `loadRevenue` es **una** tx con las lecturas en serie
+  (`revenueAmountsInTx`, `lib/dashboard.ts:585,642`): con todo en paralelo `Promise.all` no ganaba nada salvo
+  conexiones. **Diferido C1 perf:** `_loadDashboardCounts` (`lib/dashboard.ts:153`) sigue abriendo ~8 `runWithRls`
+  en paralelo, el mismo patrón (AUDIT `dashboard-counts-tx-paralelas`).
+
+**Bundle** (first-load gzip, `npm run perf:bundle`):
+
+| Ruta | ES3 | SR | Criterio de §17.3 (≤ +1 kB) |
+|---|---|---|---|
+| `/agenda` | ~202 kB | **204,5 kB** | **no cumplido** |
+| `/configuracion` | ~212,5 kB | **216,2 kB** | **no cumplido** |
+| `/dashboard` | 184 kB | 184,6 kB | cumplido |
+| `/pacientes/[id]` · `/planes` · `/seguimiento/[sessionId]` · `/diagnostico` | 205,3 · 184,6 · 185 · 180,3 kB | sin cambios | — |
+
+Lo que ya va diferido: "Por sala" (`RoomDayPanel`) y `RoomFilter` con `dynamic()` en `/agenda`; `RoomsSection` con
+`dynamic` al abrir en `/configuracion`. `buildRoomColumns` se separó a `lib/agenda-layout-rooms.ts` (sin re-export desde
+`agenda-layout.ts`): webpack no separa un módulo por export y viajaba en el first load (~−0,83 kB gz, proxy de esbuild
+de SR-U6). **Decisión de Martin** (recomendado: aceptar; el bloqueante está en C1). Mejora concreta: el `WeekDrawer`
+del editor de horarios con `dynamic` (C1). Fila `bundle-sr-sobre-criterio` en AUDIT.
 
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 

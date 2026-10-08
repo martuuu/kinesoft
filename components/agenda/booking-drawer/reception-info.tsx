@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Tag } from "@/components/ui/tag";
 import { Row } from "./billing-rows";
 import type { DrawerBooking } from "./types";
@@ -30,8 +31,13 @@ function safeUrl(url: string | null | undefined): string | null {
  * estado de recepción. Todo opcional: si el DTO no trae el campo, la fila no
  * aparece (la agenda los suma en B4.3; hasta entonces el drawer se ve igual).
  * Fragmento dentro de la tarjeta de detalle, como `BillingRows`.
+ *
+ * SR-U5b: `room` = la fila "Sala" (`RoomRow`), justo debajo de la sede. La arma
+ * `index.tsx` porque "Cambiar" necesita el estado y la llamada al server; para
+ * quien no opera el turno la fila es de solo lectura. Ausente (sin salas en la
+ * sede ni en el turno) = el detalle queda como antes de SR.
  */
-export function ReceptionInfo({ booking }: { booking: DrawerBooking }) {
+export function ReceptionInfo({ booking, room }: { booking: DrawerBooking; room?: ReactNode }) {
   const url = safeUrl(booking.telemedicineUrl);
   // Atendido: ya no está "en atención"; queda la hora de llegada como dato.
   const reception =
@@ -43,6 +49,7 @@ export function ReceptionInfo({ booking }: { booking: DrawerBooking }) {
   return (
     <>
       {booking.locationName && <Row label="Sede">{booking.locationName}</Row>}
+      {room}
       {booking.isTelemedicine && (
         <Row label="Modalidad">
           Telemedicina

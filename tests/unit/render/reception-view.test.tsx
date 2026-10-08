@@ -53,4 +53,45 @@ describe("ReceptionView render", () => {
     expect(html).not.toContain("Marcar Llegó");
     expect(html).toContain("Este día no es hoy");
   });
+  it("[SR-U5a] columna Sala solo con salas; sin salas el markup es el de siempre", () => {
+    const render = (roomById?: Record<string, { name: string }> | null) =>
+      renderToStaticMarkup(
+        <ReceptionView dayKey={DAY} bookings={withRooms} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} roomById={roomById} />
+      );
+    const sin = render(undefined);
+    expect(sin).not.toContain(">Sala<");
+    expect(sin).not.toContain('data-label="Sala"');
+    // Catálogo vacío o null = consultorio sin salas: idéntico a no pasar nada.
+    expect(render({})).toBe(sin);
+    expect(render(null)).toBe(sin);
+
+    const con = render({ room_c2: { name: "Consultorio 2" } });
+    expect(con).toContain('<th scope="col">Sala</th>');
+    // Una celda por fila (data-label para las cards de mobile), con o sin sala.
+    expect(con.split('data-label="Sala"').length - 1).toBe(withRooms.length);
+    expect(con).toContain("Consultorio 2");
+    // La columna va después de Profesional y antes de Estado.
+    expect(con.indexOf(">Profesional<")).toBeLessThan(con.indexOf(">Sala<"));
+    expect(con.indexOf(">Sala<")).toBeLessThan(con.indexOf(">Estado<"));
+  });
+  it("[SRZ-FX2a B5] sala fuera del catálogo = 'Sala archivada' (nunca '—', que es 'sin sala')", () => {
+    const html = renderToStaticMarkup(
+      <ReceptionView dayKey={DAY} bookings={withRooms} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} roomById={{ room_c2: { name: "Consultorio 2" } }} />
+    );
+    const cell = (id: string) => {
+      const i = html.indexOf(`Paciente ${id}<`);
+      const j = html.indexOf('data-label="Sala"', i);
+      return html.slice(j, html.indexOf("</td>", j));
+    };
+    expect(cell("archivada")).toContain("Sala archivada");
+    expect(cell("sin")).toContain("—");
+    expect(cell("sin")).not.toContain("Sala archivada");
+    expect(cell("c2")).toContain("Consultorio 2");
+  });
 });
+
+const withRooms = [
+  dto("c2", "09:00", { isOverbooked: false, roomId: "room_c2" }),
+  dto("sin", "09:30", { isOverbooked: false, roomId: null }),
+  dto("archivada", "10:30", { isOverbooked: false, roomId: "room_vieja" }),
+];

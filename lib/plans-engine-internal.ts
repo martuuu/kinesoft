@@ -59,6 +59,7 @@ import { BAD_LOCATION_ERROR } from "@/lib/bookings-constants";
 import { buildBookingCreateData, defaultLocationFor, practitionerServiceRule } from "@/lib/bookings-core";
 import type { BookingChangeRef } from "@/lib/booking-events-internal";
 import { dayKeyToDbDate, dayWindow } from "@/lib/availability/day";
+import { defaultRoomFor } from "@/lib/availability/rooms";
 import {
   classifyPlanRows,
   expandPlanDates,
@@ -834,6 +835,10 @@ async function lockWrittenSessionsInTx(
  *   - Sede: la del plan o la de la franja (la principal si no cae en
  *     ninguna), validadas activas con el lock compartido ya tomado; una de
  *     franja archivada en el medio queda null (como `bookings-core`).
+ *   - Sala (SR2b, SR-D3): la de la franja (`defaultRoomFor`, sede ya
+ *     resuelta), validada activa en UNA sentencia con el mismo lock; una
+ *     archivada en el medio queda null. Sin chequeo de ocupación ni lock de
+ *     sala, y fuera del preview y del `stateToken` (C6/C7 no cambian).
  *   - Caché `totalSessions` solo en modo `add` (el alta la escribe al crear).
  */
 export async function commitPlanRowsInTx(
@@ -862,6 +867,8 @@ export async function commitPlanRowsInTx(
     completedAt: Date | null;
     adopt: PatientBookingDetail | null;
     locationId: string | null;
+    /** SR: sala por defecto de la franja (solo turnos nuevos); con sala, `locationId` es explícito (SR-D6). */
+    roomId: string | null;
     /** Sesión existente cuya fecha cambia (I3). */
     moved: boolean;
   };
@@ -875,10 +882,16 @@ export async function commitPlanRowsInTx(
     const at = creates ? new Date(c.at) : adopt ? adopt.scheduledFor : row.at;
     const completedAt = kind === "mark-done" ? row.at : adopt?.status === "COMPLETED" ? adopt.scheduledFor : null;
     const locationId = creates ? program.locationId ?? defaultLocationFor(input, program.practitionerId, at, program.durationMin) : null;
+    // SR (SR2b, SR-D3): la sala por defecto de la franja que contiene el turno,
+    // en la sede YA resuelta (la del plan o la de la franja). Sin chequeo de
+    // ocupación ni lock de sala: Planes no toca C6/C7 (el preview y el
+    // `stateToken` no la miran) y la barrera es la validación de Configuración.
+    // `locationId` null acá = el tenant no tiene sedes → tampoco salas.
+    const roomId = locationId ? defaultRoomFor(input, program.practitionerId, at, program.durationMin, locationId) : null;
     // I3: contra la fecha ACTUAL de la sesión (P2-Z), no contra el `at` de la
     // fila: en replan/adopción la fila ya trae la fecha nueva.
     const moved = !!row.sessionId && (+at !== +(row.currentAt ?? row.at) || row.index !== c.index);
-    return { c, row, creates, at, completedAt, adopt, locationId, moved };
+    return { c, row, creates, at, completedAt, adopt, locationId, roomId, moved };
   });
 
   await lockWrittenSessionsInTx(tx, program.id, plans);
@@ -890,7 +903,32 @@ export async function commitPlanRowsInTx(
       (await tx.location.findMany({ where: { id: { in: locIds }, tenantId, active: true }, select: { id: true } })).map((l) => l.id)
     );
     if (program.locationId && !active.has(program.locationId)) throw new PlanRejected(PLAN_ENGINE_COPY.location, "locationId");
-    for (const x of plans) if (x.locationId && !active.has(x.locationId)) x.locationId = null;
+    for (const x of plans) {
+      if (x.locationId && !active.has(x.locationId)) {
+        x.locationId = null;
+        x.roomId = null; // la sala es de esa sede (FK compuesta): se va con ella
+      }
+    }
+  }
+
+  // Salas efectivamente escritas (SR2b): UNA sentencia para todas, y solo si
+  // alguna fila tiene sala (sin salas, 0 statements nuevos). Mismo lock
+  // compartido de sedes que arriba: `archiveRoom` toma el exclusivo, así que no
+  // se intercala entre esta lectura y el INSERT. Una sala archivada (o de otra
+  // sede, p. ej. una excepción con JSON viejo) entre el preview y el commit deja
+  // la fila SIN sala, no es error: el plan no la eligió, la puso la franja.
+  // `tenantId` a mano (prod es BYPASSRLS y las FK saltean RLS).
+  const roomIds = Array.from(new Set(plans.map((x) => x.roomId).filter((x): x is string => !!x)));
+  if (roomIds.length) {
+    const live = new Map(
+      (
+        await tx.room.findMany({
+          where: { id: { in: roomIds }, tenantId, active: true, location: { active: true } },
+          select: { id: true, locationId: true },
+        })
+      ).map((r) => [r.id, r.locationId])
+    );
+    for (const x of plans) if (x.roomId && live.get(x.roomId) !== x.locationId) x.roomId = null;
   }
 
   // ── Sesiones ──
@@ -955,6 +993,10 @@ export async function commitPlanRowsInTx(
           idempotencyKey: `${PLAN_KEY_PREFIX}${generationId}:${x.c.index}`,
           seriesId: generationId,
         }),
+        // SR2b: después del spread, así manda aunque `buildBookingCreateData`
+        // sume `roomId` (SR2a). Con sala, `locationId` ya es explícito (CHECK
+        // Booking_room_location_check, SR-D6).
+        roomId: x.roomId,
         programId: program.id,
         sessionId: sessionIds.get(x.c.index)!,
         pricedByPlan: stamp.pricedByPlan,
@@ -962,9 +1004,10 @@ export async function commitPlanRowsInTx(
     });
     const rows = await tx.booking.createManyAndReturn({
       data,
-      select: { id: true, idempotencyKey: true, practitionerId: true, scheduledFor: true },
+      select: { id: true, idempotencyKey: true, practitionerId: true, scheduledFor: true, roomId: true },
     });
-    for (const b of rows) refs.push({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, prev: null, kind: "booking" });
+    for (const b of rows)
+      refs.push({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, roomId: b.roomId, prev: null, kind: "booking" });
   }
 
   // ── Adopciones (CAS) ──

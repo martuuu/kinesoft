@@ -47,6 +47,23 @@ export const CLINICAL_RELINK_ERROR = "Este turno tiene datos clínicos: pedile a
 export const SERVICE_DISABLED_ERROR = (serviceName: string) =>
   `Este profesional no tiene habilitado el servicio «${serviceName}». Elegí otro profesional o habilitalo en Configuración → Profesionales.`;
 export const BAD_LOCATION_ERROR = "Sede inválida o archivada. Elegí otra sede.";
+
+// ─── Salas (corrida SR; copy del relevamiento UI y de §17.5) ───
+
+/**
+ * Sala elegida que no existe, es de otro consultorio, está archivada o no es
+ * de la sede del turno (outcome `bad-room` del core). No se escribe nada.
+ */
+export const BAD_ROOM_ERROR = "Esa sala no está disponible en esa sede.";
+/**
+ * Sala llena: ya atienden ahí tantos profesionales como su capacidad (SR-D1).
+ * Forzable con `allowRoomConflict`, que NO es sobreturno (SR-D2).
+ */
+export const ROOM_BUSY_ERROR = (roomName: string) =>
+  `${roomName} ya está ocupado a esa hora. Elegí otra sala o asignalo igual.`;
+/** Sala tapada por un bloqueo de sala (`TimeBlock.roomId`, §17.5). Mismo forzado que `ROOM_BUSY_ERROR`. */
+export const ROOM_BLOCKED_ERROR = (roomName: string, reason: string | null) =>
+  `${roomName} está bloqueado a esa hora${reason ? ` (${reason})` : ""}. Elegí otra sala o asignalo igual.`;
 /**
  * Caso `conflict` del core al MOVER un turno (sin la sugerencia de "próximo
  * libre / sobreturno" del alta). P3.Z.0 (S22a → S27b): antes el literal estaba

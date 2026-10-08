@@ -56,6 +56,7 @@ import {
   planCardActions,
   planCardHeading,
   planDischargePrompt,
+  RESCHEDULE_FORCE_LABEL,
   rescheduleForceFor,
   splitPlanSessions,
 } from "@/components/planes/plan-card";
@@ -70,7 +71,15 @@ import { PlanHistoryBody, dayKeyToDisplay, planHistoryEventLabel } from "@/compo
 import { PlanView, sortPlansForView } from "@/components/patients/profile/views/plan-view";
 import { PlanTemplateApplyButton, PlanTemplateApplyModal } from "@/components/patients/plan-template-apply";
 import { NO_PLAN_PERMISSIONS, type PlanPermissions } from "@/components/planes/plan-editor-types";
-import { BLOCKED_ERROR, OUT_OF_HOURS_ERROR, PATIENT_OVERLAP_ERROR, STALE_ERROR } from "@/lib/bookings-constants";
+import {
+  BAD_ROOM_ERROR,
+  BLOCKED_ERROR,
+  OUT_OF_HOURS_ERROR,
+  PATIENT_OVERLAP_ERROR,
+  ROOM_BLOCKED_ERROR,
+  ROOM_BUSY_ERROR,
+  STALE_ERROR,
+} from "@/lib/bookings-constants";
 import type { PlanDTO, PlanSessionDTO } from "@/lib/plans-read-types";
 
 const render = (el: ReactElement) =>
@@ -214,6 +223,16 @@ describe("[S22a] helpers de la PlanCard (copy literal de C13)", () => {
     expect(rescheduleForceFor("El profesional ya tiene un turno en ese horario.")).toBe("allowOverbooking");
     expect(rescheduleForceFor(STALE_ERROR)).toBeNull();
     expect(rescheduleForceFor("La sesión ya fue realizada: no se puede reprogramar.")).toBeNull();
+  });
+
+  it("[SR-FX2b] reprogramar a una sala ocupada o bloqueada → allowRoomConflict, y el label no dice sobreturno (SR-D2)", () => {
+    expect(rescheduleForceFor(ROOM_BUSY_ERROR("Consultorio 1"))).toBe("allowRoomConflict");
+    expect(rescheduleForceFor(ROOM_BLOCKED_ERROR("Consultorio 1", "Pintura"))).toBe("allowRoomConflict");
+    expect(rescheduleForceFor(ROOM_BLOCKED_ERROR("Box", null))).toBe("allowRoomConflict");
+    // La sala inválida no se fuerza: solo se muestra el error.
+    expect(rescheduleForceFor(BAD_ROOM_ERROR)).toBeNull();
+    expect(RESCHEDULE_FORCE_LABEL.allowRoomConflict).toBe("Moverlo igual (sala ocupada)");
+    expect(RESCHEDULE_FORCE_LABEL.allowRoomConflict.toLowerCase()).not.toContain("sobreturno");
   });
 });
 

@@ -15,6 +15,7 @@ import {
   type PractitionerPayerRule,
   type PractitionerServiceRule,
   type PractitionerTemplate,
+  type RoomBlock,
   type ScheduleExceptionInput,
   type ScheduleRange,
   type ScheduleTemplateRange,
@@ -51,8 +52,13 @@ export { NO_LOCATION_ID };
  * con `practitionerPayers` SIEMPRE cargado (en el contrato es opcional para
  * los callers puros).
  */
-export type LoadedAvailabilityInput = AvailabilityInput & {
+export type LoadedAvailabilityInput = Omit<AvailabilityInput, "bookings" | "roomBlocks"> & {
   practitionerPayers: ReadonlyArray<PractitionerPayerRule>;
+  /** SR: el loader siempre trae la sala del turno (null = sin sala), así el
+   *  resultado entra directo en `roomOccupancyAt`. */
+  bookings: ReadonlyArray<AvailabilityBooking & { roomId: string | null }>;
+  /** SR (§17.5): siempre cargado (`[]` = ninguno). */
+  roomBlocks: ReadonlyArray<RoomBlock>;
 };
 
 export type LoadAvailabilityParams = {
@@ -109,11 +115,17 @@ function tenantHoursOf(t: { businessHoursStart: number; businessHoursEnd: number
 // loader no confía — una excepción CUSTOM_HOURS con JSON roto se trata como
 // día SIN franjas (cerrar de más es recuperable; abrir de más da turnos que no
 // se pueden atender). `locationId` ausente/null = sede principal.
+// SR (M4): `roomId` ausente/null = sin sala. Un `roomId` con forma inválida se
+// toma como "sin sala" (`.catch(null)`) en vez de tumbar la excepción entera:
+// la sala solo decide la sala por defecto, no si el día abre. Que la sala sea
+// del tenant, de esa sede y activa lo valida el write-path del turno
+// (`lockActiveRoomInTx`, SR1d → bad-room), no el loader.
 const ExceptionRangesJson = z.array(
   z.object({
     startMin: z.number().int().min(0).max(MINUTES_PER_DAY),
     endMin: z.number().int().min(0).max(MINUTES_PER_DAY),
     locationId: z.string().nullish(),
+    roomId: z.string().min(1).max(64).nullish().catch(null),
   })
 );
 
@@ -304,6 +316,7 @@ async function loadForRuns(
             endMin: true,
             validFrom: true,
             validUntil: true,
+            roomId: true, // SR: columna escalar, misma sentencia
             location: { select: { active: true } },
           },
           orderBy: [{ dow: "asc" }, { startMin: "asc" }, { id: "asc" }],
@@ -344,6 +357,10 @@ async function loadForRuns(
         allDay: true,
         reason: true,
         groupId: true,
+        // SR (§17.5): un bloqueo de SALA tiene `practitionerId` null por CHECK
+        // y entra por el `practitionerId: null` de arriba; se separa abajo (sin
+        // otra sentencia) para que no bloquee a "todos".
+        roomId: true,
       },
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],
     }),
@@ -373,6 +390,7 @@ async function loadForRuns(
             practitionerId: true,
             serviceId: true,
             locationId: true,
+            roomId: true, // SR: ocupación de sala / vista "Por sala"
           },
           orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
         })
@@ -456,7 +474,17 @@ async function loadForRuns(
       // Poda de vigencias que no tocan la ventana (el motor igual las filtra por día).
       if (validFrom && validFrom > to) continue;
       if (validUntil && validUntil < from) continue;
-      ranges.push({ dow: r.dow, startMin: r.startMin, endMin: r.endMin, locationId: r.locationId, validFrom, validUntil });
+      // `roomId` solo si la franja tiene sala: la forma de una franja sin sala
+      // no cambia (y `normalize`/`scheduledRanges` la descartan igual, §5.27).
+      ranges.push({
+        dow: r.dow,
+        startMin: r.startMin,
+        endMin: r.endMin,
+        locationId: r.locationId,
+        ...(r.roomId != null ? { roomId: r.roomId } : {}),
+        validFrom,
+        validUntil,
+      });
     }
     return { practitionerId, isFallback: false, ranges };
   });
@@ -469,7 +497,12 @@ async function loadForRuns(
       ranges = parsed.success
         ? parsed.data
             .filter((r) => r.startMin < r.endMin)
-            .map((r) => ({ startMin: r.startMin, endMin: r.endMin, locationId: resolveLocation(r.locationId) }))
+            .map((r) => ({
+              startMin: r.startMin,
+              endMin: r.endMin,
+              locationId: resolveLocation(r.locationId),
+              ...(r.roomId != null ? { roomId: r.roomId } : {}),
+            }))
             .filter((r) => inLocation(r.locationId))
         : [];
     }
@@ -483,9 +516,23 @@ async function loadForRuns(
     };
   });
 
-  const blockInputs: TimeBlockInput[] = blocks.map((b) => ({ ...b }));
+  // SR (§17.5): un TimeBlock con `roomId` NO es un bloqueo de profesional (su
+  // `practitionerId` null acá significaría "todos"): sale de `blocks` y va a
+  // `roomBlocks`, que solo leen la ocupación de sala y la vista "Por sala".
+  // Se pasan `startsAt`/`endsAt` tal cual (sin la expansión de `allDay` de
+  // `ranges.ts`): es lo que compara `countRoomOverlapsInTx` (SR1d) en SQL, y la
+  // agenda y el write-path tienen que decir lo mismo.
+  const blockInputs: TimeBlockInput[] = [];
+  const roomBlocks: RoomBlock[] = [];
+  for (const { roomId, ...b } of blocks) {
+    if (roomId != null) {
+      roomBlocks.push({ id: b.id, roomId, startsAt: b.startsAt, endsAt: b.endsAt, reason: b.reason });
+    } else {
+      blockInputs.push(b);
+    }
+  }
 
-  const bookingInputs: AvailabilityBooking[] = bookings.map((b) => ({
+  const bookingInputs: Array<AvailabilityBooking & { roomId: string | null }> = bookings.map((b) => ({
     id: b.id,
     scheduledFor: b.scheduledFor,
     durationMin: b.durationMin,
@@ -497,6 +544,7 @@ async function loadForRuns(
     practitionerId: b.practitionerId,
     serviceId: b.serviceId,
     locationId: resolveLocation(b.locationId),
+    roomId: b.roomId,
   }));
 
   const practitionerServices: PractitionerServiceRule[] = pracServices.map((ps) => ({ ...ps }));
@@ -518,6 +566,7 @@ async function loadForRuns(
     templates,
     exceptions: exceptionInputs,
     blocks: blockInputs,
+    roomBlocks,
     bookings: bookingInputs,
     practitionerServices,
     services: serviceInfos,

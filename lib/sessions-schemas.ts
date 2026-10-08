@@ -34,6 +34,7 @@ const RescheduleForce = z
     allowPatientOverlap: z.boolean().optional(),
     allowOutOfHours: z.boolean().optional(),
     allowBlocked: z.boolean().optional(),
+    allowRoomConflict: z.boolean().optional(),
   })
   .strict();
 

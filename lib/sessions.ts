@@ -68,6 +68,9 @@ import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-eve
 import { assertProgramInvariantsInTx, ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
 import {
   BAD_LOCATION_ERROR,
+  BAD_ROOM_ERROR,
+  ROOM_BLOCKED_ERROR,
+  ROOM_BUSY_ERROR,
   BASIC_ACCESS_ERROR,
   BLOCKED_ERROR,
   OUT_OF_HOURS_ERROR,
@@ -578,6 +581,10 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
       return PATIENT_OVERLAP_ERROR;
     case "bad-location":
       return BAD_LOCATION_ERROR;
+    case "bad-room":
+      return BAD_ROOM_ERROR;
+    case "room-busy":
+      return o.blocked ? ROOM_BLOCKED_ERROR(o.roomName, o.blocked.reason) : ROOM_BUSY_ERROR(o.roomName);
     case "blocked":
       return BLOCKED_ERROR(o.reason);
     case "out-of-hours":
@@ -619,7 +626,7 @@ export async function rescheduleSession(input: {
   sessionId: string;
   scheduledFor: string; // ISO
   practitionerId?: string;
-  force?: { allowOverbooking?: boolean; allowPatientOverlap?: boolean; allowOutOfHours?: boolean; allowBlocked?: boolean };
+  force?: { allowOverbooking?: boolean; allowPatientOverlap?: boolean; allowOutOfHours?: boolean; allowBlocked?: boolean; allowRoomConflict?: boolean };
 }): Promise<ActionResult<RescheduleSessionResult>> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);

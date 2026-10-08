@@ -1,15 +1,14 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useMemo } from "react";
 import { Card } from "@/components/ui/card";
-import { nowOffset, type AgendaDayLayout, type AgendaZoom, type PractitionerColumn } from "@/lib/agenda-layout";
+import type { AgendaDayLayout, AgendaZoom, PractitionerColumn } from "@/lib/agenda-layout";
 import type { DayLockState } from "@/lib/availability/types";
 import { matchesHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { SlotCell, type PractitionerDayBooking } from "../grid/slot-cell";
-import { GUTTER_WIDTH, TimeGutterCell, rowMinHeight } from "../grid/time-gutter";
-import { NowLine } from "../grid/now-line";
 import { LockIcon } from "../grid/unavailable-overlay";
+import { DayColumnsGrid, gridDayLabel } from "./day-columns-grid";
 
 export type { PractitionerDayBooking } from "../grid/slot-cell";
 
@@ -54,7 +53,9 @@ export type { PractitionerDayBooking } from "../grid/slot-cell";
  *   (p. ej. sin la capability `agenda.manageBlocks`).
  *
  * ── Layout ──────────────────────────────────────────────────────────────────
- * Un contenedor con scroll en los dos ejes. Cada fila es su propia grilla CSS
+ * Desde SR-U4 la grilla (teclado, sticky, línea de "ahora", aria-grid) vive
+ * en `day-columns-grid.tsx`, compartida con "Por sala"; esta vista solo dibuja
+ * el header del profesional y le pasa la celda. Un contenedor con scroll en los dos ejes. Cada fila es su propia grilla CSS
  * con el mismo `gridTemplateColumns` (gutter + N × minmax(colMin, 1fr)), así
  * las columnas quedan alineadas y cada fila crece con sus cards (en flujo, sin
  * posicionar por hora: misma decisión que la vista Día). Header de
@@ -81,6 +82,13 @@ export type PractitionerDayViewProps<B extends PractitionerDayBooking = Practiti
   highlight?: AgendaHighlight | null;
   lockStateByPractitioner?: Readonly<Record<string, DayLockState | undefined>>;
   onDayLockClick?: (practitionerId: string) => void;
+  /**
+   * SR-U6: salas para las cards ("· Consultorio 2", ver `SlotCell.roomOf`). El
+   * caller lo pasa solo cuando la sala aporta (`showRoomOnCards`); ausente o
+   * null = cards de siempre. El resolver se arma acá (chunk diferido) y no en
+   * `agenda-client` (first load de /agenda).
+   */
+  roomById?: Readonly<Record<string, { name: string }>> | null;
 };
 
 /** Ancho mínimo de columna: debajo de esto la card no deja leer el nombre. */
@@ -148,8 +156,6 @@ export function blockedRunStarts(column: Pick<PractitionerColumn, "slots">): Set
   return out;
 }
 
-const PAGE_ROWS = 4;
-
 export function PractitionerDayView<B extends PractitionerDayBooking>({
   dayKey,
   layout,
@@ -162,67 +168,15 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
   highlight = null,
   lockStateByPractitioner,
   onDayLockClick,
+  roomById = null,
 }: PractitionerDayViewProps<B>) {
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [focus, setFocus] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
   const { rows, columns } = layout;
-  const rowMin = rowMinHeight(zoom, density);
-  const colMin = columnMinWidth(density);
-  const template = `${GUTTER_WIDTH}px repeat(${Math.max(1, columns.length)}, minmax(${colMin}px, 1fr))`;
-  const minWidth = GUTTER_WIDTH + Math.max(1, columns.length) * colMin;
-
   const extra = useMemo(() => new Map(practitioners.map((p) => [p.id, p])), [practitioners]);
-  const runStarts = useMemo(() => columns.map((c) => blockedRunStarts(c)), [columns]);
-
-  // Línea de "ahora": fila que contiene el minuto y posición dentro de ella.
-  const now$ = useMemo(() => {
-    const off = nowOffset(dayKey, now, layout.window);
-    if (!off || rows.length === 0) return null;
-    let idx = rows.findIndex((r) => off.minute >= r.startMin && off.minute < r.endMin);
-    if (idx === -1) idx = rows.length - 1; // minuto == fin de la ventana
-    const row = rows[idx];
-    const ratio = (off.minute - row.startMin) / (row.endMin - row.startMin);
-    const hh = String(Math.floor(off.minute / 60)).padStart(2, "0");
-    const mm = String(off.minute % 60).padStart(2, "0");
-    return { idx, ratio, time: `${hh}:${mm}` };
-  }, [dayKey, now, layout.window, rows]);
-
-  // Foco tabulable dentro de los límites aunque cambien filas/columnas.
-  const fr = Math.min(focus.r, Math.max(0, rows.length - 1));
-  const fc = Math.min(focus.c, Math.max(0, columns.length - 1));
-
-  const onFocusCell = useCallback((r: number, c: number) => setFocus({ r, c }), []);
-  const onGridKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLElement>, r: number, c: number) => {
-      const lastR = rows.length - 1;
-      const lastC = columns.length - 1;
-      let nr = r;
-      let nc = c;
-      switch (e.key) {
-        case "ArrowDown": nr = Math.min(lastR, r + 1); break;
-        case "ArrowUp": nr = Math.max(0, r - 1); break;
-        case "ArrowRight": nc = Math.min(lastC, c + 1); break;
-        case "ArrowLeft": nc = Math.max(0, c - 1); break;
-        case "PageDown": nr = Math.min(lastR, r + PAGE_ROWS); break;
-        case "PageUp": nr = Math.max(0, r - PAGE_ROWS); break;
-        case "Home": if (e.ctrlKey) nr = 0; nc = 0; break;
-        case "End": if (e.ctrlKey) nr = lastR; nc = lastC; break;
-        default: return;
-      }
-      e.preventDefault();
-      if (nr === r && nc === c) return;
-      setFocus({ r: nr, c: nc });
-      gridRef.current?.querySelector<HTMLElement>(`[data-cell="${nr}:${nc}"]`)?.focus();
-    },
-    [rows.length, columns.length]
+  const roomOf = useMemo(
+    () => (roomById ? (b: B) => (b.roomId ? roomById[b.roomId] ?? null : null) : undefined),
+    [roomById]
   );
-
-  const dayLabel = new Date(`${dayKey}T12:00:00-03:00`).toLocaleDateString("es-AR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "America/Argentina/Buenos_Aires",
-  });
+  const runStarts = useMemo(() => columns.map((c) => blockedRunStarts(c)), [columns]);
 
   if (columns.length === 0) {
     return (
@@ -235,110 +189,49 @@ export function PractitionerDayView<B extends PractitionerDayBooking>({
   }
 
   return (
-    <Card style={{ padding: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div
-        ref={gridRef}
-        role="grid"
-        aria-label={`Agenda del ${dayLabel} por profesional`}
-        aria-rowcount={rows.length + 1}
-        aria-colcount={columns.length + 1}
-        className="k-scroll"
-        style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}
-      >
-        <div style={{ minWidth }}>
-          {/* Header de profesionales (sticky arriba) */}
-          <div role="rowgroup" style={{ position: "sticky", top: 0, zIndex: 5 }}>
-            <div
-              role="row"
-              aria-rowindex={1}
-              style={{
-                display: "grid",
-                gridTemplateColumns: template,
-                background: "var(--card-bg)",
-                borderBottom: "1px solid rgba(15,30,51,0.1)",
-                boxShadow: "0 2px 6px rgba(15,30,51,0.04)",
-              }}
-            >
-              <div
-                role="columnheader"
-                aria-colindex={1}
-                style={{
-                  position: "sticky",
-                  left: 0,
-                  zIndex: 6,
-                  background: "var(--card-bg)",
-                  borderRight: "1px solid rgba(15,30,51,0.08)",
-                  display: "flex",
-                  alignItems: "flex-end",
-                  justifyContent: "flex-end",
-                  padding: "0 8px 6px 0",
-                  fontSize: 10,
-                  color: "var(--navy-300)",
-                }}
-              >
-                <span>Hora</span>
-              </div>
-              {columns.map((col, c) => (
-                <ColumnHeader
-                  key={col.practitionerId}
-                  column={col}
-                  colIndex={c}
-                  subtitle={extra.get(col.practitionerId)?.subtitle ?? null}
-                  status={columnDayStatus(col, lockStateByPractitioner?.[col.practitionerId])}
-                  density={density}
-                  highlightCount={columnHighlightCount(col, highlight)}
-                  onDayLockClick={onDayLockClick}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Cuerpo: una fila por franja */}
-          <div role="rowgroup">
-            {rows.map((row, r) => {
-              const onTheHour = row.startMin % 60 === 0;
-              const isNowRow = now$?.idx === r;
-              return (
-                <div
-                  key={row.startMin}
-                  role="row"
-                  aria-rowindex={r + 2}
-                  style={{
-                    position: "relative",
-                    display: "grid",
-                    gridTemplateColumns: template,
-                    borderTop: onTheHour ? "1px solid rgba(15,30,51,0.08)" : "1px dashed rgba(15,30,51,0.05)",
-                  }}
-                >
-                  <TimeGutterCell time={row.time} startMin={row.startMin} zoom={zoom} isNowRow={isNowRow} />
-                  {columns.map((col, c) => (
-                    <SlotCell<B>
-                      key={col.practitionerId}
-                      cell={col.slots[r]}
-                      dayKey={dayKey}
-                      practitionerId={col.practitionerId}
-                      practitionerName={col.name}
-                      rowIndex={r}
-                      colIndex={c}
-                      tabbable={r === fr && c === fc}
-                      rowMin={rowMin}
-                      density={density}
-                      showBlockLabel={runStarts[c].has(r)}
-                      highlight={highlight}
-                      onSlotClick={onSlotClick}
-                      onBookingClick={onBookingClick}
-                      onFocusCell={onFocusCell}
-                      onGridKeyDown={onGridKeyDown}
-                    />
-                  ))}
-                  {isNowRow && now$ && <NowLine ratio={now$.ratio} time={now$.time} />}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </Card>
+    <DayColumnsGrid<PractitionerColumn<B>>
+      dayKey={dayKey}
+      rows={rows}
+      window={layout.window}
+      columns={columns}
+      columnKey={(col) => col.practitionerId}
+      columnMinWidth={columnMinWidth(density)}
+      zoom={zoom}
+      density={density}
+      now={now}
+      ariaLabel={`Agenda del ${gridDayLabel(dayKey)} por profesional`}
+      renderHeader={(col, c) => (
+        <ColumnHeader
+          column={col}
+          colIndex={c}
+          subtitle={extra.get(col.practitionerId)?.subtitle ?? null}
+          status={columnDayStatus(col, lockStateByPractitioner?.[col.practitionerId])}
+          density={density}
+          highlightCount={columnHighlightCount(col, highlight)}
+          onDayLockClick={onDayLockClick}
+        />
+      )}
+      renderCell={(col, r, c, nav) => (
+        <SlotCell<B>
+          cell={col.slots[r]}
+          dayKey={dayKey}
+          columnId={col.practitionerId}
+          columnLabel={col.name}
+          rowIndex={r}
+          colIndex={c}
+          tabbable={nav.tabbable}
+          rowMin={nav.rowMin}
+          density={density}
+          showBlockLabel={runStarts[c].has(r)}
+          highlight={highlight}
+          roomOf={roomOf}
+          onSlotClick={onSlotClick}
+          onBookingClick={onBookingClick}
+          onFocusCell={nav.onFocusCell}
+          onGridKeyDown={nav.onGridKeyDown}
+        />
+      )}
+    />
   );
 }
 

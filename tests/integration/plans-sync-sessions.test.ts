@@ -57,6 +57,8 @@ import { asUser } from "@/tests/helpers/actor";
 import { waitForAdvisoryWaiter } from "@/tests/helpers/advisory-wait";
 import { planPatientLockKey } from "@/lib/plan-lock";
 import { revalidateTagSpy } from "@/tests/helpers/integration-setup";
+import { dayWindow } from "@/lib/availability/day";
+import { toARDateKey } from "@/lib/datetime-ar";
 
 const RUN = process.env.INTEGRATION === "1";
 const DAY = 86_400_000;
@@ -120,7 +122,10 @@ describe.skipIf(!RUN)("S12b · sincronía sesión → turno", () => {
   let todayMinute = 0;
   const todaySlot = () => {
     todayMinute += 1;
-    const d = new Date(Date.now() - 90 * 60_000 + todayMinute * 60_000);
+    // Gate de SR: "una hora antes de ahora" caía AYER entre las 00:00 y las
+    // 01:30 AR y Recepción (con razón) rechazaba el turno. Piso = inicio del día AR.
+    const dayStart = +dayWindow(toARDateKey(new Date())).start;
+    const d = new Date(Math.max(Date.now() - 90 * 60_000, dayStart) + todayMinute * 60_000);
     d.setUTCSeconds(0, 0);
     return d;
   };

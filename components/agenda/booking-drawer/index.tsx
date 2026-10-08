@@ -37,6 +37,13 @@
  * lleno: banner en reprogramar / editar y `useConfirm` al cambiar estado, con
  * re-llamada acumulando el flag (`lib/booking-force-flags.ts`). Antes caían en
  * el `error` genérico y no había forma de forzarlos desde acá.
+ *
+ * SR-U5b: fila "Sala" (`./room-row`). Cambiarla = `canOperate` (también la
+ * Secretaria con `agenda.operateAll`: la sala es operativa, no clínica), con
+ * las salas de la sede del turno (la sede no se cambia desde acá, D9). Sala
+ * ocupada o bloqueada → `useConfirm` "Asignar igual" con `allowRoomConflict`
+ * (SR-D2: no es sobreturno). Sin `rooms` (o sin salas en la sede y sin sala en
+ * el turno) el drawer es el de antes.
  */
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
@@ -88,6 +95,8 @@ import {
 } from "./plan-row";
 import { planStatusToastDescription } from "./status-actions";
 import { ReceptionInfo } from "./reception-info";
+import { NO_ROOM_VALUE, RoomRow, drawerRoomModel, roomChangeOutcome, roomUpdatePayload } from "./room-row";
+import type { RoomOption } from "@/lib/rooms-types";
 import {
   bookingDrawerAccess,
   type BannerState,
@@ -119,10 +128,19 @@ export function BookingDrawer({
   onClose,
   onSaved,
   capabilities,
+  rooms,
+  primaryLocationId,
 }: {
   booking: DrawerBooking | null;
   onClose: () => void;
   onSaved: () => void;
+  /**
+   * SR-U5b: catálogo de salas del bootstrap de la agenda (activas de sedes
+   * activas). Sin él (o vacío) no hay fila "Sala": el drawer es el de antes.
+   */
+  rooms?: readonly RoomOption[] | null;
+  /** Sede principal: la de un turno con `locationId` null (para filtrar sus salas). */
+  primaryLocationId?: string | null;
   /**
    * P0-S07u: capabilities del actor (array del server). Solo las usa el
    * fallback de `bookingDrawerAccess` cuando la fila no trae
@@ -160,6 +178,9 @@ export function BookingDrawer({
   // from the booking; `undefined` means "no change pending". `null`
   // means the user cleared the link (booking becomes a guest slot).
   const [editPatient, setEditPatient] = useState<PickedPatient | null | undefined>(undefined);
+  // SR-U5b: "Cambiar" sala abierto + valor del select (`NO_ROOM_VALUE` = "Sin sala").
+  const [editingRoom, setEditingRoom] = useState(false);
+  const [roomDraft, setRoomDraft] = useState<string>(NO_ROOM_VALUE);
 
   const caps = useMemo(() => capabilitySet(capabilities), [capabilities]);
   const access = booking ? bookingDrawerAccess(booking, caps) : CLOSED;
@@ -203,6 +224,8 @@ export function BookingDrawer({
     setError(null);
     setEditPatient(undefined);
     setRecent([]);
+    setEditingRoom(false);
+    setRoomDraft(booking?.roomId ?? NO_ROOM_VALUE);
     if (booking) {
       setNewWhenLocal(isoToARLocalInput(booking.scheduledFor));
       setEditDuration(booking.durationMin);
@@ -442,6 +465,29 @@ export function BookingDrawer({
     });
   };
 
+  // SR-U5b: cambio de sala (payload y lectura de la respuesta, puros en
+  // `./room-row`). "Elegir otra" deja el select abierto con lo elegido.
+  const submitRoom = (roomId: string | null, force: ForceFlags = {}) => {
+    if (!booking) return;
+    setError(null);
+    start(async () => {
+      const r = await updateBooking(roomUpdatePayload(booking, roomId, force));
+      const outcome = roomChangeOutcome(r, force);
+      if (outcome.kind === "confirm") {
+        if (await confirm(outcome.options)) submitRoom(roomId, outcome.next);
+        return;
+      }
+      if (outcome.kind === "error") {
+        setError(outcome.error);
+        toast.error("No pudimos cambiar la sala", { description: outcome.error });
+        return;
+      }
+      setEditingRoom(false);
+      toast.success("Sala cambiada");
+      onSaved();
+    });
+  };
+
   const submitReschedule = (opts: { iso?: string; force?: ForceFlags } = {}) => {
     if (!booking) return;
     // The datetime-local input is AR wall-clock; tag it with the
@@ -492,6 +538,7 @@ export function BookingDrawer({
   // Secretaria con Consultorio común (fila "basic" = nivel admin) perdía la
   // edición. Ahora es `canOperate` (guest sigue operable).
   const { canOperate, clinicalWritable, notesWritable, canDelete } = access;
+  const roomModel = booking ? drawerRoomModel(booking, rooms, primaryLocationId) : null;
 
   // Dirty-guard (A2b-S-ui): con "Editar" o "Reprogramar" abiertos y algo
   // cambiado, Esc / fondo / X preguntan antes de tirar la edición. El paciente
@@ -514,7 +561,8 @@ export function BookingDrawer({
           },
           { durationMin: editDuration, notes: editNotes, title: editTitle, description: editDescription }
         ))) ||
-      (editingWhen && newWhenLocal !== isoToARLocalInput(booking.scheduledFor)));
+      (editingWhen && newWhenLocal !== isoToARLocalInput(booking.scheduledFor)) ||
+      (editingRoom && roomDraft !== (booking.roomId ?? NO_ROOM_VALUE)));
 
 
   /** Dirty-guard de las salidas de la fila Plan (diálogo o navegación). */
@@ -558,7 +606,31 @@ export function BookingDrawer({
 
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>
             <BillingRows booking={booking} />
-            <ReceptionInfo booking={booking} />
+            <ReceptionInfo
+              booking={booking}
+              room={
+                roomModel?.visible ? (
+                  <RoomRow
+                    model={roomModel}
+                    canOperate={canOperate}
+                    cancelled={booking.status === "CANCELLED"}
+                    pending={pending}
+                    editing={editingRoom}
+                    draft={roomDraft}
+                    onOpen={() => {
+                      setRoomDraft(booking.roomId ?? NO_ROOM_VALUE);
+                      setEditingRoom(true);
+                    }}
+                    onCancel={() => {
+                      setEditingRoom(false);
+                      setRoomDraft(booking.roomId ?? NO_ROOM_VALUE);
+                    }}
+                    onDraftChange={setRoomDraft}
+                    onSubmit={(id) => submitRoom(id)}
+                  />
+                ) : undefined
+              }
+            />
             {!canOperate && (
               <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 4 }}>
                 Tenés acceso básico a este paciente: podés ver el turno pero no modificarlo. Pedile al

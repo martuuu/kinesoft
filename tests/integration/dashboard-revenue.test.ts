@@ -127,7 +127,7 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
       expect(await revenue(range)).toMatchObject({ totalCents: 250_000, manualCents: 250_000, mpCents: 0 });
     }
     // La KPI del mes del dashboard dice lo mismo que el widget.
-    expect((await getDashboardData()).monthRevenue.totalCents).toBe(250_000);
+    expect((await getDashboardData()).monthRevenue?.totalCents).toBe(250_000);
 
     const unmarked = await setBookingCopagoPaid(b.id, false, marked.ok ? marked.data.updatedAt.toISOString() : undefined);
     expect(unmarked.ok).toBe(true);
@@ -207,7 +207,7 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
     expect(touches("TreatmentProgram")).toEqual([]);
     expect(touches("Session")).toEqual([]);
     const { result: d } = await measure(() => getDashboardData());
-    expect(d.monthRevenue.totalCents).toBe(80_000);
+    expect(d.monthRevenue?.totalCents).toBe(80_000);
     expect(touches("TreatmentProgram")).toEqual([]);
   });
 
@@ -225,15 +225,15 @@ describe.skipIf(!RUN)("S14r · ingresos del dashboard (Mes/Semana)", () => {
     const T = await tenant();
     asUser(T.userId);
     expect((await getUserPreferences()).dashboard).toEqual({ revenueRange: "month" });
-    expect((await getDashboardData()).revenue.range).toBe("month");
+    expect((await getDashboardData()).revenue?.range).toBe("month");
 
     expect(await updateDashboardPrefs({ revenueRange: "week" })).toEqual({ ok: true, data: { revenueRange: "week" } });
     const row = await db.userPreferences.findUniqueOrThrow({ where: { userId: T.userId } });
     expect(row.dashboardPrefs).toEqual({ revenueRange: "week" });
     expect((await getUserPreferences()).dashboard.revenueRange).toBe("week");
     const d = await getDashboardData();
-    expect(d.revenue.range).toBe("week");
-    expect(d.monthRevenue.range).toBe("month");
+    expect(d.revenue?.range).toBe("week");
+    expect(d.monthRevenue?.range).toBe("month");
 
     // Escritura estricta: no se guarda basura.
     expect((await updateDashboardPrefs({ revenueRange: "year" })).ok).toBe(false);

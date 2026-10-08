@@ -43,6 +43,12 @@ export type DrawerBooking = {
   locationId?: string | null;
   /** Nombre de la sede; sin él, la sede no se muestra (el id solo no dice nada). */
   locationName?: string | null;
+  /**
+   * SR: sala del turno (`BookingDTO.roomId` expandido: null = sin sala;
+   * undefined = la proyección no la trae → la fila solo aparece si la sede
+   * tiene salas). El nombre se resuelve con el catálogo (`rooms` del drawer).
+   */
+  roomId?: string | null;
   isTelemedicine?: boolean;
   telemedicineUrl?: string | null;
   /** Sin `clinical.read` o sin full: title/description/notas llegan null a propósito. */

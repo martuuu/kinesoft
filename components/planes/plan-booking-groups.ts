@@ -234,9 +234,13 @@ export function isCancelledWithMoney(b: BillingRow): boolean {
   );
 }
 
-/** Filas de Facturación: agrupada → facturables + cancelados con cobro; sin agrupar → como hoy. */
-export function isBillingVisible(b: BillingRow, grouped: boolean): boolean {
-  return isBillableBooking(b) || (grouped && isCancelledWithMoney(b));
+/**
+ * Filas de Facturación: facturables + cancelados/ausentes con cobro, agrupada
+ * o no (SR-D4F, Martin 08-oct). Antes la vista plana los escondía y un
+ * cancelado cobrado de un consultorio General no figuraba en ningún lado.
+ */
+export function isBillingVisible(b: BillingRow): boolean {
+  return isBillableBooking(b) || isCancelledWithMoney(b);
 }
 
 /** Turnos de plan no se eliminan desde la ficha (S22f): se cancelan o se sacan del plan. */
@@ -254,11 +258,12 @@ export type BillingSummary = {
 };
 
 /**
- * Resumen de Facturación. Sin agrupar = exactamente la cuenta de siempre.
- * Agrupada:
- *  - percibido (OS y copago) = Σ de las filas visibles, incluidos los
- *    cancelados cobrados (es plata que entró);
- *  - pendiente = OS pendiente de los facturables + copago pendiente de los
+ * Resumen de Facturación.
+ *  - percibido (OS y copago) = Σ de las filas visibles, agrupada o no,
+ *    incluidos los cancelados/ausentes cobrados (es plata que entró; SR-D4F).
+ *    Copago: solo PAID; REFUNDED y AUTHORIZED se ven pero suman 0.
+ *  - sin agrupar: pendiente = OS + copago impagos de los facturables.
+ *  - agrupada: pendiente = OS pendiente de los facturables + copago pendiente de los
  *    turnos SUELTOS facturables + Σ pendiente de los planes DEL SERVER. El
  *    copago de un turno de plan no se suma fila por fila: lo que el paciente
  *    debe del plan es el saldo P7 (devengado − cobrado), y con paquete o
@@ -268,7 +273,7 @@ export function billingSummary(
   bookings: readonly (BillingRow & { programId: string | null; copagoCents: number; osAmountCents: number })[],
   opts: { grouped: boolean; planBalances?: PatientPlanBalances | null }
 ): BillingSummary {
-  const visible = bookings.filter((b) => isBillingVisible(b, opts.grouped));
+  const visible = bookings.filter(isBillingVisible);
   const billable = bookings.filter(isBillableBooking);
   const osPaidCents = visible.reduce((s, b) => s + (b.insurerPaidAt ? b.osAmountCents : 0), 0);
   const copagoPaidCents = visible.reduce((s, b) => s + (b.paymentStatus === "PAID" ? b.copagoCents : 0), 0);

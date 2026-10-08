@@ -16,8 +16,10 @@ import {
   type DayLockApplyData,
   type DayLockPreviewInput,
   type DayLockRemainingBlock,
+  type DayLockRemoveInput,
   type DayLockSkipReason,
 } from "@/lib/time-blocks-schemas";
+import type { RoomOption } from "@/lib/rooms-types";
 
 /** Motivos sugeridos (decisión 10: no hay feriados automáticos en B-pre). */
 export const DAY_LOCK_REASONS = ["Feriado", "Congreso", "Vacaciones", "Capacitación"] as const;
@@ -68,21 +70,67 @@ export type DayLockFormState = {
   span: "allDay" | "range";
   startMin: number;
   endMin: number;
-  /** "all" = todos (fila con practitionerId null; alcanza a futuros). */
-  who: "all" | "some";
+  /**
+   * "all" = todos (fila con practitionerId null; alcanza a futuros).
+   * "room" (SR-BU, §17.5 "Bloquear sala") = una sala: bloquea SOLO la sala,
+   * nunca a los profesionales; `practitionerIds` se ignora (no viaja).
+   */
+  who: "all" | "some" | "room";
   practitionerIds: string[];
-  /** null = todas las sedes. */
+  /** null = todas las sedes. Con `who: "room"` manda la sede de la sala. */
   locationId: string | null;
+  /** Sala elegida (solo cuenta con `who: "room"`). */
+  roomId: string | null;
   reason: string;
 };
 
-export type DayLockFormErrors = Partial<Record<"practitionerIds" | "startMin" | "endMin" | "reason", string>>;
+export type DayLockFormErrors = Partial<
+  Record<"practitionerIds" | "roomId" | "startMin" | "endMin" | "reason", string>
+>;
+
+/** Sala del catálogo de la agenda que el candado necesita (nombre y sede). */
+export type DayLockRoom = Pick<RoomOption, "id" | "locationId" | "name">;
 
 export type DayLockContext = {
   practitioners: { id: string; name: string }[];
   canBlockAll: boolean;
   ownPractitionerId?: string | null;
+  /**
+   * SR-BU: salas activas (`AgendaBootstrapProps.rooms`). Sin salas (o
+   * ausente) el candado es el de siempre: no hay alcance "Una sala" y los
+   * rótulos no cambian.
+   */
+  rooms?: readonly DayLockRoom[];
 };
+
+/** Copy fijo del alcance "Una sala" (§17.5: el bloqueo de sala no toca agendas). */
+export const ROOM_SCOPE_NOTE = "Bloqueás solo la sala: los profesionales siguen con su horario.";
+export const ROOM_REQUIRED_ERROR = "Elegí la sala.";
+export const ROOM_FORBIDDEN_ERROR = "Solo quien administra la agenda puede bloquear una sala.";
+
+/**
+ * El alcance "Una sala" se ofrece si hay salas y el usuario tiene
+ * `agenda.manageBlocks` (SR-B usa la misma regla que el candado de "todos":
+ * la Secretaria puede, el profesional sin ese permiso no).
+ */
+export function canLockRoom(ctx: Pick<DayLockContext, "canBlockAll" | "rooms">): boolean {
+  return ctx.canBlockAll && (ctx.rooms?.length ?? 0) > 0;
+}
+
+/** Nombre de la sala desde el catálogo del cliente; "Sala" si no está (archivada). */
+export function roomNameOf(roomId: string, rooms: readonly DayLockRoom[] | undefined): string {
+  return rooms?.find((r) => r.id === roomId)?.name ?? "Sala";
+}
+
+/**
+ * Pasar el form al alcance "Una sala". Con una sola sala se preselecciona
+ * (no hay nada que elegir); con varias queda vacía para que el usuario elija
+ * a conciencia ("Elegí la sala"), salvo que ya hubiera una vigente elegida.
+ */
+export function withRoomScope(form: DayLockFormState, rooms: readonly DayLockRoom[]): DayLockFormState {
+  const keep = form.roomId && rooms.some((r) => r.id === form.roomId) ? form.roomId : null;
+  return { ...form, who: "room", roomId: keep ?? (rooms.length === 1 ? rooms[0].id : null) };
+}
 
 /**
  * Estado inicial. Profesionales: los filtrados en la agenda
@@ -115,6 +163,7 @@ export function initialDayLockForm(
     who,
     practitionerIds: ids,
     locationId: null,
+    roomId: null,
     reason: "",
   };
 }
@@ -127,6 +176,7 @@ export function isDayLockFormDirty(a: DayLockFormState, b: DayLockFormState): bo
     a.who !== b.who ||
     ids(a) !== ids(b) ||
     a.locationId !== b.locationId ||
+    (b.who === "room" && a.roomId !== b.roomId) ||
     a.reason.trim() !== b.reason.trim()
   );
 }
@@ -139,9 +189,16 @@ export function isDayLockFormDirty(a: DayLockFormState, b: DayLockFormState): bo
 export function buildDayLockScope(
   dayKey: string,
   form: DayLockFormState,
-  ctx: Pick<DayLockContext, "canBlockAll" | "ownPractitionerId">
+  ctx: Pick<DayLockContext, "canBlockAll" | "ownPractitionerId" | "rooms">
 ): { ok: true; scope: DayLockPreviewInput; reason: string | null } | { ok: false; errors: DayLockFormErrors } {
   const errors: DayLockFormErrors = {};
+  // SR-BU: la sala tiene que estar en el catálogo (su sede sale de ahí: el
+  // server exige que `locationId`, si viene, sea la sede de la sala).
+  const room = form.who === "room" ? (ctx.rooms?.find((r) => r.id === form.roomId) ?? null) : null;
+  if (form.who === "room") {
+    if (!ctx.canBlockAll) errors.roomId = ROOM_FORBIDDEN_ERROR;
+    else if (!room) errors.roomId = ROOM_REQUIRED_ERROR;
+  }
   if (form.who === "all" && !ctx.canBlockAll) {
     errors.practitionerIds = "Solo podés bloquear tu propia agenda.";
   }
@@ -159,6 +216,19 @@ export function buildDayLockScope(
   const reason = form.reason.trim();
   if (reason.length > DAY_LOCK_REASON_MAX) errors.reason = `Máximo ${DAY_LOCK_REASON_MAX} caracteres.`;
   if (Object.keys(errors).length) return { ok: false, errors };
+  const span = {
+    allDay: form.span === "allDay",
+    ...(form.span === "range" ? { startMin: form.startMin, endMin: form.endMin } : {}),
+  };
+  if (room) {
+    // Contrato SR-B: `{ practitionerIds: null, roomId, locationId? }`; sala +
+    // profesionales es "Datos inválidos" en el server, así que nunca viajan.
+    return {
+      ok: true,
+      reason: reason || null,
+      scope: { dayKey, practitionerIds: null, roomId: room.id, locationId: room.locationId, ...span },
+    };
+  }
   return {
     ok: true,
     reason: reason || null,
@@ -166,8 +236,7 @@ export function buildDayLockScope(
       dayKey,
       practitionerIds: form.who === "all" ? null : [...new Set(form.practitionerIds)],
       locationId: form.locationId,
-      allDay: form.span === "allDay",
-      ...(form.span === "range" ? { startMin: form.startMin, endMin: form.endMin } : {}),
+      ...span,
     },
   };
 }
@@ -231,8 +300,15 @@ export function affectedLines(
   }));
 }
 
-export function affectedHeadline(count: number, allDay: boolean): string {
-  const where = allDay ? "ese día" : "esa franja";
+/** `roomName` (SR-BU): el preview de "Una sala" lista solo los turnos de esa sala. */
+export function affectedHeadline(count: number, allDay: boolean, roomName?: string | null): string {
+  const where = roomName
+    ? allDay
+      ? `${roomName} ese día`
+      : `${roomName} en esa franja`
+    : allDay
+      ? "ese día"
+      : "esa franja";
   if (count === 0) return `No hay turnos en ${where}.`;
   return count === 1 ? `Hay 1 turno en ${where}.` : `Hay ${count} turnos en ${where}.`;
 }
@@ -244,11 +320,20 @@ export const SKIP_REASON_LABEL: Record<DayLockSkipReason, string> = {
 };
 
 /** Resumen del resultado del candado (paso final del diálogo). */
-export function applySummary(data: DayLockApplyData): { headline: string; detail: string | null } {
+export function applySummary(
+  data: DayLockApplyData,
+  opts?: { room?: boolean }
+): { headline: string; detail: string | null } {
   const c = data.cancelled.length;
   const s = data.skipped.length;
   const k = data.kept.length;
-  const headline = data.reused ? "El día ya estaba bloqueado así." : "Listo, el día quedó bloqueado.";
+  const headline = opts?.room
+    ? data.reused
+      ? "La sala ya estaba bloqueada así."
+      : "Listo, la sala quedó bloqueada."
+    : data.reused
+      ? "El día ya estaba bloqueado así."
+      : "Listo, el día quedó bloqueado.";
   if (data.decision === "keep") {
     return {
       headline,
@@ -274,6 +359,12 @@ export type ExistingDayBlock = {
   id: string;
   groupId?: string | null;
   practitionerId: string | null;
+  /**
+   * SR-BU: bloqueo de sala (`AgendaAvailability.roomBlocks`). También tiene
+   * `practitionerId` null (CHECK de M4), así que sin mirar esto se leería
+   * como "Todo el equipo".
+   */
+  roomId?: string | null;
   startsAt: string;
   endsAt: string;
   allDay: boolean;
@@ -321,12 +412,16 @@ export function removableBlocks(
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id))
     .map((block) => {
       const span = blockSpanLabel(block, dayKey);
-      const who =
-        block.practitionerId === null ? "Todo el equipo" : (names.get(block.practitionerId) ?? "Profesional");
+      const who = block.roomId
+        ? roomNameOf(block.roomId, ctx.rooms)
+        : block.practitionerId === null
+          ? "Todo el equipo"
+          : (names.get(block.practitionerId) ?? "Profesional");
       const label = [span.text, who, block.reason?.trim() || null].filter(Boolean).join(" · ");
       let why: string | null = null;
       if (span.multiDay) why = "Abarca varios días: se quita desde el bloqueo original.";
-      else if (!ctx.canBlockAll && block.practitionerId !== (ctx.ownPractitionerId ?? undefined)) {
+      else if (block.roomId && !ctx.canBlockAll) why = "Es un bloqueo de sala.";
+      else if (!block.roomId && !ctx.canBlockAll && block.practitionerId !== (ctx.ownPractitionerId ?? undefined)) {
         why = block.practitionerId === null ? "Es de todo el equipo." : "Es de otro profesional.";
       }
       return { block, label, removable: why === null, why };
@@ -336,6 +431,35 @@ export function removableBlocks(
 /** Alcance de `removeDayLock`: todo el consultorio si puede, si no su agenda. */
 export function removeScopeFor(ctx: Pick<DayLockContext, "canBlockAll" | "ownPractitionerId">): string | null {
   return ctx.canBlockAll ? null : (ctx.ownPractitionerId ?? null);
+}
+
+/**
+ * Llamadas a `removeDayLock` para los bloqueos tildados. El server desbloquea
+ * por alcance: sin `roomId` nunca toca bloqueos de sala, y con `roomId` solo
+ * los de ESA sala (contrato SR-B: `{ practitionerId: null, roomId }`). Por eso
+ * van una llamada para los de profesionales/"todos" (el alcance de siempre) y
+ * una por cada sala, en ese orden.
+ */
+export function removeDayLockRequests(
+  dayKey: string,
+  selected: readonly ExistingDayBlock[],
+  ctx: Pick<DayLockContext, "canBlockAll" | "ownPractitionerId">
+): DayLockRemoveInput[] {
+  const plain: string[] = [];
+  const byRoom = new Map<string, string[]>();
+  for (const b of selected) {
+    if (b.roomId) {
+      const ids = byRoom.get(b.roomId) ?? [];
+      ids.push(b.id);
+      byRoom.set(b.roomId, ids);
+    } else {
+      plain.push(b.id);
+    }
+  }
+  const out: DayLockRemoveInput[] = [];
+  if (plain.length) out.push({ dayKey, practitionerId: removeScopeFor(ctx), blockIds: plain });
+  for (const [roomId, blockIds] of byRoom) out.push({ dayKey, practitionerId: null, roomId, blockIds });
+  return out;
 }
 
 export function removeSummary(deleted: number, remaining: readonly DayLockRemainingBlock[]): {

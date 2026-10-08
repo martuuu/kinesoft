@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   expandPlanFields,
+  expandRoomFields,
+  roomNameOf,
   serviceDisciplineMap,
   toBookingDTO,
   type BookingDTO,
@@ -61,6 +63,8 @@ function agendaRow(c9: Partial<AgendaPlanFields> = {}): AgendaBookingRow {
     clinicalHidden: false,
     canOperate: true,
     clinicalWritable: true,
+    // SR3a vuelve requerido `AgendaBookingRow.roomId`; null = "Sin sala".
+    roomId: null,
     ...neutral,
     ...c9,
   };
@@ -173,3 +177,64 @@ describe("expandPlanFields (cliente)", () => {
     expect(expandPlanFields(fixture, disciplines)).toBe(fixture);
   });
 });
+
+describe("[SR-U5a] roomId compacto en el cable", () => {
+  const withRoom = (roomId: string | null) => ({ ...agendaRow(), roomId }) as AgendaBookingRow;
+
+  it("roomId null no viaja: un turno suelto sin sala pesa lo mismo que antes de SR", () => {
+    const dto = toBookingDTO(withRoom(null));
+    expect("roomId" in dto).toBe(false);
+    // Misma fila SIN la clave roomId (lo que mandaba el server antes de SR).
+    const preSR = { ...agendaRow() } as Partial<AgendaBookingRow>;
+    delete preSR.roomId;
+    expect(JSON.stringify(dto)).toBe(JSON.stringify(toBookingDTO(preSR as AgendaBookingRow)));
+  });
+
+  it("con sala viaja solo el id (el nombre sale del catálogo del cliente)", () => {
+    const dto = toBookingDTO(withRoom("room_c2"));
+    expect(dto.roomId).toBe("room_c2");
+    expect(JSON.stringify(dto)).not.toContain("Consultorio");
+  });
+
+  it("proyección completa: sin roomId (undefined = no sé)", () => {
+    expect("roomId" in toBookingDTO(base)).toBe(false);
+  });
+});
+
+describe("[SR-U5a] expansión de la sala en el cliente", () => {
+  it("liviana sin roomId en el cable → null (Sin sala sabido), no undefined", () => {
+    const dto = expandPlanFields(toBookingDTO(withRoomRow(null)), disciplines);
+    expect(dto.roomId).toBeNull();
+    expect("roomId" in dto).toBe(true);
+  });
+
+  it("liviana con sala → el id, ida y vuelta", () => {
+    expect(expandPlanFields(toBookingDTO(withRoomRow("room_c2")), disciplines).roomId).toBe("room_c2");
+  });
+
+  it("completa: no se toca (undefined honesto) y el DTO vuelve igual", () => {
+    const dto = toBookingDTO(base);
+    expect(expandRoomFields(dto)).toEqual({});
+    const out = expandPlanFields(dto, disciplines);
+    expect(out).toBe(dto);
+    expect(out.roomId).toBeUndefined();
+  });
+
+  it("expandir dos veces da lo mismo (overrides ya expandidos)", () => {
+    const once = expandPlanFields(toBookingDTO(withRoomRow(null)), disciplines);
+    expect(expandPlanFields(once, disciplines)).toEqual(once);
+  });
+
+  it("roomNameOf: nombre del catálogo; null sin catálogo, sin sala o con sala fuera del catálogo", () => {
+    const rooms = { room_c2: { name: "Consultorio 2" } };
+    expect(roomNameOf(rooms, { roomId: "room_c2" })).toBe("Consultorio 2");
+    expect(roomNameOf(rooms, { roomId: null })).toBeNull();
+    expect(roomNameOf(rooms, { roomId: undefined })).toBeNull();
+    expect(roomNameOf(rooms, { roomId: "archivada" })).toBeNull();
+    expect(roomNameOf(null, { roomId: "room_c2" })).toBeNull();
+  });
+});
+
+function withRoomRow(roomId: string | null): AgendaBookingRow {
+  return { ...agendaRow(), roomId } as AgendaBookingRow;
+}

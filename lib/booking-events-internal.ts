@@ -42,7 +42,14 @@ export type BookingChangeRef = {
   bookingId: string;
   practitionerId: string;
   scheduledFor: Date;
-  prev?: { practitionerId: string; scheduledFor: Date } | null;
+  /**
+   * SR (aditivo, opcional): sala del turno DESPUÉS del cambio; null = sin sala,
+   * ausente = el write-path no la informa. La consume SV (M5: "Llamar" y la
+   * vista de sala); hoy esta función no la lee.
+   */
+  roomId?: string | null;
+  /** `roomId` = sala de antes (SR): un cambio de sala avisa a las dos salas. */
+  prev?: { practitionerId: string; scheduledFor: Date; roomId?: string | null } | null;
   kind?: "booking" | "reception" | "called";
 };
 

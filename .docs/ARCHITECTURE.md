@@ -149,22 +149,108 @@ la tx con `withTxConflictRetry` y después del commit llama una vez a `afterBook
 | `lib/patient-search.ts` (P2-FX1) | `searchPatientsForBooking`: buscador del `PatientPicker` de la agenda (nombre + DNI, sin gate de módulo). El picker elige con `source` (`components/patients/patient-picker-search.ts`) |
 | `lib/services-discipline.ts` | Disciplina sugerida de un servicio desde las especialidades (puro) |
 
-## Módulos de Planes ES3 (08-oct-2026, pendiente commit)
+## Módulos de Planes ES3 (08-oct-2026, commit `ad50059`)
 
 UI de Planes sobre el motor de ES2b. Contratos en [PLANES.md §4 C9/C10/C13](PLANES.md); decisiones en PLANES §11.
 
 | Módulo | Qué es |
 | --- | --- |
 | `lib/plans-deeplink.ts` | **Único parser** de los deep-links C10 (zod, `prefill` ≤ 2 kB, tab `planes` con alias `plan`). `PlanEditorPrefill` sin texto libre: sin `authorization` |
-| `lib/agenda-highlight.ts` · `lib/agenda-client-state.ts:175-210` | Resaltado de la agenda (`AgendaHighlight`: servicio / plan / sueltos; resalta, no filtra) y filtros extensibles `AgendaFilters` `{practitionerIds, locationId}` + `AGENDA_FILTER_DIMENSIONS` (SR suma `roomId`) |
+| `lib/agenda-highlight.ts` · `lib/agenda-client-state.ts` | Resaltado de la agenda (`AgendaHighlight`: servicio / plan / sueltos; resalta, no filtra) y filtros extensibles `AgendaFilters` `{practitionerIds, locationId, roomId}` + `AGENDA_FILTER_DIMENSIONS` (`roomId` lo sumó SR sin rehacer el modelo, `:239-298`) |
 | `components/agenda/agenda-utils.ts` (`compactPlanFields` / `expandPlanFields`) | DTO compacto C9 en el cable: omite los neutros y la disciplina del servicio sale del catálogo en el cliente |
 | `components/planes/plan-editor-drawer.tsx` · `plan-form.tsx` · `lib/plan-editor-state.ts` | **Editor único** (Drawer 600 px, modos `create`/`generate`/`replan`) para las 4 puertas; estado puro testeable. Lo monta una vez el shell del perfil y lo abren Diagnóstico, `/planes` y la agenda por deep-link |
 | `components/planes/plan-preview-table.tsx` | "Revisá los turnos" (C13): estados, resoluciones, stale y ordinal (`ordinalOf`). La reusan el editor, los diálogos y el modal de Seguimiento |
 | `components/seguimiento/schedule-session-modal.tsx` | "Agendar" una sesión sin turno: modal de **una fila** sobre `previewGeneratePlanBookings`/`generatePlanBookings` (sin montar el editor) |
 | `lib/plan-templates.ts` (+ `-types`) | CRUD de plantillas (CAS opcional, autor o admin, módulo `plantillas`) y `getTemplatePrefill` para el editor |
-| `lib/dashboard-revenue.ts` · `getRevenue` (`lib/dashboard.ts:619`) · `updateDashboardPrefs` (`lib/preferences.ts:158`) | Ingresos reales (S14r): MP + copagos manuales por `copagoPaidAt` + OS aparte por `insurerPaidAt`; Mes/Semana en `UserPreferences.dashboardPrefs` (M3a) |
+| `lib/dashboard-revenue.ts` · `getRevenue` (`lib/dashboard.ts`) · `updateDashboardPrefs` (`lib/preferences.ts:158`) | Ingresos reales (S14r): MP + copagos manuales por `copagoPaidAt` + OS aparte por `insurerPaidAt`; Mes/Semana en `UserPreferences.dashboardPrefs` (M3a). Desde SR, por rol (SR-D5I, ver §Salas) y en **una** tx (`loadRevenue`, `lib/dashboard.ts:642`) |
 | `components/planes/plan-balance.tsx` · `plan-booking-groups.ts` | Turnos y Facturación agrupados por plan con el saldo del server |
 | `components/patients/archive-patient-dialog.tsx` | Diálogo L9 (archivar paciente → pausar/cancelar planes) |
+
+## Salas (SR, 08-oct-2026, pendiente commit)
+
+Corrida SR sobre `ad50059`, planning en el plan vigente §17 + §17.5. Antes solo había sedes y nada impedía que dos
+profesionales usaran el mismo lugar a la misma hora. **Un consultorio sin salas cargadas ve todo igual que antes**
+(markup de la agenda idéntico byte a byte, 0 statements nuevos en create/update/batch/agenda). Aplica a General y
+Kinesiología sin módulo nuevo ([VERTICALES.md](VERTICALES.md)).
+
+### Modelo (M4 `20261009120000_rooms`)
+
+```
+Location ──< Room (kind CONSULTORIO|BOX|GIMNASIO|SALA, capacity 1..50, active, sortOrder)
+               ▲
+               ├── PractitionerSchedule.roomId?  (NO ACTION)  "AP atiende en el Consultorio 1 los lunes 9-13"
+               ├── Booking.roomId?               (RESTRICT)   CHECK Booking_room_location_check: sala ⇒ sede
+               └── TimeBlock.roomId?             (CASCADE)    CHECK TimeBlock_room_scope_check: sede y sin profesional
+ScheduleException.ranges[].roomId?  (solo zod, sin DDL)
+```
+
+- `Room` con RLS ENABLE + FORCE + `Room_tenant_isolation`; sin GRANT (DEFAULT PRIVILEGES). FK `(locationId, tenantId)`
+  → `Location_id_tenantId_key` (índice nuevo, destino de la FK compuesta).
+- Las tres columnas `roomId` llevan FKs compuestas `(roomId, tenantId)` (misma empresa) y `(roomId, locationId)` (misma
+  sede): una sala de otra sede o de otro consultorio no entra ni por RPC (las FK saltean RLS). RESTRICT y NO ACTION se
+  chequean igual al final de la sentencia.
+- Quien cambia `Booking.locationId` recalcula o limpia `roomId` en el **mismo UPDATE**; si no, 23503.
+- Índice parcial `Room_locationId_name_active_key` (`lower(btrim(name))` WHERE `active`): no se expresa en Prisma y
+  no se borra si `migrate dev` lo propone. Drift aceptado documentado en el SQL y en `schema.prisma` («SR M4: DRIFT
+  ACEPTADO», `prisma/schema.prisma:1736`).
+
+### Reglas (SR-D1..D9 + §17.5)
+
+| # | Regla | Dónde |
+|---|---|---|
+| SR-D1 | `capacity` = **profesionales a la vez**, no pacientes (el cupo de pacientes sigue en `Service.maxConcurrent`). El mismo profesional **no ocupa su sala dos veces**: `roomOccupancyAt` lo excluye; si no, un kine con varios pacientes chocaría consigo mismo | `lib/availability/rooms.ts:107-140` |
+| SR-D2 | Forzar sala (`allowRoomConflict`) **no es sobreturno**: no marca `isOverbooked` ni escribe `[SOBRETURNO]`. Copy "Asignar igual" / "Agendar igual" / "Moverlo igual (sala ocupada)" | `lib/bookings-core.ts:1395,1712` · `lib/booking-force-flags.ts:36,83` |
+| SR-D3 | Planes, "este y los siguientes" y el turnero **estampan** la sala (`defaultRoomFor`; archivada → sin sala) y **no** chequean ocupación ni toman clave de sala. La barrera es la validación de Configuración. `rescheduleSession` y las ediciones sueltas sí chequean | `lib/plans-engine-internal.ts` · `lib/public-booking.ts` |
+| SR-D4 | En Configuración, choque **duro** entre plantillas de profesionales distintos (con la vigencia de cada franja); contra excepciones futuras, solo aviso | `lib/room-schedule-validate.ts:172` · `lib/practitioner-schedule.ts` |
+| §17.5 | **Bloquear sala** entra en SR: `TimeBlock.roomId`, alcance "Una sala" del candado. Para la ocupación cuenta como sala llena (`room-busy` con `blocked: {reason}`), con aviso y forzado | `lib/time-blocks.ts:189-209` · `lib/booking-rooms-internal.ts:193` |
+| SR-D6 | Sala ⇒ sede explícita (CHECK). Con sala y sede null se estampa la principal | M4 · `lib/bookings-core.ts` |
+| SR-D7 | El batch omite las fechas con sala ocupada salvo forzar (casilla aparte); re-cuenta bajo lock | `lib/bookings.ts` |
+| SR-D8 | `archiveRoom` se niega con franjas vigentes, turnos futuros o excepciones futuras; los **bloqueos** futuros no bloquean: se borran (soft delete) en la misma tx | `lib/rooms.ts:276` |
+| SR-D9 | Nombre único por sede entre las activas (índice parcial) → `fieldErrors.name` | M4 · `lib/rooms.ts` |
+
+- **Sala por defecto:** el turno toma la sala de la franja que lo contiene (`defaultRoomFor`, `lib/availability/rooms.ts:54`,
+  sobre franjas **crudas** con `roomRangesFor`, no `scheduledRanges`: §5.27 no cambia). Sala archivada → sin sala.
+- **Elegir sala no cambia la sede:** una sala de otra sede → `bad-room` (`BAD_ROOM_ERROR`, `lib/bookings-constants.ts:57`).
+  La sede no se cambia desde el drawer.
+- **Un bloqueo de sala NUNCA es "todos".** Antes `practitionerId` null = "todo el equipo"; un bloqueo de sala también
+  tiene `practitionerId` null (por CHECK), así que **todo lector de `TimeBlock` excluye `roomId`**: `liveBlocksInTx`
+  (`lib/bookings-core.ts:534-550`, `roomId: null`; el gate encontró que bloqueaba a todos los profesionales), el
+  loader (separa `roomBlocks`), `listTimeBlocks`, `removeDayLock` y el reuso del candado (`NOT_ROOM_BLOCK`,
+  `lib/time-blocks-schemas.ts:201`). Un lector nuevo de `TimeBlock` suma ese filtro.
+- **Ocupación** (`lib/booking-rooms-internal.ts`, `server-only`): `lockActiveRoomInTx` (`:63`), `countRoomOverlapsInTx`
+  (`:193`, **una** sentencia UNION ALL turnos + bloqueos) y `loadRoomBookingsInTx` (`:242`, el batch la carga una vez).
+  Lookback `ROOM_LOOKBACK_MIN = 480` (`:23`) = el máximo de `Service.durationMin`; el de cupo sigue en 240. Con 240, un
+  turno de 6 h de otro profesional no contaba (revisión (a)).
+- **Locks:** enmienda C2 (1b) en ADR-004.
+- **Ingresos por rol (SR-D5I) y Facturación (SR-D4F)** entraron en la misma corrida: ver [SECURITY.md §16](SECURITY.md).
+
+### Módulos
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/rooms.ts` (+ `-types`, `-constants`, `-schemas`) | CRUD de salas: `listRooms` (`:111`), `listRoomOptions` (`:156`, bootstrap de la agenda, solo activas de sedes activas), `createRoom`/`updateRoom`/`archiveRoom`/`restoreRoom` con `schedule.configure` + sedes exclusivo + `auditInTx` |
+| `lib/availability/rooms.ts` | Motor puro: `defaultRoomFor`, `roomOccupancyAt`, `roomAssignmentsFor` ("Asignada: AP 9–13" de la vista "Por sala") |
+| `lib/booking-rooms-internal.ts` | Ocupación y validación de sala dentro de la tx (arriba) |
+| `lib/room-schedule-validate.ts` | Validación pura entre profesionales (`roomScheduleConflicts`), la usan el server y el editor de horarios |
+| `lib/agenda-layout-rooms.ts` | Layout puro de "Por sala" (`buildRoomColumns`, `:137`). **Módulo aparte por bundle:** `agenda-layout.ts` está en el first load de `/agenda` y webpack no separa un módulo por export (~0,83 kB gz). Solo lo importan `room-day-panel.tsx`, `room-day-view.tsx` y tests; **`agenda-layout.ts` no lo re-exporta** (hay test); los helpers comunes se importan de `agenda-layout.ts`, no se duplican |
+| `components/agenda/views/room-day-panel.tsx` · `room-day-view.tsx` · `day-columns-grid.tsx` | Vista "Por sala" con `dynamic()` (`agenda-client.tsx:123`); el shell `DayColumnsGrid` se comparte con "Por profesional" (su test quedó intacto) |
+| `components/agenda/room-filter.tsx` | Filtro de sala (radiogroup, "Sin sala", solo con ≥ 2 salas en el alcance), `dynamic()` |
+| `components/configuracion/panels/rooms-section.tsx` | Configuración › Sedes › Salas, `dynamic()` al abrir (`locations-panel.tsx:47`) |
+| `components/agenda/booking-drawer/room-row.tsx` | Fila Sala del drawer ("Cambiar" con `canOperate`, "Asignar igual" por `useConfirm`) |
+
+### Agenda
+
+- **El filtro de sala es del cliente** (`applyAgendaFilters`, dimensión `roomId` en `lib/agenda-client-state.ts:296`),
+  igual que la sede: `listAgendaBookings` ya trae la semana entera y mandar `roomId` al server sumaría un viaje por
+  cada cambio de chip. Persiste en `agendaPrefs.roomId` (se limpia al cambiar de sede; null se omite del blob).
+- **"Por sala" no aplica el filtro de profesionales** y oculta los chips (`agenda-client.tsx:551,817`): con un chip
+  puesto, una sala ocupada por otro profesional se veía libre y la Secretaria forzaba sin ver por qué (revisión (b) M2).
+  "Asignada:" usa todos los profesionales (`roomPractitionerById`, `:445`). Con "Todas las sedes" usa la sede
+  principal y lo dice; "Sin sala" se filtra a la sede del alcance.
+- El bootstrap (`app/(app)/agenda/page.tsx:65`) carga `listRoomOptions` aparte de `listAgendaBookings` (que no suma
+  queries). Un turno con sala fuera del catálogo se muestra "Sala archivada".
+- SV: `BookingChangeRef.roomId?` + `prev.roomId` (`lib/booking-events-internal.ts:50-52`) ya existen; el publish
+  realtime con sala lo hace SV.
 
 ## Timezone (a core invariant)
 
@@ -479,8 +565,8 @@ Booking.locationId? ──► Location (RESTRICT; null = primary)
      it exclusive);
   3. **rows** — count, upsert, block rows.
 
-  Planes (ES2b) extends this order with the patient lock first and Booking → Session → TreatmentProgram for rows:
-  ADR-004.
+  Planes (ES2b) extends this order with the patient lock first and Booking → Session → TreatmentProgram for rows;
+  SR adds the room key between capacity and locations (C2 (1b)): ADR-004.
 
 ### Capabilities / authz
 
@@ -537,7 +623,7 @@ hides; the action is the barrier. Details in SECURITY.md §13.
   one column per practitioner, occupancy "2/3" / "4/∞", overbooking, out of
   hours, blocked hatch, now-line, keyboard) / **Recepción**; layout math is pure
   in `lib/agenda-layout.ts`. Practitioner chips with favourites, location
-  filter, mode toggle.
+  filter, mode toggle. Since SR: **Por sala** and the room filter (§Salas).
 - **Reception** (`lib/reception-state.ts` pure + `markReceptionAction`,
   `lib/bookings.ts:~1706`): timestamps `arrivedAt`/`attendingAt`, not new
   `BookingStatus` values; optimistic lock; capability `agenda.reception`. It is
@@ -546,18 +632,21 @@ hides; the action is the barrier. Details in SECURITY.md §13.
   goes back to PENDING for a guest or an unpaid public reservation, CONFIRMED
   otherwise (fixer).
 - **Day lock** (`lib/time-blocks.ts`: `previewDayLock` → `applyDayLock` →
-  `removeDayLock`): "everyone" = one TimeBlock with `practitionerId` null
-  (reaches future practitioners); a subset = N rows with `groupId`. Apply runs
+  `removeDayLock`): "everyone" = one TimeBlock with `practitionerId` null **and
+  `roomId` null** (reaches future practitioners; a room block is never
+  "everyone", §Salas); a subset = N rows with `groupId`; since SR, scope "Una
+  sala" (`agenda.manageBlocks`). Apply runs
   in one tx: locks → recompute affected → if they differ from what the user saw
   → `changed`, nothing applied → create blocks → optionally
   `cancelBookingsInTx` (`lib/bookings-cancel-internal.ts`; bookings with a
   recorded payment are **skipped**, H1).
-- **Agenda prefs**: `UserPreferences.agendaPrefs` (`mode`, `zoom`, density,
-  `favoritePractitionerIds`, `locationId`), sanitised on read
+- **Agenda prefs**: `UserPreferences.agendaPrefs` (`mode` incl. `room`, `zoom`, density,
+  `favoritePractitionerIds`, `locationId`, `roomId`), sanitised on read
   (`sanitizeAgendaViewPrefs`, `lib/preferences.ts:47`).
-- **Lazy loading in /agenda** (`components/agenda/agenda-client.tsx:89-95`):
-  `next/dynamic` for the modal, drawer, day-lock dialog, Recepción and Por
-  profesional. First load 238 → 195 kB (PERF.md §B4.6).
+- **Lazy loading in /agenda** (`components/agenda/agenda-client.tsx:110-124`):
+  `next/dynamic` for the modal, drawer, day-lock dialog, Recepción, Por
+  profesional and (SR) Por sala + room filter. First load 238 → 195 kB (PERF.md
+  §B4.6); 204,5 kB after SR (PERF.md §SR).
 - **Render tests** `tests/unit/render/*.test.tsx` (`renderToStaticMarkup`, no
   DOM): agenda-client, practitioner-day-view, day-lock, reception-view,
   public-booking-wizard.
@@ -679,6 +768,14 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   3. **Sedes:** `lockTenantLocationsShared` una vez y recién después validar la sede `{id, tenantId, active}`.
   4. **Filas:** `Booking` (`FOR UPDATE`, id asc) → `Session` → `TreatmentProgram`. El CAS del `updatedAt` del plan
      va al final. Toda escritura multi-fila hace antes `SELECT … FOR UPDATE ORDER BY id` de sus candidatas.
+  - **Enmienda C2 (1b), SR (08-oct):** entre (2) y (3) va la **sala**: paciente → cupo → **sala** → sedes → filas.
+    Cupo y sala en **una** sentencia (`lockCapacityAndRoomsMany`, `lib/booking-cap-lock.ts:252`, claves
+    `kinesoft:room:<t>:<roomId>:<día AR>`); con sala por defecto en la edición, una 2.ª sentencia después del cupo y
+    antes de las sedes. La sala se valida después del compartido de sedes y se cuenta solo con su clave tomada.
+    **Configuración:** sedes compartido → `kinesoft:room-schedule:<t>` (solo si hay sala) → `schedule`/`schedexc`
+    (`lib/practitioner-schedule.ts:184-196`); ningún write-path de turnos lo toma. **Bloqueo de sala:** clave de sala →
+    sedes → validar (`lib/time-blocks.ts:189-203`). `archiveRoom`/`updateRoom`/`restoreRoom`: sedes exclusivo. Planes,
+    serie y turnero no toman clave de sala (SR-D3). Literal en [PLANES.md §4 C2](PLANES.md).
   - **Seguimiento y `rescheduleSession`** lockean el plan con **`FOR NO KEY UPDATE`** (`lib/sessions.ts:706,996`),
     no `FOR UPDATE`: el INSERT de un turno con FK al plan pide `FOR KEY SHARE` sobre el plan, que choca con
     `FOR UPDATE` pero no con `FOR NO KEY UPDATE`. Sigue serializando dos cierres concurrentes (A4 de ES1).
@@ -755,7 +852,11 @@ Agenda, patients, clinical history and sessions are **not** cached (correct).
 Neither is availability (B-pre, `lib/availability-actions.ts`): no
 `availability` tag on purpose. The global catalog (B-pre) reads under
 `tags.catalog()`; Plataforma writes revalidate it and the import is followed
-by "Refrescar catálogo".
+by "Refrescar catálogo". **Per-user data in a shared key is a leak:** the
+dashboard revenue key carries the revenue scope explicitly
+(`["dashboard:revenue", tenantId, revenueScopeKey(scope), range, dayKey]`,
+`lib/dashboard.ts:679`, SR-D5I), and `monthRevenue` left the counts cache,
+which is shared by patient visibility, not by practitioner.
 
 **HTTP** — every page in `(app)`, `(portal)` and booking is dynamic
 (`force-dynamic`/cookies) → `Cache-Control: private, no-store`: the CDN never

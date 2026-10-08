@@ -23,9 +23,16 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { lockPlanPatient } from "@/lib/plan-lock";
 import { bookingHasMoney, priorPaidStamp } from "@/lib/plan-pricing";
 import { formatARS } from "@/lib/format";
-import { classifyBatchInstant, dayKeyOf, expandDates } from "@/lib/availability";
+import { classifyBatchInstant, dayKeyOf, defaultRoomFor, expandDates, roomOccupancyAt } from "@/lib/availability";
 import { loadAvailabilityInputs } from "@/lib/availability-loader";
-import { lockCapacityWindow } from "@/lib/booking-cap-lock";
+import {
+  capacityKeysForWindow,
+  lockCapacityAndRoomsMany,
+  lockCapacityWindow,
+  roomKeysForWindow,
+} from "@/lib/booking-cap-lock";
+import { lockTenantLocationsShared } from "@/lib/location-lock";
+import { countRoomOverlapsInTx, loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { bulkPatientAccess } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
 import { getMembershipRole, requireCapability } from "@/lib/authz";
@@ -76,6 +83,7 @@ import { loadAgendaPlanProjection } from "@/lib/agenda-plan-projection-internal"
 import {
   BASIC_ACCESS_ERROR,
   BAD_LOCATION_ERROR,
+  BAD_ROOM_ERROR,
   BLOCKED_ERROR,
   CLINICAL_RELINK_ERROR,
   OUT_OF_HOURS_ERROR,
@@ -88,6 +96,8 @@ import {
   SESSION_KEPT_DONE_NOTICE,
   RECEPTION_FORBIDDEN_ERROR,
   RECEPTION_OTHER_PRACTITIONER_ERROR,
+  ROOM_BLOCKED_ERROR,
+  ROOM_BUSY_ERROR,
   SAME_INSTANT_ERROR,
   STALE_ERROR,
   UPDATE_SAME_INSTANT_ERROR,
@@ -321,6 +331,10 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         ...(practitionerIds ? { practitionerId: { in: practitionerIds } } : {}),
         ...(q.includeCancelled === false ? { status: { not: "CANCELLED" as const } } : {}),
         ...locationWhere,
+        // SR: filtro de sala en el MISMO where (sin queries nuevas, techo +10 %):
+        // "none" = solo sin sala; un id = esa sala (una ajena no matchea: el
+        // tenantId de arriba va a mano); null/ausente = todas.
+        ...(q.roomId === "none" ? { roomId: null } : q.roomId ? { roomId: q.roomId } : {}),
       },
       orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
       select: {
@@ -342,6 +356,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         idempotencyKey: true,
         isOverbooked: true,
         locationId: true,
+        roomId: true, // SR: escalar, misma sentencia; el nombre lo resuelve el cliente
         isTelemedicine: true,
         telemedicineUrl: true,
         arrivedAt: true,
@@ -458,6 +473,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       isOverbooked: b.isOverbooked,
       locationId: b.locationId,
       locationName: b.locationId ? locationName.get(b.locationId) ?? null : primaryName,
+      roomId: b.roomId,
       isTelemedicine: b.isTelemedicine,
       telemedicineUrl: b.telemedicineUrl,
       arrivedAt: b.arrivedAt,
@@ -549,6 +565,11 @@ export async function createBooking(
     // Queda como sobreturno (`isOverbooked` + prefijo). El turnero y Planes no
     // lo pueden forzar (bloqueo duro allá).
     allowBlocked?: boolean;
+    // SR (SR-D2): el staff confirmó "Cargar igual" con la sala llena u ocupada
+    // (otro profesional o un bloqueo de sala). NO es sobreturno: no marca
+    // `isOverbooked` ni el prefijo. Saltea la clave y el conteo de sala; la sala
+    // igual se valida (tenant, sede, activa).
+    allowRoomConflict?: boolean;
     // Stable per-attempt key from the client so a double-submit / retry
     // collapses to one row, while a deliberate new turno gets its own.
     idempotencyKey?: string;
@@ -567,6 +588,9 @@ export async function createBooking(
     outOfHours?: BookingOutOfHoursPrompt;
     // B3.1: sobre un bloqueo de agenda (re-llamar con allowBlocked).
     blocked?: BookingBlockedPrompt;
+    // SR: sala llena u ocupada (re-llamar con allowRoomConflict). Último aviso
+    // del orden (FORCE_PROMPT_ORDER): sale después del cupo y del paciente.
+    roomBusy?: { roomName: string; nextFreeISO: null; blocked?: { reason: string | null } | null };
   }
 > {
   const actor = await getActor();
@@ -633,6 +657,30 @@ export async function createBooking(
   };
   const cls = classifyForWrite(input, clsArgs);
   const locationId = data.locationId ?? defaultLocationFor(input, data.practitionerId, data.scheduledFor, duration);
+  // ── SR: sala del turno ────────────────────────────────────────────────────
+  // Tres fuentes (lib/validation.ts `bookingRoomId`): ausente = la de la franja
+  // que contiene el turno en la sede resuelta (`defaultRoomFor`, SR1a); null =
+  // "Sin sala" explícito (no se estampa ni se chequea); un id = esa sala, que
+  // tiene que ser de la sede final (elegir sala no cambia la sede, igual que
+  // la edición de SR2a: el modal manda la sede de la sala).
+  // La de por defecto sale de las franjas leídas en `pre`, igual que la sede
+  // por defecto (`defaultLocationFor`): el alta nunca releyó franjas dentro del
+  // lock (solo bloqueos, `liveBlocksInTx`). Por eso, a diferencia de la edición
+  // (que lee franjas DESPUÉS del lock de cupo y toma la clave de sala en una
+  // 2.ª sentencia), acá la sala ya se conoce antes de la tx de escritura y su
+  // clave va FUSIONADA con el cupo en una sola sentencia: con sala, +1
+  // statement (el conteo) y no +2.
+  const roomPinned = typeof data.roomId === "string";
+  const roomTarget: string | null =
+    data.roomId === undefined
+      ? defaultRoomFor(input, data.practitionerId, data.scheduledFor, duration, locationId)
+      : data.roomId;
+  // SR-D6: turno con sala ⇒ sede explícita (CHECK de M4). null = la principal,
+  // que el loader ya trajo (`primaryLocationId`): sin query extra.
+  const roomLocationId = roomTarget ? (locationId ?? input.primaryLocationId) : null;
+  // SR-D1/D2: la ocupación se chequea (clave + conteo) salvo que el usuario ya
+  // haya confirmado "Cargar igual".
+  const roomCheck = !!roomTarget && !raw.allowRoomConflict;
   const suggest = () =>
     suggestNextFreeSlot(actor.tenantId, {
       practitionerId: data.practitionerId,
@@ -767,13 +815,28 @@ export async function createBooking(
       // B3.1 (TOCTOU): el conteo y el upsert van en ESTE tx, detrás del lock de
       // cupo del día. Antes el conteo corría en otro tx y dos altas
       // simultáneas de pacientes distintos en un cupo 1 pasaban las dos.
-      await lockCapacityWindow(tx, {
+      const capWindow = {
         tenantId: actor.tenantId,
         practitionerId: data.practitionerId,
         serviceId: service.id,
         start: data.scheduledFor,
         end,
-      });
+      };
+      if (roomCheck) {
+        // SR, enmienda C2 (1b): cupo → SALA → sedes → filas. Cupo y sala en UNA
+        // sentencia (la misma cantidad que `lockCapacityWindow`): dos altas de
+        // profesionales distintos en la misma sala se serializan acá, y el
+        // conteo de abajo de la segunda ya ve la fila de la primera.
+        await lockCapacityAndRoomsMany(
+          tx,
+          capacityKeysForWindow(capWindow),
+          roomKeysForWindow({ tenantId: actor.tenantId, roomId: roomTarget!, start: data.scheduledFor, end })
+        );
+      } else {
+        // Sin sala (o forzada): lo de siempre, 0 statements nuevos (techo
+        // estricto de `f.createBooking` en tests/perf/compare.ts).
+        await lockCapacityWindow(tx, capWindow);
+      }
       // Integrador final de B-pre: re-chequeo de bloqueos con el lock de cupo
       // ya tomado (`liveBlocksInTx`). `cls` se calculó en otro tx: un candado
       // commiteado en el medio solo se ve acá. Bloqueado y sin forzar → el
@@ -815,9 +878,58 @@ export async function createBooking(
       // con archiveLocation). Elegida y ya archivada → rechazo; la de por
       // defecto archivada en el medio → null (= principal).
       let loc = locationId;
-      if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
-        if (data.locationId) return { kind: "bad-location" as const };
-        loc = null;
+      // SR: la sala se valida DESPUÉS del lock compartido de sedes
+      // (`archiveRoom` toma el exclusivo: con el compartido tomado, la sala no
+      // se archiva entre esta lectura y el upsert). `lockActiveRoomInTx` exige
+      // sala activa, DE esa sede y sede activa: reemplaza a la validación de la
+      // sede (misma cantidad de sentencias que `lockActiveLocation`).
+      let roomId: string | null = null;
+      let room: { id: string; capacity: number; name: string } | null = null;
+      if (roomTarget && roomLocationId) {
+        await lockTenantLocationsShared(tx, actor.tenantId);
+        room = await lockActiveRoomInTx(tx, {
+          tenantId: actor.tenantId,
+          roomId: roomTarget,
+          locationId: roomLocationId,
+        });
+      }
+      if (room) {
+        roomId = room.id;
+        loc = roomLocationId; // SR-D6: la sede de la sala, explícita.
+      } else {
+        // Elegida y no válida (de otra sede, de otro consultorio, archivada, o
+        // su sede archivada) → rechazo sin escribir. La por defecto archivada
+        // en el medio → sin sala, como el turnero (SR2b) y la edición (SR2a);
+        // la sede se valida sola, como siempre.
+        if (roomPinned) return { kind: "bad-room" as const };
+        if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
+          if (data.locationId) return { kind: "bad-location" as const };
+          loc = null;
+        }
+      }
+      // SR-D1/D2: ocupación de la sala DESPUÉS del conteo de cupo (orden de los
+      // avisos: FORCE_PROMPT_ORDER) y con la clave de sala ya tomada arriba.
+      // Profesionales DISTINTOS solapados o un bloqueo de sala (§17.5) → aviso
+      // forzable; el mismo profesional nunca choca consigo mismo.
+      if (room && roomCheck) {
+        const occ = await countRoomOverlapsInTx(tx, {
+          tenantId: actor.tenantId,
+          roomId: room.id,
+          practitionerId: data.practitionerId,
+          start: data.scheduledFor,
+          end,
+          now,
+          capacity: room.capacity,
+          // Un reintento idempotente no choca consigo mismo.
+          excludeKey: clientKey,
+        });
+        if (occ.atCapacity) {
+          return {
+            kind: "room-busy" as const,
+            roomName: room.name,
+            blocked: occ.blocked ? { reason: occ.blocked.reason } : null,
+          };
+        }
       }
       const row = await tx.booking.upsert({
         where: { idempotencyKey },
@@ -828,6 +940,9 @@ export async function createBooking(
           notes,
           isOverbooked: overbooked,
           locationId: loc,
+          // SR: junto con la sede, en la MISMA sentencia (la FK compuesta
+          // (roomId, locationId) de M4 no admite la sala vieja con otra sede).
+          roomId,
           isTelemedicine,
           telemedicineUrl,
           status: data.patientId ? "CONFIRMED" : "PENDING",
@@ -850,6 +965,7 @@ export async function createBooking(
           notes,
           isOverbooked: overbooked,
           locationId: loc,
+          roomId,
           isTelemedicine,
           telemedicineUrl,
           title,
@@ -859,6 +975,14 @@ export async function createBooking(
       });
       return { kind: "ok" as const, row };
     });
+    if (w.kind === "room-busy") {
+      return {
+        ok: false,
+        error: w.blocked ? ROOM_BLOCKED_ERROR(w.roomName, w.blocked.reason) : ROOM_BUSY_ERROR(w.roomName),
+        roomBusy: { roomName: w.roomName, nextFreeISO: null, blocked: w.blocked },
+      };
+    }
+    if (w.kind === "bad-room") return { ok: false, error: BAD_ROOM_ERROR };
     if (w.kind === "conflict") {
       const [practitionerName, suggestion] = await Promise.all([nameOf(), suggest()]);
       return {
@@ -921,7 +1045,7 @@ export async function createBooking(
     // Del row que devolvió el upsert: en un reintento con la misma key (rama
     // `update`) el horario y el profesional son los de la fila que ya existía.
     await afterBookingsCommitted(actor.tenantId, [
-      { bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, kind: "booking" },
+      { bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, kind: "booking", roomId: b.roomId },
     ]);
     return { ok: true, data: { id: b.id } };
   } catch (e) {
@@ -950,6 +1074,8 @@ type UpdateBookingResult = ActionResult<{ updatedAt: Date }> & {
   // B3.1: mismos avisos blandos que createBooking (re-llamar con el flag).
   outOfHours?: BookingOutOfHoursPrompt;
   blocked?: BookingBlockedPrompt;
+  // SR: sala llena u ocupada (forzable con `allowRoomConflict`, no es sobreturno).
+  roomBusy?: { roomName: string; nextFreeISO: null; blocked?: { reason: string | null } | null };
   /**
    * S12 (C4): aviso no bloqueante de la sincronía con la sesión del plan (p.
    * ej. salir de COMPLETED con evolución cargada: la sesión queda realizada).
@@ -966,6 +1092,7 @@ export async function updateBooking(
     // B3.1: mismos flags que createBooking (decisiones 1 y 2).
     allowOutOfHours?: boolean;
     allowBlocked?: boolean;
+    allowRoomConflict?: boolean;
     expectedUpdatedAt?: string;
   }
 ): Promise<UpdateBookingResult> {
@@ -995,6 +1122,7 @@ export async function updateBooking(
           allowPatientOverlap: raw.allowPatientOverlap,
           allowOutOfHours: raw.allowOutOfHours,
           allowBlocked: raw.allowBlocked,
+          allowRoomConflict: raw.allowRoomConflict,
         },
       },
       { now }
@@ -1039,6 +1167,16 @@ export async function updateBooking(
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "foreign-patient") return { ok: false, error: "Paciente fuera del consultorio." };
   if (outcome.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
+  if (outcome.kind === "bad-room") return { ok: false, error: BAD_ROOM_ERROR };
+  if (outcome.kind === "room-busy") {
+    return {
+      ok: false,
+      error: outcome.blocked
+        ? ROOM_BLOCKED_ERROR(outcome.roomName, outcome.blocked.reason)
+        : ROOM_BUSY_ERROR(outcome.roomName),
+      roomBusy: { roomName: outcome.roomName, nextFreeISO: null, blocked: outcome.blocked ?? null },
+    };
+  }
   // S12 (C4): variantes de Planes del core.
   if (outcome.kind === "plan-session-not-pending") {
     return { ok: false, error: PLAN_SESSION_NOT_PENDING_ERROR(outcome.ordinal) };
@@ -1085,7 +1223,10 @@ export async function updateBooking(
     entity: "Booking",
     entityId: id,
     // El patch YA filtrado (S07sb): un campo sacado no aparece ni en el audit.
-    payload: outcome.written as Record<string, unknown>,
+    payload: {
+      ...(outcome.written as Record<string, unknown>),
+      ...(outcome.roomId !== undefined ? { roomId: outcome.roomId } : {}),
+    },
   });
   // Surface status transitions in the bell.
   if (patch.status && patch.status !== before.status && actor.userId) {
@@ -1223,6 +1364,8 @@ export async function markReceptionAction(
         paymentStatus: true,
         idempotencyKey: true,
         patient: { select: { firstName: true, lastName: true } },
+        // SR: sala para el `BookingChangeRef` (escalar, misma sentencia).
+        roomId: true,
         // S12 (C4): vínculo con el plan (escalares: sin sentencia extra).
         sessionId: true,
         pricedByPlan: true,
@@ -1336,7 +1479,7 @@ export async function markReceptionAction(
   // la agenda, KPIs) solo cambian con el estado, como antes.
   await afterBookingsCommitted(
     actor.tenantId,
-    [{ bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "reception" }],
+    [{ bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "reception", roomId: row.roomId }],
     { invalidateCaches: !!transition.patch.status }
   );
   if (plan?.discharge) await notifyPlanNearingDischarge(actor.tenantId, plan.discharge, actor.userId ?? null);
@@ -1375,6 +1518,7 @@ export async function deleteBooking(
         practitionerId: true,
         scheduledFor: true,
         programId: true,
+        roomId: true, // SR: sala del ref (escalar)
       },
     });
     if (!row) return { kind: "notfound" as const };
@@ -1417,6 +1561,7 @@ export async function deleteBooking(
       practitionerId: row.practitionerId,
       scheduledFor: row.scheduledFor,
       kind: "booking",
+      roomId: row.roomId,
     };
     return { kind: "ok" as const, patientId: row.patientId, ref };
   }).catch((e) => {
@@ -1492,6 +1637,7 @@ async function toggleBilling(
         paymentStatus: true,
         // P3.Z: idem `insurerPaidAt` (la OS se cuenta por esa fecha).
         insurerPaidAt: true,
+        roomId: true, // SR: sala del ref (escalar)
       },
     });
     if (!row) return { kind: "notfound" as const };
@@ -1563,7 +1709,7 @@ async function toggleBilling(
       select: { updatedAt: true },
     });
     const refs: BookingChangeRef[] = [
-      { bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "booking" },
+      { bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "booking", roomId: row.roomId },
     ];
     const sync = planPrior ? await syncPriorPaidReplacementInTx(tx, actor.tenantId, row.sessionId!, new Date()) : null;
     if (sync?.ref) refs.push(sync.ref);
@@ -1633,6 +1779,7 @@ async function syncPriorPaidReplacementInTx(
           scheduledFor: true,
           updatedAt: true,
           practitionerId: true,
+          roomId: true,
           payment: { select: { status: true } },
         },
       },
@@ -1674,7 +1821,13 @@ async function syncPriorPaidReplacementInTx(
   });
   if (res.count !== 1) throw new BillingReplacementStale();
   return {
-    ref: { bookingId: active.id, practitionerId: active.practitionerId, scheduledFor: active.scheduledFor, kind: "booking" },
+    ref: {
+      bookingId: active.id,
+      practitionerId: active.practitionerId,
+      scheduledFor: active.scheduledFor,
+      kind: "booking",
+      roomId: active.roomId,
+    },
     notice: stamp.priorPaid
       ? `La sesión ya quedó paga con este turno: el turno del ${when} pasa a ${formatARS(0)}.`
       : stamp.copagoCents != null
@@ -1753,6 +1906,9 @@ export async function setBookingCopagoPaid(
 // archivo "use server" no puede exportar valores que no sean funciones async).
 export type { BatchSlotStatus } from "@/lib/booking-schedule";
 
+/** Sala del preflight del batch (validada: activa, de una sede activa, del tenant). */
+type RoomInfoRow = { id: string; locationId: string; capacity: number; name: string };
+
 export type BatchOutcome = {
   /** True when nothing was written (preflight). */
   dryRun: boolean;
@@ -1795,6 +1951,9 @@ export async function createBookingsBatch(
     idempotencyKey?: string;
     dryRun?: boolean;
     allowOverbooking?: boolean;
+    // SR (SR-D7): escribir también las fechas con la sala llena u ocupada
+    // (`BatchDateOutcome.roomBusy`). No es sobreturno (SR-D2).
+    allowRoomConflict?: boolean;
   }
 ): Promise<ActionResult<BatchOutcome>> {
   const actor = await getActor();
@@ -1851,20 +2010,78 @@ export async function createBookingsBatch(
   // bloqueos y los turnos que pueden chocar — del profesional (cupo) o del
   // paciente (solape propio / duplicado), con 240 min hacia atrás.
   const last = dates[dates.length - 1];
-  const input = await runWithRls(actor.tenantId, (tx) =>
-    loadAvailabilityInputs(tx, {
+  const now = new Date();
+  // SR (SR-D7): la sala de cada fecha (la elegida o la de la franja de ESE
+  // día, en la sede de esa fecha) y su ocupación en el preflight. Va en la
+  // MISMA tx que el loader (la sala por defecto sale de sus franjas): sin sala,
+  // 0 sentencias y 0 transacciones nuevas (techo estricto del batch). Con sala:
+  // 1 query de salas (validación + capacidad + nombre) y UNA carga por sala
+  // distinta (`loadRoomBookingsInTx`, todas las fechas), porque el loader solo
+  // trae los turnos de ESTE profesional y la sala la ocupan otros.
+  const loaded = await runWithRls(actor.tenantId, async (tx) => {
+    const input = await loadAvailabilityInputs(tx, {
       tenantId: actor.tenantId,
       practitionerIds: [data.practitionerId],
       serviceId: service.id,
       patientId: data.patientId,
       from: dayKeyOf(dates[0]),
       to: dayKeyOf(new Date(last.getTime() + duration * 60_000 - 1)),
-    })
-  );
-  const now = new Date();
+    });
+    const perDate = dates.map((when) => {
+      const locationId = data.locationId ?? defaultLocationFor(input, data.practitionerId, when, duration);
+      const roomId =
+        data.roomId === undefined ? defaultRoomFor(input, data.practitionerId, when, duration, locationId) : data.roomId;
+      // SR-D6: con sala, la sede explícita (null = la principal del loader).
+      return { when, locationId, roomId, roomLocationId: roomId ? (locationId ?? input.primaryLocationId) : null };
+    });
+    const roomIds = [...new Set(perDate.map((p) => p.roomId).filter((id): id is string => !!id))];
+    if (roomIds.length === 0) return { input, perDate, rooms: new Map<string, RoomInfoRow>(), occupancy: null };
+    const rooms = new Map<string, RoomInfoRow>(
+      (
+        await tx.room.findMany({
+          where: { tenantId: actor.tenantId, id: { in: roomIds }, active: true, location: { active: true, tenantId: actor.tenantId } },
+          select: { id: true, locationId: true, capacity: true, name: true },
+        })
+      ).map((r) => [r.id, r])
+    );
+    // Sala elegida inválida (ajena, archivada, o de otra sede que la de alguna
+    // fecha) → todo el batch rechazado, también el preflight: mismo contrato
+    // que el alta suelta (BAD_ROOM_ERROR, nada escrito).
+    if (typeof data.roomId === "string") {
+      const r = rooms.get(data.roomId);
+      if (!r || perDate.some((p) => p.roomLocationId !== r.locationId)) return { badRoom: true as const };
+    }
+    const occupancy = new Map<string, Awaited<ReturnType<typeof loadRoomBookingsInTx>>>();
+    const lastEnd = new Date(last.getTime() + duration * 60_000);
+    for (const id of roomIds) {
+      if (!rooms.has(id)) continue; // la por defecto archivada → sin sala (abajo)
+      occupancy.set(id, await loadRoomBookingsInTx(tx, { tenantId: actor.tenantId, roomId: id, from: dates[0], to: lastEnd }));
+    }
+    return { input, perDate, rooms, occupancy };
+  });
+  if ("badRoom" in loaded) return { ok: false, error: BAD_ROOM_ERROR };
+  const { input, rooms } = loaded;
   const rangesFor = rangesForInput(input);
 
-  const plan = dates.map((when) => {
+  const plan = loaded.perDate.map(({ when, locationId, roomId: roomTarget, roomLocationId }) => {
+    // Por defecto archivada (o de otra sede que la de la fecha) → sin sala.
+    const room = roomTarget ? rooms.get(roomTarget) : undefined;
+    const roomOk = !!room && room.locationId === roomLocationId;
+    const occ =
+      roomOk && loaded.occupancy
+        ? roomOccupancyAt(
+            loaded.occupancy.get(room!.id)!.bookings,
+            {
+              roomId: room!.id,
+              practitionerId: data.practitionerId,
+              when,
+              durationMin: duration,
+              capacity: room!.capacity,
+              now,
+            },
+            loaded.occupancy.get(room!.id)!.blocks
+          )
+        : null;
     const c = classifyBatchInstant({
       when,
       durationMin: duration,
@@ -1883,7 +2100,10 @@ export async function createBookingsBatch(
       status: c.status,
       outOfHours: c.outOfHours,
       blocked: c.blocked,
-      locationId: data.locationId ?? defaultLocationFor(input, data.practitionerId, when, duration),
+      locationId,
+      room: roomOk ? room! : null,
+      roomLocationId: roomOk ? roomLocationId : null,
+      roomBusy: !!occ?.atCapacity,
     };
   });
   const free = plan.filter((p) => p.status === "libre").length;
@@ -1894,6 +2114,9 @@ export async function createBookingsBatch(
     status: p.status,
     outOfHours: p.outOfHours,
     blocked: p.blocked,
+    // SR-D7: flag como `blocked` (no cambia status ni conteos). Solo presente
+    // cuando es true: sin salas, la forma de la respuesta no cambia.
+    ...(p.roomBusy ? { roomBusy: true } : {}),
   }));
 
   if (raw.dryRun) {
@@ -1930,8 +2153,14 @@ export async function createBookingsBatch(
       omitted++;
       continue;
     }
+    // SR-D7: sala llena u ocupada en el preflight y sin forzar → se omite.
+    if (slot.roomBusy && !raw.allowRoomConflict) {
+      omitted++;
+      continue;
+    }
     const idempotencyKey = `${keyBase}:${when.toISOString()}`;
     const end = new Date(when.getTime() + duration * 60_000);
+    const roomCheck = !!slot.room && !raw.allowRoomConflict;
     try {
       // Una tx por fecha (un P2002 aborta la tx entera; así cada fecha se
       // resuelve sola, como antes). B3.1 (TOCTOU): dentro, lock de cupo de los
@@ -1939,13 +2168,24 @@ export async function createBookingsBatch(
       // alguien llenó el cupo, la fecha pasa a sobreturno (forzada solo con
       // allowOverbooking; si no, se omite).
       const w = await runWithRls(actor.tenantId, async (tx) => {
-        await lockCapacityWindow(tx, {
+        const capWindow = {
           tenantId: actor.tenantId,
           practitionerId: data.practitionerId,
           serviceId: service.id,
           start: when,
           end,
-        });
+        };
+        if (roomCheck) {
+          // SR, C2 (1b): cupo + sala de ESTA fecha en una sentencia (= mismo
+          // número de statements que `lockCapacityWindow`).
+          await lockCapacityAndRoomsMany(
+            tx,
+            capacityKeysForWindow(capWindow),
+            roomKeysForWindow({ tenantId: actor.tenantId, roomId: slot.room!.id, start: when, end })
+          );
+        } else {
+          await lockCapacityWindow(tx, capWindow);
+        }
         // Integrador final de B-pre: re-chequeo de bloqueos con el lock tomado
         // (`liveBlocksInTx`): un candado commiteado después del preflight
         // vuelve la fecha sobreturno (= omitida sin allowOverbooking), igual
@@ -1982,9 +2222,43 @@ export async function createBookingsBatch(
         // Sede: elegida o la de la franja de ese día; archivada en el medio →
         // la elegida omite la fecha, la de por defecto cae a null (= principal).
         let loc = slot.locationId;
-        if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
-          if (data.locationId) return { kind: "omitted" as const };
-          loc = null;
+        // SR: sala validada después del lock compartido de sedes (carrera con
+        // `archiveRoom`); reemplaza a la validación de la sede. Archivada en el
+        // medio: la elegida omite la fecha, la por defecto cae a "sin sala".
+        let roomId: string | null = null;
+        let room: { id: string; capacity: number } | null = null;
+        if (slot.room && slot.roomLocationId) {
+          await lockTenantLocationsShared(tx, actor.tenantId);
+          room = await lockActiveRoomInTx(tx, {
+            tenantId: actor.tenantId,
+            roomId: slot.room.id,
+            locationId: slot.roomLocationId,
+          });
+        }
+        if (room) {
+          roomId = room.id;
+          loc = slot.roomLocationId;
+        } else {
+          if (slot.room && typeof data.roomId === "string") return { kind: "omitted" as const };
+          if (loc && !(await lockActiveLocation(tx, actor.tenantId, loc))) {
+            if (data.locationId) return { kind: "omitted" as const };
+            loc = null;
+          }
+        }
+        // SR-D7 (TOCTOU): re-conteo de la sala con la clave tomada; si alguien
+        // la ocupó entre el preflight y acá, la fecha se omite sin forzar.
+        if (room && roomCheck) {
+          const occ = await countRoomOverlapsInTx(tx, {
+            tenantId: actor.tenantId,
+            roomId: room.id,
+            practitionerId: data.practitionerId,
+            start: when,
+            end,
+            now,
+            capacity: room.capacity,
+            excludeKey: idempotencyKey,
+          });
+          if (occ.atCapacity) return { kind: "omitted" as const };
         }
         // Same tagging the single-create path uses, so reports can tell them apart.
         const notes = isOverbook ? `[SOBRETURNO] ${own.notes ?? ""}`.trim() : own.notes;
@@ -2007,6 +2281,7 @@ export async function createBookingsBatch(
             notes,
             isOverbooked: isOverbook,
             locationId: loc,
+            roomId,
             isTelemedicine,
             telemedicineUrl,
             title,
@@ -2014,7 +2289,7 @@ export async function createBookingsBatch(
             seriesId,
             idempotencyKey,
           }),
-          select: { id: true, practitionerId: true, scheduledFor: true },
+          select: { id: true, practitionerId: true, scheduledFor: true, roomId: true },
         });
         return { kind: "ok" as const, isOverbook, row };
       });
@@ -2023,7 +2298,13 @@ export async function createBookingsBatch(
         continue;
       }
       created++;
-      refs.push({ bookingId: w.row.id, practitionerId: w.row.practitionerId, scheduledFor: w.row.scheduledFor, kind: "booking" });
+      refs.push({
+        bookingId: w.row.id,
+        practitionerId: w.row.practitionerId,
+        scheduledFor: w.row.scheduledFor,
+        kind: "booking",
+        roomId: w.row.roomId,
+      });
       if (w.isOverbook) sobreturnos++;
     } catch (e) {
       // A patient+instant collision that the preflight missed (someone else
