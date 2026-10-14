@@ -43,7 +43,6 @@ import { bootstrapTenant, OpenOnboardingExistsError } from "@/lib/tenant-bootstr
 import { getSessionUser, isPortalPatientIdentity, loadMemberships } from "@/lib/onboarding-internal";
 import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputType } from "@/lib/validation";
 
-const INVITE_TTL_MS = 7 * 86_400_000;
 
 /** Paso 2: alta (o edición, si ya existe) del consultorio del usuario. */
 export async function saveOnboardingClinic(
@@ -293,46 +292,60 @@ export async function completeOnboarding(): Promise<ActionResult> {
 
 /**
  * Sesión verificada sin consultorio y con una invitación pendiente para su
- * email: la lleva a aceptarla. La invitación guarda solo el HASH del token,
- * así que el link del mail no se puede reconstruir: se rota el token (el link
- * viejo deja de valer) y se devuelve la URL nueva. Es seguro porque quien lo
- * pide es el dueño verificado del email invitado — el mismo que podría abrir
- * el mail.
+ * email: la lleva a aceptarla por id. Es seguro porque quien lo pide es el
+ * dueño verificado del email invitado (filtro escapado + `sameEmail`) — el
+ * mismo que podría abrir el mail.
+ *
+ * IAM-2a: NO rota el token. La invitación guarda solo el HASH, así que el link
+ * del mail no se puede reconstruir; antes se pisaba `Invitation.token` con uno
+ * nuevo y el link del mail que el invitado todavía tenía daba 404 (hallazgo
+ * del 14-oct, cuentas muertas: si se iba de esta pantalla y volvía al mail, ya
+ * no podía entrar). Ahora el link de esta pantalla es un token ADICIONAL: su
+ * hash se agrega a `priorTokens` (`push` atómico) y el vigente queda igual,
+ * igual que un «Reenviar» (C-IAM5). Tampoco extiende la vigencia: el invitado
+ * acepta ahora o le piden que se la reenvíen. «Generar link nuevo» del
+ * consultorio lo anula junto con los demás.
  */
 export async function openPendingInvitation(invitationId: string): Promise<ActionResult<{ url: string }>> {
   const user = await getSessionUser();
   if (!user) return { ok: false, error: "Tu sesión expiró. Iniciá sesión de nuevo." };
   if (!user.emailVerified) return { ok: false, error: "Confirmá tu email primero." };
-  if (typeof invitationId !== "string" || !invitationId) return { ok: false, error: "Invitación inválida." };
+  if (typeof invitationId !== "string" || !invitationId || invitationId.length > 64) {
+    return { ok: false, error: "Invitación inválida." };
+  }
 
   const rl = await rateLimit(`onboarding:invite:${user.id}`, { limit: 10, windowMs: 600_000 });
   if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
   // Canal service: el usuario todavía no es miembro del tenant de la
   // invitación. El filtro por email de la sesión es la barrera.
+  const now = new Date();
   const inv = await prismaService.invitation.findFirst({
     where: {
       id: invitationId,
       // IAM-0a: escapado. Pelado en el ILIKE, `jpere_@hotmail.com` reabría la
-      // invitación de `jperez@hotmail.com` y le ROTABA el token (el link del
-      // mail de la víctima dejaba de valer). + post-filtro exacto antes de rotar.
+      // invitación de `jperez@hotmail.com`. + post-filtro exacto antes de escribir.
       email: emailEqualsFilter(user.email),
       acceptedAt: null,
-      expiresAt: { gt: new Date() },
+      revokedAt: null,
+      expiresAt: { gt: now },
     },
     select: { id: true, tenantId: true, email: true },
   });
   if (!inv || !sameEmail(inv.email, user.email)) return { ok: false, error: "La invitación ya no está disponible." };
 
   const rawToken = randomBytes(24).toString("base64url");
-  await prismaService.invitation.update({
-    where: { id: inv.id },
-    data: { token: hashInviteToken(rawToken), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+  // Re-chequea el estado en el mismo UPDATE: si se anuló o aceptó entre la
+  // lectura y acá, no se agrega un link vivo a una invitación muerta.
+  const upd = await prismaService.invitation.updateMany({
+    where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
+    data: { priorTokens: { push: hashInviteToken(rawToken) } },
   });
+  if (upd.count !== 1) return { ok: false, error: "La invitación ya no está disponible." };
   await audit({
     tenantId: inv.tenantId,
     actorId: user.id,
-    action: "invitation.reissue_self",
+    action: "invitation.open_self",
     entity: "Invitation",
     entityId: inv.id,
   });

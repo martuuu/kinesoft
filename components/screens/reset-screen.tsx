@@ -75,10 +75,15 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
             role="alert"
             style={{ padding: 14, borderRadius: 12, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 13, lineHeight: 1.5 }}
           >
-            El link expiró o ya fue usado. Pedí uno nuevo y abrilo dentro de los 15 minutos.
+            El link venció o ya se usó. Pedí uno nuevo: te llega por email y vence en 1 hora.
           </div>
-          <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+          {/* IAM-2d: la salida es un botón, no un link al pie. Mismas clases que `Button` (y que
+              /auth/confirm/continuar) porque es navegación, no una acción. */}
+          <Link href="/forgot" className="k-btn k-btn-primary" style={{ width: "100%", justifyContent: "center" }}>
             Pedir un link nuevo
+          </Link>
+          <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+            Volver al login
           </Link>
         </div>
       ) : done ? (

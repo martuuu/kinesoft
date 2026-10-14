@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { ResendVerification } from "@/components/screens/resend-verification";
 import { OnboardingShell, StepHeader } from "@/components/onboarding/onboarding-shell";
 import { StepClinic, StepDone, StepHours } from "@/components/onboarding/steps-basic";
 import { StepInsurers, StepServices } from "@/components/onboarding/steps-catalog";
@@ -34,6 +35,9 @@ export default async function OnboardingPage({
   if (ctx.kind === "done") redirect("/dashboard");
 
   if (ctx.kind === "unverified") {
+    // IAM-2d: antes la única salida era «Volver al login» (que con la sesión abierta no lleva a ningún
+    // lado). Ahora: reenviar la verificación (C-IAM6) y «Cambiar de email», que cierra la sesión y vuelve
+    // a /signup — un email mal tipeado no se corrige en la cuenta pendiente: se crea otra.
     return (
       <OnboardingShell current={null}>
         <StepHeader
@@ -41,12 +45,17 @@ export default async function OnboardingPage({
           title="Te falta un paso"
           blurb={`Te mandamos un email a ${ctx.email} para confirmar tu cuenta. Abrí el link y volvé: seguimos desde acá.`}
         />
-        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
-          ¿No llega? Revisá spam o promociones.{" "}
-          <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
-            Volver al login
-          </Link>
-        </p>
+        <div style={{ display: "grid", gap: 12, maxWidth: 360 }}>
+          <ResendVerification email={ctx.email} label="Reenviar el email" variant="primary" />
+          <form action="/api/auth/sign-out?next=/signup" method="post">
+            <Button type="submit" variant="ghost" style={{ width: "100%", justifyContent: "center" }}>
+              Cambiar de email
+            </Button>
+          </form>
+          <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
+            ¿No llega? Revisá spam o promociones.
+          </p>
+        </div>
       </OnboardingShell>
     );
   }

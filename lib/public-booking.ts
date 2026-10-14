@@ -52,6 +52,7 @@ import {
   resolvePublicPatient,
 } from "@/lib/public-booking-internal";
 import { isPublicBookingOpen } from "@/lib/tenant-modules";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
 import {
   FirstPublicSlotSchema,
@@ -83,7 +84,9 @@ function callerIp(): string {
  * (`removeMember` deja la fila por historial) y se le podía reservar.
  */
 function publicPractitionerWhere(tenantId: string) {
-  return { tenantId, user: { memberships: { some: { tenantId, acceptedAt: { not: null } } } } };
+  // IAM-2e: + rol clínico y sin suspender. La Secretaria y Facturación tienen
+  // fila Practitioner (hasta IAM-4) y se les podía reservar desde el turnero.
+  return bookablePractitionerWhere(tenantId, { includeDisabledFilter: true });
 }
 
 /**

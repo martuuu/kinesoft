@@ -11,6 +11,7 @@ import { listCustomConditions } from "@/lib/conditions";
 import { listLocations } from "@/lib/locations";
 import { listRooms } from "@/lib/rooms";
 import { getPractitionerScheduleSummary } from "@/lib/practitioner-schedule";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 
 export const dynamic = "force-dynamic";
@@ -54,11 +55,9 @@ export default async function ConfiguracionPage() {
       tx.practitioner.findMany({
         // Solo miembros con la invitación aceptada: un profesional removido
         // (membresía borrada) conserva su fila Practitioner y seguía en los
-        // pickers. Mismo filtro que `listPractitioners` (lib/bookings.ts).
-        where: {
-          tenantId: actor.tenantId,
-          user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
-        },
+        // pickers. Mismo filtro que `listPractitioners` (lib/bookings.ts):
+        // IAM-2e, solo roles clínicos sin suspender (la Secretaria no atiende).
+        where: bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }),
         include: { user: { select: { fullName: true, email: true } } },
         orderBy: { createdAt: "asc" },
       })

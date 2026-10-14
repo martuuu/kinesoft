@@ -14,7 +14,18 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { removeMember, changeMemberRole } from "@/lib/invitations";
+import {
+  removeMember,
+  changeMemberRole,
+  createInvitation,
+  resendInvitation,
+  regenerateInvitationUrl,
+  revokeInvitation,
+  listPendingInvitations,
+  listTeamMembers,
+} from "@/lib/invitations";
+import { ForbiddenError } from "@/lib/session";
+import { __rateLimitInternals } from "@/lib/rate-limit";
 import { listPractitioners } from "@/lib/bookings";
 import { updateService } from "@/lib/services";
 import { updateInsurer } from "@/lib/insurers";
@@ -175,6 +186,87 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
       await T.cleanup();
     }
   });
+});
+
+/**
+ * IAM-2a · quién gestiona el equipo (IAM-D3, default de §19.10): OWNER y ADMIN. Antes era solo el OWNER
+ * (`requireOwner`), y el ADMIN que «configura el consultorio» no podía sumar a la Secretaria. Límites del ADMIN:
+ * no toca la membresía del OWNER ni asigna/transfiere el OWNER (si no, un ADMIN se quedaba con el consultorio).
+ */
+describe.skipIf(!RUN)("equipo · gestión por OWNER y ADMIN (IAM-D3)", () => {
+  let db: PrismaClient;
+  let A: EphemeralTenant;
+  let invId: string;
+
+  beforeAll(async () => {
+    db = ownerClient();
+    A = await createEphemeralTenant(db);
+    const inv = await db.invitation.create({
+      data: {
+        tenantId: A.tenantId,
+        email: `gate-${uniqueSuffix()}@test.local`,
+        firstName: "Gate",
+        lastName: "Test",
+        token: `gate-${uniqueSuffix()}`,
+        invitedById: A.userId,
+        expiresAt: new Date(Date.now() + DAY),
+      },
+    });
+    invId = inv.id;
+  });
+  afterAll(async () => {
+    await A?.cleanup();
+    await db?.$disconnect();
+  });
+  beforeEach(() => __rateLimitInternals.reset());
+
+  it("ADMIN invita, lista, cambia rol y quita a un profesional", async () => {
+    const admin = await addPractitioner(db, A, "ADMIN");
+    asUser(admin.userId);
+    const r = await createInvitation({ email: `adm-${uniqueSuffix()}@test.local`, firstName: "S", lastName: "R", role: "ASSISTANT" });
+    expect(r.ok).toBe(true);
+    expect((await listPendingInvitations()).length).toBeGreaterThan(0);
+    expect((await listTeamMembers()).some((m) => m.isYou)).toBe(true);
+
+    const kine = await addPractitioner(db, A);
+    const mem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: kine.userId } });
+    expect(await changeMemberRole(mem.id, "BILLING")).toEqual({ ok: true, data: undefined });
+    expect(await removeMember(mem.id)).toEqual({ ok: true, data: undefined });
+  });
+
+  it("ADMIN no toca la membresía del OWNER ni asigna el OWNER", async () => {
+    const admin = await addPractitioner(db, A, "ADMIN");
+    asUser(admin.userId);
+    const ownerMem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: A.userId } });
+    expect((await changeMemberRole(ownerMem.id, "ADMIN")).ok).toBe(false);
+    expect((await removeMember(ownerMem.id)).ok).toBe(false);
+    const kine = await addPractitioner(db, A);
+    const mem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: kine.userId } });
+    expect((await changeMemberRole(mem.id, "OWNER")).ok).toBe(false);
+    const own = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: admin.userId } });
+    expect((await changeMemberRole(own.id, "OWNER")).ok).toBe(false);
+    expect((await db.membership.findFirstOrThrow({ where: { id: ownerMem.id } })).role).toBe("OWNER");
+    expect((await db.membership.findFirstOrThrow({ where: { id: mem.id } })).role).toBe("PRACTITIONER");
+  });
+
+  for (const role of ["PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+    it(`${role} → Forbidden en todas las acciones del equipo, sin escribir nada`, async () => {
+      const u = await addPractitioner(db, A, role);
+      asUser(u.userId);
+      const before = await db.invitation.findUniqueOrThrow({ where: { id: invId } });
+      await expect(createInvitation({ email: `no-${uniqueSuffix()}@test.local`, firstName: "N", lastName: "O" })).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(resendInvitation(invId)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(regenerateInvitationUrl(invId)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(revokeInvitation(invId)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(listPendingInvitations()).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(listTeamMembers()).rejects.toBeInstanceOf(ForbiddenError);
+      const mem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: u.userId } });
+      await expect(changeMemberRole(mem.id, "ADMIN")).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(removeMember(mem.id)).rejects.toBeInstanceOf(ForbiddenError);
+      const after = await db.invitation.findUniqueOrThrow({ where: { id: invId } });
+      expect(after).toEqual(before);
+    });
+  }
 });
 
 describe.skipIf(!RUN)("configuración · audit antes/después de montos", () => {

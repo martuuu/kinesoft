@@ -1174,3 +1174,28 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] `/sala` sin indicador «En vivo»; se actualiza sola cada 60 s y al volver a la pestaña.
 - [ ] La Card de avisos en Configuración se ve con la nota «Los avisos se activan cuando la sala en vivo esté
   encendida en el consultorio.»; en Agenda ⋯ no aparece el control.
+
+## Identidad y acceso · IAM-0 a IAM-2 (14-oct-2026)
+
+> Con mailpit en local (`docker compose --profile mail up -d mailpit` → http://localhost:8025) o con Resend en prod
+> (dominio verificado + `RESEND_API_KEY` y `EMAIL_FROM` en Vercel). En prod, primero Site URL/Redirect URLs de
+> Supabase (§19.9 del plan). Sin dominio, los mails quedan en el log y la UI muestra el link para copiar.
+
+- [ ] 🔴 Configuración → Usuarios: el selector de rol ofrece Kinesiólogo/a, Secretario/a, Administrador/a y Facturación,
+  con una línea que explica cada uno. El ADMIN también ve la pestaña, pero no puede tocar al dueño.
+- [ ] 🔴 Invitar a una Secretaria: llega el mail con la marca de KineSoft («Consultorio X vía KineSoft») y el botón lleva a
+  `/invite/<token>` del dominio real (nunca localhost ni `#access_token`).
+- [ ] 🔴 Abrir el link sin sesión → «Activar tu cuenta» → nombre + contraseña → entra solo al consultorio y llega el mail
+  de bienvenida.
+- [ ] 🔴 La Secretaria no aparece como profesional en la agenda, en el turnero público ni en «primer hueco libre».
+- [ ] «Reenviar»: el link del primer mail sigue funcionando. «Generar link nuevo»: el viejo deja de funcionar. «Anular»:
+  el link muestra «El consultorio anuló esta invitación».
+- [ ] Un kine que ya tiene cuenta en otro consultorio: «Ya tenés cuenta» → ingresar → «Unirme a X» → entra a X.
+- [ ] Link abierto con sesión de otro email → «Esta invitación es para otro email: cerrá sesión».
+- [ ] Signup nuevo → «Revisá tu email» → el mail de confirmación llega → confirmar → `/onboarding`. «Reenviar» con espera
+  de 60 s. Signup con un email que ya tiene cuenta: misma pantalla, y llega el mail «Ya tenés una cuenta».
+- [ ] Olvidé mi contraseña → mail → link → `/reset` sin pedir la contraseña actual. Link vencido →
+  «El link venció o ya se usó» con «olvidé mi contraseña».
+- [ ] Login con email sin confirmar → aviso con «Reenviar email de confirmación» (el email ya cargado).
+- [ ] Outlook (Safe Links abre el link antes): el link de confirmación igual funciona (pasa por «Confirmando…»).
+- [ ] `/signup?invite=<token>` (links viejos) redirige a `/invite/<token>`.

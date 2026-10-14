@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { DbClient } from "@/lib/rls";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { addDays, dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
 import {
   BOOKING_LOOKBACK_MIN,
@@ -258,12 +259,10 @@ async function loadForRuns(
       : db.practitioner.findMany({
           where: requestedIds
             ? { tenantId, id: { in: requestedIds } }
-            : {
-                tenantId,
-                // Mismo criterio que `listPractitioners`: `removeMember` borra la
-                // membresía pero deja la fila Practitioner (historial).
-                user: { memberships: { some: { tenantId, acceptedAt: { not: null } } } },
-              },
+            : // Mismo criterio que `listPractitioners`: `removeMember` borra la
+              // membresía pero deja la fila Practitioner (historial); IAM-2e:
+              // solo roles clínicos sin suspender (la Secretaria no atiende).
+              bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
           select: { id: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),

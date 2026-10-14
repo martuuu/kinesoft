@@ -34,7 +34,7 @@ export function TabsBar({
     { key: "servicios", label: "Servicios" },
     { key: "obras-sociales", label: "Obras Sociales" },
     { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico" },
-    { key: "usuarios", label: "Usuarios", ownerOnly: true },
+    { key: "usuarios", label: "Usuarios", ownerOnly: true /* IAM-D3: OWNER y ADMIN */ },
   ];
   // B3.4: con 7 pestañas la píldora no entra en un celular; scrollea en
   // horizontal en vez de desbordar la página (`maxWidth: 100%`).
@@ -53,7 +53,7 @@ export function TabsBar({
       }}
     >
       {tabs.map((t) => {
-        if (t.ownerOnly && role !== "OWNER") return null;
+        if (t.ownerOnly && role !== "OWNER" && role !== "ADMIN") return null;
         if (t.module && !modules.includes(t.module)) return null;
         const on = tab === t.key;
         return (

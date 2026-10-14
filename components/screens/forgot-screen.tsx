@@ -6,22 +6,31 @@ import { Button } from "@/components/ui/button";
 import { IconCheck } from "@/components/ui/icons";
 import { AuthShell } from "@/components/screens/auth-shell";
 import { sendPasswordReset } from "@/lib/auth";
+import { FORGOT_SENT } from "@/components/screens/auth-feedback";
+import { ResendButton } from "@/components/screens/resend-verification";
 
+/**
+ * /forgot. La respuesta es SIEMPRE la genérica (`FORGOT_SENT`): exista o no la cuenta, para no confirmar qué
+ * emails están registrados. IAM-2d: tras el envío, «Reenviar el link» (con cooldown) y «¿Email equivocado?
+ * Volver», que vuelve al form con el email cargado.
+ */
 export function ForgotScreen() {
   const [pending, start] = useTransition();
-  const [sent, setSent] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const onSubmit = (formData: FormData) => {
     setError(null);
+    const email = String(formData.get("email") ?? "").trim();
+    setDraft(email);
     start(async () => {
-      const r = await sendPasswordReset({ email: String(formData.get("email") ?? "") });
+      const r = await sendPasswordReset({ email });
       if (!r.ok) {
         setError(r.error);
         return;
       }
-      // Always show success — never confirm whether the email is registered.
-      setSent(true);
+      setSentTo(email);
     });
   };
 
@@ -29,7 +38,7 @@ export function ForgotScreen() {
     <AuthShell
       eyebrow="Recuperar acceso"
       heading="¿Olvidaste tu contraseña?"
-      blurb="Te mandamos un link para resetearla por email. El link es válido por 1 hora."
+      blurb="Te mandamos por email un link para crear una contraseña nueva. Vence en 1 hora."
       footerLinks={[{ label: "Volver al login", href: "/login" }]}
     >
       <div
@@ -48,47 +57,8 @@ export function ForgotScreen() {
         Te mandamos un link
       </h2>
 
-      {sent ? (
-        <div
-          role="status"
-          style={{
-            padding: 18,
-            borderRadius: 14,
-            background: "rgba(200,245,100,0.18)",
-            color: "var(--navy-900)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-            <span
-              aria-hidden
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: "50%",
-                background: "var(--lime-300)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <IconCheck size={12} stroke={3} />
-            </span>
-            Email enviado
-          </div>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            Si la cuenta existe, vas a recibir un link de recuperación. Revisá la
-            bandeja de entrada (y la carpeta de spam por las dudas).
-          </p>
-          <Link
-            href="/login"
-            style={{ marginTop: 8, fontSize: 13, color: "var(--sky-700)", fontWeight: 600 }}
-          >
-            Volver al login →
-          </Link>
-        </div>
+      {sentTo ? (
+        <ForgotSent email={sentTo} onBack={() => setSentTo(null)} />
       ) : (
         <form action={onSubmit} autoComplete="on" style={{ display: "grid", gap: 14 }}>
           <label style={{ display: "block" }}>
@@ -97,6 +67,7 @@ export function ForgotScreen() {
               type="email"
               name="email"
               required
+              defaultValue={draft}
               placeholder="camila@movare.com.ar"
               autoComplete="email"
               style={inputStyle}
@@ -132,6 +103,68 @@ export function ForgotScreen() {
         </form>
       )}
     </AuthShell>
+  );
+}
+
+/** Estado «te mandamos un link» (exportado para el render test). El reenvío arranca con cooldown. */
+export function ForgotSent({ email, onBack }: { email: string; onBack: () => void }) {
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div
+        role="status"
+        style={{
+          padding: 18,
+          borderRadius: 14,
+          background: "rgba(200,245,100,0.18)",
+          color: "var(--navy-900)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+          <span
+            aria-hidden
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              background: "var(--lime-300)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <IconCheck size={12} stroke={3} />
+          </span>
+          Revisá tu email
+        </div>
+        <p style={{ margin: 0, fontSize: 13 }}>{FORGOT_SENT}</p>
+        <p style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
+          Lo pediste para <strong>{email}</strong>. ¿No llega? Revisá spam o promociones.
+        </p>
+      </div>
+      <ResendButton
+        label="Reenviar el link"
+        sentCopy={FORGOT_SENT}
+        startCooling
+        onSend={() => sendPasswordReset({ email })}
+      />
+      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+        ¿Email equivocado?{" "}
+        <button
+          type="button"
+          onClick={onBack}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "var(--sky-700)", fontWeight: 600 }}
+        >
+          Volver
+        </button>
+        {" · "}
+        <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+          Ir al login
+        </Link>
+      </div>
+    </div>
   );
 }
 

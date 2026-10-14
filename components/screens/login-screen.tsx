@@ -4,37 +4,20 @@ import { PhotoSlot } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
+import { loginErrorFeedback, type ConfirmLinkKind } from "@/components/screens/auth-feedback";
+import { ResendVerification } from "@/components/screens/resend-verification";
 
 /**
- * Mensajes de error del login por código (A3b-S-auth). Los emiten
- * `/api/auth/sign-in`, `/api/auth/google`, `/auth/callback` y
- * `/auth/confirm`. Un código desconocido muestra el genérico: nunca se pinta
- * el valor de la query.
+ * El mapa de códigos → mensaje + salidas vive en `auth-feedback.ts` (lógica pura, con su unit test). Acá solo
+ * se pinta: nunca el valor crudo de la query.
  */
-const LOGIN_ERRORS: Record<string, string> = {
-  rate_limited: "Demasiados intentos. Esperá un minuto y probá de nuevo.",
-  invalid_credentials: "Email o contraseña incorrectos.",
-  missing_credentials: "Completá tu email y tu contraseña.",
-  email_not_confirmed: "Todavía no confirmaste tu email. Buscá el mail que te mandamos y seguí el link.",
-  oauth_failed: "No pudimos ingresar con Google. Probá de nuevo.",
-  missing_code: "No pudimos ingresar con Google. Probá de nuevo.",
-  link_invalid: "El link venció o ya se usó. Pedí uno nuevo.",
-};
-const GENERIC_LOGIN_ERROR = "No pudimos iniciar sesión. Probá de nuevo.";
-
-export function loginErrorMessage(code: string | undefined): string | null {
-  if (!code) return null;
-  return Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, code)
-    ? LOGIN_ERRORS[code]
-    : GENERIC_LOGIN_ERROR;
-}
-
 export function LoginScreen({
   error,
   next,
   email,
-}: { error?: string; next?: string; email?: string } = {}) {
-  const errorMessage = loginErrorMessage(error);
+  linkKind,
+}: { error?: string; next?: string; email?: string; linkKind?: ConfirmLinkKind } = {}) {
+  const feedback = loginErrorFeedback(error, linkKind);
   // `next` ya viene validado por la page (safeNext); acá solo se propaga.
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
   return (
@@ -217,23 +200,34 @@ export function LoginScreen({
             Ingresá a tu consultorio
           </h2>
 
-          {errorMessage && (
-            <div
-              role="alert"
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
-                fontSize: 12,
-                marginBottom: 16,
-              }}
-            >
-              {errorMessage}
-            </div>
-          )}
-
           <form action={`/api/auth/sign-in${q}`} method="post" autoComplete="on">
+            {/* El aviso va DENTRO del form: «Reenviar email de confirmación» lee el email que la persona
+                tipeó en este form (IAM-2d), sin pedírselo de nuevo. */}
+            {feedback && (
+              <div
+                role="alert"
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  background: "rgba(228,70,70,0.1)",
+                  color: "#9F1F1F",
+                  fontSize: 12,
+                  marginBottom: 16,
+                  display: "grid",
+                  gap: 10,
+                }}
+              >
+                <span>{feedback.message}</span>
+                {feedback.ctas.includes("forgot") && (
+                  <Link href="/forgot" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+                    Pedir un link para crear una contraseña nueva →
+                  </Link>
+                )}
+                {feedback.ctas.includes("resend_verification") && (
+                  <ResendVerification label="Reenviar email de confirmación" />
+                )}
+              </div>
+            )}
             <Field label="Email profesional">
               <input
                 type="email"

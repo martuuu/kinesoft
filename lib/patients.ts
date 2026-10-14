@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { getActor, type Actor } from "@/lib/session";
 import { getMembershipRole, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -1888,12 +1889,12 @@ export async function setPatientShares(input: {
   // Validate every requested practitioner belongs to this tenant — no
   // cross-tenant grants — and is still an active member (invitación aceptada):
   // un profesional removido no recibe shares nuevos y los que tenía se quitan
-  // al guardar (no está en `wanted`). Mismo filtro que `listPractitioners`.
+  // al guardar (no está en `wanted`). Mismo filtro que `listPractitioners`
+  // (IAM-2e: rol clínico y sin suspender; la Secretaria no recibe la HC).
   const tenantPractitioners = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findMany({
     where: {
-      tenantId: actor.tenantId,
+      ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }),
       id: { in: wantedRaw },
-      user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
     },
     select: { id: true },
   }));

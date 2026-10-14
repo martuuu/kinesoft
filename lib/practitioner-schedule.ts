@@ -71,6 +71,7 @@ import {
 } from "@/lib/practitioner-schedule-schemas";
 import { FALLBACK_WORKING_DOWS, type DayKey, type ScheduleRange } from "@/lib/availability/types";
 import type { ActionResult } from "@/lib/validation";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 const WRITE_MSG = "Solo OWNER/ADMIN pueden configurar sedes y horarios.";
 const READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
@@ -647,10 +648,8 @@ export async function getPractitionerScheduleSummary(): Promise<PractitionerSche
   return runWithRls(actor.tenantId, async (tx) => {
     const [pracs, hours] = await Promise.all([
       tx.practitioner.findMany({
-        where: {
-          tenantId: actor.tenantId,
-          user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
-        },
+        // IAM-2e: solo quien atiende (rol clínico, sin suspender).
+        where: bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }),
         orderBy: { createdAt: "asc" },
         select: {
           id: true,

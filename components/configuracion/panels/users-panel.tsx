@@ -11,9 +11,11 @@ import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconCheck, IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
+import type { InvitationRow, InvitationSendResult, TeamMemberRow } from "@/lib/invitations-types";
+import { inviteEmailStatusCopy } from "@/lib/invitations-constants";
 import {
   createInvitation,
+  resendInvitation,
   revokeInvitation,
   regenerateInvitationUrl,
   changeMemberRole,
@@ -23,9 +25,19 @@ import { ROLE_ORDER, INVITABLE_ROLES, roleLabel, roleDescription } from "@/lib/r
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { ErrorBox } from "../controls";
 
-export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMemberRow[]; pending: InvitationRow[] }) {
+// IAM-D3: el equipo lo gestionan OWNER y ADMIN. El ADMIN no puede tocar al dueño ni dar el rol de dueño: el server lo
+// rechaza (`requireTeamManager` en lib/invitations.ts) y la UI no lo ofrece.
+export function UsersPanel({
+  team,
+  pending: pendingInvites,
+  viewerRole = "OWNER",
+}: {
+  team: TeamMemberRow[];
+  pending: InvitationRow[];
+  viewerRole?: Role;
+}) {
   const [inviting, setInviting] = useState(false);
-  const [inviteResult, setInviteResult] = useState<{ url: string; emailSent: boolean } | null>(null);
+  const [inviteResult, setInviteResult] = useState<InvitationSendResult | null>(null);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -51,7 +63,7 @@ export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMember
         </header>
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {team.map((m) => (
-            <TeamRow key={m.membershipId} member={m} />
+            <TeamRow key={m.membershipId} member={m} viewerIsAdmin={viewerRole === "ADMIN"} />
           ))}
         </ul>
       </Card>
@@ -75,18 +87,14 @@ export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMember
       {inviting && (
         <InviteModal
           onClose={() => setInviting(false)}
-          onSuccess={(url, emailSent) => {
+          onSuccess={(result) => {
             setInviting(false);
-            setInviteResult({ url, emailSent });
+            setInviteResult(result);
           }}
         />
       )}
       {inviteResult && (
-        <ShareInviteModal
-          url={inviteResult.url}
-          emailSent={inviteResult.emailSent}
-          onClose={() => setInviteResult(null)}
-        />
+        <ShareInviteModal result={inviteResult} onClose={() => setInviteResult(null)} />
       )}
     </div>
   );
@@ -103,7 +111,8 @@ function useTenantVertical(): TenantVertical {
   return useTenantModules().has("sesiones") ? "KINESIOLOGY" : "GENERAL";
 }
 
-function TeamRow({ member }: { member: TeamMemberRow }) {
+function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; viewerIsAdmin?: boolean }) {
+  const ownerLocked = viewerIsAdmin && member.role === "OWNER";
   const router = useRouter();
   const vertical = useTenantVertical();
   const label = (r: Role) => roleLabel(r, vertical);
@@ -193,7 +202,7 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
       </div>
       <select
         value={member.role}
-        disabled={member.isYou || pending}
+        disabled={member.isYou || pending || ownerLocked}
         onChange={(e) => changeRole(e.target.value as Role)}
         style={{
           padding: "8px 10px",
@@ -204,14 +213,14 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
           fontWeight: 600,
         }}
       >
-        {ROLE_ORDER.map((r) => (
+        {ROLE_ORDER.filter((r) => !viewerIsAdmin || r !== "OWNER" || member.role === "OWNER").map((r) => (
           <option key={r} value={r}>
             {label(r)}
           </option>
         ))}
       </select>
       <div style={{ textAlign: "right" }}>
-        {!member.isYou && (
+        {!member.isYou && !ownerLocked && (
           <button
             type="button"
             onClick={remove}
@@ -234,31 +243,66 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
   );
 }
 
+/**
+ * IAM-2a: la fila muestra el estado de envío real (de `EmailLog`) y separa las tres acciones de C-IAM5:
+ * «Reenviar» (otro mail; el link anterior sigue valiendo), «Generar link nuevo» (anula los anteriores: para un
+ * link que se compartió donde no debía) y «Anular» (la invitación deja de valer; queda como historia).
+ */
 function PendingInviteRow({ invite }: { invite: InvitationRow }) {
   const router = useRouter();
   const vertical = useTenantVertical();
   const [pending, start] = useTransition();
-  const [shareResult, setShareResult] = useState<{ url: string; emailSent: boolean } | null>(null);
+  const [shareResult, setShareResult] = useState<InvitationSendResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
-  const regen = () => {
+  const run = (fn: () => Promise<{ ok: true; data: InvitationSendResult } | { ok: false; error: string }>) => {
+    setError(null);
     start(async () => {
-      const r = await regenerateInvitationUrl(invite.id);
-      if (r.ok) setShareResult({ url: r.data.url, emailSent: r.data.emailSent });
+      const r = await fn();
+      if (r.ok) {
+        setShareResult(r.data);
+        router.refresh();
+      } else setError(r.error);
     });
   };
-  const confirm = useConfirm();
+  const resend = () => run(() => resendInvitation(invite.id));
+  const regen = async () => {
+    const ok = await confirm({
+      title: "¿Generar un link nuevo?",
+      message: "Los links que ya mandaste dejan de funcionar y le llega un mail nuevo al invitado.",
+      confirmLabel: "Generar link nuevo",
+    });
+    if (ok) run(() => regenerateInvitationUrl(invite.id));
+  };
   const revoke = async () => {
     const ok = await confirm({
-      title: `¿Revocar la invitación a ${invite.email}?`,
-      confirmLabel: "Revocar",
+      title: `¿Anular la invitación a ${invite.email}?`,
+      message: "El link deja de funcionar. Si después querés sumarlo, lo invitás de nuevo.",
+      confirmLabel: "Anular",
       tone: "danger",
     });
     if (!ok) return;
+    setError(null);
     start(async () => {
       const r = await revokeInvitation(invite.id);
       if (r.ok) router.refresh();
+      else setError(r.error);
     });
   };
+
+  const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
+  const expired = invite.status === "expired";
+  const last = invite.lastEmail ? inviteEmailStatusCopy(invite.lastEmail.status, invite.lastEmail.reason) : null;
+  const linkStyle = {
+    background: "transparent",
+    border: "none",
+    color: "var(--sky-700)",
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 700,
+    padding: 0,
+  } as const;
 
   return (
     <>
@@ -266,7 +310,7 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
         style={{
           padding: "12px 20px",
           display: "grid",
-          gridTemplateColumns: "1.5fr 1fr 130px 130px",
+          gridTemplateColumns: "1.5fr 1fr 150px 210px",
           gap: 14,
           alignItems: "center",
           borderBottom: "1px solid rgba(15,30,51,0.04)",
@@ -277,51 +321,33 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
             {invite.firstName} {invite.lastName}
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{invite.email}</div>
+          {last && (
+            <div style={{ fontSize: 11, marginTop: 2, color: last.tone === "ok" ? "var(--navy-500)" : last.tone === "warn" ? "#7A4A00" : "#9F1F1F" }}>
+              {last.tone === "ok" ? "Mail enviado" : "Mail no enviado"}
+              {invite.lastSentAt && ` · ${invite.lastSentAt.toLocaleDateString("es-AR", tz)}`}
+              {invite.sendCount > 1 && ` · ${invite.sendCount} envíos`}
+            </div>
+          )}
+          {error && <div style={{ fontSize: 11, color: "#9F1F1F", marginTop: 2 }}>{error}</div>}
         </div>
         <Tag tone="soft">{roleLabel(invite.role, vertical)}</Tag>
-        <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-          Vence {invite.expiresAt.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}
+        <div style={{ fontSize: 11, color: expired ? "#9F1F1F" : "var(--navy-500)" }}>
+          {expired ? "Venció el " : "Vence "}
+          {invite.expiresAt.toLocaleDateString("es-AR", tz)}
         </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={regen}
-            disabled={pending}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--sky-700)",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button type="button" onClick={resend} disabled={pending} style={linkStyle}>
             Reenviar
           </button>
-          <button
-            type="button"
-            onClick={revoke}
-            disabled={pending}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#9F1F1F",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            Revocar
+          <button type="button" onClick={regen} disabled={pending} style={linkStyle}>
+            Generar link nuevo
+          </button>
+          <button type="button" onClick={revoke} disabled={pending} style={{ ...linkStyle, color: "#9F1F1F" }}>
+            Anular
           </button>
         </div>
       </li>
-      {shareResult && (
-        <ShareInviteModal
-          url={shareResult.url}
-          emailSent={shareResult.emailSent}
-          onClose={() => setShareResult(null)}
-        />
-      )}
+      {shareResult && <ShareInviteModal result={shareResult} onClose={() => setShareResult(null)} />}
     </>
   );
 }
@@ -331,7 +357,7 @@ function InviteModal({
   onSuccess,
 }: {
   onClose: () => void;
-  onSuccess: (url: string, emailSent: boolean) => void;
+  onSuccess: (result: InvitationSendResult) => void;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -359,7 +385,7 @@ function InviteModal({
       if (!r.ok) setError(r.error);
       else {
         router.refresh();
-        onSuccess(r.data.url, r.data.emailSent);
+        onSuccess(r.data);
       }
     });
   };
@@ -396,17 +422,17 @@ function InviteModal({
   );
 }
 
-function ShareInviteModal({
-  url,
-  emailSent,
-  onClose,
-}: {
-  url: string;
-  emailSent?: boolean;
-  onClose: () => void;
-}) {
+/**
+ * Resultado de invitar / reenviar / generar link nuevo. IAM-2a: el estado del mail sale del resultado real de
+ * `sendEmail` (antes: «Email enviado vía Supabase» o «Configurá SUPABASE_SERVICE_ROLE_KEY», ninguno cierto). El
+ * link solo viene para el OWNER (`url` null para el ADMIN: es una credencial).
+ */
+function ShareInviteModal({ result, onClose }: { result: InvitationSendResult; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
+  const url = result.url;
+  const status = inviteEmailStatusCopy(result.emailStatus, result.emailReason);
   const copy = () => {
+    if (!url) return;
     navigator.clipboard.writeText(url).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -415,30 +441,30 @@ function ShareInviteModal({
   return (
     <Modal
       onClose={onClose}
-      title="Link de invitación"
+      title={url ? "Link de invitación" : "Invitación"}
       description={
-        emailSent
-          ? "Mandamos el email al invitado. Como backup, también podés compartirle este link."
-          : "No pudimos mandar el email automáticamente. Pasale este link al invitado para que se registre."
+        url
+          ? "Si hace falta, también podés compartirle este link al invitado."
+          : result.emailSent
+            ? "Le llega un mail al invitado con el link para sumarse."
+            : "El mail no salió. Probá «Reenviar» más tarde o pedile al dueño del consultorio el link."
       }
       width={520}
     >
-      {emailSent !== undefined && (
-        <div
-          style={{
-            padding: 10,
-            borderRadius: 10,
-            background: emailSent ? "rgba(200,245,100,0.18)" : "rgba(228,176,32,0.15)",
-            color: emailSent ? "var(--navy-900)" : "#7A4A00",
-            fontSize: 12.5,
-            marginBottom: 10,
-          }}
-        >
-          {emailSent
-            ? "✓ Email enviado vía Supabase."
-            : "⚠ Email no enviado. Configurá SUPABASE_SERVICE_ROLE_KEY en el server o compartí el link manualmente."}
-        </div>
-      )}
+      <div
+        role="status"
+        style={{
+          padding: 10,
+          borderRadius: 10,
+          background: status.tone === "ok" ? "rgba(200,245,100,0.18)" : status.tone === "warn" ? "rgba(228,176,32,0.15)" : "rgba(159,31,31,0.08)",
+          color: status.tone === "ok" ? "var(--navy-900)" : status.tone === "warn" ? "#7A4A00" : "#9F1F1F",
+          fontSize: 12.5,
+          marginBottom: 10,
+        }}
+      >
+        {status.text}
+      </div>
+      {url && (
       <div
         style={{
           padding: 14,
@@ -452,13 +478,16 @@ function ShareInviteModal({
       >
         {url}
       </div>
+      )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cerrar
         </Button>
-        <Button variant="primary" onClick={copy}>
-          {copied ? <><IconCheck size={12} stroke={3} /> Copiado</> : "Copiar link"}
-        </Button>
+        {url && (
+          <Button variant="primary" onClick={copy}>
+            {copied ? <><IconCheck size={12} stroke={3} /> Copiado</> : "Copiar link"}
+          </Button>
+        )}
       </div>
     </Modal>
   );

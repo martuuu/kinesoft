@@ -17,6 +17,7 @@ import { runWithRls } from "@/lib/rls";
 import { modulesFor } from "@/lib/tenant-modules";
 import { parseProfilePlanParams, type SearchParamsLike } from "@/lib/plans-deeplink";
 import type { PatientCoreWithAccess } from "@/lib/patients-types";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import { PatientProfile, PatientAdminProfile } from "@/components/patients/patient-profile";
 import { PatientBasicView } from "@/components/patients/patient-basic-view";
 
@@ -118,11 +119,9 @@ export default async function PatientPage({
       tx.practitioner.findMany({
         // Solo miembros con la invitación aceptada: un profesional removido
         // (membresía borrada) conserva su fila Practitioner y seguía en los
-        // pickers. Mismo filtro que `listPractitioners` (lib/bookings.ts).
-        where: {
-          tenantId: actor.tenantId,
-          user: { memberships: { some: { tenantId: actor.tenantId, acceptedAt: { not: null } } } },
-        },
+        // pickers. Mismo filtro que `listPractitioners` (lib/bookings.ts):
+        // IAM-2e, solo roles clínicos sin suspender (la Secretaria no atiende).
+        where: bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }),
         include: { user: { select: { fullName: true, email: true } } },
         orderBy: { createdAt: "asc" },
       })

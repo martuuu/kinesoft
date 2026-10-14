@@ -163,6 +163,7 @@ export async function listPendingInvitesFor(email: string): Promise<PendingInvit
     where: {
       email: emailEqualsFilter(email),
       acceptedAt: null,
+      revokedAt: null, // IAM-2a: una invitación anulada no se ofrece
       expiresAt: { gt: new Date() },
     },
     select: { id: true, email: true, role: true, expiresAt: true, tenant: { select: { name: true } } },
@@ -259,7 +260,7 @@ export async function loadOnboardingContext(
         orderBy: [{ isParticular: "desc" }, { name: "asc" }],
       }),
       tx.invitation.findMany({
-        where: { tenantId, acceptedAt: null },
+        where: { tenantId, acceptedAt: null, revokedAt: null },
         select: { id: true, email: true, firstName: true, lastName: true, role: true },
         orderBy: { invitedAt: "asc" },
       }),

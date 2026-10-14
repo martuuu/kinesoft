@@ -89,8 +89,8 @@ export function ConfiguracionClient(props: Props) {
       )}
       {tab === "obras-sociales" && <InsurersPanel insurers={props.insurers} />}
       {tab === "diagnosticos" && props.modules.includes("diagnostico") && <DiagnosticosPanel conditions={props.customConditions} />}
-      {tab === "usuarios" && props.role === "OWNER" && (
-        <UsersPanel team={props.team} pending={props.pending} />
+      {tab === "usuarios" && (props.role === "OWNER" || props.role === "ADMIN") && (
+        <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} />
       )}
     </div>
   );

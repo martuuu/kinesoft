@@ -35,6 +35,7 @@
  */
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 type Tx = Prisma.TransactionClient;
 
@@ -65,13 +66,15 @@ export function isValidTenantHours(start: number, end: number): boolean {
   return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && start < end && end <= 24;
 }
 
-/** Profesionales del tenant con membresía ACEPTADA en ese tenant (= JOIN Membership del backfill). */
+/**
+ * Profesionales del tenant con membresía ACEPTADA en ese tenant (= JOIN
+ * Membership del backfill). IAM-2e: solo roles clínicos sin suspender; a la
+ * Secretaria y a Facturación no se les habilitan servicios ni obras sociales
+ * nuevas (no atienden, §19.2 decisión 2).
+ */
 export async function acceptedPractitionerIds(tx: Tx, tenantId: string): Promise<string[]> {
   const rows = await tx.practitioner.findMany({
-    where: {
-      tenantId,
-      user: { memberships: { some: { tenantId, acceptedAt: { not: null } } } },
-    },
+    where: bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
     select: { id: true },
     orderBy: { createdAt: "asc" },
   });

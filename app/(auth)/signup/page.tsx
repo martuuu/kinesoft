@@ -1,38 +1,31 @@
 import { redirect } from "next/navigation";
 import { SignupScreen } from "@/components/screens/signup-screen";
-import { getSessionUser, loadInvitePreview } from "@/lib/onboarding-internal";
+import { getSessionUser } from "@/lib/onboarding-internal";
 
 export const metadata = { title: "Crear cuenta · KineSoft" };
 export const dynamic = "force-dynamic";
 
 /**
- * Paso 1 del alta: la cuenta (A3c-S-signup). Dos modos:
- *   - `/signup` → cuenta nueva; el consultorio se carga en `/onboarding`
- *     después de verificar el email;
- *   - `/signup?invite=<token crudo>` → unión a un consultorio existente
- *     (contrato con `app/invite/[token]/page.tsx`): email fijo de la
- *     invitación, no crea tenant, al verificar vuelve a `/invite/<token>`.
+ * Paso 1 del alta: la cuenta (A3c-S-signup). El consultorio se carga en `/onboarding` después de verificar
+ * el email.
+ *
+ * IAM-2d: `/signup?invite=<token>` ya no es un modo de esta pantalla. La unión a un consultorio se activa en
+ * `/invite/<token>` (IAM-2b: nombre + contraseña → cuenta confirmada + membresía), así que los links viejos
+ * (mails de invitación anteriores a IAM-2, el «¿No tenés cuenta?» de versiones previas) se redirigen del
+ * lado del server, antes de pintar nada y con o sin sesión: `/invite` decide qué mostrar en cada caso.
  */
 export default async function SignupPage({
   searchParams,
 }: {
   searchParams: { invite?: string | string[] };
 }) {
-  const inviteToken = typeof searchParams.invite === "string" && searchParams.invite ? searchParams.invite : null;
+  const inviteToken = typeof searchParams.invite === "string" ? searchParams.invite.trim() : "";
+  // Mismo tope que `signUpPractitioner` (lib/auth.ts): un token más largo no es un token nuestro.
+  if (inviteToken && inviteToken.length <= 200) redirect(`/invite/${encodeURIComponent(inviteToken)}`);
 
-  // Con sesión no hay nada que registrar: la app (o la invitación) decide.
+  // Con sesión no hay nada que registrar: la app decide.
   const user = await getSessionUser();
-  if (user) redirect(inviteToken ? `/invite/${encodeURIComponent(inviteToken)}` : "/dashboard");
+  if (user) redirect("/dashboard");
 
-  if (!inviteToken) return <SignupScreen invite={null} />;
-  const preview = await loadInvitePreview(inviteToken);
-  return (
-    <SignupScreen
-      invite={
-        preview.valid
-          ? { token: inviteToken, email: preview.email, firstName: preview.firstName, tenantName: preview.tenantName }
-          : { invalid: preview.reason }
-      }
-    />
-  );
+  return <SignupScreen />;
 }

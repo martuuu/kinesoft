@@ -283,7 +283,7 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
   const now = new Date();
   const [homes, pendingInvitations, bookingsLast30Days, bookingsUpcoming, lastActivity, events] = await Promise.all([
     platformHomeIds([t.id]),
-    prismaService.invitation.count({ where: { tenantId, acceptedAt: null, expiresAt: { gt: now } } }),
+    prismaService.invitation.count({ where: { tenantId, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } } }),
     // Booking tiene PHI: solo count (contrato PHI).
     prismaService.booking.count({
       where: { tenantId, scheduledFor: { gte: new Date(now.getTime() - 30 * DAY_MS), lt: now } },

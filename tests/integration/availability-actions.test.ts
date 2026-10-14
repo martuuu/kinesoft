@@ -361,11 +361,15 @@ describe.skipIf(!RUN)("availability actions (B3.3)", () => {
       expect(off.ok && off.data.mode === "any" && off.data.practitioners.map((p) => p.practitionerId)).not.toContain(
         prac2.practitionerId
       );
-      // Queda el profesional de BILLING (tiene fila Practitioner y membresía
-      // aceptada, sin franjas → horario del tenant 8-19): gana a las 8:00.
+      // IAM-2e: Facturación tiene fila Practitioner y membresía aceptada (sin
+      // franjas → horario del tenant 8-19) y antes ganaba a las 8:00 como si
+      // atendiera. Ya no es elegible (no es rol clínico): queda A a las 9:00.
+      expect(off.ok && off.data.mode === "any" && off.data.practitioners.map((p) => p.practitionerId)).not.toContain(
+        billing.practitionerId
+      );
       expect(off.ok && off.data.mode === "any" && off.data.firstFree).toMatchObject({
-        practitionerId: billing.practitionerId,
-        iso: new Date(at("08:00")).toISOString(),
+        practitionerId: A.practitionerId,
+        iso: new Date(at("09:00")).toISOString(),
       });
       await db.practitionerService.deleteMany({ where: { practitionerId: prac2.practitionerId, serviceId: shared } });
     });

@@ -6,38 +6,42 @@ import { headers } from "next/headers";
 import { revalidateTag } from "next/cache";
 import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
-import { hashInviteToken } from "@/lib/invitations-tokens";
-import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
+import { sameEmail } from "@/lib/email-match";
 import { tags } from "@/lib/cache-tags";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
-import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
+import { findInvitationByRawToken } from "@/lib/invitations-internal";
+import {
+  INVITE_MESSAGES,
+  InvitationRaceError,
+  closedInvitationMessage,
+  joinTenantInTx,
+  setActiveTenantCookie,
+  usedAsPortalPatient,
+} from "@/lib/invite-activation-internal";
 import type { ActionResult } from "@/lib/validation";
 
 /**
- * Accept a team invitation. Caller must already be authenticated via
- * Supabase with the email that matches the invitation.
+ * Aceptar una invitación con una sesión que YA existe (alguien con cuenta: un
+ * kine de otro consultorio, o quien activó antes y volvió a entrar). Quien no
+ * tiene cuenta la crea en la misma página con `activateInvitationAction`
+ * (IAM-2b, `activate-action.ts`).
  *
- * On success we:
- *   - Upsert `UserProfile` from the Supabase user.
- *   - Find or create the `Practitioner` OF THIS TENANT. IAM-1 (M6, decisión
- *     6 de Martin del 14-oct): `Practitioner` es único por (tenantId,
- *     userId), así que un kine de A que acepta B queda profesional de B con
- *     su agenda. Antes (único global) se salteaba el Practitioner si tenía
- *     uno en otro consultorio y quedaba con membresía en B sin poder entrar
- *     (`buildActor` → no_membership → bucle, hallazgo [A] de §19.1).
- *   - Upsert `Membership` with the invited role.
- *   - B-pre B2.3: give the Practitioner of this tenant the default agenda,
- *     same rules/ids as the agenda_foundations backfill: primary Location
- *     (created if missing), Mon-Sat slots with the tenant hours,
- *     PractitionerService for shared services (and their own),
- *     PractitionerPayer for every active Insurer. Idempotent.
- *   - Stamp `Invitation.acceptedAt` + `acceptedByUserId` (M6).
+ * IAM-2b:
+ *   - la invitación se resuelve con `findInvitationByRawToken` (C-IAM5): un
+ *     link anterior reenviado sigue valiendo (antes: 404 tras «Reenviar») y una
+ *     anulada se rechaza (antes no existía el estado);
+ *   - las filas las escribe `joinTenantInTx` (la misma de la activación): CAS
+ *     sobre `acceptedAt IS NULL AND revokedAt IS NULL` primero, así dos
+ *     aceptaciones a la vez no escriben dos veces; perfil, Practitioner DE ESTE
+ *     consultorio (IAM-1: un kine de A que acepta B queda profesional de B con
+ *     su agenda), membresía, agenda por defecto y audit en la misma tx;
+ *   - cookie `kine_tenant` = este consultorio: quien acepta entra al que acaba
+ *     de aceptar, no al anterior.
  *
- * Todavía crea Practitioner para TODO rol (también Secretario/a y
- * Facturación): sacarlo es IAM-2e/IAM-4 (`PRACTITIONER_FOR_ALL_ROLES`).
+ * Staff ≠ paciente (AUDIT §5.22) se mantiene: una identidad del portal de
+ * pacientes no se suma al equipo.
  */
 export async function acceptInvite(token: string): Promise<ActionResult> {
   // A3a-S-rl: sin límite se podía probar tokens por fuerza bruta (el token es
@@ -57,118 +61,41 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
     return { ok: false, error: "Tenés que confirmar tu email antes de aceptar." };
   }
 
-  const invite = await prisma.invitation.findUnique({
-    where: { token: hashInviteToken(token) },
-    include: { tenant: { select: { id: true, slug: true, name: true } } },
-  });
-  if (!invite) return { ok: false, error: "Invitación inválida." };
-  if (invite.acceptedAt) return { ok: false, error: "Esta invitación ya fue aceptada." };
-  if (invite.expiresAt < new Date()) return { ok: false, error: "La invitación venció." };
+  const now = new Date();
+  const invite = await findInvitationByRawToken(token, now);
+  if (!invite) return { ok: false, error: INVITE_MESSAGES.not_found };
+  if (invite.status !== "pending") return { ok: false, error: closedInvitationMessage(invite.status) };
   if (!sameEmail(invite.email, user.email)) {
     return { ok: false, error: "El email de tu sesión no coincide con la invitación." };
   }
 
-  // Staff ≠ paciente (A3b-S-auth): una identidad que ya se usa en el portal
-  // de pacientes (vinculada a una ficha, o su email es de una ficha con portal
-  // vinculado) en CUALQUIER consultorio no se suma al equipo. Canal service a
-  // propósito: quien pregunta es el dueño de la identidad, así que no filtra
-  // nada ajeno (el chequeo de `createInvitation` es solo del propio tenant).
-  const asPatient = await prisma.patient.findFirst({
-    where: {
-      OR: [
-        { userId: user.id },
-        // IAM-0a: escapado. Pelado en el ILIKE, la identidad `ana_@x.com` se
-        // rechazaba por la ficha con portal de `anax@x.com` (otra persona).
-        { email: emailEqualsFilter(user.email), userId: { not: null } },
-      ],
-    },
-    select: { id: true },
-  });
-  if (asPatient) {
-    return {
-      ok: false,
-      error:
-        "Esta cuenta se usa en el portal de pacientes. Para sumarte al equipo, pedí la invitación con otro email.",
-    };
+  if (await usedAsPortalPatient({ userId: user.id, email: user.email })) {
+    return { ok: false, error: INVITE_MESSAGES.patient_identity };
   }
 
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.userProfile.upsert({
-        where: { id: user.id },
-        create: {
-          id: user.id,
-          email: user.email!.toLowerCase(),
-          fullName:
-            (user.user_metadata?.full_name as string | undefined) ??
-            `${invite.firstName} ${invite.lastName}`,
-          avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
-        },
-        update: {
-          email: user.email!.toLowerCase(),
-          fullName:
-            (user.user_metadata?.full_name as string | undefined) ??
-            `${invite.firstName} ${invite.lastName}`,
-        },
-      });
-
-      // IAM-1: el Practitioner DE ESTE consultorio (clave compuesta
-      // tenantId+userId). Si ya existe (re-invitación de alguien que estuvo,
-      // o una segunda invitación) se reusa sin pisar su especialidad; los de
-      // otros consultorios no importan acá.
-      const { id: practitionerId } = await tx.practitioner.upsert({
-        where: { tenantId_userId: { tenantId: invite.tenant.id, userId: user.id } },
-        create: {
-          userId: user.id,
-          tenantId: invite.tenant.id,
-          specialty: invite.specialty,
-        },
-        update: {},
-        select: { id: true },
-      });
-
-      await tx.membership.upsert({
-        where: {
-          userId_tenantId: { userId: user.id, tenantId: invite.tenant.id },
-        },
-        create: {
-          userId: user.id,
-          tenantId: invite.tenant.id,
-          role: invite.role,
-          acceptedAt: new Date(),
-        },
-        update: { acceptedAt: new Date(), role: invite.role },
-      });
-
-      // B2.3: después de la membresía aceptada (la regla del backfill es
-      // "profesional con membresía aceptada"). Idempotente: una segunda
-      // invitación aceptada por la misma persona no duplica ni pisa franjas
-      // ya cargadas.
-      await provisionPractitionerAgenda(tx, { tenantId: invite.tenant.id, practitionerId });
-
-      await tx.invitation.update({
-        where: { id: invite.id },
-        data: { acceptedAt: new Date(), acceptedByUserId: user.id },
-      });
-    });
-
-    await audit({
-      tenantId: invite.tenant.id,
-      actorId: user.id,
-      action: "invitation.accept",
-      entity: "Invitation",
-      entityId: invite.id,
-    });
-    // Handoff A2: el nuevo miembro puede ser un Practitioner nuevo → el
-    // listado cacheado de profesionales del tenant queda viejo sin esto.
-    revalidateTag(tags.practitioners(invite.tenant.id));
-    logger.info("invitation.accept", {
-      tenantSlug: invite.tenant.slug,
-      email: invite.email,
-    });
-
-    return { ok: true, data: undefined };
+    const existing = await prisma.userProfile.findUnique({ where: { id: user.id }, select: { fullName: true } });
+    const metaName = (user.user_metadata?.full_name as string | undefined)?.trim() || null;
+    await prisma.$transaction((tx) =>
+      joinTenantInTx(tx, {
+        invitation: invite,
+        userId: user.id,
+        email: user.email!,
+        // Antes se pisaba el nombre con el de la invitación en cada aceptación; ahora solo si no hay uno.
+        fullName: metaName ?? existing?.fullName ?? `${invite.firstName} ${invite.lastName}`,
+        avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+        now,
+        via: "session",
+      })
+    );
   } catch (err) {
+    if (err instanceof InvitationRaceError) {
+      const again = await findInvitationByRawToken(token, new Date());
+      return {
+        ok: false,
+        error: closedInvitationMessage(again && again.status !== "pending" ? again.status : "accepted"),
+      };
+    }
     // Nunca el token crudo en logs (handoff A3a): con él se acepta la
     // invitación. El id de la invitación alcanza para correlacionar.
     logger.error("invitation.accept.failed", {
@@ -177,4 +104,11 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
     });
     return { ok: false, error: "No pudimos aceptar la invitación." };
   }
+
+  // Handoff A2: el nuevo miembro puede ser un Practitioner nuevo → el
+  // listado cacheado de profesionales del tenant queda viejo sin esto.
+  revalidateTag(tags.practitioners(invite.tenantId));
+  setActiveTenantCookie(invite.tenantId);
+  logger.info("invitation.accept", { invitationId: invite.id, tenantId: invite.tenantId });
+  return { ok: true, data: undefined };
 }

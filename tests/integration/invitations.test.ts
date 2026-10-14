@@ -13,6 +13,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { createInvitation } from "@/lib/invitations";
+import { findInvitationByRawToken } from "@/lib/invitations-internal";
 import { acceptInvite } from "@/app/invite/[token]/accept-action";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { __rateLimitInternals } from "@/lib/rate-limit";
@@ -75,6 +76,19 @@ describe.skipIf(!RUN)("invitaciones · re-invitar y staff ≠ paciente", () => {
     expect(ev.payload).toMatchObject({
       changed: { role: { from: "PRACTITIONER", to: "ADMIN" }, firstName: { from: "Ana", to: "Anabel" } },
     });
+  });
+
+  // Hallazgo del 14-oct (§19.1, cuentas muertas): re-invitar rotaba el token y el link del primer mail daba 404.
+  it("[IAM-2a] re-invitar no deja 404 en el link anterior", async () => {
+    const email = `relink-${uniqueSuffix()}@test.local`;
+    const first = await createInvitation({ email, firstName: "Ana", lastName: "Pérez" });
+    if (!first.ok || !first.data.url) throw new Error("sin url");
+    const oldRaw = first.data.url.split("/invite/")[1];
+    __rateLimitInternals.reset();
+    const second = await createInvitation({ email, firstName: "Ana", lastName: "Pérez" });
+    expect(second.ok).toBe(true);
+    const found = await findInvitationByRawToken(oldRaw);
+    expect(found?.status).toBe("pending");
   });
 
   it("createInvitation rechaza el email de un paciente del consultorio con portal vinculado", async () => {

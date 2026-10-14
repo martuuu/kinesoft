@@ -56,7 +56,7 @@ export function roleDescription(role: Role, vertical?: TenantVertical | null): s
     case "OWNER":
       return "Maneja todo el consultorio, incluido el equipo y quién puede hacer qué.";
     case "ADMIN":
-      return "Configura el consultorio y ve todo, historias clínicas incluidas. No administra el equipo.";
+      return "Configura el consultorio, ve todo (historias clínicas incluidas) y administra el equipo, salvo al dueño.";
     case "PRACTITIONER":
       // General no tiene el módulo de planes (lib/tenant-modules.ts): no se promete.
       return vertical === "GENERAL"

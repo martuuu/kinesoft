@@ -124,6 +124,7 @@ import {
   type ReceptionActionResult,
 } from "@/lib/bookings-types";
 import type { ReceptionAction } from "@/lib/reception-state";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 
 export async function listBookingsInRange(opts: {
   from: Date;
@@ -532,16 +533,18 @@ export async function listServices() {
  * deja la fila Practitioner (historial), y antes el removido seguía
  * apareciendo como opción para dar turnos. El tag `practitioners` se invalida
  * al quitar/cambiar de rol (lib/invitations.ts) y al aceptar una invitación.
+ * IAM-2e: además en un rol clínico y sin suspender
+ * (`bookablePractitionerWhere`): la Secretaria y Facturación tienen fila
+ * Practitioner para poder entrar (hasta IAM-4) pero no atienden (§19.2
+ * decisión 2). Sus turnos viejos siguen en la agenda: `listAgendaBookings`
+ * lista por tenant y fecha, no por esta lista.
  */
 export async function listPractitioners() {
   const actor = await getActor();
   const fetcher = unstable_cache(
     async (tenantId: string) =>
       runWithRls(tenantId, (tx) => tx.practitioner.findMany({
-        where: {
-          tenantId,
-          user: { memberships: { some: { tenantId, acceptedAt: { not: null } } } },
-        },
+        where: bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
         include: { user: true },
         orderBy: { createdAt: "asc" },
       })),

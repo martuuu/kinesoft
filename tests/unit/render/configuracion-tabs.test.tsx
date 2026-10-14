@@ -34,9 +34,15 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
     expect(tabs(html)).toContain("Servicios");
   });
 
-  it("Usuarios solo para OWNER", () => {
-    const html = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role="ADMIN" modules={KINE} />);
-    expect(tabs(html)).not.toContain("Usuarios");
+  it("[IAM-D3] Usuarios para OWNER y ADMIN, no para el resto", () => {
+    for (const role of ["OWNER", "ADMIN"] as const) {
+      const html = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role={role} modules={KINE} />);
+      expect(tabs(html)).toContain("Usuarios");
+    }
+    for (const role of ["PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+      const html = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role={role} modules={KINE} />);
+      expect(tabs(html)).not.toContain("Usuarios");
+    }
   });
 });
 

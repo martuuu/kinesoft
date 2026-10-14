@@ -1,53 +1,44 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { acceptInvite } from "./accept-action";
+import { InviteNotice } from "./invite-notice";
 
 /**
- * Botón "Aceptar invitación" (A3b-S-auth). Antes era un `<form action>` que
- * solo redirigía si salía bien: cualquier rechazo (rate-limit, email sin
- * confirmar, cuenta del portal de pacientes, error de DB) dejaba la pantalla
- * igual, sin decir nada. Ahora muestra el mensaje de `acceptInvite`.
+ * «Unirme a {consultorio}» para quien ya tiene sesión con el email invitado
+ * (A3b-S-auth; IAM-2b le pone el nombre del consultorio). Muestra el mensaje
+ * de `acceptInvite` si falla (antes un `<form action>` dejaba la pantalla
+ * igual, sin decir nada). Al aceptar, la action deja la cookie del
+ * consultorio y se navega duro a /dashboard: el layout tiene que leer el
+ * consultorio nuevo, no el que tenía cacheado el router.
  */
-export function AcceptInviteButton({ token }: { token: string }) {
-  const router = useRouter();
+export function AcceptInviteButton({ token, tenantName }: { token: string; tenantName: string }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {error && (
-        <div
-          role="alert"
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
-            fontSize: 13,
-            lineHeight: 1.45,
-          }}
-        >
+        <InviteNotice tone="error" role="alert">
           {error}
-        </div>
+        </InviteNotice>
       )}
       <Button
         type="button"
         variant="primary"
         disabled={pending}
-        style={{ width: "100%", justifyContent: "center" }}
+        style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
         onClick={() =>
           start(async () => {
             setError(null);
             const r = await acceptInvite(token);
-            if (r.ok) router.push("/dashboard");
+            if (r.ok) window.location.assign("/dashboard");
             else setError(r.error);
           })
         }
       >
-        {pending ? "Aceptando…" : "Aceptar invitación"}
+        {pending ? "Uniéndote…" : `Unirme a ${tenantName}`}
       </Button>
     </div>
   );

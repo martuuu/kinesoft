@@ -77,10 +77,7 @@ describe("[P0-S04a] tokens inexistentes", () => {
 
   it("todo var(--x) usado en app/components/lib está definido en globals.css", () => {
     const defined = new Set(Array.from(CSS.matchAll(/(--[a-z0-9-]+)\s*:/gi), (m) => m[1]));
-    // `--app-bg` (app/invite/[token]/page.tsx) es un nombre equivocado de
-    // `--bg-app` que siempre cayó a su fallback inline: definirlo cambiaría el
-    // fondo de la invitación. Se deja anotado, no se "arregla" acá.
-    const allow = new Set(["--app-bg"]);
+    const allow = new Set<string>();
     const used = new Map<string, string>();
     const walk = (dir: string) => {
       for (const f of readdirSync(dir)) {

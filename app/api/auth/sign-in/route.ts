@@ -19,9 +19,11 @@ export const runtime = "nodejs";
  *   - chequeo de Origin: un sitio ajeno no puede loguear a la víctima en una
  *     cuenta del atacante (login CSRF).
  */
-function backToLogin(req: Request, error: string, next: string) {
+function backToLogin(req: Request, error: string, next: string, email?: string) {
   const u = new URL("/login", req.url);
   u.searchParams.set("error", error);
+  // Solo con email_not_confirmed (ya lo dice el error): el botón «Reenviar» del login lo usa sin que se tipee de nuevo.
+  if (email) u.searchParams.set("email", email.slice(0, 120));
   if (next !== "/dashboard") u.searchParams.set("next", next);
   return NextResponse.redirect(u, { status: 303 });
 }
@@ -58,11 +60,8 @@ export async function POST(req: Request) {
     // Supabase distingue "no confirmó el email" de "clave mala"; lo primero
     // se le dice (tiene arreglo: buscar el mail), lo segundo queda genérico
     // para no confirmar qué emails existen.
-    return backToLogin(
-      req,
-      error.code === "email_not_confirmed" ? "email_not_confirmed" : "invalid_credentials",
-      next
-    );
+    const notConfirmed = error.code === "email_not_confirmed";
+    return backToLogin(req, notConfirmed ? "email_not_confirmed" : "invalid_credentials", next, notConfirmed ? email : undefined);
   }
 
   return NextResponse.redirect(new URL(next, req.url), { status: 303 });

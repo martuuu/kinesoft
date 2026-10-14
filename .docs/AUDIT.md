@@ -450,12 +450,18 @@ Gate final del Bloque A: `tsc` 0 · unit 252/252 en 19 archivos (TZ=UTC y TZ=AR)
     `setBusinessHours`, servicios, OS e invitaciones. El paso 7 (`completeOnboarding`, `:161`) exige ≥1 servicio
     y es idempotente (`updateMany … onboardingCompletedAt: null`). Una invitación pendiente se ofrece en
     `/onboarding` (`openPendingInvitation`, `:195`).
-  - **Unión por invitación:** `/signup?invite=<token>` fija el email de la invitación, no crea tenant y usa
-    `emailRedirectTo=/auth/confirm?next=/invite/<token>` (`lib/auth.ts:62-78`).
+  - **Unión por invitación (IAM-2b, 14-oct):** el invitado sin cuenta la activa en `/invite/<token>` mismo
+    (nombre + contraseña → `activateInvitation`, `lib/invite-activation-internal.ts`: `createUser` confirmado +
+    perfil + membresía + profesional con agenda + invitación aceptada con CAS en una tx; compensa con
+    `deleteUser`; adopta zombies; «ya tenés cuenta» → login con `next`). Antes iba a `/signup?invite=` y `signUp`
+    sobre el usuario que ya había creado `inviteUserByEmail` no mandaba nada (punto 4 del QA). El
+    `/signup?invite=` → `/invite` lo redirige IAM-2d.
   - **Reset** (`updatePasswordWithRecoverySession`, `lib/auth.ts:206`): con cookie `ks_recovery` válida del mismo
     usuario no pide la contraseña actual (cookie de un solo uso: se borra tras el éxito); sin cookie exige la
-    actual, con 5/10 min por usuario. `sendPasswordReset` (`:145`) usa
-    `redirectTo=<APP_URL>/auth/confirm?type=recovery&next=/reset` (`:183`).
+    actual, con 5/10 min por usuario. Desde IAM-2c (14-oct) `sendPasswordReset` y el signup ya no usan
+    `resetPasswordForEmail` ni `auth.signUp`: el token sale de `admin.generateLink` (`lib/identity/access-link.ts`)
+    y el mail lo manda la app por Resend; `/auth/confirm` es resistente a escáneres (GET no canjea, POST desde
+    `/auth/confirm/continuar` con chequeo de origen).
   - `scripts/create-tenant.ts` usa `bootstrapTenant`: ahora crea "Particular". Desde M6 (IAM-1, 14-oct)
     `Practitioner` es único por consultorio y el alta usa un advisory lock por usuario (`OpenOnboardingExistsError`).
   - Tests: unit `onboarding-logic` (13), integración `signup` (10) y `onboarding` (8).
@@ -1810,7 +1816,9 @@ era intencional.
 22. **Staff ≠ paciente (A3b)** — una identidad con Membership no se trata como paciente en el portal, el
     callback no le vincula fichas, `createInvitation` rechaza un email de Patient con portal vinculado **del
     propio tenant** (no consultar otros tenants: sería un oráculo cross-tenant) y `acceptInvite` rechaza si
-    `Patient.userId = user.id` o el email es de un Patient con portal.
+    `Patient.userId = user.id` o el email es de un Patient con portal. **Desde IAM-2b** la regla vive en
+    `usedAsPortalPatient` (`lib/invite-activation-internal.ts`) y la aplican las dos puertas de `/invite`:
+    `acceptInvite` (con sesión) y `activateInvitation` (crea la cuenta), esta última ANTES de tocar GoTrue.
 23. **`lib/redact.ts` + Sentry sin cliente** — logger y `beforeSend*` de Sentry pasan por `redact()`
     (claves sensibles + emails, JWT, Bearer/Basic, tokens MP, `?token=`/`code=`, DNI con formato);
     `sendDefaultPii: false`; Sentry es **no-op total sin `SENTRY_DSN`**. No agregar el SDK de cliente sin
@@ -1830,6 +1838,13 @@ era intencional.
     nombre, y rechaza un Practitioner de otro tenant. Lo usan `/onboarding` (paso 2) y
     `scripts/create-tenant.ts`. El signup **no** crea tenant: no volver a crearlo ahí ni con
     `admin.createUser({ email_confirm: true })` (era H5).
+    **Enmienda IAM-2b (14-oct, IAM-D1):** `createUser({ email_confirm: true })` (en el puerto,
+    `authAdmin().createUser({ emailConfirm: true })`) se permite **solo** en la activación de una invitación con
+    token válido (`lib/invite-activation-internal.ts`: el link llegó a ese email y el email lo fija la invitación,
+    no quien activa) y en el script `create-tenant`. La adopción de un usuario zombie en la misma activación
+    (`updateUserById({ emailConfirm: true })`, solo si `canSafelyDeleteAuthUser`) entra en la misma excepción. Lo
+    vigila `tests/unit/email-confirm-guard.test.ts` (fuera de esos archivos, del puerto y de
+    `scripts/diagnose-auth.ts`, un `email_confirm: true` / `emailConfirm: true` rompe el test).
 
 27. **Motor de disponibilidad y su paridad (B-pre).** `lib/availability/*` es puro (sin DB, `now` inyectado,
     reloj por `lib/datetime-ar.ts`); el único punto de DB es `lib/availability-loader.ts`, con `db` inyectado (tx

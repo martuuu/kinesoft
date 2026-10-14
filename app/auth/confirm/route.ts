@@ -7,57 +7,93 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { prismaService as prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { safeNextFromUrl, unwrapConfirmNext } from "@/lib/safe-next";
+import { confirmContinuePath, isConfirmPostAllowed, parseConfirmParams } from "@/lib/auth-confirm-internal";
 import { RECOVERY_COOKIE, RECOVERY_TTL_S, makeRecoveryCookieValue } from "@/lib/recovery-cookie";
 import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
 
 export const runtime = "nodejs";
 
 /**
- * Landing de los links de email de Supabase con `token_hash` (A3b-S-auth).
+ * Landing de los links de email con `token_hash` (A3b-S-auth; resistente a escáneres desde IAM-2c).
  *
- * Contrato con las plantillas de Supabase Auth (tarea del dueño, ver
- * EXTERNAL-CONFIG): `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=<tipo>&next=<destino>`.
- *   - `type`: `signup` / `email` (confirmación de alta), `invite`,
- *     `recovery`, `magiclink`. Cualquier otro → link inválido.
- *   - `next`: path propio o URL absoluta de la app (`{{ .RedirectTo }}`); pasa
- *     por `safeNextFromUrl`. Default: `/reset` para recovery, `/dashboard`
- *     para el resto.
+ * Quién arma el link: desde IAM-2c la APP (`lib/identity/access-link.ts#buildConfirmUrl`, mail propio por
+ * `lib/email`): `${APP_URL}/auth/confirm?token_hash=…&type=…&next=…`. Los links viejos de las plantillas
+ * de Supabase tienen la misma forma y siguen funcionando.
+ *   - `type`: `signup` / `email` (confirmación de alta), `invite`, `recovery`, `magiclink`. Otro → inválido.
+ *   - `next`: path propio o URL absoluta de la app; se sanea siempre (default `/reset` en recovery,
+ *     `/dashboard` en el resto). Ver `lib/auth-confirm-internal.ts#parseConfirmParams`.
  *
- * Por qué `token_hash` + `verifyOtp` y no el `?code=` de PKCE: el code de
- * PKCE solo se puede canjear en el MISMO browser que pidió el mail (el
- * verifier vive en una cookie de ese browser). Con signup / reset la gente
- * abre el mail en el celular → "link inválido". `verifyOtp` no depende de eso.
+ * IAM-2c · GET → `/auth/confirm/continuar` → POST. Outlook Safe Links (y otros escáneres) abren el link
+ * antes que la persona: si el GET canjeaba, el escáner gastaba el token y la persona veía «el link venció».
+ *   - GET: valida la forma y redirige (303) a la página intermedia. NO llama a `verifyOtp`.
+ *   - POST (el form de esa página, que se manda solo): chequea el origen, canjea, deja la sesión en
+ *     cookies y redirige (303 → el navegador sigue con GET) a `next`.
  *
- * En `recovery` además deja la cookie firmada `ks_recovery` (15 min,
- * httpOnly): es la que habilita a /reset a cambiar la clave SIN pedir la
- * actual (A3c-S-signup). Contrato en `lib/recovery-cookie.ts`.
+ * Por qué `token_hash` + `verifyOtp` y no el `?code=` de PKCE: el code de PKCE solo se canjea en el MISMO
+ * browser que pidió el mail (el verifier vive en una cookie de ese browser), y la gente abre el mail en el
+ * celular → "link inválido". `verifyOtp` no depende de eso.
+ *
+ * En `recovery` además deja la cookie firmada `ks_recovery` (15 min, httpOnly): es la que habilita a
+ * /reset a cambiar la clave SIN pedir la actual (A3c-S-signup; AUDIT §5.20, contrato en
+ * `lib/recovery-cookie.ts`). Solo acá y solo tras un `verifyOtp` de recovery exitoso.
  */
-const ALLOWED_TYPES = new Set<EmailOtpType>(["signup", "email", "invite", "recovery", "magiclink"]);
 
+function allowedOrigins(url: URL): string[] {
+  return [url.origin, env.NEXT_PUBLIC_APP_URL];
+}
+
+// `type` (opcional) le dice al login qué salida ofrecer: «olvidé mi contraseña» o «reenviar confirmación» (IAM-2d).
+function invalid(url: URL, type?: string): NextResponse {
+  const u = new URL("/login?error=link_invalid", url.origin);
+  if (type === "recovery") u.searchParams.set("link", "recovery");
+  else if (type === "signup" || type === "email") u.searchParams.set("link", "signup");
+  return NextResponse.redirect(u, 303);
+}
+
+/** GET: NO canjea. Lleva a la página intermedia con los parámetros ya saneados. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const tokenHash = url.searchParams.get("token_hash");
-  const rawType = url.searchParams.get("type");
-  const type = rawType && ALLOWED_TYPES.has(rawType as EmailOtpType) ? (rawType as EmailOtpType) : null;
-  const fallback = type === "recovery" ? "/reset" : "/dashboard";
-  // unwrapConfirmNext: un `next` que vuelve a /auth/confirm (links viejos con
-  // emailRedirectTo=/auth/confirm?next=…) iría sin token_hash → link inválido.
-  const next = unwrapConfirmNext(
-    safeNextFromUrl(url.searchParams.get("next"), [url.origin, env.NEXT_PUBLIC_APP_URL], fallback),
-    fallback
-  );
+  const params = parseConfirmParams((k) => url.searchParams.get(k), allowedOrigins(url));
+  if (!params) return invalid(url);
+  const res = NextResponse.redirect(new URL(confirmContinuePath(params), url.origin), 303);
+  // El token viaja en la URL: que ningún intermediario lo cachee ni salga como Referer a otro sitio.
+  res.headers.set("Cache-Control", "no-store");
+  res.headers.set("Referrer-Policy", "no-referrer");
+  return res;
+}
 
-  if (!tokenHash || !type) {
-    return NextResponse.redirect(new URL("/login?error=link_invalid", url.origin));
+/** POST: el form de `/auth/confirm/continuar`. Canjea el token, abre la sesión y redirige a `next`. */
+export async function POST(req: Request) {
+  const url = new URL(req.url);
+  const origins = allowedOrigins(url);
+  if (!isConfirmPostAllowed(req.headers, origins)) {
+    // Un form de otro sitio con un token del atacante dejaría a la víctima logueada en la cuenta ajena.
+    logger.warn("auth.confirm.origin_rejected", {
+      origin: req.headers.get("origin") === "null" ? "null" : req.headers.get("origin") ? "otro" : "ausente",
+      secFetchSite: req.headers.get("sec-fetch-site") ?? "ausente",
+    });
+    return invalid(url);
   }
 
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return invalid(url);
+  }
+  const params = parseConfirmParams((k) => {
+    const v = form.get(k);
+    return typeof v === "string" ? v : null;
+  }, origins);
+  if (!params) return invalid(url);
+  const type = params.type as EmailOtpType;
+
   const supabase = getSupabaseServerClient();
-  const { data, error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
+  const { data, error } = await supabase.auth.verifyOtp({ type, token_hash: params.tokenHash });
   if (error || !data.user) {
-    // Link vencido o ya usado (los scanners de mail a veces lo "abren" antes).
+    // Vencido, ya usado, o de otro proyecto. Desde IAM-2c un escáner ya no lo gasta (solo hace GET).
     logger.warn("auth.confirm.failed", { type, message: error?.message ?? "no_user" });
-    return NextResponse.redirect(new URL("/login?error=link_invalid", url.origin));
+    return invalid(url, type);
   }
   const user = data.user;
 
@@ -84,5 +120,6 @@ export async function GET(req: Request) {
     });
   }
 
-  return NextResponse.redirect(new URL(next, url.origin));
+  // 303: el navegador sigue con un GET (un 307 repetiría el POST en el destino).
+  return NextResponse.redirect(new URL(params.next, url.origin), 303);
 }

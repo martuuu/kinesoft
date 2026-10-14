@@ -34,6 +34,7 @@ import { addInsurerFromCatalog, updateInsurer } from "@/lib/insurers";
 import { setBusinessHours } from "@/lib/tenant-settings";
 import { savePractitionerWeek } from "@/lib/practitioner-schedule";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { findInvitationByRawToken } from "@/lib/invitations-internal";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import { runWithRls } from "@/lib/rls";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
@@ -273,7 +274,10 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     expect(late.ok).toBe(false);
   });
 
-  it("invitación pendiente: se reabre (token rotado) solo para el email invitado", async () => {
+  // IAM-2a: reabrir ya NO rota el token. Antes `openPendingInvitation` pisaba `Invitation.token` y el link del mail
+  // que el invitado todavía tenía dejaba de valer (hallazgo del 14-oct, cuentas muertas). Ahora el link de esta
+  // pantalla es un token ADICIONAL (su hash va a `priorTokens`) y el vigente queda igual.
+  it("invitación pendiente: se reabre solo para el email invitado y sin rotar el token del mail", async () => {
     const uid = newIdentity();
     const oldRaw = randomBytes(24).toString("base64url");
     const inv = await db.invitation.create({
@@ -293,14 +297,41 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     if (!r.ok) return;
     const newRaw = r.data.url.replace("/invite/", "");
     const row = await db.invitation.findUniqueOrThrow({ where: { id: inv.id } });
-    expect(row.token).toBe(hashInviteToken(newRaw));
-    expect(row.token).not.toBe(hashInviteToken(oldRaw));
+    // El token del mail sigue siendo el vigente y sigue resolviendo.
+    expect(row.token).toBe(hashInviteToken(oldRaw));
+    expect(row.expiresAt).toEqual(inv.expiresAt);
+    expect((await findInvitationByRawToken(oldRaw))?.id).toBe(inv.id);
+    // El link de la pantalla también resuelve a la misma invitación.
+    expect(newRaw).not.toBe(oldRaw);
+    expect(row.priorTokens).toEqual([hashInviteToken(newRaw)]);
+    expect((await findInvitationByRawToken(newRaw))?.id).toBe(inv.id);
 
-    // Otra identidad no puede reabrir (ni rotar) una invitación ajena.
+    // Otra identidad no puede reabrir (ni tocar) una invitación ajena.
     newIdentity();
     const other = await openPendingInvitation(inv.id);
     expect(other.ok).toBe(false);
-    expect((await db.invitation.findUniqueOrThrow({ where: { id: inv.id } })).token).toBe(row.token);
+    const after = await db.invitation.findUniqueOrThrow({ where: { id: inv.id } });
+    expect(after.token).toBe(row.token);
+    expect(after.priorTokens).toEqual(row.priorTokens);
+  });
+
+  it("invitación anulada: no se reabre", async () => {
+    const uid = newIdentity();
+    const inv = await db.invitation.create({
+      data: {
+        tenantId: A.tenantId,
+        email: `${uid}@test.local`,
+        firstName: "Inv",
+        lastName: "Anulada",
+        token: hashInviteToken(randomBytes(24).toString("base64url")),
+        invitedById: A.userId,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        revokedAt: new Date(),
+      },
+    });
+    const r = await openPendingInvitation(inv.id);
+    expect(r.ok).toBe(false);
+    expect((await db.invitation.findUniqueOrThrow({ where: { id: inv.id } })).priorTokens).toEqual([]);
   });
 
   // ── B5.5 ONB: pasos de agenda ──────────────────────────────────────
