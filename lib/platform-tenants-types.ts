@@ -13,8 +13,10 @@
  * Fechas como string (ISO o "YYYY-MM-DD" del día AR) para que crucen al cliente
  * sin ambigüedad. Solo `import type` de Prisma: el cliente no carga el runtime.
  */
-import type { SubscriptionStatus, TenantPlan, TenantVertical } from "@prisma/client";
+import type { SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
 import type { TenantModule } from "@/lib/tenant-modules";
+import type { TenantAccess, TenantAccessMode } from "@/lib/tenant-access";
+import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
 
 export const PLATFORM_TENANTS_PAGE_SIZE = 50;
 /** "Trials que vencen pronto" en el resumen: los que vencen en ≤ N días (o ya vencieron y siguen TRIALING). */
@@ -47,7 +49,24 @@ export type PlatformTenantRow = {
   createdAt: string;
   /** Es el consultorio "casa" de algún superadmin (se marca "Plataforma"). */
   isPlatformHome: boolean;
+  /** BO2-D: estado administrativo (ACTIVE / SUSPENDED / CLOSED). */
+  status: TenantStatus;
+  /** BO2-D: motivo de la suspensión/baja (código + nota corta, sin PHI); null si nunca hubo. */
+  statusReason: PlatformStatusReason | null;
+  /** BO2-D: ISO del último cambio de `status`; null = nunca cambió. */
+  statusChangedAt: string | null;
+  /** BO2-D: cupo a medida; null = el del plan. */
+  seatLimitOverride: number | null;
+  /** BO2-D: acceso REAL calculado (`tenantAccessFor`, C-BO1), el que la banda le muestra al consultorio. */
+  access: TenantAccess;
+  /** BO2-D: el modo que aplican hoy los cortes (`effectiveMode` con `TENANT_ACCESS_ENFORCEMENT`). */
+  effectiveAccessMode: TenantAccessMode;
+  /** BO2-D: slugs viejos que redirigen al actual (BO-D9), del más nuevo al más viejo. */
+  slugAliases: string[];
 };
+
+/** `Tenant.statusReason` parseado (`parseStatusReason`). `code` null = texto que no salió del form. */
+export type PlatformStatusReason = { code: StatusReasonCode | null; note: string | null };
 
 export type PlatformTenantPage = {
   rows: PlatformTenantRow[];

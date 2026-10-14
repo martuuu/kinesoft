@@ -15,7 +15,7 @@
  * sirve para nada fuera del server: no existe ninguna action que firme una
  * clave mandada por el cliente (antes `resolveMediaUrl` lo hacía sin sesión) y
  * el bucket es privado por service role. Si algún día se quiere preview acá, se
- * pide por `mediaId` a una action con `requireSuperAdmin` que llame a
+ * pide por `mediaId` a una action con `requirePlatformAdmin` que llame a
  * `signExerciseMedia` — nunca pasando `url`.
  */
 import { useRef, useState, useTransition } from "react";

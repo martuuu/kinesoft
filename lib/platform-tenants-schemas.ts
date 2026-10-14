@@ -7,14 +7,18 @@
  * `@prisma/client` al bundle.
  *
  * `UpdatePlatformTenant` es `.strict()` a propósito: la action corre sobre el
- * canal service y cruza tenants, y EV-D6 limita lo editable a vertical, plan,
- * estado, trial y turnero. Nombre, slug, contacto y `sharedPatientView` son de
- * solo lectura desde /plataforma: una key de más es un form roto o un intento
- * de abuso, y tiene que rebotar en vez de ignorarse en silencio.
+ * canal service y cruza tenants, y edita SOLO entitlements (vertical, plan,
+ * estado de la suscripción, trial y turnero). Una key de más es un form roto o un
+ * intento de abuso, y tiene que rebotar en vez de ignorarse en silencio.
+ * BO2-D revisa EV-D6: nombre, razón social, CUIT, contacto y slug ahora también
+ * los edita el superadmin, pero con SUS schemas (abajo) y sus actions
+ * (`lib/platform-tenant-lifecycle.ts`), no colados en este Drawer.
+ * `sharedPatientView` sigue siendo solo del consultorio.
  */
 import { z } from "zod";
-import type { SubscriptionStatus, TenantPlan, TenantVertical } from "@prisma/client";
+import type { SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
 import { localToARIso } from "@/lib/datetime-ar";
+import { isValidSlug } from "@/lib/onboarding-logic";
 
 export const TENANT_VERTICAL_VALUES = ["GENERAL", "KINESIOLOGY"] as const satisfies readonly TenantVertical[];
 export const TENANT_PLAN_VALUES = ["FREE", "STARTER", "PRO", "ENTERPRISE"] as const satisfies readonly TenantPlan[];
@@ -24,6 +28,7 @@ export const SUBSCRIPTION_STATUS_VALUES = [
   "PAST_DUE",
   "CANCELLED",
 ] as const satisfies readonly SubscriptionStatus[];
+export const TENANT_STATUS_VALUES = ["ACTIVE", "SUSPENDED", "CLOSED"] as const satisfies readonly TenantStatus[];
 
 // `satisfies` no detecta un valor FALTANTE: si el schema suma un enum, esto deja
 // de compilar y obliga a sumarlo a la lista (y al form).
@@ -32,7 +37,8 @@ const _exhaustive: [
   Missing<TenantVertical, (typeof TENANT_VERTICAL_VALUES)[number]>,
   Missing<TenantPlan, (typeof TENANT_PLAN_VALUES)[number]>,
   Missing<SubscriptionStatus, (typeof SUBSCRIPTION_STATUS_VALUES)[number]>,
-] = [true, true, true];
+  Missing<TenantStatus, (typeof TENANT_STATUS_VALUES)[number]>,
+] = [true, true, true, true];
 void _exhaustive;
 
 const id = z.string().trim().min(1).max(64);
@@ -79,6 +85,112 @@ export const PlatformTenantListQuery = z.object({
   vertical: z.union([z.enum(TENANT_VERTICAL_VALUES), z.literal("")]).default(""),
   plan: z.union([z.enum(TENANT_PLAN_VALUES), z.literal("")]).default(""),
   status: z.union([z.enum(SUBSCRIPTION_STATUS_VALUES), z.literal("")]).default(""),
+  /** BO2-D: estado del consultorio (ACTIVE / SUSPENDED / CLOSED). */
+  tenantStatus: z.union([z.enum(TENANT_STATUS_VALUES), z.literal("")]).default(""),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
 });
 export type PlatformTenantListQueryInput = z.input<typeof PlatformTenantListQuery>;
+
+// ──────────────────────────────────────────────────────────────────────
+// BO2-D · ciclo de vida del consultorio (lib/platform-tenant-lifecycle.ts)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Motivo de una suspensión o baja (`Tenant.statusReason`). Código cerrado + nota corta: el código es lo que se
+ * filtra y se cuenta; la nota es para el próximo superadmin que mire el consultorio. Nunca PHI (la nota es texto
+ * libre: el form lo avisa y el audit guarda solo la CLAVE `statusReason`, no el texto — handoff BO1-B).
+ */
+export const STATUS_REASON_CODES = [
+  "NONPAYMENT",
+  "OWNER_REQUEST",
+  "ABUSE",
+  "DUPLICATE",
+  "TEST",
+  "OTHER",
+] as const;
+export type StatusReasonCode = (typeof STATUS_REASON_CODES)[number];
+export const STATUS_REASON_NOTE_MAX = 200;
+
+/**
+ * Se guarda como `"<CODE>"` o `"<CODE>: <nota>"` en una sola columna TEXT (M7 no tiene dos). `parseStatusReason`
+ * es el inverso tolerante: un texto que no arranca con un código conocido (escrito a mano por SQL) vuelve como
+ * `{ code: null, note: <texto> }` en vez de perderse.
+ */
+export function encodeStatusReason(code: StatusReasonCode, note: string | null | undefined): string {
+  const n = (note ?? "").trim();
+  return n ? `${code}: ${n}` : code;
+}
+export function parseStatusReason(raw: string | null): { code: StatusReasonCode | null; note: string | null } | null {
+  if (raw === null || raw.trim() === "") return null;
+  const m = /^([A-Z_]+)(?::\s?([\s\S]*))?$/.exec(raw.trim());
+  if (m && (STATUS_REASON_CODES as readonly string[]).includes(m[1])) {
+    const note = m[2]?.trim() || null;
+    return { code: m[1] as StatusReasonCode, note };
+  }
+  return { code: null, note: raw.trim() };
+}
+
+const expectedUpdatedAt = z.string().datetime({ offset: true, message: "Versión inválida. Recargá la página." });
+const reasonNote = z
+  .string()
+  .trim()
+  .max(STATUS_REASON_NOTE_MAX, `La nota tiene un máximo de ${STATUS_REASON_NOTE_MAX} caracteres`)
+  // Una línea: es un rótulo, no una ficha. Saltos de línea = alguien pegando algo largo (y posiblemente PHI).
+  .regex(/^[^\r\n]*$/, "La nota va en una sola línea")
+  .optional();
+
+/** Suspender (ACTIVE → SUSPENDED) y dar de baja (ACTIVE|SUSPENDED → CLOSED): motivo obligatorio. */
+export const ChangePlatformTenantStatus = z
+  .object({
+    tenantId: id,
+    expectedUpdatedAt,
+    reasonCode: z.enum(STATUS_REASON_CODES, { message: "Elegí un motivo" }),
+    note: reasonNote,
+  })
+  .strict();
+export type ChangePlatformTenantStatusInput = z.input<typeof ChangePlatformTenantStatus>;
+
+/** Reactivar, forzar fin del alta: solo el consultorio y la versión que vio el superadmin. */
+export const PlatformTenantVersioned = z.object({ tenantId: id, expectedUpdatedAt }).strict();
+export type PlatformTenantVersionedInput = z.input<typeof PlatformTenantVersioned>;
+
+/**
+ * Datos del consultorio (BO2-D, revisa EV-D6: ahora el superadmin también los edita, con CAS y audit). Mismas
+ * reglas que Configuración (`TenantProfileFields`) + contacto público. Ausente = no tocar; "" = borrar.
+ */
+const optionalPhone = z
+  .string()
+  .trim()
+  .max(30)
+  .regex(/^[0-9+()\-\s]*$/, "Solo números, espacios, +, - y paréntesis");
+export const TenantProfileFields = z.object({
+  name: z.string().trim().min(1, "El nombre no puede estar vacío.").max(120, "Máximo 120 caracteres").optional(),
+  legalName: z.string().trim().max(160, "Máximo 160 caracteres").nullable().optional(),
+  // Laxo a propósito: Configuración manda el valor guardado en cada submit y hay CUITs cargados con puntos,
+  // espacios o sin guiones. Un formato estricto rebotaría guardar el NOMBRE por un CUIT viejo.
+  taxId: z.string().trim().max(40, "Máximo 40 caracteres").nullable().optional(),
+  phone: optionalPhone.nullable().optional(),
+  whatsapp: optionalPhone.nullable().optional(),
+  publicEmail: z
+    .union([z.string().trim().toLowerCase().email("Email inválido").max(120), z.literal("")])
+    .nullable()
+    .optional(),
+});
+export type TenantProfileFieldsInput = z.input<typeof TenantProfileFields>;
+
+export const UpdatePlatformTenantProfile = TenantProfileFields.extend({ tenantId: id, expectedUpdatedAt }).strict();
+export type UpdatePlatformTenantProfileInput = z.input<typeof UpdatePlatformTenantProfile>;
+
+/** Cambio de slug (BO-D9: el viejo queda como alias con redirect permanente). */
+export const ChangePlatformTenantSlug = z
+  .object({
+    tenantId: id,
+    expectedUpdatedAt,
+    slug: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .refine(isValidSlug, "Slug inválido: 3 a 40 letras minúsculas, números o guiones (y no una palabra reservada)."),
+  })
+  .strict();
+export type ChangePlatformTenantSlugInput = z.input<typeof ChangePlatformTenantSlug>;

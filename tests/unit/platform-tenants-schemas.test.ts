@@ -4,15 +4,18 @@
  * Por qué importa: `updatePlatformTenant` corre sobre el canal service (BYPASSRLS)
  * y cruza tenants; el schema `.strict()` es lo que garantiza que el Drawer de
  * "Editar suscripción" solo puede tocar las columnas de EV-D6 (vertical, plan,
- * estado, trial, turnero). Datos del consultorio y `sharedPatientView` son de
- * solo lectura desde /plataforma: una key extra tiene que rebotar, no ignorarse
- * en silencio.
+ * estado, trial, turnero): una key extra tiene que rebotar, no ignorarse en
+ * silencio. BO2-D: los datos del consultorio y el slug se editan con SUS schemas
+ * (abajo), también `.strict()`; `sharedPatientView` sigue siendo solo del consultorio.
  *
  * `trialEndsOn` es un día AR ("YYYY-MM-DD") que se guarda como el FIN de ese día
  * en Argentina: se corre en TZ=UTC y TZ=AR y el resultado tiene que ser el mismo.
  */
 import { describe, it, expect } from "vitest";
 import {
+  ChangePlatformTenantSlug,
+  ChangePlatformTenantStatus,
+  UpdatePlatformTenantProfile,
   UpdatePlatformTenant,
   PlatformTenantListQuery,
   PlatformTenantId,
@@ -102,7 +105,7 @@ describe("listas literales de enums (el form del cliente no importa Prisma en ru
 describe("PlatformTenantListQuery / PlatformTenantId", () => {
   it("defaults: q vacío, sin filtros, página 1", () => {
     const r = PlatformTenantListQuery.parse({});
-    expect(r).toEqual({ q: "", vertical: "", plan: "", status: "", page: 1 });
+    expect(r).toEqual({ q: "", vertical: "", plan: "", status: "", tenantStatus: "", page: 1 });
   });
 
   it("coerce de page desde searchParams y rechazo de filtros inválidos", () => {
@@ -114,5 +117,36 @@ describe("PlatformTenantListQuery / PlatformTenantId", () => {
   it("id: no vacío", () => {
     expect(PlatformTenantId.safeParse("").success).toBe(false);
     expect(PlatformTenantId.safeParse("ckabc").success).toBe(true);
+  });
+});
+
+describe("BO2-D · schemas del ciclo de vida", () => {
+  const base = { tenantId: "t1", expectedUpdatedAt: "2026-10-14T12:00:00.000Z" };
+
+  it("estado: motivo obligatorio de la lista; nota de una línea y ≤ 200; strict", () => {
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "NONPAYMENT" }).success).toBe(true);
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "OTHER", note: "x".repeat(200) }).success).toBe(true);
+    expect(ChangePlatformTenantStatus.safeParse(base).success).toBe(false);
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "NOPE" }).success).toBe(false);
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "OTHER", note: "a\nb" }).success).toBe(false);
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "OTHER", note: "x".repeat(201) }).success).toBe(false);
+    expect(ChangePlatformTenantStatus.safeParse({ ...base, reasonCode: "OTHER", status: "ACTIVE" }).success).toBe(false);
+  });
+
+  it("datos: campos opcionales, '' borra, strict (slug/sharedPatientView/entitlements rebotan)", () => {
+    const ok = UpdatePlatformTenantProfile.parse({ ...base, publicEmail: " A@B.COM ", whatsapp: "" });
+    expect(ok).toMatchObject({ publicEmail: "a@b.com", whatsapp: "" });
+    expect(UpdatePlatformTenantProfile.safeParse({ ...base, name: "  " }).success).toBe(false);
+    expect(UpdatePlatformTenantProfile.safeParse({ ...base, phone: "abc" }).success).toBe(false);
+    for (const k of ["slug", "sharedPatientView", "plan", "status"]) {
+      expect(UpdatePlatformTenantProfile.safeParse({ ...base, [k]: "x" }).success, k).toBe(false);
+    }
+  });
+
+  it("slug: normaliza a minúsculas y rechaza inválidos y reservados", () => {
+    expect(ChangePlatformTenantSlug.parse({ ...base, slug: " Movare-2 " }).slug).toBe("movare-2");
+    for (const bad of ["ab", "plataforma", "-x-", "a b", "ñandu", "x".repeat(41)]) {
+      expect(ChangePlatformTenantSlug.safeParse({ ...base, slug: bad }).success, bad).toBe(false);
+    }
   });
 });

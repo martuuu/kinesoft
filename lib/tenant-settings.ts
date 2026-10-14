@@ -17,10 +17,13 @@ import type { TenantPlan, TenantVertical } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
-import { audit } from "@/lib/audit";
+import { withSupportWritable } from "@/lib/support-writable";
+import { audit, auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { updateTenantProfileInTx } from "@/lib/tenant-profile-internal";
+import { TenantProfileFields } from "@/lib/platform-tenants-schemas";
 import type { ActionResult } from "@/lib/validation";
 
 export type TenantSettings = {
@@ -42,11 +45,13 @@ export type TenantSettings = {
   businessHoursEnd: number;
   /** Agenda row granularity: 60 (per hour) or 30 (half-hour rows). */
   agendaSlotMinutes: number;
+  /** BO2-D: ISO de `Tenant.updatedAt`, para el CAS opcional de `updateTenantBasics`. */
+  updatedAt: string;
 };
 
 export async function getTenantSettings(): Promise<TenantSettings> {
   const actor = await getActor();
-  const t = await runWithRls(actor.tenantId, (tx) => tx.tenant.findUniqueOrThrow({
+  const { updatedAt, ...t } = await runWithRls(actor.tenantId, (tx) => tx.tenant.findUniqueOrThrow({
     where: { id: actor.tenantId },
     select: {
       slug: true,
@@ -62,12 +67,17 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       businessHoursStart: true,
       businessHoursEnd: true,
       agendaSlotMinutes: true,
+      updatedAt: true,
     },
   }));
-  return t;
+  return { ...t, updatedAt: updatedAt.toISOString() };
 }
 
-export async function setBusinessHours(input: {
+export async function setBusinessHours(...args: Parameters<typeof setBusinessHoursImpl>): ReturnType<typeof setBusinessHoursImpl> {
+  return withSupportWritable("lib/tenant-settings.ts#setBusinessHours", () => setBusinessHoursImpl(...args));
+}
+
+async function setBusinessHoursImpl(input: {
   start: number;
   end: number;
   /** Optional so existing callers keep working; only 30 or 60 accepted. */
@@ -168,7 +178,11 @@ const publicBookingSchema = z.boolean();
  * /plataforma, que edita varias columnas a la vez. Mismo valor = no-op del
  * escritor: ni write ni audit, y no se revalida nada.
  */
-export async function setPublicBookingEnabled(enabled: boolean): Promise<ActionResult> {
+export async function setPublicBookingEnabled(...args: Parameters<typeof setPublicBookingEnabledImpl>): ReturnType<typeof setPublicBookingEnabledImpl> {
+  return withSupportWritable("lib/tenant-settings.ts#setPublicBookingEnabled", () => setPublicBookingEnabledImpl(...args));
+}
+
+async function setPublicBookingEnabledImpl(enabled: boolean): Promise<ActionResult> {
   const actor = await requireTenantAdmin();
   const parsed = publicBookingSchema.safeParse(enabled);
   if (!parsed.success) return { ok: false, error: "Valor inválido para el turnero público." };
@@ -195,30 +209,66 @@ export async function setPublicBookingEnabled(enabled: boolean): Promise<ActionR
   return { ok: true, data: undefined };
 }
 
-export async function updateTenantBasics(input: {
+const TenantBasicsInput = TenantProfileFields.pick({ name: true, legalName: true, taxId: true }).extend({
+  expectedUpdatedAt: z.string().datetime({ offset: true }).optional(),
+});
+
+/**
+ * Nombre, razón social y CUIT desde Configuración. BO2-D: pasa por el núcleo compartido con /plataforma
+ * (`updateTenantProfileInTx`: FOR UPDATE + diff + CAS opcional), porque ahora el superadmin edita las mismas
+ * columnas. Sin `expectedUpdatedAt` (el form de hoy no lo manda) el último que guarda gana, como antes; con él,
+ * un cambio del superadmin en el medio devuelve el error de «otro cambio» en vez de pisarse. Sin cambios reales
+ * no se audita (antes cada submit dejaba un `tenant.update` aunque no cambiara nada).
+ */
+export async function updateTenantBasics(...args: Parameters<typeof updateTenantBasicsImpl>): ReturnType<typeof updateTenantBasicsImpl> {
+  return withSupportWritable("lib/tenant-settings.ts#updateTenantBasics", () => updateTenantBasicsImpl(...args));
+}
+
+async function updateTenantBasicsImpl(input: {
   name?: string;
   legalName?: string | null;
   taxId?: string | null;
+  expectedUpdatedAt?: string;
 }): Promise<ActionResult> {
   const actor = await requireTenantAdmin();
-  const patch: Record<string, string | null> = {};
-  if (input.name !== undefined) {
-    const v = input.name.trim();
-    if (!v) return { ok: false, error: "El nombre no puede estar vacío." };
-    patch.name = v;
+  const parsed = TenantBasicsInput.safeParse(input);
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed.error.flatten().fieldErrors)) if (v) fieldErrors[k] = v;
+    const first = Object.values(fieldErrors)[0]?.[0];
+    return { ok: false, error: first ?? "Datos inválidos", fieldErrors };
   }
-  if (input.legalName !== undefined) patch.legalName = input.legalName?.trim() || null;
-  if (input.taxId !== undefined) patch.taxId = input.taxId?.trim() || null;
-  if (Object.keys(patch).length === 0) return { ok: true, data: undefined };
+  const { expectedUpdatedAt, ...patch } = parsed.data;
+  if (Object.values(patch).every((v) => v === undefined)) return { ok: true, data: undefined };
 
-  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({ where: { id: actor.tenantId }, data: patch }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "tenant.update",
-    entity: "Tenant",
-    entityId: actor.tenantId,
+  const r = await runWithRls(actor.tenantId, async (tx) => {
+    const res = await updateTenantProfileInTx(tx, {
+      tenantId: actor.tenantId,
+      patch,
+      expectedUpdatedAt: expectedUpdatedAt ? new Date(expectedUpdatedAt) : undefined,
+    });
+    if (res.ok && res.changed.length > 0) {
+      // En la misma tx: el evento existe si y solo si el cambio existe. Solo las claves (los valores son datos
+      // del consultorio, no PHI, pero el log no necesita la foto).
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "tenant.update",
+        entity: "Tenant",
+        entityId: actor.tenantId,
+        payload: { changed: res.changed },
+      });
+    }
+    return res;
   });
-  revalidatePath("/configuracion");
+  if (!r.ok) {
+    if (r.reason === "stale") return { ok: false, error: "Otro cambio se guardó antes. Recargá y revisá." };
+    return { ok: false, error: "No encontramos el consultorio. Recargá la página." };
+  }
+  if (r.changed.length > 0) {
+    revalidatePath("/configuracion");
+    // El nombre se ve en el shell (selector de consultorio, encabezado).
+    if (r.changed.includes("name")) revalidatePath("/", "layout");
+  }
   return { ok: true, data: undefined };
 }

@@ -118,6 +118,23 @@ const MATRIX: Record<Role, readonly Capability[]> = {
 };
 
 /**
+ * BO2-E (plan §19.5, decisión 3 de Martin): capacidades del actor de SOPORTE (un superadmin «como soporte» en un
+ * consultorio ajeno). «Ve lo que ve la Secretaria», sin acceso clínico: las de ASSISTANT + `tenant.admin` y
+ * `schedule.configure`, que son las que exigen las actions de Configuración que soporte puede usar (usuarios,
+ * obras sociales, servicios, sedes/salas, horarios, datos del consultorio, turnero).
+ *
+ * Las capacidades NO son la barrera de escritura del soporte: con `agenda.operateAll` (de la Secretaria) pasaría el
+ * chequeo de crear un turno, pero la transacción va en solo lectura (`runWithRls` + `request-context.readOnly`) salvo
+ * dentro de una action de la allowlist `SUPPORT_WRITABLE_ACTIONS` (lib/support-writable.ts). `clinical.read` y
+ * `plans.manage` no están nunca (un test lo fija).
+ */
+export const SUPPORT_CAPS: ReadonlySet<Capability> = new Set<Capability>(
+  [...MATRIX.ASSISTANT, "tenant.admin", "schedule.configure"].filter(
+    (c): c is Capability => c !== "clinical.read" && c !== "plans.manage" && c !== "billing.manage"
+  )
+);
+
+/**
  * Capabilities de un rol. Rol desconocido o ausente (sin membresía) → set
  * vacío: falla cerrado.
  */

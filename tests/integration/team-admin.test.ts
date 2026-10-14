@@ -111,7 +111,8 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
+    // BO2-B (BO-D7): PRO = 10 lugares. Estos casos invitan / ascienden / reactivan profesionales; el cupo se prueba en seats.test.ts.
+    A = await createEphemeralTenant(db, { plan: "PRO" });
     B = await createEphemeralTenant(db);
   });
   afterAll(async () => {

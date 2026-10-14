@@ -169,8 +169,9 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    C = await createEphemeralTenant(db);
+    // PRO: estos casos suman varios profesionales al mismo consultorio; FREE (1 lugar) los frena al activar (BO2-B).
+    A = await createEphemeralTenant(db, { plan: "PRO" });
+    C = await createEphemeralTenant(db, { plan: "PRO" });
     await db.tenant.update({ where: { id: A.tenantId }, data: { businessHoursStart: 9, businessHoursEnd: 18 } });
     aShared = (
       await db.service.create({

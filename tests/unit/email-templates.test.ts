@@ -8,6 +8,9 @@ import {
   adminPasswordResetEmail,
   accountExistsEmail,
   welcomeEmail,
+  tenantOwnerActivationEmail,
+  platformAccessLinkEmail,
+  supportAccessEmail,
   escapeHtml,
   safeHref,
   formatExpiryAR,
@@ -40,12 +43,17 @@ const ALL: Array<[string, () => RenderedEmail]> = [
   ["adminPasswordReset", () => adminPasswordResetEmail({ tenantName: "Consultorio Ramos", url: URL })],
   ["accountExists", () => accountExistsEmail({ loginUrl: URL, resetUrl: "https://app.kinesoft.com.ar/reset" })],
   ["welcome", () => welcomeEmail({ tenantName: "Consultorio Ramos", url: URL })],
+  // BO2: mails de Plataforma.
+  ["tenantActivation", () => tenantOwnerActivationEmail({ tenantName: "Consultorio Ramos", url: URL })],
+  ["platformAccessLink activation", () => platformAccessLinkEmail({ url: URL, purpose: "activation" })],
+  ["platformAccessLink recovery", () => platformAccessLinkEmail({ url: URL, purpose: "recovery" })],
+  ["supportAccess", () => supportAccessEmail({ tenantName: "Consultorio Ramos", superadminEmail: "soporte@kinesoft.com.ar", startedAt: EXPIRES, url: URL })],
 ];
 
 // Pictográficos + variación: cualquier emoji en asunto, html o texto.
 const EMOJI = /\p{Extended_Pictographic}/u;
 
-describe("estructura de marca, igual en las 8", () => {
+describe("estructura de marca, igual en todas", () => {
   it.each(ALL)("%s", (_n, render) => {
     const m = render();
     expect(m.subject.length).toBeGreaterThan(5);
@@ -134,6 +142,38 @@ describe("copy por plantilla", () => {
   });
 });
 
+describe("plantillas de Plataforma (BO2)", () => {
+  it("tenant_activation: titular, CTA, vence en 1 hora y el porqué", () => {
+    const m = tenantOwnerActivationEmail({ tenantName: "Consultorio Ramos", url: URL });
+    expect(m.subject).toBe("Tu consultorio Consultorio Ramos ya está en KineSoft");
+    expect(m.text).toContain("Activá tu acceso");
+    expect(m.text).toContain("Te dimos de alta como titular de Consultorio Ramos en KineSoft.");
+    expect(m.text).toContain("El link vence en 1 hora y sirve una sola vez.");
+    expect(m.text).toContain("Activar mi acceso");
+    expect(m.text).toContain("creó el consultorio Consultorio Ramos con este email como titular");
+  });
+
+  it("platform_access_link: activación y recuperación con copy distinto, firmado por soporte de KineSoft", () => {
+    const a = platformAccessLinkEmail({ url: URL, purpose: "activation" });
+    const r = platformAccessLinkEmail({ url: URL, purpose: "recovery" });
+    expect(a.subject).toBe("Activá tu acceso a KineSoft");
+    expect(r.subject).not.toBe(a.subject);
+    expect(a.text).toContain("Activar mi acceso");
+    expect(r.text).toContain("Elegir contraseña nueva");
+    for (const m of [a, r]) expect(m.text).toContain("soporte de KineSoft");
+  });
+
+  it("support_access: quién, cuándo (hora AR), sin HC, dónde ver la lista; el motivo tipeado NO viaja", () => {
+    const m = supportAccessEmail({ tenantName: "Consultorio Ramos", superadminEmail: "soporte@kinesoft.com.ar", startedAt: EXPIRES, url: URL });
+    expect(m.subject).toBe("Soporte de KineSoft entró a Consultorio Ramos");
+    expect(m.text).toContain("soporte@kinesoft.com.ar");
+    expect(m.text).toContain("20 de octubre de 2026");
+    expect(m.text).toContain("nada de historia clínica");
+    expect(m.text).toContain("Configuración → Accesos de soporte");
+    expect(m.text).not.toMatch(/Motivo:/);
+  });
+});
+
 describe("escape de todo dato de afuera", () => {
   const evil = [
     () => staffInviteEmail({ tenantName: PAYLOAD, inviterName: PAYLOAD, roleLabel: PAYLOAD, url: URL, expiresAt: EXPIRES }),
@@ -141,6 +181,8 @@ describe("escape de todo dato de afuera", () => {
     () => portalMagicLinkEmail({ tenantName: PAYLOAD, url: URL }),
     () => adminPasswordResetEmail({ tenantName: PAYLOAD, url: URL }),
     () => welcomeEmail({ tenantName: PAYLOAD, url: URL }),
+    () => tenantOwnerActivationEmail({ tenantName: PAYLOAD, url: URL }),
+    () => supportAccessEmail({ tenantName: PAYLOAD, superadminEmail: PAYLOAD, startedAt: EXPIRES, url: URL }),
   ];
   it.each(evil.map((f, i) => [i, f] as const))("plantilla #%i: el nombre no se interpreta como HTML", (_i, render) => {
     const m = render();

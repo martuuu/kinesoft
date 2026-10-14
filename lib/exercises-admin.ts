@@ -5,15 +5,22 @@
  *
  * Every mutation here targets the GLOBAL catalog (`tenantId: null`) and runs
  * through `prismaService` (BYPASSRLS): the RLS-forced app role physically can't
- * write `tenantId IS NULL` rows, so `requireSuperAdmin()` is the single
- * enforcement chokepoint. Tenant-private custom exercises keep going through
+ * write `tenantId IS NULL` rows, so `requirePlatformAdmin()` is the single
+ * enforcement chokepoint (one call per export). Tenant-private custom exercises keep going through
  * `createExercise` in lib/exercises.ts (app role, runWithRls).
+ *
+ * BO2-F (plan §19.5): antes la barrera era `requireSuperAdmin()`, que arma un Actor por `buildActor`: un
+ * superadmin sin consultorio propio no podía curar el catálogo, y el que sí tenía uno dejaba cada edición del
+ * catálogo GLOBAL en el `AuditEvent` de SU consultorio (`actor.tenantId` se usaba solo para eso). Ahora cada
+ * escritura deja su fila en el registro de plataforma (`auditPlatformGlobalInTx`, `tenantId` null) dentro de
+ * la misma tx del write. Payload de lista cerrada: nombre/tipo al crear y las CLAVES cambiadas al editar
+ * (nunca el texto de descripción/instrucciones/artículo).
  */
 import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
-import { requireSuperAdmin } from "@/lib/session";
-import { audit } from "@/lib/audit";
+import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
+import { auditPlatformGlobalInTx, type PlatformAuditAction } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import {
   ExerciseAdminCreate,
@@ -81,7 +88,7 @@ export async function listGlobalExercisesForAdmin(opts?: {
   skip?: number;
   take?: number;
 }): Promise<CatalogPage> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const f = { ...DEFAULT_CATALOG_FILTERS, ...(opts?.filters ?? {}) };
   const q = f.q.trim();
 
@@ -153,7 +160,7 @@ export async function listCatalogTagOptions(): Promise<{
   equipment: { slug: string; label: string }[];
   discipline: { slug: string; label: string }[];
 }> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const rows = await prismaService.tag.findMany({
     where: { kind: { in: ["MUSCLE_GROUP", "EQUIPMENT", "DISCIPLINE"] } },
     orderBy: { label: "asc" },
@@ -165,7 +172,7 @@ export async function listCatalogTagOptions(): Promise<{
 
 /** Full global exercise (incl. tags, media, article) for the admin editor. */
 export async function getGlobalExerciseForAdmin(id: string) {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   return prismaService.exercise.findFirst({
     where: { id, tenantId: null },
     include: {
@@ -185,6 +192,16 @@ function revalidateCatalog() {
   revalidateTag(cacheTags.catalog());
 }
 
+function auditExercise(
+  tx: Prisma.TransactionClient,
+  actor: PlatformActor,
+  action: PlatformAuditAction,
+  exerciseId: string,
+  payload?: Record<string, unknown>,
+) {
+  return auditPlatformGlobalInTx(tx, { actor, action, entity: "Exercise", entityId: exerciseId, payload });
+}
+
 async function uniqueGlobalSlug(name: string): Promise<string> {
   const base = slugify(name) || "ejercicio";
   let slug = base;
@@ -199,7 +216,7 @@ async function uniqueGlobalSlug(name: string): Promise<string> {
 export async function createGlobalExercise(
   raw: unknown,
 ): Promise<ActionResult<{ id: string; slug: string }>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = ExerciseAdminCreate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -210,35 +227,31 @@ export async function createGlobalExercise(
   const freeText = await freeTextFromTags(tagSlugs);
 
   try {
-    const ex = await prismaService.exercise.create({
-      data: {
-        slug,
-        name: d.name,
-        kind: d.kind,
-        description: d.description ?? null,
-        difficulty: d.difficulty,
-        defaultSets: d.defaultSets ?? null,
-        defaultReps: d.defaultReps ?? null,
-        durationSeconds: d.durationSeconds ?? null,
-        instructions: d.instructions ?? null,
-        cues: d.cues ?? null,
-        // Deprecated free-text kept as a denormalized cache for the cards.
-        muscleGroups: freeText.muscleGroups,
-        equipment: freeText.equipment,
-        isBasic: d.isBasic ?? false,
-        tenantId: null, // global catalog
-        createdById: actor.userId,
-      },
-      select: { id: true, slug: true },
-    });
-    if (tagSlugs.length) await setExerciseTags(ex.id, tagSlugs);
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "admin.exercise.create",
-      entity: "Exercise",
-      entityId: ex.id,
-      payload: { name: d.name, kind: d.kind },
+    const ex = await prismaService.$transaction(async (tx) => {
+      const created = await tx.exercise.create({
+        data: {
+          slug,
+          name: d.name,
+          kind: d.kind,
+          description: d.description ?? null,
+          difficulty: d.difficulty,
+          defaultSets: d.defaultSets ?? null,
+          defaultReps: d.defaultReps ?? null,
+          durationSeconds: d.durationSeconds ?? null,
+          instructions: d.instructions ?? null,
+          cues: d.cues ?? null,
+          // Deprecated free-text kept as a denormalized cache for the cards.
+          muscleGroups: freeText.muscleGroups,
+          equipment: freeText.equipment,
+          isBasic: d.isBasic ?? false,
+          tenantId: null, // global catalog
+          createdById: actor.userId,
+        },
+        select: { id: true, slug: true },
+      });
+      if (tagSlugs.length) await setExerciseTags(created.id, tagSlugs, undefined, tx);
+      await auditExercise(tx, actor, "platform.catalog.exercise.create", created.id, { name: d.name, kind: d.kind });
+      return created;
     });
     revalidateCatalog();
     return { ok: true, data: ex };
@@ -251,7 +264,7 @@ export async function createGlobalExercise(
 }
 
 export async function updateGlobalExercise(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = ExerciseAdminUpdate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -276,53 +289,50 @@ export async function updateGlobalExercise(raw: unknown): Promise<ActionResult> 
   if (d.cues !== undefined) data.cues = d.cues ?? null;
   if (d.isBasic !== undefined) data.isBasic = d.isBasic;
 
-  if (tagSlugs !== undefined) {
-    await setExerciseTags(id, tagSlugs);
-    const freeText = await freeTextFromTags(tagSlugs);
-    data.muscleGroups = freeText.muscleGroups;
-    data.equipment = freeText.equipment;
-  }
+  // Claves (no valores) para el registro: qué tocó el superadmin, sin copiar texto libre.
+  const changed = Object.keys(d).filter((k) => d[k as keyof typeof d] !== undefined);
+  if (tagSlugs !== undefined) changed.push("tags");
 
-  await prismaService.exercise.update({ where: { id }, data });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.exercise.update",
-    entity: "Exercise",
-    entityId: id,
+  await prismaService.$transaction(async (tx) => {
+    if (tagSlugs !== undefined) {
+      await setExerciseTags(id, tagSlugs, undefined, tx);
+      const freeText = await freeTextFromTags(tagSlugs, tx);
+      data.muscleGroups = freeText.muscleGroups;
+      data.equipment = freeText.equipment;
+    }
+    await tx.exercise.update({ where: { id }, data });
+    await auditExercise(tx, actor, "platform.catalog.exercise.update", id, { changed: changed.sort() });
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
 }
 
-async function setArchived(id: string, archived: boolean): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+async function setArchived(actor: PlatformActor, id: string, archived: boolean): Promise<ActionResult> {
   const existing = await prismaService.exercise.findFirst({
     where: { id, tenantId: null },
     select: { id: true },
   });
   if (!existing) return { ok: false, error: "Ejercicio global no encontrado." };
-  await prismaService.exercise.update({
-    where: { id },
-    data: { archivedAt: archived ? new Date() : null },
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: archived ? "admin.exercise.archive" : "admin.exercise.restore",
-    entity: "Exercise",
-    entityId: id,
+  await prismaService.$transaction(async (tx) => {
+    await tx.exercise.update({
+      where: { id },
+      data: { archivedAt: archived ? new Date() : null },
+    });
+    await auditExercise(tx, actor, archived ? "platform.catalog.exercise.archive" : "platform.catalog.exercise.restore", id);
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
 }
 
+// La barrera va en cada export (invariante del bloque BO), no en el helper compartido.
 export async function archiveGlobalExercise(id: string): Promise<ActionResult> {
-  return setArchived(id, true);
+  const actor = await requirePlatformAdmin("catalog.write");
+  return setArchived(actor, id, true);
 }
 
 export async function restoreGlobalExercise(id: string): Promise<ActionResult> {
-  return setArchived(id, false);
+  const actor = await requirePlatformAdmin("catalog.write");
+  return setArchived(actor, id, false);
 }
 
 /**
@@ -332,7 +342,7 @@ export async function restoreGlobalExercise(id: string): Promise<ActionResult> {
  * cascade away safely.
  */
 export async function hardDeleteGlobalExercise(id: string): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const existing = await prismaService.exercise.findFirst({
     where: { id, tenantId: null },
     select: { id: true },
@@ -349,13 +359,9 @@ export async function hardDeleteGlobalExercise(id: string): Promise<ActionResult
         "No se puede borrar: está usado en planes o diagnósticos. Archivalo en su lugar (queda oculto pero preserva el historial).",
     };
   }
-  await prismaService.exercise.delete({ where: { id } });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.exercise.delete",
-    entity: "Exercise",
-    entityId: id,
+  await prismaService.$transaction(async (tx) => {
+    await tx.exercise.delete({ where: { id } });
+    await auditExercise(tx, actor, "platform.catalog.exercise.delete", id);
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
@@ -363,7 +369,7 @@ export async function hardDeleteGlobalExercise(id: string): Promise<ActionResult
 
 /** Create/update the long-form "Ejercicio completo" article (1:1). */
 export async function upsertExerciseArticle(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = ExerciseArticleUpsert.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -383,17 +389,13 @@ export async function upsertExerciseArticle(raw: unknown): Promise<ActionResult>
     bodyMarkdown: d.bodyMarkdown ?? null,
     references: d.references ?? null,
   };
-  await prismaService.exerciseArticle.upsert({
-    where: { exerciseId },
-    create: { exerciseId, ...fields },
-    update: fields,
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.exercise.article",
-    entity: "Exercise",
-    entityId: exerciseId,
+  await prismaService.$transaction(async (tx) => {
+    await tx.exerciseArticle.upsert({
+      where: { exerciseId },
+      create: { exerciseId, ...fields },
+      update: fields,
+    });
+    await auditExercise(tx, actor, "platform.catalog.exercise.article", exerciseId);
   });
   revalidatePath(`/biblioteca/${ex.slug}`);
   revalidateCatalog();

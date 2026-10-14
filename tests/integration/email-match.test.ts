@@ -56,8 +56,9 @@ describe.skipIf(!RUN)("IAM-0a · match de email sin comodines", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    // PRO: los casos activan varios profesionales en el mismo consultorio; FREE (1 lugar) los frena (BO2-B).
+    A = await createEphemeralTenant(db, { plan: "PRO" });
+    B = await createEphemeralTenant(db, { plan: "PRO" });
   });
   afterAll(async () => {
     await A?.cleanup();

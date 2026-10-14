@@ -51,6 +51,12 @@ export interface AuthAdminPort {
   ): Promise<AuthAdminResult<AuthUserLite>>;
   getUser(id: string): Promise<AuthAdminResult<AuthUserLite>>;
   findUserByEmail(email: string): Promise<AuthAdminResult<AuthUserLite | null>>; // pagina listUsers; match exacto normalizado
+  /**
+   * BO2-C: UNA página de usuarios de Auth (`page` desde 1). La usa la salud de la plataforma para los detectores
+   * que necesitan el padrón completo (huérfanos de Auth, emails distintos); el que pagina es el caller. Página
+   * con menos de `perPage` = última.
+   */
+  listUsers(p: { page: number; perPage: number }): Promise<AuthAdminResult<{ users: AuthUserLite[] }>>;
   generateLink(p: {
     type: "signup" | "magiclink" | "recovery" | "invite";
     email: string;
@@ -247,6 +253,14 @@ const supabasePort: AuthAdminPort = {
         if (users.length < LIST_PER_PAGE) return { ok: true, data: null };
       }
       return fail("findUserByEmail", { message: `más de ${LIST_MAX_PAGES} páginas de usuarios` });
+    });
+  },
+
+  listUsers(p) {
+    return withClient("listUsers", async (c) => {
+      const { data, error } = await c.auth.admin.listUsers({ page: p.page, perPage: p.perPage });
+      if (error) return fail("listUsers", error);
+      return { ok: true, data: { users: (data?.users ?? []).map(toLite) } };
     });
   },
 

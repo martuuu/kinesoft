@@ -42,6 +42,9 @@ import {
   adminPasswordResetEmail,
   accountExistsEmail,
   welcomeEmail,
+  tenantOwnerActivationEmail,
+  platformAccessLinkEmail,
+  supportAccessEmail,
 } from "../lib/email/templates";
 
 const TENANT = "Consultorio de prueba";
@@ -69,6 +72,10 @@ function samples(base: string): Record<EmailKind, () => RenderedEmail> {
     admin_password_reset: () => adminPasswordResetEmail({ tenantName: TENANT, url: link("/reset") }),
     account_exists: () => accountExistsEmail({ loginUrl: link("/login"), resetUrl: link("/reset") }),
     welcome: () => welcomeEmail({ tenantName: TENANT, url: link("/agenda") }),
+    tenant_activation: () => tenantOwnerActivationEmail({ tenantName: TENANT, url: link("/reset") }),
+    platform_access_link: () => platformAccessLinkEmail({ url: link("/reset"), purpose: "activation" }),
+    support_access: () =>
+      supportAccessEmail({ tenantName: TENANT, superadminEmail: "soporte@kinesoft.com.ar", startedAt: new Date(), url: link("/configuracion") }),
   };
 }
 

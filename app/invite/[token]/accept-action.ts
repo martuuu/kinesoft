@@ -12,6 +12,7 @@ import { tags } from "@/lib/cache-tags";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { findInvitationByRawToken } from "@/lib/invitations-internal";
+import { SeatLimitError, SEAT_LIMIT_JOIN_MESSAGE } from "@/lib/team-internal";
 import {
   INVITE_MESSAGES,
   InvitationRaceError,
@@ -89,6 +90,8 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
     );
   } catch (err) {
     if (err instanceof UserDisabledError) return { ok: false, error: INVITE_MESSAGES.user_disabled };
+    // BO2-B (BO-D7): el plan bajó desde que se invitó y no queda lugar clínico.
+    if (err instanceof SeatLimitError) return { ok: false, error: SEAT_LIMIT_JOIN_MESSAGE };
     if (err instanceof InvitationRaceError) {
       const again = await findInvitationByRawToken(token, new Date());
       return {

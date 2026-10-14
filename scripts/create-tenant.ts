@@ -10,10 +10,10 @@
  *      password (auto-confirmed so the user can log in immediately).
  *   2. `prisma.$transaction` + `bootstrapTenant` (lib/tenant-bootstrap.ts,
  *      la misma lógica que el alta web): UserProfile + Tenant + Practitioner +
- *      Membership(OWNER) + Insurer "Particular" + AuditEvent. El alta queda
+ *      Membership(OWNER) + Insurer "Particular" + servicios iniciales de la
+ *      vertical (`starterServicesFor`, lib/tenant-starter-services.ts; `--skip-services`
+ *      los saltea) + AuditEvent, TODO en una sola transacción. El alta queda
  *      completa (`onboardingCompletedAt`), así el OWNER no ve el stepper.
- *   3. Optional: seed the starter `Service` rows of the vertical
- *      (`starterServicesFor`, lib/tenant-starter-services.ts); `--skip-services` lo saltea.
  *
  * Idempotency: if the email already exists in Supabase Auth, we re-use
  * the existing user.id. If a tenant with the same slug already exists,
@@ -46,7 +46,6 @@
  */
 import { PrismaClient, type TenantVertical } from "@prisma/client";
 import { bootstrapTenant, OpenOnboardingExistsError } from "../lib/tenant-bootstrap";
-import { enableServiceForPractitioners } from "../lib/agenda-defaults";
 import { starterServicesFor } from "../lib/tenant-starter-services";
 import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
 import { assertSafeTarget } from "./lib/assert-safe-target";
@@ -163,7 +162,7 @@ async function main() {
   });
 
   // ── Step 1 — Supabase Auth user ──────────────────────────────────────
-  console.log(`[1/3] Provisioning Supabase user: ${args.email}`);
+  console.log(`[1/2] Provisioning Supabase user: ${args.email}`);
   let userId: string | null = null;
 
   const created = await admin.auth.admin.createUser({
@@ -204,7 +203,7 @@ async function main() {
   console.log(`    Supabase user.id = ${userId}`);
 
   // ── Step 2 — Tenant + UserProfile + Practitioner + Membership ───────
-  console.log("[2/3] Provisioning tenant + practitioner + OWNER membership");
+  console.log("[2/2] Provisioning tenant + practitioner + OWNER membership + starter services");
 
   const existingTenant = await prisma.tenant.findUnique({
     where: { slug },
@@ -235,6 +234,10 @@ async function main() {
         licenseNumber: args.license ?? null,
         onboardingCompleted: true,
         vertical: args.vertical,
+        // BO2-A: los servicios iniciales van en la MISMA tx del alta. Antes el script los sembraba después, en txs
+        // sueltas: un corte en el medio dejaba un consultorio sin servicios (y re-correr chocaba con el slug).
+        // BO1-C: dependen de la vertical; precio 0 (el arancel lo carga el consultorio).
+        starterServices: args.skipServices ? [] : starterServicesFor(args.vertical),
         source: "scripts/create-tenant.ts",
       })
     ));
@@ -249,32 +252,11 @@ async function main() {
 
   console.log(`    Tenant created: id=${tenantId}, slug=${slug}, vertical=${args.vertical}`);
 
-  // ── Step 3 — Starter Services ───────────────────────────────────────
-  if (!args.skipServices) {
-    console.log("[3/3] Seeding starter services");
-    // BO1-C: los servicios iniciales dependen de la vertical
-    // (lib/tenant-starter-services.ts). Antes eran 3 fijos de kine, también en
-    // un consultorio General. Precio 0: el arancel lo carga el consultorio.
-    const starter = starterServicesFor(args.vertical);
-    for (const s of starter) {
-      const exists = await prisma.service.findFirst({
-        where: { tenantId, name: s.name },
-        select: { id: true },
-      });
-      // B-pre (B2.3 → integrador B2): el servicio nace habilitado para los
-      // profesionales (PractitionerService), igual que `createService` y el
-      // backfill de `agenda_foundations`. Idempotente (skipDuplicates): si el
-      // servicio ya existía, re-correr el script repara las filas que falten.
-      await prisma.$transaction(async (tx) => {
-        const svc =
-          exists ?? (await tx.service.create({ data: { ...s, tenantId }, select: { id: true } }));
-        await enableServiceForPractitioners(tx, { tenantId, serviceId: svc.id, practitionerId: null });
-      });
-    }
-    console.log(`    Seeded ${starter.length} services for ${args.vertical} (skip with --skip-services).`);
-  } else {
-    console.log("[3/3] Skipping starter services (--skip-services).");
-  }
+  console.log(
+    args.skipServices
+      ? "    Sin servicios iniciales (--skip-services)."
+      : `    ${starterServicesFor(args.vertical).length} servicios iniciales para ${args.vertical} (saltealos con --skip-services).`
+  );
 
   console.log("");
   console.log("🎉 Listo. El OWNER puede iniciar sesión en /login con:");

@@ -137,6 +137,12 @@ function readMembershipRole(db: DbClient, userId: string, tenantId: string) {
  * asignado/share/básico. No se cambia acá porque `getActor()` ya exige
  * membresía (sin ella no hay Actor) y pasarla a `admin` le abriría contacto y
  * cobertura de todo el tenant a una identidad sin rol.
+ *
+ * BO2-E (PHI): el superadmin que entra «como soporte» NO tiene membresía en el
+ * consultorio, así que caía en ese default `PRACTITIONER` y, con «Consultorio
+ * común», veía la HC completa. Decisión 3 de Martin: soporte ve lo que ve la
+ * Secretaria → se fuerza `ASSISTANT` (nivel `admin`) cuando `actor.support`,
+ * aunque el superadmin además sea miembro del consultorio.
  */
 function isAdminOnlyRole(role: Role): boolean {
   return !capabilitiesFor(role).has("clinical.read");
@@ -153,7 +159,7 @@ export async function visibilityForActor(
     ]);
 
     const sharedView = tenant?.sharedPatientView ?? false;
-    const role = membership?.role ?? "PRACTITIONER";
+    const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
     const adminView = isAdminOnlyRole(role);
     // PD-13: sin clinical.read, "Consultorio común" ya no abre todo.
     const seesAll = !adminView && (role === "OWNER" || role === "ADMIN" || sharedView);
@@ -198,7 +204,7 @@ export const patientAccessFor = cache(
 
       if (!patient || patient.tenantId !== actor.tenantId) return "none";
 
-      const role = membership?.role ?? "PRACTITIONER";
+      const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
       if (role === "OWNER" || role === "ADMIN") return "full";
       // PD-13: antes que sharedPatientView / asignación / share, que darían full.
       if (isAdminOnlyRole(role)) return "admin";
@@ -248,7 +254,7 @@ export async function bulkPatientAccess(
       readMembershipRole(c, actor.userId, actor.tenantId),
     ]);
 
-    const role = membership?.role ?? "PRACTITIONER";
+    const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
 
     // PD-13: sin clinical.read, `admin` para todos los pacientes del tenant
     // (los ausentes del mapa siguen siendo "none": no son del tenant). Mismo

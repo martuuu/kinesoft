@@ -13,7 +13,7 @@ import { runWithRls } from "@/lib/rls";
 import { safeNext } from "@/lib/safe-next";
 import { decideAppGate } from "@/lib/onboarding-logic";
 import { modulesFor } from "@/lib/tenant-modules";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { SUPPORT_CAPS, capabilitiesFor } from "@/lib/capabilities";
 import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
 
 /**
@@ -81,12 +81,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       hasSession: !!snapshot,
       hasActor: true,
       access: snapshot?.state ?? null,
-      // Sin foto (actor demo) no hay elección posible.
-      needsChoice: !!snapshot && choice.needsChoice,
+      // Sin foto (actor demo) no hay elección posible. BO2-E: el soporte ya eligió consultorio al entrar (la
+      // cookie de soporte gana sobre la de consultorio); pedirle elegir lo mandaría a su consultorio propio.
+      needsChoice: !!snapshot && choice.needsChoice && !actor.support,
       role: t.role,
       onboardingCompleted: t.completed,
       nextPath,
-      block: block?.kind ?? null,
+      // BO2-E: los bloqueos de la foto son los del consultorio PROPIO del superadmin (o su usuario); el destino de
+      // soporte suspendido igual se puede mirar (la banda muestra su acceso real y todo va en solo lectura).
+      block: actor.support ? null : (block?.kind ?? null),
     });
   }
   if (gate) redirect(gate);
@@ -100,7 +103,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es
   // `assertModule`/`requireCapability` en cada action.
   const modules = Array.from(modulesFor(actor.entitlements));
-  const capSet = capabilitiesFor(role);
+  // BO2-E: el soporte no tiene membresía (role null → sin capacidades, nav vacío): sus capacidades son
+  // `SUPPORT_CAPS` (Secretaria sin clínico + Configuración), las mismas que `capabilitiesForActor` en las actions.
+  const capSet = actor.support ? SUPPORT_CAPS : capabilitiesFor(role);
   const caps = Array.from(capSet);
   // SV07b: qué driver realtime usa este actor (off/local/supabase) y, con
   // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas

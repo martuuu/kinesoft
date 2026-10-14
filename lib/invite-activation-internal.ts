@@ -23,6 +23,7 @@ import { welcomeEmail } from "@/lib/email/templates";
 import { tags } from "@/lib/cache-tags";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { checkSeatForJoinInTx, SeatLimitError, SEAT_LIMIT_JOIN_MESSAGE } from "@/lib/team-internal";
 
 /**
  * Núcleo de la activación de una cuenta desde `/invite/<token>` y de la unión al consultorio (IAM-2b).
@@ -76,6 +77,7 @@ export type ActivationFailCode =
   | "weak_password"
   | "signin_failed"
   | "user_disabled"
+  | "seat_limit"
   | "error";
 
 export type ActivationOk = {
@@ -191,6 +193,9 @@ export async function joinTenantInTx(
   // BO1-A: primero, sin escribir nada. Un usuario adoptado o recién creado no tiene perfil (null = habilitado).
   const profile = await tx.userProfile.findUnique({ where: { id: userId }, select: { disabledAt: true } });
   if (profile?.disabledAt) throw new UserDisabledError();
+  // BO2-B (BO-D7): si el plan bajó desde que se invitó, no se entra por encima del cupo. Tenant FOR UPDATE antes
+  // del CAS (mismo orden que crear/reenviar: Tenant primero), así dos aceptaciones simultáneas se serializan.
+  await checkSeatForJoinInTx(tx, { tenantId: inv.tenantId, userId, role: inv.role });
   const cas = await tx.invitation.updateMany({
     where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
     data: { acceptedAt: now, acceptedByUserId: userId },
@@ -388,6 +393,7 @@ async function activate(p: {
       }
     }
     if (err instanceof UserDisabledError) return fail("user_disabled");
+    if (err instanceof SeatLimitError) return fail("seat_limit", SEAT_LIMIT_JOIN_MESSAGE);
     if (err instanceof InvitationRaceError) {
       const again = await findInvitationByRawToken(p.token, new Date());
       return fail(again && again.status !== "pending" ? again.status : "accepted");

@@ -7,7 +7,8 @@ import "server-only";
  * Seguridad:
  *  - Todo va por `prismaService` (canal service, BYPASSRLS): el resumen y la
  *    lista cruzan TODOS los tenants, cosa que el rol app no puede hacer. Por eso
- *    la única barrera es `requireSuperAdmin()`, y la llama CADA export (aunque el
+ *    la única barrera es `requirePlatformAdmin("platform.read")` (BO2-D; antes
+ *    `requireSuperAdmin()`), y la llama CADA export (aunque el
  *    layout de /plataforma ya lo haga: el layout es UX, y un export nuevo que se
  *    olvide del guard filtraría todos los consultorios). grep 2 de §15.9 lo
  *    verifica.
@@ -22,12 +23,15 @@ import "server-only";
  */
 import { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
-import { requireSuperAdmin } from "@/lib/session";
+import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { tenantAccessEnforcement } from "@/lib/env";
+import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
 import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
 import {
   PlatformTenantId,
   PlatformTenantListQuery,
+  parseStatusReason,
   trialEndsOnToDate,
   type PlatformTenantListQueryInput,
 } from "@/lib/platform-tenants-schemas";
@@ -76,6 +80,13 @@ const rowSelect = {
   publicBookingEnabled: true,
   onboardingCompletedAt: true,
   createdAt: true,
+  // BO2-D: estado, motivo, cupo y las 4 columnas del acceso (`TENANT_ACCESS_SELECT`, C-BO1).
+  status: true,
+  statusReason: true,
+  statusChangedAt: true,
+  seatLimitOverride: true,
+  subscriptionStatusChangedAt: true,
+  slugAliases: { select: { slug: true }, orderBy: [{ createdAt: "desc" }, { slug: "asc" }] },
   memberships: {
     where: { role: "OWNER" },
     select: { user: { select: { email: true } } },
@@ -101,7 +112,8 @@ async function platformHomeIds(ids: string[]): Promise<Set<string>> {
   return new Set(rows.map((r) => r.tenantId));
 }
 
-function toRow(t: RowSource, homes: Set<string>): PlatformTenantRow {
+function toRow(t: RowSource, homes: Set<string>, now: Date): PlatformTenantRow {
+  const access = tenantAccessFor(t, now);
   return {
     id: t.id,
     name: t.name,
@@ -117,12 +129,19 @@ function toRow(t: RowSource, homes: Set<string>): PlatformTenantRow {
     memberCount: t._count.memberships,
     createdAt: t.createdAt.toISOString(),
     isPlatformHome: homes.has(t.id),
+    status: t.status,
+    statusReason: parseStatusReason(t.statusReason),
+    statusChangedAt: t.statusChangedAt ? t.statusChangedAt.toISOString() : null,
+    seatLimitOverride: t.seatLimitOverride,
+    access,
+    effectiveAccessMode: effectiveMode(access.mode, tenantAccessEnforcement()),
+    slugAliases: t.slugAliases.map((a) => a.slug),
   };
 }
 
 /** Resumen de /plataforma: consultorios por tipo × plan, trials por vencer, altas sin terminar, turneros prendidos. */
 export async function getPlatformOverview(): Promise<PlatformOverview> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
 
   const now = new Date();
   const todayKey = toARDateKey(now);
@@ -193,7 +212,7 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
 
 /** Lista paginada (50) de consultorios con filtros por nombre/slug, tipo, plan y estado. */
 export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}): Promise<PlatformTenantPage> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   // Vienen de searchParams editables a mano: un filtro inválido (`?plan=GOLD`)
   // cae a la lista sin filtros en vez de tirar un 500.
   const parsedQuery = PlatformTenantListQuery.safeParse(raw);
@@ -205,12 +224,15 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
           OR: [
             { name: { contains: query.q, mode: "insensitive" } },
             { slug: { contains: query.q, mode: "insensitive" } },
+            // BO2-D: buscar por un slug viejo (alguien llega con el link que circuló antes del cambio).
+            { slugAliases: { some: { slug: { contains: query.q, mode: "insensitive" } } } },
           ],
         }
       : {}),
     ...(query.vertical ? { vertical: query.vertical } : {}),
     ...(query.plan ? { plan: query.plan } : {}),
     ...(query.status ? { subscriptionStatus: query.status } : {}),
+    ...(query.tenantStatus ? { status: query.tenantStatus } : {}),
   };
 
   const [total, tenants] = await Promise.all([
@@ -224,8 +246,9 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
     }),
   ]);
   const homes = await platformHomeIds(tenants.map((t) => t.id));
+  const now = new Date();
   return {
-    rows: tenants.map((t) => toRow(t, homes)),
+    rows: tenants.map((t) => toRow(t, homes, now)),
     total,
     page: query.page,
     pageSize: PLATFORM_TENANTS_PAGE_SIZE,
@@ -254,7 +277,7 @@ function changesOf(payload: Prisma.JsonValue | null): PlatformAuditChange[] {
 
 /** Detalle de un consultorio para /plataforma. null = no existe. */
 export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTenantDetail | null> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const parsed = PlatformTenantId.safeParse(rawId);
   if (!parsed.success) return null;
   const tenantId = parsed.data;
@@ -315,7 +338,7 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
 
   const modules = modulesFor(t);
   return {
-    ...toRow(t, homes),
+    ...toRow(t, homes, now),
     phone: t.phone,
     whatsapp: t.whatsapp,
     publicEmail: t.publicEmail,

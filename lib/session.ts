@@ -55,6 +55,7 @@ import { clientIp } from "@/lib/client-ip";
 import type { TenantEntitlements } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { getRequestContext } from "@/lib/request-context";
+import { discardSupportCookieIfPresent, resolveSupportTarget, type SupportTarget } from "@/lib/support-session-internal";
 import {
   ReadOnlyModeError as ReadOnlyModeErrorClass,
   assertWritableFor,
@@ -102,7 +103,11 @@ export type Actor = {
    * (`effectiveMode` con `TENANT_ACCESS_ENFORCEMENT`); la banda usa este para avisar antes de cortar.
    */
   access: TenantAccess;
-  /** BO2-E: sesión de soporte de un superadmin. null hasta que BO2-E arme la rama de soporte. */
+  /**
+   * BO2-E (C-BO9): sesión de soporte de un superadmin en un consultorio ajeno (rama de soporte de `resolveActor`).
+   * Con soporte: `practitionerId` null, capacidades `SUPPORT_CAPS` (Secretaria sin clínico, lib/authz.ts), las tx en
+   * solo lectura salvo `withSupportWritable` (C-BO4) y cada `audit()` estampa `supportSessionId`.
+   */
   support: { sessionId: string; superadminEmail: string } | null;
 };
 
@@ -435,9 +440,51 @@ async function buildDemoActor(): Promise<Actor | null> {
   };
 }
 
+/**
+ * BO2-E (C-BO9, decisión 3 de Martin): el Actor SINTÉTICO de «Entrar como soporte». El consultorio es el destino de
+ * la `SupportSession` abierta (no una membresía: el superadmin no es miembro, `startSupportSession` lo exige), sin
+ * profesional (nunca «es» un profesional del consultorio: ni agenda propia ni pacientes «propios»), con el acceso
+ * REAL del destino (la banda lo muestra) y la marca `support` que pone el request en solo lectura
+ * (`isReadOnlyActor`) y que lib/authz.ts traduce a `SUPPORT_CAPS` (Secretaria sin `clinical.read`).
+ * `userId` es el del superadmin: la auditoría del consultorio dice quién fue y el `supportSessionId` dice «como
+ * soporte».
+ */
+function buildSupportActor(s: AccessSnapshot & { profile: AccessProfile }, t: SupportTarget): Actor {
+  return {
+    tenantId: t.tenantId,
+    tenantSlug: t.tenant.slug,
+    tenantName: t.tenant.name,
+    practitionerId: null,
+    practitionerName: `${s.profile.fullName ?? s.profile.email} (soporte)`,
+    userId: s.userId,
+    isPlatformAdmin: true,
+    entitlements: entitlementsOf(t.tenant),
+    access: tenantAccessFor(t.tenant, s.now),
+    support: { sessionId: t.sessionId, superadminEmail: t.superadminEmail },
+  };
+}
+
+/**
+ * Rama de soporte. Solo un superadmin vigente (y no deshabilitado) la puede tomar; a cualquier otro la cookie se le
+ * ignora y se borra. Sin la cookie no hay query (`resolveSupportTarget` sale antes): el resto de los usuarios no
+ * paga nada. Gana sobre el consultorio propio del superadmin: mientras está «como soporte» la app es la del
+ * destino; al salir (o al cerrar sesión) vuelve a la suya. /plataforma no pasa por acá (`requirePlatformAdmin`).
+ */
+async function resolveSupportActor(s: AccessSnapshot): Promise<Actor | null> {
+  const profile = s.profile;
+  if (!profile || !profile.isPlatformAdmin || profile.disabledAt) {
+    discardSupportCookieIfPresent();
+    return null;
+  }
+  const target = await resolveSupportTarget(s.userId);
+  return target ? buildSupportActor({ ...s, profile }, target) : null;
+}
+
 async function resolveActor(): Promise<Actor | null> {
   const snapshot = await getAccessSnapshot();
   if (snapshot) {
+    const support = await resolveSupportActor(snapshot);
+    if (support) return support;
     try {
       return buildActor(snapshot);
     } catch (err) {

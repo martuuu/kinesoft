@@ -1,5 +1,5 @@
 import "server-only";
-import type { TagKind } from "@prisma/client";
+import type { Prisma, TagKind } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 
 /**
@@ -8,7 +8,11 @@ import { prismaService } from "@/lib/db";
  * The `Tag` table + the global `Exercise` catalog (`tenantId IS NULL`) are
  * curated centrally, so every write here goes through `prismaService`
  * (BYPASSRLS) — the RLS-forced app role physically can't touch global rows.
- * Callers must already have passed `requireSuperAdmin()` (or be the backfill).
+ * Callers must already have passed `requirePlatformAdmin()` (or be the backfill).
+ *
+ * BO2-F: `setExerciseTags`/`freeTextFromTags` aceptan la tx del caller (`db`) para que el cambio de tags, el
+ * update del ejercicio y la fila de `PlatformAuditEvent` commiteen juntos (C-BO5 audita en la tx del write).
+ * Sin `db` siguen como antes (la backfill).
  */
 
 /** URL-safe slug from a human label. Mirrors lib/exercises.ts + lib/conditions.ts. */
@@ -62,14 +66,21 @@ export async function setExerciseTags(
   exerciseId: string,
   tagSlugs: string[],
   kinds?: TagKind[],
+  db?: Prisma.TransactionClient,
 ): Promise<void> {
   const unique = [...new Set(tagSlugs)];
   const tags = unique.length
-    ? await prismaService.tag.findMany({ where: { slug: { in: unique } }, select: { id: true } })
+    ? await (db ?? prismaService).tag.findMany({ where: { slug: { in: unique } }, select: { id: true } })
     : [];
   const clearWhere = kinds
     ? { exerciseId, tag: { kind: { in: kinds } } }
     : { exerciseId };
+  if (db) {
+    // Ya dentro de la tx del caller (una interactive tx no anida `$transaction`).
+    await db.exerciseTag.deleteMany({ where: clearWhere });
+    await db.exerciseTag.createMany({ data: tags.map((t) => ({ exerciseId, tagId: t.id })), skipDuplicates: true });
+    return;
+  }
   await prismaService.$transaction([
     prismaService.exerciseTag.deleteMany({ where: clearWhere }),
     prismaService.exerciseTag.createMany({
@@ -87,9 +98,10 @@ export async function setExerciseTags(
  */
 export async function freeTextFromTags(
   tagSlugs: string[],
+  db?: Prisma.TransactionClient,
 ): Promise<{ muscleGroups: string | null; equipment: string | null }> {
   if (!tagSlugs.length) return { muscleGroups: null, equipment: null };
-  const tags = await prismaService.tag.findMany({
+  const tags = await (db ?? prismaService).tag.findMany({
     where: { slug: { in: [...new Set(tagSlugs)] } },
     select: { kind: true, label: true },
   });

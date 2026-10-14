@@ -42,6 +42,7 @@ import { clientIp } from "@/lib/client-ip";
 import { audit } from "@/lib/audit";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
+import { publicSurfacesOpenFor } from "@/lib/public-booking-internal";
 import type { ActionResult } from "@/lib/validation";
 import type {
   PortalAuth,
@@ -237,6 +238,12 @@ export async function submitCheckIn(input: {
 
   const auth = await authedPatientByTenant(input.tenantSlug);
   if (!auth) return { ok: false, error: "Sin acceso." };
+  // BO2-D (C-BO1 `publicSurfacesOpen`): un consultorio suspendido / dado de baja (o en solo lectura con
+  // `enforce`) no recibe check-ins: es una ESCRITURA sin Actor (EvaScore + notificación) que nadie del equipo
+  // podría atender. Leer el plan (`getPortalPlan`) NO se corta: la HC del paciente se puede ver siempre.
+  if (!publicSurfacesOpenFor(auth.tenant)) {
+    return { ok: false, error: "Tu consultorio no está recibiendo check-ins por ahora. Escribiles directamente." };
+  }
 
   // Per-patient throttle — one check-in per (patient, session) is enough.
   const existing = await prisma.evaScore.findFirst({

@@ -43,7 +43,9 @@ const STALE_COPY = "Otro cambio se guardó antes. Recargá y revisá.";
 const PHI_MARK = "Zqxphimark";
 
 const ROW_KEYS = [
+  "access", // BO2-D
   "createdAt",
+  "effectiveAccessMode", // BO2-D
   "id",
   "isPlatformHome",
   "memberCount",
@@ -53,7 +55,12 @@ const ROW_KEYS = [
   "patientCount",
   "plan",
   "publicBookingEnabled",
+  "seatLimitOverride", // BO2-D
   "slug",
+  "slugAliases", // BO2-D
+  "status", // BO2-D
+  "statusChangedAt", // BO2-D
+  "statusReason", // BO2-D
   "subscriptionStatus",
   "trialEndsOn",
   "vertical",
@@ -322,6 +329,9 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
       onboardingCompleted: true,
     });
     expect(row.ownerEmails).toEqual([`${B.userId}@test.local`]);
+    // BO2-D: estado y acceso calculado (B ACTIVE + ACTIVE → full) sin alias.
+    expect(row).toMatchObject({ status: "ACTIVE", statusReason: null, slugAliases: [], effectiveAccessMode: "full" });
+    expect(keysOf(row.access)).toEqual(["daysLeft", "mode", "reason"]);
 
     const home = await listPlatformTenants({ q: S.slug });
     expect(home.rows[0]?.isPlatformHome).toBe(true);

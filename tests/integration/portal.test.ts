@@ -157,6 +157,42 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(JSON.stringify(plan)).not.toContain("Nota privada del kine");
   });
 
+  // BO2-D (C-BO1 `publicSurfacesOpen`): el check-in es una escritura sin Actor; con el consultorio suspendido
+  // (o en solo lectura bajo `enforce`) se rechaza sin escribir. Leer el plan NO se corta (Ley 26.529).
+  it("[BO2-D] consultorio suspendido o en solo lectura con enforce: check-in rechazado, el plan se sigue viendo", async () => {
+    const uid = patientIdentity();
+    const patientId = await addPatient(db, A, { email: `${uid}@test.local` });
+    const { sessionId } = await addProgramWithSession(patientId);
+    asUser(uid);
+    const prev = process.env.TENANT_ACCESS_ENFORCEMENT;
+    try {
+      await db.tenant.update({ where: { id: A.tenantId }, data: { status: "SUSPENDED" } });
+      const r = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 });
+      expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/no está recibiendo check-ins/) });
+      expect((await getPortalPlan(A.slug))?.title).toBe("Plan lumbar");
+
+      await db.tenant.update({
+        where: { id: A.tenantId },
+        data: { status: "ACTIVE", subscriptionStatus: "TRIALING", trialEndsAt: new Date(Date.now() - 30 * 86_400_000) },
+      });
+      process.env.TENANT_ACCESS_ENFORCEMENT = "enforce";
+      expect((await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 })).ok).toBe(false);
+      expect(await db.evaScore.count({ where: { patientId } })).toBe(0);
+
+      // Con `banner` (default) el trial vencido solo se avisa: el check-in pasa.
+      process.env.TENANT_ACCESS_ENFORCEMENT = "banner";
+      expect(await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 4 })).toEqual({ ok: true, data: undefined });
+      expect(await db.evaScore.count({ where: { patientId } })).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env.TENANT_ACCESS_ENFORCEMENT;
+      else process.env.TENANT_ACCESS_ENFORCEMENT = prev;
+      await db.tenant.update({
+        where: { id: A.tenantId },
+        data: { status: "ACTIVE", subscriptionStatus: "ACTIVE", trialEndsAt: null },
+      });
+    }
+  });
+
   it("una identidad staff no puede hacer check-in sobre una ficha con su email", async () => {
     const patientId = (
       await db.patient.findFirstOrThrow({ where: { tenantId: A.tenantId, email: `${A.userId}@test.local` } })

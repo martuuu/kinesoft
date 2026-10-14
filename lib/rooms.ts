@@ -34,6 +34,7 @@
  * `Room_locationId_name_active_key` (SR-D9) hace el nombre único por sede
  * SOLO entre activas: archivar libera el nombre y restaurar puede chocar.
  */
+import { withSupportWritable } from "@/lib/support-writable";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
@@ -169,7 +170,11 @@ export async function listRoomOptions(): Promise<RoomOption[]> {
  * (`sortOrder` = máximo + 1, contando archivadas para no reusar posiciones).
  * Nombre repetido entre las activas de la sede → `fieldErrors.name`.
  */
-export async function createRoom(raw: RoomCreateInput): Promise<ActionResult<{ id: string }>> {
+export async function createRoom(...args: Parameters<typeof createRoomImpl>): ReturnType<typeof createRoomImpl> {
+  return withSupportWritable("lib/rooms.ts#createRoom", () => createRoomImpl(...args));
+}
+
+async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: string }>> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = RoomCreate.safeParse(raw);
   if (!parsed.success) {
@@ -229,7 +234,11 @@ export async function createRoom(raw: RoomCreateInput): Promise<ActionResult<{ i
  * `capacity` lo leen las altas de turno bajo el compartido (`lockActiveRoomInTx`):
  * una baja de capacidad no se intercala entre leerla y contar la ocupación.
  */
-export async function updateRoom(raw: RoomUpdateInput): Promise<ActionResult> {
+export async function updateRoom(...args: Parameters<typeof updateRoomImpl>): ReturnType<typeof updateRoomImpl> {
+  return withSupportWritable("lib/rooms.ts#updateRoom", () => updateRoomImpl(...args));
+}
+
+async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = RoomUpdate.safeParse(raw);
   if (!parsed.success) {
@@ -273,7 +282,11 @@ export async function updateRoom(raw: RoomUpdateInput): Promise<ActionResult> {
  * (§17.5: un bloqueo de una sala archivada no tiene sentido; los pasados
  * quedan como historia). Ya archivada → ok idempotente, sin audit.
  */
-export async function archiveRoom(raw: RoomArchiveInput): Promise<ArchiveRoomResult> {
+export async function archiveRoom(...args: Parameters<typeof archiveRoomImpl>): ReturnType<typeof archiveRoomImpl> {
+  return withSupportWritable("lib/rooms.ts#archiveRoom", () => archiveRoomImpl(...args));
+}
+
+async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = RoomArchive.safeParse(raw);
   if (!parsed.success) return { ok: false, error: NOT_FOUND };
@@ -367,7 +380,11 @@ export async function archiveRoom(raw: RoomArchiveInput): Promise<ArchiveRoomRes
  * `fieldErrors.name` (hay que renombrar una de las dos). Ya activa → ok.
  * Los bloqueos borrados al archivar no vuelven.
  */
-export async function restoreRoom(raw: RoomArchiveInput): Promise<ActionResult> {
+export async function restoreRoom(...args: Parameters<typeof restoreRoomImpl>): ReturnType<typeof restoreRoomImpl> {
+  return withSupportWritable("lib/rooms.ts#restoreRoom", () => restoreRoomImpl(...args));
+}
+
+async function restoreRoomImpl(raw: RoomArchiveInput): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = RoomArchive.safeParse(raw);
   if (!parsed.success) return { ok: false, error: NOT_FOUND };

@@ -6,19 +6,21 @@
  * suscripción, fin del trial y el switch del turnero (EV-D6). Las lecturas viven
  * en `lib/platform-tenants-read.ts` (server-only, no son actions).
  *
- * Orden: `requireSuperAdmin()` → zod `.strict()` → tx del canal service →
+ * Orden: `requirePlatformAdmin("tenant.entitlements.update")` (BO2-D: antes
+ * `requireSuperAdmin()`, que pasaba por `buildActor` y exigía un consultorio
+ * «casa»; handoff BO1-B) → zod `.strict()` → tx del canal service →
  * `applyTenantEntitlementsInTx` (escritor único C-EV5: allowlist, FOR UPDATE,
  * CAS, audit `platform.tenant.entitlements` en el tenant AFECTADO) → revalidar
  * después del commit y solo si algo cambió.
  *
  * Por qué `prismaService.$transaction` y no `runWithRls`: el superadmin edita un
  * tenant que no es el suyo; bajo el rol app la fila ajena es invisible
- * (`not-found`). El canal service bypassa RLS, así que `requireSuperAdmin()` es
+ * (`not-found`). El canal service bypassa RLS, así que `requirePlatformAdmin` es
  * la única barrera y va primero, antes incluso de parsear.
  */
 import { revalidatePath, revalidateTag } from "next/cache";
 import { prismaService } from "@/lib/db";
-import { requireSuperAdmin } from "@/lib/session";
+import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import {
   applyTenantEntitlementsInTx,
@@ -28,7 +30,7 @@ import { UpdatePlatformTenant, trialEndsOnToDate } from "@/lib/platform-tenants-
 import type { ActionResult } from "@/lib/validation";
 
 export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{ updatedAt: string }>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("tenant.entitlements.update");
 
   const parsed = UpdatePlatformTenant.safeParse(raw);
   if (!parsed.success) {
@@ -54,8 +56,8 @@ export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{
       source: "platform",
       patch,
       expectedUpdatedAt: new Date(expectedUpdatedAt),
-      // PlatformActorRef (C-BO5): el email lo completa el registro desde UserProfile.
-      actor: { userId: actor.userId, email: null, homeTenantId: actor.tenantId },
+      // PlatformActorRef (C-BO5) desde el PlatformActor (C-BO2): `homeTenantId` null = sin consultorio propio.
+      actor: { userId: actor.userId, email: actor.email, homeTenantId: actor.homeTenantId },
     })
   );
 

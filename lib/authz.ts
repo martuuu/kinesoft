@@ -21,7 +21,7 @@ import type { Role } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { redirect } from "next/navigation";
 import { getActor, tryGetActor, ForbiddenError, type Actor } from "@/lib/session";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { SUPPORT_CAPS, capabilitiesFor, type Capability } from "@/lib/capabilities";
 import { modulesFor, MODULE_DENIED_COPY, type TenantModule } from "@/lib/tenant-modules";
 
 // Cacheado por primitivos (no por la identidad del objeto Actor) para que dos
@@ -36,15 +36,30 @@ const roleFor = cache(async (tenantId: string, userId: string): Promise<Role | n
   return m?.role ?? null;
 });
 
-/** Rol del actor en su tenant activo; `null` si no tiene membresía (falla cerrado). */
+/**
+ * Rol del actor en su tenant activo; `null` si no tiene membresía (falla cerrado).
+ *
+ * BO2-E: el actor de SOPORTE no tiene membresía en el consultorio destino (`startSupportSession` rechaza al
+ * superadmin que es miembro). Para los que deciden por rol (visibilidad del paciente, «propios», el gate) vale como
+ * la Secretaria: `ASSISTANT` es el rol sin `clinical.read`, así que todo lo clínico cae en la proyección
+ * administrativa (PD-13). Sin query. Sus capacidades NO salen de este rol sino de `SUPPORT_CAPS`
+ * (`capabilitiesForActor`): suma `tenant.admin`/`schedule.configure` para las actions de Configuración.
+ */
 export async function getMembershipRole(actor: Actor): Promise<Role | null> {
+  if (actor.support) return "ASSISTANT";
   return roleFor(actor.tenantId, actor.userId);
+}
+
+/** Capabilities de un actor ya resuelto: las de su rol, o `SUPPORT_CAPS` si es una sesión de soporte (BO2-E). */
+export async function capabilitiesForActor(actor: Actor): Promise<ReadonlySet<Capability>> {
+  if (actor.support) return SUPPORT_CAPS;
+  return capabilitiesFor(await getMembershipRole(actor));
 }
 
 /** Capabilities del actor de la sesión. */
 export async function getCapabilities(): Promise<ReadonlySet<Capability>> {
   const actor = await getActor();
-  return capabilitiesFor(await getMembershipRole(actor));
+  return capabilitiesForActor(actor);
 }
 
 /**
@@ -56,7 +71,7 @@ export async function requireCapability(
   message = "No tenés permiso para hacer esta acción."
 ): Promise<{ actor: Actor; caps: ReadonlySet<Capability> }> {
   const actor = await getActor();
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await capabilitiesForActor(actor);
   if (!caps.has(cap)) throw new ForbiddenError(message);
   return { actor, caps };
 }

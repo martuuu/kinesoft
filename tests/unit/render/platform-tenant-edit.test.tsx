@@ -49,6 +49,14 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
   memberCount: 3,
   createdAt: "2026-09-01T15:00:00.000Z",
   isPlatformHome: false,
+  // BO2-D: estado, acceso y alias en el DTO.
+  status: "ACTIVE",
+  statusReason: null,
+  statusChangedAt: null,
+  seatLimitOverride: null,
+  access: { mode: "full", reason: "trial", daysLeft: 7 },
+  effectiveAccessMode: "full",
+  slugAliases: [],
   ...over,
 });
 

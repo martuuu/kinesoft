@@ -29,6 +29,7 @@
  * `dayKeyToDbDate`/`dbDateToDayKey` de `lib/schedule-validate.ts` (etiqueta de
  * día por UTC, ver ahí por qué). "Hoy" siempre con `toARDateKey`.
  */
+import { withSupportWritable } from "@/lib/support-writable";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -488,7 +489,11 @@ export async function getPractitionerSchedule(
  *     fila "Esa sala ya la usa …";
  *   • contra excepciones futuras de otros: solo `warnings` (se guarda igual).
  */
-export async function savePractitionerWeek(
+export async function savePractitionerWeek(...args: Parameters<typeof savePractitionerWeekImpl>): ReturnType<typeof savePractitionerWeekImpl> {
+  return withSupportWritable("lib/practitioner-schedule.ts#savePractitionerWeek", () => savePractitionerWeekImpl(...args));
+}
+
+async function savePractitionerWeekImpl(
   practitionerId: string,
   ranges: ReadonlyArray<{
     dow: number;
@@ -738,7 +743,11 @@ export async function listExceptions(range: {
  * como Prisma no puede hacer `upsert` sobre un índice parcial, se busca y se
  * actualiza o crea bajo un advisory lock de la clave.
  */
-export async function upsertException(raw: UpsertExceptionRaw): Promise<ActionResult<{ id: string }>> {
+export async function upsertException(...args: Parameters<typeof upsertExceptionImpl>): ReturnType<typeof upsertExceptionImpl> {
+  return withSupportWritable("lib/practitioner-schedule.ts#upsertException", () => upsertExceptionImpl(...args));
+}
+
+async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResult<{ id: string }>> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = UpsertExceptionInput.safeParse(raw);
   if (!parsed.success) {
@@ -911,7 +920,11 @@ export async function upsertException(raw: UpsertExceptionRaw): Promise<ActionRe
   }
 }
 
-export async function deleteException(id: string): Promise<ActionResult> {
+export async function deleteException(...args: Parameters<typeof deleteExceptionImpl>): ReturnType<typeof deleteExceptionImpl> {
+  return withSupportWritable("lib/practitioner-schedule.ts#deleteException", () => deleteExceptionImpl(...args));
+}
+
+async function deleteExceptionImpl(id: string): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const idOk = EntityId.safeParse(id);
   if (!idOk.success) return { ok: false, error: "Excepción no encontrada." };

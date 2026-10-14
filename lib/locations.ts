@@ -21,6 +21,7 @@
  * Archivar = `active = false` (nunca DELETE): `Booking.locationId` es
  * RESTRICT y el historial de turnos tiene que seguir diciendo dónde fue.
  */
+import { withSupportWritable } from "@/lib/support-writable";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -91,7 +92,11 @@ export async function listLocations(
  * deploy de la migración y B2.3, o datos viejos), la nueva nace principal:
  * el motor necesita una (`Booking.locationId` null = principal).
  */
-export async function createLocation(raw: LocationInputRaw): Promise<ActionResult<{ id: string }>> {
+export async function createLocation(...args: Parameters<typeof createLocationImpl>): ReturnType<typeof createLocationImpl> {
+  return withSupportWritable("lib/locations.ts#createLocation", () => createLocationImpl(...args));
+}
+
+async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{ id: string }>> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const parsed = LocationInput.safeParse(raw);
   if (!parsed.success) {
@@ -125,7 +130,11 @@ export async function createLocation(raw: LocationInputRaw): Promise<ActionResul
 }
 
 /** Edición de datos de la sede (no toca `isPrimary` ni `active`: tienen su action). */
-export async function updateLocation(
+export async function updateLocation(...args: Parameters<typeof updateLocationImpl>): ReturnType<typeof updateLocationImpl> {
+  return withSupportWritable("lib/locations.ts#updateLocation", () => updateLocationImpl(...args));
+}
+
+async function updateLocationImpl(
   id: string,
   raw: Partial<LocationInputRaw>
 ): Promise<ActionResult> {
@@ -179,7 +188,11 @@ export async function updateLocation(
  * que los turnos sin sede pasan a mostrarse en la nueva (el backfill de
  * `agenda_foundations` les puso sede a todos los existentes).
  */
-export async function setPrimaryLocation(id: string): Promise<ActionResult> {
+export async function setPrimaryLocation(...args: Parameters<typeof setPrimaryLocationImpl>): ReturnType<typeof setPrimaryLocationImpl> {
+  return withSupportWritable("lib/locations.ts#setPrimaryLocation", () => setPrimaryLocationImpl(...args));
+}
+
+async function setPrimaryLocationImpl(id: string): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const idOk = LocationId.safeParse(id);
   if (!idOk.success) return { ok: false, error: NOT_FOUND };
@@ -238,7 +251,11 @@ export async function setPrimaryLocation(id: string): Promise<ActionResult> {
  * ACTIVE vivos con esa sede (S13g).
  * Conteos y archivado en la misma tx con lock exclusivo (ver cabecera).
  */
-export async function archiveLocation(id: string): Promise<ArchiveLocationResult> {
+export async function archiveLocation(...args: Parameters<typeof archiveLocationImpl>): ReturnType<typeof archiveLocationImpl> {
+  return withSupportWritable("lib/locations.ts#archiveLocation", () => archiveLocationImpl(...args));
+}
+
+async function archiveLocationImpl(id: string): Promise<ArchiveLocationResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const idOk = LocationId.safeParse(id);
   if (!idOk.success) return { ok: false, error: NOT_FOUND };
@@ -352,7 +369,11 @@ export async function archiveLocation(id: string): Promise<ArchiveLocationResult
 }
 
 /** Reactiva una sede archivada (sin esto, archivar por error no tiene vuelta). */
-export async function restoreLocation(id: string): Promise<ActionResult> {
+export async function restoreLocation(...args: Parameters<typeof restoreLocationImpl>): ReturnType<typeof restoreLocationImpl> {
+  return withSupportWritable("lib/locations.ts#restoreLocation", () => restoreLocationImpl(...args));
+}
+
+async function restoreLocationImpl(id: string): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
   const idOk = LocationId.safeParse(id);
   if (!idOk.success) return { ok: false, error: NOT_FOUND };

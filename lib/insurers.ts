@@ -11,6 +11,7 @@
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER role can read
  * but not mutate — keeping the catalogue stable across the consultorio.
  */
+import { withSupportWritable } from "@/lib/support-writable";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -85,7 +86,11 @@ const InsurerInput = z.object({
   payerId: InsurerPayerLink.optional(),
 });
 
-export async function createInsurer(
+export async function createInsurer(...args: Parameters<typeof createInsurerImpl>): ReturnType<typeof createInsurerImpl> {
+  return withSupportWritable("lib/insurers.ts#createInsurer", () => createInsurerImpl(...args));
+}
+
+async function createInsurerImpl(
   raw: z.input<typeof InsurerInput>
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = InsurerInput.safeParse(raw);
@@ -143,7 +148,11 @@ export async function createInsurer(
   }
 }
 
-export async function updateInsurer(
+export async function updateInsurer(...args: Parameters<typeof updateInsurerImpl>): ReturnType<typeof updateInsurerImpl> {
+  return withSupportWritable("lib/insurers.ts#updateInsurer", () => updateInsurerImpl(...args));
+}
+
+async function updateInsurerImpl(
   id: string,
   raw: Partial<z.input<typeof InsurerInput>>
 ): Promise<ActionResult> {
@@ -251,7 +260,11 @@ function auditDiff<T extends Record<string, unknown>>(before: T, after: T): Audi
   return Object.keys(b).length ? { before: b, after: a } : null;
 }
 
-export async function deleteInsurer(id: string): Promise<ActionResult> {
+export async function deleteInsurer(...args: Parameters<typeof deleteInsurerImpl>): ReturnType<typeof deleteInsurerImpl> {
+  return withSupportWritable("lib/insurers.ts#deleteInsurer", () => deleteInsurerImpl(...args));
+}
+
+async function deleteInsurerImpl(id: string): Promise<ActionResult> {
   const actor = await requireTenantAdmin(ADMIN_MSG);
   const owned = await runWithRls(actor.tenantId, (tx) => tx.insurer.findFirst({
     where: { id, tenantId: actor.tenantId },
@@ -300,7 +313,11 @@ export async function deleteInsurer(id: string): Promise<ActionResult> {
  * Si ya hay un Insurer con ese nombre (`@@unique([tenantId, name])`) no se
  * pisa nada: devuelve `status: "exists"` y la UI ofrece vincularlo.
  */
-export async function addInsurerFromCatalog(
+export async function addInsurerFromCatalog(...args: Parameters<typeof addInsurerFromCatalogImpl>): ReturnType<typeof addInsurerFromCatalogImpl> {
+  return withSupportWritable("lib/insurers.ts#addInsurerFromCatalog", () => addInsurerFromCatalogImpl(...args));
+}
+
+async function addInsurerFromCatalogImpl(
   rawPayerId: string
 ): Promise<ActionResult<AddFromCatalogResult>> {
   const payerId = CatalogId.safeParse(rawPayerId);
@@ -356,7 +373,11 @@ export async function addInsurerFromCatalog(
  * Varias OS del consultorio pueden apuntar a la misma prestadora (p. ej.
  * "OSDE 210" y "OSDE 310" con copagos distintos: el precio por plan es D).
  */
-export async function linkInsurerToPayer(
+export async function linkInsurerToPayer(...args: Parameters<typeof linkInsurerToPayerImpl>): ReturnType<typeof linkInsurerToPayerImpl> {
+  return withSupportWritable("lib/insurers.ts#linkInsurerToPayer", () => linkInsurerToPayerImpl(...args));
+}
+
+async function linkInsurerToPayerImpl(
   insurerId: string,
   rawPayerId: string | null
 ): Promise<ActionResult> {

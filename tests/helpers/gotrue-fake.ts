@@ -189,6 +189,14 @@ export class GotrueFake implements AuthAdminPort {
     return { ok: true, data: u ? this.lite(u) : null };
   }
 
+  /** BO2-C: una página en orden de alta (Map conserva el orden de inserción), como el `listUsers` de GoTrue. */
+  async listUsers(p: { page: number; perPage: number }): Promise<AuthAdminResult<{ users: AuthUserLite[] }>> {
+    const injected = this.record("listUsers", [p]);
+    if (injected) return injected;
+    const all = [...this.users.values()].map((u) => this.lite(u));
+    return { ok: true, data: { users: all.slice((p.page - 1) * p.perPage, p.page * p.perPage) } };
+  }
+
   async generateLink(p: {
     type: "signup" | "magiclink" | "recovery" | "invite";
     email: string;

@@ -41,16 +41,42 @@ async function main() {
     console.error("Uso: set-platform-admin.ts <email> [--revoke] | --list");
     process.exit(1);
   }
-  const user = await db.userProfile.findUnique({ where: { email } });
+  const user = await db.userProfile.findUnique({ where: { email }, select: { id: true, isPlatformAdmin: true } });
   if (!user) {
     console.error(`No existe un usuario con email ${email}.`);
     process.exit(1);
   }
-  await db.userProfile.update({
-    where: { email },
-    data: { isPlatformAdmin: !revoke },
+  if (user.isPlatformAdmin === !revoke) {
+    console.log(`${email} ya ${revoke ? "no era" : "era"} superadmin: sin cambios (no se registra nada).`);
+    return;
+  }
+  // BO2-C: el cambio y su fila en el registro global de plataforma (PlatformAuditEvent, C-BO5) van en la MISMA tx:
+  // antes el script daba o quitaba superadmin sin dejar rastro, y es la acción de más poder del sistema.
+  // `actorId` null = lo hizo un script (no hay persona logueada detrás); la acción es la misma que usa
+  // /plataforma (`lib/platform-users.ts#setPlatformSuperadmin`), así el visor los muestra juntos.
+  // Se escribe directo con este cliente y no con `auditPlatformGlobalInTx` (lib/audit.ts): ese módulo arrastra
+  // `lib/db.ts`, cuyo canal service resuelve su propia URL (DATABASE_URL_SERVICE/DIRECT_URL) y podría apuntar a
+  // otra base que la DATABASE_URL explícita de esta corrida. Misma forma de fila que `insertPlatformEvent`.
+  await db.$transaction(async (tx) => {
+    await tx.userProfile.update({
+      where: { email },
+      data: { isPlatformAdmin: !revoke },
+    });
+    await tx.platformAuditEvent.create({
+      data: {
+        actorId: null,
+        actorEmail: null,
+        action: revoke ? "platform.superadmin.revoke" : "platform.superadmin.grant",
+        tenantId: null,
+        targetUserId: user.id,
+        entity: "UserProfile",
+        entityId: user.id,
+        payload: { via: "script", script: "set-platform-admin", platform: { actorHomeTenantId: null } },
+      },
+      select: { id: true },
+    });
   });
-  console.log(`${revoke ? "Revocado" : "Otorgado"} isPlatformAdmin a ${email}.`);
+  console.log(`${revoke ? "Revocado" : "Otorgado"} isPlatformAdmin a ${email} (registrado en PlatformAuditEvent).`);
 }
 
 main()

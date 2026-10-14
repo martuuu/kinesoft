@@ -4,8 +4,8 @@
  * Curado del catálogo global de prestadoras / prácticas / especialidades —
  * Plataforma, solo superadmin (B1.3 CAT-admin, bpre-design §A).
  *
- * Mismo patrón que `lib/exercises-admin.ts`: `requireSuperAdmin()` es la única
- * barrera y toda escritura va por `prismaService`. No es una preferencia: las
+ * Mismo patrón que `lib/exercises-admin.ts`: `requirePlatformAdmin()` es la única
+ * barrera (una llamada por export) y toda escritura va por `prismaService`. No es una preferencia: las
  * tablas del catálogo (Payer, Practice, Specialty, PracticeSpecialty) tienen RLS
  * con UNA policy `FOR SELECT` y ninguna de escritura (migración
  * `catalog_global`), así que el rol app no puede escribirlas aunque quiera. Los
@@ -24,8 +24,8 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
-import { requireSuperAdmin } from "@/lib/session";
-import { audit } from "@/lib/audit";
+import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
+import { auditPlatformGlobalInTx, type PlatformAuditAction } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import { matchKey } from "@/lib/catalog/normalize";
 import type { ActionResult } from "@/lib/validation";
@@ -53,6 +53,22 @@ import type {
 
 /** Error de negocio dentro de una tx: corta y se traduce a `{ ok: false }`. */
 class CatalogAdminError extends Error {}
+
+/**
+ * BO2-F (plan §19.5): el catálogo es GLOBAL, así que su auditoría va al registro de plataforma
+ * (`PlatformAuditEvent`, `tenantId` null) y no al log de un consultorio. Antes cada edición caía en el
+ * `AuditEvent` del consultorio «casa» del superadmin (`actor.tenantId` de `requireSuperAdmin`): ruido para
+ * ese OWNER, nada en el visor de Plataforma, y un superadmin sin consultorio ni siquiera podía curar.
+ * `actor.tenantId` se usaba SOLO para eso. Se escribe en la tx del write: el evento existe sii el cambio.
+ * Payload: ids, nombres de catálogo y contadores (no hay PHI en estas tablas).
+ */
+function auditCatalog(
+  tx: Prisma.TransactionClient,
+  actor: PlatformActor,
+  p: { action: PlatformAuditAction; entity: string; entityId: string; payload?: Record<string, unknown> }
+) {
+  return auditPlatformGlobalInTx(tx, { actor, ...p });
+}
 
 function revalidateCatalog() {
   revalidateTag(cacheTags.catalog());
@@ -130,7 +146,7 @@ const PAYER_KIND_LABEL: Record<string, string> = {
  * esconda filas con el mismo nombre.
  */
 export async function listCatalogForAdmin(raw: CatalogListQueryInput): Promise<CatalogAdminPage> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const f = CatalogListQuery.parse(raw);
   const contains = (v: string) => ({ contains: v, mode: "insensitive" as const });
   const aliasIds = f.q ? await aliasMatchIds(f.entity, f.q) : [];
@@ -308,7 +324,7 @@ function baseRow(r: {
 
 /** Detalle completo para el drawer de edición. */
 export async function getCatalogDetail(entity: CatalogEntityKind, id: string): Promise<CatalogDetail | null> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const e = CatalogEntity.parse(entity);
   const iso = (d: Date | null) => d?.toISOString() ?? null;
 
@@ -403,7 +419,7 @@ export async function searchMergeTargets(
   q: string,
   excludeId: string,
 ): Promise<{ id: string; name: string; slug: string }[]> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const term = String(q ?? "").trim().slice(0, 120);
   if (term.length < 2) return [];
   const aliasIds = await aliasMatchIds(entity, term);
@@ -423,7 +439,7 @@ export async function searchMergeTargets(
 
 /** Planes propuestos por consultorios (tenantId set) pendientes de promover. */
 export async function listPayerPlanProposals(): Promise<PayerPlanProposal[]> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const plans = await prismaService.payerPlan.findMany({
     where: { tenantId: { not: null }, promotedAt: null, archivedAt: null },
     orderBy: [{ createdAt: "desc" }, { id: "asc" }],
@@ -461,7 +477,7 @@ export async function listPayerPlanProposals(): Promise<PayerPlanProposal[]> {
 
 /** Últimas corridas de `scripts/catalog-import.ts --apply`. */
 export async function listCatalogImportRuns(limit = 30): Promise<CatalogImportRunRow[]> {
-  await requireSuperAdmin();
+  await requirePlatformAdmin("platform.read");
   const take = Math.min(Math.max(1, Math.trunc(Number(limit) || 30)), 100);
   const runs = await prismaService.catalogImportRun.findMany({
     orderBy: [{ ranAt: "desc" }, { id: "asc" }],
@@ -492,14 +508,11 @@ export async function listCatalogImportRuns(limit = 30): Promise<CatalogImportRu
  * Plataforma ya invalidan solas (`revalidateCatalog`).
  */
 export async function refreshCatalogCache(): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.refreshCache",
-    entity: "Catalog",
-    entityId: "global",
-  });
+  const actor = await requirePlatformAdmin("catalog.write");
+  // No hay write de datos: la tx corta existe solo para el registro (C-BO5 escribe en la tx del caller).
+  await prismaService.$transaction((tx) =>
+    auditCatalog(tx, actor, { action: "platform.catalog.refreshCache", entity: "Catalog", entityId: "global" })
+  );
   revalidateCatalog();
   return { ok: true, data: undefined };
 }
@@ -515,33 +528,33 @@ export async function refreshCatalogCache(): Promise<ActionResult> {
  * la sigue encontrando por el nombre viejo.
  */
 export async function updatePayer(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = PayerAdminUpdate.safeParse(raw);
   if (!parsed.success) return invalid(parsed.error);
   const { id, ...d } = parsed.data;
   const cur = await prismaService.payer.findUnique({ where: { id }, select: { name: true } });
   if (!cur) return { ok: false, error: "Prestadora no encontrada." };
   const aliases = unionAliases(d.name, d.aliases, d.name !== cur.name ? [cur.name] : []);
-  await prismaService.payer.update({
-    where: { id },
-    data: {
-      name: d.name,
-      legalName: d.legalName,
-      kind: d.kind,
-      registryCode: d.registryCode,
-      cuit: d.cuit,
-      province: d.province,
-      aliases,
-      curatedAt: new Date(),
-    },
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.payer.update",
-    entity: "Payer",
-    entityId: id,
-    payload: { name: d.name, previousName: cur.name, kind: d.kind },
+  await prismaService.$transaction(async (tx) => {
+    await tx.payer.update({
+      where: { id },
+      data: {
+        name: d.name,
+        legalName: d.legalName,
+        kind: d.kind,
+        registryCode: d.registryCode,
+        cuit: d.cuit,
+        province: d.province,
+        aliases,
+        curatedAt: new Date(),
+      },
+    });
+    await auditCatalog(tx, actor, {
+      action: "platform.catalog.payer.update",
+      entity: "Payer",
+      entityId: id,
+      payload: { name: d.name, previousName: cur.name, kind: d.kind },
+    });
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
@@ -549,31 +562,31 @@ export async function updatePayer(raw: unknown): Promise<ActionResult> {
 
 /** Edita una práctica (mismo criterio de matchKey y alias que `updatePayer`). */
 export async function updatePractice(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = PracticeAdminUpdate.safeParse(raw);
   if (!parsed.success) return invalid(parsed.error);
   const { id, ...d } = parsed.data;
   const cur = await prismaService.practice.findUnique({ where: { id }, select: { name: true } });
   if (!cur) return { ok: false, error: "Práctica no encontrada." };
   const aliases = unionAliases(d.name, d.aliases, d.name !== cur.name ? [cur.name] : []);
-  await prismaService.practice.update({
-    where: { id },
-    data: {
-      name: d.name,
-      code: d.code,
-      nomenclador: d.nomenclador,
-      defaultDurationMin: d.defaultDurationMin,
-      aliases,
-      curatedAt: new Date(),
-    },
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.practice.update",
-    entity: "Practice",
-    entityId: id,
-    payload: { name: d.name, previousName: cur.name, code: d.code },
+  await prismaService.$transaction(async (tx) => {
+    await tx.practice.update({
+      where: { id },
+      data: {
+        name: d.name,
+        code: d.code,
+        nomenclador: d.nomenclador,
+        defaultDurationMin: d.defaultDurationMin,
+        aliases,
+        curatedAt: new Date(),
+      },
+    });
+    await auditCatalog(tx, actor, {
+      action: "platform.catalog.practice.update",
+      entity: "Practice",
+      entityId: id,
+      payload: { name: d.name, previousName: cur.name, code: d.code },
+    });
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
@@ -581,24 +594,24 @@ export async function updatePractice(raw: unknown): Promise<ActionResult> {
 
 /** Edita una especialidad (mismo criterio de matchKey y alias que `updatePayer`). */
 export async function updateSpecialty(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = SpecialtyAdminUpdate.safeParse(raw);
   if (!parsed.success) return invalid(parsed.error);
   const { id, ...d } = parsed.data;
   const cur = await prismaService.specialty.findUnique({ where: { id }, select: { name: true } });
   if (!cur) return { ok: false, error: "Especialidad no encontrada." };
   const aliases = unionAliases(d.name, d.aliases, d.name !== cur.name ? [cur.name] : []);
-  await prismaService.specialty.update({
-    where: { id },
-    data: { name: d.name, aliases, curatedAt: new Date() },
-  });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.specialty.update",
-    entity: "Specialty",
-    entityId: id,
-    payload: { name: d.name, previousName: cur.name },
+  await prismaService.$transaction(async (tx) => {
+    await tx.specialty.update({
+      where: { id },
+      data: { name: d.name, aliases, curatedAt: new Date() },
+    });
+    await auditCatalog(tx, actor, {
+      action: "platform.catalog.specialty.update",
+      entity: "Specialty",
+      entityId: id,
+      payload: { name: d.name, previousName: cur.name },
+    });
   });
   revalidateCatalog();
   return { ok: true, data: undefined };
@@ -611,29 +624,29 @@ export async function updateSpecialty(raw: unknown): Promise<ActionResult> {
  * archivado solo saca la fila de los pickers.
  */
 export async function setCatalogArchived(raw: unknown): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const parsed = CatalogArchive.safeParse(raw);
   if (!parsed.success) return invalid(parsed.error);
   const { entity, id, archived } = parsed.data;
   const data = { archivedAt: archived ? new Date() : null, curatedAt: new Date() };
+  const entityName = entity === "payer" ? "Payer" : entity === "practice" ? "Practice" : "Specialty";
   try {
-    if (entity === "payer") await prismaService.payer.update({ where: { id }, data });
-    else if (entity === "practice") await prismaService.practice.update({ where: { id }, data });
-    else await prismaService.specialty.update({ where: { id }, data });
+    await prismaService.$transaction(async (tx) => {
+      if (entity === "payer") await tx.payer.update({ where: { id }, data });
+      else if (entity === "practice") await tx.practice.update({ where: { id }, data });
+      else await tx.specialty.update({ where: { id }, data });
+      await auditCatalog(tx, actor, {
+        action: `platform.catalog.${entity}.${archived ? "archive" : "restore"}`,
+        entity: entityName,
+        entityId: id,
+      });
+    });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { ok: false, error: "No encontramos esa fila del catálogo." };
     }
     throw e;
   }
-  const entityName = entity === "payer" ? "Payer" : entity === "practice" ? "Practice" : "Specialty";
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: `admin.catalog.${entity}.${archived ? "archive" : "restore"}`,
-    entity: entityName,
-    entityId: id,
-  });
   revalidateCatalog();
   return { ok: true, data: undefined };
 }
@@ -654,7 +667,7 @@ export async function setCatalogArchived(raw: unknown): Promise<ActionResult> {
  *  4. from queda archivada y curada (no se borra: ver cabecera).
  */
 export async function mergePayer(raw: unknown): Promise<ActionResult<MergeResult>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.merge");
   const parsed = CatalogMerge.safeParse(raw);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   const { fromId, intoId } = parsed.data;
@@ -719,24 +732,24 @@ export async function mergePayer(raw: unknown): Promise<ActionResult<MergeResult
       });
       await tx.payer.update({ where: { id: from.id }, data: { archivedAt: from.archivedAt ?? now, curatedAt: now } });
 
-      return {
+      const out: MergeResult = {
         moved: { insurers: insurers.count, plans: plansMoved, plansMerged, coverages: coveragesMoved },
         aliasesAdded: aliases.length - into.aliases.length,
       };
+      // Solo contadores: cuántas filas de consultorios se repuntaron, no cuáles (ni de quién).
+      await auditCatalog(tx, actor, {
+        action: "platform.catalog.payer.merge",
+        entity: "Payer",
+        entityId: intoId,
+        payload: { fromId, intoId, ...out.moved, aliasesAdded: out.aliasesAdded },
+      });
+      return out;
     });
   } catch (e) {
     if (e instanceof CatalogAdminError) return { ok: false, error: e.message };
     throw e;
   }
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.payer.merge",
-    entity: "Payer",
-    entityId: intoId,
-    payload: { fromId, intoId, ...result.moved, aliasesAdded: result.aliasesAdded },
-  });
   revalidateCatalog();
   return { ok: true, data: result };
 }
@@ -749,7 +762,7 @@ export async function mergePayer(raw: unknown): Promise<ActionResult<MergeResult
  * from queda archivada y curada.
  */
 export async function mergePractice(raw: unknown): Promise<ActionResult<MergeResult>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.merge");
   const parsed = CatalogMerge.safeParse(raw);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   const { fromId, intoId } = parsed.data;
@@ -789,24 +802,23 @@ export async function mergePractice(raw: unknown): Promise<ActionResult<MergeRes
       });
       await tx.practice.update({ where: { id: from.id }, data: { archivedAt: from.archivedAt ?? now, curatedAt: now } });
 
-      return {
+      const out: MergeResult = {
         moved: { services: services.count, specialties: added.count },
         aliasesAdded: aliases.length - into.aliases.length,
       };
+      await auditCatalog(tx, actor, {
+        action: "platform.catalog.practice.merge",
+        entity: "Practice",
+        entityId: intoId,
+        payload: { fromId, intoId, ...out.moved, aliasesAdded: out.aliasesAdded },
+      });
+      return out;
     });
   } catch (e) {
     if (e instanceof CatalogAdminError) return { ok: false, error: e.message };
     throw e;
   }
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.practice.merge",
-    entity: "Practice",
-    entityId: intoId,
-    payload: { fromId, intoId, ...result.moved, aliasesAdded: result.aliasesAdded },
-  });
   revalidateCatalog();
   return { ok: true, data: result };
 }
@@ -829,12 +841,17 @@ export async function mergePractice(raw: unknown): Promise<ActionResult<MergeRes
  * parcial `PayerPlan_payerId_slug_global_key` (P2002).
  */
 export async function promotePayerPlan(raw: unknown): Promise<ActionResult<{ planId: string; merged: boolean }>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.merge");
   const parsed = PayerPlanPromote.safeParse(typeof raw === "string" ? { planId: raw } : raw);
   if (!parsed.success) return invalid(parsed.error);
   const { planId } = parsed.data;
+  // `proposedBy` (el consultorio que propuso) va en el payload y NO como `tenantId` de la fila global: la FK de
+  // `PlatformAuditEvent.tenantId` es RESTRICT (bloquearía borrar ese consultorio) y la acción es sobre el
+  // catálogo, no sobre él. Es un id, no PHI.
+  const auditPromote = (tx: Prisma.TransactionClient, payload: Record<string, unknown>) =>
+    auditCatalog(tx, actor, { action: "platform.catalog.payerPlan.promote", entity: "PayerPlan", entityId: planId, payload });
 
-  let out: { planId: string; merged: boolean; tenantId: string; coverages: number };
+  let out: { planId: string; merged: boolean };
   try {
     out = await prismaService.$transaction(async (tx) => {
       const plan = await tx.payerPlan.findUnique({
@@ -860,10 +877,12 @@ export async function promotePayerPlan(raw: unknown): Promise<ActionResult<{ pla
         });
         if (twin.archivedAt) await tx.payerPlan.update({ where: { id: twin.id }, data: { archivedAt: null } });
         await tx.payerPlan.update({ where: { id: plan.id }, data: { archivedAt: now, promotedAt: now } });
-        return { planId: twin.id, merged: true, tenantId: plan.tenantId, coverages: cov.count };
+        await auditPromote(tx, { globalPlanId: twin.id, merged: true, proposedBy: plan.tenantId, coveragesMoved: cov.count });
+        return { planId: twin.id, merged: true };
       }
       await tx.payerPlan.update({ where: { id: plan.id }, data: { tenantId: null, promotedAt: now } });
-      return { planId: plan.id, merged: false, tenantId: plan.tenantId, coverages: 0 };
+      await auditPromote(tx, { globalPlanId: plan.id, merged: false, proposedBy: plan.tenantId, coveragesMoved: 0 });
+      return { planId: plan.id, merged: false };
     });
   } catch (e) {
     if (e instanceof CatalogAdminError) return { ok: false, error: e.message };
@@ -873,14 +892,6 @@ export async function promotePayerPlan(raw: unknown): Promise<ActionResult<{ pla
     throw e;
   }
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.catalog.payerPlan.promote",
-    entity: "PayerPlan",
-    entityId: planId,
-    payload: { globalPlanId: out.planId, merged: out.merged, proposedBy: out.tenantId, coveragesMoved: out.coverages },
-  });
   revalidateCatalog();
   return { ok: true, data: { planId: out.planId, merged: out.merged } };
 }

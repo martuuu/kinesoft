@@ -35,13 +35,23 @@ const MIN = 60_000;
 export const PLATFORM_ACTION_POLICY = {
   "platform.read": { risk: "low", rateLimit: { limit: 600, windowMs: MIN } },
   "catalog.write": { risk: "low", rateLimit: { limit: 120, windowMs: MIN } },
+  // BO2-F: fusionar prestadoras/prácticas y promover planes repuntan FKs de filas de TODOS los consultorios
+  // (Insurer.payerId, Service.practiceId, Coverage.payerPlanId) y no tienen «deshacer»: no es una edición más
+  // del catálogo. Medium y un cupo chico; el curado normal sigue en `catalog.write`.
+  "catalog.merge": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
   "tenant.create": { risk: "medium", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   "tenant.entitlements.update": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
   "tenant.profile.update": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
   "tenant.status.update": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
   "tenant.slug.update": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
+  // BO2-D: forzar el fin del alta. Medio: no corta acceso ni mueve identidad, pero saltea los pasos del titular.
+  "tenant.onboarding.complete": { risk: "medium", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   "tenant.export.request": { risk: "high", rateLimit: { limit: 5, windowMs: 10 * MIN } },
   "team.manage": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
+  // BO2-B: invitar / reenviar mandan un mail en nombre del consultorio (además del límite por destinatario de los
+  // núcleos); suspender y quitar cortan el acceso de una persona (high, como deshabilitar un usuario).
+  "team.invite": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
+  "team.access.revoke": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   "team.transfer_owner": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
   "user.access_link": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
   "user.disable": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },

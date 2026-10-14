@@ -6,14 +6,15 @@
  * TTL (8 min). Nunca tira (tampoco con errores no tipados: `realtime-error`, FX1b):
  * el cliente degrada a polling con `{ok:false}`.
  *
- * Orden: `getActor()` → módulo `salaEspera` → capability (ver `realtimeAllowed`) →
+ * Orden: `getActor()` → acceso del consultorio (BO2-D) → módulo `salaEspera` → capability (ver `realtimeAllowed`) →
  * driver `supabase` → secreto presente → rate limit 30 cada 10 min por usuario →
  * firma. No hay input (nada que validar con zod) y no se toca la base más allá de
  * leer el rol: el `tenant_id` del token sale del actor de la sesión, nunca del cliente.
  *
  * El token no se loguea nunca (ni el secreto): con él se lee el canal del consultorio.
  */
-import { env } from "@/lib/env";
+import { env, tenantAccessEnforcement } from "@/lib/env";
+import { effectiveMode, publicSurfacesOpen } from "@/lib/tenant-access";
 import { logger } from "@/lib/logger";
 import { getActor, ForbiddenError, UnauthenticatedError } from "@/lib/session";
 import { assertModule, getMembershipRole } from "@/lib/authz";
@@ -36,6 +37,12 @@ export async function mintRealtimeToken(): Promise<
 > {
   try {
     const actor = await getActor();
+    // BO2-D (C-BO1 `publicSurfacesOpen`, modo EFECTIVO): sin token con el consultorio en solo lectura bajo
+    // `enforce` (suspendido / baja ya no llegan acá: `getActor` no entra a un consultorio bloqueado). El cliente
+    // degrada a polling, que lee igual (leer nunca se corta). Va antes del rate limit: no gasta cupo.
+    if (!publicSurfacesOpen(effectiveMode(actor.access.mode, tenantAccessEnforcement()))) {
+      return { ok: false, error: "realtime-off" };
+    }
     assertModule(actor, "salaEspera");
     const caps = capabilitiesFor(await getMembershipRole(actor));
     if (!realtimeAllowed(actor, caps)) return { ok: false, error: NO_ACCESS };

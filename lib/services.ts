@@ -10,6 +10,7 @@
  *
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER can read.
  */
+import { withSupportWritable } from "@/lib/support-writable";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import type { z } from "zod";
@@ -89,7 +90,11 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
   return fetcher(actor.tenantId);
 }
 
-export async function createService(
+export async function createService(...args: Parameters<typeof createServiceImpl>): ReturnType<typeof createServiceImpl> {
+  return withSupportWritable("lib/services.ts#createService", () => createServiceImpl(...args));
+}
+
+async function createServiceImpl(
   raw: z.input<typeof ServiceInput>
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = ServiceInput.safeParse(raw);
@@ -163,7 +168,11 @@ export async function createService(
   }
 }
 
-export async function updateService(
+export async function updateService(...args: Parameters<typeof updateServiceImpl>): ReturnType<typeof updateServiceImpl> {
+  return withSupportWritable("lib/services.ts#updateService", () => updateServiceImpl(...args));
+}
+
+async function updateServiceImpl(
   id: string,
   raw: Partial<z.input<typeof ServiceInput>>
 ): Promise<ActionResult> {
@@ -298,7 +307,11 @@ function auditDiff<T extends Record<string, unknown>>(before: T, after: T): Audi
 const DELETE_IN_USE_MSG =
   "No se puede borrar: hay turnos o planes de tratamiento que usan este servicio. Editá el nombre o el precio si querés actualizarlo.";
 
-export async function deleteService(id: string): Promise<ActionResult> {
+export async function deleteService(...args: Parameters<typeof deleteServiceImpl>): ReturnType<typeof deleteServiceImpl> {
+  return withSupportWritable("lib/services.ts#deleteService", () => deleteServiceImpl(...args));
+}
+
+async function deleteServiceImpl(id: string): Promise<ActionResult> {
   const actor = await requireTenantAdmin(ADMIN_MSG);
   // ES2a → S13: M1 dejó `TreatmentProgram.serviceId` en RESTRICT (un plan no
   // puede quedar sin servicio en silencio) y `Booking.serviceId` ya lo era.

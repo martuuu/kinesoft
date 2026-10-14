@@ -219,6 +219,33 @@ describe.skipIf(!RUN)("SV04b · mintRealtimeToken", () => {
     expect(await mintRealtimeToken()).toEqual({ ok: false, error: "No tenés acceso a la sala de espera en vivo." });
   });
 
+  // BO2-D (C-BO1 `publicSurfacesOpen`, modo EFECTIVO): consultorio en solo lectura bajo `enforce` → sin token
+  // (el cliente degrada a polling, que lee igual). Con `banner` (default) el trial vencido solo se avisa.
+  it("[BO2-D] trial vencido: token con banner; sin token (y sin gastar cupo) con enforce", async () => {
+    setEnv(SUPA);
+    asUser(B.userId);
+    const prev = process.env.TENANT_ACCESS_ENFORCEMENT;
+    try {
+      await db.tenant.update({
+        where: { id: B.tenantId },
+        data: { subscriptionStatus: "TRIALING", trialEndsAt: new Date(Date.now() - 30 * 86_400_000) },
+      });
+      process.env.TENANT_ACCESS_ENFORCEMENT = "banner";
+      expect((await mintRealtimeToken()).ok).toBe(true);
+      process.env.TENANT_ACCESS_ENFORCEMENT = "enforce";
+      const calls = rl.calls;
+      expect(await mintRealtimeToken()).toEqual({ ok: false, error: "realtime-off" });
+      expect(rl.calls).toBe(calls);
+      // En gracia (vencido hace 2 días) sí.
+      await db.tenant.update({ where: { id: B.tenantId }, data: { trialEndsAt: new Date(Date.now() - 2 * 86_400_000) } });
+      expect((await mintRealtimeToken()).ok).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.TENANT_ACCESS_ENFORCEMENT;
+      else process.env.TENANT_ACCESS_ENFORCEMENT = prev;
+      await db.tenant.update({ where: { id: B.tenantId }, data: { subscriptionStatus: "ACTIVE", trialEndsAt: null } });
+    }
+  });
+
   it("rate limit: 30 en la ventana pasan, el 31.º → {ok:false}", async () => {
     setEnv(SUPA);
     asUser(assistantId);

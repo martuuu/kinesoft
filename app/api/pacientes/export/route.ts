@@ -27,6 +27,9 @@ export async function GET(req: Request) {
   if (!actor) {
     return new Response("Unauthorized", { status: 401 });
   }
+  // BO2-E (plan §19.5): soporte nunca baja datos del consultorio. La exportación masiva es la vía más corta para
+  // sacar PHI en bloque y soporte solo mira en pantalla (lo que ve la Secretaria) y queda auditado lectura por lectura.
+  if (actor.support) return new Response("Forbidden", { status: 403 });
   const rl = await rateLimit(`export:patients:${actor.userId}`, {
     limit: 5,
     windowMs: 60_000,

@@ -14,7 +14,11 @@ export type EmailKind =
   | "password_reset"
   | "admin_password_reset"
   | "account_exists"
-  | "welcome";
+  | "welcome"
+  // BO2 (back-office de Plataforma): los mails que manda el equipo de KineSoft, no un consultorio.
+  | "tenant_activation" // alta asistida: el titular activa su acceso (BO2-A)
+  | "platform_access_link" // Plataforma → Usuarios: link para activar o recuperar el acceso (BO2-C)
+  | "support_access"; // aviso al OWNER: soporte entró al consultorio (BO2-E, decisión 3)
 
 /**
  * Por dónde salió (o no) un mail:

@@ -72,7 +72,8 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
+    // BO2-B (BO-D7): PRO = 10 lugares. Estos casos invitan / ascienden / reactivan profesionales; el cupo se prueba en seats.test.ts.
+    A = await createEphemeralTenant(db, { plan: "PRO" });
     await db.tenant.update({ where: { id: A.tenantId }, data: { publicEmail: "turnos@consultorio.test" } });
   });
   afterAll(async () => {
@@ -250,10 +251,15 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
     expect(rg.ok && rg.data.url).toBeNull();
   });
 
-  it("guard estático: lib/invitations.ts no usa Supabase admin ni inviteUserByEmail", () => {
-    const src = readFileSync(resolve(process.cwd(), "lib/invitations.ts"), "utf8");
-    expect(src).not.toMatch(/inviteUserByEmail\s*\(/);
-    expect(src).not.toMatch(/from\s+["']@\/lib\/supabase\/admin["']/);
-    expect(src).toMatch(/import\s+["']@\/lib\/email\/log["']/);
+  // BO2-B: los mails salen de los núcleos compartidos (`lib/team-internal.ts`), que es quien registra el sink de
+  // EmailLog; las dos puertas (Configuración y Plataforma) siguen sin Supabase admin.
+  it("guard estático: invitaciones (Configuración, Plataforma y núcleos) no usan Supabase admin ni inviteUserByEmail", () => {
+    for (const f of ["lib/invitations.ts", "lib/team-internal.ts", "lib/platform-team.ts"]) {
+      const src = readFileSync(resolve(process.cwd(), f), "utf8");
+      expect(src, f).not.toMatch(/inviteUserByEmail\s*\(/);
+      expect(src, f).not.toMatch(/from\s+["']@\/lib\/supabase\/admin["']/);
+    }
+    const core = readFileSync(resolve(process.cwd(), "lib/team-internal.ts"), "utf8");
+    expect(core).toMatch(/import\s+["']@\/lib\/email\/log["']/);
   });
 });

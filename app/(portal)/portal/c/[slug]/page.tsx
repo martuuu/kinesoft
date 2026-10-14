@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { getPortalAuth, getPortalPlan } from "@/lib/portal";
+import { resolveSlugAlias } from "@/lib/public-booking-internal";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,16 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
     );
   }
   const me = auth.patients.find((p) => p.tenantSlug === params.slug);
-  if (!me) notFound();
+  if (!me) {
+    // BO2-D (BO-D9): slug viejo (el consultorio cambió de slug) → 308 al vigente, misma regla que el turnero. Solo
+    // se mira el alias cuando no hay match (cero queries en el camino normal) y solo se redirige si el paciente es
+    // de ese consultorio: a cualquier otro, el mismo 404 de siempre.
+    const moved = await resolveSlugAlias(params.slug);
+    if (moved && auth.patients.some((p) => p.tenantSlug === moved.slug)) {
+      permanentRedirect(`/portal/c/${encodeURIComponent(moved.slug)}`);
+    }
+    notFound();
+  }
   const plan = await getPortalPlan(params.slug);
   const now = Date.now();
   const nextSession = plan?.sessions.find(

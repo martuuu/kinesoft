@@ -84,7 +84,16 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
 
   it("allowlist literal por source (C-EV5)", () => {
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.platform].sort()).toEqual(
-      ["plan", "publicBookingEnabled", "seatLimitOverride", "status", "subscriptionStatus", "trialEndsAt", "vertical"].sort()
+      [
+        "plan",
+        "publicBookingEnabled",
+        "seatLimitOverride",
+        "status",
+        "statusReason", // BO2-D (handoff BO1-B)
+        "subscriptionStatus",
+        "trialEndsAt",
+        "vertical",
+      ].sort()
     );
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.billing].sort()).toEqual(["plan", "subscriptionStatus", "trialEndsAt"].sort());
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.onboarding]).toEqual(["vertical"]);

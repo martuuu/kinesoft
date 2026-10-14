@@ -13,13 +13,18 @@
  * firmador (lo fija `tests/integration/storage-service-role.test.ts`): la firma
  * vive en `lib/exercise-media-internal.ts` (server-only, por `mediaId`) y el
  * Storage va por service role (`lib/storage-internal.ts`).
+ *
+ * BO2-F (plan §19.5): barrera `requirePlatformAdmin()` en cada export (antes `requireSuperAdmin()`, que exigía
+ * un consultorio «casa») y auditoría al registro de plataforma (`auditPlatformGlobalInTx`, `tenantId` null) en
+ * la tx de la fila; `actor.tenantId` se usaba solo para auditar. Payload: ids, tipo y contadores; nunca la URL
+ * ni la clave del bucket.
  */
 import { randomBytes } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
 import type { ExerciseMediaType } from "@prisma/client";
 import { prismaService } from "@/lib/db";
-import { requireSuperAdmin } from "@/lib/session";
-import { audit } from "@/lib/audit";
+import { requirePlatformAdmin } from "@/lib/platform-actor";
+import { auditPlatformGlobalInTx } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import { isStorageConfigured, storageRemove, storageUpload } from "@/lib/storage-internal";
 import { EXERCISE_MEDIA_BUCKET as BUCKET, youtubeId } from "@/lib/exercise-media-internal";
@@ -45,7 +50,7 @@ function revalidateFor(slug?: string) {
 }
 
 export async function addExerciseMedia(formData: FormData): Promise<ActionResult<{ id: string }>> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const exerciseId = String(formData.get("exerciseId") ?? "");
   const rawType = String(formData.get("type") ?? "");
   const caption = (String(formData.get("caption") ?? "").trim() || null) as string | null;
@@ -91,37 +96,39 @@ export async function addExerciseMedia(formData: FormData): Promise<ActionResult
 
   let row: { id: string };
   try {
-    const last = await prismaService.exerciseMedia.findFirst({
-      where: { exerciseId },
-      orderBy: { order: "desc" },
-      select: { order: true },
-    });
-    row = await prismaService.exerciseMedia.create({
-      data: { id, exerciseId, type, url, caption, order: (last?.order ?? -1) + 1 },
-      select: { id: true },
+    row = await prismaService.$transaction(async (tx) => {
+      const last = await tx.exerciseMedia.findFirst({
+        where: { exerciseId },
+        orderBy: { order: "desc" },
+        select: { order: true },
+      });
+      const created = await tx.exerciseMedia.create({
+        data: { id, exerciseId, type, url, caption, order: (last?.order ?? -1) + 1 },
+        select: { id: true },
+      });
+      await auditPlatformGlobalInTx(tx, {
+        actor,
+        action: "platform.catalog.exercise.media.add",
+        entity: "ExerciseMedia",
+        entityId: created.id,
+        payload: { exerciseId, type },
+      });
+      return created;
     });
   } catch (e) {
     // Best-effort: si el remove también falla queda logueado en storage.failed.
     if (uploadedKey) await storageRemove(BUCKET, [uploadedKey]);
     throw e;
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.exercise.media.add",
-    entity: "ExerciseMedia",
-    entityId: row.id,
-    payload: { exerciseId, type },
-  });
   revalidateFor(ex.slug);
   return { ok: true, data: { id: row.id } };
 }
 
 export async function deleteExerciseMedia(id: string): Promise<ActionResult> {
-  const actor = await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const media = await prismaService.exerciseMedia.findUnique({
     where: { id },
-    select: { id: true, type: true, url: true, exercise: { select: { slug: true } } },
+    select: { id: true, type: true, url: true, exerciseId: true, exercise: { select: { slug: true } } },
   });
   if (!media) return { ok: false, error: "Media no encontrada." };
   if (media.type !== "YOUTUBE" && !media.url.startsWith("stub:")) {
@@ -132,13 +139,15 @@ export async function deleteExerciseMedia(id: string): Promise<ActionResult> {
     const rm = await storageRemove(BUCKET, [media.url]);
     if (!rm.ok) return { ok: false, error: "No pudimos borrar el archivo. Probá de nuevo." };
   }
-  await prismaService.exerciseMedia.delete({ where: { id } });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "admin.exercise.media.delete",
-    entity: "ExerciseMedia",
-    entityId: id,
+  await prismaService.$transaction(async (tx) => {
+    await tx.exerciseMedia.delete({ where: { id } });
+    await auditPlatformGlobalInTx(tx, {
+      actor,
+      action: "platform.catalog.exercise.media.delete",
+      entity: "ExerciseMedia",
+      entityId: id,
+      payload: { exerciseId: media.exerciseId, type: media.type },
+    });
   });
   revalidateFor(media.exercise.slug);
   return { ok: true, data: undefined };
@@ -148,17 +157,25 @@ export async function reorderExerciseMedia(
   exerciseId: string,
   orderedIds: string[],
 ): Promise<ActionResult> {
-  await requireSuperAdmin();
+  const actor = await requirePlatformAdmin("catalog.write");
   const ex = await prismaService.exercise.findFirst({
     where: { id: exerciseId, tenantId: null },
     select: { slug: true },
   });
   if (!ex) return { ok: false, error: "Ejercicio global no encontrado." };
-  await prismaService.$transaction(
-    orderedIds.map((id, i) =>
-      prismaService.exerciseMedia.updateMany({ where: { id, exerciseId }, data: { order: i } }),
-    ),
-  );
+  // Antes el reorden no se auditaba; BO2-F registra toda escritura del catálogo (una fila por reorden, no por media).
+  await prismaService.$transaction(async (tx) => {
+    for (const [i, id] of orderedIds.entries()) {
+      await tx.exerciseMedia.updateMany({ where: { id, exerciseId }, data: { order: i } });
+    }
+    await auditPlatformGlobalInTx(tx, {
+      actor,
+      action: "platform.catalog.exercise.media.reorder",
+      entity: "Exercise",
+      entityId: exerciseId,
+      payload: { count: orderedIds.length },
+    });
+  });
   revalidateFor(ex.slug);
   return { ok: true, data: undefined };
 }

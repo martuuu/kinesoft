@@ -266,7 +266,7 @@ const strong = (s: string) => `<strong style="color:${C.ink};font-weight:600;">$
 
 const NOT_EXPECTED = "Si no esperabas este mail, podés ignorarlo: no se va a hacer ningún cambio.";
 
-// ── Las 8 plantillas (C-IAM1) ────────────────────────────────────────────────
+// ── Las 8 plantillas de C-IAM1 + las 3 de Plataforma (BO2) ────────────────────────────────────────────────
 
 export function staffInviteEmail(p: {
   tenantName: string;
@@ -433,5 +433,93 @@ export function welcomeEmail(p: { tenantName: string; url: string }): RenderedEm
     htmlParagraphs: [`Ya sos parte de ${strong(tenant)} en KineSoft.`, escapeHtml(second)],
     ctas: [{ label: "Ir a KineSoft", url: p.url }],
     footer: [`Te llegó este mail porque activaste tu acceso al equipo de ${tenant} en KineSoft.`],
+  });
+}
+
+// ── Plataforma (BO2): mails del equipo de KineSoft, no de un consultorio ────────────────────────────────────
+
+/**
+ * BO2-A: alta asistida. El superadmin crea el consultorio con este email como titular; el link es de recovery
+ * (lleva a /reset: elige su contraseña y entra). Antes salía `welcome`, que dice «ya podés entrar con tu
+ * contraseña» a alguien que todavía no tiene.
+ */
+export function tenantOwnerActivationEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
+  const second = `Tocá el botón para elegir tu contraseña y entrar. ${ttl}`;
+  return compose({
+    subject: `Tu consultorio ${tenant} ya está en KineSoft`,
+    preheader: "Elegí tu contraseña para entrar.",
+    context: tenant,
+    title: "Activá tu acceso",
+    paragraphs: [`Te dimos de alta como titular de ${tenant} en KineSoft.`, second],
+    htmlParagraphs: [`Te dimos de alta como titular de ${strong(tenant)} en KineSoft.`, escapeHtml(second)],
+    ctas: [{ label: "Activar mi acceso", url: p.url }],
+    footer: [
+      `Te llegó este mail porque el equipo de KineSoft creó el consultorio ${tenant} con este email como titular. Si el link venció, escribinos y te mandamos otro.`,
+      NOT_EXPECTED,
+    ],
+  });
+}
+
+/**
+ * BO2-C: Plataforma → Usuarios → «Mandar link para entrar». `activation` = nunca entró (invitado o alta sin
+ * terminar), `recovery` = ya entró alguna vez. Los dos llevan a /reset. Sin nombre de consultorio: lo manda
+ * soporte de KineSoft (antes salía `admin_password_reset` con «KineSoft te mandó…» en el lugar del consultorio).
+ */
+export function platformAccessLinkEmail(p: { url: string; purpose: "activation" | "recovery" }): RenderedEmail {
+  const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
+  const activation = p.purpose === "activation";
+  return compose({
+    subject: activation ? "Activá tu acceso a KineSoft" : "Tu link para volver a entrar a KineSoft",
+    preheader: activation ? "Elegí tu contraseña para entrar." : "Elegí una contraseña nueva para tu cuenta.",
+    context: "Soporte de KineSoft",
+    title: activation ? "Activá tu acceso" : "Volvé a entrar a KineSoft",
+    paragraphs: [
+      activation
+        ? "El equipo de soporte de KineSoft te mandó un link para activar tu acceso."
+        : "El equipo de soporte de KineSoft te mandó un link para que vuelvas a entrar.",
+      "Tocá el botón para elegir tu contraseña. Nadie del equipo de KineSoft la ve ni la conoce.",
+    ],
+    ctas: [{ label: activation ? "Activar mi acceso" : "Elegir contraseña nueva", url: p.url }],
+    footer: [
+      "Te llegó este mail porque el equipo de soporte de KineSoft pidió un link de acceso para la cuenta asociada a este email.",
+      `${ttl} Si venció, escribinos y te mandamos otro.`,
+      activation ? NOT_EXPECTED : "Si no lo esperabas, ignorá este mail: tu contraseña actual sigue funcionando.",
+    ],
+  });
+}
+
+/**
+ * BO2-E (decisión 3 de Martin): aviso al OWNER cuando el equipo de KineSoft entra a su consultorio «como soporte».
+ * Motivo GENÉRICO a propósito: el motivo que tipea el superadmin es una nota interna (puede nombrar un paciente o
+ * un ticket); el detalle, con quién y cuándo, queda en Configuración → Accesos de soporte, detrás del login.
+ */
+export function supportAccessEmail(p: {
+  tenantName: string;
+  superadminEmail: string;
+  startedAt: Date;
+  url: string;
+}): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const who = plain(p.superadminEmail);
+  const when = formatExpiryAR(p.startedAt);
+  const lead = `El equipo de soporte de KineSoft (${who}) entró a ${tenant} el ${when} para ayudarte con el consultorio.`;
+  const leadHtml = `El equipo de soporte de KineSoft (${strong(who)}) entró a ${strong(tenant)} el ${escapeHtml(when)} para ayudarte con el consultorio.`;
+  const second =
+    "Mientras dure el acceso, soporte ve lo mismo que una Secretaria (nada de historia clínica) y solo puede cambiar la Configuración. Todo lo que hace queda registrado.";
+  return compose({
+    subject: `Soporte de KineSoft entró a ${tenant}`,
+    preheader: "Podés ver el detalle en Configuración → Accesos de soporte.",
+    context: tenant,
+    title: "Soporte entró a tu consultorio",
+    paragraphs: [lead, second],
+    htmlParagraphs: [leadHtml, escapeHtml(second)],
+    ctas: [{ label: "Ver accesos de soporte", url: p.url }],
+    afterCta: ["Los vas a encontrar en Configuración → Accesos de soporte, con el motivo y cuándo terminó cada uno."],
+    footer: [
+      `Te llegó este mail porque sos titular de ${tenant} en KineSoft y el equipo de soporte entró a ayudarte.`,
+      "Si no pediste ayuda, respondé este mail y lo revisamos.",
+    ],
   });
 }

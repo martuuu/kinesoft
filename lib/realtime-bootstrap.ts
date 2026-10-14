@@ -20,9 +20,14 @@ import type { RealtimeBootstrap } from "@/lib/realtime-events";
  * salvo BILLING tiene también `reception`, así que exigir `reception` es el OR del
  * plan menos BILLING, que es lo conservador. BILLING sigue viendo la agenda por el
  * polling de 60 s.
+ *
+ * BO2-E: el soporte (`actor.support`) nunca: `SUPPORT_CAPS` trae `agenda.reception` (es la Secretaria), pero un
+ * canal en vivo de la sala de espera (nombres de pacientes llegando) no hace falta para mirar el consultorio y
+ * deja un JWT de canal en manos de alguien sin membresía. Como `mintRealtimeToken` usa esta misma función, el
+ * rechazo vale para el token y para el bootstrap del layout. Soporte ve la agenda por polling.
  */
 export function realtimeAllowed(actor: Actor, caps: ReadonlySet<Capability>): boolean {
-  return modulesFor(actor.entitlements).has("salaEspera") && caps.has("agenda.reception");
+  return !actor.support && modulesFor(actor.entitlements).has("salaEspera") && caps.has("agenda.reception");
 }
 
 export async function realtimeBootstrap(

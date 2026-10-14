@@ -88,3 +88,55 @@ export type MemberPasswordResetResult = {
 
 /** Resultado de suspender (IAM-4c): cuántos turnos futuros activos le quedan, para avisar que no se cancelan. */
 export type SuspendMemberResult = { futureBookings: number };
+
+/**
+ * Quién actúa sobre el equipo (BO2-B, contrato C-BO8). Lo arman los dos wrappers de los núcleos de
+ * `lib/team-internal.ts`:
+ *  - `via: "tenant"`: Configuración → Usuarios (`lib/invitations.ts`), OWNER o ADMIN del consultorio; `actorRef` null.
+ *  - `via: "platform"`: /plataforma (`lib/platform-team.ts`), superadmin (`actorRole: "SUPERADMIN"`) sobre cualquier
+ *    consultorio; `actorRef` = la referencia para el registro de plataforma (C-BO5).
+ * Vive acá (y `team-internal` lo re-exporta) para que la UI y los tests lo importen sin arrastrar `server-only`.
+ */
+export type TeamActorCtx = {
+  via: "tenant" | "platform";
+  tenantId: string;
+  actorUserId: string;
+  actorRole: Role | "SUPERADMIN";
+  actorRef: { userId: string | null; email: string | null; homeTenantId: string | null } | null;
+};
+
+/** Miembro del equipo visto desde Plataforma (BO2-B). Lista cerrada: nada clínico, nada del Actor del consultorio. */
+export type PlatformTeamMemberRow = {
+  membershipId: string;
+  userId: string;
+  fullName: string | null;
+  email: string;
+  role: Role;
+  joinedAt: Date | null;
+  disabledAt: Date | null;
+  /** Rol clínico con `Practitioner` en este consultorio (agenda propia). */
+  hasAgenda: boolean;
+};
+
+/** Invitación sin aceptar ni anular vista desde Plataforma (BO2-B). Sin token ni URL. */
+export type PlatformTeamInvitationRow = {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  status: InvitationStatus;
+  invitedAt: Date;
+  expiresAt: Date;
+  lastSentAt: Date | null;
+  sendCount: number;
+  lastEmailStatus: InvitationEmailStatus | null;
+};
+
+/** `getTenantTeamForPlatform` (BO2-B). `seats` = uso de lugares del plan (BO-D7, `lib/plan-catalog.ts`). */
+export type PlatformTenantTeam = {
+  tenantId: string;
+  members: PlatformTeamMemberRow[];
+  invitations: PlatformTeamInvitationRow[];
+  seats: { used: number; limit: number | null; remaining: number | null; full: boolean };
+};

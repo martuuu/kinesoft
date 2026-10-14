@@ -16,7 +16,7 @@
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
 import { getRequestContext } from "@/lib/request-context";
-import { ReadOnlyModeError, isReadOnlyViolation } from "@/lib/tenant-access";
+import { ReadOnlyModeError, SUPPORT_READ_ONLY_MESSAGE, isReadOnlyViolation } from "@/lib/tenant-access";
 
 /**
  * A Prisma client usable for tenant-scoped work: either the base client
@@ -74,8 +74,11 @@ export async function runWithRls<T>(
     }, txOpts);
   } catch (err) {
     // El 25006 sale de Prisma como error crudo del conector: se traduce a un error con copy en voseo que las
-    // actions pueden mostrar tal cual.
-    if (readOnly && isReadOnlyViolation(err)) throw new ReadOnlyModeError();
+    // actions pueden mostrar tal cual. BO2-E: si el read-only viene de una sesión de soporte (no del consultorio),
+    // el copy del consultorio («Escribinos para reactivarlo») confundiría al superadmin: va el de soporte.
+    if (readOnly && isReadOnlyViolation(err)) {
+      throw new ReadOnlyModeError(getRequestContext()?.supportSessionId ? SUPPORT_READ_ONLY_MESSAGE : undefined);
+    }
     throw err;
   }
 }

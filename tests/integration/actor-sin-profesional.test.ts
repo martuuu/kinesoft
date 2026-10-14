@@ -68,7 +68,8 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db);
+    // PRO: cupo para el kine + la Secretaria vieja (rol clínico de antes); FREE (1 lugar) frena la 2.ª activación (BO2-B).
+    T = await createEphemeralTenant(db, { plan: "PRO" });
     kine = await addPractitioner(db, T, "PRACTITIONER");
     secretaria = await staffWithoutPractitioner("ASSISTANT");
     billing = await staffWithoutPractitioner("BILLING");
@@ -293,6 +294,7 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
         updateUserById: (id, p) => fake.updateUserById(id, p),
         getUser: (id) => fake.getUser(id),
         findUserByEmail: (e) => fake.findUserByEmail(e),
+        listUsers: (p) => fake.listUsers(p),
         generateLink: (p) => fake.generateLink(p),
       });
       __setEmailTransportForTests(async () => ({ ok: true, transport: "resend", providerId: "prov" }));

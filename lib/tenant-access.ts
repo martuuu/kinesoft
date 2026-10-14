@@ -136,6 +136,9 @@ export function isTenantBlocked(mode: TenantAccessMode): mode is "suspended" | "
 export const READ_ONLY_MESSAGE =
   "Tu consultorio está en modo lectura: podés consultar todo, pero no cargar ni modificar datos. Escribinos para reactivarlo.";
 
+/** Escritura de una sesión de soporte fuera de Configuración (BO2-E): no es el consultorio el que está en lectura. */
+export const SUPPORT_READ_ONLY_MESSAGE = "Entraste como soporte: acá solo podés mirar.";
+
 /** Escritura rechazada por modo lectura (C-BO2/C-BO3). El mensaje se puede mostrar tal cual. */
 export class ReadOnlyModeError extends Error {
   constructor(message: string = READ_ONLY_MESSAGE) {
@@ -170,6 +173,6 @@ export function assertWritableFor(p: {
   support: boolean;
   supportWritable: boolean;
 }): void {
-  if (p.support && !p.supportWritable) throw new ReadOnlyModeError("Entraste como soporte: acá solo podés mirar.");
+  if (p.support && !p.supportWritable) throw new ReadOnlyModeError(SUPPORT_READ_ONLY_MESSAGE);
   if (!canWrite(effectiveMode(p.access.mode, p.enforcement))) throw new ReadOnlyModeError();
 }

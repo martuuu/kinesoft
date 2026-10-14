@@ -27,7 +27,8 @@
  */
 import type { Prisma, TenantVertical } from "@prisma/client";
 import { pickFreeSlug, slugify } from "./onboarding-logic"; // relativo: el script lo corre tsx
-import { provisionPractitionerAgenda } from "./agenda-defaults";
+import { enableServiceForPractitioners, provisionPractitionerAgenda } from "./agenda-defaults";
+import type { StarterService } from "./tenant-starter-services";
 
 type Tx = Prisma.TransactionClient;
 
@@ -42,6 +43,20 @@ export class OpenOnboardingExistsError extends Error {
   constructor(public tenantId: string) {
     super("open_onboarding_exists");
     this.name = "OpenOnboardingExistsError";
+  }
+}
+
+/**
+ * BO2-A: el slug pedido explícitamente es el alias (BO-D9, `TenantSlugAlias`) de
+ * OTRO consultorio. El índice único de `Tenant.slug` no lo ve (es otra tabla), y
+ * crear el consultorio igual dejaría el alias tapado: los links viejos del
+ * consultorio que cambió de slug llevarían al nuevo. El caller lo traduce a
+ * «ese slug ya está en uso».
+ */
+export class SlugUnavailableError extends Error {
+  constructor(public slug: string) {
+    super("slug_unavailable");
+    this.name = "SlugUnavailableError";
   }
 }
 
@@ -72,8 +87,24 @@ export type BootstrapTenantInput = {
    * `false` = el OWNER sigue en el stepper de `/onboarding`.
    */
   onboardingCompleted: boolean;
-  /** Origen para el audit ("onboarding", "scripts/create-tenant.ts"). */
+  /** Origen para el audit ("onboarding", "scripts/create-tenant.ts", "platform"). */
   source: string;
+  /**
+   * BO2-A: `true` = el caller escribe el audit del alta en la MISMA tx (Plataforma:
+   * `platform.tenant.create` doble, consultorio + registro global, con el superadmin
+   * como actor). Sin esto quedaban dos eventos del mismo hecho y el `tenant.create`
+   * atribuido al titular, que no hizo nada. Default false: onboarding y script
+   * siguen auditando acá como siempre.
+   */
+  auditByCaller?: boolean;
+  /**
+   * BO2-A: servicios iniciales (`starterServicesFor(vertical)`), creados en la misma
+   * tx y habilitados para el profesional del titular (`PractitionerService`, igual
+   * que `createService`). Antes solo los sembraba el script, en txs sueltas DESPUÉS
+   * del alta: un corte en el medio dejaba un consultorio a medias. Vacío o ausente =
+   * sin servicios (el stepper los crea en su paso).
+   */
+  starterServices?: readonly StarterService[];
   /**
    * EV0: tipo de consultorio. Sin valor = KINESIOLOGY (el cliente de hoy y el
    * default de la columna). Es la ÚNICA escritura de la vertical fuera de
@@ -82,14 +113,22 @@ export type BootstrapTenantInput = {
   vertical?: TenantVertical;
 };
 
-/** Primer slug libre derivado del nombre (una query `startsWith`). */
+/**
+ * Primer slug libre derivado del nombre (una query `startsWith` por tabla).
+ *
+ * BO2-A: también descarta los alias de slug (`TenantSlugAlias`, BO-D9). Un alias es
+ * un slug VIEJO que sigue redirigiendo a su consultorio; si un alta nueva lo tomara,
+ * los links viejos (turnero, QR impresos) llevarían a otro consultorio. La tabla es
+ * SERVICE_ONLY: todos los callers corren sobre el canal service (el Tenant todavía no
+ * existe, no hay GUC) o con el cliente owner del script.
+ */
 export async function freeSlugFor(tx: Tx, clinicName: string): Promise<string> {
   const base = slugify(clinicName);
-  const rows = await tx.tenant.findMany({
-    where: { slug: { startsWith: base } },
-    select: { slug: true },
-  });
-  return pickFreeSlug(base, rows.map((r) => r.slug));
+  const [rows, aliases] = await Promise.all([
+    tx.tenant.findMany({ where: { slug: { startsWith: base } }, select: { slug: true } }),
+    tx.tenantSlugAlias.findMany({ where: { slug: { startsWith: base } }, select: { slug: true } }),
+  ]);
+  return pickFreeSlug(base, [...rows.map((r) => r.slug), ...aliases.map((a) => a.slug)]);
 }
 
 /**
@@ -105,6 +144,8 @@ export async function bootstrapTenant(
   practitionerId: string;
   particularInsurerId: string;
   locationId: string;
+  /** BO2-A: ids de `starterServices`, en el mismo orden (vacío sin servicios iniciales). */
+  serviceIds: string[];
 }> {
   const email = input.email.trim().toLowerCase();
 
@@ -129,6 +170,13 @@ export async function bootstrapTenant(
     update: { email, ...(input.fullName ? { fullName: input.fullName } : {}) },
   });
 
+  // Slug explícito (script, Plataforma): el único de Tenant.slug cubre la carrera
+  // con otra alta (P2002 → el caller decide); el alias de otro consultorio no lo
+  // cubre ningún índice, se mira acá.
+  if (input.slug) {
+    const alias = await tx.tenantSlugAlias.count({ where: { slug: input.slug } });
+    if (alias > 0) throw new SlugUnavailableError(input.slug);
+  }
   const slug = input.slug ?? (await freeSlugFor(tx, input.clinicName));
   const tenant = await tx.tenant.create({
     data: {
@@ -173,23 +221,52 @@ export async function bootstrapTenant(
     tenantId: tenant.id,
     practitionerId: practitioner.id,
   });
+  // BO2-A: servicios iniciales en la MISMA tx que el alta (todo o nada) y ya
+  // habilitados para el titular, como `createService`. Secuencial a propósito: el
+  // orden de creación es el orden en que el consultorio los ve listados.
+  const serviceIds: string[] = [];
+  for (const s of input.starterServices ?? []) {
+    const svc = await tx.service.create({
+      data: {
+        tenantId: tenant.id,
+        name: s.name,
+        durationMin: s.durationMin,
+        priceCents: s.priceCents,
+        color: s.color,
+        maxConcurrent: s.maxConcurrent,
+        discipline: s.discipline,
+      },
+      select: { id: true },
+    });
+    await enableServiceForPractitioners(tx, { tenantId: tenant.id, serviceId: svc.id, practitionerId: practitioner.id });
+    serviceIds.push(svc.id);
+  }
   // En la misma transacción (no `audit()`, que escribe por otra conexión):
   // si el alta se revierte, no queda un audit de un tenant que no existe.
-  await tx.auditEvent.create({
-    data: {
-      tenantId: tenant.id,
-      actorId: input.userId,
-      action: "tenant.create",
-      entity: "Tenant",
-      entityId: tenant.id,
-      payload: { slug, source: input.source, practitionerId: practitioner.id, vertical: tenant.vertical },
-    },
-  });
+  if (!input.auditByCaller) {
+    await tx.auditEvent.create({
+      data: {
+        tenantId: tenant.id,
+        actorId: input.userId,
+        action: "tenant.create",
+        entity: "Tenant",
+        entityId: tenant.id,
+        payload: {
+          slug,
+          source: input.source,
+          practitionerId: practitioner.id,
+          vertical: tenant.vertical,
+          ...(serviceIds.length ? { starterServices: serviceIds.length } : {}),
+        },
+      },
+    });
+  }
   return {
     tenantId: tenant.id,
     slug,
     practitionerId: practitioner.id,
     particularInsurerId: particular.id,
     locationId: agenda.locationId,
+    serviceIds,
   };
 }

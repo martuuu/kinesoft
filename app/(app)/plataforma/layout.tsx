@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
-import { requireSuperAdmin } from "@/lib/session";
+import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { PlatformNav } from "@/components/plataforma/platform-nav";
 
 /**
- * Guard for the platform-superadmin "Plataforma" panel. `requireSuperAdmin`
- * throws `ForbiddenError` for a non-admin actor (and `UnauthenticatedError`
- * with no session, though the parent (app) layout already redirects those).
- * Either way, non-admins land on /dashboard.
+ * Guard del panel "Plataforma". BO2-F: `requirePlatformAdmin` (C-BO2) en vez de
+ * `requireSuperAdmin`: no pasa por `buildActor` (no necesita un consultorio «casa»)
+ * y rechaza al superadmin deshabilitado. Tira `ForbiddenError` a un no-admin (y
+ * `UnauthenticatedError` sin sesión, aunque el layout (app) ya redirige esos).
+ * En los dos casos, el no-admin cae en /dashboard.
  *
  * [EV0-P2] El shell suma la sub-nav de Plataforma (Resumen · Consultorios ·
  * Ejercicios · Tags · Catálogo global). Va después del guard: un no-admin no
@@ -15,7 +16,7 @@ import { PlatformNav } from "@/components/plataforma/platform-nav";
  */
 export default async function PlataformaLayout({ children }: { children: React.ReactNode }) {
   try {
-    await requireSuperAdmin();
+    await requirePlatformAdmin();
   } catch {
     redirect("/dashboard");
   }

@@ -67,6 +67,12 @@ export type EntitlementValues = {
   status: TenantStatus;
   /** BO1-B: null = el cupo del plan (`seatLimitFor`); entero ≥ 1 (CHECK en la base). Solo `platform`. */
   seatLimitOverride: number | null;
+  /**
+   * BO2-D (handoff BO1-B): motivo de la suspensión/baja, «CÓDIGO: nota» (`encodeStatusReason`). Solo `platform`,
+   * siempre junto con `status`. El audit guarda la CLAVE y no el texto: la nota es libre y el registro del
+   * consultorio no es lugar para un texto que nadie revisó.
+   */
+  statusReason: string | null;
 };
 export type EntitlementKey = keyof EntitlementValues;
 
@@ -80,6 +86,7 @@ export const ENTITLEMENT_KEYS_BY_SOURCE = {
     "publicBookingEnabled",
     "status",
     "seatLimitOverride",
+    "statusReason",
   ],
   billing: ["plan", "subscriptionStatus", "trialEndsAt"],
   onboarding: ["vertical"],
@@ -119,6 +126,12 @@ export type ApplyTenantEntitlementsResult =
   | { ok: false; reason: "not-found" | "stale" | "onboarding-closed" };
 
 const ALL_KEYS: readonly EntitlementKey[] = ENTITLEMENT_KEYS_BY_SOURCE.platform;
+
+/** Código + «: » + nota de 200 (`STATUS_REASON_NOTE_MAX`) con margen. */
+const STATUS_REASON_MAX = 240;
+
+/** Claves cuyo VALOR no va al payload del audit (solo figuran en `changed`). */
+const AUDIT_KEY_ONLY: ReadonlySet<EntitlementKey> = new Set<EntitlementKey>(["statusReason"]);
 
 /** Bug del caller (no input de usuario): se tira para que salte en tests y en Sentry. */
 function programmingError(msg: string): never {
@@ -175,6 +188,12 @@ function validatePatch(source: EntitlementSource, patch: Record<string, unknown>
         }
         out.seatLimitOverride = v as number | null;
         break;
+      case "statusReason":
+        if (v !== null && !(typeof v === "string" && v.trim() !== "" && v.length <= STATUS_REASON_MAX)) {
+          programmingError(`statusReason inválido (null o texto de 1 a ${STATUS_REASON_MAX} caracteres)`);
+        }
+        out.statusReason = v as string | null;
+        break;
     }
   }
   return out;
@@ -229,6 +248,7 @@ export async function applyTenantEntitlementsInTx(
       publicBookingEnabled: true,
       status: true,
       seatLimitOverride: true,
+      statusReason: true,
       onboardingCompletedAt: true,
       updatedAt: true,
     },
@@ -257,8 +277,10 @@ export async function applyTenantEntitlementsInTx(
     const prev = current[key];
     if (sameValue(prev, next)) continue;
     changed.push(key);
-    before[key] = auditValue(prev);
-    after[key] = auditValue(next);
+    if (!AUDIT_KEY_ONLY.has(key)) {
+      before[key] = auditValue(prev);
+      after[key] = auditValue(next);
+    }
     (data as Record<string, unknown>)[key] = next;
   }
   if (changed.length === 0) {

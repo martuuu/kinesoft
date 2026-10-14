@@ -12,7 +12,15 @@ import "server-only";
 import { prismaService as prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
-import { isPublicBookingOpen } from "@/lib/tenant-modules";
+import { isPublicBookingOpen, type TenantEntitlements } from "@/lib/tenant-modules";
+import { tenantAccessEnforcement } from "@/lib/env";
+import {
+  TENANT_ACCESS_SELECT,
+  effectiveMode,
+  publicSurfacesOpen,
+  tenantAccessFor,
+  type TenantAccessInput,
+} from "@/lib/tenant-access";
 import { getVerifiedSessionUser } from "@/lib/session-user";
 // Ciclo de imports benigno: `public-booking.ts` importa helpers de este archivo
 // y este usa `getPublicClinic` solo dentro de una función (nunca al cargar).
@@ -38,7 +46,26 @@ export const PUBLIC_BOOKING_SWITCH_SELECT = {
   vertical: true,
   plan: true,
   publicBookingEnabled: true,
+  // BO2-D: + las 4 columnas del acceso (C-BO1), en la misma lectura.
+  ...TENANT_ACCESS_SELECT,
 } as const;
+
+/**
+ * ¿Las superficies públicas SIN Actor de este consultorio están abiertas? (BO2-D, C-BO1 `publicSurfacesOpen`:
+ * turnero, check-in del portal; el token realtime lo mira con el Actor). Con el modo EFECTIVO
+ * (`TENANT_ACCESS_ENFORCEMENT`): con el default `banner` solo cierran suspendido y dado de baja (un trial vencido
+ * sigue tomando turnos hasta que Martin pase a `enforce`); con `enforce`, también el solo lectura.
+ * Lo que NUNCA se gatea acá: el webhook de MP (AUDIT §5.4: un pago siempre se concilia, aunque el consultorio
+ * esté suspendido) y el estado de un turno ya reservado (`getPublicBookingStatus`, retorno de MP).
+ */
+export function publicSurfacesOpenFor(t: TenantAccessInput, now: Date = new Date()): boolean {
+  return publicSurfacesOpen(effectiveMode(tenantAccessFor(t, now).mode, tenantAccessEnforcement()));
+}
+
+/** Turnero abierto = módulo prendido (switch EV0) Y superficies públicas abiertas (acceso BO2-D). */
+export function isPublicTurneroOpen(t: TenantEntitlements & TenantAccessInput, now: Date = new Date()): boolean {
+  return isPublicBookingOpen(t) && publicSurfacesOpenFor(t, now);
+}
 
 /** Contacto PÚBLICO del consultorio (lo que cargó en el onboarding para mostrar). */
 export type PublicClinicContact = {
@@ -48,7 +75,11 @@ export type PublicClinicContact = {
   email: string | null;
 };
 
-export type PublicBookingGate = { state: "open" } | { state: "closed"; contact: PublicClinicContact };
+export type PublicBookingGate =
+  | { state: "open" }
+  | { state: "closed"; contact: PublicClinicContact }
+  /** BO2-D (BO-D9): el slug pedido es un alias viejo; `slug` es el vigente (la página redirige). */
+  | { state: "moved"; slug: string };
 
 /**
  * ¿Qué muestra `/c/[slug]/booking`? null = el slug no existe (404, como antes);
@@ -77,8 +108,15 @@ async function readPublicBookingGate(
     where: { slug },
     select: { id: true, name: true, phone: true, whatsapp: true, publicEmail: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
   });
-  if (!t) return null;
-  if (isPublicBookingOpen(t)) return { tenantId: t.id, gate: { state: "open" } };
+  if (!t) {
+    // BO2-D (BO-D9): ¿es un slug viejo? El slug VIVO gana siempre (se miró primero): si un alias quedara pisado
+    // por un alta nueva con ese slug, el link va al consultorio que hoy lo tiene, nunca a otro por un alias.
+    const moved = await resolveSlugAlias(slug);
+    return moved ? { tenantId: moved.tenantId, gate: { state: "moved", slug: moved.slug } } : null;
+  }
+  // Abierto = switch + acceso (BO2-D). Un consultorio suspendido o dado de baja muestra la misma página
+  // «Turnos online no disponibles» (molde EV0) con su contacto público: el link ya circuló y un 404 parece roto.
+  if (isPublicTurneroOpen(t)) return { tenantId: t.id, gate: { state: "open" } };
   return {
     tenantId: t.id,
     gate: {
@@ -88,8 +126,22 @@ async function readPublicBookingGate(
   };
 }
 
+/**
+ * Slug viejo → slug vigente del consultorio (BO2-D, BO-D9). `TenantSlugAlias` es SERVICE_ONLY: se lee por el
+ * canal service (este módulo ya lo usa). null = no es un alias. Exportado para que otras superficies públicas por
+ * slug (portal) puedan redirigir con la misma regla.
+ */
+export async function resolveSlugAlias(slug: string): Promise<{ tenantId: string; slug: string } | null> {
+  const alias = await prisma.tenantSlugAlias.findUnique({
+    where: { slug },
+    select: { tenant: { select: { id: true, slug: true } } },
+  });
+  return alias ? { tenantId: alias.tenant.id, slug: alias.tenant.slug } : null;
+}
+
 export type PublicBookingPageData =
   | { state: "closed"; contact: PublicClinicContact }
+  | { state: "moved"; slug: string }
   | {
       state: "open";
       clinic: PublicClinic;
@@ -109,6 +161,8 @@ export async function loadPublicBookingPage(slug: string): Promise<PublicBooking
   if (!read) return null;
   const { gate, tenantId } = read;
   if (gate.state === "closed") return { state: "closed", contact: gate.contact };
+  // Alias: antes de la sesión y del prefill (la página redirige; no hay nada que cargar).
+  if (gate.state === "moved") return { state: "moved", slug: gate.slug };
 
   // Re-chequea el switch adentro: si lo apagaron entre las dos lecturas, null
   // (404 de un request) es aceptable; mostrar el wizard con datos, no.

@@ -1,7 +1,7 @@
 /**
  * B1.3 CAT-admin — curado del catálogo global desde Plataforma, contra la DB
  * real. Se llaman las server actions reales de `lib/catalog-admin.ts` con el
- * getActor real (solo se mockea la sesión de Supabase): un no-superadmin tiene
+ * `requirePlatformAdmin` real (BO2-F; solo se mockea la sesión de Supabase): un no-superadmin tiene
  * que rebotar en CADA action, y los merges/promoción tienen que repuntar las
  * FKs de filas de varios consultorios en una sola transacción.
  *
@@ -120,6 +120,13 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
       await db.payer.deleteMany({ where: { id: { in: payerIds } } });
       await db.practice.deleteMany({ where: { id: { in: practiceIds } } });
       await db.specialty.deleteMany({ where: { id: { in: specialtyIds } } });
+      // BO2-F: las escrituras dejan filas globales en PlatformAuditEvent (solo inserción → modo réplica).
+      if (S) {
+        await db.$transaction([
+          db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+          db.$executeRaw`DELETE FROM "PlatformAuditEvent" WHERE "actorId" = ${S.userId}`,
+        ]);
+      }
       await db.$disconnect();
     }
   });
@@ -190,9 +197,13 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
     expect(row.matchKey).toBe(payer.matchKey);
     // Sin duplicados (case/acentos) y con el nombre anterior como alias.
     expect(row.aliases).toEqual(["osdepym", "Empresarios"]);
-    const ev = await db.auditEvent.findFirst({ where: { action: "admin.catalog.payer.update", entityId: payer.id } });
-    expect(ev?.tenantId).toBe(S.tenantId);
+    // BO2-F: el catálogo es global → registro de plataforma (tenantId null), NO el log del consultorio del
+    // superadmin (antes `ev.tenantId` era S.tenantId: ruido en el log de su OWNER).
+    const ev = await db.platformAuditEvent.findFirst({ where: { action: "platform.catalog.payer.update", entityId: payer.id } });
+    expect(ev?.tenantId).toBeNull();
     expect(ev?.actorId).toBe(S.userId);
+    expect(ev?.payload).toMatchObject({ platform: { actorHomeTenantId: S.tenantId } });
+    expect(await db.auditEvent.count({ where: { tenantId: S.tenantId, entityId: payer.id } })).toBe(0);
   });
 
   it("editar práctica y especialidad también marcan curatedAt; zod rechaza nombre vacío", async () => {
@@ -281,7 +292,7 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
     expect(fromRow.archivedAt).not.toBeNull();
     expect(fromRow.curatedAt).not.toBeNull();
 
-    const ev = await db.auditEvent.findFirst({ where: { action: "admin.catalog.payer.merge", entityId: into.id } });
+    const ev = await db.platformAuditEvent.findFirst({ where: { action: "platform.catalog.payer.merge", entityId: into.id } });
     expect(ev?.payload).toMatchObject({ fromId: from.id, intoId: into.id, insurers: 2 });
   });
 
@@ -406,8 +417,9 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
     expect(prop.archivedAt).not.toBeNull();
     expect(prop.promotedAt).not.toBeNull();
     expect(prop.tenantId).toBe(B.tenantId);
-    const ev = await db.auditEvent.findFirst({ where: { action: "admin.catalog.payerPlan.promote", entityId: proposal.id } });
-    expect(ev?.payload).toMatchObject({ globalPlanId: global.id, merged: true, coveragesMoved: 2 });
+    const ev = await db.platformAuditEvent.findFirst({ where: { action: "platform.catalog.payerPlan.promote", entityId: proposal.id } });
+    expect(ev?.payload).toMatchObject({ globalPlanId: global.id, merged: true, proposedBy: B.tenantId, coveragesMoved: 2 });
+    expect(ev?.tenantId).toBeNull();
   });
 
   // Integración B1 (handoff de B1.1): el import corre fuera de Next y no puede
@@ -421,10 +433,10 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
     asUser(S.userId);
     expect(await refreshCatalogCache()).toEqual({ ok: true, data: undefined });
     expect(revalidateTagSpy).toHaveBeenCalledWith(tags.catalog());
-    const ev = await db.auditEvent.findFirst({
-      where: { action: "admin.catalog.refreshCache", actorId: S.userId },
+    const ev = await db.platformAuditEvent.findFirst({
+      where: { action: "platform.catalog.refreshCache", actorId: S.userId },
     });
-    expect(ev?.tenantId).toBe(S.tenantId);
+    expect(ev?.tenantId).toBeNull();
   });
 
   it("toda escritura de Plataforma invalida tags.catalog()", async () => {
