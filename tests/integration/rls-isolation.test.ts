@@ -813,3 +813,105 @@ describe.skipIf(!RUN || BYPASS)("RLS Room (SR M4, app role)", () => {
     expect(n).toEqual([1, 1]);
   });
 });
+
+// IAM-1 (M6): EmailLog. Lo escribe el sink de `sendEmail` por el canal service
+// (BYPASSRLS); la app (kinesoft_app) solo LEE el registro de su consultorio
+// (IAM-4c). Además del aislamiento A/B: las filas con tenantId NULL (mails sin
+// consultorio: signup, olvidé contraseña) son invisibles para la app con
+// cualquier GUC (NULL = x es NULL → falso), y la app no puede insertar una.
+// Objetos, CHECK y cascade: identity-m6.test.ts.
+describe.skipIf(!RUN || BYPASS)("RLS EmailLog (IAM-1 M6, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let logA: string;
+  let logB: string;
+  let logNull: string;
+  const row = (tenantId: string | null, kind = "staff_invite") => ({
+    tenantId,
+    kind,
+    toHash: "h",
+    toMasked: "a***@test.local",
+    transport: "log",
+    status: "skipped",
+    actorId: "rls-m6",
+  });
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    logA = (await prismaOwner.emailLog.create({ data: row(A.tenantId) })).id;
+    logB = (await prismaOwner.emailLog.create({ data: row(B.tenantId) })).id;
+    logNull = (await prismaOwner.emailLog.create({ data: row(null, "password_reset") })).id;
+  });
+
+  afterAll(async () => {
+    await prismaOwner.emailLog.deleteMany({ where: { id: logNull } });
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("lectura: A ve solo lo suyo; ni la de B ni la de tenantId NULL (y B no ve la de A)", async () => {
+    const seenByA = await runWithRls(A.tenantId, (tx) =>
+      tx.emailLog.findMany({ where: { id: { in: [logA, logB, logNull] } }, select: { id: true } })
+    );
+    expect(seenByA.map((r) => r.id)).toEqual([logA]);
+    const seenByB = await runWithRls(B.tenantId, (tx) =>
+      tx.emailLog.findMany({ where: { id: { in: [logA, logB, logNull] } }, select: { id: true } })
+    );
+    expect(seenByB.map((r) => r.id)).toEqual([logB]);
+  });
+
+  it("INSERT desde A con el tenantId de B, o con tenantId NULL → rechazado por el WITH CHECK", async () => {
+    await expect(runWithRls(A.tenantId, (tx) => tx.emailLog.create({ data: row(B.tenantId) }))).rejects.toThrow(
+      /row-level security/i
+    );
+    await expect(runWithRls(A.tenantId, (tx) => tx.emailLog.create({ data: row(null) }))).rejects.toThrow(
+      /row-level security/i
+    );
+    expect(await prismaOwner.emailLog.count({ where: { tenantId: B.tenantId } })).toBe(1);
+  });
+
+  it("UPDATE / DELETE desde A sobre la de B o la NULL afectan 0 filas y quedan intactas", async () => {
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.emailLog.updateMany({ where: { id: { in: [logB, logNull] } }, data: { status: "failed" } })).count,
+      (await tx.emailLog.deleteMany({ where: { id: { in: [logB, logNull] } } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    const rows = await prismaOwner.emailLog.findMany({ where: { id: { in: [logB, logNull] } }, select: { status: true } });
+    expect(rows.map((r) => r.status)).toEqual(["skipped", "skipped"]);
+  });
+
+  it("A no puede mudar su fila al tenant de B ni dejarla sin tenant (WITH CHECK en UPDATE)", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.emailLog.update({ where: { id: logA }, data: { tenantId: B.tenantId } }))
+    ).rejects.toThrow(/row-level security/i);
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.emailLog.update({ where: { id: logA }, data: { tenantId: null } }))
+    ).rejects.toThrow(/row-level security/i);
+    expect((await prismaOwner.emailLog.findUniqueOrThrow({ where: { id: logA } })).tenantId).toBe(A.tenantId);
+  });
+
+  it("sin GUC (fuera de runWithRls): 0 filas visibles (tampoco las NULL) y ningún INSERT entra", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.emailLog.count({ where: { id: { in: [logA, logB, logNull] } } })).toBe(0);
+      await expect(app.emailLog.create({ data: row(null) })).rejects.toThrow(/row-level security/i);
+      await expect(app.emailLog.create({ data: row(A.tenantId) })).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+    expect(await prismaOwner.emailLog.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("intra-tenant: A inserta, lee y borra lo propio (la policy no es deny-all)", async () => {
+    const created = await runWithRls(A.tenantId, (tx) => tx.emailLog.create({ data: row(A.tenantId, "welcome") }));
+    expect(created).toMatchObject({ tenantId: A.tenantId, kind: "welcome" });
+    const n = await runWithRls(A.tenantId, async (tx) => (await tx.emailLog.deleteMany({ where: { id: created.id } })).count);
+    expect(n).toBe(1);
+  });
+});

@@ -40,6 +40,7 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+import { getActor } from "@/lib/session";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -254,7 +255,10 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     asUser(uid);
     expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
 
-    const prac = await db.practitioner.findUniqueOrThrow({ where: { userId: uid }, select: { id: true } });
+    const prac = await db.practitioner.findUniqueOrThrow({
+      where: { tenantId_userId: { tenantId: A.tenantId, userId: uid } },
+      select: { id: true },
+    });
     invited = { userId: uid, practitionerId: prac.id };
     const mine = await snapshot(db, A.tenantId, [prac.id]);
     expect(mine.schedules).toHaveLength(6);
@@ -282,7 +286,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
 
     expect(await snapshot(db, A.tenantId)).toEqual(before);
-    expect(await db.practitioner.count({ where: { userId: invited.userId } })).toBe(1);
+    expect(await db.practitioner.count({ where: { userId: invited.userId, tenantId: A.tenantId } })).toBe(1);
     await db.practitionerSchedule.update({ where: { id: monday }, data: { startMin: 540 } });
   });
 
@@ -292,7 +296,10 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     const raw = await newInvite(db, C, `${uid}@test.local`);
     asUser(uid);
     expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
-    const prac = await db.practitioner.findUniqueOrThrow({ where: { userId: uid }, select: { id: true } });
+    const prac = await db.practitioner.findUniqueOrThrow({
+      where: { tenantId_userId: { tenantId: C.tenantId, userId: uid } },
+      select: { id: true },
+    });
 
     const loc = await db.location.findFirstOrThrow({ where: { tenantId: C.tenantId, isPrimary: true } });
     expect(loc).toMatchObject({ id: agendaDefaultIds.location(C.tenantId), name: PRIMARY_LOCATION_NAME });
@@ -300,13 +307,33 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     await expectSameAsBackfill(db, C.tenantId, [prac.id]);
   });
 
-  it("acceptInvite de alguien que ya es profesional de OTRO consultorio: membresía sí, agenda no", async () => {
+  // IAM-1 (M6, decisión 6 de Martin): antes («membresía sí, agenda no») el kine de A quedaba con membresía en
+  // C SIN Practitioner ahí y `buildActor` no lo dejaba entrar a C (bucle, §19.1). Ahora es profesional de los
+  // dos consultorios con el mismo usuario, cada uno con su agenda.
+  it("[IAM-1] acceptInvite de alguien que ya es profesional de OTRO consultorio: queda profesional acá, con su agenda (= backfill)", async () => {
     const raw = await newInvite(db, C, `${invited.userId}@test.local`);
     asUser(invited.userId);
     expect(await acceptInvite(raw)).toEqual({ ok: true, data: undefined });
     expect(await db.membership.count({ where: { userId: invited.userId, tenantId: C.tenantId } })).toBe(1);
+
+    const pracs = await db.practitioner.findMany({ where: { userId: invited.userId }, select: { id: true, tenantId: true } });
+    expect(pracs.map((p) => p.tenantId).sort()).toEqual([A.tenantId, C.tenantId].sort());
+    const inC = pracs.find((p) => p.tenantId === C.tenantId)!;
+    expect(inC.id).not.toBe(invited.practitionerId);
+
+    // La agenda nueva es del Practitioner de C; la de A no se tocó ni se mudó.
+    expect(await db.practitionerSchedule.count({ where: { tenantId: C.tenantId, practitionerId: inC.id } })).toBe(6);
     expect(await db.practitionerSchedule.count({ where: { tenantId: C.tenantId, practitionerId: invited.practitionerId } })).toBe(0);
-    expect(await db.practitionerPayer.count({ where: { tenantId: C.tenantId, practitionerId: invited.practitionerId } })).toBe(0);
+    expect(await db.practitionerSchedule.count({ where: { tenantId: A.tenantId, practitionerId: invited.practitionerId } })).toBe(6);
+    await expectSameAsBackfill(db, C.tenantId, [inC.id]);
+
+    // Y entra a C: sin cookie `buildActor` elige la membresía más reciente (C) y antes tiraba no_membership
+    // porque no había Practitioner suyo en C (el bucle de §19.1).
+    const actor = await getActor();
+    expect(actor).toMatchObject({ tenantId: C.tenantId, practitionerId: inC.id, userId: invited.userId });
+
+    const inv = await db.invitation.findFirstOrThrow({ where: { tenantId: C.tenantId, email: `${invited.userId}@test.local` }, orderBy: { invitedAt: "desc" } });
+    expect(inv.acceptedByUserId).toBe(invited.userId);
   });
 
   it("createInsurer activa → la aceptan todos los aceptados (no el pendiente); inactiva → nadie hasta reactivarla", async () => {

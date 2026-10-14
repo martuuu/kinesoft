@@ -222,6 +222,28 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
     expect(await db.tenant.count()).toBe(tenantsBefore);
   });
 
+  // IAM-1 (M6): antes, el Practitioner viejo de A (el único global) hacía tirar PractitionerElsewhereError y el
+  // stepper respondía «escribinos a soporte» (callejón de §19.1). Ahora puede tener el suyo.
+  it("[IAM-1] quien quedó como profesional de otro consultorio sin membresías (lo quitaron) crea el suyo", async () => {
+    const uid = newIdentity();
+    await db.userProfile.create({ data: { id: uid, email: `${uid}@test.local` } });
+    const old = await db.practitioner.create({ data: { tenantId: A.tenantId, userId: uid } });
+    try {
+      const r = await saveOnboardingClinic({ name: "Mi Propio Consultorio" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      createdTenants.push(r.data.tenantId);
+      expect(r.data.created).toBe(true);
+      const pracs = await db.practitioner.findMany({ where: { userId: uid }, select: { tenantId: true } });
+      expect(pracs.map((p) => p.tenantId).sort()).toEqual([A.tenantId, r.data.tenantId].sort());
+      const s = await ownedState(uid);
+      expect(s.memberships.map((m) => [m.tenantId, m.role])).toEqual([[r.data.tenantId, "OWNER"]]);
+    } finally {
+      // Practitioner → UserProfile es RESTRICT: el afterAll borra los perfiles test-user-onb-* antes que A.
+      await db.practitioner.delete({ where: { id: old.id } });
+    }
+  });
+
   it("paso 7: exige un servicio, marca onboardingCompletedAt y es idempotente", async () => {
     newIdentity();
     const r = await saveOnboardingClinic({ name: "Para Completar" });

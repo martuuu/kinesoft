@@ -26,10 +26,10 @@ export function bookablePractitionerWhere(
     role: { in: [...CLINICAL_ROLES] },
   };
   if (opts?.includeDisabledFilter) {
-    // `Membership.disabledAt` llega con M6 (IAM-1). Hasta entonces la columna
-    // no existe en el cliente generado y Prisma rechazaría la query: por eso
-    // es opt-in y default false. El cast se va cuando M6 regenere el cliente.
-    Object.assign(membership, { disabledAt: null } as unknown as Prisma.MembershipWhereInput);
+    // `Membership.disabledAt` (M6, IAM-1). Sigue opt-in: nadie suspende
+    // todavía (IAM-4c) y los 8 lugares que listan profesionales lo enchufan
+    // en IAM-2e.
+    membership.disabledAt = null;
   }
   return {
     tenantId,

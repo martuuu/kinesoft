@@ -39,7 +39,7 @@ import { z } from "zod";
 import { ensurePrimaryLocation } from "@/lib/agenda-defaults";
 import { lockTenantLocations } from "@/lib/location-lock";
 import { LocationInput } from "@/lib/locations-schemas";
-import { bootstrapTenant, PractitionerElsewhereError } from "@/lib/tenant-bootstrap";
+import { bootstrapTenant, OpenOnboardingExistsError } from "@/lib/tenant-bootstrap";
 import { getSessionUser, isPortalPatientIdentity, loadMemberships } from "@/lib/onboarding-internal";
 import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputType } from "@/lib/validation";
 
@@ -123,6 +123,12 @@ export async function saveOnboardingClinic(
     });
     return { ok: true, data: { tenantId: inProgress.tenantId, created: false } };
   }
+  // IAM-1: se mantiene. Desde M6 la base ya permite que un miembro de A sea
+  // profesional de un consultorio propio B, pero el stepper sigue siendo para
+  // cuentas SIN consultorio: crear el propio desde una cuenta que ya es
+  // miembro es un flujo de producto aparte (IAM-D4, «desde el selector»,
+  // IAM-3b). Lo fija onboarding.test.ts («quien ya es miembro de otro
+  // consultorio no crea uno nuevo desde el stepper»).
   if (memberships.length > 0) {
     return { ok: false, error: "Tu cuenta ya pertenece a un consultorio. Entrá desde el panel." };
   }
@@ -161,19 +167,20 @@ export async function saveOnboardingClinic(
       logger.info("onboarding.tenant_created", { tenantId: r.tenantId, slug: r.slug });
       return { ok: true, data: { tenantId: r.tenantId, created: true } };
     } catch (e) {
-      if (e instanceof PractitionerElsewhereError) {
-        // El practitioner puede ser el que acaba de crear un pedido paralelo
-        // de este mismo usuario: eso no es "otro consultorio".
-        const mine = await ownedTenantId(user.id);
-        if (mine) return { ok: true, data: { tenantId: mine, created: false } };
-        return {
-          ok: false,
-          error: "Tu cuenta ya figura como profesional de otro consultorio. Escribinos a soporte para crear uno nuevo.",
-        };
+      // IAM-1: el pedido paralelo del mismo usuario (doble click, dos
+      // pestañas) creó el consultorio mientras este esperaba el lock por
+      // usuario de `bootstrapTenant`: mismo resultado que re-entrar al paso.
+      // Antes de M6 esto lo resolvía el P2002 del único global de
+      // Practitioner.userId; ese único ya no existe (un usuario puede ser
+      // profesional en varios consultorios). Un removido de otro consultorio
+      // (Practitioner viejo, sin membresías) ya NO cae en «escribinos a
+      // soporte»: crea el suyo.
+      if (e instanceof OpenOnboardingExistsError) {
+        return { ok: true, data: { tenantId: e.tenantId, created: false } };
       }
       // P2002: slug tomado por otra alta simultánea (→ otro slug), o el
-      // UserProfile/Practitioner que insertó un pedido paralelo del mismo
-      // usuario (→ el chequeo del principio del loop devuelve ese tenant).
+      // UserProfile que insertó un pedido paralelo del mismo usuario (→ el
+      // chequeo del principio del loop devuelve ese tenant).
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") continue;
       logger.error("onboarding.tenant_create_failed", { error: e instanceof Error ? e.message : String(e) });
       return { ok: false, error: "No pudimos crear el consultorio. Probá de nuevo." };

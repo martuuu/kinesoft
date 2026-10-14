@@ -44,7 +44,7 @@
  * SUPABASE_SERVICE_ROLE_KEY env vars must be set (same as the app).
  */
 import { PrismaClient, type TenantVertical } from "@prisma/client";
-import { bootstrapTenant, PractitionerElsewhereError } from "../lib/tenant-bootstrap";
+import { bootstrapTenant, OpenOnboardingExistsError } from "../lib/tenant-bootstrap";
 import { enableServiceForPractitioners } from "../lib/agenda-defaults";
 import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
 import { assertSafeTarget } from "./lib/assert-safe-target";
@@ -215,9 +215,11 @@ async function main() {
   }
 
   // Misma lógica que el alta web (`/onboarding`): lib/tenant-bootstrap.ts.
-  // Crea además el "Particular" (antes el script no lo creaba) y rechaza a un
-  // usuario que ya es Practitioner de otro tenant (antes lo "reusaba" y el
-  // OWNER no podía entrar: buildActor no encontraba practitioner en el nuevo).
+  // Crea además el "Particular" (antes el script no lo creaba) y SIEMPRE un
+  // Practitioner del tenant nuevo. IAM-1 (M6): un usuario que ya es
+  // profesional de otro consultorio ahora puede ser dueño de este (Practitioner
+  // único por consultorio); antes se rechazaba (PractitionerElsewhereError).
+  // Sí se rechaza si ya es OWNER de un consultorio con el alta sin terminar.
   // El alta queda COMPLETA (el operador ya configuró): el OWNER no ve el stepper.
   let tenantId: string;
   try {
@@ -235,9 +237,9 @@ async function main() {
       })
     ));
   } catch (e) {
-    if (e instanceof PractitionerElsewhereError) {
+    if (e instanceof OpenOnboardingExistsError) {
       throw new Error(
-        `El usuario ya es Practitioner del tenant ${e.tenantId}. Un usuario no puede ser profesional de dos consultorios: usá otro email o una invitación.`
+        `El usuario ya es dueño del tenant ${e.tenantId} con el alta sin terminar. Terminala (o borrala) antes de crearle otro consultorio.`
       );
     }
     throw e;

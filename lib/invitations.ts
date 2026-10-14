@@ -93,7 +93,10 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
           id: true,
           email: true,
           fullName: true,
-          practitioner: { select: { specialty: true } },
+          // IAM-1 (M6): un usuario puede ser profesional en varios
+          // consultorios; la especialidad es la de ESTE (tenantId a mano: en
+          // prod la conexión es BYPASSRLS).
+          practitioners: { where: { tenantId: actor.tenantId }, select: { specialty: true }, take: 1 },
         },
       },
     },
@@ -105,7 +108,7 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
     email: m.user.email,
     fullName: m.user.fullName,
     role: m.role,
-    specialty: m.user.practitioner?.specialty ?? null,
+    specialty: m.user.practitioners[0]?.specialty ?? null,
     joinedAt: m.acceptedAt,
     isYou: m.userId === actor.userId,
   }));

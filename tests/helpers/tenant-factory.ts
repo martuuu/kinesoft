@@ -91,6 +91,8 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   await db.notification.deleteMany({ where: { tenantId } });
   await db.dismissedReminder.deleteMany({ where: { tenantId } });
   await db.userPreferences.deleteMany({ where: { tenantId } });
+  // IAM-1 (M6): EmailLog cascadea de Tenant; explícito para que un fallo tire.
+  await db.emailLog.deleteMany({ where: { tenantId } });
   // Membership, Practitioner, Insurer, Invitation, custom Condition/Exercise,
   // Favorite and PlanTemplate cascade from Tenant.
   // SR M4: Location → Room → TimeBlock cascadean; PractitionerSchedule → Room es
@@ -99,10 +101,22 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   // falta borrar nada a mano (lo prueba rooms-m4.test.ts por la cascada real).
   // Booking → Room es RESTRICT y los turnos ya se borraron arriba.
   await db.tenant.delete({ where: { id: tenantId } });
+  // IAM-1 (M6): un usuario puede ser profesional en VARIOS consultorios.
+  // Practitioner → UserProfile es RESTRICT, así que el perfil de quien sigue
+  // siendo profesional de otro tenant de test se deja: lo borra la limpieza de
+  // ese tenant (o el sweep de huérfanos).
   const ids = users.map((u) => u.userId).filter((id) => id.startsWith("test-user-"));
   if (ids.length) {
-    await db.userPreferences.deleteMany({ where: { userId: { in: ids } } });
-    await db.userProfile.deleteMany({ where: { id: { in: ids } } });
+    const removable = (
+      await db.userProfile.findMany({
+        where: { id: { in: ids }, practitioners: { none: {} } },
+        select: { id: true },
+      })
+    ).map((u) => u.id);
+    if (removable.length) {
+      await db.userPreferences.deleteMany({ where: { userId: { in: removable } } });
+      await db.userProfile.deleteMany({ where: { id: { in: removable } } });
+    }
   }
 }
 
@@ -307,7 +321,9 @@ export async function sweepOrphanTestTenants(prisma: PrismaClient): Promise<numb
   });
   for (const t of orphans) await deleteTenantDeep(prisma, t.id);
   await prisma.userProfile.deleteMany({
-    where: { id: { startsWith: "test-user-" }, memberships: { none: {} }, createdAt: { lt: cutoff } },
+    // practitioners none: Practitioner → UserProfile es RESTRICT (IAM-1: un perfil puede quedar como
+    // profesional de otro tenant de test todavía vivo).
+    where: { id: { startsWith: "test-user-" }, memberships: { none: {} }, practitioners: { none: {} }, createdAt: { lt: cutoff } },
   });
   return orphans.length;
 }

@@ -11,6 +11,14 @@
  * reusaba un Practitioner de OTRO tenant, con lo que `buildActor` no
  * encontraba practitioner en el tenant nuevo y el OWNER no podía entrar.
  *
+ * IAM-1 (M6, decisión 6 de Martin del 14-oct): `Practitioner` es único POR
+ * CONSULTORIO, ya no global. Se fue `PractitionerElsewhereError`: un usuario
+ * que ya es profesional de A (o lo fue y lo quitaron) puede tener su propio
+ * consultorio B. Lo que antes frenaba el único global —dos altas simultáneas
+ * del MISMO usuario (doble click en el paso 2, dos pestañas)— lo frena ahora
+ * un advisory lock por usuario + un re-chequeo bajo el lock
+ * (`OpenOnboardingExistsError`).
+ *
  * Por qué NO lleva `import "server-only"`: el script corre con `tsx` fuera de
  * Next, donde ese paquete tira al importarse. Este módulo no toca secretos ni
  * `env`: recibe el cliente de la transacción del caller (canal service en la
@@ -23,12 +31,29 @@ import { provisionPractitionerAgenda } from "./agenda-defaults";
 
 type Tx = Prisma.TransactionClient;
 
-/** El usuario ya es Practitioner de otro consultorio (`Practitioner.userId` es único). */
-export class PractitionerElsewhereError extends Error {
+/**
+ * El usuario ya es OWNER de un consultorio con el alta SIN terminar
+ * (`onboardingCompletedAt` NULL). Se detecta BAJO el lock por usuario: es el
+ * pedido paralelo del mismo usuario (o un alta abandonada a medias), y crear
+ * otro dejaría dos consultorios a medio armar. El caller decide: el stepper
+ * devuelve ese consultorio (= re-entrar al paso 2); el script avisa.
+ */
+export class OpenOnboardingExistsError extends Error {
   constructor(public tenantId: string) {
-    super("practitioner_elsewhere");
-    this.name = "PractitionerElsewhereError";
+    super("open_onboarding_exists");
+    this.name = "OpenOnboardingExistsError";
   }
+}
+
+/**
+ * Lock de alta por usuario, con alcance de transacción (se suelta en el
+ * COMMIT/ROLLBACK). Antes de M6 la red era el único global de
+ * `Practitioner.userId` (el segundo pedido moría con P2002); ahora un usuario
+ * puede ser profesional en varios consultorios y esa red no existe más.
+ * Misma forma de clave que `lib/location-lock.ts`.
+ */
+async function lockUserBootstrap(tx: Tx, userId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`kinesoft:tenant-bootstrap:${userId}`}, 0))`;
 }
 
 export type BootstrapTenantInput = {
@@ -83,11 +108,19 @@ export async function bootstrapTenant(
 }> {
   const email = input.email.trim().toLowerCase();
 
-  const existingPrac = await tx.practitioner.findUnique({
-    where: { userId: input.userId },
+  // Serializa las altas del MISMO usuario. El re-chequeo va DESPUÉS del lock:
+  // en READ COMMITTED cada sentencia ve lo que commiteó el pedido que tenía el
+  // lock, así que el segundo de dos pedidos simultáneos encuentra el
+  // consultorio del primero y no crea otro. Altas de usuarios distintos no se
+  // frenan entre sí (la carrera de slug sigue cubierta por el P2002 + reintento
+  // del caller).
+  await lockUserBootstrap(tx, input.userId);
+  const open = await tx.membership.findFirst({
+    where: { userId: input.userId, role: "OWNER", tenant: { onboardingCompletedAt: null } },
     select: { tenantId: true },
+    orderBy: { invitedAt: "asc" },
   });
-  if (existingPrac) throw new PractitionerElsewhereError(existingPrac.tenantId);
+  if (open) throw new OpenOnboardingExistsError(open.tenantId);
 
   await tx.userProfile.upsert({
     where: { id: input.userId },

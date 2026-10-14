@@ -456,8 +456,8 @@ Gate final del Bloque A: `tsc` 0 · unit 252/252 en 19 archivos (TZ=UTC y TZ=AR)
     usuario no pide la contraseña actual (cookie de un solo uso: se borra tras el éxito); sin cookie exige la
     actual, con 5/10 min por usuario. `sendPasswordReset` (`:145`) usa
     `redirectTo=<APP_URL>/auth/confirm?type=recovery&next=/reset` (`:183`).
-  - `scripts/create-tenant.ts` usa `bootstrapTenant`: ahora crea "Particular" y rechaza un Practitioner de otro
-    tenant (`PractitionerElsewhereError`).
+  - `scripts/create-tenant.ts` usa `bootstrapTenant`: ahora crea "Particular". Desde M6 (IAM-1, 14-oct)
+    `Practitioner` es único por consultorio y el alta usa un advisory lock por usuario (`OpenOnboardingExistsError`).
   - Tests: unit `onboarding-logic` (13), integración `signup` (10) y `onboarding` (8).
 - **Hallazgos nuevos de A2/A3** (clasificados; filas en §2 "Hallazgos 23-sep y A2/A3"):
   - [C0] los write-paths validan practitioner ∈ tenant pero **no membresía aceptada**.

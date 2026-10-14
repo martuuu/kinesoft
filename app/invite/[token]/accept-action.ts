@@ -22,17 +22,22 @@ import type { ActionResult } from "@/lib/validation";
  *
  * On success we:
  *   - Upsert `UserProfile` from the Supabase user.
- *   - Upsert `Practitioner` for this tenant (one Practitioner per
- *     UserProfile per schema constraint, so if the user is already a
- *     practitioner somewhere, that's their row — we just attach a
- *     membership to this tenant).
+ *   - Find or create the `Practitioner` OF THIS TENANT. IAM-1 (M6, decisión
+ *     6 de Martin del 14-oct): `Practitioner` es único por (tenantId,
+ *     userId), así que un kine de A que acepta B queda profesional de B con
+ *     su agenda. Antes (único global) se salteaba el Practitioner si tenía
+ *     uno en otro consultorio y quedaba con membresía en B sin poder entrar
+ *     (`buildActor` → no_membership → bucle, hallazgo [A] de §19.1).
  *   - Upsert `Membership` with the invited role.
- *   - B-pre B2.3: if the user is (now) a Practitioner OF THIS tenant, give
- *     them the default agenda, same rules/ids as the agenda_foundations
- *     backfill: primary Location (created if missing), Mon-Sat slots with the
- *     tenant hours, PractitionerService for shared services (and their own),
+ *   - B-pre B2.3: give the Practitioner of this tenant the default agenda,
+ *     same rules/ids as the agenda_foundations backfill: primary Location
+ *     (created if missing), Mon-Sat slots with the tenant hours,
+ *     PractitionerService for shared services (and their own),
  *     PractitionerPayer for every active Insurer. Idempotent.
- *   - Stamp `Invitation.acceptedAt`.
+ *   - Stamp `Invitation.acceptedAt` + `acceptedByUserId` (M6).
+ *
+ * Todavía crea Practitioner para TODO rol (también Secretario/a y
+ * Facturación): sacarlo es IAM-2e/IAM-4 (`PRACTITIONER_FOR_ALL_ROLES`).
  */
 export async function acceptInvite(token: string): Promise<ActionResult> {
   // A3a-S-rl: sin límite se podía probar tokens por fuerza bruta (el token es
@@ -107,27 +112,20 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
         },
       });
 
-      // The Practitioner row has a unique constraint on userId, so the
-      // same human can only "be a practitioner" in one tenant via this
-      // table. If they already have a practitioner row in another
-      // tenant, we still create the Membership but skip Practitioner.
-      const existingPrac = await tx.practitioner.findUnique({
-        where: { userId: user.id },
-        select: { id: true, tenantId: true },
+      // IAM-1: el Practitioner DE ESTE consultorio (clave compuesta
+      // tenantId+userId). Si ya existe (re-invitación de alguien que estuvo,
+      // o una segunda invitación) se reusa sin pisar su especialidad; los de
+      // otros consultorios no importan acá.
+      const { id: practitionerId } = await tx.practitioner.upsert({
+        where: { tenantId_userId: { tenantId: invite.tenant.id, userId: user.id } },
+        create: {
+          userId: user.id,
+          tenantId: invite.tenant.id,
+          specialty: invite.specialty,
+        },
+        update: {},
+        select: { id: true },
       });
-      let practitionerId: string | null =
-        existingPrac?.tenantId === invite.tenant.id ? existingPrac.id : null;
-      if (!existingPrac) {
-        const created = await tx.practitioner.create({
-          data: {
-            userId: user.id,
-            tenantId: invite.tenant.id,
-            specialty: invite.specialty,
-          },
-          select: { id: true },
-        });
-        practitionerId = created.id;
-      }
 
       await tx.membership.upsert({
         where: {
@@ -143,17 +141,14 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
       });
 
       // B2.3: después de la membresía aceptada (la regla del backfill es
-      // "profesional con membresía aceptada"). Solo si el Practitioner es de
-      // ESTE tenant: el de otro consultorio no atiende acá (no hay qué
-      // configurar). Idempotente: una segunda invitación aceptada por la
-      // misma persona no duplica ni pisa franjas ya cargadas.
-      if (practitionerId) {
-        await provisionPractitionerAgenda(tx, { tenantId: invite.tenant.id, practitionerId });
-      }
+      // "profesional con membresía aceptada"). Idempotente: una segunda
+      // invitación aceptada por la misma persona no duplica ni pisa franjas
+      // ya cargadas.
+      await provisionPractitionerAgenda(tx, { tenantId: invite.tenant.id, practitionerId });
 
       await tx.invitation.update({
         where: { id: invite.id },
-        data: { acceptedAt: new Date() },
+        data: { acceptedAt: new Date(), acceptedByUserId: user.id },
       });
     });
 

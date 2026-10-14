@@ -90,6 +90,8 @@ model Tenant {
   patientChangeRequests   PatientChangeRequest[]
   // SR M4 (rooms)
   rooms                   Room[]
+  // IAM-1 (M6)
+  emailLogs               EmailLog[]
 
   @@index([slug])
 }
@@ -132,7 +134,11 @@ model UserProfile {
   createdAt    DateTime      @default(now())
 
   memberships  Membership[]
-  practitioner Practitioner?
+  // IAM-1 (M6, decisión 6 de Martin del 14-oct): una persona puede ser
+  // profesional en VARIOS consultorios con el mismo usuario. `Practitioner` es
+  // único por (tenantId, userId), ya no global → 1:n. Buscar siempre por
+  // consultorio (`tenantId_userId` o findFirst con tenantId).
+  practitioners Practitioner[]
   // Planes M1 (PD-14): una cuenta del portal se vincula a fichas distintas en N
   // consultorios. `Patient.userId` es único POR CONSULTORIO, ya no global → 1:n.
   patients     Patient[]
@@ -146,6 +152,10 @@ model Membership {
   role         Role
   invitedAt    DateTime @default(now())
   acceptedAt   DateTime?
+  // IAM-1 (M6): suspensión sin borrar (la escribe IAM-4c). Suspendida = no
+  // entra ni es reservable (`isUsableMembership`, `bookablePractitionerWhere`).
+  disabledAt   DateTime?
+  disabledById String?   // UserProfile id de quien suspendió (sin FK: historia)
 
   user   UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -169,7 +179,9 @@ enum Role {
 model Practitioner {
   id            String   @id @default(cuid())
   tenantId      String
-  userId        String   @unique
+  // IAM-1 (M6): único POR CONSULTORIO (@@unique abajo), ya no global. Excepción
+  // a "todo aditivo" aprobada por Martin el 14-oct (IAM-D2, precedente M1).
+  userId        String
   licenseNumber String?  // "Matrícula Nacional"
   specialty     String?
   bio           String?
@@ -196,7 +208,9 @@ model Practitioner {
   // Planes M1: profesional responsable del plan (D17). RESTRICT.
   programs             TreatmentProgram[]
 
+  @@unique([tenantId, userId])
   @@index([tenantId])
+  @@index([userId])
 }
 
 model Patient {
@@ -414,11 +428,47 @@ model Invitation {
   invitedAt   DateTime @default(now())
   acceptedAt  DateTime?
   expiresAt   DateTime
+  // IAM-1 (M6). Los escribe IAM-2 salvo acceptedByUserId (accept-action).
+  revokedAt        DateTime?
+  revokedById      String?   // UserProfile id (sin FK: historia)
+  acceptedByUserId String?   // quién aceptó (sin FK: historia)
+  lastSentAt       DateTime?
+  sendCount        Int       @default(0)
+  // HASHES de tokens anteriores que siguen valiendo al reenviar (nunca el token crudo).
+  priorTokens      String[]  @default([])
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([email])
+}
+
+// IAM-1 (M6): una fila por intento de mail de `sendEmail`, también cuando no
+// salió. La escribe `lib/email/log.ts` por el canal service. Hash + máscara
+// del destinatario y solo el HOST del link (el link lleva el token). tenantId
+// NULL = mail sin consultorio (auth/plataforma): la app no lo ve (RLS).
+// CHECK EmailLog_status_check (sent|skipped|failed|blocked) y la policy RLS
+// viven solo en la migración (drift aceptado).
+model EmailLog {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  kind       String   // EmailKind (lib/email/types.ts)
+  toHash     String   // sha256 hex del email normalizado
+  toMasked   String   // j***@dominio
+  entity     String?
+  entityId   String?
+  transport  String   // EmailTransportName
+  status     String   // sent | skipped | failed | blocked
+  providerId String?
+  reason     String?
+  linkHost   String?
+  actorId    String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([entity, entityId, createdAt])
 }
 
 model EmergencyContact {

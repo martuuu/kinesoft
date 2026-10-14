@@ -1314,7 +1314,7 @@ async function seedDemoTenant() {
     update: {},
   });
   const practitioner = await prisma.practitioner.upsert({
-    where: { userId },
+    where: { tenantId_userId: { tenantId: tenant.id, userId } }, // IAM-1 (M6): único por consultorio
     create: {
       tenantId: tenant.id,
       userId,

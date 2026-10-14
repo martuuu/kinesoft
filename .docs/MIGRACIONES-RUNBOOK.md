@@ -45,7 +45,8 @@ Orden de corridas (13-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5
 | `20261007120000_tenant_verticals` (**M2**) | EV0 (ola V.0, sola) | **escrita y aplicada solo en el Docker local (07-oct), commiteada (`ddfdff3`)**. sha256 de `migration.sql` = `29649aa7fb7f4c1bc25eea9e5591a630569b632295961c315c6206c653cc8bb3`. `Tenant.vertical` (enum `TenantVertical`, default `KINESIOLOGY`), `Tenant.publicBookingEnabled` (default `false`) + bloque **guardado** `REVOKE … FROM anon, authenticated` (tablas, secuencias, rutinas y default privileges; en local no hay esos roles → NOTICE + no-op). `lock_timeout` 5 s |
 | `20261008120000_billing_paid_at` (**M3a**) | ES3 (P3.0.0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`ad50059`)**. sha256 de `migration.sql` = `23a785a64586b6f8c481631620253790de7287fcf17f4ca9b7836f3bd8a75474`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.copagoPaidAt TIMESTAMP(3) NULL` (fecha del cobro manual del copago; la escribe y limpia solo `toggleBilling`/`setBookingCopagoPaid`) + `UserPreferences.dashboardPrefs JSONB NULL` (`{revenueRange: 'month'\|'week'}`) con CHECK `UserPreferences_dashboardPrefs_object_check` (objeto o NULL). Verificada objeto por objeto; `migrate status` al día (30). Sin tabla nueva ni GRANTs. Orden para prod abajo («M3a») |
 | `20261009120000_rooms` (**M4**) | SR (SR0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`5811ea2`)**. sha256 de `migration.sql` = `5ab748c120edead75ed2c8334a042404d0ced9d5776ce45d793d6e74dc7b5056`. Aditiva, sin backfill, `lock_timeout` 5 s: enum `RoomKind`; tabla `Room` (RLS ENABLE + FORCE + `Room_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES; CHECKs de nombre, `capacity` 1..50 y orden); `Location_id_tenantId_key`; `roomId` nullable en `PractitionerSchedule` (NO ACTION), `Booking` (RESTRICT, CHECK `Booking_room_location_check`) y `TimeBlock` (CASCADE, CHECK `TimeBlock_room_scope_check`), con FKs compuestas `(roomId, tenantId)` y `(roomId, locationId)`; índice parcial `Room_locationId_name_active_key` (**no se borra** si `migrate dev` lo propone: drift aceptado, «SR M4: DRIFT ACEPTADO» en el SQL y en `schema.prisma`). Verificada objeto por objeto en `tests/integration/rooms-m4.test.ts` (2 roles); `migrate status` al día (31); `guard:isolation` OK. Orden para prod abajo («M4») |
-| `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), pendiente commit**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
+| `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), commiteada (`d70513a`)**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
+| `20261014120000_identity_access` (**M6**) | IAM-1 (sola) | **escrita y aplicada solo en el Docker local (14-oct), pendiente commit**. sha256 de `migration.sql` = `c217390839dbf619454cc3c3aef5d0c2e484d319ce18bd1d81cadbe3baef0773`. `lock_timeout` 5 s, con prechequeo interno (marcadores `PRECHECK`) que aborta si hay pares `(tenantId, userId)` repetidos en `Practitioner`. Objetos: único `Practitioner_tenantId_userId_key`, **DROP de `Practitioner_userId_key`** (única excepción a «aditiva», aprobada por Martin el 14-oct, IAM-D2; precedente M1) e índice `Practitioner_userId_idx`; `Membership.disabledAt/disabledById` (nullables); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt` (nullables), `sendCount INT NOT NULL DEFAULT 0`, `priorTokens TEXT[] NOT NULL DEFAULT '{}'`; tabla `EmailLog` (tenantId nullable, FK a Tenant CASCADE, índices `(tenantId, createdAt)` y `(entity, entityId, createdAt)`, CHECK `EmailLog_status_check` sent/skipped/failed/blocked, RLS ENABLE + FORCE + `EmailLog_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES). CHECK y policy no están en Prisma: drift aceptado. Verificada objeto por objeto (psql + `tests/integration/identity-m6.test.ts` y bloque EmailLog de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (33); `guard:isolation` OK. Orden para prod abajo («M6») |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -98,6 +99,45 @@ M5. Solo si Martin decidiera aplicarla **antes** del reset:
    realtime.messages` (en Supabase la tabla existe: si aparece, la policy no se creó y el canal privado no entrega nada).
 4. Prod: es aditiva, puede ir **antes** que el código (el código viejo no lee `calledAt`). `ALTER TABLE "Booking"` toma
    lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano).
+
+**M6 en prod (IAM-1).** Prod conserva sus datos (decisiones del 14-oct: sin reset y sin staging), así que M6 se aplica
+sobre la base viva:
+1. Precheck de solo lectura:
+   ```sql
+   -- tiene que dar 0 filas (si no, la migración aborta con «identity_access: hay N par(es)…»)
+   SELECT "tenantId", "userId", count(*) FROM "Practitioner" GROUP BY 1, 2 HAVING count(*) > 1;
+   -- todavía no aplicada: el único global existe (1 fila) y EmailLog no (NULL)
+   SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'Practitioner_userId_key';
+   SELECT to_regclass('public."EmailLog"');
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. `npm run db:prod:deploy` y `npm run db:prod:status` → "Database schema is up to date!" (sin staging).
+4. Verificación objeto por objeto (solo lectura):
+   ```sql
+   SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'Practitioner' ORDER BY 1;
+   --   Practitioner_tenantId_userId_key (UNIQUE tenantId,userId) y Practitioner_userId_idx; NO Practitioner_userId_key
+   SELECT table_name, column_name, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name IN ('Membership','Invitation')
+      AND column_name IN ('disabledAt','disabledById','revokedAt','revokedById','acceptedByUserId','lastSentAt','sendCount','priorTokens');
+   --   8 filas; sendCount NOT NULL default 0, priorTokens NOT NULL default ARRAY[]::text[]
+   SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'public."EmailLog"'::regclass;   -- t | t
+   SELECT policyname, cmd FROM pg_policies WHERE schemaname = 'public' AND tablename = 'EmailLog';    -- EmailLog_tenant_isolation | ALL
+   SELECT conname FROM pg_constraint WHERE conrelid = 'public."EmailLog"'::regclass ORDER BY 1;
+   --   EmailLog_pkey, EmailLog_status_check, EmailLog_tenantId_fkey
+   SELECT has_table_privilege('kinesoft_app', '"EmailLog"', 'SELECT,INSERT');                         -- t (DEFAULT PRIVILEGES)
+   SELECT grantee FROM information_schema.role_table_grants
+    WHERE table_name = 'EmailLog' AND grantee IN ('anon', 'authenticated');                             -- 0 filas
+   ```
+   Repetir `has_table_privilege` con `kinesoft_service` si existe.
+5. **Antes o después del código:** puede ir **antes**. Es compatible hacia atrás: las columnas y la tabla nuevas el
+   código viejo no las lee, y el DROP solo relaja la unicidad. El código viejo busca el Practitioner del usuario con
+   `findUnique({ userId })` (en SQL `WHERE "userId" = $1 LIMIT 1`, no depende del índice) y nunca crea un segundo
+   Practitioner para el mismo usuario (lo chequea antes: `bootstrapTenant` y `acceptInvite` viejos), así que no
+   aparecen duplicados hasta que llega el código nuevo. Lo único que se pierde en la ventana entre migración y deploy:
+   la red de la base contra dos altas simultáneas del paso 2 del onboarding del mismo usuario (el código nuevo la
+   reemplaza con un advisory lock por usuario). Recomendado: migrar y deployar el mismo día; si se mergea a `main`
+   sin aplicarla a mano, el build de Production la aplica antes de servir. `DROP INDEX` toma lock exclusivo sobre
+   `Practitioner` hasta el COMMIT (milisegundos; `lock_timeout` 5 s → P3009 liviano si estuviera tomada).
 
 **Deploy de SV en escalones** (después de que M5 esté aplicada, con la cadena o sola):
 1. Vercel env `REALTIME_DRIVER=off` (variable nueva) y deploy del código: nada se conecta y la app es idéntica a SR.
@@ -294,6 +334,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 15 | `20261008120000_billing_paid_at` | M3a: `Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs` (+ CHECK de objeto) | ES3 — **ver «Go-live con reset»** |
 | 16 | `20261009120000_rooms` | M4: `Room` con RLS + `roomId` en franja, turno y bloqueo (FKs compuestas, CHECKs) | SR — **ver «Go-live con reset»** |
 | 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
+| 18 | `20261014120000_identity_access` | M6: `Practitioner` único por consultorio (DROP del único global, aprobado), `Membership.disabledAt`, campos de `Invitation`, tabla `EmailLog` con RLS | IAM-1 — **ver «M6 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

@@ -38,9 +38,10 @@ async function main() {
   console.log(`✅ Tenant '${tenant.slug}' listo`);
 
   // 3. Crear el perfil de Practitioner (Profesional)
+  // IAM-1 (M6): Practitioner es único por (tenantId, userId), ya no global.
   await prisma.practitioner.upsert({
-    where: { userId },
-    update: { tenantId: tenant.id },
+    where: { tenantId_userId: { tenantId: tenant.id, userId } },
+    update: {},
     create: {
       userId,
       tenantId: tenant.id,
