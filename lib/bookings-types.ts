@@ -166,6 +166,8 @@ export type AgendaBookingRow = BookingRow & {
   /** Recepción (decisión 3): llegó a la sala / pasó a atención. */
   arrivedAt: Date | null;
   attendingAt: Date | null;
+  /** SV (M5): la recepción llamó al paciente al box (estado «Llamado»). */
+  calledAt: Date | null;
   /** true = title/description ocultos (sin `clinical.read`, o con paciente sin full); notas según `bookingFieldAccess`. */
   clinicalHidden: boolean;
   /**
@@ -250,7 +252,7 @@ export const AgendaBookingsQuery = z
   });
 export type AgendaBookingsQueryInput = z.input<typeof AgendaBookingsQuery>;
 
-export const RECEPTION_ACTIONS = ["llego", "en-atencion", "atendido", "ausente", "deshacer"] as const satisfies ReadonlyArray<ReceptionAction>;
+export const RECEPTION_ACTIONS = ["llego", "llamar", "en-atencion", "atendido", "ausente", "deshacer"] as const satisfies ReadonlyArray<ReceptionAction>;
 
 export const ReceptionActionInput = z.object({
   bookingId: z.string().min(1).max(64),
@@ -269,6 +271,8 @@ export type ReceptionActionResult = {
   status: BookingStatus;
   arrivedAt: string | null;
   attendingAt: string | null;
+  /** SV (M5): ISO del llamado o null. */
+  calledAt: string | null;
   /** Estado de recepción resultante (`receptionState` con el reloj del server). */
   state: ReceptionState;
   /**

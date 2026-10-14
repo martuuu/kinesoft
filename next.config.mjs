@@ -44,6 +44,27 @@ const MP = "https://*.mercadopago.com https://*.mercadolibre.com https://sdk.mer
 const SUPA = [supabaseOrigin, "https://*.supabase.co"].filter(Boolean).join(" ");
 
 /**
+ * Origen WebSocket del Realtime de Supabase (SV07b): `https://x.supabase.co` →
+ * `wss://x.supabase.co` (`http://127.0.0.1:54321` → `ws://…` en un Supabase
+ * local). Antes `connect-src` tenía `wss:` pelado, que habilita un socket a
+ * CUALQUIER host: el día que la CSP pase a enforcing, un script inyectado podría
+ * sacar datos por ahí. El único socket legítimo de la app es el canal de la
+ * agenda (`lib/realtime-client-supabase.ts`); el driver `local` es SSE same-origin
+ * ('self'). Sin URL configurada no hay socket posible → sin entrada ws.
+ */
+export function realtimeWsOrigin(u) {
+  try {
+    const url = new URL(u);
+    if (url.protocol === "https:") return `wss://${url.host}`;
+    if (url.protocol === "http:") return `ws://${url.host}`;
+    return "";
+  } catch {
+    return "";
+  }
+}
+const SUPA_WS = realtimeWsOrigin(supabaseUrl);
+
+/**
  * Endpoint de reportes CSP de Sentry derivado del DSN (A3b-S-obs):
  *   https://<key>@o1.ingest.us.sentry.io/<id>
  *   → https://o1.ingest.us.sentry.io/api/<id>/security/?sentry_key=<key>&sentry_environment=<env>
@@ -79,7 +100,8 @@ const cspReportOnly = [
   `img-src 'self' data: blob: https: ${SUPA}`,
   // Supabase Storage: signed URLs de archivos del paciente y media de la biblioteca.
   `media-src 'self' data: blob: https: ${SUPA}`,
-  `connect-src 'self' https: wss: data: blob: ${SUPA} ${MP}`,
+  // Sigue Report-Only; `wss:` acotado al host de Supabase (ver `realtimeWsOrigin`).
+  `connect-src 'self' https: ${SUPA_WS} data: blob: ${SUPA} ${MP}`,
   // Videos de ejercicios embebidos (lib/exercise-media.ts → youtube-nocookie) + checkout de MP.
   "frame-src 'self' https://www.youtube-nocookie.com https://*.mercadopago.com https://*.mercadolibre.com",
   "font-src 'self' data: https://fonts.gstatic.com",

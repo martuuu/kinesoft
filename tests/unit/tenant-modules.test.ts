@@ -207,7 +207,7 @@ describe("nav único (C-EV2)", () => {
     const h = hrefs(navFor(general, ownerCaps));
     for (const x of ["/diagnostico", "/seguimiento", "/biblioteca", "/terapia-manual", "/reportes"])
       expect(h).not.toContain(x);
-    for (const x of ["/dashboard", "/agenda", "/pacientes", "/agenda?view=reception", "/configuracion"])
+    for (const x of ["/dashboard", "/agenda", "/pacientes", "/sala", "/configuracion"])
       expect(h).toContain(x);
   });
 
@@ -215,7 +215,7 @@ describe("nav único (C-EV2)", () => {
     expect(hrefs(navFor(kine, ownerCaps))).toEqual([
       "/dashboard",
       "/agenda",
-      "/agenda?view=reception",
+      "/sala",
       "/pacientes",
       "/planes",
       "/diagnostico",
@@ -227,9 +227,22 @@ describe("nav único (C-EV2)", () => {
     ]);
   });
 
+  it("[SV11a] Sala de espera apunta a /sala: /agenda?view=reception ya no está en el nav", () => {
+    const sala = NAV_ITEMS.find((i) => i.label === "Sala de espera");
+    expect(sala).toMatchObject({
+      href: "/sala",
+      module: "salaEspera",
+      capability: "agenda.reception",
+      icon: "clock",
+    });
+    expect(NAV_ITEMS.some((i) => i.href.includes("view=reception"))).toBe(false);
+    expect(hrefs(navFor(general, ownerCaps))).toContain("/sala");
+    expect(hrefs(navFor(kine, ownerCaps))).toContain("/sala");
+  });
+
   it("Sala de espera exige la capability agenda.reception (BILLING afuera; sin caps, falla cerrado)", () => {
-    expect(hrefs(navFor(kine, billingCaps))).not.toContain("/agenda?view=reception");
-    expect(hrefs(navFor(kine))).not.toContain("/agenda?view=reception");
+    expect(hrefs(navFor(kine, billingCaps))).not.toContain("/sala");
+    expect(hrefs(navFor(kine))).not.toContain("/sala");
     expect(hrefs(navFor(kine))).toContain("/agenda");
   });
 

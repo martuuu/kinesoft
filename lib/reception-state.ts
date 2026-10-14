@@ -11,6 +11,8 @@
  *   ausente     ← status NO_SHOW
  *   atendido    ← status COMPLETED
  *   en-atencion ← attendingAt != null
+ *   llamado     ← calledAt != null (SV, M5: la recepción lo llamó al box; el
+ *                 CHECK de M5 garantiza que hay `arrivedAt`)
  *   en-sala     ← arrivedAt != null
  *   demorado    ← sin llegada y pasaron MÁS de `LATE_AFTER_MIN` (10) minutos
  *                 de la hora del turno (a los 10 justos todavía "por llegar",
@@ -23,20 +25,28 @@
  *
  * Transiciones (`allowedTransitions`) — el flujo de la sala de espera:
  *   por-llegar / demorado → Llegó, Ausente
- *   en-sala               → En atención, Atendido (el profesional ocupado no
- *                           siempre marca "en atención"), Deshacer
+ *   en-sala               → Llamar, En atención, Atendido (el profesional
+ *                           ocupado no siempre marca "en atención"), Deshacer
+ *   llamado               → En atención, Atendido, Deshacer
  *   en-atencion           → Atendido, Deshacer
  *   atendido / ausente    → Deshacer
  *   cancelado             → nada (se reactiva desde el drawer, no desde acá)
  * "En atención" exige "Llegó" antes (no hay salto por-llegar → en-atención):
  * así `arrivedAt` siempre existe cuando hay `attendingAt` y la espera se mide.
- * "Llegó" y "En atención" solo para turnos de HOY (día AR), para que un click
- * en la fila equivocada no marque la llegada de un turno de mañana.
+ * "Llamar" exige que el paciente esté en sala (SV-D5): por-llegar y demorado no
+ * lo tienen, porque no hay a quién llamar. No hay «Volver a llamar»: es
+ * Deshacer + Llamar (un solo `calledAt`, el último llamado).
+ * "Llegó", "Llamar" y "En atención" solo para turnos de HOY (día AR), para que
+ * un click en la fila equivocada no marque la llegada de un turno de mañana.
  *
- * Deshacer vuelve UN paso: en-sala → por-llegar (arrivedAt = null),
- * en-atención → en-sala (attendingAt = null), atendido/ausente → status
- * de origen conservando los timestamps (vuelve a en-atención / en-sala / por
- * llegar según lo que tenga). El status de origen (`undoStatus`) es CONFIRMED
+ * Deshacer vuelve UN paso: en-sala → por-llegar (arrivedAt = null y también
+ * calledAt = null: el CHECK de M5 `calledAt IS NULL OR arrivedAt IS NOT NULL`
+ * rechazaría dejar un llamado sin llegada), llamado → en-sala (calledAt =
+ * null), en-atención → llamado si hubo llamado, si no en-sala (attendingAt =
+ * null; `calledAt` se conserva: el llamado existió), atendido/ausente →
+ * status de origen conservando los timestamps (vuelve a en-atención / llamado
+ * / en-sala / por llegar según lo que tenga). `undoTarget` expone a dónde
+ * vuelve, para que la UI no duplique la regla. El status de origen (`undoStatus`) es CONFIRMED
  * salvo dos casos que NACEN PENDING y que la agenda nunca confirma sola
  * (revisión de B-pre: deshacer los dejaba confirmados sin que nadie confirmara):
  *   - guest (`patientId === null`): la reserva externa de la recepción;
@@ -52,15 +62,17 @@ export type ReceptionState =
   | "por-llegar"
   | "demorado"
   | "en-sala"
+  | "llamado"
   | "en-atencion"
   | "atendido"
   | "ausente"
   | "cancelado";
 
-export type ReceptionAction = "llego" | "en-atencion" | "atendido" | "ausente" | "deshacer";
+export type ReceptionAction = "llego" | "llamar" | "en-atencion" | "atendido" | "ausente" | "deshacer";
 
 export const RECEPTION_ACTION_LABEL: Record<ReceptionAction, string> = {
   llego: "Llegó",
+  llamar: "Llamar",
   "en-atencion": "En atención",
   atendido: "Atendido",
   ausente: "Ausente",
@@ -71,6 +83,7 @@ export const RECEPTION_STATE_LABEL: Record<ReceptionState, string> = {
   "por-llegar": "Por llegar",
   demorado: "Demorado",
   "en-sala": "En sala de espera",
+  llamado: "Llamado",
   "en-atencion": "En atención",
   atendido: "Atendido",
   ausente: "Ausente",
@@ -88,6 +101,8 @@ export type ReceptionBooking = {
   status: string;
   arrivedAt?: Date | string | null;
   attendingAt?: Date | string | null;
+  /** SV (M5): la recepción lo llamó. Opcional: sin el campo = no llamado. */
+  calledAt?: Date | string | null;
   /** Para el status de origen de "deshacer" (`undoStatus`). `null` = guest;
    *  sin el campo (undefined) se asume paciente. */
   patientId?: string | null;
@@ -103,6 +118,7 @@ export type ReceptionOptions = { lateAfterMin?: number };
 /** Cambio a aplicar en la fila (B4.1 lo escribe con `expectedUpdatedAt`). */
 export type ReceptionPatch = {
   arrivedAt?: Date | null;
+  calledAt?: Date | null;
   attendingAt?: Date | null;
   status?: "COMPLETED" | "NO_SHOW" | "CONFIRMED" | "PENDING";
 };
@@ -120,6 +136,7 @@ export function receptionState(b: ReceptionBooking, now: Date, opts: ReceptionOp
   if (b.status === "NO_SHOW") return "ausente";
   if (b.status === "COMPLETED") return "atendido";
   if (present(b.attendingAt)) return "en-atencion";
+  if (present(b.calledAt)) return "llamado";
   if (present(b.arrivedAt)) return "en-sala";
   const late = opts.lateAfterMin ?? LATE_AFTER_MIN;
   return now.getTime() - toDate(b.scheduledFor).getTime() > late * MIN_MS ? "demorado" : "por-llegar";
@@ -128,7 +145,8 @@ export function receptionState(b: ReceptionBooking, now: Date, opts: ReceptionOp
 const TRANSITIONS: Record<ReceptionState, ReadonlyArray<ReceptionAction>> = {
   "por-llegar": ["llego", "ausente"],
   demorado: ["llego", "ausente"],
-  "en-sala": ["en-atencion", "atendido", "deshacer"],
+  "en-sala": ["llamar", "en-atencion", "atendido", "deshacer"],
+  llamado: ["en-atencion", "atendido", "deshacer"],
   "en-atencion": ["atendido", "deshacer"],
   atendido: ["deshacer"],
   ausente: ["deshacer"],
@@ -155,11 +173,15 @@ export function allowedTransitions(state: ReceptionState): ReceptionAction[] {
   return [...TRANSITIONS[state]];
 }
 
+/** Acciones que solo valen para turnos de hoy (día AR). Ver cabecera. */
+const TODAY_ONLY: ReadonlySet<ReceptionAction> = new Set(["llego", "llamar", "en-atencion"]);
+
 /** "un turno por llegar", "un turno en sala de espera"… para los errores. */
 const STATE_PHRASE: Record<ReceptionState, string> = {
   "por-llegar": "un turno por llegar",
   demorado: "un turno demorado",
   "en-sala": "un turno en sala de espera",
+  llamado: "un turno llamado",
   "en-atencion": "un turno en atención",
   atendido: "un turno atendido",
   ausente: "un turno ausente",
@@ -180,12 +202,19 @@ export function applyReceptionAction(
 ): ReceptionTransition {
   const from = receptionState(b, now, opts);
   if (!TRANSITIONS[from].includes(action)) {
-    const verb = action === "deshacer" ? "deshacer" : `marcar «${RECEPTION_ACTION_LABEL[action]}»`;
+    const verb =
+      action === "deshacer" ? "deshacer" : action === "llamar" ? "llamar a" : `marcar «${RECEPTION_ACTION_LABEL[action]}»`;
     const what = action === "deshacer" ? `en ${STATE_PHRASE[from]}` : STATE_PHRASE[from];
-    return { ok: false, from, error: `No se puede ${verb} ${what}.` };
+    // Llamar sin llegada: se dice qué falta (es el error que más va a pasar).
+    const hint = action === "llamar" && (from === "por-llegar" || from === "demorado") ? " Primero marcá «Llegó»." : "";
+    return { ok: false, from, error: `No se puede ${verb} ${what}.${hint}` };
   }
-  if ((action === "llego" || action === "en-atencion") && dayKeyOf(toDate(b.scheduledFor)) !== dayKeyOf(now)) {
-    return { ok: false, from, error: "Solo se marca la llegada de turnos de hoy." };
+  if (TODAY_ONLY.has(action) && dayKeyOf(toDate(b.scheduledFor)) !== dayKeyOf(now)) {
+    return {
+      ok: false,
+      from,
+      error: action === "llamar" ? "Solo se llama a pacientes de turnos de hoy." : "Solo se marca la llegada de turnos de hoy.",
+    };
   }
 
   const after = (patch: ReceptionPatch): ReceptionTransition => ({
@@ -196,6 +225,7 @@ export function applyReceptionAction(
         ...b,
         status: patch.status ?? b.status,
         arrivedAt: "arrivedAt" in patch ? patch.arrivedAt : b.arrivedAt,
+        calledAt: "calledAt" in patch ? patch.calledAt : b.calledAt,
         attendingAt: "attendingAt" in patch ? patch.attendingAt : b.attendingAt,
       },
       now,
@@ -207,6 +237,8 @@ export function applyReceptionAction(
   switch (action) {
     case "llego":
       return after({ arrivedAt: now });
+    case "llamar":
+      return after({ calledAt: now });
     case "en-atencion":
       return after({ attendingAt: now });
     case "atendido":
@@ -214,10 +246,29 @@ export function applyReceptionAction(
     case "ausente":
       return after({ status: "NO_SHOW" });
     case "deshacer":
-      if (from === "en-sala") return after({ arrivedAt: null });
-      if (from === "en-atencion") return after({ attendingAt: null });
+      // en-sala: también `calledAt` (CHECK de M5), aunque en-sala ya implica
+      // calledAt null — así el patch no depende de que la fila lo haya leído.
+      if (from === "en-sala") return after({ arrivedAt: null, calledAt: null });
+      if (from === "llamado") return after({ calledAt: null });
+      if (from === "en-atencion") return after({ attendingAt: null }); // → llamado si hubo llamado
       return after({ status: undoStatus(b) }); // atendido / ausente
   }
+}
+
+/**
+ * Estado al que vuelve "Deshacer" desde el estado actual, o null si no se puede
+ * deshacer. Es el `to` de `applyReceptionAction(…, "deshacer")`: la UI (hint
+ * del botón en Recepción y en /sala) lo lee de acá en vez de repetir la regla.
+ */
+export function undoTarget(b: ReceptionBooking, now: Date, opts: ReceptionOptions = {}): ReceptionState | null {
+  const t = applyReceptionAction(b, "deshacer", now, opts);
+  return t.ok ? t.to : null;
+}
+
+/** Minutos desde que se lo llamó (`calledAt`); null si no está llamado. */
+export function calledMinutes(b: ReceptionBooking, now: Date, opts: ReceptionOptions = {}): number | null {
+  if (receptionState(b, now, opts) !== "llamado" || !present(b.calledAt)) return null;
+  return Math.max(0, Math.floor((now.getTime() - toDate(b.calledAt).getTime()) / MIN_MS));
 }
 
 /** Minutos en sala de espera (desde `arrivedAt`); null si no está en sala. */
@@ -239,12 +290,20 @@ export type ReceptionEntry<T extends ReceptionBooking> = {
   highlight: boolean;
   waitingMinutes: number | null;
   lateMinutes: number | null;
+  /**
+   * SV: minutos desde el llamado (solo en `llamado`). Opcional en el TIPO para
+   * que los fixtures que arman una entry a mano sigan compilando;
+   * `sortForReception` siempre lo llena.
+   */
+  calledMinutes?: number | null;
   actions: ReceptionAction[];
 };
 
 /**
  * Lista del modo Recepción: primero los que están EN ATENCIÓN (por
- * `attendingAt`: el que entró antes, arriba), después todo el resto
+ * `attendingAt`: el que entró antes, arriba), después los LLAMADOS (por
+ * `calledAt`: van camino al box, la secretaria los tiene que ver juntos y
+ * arriba de la sala de espera), después todo el resto
  * cronológico por hora del turno (demorados destacados en su lugar, no
  * reordenados: la secretaria lee la lista como el día), y los cancelados al
  * final. Desempate por id para que el orden sea estable entre renders. No
@@ -255,9 +314,15 @@ export function sortForReception<T extends ReceptionBooking>(
   now: Date,
   opts: ReceptionOptions = {}
 ): ReceptionEntry<T>[] {
-  const rank = (s: ReceptionState) => (s === "en-atencion" ? 0 : s === "cancelado" ? 2 : 1);
+  const rank = (s: ReceptionState) => (s === "en-atencion" ? 0 : s === "llamado" ? 1 : s === "cancelado" ? 3 : 2);
   const key = (e: ReceptionEntry<T>) =>
-    toDate(e.state === "en-atencion" && present(e.row.attendingAt) ? e.row.attendingAt : e.row.scheduledFor).getTime();
+    toDate(
+      e.state === "en-atencion" && present(e.row.attendingAt)
+        ? e.row.attendingAt
+        : e.state === "llamado" && present(e.row.calledAt)
+          ? e.row.calledAt
+          : e.row.scheduledFor
+    ).getTime();
   return rows
     .map((row): ReceptionEntry<T> => {
       const state = receptionState(row, now, opts);
@@ -267,6 +332,7 @@ export function sortForReception<T extends ReceptionBooking>(
         highlight: state === "demorado",
         waitingMinutes: waitingMinutes(row, now, opts),
         lateMinutes: lateMinutes(row, now, opts),
+        calledMinutes: calledMinutes(row, now, opts),
         actions: allowedTransitions(state),
       };
     })

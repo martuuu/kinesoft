@@ -115,12 +115,20 @@ describe("[EV0-EV-S] sidebar por módulos", () => {
     expect(html).toContain(">Plataforma<");
   });
 
-  it("Sala de espera activa no ilumina también Agenda", () => {
+  it("[SV11a] Sala de espera activa en /sala no ilumina también Agenda", () => {
+    nav.pathname = "/sala";
+    expect(activeHrefs(sidebar(KINE_PRO, "OWNER"))).toEqual(["/sala"]);
     nav.pathname = "/agenda";
-    nav.search = "view=reception";
-    expect(activeHrefs(sidebar(KINE_PRO, "OWNER"))).toEqual(["/agenda?view=reception"]);
     nav.search = "view=week";
     expect(activeHrefs(sidebar(KINE_PRO, "OWNER"))).toEqual(["/agenda"]);
+  });
+
+  it("[SV11a] el sidebar enlaza Sala de espera a /sala, no a /agenda?view=reception (General y Kine)", () => {
+    for (const t of [GENERAL, KINE_PRO]) {
+      const h = hrefs(sidebar(t, "OWNER"));
+      expect(h).toContain("/sala");
+      expect(h.some((x) => x.includes("view=reception"))).toBe(false);
+    }
   });
 
   it("Plataforma activa en cualquier subruta de /plataforma", () => {

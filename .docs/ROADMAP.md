@@ -80,10 +80,11 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **B4** | proyección liviana + recepción ∥ vista Por profesional ∥ integración de la agenda ∥ candado por día ∥ Recepción ∥ perf multi-profesional | ✅ |
 | **B5** | modal (Turno / Varias sesiones / Bloquear horario, slot picker, telemedicina) ∥ onboarding (Sede, Tu horario) ∥ turnero (sede, cobertura, primer turno) | ✅ |
 | **Cierre** | integrador → revisor → fixer → docs → gate | ✅ código (fixes de la revisión en AUDIT §Ronda 13) |
-| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**: **ES1 ✅ (`d7ac75f`, sin migración)** → **ES2a ✅ (`0edb0c8`, M1 `plans_booking_link`, solo en local)** → **ES2b ✅ (`58ec36f`, sin migración; [AUDIT §Ronda 17](AUDIT.md), ADR-004)** → **ES3 ✅ (`ad50059`; M3a `billing_paid_at` solo en local + S14r; [AUDIT §Ronda 18](AUDIT.md))** → SR ✅ → SV → ES4, con las enmiendas EV0/SV del 07-oct al tope de PLANES §10-§12. Sin sesiones de legacy (S25L/S25n/S25b eliminadas por el reset) |
+| **P0-P4 (Planes, = B0-B4)** | `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001) sobre el motor, autorización de la OS, Secretaria sobre todos los turnos, portal ampliado. Detalle ejecutable en [PLANES.md](PLANES.md) | 🟡 **planning firmado (03-oct)**: **ES1 ✅ (`d7ac75f`, sin migración)** → **ES2a ✅ (`0edb0c8`, M1 `plans_booking_link`, solo en local)** → **ES2b ✅ (`58ec36f`, sin migración; [AUDIT §Ronda 17](AUDIT.md), ADR-004)** → **ES3 ✅ (`ad50059`; M3a `billing_paid_at` solo en local + S14r; [AUDIT §Ronda 18](AUDIT.md))** → SR ✅ → SV ✅ → ES4, con las enmiendas EV0/SV del 07-oct al tope de PLANES §10-§12. Sin sesiones de legacy (S25L/S25n/S25b eliminadas por el reset) |
 | **EV0** (07-oct) | Tipo de consultorio (General / Kinesiología), matriz de módulos, guards de segmento, nav único, turnero con switch, onboarding con vertical, /plataforma de consultorios, REVOKE de la Data API. **Migración M2 `20261007120000_tenant_verticals`** (sola) | ✅ **ejecutada (07-oct), commit `ddfdff3`**; M2 solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en [QA.md §EV0](QA.md), ADR-005 |
-| **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, bloqueo de sala, filtro y vista "Por sala"; Facturación con cancelados cobrados e ingresos por rol. **Migración M4 `20261009120000_rooms`** (sola) | ✅ **ejecutada (08-oct), pendiente commit**; M4 solo en el Docker local. Cierres en [AUDIT.md §Ronda 19](AUDIT.md), QA en [QA.md §Salas (SR)](QA.md), resumen abajo («SR · Salas/Consultorios») |
-| **SV** (07-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado `llamado`, `/sala`, aviso al profesional, agenda en vivo; evento y "Llamar" con `roomId`. **Migración M5 `reception_call_realtime`** (sola; antes "M3"). Va entre SR y ES4 | ⏳ **siguiente** ([VERTICALES.md §7](VERTICALES.md)) |
+| **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, bloqueo de sala, filtro y vista "Por sala"; Facturación con cancelados cobrados e ingresos por rol. **Migración M4 `20261009120000_rooms`** (sola) | ✅ **ejecutada (08-oct), commit `5811ea2`**; M4 solo en el Docker local. Cierres en [AUDIT.md §Ronda 19](AUDIT.md), QA en [QA.md §Salas (SR)](QA.md), resumen abajo («SR · Salas/Consultorios») |
+| **SV** (13/14-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado «Llamado», `/sala`, avisos «Llegó» / «Pase …», agenda y Recepción en vivo; evento y "Llamar" con `roomId`. **Migración M5 `20261013120000_reception_call_realtime`** (sola) | ✅ **ejecutada (14-oct), sin commit todavía**; M5 solo en el Docker local. Cierres en [AUDIT.md §Ronda 20](AUDIT.md), QA en [QA.md §Sala de Espera realtime (SV)](QA.md), ADR-006, resumen abajo («SV») |
+| **ES4** (P4) | Cierre de Planes ([PLANES.md](PLANES.md)) | ⏳ **siguiente** |
 | **EV1** (07-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral, lista de pacientes, Plataforma "Común/Pro" muerto) + limpieza R-LEGACY opcional | ⏳ después de ES4 |
 | **Go-live de B** | **Reset de prod** (decisión del 07-oct: no hay datos que preservar) → `migrate deploy` de la cadena completa desde vacío → bootstrap | ⏳ [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md) |
 
@@ -91,11 +92,11 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 > "B1.7", "B3.1", "B4.6"…); no son las olas de Planes. Para no chocar, **las olas de Planes se llaman P0-P4** (= B0-B4
 > del plan vigente) y se ejecutan en corridas **ES1..ES4** (ES1 = P0, ES2a = P1, ES2b = P2, ES3 = P3, ES4 = P4).
 > Tampoco son las "Ola B2 (RLS)" de la Fase B vieja.
-> **EV0 / EV1** (verticales), **SV** (Sala de Espera realtime, 07-oct) y **SR** (Salas/Consultorios, 08-oct) son corridas, no
+> **EV0 / EV1** (verticales), **SV** (Sala de Espera realtime, 13/14-oct) y **SR** (Salas/Consultorios, 08-oct) son corridas, no
 > olas de Planes. Migraciones del bloque B: M1 = `plans_booking_link`, M2 = `tenant_verticals` (EV0), **M3a** =
-> `billing_paid_at` (ES3), **M4** = `rooms` (SR), **M5** = `reception_call_realtime` (SV; antes "M3").
+> `billing_paid_at` (ES3), **M4** = `rooms` (SR), **M5** = `reception_call_realtime` (SV).
 
-#### SR · Salas/Consultorios ✅ (08-oct, pendiente commit; M4 `rooms`, solo en local)
+#### SR · Salas/Consultorios ✅ (08-oct, commit `5811ea2`; M4 `rooms`, solo en local)
 
 Planning: plan vigente §17 + §17.5 (decisión 7 de Martin; spec original §16.3). Antes solo había sedes y nada impedía
 que dos profesionales usaran el mismo lugar a la misma hora (AUDIT `salas-inexistentes`, cerrado).
@@ -110,9 +111,26 @@ que dos profesionales usaran el mismo lugar a la misma hora (AUDIT `salas-inexis
   (SR-D4F) e ingresos del dashboard por rol (SR-D5I, [SECURITY.md §16](SECURITY.md)).
 - Evidencia en [AUDIT.md §Ronda 19](AUDIT.md); QA en [QA.md §Salas (SR)](QA.md); perf y bundle en
   [PERF.md §SR](PERF.md); deploy en [MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md).
-- **Para SV:** `BookingChangeRef.roomId?` ya existe; el publish realtime con sala, "Llamar" con "Pase al Consultorio 2"
-  y `/sala` agrupable por sala los hace SV. La pantalla TV (fase D) usa la sala.
+- SV usó la sala: el evento realtime lleva `roomId`, «Pase María G. · Consultorio 2» y `/sala` «Por sala». La pantalla TV
+  (fase D) también la va a usar.
 - **Diferido a C2:** recursos agendables y equipos (camilla, magnetoterapia).
+
+#### SV · Sala de Espera realtime ✅ (13/14-oct, sin commit; M5 `reception_call_realtime`, solo en local)
+
+Planning: plan vigente §18 (decisiones SV-D1..D16, contratos C-SV1..10). Antes Recepción no se actualizaba entre
+usuarios (AUDIT `no-realtime-agenda-compartida`, cerrado).
+
+- **Qué quedó:** Broadcast privado por consultorio publicado después del commit desde el hook único (todos los
+  write-paths de turnos, incluidos turnero, webhook de MP y candado); token corto del canal; drivers `off`/`local`/
+  `supabase`; estado «Llamado»; `/sala` (tablero de hoy por profesional o por sala); agenda y Recepción en vivo; avisos
+  «Llegó» / «Pase …» con toast, sonido opcional y título de pestaña; Card «Avisos de la sala de espera» en
+  Configuración → General. Detalle en [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHITECTURE.md),
+  [SECURITY.md §17](SECURITY.md) y [VERTICALES.md §7](VERTICALES.md).
+- **Con `REALTIME_DRIVER=off`** (default y lo que va a prod primero) la app es idéntica a SR; `/sala` pollea cada 60 s.
+- **Pendiente de Martin:** R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)); deploy en
+  escalones ([MIGRACIONES-RUNBOOK «Deploy de SV»](MIGRACIONES-RUNBOOK.md)).
+- Evidencia en [AUDIT.md §Ronda 20](AUDIT.md); QA en [QA.md §Sala de Espera realtime (SV)](QA.md); perf y bundle en
+  [PERF.md §SV](PERF.md).
 
 
 Detalle y evidencia en [AUDIT.md §Ronda 13](AUDIT.md); arquitectura en [ARCHITECTURE.md §Agenda profesional y
@@ -122,11 +140,11 @@ catálogo](ARCHITECTURE.md); QA en [QA.md §B-pre](QA.md); deploy en [MIGRACIONE
 Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · guard ✓ · integración 395/395
 (`kinesoft_app`) y 379 + 16 skip (owner) · `next build` ✓ · perf B4.6 ([PERF.md](PERF.md)).
 
-**Próximos pasos** (actualizado 08-oct):
+**Próximos pasos** (actualizado 14-oct):
 1. **Martin, ya (bloque A, independiente de todo):** revisar la Data API de Supabase en prod
    (`data-api-anon-sin-rls`, [VERTICALES.md §1](VERTICALES.md)).
-2. **Orden de corridas (08-oct):** EV0 (✅ `ddfdff3`) → ES2b (✅ `58ec36f`) → ES3 (✅ `ad50059`; M3a) → SR (✅ 08-oct,
-   pendiente commit; M4) → **SV** (siguiente, M5) → ES4 → **EV1** → reset + deploy único, todo en develop con commit de Martin entre corridas. Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
+2. **Orden de corridas (14-oct):** EV0 (✅ `ddfdff3`) → ES2b (✅ `58ec36f`) → ES3 (✅ `ad50059`; M3a) → SR (✅ `5811ea2`;
+   M4) → SV (✅ 14-oct, sin commit; M5) → **ES4** (siguiente) → **EV1** → reset + deploy único, todo en develop con commit de Martin entre corridas. Planes sigue [PLANES.md](PLANES.md) tal cual, más las enmiendas de una
    línea de [VERTICALES.md §5](VERTICALES.md) (copiadas al tope de PLANES §10-§12).
    - **ES1 ✅** (`d7ac75f`): fugas E0 cerradas en código, Secretaria, fixes de planes y cimientos. Evidencia en
      [AUDIT.md §Ronda 14](AUDIT.md).
@@ -148,10 +166,14 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
      [AUDIT.md §Ronda 18](AUDIT.md); QA en [QA.md §Planes P3](QA.md); perf y bundle en [PERF.md §ES3](PERF.md).
      Decisiones de Martin del 08-oct en [PLANES.md §11](PLANES.md): bundle aceptado, sobrevivientes de `programs.ts`
      se quedan, R-LEGACY se deja; Facturación e ingresos por rol entraron en SR.
-   - **SR ✅** (08-oct, pendiente commit; **M4 `20261009120000_rooms`**, solo en local): salas y consultorios (arriba,
+   - **SR ✅** (`5811ea2`; **M4 `20261009120000_rooms`**, solo en local): salas y consultorios (arriba,
      §SR). Evidencia en [AUDIT.md §Ronda 19](AUDIT.md). **Decisión para Martin:** bundle de `/agenda` y
      `/configuracion` sobre el criterio de +1 kB (recomendado aceptar; mejora en C1).
-   - **Siguiente: SV** (M5 `reception_call_realtime`, timestamp posterior a M4; [VERTICALES.md §7](VERTICALES.md)).
+   - **SV ✅** (14-oct, sin commit; **M5 `20261013120000_reception_call_realtime`**, solo en local): Sala de Espera en
+     vivo (arriba, §SV). Evidencia en [AUDIT.md §Ronda 20](AUDIT.md). Pendiente de Martin: R1-R4 / V1-V7
+     ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)).
+   - **Siguiente: ES4** → EV1 → reset + deploy único. ES4 comparte con SV solo `authz-matrix.test.ts` y `package.json`
+     (por handoff).
    - **No se usa `classifyBatchInstant`** (colapsa "bloqueado" y "superposición" en "sobreturno"): va `classifyPlanRows`
      (`lib/availability/plan.ts`, ADR-003).
 3. **Go-live del bloque B, una sola vez:** prod se **resetea** (decisión del 07-oct: el cliente vuelve a cargar, no hay
@@ -531,8 +553,8 @@ cambio de comportamiento** (QA visual + tsc).
   crear `Practitioner` bookeable para roles no clínicos. Cierra `roles-assistant-billing-cosmeticos`.
   Dep: `capabilities-matrix`, `practitioner-multi-tenant`.
 - ⏳ **`tenant-switcher`** — Setter de cookie `kine_tenant` + UI (hoy no existe). Dep: `practitioner-multi-tenant`.
-- ⏳ **`realtime-agenda`** — Supabase Realtime para agenda compartida (canal por tenant, invalidación
-  por cache-tags). Cierra `no-realtime-agenda-compartida`. Dep: `split-agenda-client`, `practitioner-multi-tenant`.
+- ✅ **`realtime-agenda`** — hecho en la corrida SV de B (14-oct): Broadcast privado por tenant y re-pedido con las
+  actions de la página (no por cache-tags). Cerró `no-realtime-agenda-compartida` ([AUDIT §Ronda 20](AUDIT.md)).
 
 ### Ola 2.4 — Billing SaaS completo · ⏳ pendiente
 

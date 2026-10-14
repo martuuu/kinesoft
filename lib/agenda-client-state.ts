@@ -15,12 +15,13 @@
  * las 22:00 AR = 01:00 UTC del día siguiente) corría el día. Con DayKeys la
  * aritmética es de calendario y no depende de la TZ del host.
  */
-import { addDays, dowOfDayKey, isDayKey } from "@/lib/availability/day";
+import { addDays, dayWindow, dowOfDayKey, isDayKey } from "@/lib/availability/day";
 import type { DayKey, DayLockState } from "@/lib/availability/types";
 import { canManageBlocksFor, CAPABILITIES, type Capability } from "@/lib/capabilities";
 import type { AgendaMode } from "@/lib/preferences-constants";
 import { receptionState, waitingMinutes, type ReceptionBooking } from "@/lib/reception-state";
 import type { RoomOption } from "@/lib/rooms-types";
+import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vista
@@ -367,8 +368,45 @@ export function mergeBookingOverrides<T extends { id: string }, O extends { id: 
   if (Object.keys(overrides).length === 0) return server;
   return server.map((b) => {
     const o = overrides[b.id];
-    return o ? normalize(o) : b;
+    // SV09: con la agenda en vivo, la fila del server puede llegar MÁS NUEVA
+    // que el override (otra sesión tocó el turno después de mi acción, o la
+    // action devolvió "cambió en otra sesión" con la fila vieja). Ahí manda el
+    // server. Misma versión o sin `updatedAt` legible: el override, como antes.
+    return o && !isNewerVersion(b, o) ? normalize(o) : b;
   });
+}
+
+/** ¿`a` es una versión estrictamente posterior a `b`? (`updatedAt` ISO; ilegible = no). */
+function isNewerVersion(a: object, b: object): boolean {
+  const ta = Date.parse(String((a as { updatedAt?: unknown }).updatedAt ?? ""));
+  const tb = Date.parse(String((b as { updatedAt?: unknown }).updatedAt ?? ""));
+  return Number.isFinite(ta) && Number.isFinite(tb) && ta > tb;
+}
+
+/**
+ * SV09: overrides optimistas que el server ya superó (su `updatedAt` es más
+ * nuevo). Sin podar, `overrides` solo se vaciaba al cambiar `props.bookings`;
+ * con el refetch en vivo la lista cambia SIN eso y el mapa crecería con filas
+ * muertas. Una fila ausente o de la misma versión se queda (el refetch pudo
+ * salir antes que mi acción). Sin cambios devuelve EL MISMO objeto: el caller
+ * lo usa en un `setState` y una identidad nueva sería un render de más.
+ */
+export function pruneBookingOverrides<O extends { id: string }>(
+  overrides: Readonly<Record<string, O>>,
+  rows: ReadonlyArray<{ id: string; updatedAt?: string }>
+): Readonly<Record<string, O>> {
+  const keys = Object.keys(overrides);
+  if (keys.length === 0) return overrides;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  let out: Record<string, O> | null = null;
+  for (const k of keys) {
+    const row = byId.get(k);
+    if (row && isNewerVersion(row, overrides[k])) {
+      out ??= { ...overrides };
+      delete out[k];
+    }
+  }
+  return out ?? overrides;
 }
 
 /** Profesionales visibles en orden (vacío = todos). */
@@ -579,8 +617,14 @@ export const WAIT_LABEL_MAX_MIN = 600;
  * (por llegar, demorado, atendido…) ya se lee por el fondo/estado de la card
  * o lo muestra la vista Recepción: no se repite en la grilla.
  */
-export function receptionCardBadge(b: ReceptionBooking, now: Date): { kind: "en-sala" | "en-atencion"; label: string } | null {
+export function receptionCardBadge(
+  b: ReceptionBooking,
+  now: Date
+): { kind: "en-sala" | "llamado" | "en-atencion"; label: string } | null {
   const state = receptionState(b, now);
+  // SV09 (§18.4): el llamado se ve en la grilla — el profesional que llamó y la
+  // Secretaria tienen que saber que ya se lo llamó (si no, lo llaman dos veces).
+  if (state === "llamado") return { kind: "llamado", label: "Llamado" };
   if (state === "en-sala") {
     const w = waitingMinutes(b, now);
     // Una llegada olvidada de otro día no puede decir "En sala 1440′".
@@ -605,4 +649,126 @@ export function splitCountByPractitioner<P extends { id: string; initials: strin
   // Un turno de un profesional que no está en la lista (dado de baja) igual se cuenta.
   for (const [id, c] of counts) if (!ordered.some((p) => p.id === id)) out.push({ id, initials: "?", count: c });
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SV09 · Agenda en vivo (plan §18.5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Rango con que la página carga la semana visible: lunes 00:00 AR → lunes
+ * siguiente 00:00 AR (`app/(app)/agenda/page.tsx`: `dayWindow(monday).start`,
+ * `dayWindow(sunday).end`). El refetch en vivo tiene que pedir EXACTAMENTE lo
+ * mismo: si pidiera menos, un turno del domingo desaparecería de la Semana
+ * hasta el próximo `router.refresh()`. `fromKey`/`toKey` (DayKeys AR, ambos
+ * incluidos) son para `messagesTouchRange`.
+ */
+export function weekFetchRange(weekStartKey: DayKey): { fromKey: DayKey; toKey: DayKey; from: Date; to: Date } {
+  const toKey = addDays(weekStartKey, 6);
+  return { fromKey: weekStartKey, toKey, from: dayWindow(weekStartKey).start, to: dayWindow(toKey).end };
+}
+
+/**
+ * ¿Algún mensaje del lote le toca a la semana visible? Decide si se re-pide.
+ * - `day` dentro del rango (DayKeys AR, comparables como texto) → sí.
+ * - `prev.day` dentro → sí: un turno que se fue a otra semana tiene que
+ *   desaparecer de esta.
+ * - `day: null` (colapso por profesional/consultorio, SV-D10) → sí: no se sabe
+ *   qué días tocó.
+ * - `kind: "availability"` → sí siempre: un bloqueo/candado puede cancelar o
+ *   mover turnos y además cambia las franjas (el caller hace `router.refresh()`).
+ * No filtra por profesional a propósito: la agenda trae la semana de TODOS los
+ * profesionales visibles al actor y el server ya recorta lo que no le toca; un
+ * refetch de más cuesta una consulta, uno de menos deja la grilla vieja.
+ */
+export function messagesTouchRange(
+  batch: ReadonlyArray<Pick<RealtimeAgendaMessage, "kind" | "day" | "prev">>,
+  range: { fromKey: string; toKey: string }
+): boolean {
+  const inRange = (d: string) => d >= range.fromKey && d <= range.toKey;
+  return batch.some(
+    (m) => m.kind === "availability" || m.day === null || inRange(m.day) || (m.prev != null && inRange(m.prev.day))
+  );
+}
+
+/**
+ * Ids que cambiaron entre dos listas del server: nuevos o con otro
+ * `updatedAt` (todo write de `Booking` pasa por Prisma y lo avanza, recepción
+ * y «Llamar» incluidos). Los que desaparecieron no van: no hay card que marcar.
+ */
+export function changedBookingIds(
+  prev: ReadonlyArray<{ id: string; updatedAt: string }>,
+  next: ReadonlyArray<{ id: string; updatedAt: string }>
+): string[] {
+  const before = new Map(prev.map((r) => [r.id, r.updatedAt]));
+  return next.filter((r) => before.get(r.id) !== r.updatedAt).map((r) => r.id);
+}
+
+/** Cuánto queda marcada una card que cambió por otra sesión (el CSS `k-flash` dura 600 ms). */
+export const FLASH_MS = 700;
+/** Más cambios que esto en un refetch = un cambio masivo (candado, mover en serie): sin flash, sería ruido. */
+export const FLASH_MAX_PER_BATCH = 5;
+/** Ventana en que el refetch puede traer el eco de MI acción antes que el `router.refresh()`. */
+export const OWN_ACTION_QUIET_MS = 5_000;
+
+/**
+ * Acciones propias recientes: `ids` (id → vence, ms epoch) cuando se sabe qué
+ * turno se tocó (drawer, Recepción); `quietUntil` cuando no (alta desde el
+ * modal, candado: los ids los decide el server).
+ */
+export type OwnActionMarks = { ids: ReadonlyMap<string, number>; quietUntil: number };
+
+/**
+ * Qué cards titilan después de un refetch en vivo. Mi propia acción también
+ * publica en el canal, y el refetch que dispara puede llegar ANTES que el
+ * `router.refresh()` de la acción: sin esto, la card que acabo de tocar
+ * titilaría como si la hubiera cambiado otro. Con más de
+ * `FLASH_MAX_PER_BATCH` cambios en el lote no titila nada.
+ */
+export function remoteFlashIds(changed: ReadonlyArray<string>, own: OwnActionMarks, nowMs: number): string[] {
+  if (changed.length === 0 || changed.length > FLASH_MAX_PER_BATCH) return [];
+  if (nowMs < own.quietUntil) return [];
+  return changed.filter((id) => !((own.ids.get(id) ?? 0) > nowMs));
+}
+
+/**
+ * Re-pedidos coalescidos: a lo sumo UNO en vuelo y UNO pendiente. Si llegan
+ * lotes mientras hay un refetch en vuelo, se corre uno más al terminar (el que
+ * estaba en vuelo pudo leer antes del último commit), nunca uno por lote. Un
+ * `run` que falla no traba la cola (el próximo lote o el polling reintentan).
+ * `dispose` (unmount) descarta el pendiente.
+ */
+export function createRefetchCoalescer(run: () => Promise<void>): { request(): void; dispose(): void } {
+  let inFlight = false;
+  let pending = false;
+  let disposed = false;
+  const loop = async () => {
+    inFlight = true;
+    try {
+      do {
+        pending = false;
+        try {
+          await run();
+        } catch {
+          // red caída / action rota: queda lo que se ve; el próximo aviso reintenta
+        }
+      } while (pending && !disposed);
+    } finally {
+      inFlight = false;
+    }
+  };
+  return {
+    request() {
+      if (disposed) return;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      void loop();
+    },
+    dispose() {
+      disposed = true;
+      pending = false;
+    },
+  };
 }

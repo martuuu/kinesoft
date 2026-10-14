@@ -107,6 +107,16 @@ B-pre **no suma servicios externos, env vars ni configuración de consola**. Lo 
 
 Las reglas de A3 no cambian: **A3 no se despliega sin el SMTP propio** (§0.1).
 
+### 0.3 SV — tareas del dueño (Sala de Espera en vivo, 14-oct-2026) 🔴
+
+SV suma **tres variables** y configuración de consola de Supabase. No bloquea el deploy (prod arranca con
+`REALTIME_DRIVER=off`, idéntica a SR); bloquea **prender** la sala en vivo. Todo en **§3.1** (abajo):
+
+1. **R1-R4** en staging y prod (solo lectura + R4 en la consola): `realtime.messages`, policies, Data API, tipo de
+   clave JWT (crear una HS256 si no hay), «Allow public access» OFF.
+2. Variables `REALTIME_DRIVER`, `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_KID` en Vercel.
+3. **V1-V7** en staging con `scripts/realtime-verify.ts`; recién después, prod en `supabase`.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`
@@ -160,6 +170,91 @@ Las reglas de A3 no cambian: **A3 no se despliega sin el SMTP propio** (§0.1).
   verificación de `patient-files` pendientes).
 - **Gate de activación:** `DATABASE_URL` → `kinesoft_app`; `DATABASE_URL_SERVICE` → `kinesoft_service`;
   buckets `patient-files` y `exercise-media` creados y privados.
+
+### 3.1 Supabase Realtime y JWT Signing Keys (SV, 14-oct-2026) 🔴
+
+La Sala de Espera en vivo (SV) usa **Broadcast privado** de Supabase Realtime: el server publica «el turno X cambió»
+(sin datos del paciente) en el canal `tenant:<id>:agenda`, y cada pestaña del consultorio lo escucha con un token
+corto que firma nuestro server. Diseño en [ARCHITECTURE.md ADR-006](ARCHITECTURE.md); seguridad en
+[SECURITY.md §17](SECURITY.md). **Hasta que esto esté hecho, prod corre con `REALTIME_DRIVER=off`** (la app es igual
+que antes de SV y `/sala` se actualiza cada 60 s).
+
+- **Qué configura:** prechecks R1-R4 en prod y staging; una clave HS256 si el proyecto no la tiene; «Allow public
+  access» OFF; tres variables de entorno; verificación V1-V7 en staging.
+- **Bloquea:** prender `REALTIME_DRIVER=supabase` (no bloquea el deploy: con `off` todo funciona).
+- **Responsable:** dueño.
+- **Estado:** 🔴 (R1-R4 sin correr; anotá acá los resultados, sin valores secretos).
+- **Gate de activación:** `REALTIME_DRIVER=supabase` + redeploy.
+
+**Qué es R4, en criollo.** Supabase firma los tokens de sesión con una clave del proyecto. Históricamente era un
+**secreto compartido (HS256)**: quien lo tiene puede firmar tokens que Supabase acepta, y nuestro server lo necesita
+para acuñar el token del canal. Los proyectos nuevos pueden usar **claves asimétricas** (ES256/RS256): Supabase firma
+con una clave privada que no se puede exportar, y nadie de afuera puede firmar. Si el proyecto está así, hay que
+**agregar una clave HS256** y poner su secreto y su `kid` en el env. Por eso el token lleva `kid` opcional: el mismo
+código sirve con el secreto legacy (sin `kid`) y con una clave del sistema nuevo (con `kid`).
+
+**R1 — existe `realtime.messages`** (SQL editor, solo lectura):
+```sql
+select to_regclass('realtime.messages') is not null as realtime_messages;   -- esperado: true
+select c.relkind, c.relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'realtime' and c.relname = 'messages';                  -- esperado: 'p', true
+```
+**R2 — no hay otras policies abiertas en `realtime`:**
+```sql
+select policyname, cmd, roles, qual, with_check from pg_policies where schemaname = 'realtime';
+-- antes de M5: 0 filas. Después: 1 fila  kinesoft_agenda_read | SELECT | {authenticated} | … | (sin with_check)
+```
+Cualquier otra fila (sobre todo `INSERT` o `ALL`) se borra antes de prender el driver: dejaría publicar o leer a otros.
+
+**R3 — Data API:** Settings → API → Data API **desactivada** (o `public` fuera de «Exposed schemas»), y la query de
+[VERTICALES.md §1](VERTICALES.md) (`has_table_privilege('anon', oid, 'UPDATE')` todo `false`). Es lo que hace que el
+token del canal, si se filtra, no lea tablas.
+
+**R4 — JWT keys, API keys y Realtime:**
+1. Settings → **JWT Keys** (JWT Signing Keys): ¿está activo el «Legacy JWT secret» (HS256), o el proyecto pasó a
+   claves asimétricas con el legacy revocado?
+   - **Legacy HS256 activo** → `SUPABASE_JWT_SECRET` = ese secreto; `SUPABASE_JWT_KID` vacío.
+   - **Solo asimétricas** → crear una clave nueva de tipo **Shared secret (HS256)** como *standby* (si la consola deja
+     importar el secreto, generalo con `openssl rand -base64 48`; si lo genera ella, copialo al crearla). En la lista
+     de claves, cada una muestra su **Key ID**: eso va en `SUPABASE_JWT_KID`. Correr V1 con la clave en standby; si V1
+     da `CHANNEL_ERROR`, promoverla a *current* («Rotate keys»): Supabase Auth pasa a firmar con HS256 y la app no
+     cambia (el login no lee el tipo de clave).
+2. Settings → **API Keys**: legacy `anon`/`service_role` o nuevas `sb_publishable_…`/`sb_secret_…`. Las dos sirven:
+   el socket acepta cualquiera como `apikey` y el POST de Broadcast acepta la service/secret. Anotá cuál se usa.
+3. Settings → **Realtime**: **«Allow public access» OFF** (solo canales privados). Con ON, cualquiera con la anon key
+   (que viaja en el bundle) abre canales públicos; V7 lo verifica.
+
+**Variables** (Vercel, Production y Preview/staging cada uno con las suyas; server-only, nunca `NEXT_PUBLIC_`):
+`REALTIME_DRIVER` (`off` → `supabase`), `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_KID` (opcional). Con `supabase` en
+Production el build falla si falta el secreto, la service key, `NEXT_PUBLIC_SUPABASE_URL` o `_ANON_KEY`. Detalle en
+[DEPLOYMENT.md](DEPLOYMENT.md) («Required environment variables»).
+
+**V1-V7 en staging** (con `REALTIME_DRIVER=supabase` en staging y un tenant de prueba; necesita `ws`, ya en
+devDependencies). Lee el env del proceso, no imprime secretos, rechaza localhost y exige `--confirm` = project ref:
+```bash
+npx dotenv -e .env.staging.local -- npx tsx --conditions=react-server scripts/realtime-verify.ts \
+  --tenant <tenantId> --confirm=<project-ref>
+```
+| # | Qué verifica | PASS |
+|---|---|---|
+| V1 | Token propio → canal privado `tenant:<id>:agenda` | `SUBSCRIBED` |
+| V2 | Token de otro tenant / sin token / vencido | `CHANNEL_ERROR` (nunca `SUBSCRIBED`) |
+| V3 | `channel.send` de un cliente con token propio | no llega a otro suscriptor (sin policy INSERT) |
+| V4 | El token fuera del canal: PostgREST (`/rest/v1/Tenant`), GoTrue (`/auth/v1/user`), Storage (**POST** `/storage/v1/object/list/patient-files`) | rechazado (401/403/404/42501) o lista vacía por RLS |
+| V5 | Publish REST con la service key | **202** y llega al listener de V1 |
+| V6 | 20 publicaciones | p95 de recepción < 1 s |
+| V7 | «Allow public access» OFF: join **público** sin token al mismo topic | rechazado; si suscribe, el mensaje no cruza al canal privado (y avisa que hay que apagarlo) |
+
+Sale con código 1 si algún chequeo falla. V5/V6 publican mensajes efímeros `availability` en el topic del tenant de
+prueba (una pestaña abierta ahí hace un `router.refresh()`, nada más). A mano: `/sala` en dos navegadores de staging,
+«Llegó» en uno aparece en el otro en < 2 s.
+
+**Rotación** (sin código): crear la clave HS256 nueva como standby → cargar su secreto y `kid` en Vercel → redeploy
+→ V1 → promoverla → revocar la vieja cuando no queden tokens vivos (duran 10 min). Si se rota el **secreto legacy**,
+cambia también la anon/service legacy: actualizar esas variables en el mismo redeploy.
+
+**Orden** (RUNBOOK «Deploy de SV»): M5 en la cadena única → deploy con `off` → env → staging `supabase` + V1-V7 →
+prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 
 ### 4. Rate-limiting gestionado — Upstash Redis
 - **Qué configura:** crear una DB Redis en Upstash (región **sa-east-1**; una para prod y otra para

@@ -247,6 +247,15 @@ export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope):
 // D2: cambiar de sede limpia la sala (`mergeAgendaViewPrefs`), porque una sala
 // es de UNA sede; si no, al volver a "Todas las sedes" quedaría filtrando una
 // sala que no se ve en el selector.
+//
+// SV (C-SV9): avisos de la Sala de Espera y agrupación de `/sala`, por usuario.
+// `arrivalAlert` («Cuando llega un paciente mío») y `callAlert` («Cuando un
+// profesional llama a un paciente»): default "visual" PARA TODOS (SV-D4
+// enmendada: el sonido arranca apagado y cada usuario lo prende; un chime que
+// suena sin que nadie lo pidiera en un consultorio con pacientes es peor que un
+// toast). `salaGroupBy`: control «Por profesional | Por sala» de `/sala`
+// (SV-D13), default profesional. Mismo patrón que el resto: sanitize total
+// (inválido → default) y patch estricto.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -261,6 +270,14 @@ const modeSchema = z.enum(["day", "practitioner", "room"]);
 export type AgendaViewZoom = 15 | 30 | 60;
 export const AGENDA_VIEW_ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 export type AgendaViewDensity = "comfortable" | "compact";
+/** SV: "visual" = toast; "sound" = toast + chime; "off" = nada. */
+export type AlertMode = "visual" | "sound" | "off";
+export const ALERT_MODES: ReadonlyArray<AlertMode> = ["visual", "sound", "off"];
+const alertModeSchema = z.enum(["visual", "sound", "off"]);
+/** SV-D13: columnas de `/sala` por profesional o por sala. */
+export type SalaGroupBy = "practitioner" | "room";
+export const SALA_GROUP_BYS: ReadonlyArray<SalaGroupBy> = ["practitioner", "room"];
+const salaGroupBySchema = z.enum(["practitioner", "room"]);
 /** Tope de favoritos guardados (un consultorio grande ronda los 10-15). */
 export const AGENDA_MAX_FAVORITES = 50;
 const ID_MAX = 64;
@@ -278,6 +295,12 @@ export type AgendaViewPrefs = {
    * todas). Se omite del objeto cuando es "todas" (ver arriba).
    */
   roomId?: string | null;
+  /** SV: aviso cuando llega un paciente del usuario (si tiene `practitionerId`). */
+  arrivalAlert: AlertMode;
+  /** SV: aviso cuando un profesional llama a un paciente (si tiene `agenda.operateAll`). */
+  callAlert: AlertMode;
+  /** SV-D13: agrupación de `/sala`. */
+  salaGroupBy: SalaGroupBy;
 };
 
 export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
@@ -286,6 +309,9 @@ export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
   density: "comfortable",
   favoritePractitionerIds: [],
   locationId: null,
+  arrivalAlert: "visual",
+  callAlert: "visual",
+  salaGroupBy: "practitioner",
 };
 
 const zoomSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
@@ -319,6 +345,10 @@ export function sanitizeAgendaViewPrefs(
     density: z.enum(["comfortable", "compact"]).catch(defaults.density),
     favoritePractitionerIds: z.unknown().transform(cleanIds),
     locationId: idSchema.nullable().catch(defaults.locationId),
+    // SV: ausente o inválido → default del caller (`.catch` cubre `undefined`).
+    arrivalAlert: alertModeSchema.catch(defaults.arrivalAlert),
+    callAlert: alertModeSchema.catch(defaults.callAlert),
+    salaGroupBy: salaGroupBySchema.catch(defaults.salaGroupBy),
   });
   const parsed = schema.parse({
     ...o,
@@ -343,6 +373,9 @@ export const AgendaViewPrefsPatchSchema = z
       .transform((ids) => Array.from(new Set(ids))),
     locationId: idSchema.nullable(),
     roomId: idSchema.nullable(),
+    arrivalAlert: alertModeSchema,
+    callAlert: alertModeSchema,
+    salaGroupBy: salaGroupBySchema,
   })
   .partial()
   .strict();

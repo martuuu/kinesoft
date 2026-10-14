@@ -23,6 +23,8 @@ import {
   BUSINESS_HOUR_MAX,
 } from "@/lib/tenant-settings-constants";
 import { Switch, ErrorBox } from "../controls";
+import { useAlertPrefs } from "@/components/providers/arrival-alerts";
+import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 
 export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) {
   const router = useRouter();
@@ -274,8 +276,65 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
         />
       </Card>
 
+      <AlertPrefsCard />
+
       {error && <ErrorBox>{error}</ErrorBox>}
     </div>
+  );
+}
+
+/**
+ * SV11b (§18.5 «Avisos», SV-D4 enmendada): «Avisos de la sala de espera», por
+ * usuario. Cada fila aparece solo si le aplica: la llegada a quien atiende, el
+ * llamado a quien opera la agenda de todos (Secretaria, OWNER/ADMIN); un OWNER
+ * que atiende ve las dos. El mismo control está en Agenda → «Vista».
+ * Default «Visual»: el sonido arranca apagado y cada uno lo prende.
+ *
+ * Sin canal realtime en el consultorio (driver `off`) la Card se muestra IGUAL,
+ * con una nota (FX2b, M4): la preferencia se guarda y rige el día que se
+ * encienda la sala en vivo. Ocultarla dejaba a la Secretaria sin saber dónde se
+ * configura el llamado (Martin, §18.14: «desde SU configuración»).
+ */
+export function AlertPrefsCard() {
+  const a = useAlertPrefs();
+  if (!a.appliesArrival && !a.appliesCall) return null;
+  return (
+    <Card style={{ padding: 20 }}>
+      <EyebrowLabel>Avisos de la sala de espera</EyebrowLabel>
+      <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 8, lineHeight: 1.45 }}>
+        Un aviso arriba a la derecha (y en el título de la pestaña) aunque estés en otra pantalla. Se
+        guarda en tu cuenta.
+      </div>
+      {!a.live && (
+        <div
+          data-alerts-off-note
+          style={{ fontSize: 12.5, color: "var(--navy-500)", marginBottom: 8, lineHeight: 1.45 }}
+        >
+          Los avisos se activan cuando la sala en vivo esté encendida en el consultorio.
+        </div>
+      )}
+      {a.appliesArrival && (
+        <PrefRow label="Cuando llega un paciente mío" hint="«Llegó María G. · 10:30», con el acceso a la sala.">
+          <AlertModeControl
+            label="Cuando llega un paciente mío"
+            value={a.arrivalAlert}
+            onChange={a.setArrivalAlert}
+          />
+        </PrefRow>
+      )}
+      {a.appliesCall && (
+        <PrefRow
+          label="Cuando un profesional llama a un paciente"
+          hint="«Pase María G. · Consultorio 2», para saber a quién hacer pasar."
+        >
+          <AlertModeControl
+            label="Cuando un profesional llama a un paciente"
+            value={a.callAlert}
+            onChange={a.setCallAlert}
+          />
+        </PrefRow>
+      )}
+    </Card>
   );
 }
 
@@ -498,11 +557,14 @@ function PrefRow({
         alignItems: "center",
         justifyContent: "space-between",
         gap: 16,
+        // SV11b: el segmentado de avisos no entra al lado del texto a 360 px;
+        // con wrap baja abajo (los Switch, angostos, no cambian).
+        flexWrap: "wrap",
         padding: "10px 0",
         borderTop: "1px solid rgba(15,30,51,0.06)",
       }}
     >
-      <div style={{ maxWidth: 520 }}>
+      <div style={{ maxWidth: 520, flex: "1 1 220px" }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{label}</div>
         <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
       </div>

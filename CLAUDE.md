@@ -35,10 +35,13 @@
     corridas «ES1..ES4» (ES1 = P0, ES2a = P1, ES2b = P2, ES3 = P3, ES4 = P4). Las olas internas de B-pre se llamaron
     B1-B5 y no son las de Planes. «S01…S32» (y P0-Cs, P2-C1, etc.) son sesiones de Planes ([.docs/PLANES.md](.docs/PLANES.md)).
     «Ronda N» es el historial de entregas en AUDIT/QA.
-  - «EV0 / EV1» son corridas de verticales y «SV» la corrida de Sala de Espera realtime (07-oct,
-    [.docs/VERTICALES.md](.docs/VERTICALES.md)); no son olas de Planes. «M1» = `plans_booking_link`, «M2» =
-    `tenant_verticals` (EV0), «M3» = `reception_call_realtime` (SV). «EV-D1..D6» y «SV-D1..D4» son decisiones con
-    default (no las PD/PQ de Planes); «C-EV1..9» son contratos de EV0 (no los C1-C14 de Planes).
+  - «EV0 / EV1» son corridas de verticales, «SR» la de Salas/Consultorios y «SV» la de Sala de Espera realtime
+    (13/14-oct, [.docs/VERTICALES.md](.docs/VERTICALES.md) §7); no son olas de Planes. «M1» = `plans_booking_link`,
+    «M2» = `tenant_verticals` (EV0), «M3a» = `billing_paid_at` (ES3), «M4» = `rooms` (SR), «M5» =
+    `reception_call_realtime` (SV; se llamó «M3» antes del 08-oct). «EV-D1..D6», «SR-D1..D9» y «SV-D1..D16» (SV-D5..D16
+    en el plan §18.14) son decisiones con default (no las PD/PQ de Planes); «C-EV1..9» y «C-SV1..10» son contratos de
+    EV0 y de SV (no los C1-C14 de Planes). «V1-V7» y «R1-R4» son las verificaciones y prechecks de SV en Supabase
+    ([.docs/EXTERNAL-CONFIG.md](.docs/EXTERNAL-CONFIG.md) §3.1).
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

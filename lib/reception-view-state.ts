@@ -5,8 +5,8 @@
  * sin montar el componente (AGENTS §3: la lógica pura va fuera de la UI).
  *
  * - Filtros rápidos (Todos / Por llegar / En sala / Atendidos) y contadores.
- * - Qué acciones se MUESTRAN (las de `allowedTransitions`, menos "Llegó" y
- *   "En atención" fuera del día de hoy: el server igual las rechaza con
+ * - Qué acciones se MUESTRAN (las de `allowedTransitions`, menos "Llegó",
+ *   "Llamar" y "En atención" fuera del día de hoy: el server igual las rechaza con
  *   "Solo se marca la llegada de turnos de hoy." y no tiene sentido ofrecer
  *   un botón que siempre falla).
  * - El parche optimista y su rollback: la fila cambia al click, con el mismo
@@ -22,7 +22,10 @@ import { dayKeyOf } from "@/lib/availability/day";
 import {
   RECEPTION_STATE_LABEL,
   applyReceptionAction,
+  receptionState,
   sortForReception,
+  undoTarget,
+  type ReceptionBooking,
   type ReceptionAction,
   type ReceptionEntry,
   type ReceptionState,
@@ -44,11 +47,12 @@ export const RECEPTION_FILTERS: ReadonlyArray<{ id: ReceptionFilter; label: stri
  * (todavía no llegaron: son a los que hay que llamar). "En sala" incluye a los
  * que están en atención: la pregunta de la secretaria es "quién está en el
  * consultorio ahora", y el que pasó al box sigue adentro. Ausentes y
- * cancelados solo se ven en "Todos".
+ * cancelados solo se ven en "Todos". El LLAMADO (SV) entra en "En sala": sigue
+ * en la sala de espera hasta que el profesional lo marca en atención.
  */
 const FILTER_STATES: Record<Exclude<ReceptionFilter, "todos">, ReadonlyArray<ReceptionState>> = {
   "por-llegar": ["por-llegar", "demorado"],
-  "en-sala": ["en-sala", "en-atencion"],
+  "en-sala": ["en-sala", "llamado", "en-atencion"],
   atendidos: ["atendido"],
 };
 
@@ -61,8 +65,14 @@ export function filterEntries<T extends { state: ReceptionState }>(entries: Read
 }
 
 export type ReceptionCounters = {
-  /** En sala de espera ahora (no cuenta a los que ya están en atención). */
+  /**
+   * En sala de espera ahora (no cuenta a los que ya están en atención). SV:
+   * incluye a los llamados — todavía no entraron al box, y el contador «En sala
+   * ahora» no tiene que bajar y volver a subir por un llamado de segundos.
+   */
   enSala: number;
+  /** SV: llamados que todavía no pasaron a atención (subconjunto de `enSala`). */
+  llamados: number;
   enAtencion: number;
   demorados: number;
   atendidos: number;
@@ -78,7 +88,8 @@ export function receptionCounters(entries: ReadonlyArray<{ state: ReceptionState
     RECEPTION_FILTERS.map((f) => [f.id, filterEntries(entries, f.id).length])
   ) as Record<ReceptionFilter, number>;
   return {
-    enSala: n("en-sala"),
+    enSala: n("en-sala") + n("llamado"),
+    llamados: n("llamado"),
     enAtencion: n("en-atencion"),
     demorados: n("demorado"),
     atendidos: n("atendido"),
@@ -94,12 +105,39 @@ export function bookingsOfDay<T extends { scheduledFor: string }>(bookings: Read
   return bookings.filter((b) => dayKeyOf(new Date(b.scheduledFor)) === dayKey);
 }
 
+/** Las que el server rechaza fuera de hoy (`TODAY_ONLY` de reception-state). */
+const TODAY_ONLY_ACTIONS: ReadonlyArray<ReceptionAction> = ["llego", "llamar", "en-atencion"];
+
 /**
- * Acciones a mostrar en la fila: `allowedTransitions` del estado, sin "Llegó"
- * ni "En atención" si el día mostrado no es hoy (ver cabecera).
+ * Acciones a mostrar en la fila: `allowedTransitions` del estado, sin "Llegó",
+ * "Llamar" ni "En atención" si el día mostrado no es hoy (ver cabecera).
  */
 export function visibleActions(actions: ReadonlyArray<ReceptionAction>, isToday: boolean): ReceptionAction[] {
-  return isToday ? [...actions] : actions.filter((a) => a !== "llego" && a !== "en-atencion");
+  return isToday ? [...actions] : actions.filter((a) => !TODAY_ONLY_ACTIONS.includes(a));
+}
+
+/**
+ * Hint del botón "Deshacer" (aria-label: «Deshacer (vuelve a En sala): …»),
+ * derivado de `undoTarget` para no repetir la regla de §18.4 en la UI:
+ * llamado → En sala; en atención → Llamado si hubo llamado, si no En sala;
+ * en sala → Por llegar (aunque el turno ya esté demorado: es la misma fila de
+ * "Por llegar"); atendido/ausente → "el estado anterior" (depende de los
+ * timestamps y el label exacto confunde más de lo que ayuda). null = no hay
+ * deshacer.
+ */
+export function undoHint(row: ReceptionBooking, now: Date): string | null {
+  const from = receptionState(row, now);
+  const to = undoTarget(row, now);
+  if (to == null) return null;
+  if (from === "atendido" || from === "ausente") return "vuelve al estado anterior";
+  const label: Partial<Record<ReceptionState, string>> = {
+    "por-llegar": "Por llegar",
+    demorado: "Por llegar",
+    "en-sala": "En sala",
+    llamado: "Llamado",
+    "en-atencion": "En atención",
+  };
+  return `vuelve a ${label[to] ?? RECEPTION_STATE_LABEL[to]}`;
 }
 
 /** Minutos para leer de un vistazo: 8' · 1 h 05'. */
@@ -111,12 +149,20 @@ export function fmtMinutes(min: number): string {
 
 /**
  * Texto del tag de estado. Con minutos donde importan ("Demorado 12'",
- * "En sala 8'"); el resto, el label de `RECEPTION_STATE_LABEL`. "En sala" en
+ * "En sala 8'", "Llamado 3'"); el resto, el label de `RECEPTION_STATE_LABEL`. "En sala" en
  * corto porque el tag va en una columna angosta; el label largo ("En sala de
  * espera") queda para el `title`.
  */
-export function stateTagText(entry: Pick<ReceptionEntry<never>, "state" | "waitingMinutes" | "lateMinutes">): string {
+export function stateTagText(
+  // `calledMinutes` opcional: los callers que pasan un Pick viejo (sin el
+  // campo, p. ej. `ReceptionStateTag`) siguen compilando; sin el dato se lee
+  // "Llamado" a secas.
+  entry: Pick<ReceptionEntry<never>, "state" | "waitingMinutes" | "lateMinutes" | "calledMinutes">
+): string {
   if (entry.state === "demorado" && entry.lateMinutes != null) return `Demorado ${fmtMinutes(entry.lateMinutes)}`;
+  if (entry.state === "llamado") {
+    return entry.calledMinutes != null ? `Llamado ${fmtMinutes(entry.calledMinutes)}` : "Llamado";
+  }
   if (entry.state === "en-sala") {
     return entry.waitingMinutes != null ? `En sala ${fmtMinutes(entry.waitingMinutes)}` : "En sala";
   }
@@ -126,7 +172,8 @@ export function stateTagText(entry: Pick<ReceptionEntry<never>, "state" | "waiti
 const MIN_MS = 60_000;
 
 /**
- * Columna "Espera": cuánto lleva en sala (en-sala) o cuánto esperó hasta
+ * Columna "Espera": cuánto lleva en sala (en-sala y llamado: el llamado
+ * sigue esperando hasta entrar al box, el reloj no se corta) o cuánto esperó hasta
  * pasar a atención (en-atención / atendido, si están los dos timestamps).
  * null = no aplica (se muestra "—").
  */
@@ -137,7 +184,7 @@ export function waitText(
 ): string | null {
   if (!b.arrivedAt) return null;
   const arrived = new Date(b.arrivedAt).getTime();
-  if (state === "en-sala") return fmtMinutes(Math.max(0, Math.floor((now.getTime() - arrived) / MIN_MS)));
+  if (state === "en-sala" || state === "llamado") return fmtMinutes(Math.max(0, Math.floor((now.getTime() - arrived) / MIN_MS)));
   if ((state === "en-atencion" || state === "atendido") && b.attendingAt) {
     const waited = Math.max(0, Math.floor((new Date(b.attendingAt).getTime() - arrived) / MIN_MS));
     return `esperó ${fmtMinutes(waited)}`;
@@ -175,6 +222,7 @@ export function beginReceptionAction(
     ...current,
     ...(t.patch.status ? { status: t.patch.status } : {}),
     ...("arrivedAt" in t.patch ? { arrivedAt: iso(t.patch.arrivedAt ?? null) } : {}),
+    ...("calledAt" in t.patch ? { calledAt: iso(t.patch.calledAt ?? null) } : {}),
     ...("attendingAt" in t.patch ? { attendingAt: iso(t.patch.attendingAt ?? null) } : {}),
   };
   return {
@@ -199,6 +247,9 @@ export function commitReceptionAction(
     ...o.booking,
     status: result.status,
     arrivedAt: result.arrivedAt,
+    // SV05: el server siempre devuelve `calledAt` (null = sin llamado): manda
+    // sobre el optimista, igual que `arrivedAt`.
+    calledAt: result.calledAt,
     attendingAt: result.attendingAt,
     updatedAt: result.updatedAt,
   };

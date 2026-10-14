@@ -8,6 +8,8 @@ import {
   type AgendaVisibility,
 } from "@/lib/agenda-filters";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
+import { useAlertPrefs } from "@/components/providers/arrival-alerts";
+import { AlertModeControl, SOUND_BLOCKED_NOTE } from "@/components/realtime/alert-prefs-controls";
 
 const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 
@@ -23,6 +25,11 @@ const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 // S19b (ES3): "Turnos: Todos / De plan / Sueltos". Es el mismo resaltado que
 // la leyenda "Turnos" de abajo de la agenda (no oculta: atenúa). Solo aparece
 // si `agenda-client` pasa `planScope` (módulo `planes`).
+//
+// SV11b: sección «Avisos» con el mismo control que Configuración → General
+// («Avisos de la sala de espera»). Lee y escribe por `useAlertPrefs()` (el
+// provider de `AppShell`), así no suma props que `agenda-client` (SV09) tenga
+// que pasar, y los dos controles comparten estado.
 // ──────────────────────────────────────────────────────────────────────
 
 export function ViewOptionsMenu({
@@ -107,7 +114,10 @@ export function ViewOptionsMenu({
             position: "absolute",
             top: 44,
             right: 0,
-            width: 240,
+            // SV11b: 264 (antes 240) para que «Visual y sonido» entre en el segmentado de Avisos.
+            width: 264,
+            maxHeight: "min(75vh, 620px)",
+            overflowY: "auto",
             borderRadius: 14,
             padding: 10,
             zIndex: 25,
@@ -247,12 +257,56 @@ export function ViewOptionsMenu({
               onChange={(v) => setVisibility({ ...visibility, showNoShow: v })}
             />
           </div>
+          <AvisosMenuSection />
           <div style={{ fontSize: 11.5, color: "var(--navy-300)", padding: "2px 4px", lineHeight: 1.4 }}>
             El encabezado de días (tira + grilla) se controla desde Tweaks → «Vista semanal».
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * SV11b: «Avisos» del menú. Solo las filas que le aplican al usuario; ninguna
+ * (BILLING, fuera del provider) → no se muestra. Sin canal realtime tampoco
+ * (FX2b, M4): en el menú de la agenda sería un control que no hace nada; la
+ * preferencia se puede dejar elegida en Configuración → General.
+ */
+export function AvisosMenuSection() {
+  const a = useAlertPrefs();
+  if (!a.live || (!a.appliesArrival && !a.appliesCall)) return null;
+  return (
+    <>
+      <div style={menuLabel}>Avisos</div>
+      <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+        {a.appliesArrival && (
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={menuItemText}>Cuando llega un paciente mío</div>
+            <AlertModeControl
+              compact
+              label="Cuando llega un paciente mío"
+              value={a.arrivalAlert}
+              onChange={a.setArrivalAlert}
+            />
+          </div>
+        )}
+        {a.appliesCall && (
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={menuItemText}>Cuando un profesional llama a un paciente</div>
+            <AlertModeControl
+              compact
+              label="Cuando un profesional llama a un paciente"
+              value={a.callAlert}
+              onChange={a.setCallAlert}
+            />
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: "var(--navy-500)", padding: "0 4px", lineHeight: 1.4 }}>
+          {SOUND_BLOCKED_NOTE}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -300,4 +354,11 @@ const menuLabel: React.CSSProperties = {
   textTransform: "uppercase",
   color: "var(--navy-300)",
   padding: "0 4px 6px",
+};
+
+const menuItemText: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--navy-700)",
+  padding: "0 4px",
 };

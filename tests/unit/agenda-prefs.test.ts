@@ -30,6 +30,10 @@ describe("sanitizeAgendaViewPrefs (lectura)", () => {
       density: "comfortable",
       favoritePractitionerIds: [],
       locationId: null,
+      // SV (C-SV9): avisos visuales para todos, sonido apagado; /sala por profesional.
+      arrivalAlert: "visual",
+      callAlert: "visual",
+      salaGroupBy: "practitioner",
     });
   });
 
@@ -40,6 +44,9 @@ describe("sanitizeAgendaViewPrefs (lectura)", () => {
       density: "compact",
       favoritePractitionerIds: ["p2", "p1"],
       locationId: "loc-1",
+      arrivalAlert: "sound",
+      callAlert: "off",
+      salaGroupBy: "room",
     };
     expect(sanitizeAgendaViewPrefs(v)).toEqual(v);
   });
@@ -218,5 +225,83 @@ describe("[SR-U3] agendaPrefs: mode room + roomId", () => {
     expect(
       mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ locationId: "L2", roomId: "R3" })).roomId
     ).toBe("R3");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SV02 · C-SV9: avisos de la Sala de Espera y agrupación de /sala.
+// Un blob anterior a SV (sin las claves) lee los defaults; un valor roto cae a
+// SU default sin tocar el resto; el patch acepta solo el dominio.
+// ─────────────────────────────────────────────────────────────────────────────
+import { ALERT_MODES, SALA_GROUP_BYS } from "@/lib/preferences-constants";
+
+describe("[SV02] agendaPrefs: arrivalAlert, callAlert, salaGroupBy", () => {
+  it("dominios exportados", () => {
+    expect(ALERT_MODES).toEqual(["visual", "sound", "off"]);
+    expect(SALA_GROUP_BYS).toEqual(["practitioner", "room"]);
+  });
+
+  it("blob anterior a SV (sin las claves) → defaults visual/visual/practitioner", () => {
+    const out = sanitizeAgendaViewPrefs({ mode: "practitioner", favoritePractitionerIds: ["p1"] });
+    expect(out.arrivalAlert).toBe("visual");
+    expect(out.callAlert).toBe("visual");
+    expect(out.salaGroupBy).toBe("practitioner");
+  });
+
+  it("valores válidos pasan", () => {
+    for (const m of ALERT_MODES) {
+      const out = sanitizeAgendaViewPrefs({ arrivalAlert: m, callAlert: m });
+      expect([out.arrivalAlert, out.callAlert]).toEqual([m, m]);
+    }
+    expect(sanitizeAgendaViewPrefs({ salaGroupBy: "room" }).salaGroupBy).toBe("room");
+  });
+
+  it("valor inválido → su default, sin tocar los demás campos", () => {
+    for (const bad of ["SOUND", "", null, 1, true, ["sound"], { v: "sound" }]) {
+      const out = sanitizeAgendaViewPrefs({
+        zoom: 15,
+        favoritePractitionerIds: ["p1"],
+        arrivalAlert: bad,
+        callAlert: "sound",
+        salaGroupBy: bad,
+      });
+      expect(out.arrivalAlert, JSON.stringify(bad)).toBe("visual");
+      expect(out.salaGroupBy, JSON.stringify(bad)).toBe("practitioner");
+      expect(out.callAlert).toBe("sound");
+      expect(out.zoom).toBe(15);
+      expect(out.favoritePractitionerIds).toEqual(["p1"]);
+    }
+  });
+
+  it("patch acepta las 3 claves con su dominio", () => {
+    expect(AgendaViewPrefsPatchSchema.parse({ arrivalAlert: "sound", callAlert: "off", salaGroupBy: "room" })).toEqual({
+      arrivalAlert: "sound",
+      callAlert: "off",
+      salaGroupBy: "room",
+    });
+  });
+
+  it("patch rechaza valores fuera de dominio y claves desconocidas", () => {
+    for (const bad of [
+      { arrivalAlert: "loud" },
+      { arrivalAlert: null },
+      { callAlert: "" },
+      { callAlert: 1 },
+      { salaGroupBy: "service" },
+      { salaGroupBy: null },
+      { soundAlert: "sound" },
+      { arrivalAlert: "sound", extra: 1 },
+    ]) {
+      expect(AgendaViewPrefsPatchSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("merge: el patch de avisos no toca la agenda (ni la sala del filtro)", () => {
+    const current = sanitizeAgendaViewPrefs({ locationId: "L1", roomId: "R1", mode: "room" });
+    const next = mergeAgendaViewPrefs(
+      current,
+      AgendaViewPrefsPatchSchema.parse({ arrivalAlert: "sound", salaGroupBy: "room" })
+    );
+    expect(next).toEqual({ ...current, arrivalAlert: "sound", salaGroupBy: "room" });
   });
 });

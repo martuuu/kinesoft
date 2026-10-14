@@ -37,3 +37,56 @@ describe("parseEnv — fail-fast solo en Production", () => {
     expect(() => parseEnv({ ...PROD_OK, MP_ACCESS_TOKEN: "tok" })).toThrow(/MP_WEBHOOK_SECRET/);
   });
 });
+
+// SV02 · SV-D11: driver del canal realtime de la Sala de Espera.
+describe("parseEnv — REALTIME_DRIVER (SV)", () => {
+  const PROD_RT = {
+    ...PROD_OK,
+    REALTIME_DRIVER: "supabase",
+    SUPABASE_JWT_SECRET: "test-secret",
+  };
+  const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("default off (local, CI y Production sin setear)", () => {
+    expect(parseEnv({}).REALTIME_DRIVER).toBe("off");
+    const spy = quiet();
+    expect(parseEnv(PROD_OK).REALTIME_DRIVER).toBe("off");
+    spy.mockRestore();
+  });
+  it("valor fuera del dominio falla en cualquier entorno", () => {
+    expect(() => parseEnv({ REALTIME_DRIVER: "pusher" })).toThrow(/REALTIME_DRIVER/);
+  });
+  it("supabase en Production completo pasa; SUPABASE_JWT_KID es opcional", () => {
+    const spy = quiet();
+    expect(parseEnv(PROD_RT).REALTIME_DRIVER).toBe("supabase");
+    expect(parseEnv(PROD_RT).SUPABASE_JWT_KID).toBeUndefined();
+    expect(parseEnv({ ...PROD_RT, SUPABASE_JWT_KID: "kid-1" }).SUPABASE_JWT_KID).toBe("kid-1");
+    spy.mockRestore();
+  });
+  it("supabase en Production sin SUPABASE_JWT_SECRET falla", () => {
+    expect(() => parseEnv({ ...PROD_RT, SUPABASE_JWT_SECRET: undefined })).toThrow(/SUPABASE_JWT_SECRET/);
+  });
+  it("supabase en Production sin service key o sin URL falla", () => {
+    expect(() => parseEnv({ ...PROD_RT, SUPABASE_SERVICE_ROLE_KEY: undefined })).toThrow(
+      /SUPABASE_SERVICE_ROLE_KEY: obligatoria en Production con REALTIME_DRIVER=supabase/
+    );
+    expect(() => parseEnv({ ...PROD_RT, NEXT_PUBLIC_SUPABASE_URL: undefined })).toThrow(
+      /NEXT_PUBLIC_SUPABASE_URL: obligatoria en Production con REALTIME_DRIVER=supabase/
+    );
+  });
+  it("[FX1b] supabase en Production sin NEXT_PUBLIC_SUPABASE_ANON_KEY falla (el socket del browser la usa de apikey)", () => {
+    expect(() => parseEnv({ ...PROD_RT, NEXT_PUBLIC_SUPABASE_ANON_KEY: undefined })).toThrow(
+      /NEXT_PUBLIC_SUPABASE_ANON_KEY: obligatoria en Production con REALTIME_DRIVER=supabase/
+    );
+    expect(() => parseEnv({ ...PROD_RT, NEXT_PUBLIC_SUPABASE_ANON_KEY: "" })).toThrow(/NEXT_PUBLIC_SUPABASE_ANON_KEY/);
+  });
+  it("local en Production falla", () => {
+    expect(() => parseEnv({ ...PROD_OK, REALTIME_DRIVER: "local" })).toThrow(/REALTIME_DRIVER/);
+  });
+  it("Preview y CI no fallan con supabase sin secreto ni con local", () => {
+    for (const base of [{ VERCEL_ENV: "preview" }, { NODE_ENV: "production" }, {}]) {
+      expect(() => parseEnv({ ...base, REALTIME_DRIVER: "supabase" })).not.toThrow();
+      expect(parseEnv({ ...base, REALTIME_DRIVER: "local" }).REALTIME_DRIVER).toBe("local");
+    }
+  });
+});

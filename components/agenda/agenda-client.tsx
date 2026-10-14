@@ -42,6 +42,10 @@ import {
   type AgendaBootstrapProps,
 } from "@/lib/availability-actions-types";
 import { getAgendaAvailability } from "@/lib/availability-actions";
+import { listAgendaBookings } from "@/lib/bookings";
+import { useRealtime } from "@/components/providers/realtime-provider";
+import { LiveIndicator } from "@/components/realtime/live-indicator";
+import { BookingFlashContext } from "./grid/booking-card";
 import { updateAgendaViewPrefs } from "@/lib/preferences";
 import {
   DEFAULT_AGENDA_VIEW_PREFS,
@@ -58,6 +62,14 @@ import {
   blockedRows,
   canOpenDayLock,
   capabilitySet,
+  changedBookingIds,
+  createRefetchCoalescer,
+  FLASH_MS,
+  messagesTouchRange,
+  OWN_ACTION_QUIET_MS,
+  pruneBookingOverrides,
+  remoteFlashIds,
+  weekFetchRange,
   countByPractitioner,
   countByRoom,
   dayLockInitialScope,
@@ -83,7 +95,7 @@ import {
 import type { DayLockState } from "@/lib/availability/types";
 import { sameHighlight, toggleHighlight, type AgendaHighlight } from "@/lib/agenda-highlight";
 import type { Discipline } from "@/lib/plans-constants";
-import { expandPlanFields, serviceDisciplineMap, withArchivedRooms, type BookingDTO } from "./agenda-utils";
+import { expandPlanFields, serviceDisciplineMap, toBookingDTO, withArchivedRooms, type BookingDTO } from "./agenda-utils";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { AgendaToolbar } from "./agenda-toolbar";
 import { PlanLegend } from "./plan-legend";
@@ -298,7 +310,15 @@ export function AgendaClient(props: Props) {
     /** SR-U5c: alta desde una columna de "Por sala": esa sala (null = "Sin sala"). */
     defaultRoomId?: string | null;
   }>(null);
-  const [editing, setEditing] = useState<BookingDTO | null>(null);
+  // SV09: el drawer guarda QUÉ turno abrió (id + la versión que vio) y el turno
+  // se deriva de la lista viva (abajo, `editingBooking`). Antes guardaba una
+  // copia fija: con la agenda en vivo, un turno movido por otra sesión seguía
+  // mostrando la hora vieja.
+  const [editing, setEditingState] = useState<{ id: string; updatedAt: string } | null>(null);
+  const setEditing = useCallback(
+    (b: BookingDTO | null) => setEditingState(b ? { id: b.id, updatedAt: b.updatedAt } : null),
+    []
+  );
   // Chunks diferidos (modal/drawer/candado): precarga cuando el navegador
   // está ocioso. Safari no tiene requestIdleCallback → setTimeout.
   useEffect(() => {
@@ -509,15 +529,98 @@ export function AgendaClient(props: Props) {
   // ── Turnos: recepción optimista + filtros ──────────────────────────────────
   // `ReceptionView` avisa cada cambio con la fila nueva (o la vieja si "cambió
   // en otra sesión"); se pisa acá al instante y `router.refresh()` re-lista.
-  const [overrides, setOverrides] = useState<Record<string, BookingDTO>>({});
+  const [overrides, setOverrides] = useState<Readonly<Record<string, BookingDTO>>>({});
   useEffect(() => setOverrides({}), [props.bookings]);
+
+  // ── Agenda en vivo (SV09, plan §18.5) ──────────────────────────────────────
+  // Un lote del canal que toca la semana visible → se re-pide la semana con
+  // `listAgendaBookings` DIRECTO, no con `router.refresh()`: el refresh
+  // re-ejecuta la página entera (`listPatients()` de todo el consultorio,
+  // servicios, obras sociales, settings, disponibilidad) para cambiar una
+  // fila, y con varias recepciones operando eso es un refresh cada pocos
+  // segundos por pestaña. `listAgendaBookings` no está cacheado: trae filas
+  // frescas sin invalidar nada. Mismos parámetros que la página
+  // (`weekFetchRange`: la semana entera, todos los profesionales y sedes; los
+  // filtros son del cliente) para que la lista viva sea intercambiable con
+  // `props.bookings`.
+  // `liveBookings` reemplaza a `props.bookings` SOLO mientras `props.bookings`
+  // sea el mismo array con que salió el refetch: una navegación o un
+  // `router.refresh()` (acción propia) traen datos del server más nuevos y la
+  // lista viva se descarta sola, sin un effect (que dejaría un render con la
+  // lista vieja de otra semana).
+  const rt = useRealtime();
+  const [live, setLive] = useState<{ base: BookingDTO[]; weekStartKey: string; rows: BookingDTO[] } | null>(null);
+  const rawBookings =
+    live && live.base === props.bookings && live.weekStartKey === weekStartKey ? live.rows : props.bookings;
+  // Lo último visto, para los callbacks del canal (se registran una vez).
+  const liveRef = useRef({ bookings: props.bookings, weekStartKey, shown: rawBookings });
+  useEffect(() => {
+    liveRef.current = { bookings: props.bookings, weekStartKey, shown: rawBookings };
+  });
+  // Acciones propias recientes: su eco en el canal no titila (`remoteFlashIds`).
+  const ownRef = useRef<{ ids: Map<string, number>; quietUntil: number }>({ ids: new Map(), quietUntil: 0 });
+  const markOwn = useCallback((id: string | null, opts: { quiet?: boolean } = {}) => {
+    const until = Date.now() + OWN_ACTION_QUIET_MS;
+    const own = ownRef.current;
+    for (const [k, exp] of own.ids) if (exp <= Date.now()) own.ids.delete(k);
+    if (id) own.ids.set(id, until);
+    if (opts.quiet) own.quietUntil = until;
+  }, []);
+  // Cards que cambiaron por otra sesión (`BookingFlashContext` → `k-flash`).
+  // Los ids se SUMAN y se limpian juntos `FLASH_MS` después del último lote:
+  // sacar la clase a mitad de la animación cortaría el fade (un salto de color).
+  const [flashIds, setFlashIds] = useState<ReadonlySet<string> | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
+  const refetchLive = useCallback(async () => {
+    const { bookings: base, weekStartKey: wk } = liveRef.current;
+    const range = weekFetchRange(wk);
+    const rows = await listAgendaBookings({ from: range.from, to: range.to });
+    const cur = liveRef.current;
+    // Mientras volaba, el usuario navegó o llegó un `router.refresh()`: lo del
+    // server manda y esta respuesta ya no corresponde.
+    if (cur.bookings !== base || cur.weekStartKey !== wk) return;
+    const next = rows.map(toBookingDTO);
+    const changed = changedBookingIds(cur.shown, next);
+    setLive({ base, weekStartKey: wk, rows: next });
+    // Los overrides optimistas que el server ya superó, afuera (si no, el mapa
+    // solo se vaciaba al cambiar `props.bookings`).
+    setOverrides((o) => pruneBookingOverrides(o, next));
+    const lit = remoteFlashIds(changed, ownRef.current, Date.now());
+    if (lit.length > 0) {
+      setFlashIds((prev) => new Set([...(prev ?? []), ...lit]));
+      window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setFlashIds(null), FLASH_MS);
+    }
+  }, []);
+  const { subscribe, onResync } = rt;
+  useEffect(() => {
+    // A lo sumo un refetch en vuelo y uno pendiente, por más lotes que lleguen.
+    const coalescer = createRefetchCoalescer(refetchLive);
+    const offBatch = subscribe((batch) => {
+      if (!messagesTouchRange(batch, weekFetchRange(liveRef.current.weekStartKey))) return;
+      // Candado / bloqueos: cambian franjas y bloqueos, que vienen del server
+      // component (`initialAvailability`), no de `listAgendaBookings`. Ahí sí
+      // `router.refresh()`; trae también los turnos, así que no se re-pide aparte.
+      if (batch.some((m) => m.kind === "availability")) router.refresh();
+      else coalescer.request();
+    });
+    // Reconexión, pestaña que vuelve, red que vuelve o polling de 60 s: se
+    // pudieron perder mensajes → la semana entera otra vez.
+    const offResync = onResync(() => coalescer.request());
+    return () => {
+      offBatch();
+      offResync();
+      coalescer.dispose();
+    };
+  }, [subscribe, onResync, refetchLive, router]);
   // C9 compacto en el cable (`toBookingDTO`): acá vuelven los neutros y la
   // disciplina del servicio, así las vistas y el drawer leen `programId: null`
   // (suelto) y no `undefined` ("esta proyección no trae C9").
   const disciplineByService = useMemo(() => serviceDisciplineMap(props.services), [props.services]);
   const serverBookings = useMemo(
-    () => props.bookings.map((b) => expandPlanFields(b, disciplineByService)),
-    [props.bookings, disciplineByService]
+    () => rawBookings.map((b) => expandPlanFields(b, disciplineByService)),
+    [rawBookings, disciplineByService]
   );
   // Handoff de S19a: la fila que devuelve la action (Recepción, drawer) viene
   // SIN expandir; pisarla tal cual hacía que un suelto perdiera `programId:
@@ -527,6 +630,32 @@ export function AgendaClient(props: Props) {
     () => mergeBookingOverrides(serverBookings, overrides, (b) => expandPlanFields(b, disciplineByService)),
     [serverBookings, overrides, disciplineByService]
   );
+  // SV09: el turno del drawer sale de la lista viva (hora, sala, estado
+  // nuevos), pero con el `updatedAt` que el usuario VIO al abrirlo: guardar
+  // sobre datos viejos tiene que seguir dando "cambió en otra sesión" (CAS),
+  // como antes de la agenda en vivo. Pasarle la versión nueva haría que el
+  // form (que se inicializó con los valores viejos) pise el cambio del otro.
+  const editingRow = useMemo(
+    () => (editing ? (allBookings.find((b) => b.id === editing.id) ?? null) : null),
+    [editing, allBookings]
+  );
+  const editingBooking = useMemo(
+    () =>
+      editing && editingRow
+        ? editingRow.updatedAt === editing.updatedAt
+          ? editingRow
+          : { ...editingRow, updatedAt: editing.updatedAt }
+        : null,
+    [editing, editingRow]
+  );
+  // El turno abierto desapareció de la semana (se movió a otra o se borró en
+  // otra sesión): el drawer no puede seguir operando sobre algo que no se ve.
+  useEffect(() => {
+    if (editing && !editingRow) {
+      setEditingState(null);
+      toast.info("El turno cambió en otra sesión");
+    }
+  }, [editing, editingRow, toast]);
   // S19b: un solo objeto de filtros. SR-U6: la sala se filtra en el CLIENTE,
   // igual que la sede: `listAgendaBookings` trae la semana entera (todas las
   // sedes y salas) y cambiar de sala no vuelve al server; los conteos del
@@ -797,6 +926,23 @@ export function AgendaClient(props: Props) {
     persistPrefs(prefs.roomId != null ? { locationId: id, roomId: null } : { locationId: id });
   };
 
+  // «En vivo» completo en desktop y solo el punto en mobile (el texto largo de
+  // «Sin conexión en vivo · se actualiza cada 60 s» rompía la fila del
+  // título). Reusa el par `diag-desktop`/`diag-mobile` de globals.css (1023 px)
+  // en vez de sumar CSS; el que no se ve tiene `display: none` y los lectores
+  // de pantalla no lo anuncian dos veces.
+  const liveIndicator =
+    rt.state === "off" ? null : (
+      <>
+        <span className="diag-desktop">
+          <LiveIndicator state={rt.state} />
+        </span>
+        <span className="diag-mobile">
+          <LiveIndicator state={rt.state} compact />
+        </span>
+      </>
+    );
+
   const hasServiceLegend = props.services.some((s) => s.color);
   const anchorDate = useMemo(() => instantAt(dayKey, 12 * 60), [dayKey]);
   const multi = practitionerCount > 1;
@@ -864,10 +1010,16 @@ export function AgendaClient(props: Props) {
             )}
           </>
         }
+        // `dayLock` es el slot junto al título: ahí va también el «En vivo»
+        // (SV09). Con realtime `off` el indicador no dibuja nada y el header
+        // es el de SR byte a byte (golden en el render test).
         dayLock={
-          view === "timeline" || view === "list" || view === "practitioner" || view === "room"
-            ? renderDayLock(dayKey, todayLock, false)
-            : null
+          <>
+            {view === "timeline" || view === "list" || view === "practitioner" || view === "room"
+              ? renderDayLock(dayKey, todayLock, false)
+              : null}
+            {liveIndicator}
+          </>
         }
         zoom={view === "practitioner" || view === "room" ? prefs.zoom : null}
         onZoomChange={(zoom) => persistPrefs({ zoom })}
@@ -887,118 +1039,122 @@ export function AgendaClient(props: Props) {
       )}
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={`${view}-${dayKey}`}
-            initial={{ opacity: 0, y: 6, scale: 0.995 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.995 }}
-            transition={{ duration: DUR.base, ease: EASE_OUT }}
-            style={{ height: "100%" }}
-          >
-            {view === "timeline" && (
-              <TimelineView
-                bookings={todayList}
-                dayKey={dayKey}
-                onCreate={(iso) => setCreating({ defaultISO: iso })}
-                onEdit={setEditing}
-                density={prefs.density}
-                businessHours={hours}
-                highlight={highlight}
-                practitionerById={initialsById}
-                now={now}
-                blockedRows={todayBlocked}
-                dayLocked={todayLock?.status === "locked" ? { detail: todayLock.detail } : null}
-                roomById={cardRooms}
-              />
-            )}
-            {view === "practitioner" && practitionerLayout && (
-              <PractitionerDayView
-                dayKey={dayKey}
-                layout={practitionerLayout}
-                practitioners={visiblePracs}
-                zoom={prefs.zoom}
-                density={prefs.density}
-                now={now}
-                onSlotClick={(practitionerId, iso) => setCreating({ defaultISO: iso, practitionerId })}
-                onBookingClick={setEditing}
-                highlight={highlight}
-                lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
-                onDayLockClick={canLockAny && availability ? (pid) => openDayLock(dayKey, pid) : undefined}
-                roomById={cardRooms}
-              />
-            )}
-            {view === "room" && (
-              <RoomDayPanel
-                dayKey={dayKey}
-                scopeRooms={scopeRooms}
-                roomId={roomId}
-                bookings={visibleBookings}
-                availability={availability}
-                blocks={blocks}
-                locationId={locationId}
-                primaryLocationId={primaryLocationId}
-                zoom={prefs.zoom}
-                density={prefs.density}
-                now={now}
-                layoutNow={layoutNow}
-                fallback={tenantWindow}
-                onSlotClick={(id, iso) => setCreating(roomSlotCreating(id, iso))}
-                onBookingClick={setEditing}
-                highlight={highlight}
-                practitionerById={roomPractitionerById}
-                canConfigureRooms={canConfigureRooms}
-                fallbackLocationName={
-                  locationId == null ? (props.locations?.find((l) => l.id === primaryLocationId)?.name ?? null) : null
-                }
-              />
-            )}
-            {view === "week" && (
-              <WeekGridView
-                weekDays={weekDays}
-                bookings={visibleBookings}
-                onEdit={setEditing}
-                businessHours={hours}
-                showHeader={agenda.agendaShowWeekHeader}
-                showSaturday={agenda.agendaShowSaturday}
-                showSunday={agenda.agendaShowSunday}
-                highlight={highlight}
-                practitioners={initialsById ? visiblePracs : null}
-                dayLocks={weekLocks}
-                blockedByDay={weekBlocked}
-                renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
-                roomById={cardRooms}
-              />
-            )}
-            {view === "list" && (
-              <ListView
-                bookings={todayList}
-                onEdit={setEditing}
-                highlight={highlight}
-                practitionerById={initialsById}
-                now={now}
-                roomById={cardRooms}
-              />
-            )}
-            {view === "reception" && (
-              <ReceptionView
-                dayKey={dayKey}
-                bookings={todayList}
-                practitioners={visiblePracs}
-                now={now}
-                canOperate={canReception}
-                // La columna "Sala" depende solo de que haya salas (la Secretaria
-                // deriva al paciente aunque haya un solo consultorio).
-                roomById={rooms.length > 0 ? roomById : null}
-                onOpenBooking={setEditing}
-                onChanged={(b) => {
-                  setOverrides((o) => ({ ...o, [b.id]: b }));
-                  router.refresh();
-                }}
-              />
-            )}
-          </motion.div>
-        </AnimatePresence>
+        {/* SV09: las cards leen el flash del contexto (no se pasa por cada vista). */}
+        <BookingFlashContext.Provider value={flashIds}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={`${view}-${dayKey}`}
+              initial={{ opacity: 0, y: 6, scale: 0.995 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, scale: 0.995 }}
+              transition={{ duration: DUR.base, ease: EASE_OUT }}
+              style={{ height: "100%" }}
+            >
+              {view === "timeline" && (
+                <TimelineView
+                  bookings={todayList}
+                  dayKey={dayKey}
+                  onCreate={(iso) => setCreating({ defaultISO: iso })}
+                  onEdit={setEditing}
+                  density={prefs.density}
+                  businessHours={hours}
+                  highlight={highlight}
+                  practitionerById={initialsById}
+                  now={now}
+                  blockedRows={todayBlocked}
+                  dayLocked={todayLock?.status === "locked" ? { detail: todayLock.detail } : null}
+                  roomById={cardRooms}
+                />
+              )}
+              {view === "practitioner" && practitionerLayout && (
+                <PractitionerDayView
+                  dayKey={dayKey}
+                  layout={practitionerLayout}
+                  practitioners={visiblePracs}
+                  zoom={prefs.zoom}
+                  density={prefs.density}
+                  now={now}
+                  onSlotClick={(practitionerId, iso) => setCreating({ defaultISO: iso, practitionerId })}
+                  onBookingClick={setEditing}
+                  highlight={highlight}
+                  lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
+                  onDayLockClick={canLockAny && availability ? (pid) => openDayLock(dayKey, pid) : undefined}
+                  roomById={cardRooms}
+                />
+              )}
+              {view === "room" && (
+                <RoomDayPanel
+                  dayKey={dayKey}
+                  scopeRooms={scopeRooms}
+                  roomId={roomId}
+                  bookings={visibleBookings}
+                  availability={availability}
+                  blocks={blocks}
+                  locationId={locationId}
+                  primaryLocationId={primaryLocationId}
+                  zoom={prefs.zoom}
+                  density={prefs.density}
+                  now={now}
+                  layoutNow={layoutNow}
+                  fallback={tenantWindow}
+                  onSlotClick={(id, iso) => setCreating(roomSlotCreating(id, iso))}
+                  onBookingClick={setEditing}
+                  highlight={highlight}
+                  practitionerById={roomPractitionerById}
+                  canConfigureRooms={canConfigureRooms}
+                  fallbackLocationName={
+                    locationId == null ? (props.locations?.find((l) => l.id === primaryLocationId)?.name ?? null) : null
+                  }
+                />
+              )}
+              {view === "week" && (
+                <WeekGridView
+                  weekDays={weekDays}
+                  bookings={visibleBookings}
+                  onEdit={setEditing}
+                  businessHours={hours}
+                  showHeader={agenda.agendaShowWeekHeader}
+                  showSaturday={agenda.agendaShowSaturday}
+                  showSunday={agenda.agendaShowSunday}
+                  highlight={highlight}
+                  practitioners={initialsById ? visiblePracs : null}
+                  dayLocks={weekLocks}
+                  blockedByDay={weekBlocked}
+                  renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
+                  roomById={cardRooms}
+                />
+              )}
+              {view === "list" && (
+                <ListView
+                  bookings={todayList}
+                  onEdit={setEditing}
+                  highlight={highlight}
+                  practitionerById={initialsById}
+                  now={now}
+                  roomById={cardRooms}
+                />
+              )}
+              {view === "reception" && (
+                <ReceptionView
+                  dayKey={dayKey}
+                  bookings={todayList}
+                  practitioners={visiblePracs}
+                  now={now}
+                  canOperate={canReception}
+                  // La columna "Sala" depende solo de que haya salas (la Secretaria
+                  // deriva al paciente aunque haya un solo consultorio).
+                  roomById={rooms.length > 0 ? roomById : null}
+                  onOpenBooking={setEditing}
+                  onChanged={(b) => {
+                    markOwn(b.id);
+                    setOverrides((o) => ({ ...o, [b.id]: b }));
+                    router.refresh();
+                  }}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </BookingFlashContext.Provider>
       </div>
 
       {(hasServiceLegend || plansEnabled) && (
@@ -1098,6 +1254,8 @@ export function AgendaClient(props: Props) {
             defaultRoomId={creating.defaultRoomId}
             onClose={() => setCreating(null)}
             onSaved={() => {
+              // El id del alta lo decide el server: silencio general unos segundos.
+              markOwn(null, { quiet: true });
               setCreating(null);
               router.refresh();
             }}
@@ -1106,12 +1264,14 @@ export function AgendaClient(props: Props) {
       </AnimatePresence>
 
       <BookingDrawer
-        booking={editing}
+        booking={editingBooking}
         capabilities={props.capabilities ?? null}
         rooms={rooms}
         primaryLocationId={primaryLocationId}
         onClose={() => setEditing(null)}
         onSaved={() => {
+          // Mover en serie / re-planificar tocan otros turnos del plan: silencio general.
+          markOwn(editing?.id ?? null, { quiet: true });
           setEditing(null);
           router.refresh();
         }}
@@ -1130,6 +1290,7 @@ export function AgendaClient(props: Props) {
           rooms={props.rooms}
           onClose={() => setLockDialog(null)}
           onDone={() => {
+            markOwn(null, { quiet: true });
             setLockDialog(null);
             router.refresh();
           }}

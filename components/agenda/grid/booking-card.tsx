@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { createContext, useContext, type CSSProperties } from "react";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { PAYMENT_HOLD_LABEL, paymentHoldState } from "@/lib/agenda-filters";
 import { receptionCardBadge } from "@/lib/agenda-client-state";
@@ -142,12 +142,39 @@ export function PlanMarks({ b, size = "xs" }: { b: BookingDTO; size?: "xs" | "sm
  *   caller la pasa SOLO cuando aporta (`showRoomOnCards`: 2 o más salas, fuera
  *   de "Por sala" y sin filtro de sala); sin ella el markup es el de siempre.
  *
+ * - `flash` (SV09): el turno acaba de cambiar por OTRA sesión (agenda en
+ *   vivo). Pone `data-flash` + la clase `k-flash` (`app/globals.css`, SV03u):
+ *   el fondo arranca en `--sky-100` y vuelve a su color en 600 ms. Es una
+ *   animación CSS, no una transición: las animaciones pisan el `background`
+ *   inline sin tocarlo, y por eso la card NO suma `background` a su
+ *   `transition` (la transición re-animaría cada cambio de estado). Sin
+ *   `flash` el markup es el de siempre. Si no viene por prop se lee de
+ *   `BookingFlashContext`: así `AgendaClient` marca las cards sin pasar el
+ *   flag por cada vista (Día, Por profesional, Por sala).
+ *
  * Badges de B4.3 (todos con texto, no solo color): "Sobreturno"
- * (`isOverbooked`), recepción ("En sala 12′" / "En atención") y telemedicina
+ * (`isOverbooked`), recepción ("En sala 12′" / "Llamado" (SV09) / "En atención") y telemedicina
  * (ícono de cámara con `aria-label`). Planes (S19a): chip `Kine · 3/10` y
  * "Fuera de plan" (`bookingPlanMarks`, arriba). Con `clinicalHidden` (sin
  * `clinical.read`) no se muestra título/descripción aunque viniera algo.
  */
+/**
+ * Ids de los turnos que cambiaron por otra sesión hace menos de `FLASH_MS`
+ * (SV09). Lo provee `AgendaClient`; `null` (sin provider) = ninguno.
+ */
+export const BookingFlashContext = createContext<ReadonlySet<string> | null>(null);
+
+/**
+ * Colores del badge de recepción. "Llamado" usa los tokens `--rc-called-*`
+ * (SV03u, contraste AA probado en `design-tokens.test.ts`), los mismos que la
+ * vista Recepción: el mismo estado se ve igual en las dos pantallas.
+ */
+const RECEPTION_BADGE_STYLE: Record<"en-sala" | "llamado" | "en-atencion", CSSProperties> = {
+  "en-sala": { color: "var(--navy-900)", background: "rgba(15,30,51,0.08)" },
+  llamado: { color: "var(--rc-called-fg)", background: "var(--rc-called-bg)" },
+  "en-atencion": { color: "#fff", background: "var(--navy-700)" },
+};
+
 export type BookingCardSizing = Pick<
   CSSProperties,
   "flexBasis" | "flexGrow" | "flexShrink" | "minWidth" | "maxWidth"
@@ -162,6 +189,7 @@ export function BookingCard({
   practitioner = null,
   now,
   room = null,
+  flash,
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
@@ -171,7 +199,10 @@ export function BookingCard({
   practitioner?: { initials: string; name: string } | null;
   now?: Date;
   room?: { name: string } | null;
+  flash?: boolean;
 }) {
+  const flashIds = useContext(BookingFlashContext);
+  const isFlashing = flash ?? flashIds?.has(b.id) ?? false;
   const date = new Date(b.scheduledFor);
   const clock = now ?? new Date();
   const isCancelled = b.status === "CANCELLED";
@@ -211,6 +242,8 @@ export function BookingCard({
   return (
     <button
       onClick={() => onEdit(b)}
+      className={isFlashing ? "k-flash" : undefined}
+      data-flash={isFlashing ? "true" : undefined}
       title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${hold ? ` · ${PAYMENT_HOLD_LABEL[hold]}` : ""}${extras.length ? ` · ${extras.join(" · ")}` : ""}${cardLabel ? ` · ${cardLabel}` : ""}`}
       style={{
         ...sizing,
@@ -328,11 +361,7 @@ export function BookingCard({
           {reception && (
             <span
               data-badge={reception.kind}
-              style={{
-                ...miniBadge,
-                color: reception.kind === "en-sala" ? "var(--navy-900)" : "#fff",
-                background: reception.kind === "en-sala" ? "rgba(15,30,51,0.08)" : "var(--navy-700)",
-              }}
+              style={{ ...miniBadge, ...RECEPTION_BADGE_STYLE[reception.kind] }}
             >
               {reception.label}
             </span>

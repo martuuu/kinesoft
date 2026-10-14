@@ -1087,6 +1087,11 @@ model Booking {
   isOverbooked    Boolean       @default(false)
   // Recepción (decisión 3 de B-pre): timestamps, no BookingStatus nuevos.
   arrivedAt       DateTime?
+  // SV M5 (reception_call_realtime): estado «Llamado» de la Sala de Espera, entre
+  // «En sala» y «En atención» (timestamp, no un BookingStatus nuevo, igual que
+  // arrivedAt/attendingAt). CHECK Booking_called_requires_arrived_check en SQL (no
+  // se expresa en Prisma: drift aceptado): no se llama a quien no llegó.
+  calledAt        DateTime?
   attendingAt     DateTime?
   // Telemedicina (decisión 9): URL por turno.
   isTelemedicine  Boolean       @default(false)

@@ -20,6 +20,13 @@ const { proxy } = vi.hoisted(() => ({
   proxy: () =>
     new Proxy({}, { get: (_t: object, k: string | symbol) => (k === "__esModule" ? true : k === "then" ? undefined : async () => ({ ok: true, data: {} })) }),
 }));
+// SV09: `useRealtime` con estado controlable. Fuera del provider el real ya
+// devuelve `off`; el mock deja probar `live` sin montar el hub (no hay effects
+// en `renderToStaticMarkup`). Lo usan `AgendaClient` y `LiveIndicator`.
+const { rt } = vi.hoisted(() => ({ rt: { state: "off" as "off" | "live" | "reconnecting" | "polling" } }));
+vi.mock("@/components/providers/realtime-provider", () => ({
+  useRealtime: () => ({ state: rt.state, subscribe: () => () => {}, onResync: () => () => {}, resync: () => {} }),
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("@/components/layout/tweaks-context", () => ({
   useTweaks: () => ({ agenda: { agendaShowWeekHeader: true, agendaShowSaturday: true, agendaShowSunday: false } }),
@@ -160,7 +167,7 @@ const base: Props = {
     { id: "L1", name: "Principal", isPrimary: true },
     { id: "L2", name: "Centro", isPrimary: false },
   ],
-  agendaPrefs: { mode: "day", zoom: 30, density: "comfortable", favoritePractitionerIds: ["p3"], locationId: null },
+  agendaPrefs: { mode: "day", zoom: 30, density: "comfortable", favoritePractitionerIds: ["p3"], locationId: null, arrivalAlert: "visual", callAlert: "visual", salaGroupBy: "practitioner" },
   initialAvailability: availability,
 };
 const r = (p: Props, name: string) => {
@@ -657,5 +664,99 @@ describe("[SRZ-FX2a] Por sala, filtro de sala y Recepción", () => {
     // Sin ids desconocidos devuelve el MISMO objeto (no rompe memos).
     expect(withArchivedRooms(cat, [{ roomId: "r1" }])).toBe(cat);
     expect(ARCHIVED_ROOM_LABEL).toBe("Sala archivada");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SV09 · agenda en vivo (plan §18.5): con realtime `off` la agenda es la de SR
+// byte a byte (golden tomado ANTES de cablear SV09); con `live`, el indicador.
+// ─────────────────────────────────────────────────────────────────────────────
+import { BookingCard, BookingFlashContext } from "@/components/agenda/grid/booking-card";
+
+describe("[SV09] agenda en vivo", () => {
+  beforeAll(async () => {
+    await Promise.all(dynamicLoads);
+  });
+  // Reloj fijo: "En sala 12′" y la línea de ahora dependen de `new Date()`.
+  const FIXED = new Date("2026-10-05T13:30:00.000Z"); // lunes 10:30 AR
+  const atFixed = <T,>(fn: () => T): T => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(FIXED);
+    try {
+      return fn();
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("golden: con realtime off, el markup de cada vista es el de SR", () => {
+    rt.state = "off";
+    for (const view of ["timeline", "practitioner", "week", "list", "reception"] as const) {
+      const html = atFixed(() => r({ ...base, view }, view));
+      expect(html).not.toContain("k-live-badge");
+      expect(html).not.toContain("k-flash");
+      expect(html).toMatchSnapshot(`off-${view}`);
+    }
+  });
+
+  it("con live: «En vivo» junto al título (completo en desktop, punto en mobile); reconectando también", () => {
+    rt.state = "live";
+    try {
+      const html = atFixed(() => r(base, "live"));
+      expect(html).toContain('class="k-live-badge" data-state="live"');
+      expect(html).toContain("En vivo");
+      // Compacto: solo el punto, con el texto en aria-label.
+      expect(html).toContain('data-compact="true"');
+      // Va en el header, junto al título (después del h1).
+      expect(html.indexOf("k-live-badge")).toBeGreaterThan(html.indexOf("<h1"));
+      expect(html.indexOf("k-live-badge")).toBeLessThan(html.indexOf("</header>"));
+      rt.state = "reconnecting";
+      expect(atFixed(() => r({ ...base, view: "week" }, "rec"))).toContain('data-state="reconnecting"');
+    } finally {
+      rt.state = "off";
+    }
+  });
+
+  const card = (b: BookingDTO, flash?: boolean) =>
+    renderToStaticMarkup(
+      <BookingCard b={b} onEdit={() => {}} highlight={null} compact={false} sizing={{}} now={FIXED} flash={flash} />
+    );
+
+  it("BookingCard: flash → data-flash + clase k-flash; sin flash, el markup de siempre", () => {
+    const b = bk("p1", "09:00");
+    const plain = card(b);
+    expect(plain).not.toContain("k-flash");
+    expect(plain).not.toContain("data-flash");
+    expect(card(b, false)).toBe(plain);
+    const lit = card(b, true);
+    expect(lit).toContain('data-flash="true"');
+    expect(lit).toContain('class="k-flash"');
+    // No se agrega una transición de background (la anima el CSS; una transición la pisaría).
+    expect(lit).not.toMatch(/transition:[^"]*background/);
+  });
+
+  it("BookingCard: el flash también llega por contexto (sin tocar las vistas)", () => {
+    const b = bk("p1", "09:00");
+    const viaCtx = renderToStaticMarkup(
+      <BookingFlashContext.Provider value={new Set([b.id])}>
+        <BookingCard b={b} onEdit={() => {}} highlight={null} compact={false} sizing={{}} now={FIXED} />
+      </BookingFlashContext.Provider>
+    );
+    expect(viaCtx).toBe(card(b, true));
+    const other = renderToStaticMarkup(
+      <BookingFlashContext.Provider value={new Set(["otro"])}>
+        <BookingCard b={b} onEdit={() => {}} highlight={null} compact={false} sizing={{}} now={FIXED} />
+      </BookingFlashContext.Provider>
+    );
+    expect(other).toBe(card(b));
+  });
+
+  it("BookingCard: «Llamado» con los tokens --rc-called-*", () => {
+    const b = bk("p1", "10:00", { arrivedAt: ar(DAY, "10:10"), calledAt: ar(DAY, "10:28") });
+    const html = card(b);
+    expect(html).toContain('data-badge="llamado"');
+    expect(html).toContain("Llamado");
+    expect(html).toContain("var(--rc-called-bg)");
+    expect(html).toContain("var(--rc-called-fg)");
   });
 });

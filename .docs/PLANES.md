@@ -4,16 +4,21 @@
 > **Criterio cuando hay conflicto:** primero la integridad de los datos del cliente vivo; después, que cada sesión sea chica, tenga un solo dueño por archivo y se pueda verificar.
 > **Estado verificado:** `develop @ 3ff2e50`, working tree limpio, todo en solo lectura.
 
-## Estado y decisiones firmadas (03-oct, actualizado 08-oct)
+## Estado y decisiones firmadas (03-oct, actualizado 14-oct)
 
-- **SR (Salas/Consultorios) ejecutada el 08-oct** en develop sobre `ad50059` (ES3), **sin commitear hasta que Martin
-  commitee**. **1 migración:** M4 `20261009120000_rooms` (SR0, sola), aplicada y verificada **solo en el Docker local**
+- **SV (Sala de Espera realtime) ejecutada el 13/14-oct** en develop sobre `5811ea2` (SR), **sin commit todavía**.
+  **1 migración:** M5 `20261013120000_reception_call_realtime` (SV0, sola), aplicada y verificada **solo en el Docker
+  local** (32 migraciones al día). Planning: plan vigente §18. Toca Planes solo en los refs del post-commit
+  (`plans-engine-internal`, `plans-lifecycle-internal`, `plans-adopt-internal`, `sessions.ts` ahora informan `roomId` y
+  el profesional real del turno adoptado; AUDIT §Ronda 20). Arquitectura en
+  [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHITECTURE.md); QA en [QA.md §SV](QA.md).
+  **Siguiente corrida: ES4** → EV1 → reset + deploy único. ES4 comparte con SV solo `authz-matrix.test.ts` y
+  `package.json` (por handoff).
+- **SR (Salas/Consultorios)** commiteada (`5811ea2`). **1 migración:** M4 `20261009120000_rooms` (SR0, sola), aplicada y verificada **solo en el Docker local**
   (31 migraciones al día). Planning: plan vigente §17 + §17.5 (respuestas de Martin). Entraron también las decisiones
   4 y 5 del cierre de ES3 (SR-D4F Facturación, SR-D5I ingresos por rol; ver §11 «Decididas por Martin»). Locks: enmienda
   **C2 (1b)** (§4). Arquitectura en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); cierres en AUDIT §Ronda 19; QA en
   [QA.md §Salas (SR)](QA.md).
-  **Siguiente corrida: SV** (M5 `reception_call_realtime`; el evento realtime y "Llamar" ya llevan la sala:
-  `BookingChangeRef.roomId?` existe desde SR, el publish lo hace SV). Después ES4 → EV1 → reset + deploy único.
 - **ES3 (P3)** commiteada (`ad50059`). M3a `20261008120000_billing_paid_at` aplicada solo en el Docker local.
 - **Decisiones de Martin del 08-oct** (fuente: plan vigente §16.1; también van al §9 del plan):
 
@@ -27,8 +32,8 @@
   | 6 | Widget de ingresos | Se **arregla**: suma MP + copagos cobrados a mano, con la obra social aparte, y tiene un selector **Mes/Semana** recordado por usuario. |
   | 7 | Salas/Consultorios | Corrida propia **SR**, después de ES3 y antes de SV. |
 
-- **Orden vigente de corridas (08-oct):** ES3 ✅ (con M3a y S14r) → SR ✅ (M4 `rooms`) → **SV** (M5 `reception_call_realtime`; su evento y "Llamar" llevan la sala) → ES4 → EV1 → reset de prod + deploy único de B.
-- **Migraciones nuevas del bloque B después de M2:** **M3a** `billing_paid_at` (ES3, P3.0.0, sola), **M4** `rooms` (SR, sola) y **M5** `reception_call_realtime` (SV, sola; antes se llamaba "M3").
+- **Orden vigente de corridas (14-oct):** ES3 ✅ (con M3a y S14r) → SR ✅ (M4 `rooms`) → SV ✅ (M5 `reception_call_realtime`) → **ES4** → EV1 → reset de prod + deploy único de B.
+- **Migraciones nuevas del bloque B después de M2:** **M3a** `billing_paid_at` (ES3, P3.0.0, sola), **M4** `rooms` (SR, sola) y **M5** `reception_call_realtime` (SV, sola).
 - **Decisiones de Martin del 07-oct** (detalle y contratos en [VERTICALES.md](VERTICALES.md); fuente: plan vigente §15):
   1. **Prod se resetea antes del go-live** (reset total; el cliente vuelve a cargar). No hay datos de prod que preservar:
      el deploy final es `migrate deploy` desde vacío + bootstrap ([VERTICALES.md §9](VERTICALES.md)). Por eso se caen
@@ -222,7 +227,7 @@
 | **ES2b** | **P2** | Core de turnos server-only + motor (preview y commit en una tx) + sincronía + lecturas y saldo + ciclo de vida + mover y re-planificar + cantidad y precio + autorización de la OS + Diagnóstico server + adopción + guardas | No (develop) |
 | **ES3** | **P3** | Editor único y 4 puertas, agenda, drawer (incluido "Agendar próxima sesión" para la Secretaria), Seguimiento, Turnos y Facturación por plan, plantillas, `/planes/[disciplina]`, edición del plan y renovación de la autorización; retiro de las altas viejas. **08-oct:** M3a `billing_paid_at` (sola, P3.0.0) + S14r (ingresos reales del dashboard con Mes/Semana) | No |
 | **SR** (08-oct) | — | M4 `rooms` (sola) + Salas/Consultorios: sala por franja y por turno, conflicto de sala, filtro y vista "Por sala" ([ROADMAP §SR](ROADMAP.md)) | No |
-| **SV** (07-oct) | SV0-SV2 | M5 `reception_call_realtime` (sola; antes "M3") + Sala de Espera realtime, "Llamar" (con `roomId` tras SR), `/sala`, agenda en vivo ([VERTICALES.md §7](VERTICALES.md)) | No |
+| **SV** ✅ (13/14-oct) | SV0-SV2 | M5 `reception_call_realtime` (sola) + Sala de Espera realtime, «Llamar» con sala, `/sala`, agenda y Recepción en vivo, avisos ([VERTICALES.md §7](VERTICALES.md)) | No |
 | **ES4** | **P4** | **Portal ampliado** (identidad multi-consultorio, turnos y progreso, estado de cuenta, "Mis datos" con confirmación del consultorio, ejercicios del plan), ~~legacy (server, UI y script)~~ (eliminado por el reset del 07-oct), ICS "Sesión n/N", listado de pacientes, matriz authz completa, perf y soak, E2E | No (develop) |
 | **EV1** (07-oct) | — | Barrido de la vertical General + limpieza R-LEGACY opcional | **Sí: todo el bloque B junto, una sola vez**, después del gate final: reset de prod → `migrate deploy` desde vacío → bootstrap |
 | **ES4b** | condicional | Fixes del QA de staging | Junto con ES4 |

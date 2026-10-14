@@ -657,6 +657,7 @@ export async function removeBookingFromPlanInTx(
       updatedAt: true,
       practitionerId: true,
       scheduledFor: true,
+      roomId: true,
     },
   });
   if (!b || !b.programId || !b.sessionId) throw new PlanAdoptStale(PLAN_ADOPT_COPY.bookingChanged);
@@ -694,7 +695,9 @@ export async function removeBookingFromPlanInTx(
   const after = await tx.booking.findFirst({ where: { id: b.id, tenantId }, select: { updatedAt: true } });
   return {
     patientId: head.patientId,
-    refs: [{ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, prev: null, kind: "booking" }],
+    // FX1a (SV08-gap): con la sala (leída bajo el lock de arriba); sin ella la
+    // vista «Por sala» no repintaba el chip de plan del turno que se sacó.
+    refs: [{ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, roomId: b.roomId, prev: null, kind: "booking" }],
     bookingUpdatedAt: after!.updatedAt,
     sessionId: b.sessionId,
   };

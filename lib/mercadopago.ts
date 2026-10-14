@@ -31,6 +31,7 @@ import { NotificationKind } from "@prisma/client";
 import { logger } from "@/lib/logger";
 import { formatARS } from "@/lib/format";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
+import { afterBookingsCommitted } from "@/lib/booking-events-internal";
 
 function client() {
   if (!env.MP_ACCESS_TOKEN) throw new Error("MP_ACCESS_TOKEN not configured");
@@ -216,6 +217,13 @@ type WebhookOutcome =
       duplicatePaid: boolean;
       bookingStatus: string;
       holdExpired: boolean;
+      /**
+       * SV06a: la tx escribió la fila `Booking` (cambió `paymentStatus` y/o
+       * `status`). Solo entonces hay algo que avisar a la Sala de Espera
+       * realtime; un evento que solo toca `Payment` (historial, pago no
+       * aplicado) no cambia el turno en la agenda.
+       */
+      bookingWritten: boolean;
     };
 
 function isP2002(e: unknown): boolean {
@@ -362,7 +370,8 @@ export async function consumeWebhook(paymentId: string) {
         await tx.payment.update({ where: { bookingId: id }, data: { rawPayload } });
       }
 
-      if (applied && next !== bk.paymentStatus) {
+      const bookingWritten = applied && next !== bk.paymentStatus;
+      if (bookingWritten) {
         await tx.booking.update({
           where: { id },
           data: {
@@ -384,6 +393,7 @@ export async function consumeWebhook(paymentId: string) {
         duplicatePaid,
         bookingStatus: bk.status,
         holdExpired: bk.status === "PENDING" && !isHoldingCapacity(bk, new Date()),
+        bookingWritten,
       };
     });
 
@@ -400,6 +410,29 @@ export async function consumeWebhook(paymentId: string) {
     // Idempotent replay — short-circuit without re-firing notifications.
     return { ok: true, bookingId, status: outcome.status, replay: true };
   }
+  // SV06a · Sala de Espera realtime. Después del commit (fuera de `apply`: un
+  // rollback o la segunda vuelta del P2002 no pueden dejar un evento de algo
+  // que no quedó escrito) y SOLO si se escribió `Booking`. El replay ya salió
+  // arriba sin avisar (no escribió nada).
+  // FX1a (desvío 2 de SV06a): va ANTES del corte por `amount_mismatch`. Un
+  // mismatch sobre un turno IMPAGO sí escribe `paymentStatus = FAILED`
+  // (`bookingWritten`), y antes la agenda se enteraba recién por el polling;
+  // sobre un turno ya pagado el no-downgrade no escribe → no avisa.
+  // Superficie sin Actor: el tenant es el del turno cargado arriba
+  // (`booking.tenantId`), igual que las notificaciones. Va antes de
+  // `notifyTenantOwners` para que la agenda no espere a los mails.
+  if (outcome.bookingWritten) {
+    await afterBookingsCommitted(booking.tenantId, [
+      {
+        bookingId: booking.id,
+        practitionerId: booking.practitionerId,
+        scheduledFor: booking.scheduledFor,
+        roomId: booking.roomId,
+        kind: "booking",
+      },
+    ]);
+  }
+
   if (outcome.amountMismatch) return { ok: false, reason: "amount_mismatch" };
 
   if (outcome.incoming === "PAID") {

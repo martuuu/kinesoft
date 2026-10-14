@@ -1011,9 +1011,23 @@ export async function commitPlanRowsInTx(
   }
 
   // ── Adopciones (CAS) ──
+  // FX1a (SV08-gap): el ref del adoptado lleva el profesional y la sala DEL
+  // TURNO, no los del plan. Se adopta un turno suelto del paciente de cualquier
+  // profesional: con `program.practitionerId` el aviso iba a la agenda
+  // equivocada (y un plan sin responsable mandaba `null`), y sin `roomId` la
+  // vista «Por sala» no se enteraba. Sale del pool que ya cargó
+  // `loadPlanAvailabilityInTx` (mismo snapshot que `details`, de donde sale
+  // `x.adopt`, leído con el turno ya `FOR UPDATE`): sin sentencias nuevas. El
+  // CAS de abajo no cambia ni la fecha, ni el profesional, ni la sala → sin
+  // `prev`.
+  const poolById = new Map(input.bookings.map((b) => [b.id, b]));
   let adopted = 0;
   for (const x of plans) {
     if (!x.adopt) continue;
+    const pooled = poolById.get(x.adopt.id);
+    // `details` se arma filtrando este mismo pool: si no está, el estado es
+    // inconsistente y se revierte como cualquier conflicto de escritura.
+    if (!pooled) throw new StalePlanPreview(null, "write-conflict");
     const stamp = priorPaidStamp({ priceCents: x.row.priceCents }, x.row.priorBookings ?? []);
     const doStamp = stamp.pricedByPlan && stampable(x.adopt, now);
     const res = await tx.booking.updateMany({
@@ -1043,7 +1057,14 @@ export async function commitPlanRowsInTx(
     });
     if (res.count !== 1) throw new StalePlanPreview(null, "write-conflict");
     adopted++;
-    refs.push({ bookingId: x.adopt.id, practitionerId: program.practitionerId, scheduledFor: x.adopt.scheduledFor, prev: null, kind: "booking" });
+    refs.push({
+      bookingId: x.adopt.id,
+      practitionerId: pooled.practitionerId,
+      scheduledFor: x.adopt.scheduledFor,
+      roomId: pooled.roomId,
+      prev: null,
+      kind: "booking",
+    });
   }
 
   if (p.mode === "add") {

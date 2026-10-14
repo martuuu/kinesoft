@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { BookingStatus, PrismaClient } from "@prisma/client";
-import { markReceptionAction, listAgendaBookings, listBookingsInRange } from "@/lib/bookings";
+import { markReceptionAction, listAgendaBookings, listBookingsInRange, updateBooking } from "@/lib/bookings";
 import { cancelBookingsInTx } from "@/lib/bookings-cancel-internal";
 import { runWithRls } from "@/lib/rls";
 import { localToARIso } from "@/lib/datetime-ar";
@@ -21,10 +21,13 @@ import {
   addPractitioner,
   addService,
   addInsurer,
+  addRoom,
   sweepOrphanTestTenants,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+// El mismo registro que instala integration-setup como mock del publisher.
+import { realtimeFake } from "@/tests/helpers/realtime-fake";
 import { toBookingDTO } from "@/components/agenda/agenda-utils";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -68,6 +71,8 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       title?: string | null;
       description?: string | null;
       arrivedAt?: Date | null;
+      calledAt?: Date | null;
+      roomId?: string | null;
       paymentStatus?: "UNPAID" | "PAID" | "FAILED";
       insurerPaidAt?: Date | null;
       idempotencyKey?: string;
@@ -89,6 +94,8 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
         title: o.title ?? null,
         description: o.description ?? null,
         arrivedAt: o.arrivedAt ?? null,
+        calledAt: o.calledAt ?? null,
+        roomId: o.roomId ?? null,
         paymentStatus: o.paymentStatus ?? "UNPAID",
         insurerPaidAt: o.insurerPaidAt ?? null,
       },
@@ -307,6 +314,255 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
     });
   });
 
+  // ── SV05 · «Llamar» y `calledAt` (§18.4, SV-D2/D5) ──────────────────────
+  // Antes de SV05 `markReceptionAction` no leía `calledAt`: la fila llamada se
+  // derivaba como «en-sala» (Llamar dos veces pasaba, Deshacer desde llamado
+  // borraba también la llegada) y el ref salía con `kind:"reception"`, así que
+  // la sala de espera no podía avisar el llamado.
+  describe("[SV05] llamar y calledAt", () => {
+    let salaLocation: string;
+    beforeAll(async () => {
+      // Sede NO principal a propósito: `addRoom` sin sede crearía la principal y
+      // el `beforeAll` de listAgendaBookings crea la suya (único parcial).
+      salaLocation = (await db.location.create({ data: { tenantId: A.tenantId, name: "Sala SV05" } })).id;
+    });
+
+    /** Turno de HOY en sala (llegó hace 5'), con sala y sede (SR). */
+    async function inSala(o: { practitionerId?: string } = {}) {
+      const { roomId, locationId } = await addRoom(db, A, { locationId: salaLocation });
+      const b = await seed(A, { arrivedAt: new Date(Date.now() - 5 * 60_000), roomId, locationId, ...o });
+      return { b, roomId };
+    }
+
+    it("[SV05] llamar: en-sala → llamado escribe calledAt, emite 1 vez kind 'called' con roomId y audita", async () => {
+      asUser(A.userId);
+      const { b, roomId } = await inSala();
+      realtimeFake.reset();
+      const r = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.state).toBe("llamado");
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.calledAt).not.toBeNull();
+      expect(row.arrivedAt?.toISOString()).toBe(b.arrivedAt!.toISOString());
+      expect(r.data.calledAt).toBe(row.calledAt!.toISOString());
+      expect(r.data.updatedAt).toBe(row.updatedAt.toISOString());
+
+      expect(realtimeFake.calls).toHaveLength(1);
+      const call = realtimeFake.calls[0];
+      expect(call.tenantId).toBe(A.tenantId);
+      expect(call.refs).toHaveLength(1);
+      expect(call.refs![0]).toMatchObject({
+        bookingId: b.id,
+        practitionerId: b.practitionerId,
+        roomId,
+        kind: "called",
+      });
+
+      const audits = await db.auditEvent.findMany({
+        where: { tenantId: A.tenantId, entityId: b.id },
+        select: { action: true, actorId: true, payload: true },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0].action).toBe("booking.reception.llamar");
+      expect(audits[0].actorId).toBe(A.userId);
+      expect(audits[0].payload).toMatchObject({ from: "en-sala", to: "llamado" });
+    });
+
+    it("llamar desde por-llegar → error («Primero marcá Llegó»), sin escribir ni emitir", async () => {
+      asUser(A.userId);
+      const b = await seed(A);
+      realtimeFake.reset();
+      const r = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r.ok).toBe(false);
+      expect(r.ok ? "" : r.error).toMatch(/Primero marcá «Llegó»/);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.calledAt).toBeNull();
+      expect(+row.updatedAt).toBe(+b.updatedAt);
+      expect(realtimeFake.calls).toHaveLength(0);
+      expect(await db.auditEvent.count({ where: { entityId: b.id } })).toBe(0);
+    });
+
+    it("llamar dos veces → el segundo es error (ya está llamado) y no pisa calledAt", async () => {
+      asUser(A.userId);
+      const { b } = await inSala();
+      const r1 = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+      realtimeFake.reset();
+      const r2 = await markReceptionAction(b.id, "llamar", r1.data.updatedAt);
+      expect(r2.ok).toBe(false);
+      expect(r2.ok ? "" : r2.error).toMatch(/No se puede llamar a/);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.calledAt?.toISOString()).toBe(r1.data.calledAt);
+      expect(row.updatedAt.toISOString()).toBe(r1.data.updatedAt);
+      expect(realtimeFake.calls).toHaveLength(0);
+    });
+
+    it("la Secretaria (ASSISTANT) llama en nombre del profesional (SV-D2): turno de otro profesional, audit con su usuario", async () => {
+      asUser(assistant.userId);
+      const { b } = await inSala({ practitionerId: kine.practitionerId });
+      realtimeFake.reset();
+      const r = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r.ok).toBe(true);
+      expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).calledAt).not.toBeNull();
+      expect(realtimeFake.calls[0]?.refs?.[0]).toMatchObject({ practitionerId: kine.practitionerId, kind: "called" });
+      const a = await db.auditEvent.findFirstOrThrow({ where: { entityId: b.id, action: "booking.reception.llamar" } });
+      expect(a.actorId).toBe(assistant.userId);
+    });
+
+    it("BILLING → forbidden, sin escribir ni emitir", async () => {
+      asUser(billing.userId);
+      const { b } = await inSala();
+      realtimeFake.reset();
+      const r = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r.ok).toBe(false);
+      expect(r.ok ? "" : r.error).toMatch(/permiso/);
+      expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).calledAt).toBeNull();
+      expect(realtimeFake.calls).toHaveLength(0);
+    });
+
+    it("deshacer en llamado → limpia calledAt (vuelve a en-sala, conserva la llegada) y emite kind 'reception'", async () => {
+      asUser(A.userId);
+      const { b, roomId } = await inSala();
+      const r1 = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+      realtimeFake.reset();
+      const u = await markReceptionAction(b.id, "deshacer", r1.data.updatedAt);
+      expect(u.ok).toBe(true);
+      if (!u.ok) return;
+      expect(u.data.state).toBe("en-sala");
+      expect(u.data.calledAt).toBeNull();
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.calledAt).toBeNull();
+      expect(row.arrivedAt).not.toBeNull();
+      expect(realtimeFake.calls).toHaveLength(1);
+      expect(realtimeFake.calls[0].refs).toEqual([
+        expect.objectContaining({ bookingId: b.id, practitionerId: b.practitionerId, roomId, kind: "reception" }),
+      ]);
+    });
+
+    it("deshacer en en-sala → limpia arrivedAt y calledAt (CHECK de M5)", async () => {
+      asUser(A.userId);
+      const { b } = await inSala();
+      const u = await markReceptionAction(b.id, "deshacer", b.updatedAt.toISOString());
+      expect(u.ok).toBe(true);
+      if (!u.ok) return;
+      expect(u.data.state).toBe("por-llegar");
+      expect(u.data.arrivedAt).toBeNull();
+      expect(u.data.calledAt).toBeNull();
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.arrivedAt).toBeNull();
+      expect(row.calledAt).toBeNull();
+    });
+
+    it("en-atencion desde llamado; deshacer vuelve a llamado (conserva calledAt)", async () => {
+      asUser(A.userId);
+      const { b } = await inSala();
+      const r1 = await markReceptionAction(b.id, "llamar", b.updatedAt.toISOString());
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+      const r2 = await markReceptionAction(b.id, "en-atencion", r1.data.updatedAt);
+      expect(r2.ok).toBe(true);
+      if (!r2.ok) return;
+      expect(r2.data.state).toBe("en-atencion");
+      expect(r2.data.calledAt).toBe(r1.data.calledAt);
+      let row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.attendingAt).not.toBeNull();
+      expect(row.calledAt?.toISOString()).toBe(r1.data.calledAt);
+      const u = await markReceptionAction(b.id, "deshacer", r2.data.updatedAt);
+      expect(u.ok).toBe(true);
+      if (!u.ok) return;
+      expect(u.data.state).toBe("llamado");
+      row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.attendingAt).toBeNull();
+      expect(row.calledAt?.toISOString()).toBe(r1.data.calledAt);
+    });
+  });
+
+  // ── FX1b: estampas de Recepción al mover un turno ──────────────────────
+  // Un turno «llamado» movido a mañana seguía con `arrivedAt`/`calledAt` de
+  // hoy: mañana aparecía en la Sala de Espera como ya llegado. Cambiar de día
+  // AR las limpia (las tres, en el mismo UPDATE: CHECK de M5); mover dentro
+  // del mismo día AR no las toca. Por `updateBooking` real (el core de la
+  // edición, el mismo que usan Planes y «reprogramar sesión»).
+  describe("[FX1b] updateBooking y las estampas de Recepción", () => {
+    const DAY = "2027-08-10"; // martes, lejos de los días de los otros bloques
+    const FORCE = { allowOutOfHours: true, allowBlocked: true, allowOverbooking: true } as const;
+
+    /** Turno «llamado» y «en atención» (las tres estampas puestas). */
+    async function called(hhmm: string) {
+      const when = ar(DAY, hhmm);
+      const b = await seed(A, {
+        when,
+        arrivedAt: new Date(when.getTime() - 10 * 60_000),
+        calledAt: new Date(when.getTime() - 2 * 60_000),
+      });
+      return db.booking.update({ where: { id: b.id }, data: { attendingAt: when } });
+    }
+
+    it("mover un turno llamado a MAÑANA → arrivedAt, calledAt y attendingAt en null", async () => {
+      asUser(A.userId);
+      const b = await called("10:00");
+      const r = await updateBooking({
+        id: b.id,
+        scheduledFor: ar("2027-08-11", "10:00").toISOString(),
+        expectedUpdatedAt: b.updatedAt.toISOString(),
+        ...FORCE,
+      });
+      expect(r.ok, r.ok ? "" : r.error).toBe(true);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.scheduledFor.toISOString()).toBe(ar("2027-08-11", "10:00").toISOString());
+      expect(row.arrivedAt).toBeNull();
+      expect(row.calledAt).toBeNull();
+      expect(row.attendingAt).toBeNull();
+    });
+
+    it("mover 30 min el mismo día → las estampas se conservan", async () => {
+      asUser(A.userId);
+      const b = await called("12:00");
+      const r = await updateBooking({
+        id: b.id,
+        scheduledFor: ar(DAY, "12:30").toISOString(),
+        expectedUpdatedAt: b.updatedAt.toISOString(),
+        ...FORCE,
+      });
+      expect(r.ok, r.ok ? "" : r.error).toBe(true);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.scheduledFor.toISOString()).toBe(ar(DAY, "12:30").toISOString());
+      expect(row.arrivedAt?.toISOString()).toBe(b.arrivedAt!.toISOString());
+      expect(row.calledAt?.toISOString()).toBe(b.calledAt!.toISOString());
+      expect(row.attendingAt?.toISOString()).toBe(b.attendingAt!.toISOString());
+    });
+
+    it("mover a las 22:30 AR del mismo día (= otro día en UTC) → se conservan: el día es el AR, no el del host", async () => {
+      asUser(A.userId);
+      const b = await called("14:00");
+      const r = await updateBooking({
+        id: b.id,
+        scheduledFor: ar(DAY, "22:30").toISOString(),
+        expectedUpdatedAt: b.updatedAt.toISOString(),
+        ...FORCE,
+      });
+      expect(r.ok, r.ok ? "" : r.error).toBe(true);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.arrivedAt).not.toBeNull();
+      expect(row.calledAt).not.toBeNull();
+      expect(row.attendingAt).not.toBeNull();
+    });
+
+    it("editar sin mover (notas) → no toca las estampas", async () => {
+      asUser(A.userId);
+      const b = await called("16:00");
+      const r = await updateBooking({ id: b.id, notes: "trae estudios", expectedUpdatedAt: b.updatedAt.toISOString() });
+      expect(r.ok, r.ok ? "" : r.error).toBe(true);
+      const row = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+      expect(row.arrivedAt?.toISOString()).toBe(b.arrivedAt!.toISOString());
+      expect(row.calledAt?.toISOString()).toBe(b.calledAt!.toISOString());
+    });
+  });
+
   // ── Proyección liviana ─────────────────────────────────────────────────
   describe("listAgendaBookings", () => {
     const DAY = "2027-05-11";
@@ -328,7 +584,13 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
         nullLoc: (await seed(A, { patientId: pat, when: ar(DAY, "09:00"), ...clinical })).id,
         primaryLoc: (await seed(A, { when: ar(DAY, "10:00"), locationId: primary, ...clinical })).id,
         secondLoc: (
-          await seed(A, { when: ar(DAY, "11:00"), locationId: second, arrivedAt: ar(DAY, "10:55"), ...clinical })
+          await seed(A, {
+            when: ar(DAY, "11:00"),
+            locationId: second,
+            arrivedAt: ar(DAY, "10:55"),
+            calledAt: ar(DAY, "11:02"),
+            ...clinical,
+          })
         ).id,
         other: (await seed(A, { when: ar(DAY, "12:00"), practitionerId: kine.practitionerId, ...clinical })).id,
         guest: (await seed(A, { patientId: null, when: ar(DAY, "13:00"), notes: "Llamar al 1140001000" })).id,
@@ -357,6 +619,9 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       const arrived = rows.find((x) => x.id === ids.secondLoc)!;
       expect(arrived.arrivedAt?.toISOString()).toBe(ar(DAY, "10:55").toISOString());
       expect(arrived.attendingAt).toBeNull();
+      // SV05: `calledAt` viaja en la proyección liviana (null si no se llamó).
+      expect(arrived.calledAt?.toISOString()).toBe(ar(DAY, "11:02").toISOString());
+      expect(r.calledAt).toBeNull();
 
       // Paridad de billing con la proyección completa (precedencia de copago §5.5).
       const full = await listBookingsInRange(range);
@@ -374,6 +639,7 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       // inventa los campos nuevos (ausentes, no null).
       const dto = toBookingDTO(arrived);
       expect(dto.arrivedAt).toBe(ar(DAY, "10:55").toISOString());
+      expect(dto.calledAt).toBe(ar(DAY, "11:02").toISOString());
       expect(dto.locationId).toBe(second);
       expect(dto.locationName).toBe("Norte");
       expect(toBookingDTO(r).locationName).toBe("Principal");

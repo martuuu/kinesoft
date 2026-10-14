@@ -207,7 +207,14 @@ export async function applyFutureBookingsInTx(
   // lectura y el lock; ya no es "un turno que queda", no se cuenta.
   return {
     outcome: { cancelled: res.cancelled.length, kept: 0, withPayment: counts.withPayment + lateMoney },
-    refs: res.cancelled.map((b) => ({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor })),
+    // FX1a (SV08-gap): la sala viaja en el ref. Sin ella, la vista «Por sala» y
+    // la Sala de Espera no se enteraban de que el plan canceló el turno.
+    refs: res.cancelled.map((b) => ({
+      bookingId: b.id,
+      practitionerId: b.practitionerId,
+      scheduledFor: b.scheduledFor,
+      roomId: b.roomId,
+    })),
   };
 }
 

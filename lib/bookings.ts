@@ -361,6 +361,8 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         telemedicineUrl: true,
         arrivedAt: true,
         attendingAt: true,
+        // SV05 (M5): estado «Llamado» de la sala de espera. Escalar, misma sentencia.
+        calledAt: true,
         // C9 (S12): vínculo con el plan, para la proyección de abajo.
         programId: true,
         sessionId: true,
@@ -478,6 +480,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       telemedicineUrl: b.telemedicineUrl,
       arrivedAt: b.arrivedAt,
       attendingAt: b.attendingAt,
+      calledAt: b.calledAt,
       clinicalHidden: fields.title !== "rw",
       canOperate,
       clinicalWritable,
@@ -1301,8 +1304,8 @@ export async function setBookingStatus(
 
 /**
  * Recepción (B4.1; decisión 3 de B-pre: timestamps, no BookingStatus nuevos).
- * Una sola action para las cinco acciones de la sala de espera — llegó, en
- * atención, atendido, ausente, deshacer — porque la transición válida depende
+ * Una sola action para las seis acciones de la sala de espera — llegó, llamar
+ * (SV05), en atención, atendido, ausente, deshacer — porque la transición válida depende
  * del estado ACTUAL de la fila, no del botón: `applyReceptionAction`
  * (lib/reception-state.ts, puro) la valida y arma el patch, y acá se escribe
  * en una tx con el lock optimista atómico (`where { id, tenantId, updatedAt }`
@@ -1356,6 +1359,9 @@ export async function markReceptionAction(
         durationMin: true,
         status: true,
         arrivedAt: true,
+        // SV05: sin `calledAt` la fila llamada se derivaba «en-sala»: Llamar dos
+        // veces pasaba y Deshacer desde llamado borraba también la llegada.
+        calledAt: true,
         attendingAt: true,
         updatedAt: true,
         patientId: true,
@@ -1403,7 +1409,7 @@ export async function markReceptionAction(
     const after = await tx.booking.update({
       where: { id: row.id, tenantId: actor.tenantId, updatedAt: row.updatedAt },
       data: { ...t.patch, ...planStampData(stamp) },
-      select: { updatedAt: true, status: true, arrivedAt: true, attendingAt: true },
+      select: { updatedAt: true, status: true, arrivedAt: true, calledAt: true, attendingAt: true },
     });
     // "Atendido" cierra la sesión (solo `completedAt`); "Deshacer Atendido" la
     // reabre si está untouched; "Deshacer Ausente" re-alinea la fecha (I3).
@@ -1476,10 +1482,20 @@ export async function markReceptionAction(
   }
   // Enmienda Realtime: TODA acción OK de recepción emite (SV muestra "llegó" /
   // "en atención" en la sala de espera), pero los caches derivados (puntos de
-  // la agenda, KPIs) solo cambian con el estado, como antes.
+  // la agenda, KPIs) solo cambian con el estado, como antes. SV05: «Llamar»
+  // sale como `kind:"called"` (el cliente anuncia «Pase …» con la sala); el
+  // resto, Deshacer de un llamado incluido, es `reception`.
   await afterBookingsCommitted(
     actor.tenantId,
-    [{ bookingId: row.id, practitionerId: row.practitionerId, scheduledFor: row.scheduledFor, kind: "reception", roomId: row.roomId }],
+    [
+      {
+        bookingId: row.id,
+        practitionerId: row.practitionerId,
+        scheduledFor: row.scheduledFor,
+        kind: input.action === "llamar" ? "called" : "reception",
+        roomId: row.roomId,
+      },
+    ],
     { invalidateCaches: !!transition.patch.status }
   );
   if (plan?.discharge) await notifyPlanNearingDischarge(actor.tenantId, plan.discharge, actor.userId ?? null);
@@ -1489,6 +1505,7 @@ export async function markReceptionAction(
       updatedAt: after.updatedAt.toISOString(),
       status: after.status,
       arrivedAt: after.arrivedAt?.toISOString() ?? null,
+      calledAt: after.calledAt?.toISOString() ?? null,
       attendingAt: after.attendingAt?.toISOString() ?? null,
       state: transition.to,
       ...(plan?.sessionKeptDone ? { notice: SESSION_KEPT_DONE_NOTICE } : {}),

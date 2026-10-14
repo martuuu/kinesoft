@@ -17,6 +17,7 @@ import {
   receptionCounters,
   rollbackReceptionAction,
   stateTagText,
+  undoHint,
   visibleActions,
   waitText,
   type ReceptionOverrides,
@@ -187,6 +188,7 @@ describe("optimista → confirmación / rollback", () => {
       updatedAt: iso("10:00"),
       status: "CONFIRMED",
       arrivedAt: serverArrived,
+      calledAt: null,
       attendingAt: null,
       state: "en-sala",
     });
@@ -221,5 +223,90 @@ describe("optimista → confirmación / rollback", () => {
   it("sin overrides devuelve el mismo mapa (no dispara re-render)", () => {
     const empty: ReceptionOverrides = {};
     expect(mergeReceptionOverrides([base], empty).overrides).toBe(empty);
+  });
+});
+
+describe("[SV03] «Llamado» en la vista", () => {
+  // Un día con un llamado además de cada estado de siempre.
+  const ROWS: BookingDTO[] = [
+    ...DAY_ROWS,
+    dto("llamado", "09:45", { arrivedAt: iso("09:40"), calledAt: iso("09:57") }),
+  ];
+  const entries = sortForReception(ROWS, NOW);
+  const byId = new Map(entries.map((e) => [e.row.id, e]));
+
+  it("el llamado entra en «En sala» (y en Todos), no en Por llegar ni Atendidos", () => {
+    expect(states(filterEntries(entries, "en-sala")).sort()).toEqual(["en-atencion", "en-sala", "llamado"]);
+    expect(states(filterEntries(entries, "por-llegar"))).not.toContain("llamado");
+    expect(states(filterEntries(entries, "atendidos"))).not.toContain("llamado");
+    expect(filterEntries(entries, "todos")).toHaveLength(ROWS.length);
+  });
+
+  it("contadores: el llamado sigue «en sala ahora» y se cuenta aparte", () => {
+    const c = receptionCounters(entries);
+    expect(c).toMatchObject({ enSala: 2, llamados: 1, enAtencion: 1, demorados: 1, atendidos: 1, total: 7 });
+    expect(c.byFilter).toEqual({ todos: 8, "por-llegar": 2, "en-sala": 3, atendidos: 1 });
+    expect(receptionCounters([])).toMatchObject({ llamados: 0 });
+  });
+
+  it("tag «Llamado 3'» y espera que sigue corriendo desde la llegada", () => {
+    expect(stateTagText(byId.get("llamado")!)).toBe("Llamado 3'");
+    // Sin el dato (Pick viejo): «Llamado» a secas.
+    expect(stateTagText({ state: "llamado", waitingMinutes: null, lateMinutes: null })).toBe("Llamado");
+    expect(waitText(byId.get("llamado")!.row, "llamado", NOW)).toBe("20'");
+  });
+
+  it("visibleActions: Llamar hoy sí, otro día no", () => {
+    const sala = ["llamar", "en-atencion", "atendido", "deshacer"] as const;
+    expect(visibleActions(sala, true)).toEqual([...sala]);
+    expect(visibleActions(sala, false)).toEqual(["atendido", "deshacer"]);
+    expect(visibleActions(["en-atencion", "atendido", "deshacer"], false)).toEqual(["atendido", "deshacer"]);
+  });
+
+  it("undoHint sale de la regla de deshacer (§18.4)", () => {
+    expect(undoHint(byId.get("llamado")!.row, NOW)).toBe("vuelve a En sala");
+    expect(undoHint(byId.get("sala")!.row, NOW)).toBe("vuelve a Por llegar");
+    // En atención: depende de calledAt.
+    expect(undoHint(byId.get("box")!.row, NOW)).toBe("vuelve a En sala");
+    expect(undoHint(dto("x", "09:30", { arrivedAt: iso("09:20"), calledAt: iso("09:30"), attendingAt: iso("09:35") }), NOW)).toBe(
+      "vuelve a Llamado"
+    );
+    expect(undoHint(byId.get("hecho")!.row, NOW)).toBe("vuelve al estado anterior");
+    expect(undoHint(byId.get("ausente")!.row, NOW)).toBe("vuelve al estado anterior");
+    expect(undoHint(byId.get("futuro")!.row, NOW)).toBeNull();
+    expect(undoHint(byId.get("cancelado")!.row, NOW)).toBeNull();
+  });
+
+  it("optimista: Llamar escribe calledAt; Deshacer en sala limpia arrivedAt y calledAt", () => {
+    const sala = dto("s", "09:50", { arrivedAt: iso("09:45") });
+    const r = beginReceptionAction({}, sala, "llamar", NOW);
+    expect(r.ok && r.optimistic.calledAt).toBe(NOW.toISOString());
+    if (!r.ok) return;
+    expect(sortForReception(mergeReceptionOverrides([sala], r.overrides).rows, NOW)[0].state).toBe("llamado");
+
+    const undoLlamado = beginReceptionAction({}, r.optimistic, "deshacer", NOW);
+    expect(undoLlamado.ok && undoLlamado.optimistic).toMatchObject({ calledAt: null, arrivedAt: iso("09:45") });
+    const undoSala = beginReceptionAction({}, sala, "deshacer", NOW);
+    expect(undoSala.ok && undoSala.optimistic).toMatchObject({ calledAt: null, arrivedAt: null });
+
+    const otherDay = beginReceptionAction(
+      {},
+      dto("m", "09:50", { scheduledFor: iso("09:50", "2026-10-06"), arrivedAt: iso("09:45", "2026-10-06") }),
+      "llamar",
+      NOW
+    );
+    expect(otherDay).toEqual({ ok: false, error: "Solo se llama a pacientes de turnos de hoy." });
+  });
+
+  it("confirmación: calledAt del server manda (SV05 siempre lo devuelve)", () => {
+    const sala = dto("s", "09:50", { arrivedAt: iso("09:45") });
+    const r = beginReceptionAction({}, sala, "llamar", NOW);
+    if (!r.ok) throw new Error("setup");
+    const base = { updatedAt: iso("10:00"), status: "CONFIRMED" as const, arrivedAt: iso("09:45"), attendingAt: null, state: "llamado" as const };
+    const withServer = commitReceptionAction(r.overrides, "s", { ...base, calledAt: iso("09:59") });
+    expect(withServer.booking?.calledAt).toBe(iso("09:59"));
+    // Deshacer confirmado con calledAt null: queda null (no se resucita el optimista viejo).
+    const cleared = commitReceptionAction(r.overrides, "s", { ...base, calledAt: null, state: "en-sala" });
+    expect(cleared.booking?.calledAt).toBeNull();
   });
 });

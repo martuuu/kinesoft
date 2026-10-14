@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
@@ -10,6 +11,19 @@ const schema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+
+  // Sala de Espera en tiempo real (SV, §18.2). `off` (default) = la app es
+  // idéntica a SR: ni publica ni abre sockets. `local` = bus en memoria + SSE,
+  // solo para dev (en Vercel cada lambda tiene su propio bus: no entregaría
+  // nada entre usuarios). `supabase` = Broadcast privado.
+  REALTIME_DRIVER: z.enum(REALTIME_DRIVERS).default("off"),
+  // Secreto HS256 con el que firmamos el token del canal (SV-D6/D15). SERVER-ONLY:
+  // nunca `NEXT_PUBLIC_` (el guard (d) de SV lo verifica). Con él se puede firmar
+  // un token `authenticated` del proyecto: es tan sensible como la service key.
+  SUPABASE_JWT_SECRET: z.string().optional(),
+  // `kid` opcional del header (SV-D15): con una clave HS256 del sistema nuevo de
+  // JWT signing keys de Supabase hay que nombrarla; con el secreto legacy, no.
+  SUPABASE_JWT_KID: z.string().optional(),
 
   MP_ACCESS_TOKEN: z.string().optional(),
   MP_PUBLIC_KEY: z.string().optional(),
@@ -75,6 +89,39 @@ const productionSchema = schema.superRefine((e, ctx) => {
       message: "obligatoria si MP_ACCESS_TOKEN está seteada",
     });
   }
+  // SV-D11: con `supabase` sin secreto/URL/service key el publish falla en cada
+  // action (breaker abierto) y nadie mintea tokens: la sala quedaría muda en
+  // silencio. Mejor que el deploy no salga.
+  // FX1b: también la anon key. `realtimeBootstrap` se la pasa al cliente como
+  // `apikey` del socket; sin ella el browser no conecta y la sala cae a polling
+  // sin que nada avise. Ya está en REQUIRED_IN_PRODUCTION, pero se repite acá a
+  // propósito: si alguien la saca de esa lista (p. ej. al pasar a las claves
+  // `sb_publishable_…`), el driver supabase no puede quedar sin ella.
+  if (e.REALTIME_DRIVER === "supabase") {
+    for (const key of [
+      "SUPABASE_JWT_SECRET",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    ] as const) {
+      if (!e[key]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "obligatoria en Production con REALTIME_DRIVER=supabase",
+        });
+      }
+    }
+  }
+  // SV-D11: el bus `local` vive en la memoria de UN proceso; en Vercel cada
+  // lambda tiene el suyo y los eventos no cruzarían entre usuarios.
+  if (e.REALTIME_DRIVER === "local") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["REALTIME_DRIVER"],
+      message: "\"local\" no se permite en Production (usá \"supabase\" u \"off\")",
+    });
+  }
 });
 
 export type Env = z.infer<typeof schema>;
@@ -101,6 +148,9 @@ export const env = parseEnv({
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  REALTIME_DRIVER: process.env.REALTIME_DRIVER,
+  SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET,
+  SUPABASE_JWT_KID: process.env.SUPABASE_JWT_KID,
   MP_ACCESS_TOKEN: process.env.MP_ACCESS_TOKEN,
   MP_PUBLIC_KEY: process.env.MP_PUBLIC_KEY,
   MP_WEBHOOK_SECRET: process.env.MP_WEBHOOK_SECRET,

@@ -12,12 +12,20 @@ vi.hoisted(() => {
   // `client()` exige el token; nunca sale a la red (SDK mockeado abajo).
   process.env.MP_ACCESS_TOKEN = "TEST-access-token";
 });
+/**
+ * SV06a: orden observable de los efectos externos del submit. La preferencia
+ * de MP anota `pref:<bookingId>` y el publisher fake (vía `realtimeFake.onCall`)
+ * anota `rt:<bookingId>`: así se afirma que el evento sale ANTES de la
+ * preferencia (que puede fallar y dejar el turno escrito sin aviso).
+ */
+const effects = vi.hoisted(() => ({ order: [] as string[] }));
 vi.mock("mercadopago", () => {
   class MercadoPagoConfig {
     constructor(public opts: unknown) {}
   }
   class Preference {
     async create({ body }: { body: { external_reference: string } }) {
+      effects.order.push(`pref:${body.external_reference}`);
       return {
         id: `pref-${body.external_reference}`,
         init_point: `https://mp.test/checkout/${body.external_reference}`,
@@ -37,7 +45,14 @@ vi.mock("@/lib/rate-limit", () => ({
 
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { submitPublicBooking, listPublicSlots, getPublicClinic, findFirstPublicSlot } from "@/lib/public-booking";
+import {
+  submitPublicBooking,
+  listPublicSlots,
+  getPublicClinic,
+  findFirstPublicSlot,
+  devMarkBookingPaid,
+} from "@/lib/public-booking";
+import { realtimeFake } from "@/tests/helpers/integration-setup";
 import { createBooking } from "@/lib/bookings";
 import { asUser } from "@/tests/helpers/actor";
 import {
@@ -54,6 +69,7 @@ import {
   addService,
   addPractitioner,
   addInsurer,
+  addRoom,
   sweepOrphanTestTenants,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
@@ -684,5 +700,148 @@ describe.skipIf(!RUN)("reserva pública · motor de disponibilidad (B3.2 AV-publ
     // Lo devuelto se reserva con el submit (misma grilla).
     const r = await submitPublicBooking(req({ practitionerId: first!.practitionerId, serviceId: svc.id, slot: first!.iso, documentId: "60100109" }));
     expect(r.ok).toBe(true);
+  });
+});
+
+/**
+ * SV06a · el turnero público emite a la Sala de Espera realtime
+ * (`afterBookingsCommitted`). Tenant propio con sala en la franja (lun-vie
+ * 9 a 13) para que el ref lleve un `roomId` real, no el null de siempre.
+ * Afirma el efecto observable: las llamadas registradas por el publisher fake
+ * (`realtimeFake.calls`, una por commit) y, con `onCall`, que la fila ya está
+ * commiteada cuando sale el evento (se lee con otra conexión).
+ */
+describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", () => {
+  let db: PrismaClient;
+  let T: EphemeralTenant;
+  let room: { roomId: string; locationId: string };
+  const MON = futureDow(1);
+  const TUE = futureDow(2);
+  const WED = futureDow(3);
+
+  function req(slot: string, documentId: string, key = randomUUID()): SubmitPublicBookingInput {
+    return {
+      tenantSlug: T.slug,
+      idempotencyKey: key,
+      practitionerId: T.practitionerId,
+      serviceId: T.serviceId,
+      scheduledFor: slot,
+      patient: {
+        firstName: "Sol",
+        lastName: "Sala",
+        email: `sol-${randomUUID().slice(0, 8)}@test.local`,
+        phone: `11${Math.floor(Math.random() * 1e8).toString().padStart(8, "0")}`,
+        documentId,
+        dateOfBirth: "1991-07-01",
+      },
+    };
+  }
+
+  beforeAll(async () => {
+    db = ownerClient();
+    T = await createEphemeralTenant(db);
+    room = await addRoom(db, T, { name: "Consultorio SV" });
+    await db.practitionerSchedule.createMany({
+      data: [1, 2, 3, 4, 5].map((dow) => ({
+        tenantId: T.tenantId,
+        practitionerId: T.practitionerId,
+        locationId: room.locationId,
+        roomId: room.roomId,
+        dow,
+        startMin: 540,
+        endMin: 780,
+      })),
+    });
+  });
+  afterAll(async () => {
+    await T?.cleanup();
+    await db?.$disconnect();
+  });
+
+  it("[SV06a] submitPublicBooking emite 1 vez tras el commit (ref con roomId), antes de la preferencia de MP; el replay idempotente no emite", async () => {
+    effects.order = [];
+    let committedAtPublish: boolean | null = null;
+    realtimeFake.onCall = async (call) => {
+      const id = call.refs?.[0]?.bookingId ?? "?";
+      effects.order.push(`rt:${id}`);
+      committedAtPublish = !!(await db.booking.findUnique({ where: { id }, select: { id: true } }));
+    };
+    const key = randomUUID();
+    const slot = at(MON, "09:00");
+    const r = await submitPublicBooking(req(slot, "71100101", key));
+    expect(r).toMatchObject({ ok: true });
+    if (!r.ok) return;
+
+    expect(realtimeFake.calls).toHaveLength(1);
+    expect(realtimeFake.calls[0]).toEqual({
+      tenantId: T.tenantId,
+      refs: [
+        {
+          bookingId: r.data.bookingId,
+          practitionerId: T.practitionerId,
+          scheduledFor: new Date(slot),
+          roomId: room.roomId,
+          kind: "booking",
+        },
+      ],
+    });
+    expect(committedAtPublish).toBe(true);
+    // El evento sale ANTES de pedir la preferencia de MP.
+    expect(effects.order).toEqual([`rt:${r.data.bookingId}`, `pref:${r.data.bookingId}`]);
+
+    // Replay del mismo intento (misma key): mismo turno, sin evento nuevo.
+    const again = await submitPublicBooking(req(slot, "71100101", key));
+    expect(again).toMatchObject({ ok: true, data: { bookingId: r.data.bookingId } });
+    expect(realtimeFake.calls).toHaveLength(1);
+  });
+
+  it("[SV06a] doble submit concurrente del mismo intento (twin P2002 o replay) → 1 sola llamada", async () => {
+    const payload = req(at(TUE, "09:00"), "71100102");
+    const [a, b] = await Promise.all([submitPublicBooking(payload), submitPublicBooking(payload)]);
+    expect(a.ok && b.ok).toBe(true);
+    expect(realtimeFake.calls).toHaveLength(1);
+    expect(realtimeFake.calls[0].refs).toHaveLength(1);
+  });
+
+  it("[SV06a] hold vencido reemplazado → 1 llamada con 2 refs (la nueva y la vieja cancelada)", async () => {
+    const slot = at(WED, "09:00");
+    const r1 = await submitPublicBooking(req(slot, "71100103"));
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    await db.booking.update({ where: { id: r1.data.bookingId }, data: { createdAt: new Date(Date.now() - 40 * 60_000) } });
+    realtimeFake.reset();
+
+    const r2 = await submitPublicBooking(req(slot, "71100103"));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.data.bookingId).not.toBe(r1.data.bookingId);
+    expect(realtimeFake.calls).toHaveLength(1);
+    expect(realtimeFake.calls[0].refs).toEqual([
+      { bookingId: r2.data.bookingId, practitionerId: T.practitionerId, scheduledFor: new Date(slot), roomId: room.roomId, kind: "booking" },
+      { bookingId: r1.data.bookingId, practitionerId: T.practitionerId, scheduledFor: new Date(slot), roomId: room.roomId, kind: "booking" },
+    ]);
+    expect((await db.booking.findUniqueOrThrow({ where: { id: r1.data.bookingId } })).status).toBe("CANCELLED");
+  });
+
+  it("[SV06a] devMarkBookingPaid emite 1 vez (kind booking), con la fila ya pagada", async () => {
+    const slot = at(MON, "09:45");
+    const r = await submitPublicBooking(req(slot, "71100104"));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    realtimeFake.reset();
+    let paidAtPublish: string | null = null;
+    realtimeFake.onCall = async () => {
+      paidAtPublish = (await db.booking.findUniqueOrThrow({ where: { id: r.data.bookingId } })).paymentStatus;
+    };
+    expect(await devMarkBookingPaid(r.data.bookingId)).toEqual({ ok: true, data: undefined });
+    expect(realtimeFake.calls).toEqual([
+      {
+        tenantId: T.tenantId,
+        refs: [
+          { bookingId: r.data.bookingId, practitionerId: T.practitionerId, scheduledFor: new Date(slot), roomId: room.roomId, kind: "booking" },
+        ],
+      },
+    ]);
+    expect(paidAtPublish).toBe("PAID");
   });
 });

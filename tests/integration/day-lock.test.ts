@@ -53,7 +53,7 @@ import {
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
 import { createPlan, addPlanBooking } from "@/tests/helpers/plan-factory";
-import { revalidatePathSpy, revalidateTagSpy } from "@/tests/helpers/integration-setup";
+import { realtimeFake, revalidatePathSpy, revalidateTagSpy } from "@/tests/helpers/integration-setup";
 import { createBooking } from "@/lib/bookings";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -1068,5 +1068,240 @@ describe.skipIf(!RUN)("bloqueo de sala (SR-B, §17.5)", () => {
       idempotencyKey: `rbc-${uniqueSuffix()}`,
     });
     expect(r).toMatchObject({ ok: true });
+  });
+});
+
+/**
+ * SV06b · emisión realtime del candado y de los bloqueos (§18.7/§18.8, SV-D12).
+ *
+ * Antes de SV06b el candado revalidaba `bookingDays`/`dashboard` inline y no
+ * avisaba a nadie: la Secretaria cancelaba un día entero y la agenda del
+ * profesional (o la Sala de Espera) seguía mostrando los turnos hasta el
+ * polling. Ahora:
+ *   - los cancelados salen por `afterBookingsCommitted` (1 publish, con
+ *     `roomId`, después del commit);
+ *   - el bloqueo en sí sale por `afterAvailabilityCommitted` (1 `availability`);
+ *   - «mantener» → refs vacío → 0 publish de turnos (SV-D12), igual invalida;
+ *   - alta/baja de bloqueos sueltos (profesional o sala) y desbloquear → 1
+ *     `availability` cada uno; uno de varios días → 1 con `day: null` (FX1b).
+ * Se afirma con `realtimeFake.calls` (el publisher real nunca corre en
+ * integración) y con `onCall` que la fila ya está commiteada al publicar.
+ */
+describe.skipIf(!RUN)("SV06b · emisión realtime del candado y los bloqueos", () => {
+  let db: PrismaClient;
+  let E: EphemeralTenant;
+  let prac2: { userId: string; practitionerId: string };
+  let room: { roomId: string; locationId: string };
+
+  const bookingsCalls = () => realtimeFake.calls.filter((c) => c.refs !== undefined);
+  const availabilityCalls = () => realtimeFake.calls.filter((c) => c.availability !== undefined);
+  const tagCalls = (tag: string) => revalidateTagSpy.mock.calls.filter((c) => c[0] === tag).length;
+
+  async function booking(practitionerId: string, day: string, hhmm: string, withRoom: boolean) {
+    const patientId = await addPatient(db, E, { firstName: "Rita", lastName: `Rt ${uniqueSuffix()}` });
+    return db.booking.create({
+      data: {
+        tenantId: E.tenantId,
+        patientId,
+        practitionerId,
+        serviceId: E.serviceId,
+        scheduledFor: new Date(at(day, hhmm)),
+        durationMin: 45,
+        status: "CONFIRMED",
+        ...(withRoom ? { roomId: room.roomId, locationId: room.locationId } : {}),
+        idempotencyKey: `sv06b-${uniqueSuffix()}`,
+      },
+    });
+  }
+
+  beforeAll(async () => {
+    db = ownerClient();
+    E = await createEphemeralTenant(db);
+    prac2 = await addPractitioner(db, E, "PRACTITIONER");
+    room = await addRoom(db, E, { name: "Box SV" });
+  });
+  afterAll(async () => {
+    await E?.cleanup();
+    await db?.$disconnect();
+  });
+  beforeEach(() => {
+    revalidatePathSpy.mockClear();
+    revalidateTagSpy.mockClear();
+  });
+
+  // Arrancó como it.fails("[SV06b] …"): el candado no publicaba nada.
+  it("[SV06b] candado con cancelar emite los cancelados con roomId, 1 vez, y ya no revalida inline", async () => {
+    const DAY = "2027-06-08";
+    asUser(E.userId);
+    const withRoom = await booking(E.practitionerId, DAY, "10:00", true);
+    const noRoom = await booking(E.practitionerId, DAY, "11:00", false);
+    let statusAtPublish: string[] = [];
+    realtimeFake.onCall = async (call) => {
+      if (!call.refs) return;
+      const rows = await db.booking.findMany({
+        where: { id: { in: [withRoom.id, noRoom.id] } },
+        select: { status: true },
+      });
+      statusAtPublish = rows.map((r) => r.status);
+    };
+
+    const r = await applyDayLock({
+      dayKey: DAY,
+      practitionerIds: [E.practitionerId],
+      allDay: true,
+      bookingsDecision: "cancel",
+      expectedAffectedIds: [withRoom.id, noRoom.id].sort(),
+    });
+    if (!r.ok) throw new Error(r.error);
+
+    const pub = bookingsCalls();
+    expect(pub).toHaveLength(1);
+    const refs = [...pub[0].refs!].sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime());
+    expect(refs).toEqual([
+      { bookingId: withRoom.id, practitionerId: E.practitionerId, scheduledFor: withRoom.scheduledFor, roomId: room.roomId },
+      { bookingId: noRoom.id, practitionerId: E.practitionerId, scheduledFor: noRoom.scheduledFor, roomId: null },
+    ]);
+    // Fechas `Date` desde la tx, no el ISO de `DayLockAffected`.
+    expect(refs[0].scheduledFor).toBeInstanceOf(Date);
+    // Post-commit: al publicar, la cancelación ya está en la base.
+    expect(statusAtPublish).toEqual(["CANCELLED", "CANCELLED"]);
+    expect(availabilityCalls().map((c) => c.availability)).toEqual([{ practitionerId: E.practitionerId, day: DAY }]);
+    // La invalidación sale por los hooks: `dashboard` una sola vez (antes
+    // inline, ahora `afterBookingsCommitted`); `bookingDays` no se pierde.
+    expect(tagCalls(tags.dashboard(E.tenantId))).toBe(1);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+    expect(revalidatePathSpy).toHaveBeenCalledWith("/agenda");
+  });
+
+  it("candado con MANTENER → 0 publish de turnos y 1 availability (todos → practitionerId null), igual invalida", async () => {
+    const DAY = "2027-06-09";
+    asUser(E.userId);
+    const b = await booking(prac2.practitionerId, DAY, "10:00", false);
+    const r = await applyDayLock({
+      dayKey: DAY,
+      practitionerIds: null,
+      allDay: true,
+      bookingsDecision: "keep",
+      expectedAffectedIds: [b.id],
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(bookingsCalls()).toHaveLength(0);
+    expect(availabilityCalls().map((c) => c.availability)).toEqual([{ practitionerId: null, day: DAY }]);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+  });
+
+  it("candado de varios profesionales → availability con practitionerId null", async () => {
+    const DAY = "2027-06-10";
+    asUser(E.userId);
+    const r = await applyDayLock({
+      dayKey: DAY,
+      practitionerIds: [E.practitionerId, prac2.practitionerId],
+      allDay: true,
+      bookingsDecision: "keep",
+      expectedAffectedIds: [],
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(availabilityCalls().map((c) => c.availability)).toEqual([{ practitionerId: null, day: DAY }]);
+  });
+
+  it("bloqueo de profesional: crear y borrar → 1 availability cada uno, con el día AR (TZ=UTC)", async () => {
+    // 22:00 AR = 01:00 UTC del día siguiente: el día tiene que ser el AR.
+    const DAY = "2027-06-11";
+    asUser(E.userId);
+    const c = await createTimeBlock({
+      practitionerId: prac2.practitionerId,
+      startsAt: at(DAY, "21:00"),
+      endsAt: at(DAY, "22:30"),
+      reason: "Trámite",
+    });
+    if (!c.ok) throw new Error(c.error);
+    expect(bookingsCalls()).toHaveLength(0);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: prac2.practitionerId, day: DAY }]);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+
+    realtimeFake.reset();
+    const d = await deleteTimeBlock({ id: c.data.ids[0] });
+    if (!d.ok) throw new Error(d.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: prac2.practitionerId, day: DAY }]);
+  });
+
+  it("bloqueo de sala: crear y borrar → 1 availability cada uno (practitionerId null)", async () => {
+    const DAY = "2027-06-14";
+    asUser(E.userId);
+    const c = await createTimeBlock({ roomId: room.roomId, startsAt: at(DAY, "09:00"), endsAt: at(DAY, "12:00") });
+    if (!c.ok) throw new Error(c.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: null, day: DAY }]);
+
+    realtimeFake.reset();
+    const d = await deleteTimeBlock({ id: c.data.ids[0] });
+    if (!d.ok) throw new Error(d.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: null, day: DAY }]);
+  });
+
+  it("[FX1b] bloqueo de 3 días → 1 availability con day:null y bookingDays revalidado 1 vez (crear y borrar); bloqueo que no se crea → nada", async () => {
+    // §18.2 «1 commit = 1 POST»: SV06b mandaba un availability por día AR (3
+    // POST + 3 revalidateTag del mismo tag por tenant). `day: null` = varios
+    // días; el cliente re-pide lo que esté mirando.
+    asUser(E.userId);
+    const c = await createTimeBlock({
+      practitionerId: E.practitionerId,
+      startsAt: at("2027-06-15", "00:00"),
+      endsAt: at("2027-06-18", "00:00"),
+      allDay: true,
+    });
+    if (!c.ok) throw new Error(c.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: E.practitionerId, day: null }]);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+
+    realtimeFake.reset();
+    revalidateTagSpy.mockClear();
+    const d = await deleteTimeBlock({ id: c.data.ids[0] });
+    if (!d.ok) throw new Error(d.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: E.practitionerId, day: null }]);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+
+    realtimeFake.reset();
+    const bad = await deleteTimeBlock({ id: "c0000000000000000000000000" });
+    expect(bad.ok).toBe(false);
+    expect(realtimeFake.calls).toHaveLength(0);
+  });
+
+  it("[FX1b] bloqueo de día completo (00:00 → 00:00 del día siguiente AR) → 1 availability con SU día, no null", async () => {
+    // El fin es exclusivo: termina a las 00:00 AR del día siguiente y no lo
+    // toca. Con TZ=UTC, 00:00 AR = 03:00 UTC: el día tiene que ser el AR.
+    asUser(E.userId);
+    const c = await createTimeBlock({
+      practitionerId: E.practitionerId,
+      startsAt: at("2027-06-22", "00:00"),
+      endsAt: at("2027-06-23", "00:00"),
+      allDay: true,
+    });
+    if (!c.ok) throw new Error(c.error);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([
+      { practitionerId: E.practitionerId, day: "2027-06-22" },
+    ]);
+    expect(tagCalls(tags.bookingDays(E.tenantId))).toBe(1);
+  });
+
+  it("desbloquear el día → 1 availability; sin nada que quitar → nada", async () => {
+    const DAY = "2027-06-21";
+    asUser(E.userId);
+    const r = await applyDayLock({
+      dayKey: DAY,
+      practitionerIds: [prac2.practitionerId],
+      allDay: true,
+      bookingsDecision: "keep",
+      expectedAffectedIds: [],
+    });
+    if (!r.ok) throw new Error(r.error);
+    realtimeFake.reset();
+    const u = await removeDayLock({ dayKey: DAY, practitionerId: prac2.practitionerId });
+    if (!u.ok) throw new Error(u.error);
+    expect(u.data.deleted).toBe(1);
+    expect(availabilityCalls().map((x) => x.availability)).toEqual([{ practitionerId: prac2.practitionerId, day: DAY }]);
+
+    realtimeFake.reset();
+    expect((await removeDayLock({ dayKey: DAY, practitionerId: prac2.practitionerId })).ok).toBe(false);
+    expect(realtimeFake.calls).toHaveLength(0);
   });
 });

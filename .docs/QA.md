@@ -1100,3 +1100,77 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Cierre
 - [ ] Guardar "Por sala" y archivar todas las salas → la agenda abre en el Día de siempre.
 - [ ] A 360 px, filtro y toggle envuelven sin scroll horizontal.
+
+## Sala de Espera realtime (SV) — `/sala`, «Llamar», avisos y agenda en vivo (13/14-oct-2026)
+
+> **1 migración nueva: M5 `20261013120000_reception_call_realtime`.** Correr con `REALTIME_DRIVER=local TZ=UTC npm run dev`
+> contra el Docker local con M1-M5 aplicadas (`dotenv -e .env.local -- npx prisma migrate deploy`). Usuarios: Secretaria
+> (ASSISTANT), PRACTITIONER AP, OWNER que atiende y BILLING; un consultorio Kine con la sala «Consultorio 2» y otro
+> General. Dos navegadores o dos perfiles (cada pestaña es un usuario). Contexto en
+> [ARCHITECTURE.md §Sala de Espera realtime](ARCHITECTURE.md) y [AUDIT.md §Ronda 20](AUDIT.md). Lo que solo se prueba
+> contra Supabase real (policy, firma, 202, p95, «Allow public access», CSP del `wss://`) va en V1-V7 de staging
+> ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)).
+
+### Llegada y llamado entre pestañas
+- [ ] 🔴 Secretaria en `/agenda?view=reception`, AP en `/dashboard` con «Visual y sonido» (y un clic previo en la
+  página): «Llegó» en un turno de AP → en < 2 s AP ve el toast «Llegó <Nombre A.> · 10:30» con «Ver sala», suena el
+  chime y el título dice «(1) Llegó …». «Ver sala» abre `/sala` con el paciente en «En sala» y el anillo de llegada; el
+  título vuelve al enfocar. Con «Visual»: toast sin sonido. Con «Apagado»: nada, y `/sala` igual se actualiza.
+- [ ] 🔴 «Llamar» desde `/sala` (AP) → en la pestaña de la Secretaria la card **se desliza** a la banda «Llamado» sin
+  recargar, y ve el toast «Pase <Nombre A.> · Consultorio 2 · <AP>». En `/sala` el llamado sale en la banda «Pase …»
+  arriba (8 s) **sin toast** y **sin mover el tablero** (las cards no saltan al aparecer ni al irse la banda).
+  «Deshacer» vuelve a «En sala». La Secretaria también puede «Llamar» en nombre de AP.
+- [ ] La pestaña que marca «Llegó» o «Llamar» no se avisa a sí misma.
+- [ ] Llegada a un turno de AP con OWNER mirando: OWNER (no es el profesional del turno) no recibe «Llegó». BILLING no
+  recibe nada.
+- [ ] Tres llegadas juntas (o al volver de una ausencia) → un solo toast «Llegaron 3 pacientes».
+
+### Reconexión y pestañas
+- [ ] 🔴 DevTools → Network **Offline** 30 s en una pestaña → indicador «Sin conexión en vivo · se actualiza cada
+  60 s»; un cambio en la otra pestaña llega al reconectar o a los 60 s; al volver **Online** el indicador vuelve a
+  «En vivo». El lector de pantalla no anuncia cada «Reconectando…».
+- [ ] Pestaña oculta 2 min con cambios en la otra → al volver se actualiza enseguida, sin toasts repetidos y **sin
+  sonido**.
+- [ ] Sin clic previo en la página el chime puede no sonar: el toast sale igual, con la nota «El sonido se activa
+  después del primer clic en la página.»
+
+### Agenda en vivo
+- [ ] 🔴 AP abre el drawer de un turno; la Secretaria lo mueve de hora en otra pestaña → la agenda de AP lo muestra en
+  la posición nueva (con flash) y el drawer la hora nueva; guardar con datos viejos → «El turno cambió en otra sesión».
+- [ ] 🔴 Mover un turno «en sala» o «llamado» a **otro día** → en el día nuevo aparece «por llegar» (sin llegada,
+  llamado ni atención). Moverlo de hora dentro de hoy no le cambia el estado.
+- [ ] Batch de 20 turnos → **una** actualización en la otra pestaña (fade único, sin 20 parpadeos).
+- [ ] Turnero público (`/c/<slug>/booking`) reserva → aparece en la agenda de la Secretaria; `devMarkBookingPaid` →
+  pasa a confirmado en vivo; candado del día con «cancelar» → los turnos desaparecen y el día queda bloqueado en la
+  otra pestaña; un bloqueo de varios días se refleja de una vez.
+
+### `/sala`
+- [ ] 🔴 Nunca título de diagnóstico, notas ni título del plan en ninguna card (PD-13), tampoco después de un cambio en
+  vivo (DevTools → Network: la respuesta de `listSalaBookings` no trae `title`/`notes`/`description`).
+- [ ] «Por profesional | Por sala» arriba (el segundo solo en el consultorio con salas); se recuerda al refrescar.
+  Bandas En atención · Llamado · En sala · Demorados · Próximos; «N más tarde» / «Ocultar los de más tarde».
+- [ ] Contadores: «En sala» **incluye** a los llamados y «Llamados» es ese subconjunto (los mismos números que
+  Recepción).
+- [ ] Teclado: Tab hasta «Llamar», Enter → el foco queda en el botón primario nuevo de esa card (o en la card); una
+  llegada de otro paciente mientras tanto no saca el foco. En el toast, el foco en «Ver sala» no se pierde si llega el
+  mismo aviso otra vez.
+- [ ] Vacíos: «Nadie en la sala por ahora» (con los próximos del día) y «Hoy no hay turnos», sin que el tablero salte.
+- [ ] Buscador: filtra por paciente en el momento.
+- [ ] Paletas **mint** y **coral** (Configuración → General): los estados de la sala se distinguen y se leen (En sala,
+  Llamado, En atención, Demorado).
+- [ ] `prefers-reduced-motion`: sin pulso del punto «En vivo» ni anillo; las cards cambian de banda sin deslizarse y el
+  estado final se ve completo.
+- [ ] A 360 px: columnas apiladas, sin scroll horizontal; header y contadores envuelven.
+
+### Preferencias, roles y verticales
+- [ ] Configuración → General → «Avisos de la sala de espera»: AP ve «Cuando llega un paciente mío»; la Secretaria ve
+  «Cuando un profesional llama a un paciente»; OWNER que atiende ve las dos. Se recuerda al refrescar; el mismo control
+  en Agenda ⋯ (Vista).
+- [ ] General y Kine: «Sala de espera» en el nav en **ambos** y lleva a `/sala` (activo en `/sala`, Agenda no se
+  ilumina); BILLING no ve la entrada y `/sala` lo manda a `/agenda`; `/agenda?view=reception` sigue abriendo.
+
+### Con `REALTIME_DRIVER=off`
+- [ ] 🔴 Agenda y Recepción se ven y se comportan como en SR: sin indicador, sin toasts, sin flash, sin re-pedidos.
+- [ ] `/sala` sin indicador «En vivo»; se actualiza sola cada 60 s y al volver a la pestaña.
+- [ ] La Card de avisos en Configuración se ve con la nota «Los avisos se activan cuando la sala en vivo esté
+  encendida en el consultorio.»; en Agenda ⋯ no aparece el control.

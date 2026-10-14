@@ -585,3 +585,201 @@ describe("[SR-U3] radiogroup con N opciones (flechas)", () => {
     expect(nextRadioValue(two, "room" as never, "ArrowLeft")).toBe("practitioner");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SV09 · agenda en vivo (plan §18.5): qué lote re-pide, qué cambió, qué
+// overrides optimistas ya quedaron viejos, refetch coalescido y flash.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  FLASH_MAX_PER_BATCH,
+  changedBookingIds,
+  createRefetchCoalescer,
+  messagesTouchRange,
+  pruneBookingOverrides,
+  remoteFlashIds,
+  weekFetchRange,
+} from "@/lib/agenda-client-state";
+import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
+import { dayWindow } from "@/lib/availability/day";
+
+describe("[SV09] messagesTouchRange", () => {
+  const range = { fromKey: "2026-10-05", toKey: "2026-10-11" };
+  const msg = (over: Partial<RealtimeAgendaMessage>): RealtimeAgendaMessage => ({
+    v: 1,
+    kind: "booking",
+    bookingId: "b1",
+    practitionerId: "p1",
+    day: "2026-10-07",
+    at: "2026-10-07T12:00:00.000Z",
+    ...over,
+  });
+
+  it("día dentro de la semana (bordes incluidos) → sí; fuera → no", () => {
+    expect(messagesTouchRange([msg({})], range)).toBe(true);
+    expect(messagesTouchRange([msg({ day: "2026-10-05" })], range)).toBe(true);
+    expect(messagesTouchRange([msg({ day: "2026-10-11" })], range)).toBe(true);
+    expect(messagesTouchRange([msg({ day: "2026-10-04" })], range)).toBe(false);
+    expect(messagesTouchRange([msg({ day: "2026-10-12" })], range)).toBe(false);
+    expect(messagesTouchRange([], range)).toBe(false);
+  });
+
+  it("un turno que se fue de la semana (prev.day dentro) también re-pide", () => {
+    const moved = msg({ day: "2026-10-20", prev: { practitionerId: "p1", day: "2026-10-06" } });
+    expect(messagesTouchRange([moved], range)).toBe(true);
+    const outside = msg({ day: "2026-10-20", prev: { practitionerId: "p1", day: "2026-09-29" } });
+    expect(messagesTouchRange([outside], range)).toBe(false);
+  });
+
+  it("day null (colapso por profesional o consultorio) cuenta", () => {
+    expect(messagesTouchRange([msg({ day: null, bookingId: undefined })], range)).toBe(true);
+  });
+
+  it("availability cuenta aunque el día sea de otra semana", () => {
+    expect(messagesTouchRange([msg({ kind: "availability", day: "2026-12-01", bookingId: undefined })], range)).toBe(true);
+  });
+
+  it("un lote mezclado: basta con uno que toque", () => {
+    expect(messagesTouchRange([msg({ day: "2026-01-01" }), msg({ day: "2026-10-08" })], range)).toBe(true);
+  });
+});
+
+describe("[SV09] weekFetchRange = el rango con que la página carga la semana", () => {
+  it("lunes 00:00 AR → lunes siguiente 00:00 AR, y las claves de día", () => {
+    const r = weekFetchRange("2026-10-05");
+    expect(r.fromKey).toBe("2026-10-05");
+    expect(r.toKey).toBe("2026-10-11");
+    // Mismo cálculo que `app/(app)/agenda/page.tsx`: dayWindow(monday).start / dayWindow(sunday).end.
+    expect(r.from.toISOString()).toBe(dayWindow("2026-10-05").start.toISOString());
+    expect(r.to.toISOString()).toBe(dayWindow("2026-10-11").end.toISOString());
+    expect(r.from.toISOString()).toBe("2026-10-05T03:00:00.000Z");
+    expect(r.to.toISOString()).toBe("2026-10-12T03:00:00.000Z");
+  });
+});
+
+describe("[SV09] changedBookingIds", () => {
+  const row = (id: string, updatedAt: string) => ({ id, updatedAt });
+  it("ids nuevos o con updatedAt distinto; los iguales y los que se fueron, no", () => {
+    const prev = [row("a", "2026-10-05T10:00:00.000Z"), row("b", "2026-10-05T10:00:00.000Z"), row("gone", "x")];
+    const next = [row("a", "2026-10-05T10:00:00.000Z"), row("b", "2026-10-05T10:05:00.000Z"), row("c", "2026-10-05T10:06:00.000Z")];
+    expect(changedBookingIds(prev, next)).toEqual(["b", "c"]);
+    expect(changedBookingIds(next, next)).toEqual([]);
+    expect(changedBookingIds([], [])).toEqual([]);
+  });
+});
+
+describe("[SV09] overrides optimistas por updatedAt", () => {
+  type R = { id: string; updatedAt: string; arrivedAt?: string | null };
+  const id = (r: R) => r;
+
+  it("pruneBookingOverrides: borra solo los que el server ya superó; sin cambios devuelve el mismo objeto", () => {
+    const overrides: Record<string, R> = {
+      a: { id: "a", updatedAt: "2026-10-05T10:01:00.000Z", arrivedAt: "2026-10-05T10:01:00.000Z" },
+      b: { id: "b", updatedAt: "2026-10-05T10:01:00.000Z" },
+      c: { id: "c", updatedAt: "2026-10-05T10:01:00.000Z" },
+    };
+    const rows: R[] = [
+      { id: "a", updatedAt: "2026-10-05T10:05:00.000Z" }, // el server avanzó → afuera
+      { id: "b", updatedAt: "2026-10-05T10:01:00.000Z" }, // misma versión → se queda
+      { id: "c", updatedAt: "2026-10-05T10:00:00.000Z" }, // server más viejo (refetch lento) → se queda
+    ];
+    const pruned = pruneBookingOverrides(overrides, rows);
+    expect(Object.keys(pruned)).toEqual(["b", "c"]);
+    const same = pruneBookingOverrides(pruned, rows);
+    expect(same).toBe(pruned);
+    const empty = {};
+    expect(pruneBookingOverrides(empty, rows)).toBe(empty);
+  });
+
+  it("mergeBookingOverrides: el override pierde contra una fila del server más nueva", () => {
+    const server: R[] = [
+      { id: "a", updatedAt: "2026-10-05T10:05:00.000Z", arrivedAt: null },
+      { id: "b", updatedAt: "2026-10-05T10:00:00.000Z", arrivedAt: null },
+    ];
+    const overrides: Record<string, R> = {
+      a: { id: "a", updatedAt: "2026-10-05T10:01:00.000Z", arrivedAt: "2026-10-05T10:01:00.000Z" },
+      b: { id: "b", updatedAt: "2026-10-05T10:01:00.000Z", arrivedAt: "2026-10-05T10:01:00.000Z" },
+    };
+    const merged = mergeBookingOverrides(server, overrides, id);
+    expect(merged[0]).toBe(server[0]); // el server avanzó: manda el server
+    expect(merged[1].arrivedAt).toBe("2026-10-05T10:01:00.000Z"); // el override es más nuevo: manda
+  });
+});
+
+describe("[SV09] createRefetchCoalescer: nunca N refetch en vuelo", () => {
+  it("lotes durante un refetch en vuelo → uno más al terminar, no uno por lote", async () => {
+    const pending: Array<() => void> = [];
+    let runs = 0;
+    const c = createRefetchCoalescer(() => {
+      runs++;
+      return new Promise<void>((res) => pending.push(res));
+    });
+    c.request();
+    expect(runs).toBe(1);
+    c.request();
+    c.request();
+    c.request();
+    expect(runs).toBe(1);
+    pending.shift()!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runs).toBe(2);
+    pending.shift()!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runs).toBe(2);
+    // ocioso: el próximo pedido corre directo
+    c.request();
+    expect(runs).toBe(3);
+    pending.shift()!();
+  });
+
+  it("un refetch que falla no traba el siguiente; dispose corta el re-pedido pendiente", async () => {
+    let runs = 0;
+    let fail = true;
+    const c = createRefetchCoalescer(async () => {
+      runs++;
+      if (fail) throw new Error("red");
+    });
+    c.request();
+    await Promise.resolve();
+    await Promise.resolve();
+    fail = false;
+    c.request();
+    expect(runs).toBe(2);
+    await Promise.resolve();
+    c.dispose();
+    c.request();
+    expect(runs).toBe(2);
+  });
+});
+
+describe("[SV09] remoteFlashIds", () => {
+  const quiet = { ids: new Map<string, number>(), quietUntil: 0 };
+  it("marca los cambios remotos", () => {
+    expect(remoteFlashIds(["a", "b"], quiet, 1000)).toEqual(["a", "b"]);
+  });
+  it(`más de ${FLASH_MAX_PER_BATCH} cambios en un lote → sin flash (ruido)`, () => {
+    const many = Array.from({ length: FLASH_MAX_PER_BATCH + 1 }, (_, i) => `b${i}`);
+    expect(remoteFlashIds(many, quiet, 1000)).toEqual([]);
+    expect(remoteFlashIds(many.slice(0, FLASH_MAX_PER_BATCH), quiet, 1000)).toHaveLength(FLASH_MAX_PER_BATCH);
+  });
+  it("una acción propia reciente no titila (por id, o todo durante la ventana de una acción sin id)", () => {
+    const own = { ids: new Map([["a", 5000]]), quietUntil: 0 };
+    expect(remoteFlashIds(["a", "b"], own, 1000)).toEqual(["b"]);
+    expect(remoteFlashIds(["a", "b"], own, 6000)).toEqual(["a", "b"]); // ya venció
+    expect(remoteFlashIds(["a", "b"], { ids: new Map(), quietUntil: 5000 }, 1000)).toEqual([]);
+  });
+});
+
+describe("[SV09] receptionCardBadge con «Llamado»", () => {
+  it("llamado (en sala + calledAt) → «Llamado»; en atención sigue ganando", () => {
+    const now = new Date("2026-09-30T13:30:00.000Z");
+    const base = { id: "x", scheduledFor: "2026-09-30T13:00:00.000Z", durationMin: 45, status: "CONFIRMED" };
+    const called = { ...base, arrivedAt: "2026-09-30T13:18:00.000Z", calledAt: "2026-09-30T13:28:00.000Z" };
+    expect(receptionCardBadge(called, now)).toEqual({ kind: "llamado", label: "Llamado" });
+    expect(receptionCardBadge({ ...called, attendingAt: "2026-09-30T13:29:00.000Z" }, now)).toEqual({
+      kind: "en-atencion",
+      label: "En atención",
+    });
+  });
+});

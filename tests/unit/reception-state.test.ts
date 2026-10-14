@@ -10,10 +10,12 @@ import {
   RECEPTION_ACTION_LABEL,
   allowedTransitions,
   applyReceptionAction,
+  calledMinutes,
   lateMinutes,
   receptionState,
   sortForReception,
   undoStatus,
+  undoTarget,
   waitingMinutes,
   type ReceptionBooking,
   type ReceptionState,
@@ -34,6 +36,20 @@ describe("receptionState", () => {
     ["demorado (11 min sin llegada)", b("09:49"), "demorado"],
     ["en sala", b("09:30", { arrivedAt: ar("09:25") }), "en-sala"],
     ["en atención", b("09:30", { arrivedAt: ar("09:25"), attendingAt: ar("09:35") }), "en-atencion"],
+    ["[SV03] llamado (calledAt gana a arrivedAt)", b("09:30", { arrivedAt: ar("09:25"), calledAt: ar("09:40") }), "llamado"],
+    [
+      "[SV03] en atención gana a calledAt",
+      b("09:30", { arrivedAt: ar("09:25"), calledAt: ar("09:40"), attendingAt: ar("09:42") }),
+      "en-atencion",
+    ],
+    ["[SV03] calledAt null = en sala", b("09:30", { arrivedAt: ar("09:25"), calledAt: null }), "en-sala"],
+    ["[SV03] atendido gana a calledAt", b("09:00", { status: "COMPLETED", arrivedAt: ar("08:55"), calledAt: ar("09:00") }), "atendido"],
+    ["[SV03] cancelado gana a calledAt", b("09:00", { status: "CANCELLED", arrivedAt: ar("08:55"), calledAt: ar("09:00") }), "cancelado"],
+    [
+      "[SV03] ISO strings con calledAt (DTO)",
+      { ...b("09:00"), arrivedAt: ar("08:58").toISOString(), calledAt: ar("09:05").toISOString() },
+      "llamado",
+    ],
     ["atendido gana a los timestamps", b("09:00", { status: "COMPLETED", arrivedAt: ar("08:55") }), "atendido"],
     ["ausente", b("08:00", { status: "NO_SHOW" }), "ausente"],
     ["cancelado", b("08:00", { status: "CANCELLED", arrivedAt: ar("07:55") }), "cancelado"],
@@ -53,7 +69,8 @@ describe("allowedTransitions", () => {
   it("matriz completa", () => {
     expect(allowedTransitions("por-llegar")).toEqual(["llego", "ausente"]);
     expect(allowedTransitions("demorado")).toEqual(["llego", "ausente"]);
-    expect(allowedTransitions("en-sala")).toEqual(["en-atencion", "atendido", "deshacer"]);
+    expect(allowedTransitions("en-sala")).toEqual(["llamar", "en-atencion", "atendido", "deshacer"]);
+    expect(allowedTransitions("llamado")).toEqual(["en-atencion", "atendido", "deshacer"]);
     expect(allowedTransitions("en-atencion")).toEqual(["atendido", "deshacer"]);
     expect(allowedTransitions("atendido")).toEqual(["deshacer"]);
     expect(allowedTransitions("ausente")).toEqual(["deshacer"]);
@@ -62,6 +79,7 @@ describe("allowedTransitions", () => {
   it("cada acción tiene rótulo en castellano", () => {
     expect(RECEPTION_ACTION_LABEL).toEqual({
       llego: "Llegó",
+      llamar: "Llamar",
       "en-atencion": "En atención",
       atendido: "Atendido",
       ausente: "Ausente",
@@ -224,5 +242,154 @@ describe("sortForReception", () => {
     expect(out.find((e) => e.row.id === "b-09:45")).toMatchObject({ highlight: false, waitingMinutes: 20 });
     expect(out[0].row).toBe(rows[6]); // devuelve el objeto del caller
     expect(rows[0].id).toBe("b-11:00"); // no muta
+  });
+});
+
+describe("[SV03] estado «Llamado» (§18.4)", () => {
+  const now = ar("10:00");
+  const sala = (over: Partial<ReceptionBooking> = {}) => b("09:30", { arrivedAt: ar("09:20"), ...over });
+  const llamado = (over: Partial<ReceptionBooking> = {}) => sala({ calledAt: ar("09:55"), ...over });
+
+  it("Llamar desde en sala: calledAt = now → llamado", () => {
+    expect(applyReceptionAction(sala(), "llamar", now)).toEqual({
+      ok: true,
+      from: "en-sala",
+      to: "llamado",
+      patch: { calledAt: now },
+    });
+  });
+
+  it("Llamar exige que esté en sala: por llegar / demorado / llamado / en atención / atendido no", () => {
+    expect(applyReceptionAction(b("10:30"), "llamar", now)).toEqual({
+      ok: false,
+      from: "por-llegar",
+      error: "No se puede llamar a un turno por llegar. Primero marcá «Llegó».",
+    });
+    expect(applyReceptionAction(b("09:00"), "llamar", now)).toMatchObject({ ok: false, from: "demorado" });
+    // No hay «Volver a llamar»: es Deshacer + Llamar.
+    expect(applyReceptionAction(llamado(), "llamar", now)).toEqual({
+      ok: false,
+      from: "llamado",
+      error: "No se puede llamar a un turno llamado.",
+    });
+    expect(applyReceptionAction(sala({ attendingAt: ar("09:58") }), "llamar", now)).toMatchObject({ ok: false });
+    expect(applyReceptionAction(sala({ status: "COMPLETED" }), "llamar", now)).toMatchObject({ ok: false });
+    expect(applyReceptionAction(sala({ status: "CANCELLED" }), "llamar", now)).toMatchObject({ ok: false });
+  });
+
+  it("desde llamado: En atención (conserva calledAt) y Atendido como desde en sala", () => {
+    expect(applyReceptionAction(llamado(), "en-atencion", now)).toEqual({
+      ok: true,
+      from: "llamado",
+      to: "en-atencion",
+      patch: { attendingAt: now },
+    });
+    expect(applyReceptionAction(llamado(), "atendido", now)).toEqual({
+      ok: true,
+      from: "llamado",
+      to: "atendido",
+      patch: { status: "COMPLETED" },
+    });
+    expect(applyReceptionAction(llamado(), "ausente", now)).toMatchObject({ ok: false, from: "llamado" });
+    expect(applyReceptionAction(llamado(), "llego", now)).toMatchObject({ ok: false, from: "llamado" });
+  });
+
+  it("Deshacer desde llamado limpia calledAt → en sala", () => {
+    expect(applyReceptionAction(llamado(), "deshacer", now)).toEqual({
+      ok: true,
+      from: "llamado",
+      to: "en-sala",
+      patch: { calledAt: null },
+    });
+  });
+
+  it("Deshacer desde en atención: → llamado si hubo llamado, si no → en sala (calledAt se conserva)", () => {
+    expect(applyReceptionAction(llamado({ attendingAt: ar("09:58") }), "deshacer", now)).toEqual({
+      ok: true,
+      from: "en-atencion",
+      to: "llamado",
+      patch: { attendingAt: null },
+    });
+    expect(applyReceptionAction(sala({ attendingAt: ar("09:58") }), "deshacer", now)).toEqual({
+      ok: true,
+      from: "en-atencion",
+      to: "en-sala",
+      patch: { attendingAt: null },
+    });
+  });
+
+  it("Deshacer desde en sala limpia arrivedAt Y calledAt (CHECK de M5)", () => {
+    const r = applyReceptionAction(sala(), "deshacer", now);
+    expect(r).toEqual({ ok: true, from: "en-sala", to: "demorado", patch: { arrivedAt: null, calledAt: null } });
+  });
+
+  it("Deshacer atendido con calledAt (sin en atención) vuelve a llamado", () => {
+    expect(applyReceptionAction(llamado({ status: "COMPLETED" }), "deshacer", now)).toMatchObject({
+      ok: true,
+      from: "atendido",
+      to: "llamado",
+      patch: { status: "CONFIRMED" },
+    });
+  });
+
+  it("undoTarget = el `to` de deshacer; null si no se puede", () => {
+    expect(undoTarget(llamado(), now)).toBe("en-sala");
+    expect(undoTarget(llamado({ attendingAt: ar("09:58") }), now)).toBe("llamado");
+    expect(undoTarget(sala({ attendingAt: ar("09:58") }), now)).toBe("en-sala");
+    expect(undoTarget(sala(), now)).toBe("demorado");
+    expect(undoTarget(b("10:30"), now)).toBeNull();
+    expect(undoTarget(b("10:30", { status: "CANCELLED" }), now)).toBeNull();
+  });
+
+  it("Llamar solo hoy (día AR): mañana rechazado", () => {
+    const tomorrow = sala({ scheduledFor: ar("09:00", "2026-10-06"), arrivedAt: ar("09:00", "2026-10-06") });
+    expect(applyReceptionAction(tomorrow, "llamar", now)).toEqual({
+      ok: false,
+      from: "en-sala",
+      error: "Solo se llama a pacientes de turnos de hoy.",
+    });
+  });
+
+  it("Llamar solo hoy: borde de medianoche AR (corre igual en TZ=UTC)", () => {
+    // Turno 23:30 AR del 5 (= 02:30Z del 6). A las 23:50 AR del 5 (02:50Z del 6)
+    // sigue siendo hoy aunque el día UTC ya cambió.
+    const late = b("23:30", { arrivedAt: ar("23:20") });
+    expect(applyReceptionAction(late, "llamar", ar("23:50"))).toMatchObject({ ok: true, to: "llamado" });
+    // 00:10 AR del 6: ya es otro día AR → rechazado, aunque en UTC sea el mismo día (03:10Z del 6).
+    expect(applyReceptionAction(late, "llamar", ar("00:10", "2026-10-06"))).toMatchObject({
+      ok: false,
+      error: "Solo se llama a pacientes de turnos de hoy.",
+    });
+    // Turno 00:10 AR del 6 visto a las 23:50 AR del 5 (mismo día UTC, 6): no es hoy.
+    const early = b("00:10", { scheduledFor: ar("00:10", "2026-10-06"), arrivedAt: ar("23:45") });
+    expect(applyReceptionAction(early, "llamar", ar("23:50"))).toMatchObject({ ok: false });
+  });
+
+  it("calledMinutes: minutos desde calledAt, solo en llamado", () => {
+    expect(calledMinutes(llamado({ calledAt: ar("09:57") }), now)).toBe(3);
+    expect(calledMinutes(llamado({ calledAt: ar("10:00") }), now)).toBe(0);
+    // Reloj del cliente apenas atrás del server: nunca negativo.
+    expect(calledMinutes(llamado({ calledAt: ar("10:01") }), now)).toBe(0);
+    expect(calledMinutes(sala(), now)).toBeNull();
+    expect(calledMinutes(llamado({ attendingAt: ar("09:58") }), now)).toBeNull();
+    expect(calledMinutes(llamado({ status: "COMPLETED" }), now)).toBeNull();
+    // waitingMinutes no aplica al llamado (su reloj es calledMinutes).
+    expect(waitingMinutes(llamado(), now)).toBeNull();
+  });
+
+  it("sortForReception: en atención → llamados (por calledAt) → resto cronológico → cancelados", () => {
+    const rows = [
+      b("09:45", { arrivedAt: ar("09:40") }), // en sala
+      b("09:10", { arrivedAt: ar("09:05"), calledAt: ar("09:58") }), // llamado tarde
+      b("09:50", { arrivedAt: ar("09:30"), calledAt: ar("09:52") }), // llamado antes
+      b("09:20", { arrivedAt: ar("09:15"), attendingAt: ar("09:40") }), // en atención
+      b("08:00", { status: "CANCELLED" }),
+      b("11:00"),
+    ];
+    const out = sortForReception(rows, now);
+    expect(out.map((e) => e.state)).toEqual(["en-atencion", "llamado", "llamado", "en-sala", "por-llegar", "cancelado"]);
+    expect(out.map((e) => e.row.id)).toEqual(["b-09:20", "b-09:50", "b-09:10", "b-09:45", "b-11:00", "b-08:00"]);
+    expect(out[1]).toMatchObject({ calledMinutes: 8, waitingMinutes: null, actions: ["en-atencion", "atendido", "deshacer"] });
+    expect(out[3]).toMatchObject({ calledMinutes: null, actions: ["llamar", "en-atencion", "atendido", "deshacer"] });
   });
 });

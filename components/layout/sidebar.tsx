@@ -75,9 +75,9 @@ export function useCapSet(caps: readonly Capability[]): ReadonlySet<Capability> 
  *
  * Una entrada matchea si el pathname empieza con su path y la URL actual trae
  * todos los query params de su href. Entre las que matchean gana la que exige
- * más params. Así `/agenda?view=reception` (Sala de espera) ilumina SOLO
- * "Sala de espera" y no también "Agenda" (que matchea por prefijo). Cuando SV
- * mueva la Sala a `/sala` (SV11a) esto sigue funcionando sin cambios.
+ * más params. Así un href con query (`/agenda?view=X`) ilumina solo esa
+ * entrada y no también "Agenda", que matchea por prefijo. La Sala de espera
+ * vive en `/sala` desde SV11a.
  */
 export function activeNavHref(
   hrefs: readonly string[],

@@ -37,6 +37,8 @@ const STRING_RULES: Array<[RegExp, string]> = [
   // JWT (Supabase access/refresh tokens, links de invitación firmados).
   [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, "[token]"],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [token]"],
+  // API keys nuevas de Supabase (SV: el publisher usa la secret key; si un error la arrastra, que Sentry no la vea).
+  [/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]+/g, "[token]"],
   // Access tokens de Mercado Pago.
   [/\b(APP_USR|TEST)-[A-Za-z0-9-]{16,}/g, "[token]"],
   // Parámetros de URL/form con secretos (`/invite?token=…`, callbacks OAuth `code=`).

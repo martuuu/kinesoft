@@ -402,12 +402,18 @@ export async function resolvePublicPatient(
  * es reserva pública (`isPublicReservation`, por la key) y (c) ya no retiene
  * cupo. El `updateMany` repite las condiciones + `updatedAt`: si un webhook la
  * pagó en el medio, no la cancela (count 0) y el create choca como antes.
- * Devuelve el id cancelado, o null si no había nada que liberar.
+ * Devuelve la fila cancelada, o null si no había nada que liberar.
+ *
+ * SV06a: devuelve `{id, practitionerId, scheduledFor, roomId}` (antes solo el
+ * id) porque esa cancelación también es un cambio de turno que la Sala de
+ * Espera realtime tiene que ver: el caller la manda como segundo ref de
+ * `afterBookingsCommitted`, en la MISMA llamada que el alta nueva (un commit =
+ * un publish). Se lee en el mismo `findFirst`: 0 statements nuevos.
  */
 export async function releaseOwnExpiredPublicHold(
   tx: Prisma.TransactionClient,
   o: { tenantId: string; patientId: string; scheduledFor: Date; now: Date }
-): Promise<string | null> {
+): Promise<{ id: string; practitionerId: string; scheduledFor: Date; roomId: string | null } | null> {
   const own = await tx.booking.findFirst({
     where: {
       tenantId: o.tenantId,
@@ -423,6 +429,9 @@ export async function releaseOwnExpiredPublicHold(
       patientId: true,
       idempotencyKey: true,
       updatedAt: true,
+      practitionerId: true,
+      scheduledFor: true,
+      roomId: true,
     },
   });
   if (!own || isHoldingCapacity(own, o.now)) return null;
@@ -436,5 +445,7 @@ export async function releaseOwnExpiredPublicHold(
     },
     data: { status: "CANCELLED" },
   });
-  return res.count === 1 ? own.id : null;
+  return res.count === 1
+    ? { id: own.id, practitionerId: own.practitionerId, scheduledFor: own.scheduledFor, roomId: own.roomId }
+    : null;
 }

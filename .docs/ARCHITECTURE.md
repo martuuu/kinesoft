@@ -135,7 +135,7 @@ la tx con `withTxConflictRetry` y después del commit llama una vez a `afterBook
 | Módulo | Qué es |
 | --- | --- |
 | `lib/bookings-core.ts` (`server-only`) | **Core de turnos** extraído de `lib/bookings.ts` (S07c, S12): gate de la Secretaria y `bookingFieldAccess` **adentro** de `applyBookingUpdateInTx` (así "mover", "este y los siguientes" y la sincronía no lo saltean), `validateBookingRefsInTx`, `buildBookingCreateData` (nunca escribe el vínculo), sincronía turno→sesión (`syncPlanSessionAfterBookingWriteInTx`, I3, reactivación, `planStampData`). Devuelve outcomes, nunca tira por stale ni emite. Copys en `lib/bookings-constants.ts` |
-| `lib/booking-events-internal.ts` (`server-only`) | `afterBookingsCommitted(tenantId, refs)`: único post-commit de un write-path que toca `Booking` (revalida días y dashboard; nunca tira). SV le suma el publish realtime sin cambiar la firma |
+| `lib/booking-events-internal.ts` (`server-only`) | `afterBookingsCommitted(tenantId, refs, opts?)`: único post-commit de un write-path que toca `Booking`. Revalida días y dashboard (salvo `invalidateCaches:false`) y **después publica** los refs en el canal realtime (SV; firma intacta, C-SV3); `refs: []` no publica. `afterAvailabilityCommitted(tenantId, {practitionerId, day: string\|null}, opts?)` para candado y bloqueos (`day:null` = varios días, 1 aviso). Nunca tira. Ver §Sala de Espera realtime |
 | `lib/plans.ts` + `lib/plans-engine-internal.ts` + `lib/plans-load-internal.ts` | **Motor**: `previewPlan`/`createPlan`; primitivas `previewProgramRowsInTx` → `reclassifyOrThrowStaleInTx` → `commitPlanRowsInTx` (modos `create`/`generate`/`replan`/`add`), `createPlanInTx` (con hook `clinicalCase` para Diagnóstico), `validatePlanRefsInTx` (la FK `locationId`/`practitionerId`/`serviceId` es simple: validar contra el tenant es obligatorio). Keys `plan:<generationId>:<index>`. Solo `createPlanInTx` gatea |
 | `lib/plans-read.ts` (+ `-internal`, `-types`) | Lecturas: `listPlans`, `getPlanDetail`/`getPlanHistory` (solo full), `getPatientPlans`, `getPatientPlanBalances` (saldo P7 en el server), `listSchedulablePlanSessions` (allowlist sin título). Devuelven `PlanReadResult<T>` |
 | `lib/plans-lifecycle.ts` (+ `-internal`, `-state` puro) | Estados (D7: futuros impagos cancelar/mantener), `updatePlanDetails` (título y notas, CAS), `archivePlan`, `restoreProgram`; L9 (archivar paciente → pausa sus planes) |
@@ -166,7 +166,7 @@ UI de Planes sobre el motor de ES2b. Contratos en [PLANES.md §4 C9/C10/C13](PLA
 | `components/planes/plan-balance.tsx` · `plan-booking-groups.ts` | Turnos y Facturación agrupados por plan con el saldo del server |
 | `components/patients/archive-patient-dialog.tsx` | Diálogo L9 (archivar paciente → pausar/cancelar planes) |
 
-## Salas (SR, 08-oct-2026, pendiente commit)
+## Salas (SR, 08-oct-2026, commit `5811ea2`)
 
 Corrida SR sobre `ad50059`, planning en el plan vigente §17 + §17.5. Antes solo había sedes y nada impedía que dos
 profesionales usaran el mismo lugar a la misma hora. **Un consultorio sin salas cargadas ve todo igual que antes**
@@ -249,8 +249,93 @@ ScheduleException.ranges[].roomId?  (solo zod, sin DDL)
   principal y lo dice; "Sin sala" se filtra a la sede del alcance.
 - El bootstrap (`app/(app)/agenda/page.tsx:65`) carga `listRoomOptions` aparte de `listAgendaBookings` (que no suma
   queries). Un turno con sala fuera del catálogo se muestra "Sala archivada".
-- SV: `BookingChangeRef.roomId?` + `prev.roomId` (`lib/booking-events-internal.ts:50-52`) ya existen; el publish
-  realtime con sala lo hace SV.
+- SV publica `roomId` y `prev.roomId` de cada `BookingChangeRef` en el mensaje realtime (§Sala de Espera realtime).
+
+## Sala de Espera realtime (SV, 13/14-oct-2026)
+
+Corrida SV sobre `5811ea2` (planning en el plan vigente §18; decisiones SV-D1..D16; contratos C-SV1..10). Antes,
+Recepción no se actualizaba entre usuarios: la Secretaria marcaba «Llegó» y el profesional no se enteraba. Ahora todo
+cambio de turno commiteado se publica **una vez, después del commit, sin PHI**, y llega a las pestañas del consultorio
+en < 1 s; `/sala` es el tablero compartido con el estado nuevo **«Llamado»**; hay avisos «Llegó» / «Pase …». Con
+`REALTIME_DRIVER=off` (default) la app es idéntica a SR. Decisión de transporte en **ADR-006**; seguridad en
+[SECURITY.md §17](SECURITY.md); consola en [EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md).
+
+### Flujo
+
+```
+action → runWithRls (commit) → afterBookingsCommitted(tenantId, refs)
+   → revalidateTag (si corresponde) → await publishBookingChanges  (1 POST, tope 1,5 s, breaker, nunca tira)
+   → Supabase Broadcast privado  tenant:<id>:agenda
+   → RealtimeProvider (zod, coalesce 250 ms) → cada vista re-pide con SUS actions → diff → animación / aviso
+```
+
+- **Driver** (`REALTIME_DRIVER`, `lib/env.ts`): `off` (nada) · `local` (bus en memoria `globalThis` + SSE
+  `/api/realtime/local`, solo dev; prohibido en Production) · `supabase` (POST a `/realtime/v1/api/broadcast` con la
+  service key; el browser se suscribe con un token HS256 de 10 min que acuña `mintRealtimeToken`).
+- **Mensaje** (C-SV2, sin PHI): `{v:1, kind: booking|reception|called|availability, bookingId?, practitionerId, day
+  (AR), roomId?, prev?, at}`. Más de 20 en un commit → colapso por `(practitionerId, day)`, después por profesional con
+  `day:null`, y con más de 20 profesionales a **un solo** mensaje `{practitionerId:null, day:null}` (SV-D10).
+- **Hook** (`lib/booking-events-internal.ts`): antes de SV, `invalidateCaches:false` hacía early return y Recepción
+  «llegó» no emitía; ahora el flag solo apaga la invalidación. Se invalida **antes** de publicar (el refetch que
+  dispara el evento no puede leer cache viejo).
+- **Write-paths cableados en SV** (antes no pasaban por el hook): turnero (alta y hold vencido reemplazado), webhook de
+  MP (emite **siempre que escribió `Booking`**, incluido `amount_mismatch` sobre un turno impago que pasa a FAILED;
+  replay no), `devMarkBookingPaid`, candado del día (`applyDayLock` devuelve refs; `afterAvailabilityCommitted` para el
+  bloqueo) y alta/baja de bloqueos. Un bloqueo de varios días = 1 aviso con `day:null` + 1 invalidación.
+  `guard-realtime` (c) impide un write-path nuevo sin emitir.
+- **Mover un turno a otro día AR** limpia `arrivedAt/calledAt/attendingAt` (`lib/bookings-core.ts:1732`): el estado de
+  sala es del día, no viaja con el turno.
+
+### Estado «Llamado» (M5, SV-D5)
+
+- `Booking.calledAt` + CHECK `calledAt ⇒ arrivedAt`. Derivación en `lib/reception-state.ts`: `attendingAt` > `calledAt`
+  > `arrivedAt` > demorado / por llegar. «Llamar» exige `en-sala` y solo hoy; «Deshacer» desde `llamado` → `en-sala`,
+  desde `en-atencion` → `llamado` si hubo llamado. No hay «Volver a llamar». La Secretaria llama en nombre del
+  profesional; BILLING no opera.
+- Contadores: **«En sala» incluye a los llamados** (todavía no entraron al box) y «Llamados» es ese subconjunto, en
+  Recepción y en `/sala` (`lib/sala-board-state.ts:274`).
+
+### Cliente
+
+- `RealtimeProvider` (en `AppShell`, todo el workspace) → `useRealtime(): {state, subscribe, onResync, resync}`. Con
+  `off` no importa nada de realtime-js. `@supabase/realtime-js` entra solo por `import()` dentro de `connect()`
+  (guard (e)): no está en ningún first-load. Backoff `min(30 s, 1 s·2^n)` con jitter, refresh del token al 80 % del
+  TTL, resync al volver la pestaña / `online` / reconectar, `polling` de 60 s con 2 fallos seguidos u offline.
+  `LiveIndicator`: «En vivo» · «Reconectando…» · «Sin conexión en vivo · se actualiza cada 60 s» · oculto con `off`.
+- **Agenda en vivo** (`agenda-client.tsx` + `lib/agenda-client-state.ts`): `messagesTouchRange` decide si el lote toca
+  la semana visible → re-pide `listAgendaBookings` (coalescido, uno en vuelo) → `changedBookingIds` → `k-flash` en las
+  `BookingCard` cambiadas por otro (no las propias: `OWN_ACTION_QUIET_MS`); `availability` → `router.refresh()`. El
+  drawer guarda `{id, updatedAt}` y deriva el turno de la lista viva (`agenda-client.tsx:313-317`): ve la hora nueva y
+  guardar con la versión vieja da stale. Con `off` el markup es el de SR (snapshot) y **no hay polling**.
+- **`/sala`** (`app/(app)/sala/*`, `components/sala/*`; módulo `salaEspera` + `agenda.reception`, BILLING →
+  `/agenda`; solo hoy AR, SV-D8): columnas por profesional o por sala (SV-D13, «Por sala» solo con ≥ 1 sala activa,
+  recordado en `agendaPrefs.salaGroupBy`); cada columna es **una `<ul>`** con bandas En atención → Llamado → En sala →
+  Demorados → Próximos (≤ 60 min) y «N más tarde», así la card se desliza de banda (`layout`) en vez de remontarse.
+  Lee con `listSalaBookings` (proyección sin PHI clínica **en el server**, ventana ≤ 36 h). Banda «Pase María G. ·
+  Consultorio 2» `aria-live` 8 s (no mueve el tablero). Con `off`, `/sala` pollea sola cada 60 s y al volver la
+  pestaña (`startSalaOffPolling`).
+- **Avisos** (`components/providers/arrival-alerts.tsx` + `lib/arrival-alert-state.ts`, SV-D4 enmendada / D9 / D16):
+  prefs `agendaPrefs.arrivalAlert` / `.callAlert` (`visual` default, `sound`, `off`). Llegada → el profesional del
+  turno, solo con `clinical.read`; llamado → quien tiene `agenda.operateAll` y no es ese profesional. Por diff del
+  refetch de hoy, idempotente por `bookingId+arrivedAt/calledAt`; la pestaña que actuó no se auto-avisa
+  (`lib/arrival-local-notes.ts`); ≥ 3 en un lote → un toast; tras resync o en polling, sin sonido. En `/sala` el
+  llamado no da toast (lo anuncia la banda). Chime WebAudio (`lib/arrival-chime.ts`) y `(1) Llegó …` en el título
+  (`lib/tab-title.ts`). La Card «Avisos de la sala de espera» (Configuración → General) se ve aunque el driver esté
+  `off`, con una nota.
+
+### Módulos
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/realtime-constants.ts` · `lib/realtime-events.ts` | C-SV1/C-SV2, puros y client-safe: topic, topes, `RealtimeAgendaMessageSchema`, `buildRealtimeMessages` (día AR, dedupe, colapso), `availabilityMessage`, `RealtimeBootstrap` |
+| `lib/realtime-publisher-internal.ts` (`server-only`) | C-SV4: `publishBookingChanges` / `publishAvailability` por driver; timeout 1,5 s, breaker `{3 fallos, 30 s; 300 s por config}`, log throttled sin secretos; `__setRealtimePublisherForTests` |
+| `lib/realtime-local-bus.ts` · `app/api/realtime/local/route.ts` | Driver `local`: bus por tenant en `globalThis` (sobrevive HMR) + SSE con heartbeat 25 s |
+| `lib/realtime-token-internal.ts` · `lib/realtime-token.ts` · `lib/realtime-bootstrap.ts` | C-SV5: firma/verificación HS256 con `kid`; action `mintRealtimeToken`; `realtimeBootstrap` / `realtimeAllowed` |
+| `lib/realtime-client-{types,state,supabase,local}.ts` | C-SV7: estado puro (coalescer, backoff, poll, refresh, `deriveConnectionState`) y drivers con `deps` inyectables |
+| `components/providers/realtime-provider.tsx` · `components/realtime/live-indicator.tsx` | Provider (`createRealtimeHub`) e indicador |
+| `lib/sala-board-state.ts` · `lib/sala-bookings.ts` · `components/sala/*` | Tablero puro (bandas, columnas, contadores, `salaActions`, `callAnnouncement`, `diffSala`, polling `off`), lectura con proyección en el server, UI |
+| `lib/arrival-alert-state.ts` · `lib/arrival-chime.ts` · `lib/tab-title.ts` · `lib/arrival-local-notes.ts` · `lib/patient-short-name.ts` | Avisos: diff puro y textos, chime, título, notas de la pestaña que actuó, nombre corto único (lo comparten tablero y avisos sin arrastrar deps al bundle del provider) |
+| `scripts/guard-realtime.mjs` · `scripts/realtime-verify.ts` | Guards (a)-(e) en `guard:isolation`; verificación V1-V7 en staging |
 
 ## Timezone (a core invariant)
 
@@ -838,6 +923,34 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
 - **Consecuencias.** Kine FREE/STARTER dejan de ver los globales `isBasic` (solo PRO ve el catálogo de Plataforma;
   `isBasic` queda muerto hasta EV1). Toda sesión pendiente que agregue un export en un área con módulo lleva su gate
   (enmiendas de VERTICALES §5). El webhook de billing SaaS futuro entra como `source:"billing"`.
+
+### ADR-006 — Realtime por Broadcast privado con token acuñado (status: ACCEPTED, SV, 13-oct-2026)
+
+- **Contexto.** La sala de espera tiene que ser una sola realidad en todas las pantallas del consultorio. La sesión de
+  Supabase vive en cookies httpOnly (A3: el browser no tiene el access token) y las policies de la app son por GUC
+  (`app_current_tenant_id()`), que Realtime no setea. En prod la conexión tiene BYPASSRLS. Vercel congela la lambda
+  al responder (Next 14.2 sin `after()`) y corta streams largos.
+- **Decisión (SV-D1).** Supabase Realtime **Broadcast privado** por tenant (`tenant:<id>:agenda`). Publica solo el
+  server, después del commit, desde `afterBookingsCommitted` (REST con la service key). El browser se suscribe con un
+  **token HS256 propio de 10 min** (`purpose:"kinesoft-realtime"`, `sub` sintético, `kid` opcional) que la policy de
+  M5 (`kinesoft_realtime_can_read`) acepta solo para su topic. El mensaje no lleva PHI y no se confía: el cliente
+  re-pide con sus actions. Más SV-D5..D16 (plan §18.14): «Llamar» exige en-sala (D5), claims (D6), publish
+  **esperado** con tope (D7), `/sala` solo hoy (D8), a quién se avisa (D9), colapso > 20 (D10), `local` prohibido en
+  prod (D11), `refs: []` no publica y `availability` → `router.refresh()` (D12), «Por profesional | Por sala» (D13),
+  una conexión por pestaña (D14), HS256 con `kid` (D15), toasts agrupados y sin sonido tras resync (D16).
+- **Descartados.** Canal público (cualquiera con la anon key lee); `postgres_changes` (las policies por GUC no
+  entregan nada); SSE en Vercel (`maxDuration`); Pusher/Ably (proveedor nuevo con datos de salud); trigger SQL
+  (invisible en local, no sabe de `prev`); exponer el access token real al browser (rompe el httpOnly de A3);
+  publish fire-and-forget (Vercel pierde las promesas sueltas).
+- **Consecuencias.**
+  - Cada write-path de turno paga el POST (normalmente decenas de ms; **tope 1,5 s**). Con Supabase caído, el breaker
+    (3 fallos → 30 s abierto; 300 s si falta config) lo baja a 0 ms. 0 statements SQL extra (PERF §SV).
+  - Hay que mantener la lista de write-paths: `guard-realtime` (c) y `tests/integration/realtime-emission.test.ts`.
+  - Tres drivers (`off`/`local`/`supabase`) con la misma interfaz; los tests nunca tocan Supabase (mock global del
+    publisher en `integration-setup.ts`). Lo que no se prueba en local va a V1-V7 en staging.
+  - El proyecto Supabase necesita una clave **HS256** (legacy o del sistema nuevo con `kid`); la rotación es de consola
+    + env, sin código (EXTERNAL-CONFIG §3.1).
+  - Multi-pestaña: cada pestaña su socket y su token (leader election → C1).
 
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 

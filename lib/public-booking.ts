@@ -27,6 +27,7 @@ import { headers } from "next/headers";
 import { Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
 import { createCheckoutPreference } from "@/lib/mercadopago";
+import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
@@ -621,12 +622,42 @@ export async function submitPublicBooking(
             guestPhone: resolution.contactSnapshot?.guestPhone ?? null,
             idempotencyKey,
           },
-          select: { id: true, patientId: true },
+          select: { id: true, patientId: true, practitionerId: true, scheduledFor: true, roomId: true },
         });
         return { ...row, released };
       });
       bookingId = created.id;
       patientId = created.patientId;
+      // SV06a · Sala de Espera realtime: una sola llamada por commit, JUSTO
+      // después de la tx y ANTES de `createCheckoutPreference`. Por qué ahí:
+      //   - fuera de la tx (contrato del hook): adentro, un rollback dejaba un
+      //     evento publicado de un turno que no existe;
+      //   - antes de MP: la preferencia puede fallar (red, token) y el turno
+      //     igual quedó escrito y reteniendo cupo 30 min; si el aviso fuera
+      //     después, la agenda no se enteraba hasta el polling de 60 s.
+      // Superficie sin Actor: el tenant sale del slug ya resuelto (`tenant.id`).
+      // La reserva vencida que se canceló en la misma tx va como 2.º ref.
+      // Los dos caminos de replay (key ya existente arriba y el twin del
+      // P2002 abajo) NO pasan por acá: no escribieron nada, no avisan.
+      const refs: BookingChangeRef[] = [
+        {
+          bookingId: created.id,
+          practitionerId: created.practitionerId,
+          scheduledFor: created.scheduledFor,
+          roomId: created.roomId,
+          kind: "booking",
+        },
+      ];
+      if (created.released) {
+        refs.push({
+          bookingId: created.released.id,
+          practitionerId: created.released.practitionerId,
+          scheduledFor: created.released.scheduledFor,
+          roomId: created.released.roomId,
+          kind: "booking",
+        });
+      }
+      await afterBookingsCommitted(tenant.id, refs);
       if (created.released) {
         // Auditado acá (no tras MP): la cancelación ya se commiteó aunque la
         // preferencia falle después.
@@ -634,7 +665,7 @@ export async function submitPublicBooking(
           tenantId: tenant.id,
           action: "booking.public.expired_replaced",
           entity: "Booking",
-          entityId: created.released,
+          entityId: created.released.id,
           payload: { replacedBy: created.id, patientId: created.patientId },
         });
       }
@@ -784,7 +815,10 @@ export async function devMarkBookingPaid(id: string): Promise<ActionResult> {
   if (process.env.NODE_ENV === "production") {
     return { ok: false, error: "Sólo disponible en desarrollo." };
   }
-  const b = await prisma.booking.findUnique({ where: { id }, select: { id: true, tenantId: true } });
+  const b = await prisma.booking.findUnique({
+    where: { id },
+    select: { id: true, tenantId: true, practitionerId: true, scheduledFor: true, roomId: true },
+  });
   if (!b) return { ok: false, error: "Booking no encontrado." };
   await prisma.$transaction([
     prisma.booking.update({
@@ -802,6 +836,12 @@ export async function devMarkBookingPaid(id: string): Promise<ActionResult> {
       },
       update: { status: "PAID" },
     }),
+  ]);
+  // SV06a: simula el webhook, así que avisa igual que él (después del commit,
+  // con el tenant del turno: no hay Actor). Sin esto, en dev la agenda abierta
+  // no veía el pago hasta el polling y el QA del realtime daba falso rojo.
+  await afterBookingsCommitted(b.tenantId, [
+    { bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, roomId: b.roomId, kind: "booking" },
   ]);
   return { ok: true, data: undefined };
 }

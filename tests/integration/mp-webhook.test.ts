@@ -44,6 +44,7 @@ import crypto, { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { POST } from "@/app/api/webhooks/mercadopago/route";
 import { nextPaymentStatus } from "@/lib/mercadopago";
+import { realtimeFake } from "@/tests/helpers/integration-setup";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -268,6 +269,74 @@ describe.skipIf(!RUN)("webhook MP · consumeWebhook vía la ruta firmada (A2b-S-
     const owners = await db.membership.count({ where: { tenantId: T.tenantId, role: { in: ["OWNER", "ADMIN"] } } });
     // Una sola tanda de notificaciones (dueños + el profesional, deduplicados).
     expect((await notifCount()) - n0).toBe(owners);
+  });
+
+  // SV06a: el webhook no tiene Actor; emite a la Sala de Espera con el
+  // `tenantId` del turno, SOLO si escribió `Booking`. POST real a la ruta
+  // firmada, SDK de MP mockeado (como el resto del archivo).
+  it("[SV06a] webhook aprobado emite 1 vez; replay 0; amount_mismatch: impago 1, pagado 0", async () => {
+    const id = await pendingBooking();
+    const b0 = await db.booking.findUniqueOrThrow({ where: { id } });
+    let paidAtPublish: string | null = null;
+    realtimeFake.onCall = async () => {
+      paidAtPublish = (await db.booking.findUniqueOrThrow({ where: { id } })).paymentStatus;
+    };
+    mpDetail("PAY-SV-OK", id, "approved");
+    expect((await hook("PAY-SV-OK")).status).toBe(200);
+    expect(realtimeFake.calls).toEqual([
+      {
+        tenantId: T.tenantId,
+        refs: [{ bookingId: id, practitionerId: T.practitionerId, scheduledFor: b0.scheduledFor, roomId: null, kind: "booking" }],
+      },
+    ]);
+    // Post-commit: la fila ya estaba pagada cuando salió el evento.
+    expect(paidAtPublish).toBe("PAID");
+
+    // Reenvío del mismo evento (replay) → 0.
+    realtimeFake.reset();
+    expect((await hook("PAY-SV-OK")).body.replay).toBe(true);
+    expect(realtimeFake.calls).toHaveLength(0);
+
+    // amount_mismatch sobre el turno ya pagado (no escribe Booking) → 0.
+    mpDetail("PAY-SV-CHEAP", id, "approved", 1);
+    expect((await hook("PAY-SV-CHEAP")).body.reason).toBe("amount_mismatch");
+    expect(realtimeFake.calls).toHaveLength(0);
+
+    // FX1a (desvío 2 de SV06a): amount_mismatch sobre un turno IMPAGO escribe
+    // `paymentStatus = FAILED` → 1 publish post-commit (la regla es «emite si
+    // escribió Booking»; antes la agenda se enteraba recién por el polling).
+    const id2 = await pendingBooking();
+    const b2 = await db.booking.findUniqueOrThrow({ where: { id: id2 } });
+    let failedAtPublish: string | null = null;
+    realtimeFake.onCall = async () => {
+      failedAtPublish = (await db.booking.findUniqueOrThrow({ where: { id: id2 } })).paymentStatus;
+    };
+    mpDetail("PAY-SV-CHEAP2", id2, "approved", 1);
+    expect((await hook("PAY-SV-CHEAP2")).body.reason).toBe("amount_mismatch");
+    expect(realtimeFake.calls).toEqual([
+      {
+        tenantId: T.tenantId,
+        refs: [{ bookingId: id2, practitionerId: T.practitionerId, scheduledFor: b2.scheduledFor, roomId: null, kind: "booking" }],
+      },
+    ]);
+    expect(failedAtPublish).toBe("FAILED");
+    // El turno no se confirma ni se paga por un mismatch.
+    expect(await db.booking.findUniqueOrThrow({ where: { id: id2 } })).toMatchObject({ status: "PENDING", paymentStatus: "FAILED" });
+
+    // Reenvío del mismo mismatch (replay) → 0.
+    realtimeFake.reset();
+    expect((await hook("PAY-SV-CHEAP2")).body.replay).toBe(true);
+    expect(realtimeFake.calls).toHaveLength(0);
+  });
+
+  it("[SV06a] un evento que no cambia el turno (rejected tardío sobre un PAID) no emite", async () => {
+    const id = await pendingBooking();
+    mpDetail("PAY-SV-A", id, "approved");
+    await hook("PAY-SV-A");
+    realtimeFake.reset();
+    mpDetail("PAY-SV-R", id, "rejected");
+    expect((await hook("PAY-SV-R")).status).toBe(200);
+    expect(realtimeFake.calls).toHaveLength(0);
   });
 
   it("concurrencia: approved y rejected cruzados → termina PAID sin importar el orden", async () => {

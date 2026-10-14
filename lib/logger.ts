@@ -26,6 +26,29 @@ import { redact, redactString } from "@/lib/redact";
 
 export { redact, redactString } from "@/lib/redact";
 
+/**
+ * SV04a — secretos de Supabase que `lib/redact.ts` no cubría: las API keys del
+ * sistema nuevo (`sb_secret_…` / `sb_publishable_…`, no tienen forma de JWT) y
+ * cualquier JWT largo (la service key legacy y el token del canal realtime son
+ * `eyJ…`; el regex de `redact.ts` exige ≥5 chars por segmento, este cubre
+ * firmas cortas). El publisher realtime manda la service key en cada POST:
+ * un `err.message` o un ctx descuidado no puede dejarla en los logs de Vercel.
+ * Se aplica sobre la LÍNEA YA SERIALIZADA (última barrera: cubre msg, ctx a
+ * cualquier profundidad y lo que agregue un caller futuro). Vive acá y no en
+ * `lib/redact.ts` porque ese archivo no es de esta sesión (handoff al
+ * integrador para sumarlo también al `beforeSend` de Sentry).
+ */
+const SECRET_RULES: Array<[RegExp, string]> = [
+  [/sb_(?:secret|publishable)_[A-Za-z0-9_-]+/g, "[token]"],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[token]"],
+];
+
+export function scrubSecrets(s: string): string {
+  let out = s;
+  for (const [re, rep] of SECRET_RULES) out = out.replace(re, rep);
+  return out;
+}
+
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 type Level = keyof typeof LEVELS;
 
@@ -68,7 +91,7 @@ function emit(level: Level, msg: string, ctx?: Ctx, bound?: Ctx) {
     ...redact({ ...ambientCtx(), ...(bound ?? {}), ...(ctx ?? {}) }),
   };
   if (isProd) {
-    process.stdout.write(JSON.stringify(line) + "\n");
+    process.stdout.write(scrubSecrets(JSON.stringify(line)) + "\n");
   } else {
     const color =
       level === "error" ? "\x1b[31m" : level === "warn" ? "\x1b[33m" : level === "debug" ? "\x1b[90m" : "\x1b[36m";
@@ -77,7 +100,7 @@ function emit(level: Level, msg: string, ctx?: Ctx, bound?: Ctx) {
       Object.keys(line).length > 3
         ? " " + JSON.stringify({ ...line, level: undefined, msg: undefined, ts: undefined })
         : "";
-    process.stdout.write(`${color}[${level}]${reset} ${line.msg}${ctxStr}\n`);
+    process.stdout.write(scrubSecrets(`${color}[${level}]${reset} ${line.msg}${ctxStr}`) + "\n");
   }
 }
 

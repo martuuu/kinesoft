@@ -231,6 +231,38 @@ Lo que ya va diferido: "Por sala" (`RoomDayPanel`) y `RoomFilter` con `dynamic()
 de SR-U6). **Decisión de Martin** (recomendado: aceptar; el bloqueante está en C1). Mejora concreta: el `WeekDrawer`
 del editor de horarios con `dynamic` (C1). Fila `bundle-sr-sobre-criterio` en AUDIT.
 
+## SV — Sala de Espera realtime (13/14-oct-2026)
+
+El publish es un POST HTTP después del commit: **0 sentencias SQL nuevas** en los write-paths. Lo que cuesta es
+wall-clock: se **espera** (SV-D7) con tope de 1,5 s, y con el breaker abierto (3 fallos → 30 s) no se hace el POST. En
+tests y perf el publisher es un fake (`tests/helpers/realtime-fake.ts`, mock global en `integration-setup.ts`): nunca
+se toca Supabase.
+
+- **Escenarios nuevos `rt.*`** (`tests/perf/realtime-publish.perf.test.ts`; informativos, sin referencia versionada:
+  `compare.ts` los lista como «nuevo»): `rt.createBooking.lat0` (publish instantáneo, mismos statements que
+  `f.createBooking`), `rt.createBooking.lat1500` (el publisher tarda el tope: el alta paga ~1,5 s **una vez**; es el
+  techo, no el caso normal) y `rt.createBookingsBatch.20.posts` (batch de 20 = **1** llamada con 20 refs).
+- **Del lado del cliente:** cada lote relevante dispara un re-pedido coalescido (250 ms, uno en vuelo) de la semana
+  visible o de hoy en `/sala`; los avisos re-piden hoy por pestaña (C1: medir con el tenant perf, AUDIT
+  `arrival-alerts-refetch-por-pestana`). Con `off` no hay re-pedidos: la agenda es la de SR y `/sala` pollea cada 60 s.
+- **Bundle:** `@supabase/realtime-js` entra solo por `import()` dentro de `connect()` (guard (e)): no está en ningún
+  first-load. El provider, el indicador y los avisos sí van en el layout `(app)` (todas las rutas del workspace).
+
+**Números del gate (14-oct, tenant perf):**
+
+| Escenario | Statements / tx | wallMs | Nota |
+|---|---|---|---|
+| `f.createBooking` | 35 / 5 (=) | 29 | el publish es HTTP: 0 sentencias |
+| `f.createBookingsBatch.20` | 186 / 22 (=) | 160 | 1 publish con 20 refs |
+| `a.listAgendaBookings.week` | 16 / 2 (= ES2b) | 65 | `calledAt` es una columna más, 0 sentencias |
+| `rt.createBooking.lat0` | 35 / 5 | 22 | publisher fake sin latencia |
+| `rt.createBooking.lat1500` | 35 / 5 | 1543 | peor caso acotado por el timeout (1,5 s) + breaker |
+| `rt.createBookingsBatch.20.posts` | 186 / 22 | 138 | afirma 1 sola llamada |
+
+**Bundle (gz, first-load):** `/dashboard` 184,6 → **189,1** (+4,5 = provider realtime + prefs de avisos + toast extendido);
+`/agenda` 204,5 → **212,3**; `/configuracion` 216,2 → 220,8; `/sala` 198,7 (nueva). El motor de avisos, sus controles y el
+hub del cliente van por `import()` dinámico; `@supabase/realtime-js` solo en un chunk async. Decisión en AUDIT Ronda 20.
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |

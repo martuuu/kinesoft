@@ -41,7 +41,18 @@ import type { DbClient } from "@/lib/rls";
 export type CancelSkipReason = "not-found" | "not-active" | "has-payment";
 
 export type CancelBookingsResult = {
-  cancelled: { id: string; patientId: string | null; practitionerId: string; scheduledFor: Date }[];
+  /**
+   * `roomId` (SV06b, aditivo): sala del turno al cancelar. El candado arma con
+   * esto los `BookingChangeRef` del publish realtime: sin la sala, la vista
+   * «Por sala» y la Sala de Espera no se enteraban de que el turno se fue.
+   */
+  cancelled: {
+    id: string;
+    patientId: string | null;
+    practitionerId: string;
+    scheduledFor: Date;
+    roomId: string | null;
+  }[];
   skipped: { id: string; reason: CancelSkipReason }[];
 };
 
@@ -78,6 +89,7 @@ export async function cancelBookingsInTx(
       patientId: true,
       practitionerId: true,
       scheduledFor: true,
+      roomId: true,
       payment: { select: { status: true } },
     },
   });
@@ -131,6 +143,7 @@ export async function cancelBookingsInTx(
       patientId: r.patientId,
       practitionerId: r.practitionerId,
       scheduledFor: r.scheduledFor,
+      roomId: r.roomId,
     })),
     skipped,
   };

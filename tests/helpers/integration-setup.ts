@@ -6,7 +6,8 @@
  * never the function under test. Server actions from lib/*.ts run for real
  * against Postgres, through `runWithRls` and the real `getActor()`.
  */
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
+import { realtimeFake as fakeRegistry } from "./realtime-fake";
 
 // React's `cache()` only exists in the react-server build that Next bundles;
 // the plain `react` package used by vitest doesn't export it. Pass-through:
@@ -111,3 +112,29 @@ vi.mock("@/lib/supabase/server", async () => {
 // `null` is the documented "not configured" contract (callers skip/degrade);
 // tests that need the admin client mock it explicitly.
 vi.mock("@/lib/supabase/admin", () => ({ getSupabaseAdminClient: () => null }));
+
+// SV04a · SAFETY (misma razón que el admin de arriba): `.env.local` puede traer
+// la service key y la URL de un proyecto Supabase REAL, y `afterBookingsCommitted`
+// publica después de cada commit. Ningún test de integración ni de perf (este
+// setup es el de los dos configs) puede hacer un POST real a Broadcast: el
+// publisher se reemplaza por el fake de registro a mano. El default
+// `REALTIME_DRIVER=off` de `lib/env.ts` es la segunda defensa, no la primera.
+// Se mantiene el resto del módulo real (tipos/constantes) y se pisan SOLO las
+// dos funciones que llama el hook. Los tests afirman con `realtimeFake.calls`
+// (SV08: una llamada por action, refs exactos, post-commit vía `onCall`).
+vi.mock("@/lib/realtime-publisher-internal", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/realtime-publisher-internal")>();
+  const { realtimePublisherFake } = await import("./realtime-fake");
+  return {
+    ...actual,
+    publishBookingChanges: realtimePublisherFake.publishBookingChanges,
+    publishAvailability: realtimePublisherFake.publishAvailability,
+  };
+});
+
+// Re-export (no `export { x }` de un binding importado: vitest reescribe los
+// imports del setup por los `vi.mock` hoisteados y el binding quedaba sin definir).
+export { realtimeFake } from "./realtime-fake";
+
+// Cada test arranca con el registro vacío y sin fallos/latencia inyectados.
+beforeEach(() => fakeRegistry.reset());

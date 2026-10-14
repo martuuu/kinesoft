@@ -23,6 +23,7 @@ import {
 } from "@/lib/reception-view-state";
 import { roomNameOf, type BookingDTO } from "../agenda-utils";
 import { ReceptionRow } from "./reception-row";
+import { noteLocalReception } from "@/lib/arrival-local-notes";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -46,7 +47,11 @@ import { ReceptionRow } from "./reception-row";
  *   plano; el override local se descarta solo cuando llega una versión igual
  *   o más nueva (`mergeReceptionOverrides`).
  * - `canOperate=false` (sin `agenda.reception`): solo lectura, sin columna de
- *   acciones. El server lo hace cumplir igual.
+ *   acciones. El server lo hace cumplir igual. Con `canOperate`, cada fila
+ *   además respeta el `canOperate` del DTO (SV10b): el profesional opera (y
+ *   llama) las suyas; la Secretaria/OWNER/ADMIN, todas.
+ * - SV10b: «Llamar» en las filas en sala; `onChanged` recibe la fila con el
+ *   `calledAt` que devolvió el server (`commitReceptionAction`).
  * - `roomById` (SR): catálogo de salas del consultorio. La columna "Sala"
  *   aparece solo si tiene entradas; sin salas la tabla es la de siempre. A
  *   diferencia de las tarjetas no depende de `showRoomOnCards`: en la tabla
@@ -110,7 +115,9 @@ export function ReceptionView({
   const showRoom = roomById != null && Object.keys(roomById).length > 0;
 
   async function handleAction(b: BookingDTO, action: ReceptionAction) {
-    if (!canOperate) return;
+    // SV10b: misma regla que la fila (no muestra botones si `canOperate` del
+    // DTO es false); el server lo vuelve a chequear.
+    if (!canOperate || b.canOperate === false) return;
     const begun = beginReceptionAction(overridesRef.current, b, action, new Date());
     if (!begun.ok) {
       toast.error(begun.error);
@@ -128,6 +135,8 @@ export function ReceptionView({
     }
 
     if (res.ok) {
+      // SV11b: esta pestaña hizo la acción; los avisos no se la repiten.
+      noteLocalReception(b.id, res.data);
       const done = commitReceptionAction(overridesRef.current, b.id, res.data);
       setOverrides(done.overrides);
       if (done.booking) onChanged(done.booking);
@@ -163,6 +172,9 @@ export function ReceptionView({
 
       <div className="rcp-counters" role="group" aria-label="Resumen del día">
         <Counter label="En sala ahora" value={String(counters.enSala)} hint={counters.enAtencion ? `${counters.enAtencion} en atención` : undefined} />
+        {/* SV10b: subconjunto de "En sala ahora" (siguen en la sala de espera
+            hasta que pasan al box), por eso no se resta de ese número. */}
+        <Counter label="Llamados" value={String(counters.llamados)} />
         <Counter label="Demorados" value={String(counters.demorados)} warn={counters.demorados > 0} />
         <Counter label="Atendidos" value={`${counters.atendidos}/${counters.total}`} />
       </div>
@@ -188,7 +200,7 @@ export function ReceptionView({
       )}
       {canOperate && !isToday && (
         <p className="rcp-note" role="note">
-          Este día no es hoy: «Llegó» y «En atención» solo se marcan en los turnos del día.
+          Este día no es hoy: «Llegó», «Llamar» y «En atención» solo se marcan en los turnos del día.
         </p>
       )}
 
@@ -265,7 +277,7 @@ function Counter({ label, value, hint, warn = false }: { label: string; value: s
 const RECEPTION_CSS = `
 .rcp { display: grid; gap: 12px; }
 .rcp-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.rcp-counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.rcp-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .rcp-counter { background: var(--card-bg); border: 1px solid rgba(15,30,51,0.06); border-radius: var(--r-md); padding: 10px 14px; }
 .rcp-counter[data-warn] { border-color: rgba(154,91,0,0.35); background: rgba(255,176,32,0.08); }
 .rcp-counter-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--navy-300); }
@@ -298,7 +310,7 @@ const RECEPTION_CSS = `
 .rcp-btn:focus-visible, .rcp-chip:focus-visible, .rcp-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 
 @media (max-width: 639px) {
-  .rcp-counters { gap: 6px; }
+  .rcp-counters { gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rcp-counter { padding: 8px 10px; }
   .rcp-counter-value { font-size: 18px; }
   .rcp-table, .rcp-table tbody { display: block; }

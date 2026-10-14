@@ -52,7 +52,7 @@
  *     desbloquear, el reuso del candado) suma `NOT_ROOM_BLOCK`.
  */
 import { randomUUID } from "node:crypto";
-import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor, ForbiddenError } from "@/lib/session";
@@ -64,7 +64,11 @@ import { lockCapacity, lockCapacityAndRoomsMany, roomKeysForWindow } from "@/lib
 import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
 import { dayKeyOf, dayKeyRange } from "@/lib/availability/day";
 import { cancelBookingsInTx } from "@/lib/bookings-cancel-internal";
-import { tags } from "@/lib/cache-tags";
+import {
+  afterAvailabilityCommitted,
+  afterBookingsCommitted,
+  type BookingChangeRef,
+} from "@/lib/booking-events-internal";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
@@ -105,6 +109,41 @@ const FORBIDDEN_ROOM = "Solo el equipo de administración o recepción puede blo
 // Ventana hacia atrás para encontrar turnos que EMPEZARON antes del bloqueo y
 // lo pisan: el tope de duración de un servicio (`Service.durationMin` ≤ 480).
 const MAX_BOOKING_MIN = 480;
+
+/**
+ * Aviso realtime de "cambió la disponibilidad" (SV-D12) por un bloqueo que se
+ * creó, borró o des-bloqueó. Se llama SIEMPRE después del commit y fuera de
+ * `runWithRls` (mismas reglas que el hook de turnos) y nunca tira.
+ * `practitionerId: null` = todo el consultorio (bloqueo de "todos", de sala o de
+ * varios profesionales).
+ *
+ * UNA sola llamada por commit (FX1b, §18.2 «1 commit = 1 POST»): SV06b mandaba
+ * un `afterAvailabilityCommitted` por día AR (hasta 7 en paralelo) = 7 POST a
+ * Broadcast y 7 `revalidateTag` del mismo `bookingDays` (que es por tenant, no
+ * por día) para un solo bloqueo de una semana. Ahora:
+ *   - la ventana cae en UN día AR → ese día (`dayKeyOf` = `toARDateKey`; con el
+ *     día del host, un bloqueo de 22 h AR caía en el día siguiente en Vercel);
+ *   - cae en más de uno → `day: null`, que el cliente ya trata como «re-pedí lo
+ *     que estés mirando». El último instante es `endsAt - 1 ms`: un bloqueo de
+ *     día completo termina a las 00:00 AR del día siguiente y no lo toca.
+ */
+async function emitAvailability(
+  tenantId: string,
+  practitionerId: string | null,
+  startsAt: Date,
+  endsAt: Date
+): Promise<void> {
+  const first = dayKeyOf(startsAt);
+  const last = dayKeyOf(new Date(Math.max(startsAt.getTime(), endsAt.getTime() - 1)));
+  await afterAvailabilityCommitted(tenantId, { practitionerId, day: first === last ? first : null });
+}
+
+/** Un solo profesional concreto → su id; "todos", sala o varios → null. */
+function availabilityScopeOf(practitionerIds: readonly (string | null)[], roomId: string | null): string | null {
+  if (roomId) return null;
+  const uniq = [...new Set(practitionerIds)];
+  return uniq.length === 1 ? uniq[0] : null;
+}
 
 async function actorWithCaps() {
   const actor = await getActor();
@@ -540,6 +579,9 @@ export async function createTimeBlock(
     },
   });
   revalidatePath("/agenda");
+  // SV06b: el alta no toca turnos, pero cambia los slots (o la ocupación de la
+  // sala): las agendas abiertas hacen `router.refresh()` al recibirlo.
+  await emitAvailability(tenantId, availabilityScopeOf(targets, roomId), win.startsAt, win.endsAt);
   return {
     ok: true,
     data: {
@@ -569,7 +611,7 @@ export async function deleteTimeBlock(
   type TxOut =
     | { kind: "notFound" }
     | { kind: "forbidden" }
-    | { kind: "ok"; ids: string[] };
+    | { kind: "ok"; ids: string[]; scope: string | null; startsAt: Date; endsAt: Date };
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
@@ -579,7 +621,7 @@ export async function deleteTimeBlock(
           deletedAt: null,
           ...("id" in key ? { id: key.id } : { groupId: key.groupId }),
         },
-        select: { id: true, practitionerId: true },
+        select: { id: true, practitionerId: true, roomId: true, startsAt: true, endsAt: true },
       });
       if (rows.length === 0) return { kind: "notFound" };
       if (rows.some((r) => !canManageBlocksFor(caps, actor.practitionerId, r.practitionerId))) {
@@ -590,7 +632,18 @@ export async function deleteTimeBlock(
         where: { tenantId, id: { in: ids }, deletedAt: null },
         data: { deletedAt: new Date() },
       });
-      return { kind: "ok", ids };
+      // Ventana y alcance del aviso realtime (SV06b): unión de las filas del
+      // grupo (todas comparten ventana, pero no se asume).
+      return {
+        kind: "ok",
+        ids,
+        scope: availabilityScopeOf(
+          rows.map((r) => r.practitionerId),
+          rows.find((r) => r.roomId)?.roomId ?? null
+        ),
+        startsAt: new Date(Math.min(...rows.map((r) => r.startsAt.getTime()))),
+        endsAt: new Date(Math.max(...rows.map((r) => r.endsAt.getTime()))),
+      };
     });
   } catch (e) {
     logger.error("timeBlock.delete.failed", { err: e instanceof Error ? e.message : String(e) });
@@ -608,6 +661,8 @@ export async function deleteTimeBlock(
     payload: { ids: out.ids, ...("groupId" in key ? { groupId: key.groupId } : {}) },
   });
   revalidatePath("/agenda");
+  // SV06b: quitar un bloqueo vuelve a ofrecer esos slots.
+  await emitAvailability(tenantId, out.scope, out.startsAt, out.endsAt);
   return { ok: true, data: { deleted: out.ids.length } };
 }
 
@@ -775,7 +830,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
   type TxOut =
     | { kind: "error"; error: string }
     | { kind: "changed"; affected: DayLockAffected[] }
-    | { kind: "ok"; data: DayLockApplyData };
+    | { kind: "ok"; data: DayLockApplyData; refs: BookingChangeRef[] };
   let out: TxOut;
   try {
     out = await runWithRls(tenantId, async (tx): Promise<TxOut> => {
@@ -888,6 +943,10 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
       let kept: DayLockAffected[] = affected;
       let cancelled: DayLockAffected[] = [];
       let skipped: DayLockApplyData["skipped"] = [];
+      // SV06b: refs del publish realtime armados con lo que devolvió
+      // `cancelBookingsInTx` bajo lock (fechas `Date` y sala de la fila), no
+      // con `DayLockAffected` (ISO, pensado para la UI, sin sala).
+      let refs: BookingChangeRef[] = [];
       if (input.bookingsDecision === "cancel" && affected.length > 0) {
         const res = await cancelBookingsInTx(tx, {
           tenantId,
@@ -897,6 +956,12 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
           auditAction: "booking.cancel.dayLock",
         });
         cancelled = res.cancelled.map((c) => byId.get(c.id)!).filter(Boolean);
+        refs = res.cancelled.map((c) => ({
+          bookingId: c.id,
+          practitionerId: c.practitionerId,
+          scheduledFor: c.scheduledFor,
+          roomId: c.roomId,
+        }));
         skipped = res.skipped
           .filter((s) => byId.has(s.id))
           .map((s) => ({ booking: byId.get(s.id)!, reason: s.reason }));
@@ -915,6 +980,7 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
           cancelled,
           skipped,
         },
+        refs,
       };
     });
   } catch (e) {
@@ -963,9 +1029,23 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
     },
   });
   revalidatePath("/agenda");
-  // Cancelar mueve los conteos del dashboard y los días con turnos del mini-calendario.
-  revalidateTag(tags.bookingDays(tenantId));
-  revalidateTag(tags.dashboard(tenantId));
+  // SV06b: antes acá se revalidaban `bookingDays`/`dashboard` inline y no se
+  // avisaba a nadie (§18.1: el candado era un write-path de Booking fuera del
+  // hook). Ahora, después del commit:
+  //   1. `afterBookingsCommitted` invalida `bookingDays` + `dashboard` (cancelar
+  //      mueve los conteos y los días con turnos) y publica los cancelados con
+  //      su sala. «Mantener» → `refs: []` → invalida igual pero NO publica
+  //      turnos (SV-D12: ninguno cambió);
+  //   2. `afterAvailabilityCommitted` avisa el bloqueo en sí (el día ya no
+  //      ofrece slots). Un candado de varios profesionales, de "todos" o de
+  //      sala va con `practitionerId: null`. No re-invalida `bookingDays`: ya
+  //      lo hizo el paso 1 en este mismo request.
+  await afterBookingsCommitted(tenantId, out.refs);
+  await afterAvailabilityCommitted(
+    tenantId,
+    { practitionerId: availabilityScopeOf(targets, roomId), day: input.dayKey },
+    { invalidateCaches: false }
+  );
   return { ok: true, data };
 }
 
@@ -1063,6 +1143,12 @@ export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResu
       },
     });
     revalidatePath("/agenda");
+    // SV06b: desbloquear devuelve los slots del día. Solo si se borró algo: sin
+    // cambios no hay nada que avisar. Alcance = el pedido (sala → null).
+    await afterAvailabilityCommitted(tenantId, {
+      practitionerId: roomId ? null : practitionerId,
+      day: dayKey,
+    });
   }
   return { ok: true, data: { deleted: out.deletedIds.length, remaining: out.remaining } };
 }

@@ -564,7 +564,15 @@ export async function updateSessionExercise(input: {
 }
 
 /** Turno activo de una sesión (I2: a lo sumo uno), para decidir el camino. */
-type ActiveSessionBooking = { id: string; status: string; practitionerId: string; scheduledFor: Date; updatedAt: Date };
+type ActiveSessionBooking = {
+  id: string;
+  status: string;
+  practitionerId: string;
+  scheduledFor: Date;
+  updatedAt: Date;
+  /** FX1a (SV08-gap): sala del turno para el ref realtime (la vista «Por sala»). */
+  roomId: string | null;
+};
 
 /** Traduce un rechazo del core de turnos a copy (mismo copy que `updateBooking`). */
 function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUpdateInTx>>, { kind: "ok" }>): string {
@@ -936,7 +944,7 @@ export async function completeSessionFromSeguimiento(
     // (1) C2 (3): el turno activo vinculado, primero. El WHERE se re-evalúa
     // después de esperar el lock: si otro lo canceló, ya no viene.
     const booked = await tx.$queryRaw<ActiveSessionBooking[]>`
-      SELECT id, status::text AS status, "practitionerId", "scheduledFor", "updatedAt"
+      SELECT id, status::text AS status, "practitionerId", "scheduledFor", "updatedAt", "roomId"
       FROM "Booking"
       WHERE "tenantId" = ${tenantId} AND "sessionId" = ${sessionId} AND status NOT IN ('CANCELLED', 'NO_SHOW')
       ORDER BY id
@@ -984,7 +992,8 @@ export async function completeSessionFromSeguimiento(
         data: { status: "COMPLETED" },
       });
       if (u.count === 1) {
-        refs.push({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, prev: null, kind: "booking" });
+        // FX1a (SV08-gap): con la sala, leída en (1) bajo `FOR UPDATE` (el CAS no la cambia).
+        refs.push({ bookingId: b.id, practitionerId: b.practitionerId, scheduledFor: b.scheduledFor, roomId: b.roomId, prev: null, kind: "booking" });
         await auditInTx(tx, {
           tenantId,
           actorId: actor.userId ?? undefined,

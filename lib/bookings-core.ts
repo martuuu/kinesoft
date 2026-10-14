@@ -75,6 +75,7 @@ import { bookingHasMoney, priorPaidStamp, type PricingBooking } from "@/lib/plan
 import { planSessionOrdinal } from "@/lib/plan-display";
 import { notify } from "@/lib/notifications-internal";
 import { logger } from "@/lib/logger";
+import { toARDateKey } from "@/lib/datetime-ar";
 import {
   BAD_LOCATION_ERROR,
   BASIC_ACCESS_ERROR,
@@ -1359,6 +1360,17 @@ export async function applyBookingUpdateInTx(
   const finalStatus = promoteGuest ? "CONFIRMED" : (patch.status ?? before.status);
   const finalPatientId = patch.patientId ?? before.patientId;
   const slotChanged = patch.scheduledFor != null && +patch.scheduledFor !== +before.scheduledFor;
+  // FX1b (SV): las estampas de Recepción (`arrivedAt`, `calledAt`,
+  // `attendingAt`) son de ESE día. Un turno «llamado» o «en sala» movido a
+  // mañana seguía con las estampas de hoy: mañana aparecía en la Sala de
+  // Espera como si el paciente ya hubiera llegado (y avisaba «llamado» con la
+  // hora de ayer). Cambiar de día AR (`toARDateKey`, nunca el día del host:
+  // un 22:30 AR es otro día en UTC) las limpia; mover dentro del mismo día no
+  // las toca (el paciente sigue en la sala, solo cambió el horario).
+  // Cancelar / Ausente NO las limpian: el estado gana en Recepción
+  // (`receptionStateOf`: cancelado/ausente antes que cualquier estampa) y
+  // «Deshacer» vuelve al estado previo con sus estampas.
+  const dayChanged = slotChanged && toARDateKey(newWhen) !== toARDateKey(before.scheduledFor);
   const durationChanged = patch.durationMin != null && patch.durationMin !== before.durationMin;
   const reactivating = before.status === "CANCELLED" && finalStatus !== "CANCELLED";
   const windowChanged = slotChanged || durationChanged || reactivating;
@@ -1714,6 +1726,10 @@ export async function applyBookingUpdateInTx(
         ...(isOverbooked !== undefined ? { isOverbooked } : {}),
         ...tele,
         ...planStampData(stamp),
+        // FX1b: en el MISMO UPDATE (sin sentencia nueva). Las tres juntas:
+        // el CHECK de M5 (`calledAt` exige `arrivedAt`) no admite limpiar
+        // `arrivedAt` dejando `calledAt`.
+        ...(dayChanged ? { arrivedAt: null, calledAt: null, attendingAt: null } : {}),
       },
       select: { updatedAt: true },
     });

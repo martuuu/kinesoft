@@ -843,6 +843,45 @@ SR4 (SR-U6 agenda) → SRZ (2 revisores de solo lectura, fixers FX1/FX2a/FX2b/FX
   archivos / 1228 ✓ (19 skip) y owner 94 + 1 skip / 1214 ✓ (33 skip), 0 fallas; perf + `compare.ts` sin regresiones
   fuera de umbral (28 escenarios; `f.createBooking` 35 = base); bundle en [PERF.md §SR](PERF.md).
 
+**Ronda 20 — SV: Sala de Espera en tiempo real (13/14-oct-2026) ✅ (sin commit todavía):**
+ejecutada en develop sobre `5811ea2` según el plan vigente §18 (decisiones SV-D1..D16, contratos C-SV1..10). **1
+migración nueva**, M5 `20261013120000_reception_call_realtime` (sola en SV0), aplicada y verificada **solo en el Docker
+local** (32 migraciones); va última en la cadena del deploy único (`… → M3a → M4 → M5`,
+[MIGRACIONES-RUNBOOK «Go-live con reset»](MIGRACIONES-RUNBOOK.md)). Olas SV0 (SV01) → SV1.0 (SV02 contratos y env,
+SV03 estado «Llamado», SV03u motion/tokens/toast) → SV1.1 (SV04a publisher y hook, SV04b token y verificación, SV07a
+drivers) → SV1.2 (SV05 `lib/bookings.ts`, SV06a turnero y webhook, SV06b candado, SV07b provider/SSE/CSP, SV08 emisión,
+guard y perf) → SV2 (SV09 agenda, SV10a `/sala`, SV10b Recepción, SV11a nav, SV11b avisos) → SVZ (integrador, 2
+revisores de solo lectura, fixers FX1a/FX1b server y FX2a/FX2b UI, gate en solitario). Arquitectura en
+[ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHITECTURE.md); seguridad en [SECURITY.md §17](SECURITY.md).
+
+- 🟢 **Qué entró:** publish post-commit sin PHI desde `afterBookingsCommitted` (drivers `off`/`local`/`supabase`,
+  timeout 1,5 s, breaker); token HS256 de 10 min con `kid` opcional; policy + función de M5; estado «Llamado» con
+  «Llamar» y «Deshacer»; `/sala` (tablero de hoy por profesional o por sala, con proyección en el server); agenda y
+  Recepción en vivo; avisos «Llegó» / «Pase …» (toast con acción, sonido opcional, título de pestaña) y Card «Avisos
+  de la sala de espera»; nav «Sala de espera» → `/sala`; CSP `wss://<host>`; redact de `sb_*`; `guard-realtime`
+  (a)-(e) en `guard:isolation`; `scripts/realtime-verify.ts` (V1-V7). devDependencies nuevas: `ws`, `@types/ws` (solo
+  para el script). Con `REALTIME_DRIVER=off` (default) la agenda es la de SR (snapshot) y sin polling.
+- 🟢 **Cerrados** (filas en §2): `no-realtime-agenda-compartida`, `after-commit-fuera-de-planes`.
+- 🟢 **Bugs encontrados y cerrados en la corrida** (filas en §2 «Hallazgos de SV»): early return del hook con
+  `invalidateCaches:false` (Recepción «llegó» no emitía); write-paths sin emitir (turnero, webhook, candado, bloqueos);
+  refs incompletos de Planes (sin `roomId`, y el turno adoptado con el profesional del plan); `amount_mismatch` del
+  webhook que escribía FAILED sin emitir; bloqueo de varios días con un POST por día; mover a otro día arrastraba las
+  estampas de sala; `mintRealtimeToken` que tiraba con errores no tipados; `/sala` congelada con `off`; PD-13 en el
+  re-pedido de `/sala`; banda «Pase …» que movía el tablero; foco perdido al remontar card o toast; indicador que
+  anunciaba cada vaivén al lector de pantalla; contadores distintos entre Recepción y `/sala`.
+- **Desvíos aceptados del plan:** capability del canal = `salaEspera` + `agenda.reception` (BILLING afuera aunque tenga
+  `agenda.viewAll`); más de 20 profesionales en un commit → un solo mensaje `{practitionerId:null, day:null}`;
+  `afterAvailabilityCommitted(tenantId, {practitionerId, day: string|null}, opts?)` (`day:null` y `opts` son aditivos a
+  C-SV3); la llegada solo a roles con `clinical.read`; en `/sala` el llamado no da toast (lo anuncia la banda); la
+  Card de avisos se ve con `off`, con nota; el submit del turnero conserva `revalidatePath("/agenda","/dashboard")`.
+- **Nuevos abiertos** (clasificados en el momento, filas en §2 «Hallazgos de SV»): B `turnero-revalidatepath-doble`;
+  C0 `sala-canoperate-ui-vs-server`; C1 `guard-realtime-por-archivo`, `flash-agenda-rerender`, `flash-solo-bookingcard`,
+  `realtime-leader-election`, `arrival-alerts-refetch-por-pestana`; EV1 `horarios-config-en-vivo`; D `sala-tv-y-campana`.
+- **Bundle:** todas las rutas de `(app)` pagan el provider realtime y el de avisos: Δ **+4,5 kB gz** (`/dashboard` 184,6 → 189,1). `/agenda` 204,5 → **212,3** (tope previsto 208), `/configuracion` 216,2 → 220,8, `/pacientes/[id]` 205,3 → 209,3, `/sala` (nueva) 198,7. Primera medición +11 kB: FX3 pasó el motor de avisos, los controles y el hub a `import()` dinámico (en prod arranca con `REALTIME_DRIVER=off` y no se cargan). Lo que queda es el mínimo de los dos contextos (~1,8 kB) más el toast extendido (`components/ui/toast.tsx`, ~2,7 kB). `@supabase/realtime-js` fuera de todo first-load (chunk async). **Decisión de Martin:** aceptar (recomendado; bundle bloqueante sigue en C1) o una sesión que difiera la variante `arrival` del toast. Fila nueva 🔴 C1 `bundle-sv-toast` si no se acepta.
+- **Gate de SV:** tsc 0 (app y scripts); unit 2762 en UTC y en AR; `guard:isolation` + `guard-realtime` verdes; `migrate status` al día (32), `migrate deploy` idempotente; integración `kinesoft_app` 100 archivos / 1323 + 19 skip, owner 99 + 1 skip / 1309 + 33 skip; perf `compare.ts` sin regresiones (estrictos iguales: `f.createBooking` 35, `f.createBookingsBatch.20` 186; `rt.*` nuevos); `next build` OK.
+- **Pendiente de Martin:** R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)); deploy en escalones
+  `off → env → staging → supabase` (RUNBOOK «Deploy de SV»).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -1252,7 +1291,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
 | roles-assistant-billing-cosmeticos | media | schema.prisma:108 · lib/capabilities.ts | 🟡 | roles-assistant-billing — B-pre les dio capabilities reales (ASSISTANT opera la agenda sin `clinical.read`); falta en C0 que puedan loguearse sin fila Practitioner (`secretaria-sin-practitioner`) |
 | no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
-| no-realtime-agenda-compartida | media | lib/cache-tags.ts:54 | 🔴 | **B · corrida SV** (07-oct: Sala de Espera realtime, entre ES3 y ES4; VERTICALES.md §7). Antes C2 |
+| no-realtime-agenda-compartida | media | lib/booking-events-internal.ts · lib/realtime-*.ts · components/providers/realtime-provider.tsx | 🟢 | **SV** (Ronda 20, 14-oct) — Broadcast privado por tenant publicado desde el hook post-commit; agenda, Recepción y `/sala` re-piden en vivo (ADR-006) |
 | portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
 | patient-tenancy-single-home-row | baja | schema.prisma:250 | 🔴 | Planes P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + P4-S24a (una cuenta, fichas por consultorio, sin compartir nada clínico) |
 | l1-portal-minimo | baja | lib/portal.ts:1 | 🔴 | Portal v2 (Ola 2.6) |
@@ -1446,7 +1485,7 @@ cerrado por los fixers de P2.Z (motor, Seguimiento, plata) y verificado en el ar
 | search-assignment-archivados | baja | B | lib/diagnosis.ts:484 | 🟢 | S17d — `searchPatientsForAssignment` devolvía pacientes archivados; ahora `archivedAt: null` |
 | tenant-factory-planes-ajenos | baja | B (tests) | tests/helpers/tenant-factory.ts (`deleteTenantDeep`) | 🟢 | S12b/orquestador — el sweep fallaba con planes de otro tenant que apuntaban a sede/servicio/profesional del tenant (FKs simples); ahora los borra antes |
 | retry-p2034-agenda | media | C0/C1 | lib/time-blocks.ts (`applyDayLock`, `createTimeBlock`) · lib/bookings.ts (`createBooking`) | 🔴 | **C0/C1** — no reintentan P2034/40P01 (C2 lo pide) y tapan la excepción con un error genérico ("No pudimos …"). Los tests de carrera de S11x pasan, pero un deadlock real llega al usuario como error opaco |
-| after-commit-fuera-de-planes | media | B (SV) | lib/time-blocks.ts · lib/public-booking*.ts · lib/mercadopago.ts | 🔴 | **SV06** — escriben `Booking` sin `afterBookingsCommitted` (no revalidan ni van a publicar realtime). Ya planeado en SV |
+| after-commit-fuera-de-planes | media | B (SV) | lib/time-blocks.ts · lib/public-booking*.ts · lib/mercadopago.ts | 🟢 | **SV06a/SV06b + FX1a/FX1b** (Ronda 20) — turnero (alta y hold reemplazado), webhook de MP (todo write de `Booking`, incluido `amount_mismatch` impago), `devMarkBookingPaid`, candado y bloqueos llaman al hook; `guard-realtime` (c) y `realtime-emission.test.ts` lo fijan |
 | gates-reimplementados-legacy | baja | B | lib/sessions.ts:649 (`rescheduleSession`) | 🟢 | P3-S27a/S27b (Ronda 18) — `createProgram` y `applyPlanTemplate` retirados; `rescheduleSession` → `assertPlanScheduleInTx` + full |
 | onCreateTag-sin-error | baja | C1 | components/biblioteca/biblioteca-client.tsx:969 | 🔴 | **C1** — no atrapa el Error de `ensureTag`; en prod Next enmascara el mensaje y el usuario no ve por qué no se creó |
 | autorizacion-por-vencer-dashboard | baja | C1 | lib/dashboard.ts | 🔴 | **C1** — S14 no sumó el aviso "autorización por vencer" (era opcional) |
@@ -1493,8 +1532,8 @@ Contexto y contratos en [VERTICALES.md](VERTICALES.md) (plan vigente §15). Corr
 | exercise-drawer-link-en-general | baja | B | exercise-drawer (link a `/biblioteca`) | 🔴 | **EV1** — en un tenant General el link lleva a un segmento guardado (redirige a `/dashboard`) |
 
 **Notas:**
-- `no-realtime-agenda-compartida` (C2) se adelanta: la cubre la corrida **SV** (Sala de Espera realtime, M5; antes "M3"), después de
-  ES3 y SR ([VERTICALES.md §7](VERTICALES.md)).
+- `no-realtime-agenda-compartida` (C2) se adelantó a la corrida **SV** (M5) y se cerró en la Ronda 20
+  ([VERTICALES.md §7](VERTICALES.md)).
 - Cambio de comportamiento aceptado: Kine FREE/STARTER dejan de ver los ejercicios globales `isBasic` (solo PRO ve el
   catálogo de Plataforma).
 - Reset de prod (07-oct): el hotfix de E0 se cae y los prechecks de datos de Planes también (PLANES.md §16).
@@ -1584,6 +1623,43 @@ FX2b drawer/modal/PlanCard, FX3 editor y KPI) o el orquestador en el gate, y se 
 | bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🔴 | **Decisión de Martin** (recomendado aceptar, C1) — criterio "≤ +1 kB" no cumplido; mejora concreta: `WeekDrawer` del editor de horarios con `dynamic`. [PERF.md §SR](PERF.md) |
 | dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts:153-300 (`_loadDashboardCounts`) | 🔴 | **C1 perf** — sigue abriendo ~8 `runWithRls` en paralelo, el mismo patrón que daba timeout de pool en ingresos |
 | ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) | 🔴 | **C0** — el OWNER ve el total del consultorio; filtrar por profesional queda para C0 (SR-D5I) |
+
+### Hallazgos de SV (SVZ, 13/14-oct-2026)
+
+Ronda 20. Revisor (a): token, policy, PHI del payload, service key, CSP, SSE autenticado, write-paths sin emitir.
+Revisor (b): coalescer, reconexión, densidad de la Secretaria, a11y, reduced motion, copy. Lo 🟢 lo cerraron las
+sesiones (SV04a, SV06a/b, SV08), los fixers (FX1a/FX1b server, FX2a `/sala`, FX2b avisos/toast/indicador) o el
+integrador, y se verificó en el archivo.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| hook-early-return-sin-publish | alta | B | lib/booking-events-internal.ts:74 | 🟢 | SV04a — con `invalidateCaches:false` el hook hacía `return` y Recepción «llegó» no avisaba a nadie. El flag apaga solo la invalidación; `it.fails("[SV04a]…")` dado vuelta |
+| write-paths-sin-emitir | media | B | lib/public-booking*.ts · lib/mercadopago.ts · lib/time-blocks.ts | 🟢 | SV06a/SV06b — ver `after-commit-fuera-de-planes`. Guard (c) los vigila |
+| refs-planes-sin-sala | media | B | lib/plans-lifecycle-internal.ts · lib/plans-adopt-internal.ts · lib/sessions.ts | 🟢 | FX1a (SV08-gap) — cancelar plan, adoptar serie y reprogramar sesión publicaban sin `roomId`: «Por sala» no se enteraba |
+| ref-adoptado-profesional-del-plan | media | B | lib/plans-engine-internal.ts (adopción en `commitPlanRowsInTx`) | 🟢 | FX1a (SV08-gap) — el turno adoptado se avisaba con `program.practitionerId` (agenda equivocada; `null` sin responsable). Ahora profesional y sala del turno, del pool ya cargado (0 sentencias) |
+| webhook-mismatch-sin-emitir | media | B | lib/mercadopago.ts:417-436 | 🟢 | FX1a — `amount_mismatch` sobre un turno impago escribe `paymentStatus=FAILED` y no emitía; ahora emite siempre que escribió `Booking` (replay no) |
+| bloqueo-multidia-n-posts | baja | B | lib/time-blocks.ts:120-138 | 🟢 | FX1b — un bloqueo de una semana hacía 7 POST + 7 `revalidateTag`; ahora 1 con `day:null` |
+| mover-dia-arrastra-estampas | media | B | lib/bookings-core.ts:1363,1732 | 🟢 | FX1b — un turno «llamado» movido a mañana aparecía mañana como llegado. Cambiar de día AR limpia `arrivedAt/calledAt/attendingAt` en el mismo UPDATE |
+| mint-token-tira | baja | B | lib/realtime-token.ts:68 | 🟢 | FX1b — un error no tipado salía como excepción de la action; ahora `{ok:false, error:"realtime-error"}` y el cliente degrada a polling |
+| env-supabase-sin-anon | baja | B | lib/env.ts:95 | 🟢 | FX1b — con `supabase` en Production faltaba exigir `NEXT_PUBLIC_SUPABASE_ANON_KEY` (sin ella la sala cae a polling en silencio) |
+| sala-congelada-con-off | media | B | lib/sala-board-state.ts:546 · components/sala/sala-client.tsx:190 | 🟢 | FX2a · A1 — con `off` el provider no pollea y `/sala` quedaba fija. Pollea sola cada 60 s y al volver la pestaña |
+| sala-refetch-phi | media | B | lib/sala-bookings.ts | 🟢 | FX2a — el re-pedido en vivo usaba `listAgendaBookings` desde el cliente y a OWNER/PRACTITIONER les viajaban `title/description/notes`. `listSalaBookings` proyecta en el server (PD-13), ventana ≤ 36 h |
+| banda-pase-mueve-tablero | baja | B | components/sala/sala-css.ts:20 | 🟢 | FX2a · A2 — la banda «Pase …» empujaba el tablero ~70 px y a los 8 s lo devolvía; ahora es overlay, y «Nadie en la sala» tiene su hueco reservado |
+| foco-teclado-sala-y-toast | media | B | components/sala/sala-card.tsx:42 · components/ui/toast.tsx:486 | 🟢 | FX2a · M1 / FX2b — remontar la card (anillo de llegada) o el texto del toast le sacaba el foco a quien operaba con teclado |
+| contadores-sala-vs-recepcion | baja | B | lib/sala-board-state.ts:274 | 🟢 | FX2a · M3 — «En sala» incluye a los llamados en las dos vistas |
+| sala-densidad-rerender | baja | B | components/sala/sala-board.tsx:20 · sala-card.tsx:151 | 🟢 | FX2a · M5 — columnas y cards `memo` por firma |
+| live-indicator-anuncia-vaiven | baja | B | components/realtime/live-indicator.tsx:33 | 🟢 | FX2b — solo se anuncian `live` y `polling` |
+| avisos-sin-card-con-off | baja | B | components/configuracion/panels/general-panel.tsx:292 | 🟢 | FX2b · M4 — la Card se ve con `off`, con nota; el menú de la agenda la oculta |
+| short-name-duplicado | baja | B | lib/patient-short-name.ts | 🟢 | Integrador — fuente única para tablero y avisos (sin deps en el bundle del provider) |
+| turnero-revalidatepath-doble | baja | B | lib/public-booking.ts (submit) | 🔴 | **B (poda)** — el submit conserva `revalidatePath("/agenda","/dashboard")` además del hook (desvío 3 de SV06a). Inofensivo; podar cuando se toque el turnero |
+| sala-canoperate-ui-vs-server | baja | C0 | components/agenda/reception/reception-row.tsx (`canOperate`) · lib/bookings.ts:~1374-1381 | 🔴 | **C0** — la UI (full ∨ operateAll) es más estrecha que el server en el borde «turno propio con paciente basic»: el profesional pierde los botones. Seguro; alinear con la matriz de roles |
+| guard-realtime-por-archivo | baja | C1 | scripts/guard-realtime.mjs:340-370 | 🔴 | **C1** — la regla (c) mira por archivo, no por función: una action nueva que escriba sin emitir en un archivo que ya emite pasa. Hoy lo cubre `realtime-emission` caso por caso |
+| flash-agenda-rerender | baja | C1 | components/agenda/grid/booking-card.tsx:~204 | 🔴 | **C1** — un segundo cambio de la misma card mientras sigue marcada no reinicia el flash; cada cambio re-renderiza todas las `BookingCard` por `useContext` |
+| flash-solo-bookingcard | baja | C1 | components/agenda/views/* | 🔴 | **C1** — el flash está en Día / Por profesional / Por sala; Semana, Lista y Recepción no titilan |
+| realtime-leader-election | baja | C1 | components/providers/realtime-provider.tsx | 🔴 | **C1** (SV-D14) — un socket y un mint por pestaña; chime en dos pestañas visibles del mismo usuario |
+| arrival-alerts-refetch-por-pestana | baja | C1 (perf) | components/providers/arrival-alerts.tsx | 🔴 | **C1** — cada pestaña re-pide hoy por lote relevante (coalescido). Medir con el tenant perf |
+| horarios-config-en-vivo | baja | EV1 | lib/practitioner-schedule.ts | 🔴 | **EV1** (SV-D12) — cambios de horarios en Configuración no publican `availability` |
+| sala-tv-y-campana | baja | D | — | 🔴 | **D** — pantalla TV de sala (topic propio) y notificaciones persistidas en la campana |
 
 ### Resumen del checklist (al 2026-09-29)
 

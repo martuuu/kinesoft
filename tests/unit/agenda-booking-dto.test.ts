@@ -59,6 +59,7 @@ function agendaRow(c9: Partial<AgendaPlanFields> = {}): AgendaBookingRow {
     isTelemedicine: false,
     telemedicineUrl: null,
     arrivedAt: null,
+    calledAt: null,
     attendingAt: null,
     clinicalHidden: false,
     canOperate: true,
@@ -238,3 +239,24 @@ describe("[SR-U5a] expansión de la sala en el cliente", () => {
 function withRoomRow(roomId: string | null): AgendaBookingRow {
   return { ...agendaRow(), roomId } as AgendaBookingRow;
 }
+
+describe("[SV03] calledAt en el cable", () => {
+  const called = new Date("2026-10-05T12:05:00.000Z");
+
+  it("con llamado viaja el ISO", () => {
+    const dto = toBookingDTO({ ...agendaRow(), arrivedAt: new Date("2026-10-05T11:58:00.000Z"), calledAt: called });
+    expect(dto.calledAt).toBe(called.toISOString());
+  });
+
+  it("sin llamado (null o sin la clave, server pre-SV05) no viaja: 0 bytes", () => {
+    const sinClave = toBookingDTO(agendaRow());
+    const enNull = toBookingDTO({ ...agendaRow(), calledAt: null });
+    expect("calledAt" in sinClave).toBe(false);
+    expect("calledAt" in enNull).toBe(false);
+    expect(JSON.stringify(enNull)).toBe(JSON.stringify(sinClave));
+  });
+
+  it("proyección completa: sin calledAt", () => {
+    expect("calledAt" in toBookingDTO(base)).toBe(false);
+  });
+});

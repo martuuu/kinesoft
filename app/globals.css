@@ -77,6 +77,30 @@
   --st-hold-expired-bg: rgba(15, 30, 51, 0.04);
   --st-hold-expired-fg: #3a4d6c;
   --st-hold-expired-border: rgba(15, 30, 51, 0.3);
+
+  /* ── Estado de Recepción / Sala de espera (SV03u, C-SV10) ─────────────
+     Los estados propios de Recepción que no son un BookingStatus. Antes eran
+     literales en reception-row.tsx (STATE_STYLE); /sala, Recepción y la grilla
+     los comparten desde acá (los reemplaza SV10b). Literales, como --st-*: la
+     paleta del tenant no puede cambiar lo que significa un estado.
+     - En sala: el lime pálido de siempre (el paciente está, nadie lo llamó).
+     - Llamado (nuevo, SV-D5): sky intenso sólido con texto blanco (7.2:1).
+       Tiene que separarse a simple vista de En sala (lime pálido), de En
+       atención (navy casi negro) y de Por llegar (--st-confirmed, sky pálido):
+       es un estado de pocos minutos que la Secretaria tiene que ver de lejos.
+       Es el sky-700 de la paleta base, no var(--sky-700) (en "mint" es verde).
+     - En atención: navy-900 sólido, como estaba.
+     - Demorado: el ámbar de siempre con borde (4.6:1 sobre el panel).
+     AA verificado en tests/unit/design-tokens.test.ts. */
+  --rc-insala-bg: rgba(200, 245, 100, 0.45);
+  --rc-insala-fg: #0f1e33;
+  --rc-called-bg: #1f4fbe;
+  --rc-called-fg: #ffffff;
+  --rc-attending-bg: #0f1e33;
+  --rc-attending-fg: #ffffff;
+  --rc-late-bg: rgba(255, 176, 32, 0.2);
+  --rc-late-fg: #9a5b00;
+  --rc-late-border: rgba(154, 91, 0, 0.35);
   --card-bg: #ffffff;
 
   --glass-bg: rgba(255, 255, 255, 0.55);
@@ -433,5 +457,157 @@ body {
   }
   .diag-mobile {
     display: block;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   [SV03u] Motion de la sala de espera en tiempo real (C-SV10).
+   CSS puro donde no hace falta framer: no re-renderiza React y el
+   navegador lo compone en su hilo. Todo tiene su versión estática en el
+   bloque prefers-reduced-motion del final.
+   ───────────────────────────────────────────────────────────────── */
+
+/* Indicador «En vivo» (LiveIndicator, SV07b). El color sale de data-state:
+   live = verde de "Hecho" (conectado y al día), reconnecting = ámbar
+   (atención, se recupera solo), off/offline = gris (se actualiza cada 60 s).
+   El punto hereda currentColor, así un solo atributo cambia todo. */
+.k-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: var(--st-completed-bg);
+  color: var(--st-completed-fg);
+  transition:
+    background-color 0.22s ease,
+    color 0.22s ease;
+}
+.k-live-badge[data-state="reconnecting"] {
+  background: var(--st-noshow-bg);
+  color: var(--st-noshow-fg);
+}
+.k-live-badge[data-state="off"],
+.k-live-badge[data-state="offline"] {
+  background: var(--st-cancelled-bg);
+  color: var(--st-cancelled-fg);
+}
+.k-live-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* El halo es un ::after que crece y se desvanece: el punto en sí no se mueve
+   (no distrae al leer el texto de al lado). 2 s y ease-out: un "latido"
+   tranquilo, no una alarma. Solo late cuando está en vivo. */
+.k-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+}
+.k-live-badge[data-state="live"] .k-live-dot::after,
+.k-live-dot[data-pulse="true"]::after {
+  animation: k-live-dot 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+@keyframes k-live-dot {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* Fila que cambió por un evento remoto (agenda, data-flash en BookingCard).
+   Sin keyframe `to`: el navegador interpola hasta el fondo propio del
+   elemento (el de su estado, que la card pone inline). Con un `to`
+   transparente la card quedaba un instante sin fondo y después "saltaba" a
+   su color. */
+.k-flash {
+  animation: k-flash 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes k-flash {
+  from {
+    background-color: var(--sky-100);
+  }
+}
+
+/* Anillo de llegada (arrivalPulse en lib/motion.ts anima --k-pulse de 0 a 1).
+   Se arma acá porque framer no interpola var() dentro de un box-shadow, y
+   así toma el --lime-400 de la paleta del consultorio. color-mix con
+   transparent desvanece sin virar de tono. --k-ring-base conserva la sombra
+   propia del card (se pisa inline). En reposo (--k-pulse: 1) el anillo es invisible. */
+.k-arrival-ring {
+  --k-pulse: 1;
+  /* El card la redefine inline con su sombra de siempre. */
+  --k-ring-base: 0 0 #0000;
+  box-shadow:
+    0 0 0 calc(var(--k-pulse) * 8px)
+      color-mix(in srgb, var(--lime-400) calc((1 - var(--k-pulse)) * 100%), transparent),
+    var(--k-ring-base);
+}
+
+/* Barra de vida del toast (components/ui/toast.tsx). La duración llega
+   inline (animation-duration) y se pausa en hover y focus-within, igual que
+   el temporizador del provider, para que la barra muestre exactamente lo que
+   falta. `forwards` la deja vacía al final. */
+.k-toast-progress {
+  position: absolute;
+  left: 4px;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  opacity: 0.45;
+  transform-origin: left center;
+  animation: k-toast-progress linear forwards;
+}
+.k-toast:hover .k-toast-progress,
+.k-toast:focus-within .k-toast-progress {
+  animation-play-state: paused;
+}
+@keyframes k-toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .k-live-dot::after,
+  .k-live-badge[data-state="live"] .k-live-dot::after,
+  .k-live-dot[data-pulse="true"]::after {
+    animation: none;
+    opacity: 0;
+  }
+  .k-flash {
+    animation: none;
+  }
+  .k-arrival-ring {
+    box-shadow: var(--k-ring-base);
+  }
+  /* Sin la barra que se achica: el toast igual se cierra a su tiempo y la
+     pausa en hover sigue funcionando (es del provider, no de la barra). */
+  .k-toast-progress {
+    animation: none;
+    display: none;
+  }
+  .k-live-badge {
+    transition: none;
   }
 }

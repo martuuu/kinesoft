@@ -169,3 +169,70 @@ describe("[P0-S04a] primitivas", () => {
     expect(tokenValue("--lime-700")).not.toBeNull();
   });
 });
+
+describe("[SV03u] estado de Recepción/Sala --rc-* (C-SV10)", () => {
+  // Reemplazan los literales de reception-row.tsx (STATE_STYLE: demorado, en
+  // sala, en atención) y suman «Llamado» (SV-D5). Literales como --st-*: el
+  // fondo = estado no puede cambiar con la paleta del tenant.
+  const KEYS = ["insala", "called", "attending", "late"];
+
+  for (const k of KEYS) {
+    it(`--rc-${k}-bg / --rc-${k}-fg: literales y texto AA sobre su fondo`, () => {
+      const bg = tokenValue(`--rc-${k}-bg`);
+      const fg = tokenValue(`--rc-${k}-fg`);
+      expect(bg, `--rc-${k}-bg`).not.toBeNull();
+      expect(fg, `--rc-${k}-fg`).not.toBeNull();
+      for (const base of [WHITE, PANEL]) {
+        const b = over(parseColor(bg!), base);
+        expect(contrast(parseColor(fg!).rgb, b), `--rc-${k}`).toBeGreaterThanOrEqual(AA);
+      }
+    });
+  }
+
+  it("--rc-late-border es literal (el demorado conserva su borde)", () => {
+    expect(() => parseColor(tokenValue("--rc-late-border")!)).not.toThrow();
+  });
+
+  it("«Llamado» se distingue de En sala, En atención y Por llegar (fondo y texto)", () => {
+    const called = over(parseColor(tokenValue("--rc-called-bg")!), WHITE);
+    const others = ["--rc-insala-bg", "--rc-attending-bg", "--st-confirmed-bg"].map((t) =>
+      over(parseColor(tokenValue(t)!), WHITE),
+    );
+    // Distancia euclídea RGB > 60: a simple vista son tonos distintos, no
+    // dos intensidades del mismo color.
+    for (const o of others) {
+      const d = Math.hypot(called[0] - o[0], called[1] - o[1], called[2] - o[2]);
+      expect(d).toBeGreaterThan(60);
+    }
+  });
+
+  it("ninguna paleta [data-palette] redefine --rc-*", () => {
+    const palettes = Array.from(CSS.matchAll(/\[data-palette="[^"]+"\]\s*\{([^}]*)\}/g), (m) => m[1]);
+    for (const body of palettes) expect(body).not.toMatch(/--rc-/);
+  });
+});
+
+describe("[SV03u] clases de motion en CSS (C-SV10)", () => {
+  it("define .k-live-badge, .k-live-dot, .k-flash, .k-toast-progress y sus @keyframes", () => {
+    for (const sel of [".k-live-badge", ".k-live-dot", ".k-flash", ".k-toast-progress", ".k-arrival-ring"]) {
+      expect(CSS, sel).toContain(`${sel} {`);
+    }
+    for (const kf of ["k-live-dot", "k-flash", "k-toast-progress"]) {
+      expect(CSS, kf).toMatch(new RegExp(`@keyframes ${kf}\\s*\\{`));
+    }
+  });
+
+  it("la barra del toast se pausa en hover y focus-within", () => {
+    expect(CSS).toMatch(/:hover \.k-toast-progress[\s\S]*?animation-play-state:\s*paused/);
+    expect(CSS).toMatch(/:focus-within \.k-toast-progress/);
+  });
+
+  it("prefers-reduced-motion deja estático todo lo que anima", () => {
+    const m = CSS.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/);
+    expect(m).not.toBeNull();
+    for (const sel of [".k-live-dot", ".k-flash", ".k-toast-progress", ".k-arrival-ring"]) {
+      expect(m![1], sel).toContain(sel);
+    }
+    expect(m![1]).toMatch(/animation:\s*none/);
+  });
+});

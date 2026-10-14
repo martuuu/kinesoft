@@ -52,6 +52,13 @@ export type BookingDTO = {
   /** Recepción: llegó a la sala / pasó a atención (ISO). */
   arrivedAt?: string | null;
   attendingAt?: string | null;
+  /**
+   * SV (M5): la recepción lo llamó (ISO). En el cable viaja COMPACTO (como
+   * `roomId`): solo si hay llamado, porque es un estado de segundos/minutos y
+   * casi todas las filas de la semana lo tienen en null; sin la clave =
+   * no llamado (`receptionState` trata undefined y null igual).
+   */
+  calledAt?: string | null;
   /** null = sede principal. */
   locationId?: string | null;
   /** Nombre de la sede (con `locationId` null, el de la principal). */
@@ -144,8 +151,18 @@ export function toBookingDTO(row: BookingRow | AgendaBookingRow): BookingDTO {
     clinicalHidden: row.clinicalHidden,
     ...serverPermissions(row),
     ...compactRoomField(row),
+    ...compactCalledField(row),
     ...compactPlanFields(row),
   };
+}
+
+/**
+ * SV: `calledAt` viaja solo si hay llamado (ver `BookingDTO.calledAt`). Se lee
+ * por forma porque `AgendaBookingRow.calledAt` es opcional hasta SV05.
+ */
+function compactCalledField(row: object): Pick<BookingDTO, "calledAt"> {
+  const c = (row as { calledAt?: unknown }).calledAt;
+  return c instanceof Date ? { calledAt: c.toISOString() } : {};
 }
 
 /**

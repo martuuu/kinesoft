@@ -632,8 +632,8 @@ Diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md); contratos en [VERTICALES.
 - **Data API de Supabase.** M2 revoca a `anon` y `authenticated` todo en `public` (tablas, secuencias, rutinas y
   `DEFAULT PRIVILEGES`), guardado por existencia de los roles. Guard 3c de `npm run guard:isolation`: falla ante un
   `GRANT … TO anon|authenticated` en migraciones o `prisma/roles.*.sql`, o si el bloque REVOKE desaparece. La app
-  nunca usa PostgREST. **Pendiente de Martin:** desactivar la Data API en la consola (VERTICALES §1). SV01 tiene que
-  respetar el guard (la función de la policy de realtime sin GRANT a `authenticated`).
+  nunca usa PostgREST. **Pendiente de Martin:** desactivar la Data API en la consola (VERTICALES §1). M5 (SV) lo respeta:
+  la función de la policy de realtime tiene EXECUTE a `PUBLIC`, sin GRANT a `anon`/`authenticated` (§17).
 - **Turnos online apagados** (`publicBookingEnabled = false`, default de un consultorio nuevo): la página muestra
   "Turnos online no disponibles" (`noindex`) **sin leer la sesión ni el prefill**; slots `[]` y el submit se rechaza
   **sin escribir**. El estado de un turno ya reservado sigue consultable. Portal y turnero leen los módulos con
@@ -723,3 +723,62 @@ Diseño en [ARCHITECTURE.md §Salas (SR)](ARCHITECTURE.md); orden de locks en AD
     placeholder sin datos; los "próximos turnos" muestran el copago por turno (operativo, no se tocó).
 - **Facturación (SR-D4F):** los cancelados/ausentes con cobro se ven siempre y suman en "percibido"
   (`isBillingVisible`, `components/planes/plan-booking-groups.ts:242`). No cambia quién ve la pestaña.
+
+## 17. Realtime (SV, 13/14-oct-2026; en código, sin deploy hasta cerrar B)
+
+Diseño en [ARCHITECTURE.md ADR-006](ARCHITECTURE.md); consola y verificación en [EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md).
+Con `REALTIME_DRIVER=off` (default) nada de esto corre: ni publish, ni token, ni socket.
+
+- **El payload no lleva PHI ni se confía.** `RealtimeAgendaMessageSchema` (`lib/realtime-events.ts:33`, zod
+  `.strict()`) = `{v, kind, bookingId?, practitionerId, day, roomId?, prev?, at}`: ids y un día AR. El cliente lo usa
+  como «tocá acá» y **re-pide con sus propias actions** (que aplican su gate y su proyección); los avisos salen del diff
+  del refetch, nunca del mensaje. Un mensaje inválido se descarta sin tirar (`parseIncoming`).
+- **Token del canal** (`lib/realtime-token-internal.ts`, `server-only`; action `mintRealtimeToken`, `lib/realtime-token.ts`):
+  - JWT HS256 con `node:crypto`, header `kid` opcional (`SUPABASE_JWT_KID`, SV-D15). Claims literales (SV-D6)
+    `{iss:"kinesoft-realtime", aud:"authenticated", role:"authenticated", sub:"rt:<uuid>", tenant_id, purpose:
+    "kinesoft-realtime", iat, exp: iat+600}`. El `tenant_id` sale del actor de la sesión, nunca del cliente.
+  - Gate: `getActor()` → módulo `salaEspera` → `realtimeAllowed` = **`agenda.reception`** (no `agenda.viewAll`:
+    BILLING lo tiene y quedaría adentro; `lib/realtime-bootstrap.ts:24`) → driver `supabase` → secreto presente →
+    `rateLimit("rt:token:<userId>", 30 cada 10 min)`. Nunca tira (`{ok:false}` → el cliente cae a polling). El token
+    y el secreto no se loguean.
+  - **Por qué no sirve para otra cosa si se filtra** (10 min): `sub` no es UUID (GoTrue lo rechaza y `auth.uid()` no
+    matchea), la Data API está apagada y `anon`/`authenticated` sin grants en `public` (M2 + R3), Storage sin policies
+    para `authenticated`. V4 de `scripts/realtime-verify.ts` lo comprueba en staging.
+  - No se expone el access token de Supabase de la sesión: vive en una cookie httpOnly (§11) y sacarlo al browser
+    rompía esa barrera.
+- **Policy y función (M5).** `public.kinesoft_realtime_can_read(topic, claims)`: `LANGUAGE sql IMMUTABLE STRICT`,
+  INVOKER, `search_path=''`; exige `purpose`, `role`, `tenant_id` con patrón de id y `topic = 'tenant:'||tenant_id||':agenda'`
+  (un `tenant_id` con `:` no escapa al topic de otro: hay test). EXECUTE a `PUBLIC` (la policy corre como el rol del
+  token), sin GRANT a los roles de la Data API. Policy `kinesoft_agenda_read` **FOR SELECT TO authenticated** sobre
+  `realtime.messages`, solo `extension = 'broadcast'`; **sin policy INSERT**: ningún cliente publica (V3). Tabla de
+  verdad en `tests/integration/reception-call-m5.test.ts` con stubs de Supabase en ROLLBACK.
+- **Service key solo en el publisher server-only** (`lib/realtime-publisher-internal.ts`, `import "server-only"`): 1
+  POST a `/realtime/v1/api/broadcast` con `private:true`, tope 1,5 s y breaker. El log (`realtime.publish_failed`, a lo
+  sumo 1/min por motivo) lleva tenantId, cantidad, status y motivo; nunca la key, el token ni el body. El logger
+  además borra `sb_secret_…`/`sb_publishable_…` y JWT largos de la línea serializada (`scrubSecrets`, `lib/logger.ts`),
+  y `lib/redact.ts` cubre `sb_*` para Sentry.
+- **Bootstrap client-safe** (`realtimeBootstrap`): `{driver, url?, anonKey?, tenantId}`; solo valores `NEXT_PUBLIC_*`
+  que ya viajan en el bundle. Con config incompleta degrada a `off`.
+- **SSE solo en `local` y autenticada** (`app/api/realtime/local/route.ts`): con otro driver **404**; sin sesión
+  **401**; sin `realtimeAllowed` **403**; el stream es el del `tenantId` del actor. `local` está **prohibido en
+  Production** (`lib/env.ts`, fail-fast del build, SV-D11).
+- **CSP** (sigue Report-Only): `connect-src` pasó de `wss:` genérico a `wss://<host de NEXT_PUBLIC_SUPABASE_URL>`
+  (`realtimeWsOrigin`, `next.config.mjs:55`).
+- **`/sala` y PD-13.** La página y el re-pedido en vivo usan `listSalaBookings` (`lib/sala-bookings.ts`): gate
+  `agenda.reception` + `salaEspera`, ventana ≤ 36 h, y la proyección `toSalaWire` se hace **en el server**
+  (`SALA_HIDDEN_KEYS` = `title`, `description`, `notes`, `patientCondition`, más el título del plan,
+  `lib/sala-board-state.ts:78`). Antes de FX2a el refetch del cliente usaba `listAgendaBookings` y a OWNER/PRACTITIONER
+  les volvían a viajar esas claves aunque la card no las pintara. BILLING → `redirect("/agenda")`.
+- **Avisos por rol:** la llegada solo a roles con `clinical.read` (OWNER/ADMIN/PRACTITIONER) que son el profesional del
+  turno; el llamado a quien tiene `agenda.operateAll` y no es ese profesional (`app/(app)/layout.tsx:88-91`).
+- **Guards estáticos** (`scripts/guard-realtime.mjs`, corre en `npm run guard:isolation`):
+  (a) exactamente una policy sobre `realtime.messages` tras reproducir todas las migraciones, FOR SELECT TO
+  authenticated, con la función y `extension = 'broadcast'`, sin WITH CHECK; ninguna `FOR INSERT|UPDATE|DELETE|ALL`
+  ni `ALTER POLICY`; (b) la función definida una vez, `LANGUAGE sql`, IMMUTABLE, `SET search_path`, sin SECURITY
+  DEFINER ni GRANT a `anon`/`authenticated`; (c) todo write-path de `Booking` emite (`afterBookingsCommitted` o un
+  wrapper `after…`; el webhook de MP incluido); (d) secretos: nada JWT/SECRET/SERVICE_ROLE con `NEXT_PUBLIC_`, ni en
+  `components/**`/`app/**/*.tsx`/drivers del cliente, `server-only` en publisher y firmador, sin `console.log` ni
+  `logger(…token|secret…)` en `lib/realtime-*`; (e) `@supabase/realtime-js` solo por `import()` dinámico en
+  `lib/realtime-client-supabase.ts`. Limitación: (c) mira por archivo, no por función (AUDIT `guard-realtime-por-archivo`).
+- **Pendiente de Martin** (EXTERNAL-CONFIG §3.1): R1-R4 (incluye «Allow public access» OFF) y V1-V7 en staging antes de
+  `REALTIME_DRIVER=supabase`.

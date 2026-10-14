@@ -16,7 +16,7 @@
     "prisma:seed": "dotenv -e .env.local -- tsx prisma/seed.ts",
     "prisma:studio": "dotenv -e .env.local -- prisma studio",
     "prisma:reset": "dotenv -e .env.local -- prisma migrate reset",
-    "guard:isolation": "node scripts/guard-tenant-isolation.mjs",
+    "guard:isolation": "node scripts/guard-tenant-isolation.mjs && node scripts/guard-realtime.mjs",
     "catalog:import": "dotenv -e .env.local -- tsx scripts/catalog-import.ts",
     "test:integration": "dotenv -e .env.local -- sh -c 'TZ=UTC INTEGRATION=1 vitest run -c vitest.integration.config.ts \"$@\"' --",
     "plans:dedupe-session-index": "dotenv -e .env.local -- tsx --conditions=react-server scripts/plans-dedupe-session-index.ts",
@@ -47,6 +47,7 @@
     "@types/node": "^20.17.6",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.2",
     "autoprefixer": "^10.4.20",
     "dotenv-cli": "^11.0.0",
     "eslint": "^8.57.1",
@@ -56,7 +57,8 @@
     "tailwindcss": "^3.4.14",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "ws": "^8.22.0"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

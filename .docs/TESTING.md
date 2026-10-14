@@ -198,6 +198,39 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   (`locks-room`, `bookings-rooms`, `bookings-core-rooms`, `locations-schedule-rooms`). Los índices únicos parciales
   muerden fixtures con `new Date()`: escalonar los instantes (`dashboard-revenue-scope.test.ts:90-104`).
 
+### Patrones nuevos de SV (Sala de Espera realtime, 13/14-oct-2026)
+
+- **Publisher fake global, a mano.** `tests/helpers/integration-setup.ts:125` mockea `@/lib/realtime-publisher-internal`
+  con `realtimeFake` (`tests/helpers/realtime-fake.ts`) en **toda** la integración **y** el perf (comparten el setup):
+  el `.env.local` puede traer una service key real y ningún test puede publicar de verdad (segunda defensa: driver
+  default `off`). Registro a mano (`calls`, `fail`, `latencyMs`, `reset()`), no `vi.fn`: con vitest 2.1.9 un `vi.fn`
+  que tira a través de un mock rompía el test aunque el código lo atrapara; por eso `fail` devuelve `{ok:false}` (como
+  el real) en vez de tirar. Los unit del hook usan `__setRealtimePublisherForTests`.
+- **«Post-commit» con `onCall`.** `realtimeFake.onCall` corre antes de que el publish responda: el test lee la fila ahí
+  y afirma que ya está commiteada (si el hook corriera dentro de la tx, la lectura desde otra conexión no la vería).
+- **Emisión por write-path** (`tests/integration/realtime-emission.test.ts`): **una llamada = un POST** por action, con
+  los refs exactos (`practitionerId`, `roomId`, `kind`, `prev` en movimientos); batch de 20 → 1 llamada con 20 refs;
+  estado de plan sin turnos → 0; `fail=true` → la action sigue `ok` y la fila quedó. Incluye Planes, turnero, webhook
+  y candado. Los huecos encontrados se escribieron como `[SV08-gap]` con la expectativa correcta y los dio vuelta el
+  fixer. Un write-path nuevo de `Booking` suma su caso acá.
+- **`fetch` fake** (`tests/helpers/fetch-fake.ts`, `makeFetchFake({status, delayMs, rejectWith})` → `{fetch, calls}`):
+  respeta `signal.abort`, así el timeout de 1,5 s y el breaker se prueban con fake timers sin red.
+- **Drivers con `deps` inyectables** (`lib/realtime-client-supabase.ts`, `-local.ts`): `RealtimeClient`,
+  `EventSource`, timers y `getToken` entran por parámetro; Node 20 no tiene `WebSocket`/`EventSource` y los tests corren
+  sin jsdom con `vi.useFakeTimers`. Mismo patrón en el chime, el título de pestaña, el motor de avisos
+  (`createArrivalAlertsEngine`) y el polling de `/sala` (`startSalaOffPolling`): lo que no es cableado de React se
+  testea directo.
+- **Tabla de verdad SQL con stubs en ROLLBACK** (`tests/integration/reception-call-m5.test.ts`): el Docker local no
+  tiene schema `realtime`, `auth.jwt()` ni roles `anon/authenticated`. El test extrae el bloque guardado de M5 entre
+  los marcadores `REALTIME_POLICY`, crea los stubs (`realtime.messages` con RLS, `realtime.topic()` y `auth.jwt()`
+  leyendo GUCs, rol `authenticated`) en una tx que termina en ROLLBACK y afirma la policy real (una sola, `SELECT`,
+  sin `with_check`) y la visibilidad con claims propios/ajenos. No se mueven ni renombran los marcadores.
+- **Render «`off` = SR».** `tests/unit/render/agenda-client.test.tsx` con `useRealtime` mockeado en `off` y snapshot:
+  con el driver apagado la agenda no cambia.
+- **`guard-realtime` probado por mutación.** `GUARD_REALTIME_ROOT=<copia del árbol>` corre el guard sobre una copia
+  mutada (policy `FOR ALL`, `SECURITY DEFINER`, `NEXT_PUBLIC_` en el secreto, write-path sin hook, import estático de
+  realtime-js) sin tocar el repo. Corre dentro de `npm run guard:isolation`.
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el
@@ -296,6 +329,10 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
   GLOBAL_READONLY quedan afuera de ese reporte a propósito.
 - **Allowlist del admin client** — falla si `getSupabaseAdminClient` (service-role, bypassa RLS)
   aparece importado fuera de un allowlist estático documentado.
+- **`scripts/guard-realtime.mjs`** (SV; corre después del anterior en `guard:isolation`) — reglas (a)-(e): una sola
+  policy `FOR SELECT TO authenticated` sobre `realtime.messages`, la función pura sin `SECURITY DEFINER` ni GRANT a
+  los roles de la Data API, todo write-path de `Booking` emite, secretos server-only y realtime-js solo por `import()`
+  dinámico. Detalle en [SECURITY.md §17](SECURITY.md).
 
 ---
 

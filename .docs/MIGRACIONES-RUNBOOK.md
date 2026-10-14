@@ -29,7 +29,7 @@ FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r';
 ```
 
 **Cadena de migraciones del go-live** (todas se aplican desde vacío, en orden de timestamp, con `migrate deploy`):
-Orden de corridas (08-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5) → ES4 → EV1 → reset + deploy único. Cada migración va sola, encabezando su ola, y sus timestamps tienen que quedar en ese orden: **M3a → M4 → M5**. M5 va con timestamp **posterior a `20261009120000`** (el de M4).
+Orden de corridas (13-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5 ✅ local) → ES4 → EV1 → reset + deploy único. Cada migración va sola, encabezando su ola, y sus timestamps tienen que quedar en ese orden: **M3a → M4 → M5**. M5 va con timestamp **posterior a `20261009120000`** (el de M4).
 
 | Migración | Corrida | Estado |
 |---|---|---|
@@ -37,8 +37,8 @@ Orden de corridas (08-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5
 | `20261004120000_plans_booking_link` (M1) | ES2a | commiteada (`0edb0c8`); el SQL no se toca |
 | `20261007120000_tenant_verticals` (**M2**) | EV0 (ola V.0, sola) | **escrita y aplicada solo en el Docker local (07-oct), commiteada (`ddfdff3`)**. sha256 de `migration.sql` = `29649aa7fb7f4c1bc25eea9e5591a630569b632295961c315c6206c653cc8bb3`. `Tenant.vertical` (enum `TenantVertical`, default `KINESIOLOGY`), `Tenant.publicBookingEnabled` (default `false`) + bloque **guardado** `REVOKE … FROM anon, authenticated` (tablas, secuencias, rutinas y default privileges; en local no hay esos roles → NOTICE + no-op). `lock_timeout` 5 s |
 | `20261008120000_billing_paid_at` (**M3a**) | ES3 (P3.0.0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`ad50059`)**. sha256 de `migration.sql` = `23a785a64586b6f8c481631620253790de7287fcf17f4ca9b7836f3bd8a75474`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.copagoPaidAt TIMESTAMP(3) NULL` (fecha del cobro manual del copago; la escribe y limpia solo `toggleBilling`/`setBookingCopagoPaid`) + `UserPreferences.dashboardPrefs JSONB NULL` (`{revenueRange: 'month'\|'week'}`) con CHECK `UserPreferences_dashboardPrefs_object_check` (objeto o NULL). Verificada objeto por objeto; `migrate status` al día (30). Sin tabla nueva ni GRANTs. Orden para prod abajo («M3a») |
-| `20261009120000_rooms` (**M4**) | SR (SR0, sola) | **escrita y aplicada solo en el Docker local (08-oct), pendiente commit**. sha256 de `migration.sql` = `5ab748c120edead75ed2c8334a042404d0ced9d5776ce45d793d6e74dc7b5056`. Aditiva, sin backfill, `lock_timeout` 5 s: enum `RoomKind`; tabla `Room` (RLS ENABLE + FORCE + `Room_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES; CHECKs de nombre, `capacity` 1..50 y orden); `Location_id_tenantId_key`; `roomId` nullable en `PractitionerSchedule` (NO ACTION), `Booking` (RESTRICT, CHECK `Booking_room_location_check`) y `TimeBlock` (CASCADE, CHECK `TimeBlock_room_scope_check`), con FKs compuestas `(roomId, tenantId)` y `(roomId, locationId)`; índice parcial `Room_locationId_name_active_key` (**no se borra** si `migrate dev` lo propone: drift aceptado, «SR M4: DRIFT ACEPTADO» en el SQL y en `schema.prisma`). Verificada objeto por objeto en `tests/integration/rooms-m4.test.ts` (2 roles); `migrate status` al día (31); `guard:isolation` OK. Orden para prod abajo («M4») |
-| `…_reception_call_realtime` (**M5**, antes "M3") | SV (ola SV0, sola) | **futura**: `Booking.calledAt` + función `kinesoft_realtime_can_read` + policy guardada sobre `realtime.messages` |
+| `20261009120000_rooms` (**M4**) | SR (SR0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`5811ea2`)**. sha256 de `migration.sql` = `5ab748c120edead75ed2c8334a042404d0ced9d5776ce45d793d6e74dc7b5056`. Aditiva, sin backfill, `lock_timeout` 5 s: enum `RoomKind`; tabla `Room` (RLS ENABLE + FORCE + `Room_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES; CHECKs de nombre, `capacity` 1..50 y orden); `Location_id_tenantId_key`; `roomId` nullable en `PractitionerSchedule` (NO ACTION), `Booking` (RESTRICT, CHECK `Booking_room_location_check`) y `TimeBlock` (CASCADE, CHECK `TimeBlock_room_scope_check`), con FKs compuestas `(roomId, tenantId)` y `(roomId, locationId)`; índice parcial `Room_locationId_name_active_key` (**no se borra** si `migrate dev` lo propone: drift aceptado, «SR M4: DRIFT ACEPTADO» en el SQL y en `schema.prisma`). Verificada objeto por objeto en `tests/integration/rooms-m4.test.ts` (2 roles); `migrate status` al día (31); `guard:isolation` OK. Orden para prod abajo («M4») |
+| `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), pendiente commit**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -70,6 +70,44 @@ M5. Solo si Martin decidiera aplicarla **antes** del reset:
    escrituras en `Booking` mientras se construye) y los `ALTER`/`ADD CONSTRAINT` sobre Booking, PractitionerSchedule y
    TimeBlock toman lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano) en vez de
    colgar la agenda. Es aditiva: puede ir **antes** que el código (el código viejo no lee `roomId`).
+
+**M5 en prod (SV).** Igual que M3a y M4: **no se aplica sola**, va en la cadena única del deploy desde vacío
+(`… → M3a → M4 → M5`). Solo si Martin decidiera aplicarla **antes** del reset:
+1. Precheck de solo lectura:
+   ```sql
+   -- la columna no existe todavía: 0 filas
+   SELECT column_name FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'Booking' AND column_name = 'calledAt';
+   -- R1: existe realtime.messages (esperado: true; relkind 'p', relrowsecurity true)
+   SELECT to_regclass('realtime.messages') IS NOT NULL AS realtime_messages;
+   SELECT c.relkind, c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'realtime' AND c.relname = 'messages';
+   -- R2: ninguna policy abierta en realtime (antes de M5: 0 filas)
+   SELECT policyname, cmd, roles, qual, with_check FROM pg_policies WHERE schemaname = 'realtime';
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. Staging primero. Después de migrar: R2 da **1 fila** `kinesoft_agenda_read | SELECT | {authenticated}` sin
+   `with_check`; en el log del deploy **no** tiene que aparecer el NOTICE `reception_call_realtime: no existe
+   realtime.messages` (en Supabase la tabla existe: si aparece, la policy no se creó y el canal privado no entrega nada).
+4. Prod: es aditiva, puede ir **antes** que el código (el código viejo no lee `calledAt`). `ALTER TABLE "Booking"` toma
+   lock exclusivo hasta el COMMIT; con `lock_timeout` 5 s falla rápido (P3009 liviano).
+
+**Deploy de SV en escalones** (después de que M5 esté aplicada, con la cadena o sola):
+1. Vercel env `REALTIME_DRIVER=off` (variable nueva) y deploy del código: nada se conecta y la app es idéntica a SR.
+2. Env `SUPABASE_JWT_SECRET` (+ `SUPABASE_JWT_KID` si la clave HS256 es del sistema nuevo de JWT Signing Keys, R4);
+   confirmar `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY` (con
+   `REALTIME_DRIVER=supabase` en Production, `lib/env.ts` hace fallar el build si falta cualquiera). El secreto y el
+   `kid` son server-only, nunca `NEXT_PUBLIC_` (guard (d)).
+3. Staging con `REALTIME_DRIVER=supabase` → verificaciones **V1-V7** (solo lectura sobre datos; `--confirm` = project
+   ref de la URL, rechaza localhost; detalle en [EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)):
+   ```bash
+   npx dotenv -e .env.staging.local -- npx tsx --conditions=react-server scripts/realtime-verify.ts \
+     --tenant <tenantId> --confirm=<project-ref>
+   ```
+   Sale con código 1 si algún chequeo da FAIL. A mano: `/sala` en dos navegadores de staging; «Llegó» en uno aparece
+   en el otro.
+4. Prod con `REALTIME_DRIVER=supabase` + **redeploy** (la env se lee al cargar el módulo). Rollback sin código:
+   `REALTIME_DRIVER=off` + redeploy (la app queda igual que SR, con polling de 60 s en `/sala`).
 
 **Orden del go-live** (staging primero, desde vacío, con QA completo; después prod):
 
@@ -104,8 +142,8 @@ M5. Solo si Martin decidiera aplicarla **antes** del reset:
 
     Y en el log del deploy, ningún `WARNING tenant_verticals: … siguen accesibles` (autochequeo de M2). Columnas:
     `SELECT vertical, "publicBookingEnabled" FROM "Tenant";` → el tenant casa con la vertical elegida.
-12. Con SV: `REALTIME_DRIVER=off` en el deploy → prechecks R1-R4 y V1-V6 en staging ([VERTICALES.md §7](VERTICALES.md))
-    → env → `supabase`.
+12. Con SV: `REALTIME_DRIVER=off` en el deploy → prechecks R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md))
+    → env → `supabase` (escalones de arriba, «Deploy de SV»).
 
 **Si falla un `migrate deploy` (P3009):** con la base vacía no hay nada que salvar: corregir la causa, re-reset y
 `migrate deploy` de nuevo (antes de abrir al cliente). Después de abrir, el rollback es revertir el deploy de Vercel.
@@ -248,7 +286,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 14 | `20261007120000_tenant_verticals` | M2: `Tenant.vertical` + `Tenant.publicBookingEnabled` + REVOKE guardado de `anon`/`authenticated` | EV0 — **ver «Go-live con reset»** |
 | 15 | `20261008120000_billing_paid_at` | M3a: `Booking.copagoPaidAt` + `UserPreferences.dashboardPrefs` (+ CHECK de objeto) | ES3 — **ver «Go-live con reset»** |
 | 16 | `20261009120000_rooms` | M4: `Room` con RLS + `roomId` en franja, turno y bloqueo (FKs compuestas, CHECKs) | SR — **ver «Go-live con reset»** |
-| 17 | `…_reception_call_realtime` (futura) | M5 (antes "M3"): `Booking.calledAt` + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
+| 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

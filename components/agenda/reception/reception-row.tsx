@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { IconActivity, IconCheck, IconClock, IconUsers, IconX } from "@/components/ui/icons";
+import { IconActivity, IconBell, IconCheck, IconClock, IconUsers, IconX } from "@/components/ui/icons";
 import { PractitionerBadge } from "@/components/agenda/grid/practitioner-badge";
 import { bookingPlanMarks } from "@/components/agenda/grid/booking-card";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
@@ -13,7 +13,7 @@ import {
   type ReceptionEntry,
   type ReceptionState,
 } from "@/lib/reception-state";
-import { stateTagText, waitText } from "@/lib/reception-view-state";
+import { stateTagText, undoHint, waitText } from "@/lib/reception-view-state";
 import { ARCHIVED_ROOM_LABEL, fmtHour, type BookingDTO } from "../agenda-utils";
 
 /**
@@ -37,20 +37,29 @@ type StateStyle = { icon: ReactNode; bg: string; fg: string; border?: string };
 // BookingStatus (por llegar = confirmado, atendido = hecho, ausente,
 // cancelado) usan la paleta única `--st-*` del `StatusTag` (P0-S04b), así
 // "Ausente" es el mismo ámbar en Recepción, Lista, drawer y perfil. Los propios
-// de Recepción (demorado, en sala, en atención) no tienen BookingStatus y
-// quedan con sus tonos; el ausente conserva el borde punteado para no
-// confundirse con "demorado" (mismo ámbar, distinto borde e ícono).
+// de Recepción (demorado, en sala, llamado, en atención) usan los tokens
+// `--rc-*` de globals.css (SV10b): antes eran literales acá y /sala, la grilla
+// y esta tabla tienen que pintar el mismo estado igual. El llamado es sky
+// sólido con texto blanco para separarse a simple vista de En sala (lime
+// pálido) y de Por llegar (sky pálido). El ausente conserva el borde punteado
+// para no confundirse con "demorado" (mismo ámbar, distinto borde e ícono).
 const STATE_STYLE: Record<ReceptionState, StateStyle> = {
   "por-llegar": { icon: <IconClock size={11} stroke={2.4} />, bg: "var(--st-confirmed-bg)", fg: "var(--st-confirmed-fg)" },
-  demorado: { icon: <IconClock size={11} stroke={2.6} />, bg: "rgba(255,176,32,0.2)", fg: "#9A5B00", border: "1px solid rgba(154,91,0,0.35)" },
-  "en-sala": { icon: <IconUsers size={11} stroke={2.4} />, bg: "rgba(200,245,100,0.45)", fg: "var(--navy-900)" },
-  "en-atencion": { icon: <IconActivity size={11} stroke={2.4} />, bg: "var(--navy-900)", fg: "#fff" },
+  demorado: { icon: <IconClock size={11} stroke={2.6} />, bg: "var(--rc-late-bg)", fg: "var(--rc-late-fg)", border: "1px solid var(--rc-late-border)" },
+  "en-sala": { icon: <IconUsers size={11} stroke={2.4} />, bg: "var(--rc-insala-bg)", fg: "var(--rc-insala-fg)" },
+  llamado: { icon: <IconBell size={11} stroke={2.4} />, bg: "var(--rc-called-bg)", fg: "var(--rc-called-fg)" },
+  "en-atencion": { icon: <IconActivity size={11} stroke={2.4} />, bg: "var(--rc-attending-bg)", fg: "var(--rc-attending-fg)" },
   atendido: { icon: <IconCheck size={11} stroke={3} />, bg: "var(--st-completed-bg)", fg: "var(--st-completed-fg)" },
   ausente: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-noshow-bg)", fg: "var(--st-noshow-fg)", border: "1px dashed rgba(154,91,0,0.4)" },
   cancelado: { icon: <IconX size={11} stroke={2.6} />, bg: "var(--st-cancelled-bg)", fg: "var(--st-cancelled-fg)" },
 };
 
-export function ReceptionStateTag({ entry }: { entry: Pick<ReceptionEntry<BookingDTO>, "state" | "waitingMinutes" | "lateMinutes"> }) {
+export function ReceptionStateTag({
+  entry,
+}: {
+  // `calledMinutes` (SV10b): sin él el tag del llamado dice "Llamado" a secas.
+  entry: Pick<ReceptionEntry<BookingDTO>, "state" | "waitingMinutes" | "lateMinutes" | "calledMinutes">;
+}) {
   const s = STATE_STYLE[entry.state];
   return (
     <span
@@ -65,13 +74,17 @@ export function ReceptionStateTag({ entry }: { entry: Pick<ReceptionEntry<Bookin
   );
 }
 
-/** Qué pasa con el estado tras "Deshacer", para el aria-label del botón. */
-const UNDO_HINT: Partial<Record<ReceptionState, string>> = {
-  "en-sala": "vuelve a Por llegar",
-  "en-atencion": "vuelve a En sala",
-  atendido: "vuelve al estado anterior",
-  ausente: "vuelve al estado anterior",
-};
+/**
+ * La acción principal de la fila (botón lleno): la primera de
+ * `allowedTransitions` que avanza el turno. En sala → «Llamar» (y «En
+ * atención» queda secundario: entrar sin llamar es la excepción); llamado →
+ * «En atención»; en atención → «Atendido»; por llegar → «Llegó». Fuera de hoy
+ * (`visibleActions` saca Llamar/En atención) cae en «Atendido». «Ausente» y
+ * «Deshacer» nunca son primarios.
+ */
+function primaryAction(actions: ReadonlyArray<ReceptionAction>): ReceptionAction | undefined {
+  return actions.find((a) => a !== "deshacer" && a !== "ausente");
+}
 
 export function ReceptionRow({
   entry,
@@ -104,6 +117,12 @@ export function ReceptionRow({
   const wait = waitText(b, entry.state, now);
   const cancelled = entry.state === "cancelado";
   const plan = bookingPlanMarks(b);
+  const primary = primaryAction(actions);
+  // SV10b: quién opera ESTA fila. `canOperate` del DTO (S07sb) = full ||
+  // `agenda.operateAll`: el profesional en las suyas, la Secretaria/OWNER/ADMIN
+  // en todas (SV-D2: la Secretaria llama en nombre del profesional). Sin el
+  // campo (proyecciones viejas) se asume operable; el server decide igual.
+  const operable = b.canOperate !== false;
 
   return (
     <tr
@@ -180,18 +199,20 @@ export function ReceptionRow({
       </td>
       {canOperate && (
       <td data-label="Acciones" className="rcp-actions-cell">
-        {!cancelled ? (
+        {!cancelled && operable ? (
           <div className="rcp-actions">
             {actions.map((a) => (
               <button
                 key={a}
                 type="button"
-                className={a === "deshacer" ? "rcp-btn rcp-btn-ghost" : a === "llego" || a === "atendido" ? "rcp-btn rcp-btn-primary" : "rcp-btn"}
+                className={a === "deshacer" ? "rcp-btn rcp-btn-ghost" : a === primary ? "rcp-btn rcp-btn-primary" : "rcp-btn"}
                 disabled={pending}
                 onClick={() => onAction(b, a)}
                 aria-label={
                   a === "deshacer"
-                    ? `Deshacer (${UNDO_HINT[entry.state] ?? "vuelve un paso"}): ${who}`
+                    ? // SV10b: el destino sale de `undoTarget` (en atención vuelve a
+                      // Llamado solo si hubo llamado), no de una tabla local.
+                      `Deshacer (${undoHint(b, now) ?? "vuelve un paso"}): ${who}`
                     : `Marcar ${RECEPTION_ACTION_LABEL[a]}: ${who}`
                 }
               >

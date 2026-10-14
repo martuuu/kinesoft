@@ -13,7 +13,7 @@ const DAY = "2026-10-05";
 const iso = (h: string) => new Date(`${DAY}T${h}:00-03:00`).toISOString();
 const NOW = new Date(`${DAY}T10:00:00-03:00`);
 function dto(id: string, h: string, over: Partial<BookingDTO> = {}): BookingDTO {
-  return { id, scheduledFor: iso(h), durationMin: 45, status: "CONFIRMED", serviceId: "s", serviceName: "Kinesiología", serviceColor: "#3d74b5", practitionerId: "p1", patientId: "pat", patientName: `Paciente ${id}`, patientCondition: null, obraSocial: "Particular", copagoCents: 0, updatedAt: iso("08:00"), notes: null, title: null, description: null, patientAccess: "full", arrivedAt: null, attendingAt: null, ...over };
+  return { id, scheduledFor: iso(h), durationMin: 45, status: "CONFIRMED", serviceId: "s", serviceName: "Kinesiología", serviceColor: "#3d74b5", practitionerId: "p1", patientId: "pat", patientName: `Paciente ${id}`, patientCondition: null, obraSocial: "Particular", copagoCents: 0, updatedAt: iso("08:00"), notes: null, title: null, description: null, patientAccess: "full", arrivedAt: null, attendingAt: null, calledAt: null, ...over };
 }
 const rows = [
   dto("futuro", "10:30", { practitionerId: "p2" }),
@@ -87,6 +87,68 @@ describe("ReceptionView render", () => {
     expect(cell("sin")).toContain("—");
     expect(cell("sin")).not.toContain("Sala archivada");
     expect(cell("c2")).toContain("Consultorio 2");
+  });
+});
+
+
+describe("[SV10b] «Llamar» en Recepción", () => {
+  const svRows = [
+    dto("sala", "09:50", { arrivedAt: iso("09:45") }),
+    dto("llamado", "09:40", { arrivedAt: iso("09:30"), calledAt: iso("09:55") }),
+    dto("boxllamado", "09:00", { arrivedAt: iso("08:55"), calledAt: iso("09:02"), attendingAt: iso("09:05") }),
+    dto("boxdirecto", "09:10", { arrivedAt: iso("09:05"), attendingAt: iso("09:12") }),
+    dto("ajeno", "09:20", { arrivedAt: iso("09:15"), practitionerId: "p2", canOperate: false }),
+  ];
+  const render = (over: { now?: Date; canOperate?: boolean } = {}) =>
+    renderToStaticMarkup(
+      <ReceptionView dayKey={DAY} bookings={svRows} practitioners={pr} now={over.now ?? NOW} canOperate={over.canOperate ?? true} onOpenBooking={noop} onChanged={noop} />
+    );
+  // El <button> completo cuyo aria-label es `label` (para mirar su clase).
+  const buttonWith = (html: string, label: string) => {
+    const i = html.indexOf(`aria-label="${label}"`);
+    expect(i).toBeGreaterThan(-1);
+    return html.slice(html.lastIndexOf("<button", i), html.indexOf("</button>", i));
+  };
+
+  it("fila en sala de hoy: «Llamar» primario y «En atención» secundario", () => {
+    const html = render();
+    expect(buttonWith(html, "Marcar Llamar: Paciente sala, 09:50")).toContain("rcp-btn-primary");
+    expect(buttonWith(html, "Marcar En atención: Paciente sala, 09:50")).not.toContain("rcp-btn-primary");
+  });
+  it("fila llamada: tag «Llamado 5'» con el token --rc-called-* y «En atención» primario", () => {
+    const html = render();
+    expect(html).toContain("Llamado 5&#x27;");
+    expect(html).toContain("background:var(--rc-called-bg);color:var(--rc-called-fg)");
+    expect(buttonWith(html, "Marcar En atención: Paciente llamado, 09:40")).toContain("rcp-btn-primary");
+    expect(html).not.toContain("Marcar Llamar: Paciente llamado");
+  });
+  it("deshacer: desde llamado vuelve a En sala; desde en atención con llamado vuelve a Llamado, sin llamado a En sala", () => {
+    const html = render();
+    expect(html).toContain("Deshacer (vuelve a En sala): Paciente llamado, 09:40");
+    expect(html).toContain("Deshacer (vuelve a Llamado): Paciente boxllamado, 09:00");
+    expect(html).toContain("Deshacer (vuelve a En sala): Paciente boxdirecto, 09:10");
+  });
+  it("contador «Llamados»", () => {
+    const html = render();
+    expect(html).toMatch(/Llamados<\/div><div class="rcp-counter-value k-mono">1</);
+  });
+  it("fuera de hoy no hay «Llamar»", () => {
+    const html = render({ now: new Date("2026-10-04T10:00:00-03:00") });
+    expect(html).not.toContain("Marcar Llamar");
+    expect(html).toContain("«Llamar»");
+  });
+  it("quien no opera la fila no ve «Llamar» (ni las demás acciones de esa fila)", () => {
+    const html = render();
+    expect(html).not.toContain("Marcar Llamar: Paciente ajeno");
+    expect(html).not.toContain("Deshacer (vuelve a Por llegar): Paciente ajeno");
+    expect(render({ canOperate: false })).not.toContain("Marcar Llamar");
+  });
+  it("tokens --rc-* en vez de literales (en sala, en atención, demorado)", () => {
+    const html = renderToStaticMarkup(<ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} />);
+    expect(html).toContain("background:var(--rc-insala-bg);color:var(--rc-insala-fg)");
+    expect(html).toContain("background:var(--rc-attending-bg);color:var(--rc-attending-fg)");
+    expect(html).toContain("background:var(--rc-late-bg);color:var(--rc-late-fg);border:1px solid var(--rc-late-border)");
+    expect(html).not.toContain("rgba(200,245,100");
   });
 });
 

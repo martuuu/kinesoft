@@ -57,10 +57,12 @@ export type NavItem = {
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/dashboard", label: "Inicio", icon: "home", shortcut: "Inicio" },
   { href: "/agenda", label: "Agenda", icon: "calendar", module: "agenda", shortcut: "Agenda" },
-  // Hasta que SV cree `/sala` (SV11a cambia este href). Capability = la de
-  // Recepción: BILLING ve la agenda pero no recepciona.
+  // Sala de espera en tiempo real (SV10a). Antes apuntaba a
+  // `/agenda?view=reception`; SV11a la movió a su ruta propia, así el sidebar
+  // ya no compite con Agenda por la misma ruta. Capability = la de Recepción:
+  // BILLING ve la agenda pero no recepciona.
   {
-    href: "/agenda?view=reception",
+    href: "/sala",
     label: "Sala de espera",
     icon: "clock",
     module: "salaEspera",

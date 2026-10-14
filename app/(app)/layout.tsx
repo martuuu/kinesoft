@@ -11,6 +11,7 @@ import { decideAppGate } from "@/lib/onboarding-logic";
 import { getSessionUser } from "@/lib/onboarding-internal";
 import { modulesFor } from "@/lib/tenant-modules";
 import { capabilitiesFor } from "@/lib/capabilities";
+import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
 
 /**
  * Guard for the entire authenticated workspace. Renders the AppShell only
@@ -76,7 +77,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es
   // `assertModule`/`requireCapability` en cada action.
   const modules = Array.from(modulesFor(actor.entitlements));
-  const caps = Array.from(capabilitiesFor(role));
+  const capSet = capabilitiesFor(role);
+  const caps = Array.from(capSet);
+  // SV07b: qué driver realtime usa este actor (off/local/supabase) y, con
+  // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas
+  // para no releer la membresía; el token del canal lo pide el cliente aparte.
+  const realtime = await realtimeBootstrap(actor, capSet);
+  // SV11b (SV-D9): a quién se le avisa. Llegada → quien ATIENDE: todo Actor
+  // tiene `practitionerId` (también la Secretaria y BILLING), así que «atiende»
+  // = rol clínico (`clinical.read`: OWNER/ADMIN/PRACTITIONER). Llamado → quien
+  // opera la agenda de todos. Las prefs salen de `agendaPrefs` ya sanitizadas.
+  const alertViewer = {
+    practitionerId: capSet.has("clinical.read") ? actor.practitionerId : null,
+    canOperateAll: capSet.has("agenda.operateAll"),
+  };
+  const initialAlertPrefs = {
+    arrivalAlert: prefs.agendaView.arrivalAlert,
+    callAlert: prefs.agendaView.callAlert,
+  };
   return (
     <TweaksProvider
       initialAgenda={{
@@ -85,7 +103,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         agendaShowSunday: prefs.agendaShowSunday,
       }}
     >
-      <AppShell isPlatformAdmin={actor.isPlatformAdmin} modules={modules} caps={caps}>
+      <AppShell
+        isPlatformAdmin={actor.isPlatformAdmin}
+        modules={modules}
+        caps={caps}
+        realtime={realtime}
+        alertViewer={alertViewer}
+        initialAlertPrefs={initialAlertPrefs}
+      >
         {children}
       </AppShell>
     </TweaksProvider>
