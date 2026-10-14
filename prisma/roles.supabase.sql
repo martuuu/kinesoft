@@ -10,9 +10,8 @@
 -- que tiene CREATEROLE), DESPUÉS de `prisma migrate deploy`. Los passwords se
 -- pasan como variables de psql — NUNCA van escritos en este archivo:
 --
---   psql "$OWNER_URL" \
---     -v app_password="$(openssl rand -base64 32)" \
---     -v service_password="$(openssl rand -base64 32)" \
+--   APP_PW="$(openssl rand -hex 24)"; SVC_PW="$(openssl rand -hex 24)"   # hex: base64 rompe las URLs
+--   psql "$OWNER_URL" -v app_password="$APP_PW" -v service_password="$SVC_PW" \
 --     -f prisma/roles.supabase.sql
 --
 -- (guardá los dos secretos generados en el secret manager / env de Vercel).

@@ -9,6 +9,13 @@
 
 ## Go-live con reset (07-oct-2026) — **manda sobre §2.1-§2.4 donde choquen**
 
+> **Paso a paso con comandos, consolas y variables: [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)** (14-oct). Esta
+> sección es la referencia técnica; si hay diferencias, manda la guía.
+>
+> ⚠️ **Antes del reset:** `DROP SCHEMA public` borra también la biblioteca global (ejercicios, condiciones de
+> Diagnóstico, tags, regiones, media) y **no hay carga versionada** para recuperarla en prod (el seed es solo local).
+> Contar qué hay y resolverlo es el paso 1 de la guía.
+>
 > **Decisión de Martin del 07-oct:** prod se **resetea** antes del go-live (reset total; el cliente vuelve a cargar).
 > No hay datos de prod que preservar: el deploy de todo el bloque B (A + B-pre + Planes + verticales + Sala de Espera)
 > es **una sola vez**, con la cadena completa de migraciones aplicada **desde vacío**. Contexto y contratos:
@@ -307,8 +314,10 @@ GROUP BY 1,2,3 HAVING count(*) > 1;
 # a) Roles: app sin BYPASSRLS + service con BYPASSRLS. Passwords por variable
 #    (nunca en el archivo); re-correrlo ROTA los passwords.
 set -a; . ./.env.prod.local; set +a
-psql "$DIRECT_URL" -v app_password="$(openssl rand -base64 32)" \
-  -v service_password="$(openssl rand -base64 32)" -f prisma/roles.supabase.sql
+# -hex y no base64: `/`, `+` y `=` rompen las URLs de conexión (hay que guardarlas para Vercel).
+APP_PW="$(openssl rand -hex 24)"; SVC_PW="$(openssl rand -hex 24)"
+psql "$DIRECT_URL" -v app_password="$APP_PW" -v service_password="$SVC_PW" -f prisma/roles.supabase.sql
+echo "app: $APP_PW"; echo "service: $SVC_PW"    # copiarlas a un gestor de contraseñas ahora
 #    → después, en Vercel: DATABASE_URL apunta al rol app (pooler 6543)
 #      y DATABASE_URL_SERVICE al rol kinesoft_service (cargala ANTES del flip).
 
