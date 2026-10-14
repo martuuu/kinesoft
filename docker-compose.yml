@@ -39,5 +39,24 @@ services:
     depends_on:
       - db
 
+  # IAM-0b · buzón local para ver los mails de la app (invitaciones, reset,
+  # portal) tal como llegan, sin mandar nada afuera. Perfil opcional: NO se
+  # levanta con `docker compose up -d db` ni con un `up` pelado.
+  #   docker compose --profile mail up -d mailpit
+  #   UI: http://localhost:8025 · en .env.local: EMAIL_TRANSPORT="mailpit"
+  # La app le habla por la API HTTP (POST /api/v1/send, lib/email/mailpit.ts);
+  # el SMTP (1025) queda publicado por si otra herramienta lo necesita.
+  # Sin volumen: los mails viven en memoria y se pierden al bajarlo (a propósito).
+  mailpit:
+    image: axllent/mailpit:v1.22.3
+    container_name: kinesoft-mailpit
+    profiles: ["mail"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+
 volumes:
   kinesoft_pgdata:

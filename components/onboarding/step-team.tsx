@@ -17,19 +17,53 @@ import { createInvitation, revokeInvitation } from "@/lib/invitations";
 import { openPendingInvitation } from "@/lib/onboarding";
 import { formatDateAR } from "@/lib/format";
 import { STEP } from "@/lib/onboarding-logic";
+import { INVITABLE_ROLES, roleLabel as labelOf, roleDescription } from "@/lib/roles";
+import type { Role, TenantVertical } from "@prisma/client";
 import type { OnboardingInvitation, PendingInvite } from "@/lib/onboarding-internal";
 import { StepHeader } from "./onboarding-shell";
 import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
 
-const ROLE_OPTIONS = [
-  { value: "PRACTITIONER", label: "Kinesiólogo/a" },
-  { value: "ADMIN", label: "Admin" },
-  { value: "ASSISTANT", label: "Asistente / Secretaría" },
-  { value: "BILLING", label: "Facturación" },
-] as const;
-const roleLabel = (r: string) => ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r;
+type InvitableRole = "PRACTITIONER" | "ADMIN" | "ASSISTANT" | "BILLING";
 
-export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] }) {
+/**
+ * Etiqueta única de `lib/roles.ts` (IAM-0c). Acá el rol llega como `string`
+ * (`OnboardingInvitation`/`PendingInvite`): uno desconocido se muestra tal
+ * cual en vez de romper. Sin vertical → «Kinesiólogo/a» (el alta todavía no
+ * le pasa la del consultorio: handoff de IAM-0c a `app/onboarding/page.tsx`).
+ */
+const ROLE_SET: ReadonlySet<string> = new Set(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]);
+const roleLabel = (r: string, vertical?: TenantVertical | null) =>
+  ROLE_SET.has(r) ? labelOf(r as Role, vertical) : r;
+
+/**
+ * Selector de rol con la descripción del elegido debajo (un <option> nativo
+ * no admite segunda línea). Controlado solo para el texto de ayuda; el valor
+ * viaja por FormData como antes. Se remonta con el form (`formKey`), así que
+ * vuelve al default después de cada invitación.
+ */
+function RoleSelect({ vertical }: { vertical?: TenantVertical | null }) {
+  const [role, setRole] = useState<InvitableRole>("PRACTITIONER");
+  return (
+    <FormField
+      as="select"
+      label="Rol"
+      name="role"
+      value={role}
+      onChange={(v) => setRole(v as InvitableRole)}
+      hint={roleDescription(role, vertical)}
+      options={INVITABLE_ROLES.map((r) => ({ value: r, label: labelOf(r, vertical) }))}
+    />
+  );
+}
+
+export function StepTeam({
+  invitations,
+  vertical,
+}: {
+  invitations: OnboardingInvitation[];
+  /** Vertical del consultorio en alta, para «Kinesiólogo/a» vs «Profesional». */
+  vertical?: TenantVertical | null;
+}) {
   const { go, refresh } = useStepNav();
   const confirm = useConfirm();
   const toast = useToast();
@@ -46,7 +80,7 @@ export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] 
         email: String(fd.get("email") ?? "").trim(),
         firstName: String(fd.get("firstName") ?? ""),
         lastName: String(fd.get("lastName") ?? ""),
-        role: String(fd.get("role") ?? "PRACTITIONER") as (typeof ROLE_OPTIONS)[number]["value"],
+        role: String(fd.get("role") ?? "PRACTITIONER") as InvitableRole,
       });
       if (!r.ok) {
         setError(r.error);
@@ -82,7 +116,7 @@ export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] 
             <ItemRow
               key={i.id}
               title={`${i.firstName} ${i.lastName}`}
-              meta={`${i.email} · ${roleLabel(i.role)} · pendiente`}
+              meta={`${i.email} · ${roleLabel(i.role, vertical)} · pendiente`}
               action={
                 <Button type="button" variant="ghost" onClick={() => revoke(i)} disabled={pending} aria-label={`Cancelar invitación a ${i.email}`} style={{ padding: 8 }}>
                   <IconX size={14} />
@@ -106,13 +140,7 @@ export function StepTeam({ invitations }: { invitations: OnboardingInvitation[] 
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
           <FormField label="Email" name="email" type="email" required error={fieldErrors.email?.[0]} />
-          <FormField
-            as="select"
-            label="Rol"
-            name="role"
-            defaultValue="PRACTITIONER"
-            options={ROLE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-          />
+          <RoleSelect vertical={vertical} />
         </div>
         <div>
           <Button type="submit" variant="ghost" disabled={pending}>

@@ -5,6 +5,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { prismaService as prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
+import { linkPortalPatientOnCallback } from "@/lib/portal-link-internal";
 
 export const runtime = "nodejs";
 
@@ -58,39 +59,9 @@ export async function GET(req: Request) {
   });
 
   if (tenantSlug && user.email && emailVerified) {
-    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
-    const isStaff = !!(await prisma.membership.findFirst({
-      where: { userId: user.id },
-      select: { id: true },
-    }));
-    if (tenant && isStaff) {
-      logger.warn("portal.link.refused", { tenantSlug, reason: "identity_is_staff" });
-    } else if (tenant) {
-      const patient = await prisma.patient.findFirst({
-        where: { tenantId: tenant.id, email: { equals: user.email, mode: "insensitive" } },
-        select: { id: true, userId: true },
-      });
-      // Only link if this Patient row has no userId yet OR is already
-      // bound to this same user. Refuses to "steal" a Patient already
-      // linked to another Supabase identity.
-      if (patient && (patient.userId == null || patient.userId === user.id)) {
-        await prisma.patient.update({
-          where: { id: patient.id },
-          data: { userId: user.id },
-        });
-        await prisma.patientTenantLink.upsert({
-          where: { patientId_tenantId: { patientId: patient.id, tenantId: tenant.id } },
-          create: { patientId: patient.id, tenantId: tenant.id },
-          update: {},
-        });
-      } else if (patient && patient.userId && patient.userId !== user.id) {
-        logger.warn("portal.link.refused", {
-          tenantSlug,
-          email: user.email,
-          reason: "patient already linked to a different identity",
-        });
-      }
-    }
+    // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable
+    // contra Postgres; una ruta de Next no puede exportar helpers).
+    await linkPortalPatientOnCallback({ id: user.id, email: user.email, emailVerified }, tenantSlug);
   } else if (tenantSlug && !emailVerified) {
     logger.warn("portal.link.refused", {
       tenantSlug,

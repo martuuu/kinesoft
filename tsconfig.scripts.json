@@ -6,11 +6,12 @@
   // por arrastre. `incremental: false` para no dejar un .tsbuildinfo suelto.
   // SV04b: también `scripts/realtime-verify.ts` (V1-V6 de staging); compila
   // aunque `ws` no esté instalado (import dinámico con especificador en variable).
+  // IAM-0b: `scripts/diagnose-email.ts` (prueba del canal de mail).
   // Uso: npx tsc --noEmit -p tsconfig.scripts.json
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "incremental": false
   },
-  "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/lib/**/*.ts"],
+  "include": ["scripts/plans-*.ts", "scripts/realtime-verify.ts", "scripts/diagnose-email.ts", "scripts/diagnose-auth.ts", "scripts/lib/**/*.ts"],
   "exclude": ["node_modules"]
 }

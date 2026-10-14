@@ -23,6 +23,11 @@
  *   - match de email **case-insensitive**: había fichas cargadas con
  *     mayúsculas ("Juan@Mail.com") que nunca aparecían en el portal.
  *   - el check-in **ya no escribe `Patient.notes`** (ver `submitCheckIn`).
+ *
+ * IAM-0a: el match por email era `equals` + `mode: "insensitive"` = `ILIKE`
+ * con el email pelado, y `_`/`%` son comodines: `jpere_@hotmail.com`
+ * (verificado) veía fichas, turnos y planes de `jperez@hotmail.com`. Ahora va
+ * por `emailEqualsFilter` (escapado) + `sameEmail` como post-filtro exacto.
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
@@ -36,6 +41,7 @@ import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { audit } from "@/lib/audit";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import type { ActionResult } from "@/lib/validation";
 import type {
   PortalAuth,
@@ -81,7 +87,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
   if (me.isStaff) return { signedIn: true, email: me.email, fullName: me.fullName, patients: [] };
 
   const patients = await prisma.patient.findMany({
-    where: { email: { equals: me.email, mode: "insensitive" } },
+    where: { email: emailEqualsFilter(me.email) },
     include: {
       tenant: { select: { slug: true, name: true } },
       programs: {
@@ -100,11 +106,15 @@ export async function getPortalAuth(): Promise<PortalAuth> {
     },
   });
 
+  // Post-filtro exacto (IAM-0a): defensa en profundidad si el filtro de arriba
+  // volviera a interpretar comodines.
+  const own = patients.filter((p) => sameEmail(p.email, me.email));
+
   return {
     signedIn: true,
     email: me.email,
     fullName: me.fullName,
-    patients: patients.map((p): PortalPatient => ({
+    patients: own.map((p): PortalPatient => ({
       id: p.id,
       tenantSlug: p.tenant.slug,
       tenantName: p.tenant.name,
@@ -138,10 +148,11 @@ async function authedPatientByTenant(tenantSlug: string) {
   const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
   if (!tenant) return null;
   const patient = await prisma.patient.findFirst({
-    where: { tenantId: tenant.id, email: { equals: me.email, mode: "insensitive" } },
-    select: { id: true, firstName: true, lastName: true, assignedPractitionerId: true },
+    where: { tenantId: tenant.id, email: emailEqualsFilter(me.email) },
+    select: { id: true, email: true, firstName: true, lastName: true, assignedPractitionerId: true },
   });
-  if (!patient) return null;
+  // IAM-0a: post-filtro exacto (la ficha autoriza plan, check-in y PHI).
+  if (!patient || !sameEmail(patient.email, me.email)) return null;
   return { user: me, tenant, patient };
 }
 

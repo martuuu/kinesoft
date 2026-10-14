@@ -14,6 +14,7 @@ import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { isCustomSchedule, type OnboardingProgress } from "@/lib/onboarding-logic";
 import { agendaDefaultIds } from "@/lib/agenda-defaults";
 import type { LocationRow } from "@/lib/locations-schemas";
@@ -56,7 +57,9 @@ export async function isPortalPatientIdentity(user: { id: string; email: string 
     where: {
       OR: [
         { userId: user.id },
-        { email: { equals: user.email, mode: "insensitive" }, userId: { not: null } },
+        // IAM-0a: escapado; pelado, `ana_@x.com` quedaba marcada como paciente
+        // por la ficha con portal de `anax@x.com` y no podía armar su consultorio.
+        { email: emailEqualsFilter(user.email), userId: { not: null } },
       ],
     },
     select: { id: true },
@@ -148,18 +151,24 @@ export type OnboardingContext =
       progress: OnboardingProgress;
     };
 
-/** Invitaciones vivas para el email de la sesión (en cualquier consultorio). */
+/**
+ * Invitaciones vivas para el email de la sesión (en cualquier consultorio).
+ *
+ * IAM-0a: el email iba pelado a un `ILIKE` y `jpere_@hotmail.com` veía (y con
+ * `openPendingInvitation` reabría, rotando el token) las invitaciones de
+ * `jperez@hotmail.com`. Filtro escapado + `sameEmail` como post-filtro.
+ */
 export async function listPendingInvitesFor(email: string): Promise<PendingInvite[]> {
   const rows = await prismaService.invitation.findMany({
     where: {
-      email: { equals: email, mode: "insensitive" },
+      email: emailEqualsFilter(email),
       acceptedAt: null,
       expiresAt: { gt: new Date() },
     },
-    select: { id: true, role: true, expiresAt: true, tenant: { select: { name: true } } },
+    select: { id: true, email: true, role: true, expiresAt: true, tenant: { select: { name: true } } },
     orderBy: { invitedAt: "desc" },
   });
-  return rows.map((r) => ({ id: r.id, tenantName: r.tenant.name, role: r.role, expiresAt: r.expiresAt }));
+  return rows.filter((r) => sameEmail(r.email, email)).map((r) => ({ id: r.id, tenantName: r.tenant.name, role: r.role, expiresAt: r.expiresAt }));
 }
 
 /**

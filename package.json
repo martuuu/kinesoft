@@ -16,6 +16,7 @@
     "prisma:seed": "dotenv -e .env.local -- tsx prisma/seed.ts",
     "prisma:studio": "dotenv -e .env.local -- prisma studio",
     "prisma:reset": "dotenv -e .env.local -- prisma migrate reset",
+    "diag:email": "tsx --conditions=react-server scripts/diagnose-email.ts",
     "guard:isolation": "node scripts/guard-tenant-isolation.mjs && node scripts/guard-realtime.mjs",
     "catalog:import": "dotenv -e .env.local -- tsx scripts/catalog-import.ts",
     "test:integration": "dotenv -e .env.local -- sh -c 'TZ=UTC INTEGRATION=1 vitest run -c vitest.integration.config.ts \"$@\"' --",

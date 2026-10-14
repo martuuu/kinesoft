@@ -90,3 +90,53 @@ describe("parseEnv — REALTIME_DRIVER (SV)", () => {
     }
   });
 });
+
+// [IAM-0b] Mail (C-IAM1): todo opcional. En Production, sin RESEND_API_KEY o
+// EMAIL_FROM la app no manda mails (transporte log), pero el deploy NO se cae:
+// se vuelven obligatorias cuando Martin cargue el dominio de envío (§19.9).
+describe("parseEnv — mail (IAM-0b)", () => {
+  const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("local/CI sin nada: todo undefined, sin fallar", () => {
+    const e = parseEnv({});
+    expect(e.RESEND_API_KEY).toBeUndefined();
+    expect(e.EMAIL_FROM).toBeUndefined();
+    expect(e.EMAIL_TRANSPORT).toBeUndefined();
+    expect(e.EMAIL_REPLY_TO).toBeUndefined();
+    expect(e.MAILPIT_URL).toBeUndefined();
+  });
+  it("vacíos (como en .env.example) cuentan como no seteados", () => {
+    const e = parseEnv({ EMAIL_TRANSPORT: "", MAILPIT_URL: "", EMAIL_REPLY_TO: "", EMAIL_FROM: "", RESEND_API_KEY: "" });
+    expect(e.EMAIL_TRANSPORT).toBeUndefined();
+    expect(e.MAILPIT_URL).toBeUndefined();
+  });
+  it("EMAIL_TRANSPORT acepta resend|mailpit|log y rechaza otro valor", () => {
+    for (const t of ["resend", "mailpit", "log"] as const) expect(parseEnv({ EMAIL_TRANSPORT: t }).EMAIL_TRANSPORT).toBe(t);
+    expect(() => parseEnv({ EMAIL_TRANSPORT: "smtp" })).toThrow(/EMAIL_TRANSPORT/);
+  });
+  it("MAILPIT_URL tiene que ser una URL", () => {
+    expect(parseEnv({ MAILPIT_URL: "http://localhost:8025" }).MAILPIT_URL).toBe("http://localhost:8025");
+    expect(() => parseEnv({ MAILPIT_URL: "localhost" })).toThrow(/MAILPIT_URL/);
+  });
+  it("Production sin RESEND_API_KEY ni EMAIL_FROM: NO falla, avisa por console.error", () => {
+    const spy = quiet();
+    expect(() => parseEnv(PROD_OK)).not.toThrow();
+    const msg = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(msg).toMatch(/RESEND_API_KEY/);
+    expect(msg).toMatch(/EMAIL_FROM/);
+    spy.mockRestore();
+  });
+  it("Production con mail configurado no lo lista entre lo que falta", () => {
+    const spy = quiet();
+    parseEnv({ ...PROD_OK, RESEND_API_KEY: "re_x", EMAIL_FROM: "KineSoft <no-reply@mail.kinesoft.com.ar>" });
+    const msg = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(msg).not.toMatch(/RESEND_API_KEY|EMAIL_FROM/);
+    spy.mockRestore();
+  });
+  it("Preview sin mail no avisa (el aviso es solo de Production)", () => {
+    const spy = quiet();
+    parseEnv({ VERCEL_ENV: "preview" });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});

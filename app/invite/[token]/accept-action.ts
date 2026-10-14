@@ -9,6 +9,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { tags } from "@/lib/cache-tags";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
@@ -58,7 +59,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
   if (!invite) return { ok: false, error: "Invitación inválida." };
   if (invite.acceptedAt) return { ok: false, error: "Esta invitación ya fue aceptada." };
   if (invite.expiresAt < new Date()) return { ok: false, error: "La invitación venció." };
-  if (invite.email.toLowerCase() !== user.email.toLowerCase()) {
+  if (!sameEmail(invite.email, user.email)) {
     return { ok: false, error: "El email de tu sesión no coincide con la invitación." };
   }
 
@@ -71,7 +72,9 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
     where: {
       OR: [
         { userId: user.id },
-        { email: { equals: user.email, mode: "insensitive" }, userId: { not: null } },
+        // IAM-0a: escapado. Pelado en el ILIKE, la identidad `ana_@x.com` se
+        // rechazaba por la ficha con portal de `anax@x.com` (otra persona).
+        { email: emailEqualsFilter(user.email), userId: { not: null } },
       ],
     },
     select: { id: true },

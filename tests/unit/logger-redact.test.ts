@@ -23,6 +23,12 @@ describe("redactString", () => {
     );
     expect(redactString("/auth/callback?code=xyz&state=1")).toBe("/auth/callback?code=[redacted]&state=1");
   });
+  it("[IAM-0b] token_hash de los links de mail (/auth/confirm), sin tocar type ni next", () => {
+    expect(redactString("https://app.kinesoft.com.ar/auth/confirm?token_hash=pkce_abc123&type=invite&next=/agenda")).toBe(
+      "https://app.kinesoft.com.ar/auth/confirm?token_hash=[redacted]&type=invite&next=/agenda",
+    );
+    expect(redactString("/auth/confirm?type=recovery&token_hash=xyz")).toBe("/auth/confirm?type=recovery&token_hash=[redacted]");
+  });
   it("DNI con puntos o precedido de 'DNI'", () => {
     expect(redactString("paciente 30.123.456 duplicado")).toBe("paciente [dni] duplicado");
     expect(redactString("DNI: 30123456 ya existe")).toBe("DNI [redacted] ya existe");

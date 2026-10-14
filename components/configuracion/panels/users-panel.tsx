@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { Role } from "@prisma/client";
+import type { Role, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -19,6 +19,8 @@ import {
   changeMemberRole,
   removeMember,
 } from "@/lib/invitations";
+import { ROLE_ORDER, INVITABLE_ROLES, roleLabel, roleDescription } from "@/lib/roles";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { ErrorBox } from "../controls";
 
 export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMemberRow[]; pending: InvitationRow[] }) {
@@ -90,16 +92,21 @@ export function UsersPanel({ team, pending: pendingInvites }: { team: TeamMember
   );
 }
 
-const ROLE_LABELS: Record<Role, string> = {
-  OWNER: "Owner",
-  ADMIN: "Admin",
-  PRACTITIONER: "Kinesiólogo",
-  ASSISTANT: "Asistente",
-  BILLING: "Facturación",
-};
+/**
+ * Vertical del consultorio para la etiqueta del profesional (IAM-0c):
+ * «Kinesiólogo/a» o «Profesional». El contexto de módulos no trae la
+ * vertical, pero `sesiones` existe solo en Kinesiología (`lib/tenant-modules.ts`)
+ * y es independiente del plan. Fuera del provider (render tests) el default
+ * es Kine, igual que el del contexto.
+ */
+function useTenantVertical(): TenantVertical {
+  return useTenantModules().has("sesiones") ? "KINESIOLOGY" : "GENERAL";
+}
 
 function TeamRow({ member }: { member: TeamMemberRow }) {
   const router = useRouter();
+  const vertical = useTenantVertical();
+  const label = (r: Role) => roleLabel(r, vertical);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -113,24 +120,24 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
     // caso lleva una segunda confirmación explícita.
     if (role === "OWNER") {
       const first = await confirm({
-        title: `¿Transferir el OWNER a ${who}?`,
+        title: `¿Transferir la titularidad a ${who}?`,
         message:
-          "Pasa a ser el dueño del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como Admin y no vas a poder deshacerlo desde tu cuenta.",
+          `Pasa a ser el dueño del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como ${label("ADMIN")} y no vas a poder deshacerlo desde tu cuenta.`,
         confirmLabel: "Continuar",
         tone: "danger",
       });
       if (!first) return;
       const second = await confirm({
         title: "Confirmá la transferencia",
-        message: `${who} va a ser el OWNER del consultorio y vos pasás a Admin. ¿Seguro?`,
-        confirmLabel: "Sí, transferir el OWNER",
+        message: `${who} va a ser ${label("OWNER")} del consultorio y vos pasás a ${label("ADMIN")}. ¿Seguro?`,
+        confirmLabel: "Sí, transferir",
         tone: "danger",
       });
       if (!second) return;
     } else {
       const ok = await confirm({
         title: `¿Cambiar el rol de ${who}?`,
-        message: `De ${ROLE_LABELS[member.role]} a ${ROLE_LABELS[role]}. Cambia lo que puede ver y hacer en el consultorio.`,
+        message: `De ${label(member.role)} a ${label(role)}: ${roleDescription(role, vertical)}`,
         confirmLabel: "Cambiar rol",
       });
       if (!ok) return;
@@ -197,9 +204,9 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
           fontWeight: 600,
         }}
       >
-        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+        {ROLE_ORDER.map((r) => (
           <option key={r} value={r}>
-            {ROLE_LABELS[r]}
+            {label(r)}
           </option>
         ))}
       </select>
@@ -229,6 +236,7 @@ function TeamRow({ member }: { member: TeamMemberRow }) {
 
 function PendingInviteRow({ invite }: { invite: InvitationRow }) {
   const router = useRouter();
+  const vertical = useTenantVertical();
   const [pending, start] = useTransition();
   const [shareResult, setShareResult] = useState<{ url: string; emailSent: boolean } | null>(null);
 
@@ -270,7 +278,7 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{invite.email}</div>
         </div>
-        <Tag tone="soft">{invite.role}</Tag>
+        <Tag tone="soft">{roleLabel(invite.role, vertical)}</Tag>
         <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
           Vence {invite.expiresAt.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}
         </div>
@@ -328,6 +336,11 @@ function InviteModal({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const vertical = useTenantVertical();
+  // Controlado solo para mostrar la descripción del rol elegido debajo: un
+  // <option> nativo no admite una segunda línea. El valor sigue viajando por
+  // FormData (`name="role"`), como antes.
+  const [role, setRole] = useState<Role>("PRACTITIONER");
 
   const submit = (formData: FormData) => {
     setError(null);
@@ -363,13 +376,10 @@ function InviteModal({
           as="select"
           label="Rol"
           name="role"
-          defaultValue="PRACTITIONER"
-          options={[
-            { value: "PRACTITIONER", label: "Kinesiólogo" },
-            { value: "ADMIN", label: "Administrador" },
-            { value: "ASSISTANT", label: "Asistente" },
-            { value: "BILLING", label: "Facturación" },
-          ]}
+          value={role}
+          onChange={(v) => setRole(v as Role)}
+          hint={roleDescription(role, vertical)}
+          options={INVITABLE_ROLES.map((r) => ({ value: r, label: roleLabel(r, vertical) }))}
         />
         <FormField label="Especialidad (opcional)" name="specialty" placeholder="Osteopatía, RPG…" />
         {error && <ErrorBox>{error}</ErrorBox>}

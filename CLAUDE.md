@@ -28,7 +28,8 @@
     staging → prod; qué va antes y después del deploy);
   - `.docs/` actualizado y podado;
   - memoria actualizada;
-  - el comando de commit para Martin (lo ejecuta él).
+  - el comando de commit para Martin (lo ejecuta él): `git add -A` con las excepciones como `':!archivo'`, mensaje
+    corto de una línea, sin co-autor (AGENTS.md §4).
 - **IDs que chocan:**
   - «H1-H6» son hallazgos altos de la auditoría, no olas.
   - «A0-A3 / B-pre / B0-B4 / C0-C2» son olas de bloque. «P0-P4» = olas de Planes (= B0-B4), y se ejecutan en las

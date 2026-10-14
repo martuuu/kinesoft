@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 
+// IAM-0b: `.env.example` trae estas variables vacías (`EMAIL_TRANSPORT=""`).
+// Un string vacío cuenta como "no seteada", no como un valor inválido: si no,
+// copiar el example rompería el arranque en local.
+const emptyAsUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+
 const schema = z.object({
   DATABASE_URL: z.string().url().optional(),
   DIRECT_URL: z.string().url().optional(),
@@ -38,6 +43,25 @@ const schema = z.object({
   UPSTASH_REDIS_REST_URL: z.string().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
 
+  // Mail transaccional (IAM-0b, C-IAM1). La app manda todos los mails; Supabase
+  // solo emite tokens. Todo opcional: `lib/email/transport.ts` decide por dónde
+  // sale cada mail leyendo `process.env` en cada envío (no este objeto, que se
+  // congela al importar y los tests no podrían cambiarlo); acá se validan la
+  // forma y el aviso de Production.
+  //   RESEND_API_KEY  SERVER-ONLY (nunca NEXT_PUBLIC_). Sin ella, en Production
+  //                   los mails van a log (no salen) y se avisa al boot.
+  //   EMAIL_FROM      `KineSoft <no-reply@mail.dominio>`. Fuera de Production
+  //                   hay default; en Production sin él tampoco sale nada.
+  //   EMAIL_TRANSPORT resend|mailpit|log. Solo pesa fuera de Production (dev:
+  //                   mailpit o el opt-in de resend); Production lo ignora.
+  //   EMAIL_REPLY_TO  default del Reply-To cuando el emisor no pasa uno.
+  //   MAILPIT_URL     API HTTP de Mailpit (default http://localhost:8025).
+  RESEND_API_KEY: z.preprocess(emptyAsUndefined, z.string().optional()),
+  EMAIL_FROM: z.preprocess(emptyAsUndefined, z.string().optional()),
+  EMAIL_TRANSPORT: z.preprocess(emptyAsUndefined, z.enum(["resend", "mailpit", "log"]).optional()),
+  EMAIL_REPLY_TO: z.preprocess(emptyAsUndefined, z.string().optional()),
+  MAILPIT_URL: z.preprocess(emptyAsUndefined, z.string().url().optional()),
+
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
 });
@@ -60,6 +84,15 @@ const REQUIRED_IN_PRODUCTION = [
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
 ] as const;
+
+/**
+ * IAM-0b · §19.9: sin estas dos, Production no manda NINGÚN mail (invitaciones,
+ * reset, portal): `lib/email/transport.ts` cae a log. Es un aviso y no un error
+ * porque hoy el dominio de envío todavía no está cargado y un deploy no puede
+ * caerse por eso; pasan a REQUIRED_IN_PRODUCTION cuando Martin cargue el
+ * dominio en Resend (antes de IAM-2).
+ */
+const EMAIL_RECOMMENDED_IN_PRODUCTION = ["RESEND_API_KEY", "EMAIL_FROM"] as const;
 
 /** Still owner-pending (bucket C): logged loudly in prod, not fatal yet. */
 const RECOMMENDED_IN_PRODUCTION = [
@@ -137,6 +170,12 @@ export function parseEnv(raw: Record<string, string | undefined>): Env {
     if (missing.length) {
       console.error(`[env] Production sin: ${missing.join(", ")} (tareas del dueño, ver .docs/EXTERNAL-CONFIG.md)`);
     }
+    const missingEmail = EMAIL_RECOMMENDED_IN_PRODUCTION.filter((k) => !r.data[k]?.trim());
+    if (missingEmail.length) {
+      console.error(
+        `[env] Production sin ${missingEmail.join(", ")}: la app NO manda mails (transporte log). Ver plan §19.9.`
+      );
+    }
   }
   return r.data;
 }
@@ -160,6 +199,11 @@ export const env = parseEnv({
   SENTRY_DSN: process.env.SENTRY_DSN,
   UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL,
   UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN,
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
+  EMAIL_FROM: process.env.EMAIL_FROM,
+  EMAIL_TRANSPORT: process.env.EMAIL_TRANSPORT,
+  EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO,
+  MAILPIT_URL: process.env.MAILPIT_URL,
   VERCEL_ENV: process.env.VERCEL_ENV,
 });
 

@@ -31,6 +31,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { hashKeyPart, rateLimit, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { emailEqualsFilter } from "@/lib/email-match";
 import { RECOVERY_COOKIE, verifyRecoveryCookie } from "@/lib/recovery-cookie";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
@@ -96,7 +97,9 @@ export async function signUpPractitioner(
   // mail a una identidad existente). El mensaje explícito lo da el paso 2 de
   // /onboarding, con la identidad ya verificada.
   const asPatient = await prisma.patient.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, userId: { not: null } },
+    // IAM-0a: escapado. Pelado en el ILIKE, `ana_@x.com` "era" la paciente con
+    // portal `anax@x.com` y su alta se descartaba en silencio.
+    where: { email: emailEqualsFilter(email), userId: { not: null } },
     select: { id: true },
   });
   if (asPatient) {

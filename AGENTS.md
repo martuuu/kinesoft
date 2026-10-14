@@ -75,7 +75,11 @@ vive en `.docs/`.
 - **Git es solo de Martin.**
   - Nada de commit, push, pull, stash, checkout, reset ni ramas.
   - Leer (status, log, diff, show, blame) sí.
-  - Al cerrar una sesión se le deja el comando de commit armado y lo ejecuta él.
+  - Al cerrar una sesión se le deja el comando de commit armado y lo ejecuta él. Formato fijo:
+    - `git add -A`, y solo las **excepciones** van como pathspec de exclusión (`git add -A -- . ':!archivo'`).
+      Nunca la lista de archivos agregados.
+    - Mensaje **corto y conciso** (una línea).
+    - **Sin** `Co-Authored-By` ni «Generated with».
   - **Nunca push**: Vercel deploya `main` y cada build auto-migra.
 - **`.env` puede apuntar a PRODUCCIÓN.** Nunca se leen ni se imprimen sus valores: a lo sumo se comparan nombres de
   claves con `grep -c '^NOMBRE='`. `.env.local` = Docker local (puerto **5433**).

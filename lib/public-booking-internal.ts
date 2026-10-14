@@ -17,6 +17,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 // Ciclo de imports benigno: `public-booking.ts` importa helpers de este archivo
 // y este usa `getPublicClinic` solo dentro de una función (nunca al cargar).
 import { getPublicClinic } from "@/lib/public-booking";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import {
   normalizeDocumentId,
   normalizePhoneForCompare,
@@ -158,6 +159,10 @@ export async function loadPublicBookingPage(slug: string): Promise<PublicBooking
  *      `(tenantId, email)` case-sensitive y acá se compara sin mayúsculas: dos
  *      fichas (p. ej. familiares que comparten casilla) son ambiguas → sin
  *      prefill, antes que mostrar los datos de la persona equivocada.
+ *
+ * IAM-0a: el email iba pelado a un `ILIKE` (`equals` + `mode: "insensitive"`):
+ * `jpere_@hotmail.com` verificado recibía precargados DNI, nacimiento y
+ * cobertura de `jperez@hotmail.com`. Filtro escapado + `sameEmail`.
  */
 export async function findPatientByEmailForPrefill(
   email: string,
@@ -177,13 +182,15 @@ export async function findPatientByEmailForPrefill(
     : null;
   if (!row) {
     const byEmail = await prisma.patient.findMany({
-      where: { tenantId: opts.tenantId, email: { equals: trimmed, mode: "insensitive" } },
+      where: { tenantId: opts.tenantId, email: emailEqualsFilter(trimmed) },
       include,
       orderBy: { id: "asc" },
       take: 2,
     });
-    if (byEmail.length !== 1) return null;
-    row = byEmail[0];
+    // Post-filtro exacto (defensa en profundidad): devuelve PHI.
+    const exact = byEmail.filter((p) => sameEmail(p.email, trimmed));
+    if (exact.length !== 1 || byEmail.length !== 1) return null;
+    row = exact[0];
   }
   return {
     firstName: row.firstName,
@@ -323,7 +330,9 @@ export async function resolvePublicPatient(
       // guarda en esta (quedan en el snapshot del turno).
       const [emailOwner, phoneOwner] = await Promise.all([
         prisma.patient.findFirst({
-          where: { tenantId, email: { equals: input.email, mode: "insensitive" } },
+          // IAM-0a: escapado. Con el email pelado en el ILIKE, `ana_@x.com`
+          // "chocaba" con la ficha de `anax@x.com` y la ficha nueva quedaba sin email.
+          where: { tenantId, email: emailEqualsFilter(input.email) },
           select: { id: true },
         }),
         prisma.patient.findFirst({ where: { tenantId, phone: input.phone }, select: { id: true } }),

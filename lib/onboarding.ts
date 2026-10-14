@@ -33,6 +33,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { ensurePrimaryLocation } from "@/lib/agenda-defaults";
@@ -305,13 +306,16 @@ export async function openPendingInvitation(invitationId: string): Promise<Actio
   const inv = await prismaService.invitation.findFirst({
     where: {
       id: invitationId,
-      email: { equals: user.email, mode: "insensitive" },
+      // IAM-0a: escapado. Pelado en el ILIKE, `jpere_@hotmail.com` reabría la
+      // invitación de `jperez@hotmail.com` y le ROTABA el token (el link del
+      // mail de la víctima dejaba de valer). + post-filtro exacto antes de rotar.
+      email: emailEqualsFilter(user.email),
       acceptedAt: null,
       expiresAt: { gt: new Date() },
     },
-    select: { id: true, tenantId: true },
+    select: { id: true, tenantId: true, email: true },
   });
-  if (!inv) return { ok: false, error: "La invitación ya no está disponible." };
+  if (!inv || !sameEmail(inv.email, user.email)) return { ok: false, error: "La invitación ya no está disponible." };
 
   const rawToken = randomBytes(24).toString("base64url");
   await prismaService.invitation.update({

@@ -32,6 +32,7 @@ import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { emailEqualsFilter } from "@/lib/email-match";
 import { tags } from "@/lib/cache-tags";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import type { ActionResult } from "@/lib/validation";
@@ -177,7 +178,9 @@ export async function createInvitation(
   const portalPatient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: {
       tenantId: actor.tenantId,
-      email: { equals: emailLc, mode: "insensitive" },
+      // IAM-0a: escapado. Pelado en el ILIKE, invitar a `ana_@x.com` se
+      // rechazaba por la ficha con portal de `anax@x.com`.
+      email: emailEqualsFilter(emailLc),
       userId: { not: null },
     },
     select: { id: true },

@@ -11,6 +11,7 @@ import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { hashInviteToken } from "@/lib/invitations-tokens";
+import { roleLabel } from "@/lib/roles";
 import { AcceptInviteButton } from "./accept-button";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,8 @@ export default async function InviteAcceptPage({
   const invite = await prisma.invitation.findUnique({
     where: { token: hashInviteToken(params.token) },
     include: {
-      tenant: { select: { name: true, slug: true } },
+      // `vertical`: la etiqueta del profesional depende de ella (IAM-0c).
+      tenant: { select: { name: true, slug: true, vertical: true } },
     },
   });
   if (!invite) notFound();
@@ -55,6 +57,8 @@ export default async function InviteAcceptPage({
   } = await supabase.auth.getUser();
   const userEmail = user?.email?.toLowerCase() ?? null;
   const emailMatches = userEmail && userEmail === invite.email.toLowerCase();
+  // Antes se mostraba el enum crudo («ASSISTANT»). IAM-0c: etiqueta única.
+  const role = roleLabel(invite.role, invite.tenant.vertical);
 
   return (
     <main
@@ -77,7 +81,7 @@ export default async function InviteAcceptPage({
             {invite.firstName}, te invitan a {invite.tenant.name}
           </h1>
           <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
-            Rol: <Tag tone="lime">{invite.role}</Tag>
+            Rol: <Tag tone="lime">{role}</Tag>
             {invite.specialty ? <span style={{ marginLeft: 6 }}>· {invite.specialty}</span> : null}
           </p>
         </div>
@@ -135,7 +139,7 @@ export default async function InviteAcceptPage({
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Notice tone="success">
-              ¡Listo! Confirmás que vas a unirte como <strong>{invite.role}</strong>.
+              ¡Listo! Confirmás que vas a unirte como <strong>{role}</strong>.
             </Notice>
             <AcceptInviteButton token={params.token} />
           </div>

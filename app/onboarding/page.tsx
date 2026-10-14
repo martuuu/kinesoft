@@ -80,7 +80,7 @@ export default async function OnboardingPage({
       ) : step === STEP.insurers ? (
         <StepInsurers insurers={ctx.insurers} />
       ) : step === STEP.team ? (
-        <StepTeam invitations={ctx.invitations} />
+        <StepTeam invitations={ctx.invitations} vertical={ctx.tenant?.vertical} />
       ) : (
         <StepDone
           tenant={ctx.tenant}
