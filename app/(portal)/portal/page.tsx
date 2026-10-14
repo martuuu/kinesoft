@@ -5,14 +5,25 @@ import { Button } from "@/components/ui/button";
 import { IconArrow, IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
 import { getPortalAuth } from "@/lib/portal";
 import type { PortalPatient } from "@/lib/portal-types";
+import { PortalEmailForm } from "./portal-email-form";
 
 export const dynamic = "force-dynamic";
 
-export default async function PortalHome() {
+/** `?c=<slug>`: viene del CTA de `/portal/c/<slug>` sin sesión; el link (Google o email) vuelve a ese consultorio. */
+function slugParam(raw: string | string[] | undefined): string | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v && /^[a-z0-9-]{1,64}$/.test(v) ? v : null;
+}
+
+export default async function PortalHome({
+  searchParams,
+}: {
+  searchParams?: { [k: string]: string | string[] | undefined };
+}) {
   const auth = await getPortalAuth();
 
   if (!auth.signedIn) {
-    return <PortalSignIn />;
+    return <PortalSignIn slug={slugParam(searchParams?.c)} />;
   }
 
   if (auth.patients.length === 0) {
@@ -213,7 +224,10 @@ function PatientCard({ p }: { p: PortalPatient }) {
   );
 }
 
-function PortalSignIn() {
+function PortalSignIn({ slug }: { slug: string | null }) {
+  // IAM-3c: además de Google, «Entrar con tu email» (magic link propio; IAM-D5). El `next` de Google vuelve
+  // al consultorio del CTA si vino con `?c=`.
+  const next = slug ? `/portal/c/${slug}` : "/portal";
   return (
     <Card glass style={{ padding: 32, textAlign: "center", display: "flex", flexDirection: "column", gap: 16 }}>
       <div
@@ -235,9 +249,9 @@ function PortalSignIn() {
         Tu recuperación al alcance de un toque
       </h1>
       <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-        Ingresá con Google para ver tus próximos turnos, el plan de tratamiento y la evolución de tu dolor.
+        Entrá para ver tus próximos turnos, el plan de tratamiento y la evolución de tu dolor.
       </p>
-      <form action="/api/auth/google?next=/portal" method="post">
+      <form action={`/api/auth/google?next=${encodeURIComponent(next)}`} method="post">
         <Button
           variant="primary"
           type="submit"
@@ -247,8 +261,26 @@ function PortalSignIn() {
           <IconArrow size={14} />
         </Button>
       </form>
+      <div
+        aria-hidden
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          fontSize: 11,
+          color: "var(--navy-300)",
+          fontWeight: 700,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}
+      >
+        <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
+        o entrá con tu email
+        <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
+      </div>
+      <PortalEmailForm slug={slug} />
       <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-        Usamos tu email para vincularte con tu ficha clínica. Nada se publica.
+        Usá el mismo email que tiene tu ficha en el consultorio. Nada se publica.
       </div>
     </Card>
   );

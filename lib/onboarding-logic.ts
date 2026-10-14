@@ -5,6 +5,8 @@
  * página de `/onboarding`, `lib/tenant-bootstrap.ts` (que también usa el
  * script `create-tenant`) y los unit tests (tests/unit/onboarding-logic.test.ts).
  */
+// Solo tipo (se borra al compilar) y relativo: `tenant-bootstrap` lo importa desde un script de tsx.
+import type { AccessState } from "./access-logic";
 
 // ──────────────────────────────────────────────────────────────────────
 // Slug del consultorio
@@ -21,9 +23,9 @@ export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
  */
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "admin", "api", "app", "auth", "agenda", "biblioteca", "booking",
-  "c", "configuracion", "dashboard", "diagnostico", "forgot", "invite",
+  "c", "configuracion", "dashboard", "diagnostico", "elegir-consultorio", "forgot", "invite",
   "login", "logout", "onboarding", "pacientes", "plataforma", "portal",
-  "reportes", "reset", "seguimiento", "signup", "terapia-manual", "www",
+  "reportes", "reset", "seguimiento", "signup", "sin-acceso", "terapia-manual", "www",
 ]);
 
 export function isValidSlug(slug: string): boolean {
@@ -73,39 +75,61 @@ export function pickFreeSlug(base: string, taken: Iterable<string>): string {
 export type AppGateInput = {
   /** Hay sesión de Supabase (getUser devolvió usuario). */
   hasSession: boolean;
-  /** Se pudo armar un Actor (membresía aceptada + practitioner). */
+  /** Se pudo armar un Actor (membresía usable). También true con el actor demo (sin sesión). */
   hasActor: boolean;
+  /**
+   * IAM-3a: estado de acceso de la sesión (`resolveAccessState` sobre TODAS sus membresías). null = no hay foto
+   * (sin sesión, o actor demo).
+   */
+  access: AccessState | null;
+  /** IAM-3a (decisión 6): 2+ consultorios usables y la cookie `kine_tenant` no apunta a uno → preguntar. */
+  needsChoice: boolean;
   /** Rol del actor en el tenant activo (null si no hay actor). */
   role: string | null;
   /** `Tenant.onboardingCompletedAt != null` del tenant activo. */
   onboardingCompleted: boolean;
-  /** Path pedido, para volver después del login (ya pasado por safeNext o null). */
+  /** Path pedido, para volver después del login / la elección (ya pasado por safeNext o null). */
   nextPath: string | null;
 };
+
+/** Destinos del gate. Todos viven FUERA del grupo `(app)`: ninguno vuelve a pasar por este layout. */
+export const APP_GATE_DESTINATIONS = ["/login", "/onboarding", "/sin-acceso", "/elegir-consultorio"] as const;
+
+function withNext(path: string, next: string | null): string {
+  // /dashboard es el default de todos estos destinos: no hace falta ensuciar la URL.
+  return next && next !== "/dashboard" ? `${path}?next=${encodeURIComponent(next)}` : path;
+}
 
 /**
  * Adónde manda el layout de la app. `null` = renderizar la app.
  *
  * - Sin sesión → `/login?next=<path>` (handoff de A3b-S-auth: antes se perdía
  *   el destino y el usuario caía siempre en /dashboard).
- * - Sesión verificada sin membresía → `/onboarding`. Antes iba a `/login`, que
+ * - Sesión sin ninguna membresía → `/onboarding`. Antes iba a `/login`, que
  *   lo mandaba de vuelta a /dashboard: loop para toda cuenta nueva y para un
  *   invitado que todavía no aceptó. `/onboarding` resuelve las dos cosas: si
  *   hay una invitación pendiente para su email la ofrece primero; si no, arranca
  *   el alta del consultorio.
+ * - IAM-3a: sesión con membresías pero NINGUNA usable (todas suspendidas, sin
+ *   aceptar o sin profesional) → `/sin-acceso`. Antes iba a `/onboarding`, que
+ *   veía membresías y decía «done» → /dashboard → acá → … (bucle del 14-oct,
+ *   §19.1). `/sin-acceso` está fuera de `(app)` y no redirige solo a la app.
+ * - IAM-3a (decisión 6): 2+ consultorios usables sin cookie válida →
+ *   `/elegir-consultorio?next=<path>`. Antes que el alta abierta: primero se
+ *   elige DÓNDE entrar.
  * - OWNER de un tenant con el alta sin terminar → `/onboarding`. Los demás
  *   roles NO: un profesional invitado mientras el dueño todavía configura no
  *   tiene nada que hacer en el stepper (y no podría: es OWNER-only).
  */
 export function decideAppGate(i: AppGateInput): string | null {
   if (!i.hasActor) {
-    if (!i.hasSession) {
-      return i.nextPath && i.nextPath !== "/dashboard"
-        ? `/login?next=${encodeURIComponent(i.nextPath)}`
-        : "/login";
-    }
-    return "/onboarding";
+    if (!i.hasSession) return withNext("/login", i.nextPath);
+    if (!i.access || i.access.kind === "needs_onboarding") return "/onboarding";
+    // `no_access`, o `ok` sin Actor (no debería pasar: `buildActor` arma el Actor desde la misma foto). Las dos van
+    // a /sin-acceso, que muestra el motivo y NUNCA rebota solo a la app: si hubiera una carrera, no hay bucle.
+    return "/sin-acceso";
   }
+  if (i.needsChoice) return withNext("/elegir-consultorio", i.nextPath);
   if (!i.onboardingCompleted && i.role === "OWNER") return "/onboarding";
   return null;
 }

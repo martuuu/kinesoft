@@ -10,6 +10,8 @@ import { logger } from "@/lib/logger";
 import { confirmContinuePath, isConfirmPostAllowed, parseConfirmParams } from "@/lib/auth-confirm-internal";
 import { RECOVERY_COOKIE, RECOVERY_TTL_S, makeRecoveryCookieValue } from "@/lib/recovery-cookie";
 import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
+import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
+import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 
 export const runtime = "nodejs";
 
@@ -109,6 +111,11 @@ export async function POST(req: Request) {
     },
     update: { email: (user.email ?? "").toLowerCase() },
   });
+
+  // IAM-3c: el magic link del portal vincula la ficha (Patient.userId) del consultorio del `next` (§5.8). Nunca tira.
+  await linkPortalPatientsOnSignIn({ id: user.id, email: user.email, emailVerified: !!user.email_confirmed_at }, params.next);
+  // Decisión 6 (14-oct): todo inicio de sesión limpia el consultorio activo; si hay más de uno, la app pregunta.
+  cookies().set(ACTIVE_TENANT_COOKIE, "", { ...ACTIVE_TENANT_COOKIE_OPTIONS, maxAge: 0 });
 
   if (type === "recovery") {
     cookies().set(RECOVERY_COOKIE, makeRecoveryCookieValue(user.id), {

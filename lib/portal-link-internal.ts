@@ -15,6 +15,20 @@ import "server-only";
  *     email iba pelado a un `ILIKE` y `jpere_@hotmail.com` (verificado) se
  *     vinculaba a la ficha SIN vincular de `jperez@hotmail.com` = toma de
  *     ficha. Filtro escapado + `sameEmail` antes de escribir.
+ *   - IAM-3c: el log de rechazo ya no lleva el email en claro (el logger lo
+ *     redactaba, pero el contrato es no pasarlo: alcanza con slug y motivo).
+ *   - IAM-3c: con dos fichas del mismo email en un consultorio (familia que
+ *     comparte el mail) se vincula UNA, siempre la misma (la más vieja): el
+ *     único es (tenantId, userId) y el `findFirst` sin orden podía elegir la
+ *     otra en el siguiente login → P2002 → el callback devolvía 500.
+ *
+ * `linkPortalPatientsOnSignIn` (IAM-3c) es la puerta de entrada al iniciar
+ * sesión: deduce los consultorios del `next` (Google y magic link vuelven con
+ * `next=/portal` o `/portal/c/<slug>`). Antes el callback solo vinculaba con
+ * `?tenant=<slug>`, que NADIE armaba (`app/api/auth/google/route.ts` manda solo
+ * `next`): el vínculo no ocurría nunca y el portal funcionaba solo por el
+ * match de email. El vínculo importa: es lo que hace valer «staff ≠ paciente»
+ * en el signup y en las invitaciones (AUDIT §5.22, `userId: { not: null }`).
  */
 // OAuth callback, no Actor; tenant resolved by slug + Patient/PatientTenantLink
 // writes → service channel (BYPASSRLS). See lib/db.ts#prismaService.
@@ -45,11 +59,23 @@ export async function linkPortalPatientOnCallback(
     return "staff";
   }
   if (!tenant) return "no_tenant";
-  const patient = await prisma.patient.findFirst({
+  // Ya vinculada a ESTA identidad en este consultorio: nada que hacer (el único
+  // (tenantId, userId) no permite una segunda ficha).
+  const already = await prisma.patient.findFirst({
+    where: { tenantId: tenant.id, userId: user.id },
+    select: { id: true },
+  });
+  if (already) return "linked";
+  const candidates = await prisma.patient.findMany({
     where: { tenantId: tenant.id, email: emailEqualsFilter(user.email) },
     select: { id: true, userId: true, email: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  if (!patient || !sameEmail(patient.email, user.email)) return "no_patient";
+  const exact = candidates.filter((c) => sameEmail(c.email, user.email));
+  if (exact.length === 0) return "no_patient";
+  // Preferir una ficha libre: si la más vieja es de otra identidad y hay otra
+  // libre con el mismo email (familia), se vincula la libre.
+  const patient = exact.find((c) => c.userId == null) ?? exact[0];
   // Only link if this Patient row has no userId yet OR is already
   // bound to this same user. Refuses to "steal" a Patient already
   // linked to another Supabase identity.
@@ -67,8 +93,47 @@ export async function linkPortalPatientOnCallback(
   }
   logger.warn("portal.link.refused", {
     tenantSlug,
-    email: user.email,
     reason: "patient already linked to a different identity",
   });
   return "linked_elsewhere";
+}
+
+const PORTAL_TENANT_RE = /^\/portal\/c\/([a-z0-9-]{1,64})(?:[/?#]|$)/;
+
+/**
+ * Vínculo al iniciar sesión (Google por `/auth/callback`, magic link por
+ * `/auth/confirm`). Solo actúa si el destino es el portal:
+ *   - `/portal/c/<slug>` → ese consultorio;
+ *   - `/portal` (o cualquier otra ruta del portal) → cada consultorio con una
+ *     ficha de ese email EXACTO (lo mismo que el portal ya le muestra).
+ * Cualquier otro destino (staff que entra al dashboard) no vincula nada.
+ * Las reglas de AUDIT §5.8 las aplica `linkPortalPatientOnCallback` por
+ * consultorio. Nunca tira: un vínculo que falla no puede dejar sin entrar.
+ */
+export async function linkPortalPatientsOnSignIn(
+  user: { id: string; email: string | null | undefined; emailVerified: boolean },
+  next: string
+): Promise<PortalLinkOutcome[]> {
+  if (!user.email || !user.emailVerified) return [];
+  const path = next.startsWith("/") ? next : "";
+  if (path !== "/portal" && !path.startsWith("/portal/") && !path.startsWith("/portal?")) return [];
+  try {
+    const m = PORTAL_TENANT_RE.exec(path);
+    let slugs: string[];
+    if (m) {
+      slugs = [m[1]];
+    } else {
+      const rows = await prisma.patient.findMany({
+        where: { email: emailEqualsFilter(user.email) },
+        select: { email: true, tenant: { select: { slug: true } } },
+      });
+      slugs = Array.from(new Set(rows.filter((r) => sameEmail(r.email, user.email)).map((r) => r.tenant.slug)));
+    }
+    const out: PortalLinkOutcome[] = [];
+    for (const slug of slugs) out.push(await linkPortalPatientOnCallback(user, slug));
+    return out;
+  } catch (err) {
+    logger.warn("portal.link.failed", { error: err instanceof Error ? err.name : "unknown" });
+    return [];
+  }
 }

@@ -13,7 +13,7 @@ import { prismaService as prisma } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { isPublicBookingOpen } from "@/lib/tenant-modules";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
 // Ciclo de imports benigno: `public-booking.ts` importa helpers de este archivo
 // y este usa `getPublicClinic` solo dentro de una función (nunca al cargar).
 import { getPublicClinic } from "@/lib/public-booking";
@@ -121,14 +121,12 @@ export async function loadPublicBookingPage(slug: string): Promise<PublicBooking
   let prefill: PrefillPatient | null = null;
   let session: { email: string; fullName: string | null } | null = null;
   try {
-    const supabase = getSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.email && user.email_confirmed_at) {
+    // IAM-3a: un solo `auth.getUser()` por request (`getVerifiedSessionUser`, nunca tira).
+    const user = await getVerifiedSessionUser();
+    if (user?.email && user.emailConfirmedAt) {
       session = {
         email: user.email,
-        fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
+        fullName: user.fullName,
       };
       // EV0 V.Z (P2, PD-14): SOLO fichas de ESTE consultorio. Antes se buscaba
       // por email en todos (canal de servicio, BYPASSRLS): un paciente de A que

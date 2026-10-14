@@ -3,10 +3,12 @@
  * sin `next/headers` (la escribe el selector de consultorio de IAM-3b y la
  * lee `buildActor` en IAM-3a).
  *
- * Valor: el `tenantId` (no el slug). Hoy `lib/session.ts` lee `kine_tenant`
- * como slug, pero ningún código la escribe (verificado al 14-oct), así que el
- * cambio de significado no deja cookies viejas que migrar. Igual nunca se
- * confía: `chooseActiveTenant` la ignora si no es una membresía usable.
+ * Valor: el `tenantId` (no el slug). `kine_tenant` se lee como tenantId en
+ * `getAccessSnapshot` desde IAM-3a (antes `lib/session.ts` la leía como slug,
+ * pero nadie la escribía: no quedaron cookies viejas que migrar). La escriben
+ * `setActiveTenant` (`/elegir-consultorio` y el selector del sidebar de IAM-3b)
+ * y la aceptación de una invitación. Igual nunca se confía:
+ * `chooseActiveTenant` la ignora si no es una membresía usable.
  *
  * Opciones con el mismo criterio que `SUPABASE_COOKIE_OPTIONS`
  * (`lib/supabase/cookie-options.ts`): httpOnly porque ningún JS del cliente la

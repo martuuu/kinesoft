@@ -3,7 +3,7 @@ import Link from "next/link";
 // there's no Actor GUC → service channel (BYPASSRLS), same as accept-action.ts
 // and `findInvitationByRawToken`. See lib/db.ts.
 import { prismaService as prisma } from "@/lib/db";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
 import { AuthShell } from "@/components/screens/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -37,10 +37,8 @@ export default async function InvitePage({ params }: { params: { token: string }
   const token = params.token;
   const invite = await findInvitationByRawToken(token);
 
-  const supabase = getSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // IAM-3a: un solo `auth.getUser()` por request (`getVerifiedSessionUser`, nunca tira: Supabase caído = sin sesión).
+  const user = await getVerifiedSessionUser();
   const sessionEmail = user?.email ?? null;
 
   // «¿Ya tiene cuenta?» solo cuando importa (pendiente y sin sesión). Es un

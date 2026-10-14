@@ -4,6 +4,7 @@ import { hashKeyPart, rateLimitAll } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { env } from "@/lib/env";
 import { isAllowedOrigin, safeNext } from "@/lib/safe-next";
+import { clearActiveTenantCookie } from "@/lib/tenant-choice";
 
 export const runtime = "nodejs";
 
@@ -64,5 +65,9 @@ export async function POST(req: Request) {
     return backToLogin(req, notConfirmed ? "email_not_confirmed" : "invalid_credentials", next, notConfirmed ? email : undefined);
   }
 
+  // IAM-3a (decisión 6 de Martin, 14-oct): cada login arranca sin consultorio elegido. Con 2+ consultorios usables
+  // el layout de la app ve la cookie vacía y pregunta a cuál entrar (`/elegir-consultorio`); con uno solo entra
+  // directo. Además, la cookie de OTRA cuenta que se logueó antes en este navegador no se arrastra.
+  clearActiveTenantCookie();
   return NextResponse.redirect(new URL(next, req.url), { status: 303 });
 }

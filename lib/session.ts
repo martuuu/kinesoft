@@ -3,12 +3,18 @@
  *
  * Authentication model (post-Sprint 11):
  *
- *   1. Supabase auth gives us `user.id` + `user.email`.
- *   2. We look up the user's `Membership` rows. Active members can switch
- *      between tenants via the `kine_tenant` cookie — but only across
- *      tenants they belong to. The cookie is validated, not trusted.
- *   3. If no cookie, we use the most recently invited membership as the
- *      default active tenant.
+ *   1. Supabase auth gives us `user.id` + `user.email` (`getVerifiedSessionUser`,
+ *      lib/session-user.ts: un solo `auth.getUser()` por request).
+ *   2. IAM-3a: se cargan TODAS las membresías del usuario (aceptadas o no, con
+ *      `disabledAt`) y si tiene `Practitioner` en cada consultorio
+ *      (`getAccessSnapshot`). Solo cuentan las USABLES (`lib/access-logic.ts`).
+ *   3. Consultorio activo = `chooseActiveTenant`: la cookie `kine_tenant`
+ *      (guarda el tenantId; se valida, nunca se confía) → `UserPreferences.tenantId`
+ *      → la usable aceptada más recientemente. Una membresía rota se saltea:
+ *      nunca tapa a una sana (bucle de redirecciones del 14-oct, §19.1).
+ *   4. Decisión 6 de Martin (14-oct): con 2+ consultorios usables y sin cookie
+ *      válida el layout pregunta a cuál entrar (`/elegir-consultorio`); el login
+ *      borra la cookie para que pregunte en cada inicio de sesión.
  *
  * The `x-tenant-slug` request header is **explicitly ignored** here. The
  * middleware sets it for public routes (`/c/<slug>/…`, subdomains), but
@@ -34,7 +40,15 @@ import { cache } from "react";
 // service channel, or the flip to the app role locks out every login.
 import { prismaService } from "@/lib/db";
 import { withTenantDb, type DbClient } from "@/lib/rls";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
+import { ACTIVE_TENANT_COOKIE } from "@/lib/active-tenant-cookie";
+import {
+  isUsableMembership,
+  resolveAccessState,
+  type AccessState,
+  type MembershipLite,
+} from "@/lib/access-logic";
+import { logger } from "@/lib/logger";
 import { ensureRequestContext } from "@/lib/request-context";
 import { clientIp } from "@/lib/client-ip";
 import type { TenantEntitlements } from "@/lib/tenant-modules";
@@ -87,41 +101,156 @@ const DEMO_ALLOWED =
   process.env.KINESOFT_ALLOW_DEMO_ACTOR === "1" &&
   process.env.NODE_ENV !== "production";
 
-async function buildActor(input: {
-  userId: string;
-  desiredTenantSlug?: string | null;
-}): Promise<Actor> {
-  const memberships = await prismaService.membership.findMany({
-    where: { userId: input.userId, acceptedAt: { not: null } },
-    include: { tenant: true },
-    orderBy: { invitedAt: "desc" },
-  });
-  if (memberships.length === 0) {
-    throw new UnauthenticatedError("no_membership");
-  }
+/**
+ * Membresía tal como la ve el acceso (IAM-3a): la forma pura de `access-logic` + el `Practitioner` de ese
+ * consultorio (si hay) + las columnas del tenant que el Actor, el gate y el selector necesitan. Incluye las NO
+ * aceptadas y las deshabilitadas: `resolveAccessState` necesita verlas para decir POR QUÉ no hay acceso.
+ */
+export type AccessMembership = MembershipLite & {
+  practitionerId: string | null;
+  tenant: {
+    id: string;
+    slug: string;
+    name: string;
+    vertical: TenantEntitlements["vertical"];
+    plan: TenantEntitlements["plan"];
+    publicBookingEnabled: boolean;
+    onboardingCompletedAt: Date | null;
+  };
+};
 
-  // Respect the cookie only if the user is actually a member of that tenant.
-  const desired = input.desiredTenantSlug?.toLowerCase();
-  const chosen =
-    (desired && memberships.find((m) => m.tenant.slug === desired)) ||
-    memberships[0];
+export type AccessProfile = { fullName: string | null; email: string; isPlatformAdmin: boolean };
 
-  const prac = await prismaService.practitioner.findFirst({
-    where: { tenantId: chosen.tenantId, userId: input.userId },
-    include: { user: true },
-  });
-  if (!prac) {
-    throw new UnauthenticatedError("no_membership");
-  }
-
+/**
+ * Todo lo que decide a qué consultorio entra una sesión, en una lectura (perfil con membresías y profesionales). Por `prismaService`: todavía no hay Actor ni GUC (ver import arriba), y el filtro es el
+ * `userId` de la sesión verificada.
+ */
+export async function loadAccessMemberships(userId: string): Promise<{
+  profile: AccessProfile | null;
+  memberships: AccessMembership[];
+  preferredTenantId: string | null;
+}> {
+  // Gate de IAM-3: la preferencia guardada (`UserPreferences.tenantId`) NO se lee acá. Con la decisión 6 de Martin
+  // (cada login pregunta a qué consultorio entrar) la única fuente del consultorio activo es la cookie `kine_tenant`,
+  // y leer la preferencia sumaba una sentencia a CADA request (rompía el techo estricto de createBooking: 34 → 35).
+  const [profile] = await Promise.all([
+    prismaService.userProfile.findUnique({
+      where: { id: userId },
+      select: {
+        fullName: true,
+        email: true,
+        isPlatformAdmin: true,
+        memberships: {
+          select: {
+            tenantId: true,
+            role: true,
+            acceptedAt: true,
+            disabledAt: true,
+            tenant: {
+              select: {
+                id: true,
+                slug: true,
+                name: true,
+                vertical: true,
+                plan: true,
+                publicBookingEnabled: true,
+                onboardingCompletedAt: true,
+              },
+            },
+          },
+        },
+        practitioners: { select: { id: true, tenantId: true } },
+      },
+    }),
+  ]);
+  if (!profile) return { profile: null, memberships: [], preferredTenantId: null };
+  // M6: Practitioner es único por (tenantId, userId), así que el mapa no pierde nada.
+  const pracByTenant = new Map(profile.practitioners.map((p) => [p.tenantId, p.id]));
+  const memberships = profile.memberships.map<AccessMembership>((m) => ({
+    tenantId: m.tenantId,
+    role: m.role,
+    acceptedAt: m.acceptedAt,
+    disabledAt: m.disabledAt,
+    hasPractitioner: pracByTenant.has(m.tenantId),
+    practitionerId: pracByTenant.get(m.tenantId) ?? null,
+    tenant: m.tenant,
+  }));
   return {
-    tenantId: chosen.tenantId,
+    profile: { fullName: profile.fullName, email: profile.email, isPlatformAdmin: profile.isPlatformAdmin },
+    memberships,
+    preferredTenantId: null,
+  };
+}
+
+/** Foto del acceso de la sesión de este request (C-IAM7 la consume vía `lib/tenant-choice.ts`). */
+export type AccessSnapshot = {
+  userId: string;
+  profile: AccessProfile | null;
+  memberships: AccessMembership[];
+  /** Usables (`isUsableMembership`), en el orden de la query. */
+  usable: AccessMembership[];
+  cookieTenantId: string | null;
+  preferredTenantId: string | null;
+  /** `kine_tenant` apunta a una membresía usable (si no, se ignora: nunca se confía). */
+  cookieValid: boolean;
+  state: AccessState;
+};
+
+function readActiveTenantCookie(): string | null {
+  try {
+    const v = cookies().get(ACTIVE_TENANT_COOKIE)?.value?.trim();
+    return v ? v.slice(0, 64) : null;
+  } catch {
+    return null; // fuera de un request
+  }
+}
+
+async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
+  const user = await getVerifiedSessionUser();
+  if (!user) return null;
+  const { profile, memberships, preferredTenantId } = await loadAccessMemberships(user.id);
+  const cookieTenantId = readActiveTenantCookie();
+  const usable = memberships.filter((m) => isUsableMembership(m));
+  // IAM-0c/IAM-3a: la cookie guarda el tenantId (antes se leía como slug y nadie la escribía).
+  const cookieValid = !!cookieTenantId && usable.some((m) => m.tenantId === cookieTenantId);
+  const state = resolveAccessState(memberships, { cookieTenantId, preferredTenantId });
+  return { userId: user.id, profile, memberships, usable, cookieTenantId, preferredTenantId, cookieValid, state };
+}
+
+/**
+ * Foto del acceso de la sesión verificada (null = sin sesión). Una por request (`cache`): el layout, el gate,
+ * `getActor` y el selector de consultorio leen la misma, así no pueden discrepar entre sí dentro de un render.
+ */
+export const getAccessSnapshot: () => Promise<AccessSnapshot | null> = cache(loadAccessSnapshot);
+
+/**
+ * Actor a partir de la foto (IAM-3a). Antes tomaba la membresía aceptada invitada más recientemente y, si ahí no
+ * había `Practitioner`, tiraba `no_membership` aunque hubiera otro consultorio sano: el layout mandaba a
+ * /onboarding, que veía membresías y decía «done» → /dashboard → … (bucle del 14-oct, §19.1). Ahora elige entre
+ * las USABLES (`chooseActiveTenant`: cookie → `UserPreferences.tenantId` → la aceptada más reciente) y solo tira
+ * si no hay ninguna; las rotas se saltean y se loguean (para repararlas desde Plataforma / Usuarios).
+ */
+function buildActor(s: AccessSnapshot): Actor {
+  for (const m of s.memberships) {
+    if (m.acceptedAt && !m.disabledAt && !m.hasPractitioner && !isUsableMembership(m)) {
+      logger.warn("session.membership.unusable", { userId: s.userId, tenantId: m.tenantId, reason: "missing_practitioner" });
+    }
+  }
+  if (s.state.kind !== "ok" || !s.profile) {
+    throw new UnauthenticatedError("no_membership");
+  }
+  const tenantId = s.state.tenantId;
+  const chosen = s.memberships.find((m) => m.tenantId === tenantId);
+  // `PRACTITIONER_FOR_ALL_ROLES` (IAM-4 lo apaga): hoy toda membresía usable tiene Practitioner y el Actor lo exige.
+  if (!chosen || !chosen.practitionerId) throw new UnauthenticatedError("no_membership");
+  return {
+    tenantId,
     tenantSlug: chosen.tenant.slug,
     tenantName: chosen.tenant.name,
-    practitionerId: prac.id,
-    practitionerName: prac.user.fullName ?? prac.user.email,
-    userId: input.userId,
-    isPlatformAdmin: prac.user.isPlatformAdmin,
+    practitionerId: chosen.practitionerId,
+    practitionerName: s.profile.fullName ?? s.profile.email,
+    userId: s.userId,
+    isPlatformAdmin: s.profile.isPlatformAdmin,
     entitlements: entitlementsOf(chosen.tenant),
   };
 }
@@ -147,18 +276,17 @@ async function buildDemoActor(): Promise<Actor | null> {
 }
 
 async function resolveActor(): Promise<Actor | null> {
-  const c = cookies();
-  try {
-    const supabase = getSupabaseServerClient();
-    const { data } = await supabase.auth.getUser();
-    if (data.user?.id) {
-      return await buildActor({
-        userId: data.user.id,
-        desiredTenantSlug: c.get("kine_tenant")?.value ?? null,
-      });
+  const snapshot = await getAccessSnapshot();
+  if (snapshot) {
+    try {
+      return buildActor(snapshot);
+    } catch (err) {
+      if (!(err instanceof UnauthenticatedError)) throw err;
+      // IAM-3a: con sesión pero sin consultorio usable NO se cae al demo (antes sí): en dev eso mostraba el
+      // consultorio demo a un usuario suspendido o sin profesional y tapaba justo el caso del bucle. El layout lo
+      // manda a /onboarding o /sin-acceso. Prod no cambia (DEMO_ALLOWED es false ahí).
+      return null;
     }
-  } catch (err) {
-    if (!(err instanceof UnauthenticatedError)) throw err;
   }
   if (DEMO_ALLOWED) {
     return buildDemoActor();

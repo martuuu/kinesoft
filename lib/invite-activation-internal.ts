@@ -221,8 +221,9 @@ export async function joinTenantInTx(
 
 /**
  * Deja al usuario en el consultorio que acaba de aceptar (cookie `kine_tenant` = tenantId, C-IAM2). Sin esto
- * un kine de A que se une a B seguía entrando a A. Hasta IAM-3a `lib/session.ts` la lee como slug y la ignora;
- * mientras tanto `buildActor` elige la membresía invitada más reciente, que es esta.
+ * un kine de A que se une a B seguía entrando a A. `kine_tenant` se lee como tenantId en `getAccessSnapshot`
+ * desde IAM-3a, así que entra a B aunque tenga otros consultorios (y la cookie le ahorra la pregunta de
+ * `/elegir-consultorio` en esta sesión: acaba de elegir B al aceptar).
  */
 export function setActiveTenantCookie(tenantId: string): void {
   try {

@@ -23,6 +23,7 @@ import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
 import type { Capability } from "@/lib/capabilities";
 import type { TenantModule } from "@/lib/tenant-modules";
 import { useTenantModules } from "./tenant-modules-context";
+import { TenantSwitcher } from "./tenant-switcher";
 
 /**
  * EV0 (EV-S): el sidebar ya no tiene lista propia. Renderiza
@@ -166,6 +167,10 @@ export function Sidebar({
       >
         <KineLogo size={collapsed ? 32 : 26} markOnly={collapsed} />
       </div>
+      {/* IAM-3b (decisión 6: un usuario, varios consultorios): debajo del logo, el consultorio activo. Con 2+ es el
+          selector (también colapsado, con las iniciales); con 1, solo el nombre; sin provider, nada. Las opciones
+          llegan por `TenantChoiceProvider` (AppShell), no por props. */}
+      <TenantSwitcher collapsed={collapsed} />
       <div
         style={{
           display: "flex",

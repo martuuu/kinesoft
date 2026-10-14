@@ -5,7 +5,7 @@
  * (cambio de OS con/sin resetCopago, email normalizado, lock optimista,
  * invite con Supabase fallando, acceso básico, paginado de turnos).
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -31,29 +31,24 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+import { __setAuthAdminForTests } from "@/lib/identity/auth-admin";
+import { __setEmailTransportForTests, type SendEmailInput, type SendEmailResult } from "@/lib/email";
+import { GotrueFake } from "@/tests/helpers/gotrue-fake";
 
 const RUN = process.env.INTEGRATION === "1";
 
-// El setup de integración mockea el admin client de Supabase como `null`
-// (sin red). Acá se reemplaza por uno controlable para simular que Supabase
-// RESPONDE con `{ error }` (supabase-js no tira excepción): se mockea la
-// dependencia externa, nunca `sendPatientPortalInvite`.
-const supa = vi.hoisted(() => ({
-  inviteError: null as null | { message: string },
-  calls: 0,
-}));
-vi.mock("@/lib/supabase/admin", () => ({
-  getSupabaseAdminClient: () => ({
-    auth: {
-      admin: {
-        inviteUserByEmail: async () => {
-          supa.calls += 1;
-          return { data: supa.inviteError ? null : { user: null }, error: supa.inviteError };
-        },
-      },
-    },
-  }),
-}));
+// IAM-3c: el invite al portal ya no usa el admin client de Supabase (`inviteUserByEmail`): pide el link a
+// GoTrue por el puerto `lib/identity/auth-admin.ts` y manda el mail por `sendEmail`. Se reemplazan esas dos
+// fronteras (fake de GoTrue + transporte de registro a mano), nunca `sendPatientPortalInvite`.
+const mail = {
+  sent: 0,
+  next: null as SendEmailResult | null,
+  transport: async (_i: SendEmailInput): Promise<SendEmailResult> => {
+    mail.sent += 1;
+    const r = mail.next ?? { ok: true as const, transport: "resend" as const, providerId: `re_${mail.sent}` };
+    return r;
+  },
+};
 
 describe.skipIf(!RUN)("pacientes · cobertura y copago (caracterización)", () => {
   let db: PrismaClient;
@@ -64,9 +59,13 @@ describe.skipIf(!RUN)("pacientes · cobertura y copago (caracterización)", () =
     db = ownerClient();
     A = await createEphemeralTenant(db);
     asUser(A.userId);
+    __setAuthAdminForTests(new GotrueFake());
+    __setEmailTransportForTests(mail.transport);
   });
 
   afterAll(async () => {
+    __setAuthAdminForTests(null);
+    __setEmailTransportForTests(null);
     await A?.cleanup();
     if (portalUsers.length) await db?.userProfile.deleteMany({ where: { id: { in: portalUsers } } });
     await db?.$disconnect();
@@ -227,43 +226,44 @@ describe.skipIf(!RUN)("pacientes · cobertura y copago (caracterización)", () =
     expect(ev?.payload).toEqual({ fields: ["notes"] });
   });
 
-  it("[A2-S08] invite al portal: si Supabase responde { error } → emailSent false (primera vez y reenvío)", async () => {
-    supa.inviteError = { message: "SMTP caído" };
+  it("[A2-S08] invite al portal: si el mail no sale → emailSent false (primera vez y reenvío); IAM-3c: el reenvío a un vinculado sale", async () => {
+    // IAM-3c: antes se simulaba `{ error }` de `inviteUserByEmail`; ahora la frontera es el transporte del mail.
+    mail.next = { ok: false, transport: "resend", skipped: false, reason: "provider_error", status: 500 };
     try {
       const p = await addPatient(db, A, { email: `inv-${uniqueSuffix()}@test.local` });
       const first = await sendPatientPortalInvite({ patientId: p });
-      expect(first).toMatchObject({ ok: true, data: { emailSent: false } });
+      expect(first).toMatchObject({ ok: true, data: { emailSent: false, emailStatus: "failed" } });
 
       // Rama "ya linkeado" (userId): antes ignoraba el `{ error }` y decía "enviado".
       const uid = `test-portal-${uniqueSuffix()}`;
       portalUsers.push(uid);
       await db.userProfile.create({ data: { id: uid, email: `${uid}@test.local` } });
       await db.patient.update({ where: { id: p }, data: { userId: uid } });
-      const calls = supa.calls;
+      const calls = mail.sent;
       // A3a: 1 envío cada 10 min por destinatario; este test mide la rama de
-      // error de Supabase, no el límite (ese va en su propio test abajo).
+      // error del envío, no el límite (ese va en su propio test abajo).
       __rateLimitInternals.reset();
       const resend = await sendPatientPortalInvite({ patientId: p });
-      expect(supa.calls).toBe(calls + 1);
+      expect(mail.sent).toBe(calls + 1);
       expect(resend).toMatchObject({ ok: true, data: { emailSent: false } });
 
-      supa.inviteError = null;
+      mail.next = null;
       __rateLimitInternals.reset();
       expect(await sendPatientPortalInvite({ patientId: p })).toMatchObject({ ok: true, data: { emailSent: true } });
     } finally {
-      supa.inviteError = null;
+      mail.next = null;
     }
   });
 
-  it("[A3a-S-rl] reenviar el portal dos veces seguidas al mismo paciente → el segundo se limita sin llamar a Supabase", async () => {
+  it("[A3a-S-rl] reenviar el portal dos veces seguidas al mismo paciente → el segundo se limita sin mandar mail", async () => {
     const p = await addPatient(db, A, { email: `rl-${uniqueSuffix()}@test.local` });
     __rateLimitInternals.reset();
     expect((await sendPatientPortalInvite({ patientId: p })).ok).toBe(true);
-    const calls = supa.calls;
+    const calls = mail.sent;
     const second = await sendPatientPortalInvite({ patientId: p });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error).toMatch(/Probá de nuevo en \d+ s/);
-    expect(supa.calls).toBe(calls);
+    expect(mail.sent).toBe(calls);
   });
 
   it("[A2-S08] acceso básico = solo ver: editar, cobertura, copago e invite → rechaza sin escribir", async () => {

@@ -5,7 +5,7 @@
 import { headers } from "next/headers";
 import { revalidateTag } from "next/cache";
 import { prismaService as prisma } from "@/lib/db";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
 import { logger } from "@/lib/logger";
 import { sameEmail } from "@/lib/email-match";
 import { tags } from "@/lib/cache-tags";
@@ -50,14 +50,12 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
   const rl = await rateLimit(`invite:accept:${clientIp(headers())}`, { limit: 10, windowMs: 600_000 });
   if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
-  const supabase = getSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // IAM-3a: un solo `auth.getUser()` por request (`getVerifiedSessionUser`, nunca tira).
+  const user = await getVerifiedSessionUser();
   if (!user?.email) {
     return { ok: false, error: "Iniciá sesión para aceptar la invitación." };
   }
-  if (!user.email_confirmed_at) {
+  if (!user.emailConfirmedAt) {
     return { ok: false, error: "Tenés que confirmar tu email antes de aceptar." };
   }
 
@@ -75,7 +73,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
 
   try {
     const existing = await prisma.userProfile.findUnique({ where: { id: user.id }, select: { fullName: true } });
-    const metaName = (user.user_metadata?.full_name as string | undefined)?.trim() || null;
+    const metaName = user.fullName?.trim() || null;
     await prisma.$transaction((tx) =>
       joinTenantInTx(tx, {
         invitation: invite,
@@ -83,7 +81,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
         email: user.email!,
         // Antes se pisaba el nombre con el de la invitación en cada aceptación; ahora solo si no hay uno.
         fullName: metaName ?? existing?.fullName ?? `${invite.firstName} ${invite.lastName}`,
-        avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+        avatarUrl: user.avatarUrl,
         now,
         via: "session",
       })

@@ -12,7 +12,9 @@ import "server-only";
 import type { TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
+import { loadAccessMemberships } from "@/lib/session";
+import { isUsableMembership } from "@/lib/access-logic";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { isCustomSchedule, type OnboardingProgress } from "@/lib/onboarding-logic";
@@ -27,22 +29,19 @@ export type SessionUser = {
   fullName: string | null;
 };
 
-/** Usuario de Supabase validado contra el server (`getUser`, no `getSession`). */
+/**
+ * Usuario de Supabase validado contra el server (`getUser`, no `getSession`). IAM-3a: sale del único
+ * `getVerifiedSessionUser` (lib/session-user.ts), compartido con `getActor` en el mismo request. Sin email
+ * (identidad sin email) = sin sesión para el alta, como antes.
+ */
 export async function getSessionUser(): Promise<SessionUser | null> {
-  let u;
-  try {
-    const { data, error } = await getSupabaseServerClient().auth.getUser();
-    if (error || !data.user?.id || !data.user.email) return null;
-    u = data.user;
-  } catch {
-    // Supabase caído / sin configurar (dev local): se trata como sin sesión.
-    return null;
-  }
+  const u = await getVerifiedSessionUser();
+  if (!u || !u.email) return null;
   return {
     id: u.id,
-    email: u.email!.toLowerCase(),
-    emailVerified: !!u.email_confirmed_at,
-    fullName: (u.user_metadata?.full_name as string | undefined) ?? null,
+    email: u.email.toLowerCase(),
+    emailVerified: !!u.emailConfirmedAt,
+    fullName: u.fullName,
   };
 }
 
@@ -195,7 +194,14 @@ export async function loadOnboardingContext(
 
   const memberships = await loadMemberships(user.id);
   const inProgress = memberships.find((m) => m.role === "OWNER" && !m.tenant.onboardingCompletedAt);
-  if (!inProgress && memberships.length > 0) return { kind: "done" };
+  // IAM-3a: «done» (→ /dashboard) solo si hay una membresía USABLE. Antes bastaba con tener alguna aceptada: un
+  // removido que aceptó otra invitación (membresía en B sin Practitioner de B) caía en /dashboard → el layout no
+  // armaba Actor → /onboarding → «done» → … (bucle del 14-oct, §19.1). Sin ninguna usable sigue el alta normal:
+  // invitaciones pendientes o crear su propio consultorio (el layout ya lo manda a /sin-acceso, que ofrece esto).
+  if (!inProgress && memberships.length > 0) {
+    const access = await loadAccessMemberships(user.id);
+    if (access.memberships.some((m) => isUsableMembership(m))) return { kind: "done" };
+  }
 
   if (!inProgress) {
     if (!opts.skipInvites) {

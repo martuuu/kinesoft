@@ -8,6 +8,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconSearch } from "@/components/ui/icons";
 import type { Capability } from "@/lib/capabilities";
 import { useTenantModules } from "./tenant-modules-context";
+import { TenantSwitcher } from "./tenant-switcher";
 import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } from "./sidebar";
 
 /**
@@ -96,6 +97,10 @@ export function TopBar({
         <IconSearch size={15} /> Buscar paciente, ejercicio…
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {/* IAM-3b: con 2+ consultorios, el selector también en el chrome de barra superior. */}
+        <div style={{ width: 220 }}>
+          <TenantSwitcher />
+        </div>
         <span
           className="k-glass"
           style={{

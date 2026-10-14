@@ -36,7 +36,7 @@ import { headers } from "next/headers";
 // Every query is explicitly scoped by the verified patient's id/tenant, so it
 // runs on the service channel (BYPASSRLS) — same trust model as public-booking.
 import { prismaService as prisma } from "@/lib/db";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { audit } from "@/lib/audit";
@@ -52,7 +52,9 @@ import type {
 /**
  * Returns the verified Supabase user, or null. The portal must NEVER act
  * on an unverified email — that's how account takeover via magic-link
- * sign-up happens.
+ * sign-up happens. (IAM-3c: el magic link del portal llega por
+ * `/auth/confirm` → `verifyOtp`, que confirma el email al canjearse; un
+ * usuario que nunca abrió el link no tiene `email_confirmed_at`.)
  */
 async function verifiedUser(): Promise<{
   id: string;
@@ -60,10 +62,10 @@ async function verifiedUser(): Promise<{
   fullName: string | null;
   isStaff: boolean;
 } | null> {
-  const supabase = getSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // IAM-3c: el `getUser()` de IAM-3a (un solo round-trip por request, chequea `{ error }` y nunca tira).
+  const user = await getVerifiedSessionUser();
   if (!user?.email) return null;
-  if (!user.email_confirmed_at) return null;
+  if (!user.emailConfirmedAt) return null;
   // Staff ≠ paciente (A3b-S-auth): con Membership en cualquier consultorio, el
   // portal no la trata como paciente (ver getPortalAuth / authedPatientByTenant).
   const staff = await prisma.membership.findFirst({
@@ -74,7 +76,7 @@ async function verifiedUser(): Promise<{
     isStaff: !!staff,
     id: user.id,
     email: user.email.toLowerCase(),
-    fullName: (user.user_metadata?.full_name as string | undefined) ?? null,
+    fullName: user.fullName,
   };
 }
 

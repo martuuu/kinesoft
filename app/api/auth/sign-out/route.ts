@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { isAllowedOrigin, safeNext } from "@/lib/safe-next";
+import { clearActiveTenantCookie } from "@/lib/tenant-choice";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,8 @@ export async function POST(req: Request) {
   }
   const supabase = getSupabaseServerClient();
   await supabase.auth.signOut();
+  // IAM-3a: el consultorio elegido es de esta sesión; el próximo login (quizá otra cuenta) arranca sin él.
+  clearActiveTenantCookie();
   const next = safeNext(new URL(req.url).searchParams.get("next"), "/login");
   return NextResponse.redirect(new URL(next, env.NEXT_PUBLIC_APP_URL), { status: 303 });
 }

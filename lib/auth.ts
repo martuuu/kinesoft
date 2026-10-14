@@ -35,6 +35,7 @@ import { cookies, headers } from "next/headers";
 // GUC posible → canal service. See lib/db.ts.
 import { prismaService as prisma } from "@/lib/db";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getVerifiedSessionUser } from "@/lib/session-user";
 import { hashKeyPart, rateLimit, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { emailEqualsFilter } from "@/lib/email-match";
@@ -335,8 +336,8 @@ export async function updatePasswordWithRecoverySession(
     return { ok: false, error: rateLimitedMessage(limited.retryAfterMs) };
   }
   const supabase = getSupabaseServerClient();
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  // IAM-3a: el usuario sale del único `getVerifiedSessionUser` (un `auth.getUser()` por request, nunca tira).
+  const user = await getVerifiedSessionUser();
   if (!user?.email) {
     return {
       ok: false,

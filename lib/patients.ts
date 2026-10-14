@@ -29,7 +29,13 @@ import { resolveInsurerName } from "@/lib/insurers-internal";
 import { patientAccessFor, bulkPatientAccess, type AccessLevel } from "@/lib/visibility";
 import { hcAccessError } from "@/lib/patient-access-internal";
 import { env } from "@/lib/env";
-import { getSupabaseAdminClient } from "@/lib/supabase/admin";
+import { issueAccessLink } from "@/lib/identity/access-link";
+import { sendEmail } from "@/lib/email";
+// Registra el sink de EmailLog (cada emisor de mails lo importa: ver lib/email/log.ts).
+import "@/lib/email/log";
+import { portalInviteEmail } from "@/lib/email/templates";
+import type { EmailTransportName } from "@/lib/email/types";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
@@ -1576,19 +1582,39 @@ export async function assignPatientToPractitioner(input: {
 }
 
 /**
- * Send a patient portal invitation. Uses Supabase Admin's
- * `inviteUserByEmail` to email the patient a magic link that lands on
- * `/portal` after sign-up. Once they confirm + sign in, the
- * `/auth/callback` route auto-links their Supabase identity to this
- * Patient row (by email match, gated by `email_confirmed_at`).
+ * Invitación al portal del paciente (IAM-3c).
  *
- * Idempotent — if the Patient already has a `userId` linked, returns
- * { ok: true } without re-sending. Falls back to a manual share-URL
- * when Supabase admin isn't configured (dev/test environments).
+ * Antes usaba `inviteUserByEmail` de Supabase: flujo implícito (link a la Site URL = localhost, §19.1 #3),
+ * plantilla genérica sin la marca del consultorio, y a un paciente YA vinculado le volvía a mandar un invite
+ * que GoTrue rechaza («already registered»): el reenvío fallaba siempre. Ahora, como el resto del bloque IAM
+ * (ADR: la app manda los mails, Supabase solo emite tokens):
+ *   - link de acceso de un clic con `issueAccessLink({ kind: "magiclink", next: "/portal/c/<slug>" })` a
+ *     NUESTRO `/auth/confirm`. Sirve igual para la primera vez y para reenviar: si el paciente no tiene
+ *     cuenta, GoTrue la crea sin confirmar [S4] (aceptable: la ficha la cargó el consultorio, y la cuenta
+ *     solo se confirma al abrir el link desde su buzón); si ya la tiene, es un magiclink común;
+ *   - mail `portal_invite` por `sendEmail`, remitente «<Consultorio> vía KineSoft», Reply-To = el email
+ *     público del consultorio;
+ *   - el resultado dice la verdad (como el staff en IAM-2a): `emailSent` = el transporte lo aceptó;
+ *     `transport`/`emailStatus`/`emailReason` explican por qué no (entorno sin mails, proveedor, link no
+ *     emitido). `portalUrl` es la URL pública del portal (no lleva token: se puede mostrar para copiar).
+ *
+ * El vínculo `Patient.userId` NO se hace acá: lo hace el inicio de sesión con el email verificado
+ * (`linkPortalPatientsOnSignIn`, AUDIT §5.8).
+ *
+ * Staff ≠ paciente (AUDIT §5.22): si el email es de alguien del equipo de ESTE consultorio, se rechaza con el
+ * motivo (dato propio del consultorio). De otros consultorios no se consulta: sería un oráculo cross-tenant.
  */
 export async function sendPatientPortalInvite(input: {
   patientId: string;
-}): Promise<ActionResult<{ emailSent: boolean; portalUrl: string }>> {
+}): Promise<
+  ActionResult<{
+    emailSent: boolean;
+    portalUrl: string;
+    transport: EmailTransportName | null;
+    emailStatus: "sent" | "skipped" | "failed" | "blocked";
+    emailReason: string | null;
+  }>
+> {
   const actor = await getActor();
   const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
@@ -1598,7 +1624,7 @@ export async function sendPatientPortalInvite(input: {
       lastName: true,
       email: true,
       userId: true,
-      tenant: { select: { slug: true, name: true } },
+      tenant: { select: { slug: true, name: true, publicEmail: true } },
     },
   }));
   if (!patient) return { ok: false, error: "Paciente no encontrado." };
@@ -1609,79 +1635,75 @@ export async function sendPatientPortalInvite(input: {
   if (!patient.email) {
     return { ok: false, error: "El paciente no tiene email cargado." };
   }
+  const email = patient.email.trim().toLowerCase();
 
-  // A3a-S-rl: cada llamada manda un mail de Supabase y no había límite (spam
-  // + cuota de envío). 10/h por actor + 1 cada 10 min por destinatario (hash
-  // del email, nunca en claro). Va después de los chequeos de acceso para que
-  // un rechazo por permisos no consuma cupo.
+  const staffHere = await runWithRls(actor.tenantId, (tx) => tx.membership.findMany({
+    where: { tenantId: actor.tenantId, user: { email: emailEqualsFilter(email) } },
+    select: { user: { select: { email: true } } },
+    take: 5,
+  }));
+  if (staffHere.some((m) => sameEmail(m.user.email, email))) {
+    return {
+      ok: false,
+      error: "Ese email es de alguien del equipo del consultorio: el portal de pacientes es para otro email.",
+    };
+  }
+
+  // A3a-S-rl: cada llamada manda un mail y no había límite (spam + cuota de
+  // envío). 10/h por actor + 1 cada 10 min por destinatario (hash del email,
+  // nunca en claro). Va después de los chequeos de acceso para que un rechazo
+  // por permisos no consuma cupo.
   const rl = await rateLimitAll([
     { key: `portal-invite:actor:${actor.userId ?? actor.tenantId}`, limit: 10, windowMs: 3_600_000 },
-    { key: `portal-invite:to:${hashKeyPart(patient.email)}`, limit: 1, windowMs: 600_000 },
+    { key: `portal-invite:to:${hashKeyPart(email)}`, limit: 1, windowMs: 600_000 },
   ]);
   if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
-  const portalUrl = `${env.NEXT_PUBLIC_APP_URL}/portal/c/${patient.tenant.slug}`;
+  const portalUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/portal/c/${patient.tenant.slug}`;
+  const linked = patient.userId != null;
 
-  if (patient.userId) {
-    // Already linked to a Supabase identity. Just send a reminder.
-    await audit({
+  let outcome: {
+    emailSent: boolean;
+    transport: EmailTransportName | null;
+    emailStatus: "sent" | "skipped" | "failed" | "blocked";
+    emailReason: string | null;
+  };
+  const link = await issueAccessLink({ email, kind: "magiclink", next: `/portal/c/${patient.tenant.slug}` });
+  if (!link.ok) {
+    logger.warn("patient.portal_invite.link_failed", { code: link.code });
+    outcome = { emailSent: false, transport: null, emailStatus: "failed", emailReason: `link_${link.code}` };
+  } else {
+    const r = await sendEmail({
+      ...portalInviteEmail({ tenantName: patient.tenant.name, url: link.url }),
+      kind: "portal_invite",
+      to: email,
       tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.portal_invite.resend",
       entity: "Patient",
       entityId: patient.id,
+      fromName: patient.tenant.name,
+      replyTo: patient.tenant.publicEmail || null,
+      actorId: actor.userId ?? null,
     });
-    const admin = getSupabaseAdminClient();
-    if (admin) {
-      try {
-        // supabase-js NO tira excepción: devuelve `{ error }`. Antes esta rama
-        // lo ignoraba y respondía "Email enviado" aunque Supabase rechazara.
-        const { error } = await admin.auth.admin.inviteUserByEmail(patient.email.toLowerCase(), {
-          redirectTo: portalUrl,
-        });
-        if (!error) return { ok: true, data: { emailSent: true, portalUrl } };
-        logger.warn("patient.portal_invite.resend_email_failed", { err: error.message });
-      } catch (e) {
-        logger.warn("patient.portal_invite.resend_email_failed", { err: e instanceof Error ? e.message : String(e) });
-        /* fall through to manual URL */
-      }
-    }
-    return { ok: true, data: { emailSent: false, portalUrl } };
-  }
-
-  // First-time invite.
-  const admin = getSupabaseAdminClient();
-  let emailSent = false;
-  if (admin) {
-    try {
-      const { error } = await admin.auth.admin.inviteUserByEmail(
-        patient.email.toLowerCase(),
-        {
-          redirectTo: portalUrl,
-          data: {
-            full_name: `${patient.firstName} ${patient.lastName}`,
-            kinesoft_portal_url: portalUrl,
-            kinesoft_tenant: patient.tenant.name,
-          },
-        }
-      );
-      if (!error) emailSent = true;
-      else logger.warn("patient.portal_invite.email_failed", { err: error.message });
-    } catch (e) {
-      logger.warn("patient.portal_invite.email_failed", { err: e instanceof Error ? e.message : String(e) });
-      /* fall back to manual URL */
-    }
+    outcome = r.ok
+      ? { emailSent: true, transport: r.transport, emailStatus: "sent", emailReason: null }
+      : {
+          emailSent: false,
+          transport: r.transport,
+          emailStatus: r.transport === "blocked" ? "blocked" : r.skipped ? "skipped" : "failed",
+          emailReason: r.reason,
+        };
   }
 
   await audit({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
-    action: "patient.portal_invite",
+    // Con la ficha ya vinculada es un reenvío (la actividad del paciente lo muestra distinto).
+    action: linked ? "patient.portal_invite.resend" : "patient.portal_invite",
     entity: "Patient",
     entityId: patient.id,
-    payload: { emailSent },
+    payload: { emailSent: outcome.emailSent, transport: outcome.transport, emailStatus: outcome.emailStatus, linked },
   });
-  return { ok: true, data: { emailSent, portalUrl } };
+  return { ok: true, data: { ...outcome, portalUrl } };
 }
 
 /**

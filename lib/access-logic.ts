@@ -2,8 +2,9 @@
  * Lógica pura de acceso: qué consultorio usa una sesión y, si no hay
  * ninguno, por qué (IAM-0c, C-IAM2).
  *
- * Puro (sin DB, sin `next/*`): IAM-3a lo enchufa en `buildActor`
- * (`lib/session.ts`) y en el layout; hasta entonces no lo consume nadie.
+ * Puro (sin DB, sin `next/*`): lo consumen `buildActor` y `getAccessSnapshot`
+ * (`lib/session.ts`) desde IAM-3a; `kine_tenant` se lee como tenantId en
+ * `getAccessSnapshot` desde IAM-3a.
  *
  * El bug que lo motiva (§19.1, [A] bucle de redirecciones): `buildActor`
  * toma la membresía aceptada más recientemente INVITADA (`invitedAt desc`) y,

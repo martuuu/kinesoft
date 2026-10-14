@@ -21,6 +21,12 @@ export const metadata = { title: "Alta del consultorio · KineSoft" };
  * (`resolveStep`): sin tenant solo hay Consultorio; sin servicios no se pasa
  * de Servicios. Un tenant con el alta cerrada nunca llega acá
  * (`loadOnboardingContext` → "done" → /dashboard).
+ *
+ * IAM-3a: «done» solo con una membresía USABLE. Quien tiene membresías pero
+ * ninguna usable (suspendido, sin profesional) ve acá sus invitaciones o el
+ * alta de su propio consultorio, en vez de rebotar a /dashboard → layout →
+ * /onboarding (bucle del 14-oct). El layout a ese usuario lo manda a
+ * /sin-acceso, que tiene un link a esta pantalla.
  */
 export default async function OnboardingPage({
   searchParams,

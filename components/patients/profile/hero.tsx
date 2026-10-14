@@ -275,7 +275,7 @@ function PatientHeroActions({
 
   const [portalSending, startPortal] = useTransition();
   const [portalResult, setPortalResult] = useState<
-    | { ok: true; emailSent: boolean; portalUrl: string }
+    | { ok: true; emailSent: boolean; portalUrl: string; emailStatus?: string }
     | { ok: false; error: string }
     | null
   >(null);
@@ -362,7 +362,9 @@ function PatientHeroActions({
           {portalResult.ok
             ? portalResult.emailSent
               ? "✓ Email enviado al paciente."
-              : `Email no enviado (server sin SMTP). URL: ${portalResult.portalUrl}`
+              : portalResult.emailStatus === "skipped"
+                ? `Este entorno no manda mails: compartile el link del portal. ${portalResult.portalUrl}`
+                : `No pudimos mandar el mail. Probá de nuevo en un rato. Link del portal: ${portalResult.portalUrl}`
             : portalResult.error}
         </div>
       )}

@@ -21,9 +21,10 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
         <p style={{ fontSize: 14, color: "var(--navy-500)" }}>
           Iniciá sesión para ver tu plan.
         </p>
-        <Link href="/portal">
+        {/* IAM-3c: `?c=` hace que Google o el link por email vuelvan a este consultorio. */}
+        <Link href={`/portal?c=${encodeURIComponent(params.slug)}`}>
           <Button variant="primary" style={{ marginTop: 8 }}>
-            Ir al portal <IconArrow size={14} />
+            Entrar con Google o con tu email <IconArrow size={14} />
           </Button>
         </Link>
       </Card>

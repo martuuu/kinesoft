@@ -5,7 +5,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { prismaService as prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
-import { linkPortalPatientOnCallback } from "@/lib/portal-link-internal";
+import { linkPortalPatientOnCallback, linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
+import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,15 @@ export const runtime = "nodejs";
  *   - `next` pasa por `safeNext`: antes `${origin}${next}` con
  *     `next=@evil.com` redirigía a `https://app…@evil.com` (open redirect).
  *     Los errores vuelven al login como código, no como `error.message`.
+ *   - IAM-3c: el vínculo se deduce del `next` (`/portal` → cada consultorio
+ *     con ficha de ese email; `/portal/c/<slug>` → ese) con
+ *     `linkPortalPatientsOnSignIn`. Antes solo vinculaba con `?tenant=<slug>`,
+ *     que nadie armaba (el botón de Google manda solo `next`): no vinculaba
+ *     nunca. El `?tenant=` se sigue respetando por compatibilidad.
+ *   - IAM-3c (decisión 6 de Martin, 14-oct): al iniciar sesión se BORRA la
+ *     cookie del consultorio activo `kine_tenant`; con más de un consultorio
+ *     usable la app pregunta a cuál entrar (IAM-3a/3b). Con el mismo path y
+ *     flags con que se escribe, si no el navegador no la reemplaza.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -62,13 +72,14 @@ export async function GET(req: Request) {
     // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable
     // contra Postgres; una ruta de Next no puede exportar helpers).
     await linkPortalPatientOnCallback({ id: user.id, email: user.email, emailVerified }, tenantSlug);
+  } else if (user.email && emailVerified) {
+    await linkPortalPatientsOnSignIn({ id: user.id, email: user.email, emailVerified }, next);
   } else if (tenantSlug && !emailVerified) {
-    logger.warn("portal.link.refused", {
-      tenantSlug,
-      email: user.email,
-      reason: "email_not_confirmed",
-    });
+    // IAM-3c: sin el email en claro (alcanza con el slug y el motivo).
+    logger.warn("portal.link.refused", { tenantSlug, reason: "email_not_confirmed" });
   }
 
-  return NextResponse.redirect(new URL(next, url.origin));
+  const res = NextResponse.redirect(new URL(next, url.origin));
+  res.cookies.set(ACTIVE_TENANT_COOKIE, "", { ...ACTIVE_TENANT_COOKIE_OPTIONS, maxAge: 0 });
+  return res;
 }

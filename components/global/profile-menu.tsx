@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { IconCheck, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
+import { IconCheck, IconHome, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
   kpiOptionsFor,
@@ -15,6 +15,7 @@ import {
   type Preferences,
 } from "@/lib/preferences-constants";
 import { useTweaks } from "@/components/layout/tweaks-context";
+import { CHOOSE_TENANT_HREF, useTenantChoice } from "@/components/layout/tenant-switcher";
 
 const PALETTES: { value: Palette; swatch: [string, string, string]; label: string }[] = [
   { value: "sky", swatch: ["#1F4FBE", "#C8F564", "#E6EFFA"], label: "Sky" },
@@ -32,17 +33,25 @@ const PALETTES: { value: Palette; swatch: [string, string, string]; label: strin
  *
  * SRZ-FX3 (B8): `revenueScope` (SR-D5I) decide si el picker ofrece la KPI de
  * ingresos y con qué rótulo (`kpiOptionsFor`). Default `tenant` = lo de antes.
+ *
+ * IAM-3b (decisión 6: un usuario puede trabajar en varios consultorios): con 2+ consultorios usables suma
+ * «Cambiar de consultorio» → `/elegir-consultorio`. Es la salida con el chrome «topbar», que no tiene el selector
+ * del sidebar. Las opciones salen de `TenantChoiceProvider` (AppShell): sin provider o con uno solo, no aparece.
  */
 export function ProfileMenu({
   name,
   preferences,
   revenueScope = "tenant",
+  defaultOpen = false,
 }: {
   name: string;
   preferences: Preferences;
   revenueScope?: KpiRevenueScope;
+  /** Solo para el test de render (sin jsdom no hay click). */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  const { canSwitch } = useTenantChoice();
   const [showSettings, setShowSettings] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -117,6 +126,26 @@ export function ProfileMenu({
               setShowSettings(true);
             }}
           />
+          {canSwitch && (
+            // `<a>` y no `next/link`: navegación dura, como el selector del sidebar (la pantalla está fuera de `(app)`).
+            <a
+              href={CHOOSE_TENANT_HREF}
+              role="menuitem"
+              style={{
+                padding: "10px 12px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "var(--navy-700)",
+                borderRadius: 10,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                textDecoration: "none",
+              }}
+            >
+              <IconHome size={14} /> Cambiar de consultorio
+            </a>
+          )}
           <form action="/api/auth/sign-out" method="post">
             <button
               type="submit"

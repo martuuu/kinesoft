@@ -1,9 +1,12 @@
 /**
  * A3c-S-signup — lógica pura del guard de la app, del stepper y del slug.
  * B5.5 ONB — pasos Sede y Tu horario: retome, saltos y "semana propia".
+ * IAM-3a — gate sin bucles: /sin-acceso, /elegir-consultorio y ningún destino que rebote a sí mismo.
  */
 import { describe, it, expect } from "vitest";
+import type { AccessState } from "@/lib/access-logic";
 import {
+  APP_GATE_DESTINATIONS,
   decideAppGate,
   deriveResumeStep,
   isCustomSchedule,
@@ -18,8 +21,18 @@ import {
   type OnboardingProgress,
 } from "@/lib/onboarding-logic";
 
+const OK: AccessState = { kind: "ok", tenantId: "t1" };
 const gate = (p: Partial<AppGateInput>) =>
-  decideAppGate({ hasSession: false, hasActor: false, role: null, onboardingCompleted: false, nextPath: null, ...p });
+  decideAppGate({
+    hasSession: false,
+    hasActor: false,
+    access: null,
+    needsChoice: false,
+    role: null,
+    onboardingCompleted: false,
+    nextPath: null,
+    ...p,
+  });
 
 describe("decideAppGate", () => {
   it("sin sesión → /login, con next si hay path", () => {
@@ -29,22 +42,82 @@ describe("decideAppGate", () => {
     expect(gate({ nextPath: "/dashboard" })).toBe("/login");
   });
 
-  it("sesión verificada sin membresía → /onboarding (no /login: era un loop)", () => {
-    expect(gate({ hasSession: true })).toBe("/onboarding");
+  it("sesión sin ninguna membresía → /onboarding (no /login: era un loop)", () => {
+    expect(gate({ hasSession: true, access: { kind: "needs_onboarding" } })).toBe("/onboarding");
+    // Sin foto (no debería pasar con sesión): el destino conservador de antes.
+    expect(gate({ hasSession: true, access: null })).toBe("/onboarding");
+  });
+
+  it("[IAM-3a] membresías sin ninguna usable → /sin-acceso (antes /onboarding → «done» → /dashboard: bucle)", () => {
+    for (const reason of ["all_disabled", "missing_practitioner", "pending_only"] as const) {
+      expect(gate({ hasSession: true, access: { kind: "no_access", reason } })).toBe("/sin-acceso");
+    }
+  });
+
+  it("[IAM-3a] acceso ok pero sin Actor (carrera) → /sin-acceso, que no rebota solo a la app", () => {
+    expect(gate({ hasSession: true, access: OK })).toBe("/sin-acceso");
+  });
+
+  it("[IAM-3a] 2+ consultorios sin cookie válida → /elegir-consultorio con next (decisión 6)", () => {
+    const base = { hasSession: true, hasActor: true, access: OK, role: "PRACTITIONER", onboardingCompleted: true, needsChoice: true };
+    expect(gate(base)).toBe("/elegir-consultorio");
+    expect(gate({ ...base, nextPath: "/dashboard" })).toBe("/elegir-consultorio");
+    expect(gate({ ...base, nextPath: "/agenda?d=2026-10-01" })).toBe("/elegir-consultorio?next=%2Fagenda%3Fd%3D2026-10-01");
+    // Antes que el alta abierta: primero se elige DÓNDE entrar.
+    expect(gate({ ...base, role: "OWNER", onboardingCompleted: false })).toBe("/elegir-consultorio");
   });
 
   it("OWNER con el alta sin terminar → /onboarding", () => {
-    expect(gate({ hasSession: true, hasActor: true, role: "OWNER", onboardingCompleted: false })).toBe("/onboarding");
+    expect(gate({ hasSession: true, hasActor: true, access: OK, role: "OWNER", onboardingCompleted: false })).toBe("/onboarding");
   });
 
   it("un miembro no-OWNER entra aunque el dueño no haya terminado el alta", () => {
     for (const role of ["ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]) {
-      expect(gate({ hasSession: true, hasActor: true, role, onboardingCompleted: false })).toBeNull();
+      expect(gate({ hasSession: true, hasActor: true, access: OK, role, onboardingCompleted: false })).toBeNull();
     }
   });
 
   it("alta completa → renderiza la app", () => {
-    expect(gate({ hasSession: true, hasActor: true, role: "OWNER", onboardingCompleted: true })).toBeNull();
+    expect(gate({ hasSession: true, hasActor: true, access: OK, role: "OWNER", onboardingCompleted: true })).toBeNull();
+  });
+
+  it("actor demo (sin sesión ni foto) → renderiza la app", () => {
+    expect(gate({ hasSession: false, hasActor: true, access: null, role: "OWNER", onboardingCompleted: true })).toBeNull();
+  });
+
+  it("[IAM-3a] ningún destino rebota a sí mismo: todos viven fuera de (app), en todas las combinaciones", () => {
+    const accesses: Array<AccessState | null> = [
+      null,
+      OK,
+      { kind: "needs_onboarding" },
+      { kind: "no_access", reason: "all_disabled" },
+      { kind: "no_access", reason: "missing_practitioner" },
+      { kind: "no_access", reason: "pending_only" },
+    ];
+    const appRoutes = ["/dashboard", "/agenda", "/pacientes", "/configuracion", "/plataforma", "/sala"];
+    let seen = 0;
+    for (const hasSession of [false, true])
+      for (const hasActor of [false, true])
+        for (const access of accesses)
+          for (const needsChoice of [false, true])
+            for (const role of [null, "OWNER", "PRACTITIONER", "ASSISTANT"])
+              for (const onboardingCompleted of [false, true])
+                for (const nextPath of [null, "/dashboard", "/agenda?d=1"]) {
+                  const to = decideAppGate({ hasSession, hasActor, access, needsChoice, role, onboardingCompleted, nextPath });
+                  seen++;
+                  if (to === null) continue;
+                  const path = to.split("?")[0];
+                  expect(APP_GATE_DESTINATIONS).toContain(path);
+                  expect(appRoutes.some((r) => path === r || path.startsWith(`${r}/`))).toBe(false);
+                  // El `next` que se propaga nunca apunta a la pantalla misma.
+                  const next = new URLSearchParams(to.split("?")[1] ?? "").get("next");
+                  if (next) expect(next.split("?")[0]).not.toBe(path);
+                }
+    expect(seen).toBeGreaterThan(1000);
+  });
+
+  it("[IAM-3a] los destinos del gate son slugs reservados (un consultorio no puede tapar la ruta)", () => {
+    for (const d of APP_GATE_DESTINATIONS) expect(isValidSlug(d.slice(1))).toBe(false);
   });
 });
 

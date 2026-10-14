@@ -13,6 +13,8 @@ import { RealtimeProvider } from "@/components/providers/realtime-provider";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
 import { ArrivalAlerts } from "@/components/providers/arrival-alerts";
 import type { AlertPrefs, AlertViewer } from "@/lib/arrival-alert-state";
+import type { TenantOption } from "@/lib/tenant-choice";
+import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher";
 
 /**
  * Authenticated workspace shell. Picks chrome (sidebar vs. topbar) based
@@ -31,6 +33,10 @@ import type { AlertPrefs, AlertViewer } from "@/lib/arrival-alert-state";
  * SV11b: `ArrivalAlerts` va DENTRO del `RealtimeProvider` (usa `useRealtime`) y
  * envuelve todo el workspace para que la Card de Configuración y el menú de la
  * agenda lean `useAlertPrefs()`. Sin canal (`driver:"off"`) no arranca nada.
+ *
+ * IAM-3b (decisión 6: un usuario puede trabajar en varios consultorios): `TenantChoiceProvider` publica los
+ * consultorios usables de la sesión y el activo, que el layout ya leyó para el gate. Lo leen el selector del
+ * sidebar y el «Cambiar de consultorio» del menú de perfil (que vive en el dashboard, dentro de este árbol).
  */
 export function AppShell({
   children,
@@ -40,6 +46,9 @@ export function AppShell({
   realtime,
   alertViewer,
   initialAlertPrefs,
+  tenantOptions = [],
+  activeTenantId = null,
+  switchTenantAction = null,
 }: {
   children: ReactNode;
   isPlatformAdmin?: boolean;
@@ -48,34 +57,41 @@ export function AppShell({
   realtime: RealtimeBootstrap;
   alertViewer: AlertViewer;
   initialAlertPrefs: AlertPrefs;
+  /** Consultorios usables de la sesión (solo los propios). Vacío = sin selector (actor demo). */
+  tenantOptions?: readonly TenantOption[];
+  activeTenantId?: string | null;
+  /** Server action `switchTenant` (la pasa el layout: un módulo cliente no la importa, ver tenant-switcher). */
+  switchTenantAction?: SwitchTenantAction | null;
 }) {
   const { t } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
 
   return (
-    <TenantModulesProvider modules={modules}>
-      <RealtimeProvider bootstrap={realtime}>
-        <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={realtime.driver !== "off"}>
-          <div
-            className="k-app"
-            style={{
-              minHeight: "100vh",
-              background: "var(--bg-app)",
-              display: useSidebar ? "flex" : "block",
-            }}
-          >
-            {useSidebar && (
-              <Sidebar collapsed={t.sidebarCollapsed} isPlatformAdmin={isPlatformAdmin} caps={caps} />
-            )}
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-              {!useSidebar && <TopBar caps={caps} isPlatformAdmin={isPlatformAdmin} />}
-              <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
+    <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
+      <TenantModulesProvider modules={modules}>
+        <RealtimeProvider bootstrap={realtime}>
+          <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={realtime.driver !== "off"}>
+            <div
+              className="k-app"
+              style={{
+                minHeight: "100vh",
+                background: "var(--bg-app)",
+                display: useSidebar ? "flex" : "block",
+              }}
+            >
+              {useSidebar && (
+                <Sidebar collapsed={t.sidebarCollapsed} isPlatformAdmin={isPlatformAdmin} caps={caps} />
+              )}
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                {!useSidebar && <TopBar caps={caps} isPlatformAdmin={isPlatformAdmin} />}
+                <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
+              </div>
+              <TweaksPanel />
+              <CommandPalette />
             </div>
-            <TweaksPanel />
-            <CommandPalette />
-          </div>
-        </ArrivalAlerts>
-      </RealtimeProvider>
-    </TenantModulesProvider>
+          </ArrivalAlerts>
+        </RealtimeProvider>
+      </TenantModulesProvider>
+    </TenantChoiceProvider>
   );
 }

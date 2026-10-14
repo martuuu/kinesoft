@@ -15,11 +15,15 @@ import type { PrismaClient } from "@prisma/client";
 import { cookies } from "next/headers";
 import { RECOVERY_COOKIE, verifyRecoveryCookie } from "@/lib/recovery-cookie";
 import { env } from "@/lib/env";
-import { ownerClient, uniqueSuffix } from "@/tests/helpers/tenant-factory";
+import { ACTIVE_TENANT_COOKIE } from "@/lib/active-tenant-cookie";
+import { addPatient, createEphemeralTenant, ownerClient, uniqueSuffix } from "@/tests/helpers/tenant-factory";
 
 const sb = vi.hoisted(() => ({
   calls: [] as Array<{ type: string; token_hash: string }>,
-  result: null as null | { user: { id: string; email: string; user_metadata?: Record<string, unknown> } | null; error: { message: string } | null },
+  result: null as null | {
+    user: { id: string; email: string; email_confirmed_at?: string; user_metadata?: Record<string, unknown> } | null;
+    error: { message: string } | null;
+  },
 }));
 vi.mock("@/lib/supabase/server", () => ({
   getSupabaseServerClient: () => ({
@@ -149,6 +153,28 @@ describe.skipIf(!RUN)("/auth/confirm · GET no consume, POST canjea", () => {
     // IAM-2d: el login recibe el tipo de link para ofrecer una sola salida («olvidé mi contraseña»).
     expect(location(r)).toBe("/login?error=link_invalid&link=recovery");
     expect(cookies().get(RECOVERY_COOKIE)).toBeUndefined();
+  });
+
+  it("[IAM-3c] magic link del portal (next=/portal): vincula la ficha del paciente y borra kine_tenant (decisión 6)", async () => {
+    // Antes de IAM-3c el vínculo Patient.userId no ocurría nunca (solo con `?tenant=`, que nadie armaba) y el portal
+    // andaba solo por el match de email: «staff ≠ paciente» (AUDIT §5.22) no tenía de dónde agarrarse.
+    const t = await createEphemeralTenant(db);
+    try {
+      const u = newUser();
+      const pid = await addPatient(db, t, { email: u.email });
+      // Cookie de una sesión anterior (otro usuario en la misma compu): todo login arranca sin consultorio activo.
+      cookies().set(ACTIVE_TENANT_COOKIE, t.tenantId);
+      sb.result = { user: { id: u.id, email: u.email, email_confirmed_at: new Date().toISOString() }, error: null };
+      const r = await post({ token_hash: HASH, type: "magiclink", next: "/portal" });
+      expect(sb.calls).toEqual([{ type: "magiclink", token_hash: HASH }]);
+      expect(location(r)).toBe("/portal");
+      expect((await db.patient.findUniqueOrThrow({ where: { id: pid } })).userId).toBe(u.id);
+      expect(await db.patientTenantLink.count({ where: { patientId: pid, tenantId: t.tenantId } })).toBe(1);
+      expect(cookies().get(ACTIVE_TENANT_COOKIE)?.value ?? "").toBe("");
+    } finally {
+      // La ficha apunta al UserProfile: se borra el consultorio (y la ficha) antes que el perfil en afterAll.
+      await t.cleanup();
+    }
   });
 
   it("POST con parámetros inválidos → link_invalid sin llamar a verifyOtp", async () => {
