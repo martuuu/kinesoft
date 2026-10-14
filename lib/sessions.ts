@@ -48,6 +48,7 @@ import { audit, auditInTx } from "@/lib/audit";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
 import { withTxConflictRetry } from "@/lib/plan-lock";
 import { bulkPatientAccess, patientAccessFor, visibilityForActor } from "@/lib/visibility";
+import { ownPatientsWhere } from "@/lib/practitioner-scope";
 import { dayKeyOf, dayWindow } from "@/lib/availability/day";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { planSessionOrdinals } from "@/lib/plan-display";
@@ -62,8 +63,7 @@ import {
   applyBookingUpdateInTx,
   notifyPlanNearingDischarge,
   resolveBookingUpdateUniqueViolation,
-  type PlanDischarge,
-} from "@/lib/bookings-core";
+  type PlanDischarge, PRACTITIONER_NOT_BOOKABLE_ERROR } from "@/lib/bookings-core";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { assertProgramInvariantsInTx, ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
 import {
@@ -248,6 +248,16 @@ function toOpenSessionRow(s: OpenSessionHydrated): OpenSessionRow {
 
 const EMPTY_BUCKET: OpenSessionBucket = { rows: [], total: 0 };
 
+const EMPTY_OPEN_SESSIONS: OpenSessionBuckets = {
+  overdue: EMPTY_BUCKET,
+  today: EMPTY_BUCKET,
+  upcoming: EMPTY_BUCKET,
+  recent: EMPTY_BUCKET,
+  sinTurno: EMPTY_BUCKET,
+  realizadasSinEvolucion: EMPTY_BUCKET,
+  suggestDischarge: { rows: [], total: 0 },
+};
+
 /**
  * Landing de Seguimiento (A2a-S03 ítem 5). Cambios vs. la versión anterior:
  *   - el día es el día AR (`lib/datetime-ar.ts`); antes `setHours(0)` del host
@@ -278,17 +288,7 @@ const EMPTY_BUCKET: OpenSessionBucket = { rows: [], total: 0 };
  */
 export async function listOpenSessions(now: Date = new Date()): Promise<OpenSessionBuckets> {
   const actor = await getActor();
-  if (sessionsModuleOff(actor)) {
-    return {
-      overdue: EMPTY_BUCKET,
-      today: EMPTY_BUCKET,
-      upcoming: EMPTY_BUCKET,
-      recent: EMPTY_BUCKET,
-      sinTurno: EMPTY_BUCKET,
-      realizadasSinEvolucion: EMPTY_BUCKET,
-      suggestDischarge: { rows: [], total: 0 },
-    };
-  }
+  if (sessionsModuleOff(actor)) return EMPTY_OPEN_SESSIONS;
   const today = arDayBounds(now);
   const recentSince = new Date(today.start.getTime() - 14 * DAY_MS);
   const take = OPEN_SESSIONS_BUCKET_LIMIT;
@@ -296,14 +296,11 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
 
   return runWithRls(tenantId, async (tx) => {
     const vis = await visibilityForActor(actor, tx);
-    const patientAccessWhere: Prisma.PatientWhereInput = vis.seesAll
-      ? {}
-      : {
-          OR: [
-            { assignedPractitionerId: actor.practitionerId },
-            { shares: { some: { practitionerId: actor.practitionerId } } },
-          ],
-        };
+    // IAM-4a: sin «ver todo» y sin profesional (Secretaria, Facturación: nunca tienen `full`) no hay ninguna fila
+    // posible; se corta sin consultar. Antes el `{ assignedPractitionerId: null }` del filtro de abajo abría las
+    // sesiones de los pacientes SIN asignar (y el `shares.some.practitionerId: null` tiraba en Prisma).
+    if (!vis.seesAll && !actor.practitionerId) return EMPTY_OPEN_SESSIONS;
+    const patientAccessWhere: Prisma.PatientWhereInput = vis.seesAll ? {} : ownPatientsWhere(actor);
     const programWhere = (statuses: ("ACTIVE" | "COMPLETED" | "PAUSED")[]): Prisma.TreatmentProgramWhereInput => ({
       tenantId,
       ...liveProgramWhere,
@@ -350,10 +347,15 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
     // ejercicios) contra ~4 ms como owner. Con `NOT EXISTS` correlacionado la
     // policy corre solo sobre los ejercicios de las candidatas, por índice.
     // `count(*) OVER ()` da el total antes del LIMIT en la misma sentencia.
+    // Espejo SQL de `ownPatientsWhere`. Acá `actor.practitionerId` no es null (corte de arriba); con null el `=`
+    // de SQL igual daría NULL (falso), pero no se depende de eso.
+    const ownPid = actor.practitionerId;
     const accessSql = vis.seesAll
       ? Prisma.sql`TRUE`
-      : Prisma.sql`(pa."assignedPractitionerId" = ${actor.practitionerId} OR EXISTS (
-          SELECT 1 FROM "PatientShare" sh WHERE sh."patientId" = pa.id AND sh."practitionerId" = ${actor.practitionerId}))`;
+      : ownPid
+        ? Prisma.sql`(pa."assignedPractitionerId" = ${ownPid} OR EXISTS (
+          SELECT 1 FROM "PatientShare" sh WHERE sh."patientId" = pa.id AND sh."practitionerId" = ${ownPid}))`
+        : Prisma.sql`FALSE`;
     const sinEvRows = await tx.$queryRaw<{ id: string; total: number }[]>`
       SELECT s.id, count(*) OVER ()::int AS total
       FROM "Session" s
@@ -589,6 +591,8 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
       return PATIENT_OVERLAP_ERROR;
     case "bad-location":
       return BAD_LOCATION_ERROR;
+    case "practitioner-not-bookable":
+      return PRACTITIONER_NOT_BOOKABLE_ERROR;
     case "bad-room":
       return BAD_ROOM_ERROR;
     case "room-busy":

@@ -98,10 +98,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas
   // para no releer la membresía; el token del canal lo pide el cliente aparte.
   const realtime = await realtimeBootstrap(actor, capSet);
-  // SV11b (SV-D9): a quién se le avisa. Llegada → quien ATIENDE: todo Actor
-  // tiene `practitionerId` (también la Secretaria y BILLING), así que «atiende»
-  // = rol clínico (`clinical.read`: OWNER/ADMIN/PRACTITIONER). Llamado → quien
-  // opera la agenda de todos. Las prefs salen de `agendaPrefs` ya sanitizadas.
+  // SV11b (SV-D9): a quién se le avisa. Llegada → quien ATIENDE = rol clínico
+  // (`clinical.read`: OWNER/ADMIN/PRACTITIONER). Desde IAM-4a la Secretaria y
+  // BILLING ya llegan con `practitionerId` null; el chequeo de `clinical.read`
+  // queda como red. Llamado → quien opera la agenda de todos. Las prefs salen
+  // de `agendaPrefs` ya sanitizadas.
   const alertViewer = {
     practitionerId: capSet.has("clinical.read") ? actor.practitionerId : null,
     canOperateAll: capSet.has("agenda.operateAll"),

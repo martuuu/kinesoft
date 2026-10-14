@@ -46,7 +46,7 @@ Orden de corridas (13-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5
 | `20261008120000_billing_paid_at` (**M3a**) | ES3 (P3.0.0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`ad50059`)**. sha256 de `migration.sql` = `23a785a64586b6f8c481631620253790de7287fcf17f4ca9b7836f3bd8a75474`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.copagoPaidAt TIMESTAMP(3) NULL` (fecha del cobro manual del copago; la escribe y limpia solo `toggleBilling`/`setBookingCopagoPaid`) + `UserPreferences.dashboardPrefs JSONB NULL` (`{revenueRange: 'month'\|'week'}`) con CHECK `UserPreferences_dashboardPrefs_object_check` (objeto o NULL). Verificada objeto por objeto; `migrate status` al día (30). Sin tabla nueva ni GRANTs. Orden para prod abajo («M3a») |
 | `20261009120000_rooms` (**M4**) | SR (SR0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`5811ea2`)**. sha256 de `migration.sql` = `5ab748c120edead75ed2c8334a042404d0ced9d5776ce45d793d6e74dc7b5056`. Aditiva, sin backfill, `lock_timeout` 5 s: enum `RoomKind`; tabla `Room` (RLS ENABLE + FORCE + `Room_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES; CHECKs de nombre, `capacity` 1..50 y orden); `Location_id_tenantId_key`; `roomId` nullable en `PractitionerSchedule` (NO ACTION), `Booking` (RESTRICT, CHECK `Booking_room_location_check`) y `TimeBlock` (CASCADE, CHECK `TimeBlock_room_scope_check`), con FKs compuestas `(roomId, tenantId)` y `(roomId, locationId)`; índice parcial `Room_locationId_name_active_key` (**no se borra** si `migrate dev` lo propone: drift aceptado, «SR M4: DRIFT ACEPTADO» en el SQL y en `schema.prisma`). Verificada objeto por objeto en `tests/integration/rooms-m4.test.ts` (2 roles); `migrate status` al día (31); `guard:isolation` OK. Orden para prod abajo («M4») |
 | `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), commiteada (`d70513a`)**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
-| `20261014120000_identity_access` (**M6**) | IAM-1 (sola) | **escrita y aplicada solo en el Docker local (14-oct), pendiente commit**. sha256 de `migration.sql` = `c217390839dbf619454cc3c3aef5d0c2e484d319ce18bd1d81cadbe3baef0773`. `lock_timeout` 5 s, con prechequeo interno (marcadores `PRECHECK`) que aborta si hay pares `(tenantId, userId)` repetidos en `Practitioner`. Objetos: único `Practitioner_tenantId_userId_key`, **DROP de `Practitioner_userId_key`** (única excepción a «aditiva», aprobada por Martin el 14-oct, IAM-D2; precedente M1) e índice `Practitioner_userId_idx`; `Membership.disabledAt/disabledById` (nullables); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt` (nullables), `sendCount INT NOT NULL DEFAULT 0`, `priorTokens TEXT[] NOT NULL DEFAULT '{}'`; tabla `EmailLog` (tenantId nullable, FK a Tenant CASCADE, índices `(tenantId, createdAt)` y `(entity, entityId, createdAt)`, CHECK `EmailLog_status_check` sent/skipped/failed/blocked, RLS ENABLE + FORCE + `EmailLog_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES). CHECK y policy no están en Prisma: drift aceptado. Verificada objeto por objeto (psql + `tests/integration/identity-m6.test.ts` y bloque EmailLog de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (33); `guard:isolation` OK. Orden para prod abajo («M6») |
+| `20261014120000_identity_access` (**M6**) | IAM-1 (sola) | **escrita y aplicada solo en el Docker local (14-oct), commiteada (`972359f`)**; el SQL no se toca. sha256 de `migration.sql` = `c217390839dbf619454cc3c3aef5d0c2e484d319ce18bd1d81cadbe3baef0773`. `lock_timeout` 5 s, con prechequeo interno (marcadores `PRECHECK`) que aborta si hay pares `(tenantId, userId)` repetidos en `Practitioner`. Objetos: único `Practitioner_tenantId_userId_key`, **DROP de `Practitioner_userId_key`** (única excepción a «aditiva», aprobada por Martin el 14-oct, IAM-D2; precedente M1) e índice `Practitioner_userId_idx`; `Membership.disabledAt/disabledById` (nullables); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt` (nullables), `sendCount INT NOT NULL DEFAULT 0`, `priorTokens TEXT[] NOT NULL DEFAULT '{}'`; tabla `EmailLog` (tenantId nullable, FK a Tenant CASCADE, índices `(tenantId, createdAt)` y `(entity, entityId, createdAt)`, CHECK `EmailLog_status_check` sent/skipped/failed/blocked, RLS ENABLE + FORCE + `EmailLog_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES). CHECK y policy no están en Prisma: drift aceptado. Verificada objeto por objeto (psql + `tests/integration/identity-m6.test.ts` y bloque EmailLog de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (33); `guard:isolation` OK. Orden para prod abajo («M6») |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -129,6 +129,34 @@ sobre la base viva:
     WHERE table_name = 'EmailLog' AND grantee IN ('anon', 'authenticated');                             -- 0 filas
    ```
    Repetir `has_table_privilege` con `kinesoft_service` si existe.
+4b. **Prechecks del código de IAM (antes del deploy, solo lectura).** No bloquean la migración; deciden qué avisarle a
+   cada consultorio:
+   ```sql
+   -- (a) Turnos FUTUROS activos de Secretaria/Facturación. Desde IAM-2e/4b no son reservables: esos turnos siguen en la
+   --     agenda (columna «Otros (sin agenda)» en «Día por profesional») y se pueden cancelar, pero no reprogramar.
+   --     Reasignarlos a un profesional antes o después del deploy.
+   SELECT m."tenantId", m.role, p.id AS "practitionerId", count(*) AS turnos_futuros
+     FROM "Booking" b
+     JOIN "Practitioner" p ON p.id = b."practitionerId"
+     JOIN "Membership" m ON m."tenantId" = b."tenantId" AND m."userId" = p."userId"
+    WHERE m.role IN ('ASSISTANT', 'BILLING')
+      AND b."scheduledFor" > now()
+      AND b.status IN ('PENDING', 'CONFIRMED')
+    GROUP BY 1, 2, 3 ORDER BY 4 DESC;
+   -- (b) Pacientes asignados a la fila Practitioner vieja de una Secretaria/Facturación: desde IAM-4a ella tiene
+   --     `practitionerId` null y no los «posee»; quedan en acceso admin salvo para OWNER/ADMIN. Reasignarlos.
+   SELECT m."tenantId", m.role, count(*) AS pacientes
+     FROM "Patient" pa
+     JOIN "Practitioner" p ON p.id = pa."assignedPractitionerId"
+     JOIN "Membership" m ON m."tenantId" = pa."tenantId" AND m."userId" = p."userId"
+    WHERE m.role IN ('ASSISTANT', 'BILLING')
+    GROUP BY 1, 2;
+   -- (c) Slugs reservados desde IAM-3a (rutas nuevas /sin-acceso y /elegir-consultorio). Tiene que dar 0 filas;
+   --     si no, cambiar ese slug antes del deploy (quedaron reservados en `lib/onboarding-logic.ts:26-28`).
+   SELECT id, slug FROM "Tenant" WHERE slug IN ('sin-acceso', 'elegir-consultorio');
+   ```
+   Después del deploy: los usuarios con 2+ consultorios ven «¿A qué consultorio querés entrar?» una vez al volver a
+   entrar. Configuración de consola (Resend, Site URL, Redirect URLs) en [EXTERNAL-CONFIG.md §0.4](EXTERNAL-CONFIG.md).
 5. **Antes o después del código:** puede ir **antes**. Es compatible hacia atrás: las columnas y la tabla nuevas el
    código viejo no las lee, y el DROP solo relaja la unicidad. El código viejo busca el Practitioner del usuario con
    `findUnique({ userId })` (en SQL `WHERE "userId" = $1 LIMIT 1`, no depende del índice) y nunca crea un segundo
@@ -395,8 +423,8 @@ DATABASE_URL="$DIRECT_URL" KINESOFT_CONFIRM_PROD=<project-ref> \
 
 > ⚠️ **Hay UNA migración nueva en este bloque: `20260930120000_tenant_onboarding`** (A3c). A2, A3a y A3b no
 > tienen migraciones. Reglas de corte:
-> - **A3 no se despliega sin el SMTP propio configurado** (EXTERNAL-CONFIG §0.1): sin él, los mails de
->   verificación del signup no llegan y nadie puede darse de alta.
+> - ~~A3 no se despliega sin el SMTP propio configurado~~ (histórico: desde IAM, 14-oct, los mails los manda la app
+>   por Resend y no hace falta SMTP en Supabase; ver EXTERNAL-CONFIG §0.4).
 > - **A3b no se despliega sin A3c**: la página de invitación de A3b ofrece "Crear mi cuenta para unirme", que
 >   con el signup viejo crearía un consultorio nuevo en vez de sumarse al equipo.
 > - **El QA del signup (QA.md §A3c) se corre en staging con un email real ANTES del merge a `main`.** Si falla,
@@ -448,7 +476,7 @@ Qué hacer si dan > 0:
 **2) Backup:** `npm run db:prod:backup`.
 
 **3) Staging primero (antes del merge a `main`):** con los prerrequisitos de EXTERNAL-CONFIG §0.1 cargados en
-staging (SMTP propio, plantillas con `type=email` / `type=recovery`, Redirect URLs, "Confirm email" ON, "Secure
+staging (histórico; desde IAM sin SMTP ni plantillas de Supabase, ver EXTERNAL-CONFIG §0.4: Redirect URLs, "Confirm email" ON, "Secure
 password change" OFF, Upstash, DSN), deployar el bloque al Preview de staging. La migración se aplica en staging
 con `migrate deploy` contra la DB de staging (el Preview no migra solo). Correr el QA de
 [QA.md §Bloque A — A2/A3](QA.md) **incluida la subsección A3c con un email real** (mail abierto en otro
@@ -512,8 +540,8 @@ DSN) llega un evento de prueba; en Upstash aparecen claves `rl:production:`.
 > mergear a `main`.
 >
 > **Relación con el Bloque A:** el Bloque A ya está commiteado (`ef3281f`). B-pre puede desplegarse **solo** (si A
-> ya está en prod) o **en el mismo deploy** que A. Las reglas de A no cambian: **A3 sigue requiriendo el SMTP
-> propio** (EXTERNAL-CONFIG §0.1) y A3b no va sin A3c. Si A no está en prod, este deploy lleva también
+> ya está en prod) o **en el mismo deploy** que A. Las reglas de A no cambian (el SMTP propio quedó
+> superado por IAM, EXTERNAL-CONFIG §0.4) y A3b no va sin A3c. Si A no está en prod, este deploy lleva también
 > `20260930120000_tenant_onboarding` (§2.1): aplicar los prechecks de las dos secciones y el orden de migraciones
 > es por timestamp (onboarding → catalog_global → agenda_foundations), que es lo que hace `migrate deploy`.
 

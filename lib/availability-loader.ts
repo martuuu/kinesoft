@@ -64,8 +64,10 @@ export type LoadedAvailabilityInput = Omit<AvailabilityInput, "bookings" | "room
 
 export type LoadAvailabilityParams = {
   tenantId: string;
-  /** Sin pasar = todos los profesionales con membresía ACEPTADA. Pasado = esos
-   *  ids, filtrados contra el tenant (un id ajeno se descarta). `[]` = ninguno. */
+  /** Sin pasar = todos los profesionales reservables (`bookablePractitionerWhere`).
+   *  Pasado = esos ids, filtrados con el MISMO criterio (IAM-4b: un id ajeno o
+   *  no reservable no trae plantilla ni reglas; sus turnos sí, ver
+   *  `bookingPracIds`). `[]` = ninguno. */
   practitionerIds?: ReadonlyArray<string>;
   /** Acota `services` y `practitionerServices` a ese servicio. NO acota los
    *  turnos: el solape del paciente y la ocupación del profesional cruzan
@@ -257,12 +259,16 @@ async function loadForRuns(
     requestedIds && requestedIds.length === 0
       ? Promise.resolve([] as { id: string }[])
       : db.practitioner.findMany({
+          // Mismo criterio que `listPractitioners`: `removeMember` borra la
+          // membresía pero deja la fila Practitioner (historial); IAM-2e:
+          // solo roles clínicos sin suspender (la Secretaria no atiende).
+          // IAM-4b: también con ids explícitos (antes solo `tenantId`): un id
+          // no reservable no tiene plantilla → sin slots, y el write-path de
+          // la edición lo usa para rechazar el movimiento. EXISTS en la misma
+          // sentencia: 0 statements nuevos.
           where: requestedIds
-            ? { tenantId, id: { in: requestedIds } }
-            : // Mismo criterio que `listPractitioners`: `removeMember` borra la
-              // membresía pero deja la fila Practitioner (historial); IAM-2e:
-              // solo roles clínicos sin suspender (la Secretaria no atiende).
-              bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
+            ? { ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }), id: { in: requestedIds } }
+            : bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
           select: { id: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
@@ -299,8 +305,14 @@ async function loadForRuns(
   const toDb = dayKeyToDbDate(to);
 
   // ── Fase 2: todo lo demás, en paralelo (con un `tx` Prisma lo encola) ──────
+  // IAM-4b: con ids explícitos, los TURNOS se cargan por los ids pedidos
+  // (crudos: el `where: { tenantId }` de la query ya descarta uno ajeno) y no
+  // solo por los reservables. Un profesional recién suspendido o una
+  // Secretaria con turnos viejos no ofrecen slots, pero sus turnos siguen
+  // ocupando: el cupo y la ocupación del paciente/sala no se pierden.
+  const bookingPracIds = requestedIds ?? pracIds;
   const bookingScope = [
-    ...(hasPracs ? [{ practitionerId: { in: pracIds } }] : []),
+    ...(bookingPracIds.length > 0 ? [{ practitionerId: { in: bookingPracIds } }] : []),
     ...(patientOk ? [{ patientId: patientOk.id }] : []),
   ];
   const [schedules, exceptions, blocks, bookings, pracServices, services, pracPayers] = await Promise.all([

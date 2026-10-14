@@ -23,7 +23,7 @@ export const CAPABILITIES = [
   "agenda.viewAll",
   /** Candado/bloqueos de agenda de CUALQUIER profesional (incluye "todos"). */
   "agenda.manageBlocks",
-  /** Candado/bloqueos solo de la agenda propia (actor.practitionerId). */
+  /** Candado/bloqueos solo de la agenda propia (actor.practitionerId; sin profesional no hay agenda propia). */
   "agenda.manageOwnBlocks",
   /** Recepción: marcar llegada (arrivedAt) / en atención (attendingAt). */
   "agenda.reception",
@@ -142,11 +142,14 @@ export function isTenantAdminRole(role: Role | null | undefined): boolean {
  */
 export function canManageBlocksFor(
   caps: ReadonlySet<Capability>,
-  actorPractitionerId: string,
+  actorPractitionerId: string | null,
   targetPractitionerId: string | null
 ): boolean {
   if (caps.has("agenda.manageBlocks")) return true;
+  // IAM-4a: actor sin profesional (rol no clínico) → no tiene agenda «propia»; nunca `null === null` (que sería
+  // el candado de «todos»).
   return (
+    actorPractitionerId !== null &&
     targetPractitionerId !== null &&
     targetPractitionerId === actorPractitionerId &&
     caps.has("agenda.manageOwnBlocks")

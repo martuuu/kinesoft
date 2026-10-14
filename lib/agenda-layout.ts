@@ -348,6 +348,18 @@ export function visibleWindow(
 }
 
 /**
+ * IAM-4b: columna extra de «Día por profesional» para los turnos cuyo
+ * profesional NO tiene columna (no es reservable: turnos viejos asignados a la
+ * Secretaria o a Facturación de antes de IAM-2e, o a alguien suspendido o dado
+ * de baja). Sin ella esos turnos desaparecían de la vista aunque el server los
+ * mandara. No es una agenda: sin franjas (todo «fuera de horario»), sin cupo
+ * (mezcla profesionales: no inventa un «lleno») y sin bloqueos. El id no
+ * choca con un cuid de Prisma.
+ */
+export const OTHERS_COLUMN_ID = "__otros__";
+export const OTHERS_COLUMN_NAME = "Otros (sin agenda)";
+
+/**
  * Columnas de la vista "Día por profesional" (y de la vista por día con un
  * solo profesional). Ver reglas 1-5 en la cabecera. `window` omitida → se
  * calcula con `visibleWindow` (franjas de estos profesionales, `fallback` o el
@@ -370,12 +382,25 @@ export function buildPractitionerColumns<T extends LayoutBooking>(
     fallback?: MinuteWindow;
     /** Filtro de sede: ignora bloqueos de otras sedes. */
     locationId?: string | null;
+    /**
+     * IAM-4b: los turnos del día cuyo profesional no está en `practitioners`
+     * van a una columna «Otros» al final (`OTHERS_COLUMN_ID`), en vez de
+     * descartarse. Solo para la vista: el caller ya filtró por chips (un turno
+     * de un profesional filtrado no llega acá), así que lo que sobra es de
+     * alguien sin columna. Default false (filas bloqueadas, tests de antes).
+     */
+    othersColumn?: boolean;
   }
 ): AgendaDayLayout<T> {
-  const { dayKey, now, capOf } = opts;
+  const { dayKey, now } = opts;
   const zoom = normalizeZoom(opts.zoom);
   const ids = new Set(practitioners.map((p) => p.id));
-  const dayBookings = bookings.filter((b) => ids.has(b.practitionerId) && touchesDay(dayKey, b));
+  const todays = bookings.filter((b) => touchesDay(dayKey, b));
+  const dayBookings = opts.othersColumn ? todays : todays.filter((b) => ids.has(b.practitionerId));
+  const orphans = opts.othersColumn ? todays.filter((b) => !ids.has(b.practitionerId)) : [];
+  const allColumns: ReadonlyArray<LayoutPractitioner> =
+    orphans.length > 0 ? [...practitioners, { id: OTHERS_COLUMN_ID, name: OTHERS_COLUMN_NAME }] : practitioners;
+  const capOf: CapOf = (pid, sid) => (pid === OTHERS_COLUMN_ID ? null : opts.capOf(pid, sid));
 
   const window =
     opts.window ??
@@ -387,11 +412,12 @@ export function buildPractitionerColumns<T extends LayoutBooking>(
   const rows = rowsOf(window, zoom);
   const loc = opts.locationId ?? null;
 
-  const columns = practitioners.map((p): PractitionerColumn<T> => {
-    const mine = dayBookings.filter((b) => b.practitionerId === p.id);
+  const columns = allColumns.map((p): PractitionerColumn<T> => {
+    const isOthers = p.id === OTHERS_COLUMN_ID;
+    const mine = isOthers ? orphans : dayBookings.filter((b) => b.practitionerId === p.id);
     const lanes = assignLanes(dayKey, mine);
-    const ranges = (opts.ranges[p.id] ?? []).filter((r) => r.startMin < r.endMin);
-    const blocks = (opts.blocks ?? [])
+    const ranges = isOthers ? [] : (opts.ranges[p.id] ?? []).filter((r) => r.startMin < r.endMin);
+    const blocks = (isOthers ? [] : (opts.blocks ?? []))
       .filter(
         (b) =>
           (b.practitionerId == null || b.practitionerId === p.id) &&

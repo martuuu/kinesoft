@@ -379,3 +379,32 @@ describe("S19e · vista Día con plan", () => {
     expect(renderDay(list, null)).toContain("+1 más</button>");
   });
 });
+
+describe("[IAM-4b] «Día por profesional» con turnos de quien no tiene columna", () => {
+  it("el turno viejo de la Secretaria se dibuja en la columna «Otros (sin agenda)»", () => {
+    const orphan = bk("secretaria", "10:00", KINE, { patientName: "Paciente Huérfano" });
+    const layout = buildPractitionerColumns(practitioners.slice(0, 2), [orphan], {
+      dayKey: DAY,
+      zoom: 30,
+      ranges,
+      capOf,
+      now: NOW,
+      othersColumn: true,
+    });
+    const html = renderToStaticMarkup(
+      <PractitionerDayView
+        dayKey={DAY}
+        layout={layout}
+        practitioners={practitioners.slice(0, 2)}
+        zoom={30}
+        density="comfortable"
+        now={NOW}
+        onSlotClick={() => {}}
+        onBookingClick={() => {}}
+        highlight={null}
+      />
+    );
+    expect(html).toContain("Otros (sin agenda)");
+    expect(html).toContain("Paciente Huérfano");
+  });
+});

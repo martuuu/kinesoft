@@ -41,6 +41,7 @@ import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
 import { hcAccessError } from "@/lib/patient-access-internal";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
+import { ownPatientsWhere } from "@/lib/practitioner-scope";
 import { tags as cacheTags, ttl } from "@/lib/cache-tags";
 import { diagnosisRampSteps, rankSelection } from "@/lib/diagnosis-engine";
 import type {
@@ -262,18 +263,8 @@ export async function searchPatientsForAssignment(
     // Un paciente archivado no se elige para un plan nuevo (hallazgo de P2-FX1).
     archivedAt: null,
     ...v.patientWhere,
-    ...(v.seesAll
-      ? {}
-      : {
-          AND: [
-            {
-              OR: [
-                { assignedPractitionerId: actor.practitionerId },
-                { shares: { some: { practitionerId: actor.practitionerId } } },
-              ],
-            },
-          ],
-        }),
+    // IAM-4a: `ownPatientsWhere` (nunca `assignedPractitionerId IS NULL` con un actor sin profesional).
+    ...(v.seesAll ? {} : { AND: [ownPatientsWhere(actor)] }),
     ...(term
       ? {
           OR: [

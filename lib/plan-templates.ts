@@ -32,7 +32,8 @@ import { revalidatePath } from "next/cache";
 import { Prisma, type Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
-import { ForbiddenError, getActor, type Actor } from "@/lib/session";
+import { ForbiddenError, getActor, requireActorPractitionerId, type Actor } from "@/lib/session";
+import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { modulesFor } from "@/lib/tenant-modules";
 import { getMembershipRole } from "@/lib/authz";
 import { capabilitiesFor, isTenantAdminRole } from "@/lib/capabilities";
@@ -281,7 +282,7 @@ export async function listPlanTemplates(
     orderBy: [{ archivedAt: { sort: "desc", nulls: "first" } }, { updatedAt: "desc" }],
     select: ROW_SELECT,
   }));
-  return rows.map((r) => toRow(r, (authorId) => manage && (isAdmin || authorId === actor.practitionerId)));
+  return rows.map((r) => toRow(r, (authorId) => manage && (isAdmin || isActorPractitioner(actor, authorId))));
 }
 
 /**
@@ -313,7 +314,7 @@ export async function getPlanTemplate(id: string): Promise<ActionResult<PlanTemp
       const names = new Map(visible.map((e) => [e.id, e.name]));
       const ok = new Set(assignable.map((e) => e.id));
       const detail: PlanTemplateDetail = {
-        ...toRow(r, (authorId) => manage && (isAdmin || authorId === actor.practitionerId)),
+        ...toRow(r, (authorId) => manage && (isAdmin || isActorPractitioner(actor, authorId))),
         notes: r.notes,
         exercises: ids.map((eid) => ({ id: eid, name: names.get(eid) ?? "Ejercicio no disponible", assignable: ok.has(eid) })),
       };
@@ -419,6 +420,9 @@ export async function createPlanTemplate(raw: PlanTemplateCreateInput): Promise<
   try {
     const id = await runWithRls(actor.tenantId, async (tx) => {
       const { gate } = await templateGateInTx(tx, actor);
+      // IAM-4a: `PlanTemplate.authorId` es NOT NULL → Practitioner. El gate exige `plans.manage` (solo roles
+      // clínicos, que siempre tienen profesional): esto es la red, con 403 en vez de un error de Prisma.
+      const authorId = requireActorPractitionerId(actor, COPY.role);
       const exerciseIds = input.exerciseIds ?? [];
       const discipline = await validateTemplateRefsInTx(
         tx,
@@ -426,13 +430,13 @@ export async function createPlanTemplate(raw: PlanTemplateCreateInput): Promise<
         gate,
         { discipline: input.discipline ?? null, serviceId: input.serviceId ?? null, durationMin: input.durationMin ?? null },
         exerciseIds,
-        actor.practitionerId // el autor de una plantilla nueva es el actor
+        authorId // el autor de una plantilla nueva es el actor
       );
       const schedule = input.schedule ?? null;
       const row = await tx.planTemplate.create({
         data: {
           tenantId: actor.tenantId,
-          authorId: actor.practitionerId,
+          authorId,
           name: input.name,
           description: input.description ?? null,
           totalSessions: input.totalSessions,
@@ -491,7 +495,7 @@ export async function updatePlanTemplate(
         select: { id: true, authorId: true, updatedAt: true, discipline: true, serviceId: true, durationMin: true },
       });
       if (!cur) return "not_found" as const;
-      if (!isAdmin && cur.authorId !== actor.practitionerId) throw new ForbiddenError(COPY.notAuthor);
+      if (!isAdmin && !isActorPractitioner(actor, cur.authorId)) throw new ForbiddenError(COPY.notAuthor);
       if (p.expectedUpdatedAt && +new Date(p.expectedUpdatedAt) !== +cur.updatedAt) return "stale" as const;
 
       const refsTouched = p.discipline !== undefined || p.serviceId !== undefined || p.durationMin !== undefined;
@@ -547,7 +551,7 @@ export async function updatePlanTemplate(
         action: "planTemplate.update",
         entity: "PlanTemplate",
         entityId: cur.id,
-        payload: { fields: Object.keys(data), byAdmin: cur.authorId !== actor.practitionerId },
+        payload: { fields: Object.keys(data), byAdmin: !isActorPractitioner(actor, cur.authorId) },
       });
       return { updatedAt: after.updatedAt.toISOString() };
     });
@@ -578,7 +582,7 @@ export async function setPlanTemplateArchived(id: string, archived: boolean): Pr
         select: { id: true, authorId: true, archivedAt: true },
       });
       if (!cur) return "not_found" as const;
-      if (!isAdmin && cur.authorId !== actor.practitionerId) throw new ForbiddenError(COPY.notAuthor);
+      if (!isAdmin && !isActorPractitioner(actor, cur.authorId)) throw new ForbiddenError(COPY.notAuthor);
       if ((cur.archivedAt !== null) === archived) return "ok" as const;
       await tx.planTemplate.updateMany({
         where: { id, tenantId: actor.tenantId },
@@ -590,7 +594,7 @@ export async function setPlanTemplateArchived(id: string, archived: boolean): Pr
         action: archived ? "planTemplate.archive" : "planTemplate.restore",
         entity: "PlanTemplate",
         entityId: id,
-        payload: { byAdmin: cur.authorId !== actor.practitionerId },
+        payload: { byAdmin: !isActorPractitioner(actor, cur.authorId) },
       });
       return "ok" as const;
     });
@@ -630,12 +634,14 @@ export async function deletePlanTemplate(id: string): Promise<ActionResult> {
         select: { id: true, authorId: true },
       });
       if (!tpl) return "not_found" as const;
-      if (!isAdmin && tpl.authorId !== actor.practitionerId) return "forbidden" as const;
+      if (!isAdmin && !isActorPractitioner(actor, tpl.authorId)) return "forbidden" as const;
       const del = await tx.planTemplate.deleteMany({
         where: {
           id,
           tenantId: actor.tenantId,
-          ...(isAdmin ? {} : { authorId: actor.practitionerId }),
+          // IAM-4a: acá `actor.practitionerId` no es null (el `isActorPractitioner` de arriba ya cortó a quien no
+          // tiene profesional); `tpl.authorId` es el mismo valor y es NOT NULL.
+          ...(isAdmin ? {} : { authorId: tpl.authorId }),
         },
       });
       if (del.count === 0) return "not_found" as const;
@@ -645,7 +651,7 @@ export async function deletePlanTemplate(id: string): Promise<ActionResult> {
         action: "planTemplate.delete",
         entity: "PlanTemplate",
         entityId: id,
-        payload: { authorId: tpl.authorId, byAdmin: tpl.authorId !== actor.practitionerId },
+        payload: { authorId: tpl.authorId, byAdmin: !isActorPractitioner(actor, tpl.authorId) },
       });
       return "ok" as const;
     });

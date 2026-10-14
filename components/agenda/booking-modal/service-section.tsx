@@ -16,6 +16,25 @@
 import { Select } from "../controls";
 import type { PractitionerOption, ServiceOption } from "./types";
 
+/**
+ * IAM-4b: profesional inicial del turno nuevo. El default (columna, chip o el
+ * profesional del usuario) si está en la lista; si no, el ÚNICO profesional
+ * (no hay nada que elegir); con varios, ninguno: obliga a elegir. Antes caía
+ * en silencio al primero de la lista, y la Secretaria (sin profesional propio
+ * desde IAM-4a) le cargaba el turno a cualquiera. La lista ya viene filtrada a
+ * los reservables (`listPractitioners`, IAM-2e).
+ */
+export function initialPractitionerId(
+  defaultId: string | null | undefined,
+  practitioners: ReadonlyArray<{ id: string }>
+): string {
+  if (defaultId && practitioners.some((p) => p.id === defaultId)) return defaultId;
+  return practitioners.length === 1 ? practitioners[0].id : "";
+}
+
+export const NO_BOOKABLE_PRACTITIONERS_COPY =
+  "No hay profesionales con agenda en este consultorio. Sumá uno desde Configuración → Usuarios.";
+
 export function ServiceSection({
   practitioners,
   practitionerId,
@@ -48,12 +67,23 @@ export function ServiceSection({
         value={practitionerId}
         onChange={onPractitionerChange}
       >
+        {/* IAM-4b: placeholder solo sin elegir (con uno elegido, el markup de siempre). */}
+        {practitionerId === "" && (
+          <option value="" disabled>
+            — Elegí un profesional —
+          </option>
+        )}
         {practitioners.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name}
           </option>
         ))}
       </Select>
+      {practitioners.length === 0 && (
+        <div role="status" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+          {NO_BOOKABLE_PRACTITIONERS_COPY}
+        </div>
+      )}
       <div style={{ display: "grid", gap: 4 }}>
         <Select
           label="Servicio"

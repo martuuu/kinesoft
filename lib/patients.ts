@@ -13,7 +13,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { getActor, type Actor } from "@/lib/session";
 import { getMembershipRole, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -899,9 +899,12 @@ export async function createPatient(
           },
           select: { id: true },
         });
-        if (!target || (!clinical && target.id === actor.practitionerId)) return null;
+        if (!target || (!clinical && isActorPractitioner(actor, target.id))) return null;
         assignee = target.id;
       }
+      // IAM-4a: sin `assignTo` la ficha queda a cargo del actor; un actor sin profesional (rol no clínico, que
+      // igual exige `assignTo` arriba) nunca la deja en `null` = «sin asignar» por accidente.
+      if (!assignee) return null;
       const created = await tx.patient.create({
         data: {
           ...patientData,
@@ -1876,8 +1879,9 @@ async function requireShareAuthority(patientId: string) {
   // pacientes asignados a la Secretaria (precheck 15): sin el chequeo de rol,
   // ella manejaba los shares y abría la HC a otros profesionales, aunque por
   // PD-13 nunca tiene full sobre esa ficha.
+  // IAM-4a: `isActorPractitioner` (nunca `null === null` con un paciente sin asignar).
   const isOwner =
-    patient.assignedPractitionerId === actor.practitionerId && capabilitiesFor(role).has("clinical.read");
+    isActorPractitioner(actor, patient.assignedPractitionerId) && capabilitiesFor(role).has("clinical.read");
   if (!isAdmin && !isOwner) {
     return {
       ok: false as const,

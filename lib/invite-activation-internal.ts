@@ -152,11 +152,12 @@ export async function usedAsPortalPatient(p: { userId?: string | null; email: st
  *
  *  - `UserProfile`: upsert por id (Supabase user id).
  *  - `Practitioner` DE ESTE consultorio (clave compuesta, IAM-1/M6): un kine de A que se une a B queda
- *    profesional de B con su agenda; si ya existía (re-invitación) se reusa sin pisar la especialidad. Hoy
- *    toda membresía lleva Practitioner (`PRACTITIONER_FOR_ALL_ROLES`); cuando IAM-4 lo apague, solo los
- *    roles clínicos.
- *  - `Membership` aceptada con el rol invitado.
- *  - Agenda por defecto (B2.3, idempotente; regla del backfill: profesional con membresía aceptada).
+ *    profesional de B con su agenda; si ya existía (re-invitación) se reusa sin pisar la especialidad. Solo
+ *    para roles clínicos (IAM-4a, `PRACTITIONER_FOR_ALL_ROLES = false`): la Secretaria y Facturación son staff
+ *    sin agenda (§19.2 decisión 2) y entran sin `Practitioner`; antes se les creaba profesional + franjas.
+ *  - `Membership` aceptada con el rol invitado (y sin suspender: una suspendida se reactiva, IAM-4c).
+ *  - Agenda por defecto (B2.3, idempotente; regla del backfill: profesional con membresía aceptada), solo si se
+ *    creó/reusó el `Practitioner` (rol clínico).
  *  - `invitation.accept` auditado en la misma tx (existe si y solo si existe la unión).
  */
 export async function joinTenantInTx(
@@ -198,10 +199,20 @@ export async function joinTenantInTx(
     ).id;
   }
 
+  // IAM-4c (handoff de IAM-2b): aceptar una invitación NUEVA reactiva una membresía suspendida del mismo
+  // consultorio. Antes el upsert dejaba `disabledAt` puesto: la persona «aceptaba» y seguía sin poder entrar (o
+  // caía a `/sin-acceso`), sin nada que se lo explicara. La invitación la creó quien gestiona el equipo, así que es
+  // su decisión de devolverle el acceso; las invitaciones pendientes de antes se anulan al suspender
+  // (`suspendMember`), así que una vieja no sirve de puerta de vuelta. Se lee antes para auditarlo.
+  const prior = await tx.membership.findUnique({
+    where: { userId_tenantId: { userId, tenantId: inv.tenantId } },
+    select: { disabledAt: true },
+  });
+  const reactivated = !!prior?.disabledAt;
   await tx.membership.upsert({
     where: { userId_tenantId: { userId, tenantId: inv.tenantId } },
     create: { userId, tenantId: inv.tenantId, role: inv.role, acceptedAt: now },
-    update: { acceptedAt: now, role: inv.role },
+    update: { acceptedAt: now, role: inv.role, disabledAt: null, disabledById: null },
   });
 
   if (practitionerId) {
@@ -214,7 +225,7 @@ export async function joinTenantInTx(
     action: "invitation.accept",
     entity: "Invitation",
     entityId: inv.id,
-    payload: { via: p.via, ...(p.adopted ? { adopted: true } : {}) },
+    payload: { via: p.via, ...(p.adopted ? { adopted: true } : {}), ...(reactivated ? { reactivated: true } : {}) },
   });
   return { practitionerId };
 }

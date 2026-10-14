@@ -133,7 +133,7 @@ export function summarizeRevenue(
  *   - `tenant`: todo el consultorio. `billing.manage` = OWNER, ADMIN, BILLING.
  *   - `own`: solo los turnos cuyo `Booking.practitionerId` es el del actor
  *     (PRACTITIONER: tiene `clinical.read` y no `billing.manage`).
- *   - `none`: nada (ASSISTANT / Secretaria): el widget y la KPI no se
+ *   - `none`: nada (ASSISTANT / Secretaria, o un actor sin profesional): el widget y la KPI no se
  *     renderizan y `getRevenue` devuelve error. Sin membresía (caps vacías)
  *     también cae acá: falla cerrado.
  *
@@ -149,9 +149,11 @@ export function summarizeRevenue(
 export type RevenueScope = { kind: "tenant" } | { kind: "own"; practitionerId: string } | { kind: "none" };
 export type RevenueScopeKind = RevenueScope["kind"];
 
-export function revenueScopeFor(caps: ReadonlySet<Capability>, practitionerId: string): RevenueScope {
+export function revenueScopeFor(caps: ReadonlySet<Capability>, practitionerId: string | null): RevenueScope {
   if (caps.has("billing.manage")) return { kind: "tenant" };
-  if (caps.has("clinical.read")) return { kind: "own", practitionerId };
+  // IAM-4a: `practitionerId` es null para los roles no clínicos. Un clínico sin profesional no debería existir
+  // (`buildActor`), pero si pasara: `none`, nunca `own` con null (sería «los turnos sin profesional»).
+  if (caps.has("clinical.read") && practitionerId) return { kind: "own", practitionerId };
   return { kind: "none" };
 }
 

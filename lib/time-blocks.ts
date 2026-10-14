@@ -246,7 +246,7 @@ async function lockAndCheckRoom(
 }
 
 /** Bloquear / desbloquear una sala: la regla del candado para "todos" (`agenda.manageBlocks`). */
-function assertCanManageRoom(caps: ReadonlySet<Capability>, actorPractitionerId: string): void {
+function assertCanManageRoom(caps: ReadonlySet<Capability>, actorPractitionerId: string | null): void {
   if (!canManageBlocksFor(caps, actorPractitionerId, null)) {
     throw new ForbiddenError(caps.has("agenda.manageOwnBlocks") ? FORBIDDEN_ROOM : "No tenés permiso para bloquear la agenda.");
   }
@@ -702,7 +702,7 @@ const FORBIDDEN_ALL = "Solo el equipo de administración o recepción puede bloq
 
 function assertCanManageTargets(
   caps: ReadonlySet<Capability>,
-  actorPractitionerId: string,
+  actorPractitionerId: string | null,
   targets: (string | null)[]
 ): void {
   for (const t of targets) {

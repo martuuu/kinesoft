@@ -46,15 +46,18 @@ import { getMembershipRole } from "@/lib/authz";
 import { audit, auditInTx } from "@/lib/audit";
 import { env } from "@/lib/env";
 import { hashInviteToken } from "@/lib/invitations-tokens";
-import { INVITE_TTL_MS, appendPriorToken } from "@/lib/invitations-constants";
-import { emailEqualsFilter } from "@/lib/email-match";
+import { INVITE_TTL_MS, appendPriorToken, reassignBeforeRoleChangeCopy } from "@/lib/invitations-constants";
+import { emailEqualsFilter, normalizeEmail } from "@/lib/email-match";
 import { invitationStatus } from "@/lib/access-logic";
-import { roleLabel } from "@/lib/roles";
+import { isClinicalRole, roleLabel } from "@/lib/roles";
+import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
+import { issueAccessLink } from "@/lib/identity/access-link";
+import { logger } from "@/lib/logger";
 import { sendEmail } from "@/lib/email";
 // Registra el sink de EmailLog (handoff de IAM-1): sin este import el envío no
 // deja fila y la UI no puede mostrar si el mail salió.
 import "@/lib/email/log";
-import { staffInviteEmail } from "@/lib/email/templates";
+import { adminPasswordResetEmail, staffInviteEmail } from "@/lib/email/templates";
 import { tags } from "@/lib/cache-tags";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import type { ActionResult } from "@/lib/validation";
@@ -62,6 +65,8 @@ import type {
   InvitationEmailStatus,
   InvitationRow,
   InvitationSendResult,
+  MemberPasswordResetResult,
+  SuspendMemberResult,
   TeamMemberRow,
 } from "@/lib/invitations-types";
 import type { EmailTransportName } from "@/lib/email/types";
@@ -119,33 +124,65 @@ function newRawToken() {
 
 export async function listTeamMembers(): Promise<TeamMemberRow[]> {
   const { actor } = await requireTeamManager();
-  const rows = await runWithRls(actor.tenantId, (tx) => tx.membership.findMany({
-    where: { tenantId: actor.tenantId },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          fullName: true,
-          // IAM-1 (M6): un usuario puede ser profesional en varios
-          // consultorios; la especialidad es la de ESTE (tenantId a mano: en
-          // prod la conexión es BYPASSRLS).
-          practitioners: { where: { tenantId: actor.tenantId }, select: { specialty: true }, take: 1 },
+  const { rows, logs } = await runWithRls(actor.tenantId, async (tx) => {
+    const rows = await tx.membership.findMany({
+      where: { tenantId: actor.tenantId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            // IAM-1 (M6): un usuario puede ser profesional en varios
+            // consultorios; la especialidad es la de ESTE (tenantId a mano: en
+            // prod la conexión es BYPASSRLS).
+            practitioners: { where: { tenantId: actor.tenantId }, select: { specialty: true }, take: 1 },
+          },
         },
       },
-    },
-    orderBy: { invitedAt: "asc" },
-  }));
-  return rows.map((m) => ({
-    membershipId: m.id,
-    userId: m.userId,
-    email: m.user.email,
-    fullName: m.user.fullName,
-    role: m.role,
-    specialty: m.user.practitioners[0]?.specialty ?? null,
-    joinedAt: m.acceptedAt,
-    isYou: m.userId === actor.userId,
-  }));
+      orderBy: { invitedAt: "asc" },
+    });
+    // IAM-4c: último «link para nueva contraseña» por miembro (EmailLog, entity Membership), para que la UI diga
+    // si salió sin que nadie abra Vercel. Más nuevo primero: el primero por membresía es el último intento.
+    const logs = rows.length
+      ? await tx.emailLog.findMany({
+          where: {
+            tenantId: actor.tenantId,
+            entity: "Membership",
+            kind: "admin_password_reset",
+            entityId: { in: rows.map((r) => r.id) },
+          },
+          orderBy: { createdAt: "desc" },
+          select: { entityId: true, status: true, transport: true, reason: true, createdAt: true },
+        })
+      : [];
+    return { rows, logs };
+  });
+  const lastByMember = new Map<string, (typeof logs)[number]>();
+  for (const l of logs) if (l.entityId && !lastByMember.has(l.entityId)) lastByMember.set(l.entityId, l);
+  return rows.map((m) => {
+    const l = lastByMember.get(m.id);
+    return {
+      membershipId: m.id,
+      userId: m.userId,
+      email: m.user.email,
+      fullName: m.user.fullName,
+      role: m.role,
+      specialty: m.user.practitioners[0]?.specialty ?? null,
+      joinedAt: m.acceptedAt,
+      isYou: m.userId === actor.userId,
+      disabledAt: m.disabledAt,
+      hasAgenda: isClinicalRole(m.role) && m.user.practitioners.length > 0,
+      lastPasswordResetEmail: l
+        ? {
+            status: l.status as InvitationEmailStatus,
+            transport: l.transport as EmailTransportName,
+            reason: l.reason,
+            at: l.createdAt,
+          }
+        : null,
+    };
+  });
 }
 
 /**
@@ -234,10 +271,16 @@ export async function createInvitation(
   // Refuse if a user with this email is already a member of the tenant.
   const existing = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
     where: { tenantId: actor.tenantId, user: { email: emailLc } },
-    select: { id: true },
+    select: { id: true, disabledAt: true },
   }));
   if (existing) {
-    return { ok: false, error: "Ese email ya es miembro del consultorio." };
+    // IAM-4c: a un suspendido no se lo re-invita (cambiaría el rol por la puerta de atrás): se lo reactiva.
+    return {
+      ok: false,
+      error: existing.disabledAt
+        ? "Ese email es de un miembro suspendido. Usá «Reactivar» en la lista del equipo."
+        : "Ese email ya es miembro del consultorio.",
+    };
   }
 
   // Staff ≠ paciente (A3b-S-auth): no se invita al equipo un email que en
@@ -520,81 +563,374 @@ export async function revokeInvitation(id: string): Promise<ActionResult> {
   return { ok: true, data: undefined };
 }
 
+/** Otro cambio de rol ganó entre la lectura y el update (CAS sobre el rol leído). */
+class RoleChangeRaceError extends Error {
+  constructor() {
+    super("role_change_race");
+    this.name = "RoleChangeRaceError";
+  }
+}
+
+const RoleInput = z.enum(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]);
+
+/**
+ * Turnos futuros activos y pacientes asignados (sin archivar) del profesional en este consultorio: lo que queda
+ * colgado si deja de atender (quitar, pasar a un rol no clínico). `tenantId` a mano en cada conteo.
+ */
+async function countPractitionerLoad(tx: DbClient, tenantId: string, practitionerId: string) {
+  const [futureBookings, assignedPatients] = await Promise.all([
+    tx.booking.count({
+      where: {
+        tenantId,
+        practitionerId,
+        scheduledFor: { gte: new Date() },
+        status: { in: ["PENDING", "CONFIRMED"] },
+      },
+    }),
+    tx.patient.count({ where: { tenantId, assignedPractitionerId: practitionerId, archivedAt: null } }),
+  ]);
+  return { futureBookings, assignedPatients };
+}
+
+/**
+ * IAM-4c: un rol clínico necesita su `Practitioner` en ESTE consultorio (sin él la membresía no es usable:
+ * `missing_practitioner`, `lib/access-logic.ts`). Desde IAM-4a la Secretaria y Facturación entran sin profesional,
+ * así que ascenderlas (o reactivar a alguien así) sin crearlo las dejaba afuera. Upsert por la clave compuesta de
+ * M6 (no pisa la especialidad de una fila vieja) y agenda por defecto SOLO si no tenía ninguna franja: una fila
+ * vieja con agenda cargada no se toca (`provisionPractitionerAgenda` igual es idempotente). Corre en la tx del
+ * caller, con `runWithRls` (todas las filas llevan el `tenantId` del actor).
+ */
+async function ensureClinicalPractitionerInTx(tx: DbClient, tenantId: string, userId: string) {
+  const prac = await tx.practitioner.upsert({
+    where: { tenantId_userId: { tenantId, userId } },
+    create: { userId, tenantId, specialty: null },
+    update: {},
+    select: { id: true },
+  });
+  const hasSchedule = await tx.practitionerSchedule.findFirst({
+    where: { tenantId, practitionerId: prac.id },
+    select: { id: true },
+  });
+  if (!hasSchedule) await provisionPractitionerAgenda(tx, { tenantId, practitionerId: prac.id });
+  return { practitionerId: prac.id, provisioned: !hasSchedule };
+}
+
+/**
+ * Cambio de rol. IAM-4c: el rol decide si la persona ATIENDE (tiene `Practitioner` y agenda) o no:
+ *  - a un rol clínico (OWNER, ADMIN, PRACTITIONER): en la misma tx se crea el `Practitioner` si falta y su agenda
+ *    por defecto si no tenía (antes solo cambiaba `Membership.role`, y una Secretaria ascendida quedaba sin acceso);
+ *  - a un rol no clínico (ASSISTANT, BILLING): se FRENA si tiene turnos futuros o pacientes asignados, como
+ *    `removeMember` (dejarían de verse en la agenda por profesional / quedarían a cargo de nadie). Si no tiene
+ *    nada, la fila `Practitioner` queda: no es reservable (`bookablePractitionerWhere` mira el rol) y el actor no
+ *    clínico tiene `practitionerId` null, así que es inofensiva y guarda la historia.
+ * Conteos, update y audit van en UNA tx (antes: conteo de planes en una, update en otra, audit fuera).
+ */
 export async function changeMemberRole(
   membershipId: string,
   role: "OWNER" | "ADMIN" | "PRACTITIONER" | "ASSISTANT" | "BILLING"
 ): Promise<ActionResult> {
   const { actor, role: actorRole } = await requireTeamManager();
+  const parsedId = IdInput.safeParse(membershipId);
+  const parsedRole = RoleInput.safeParse(role);
+  if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
+  if (!parsedRole.success) return { ok: false, error: "Rol inválido." };
+  const nextRole: Role = parsedRole.data;
   const m = await runWithRls(actor.tenantId, (tx) => tx.membership.findFirst({
-    where: { id: membershipId, tenantId: actor.tenantId },
-    select: { id: true, userId: true, role: true, acceptedAt: true },
+    where: { id: parsedId.data, tenantId: actor.tenantId },
+    select: { id: true, userId: true, role: true, acceptedAt: true, disabledAt: true },
   }));
   if (!m) return { ok: false, error: "Miembro no encontrado." };
   // IAM-D3: el ADMIN gestiona el equipo, pero el OWNER es intocable para él
   // (si no, un ADMIN se degradaba al dueño o se quedaba con el consultorio).
-  if (actorRole !== "OWNER" && (m.role === "OWNER" || role === "OWNER")) {
+  if (actorRole !== "OWNER" && (m.role === "OWNER" || nextRole === "OWNER")) {
     return { ok: false, error: "Solo el dueño puede cambiar o transferir el rol de dueño." };
   }
-  if (m.userId === actor.userId && role !== m.role) {
+  if (m.userId === actor.userId && nextRole !== m.role) {
     return {
       ok: false,
       error: actorRole === "OWNER" ? "No podés cambiar tu propio rol de dueño." : "No podés cambiar tu propio rol.",
     };
   }
-  if (m.role === role) return { ok: true, data: undefined };
-  // S13g: el responsable de un plan tiene que poder gestionarlo
-  // (`plans.manage`); ASSISTANT y BILLING no. Pasar a alguien a esos roles
-  // con planes ACTIVE a cargo dejaba planes que nadie del lado clínico
-  // "posee". El conteo va en su propia tx antes del update: el cambio de rol
-  // no toma lock, igual que el resto de esta action (OWNER/ADMIN, sin carrera
-  // realista con el alta de un plan del mismo profesional).
-  if (!capabilitiesFor(role).has("plans.manage")) {
-    const activePlans = await runWithRls(actor.tenantId, (tx) =>
-      countActivePlansAsResponsible(tx, actor.tenantId, m.userId)
-    );
-    if (activePlans > 0) {
-      return {
-        ok: false,
-        error: `No se puede cambiar el rol: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`,
-      };
-    }
-  }
-  if (role === "OWNER" && m.userId !== actor.userId) {
-    // El OWNER no se transfiere a una membresía que nunca se aceptó: el
-    // consultorio quedaría sin nadie que pueda entrar como dueño.
+  if (m.role === nextRole) return { ok: true, data: undefined };
+  const transfer = nextRole === "OWNER" && m.userId !== actor.userId;
+  if (transfer) {
+    // El OWNER no se transfiere a una membresía que nunca se aceptó ni a una
+    // suspendida: el consultorio quedaría sin nadie que pueda entrar como dueño.
     if (!m.acceptedAt) {
       return { ok: false, error: "Solo podés transferir el OWNER a alguien que ya aceptó la invitación." };
     }
-    // Transferring OWNER role — downgrade self to ADMIN first.
-    await runWithRls(actor.tenantId, async (tx) => {
-      await tx.membership.update({
-        where: { id: membershipId },
-        data: { role: "OWNER" },
-      });
-      await tx.membership.updateMany({
-        where: { tenantId: actor.tenantId, userId: actor.userId },
-        data: { role: "ADMIN" },
-      });
-    });
-  } else {
-    await runWithRls(actor.tenantId, (tx) => tx.membership.update({
-      where: { id: membershipId },
-      data: { role },
-    }));
+    if (m.disabledAt) {
+      return { ok: false, error: "No podés transferir la titularidad a alguien suspendido. Reactivalo primero." };
+    }
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "membership.role.change",
-    entity: "Membership",
-    entityId: membershipId,
-    payload: { from: m.role, role },
-  });
+
+  let outcome: { blocked: string | null };
+  try {
+    outcome = await runWithRls(actor.tenantId, async (tx) => {
+      let practitionerCreated = false;
+      if (isClinicalRole(nextRole)) {
+        practitionerCreated = (await ensureClinicalPractitionerInTx(tx, actor.tenantId, m.userId)).provisioned;
+      } else {
+        const prac = await tx.practitioner.findFirst({
+          where: { tenantId: actor.tenantId, userId: m.userId },
+          select: { id: true },
+        });
+        if (prac) {
+          const load = await countPractitionerLoad(tx, actor.tenantId, prac.id);
+          const copy = reassignBeforeRoleChangeCopy(load.futureBookings, load.assignedPatients);
+          if (copy) return { blocked: copy };
+        }
+      }
+      // S13g: el responsable de un plan tiene que poder gestionarlo
+      // (`plans.manage`); ASSISTANT y BILLING no. Pasar a alguien a esos roles
+      // con planes ACTIVE a cargo dejaba planes que nadie del lado clínico "posee".
+      if (!capabilitiesFor(nextRole).has("plans.manage")) {
+        const activePlans = await countActivePlansAsResponsible(tx, actor.tenantId, m.userId);
+        if (activePlans > 0) {
+          return {
+            blocked: `No se puede cambiar el rol: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`,
+          };
+        }
+      }
+      // CAS sobre el rol leído: si otro cambio ganó en el medio, no se pisa.
+      const upd = await tx.membership.updateMany({
+        where: { id: m.id, tenantId: actor.tenantId, role: m.role },
+        data: { role: nextRole },
+      });
+      // Tirar (no devolver) revierte el Practitioner/agenda que se haya creado arriba en esta misma tx.
+      if (upd.count !== 1) throw new RoleChangeRaceError();
+      if (transfer) {
+        // Transferir el OWNER: quien transfiere queda como ADMIN.
+        await tx.membership.updateMany({
+          where: { tenantId: actor.tenantId, userId: actor.userId },
+          data: { role: "ADMIN" },
+        });
+      }
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "membership.role.change",
+        entity: "Membership",
+        entityId: m.id,
+        payload: { from: m.role, role: nextRole, ...(practitionerCreated ? { agendaProvisioned: true } : {}) },
+      });
+      return { blocked: null };
+    });
+  } catch (err) {
+    if (err instanceof RoleChangeRaceError) {
+      return { ok: false, error: "El rol cambió mientras tanto. Recargá y probá de nuevo." };
+    }
+    throw err;
+  }
+  if (outcome.blocked) return { ok: false, error: outcome.blocked };
+
   revalidatePath("/configuracion");
   // A2b-S-cfg: la lista de profesionales de la agenda está cacheada por tag;
   // sin esto un cambio de equipo tardaba hasta el TTL en verse.
   revalidateTag(tags.practitioners(actor.tenantId));
   return { ok: true, data: undefined };
+}
+
+/** Membresía del consultorio del actor, con lo que necesitan suspender / reactivar / mandar link. */
+function findMemberForAdmin(tenantId: string, membershipId: string) {
+  return runWithRls(tenantId, (tx) => tx.membership.findFirst({
+    where: { id: membershipId, tenantId },
+    select: {
+      id: true,
+      userId: true,
+      role: true,
+      acceptedAt: true,
+      disabledAt: true,
+      user: { select: { email: true } },
+    },
+  }));
+}
+
+/**
+ * «Suspender acceso» (IAM-4c, IAM-D7: suspender ≠ quitar). Marca `Membership.disabledAt`/`disabledById` y no borra
+ * nada: la persona no entra a ESTE consultorio (`isUsableMembership`: cae a otro consultorio usable o a
+ * `/sin-acceso`) y no es reservable (`bookablePractitionerWhere` con `includeDisabledFilter`, IAM-2e), pero sus
+ * turnos, pacientes y planes quedan como están y «Reactivar» le devuelve todo. Para irse del todo está «Quitar».
+ *
+ * Reglas: nadie se suspende a sí mismo (te quedarías afuera sin vuelta) y nadie suspende al dueño (el consultorio
+ * quedaría sin quien lo gestione; el ADMIN tampoco puede tocarlo, IAM-D3). Antes no existía la suspensión: la única
+ * forma de cortar el acceso era quitar, que exige reasignar todo primero.
+ *
+ * Además anula las invitaciones pendientes a ese email en este consultorio: aceptar una invitación reactiva la
+ * membresía (`joinTenantInTx`), así que una vieja que quedara viva sería una puerta de vuelta sin que nadie la abra.
+ * Devuelve cuántos turnos futuros activos le quedan, para que la UI avise que NO se cancelan.
+ */
+export async function suspendMember(membershipId: string): Promise<ActionResult<SuspendMemberResult>> {
+  const { actor } = await requireTeamManager();
+  const parsedId = IdInput.safeParse(membershipId);
+  if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
+  const m = await findMemberForAdmin(actor.tenantId, parsedId.data);
+  if (!m) return { ok: false, error: "Miembro no encontrado." };
+  if (m.userId === actor.userId) return { ok: false, error: "No podés suspenderte a vos mismo." };
+  if (m.role === "OWNER") return { ok: false, error: "No se puede suspender al dueño del consultorio." };
+
+  const now = new Date();
+  const result = await runWithRls(actor.tenantId, async (tx) => {
+    const upd = await tx.membership.updateMany({
+      where: { id: m.id, tenantId: actor.tenantId, disabledAt: null, role: { not: "OWNER" } },
+      data: { disabledAt: now, disabledById: actor.userId },
+    });
+    const prac = await tx.practitioner.findFirst({
+      where: { tenantId: actor.tenantId, userId: m.userId },
+      select: { id: true },
+    });
+    const futureBookings = prac ? (await countPractitionerLoad(tx, actor.tenantId, prac.id)).futureBookings : 0;
+    if (upd.count !== 1) return { changed: false, futureBookings }; // ya estaba suspendido: idempotente
+    const revoked = await tx.invitation.updateMany({
+      where: { tenantId: actor.tenantId, email: normalizeEmail(m.user.email), acceptedAt: null, revokedAt: null },
+      data: { revokedAt: now, revokedById: actor.userId },
+    });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "membership.suspend",
+      entity: "Membership",
+      entityId: m.id,
+      payload: { userId: m.userId, role: m.role, futureBookings, revokedInvitations: revoked.count },
+    });
+    return { changed: true, futureBookings };
+  });
+  if (result.changed) {
+    revalidatePath("/configuracion");
+    revalidateTag(tags.practitioners(actor.tenantId));
+  }
+  return { ok: true, data: { futureBookings: result.futureBookings } };
+}
+
+/**
+ * «Reactivar» (IAM-4c): limpia `disabledAt`/`disabledById` y la persona vuelve a entrar con el rol que tenía. Si
+ * es un rol clínico sin `Practitioner` (membresía rota de antes) se le crea en la misma tx: reactivar tiene que
+ * devolver el acceso, no dejarla en `missing_practitioner`.
+ */
+export async function reactivateMember(membershipId: string): Promise<ActionResult> {
+  const { actor, role: actorRole } = await requireTeamManager();
+  const parsedId = IdInput.safeParse(membershipId);
+  if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
+  const m = await findMemberForAdmin(actor.tenantId, parsedId.data);
+  if (!m) return { ok: false, error: "Miembro no encontrado." };
+  if (m.role === "OWNER" && actorRole !== "OWNER") {
+    return { ok: false, error: "Solo el dueño puede tocar la membresía del dueño." };
+  }
+  if (!m.disabledAt) return { ok: true, data: undefined }; // idempotente
+
+  await runWithRls(actor.tenantId, async (tx) => {
+    const upd = await tx.membership.updateMany({
+      where: { id: m.id, tenantId: actor.tenantId, disabledAt: { not: null } },
+      data: { disabledAt: null, disabledById: null },
+    });
+    if (upd.count !== 1) return;
+    if (isClinicalRole(m.role)) await ensureClinicalPractitionerInTx(tx, actor.tenantId, m.userId);
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "membership.reactivate",
+      entity: "Membership",
+      entityId: m.id,
+      payload: { userId: m.userId, role: m.role, suspendedAt: m.disabledAt!.toISOString() },
+    });
+  });
+  revalidatePath("/configuracion");
+  revalidateTag(tags.practitioners(actor.tenantId));
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Límite de «Mandar link para nueva contraseña»: cada pedido es un mail con una llave de la cuenta. 10/h por actor
+ * (quien gestiona el equipo, o una sesión robada, no usa el consultorio como cañón de mails) + 1 cada 10 min por
+ * destinatario (hash del email, nunca en claro): con un link vivo alcanza, y el de recovery de GoTrue además
+ * invalida el anterior.
+ */
+async function memberResetRateLimit(actorId: string, email: string) {
+  return rateLimitAll([
+    { key: `member-reset:actor:${actorId}`, limit: 10, windowMs: 3_600_000 },
+    { key: `member-reset:to:${hashKeyPart(email)}`, limit: 1, windowMs: 600_000 },
+  ]);
+}
+
+/**
+ * «Mandar link para nueva contraseña» (IAM-4c). Para el miembro que no puede entrar (se olvidó la clave, nunca la
+ * eligió): `issueAccessLink({ kind: "recovery", next: "/reset" })` (C-IAM3: Supabase solo emite el token) + mail
+ * `adminPasswordResetEmail` con el nombre del consultorio, por `sendEmail` (EmailLog con entity Membership).
+ *
+ * Quien lo pide NUNCA ve el link: ni en el resultado (`{ emailSent, transport, emailStatus, emailReason }`), ni en
+ * el audit, ni en los logs (`issueAccessLink` y `sendEmail` solo registran el host). Es un clic que entra a la
+ * cuenta de otra persona y le cambia la clave: con verlo, el OWNER o el ADMIN podrían tomar esa cuenta (que puede
+ * ser miembro de otros consultorios). A diferencia de la invitación, acá no hay «copiar link».
+ *
+ * No se manda: al dueño si lo pide un ADMIN (IAM-D3), a un suspendido (primero se reactiva: si no, el link le
+ * devuelve una sesión a alguien que no debería entrar), ni si el usuario de Auth que resuelve GoTrue no es el de
+ * la membresía (email cambiado / desincronizado: se corta antes de mandar una llave a otra cuenta).
+ */
+export async function sendMemberPasswordReset(membershipId: string): Promise<ActionResult<MemberPasswordResetResult>> {
+  const { actor, role: actorRole } = await requireTeamManager();
+  const parsedId = IdInput.safeParse(membershipId);
+  if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
+  const m = await findMemberForAdmin(actor.tenantId, parsedId.data);
+  if (!m) return { ok: false, error: "Miembro no encontrado." };
+  if (m.role === "OWNER" && actorRole !== "OWNER") {
+    return { ok: false, error: "Solo el dueño puede pedir un link de contraseña para el dueño." };
+  }
+  if (m.disabledAt) {
+    return { ok: false, error: "Está suspendido: reactivalo antes de mandarle un link para entrar." };
+  }
+  const email = normalizeEmail(m.user.email);
+  const rl = await memberResetRateLimit(actor.userId, email);
+  if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
+
+  const link = await issueAccessLink({ email, kind: "recovery", next: "/reset" });
+  if (!link.ok) {
+    if (link.code === "not_found") {
+      return { ok: false, error: "Esa persona todavía no tiene cuenta para ingresar. Si tiene una invitación pendiente, reenviásela." };
+    }
+    if (link.code === "rate_limited") {
+      return { ok: false, error: "El servicio de acceso está limitando los pedidos. Probá de nuevo en unos minutos." };
+    }
+    return { ok: false, error: "No pudimos generar el link. Probá de nuevo en unos minutos." };
+  }
+  if (link.userId && link.userId !== m.userId) {
+    logger.warn("membership.password_reset.user_mismatch", { tenantId: actor.tenantId, membershipId: m.id });
+    return { ok: false, error: "No pudimos generar el link para esta cuenta. Avisale a soporte." };
+  }
+
+  const tenant = await runWithRls(actor.tenantId, (tx) =>
+    tx.tenant.findUnique({ where: { id: actor.tenantId }, select: { name: true, publicEmail: true } })
+  );
+  const tenantName = tenant?.name ?? actor.tenantName;
+  const r = await sendEmail({
+    ...adminPasswordResetEmail({ tenantName, url: link.url }),
+    kind: "admin_password_reset",
+    to: email,
+    tenantId: actor.tenantId,
+    entity: "Membership",
+    entityId: m.id,
+    fromName: tenantName,
+    replyTo: tenant?.publicEmail || null,
+    actorId: actor.userId,
+  });
+  const outcome: MemberPasswordResetResult = r.ok
+    ? { emailSent: true, transport: r.transport, emailStatus: "sent", emailReason: null }
+    : {
+        emailSent: false,
+        transport: r.transport,
+        emailStatus: r.transport === "blocked" ? "blocked" : r.skipped ? "skipped" : "failed",
+        emailReason: r.reason,
+      };
+  // Sin el link ni el email: quién lo pidió, para quién (userId) y si salió.
+  await audit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId,
+    action: "membership.password_reset.send",
+    entity: "Membership",
+    entityId: m.id,
+    payload: { userId: m.userId, emailStatus: outcome.emailStatus, transport: outcome.transport },
+  });
+  revalidatePath("/configuracion");
+  return { ok: true, data: outcome };
 }
 
 /**
@@ -628,22 +964,8 @@ export async function removeMember(membershipId: string): Promise<ActionResult> 
       select: { id: true },
     });
     if (prac) {
-      const [futureBookings, assignedPatients, activePlans] = await Promise.all([
-        tx.booking.count({
-          where: {
-            tenantId: actor.tenantId,
-            practitionerId: prac.id,
-            scheduledFor: { gte: new Date() },
-            status: { in: ["PENDING", "CONFIRMED"] },
-          },
-        }),
-        tx.patient.count({
-          where: {
-            tenantId: actor.tenantId,
-            assignedPractitionerId: prac.id,
-            archivedAt: null,
-          },
-        }),
+      const [{ futureBookings, assignedPatients }, activePlans] = await Promise.all([
+        countPractitionerLoad(tx, actor.tenantId, prac.id),
         // S13g: planes ACTIVE a cargo (ver `countActivePlansAsResponsible`).
         countActivePlansAsResponsible(tx, actor.tenantId, m.userId),
       ]);

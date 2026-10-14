@@ -89,9 +89,12 @@ export function isClinicalRole(role: Role): boolean {
 export const INVITABLE_ROLES: readonly Role[] = ["PRACTITIONER", "ASSISTANT", "ADMIN", "BILLING"];
 
 /**
- * Hoy `acceptInvite` le crea `Practitioner` a TODA membresía (también a la
- * Secretaria) y `buildActor` lo exige. Mientras eso sea así, una membresía
- * sin `Practitioner` no es usable para ningún rol (`lib/access-logic.ts`).
- * IAM-4 lo pone en `false` cuando el Actor admita `practitionerId: null`.
+ * IAM-4a (§19.2 decisión 2: Secretaria = staff sin agenda): `false`. Solo los
+ * roles clínicos necesitan `Practitioner` para que su membresía sea usable
+ * (`lib/access-logic.ts`); la Secretaria (ASSISTANT) y Facturación (BILLING)
+ * entran con `Actor.practitionerId = null` y al unirse no se les crea
+ * `Practitioner` ni agenda (`joinTenantInTx`). Hasta IAM-4a `acceptInvite` le
+ * creaba profesional y franjas a TODA membresía y `buildActor` lo exigía:
+ * por eso la Secretaria aparecía reservable (IAM-2e lo cortó por rol).
  */
-export const PRACTITIONER_FOR_ALL_ROLES = true;
+export const PRACTITIONER_FOR_ALL_ROLES = false;

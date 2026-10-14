@@ -265,8 +265,9 @@ diseño de Planes) está en el plan del 23-sep, referenciado desde el ROADMAP.
   - 🟢 **H4** la reserva pública con DNI ajeno escribía el email del atacante en la ficha (takeover del
     portal). Cerrado en A2b-S-pub.
   - 🟢 **H5** el signup auto-confirmaba cualquier email (`admin.createUser({ email_confirm: true })`) y rompía
-    el gate `email_confirmed_at` del portal. Cerrado en A3c-S-signup: `auth.signUp` con email verificado
-    (`lib/auth.ts:49-137`) y el tenant se crea recién en `/onboarding`. Evidencia en §Ronda 12.
+    el gate `email_confirmed_at` del portal. Cerrado en A3c-S-signup: signup con email verificado y el tenant
+    se crea recién en `/onboarding`. Evidencia en §Ronda 12. Desde IAM-2c (Ronda 21) el signup ya no usa
+    `auth.signUp`: `admin.generateLink(signup)` + mail propio (`lib/auth.ts:114`).
   - 🟢 **H6** los Preview de Vercel aplicaban migraciones en la DB de prod: cerrado en código en A0b (ver
     abajo); falta el staging aislado (A0d, dueño).
 - 🟢 **A0b `ops-hardening` (2026-09-29):**
@@ -434,8 +435,9 @@ Gate final del Bloque A: `tsc` 0 · unit 252/252 en 19 archivos (TZ=UTC y TZ=AR)
   Google (`next.config.mjs:77-96`); HSTS con preload solo en Production (`:113`); `allowedOrigins` sin
   localhost en Production.
 - 🟢 **A3c · signup verificado + stepper de alta (cierra H5):**
-  - **Signup** (`signUpPractitioner`, `lib/auth.ts:49`): `auth.signUp` con
-    `emailRedirectTo=<APP_URL>/auth/confirm?next=/onboarding` (`:108-112`). Se eliminaron
+  - **Signup** (`signUpPractitioner`, `lib/auth.ts:114`): en A3c era `auth.signUp` con
+    `emailRedirectTo=<APP_URL>/auth/confirm?next=/onboarding`; **desde IAM-2c** es `admin.generateLink(signup)` +
+    mail propio de verificación (ver abajo «Reset»). Las líneas citadas a continuación son de A3c. Se eliminaron
     `admin.createUser({ email_confirm: true })` y la creación de tenant en el signup. Rate-limit 3/10 min por IP
     + 3/h por hash del email (`:82-85`). Un email de paciente con portal recibe la **misma respuesta** sin mail
     ni tenant (anti-oráculo, `:98-104`). Si Supabase devuelve sesión (Confirm email OFF) se loguea
@@ -888,6 +890,47 @@ revisores de solo lectura, fixers FX1a/FX1b server y FX2a/FX2b UI, gate en solit
 - **Pendiente de Martin:** R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)); deploy en escalones
   `off → env → staging → supabase` (RUNBOOK «Deploy de SV»).
 
+**Ronda 21 — Bloque IAM: Identidad y acceso (14-oct-2026) ✅ (IAM-0..3 commiteados, IAM-4 sin commit todavía):**
+ejecutado en develop sobre `73a0752` según el plan vigente §19.4 (decisiones IAM-D1..D12 y 2/6 de Martin del 14-oct,
+contratos C-IAM1..7). Commits: IAM-0 `f53de55` (hotfix ILIKE, mails con Resend, roles, puerto de Auth admin), IAM-1
+`972359f` (**M6** `20261014120000_identity_access`, sola), IAM-2 `67521e7` (invitaciones y activación propias, auth
+con mails propios, Secretaria fuera de agenda), IAM-3 `b8762a8` (acceso sin bucles, elegir consultorio, selector,
+portal con magic link); IAM-4 (actor sin profesional, superficies, administración del equipo) en el árbol. **1 migración
+nueva**, M6, aplicada y verificada **solo en el Docker local**; en prod va sobre la base viva (sin reset ni staging,
+decisiones del 14-oct): [MIGRACIONES-RUNBOOK «M6 en prod»](MIGRACIONES-RUNBOOK.md). Arquitectura en
+[ARCHITECTURE.md §Identidad y acceso + ADR-007/ADR-008](ARCHITECTURE.md); seguridad en [SECURITY.md §18](SECURITY.md);
+consola en [EXTERNAL-CONFIG.md §0.4](EXTERNAL-CONFIG.md); QA en [QA.md §Identidad y acceso](QA.md).
+
+- 🟢 **Qué entró:** mails propios por Resend (`lib/email/*`, transporte por entorno, `blocked` con links a localhost
+  en prod, 8 plantillas en voseo, `EmailLog`); puerto de Auth admin (`lib/identity/*`) y fake de GoTrue; afuera
+  `inviteUserByEmail`, `auth.signUp` y `resetPasswordForEmail`; `/auth/confirm` en dos pasos (GET no canjea);
+  invitación con link propio `/invite/<token>` (reenviar / generar link nuevo / anular) y activación con nombre +
+  contraseña; etiquetas únicas de rol (Secretario/a); `Practitioner` único por consultorio; acceso con lógica pura
+  (`/sin-acceso`, `/elegir-consultorio`, selector del sidebar); `getVerifiedSessionUser` único; portal con magic link;
+  `Actor.practitionerId` nullable con helpers y guard; Secretaria y Facturación fuera de agenda, turnero,
+  disponibilidad y `createBooking`; suspender / reactivar / link de contraseña / cambio de rol que crea o frena el
+  profesional.
+- 🟢 **Cerrados** (filas en §2 y en «Hallazgos de IAM»): `email-ilike-sin-escapar` [A], `bucle-redireccion-sin-practitioner`
+  [A], `portal-vinculo-nunca-ocurria`, `practitioner-userid-unique-blocks-multitenant` (F-A9), `secretaria-sin-practitioner`,
+  `roles-assistant-billing-cosmeticos`, `sin-suspension-de-membresia`, `createbooking-acepta-secretaria`,
+  `invitacion-link-localhost`, `invitacion-signup-colgado`, `reenvio-portal-vinculado-falla`, `reset-admin-no-existe`.
+  🟡 `write-paths-sin-membresia-aceptada` (turnos y reasignar paciente ya filtran por membresía aceptada y rol clínico).
+- **Desvíos aceptados:** signup sobre una cuenta sin confirmar re-manda la verificación **sin pisar la contraseña**
+  (anti pre-account takeover; decide Martin); suspender anula las invitaciones pendientes de ese email; re-invitar a un
+  suspendido → «Usá Reactivar»; nadie suspende al OWNER; `UserPreferences.tenantId` no evita la pregunta de consultorio
+  (solo la cookie); el dashboard de un actor sin profesional muestra sus KPIs propios en 0; una Secretaria vieja
+  conserva su fila `Practitioner` (no se borra; deja de ser reservable y sus turnos viejos caen en «Otros»).
+- **Nuevos abiertos** (filas en «Hallazgos de IAM»): C `insurers-catalog-ilike-nombre`; BO
+  `cuentas-auth-huerfanas-sin-reparacion`, `guard-auth-admin-y-getuser`, `email-log-sin-webhook-entrega` (IAM-5
+  opcional); VX `formfield-sin-autocomplete-new-password`; C0 `invitedat-membresia-preexistente`; poda
+  `comentarios-viejos-iam`.
+- **Pendiente de Martin:** dominio + Resend + variables y URL Configuration de Supabase ([EXTERNAL-CONFIG §0.4](EXTERNAL-CONFIG.md));
+  correr `scripts/diagnose-email.ts` y `scripts/diagnose-auth.ts` (S4/S6/S7/S8/S11); prechecks de prod de M6, de turnos
+  futuros de Secretaria/Facturación y de slugs reservados (RUNBOOK «M6 en prod»).
+- **Gate de IAM (cierre de IAM-4, 14-oct):** tsc 0 (app y scripts); unit 3099 en UTC y en AR; guards OK; integración
+  app 114 archivos / 1498 + 19 skip y owner 113 + 1 skip / 1478 + 39 skip; `next build` OK; perf sin regresiones (techo
+  estricto de `createBooking` 34 intacto). Intermitente bajo carga: `locations-schedule-rooms` (hook; pasa solo 8/8).
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -1041,6 +1084,8 @@ el ROADMAP.
   → sesión `login-error-feedback`.
 
 ### <a id="f-a9"></a>F-A9 — `practitioner-userid-unique-blocks-multitenant` · Un kine no puede pertenecer a dos consultorios
+
+> 🟢 **Cerrado en IAM-1 (Ronda 21, 14-oct-2026):** M6 lo hace único por `(tenantId, userId)`. Ver ADR-008.
 - **Ubicación:** `prisma/schema.prisma:123` (`Practitioner.userId String @unique`) + `lib/session.ts:75-81`
 - **Clase:** C-SEC-07 (unicidad global vs tenant-scoped) · **Bucket:** A · **Severidad:** **alta**
 - **Descripción:** `Membership` es N:N y `session.ts` documenta "switch between tenants", pero
@@ -1203,7 +1248,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | search-booking-toLocale-no-tz | alta | A | lib/search.ts:140 | 🟢 | Ronda 1 (tz-vistas) |
 | portal-session-date-no-tz | media | A | portal/c/[slug]/page.tsx:193 | 🟢 | Ronda 1 (tz-vistas) |
 | login-sin-feedback-error | alta | A | login-screen.tsx:189 | 🟢 | Ronda 1 (login-error-feedback) |
-| practitioner-userid-unique-blocks-multitenant | alta | A | schema.prisma:123 | 🔴 | practitioner-multi-tenant — `userId String @unique` global sigue en el schema |
+| practitioner-userid-unique-blocks-multitenant | alta | A | schema.prisma (Practitioner) | 🟢 | **IAM-1** (Ronda 21) — M6: único `(tenantId, userId)`, DROP del global (IAM-D2); advisory lock por usuario en `bootstrapTenant`; ADR-008 |
 | tenant-tables-sin-rls-ni-filtro | media | B | prisma/migrations/20260725120000_rls_policies | 🟢 | Ronda 4 — la migración cubre PatientShare/PatientFile/Insurer/Invitation/PlanTemplate/Notification/DismissedReminder; Favorite/UserPreferences quedan user-scoped a propósito (allowlist del guard). Re-verificado 2026-09-29 con `npm run guard:isolation` ✓ |
 | rls-bypassed-by-superuser-role | media | B | .env / docker-compose | 🟢 | Ronda 4 — **cerrado en código** (rol `kinesoft_app` sin BYPASSRLS en local + test de aislamiento). **El flip de PROD sigue pendiente del dueño** (bucket C) |
 | runwithrls-solo-en-2-modulos | media | B | lib/rls.ts:19 | 🟢 | Ronda 4 — **cerrado en código**: `runWithRls` cableado en ~22 módulos de `lib/` (verificado). Depende del mismo flip prod |
@@ -1295,7 +1340,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 |---|---|---|---|---|
 | deuda-archivos-grandes | media | components varios | 🟢 | split-* (Ronda 3) |
 | role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
-| roles-assistant-billing-cosmeticos | media | schema.prisma:108 · lib/capabilities.ts | 🟡 | roles-assistant-billing — B-pre les dio capabilities reales (ASSISTANT opera la agenda sin `clinical.read`); falta en C0 que puedan loguearse sin fila Practitioner (`secretaria-sin-practitioner`) |
+| roles-assistant-billing-cosmeticos | media | lib/roles.ts · lib/session.ts · lib/practitioner-scope.ts | 🟢 | **IAM-0c/2e/4a** (Ronda 21) — etiquetas únicas (`roleLabel`: Secretario/a, Facturación), no reservables (`bookablePractitionerWhere` mira rol clínico), entran sin `Practitioner` (`Actor.practitionerId` null) |
 | no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
 | no-realtime-agenda-compartida | media | lib/booking-events-internal.ts · lib/realtime-*.ts · components/providers/realtime-provider.tsx | 🟢 | **SV** (Ronda 20, 14-oct) — Broadcast privado por tenant publicado desde el hook post-commit; agenda, Recepción y `/sala` re-piden en vivo (ADR-006) |
 | portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
@@ -1331,7 +1376,7 @@ Evidencia de cada cierre en §Ronda 12.
 | H2 editar-paciente-borra-cobertura-copago | alta | A | lib/patients.ts:1091 · hero.tsx:334 | 🟢 | A2a-S08 |
 | H3 cerrar-sesion-descarta-eva-notas | alta | A | lib/sessions.ts:462 | 🟢 | A2a-S03 |
 | H4 reserva-publica-takeover-por-dni | alta | A | lib/public-booking-internal.ts:122 | 🟢 | A2b-S-pub |
-| H5 signup-autoconfirma-email | alta | A | lib/auth.ts:49-137 | 🟢 | A3c-S-signup — `auth.signUp` verificado; el tenant se crea en `/onboarding` |
+| H5 signup-autoconfirma-email | alta | A | lib/auth.ts:114 | 🟢 | A3c-S-signup — signup verificado; el tenant se crea en `/onboarding`. Desde IAM-2c sin `auth.signUp`: `generateLink(signup)` + mail propio |
 | H6 preview-migra-prod | alta | A | scripts/vercel-build.mjs | 🟢 | A0b (staging aislado: A0d, dueño) |
 | booking-idor-practitioner-patient | alta | A | lib/bookings.ts:565-595,1295-1317 | 🟢 | A2a-S06 |
 | booking-idempotency-key-cross-tenant | alta | A | lib/bookings.ts:712-720 | 🟢 | A2a-S06 (hallado en la sesión) |
@@ -1352,7 +1397,7 @@ Evidencia de cada cierre en §Ronda 12.
 | checkin-trunca-notas-del-kine | media | A | lib/portal.ts:196 | 🟢 | A3b-S-auth |
 | next-cves-14.2.18 | alta | A | package.json | 🟢 | A3b-S-obs → 14.2.35 |
 | logs-y-sentry-con-pii | media | A | lib/redact.ts | 🟢 | A3b-S-obs |
-| write-paths-sin-membresia-aceptada | media | C0 | lib/bookings.ts (create/batch) · lib/patients.ts (reasignar) · lib/services.ts · lib/sessions.ts (sesión a medida) | 🔴 | C0 — validan practitioner ∈ tenant pero no membresía aceptada; los pickers ya no ofrecen removidos |
+| write-paths-sin-membresia-aceptada | media | C0 | lib/bookings.ts (create/batch) · lib/patients.ts (reasignar) · lib/services.ts · lib/sessions.ts (sesión a medida) | 🟡 | C0 — validan practitioner ∈ tenant pero no membresía aceptada; los pickers ya no ofrecen removidos | · **IAM-2e/4b (Ronda 21):** turnos (create/batch/mover, `bookings-core.ts:731`) y reasignar paciente (`patients.ts:1922`) validan con `bookablePractitionerWhere` (membresía aceptada, rol clínico, sin suspender); falta revisar `services.ts` y la sesión a medida (C0)
 | batch-key-otro-tenant-no-rechaza | baja | C | lib/bookings.ts:1465 | 🔴 | C — usa `update: {}` (no escribe nada ajeno), pero debería rechazar como `createBooking` |
 | cupo-1-toctou | media | C | lib/booking-cap-lock.ts · lib/bookings.ts · lib/public-booking.ts · lib/mercadopago.ts | 🟡 | **B-pre cerró agenda y turnero** (lock de cupo por profesional+servicio+día AR dentro de la tx; test con `pg_locks`). Sigue 🔴 en C: el pago tardío del webhook sobre una reserva vencida confirma y avisa sin revalidar el cupo |
 | formatars-sin-centavos-en-listados | baja | C1 | lib/format.ts | 🔴 | C1 — $1.500,50 se ve "$1.501" |
@@ -1390,7 +1435,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | turnero-texto-fijo-lun-sab | baja | C | nav del turnero público | 🔴 | C — "lun-sáb 8 a 19hs" fijo; derivar de las franjas reales |
 | public-overlap-lookback-sin-uso | baja | C | lib/public-booking* | 🔴 | C — `PUBLIC_OVERLAP_LOOKBACK_MS` sin uso |
 | agenda-listpatients-in-1000 | baja | C1 | app/(app)/agenda/page.tsx | 🔴 | C1 — conocido (`agenda-loads-full-patient-directory`) |
-| secretaria-sin-practitioner | media | C0 | lib/session.ts:91-97 | 🔴 | C0 — `buildActor` exige fila Practitioner: una Secretaria (ASSISTANT) no puede loguearse sin una |
+| secretaria-sin-practitioner | media | C0 | lib/session.ts · lib/access-logic.ts | 🟢 | **IAM-4a** (Ronda 21) — `isUsableMembership` solo exige `Practitioner` a roles clínicos; `Actor.practitionerId` null + `ownPatientsWhere`/`isActorPractitioner` + guard `actor-practitioner-guard.test.ts`; la activación ya no le crea profesional |
 | catalogo-siglas-ambiguas | baja | catálogo | prisma/catalog/payers.csv (`aliases`) · lib/catalog/normalize.ts `matchKey` | 🔴 | curado en Plataforma — 37 siglas ambiguas sin alias (p. ej. OSPA no se encuentra por sigla) |
 | catalogo-datos-por-verificar | baja | catálogo | prisma/catalog/payer-plans.csv · specialties.csv | 🔴 | curado — planes Sancor 1000/1500 y especialidades de Mendoza |
 
@@ -1668,6 +1713,29 @@ integrador, y se verificó en el archivo.
 | horarios-config-en-vivo | baja | EV1 | lib/practitioner-schedule.ts | 🔴 | **EV1** (SV-D12) — cambios de horarios en Configuración no publican `availability` |
 | sala-tv-y-campana | baja | D | — | 🔴 | **D** — pantalla TV de sala (topic propio) y notificaciones persistidas en la campana |
 
+### Hallazgos de IAM (IAM-Z, 14-oct-2026)
+
+Ronda 21. Los 🟢 se cerraron en las sesiones IAM-0a..4c y se verificaron en el archivo.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| email-ilike-sin-escapar | alta | **A** | lib/portal.ts · app/auth/callback · lib/public-booking-internal.ts · lib/onboarding*.ts | 🟢 | **IAM-0a** — `{equals, mode:"insensitive"}` = `ILIKE`: `jpere_@hotmail.com` veía/vinculaba fichas de `jperez@…` y precargaba PHI ajena en el turnero. `lib/email-match.ts` (escape + `sameEmail`) + guard |
+| bucle-redireccion-sin-practitioner | alta | **A** | lib/session.ts · app/(app)/layout.tsx | 🟢 | **IAM-1 + IAM-3a** — membresía sin `Practitioner` → `no_membership` → `/onboarding` → `/dashboard` → … (kine de A que acepta B, removido que acepta otra). Acceso con `resolveAccessState` (saltea consultorios rotos, `/sin-acceso` con motivo). El callejón «escribinos a soporte» de `PractitionerElsewhereError` ya no existe |
+| portal-vinculo-nunca-ocurria | media | B | app/auth/callback/route.ts · lib/portal-link-internal.ts | 🟢 | **IAM-3c** — el callback vinculaba solo con `?tenant=` y nadie lo armaba: `Patient.userId` nunca se escribía y «staff ≠ paciente» en signup/invitaciones no tenía con qué comparar. Vínculo por `next` en callback y `/auth/confirm` (§5.8) |
+| invitacion-link-localhost | alta | A | lib/invitations.ts | 🟢 | **IAM-2a** — `inviteUserByEmail` (flujo implícito + Site URL localhost) → link propio `/invite/<token>` por Resend (§19.1 #3) |
+| invitacion-signup-colgado | alta | A | lib/auth.ts · app/invite/[token]/* | 🟢 | **IAM-2b/2c** — `signUp` sobre el usuario que ya creó `inviteUserByEmail` no mandaba nada; activación en `/invite/<token>` (§19.1 #4) |
+| reenvio-portal-vinculado-falla | baja | B | lib/patients.ts (`sendPatientPortalInvite`) | 🟢 | **IAM-3c** — reenviar a un paciente vinculado daba siempre «already registered» |
+| sin-suspension-de-membresia | media | C0 | lib/invitations.ts · lib/access-logic.ts | 🟢 | **IAM-4c** — no había forma de cortar el acceso sin «Quitar» (que exige reasignar todo). `suspendMember`/`reactivateMember` con `Membership.disabledAt` |
+| createbooking-acepta-secretaria | media | B | lib/bookings-core.ts:731 · lib/availability-loader.ts:270 | 🟢 | **IAM-4b** — con el id de la Secretaria, `createBooking`, el batch y el loader con `practitionerIds` explícitos la aceptaban. Ahora `bookablePractitionerWhere`; reprogramar un turno viejo de ella se rechaza, cancelarlo sigue andando |
+| reset-admin-no-existe | baja | C0 | lib/invitations.ts:869 | 🟢 | **IAM-4c** — «Mandar link para nueva contraseña» sin exponer el link (§5.47) |
+| insurers-catalog-ilike-nombre | baja | C | lib/insurers-internal.ts:26 · lib/catalog.ts:168 | 🔴 | **C** — comparan nombre/código de obra social con `ILIKE` sin escapar. Sin PHI (catálogo), pero un `_` matchea de más. Pasar a `escapeLike` |
+| cuentas-auth-huerfanas-sin-reparacion | media | BO | — | 🔴 | **BO2-C** — usuarios de Auth huérfanos (zombies viejos de `inviteUserByEmail`, altas trabadas), miembros sin `Practitioner`, consultorios sin OWNER: detectores y reparación desde `/plataforma` (absorbe la «4d» de IAM). Hoy la activación adopta zombies solo si `canSafelyDeleteAuthUser` |
+| guard-auth-admin-y-getuser | baja | BO | scripts/guard-* | 🔴 | **BO** (invariantes §19.5) — `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` se cumplen hoy (grep), pero sin guard estático |
+| email-log-sin-webhook-entrega | baja | BO | lib/email/log.ts | 🔴 | **IAM-5 (opcional) / BO** — `EmailLog` registra «Resend lo aceptó», no entregado/rebote/queja |
+| formfield-sin-autocomplete-new-password | baja | VX | components/ui/form-field.tsx | 🔴 | **VX** — los campos de contraseña nueva (activación, reset) no pasan `autoComplete="new-password"` |
+| invitedat-membresia-preexistente | baja | C0 | lib/invite-activation-internal.ts (`joinTenantInTx`) | 🔴 | **C0** — al aceptar una invitación nueva sobre una membresía existente no se actualiza `invitedAt` |
+| comentarios-viejos-iam | baja | poda | lib/supabase/admin.ts:12 | 🔴 | **Poda** — el comentario todavía dice que el admin client se usa para `auth.admin.inviteUserByEmail` (`lib/practitioner-scope.ts:30-31` ya se corrigió) |
+
 ### Resumen del checklist (al 2026-09-29)
 
 93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
@@ -1682,7 +1750,7 @@ se recontaron.*
 | ⏸ DIFERIDO-CON-GATE | 0 | 4 | 0 | **4** |
 | 🔴 ABIERTO | 4 | 17 | 2 | **23** |
 
-Confirmados que siguen 🔴 al 30-sep: `practitioner-userid-unique-blocks-multitenant` (C0),
+Confirmados que siguen 🔴 al 30-sep: `practitioner-userid-unique-blocks-multitenant` (C0; 🟢 en IAM-1, 14-oct),
 `no-saas-billing-charge-clinic` y `plan-fields-inert-no-upgrade-no-enforcement` (C2).
 `c1-ratelimit-inmemory` pasó a 🟡: el código se endureció en A3a y falta solo la env de Upstash (dueño). El
 **flip prod** de `rls-bypassed-by-superuser-role` (🟢 solo en código) sigue siendo del dueño; su prerrequisito
@@ -1763,6 +1831,12 @@ era intencional.
 8. **`app/auth/callback/route.ts`** — linkea `Patient` solo si `email_confirmed_at` y (`userId==null`
    o ya coincide); nunca re-bindea un `Patient` ya linkeado (anti-takeover). Desde A3b tampoco vincula
    fichas a una identidad con Membership (staff ≠ paciente, `:62`).
+   **Enmienda IAM (14-oct):** la regla vive en `lib/portal-link-internal.ts` (testeable contra Postgres). Match de email
+   **exacto** (`emailEqualsFilter` + `sameEmail`, hallazgo ILIKE). El vínculo lo dispara `linkPortalPatientsOnSignIn`
+   según el `next` (`/portal` = cada consultorio con ese email; `/portal/c/<slug>` = solo ese), tanto en `/auth/callback`
+   (Google) como en `/auth/confirm` (magic link): antes dependía de un `?tenant=` que nadie armaba y no ocurría nunca.
+   Con dos fichas del mismo email en un consultorio vincula siempre la más vieja (determinístico). El log de rechazo no
+   lleva el email.
 9. **`lib/files.ts`** — `ALLOWED_MIME`, `SAFE_EXT_RE /^[a-z0-9]{1,8}$/` contra traversal,
    `getDownloadUrl` audita cada URL firmada. Mantener el audit por descarga.
 10. **`lib/insurers-internal.ts`** — `resolveInsurerName` normaliza y linkea free-form al catálogo
@@ -1953,6 +2027,23 @@ era intencional.
     (`capLocksHeld`) y el turnero **estampan** la sala por defecto (`defaultRoomFor`; archivada → sin sala) sin contar
     ocupación ni tomar clave de sala. La barrera es la validación dura de Configuración (SR-D4). No sumarles el chequeo:
     toca C6/C7 y agrega riesgo de deadlock. `rescheduleSession` y las ediciones sueltas sí chequean.
+45. **La app manda los mails; Supabase solo emite tokens (IAM, ADR-007).** Todo mail sale por `sendEmail`
+    (`lib/email/index.ts`, nunca tira, deja `EmailLog`) y todo link de acceso por `issueAccessLink`
+    (`admin.generateLink` → link propio a `/auth/confirm`). No volver a `inviteUserByEmail`, `auth.signUp`,
+    `resetPasswordForEmail` ni a las plantillas de Supabase. `auth.admin.*` solo en `lib/identity/auth-admin.ts`.
+46. **`/auth/confirm`: GET no consume, POST con origen (IAM-2c).** El GET valida y redirige a
+    `/auth/confirm/continuar`; solo el POST (chequeo de origen, `isConfirmPostAllowed`) llama a `verifyOtp`. Outlook
+    Safe Links abre los links antes que la persona: si el GET canjeara, el escáner gastaría el token. No «simplificar» a
+    un GET que canjea.
+47. **Reset por admin nunca expone el link (IAM-4c).** `sendMemberPasswordReset` devuelve solo el estado del envío; el
+    link no va al resultado, al audit ni al log. No sumar «copiar link» acá (sí existe en la invitación, que todavía no
+    tiene cuenta detrás).
+48. **Match de email exacto (IAM-0a, C-IAM4).** Todo `where` por email usa `emailEqualsFilter` + post-filtro `sameEmail`
+    (`lib/email-match.ts`). `mode: "insensitive"` pelado es `ILIKE` con comodines `_`/`%`. Guard en
+    `tests/unit/email-match.test.ts`.
+49. **`Actor.practitionerId` puede ser `null` (IAM-4a).** Nunca usarlo crudo en un `where`, en `===` contra otra cosa que
+    `null` ni en SQL: `ownPatientsWhere`, `isActorPractitioner`, `requireActorPractitionerId`. Guard en
+    `tests/unit/actor-practitioner-guard.test.ts`.
 
 ---
 
@@ -1967,11 +2058,13 @@ features grandes que el dueño sumó. Alimenta las olas 2.6-2.8 del ROADMAP.
   Token válido 7 días, un solo uso (`acceptedAt`), email debe coincidir. 🟢 **Token hasheado**
   (`hashInviteToken` en `lib/invitations-tokens.ts`; la fila guarda el hash y el raw solo viaja en la
   URL — rotar el invite mintea uno nuevo porque el original es irrecuperable) — cerrado en Ronda 2.
-- Invitación de **paciente** al portal: existe pero por otro mecanismo (`sendPatientPortalInvite` →
-  `supabase.auth.admin.inviteUserByEmail`, sin fila `Invitation`); vínculo por email en el callback.
+- Invitación de **paciente** al portal: `sendPatientPortalInvite` (`lib/patients.ts`) manda el mail propio
+  `portal_invite` con link a `/auth/confirm` (IAM-3c; antes `inviteUserByEmail`), sin fila `Invitation`; además el
+  paciente pide su link en `/portal` (`requestPortalLink`). El vínculo `Patient.userId` lo hace el inicio de sesión
+  (`linkPortalPatientsOnSignIn`).
 - **Signup self-serve de paciente: NO-EXISTE** (solo entra por Google + email pre-cargado por el kine).
 - **OAuth: solo Google** (`app/api/auth/google`). Apple/Meta: NO-EXISTE.
-- CRUD de miembros en panel del tenant: completo. **Reset de password admin→otro miembro: NO-EXISTE.**
+- CRUD de miembros en panel del tenant: completo. Reset de password admin→otro miembro: **existe desde IAM-4c** (`sendMemberPasswordReset`, mail sin exponer el link); suspender/reactivar también.
 - Portal actual (mobile-first, <150kB): home con próximos turnos, `/me` solo-lectura, `/c/[slug]` con
   plan activo + check-in EVA + timeline de sesiones. Auth **por email match, no por `Patient.userId`**.
   NO existe: confirmar/cancelar/reagendar, cambio de contraseña, HC visible, datos personales

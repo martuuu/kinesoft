@@ -48,6 +48,7 @@ import {
   type AccessState,
   type MembershipLite,
 } from "@/lib/access-logic";
+import { isClinicalRole } from "@/lib/roles";
 import { logger } from "@/lib/logger";
 import { ensureRequestContext } from "@/lib/request-context";
 import { clientIp } from "@/lib/client-ip";
@@ -57,7 +58,15 @@ export type Actor = {
   tenantId: string;
   tenantSlug: string;
   tenantName: string;
-  practitionerId: string;
+  /**
+   * IAM-4a: el `Practitioner` del actor en el consultorio activo, SOLO para roles clínicos (OWNER, ADMIN,
+   * PRACTITIONER: `isClinicalRole`). `null` para la Secretaria (ASSISTANT) y Facturación (BILLING), aunque tengan
+   * una fila `Practitioner` vieja (antes de IAM-4a `acceptInvite` se la creaba a todos; no se borra y desde IAM-2e
+   * no es reservable). Ojo con las columnas nullable: `{ assignedPractitionerId: actor.practitionerId }` con
+   * `null` compila a `IS NULL` y abre todo lo «sin asignar». Para eso están `ownPatientsWhere` /
+   * `isActorPractitioner` (`lib/practitioner-scope.ts`) y `requireActorPractitionerId` (write-paths clínicos).
+   */
+  practitionerId: string | null;
   practitionerName: string;
   userId: string;
   // Platform superadmin (cross-tenant): authors the global exercise catalog +
@@ -95,6 +104,21 @@ export class ForbiddenError extends Error {
     super(reason);
     this.name = "ForbiddenError";
   }
+}
+
+/**
+ * IAM-4a: el profesional del actor para un write-path SOLO clínico, cuya columna es NOT NULL y apunta a
+ * `Practitioner` (`ClinicalCase.authorId`, `PlanTemplate.authorId`). Esos caminos ya exigen una capability
+ * clínica (`plans.manage` / `clinical.read` + full) que un rol no clínico no tiene, así que acá solo llega un
+ * clínico, que siempre tiene `practitionerId` (`buildActor`). Es la red: si algún día un rol sin profesional
+ * pasara el gate, falla cerrado con un 403 en vez de tirar un error de Prisma o escribir con el `userId`.
+ */
+export function requireActorPractitionerId(
+  actor: Pick<Actor, "practitionerId">,
+  message = "Esta acción es solo para profesionales del consultorio."
+): string {
+  if (!actor.practitionerId) throw new ForbiddenError(message);
+  return actor.practitionerId;
 }
 
 const DEMO_ALLOWED =
@@ -241,13 +265,17 @@ function buildActor(s: AccessSnapshot): Actor {
   }
   const tenantId = s.state.tenantId;
   const chosen = s.memberships.find((m) => m.tenantId === tenantId);
-  // `PRACTITIONER_FOR_ALL_ROLES` (IAM-4 lo apaga): hoy toda membresía usable tiene Practitioner y el Actor lo exige.
-  if (!chosen || !chosen.practitionerId) throw new UnauthenticatedError("no_membership");
+  if (!chosen) throw new UnauthenticatedError("no_membership");
+  // IAM-4a: los clínicos tienen Practitioner (`isUsableMembership` ya lo exige: esto es la red). Los no clínicos
+  // entran sin él y, si tienen una fila vieja, se ignora: un actor no clínico nunca «es» un profesional (ni para
+  // `assignedPractitionerId`, ni para shares, ni para la agenda propia).
+  const clinical = isClinicalRole(chosen.role);
+  if (clinical && !chosen.practitionerId) throw new UnauthenticatedError("no_membership");
   return {
     tenantId,
     tenantSlug: chosen.tenant.slug,
     tenantName: chosen.tenant.name,
-    practitionerId: chosen.practitionerId,
+    practitionerId: clinical ? chosen.practitionerId : null,
     practitionerName: s.profile.fullName ?? s.profile.email,
     userId: s.userId,
     isPlatformAdmin: s.profile.isPlatformAdmin,

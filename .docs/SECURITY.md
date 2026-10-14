@@ -38,7 +38,12 @@ open security items in [AUDIT.md](AUDIT.md).
   email verification (`lib/auth.ts:49`); `admin.createUser({ email_confirm: true })`
   and tenant creation at signup are gone. The tenant is created only in
   `/onboarding` (step 2, `lib/tenant-bootstrap.ts`) by a verified identity.
-  Requires "Confirm email" ON in Supabase (EXTERNAL-CONFIG §0.1).
+  Requires "Confirm email" ON in Supabase (EXTERNAL-CONFIG §0.1). **Since IAM
+  (14-oct)** `auth.signUp` is gone too: `admin.generateLink(signup)` + the app's
+  own mail (§18).
+- **IAM (14-oct-2026)** — exact email match (ILIKE finding), app-sent mails with
+  scanner-proof `/auth/confirm`, own invitation tokens, multi-tenant users,
+  membership suspension, actor without practitioner (§18).
 
 - **B-pre (01-oct-2026)** — capabilities per role (§13), global catalog
   read-only under RLS (§9, §10), public booking filtered by PUBLIC practices and
@@ -67,8 +72,9 @@ kine_tenant ────┘
 - **`tryGetActor()`** — same, but returns null instead of throwing. Used
   by server components that render a "please sign in" branch (e.g.
   `app/(app)/layout.tsx`).
-- The `kine_tenant` cookie chooses *which* tenant to act as. It is only
-  honoured when the user is actually a `Membership` of that tenant.
+- The `kine_tenant` cookie (value = tenantId) chooses *which* tenant to act
+  as. It is only honoured when it points to a *usable* `Membership` (accepted,
+  not suspended), and it is cleared on every login (§18).
 - The `x-tenant-slug` request header is **stripped** by `middleware.ts`
   on every inbound request. The middleware re-sets it for `/c/<slug>/…`
   paths and subdomains so public-tenant surfaces can resolve, but the
@@ -167,7 +173,7 @@ treating the email as authoritative — Supabase magic-link / unverified
 sign-ups can never read PHI on a Patient row that happens to share their
 email.
 
-The portal matches the patient's email case-insensitively and treats any
+The portal matches the patient's email exactly (escaped + `sameEmail`, §18) and treats any
 identity with a `Membership` as "no patient files" (staff ≠ patient, §9).
 
 `submitCheckIn` (`lib/portal.ts:196`):
@@ -220,7 +226,9 @@ row when:
 2. The Patient row has `userId == null` (or already matches this user).
 
 A Patient already linked to a different identity is never re-bound. This
-closes the account-takeover vector via mistyped Patient emails. Since A3b
+closes the account-takeover vector via mistyped Patient emails (since IAM the
+email match is exact, `lib/portal-link-internal.ts`; the link also happens on
+magic-link sign-in via `linkPortalPatientsOnSignIn`, driven by `next`). Since A3b
 (30-sep-2026) the callback also never links files to an identity that has a
 `Membership` (staff ≠ patient), and its `next` goes through `safeNext` (§11).
 
@@ -782,3 +790,54 @@ Con `REALTIME_DRIVER=off` (default) nada de esto corre: ni publish, ni token, ni
   `lib/realtime-client-supabase.ts`. Limitación: (c) mira por archivo, no por función (AUDIT `guard-realtime-por-archivo`).
 - **Pendiente de Martin** (EXTERNAL-CONFIG §3.1): R1-R4 (incluye «Allow public access» OFF) y V1-V7 en staging antes de
   `REALTIME_DRIVER=supabase`.
+
+## 18. Identidad y acceso (IAM, 14-oct-2026)
+
+Diseño en [ARCHITECTURE.md §Identidad y acceso + ADR-007/ADR-008](ARCHITECTURE.md); consola en
+[EXTERNAL-CONFIG.md §0.4](EXTERNAL-CONFIG.md).
+
+- **Match de email exacto (hallazgo [A] ILIKE, IAM-0a).** Prisma traduce `{ equals, mode: "insensitive" }` a `ILIKE`,
+  donde `_` y `%` son comodines: `jpere_@hotmail.com` (verificado) matcheaba la ficha de `jperez@hotmail.com`. Pasaba en
+  el portal (fichas ajenas), en el vínculo de `/auth/callback` (`Patient.userId` ajeno = toma de ficha), en la
+  precarga del turnero (PHI ajena) y en onboarding. Ahora todo match de email usa `emailEqualsFilter` (escapa `\ % _`)
+  **y** `sameEmail` (post-filtro exacto normalizado) de `lib/email-match.ts`; `findUserByEmail` del puerto también
+  compara exacto. Guard: `tests/unit/email-match.test.ts` («ningún email con ILIKE pelado» en `lib/` y `app/`).
+  Abierto (C, baja): `insurers-internal.ts:26` y `catalog.ts:168` comparan nombre/código con ILIKE sin escapar.
+- **Staff ≠ paciente** (AUDIT §5.22): `usedAsPortalPatient` (`lib/invite-activation-internal.ts:139`) en las dos
+  puertas de `/invite` (antes de tocar GoTrue en la activación); el portal no le manda link a una identidad con
+  membresía; el vínculo de fichas al iniciar sesión tampoco.
+- **Tokens de invitación.** En la base solo el hash (sha256); el crudo viaja en el mail. «Reenviar» rota el token y
+  el hash anterior va a `priorTokens` (el link del mail anterior sigue valiendo); «Generar link nuevo» vacía
+  `priorTokens`; «Anular» = `revokedAt`. Aceptar/activar es CAS `acceptedAt IS NULL AND revokedAt IS NULL`. Suspender a
+  un miembro anula sus invitaciones pendientes (aceptar una reactiva la membresía).
+- **Activación con `createUser(email_confirm)` solo con token válido** (enmienda AUDIT §5.26, IAM-D1): el email lo fija
+  la invitación (el link llegó a ese buzón), no quien activa. Adoptar un zombie (`updateUserById({emailConfirm:true})`)
+  solo si `canSafelyDeleteAuthUser` (nunca entró, sin confirmar, sin perfil, membresías ni fichas). Guard:
+  `tests/unit/email-confirm-guard.test.ts`.
+- **Sin oráculo de cuentas.** Signup, olvidé contraseña, reenviar verificación y el link del portal responden igual
+  exista o no la cuenta (o la ficha). Signup sobre una cuenta confirmada → mail «Ya tenés una cuenta» al buzón; sobre una
+  sin confirmar → re-manda la verificación **sin pisar la contraseña** (anti pre-account takeover, desvío aceptado de
+  IAM-2c). El portal solo pide un magic link si hay ficha con ese email exacto: `generateLink(magiclink)` a un email
+  sin cuenta la crea (supuesto S4). Rate limit por IP y por hash del email en todos.
+- **`/auth/confirm` resistente a escáneres** (AUDIT §5): el GET valida y redirige a `/auth/confirm/continuar`, **no
+  canjea**; el POST (form que se manda solo) exige origen propio (`isConfirmPostAllowed`) y recién ahí `verifyOtp`.
+  `next` siempre por `safeNext`. Limpia `kine_tenant` (login nuevo).
+- **Reset por admin nunca expone el link.** `sendMemberPasswordReset` (`lib/invitations.ts:869`) manda el mail y
+  devuelve solo el estado del envío; ni el resultado, ni el audit, ni el log llevan el link (con verlo, el OWNER o el
+  ADMIN tomarían una cuenta que puede ser de otros consultorios). No va al OWNER si lo pide un ADMIN, ni a un
+  suspendido, ni si el usuario de Auth no es el de la membresía. 10/h por actor y 1 cada 10 min por destinatario.
+- **Suspensión de membresía** (`Membership.disabledAt`): corta el acceso a ese consultorio en `isUsableMembership`
+  (no a los demás) y lo saca de lo reservable. Nadie se suspende a sí mismo ni al OWNER; re-invitar a un suspendido se
+  rechaza («Usá Reactivar»).
+- **Cookie `kine_tenant`** = tenantId, httpOnly; se limpia en cada login y nunca se confía: `chooseActiveTenant` la
+  ignora si no es una membresía usable; `switchTenant` responde lo mismo para ajeno, suspendido o basura.
+- **Actor sin profesional.** `Actor.practitionerId` es `null` para Secretaria y Facturación; un `where` con ese `null`
+  abriría lo «sin asignar» (`IS NULL`). Helpers `ownPatientsWhere` / `isActorPractitioner` y guard estático
+  `tests/unit/actor-practitioner-guard.test.ts`. `createBooking` rechaza el id de una Secretaria (IAM-4b).
+- **`EmailLog` sin email en claro**: `toHash` (sha256 del email normalizado), `toMasked` (`j***@dominio`) y solo el host
+  del link (el link lleva el token). RLS ENABLE + FORCE; escribe `prismaService` (envíos sin Actor). Los logs de
+  `issueAccessLink` y `sendEmail` registran el host, nunca el token ni la URL; el rechazo del vínculo del portal ya no
+  loguea el email.
+- **Puerto único de Auth admin**: `auth.admin.*` solo en `lib/identity/auth-admin.ts` (verificado con grep al cierre; todavía sin guard estático, va a BO);
+  `auth.getUser()` solo en `getVerifiedSessionUser`. `lib/invitations.ts` no usa el cliente admin ni
+  `inviteUserByEmail` (guard en `tests/integration/invitations-email.test.ts`).

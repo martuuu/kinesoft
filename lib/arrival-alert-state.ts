@@ -21,8 +21,8 @@ import type { RealtimeAgendaMessage } from "@/lib/realtime-events";
 export type AlertViewer = {
   /**
    * Profesional que ATIENDE (recibe llegadas). null = no atiende (Secretaria,
-   * BILLING). Ojo: `Actor.practitionerId` nunca es null (toda membresía tiene su
-   * fila de Practitioner), así que el layout decide quién atiende.
+   * BILLING). Desde IAM-4a `Actor.practitionerId` ya es null para esos roles;
+   * el layout igual decide quién atiende por `clinical.read` (red).
    */
   practitionerId: string | null;
   canOperateAll: boolean;

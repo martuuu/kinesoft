@@ -206,7 +206,8 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
       select: {
         id: true,
         userId: true,
-        user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true } } } },
+        // IAM-4b: + `disabledAt` (escalar de la misma relación: 0 sentencias nuevas).
+        user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true, disabledAt: true } } } },
       },
     }),
     tx.service.findFirst({
@@ -225,8 +226,11 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
   ]);
   // Responsable = miembro ACEPTADO con un rol que gestiona planes (no la
   // Secretaria ni Facturación, que también tienen fila de Practitioner).
+  // IAM-4b: y sin suspender (`Membership.disabledAt`, M6): mismo criterio que
+  // `bookablePractitionerWhere`; un suspendido no aparece en la agenda ni
+  // ofrece slots, así que un plan nuevo a su nombre quedaría huérfano.
   const m = prac?.user.memberships[0];
-  if (!prac || !m || m.acceptedAt == null || !capabilitiesFor(m.role).has("plans.manage")) {
+  if (!prac || !m || m.acceptedAt == null || m.disabledAt != null || !capabilitiesFor(m.role).has("plans.manage")) {
     throw new PlanRejected(PLAN_ENGINE_COPY.practitioner, "practitionerId");
   }
   if (!service) throw new PlanRejected(PLAN_ENGINE_COPY.service, "serviceId");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Role, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconCheck, IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { InvitationRow, InvitationSendResult, TeamMemberRow } from "@/lib/invitations-types";
-import { inviteEmailStatusCopy } from "@/lib/invitations-constants";
+import { inviteEmailStatusCopy, passwordResetEmailStatusCopy } from "@/lib/invitations-constants";
 import {
   createInvitation,
   resendInvitation,
@@ -20,8 +20,11 @@ import {
   regenerateInvitationUrl,
   changeMemberRole,
   removeMember,
+  suspendMember,
+  reactivateMember,
+  sendMemberPasswordReset,
 } from "@/lib/invitations";
-import { ROLE_ORDER, INVITABLE_ROLES, roleLabel, roleDescription } from "@/lib/roles";
+import { ROLE_ORDER, INVITABLE_ROLES, roleLabel, roleDescription, isClinicalRole } from "@/lib/roles";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { ErrorBox } from "../controls";
 
@@ -73,7 +76,8 @@ export function UsersPanel({
           <header style={{ padding: "16px 20px", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
             <EyebrowLabel>Invitaciones pendientes</EyebrowLabel>
             <div style={{ fontSize: 12, color: "var(--navy-500)", marginTop: 4 }}>
-              Compartí el link con el invitado. Al aceptarlo, se suma al equipo.
+              {/* IAM-4c: antes decía «Compartí el link», pero la lista nunca muestra el link (se guarda hasheado). */}
+              Le mandamos un mail con el link. Si no le llegó, usá «Reenviar». Al aceptarlo, se suma al equipo.
             </div>
           </header>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -111,18 +115,31 @@ function useTenantVertical(): TenantVertical {
   return useTenantModules().has("sesiones") ? "KINESIOLOGY" : "GENERAL";
 }
 
+type RowNotice = { tone: "ok" | "warn" | "error"; text: string };
+
+const NOTICE_COLOR: Record<RowNotice["tone"], string> = { ok: "var(--navy-500)", warn: "#7A4A00", error: "#9F1F1F" };
+
+/**
+ * Fila de un miembro (IAM-4c). El rol se cambia con el <select> (como antes); el resto de las acciones van en el
+ * menú «⋯»: «Suspender acceso» / «Reactivar», «Mandar link para nueva contraseña» y «Quitar del equipo». Todas
+ * confirman con `useConfirm` y el resultado (o el rechazo del server, p. ej. «Reasigná sus N turnos…») queda
+ * escrito debajo de la fila. Ni la fila propia ni la del dueño (para un ADMIN) ofrecen acciones: el server igual
+ * las rechaza (`lib/invitations.ts`).
+ */
 function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; viewerIsAdmin?: boolean }) {
   const ownerLocked = viewerIsAdmin && member.role === "OWNER";
   const router = useRouter();
   const vertical = useTenantVertical();
   const label = (r: Role) => roleLabel(r, vertical);
   const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<RowNotice | null>(null);
+  const suspended = !!member.disabledAt;
+  const who = member.fullName ?? member.email;
+  const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
 
   const confirm = useConfirm();
   const changeRole = async (role: Role) => {
     if (member.isYou || role === member.role) return;
-    const who = member.fullName ?? member.email;
     // A2b-S-cfg: el <select> cambiaba el rol al instante, sin confirmar. Un
     // cambio de rol cambia qué puede ver y tocar esa persona, y transferir el
     // OWNER te deja a vos como Admin sin vuelta atrás desde tu cuenta: ese
@@ -144,36 +161,110 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
       });
       if (!second) return;
     } else {
+      // IAM-4c: el rol decide si atiende. Se avisa qué pasa con su agenda antes de confirmar.
+      const agenda = isClinicalRole(role)
+        ? member.hasAgenda
+          ? ""
+          : " Se le crea su agenda con el horario del consultorio."
+        : member.hasAgenda
+          ? " Deja de atender: sale de la agenda y del turnero. Si tiene turnos futuros o pacientes asignados, primero reasignalos."
+          : "";
       const ok = await confirm({
         title: `¿Cambiar el rol de ${who}?`,
-        message: `De ${label(member.role)} a ${label(role)}: ${roleDescription(role, vertical)}`,
+        message: `De ${label(member.role)} a ${label(role)}: ${roleDescription(role, vertical)}${agenda}`,
         confirmLabel: "Cambiar rol",
       });
       if (!ok) return;
     }
-    setError(null);
+    setNotice(null);
     start(async () => {
       const r = await changeMemberRole(member.membershipId, role);
-      if (!r.ok) setError(r.error);
+      if (!r.ok) setNotice({ tone: "error", text: r.error });
       else router.refresh();
     });
   };
+
+  const suspend = async () => {
+    const ok = await confirm({
+      title: `¿Suspender el acceso de ${who}?`,
+      message:
+        "No va a poder entrar a este consultorio ni recibir turnos nuevos hasta que lo reactives. No se borra nada: sus turnos, pacientes e historia quedan como están.",
+      confirmLabel: "Suspender",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setNotice(null);
+    start(async () => {
+      const r = await suspendMember(member.membershipId);
+      if (!r.ok) return setNotice({ tone: "error", text: r.error });
+      const n = r.data.futureBookings;
+      if (n > 0) {
+        setNotice({
+          tone: "warn",
+          text: `Tiene ${n} turno${n === 1 ? "" : "s"} futuro${n === 1 ? "" : "s"}: siguen agendados. Reasignalos o cancelalos si no los va a atender.`,
+        });
+      }
+      router.refresh();
+    });
+  };
+
+  const reactivate = async () => {
+    const ok = await confirm({
+      title: `¿Reactivar a ${who}?`,
+      message: `Vuelve a entrar al consultorio como ${label(member.role)}.`,
+      confirmLabel: "Reactivar",
+    });
+    if (!ok) return;
+    setNotice(null);
+    start(async () => {
+      const r = await reactivateMember(member.membershipId);
+      if (!r.ok) setNotice({ tone: "error", text: r.error });
+      else router.refresh();
+    });
+  };
+
+  const sendReset = async () => {
+    const ok = await confirm({
+      title: `¿Mandarle a ${who} un link para crear una contraseña nueva?`,
+      message: `Le llega un mail a ${member.email} con un link para elegir su contraseña. Vos no ves el link ni la contraseña. La actual sigue funcionando hasta que la cambie.`,
+      confirmLabel: "Mandar link",
+    });
+    if (!ok) return;
+    setNotice(null);
+    start(async () => {
+      const r = await sendMemberPasswordReset(member.membershipId);
+      if (!r.ok) return setNotice({ tone: "error", text: r.error });
+      setNotice(passwordResetEmailStatusCopy(r.data.emailStatus, r.data.emailReason));
+      router.refresh();
+    });
+  };
+
   const remove = async () => {
     const ok = await confirm({
-      title: `¿Quitar a ${member.fullName ?? member.email} del equipo?`,
+      title: `¿Quitar a ${who} del equipo?`,
       message:
-        "Deja de tener acceso al consultorio. Si tiene turnos futuros o pacientes asignados, primero tenés que reasignarlos.",
+        "Deja de tener acceso al consultorio. Si tiene turnos futuros o pacientes asignados, primero tenés que reasignarlos. Si solo querés cortarle el acceso por un tiempo, usá «Suspender acceso».",
       confirmLabel: "Quitar",
       tone: "danger",
     });
     if (!ok) return;
-    setError(null);
+    setNotice(null);
     start(async () => {
       const r = await removeMember(member.membershipId);
-      if (!r.ok) setError(r.error);
+      if (!r.ok) setNotice({ tone: "error", text: r.error });
       else router.refresh();
     });
   };
+
+  const lastReset = member.lastPasswordResetEmail;
+  const actions: MemberAction[] = [
+    suspended
+      ? { label: "Reactivar", onSelect: reactivate }
+      : { label: "Suspender acceso", onSelect: suspend, danger: true },
+    // A un suspendido no se le manda un link para entrar: primero se reactiva (el server también lo frena).
+    ...(suspended ? [] : [{ label: "Mandar link para nueva contraseña", onSelect: sendReset }]),
+    { label: "Quitar del equipo", onSelect: remove, danger: true },
+  ];
 
   return (
     <li
@@ -186,16 +277,26 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
         borderBottom: "1px solid rgba(15,30,51,0.04)",
       }}
     >
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {member.fullName ?? member.email}
+      <div style={{ opacity: suspended ? 0.65 : 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {who}
           {member.isYou && (
-            <span style={{ marginLeft: 6, fontSize: 11, color: "var(--sky-700)", fontWeight: 700 }}>
-              (vos)
-            </span>
+            <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 700 }}>(vos)</span>
           )}
+          {suspended && <Tag tone="soft">Suspendido</Tag>}
         </div>
         <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{member.email}</div>
+        {suspended && member.disabledAt && (
+          <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 2 }}>
+            Sin acceso desde el {member.disabledAt.toLocaleDateString("es-AR", tz)}
+          </div>
+        )}
+        {!notice && lastReset && (
+          <div style={{ fontSize: 11, marginTop: 2, color: lastReset.status === "sent" ? "var(--navy-500)" : "#9F1F1F" }}>
+            {lastReset.status === "sent" ? "Link de contraseña enviado" : "Link de contraseña no enviado"}
+            {` · ${lastReset.at.toLocaleDateString("es-AR", tz)}`}
+          </div>
+        )}
       </div>
       <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
         {member.specialty ?? "—"}
@@ -204,6 +305,7 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
         value={member.role}
         disabled={member.isYou || pending || ownerLocked}
         onChange={(e) => changeRole(e.target.value as Role)}
+        aria-label={`Rol de ${who}`}
         style={{
           padding: "8px 10px",
           borderRadius: 10,
@@ -220,26 +322,103 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
         ))}
       </select>
       <div style={{ textAlign: "right" }}>
-        {!member.isYou && !ownerLocked && (
-          <button
-            type="button"
-            onClick={remove}
-            disabled={pending}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#9F1F1F",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            Quitar
-          </button>
+        {/* El dueño no se suspende ni se quita desde acá; el ADMIN no toca al dueño (IAM-D3). */}
+        {!member.isYou && !ownerLocked && member.role !== "OWNER" && (
+          <MemberActionsMenu who={who} actions={actions} disabled={pending} />
         )}
-        {error && <div style={{ fontSize: 11, color: "#9F1F1F", marginTop: 4 }}>{error}</div>}
+        {!member.isYou && !ownerLocked && member.role === "OWNER" && (
+          <MemberActionsMenu who={who} actions={[{ label: "Mandar link para nueva contraseña", onSelect: sendReset }]} disabled={pending} />
+        )}
       </div>
+      {notice && (
+        <div role="status" style={{ gridColumn: "1 / -1", fontSize: 11.5, color: NOTICE_COLOR[notice.tone], marginTop: -6 }}>
+          {notice.text}
+        </div>
+      )}
     </li>
+  );
+}
+
+type MemberAction = { label: string; onSelect: () => void; danger?: boolean };
+
+/** Menú «⋯» de la fila (mismo patrón que `components/patients/patient-row-actions.tsx`: cierra con click afuera o Escape). */
+function MemberActionsMenu({ who, actions, disabled }: { who: string; actions: MemberAction[]; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-flex", justifyContent: "flex-end" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        aria-label={`Acciones para ${who}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 8,
+          border: "none",
+          background: open ? "rgba(31,79,190,0.1)" : "transparent",
+          color: "var(--navy-500)",
+          cursor: disabled ? "default" : "pointer",
+          fontSize: 16,
+          fontWeight: 700,
+        }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="k-glass-strong"
+          style={{ position: "absolute", top: 30, right: 0, width: 250, borderRadius: 12, padding: 4, zIndex: 25, textAlign: "left" }}
+        >
+          {actions.map((a) => (
+            <button
+              key={a.label}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                a.onSelect();
+              }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                background: "transparent",
+                border: "none",
+                padding: "8px 12px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: a.danger ? "#9F1F1F" : "var(--navy-700)",
+                borderRadius: 8,
+                cursor: "pointer",
+              }}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -447,7 +626,8 @@ function ShareInviteModal({ result, onClose }: { result: InvitationSendResult; o
           ? "Si hace falta, también podés compartirle este link al invitado."
           : result.emailSent
             ? "Le llega un mail al invitado con el link para sumarse."
-            : "El mail no salió. Probá «Reenviar» más tarde o pedile al dueño del consultorio el link."
+            : // IAM-4c: antes mandaba a «pedirle el link al dueño», que tampoco lo puede ver después de crear la invitación.
+              "El mail no salió. Probá «Reenviar» en unos minutos."
       }
       width={520}
     >

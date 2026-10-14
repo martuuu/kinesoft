@@ -540,7 +540,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 > integración 175/175 (`kinesoft_app`) y 171 + 4 skip (owner) · `next build` ✓. **Todo lo de abajo se prueba en staging (o local) con `TZ=UTC`**, nunca en un Preview que
 > comparta la DB de prod. Marcas: 🧪 **MP** = requiere sandbox de Mercado Pago · 📡 **DSN** = requiere
 > `SENTRY_DSN` en staging · ⏱ **JWT** = requiere bajar el JWT expiry de staging · ☁️ **Upstash** = requiere
-> Upstash configurado en staging · ✉️ **SMTP** = requiere SMTP propio y email real en staging. Ojo: **A3b no se
+> Upstash configurado en staging · ✉️ **SMTP** = requiere email real (desde IAM, Resend con dominio propio: EXTERNAL-CONFIG §0.4). Ojo: **A3b no se
 > despliega sin A3c** (ver MIGRACIONES-RUNBOOK §Deploy del Bloque A); el QA del signup/stepper va en la sección
 > de A3c.
 
@@ -662,8 +662,9 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### A3c · Signup verificado y stepper de alta
 
-> Todo en **staging con ✉️ SMTP propio y email real** (EXTERNAL-CONFIG §0.1: Confirm email ON, plantillas y
-> Redirect URLs cargadas). Sin esto no se mergea: ver MIGRACIONES-RUNBOOK §2.1.
+> Con ✉️ email real. **Desde IAM (14-oct)** los mails los manda la app por Resend (EXTERNAL-CONFIG §0.4) y las
+> plantillas de Supabase ya no se usan; «Confirm email» ON sigue (§0.1). Sin staging (decisión del 14-oct): QA en prod
+> demo. El QA vigente del signup está en «Identidad y acceso».
 
 - [ ] 🔴 ✉️ Landing → "Probar gratis" → signup → llega el mail → abrirlo **en el celular** → cae en
   `/onboarding` paso 2.
@@ -1175,7 +1176,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] La Card de avisos en Configuración se ve con la nota «Los avisos se activan cuando la sala en vivo esté
   encendida en el consultorio.»; en Agenda ⋯ no aparece el control.
 
-## Identidad y acceso · IAM-0 a IAM-2 (14-oct-2026)
+## Identidad y acceso · IAM-0 a IAM-4 (14-oct-2026)
 
 > Con mailpit en local (`docker compose --profile mail up -d mailpit` → http://localhost:8025) o con Resend en prod
 > (dominio verificado + `RESEND_API_KEY` y `EMAIL_FROM` en Vercel). En prod, primero Site URL/Redirect URLs de
@@ -1199,3 +1200,69 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Login con email sin confirmar → aviso con «Reenviar email de confirmación» (el email ya cargado).
 - [ ] Outlook (Safe Links abre el link antes): el link de confirmación igual funciona (pasa por «Confirmando…»).
 - [ ] `/signup?invite=<token>` (links viejos) redirige a `/invite/<token>`.
+
+### IAM-3a · acceso sin bucles
+
+- [ ] 🔴 Kine con consultorio A acepta una invitación de B: entra a B (sin bucle) y A le sigue funcionando.
+- [ ] 🔴 Usuario con 2+ consultorios: después de **cada** login aparece «¿A qué consultorio querés entrar?»
+  (`/elegir-consultorio`, «Hola, <nombre>.»); elige uno y entra ahí. Con un solo consultorio entra directo.
+- [ ] Sesión de un usuario sin ningún consultorio usable (suspendido en el único, o solo con invitaciones sin aceptar) →
+  `/sin-acceso` «No podés entrar todavía.» con el motivo (p. ej. «Tu acceso está suspendido»), nunca un bucle ni el
+  onboarding.
+- [ ] Usuario sin ninguna membresía → `/onboarding` (alta de consultorio) como antes.
+- [ ] Removido de su único consultorio que acepta otra invitación → entra al nuevo (ya no aparece «escribinos a soporte»).
+- [ ] Prod después del deploy: los usuarios con 2+ consultorios ven la elección una vez al volver a entrar.
+
+### IAM-3b · selector de consultorio
+
+- [ ] 🔴 Sidebar con 2+ consultorios: el nombre del activo es un botón; abre la lista con el rol por vertical
+  («Kinesiólogo/a» / «Profesional») y un check en el activo; elegir otro recarga la app entera en ese consultorio (agenda,
+  pacientes y sala del nuevo, nada del anterior).
+- [ ] Con un solo consultorio: solo el nombre, sin flecha ni lista.
+- [ ] Sidebar colapsado: botón con iniciales y el nombre en el tooltip. Teclado: flechas, Home/End, Escape.
+- [ ] «Cambiar de consultorio» lleva a `/elegir-consultorio`.
+- [ ] Suspendido en B entre que se pintó el sidebar y el click → «Ese consultorio ya no está disponible para tu usuario.»
+
+### IAM-3c · portal con magic link
+
+- [ ] 🔴 `/portal/c/<slug>` → «Mandame un link para entrar» con el email de una ficha → llega el mail «<Consultorio> vía
+  KineSoft» → el link pasa por «Confirmando…» y entra al portal de ese consultorio, con sus turnos.
+- [ ] 🔴 Email que no es de ningún paciente (o de alguien del equipo): **mismo mensaje** («Si tu email está registrado…»)
+  y no llega nada.
+- [ ] Ficha → «Invitar al portal»: llega el mail propio (no el de Supabase); a un paciente ya vinculado «Reenviar» ahora
+  funciona.
+- [ ] Google sigue funcionando; entrar desde `/portal/c/<slug>` vincula solo la ficha de ese consultorio y desde
+  `/portal` las de todos los consultorios con ese email.
+- [ ] Outlook: el link del portal funciona aunque Safe Links lo abra antes.
+
+### IAM-4a · Secretaria y Facturación sin profesional
+
+- [ ] 🔴 Invitar una Secretaria nueva y activarla: entra, ve la agenda de **todos**, crea un turno eligiendo el
+  profesional y opera Recepción; **no** aparece como profesional en la agenda, el turnero ni «primer hueco libre».
+- [ ] 🔴 La Secretaria no ve historia clínica de pacientes sin asignar (nivel «admin», nunca «full») ni sesiones abiertas
+  de pacientes sin asignar en Seguimiento.
+- [ ] Facturación entra y ve los ingresos de **todo** el consultorio.
+- [ ] Dashboard de la Secretaria abre sin error; sus KPIs propios en 0 y sin ingresos.
+- [ ] Secretaria vieja (con fila de profesional de antes de IAM) entra igual y se comporta como la nueva.
+
+### IAM-4b · superficies de agenda
+
+- [ ] 🔴 Modal de turno nuevo con varios profesionales y sin filtro: arranca en «Elegí un profesional» (no en el
+  primero); con filtro o con el profesional del usuario, queda ese; con uno solo, ese.
+- [ ] «Día por profesional»: un turno viejo de la Secretaria aparece en la columna «Otros (sin agenda)», no desaparece;
+  sin turnos así, la columna no está.
+- [ ] Reprogramar un turno viejo de la Secretaria → error claro; cancelarlo funciona.
+- [ ] La Secretaria bloquea horarios de cualquier profesional (o de todos) desde «Bloquear horario», sin agenda propia
+  que elegir; Facturación no puede bloquear horarios.
+
+### IAM-4c · administración del equipo
+
+- [ ] 🔴 OWNER → Configuración → Usuarios → menú de un miembro → «Suspender acceso»: avisa cuántos turnos futuros le
+  quedan (no se cancelan); el suspendido ya no entra a ese consultorio (cae a otro o a `/sin-acceso`) ni aparece en la
+  agenda; badge «Suspendido» con fecha. «Reactivar» le devuelve todo.
+- [ ] 🔴 «Mandar link para nueva contraseña»: le llega el mail al miembro; quien lo pidió **nunca** ve el link (ni en
+  pantalla ni en la actividad); el panel muestra «Link de contraseña enviado».
+- [ ] ADMIN: ve el menú para los miembros, pero no para sí mismo ni para el dueño.
+- [ ] «Cambiar rol» de Secretaria a Kinesiólogo/a: queda con agenda y aparece en la agenda. De Kinesiólogo/a a
+  Secretaria con turnos futuros o pacientes asignados → rechazo con el conteo; sin nada, OK.
+- [ ] Re-invitar a un suspendido → «Usá Reactivar». Las invitaciones pendientes ya no dicen «Compartí el link».

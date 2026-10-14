@@ -53,6 +53,7 @@ import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-eve
 import {
   acceptClientKey,
   applyBookingUpdateInTx,
+  PRACTITIONER_NOT_BOOKABLE_ERROR,
   bookingRefsError,
   buildBookingCreateData,
   checkPatientOverlap,
@@ -124,7 +125,7 @@ import {
   type ReceptionActionResult,
 } from "@/lib/bookings-types";
 import type { ReceptionAction } from "@/lib/reception-state";
-import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 
 export async function listBookingsInRange(opts: {
   from: Date;
@@ -306,7 +307,13 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
   const clinical = caps.has("clinical.read");
   let practitionerIds = q.practitionerIds?.length ? [...new Set(q.practitionerIds)] : undefined;
   if (!caps.has("agenda.viewAll")) {
-    practitionerIds = (practitionerIds ?? [actor.practitionerId]).filter((id) => id === actor.practitionerId);
+    // IAM-4a: sin profesional no hay agenda propia → `[]` (= ningún turno: el filtro es `in: []`, no «todos»).
+    // IAM-4b: hoy ningún rol llega acá sin profesional: todos los roles tienen `agenda.viewAll`
+    // (`lib/capabilities.ts` MATRIX) y los no clínicos (ASSISTANT, BILLING) entran por esa rama. Queda como
+    // red, fallando cerrado, para un rol futuro sin profesional ni `agenda.viewAll`.
+    practitionerIds = actor.practitionerId
+      ? (practitionerIds ?? [actor.practitionerId]).filter((id) => isActorPractitioner(actor, id))
+      : [];
   }
   const tenantId = actor.tenantId;
 
@@ -1190,6 +1197,9 @@ export async function updateBooking(
   if (outcome.kind === "plan-session-taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
   if (outcome.kind === "plan-paid-cancel") return { ok: false, error: PLAN_PAID_CANCEL_ERROR };
   if (outcome.kind === "plan-patient-change") return { ok: false, error: PLAN_PATIENT_CHANGE_ERROR };
+  // IAM-4b: turno viejo de un profesional que ya no atiende acá (Secretaria,
+  // suspendido): no se mueve; se cancela y se carga con otro profesional.
+  if (outcome.kind === "practitioner-not-bookable") return { ok: false, error: PRACTITIONER_NOT_BOOKABLE_ERROR };
   if (outcome.kind === "conflict" || outcome.kind === "blocked" || outcome.kind === "out-of-hours") {
     const [practitionerName, nextFreeISO] = await Promise.all([
       runWithRls(actor.tenantId, (tx) => practitionerLabel(tx, actor.tenantId, outcome.before.practitionerId)),
@@ -1383,7 +1393,7 @@ export async function markReceptionAction(
     if (!row) return { kind: "notfound" as const };
     if (
       !caps.has("agenda.manageBlocks") &&
-      row.practitionerId !== actor.practitionerId &&
+      !isActorPractitioner(actor, row.practitionerId) &&
       !(await hasFullAccess(actor, row.patientId, tx))
     ) {
       return { kind: "forbidden" as const };

@@ -76,6 +76,7 @@ import { planSessionOrdinal } from "@/lib/plan-display";
 import { notify } from "@/lib/notifications-internal";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import {
   BAD_LOCATION_ERROR,
   BASIC_ACCESS_ERROR,
@@ -83,6 +84,14 @@ import {
 } from "@/lib/bookings-constants";
 
 export type Tx = Prisma.TransactionClient;
+
+/**
+ * IAM-4b: el `practitionerId` del turno no es reservable en este consultorio
+ * (Secretaria/Facturación, membresía no aceptada o suspendida, o de otro
+ * consultorio: el mismo texto para todos, sin oráculo). Vive acá y no en
+ * `bookings-constants.ts` porque esa constante es de otra sesión de la ola.
+ */
+export const PRACTITIONER_NOT_BOOKABLE_ERROR = "Ese profesional no atiende en este consultorio.";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Guards de acceso compartidos por los write-paths (A2a-S06, E1/S07sb).
@@ -713,8 +722,13 @@ export async function validateBookingRefsInTx(
       where: { id: refs.serviceId, tenantId: actor.tenantId },
       select: { id: true, durationMin: true, name: true, maxConcurrent: true, practitionerId: true },
     }),
+    // IAM-4b: reservable en ESTE consultorio (rol clínico, membresía aceptada
+    // y sin suspender), no solo «del tenant». Antes la Secretaria y
+    // Facturación (que tienen fila Practitioner vieja) recibían turnos por RPC
+    // o con un id viejo en el cliente. El filtro de membresía es un EXISTS en
+    // la MISMA sentencia: 0 statements nuevos (techo de createBooking).
     tx.practitioner.findFirst({
-      where: { id: refs.practitionerId, tenantId: actor.tenantId },
+      where: { id: refs.practitionerId, ...bookablePractitionerWhere(actor.tenantId, { includeDisabledFilter: true }) },
       select: { id: true },
     }),
     refs.locationId
@@ -747,7 +761,9 @@ export function bookingRefsError(r: BookingRefsRejection): string {
     case "foreign-patient":
       return "Paciente fuera del tenant.";
     case "foreign-practitioner":
-      return "Profesional inválido.";
+      // IAM-4b: mismo texto para «de otro consultorio» y «no atiende acá»
+      // (no se distingue sin otra lectura, y tampoco conviene: sin oráculo).
+      return PRACTITIONER_NOT_BOOKABLE_ERROR;
     case "bad-service":
       return "Servicio inválido.";
     case "bad-location":
@@ -1223,6 +1239,11 @@ export type BookingUpdateTxOutcome =
   | { kind: "plan-session-not-pending"; ordinal: number }
   | { kind: "plan-paid-cancel" }
   | { kind: "plan-patient-change" }
+  // IAM-4b: mover (o reactivar / cambiar de sede) un turno cuyo profesional ya
+  // no es reservable (turno viejo de la Secretaria, profesional suspendido).
+  // Copy: PRACTITIONER_NOT_BOOKABLE_ERROR. Editar notas o cancelar sigue
+  // andando: no re-clasifica.
+  | { kind: "practitioner-not-bookable" }
   | {
       kind: "ok";
       before: BookingUpdateBefore;
@@ -1490,6 +1511,14 @@ export async function applyBookingUpdateInTx(
         start: newWhen,
         end,
       });
+      // IAM-4b: el loader solo arma plantilla para profesionales reservables
+      // (`bookablePractitionerWhere`), así que «sin plantilla para este id» =
+      // no atiende en este consultorio. Sin sentencia nueva: es la carga que
+      // ya corría. Sin esto el turno se movía por el horario de fallback y,
+      // con «Cargar igual», a cualquier hora.
+      if (!avail.templates.some((t) => t.practitionerId === before.practitionerId)) {
+        return { kind: "practitioner-not-bookable" };
+      }
       const cls = classifyForWrite(avail, {
         when: newWhen,
         durationMin: newDuration,

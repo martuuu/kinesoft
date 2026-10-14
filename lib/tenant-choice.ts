@@ -27,7 +27,7 @@ export type TenantOption = { tenantId: string; name: string; slug: string; role:
 
 /**
  * Consultorios a los que puede entrar la sesión (solo membresías USABLES: aceptadas, sin `disabledAt` y con
- * `Practitioner` mientras `PRACTITIONER_FOR_ALL_ROLES`), cuál es el activo y si hay que preguntar.
+ * `Practitioner` si el rol es clínico; desde IAM-4a la Secretaria y Facturación no lo necesitan), cuál es el activo y si hay que preguntar.
  *
  * `needsChoice` = hay 2+ opciones y la cookie no apunta a una de ellas. El `UserPreferences.tenantId` NO evita la
  * pregunta (decisión 6: se pregunta en cada login); solo decide a cuál entra `getActor` mientras tanto (una action

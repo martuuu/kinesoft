@@ -48,39 +48,14 @@ Antes de cualquier migración nueva. Anotá acá los resultados (sin valores sec
 
 ### 0.1 Bloque A3 — tareas del dueño **antes de desplegar A3** (30-sep-2026) 🔴
 
-El código de A3 está completo (A3a, A3b y A3c; Bloque A cerrado el 30-sep). **A3 no se despliega sin estos puntos**: sin SMTP propio los
-mails de verificación del signup no llegan a externos y nadie puede darse de alta. Orden sugerido: 1 → 2 → 3 →
-4 en **staging**, QA con un email real, y después lo mismo en prod.
+El código de A3 está completo (A3a, A3b y A3c; Bloque A cerrado el 30-sep). **Desde IAM (14-oct) el SMTP propio
+en Supabase y las plantillas de Supabase ya no hacen falta:** la app manda los mails por Resend y arma sus propios links
+(ADR-007). Los puntos 1-3 originales (Custom SMTP, plantillas con `token_hash`, URL Configuration) se reemplazan por
+**§0.4**. Siguen vigentes:
 
-1. **SMTP propio** (Resend o Postmark):
-   - dominio verificado con **SPF, DKIM y DMARC** (registros DNS en el dominio, §2);
-   - Supabase → Authentication → **SMTP Settings → Custom SMTP** con esas credenciales (prod y staging, cada uno
-     con el suyo).
-2. **Plantillas de email en es-AR** (Supabase → Authentication → Email Templates). Todos los links van a
-   `/auth/confirm` con el `token_hash` (no al link por defecto de Supabase, que usa PKCE y falla si el mail se
-   abre en otro dispositivo). Texto exacto del link:
-
-   | Plantilla | Link |
-   |---|---|
-   | **Confirm signup** | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}` |
-   | **Reset password** | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset` |
-   | Invite user / Magic link | mismo formato con `type=invite` / `type=magiclink` y `next={{ .RedirectTo }}` |
-
-   - Confirm signup usa `type=email` (el tipo vigente de `verifyOtp`); `/auth/confirm` acepta también `signup`
-     por compatibilidad (`app/auth/confirm/route.ts:36`), pero la plantilla va con `email`.
-   - `{{ .RedirectTo }}` es el `emailRedirectTo` que manda el signup: `/onboarding` en un alta normal y
-     `/invite/<token>` en la unión por invitación. `/auth/confirm` lo reduce a path con `safeNextFromUrl`.
-   - En `recovery` la ruta deja la cookie firmada `ks_recovery` (15 min, un solo uso): con ella `/reset` no pide
-     la contraseña actual.
-   - El código manda como `emailRedirectTo`/`redirectTo` el **destino final** (`<APP_URL>/onboarding`,
-     `<APP_URL>/invite/<token>`, `<APP_URL>/reset`): esas URLs tienen que estar en Redirect URLs (punto 3).
-3. **URL Configuration** (Supabase → Authentication): Site URL = el dominio de prod (en staging, el de staging) y
-   **Redirect URLs**: `<APP_URL>/auth/confirm**`, `<APP_URL>/auth/callback`, `<APP_URL>/invite/**`,
-   `<APP_URL>/onboarding`, `<APP_URL>/reset` y `<APP_URL>/portal/**`. Si un `emailRedirectTo` / `redirectTo` no está en la lista,
-   Supabase lo reemplaza por la Site URL sin avisar.
-4. **"Confirm email" ON** (Authentication → Providers → Email). Junto con el signup de A3c es lo que cierra H5:
-   sin esto `auth.signUp` devuelve sesión con el email sin verificar (el código lo detecta y loguea
-   `signup.confirm_email_disabled`, pero la cuenta ya quedó creada sin verificar).
+4. **"Confirm email" ON** (Authentication → Providers → Email): el signup crea la cuenta sin confirmar con
+   `generateLink(signup)` y el login rechaza un email sin confirmar (`email_not_confirmed`); con la opción OFF GoTrue
+   deja entrar sin verificar.
    - **"Secure password change" OFF** (misma pantalla). Si está ON, `updateUser({ password })` exige un nonce
      por mail y el `/reset` de A3c falla.
 5. **Upstash Redis** en **sa-east-1**, una DB para **prod** y otra para **staging** (§4). Las claves ya llevan
@@ -105,7 +80,7 @@ B-pre **no suma servicios externos, env vars ni configuración de consola**. Lo 
 3. **Curado inicial en Plataforma** (cuando quiera, no bloquea): las 37 siglas ambiguas sin alias, los planes
    Sancor 1000/1500 y las especialidades de Mendoza (AUDIT §2 "Hallazgos de B-pre").
 
-Las reglas de A3 no cambian: **A3 no se despliega sin el SMTP propio** (§0.1).
+Mails: desde IAM no hace falta SMTP propio en Supabase; lo que hace falta es Resend con dominio propio (§0.4).
 
 ### 0.3 SV — tareas del dueño (Sala de Espera en vivo, 14-oct-2026) 🔴
 
@@ -116,6 +91,55 @@ SV suma **tres variables** y configuración de consola de Supabase. No bloquea e
    clave JWT (crear una HS256 si no hay), «Allow public access» OFF.
 2. Variables `REALTIME_DRIVER`, `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_KID` en Vercel.
 3. **V1-V7** en staging con `scripts/realtime-verify.ts`; recién después, prod en `supabase`.
+
+### 0.4 IAM — Mails (Resend) y Auth de Supabase (14-oct-2026) 🔴
+
+Desde IAM **la app manda todos los mails y Supabase solo emite tokens** (ARCHITECTURE ADR-007). Orden:
+
+1. **Dominio propio en Vercel** (§2) y `NEXT_PUBLIC_APP_URL` = ese dominio (Production). Los links de los mails salen
+   de esa variable: con un valor local, en Production el mail sale `blocked`.
+2. **Resend**: agregar el subdominio de envío `mail.<dominio>` y cargar en el DNS los registros que da Resend: **DKIM**
+   (CNAME/TXT), **SPF** (MX + TXT del subdominio) y **DMARC** (`_dmarc.mail.<dominio>` TXT, arrancar con `p=none`).
+   Esperar «Verified».
+3. **Variables en Vercel** (Production; en Preview no hacen falta: Preview siempre cae a `log`):
+
+   | Variable | Valor | Nota |
+   |---|---|---|
+   | `RESEND_API_KEY` | key de Resend con permiso de envío | server-only, nunca `NEXT_PUBLIC_` |
+   | `EMAIL_FROM` | `KineSoft <no-reply@mail.<dominio>>` | el remitente sale como «Consultorio X vía KineSoft» |
+   | `EMAIL_REPLY_TO` | opcional | Reply-To por defecto si el emisor no pasa uno |
+   | `EMAIL_TRANSPORT` | **no cargar en prod** | solo pesa fuera de Production: `mailpit` en local, `resend` para el script |
+
+   Sin `RESEND_API_KEY` o `EMAIL_FROM` en Production la app arranca igual (warning, no error) y los mails van a `log`.
+4. **Supabase → Authentication → URL Configuration** (prod):
+   - **Site URL** = el dominio real (`https://<dominio>`; mientras tanto `https://kinesoft.vercel.app`). Nunca localhost.
+   - **Redirect URLs**: `<APP_URL>/auth/callback**`, `<APP_URL>/auth/confirm**`, `<APP_URL>/invite/**`,
+     `<APP_URL>/portal/**`, `<APP_URL>/reset`, `<APP_URL>/onboarding`.
+   - Solo **Google OAuth** depende de la Site URL y de esta lista (`/auth/callback`). Los links de mail los arma la app.
+5. **Plantillas de Supabase** («Invite user», «Confirm signup», «Reset password», «Magic link»): **la app ya no las
+   usa** (no llama `inviteUserByEmail`, `auth.signUp`, `resetPasswordForEmail` ni el magic link de Supabase). No hace
+   falta editarlas ni configurar Custom SMTP. Los links viejos con `token_hash` que hayan quedado en buzones siguen
+   funcionando en `/auth/confirm`.
+6. **Diagnóstico** (los corre Martin, nunca imprimen secretos):
+   - Mail: `scripts/diagnose-email.ts` recorre el `sendEmail` real y dice en qué escalón se corta.
+     ```bash
+     # local con mailpit
+     EMAIL_TRANSPORT=mailpit npx tsx --conditions=react-server scripts/diagnose-email.ts --to vos@ejemplo.com --all
+     # Resend de verdad (manda un mail REAL; exige --confirm)
+     RESEND_API_KEY=… EMAIL_FROM="KineSoft <no-reply@mail.<dominio>>" EMAIL_TRANSPORT=resend \
+       npx tsx --conditions=react-server scripts/diagnose-email.ts --to vos@ejemplo.com --url https://<dominio> --confirm
+     ```
+   - Auth: `scripts/diagnose-auth.ts` verifica contra Supabase real los supuestos del fake de GoTrue
+     (`tests/helpers/gotrue-fake.ts`). **Importan sobre todo S4** (magic link a un email sin cuenta la crea), **S6**
+     (signup sobre cuenta sin confirmar re-emite sin password), **S7** (invite), **S8** (mínimo de contraseña) y **S11**
+     (`emailConfirm:false` no des-confirma). Crea y borra solo sus propias cuentas; no manda mails.
+     ```bash
+     npx dotenv -e .env.prod.local -- npx tsx --conditions=react-server \
+       scripts/diagnose-auth.ts --email diag+auth@<dominio> --confirm=<project ref>
+     ```
+     Sale con código 1 si algún supuesto da FAIL: avisar (se corrige el fake y el puerto, no el test).
+7. **Local:** mailpit (`docker compose --profile mail up -d mailpit`, UI en http://localhost:8025) y
+   `EMAIL_TRANSPORT="mailpit"` en `.env.local`. Sin eso, los mails de dev quedan en el log.
 
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
@@ -161,8 +185,7 @@ SV suma **tres variables** y configuración de consola de Supabase. No bloquea e
      saneada con `/^[a-z0-9]{1,5}$/`. Sin el bucket, toda subida desde `/plataforma/ejercicios`
      falla (la media tipo YOUTUBE sigue andando: guarda un link, no un archivo).
   5. **Password policy** de Supabase Auth (complejidad) alineada con `password-policy`.
-  6. **Custom SMTP propio** (§0.1 y §7): el SMTP default de Supabase no entrega a externos; es
-     bloqueante de A3.
+  6. ~~Custom SMTP propio~~: desde IAM (14-oct) la app no usa los mails de Supabase (ADR-007); ver §0.4 y §7.
 - **Bloquea:** RLS real en prod (residual de la Ola 2.2 / Ronda 4), escritura del catálogo global
   desde Plataforma, subida de media de ejercicios, corte E1 #14, `password-policy`.
 - **Responsable:** dueño (roles/buckets/policy) + ejecutor técnico (cambio de connection strings).
@@ -293,14 +316,14 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Gate de activación:** `MP_WEBHOOK_SECRET` + credenciales prod; sandbox para QA.
 
 ### 7. Email transaccional
-- **Qué configura:** proveedor de email transaccional propio (Resend o Postmark) para verificación de
-  signup, invitaciones, reset de password y portal, con dominio verificado (SPF/DKIM/DMARC) y cargado como
-  Custom SMTP en Supabase Auth. Detalle y plantillas en §0.1.
-- **Bloquea:** **despliegue de A3** (signup verificado + stepper, decisión del dueño del 30-sep-2026): con el
-  SMTP default de Supabase los mails no llegan a externos.
+- **Qué configura:** Resend con dominio propio (subdominio `mail.<dominio>`, SPF/DKIM/DMARC) para invitaciones,
+  verificación de signup, recuperación de contraseña, reset por admin y portal. La app lo llama por `fetch`
+  (`lib/email/resend.ts`); Supabase no manda nada. Detalle en **§0.4**.
+- **Bloquea:** que los mails lleguen en prod. Sin `RESEND_API_KEY`/`EMAIL_FROM`, Production cae a `log` (aviso al
+  boot) y la UI de invitaciones ofrece copiar el link.
 - **Responsable:** dueño.
-- **Estado:** 🔴 (usando SMTP default de Supabase).
-- **Gate de activación:** dominio verificado + credenciales SMTP propias.
+- **Estado:** 🔴 (dominio + Resend pendientes).
+- **Gate de activación:** `RESEND_API_KEY` + `EMAIL_FROM` en Vercel (Production) con el dominio verificado.
 
 ### 8. Identidad / OAuth
 - **Qué configura:** proveedores OAuth adicionales. **Google** ya está cableado. **Apple** requiere

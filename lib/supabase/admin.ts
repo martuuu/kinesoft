@@ -8,8 +8,8 @@ import { env } from "@/lib/env";
  * import touch a client bundle. The `import "server-only"` guard at the
  * top makes a Next.js bundler error any leak.
  *
- * Use cases (today):
- *   - `auth.admin.inviteUserByEmail` for sending team invitations.
+ * Use cases (today): only through the IAM port `lib/identity/auth-admin.ts` (createUser, generateLink, …).
+ *   Team and portal invitations no longer use `inviteUserByEmail`: the app mails them via Resend (ADR-007).
  *
  * Returns null when service-role + URL aren't both configured (eg.
  * local dev without Supabase). Callers should treat null as "skip

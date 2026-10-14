@@ -26,8 +26,10 @@ Every domain table carries `tenantId`. Two layers of isolation:
 1. **App layer (primary gate).** Every mutating server action and
    authenticated route calls `getActor()` (`lib/session.ts`) → returns
    `Actor { tenantId, practitionerId, userId }` or throws. All queries filter
-   by `actor.tenantId`. The `kine_tenant` cookie selects the active tenant and
-   is honoured only if the user is a real `Membership`. `middleware.ts` strips
+   by `actor.tenantId`. The `kine_tenant` cookie (value = tenantId since IAM)
+   selects the active tenant and is honoured only if it points to a *usable*
+   `Membership` (accepted, not suspended; `practitionerId` is null for
+   non-clinical roles — see §Identidad y acceso, ADR-008). `middleware.ts` strips
    client-supplied `x-tenant-slug`/`x-tenant-id` headers (anti-smuggling).
 2. **RLS (real backstop since Ronda 4).**
    `prisma/migrations/20260725120000_rls_policies/migration.sql` is the single
@@ -336,6 +338,99 @@ action → runWithRls (commit) → afterBookingsCommitted(tenantId, refs)
 | `lib/sala-board-state.ts` · `lib/sala-bookings.ts` · `components/sala/*` | Tablero puro (bandas, columnas, contadores, `salaActions`, `callAnnouncement`, `diffSala`, polling `off`), lectura con proyección en el server, UI |
 | `lib/arrival-alert-state.ts` · `lib/arrival-chime.ts` · `lib/tab-title.ts` · `lib/arrival-local-notes.ts` · `lib/patient-short-name.ts` | Avisos: diff puro y textos, chime, título, notas de la pestaña que actuó, nombre corto único (lo comparten tablero y avisos sin arrastrar deps al bundle del provider) |
 | `scripts/guard-realtime.mjs` · `scripts/realtime-verify.ts` | Guards (a)-(e) en `guard:isolation`; verificación V1-V7 en staging |
+
+## Identidad y acceso (IAM, 14-oct-2026)
+
+Bloque IAM del plan vigente §19.4 (olas IAM-0..4, migración **M6** `20261014120000_identity_access`, contratos
+C-IAM1..7). Lo motivó el QA de Martin en prod (§19.1): las invitaciones llegaban con la plantilla de Supabase y un link
+a `localhost/#access_token`, el `/signup?invite=` no mandaba nada, no existía «Secretario/a» y un kine que aceptaba
+otro consultorio quedaba en un bucle de redirecciones. Decisiones de fondo en ADR-007 y ADR-008 (abajo).
+
+**Modelo (M6).** `Practitioner` único por `(tenantId, userId)` (sin el único global); `Membership.disabledAt/
+disabledById` (suspensión); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt/sendCount/priorTokens`;
+tabla `EmailLog` (`tenantId` nullable, RLS ENABLE + FORCE). Orden para prod en MIGRACIONES-RUNBOOK «M6 en prod».
+
+### Flujos
+
+- **Mails:** todo sale por `sendEmail` (`lib/email/index.ts:138`, nunca tira) con plantillas propias en voseo
+  (`lib/email/templates.ts`). Transporte por entorno (`lib/email/transport.ts`): Production con
+  `RESEND_API_KEY` + `EMAIL_FROM` → Resend por `fetch`; Production sin key → `log`; Preview → `log` siempre (los
+  Preview pegan a la base de prod); dev → `mailpit` con `EMAIL_TRANSPORT=mailpit`. En Production un mail con link a
+  localhost sale **`blocked`**. Cada intento deja una fila en `EmailLog` (sink de `lib/email/log.ts`, ver SECURITY §18).
+- **Links de acceso:** `issueAccessLink` (`lib/identity/access-link.ts:74`) pide el token a `admin.generateLink`
+  (no manda nada) y arma `${APP_URL}/auth/confirm?token_hash&type&next`. `/auth/confirm` (`app/auth/confirm/route.ts`)
+  es resistente a escáneres: el GET no canjea, redirige a `/auth/confirm/continuar`, cuyo form hace POST con chequeo
+  de origen y recién ahí `verifyOtp`.
+- **Invitación del equipo:** `createInvitation`/`resendInvitation`/`regenerateInvitationUrl`/`revokeInvitation`
+  (`lib/invitations.ts`) con mail `staff_invite` y link propio `/invite/<token>`. «Reenviar» manda token nuevo y el
+  hash anterior pasa a `priorTokens` (el link viejo sigue valiendo); «Generar link nuevo» vacía `priorTokens`;
+  «Anular» marca `revokedAt`. `findInvitationByRawToken` (`lib/invitations-internal.ts:44`) busca el vigente o uno de
+  `priorTokens`.
+- **Activación:** `/invite/<token>` sin sesión → nombre + contraseña → `activateInvitation`
+  (`lib/invite-activation-internal.ts:263`): `createUser({ emailConfirm: true })` + perfil + membresía (+ profesional
+  con agenda solo si el rol es clínico) + invitación aceptada con CAS, en una tx; si la tx falla compensa con
+  `deleteUser`; adopta un usuario «zombie» si `canSafelyDeleteAuthUser`. Con cuenta → «Ya tenés cuenta» → login →
+  `acceptInvite` (`app/invite/[token]/accept-action.ts:46`). Las dos puertas usan `joinTenantInTx` (`:163`) y dejan
+  la cookie `kine_tenant` en el consultorio recién aceptado.
+- **Signup / olvidé / reenviar verificación** (`lib/auth.ts:114,232,279`): `generateLink(signup|recovery)` + mail
+  propio, misma respuesta exista o no la cuenta (si existe y está confirmada llega «Ya tenés una cuenta»). El signup
+  con `?invite=` redirige a `/invite/<token>`.
+- **Acceso a la app:** `getAccessSnapshot` (`lib/session.ts:248`) carga todas las membresías del usuario
+  (`loadAccessMemberships`) y decide con la lógica pura de `lib/access-logic.ts` (`isUsableMembership`,
+  `chooseActiveTenant`, `resolveAccessState`). Una membresía usable = aceptada, sin `disabledAt` y, si el rol es
+  clínico, con `Practitioner` en ese consultorio. Los consultorios rotos se saltean; sin ninguno usable →
+  `/sin-acceso` con el motivo (`all_disabled`, `missing_practitioner`, `pending_only`), nunca un bucle. Con 2+ usables
+  y la cookie vacía → `/elegir-consultorio` (`decideAppGate`, `lib/onboarding-logic.ts:132`).
+- **Sesión verificada única:** `getVerifiedSessionUser()` (`lib/session-user.ts`, `cache()` por request, nunca tira)
+  reemplazó los 7 `auth.getUser()` sueltos.
+- **Portal:** Google + link por email (`requestPortalLink`, `lib/portal-auth.ts:47`; IAM-D5). El link solo se pide si
+  hay una ficha con ese email exacto (`resolvePortalLinkTarget`, `lib/portal-auth-internal.ts`), porque un
+  `generateLink(magiclink)` a un email sin cuenta **la crea** (supuesto S4). El vínculo `Patient.userId` lo hace
+  `linkPortalPatientsOnSignIn` (`lib/portal-link-internal.ts:113`) al iniciar sesión con email verificado, según el
+  `next` (`/portal` o `/portal/c/<slug>`); antes dependía de un `?tenant=` que nadie armaba y no ocurría nunca.
+- **Administración del equipo** (OWNER y ADMIN, IAM-D3; `lib/invitations.ts`): `changeMemberRole` (subir a un rol
+  clínico crea el `Practitioner` con agenda; bajar con turnos futuros o pacientes asignados se rechaza con conteo),
+  `suspendMember`/`reactivateMember` (`Membership.disabledAt`; suspender anula las invitaciones pendientes a ese email;
+  nadie suspende al OWNER ni a sí mismo), `sendMemberPasswordReset` (mail `admin_password_reset`, quien lo pide nunca
+  ve el link) y `removeMember`. El panel muestra el estado del último envío desde `EmailLog`.
+
+### Roles y `Actor.practitionerId` nullable (IAM-4a)
+
+- Etiquetas únicas en `lib/roles.ts` (`roleLabel` por vertical): Dueño/a, Administrador/a, Kinesiólogo/a (o
+  «Profesional» en General), **Secretario/a** (`ASSISTANT`), Facturación (`BILLING`). `CLINICAL_ROLES` = OWNER, ADMIN,
+  PRACTITIONER; `PRACTITIONER_FOR_ALL_ROLES = false` (`lib/roles.ts:100`).
+- `Actor.practitionerId: string | null` (`lib/session.ts:69`): `null` para Secretaria y Facturación, **aunque** tengan
+  una fila `Practitioner` vieja. No son reservables (`bookablePractitionerWhere`, `lib/practitioner-scope.ts:20`) en
+  agenda, turnero, disponibilidad ni `createBooking` (IAM-2e/4b); la agenda «Día por profesional» muestra sus turnos
+  viejos en una columna «Otros».
+- **Trampa que `tsc` no ve:** `{ assignedPractitionerId: actor.practitionerId }` con `null` compila a `IS NULL` y le
+  da al no clínico todo lo «sin asignar»; `row.x === actor.practitionerId` da `null === null`. Por eso:
+  `ownPatientsWhere` (`lib/practitioner-scope.ts:69`, sin profesional = condición imposible), `isActorPractitioner`
+  (`:79`), `revenueScopeFor`, `canManageBlocksFor` y `requireActorPractitionerId` (`lib/session.ts:116`, 403 en
+  write-paths clínicos). El guard `tests/unit/actor-practitioner-guard.test.ts` prohíbe usar `actor.practitionerId`
+  crudo como valor de un `where`, en `===`/`!==` contra algo que no sea `null` o en SQL crudo.
+
+### Módulos nuevos
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/email/{types,transport,resend,mailpit,templates,index}.ts` | C-IAM1: tipos, matriz de transporte (pura), Resend y Mailpit por `fetch`, 8 plantillas con `escapeHtml`, `sendEmail` (nunca tira), `registerEmailSink`, `__setEmailTransportForTests` |
+| `lib/email/log.ts` | Sink → `EmailLog` (se auto-registra al importarse: cada emisor hace `import "@/lib/email/log"`); `toHash`, `toMasked`, `linkHost` |
+| `lib/identity/auth-admin.ts` | C-IAM3: `AuthAdminPort` (`createUser`, `deleteUser`, `updateUserById`, `getUser`, `findUserByEmail`, `generateLink`), nunca tira, errores tipados; único lugar con `auth.admin.*`; `__setAuthAdminForTests` |
+| `lib/identity/access-link.ts` | `buildConfirmUrl` + `issueAccessLink`: token de GoTrue, link propio a `/auth/confirm`, log solo del host |
+| `lib/email-match.ts` | C-IAM4: `normalizeEmail`, `escapeLike`, `emailEqualsFilter`, `sameEmail` (match exacto, ver SECURITY §18) |
+| `lib/roles.ts` | C-IAM2: etiquetas y descripciones por vertical, `CLINICAL_ROLES`, `isClinicalRole`, `INVITABLE_ROLES` |
+| `lib/access-logic.ts` | Puro: `isUsableMembership`, `chooseActiveTenant`, `resolveAccessState`, `invitationStatus`, `canSafelyDeleteAuthUser` |
+| `lib/practitioner-scope.ts` | Fragmentos Prisma puros: `bookablePractitionerWhere`, `ownPatientsWhere`, `isActorPractitioner` |
+| `lib/active-tenant-cookie.ts` | Nombre y opciones de `kine_tenant` (valor = tenantId) |
+| `lib/session-user.ts` | `getVerifiedSessionUser()`: el único `auth.getUser()` de la app |
+| `lib/tenant-choice.ts` · `lib/tenant-switch.ts` | C-IAM7: `getTenantChoiceState`, `setActiveTenant`, `clearActiveTenantCookie`; action `switchTenant` del selector del sidebar (navegación dura) |
+| `lib/invitations-internal.ts` | C-IAM5: `findInvitationByRawToken` (vigente o `priorTokens`, por `prismaService`) |
+| `lib/invite-activation-internal.ts` | `activateInvitation`, `joinTenantInTx`, `usedAsPortalPatient`, cookie del consultorio aceptado |
+| `lib/auth-confirm-internal.ts` | Parámetros y origen del `/auth/confirm` en dos pasos |
+| `lib/portal-auth.ts` · `lib/portal-auth-internal.ts` · `lib/portal-link-internal.ts` | Link de ingreso al portal (sin oráculo) y vínculo de fichas al iniciar sesión |
+| `app/invite/[token]/*` · `app/sin-acceso` · `app/elegir-consultorio` · `app/auth/confirm/continuar` | Activación/aceptación, pantalla sin acceso, elección de consultorio, paso intermedio anti-escáner |
+| `scripts/diagnose-email.ts` · `scripts/diagnose-auth.ts` | Los corre Martin: camino real del mail y contrato del puerto contra Supabase real (EXTERNAL-CONFIG §0.4) |
 
 ## Timezone (a core invariant)
 
@@ -952,6 +1047,53 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
     + env, sin código (EXTERNAL-CONFIG §3.1).
   - Multi-pestaña: cada pestaña su socket y su token (leader election → C1).
 
+### ADR-007 — La app manda los mails; Supabase solo emite tokens (status: ACCEPTED, IAM, 14-oct-2026)
+
+- **Contexto.** Hasta IAM todo mail salía por las plantillas de Supabase con su SMTP default (que no entrega a
+  externos). `inviteUserByEmail` usaba el flujo implícito (tokens en el `#`, que el server nunca ve) y Supabase
+  reemplazaba el `redirectTo` por la Site URL = localhost: el link llegaba como `http://localhost:3000/#access_token=…`.
+  Además **creaba el usuario de Auth al invitar**: el `auth.signUp` posterior del invitado no mandaba nada (o
+  descartaba la contraseña) y, al vencer o anular la invitación, quedaba un usuario «zombie» con el email tomado. El
+  texto, la marca y el destino de cada link dependían de plantillas en la consola, sin tests.
+- **Decisión.** La app arma y manda **todos** los mails (`lib/email/*`, Resend por `fetch`, sin dependencia nueva) y
+  Supabase solo emite tokens con `admin.generateLink` (devuelve `hashed_token`, no manda nada), detrás del puerto
+  `lib/identity/auth-admin.ts`. El link es propio: `${APP_URL}/auth/confirm?token_hash&type&next`, y `/auth/confirm`
+  no canjea en el GET (Outlook Safe Links y otros escáneres abren el link antes que la persona): GET →
+  `/auth/confirm/continuar` → POST con chequeo de origen → `verifyOtp`. Afuera `inviteUserByEmail`, `auth.signUp` y
+  `resetPasswordForEmail`. La invitación del equipo ni siquiera pasa por GoTrue: link `/invite/<token>` con token
+  propio, y la cuenta se crea recién al activar (`createUser` confirmado, enmienda AUDIT §5.26).
+- **Descartados.** Custom SMTP en Supabase + plantillas a mano (sigue sin tests, sin `EmailLog` y con la Site URL en el
+  medio); SDK de Resend (dependencia nueva para un POST); canjear en el GET (el escáner gasta el token).
+- **Consecuencias.**
+  - La Site URL y las plantillas de Supabase dejan de importar para los links; solo Google OAuth depende de la Site
+    URL y de las Redirect URLs (EXTERNAL-CONFIG §0.4).
+  - Cada envío queda en `EmailLog` (sin email en claro ni link) y el envío nunca tira: la action sigue y la UI dice si
+    salió. Sin dominio en Resend, prod cae a `log` y la UI de invitaciones ofrece copiar el link.
+  - Hay que mantener el contrato del fake de GoTrue (`tests/helpers/gotrue-fake.ts`, supuestos S1-S11) contra
+    Supabase real con `scripts/diagnose-auth.ts`: si GoTrue cambia, se corrige el fake y el puerto.
+  - Un mail nuevo = plantilla en `templates.ts` + `EmailKind` + `import "@/lib/email/log"` en el emisor.
+
+### ADR-008 — Un usuario, varios consultorios (status: ACCEPTED, IAM, 14-oct-2026; decisión 6 de Martin)
+
+- **Contexto.** `Practitioner.userId` era único global (AUDIT F-A9): un kine no podía ser profesional en dos
+  consultorios. Al aceptar una invitación de B, el kine de A quedaba con membresía sin `Practitioner` en B; `buildActor`
+  tiraba `no_membership` → layout → `/onboarding` → `/dashboard` → bucle. La cookie `kine_tenant` se leía como slug y
+  nadie la escribía: no había forma de elegir consultorio.
+- **Decisión.** M6 pasa `Practitioner` a **único por `(tenantId, userId)`** (DROP del único global aprobado, IAM-D2;
+  precedente M1) y `bootstrapTenant` toma un advisory lock por usuario. `kine_tenant` guarda el **tenantId** y se
+  **limpia en cada login** (`/api/auth/sign-in`, `/auth/callback`, `/auth/confirm`): con 2+ consultorios usables la app
+  pregunta «¿A qué consultorio querés entrar?» (`/elegir-consultorio`) y después se cambia con el selector del sidebar
+  (`switchTenant`, navegación dura para que realtime y avisos arranquen de cero). `UserPreferences.tenantId` no evita
+  la pregunta. El acceso se decide con la lógica pura de `lib/access-logic.ts` y nunca se confía en la cookie: una
+  membresía no usable se ignora.
+- **Descartados.** Un `Practitioner` compartido entre consultorios (mezcla agendas, franjas y servicios de dos
+  tenants bajo RLS); recordar el último consultorio sin preguntar (Martin pidió preguntar en cada login).
+- **Consecuencias.**
+  - Un usuario con un solo consultorio usable no ve ningún paso extra.
+  - Un miembro de A puede crear su propio consultorio B (IAM-D4) y aceptar invitaciones a otros.
+  - Suspender una membresía (`disabledAt`) solo afecta ese consultorio: la persona cae al otro o a `/sin-acceso`.
+  - El directorio público de profesionales (DIR, §19.7b del plan) se apoya en esto.
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the
@@ -988,8 +1130,9 @@ RSCs dropped the refreshed cookie, so long sessions logged out.
 code-verifier, now **httpOnly**, `Secure` in production and `SameSite=Lax`
 (`lib/supabase/cookie-options.ts`; the `@supabase/ssr` default was httpOnly
 false). `ks_recovery` (httpOnly, 15 min, HMAC-signed) only during a password
-recovery. `kine_tenant` is read and validated against memberships but no code
-writes it (no tenant switcher yet). No tracking/analytics cookies → no banner
+recovery. `kine_tenant` (httpOnly, 1 year, value = tenantId) is written by
+`/elegir-consultorio`, the sidebar switcher and invite acceptance, cleared on
+every login, and only honoured for a usable membership (IAM, ADR-008). No tracking/analytics cookies → no banner
 needed (list them in the privacy policy). Browser storage:
 `localStorage['kinesoft:tweaks']` and `kinesoft:agenda-visibility:<userId>`
 (agenda toggles). Agenda mode/zoom/favourites/location live server-side in

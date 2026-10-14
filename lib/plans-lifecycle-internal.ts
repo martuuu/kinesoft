@@ -254,10 +254,11 @@ export async function revalidateRefsForReactivationInTx(
   if (program.practitionerId) {
     const prac = await tx.practitioner.findFirst({
       where: { id: program.practitionerId, tenantId },
-      select: { user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true } } } } },
+      select: { user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true, disabledAt: true } } } } },
     });
     const m = prac?.user.memberships[0];
-    if (!m || m.acceptedAt == null || !capabilitiesFor(m.role).has("plans.manage")) {
+    // IAM-4b: un responsable suspendido tampoco (igual que validatePlanRefsInTx).
+    if (!m || m.acceptedAt == null || m.disabledAt != null || !capabilitiesFor(m.role).has("plans.manage")) {
       throw new PlanLifecycleRejected(PLAN_REACTIVATE_COPY.practitioner, "practitionerId");
     }
   }

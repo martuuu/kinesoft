@@ -19,7 +19,7 @@ import "server-only";
 import { z } from "zod";
 import type { ProgramPhase } from "@prisma/client";
 import type { DbClient } from "@/lib/rls";
-import type { Actor } from "@/lib/session";
+import { requireActorPractitionerId, type Actor } from "@/lib/session";
 import { PlanCreateInputSchema } from "@/lib/plans-schemas";
 import { PLAN_MAX_SESSIONS } from "@/lib/plans-constants";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
@@ -210,7 +210,9 @@ export function clinicalCaseHook(o: {
     const c = await tx.clinicalCase.create({
       data: {
         tenantId: o.actor.tenantId,
-        authorId: o.actor.practitionerId,
+        // IAM-4a: `ClinicalCase.authorId` es NOT NULL → Practitioner. Camino solo clínico (`assertPlanManageInTx`:
+        // `plans.manage` + `clinical.read` + full): un rol sin profesional no llega; si llegara, 403.
+        authorId: requireActorPractitionerId(o.actor),
         patientId: o.patientId,
         selectedZones: o.selection.regions,
         refinements: {

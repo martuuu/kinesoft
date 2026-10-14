@@ -32,6 +32,7 @@ import {
   type RevenueSummary,
 } from "@/lib/dashboard-revenue";
 import type { ActionResult } from "@/lib/validation";
+import type { Prisma } from "@prisma/client";
 
 function startOfDay(d: Date) {
   // AR midnight of the AR day containing `d`, anchored to the business tz
@@ -140,6 +141,12 @@ type DashboardCounts = Omit<
 };
 
 /**
+ * IAM-4a: token de scope de un actor SIN profesional (Secretaria, Facturación) que tampoco «ve todo». No choca con
+ * un id real (los ids son cuid) ni con `"all"`. Va en la clave del cache como cualquier scope.
+ */
+const NO_PRACTITIONER_SCOPE = "no-practitioner";
+
+/**
  * Heavy DB work — wrapped in `unstable_cache` so repeated dashboard hits
  * within `ttl.micro` (60s) re-use the result. Cache key includes
  * `tenantId + scope + dayKey`; the scope token captures whether the
@@ -176,10 +183,20 @@ const _loadDashboardCounts = unstable_cache(
 
     const seesAll = scope === "all";
     const none = <T,>(v: T) => Promise.resolve(v);
-    const bookingWhere = seesAll ? {} : { practitionerId: scope };
-    const patientWhere = seesAll
+    // IAM-4a: sin profesional, condiciones imposibles (no `IS NULL`): los KPIs «propios» valen 0.
+    const noPractitioner = scope === NO_PRACTITIONER_SCOPE;
+    const bookingWhere: Prisma.BookingWhereInput = seesAll
       ? {}
-      : { OR: [{ assignedPractitionerId: scope }, { assignedPractitionerId: null }] };
+      : noPractitioner
+        ? { id: { in: [] } }
+        : { practitionerId: scope };
+    // El `assignedPractitionerId: null` de acá es a propósito (pacientes «del consultorio» que todo profesional
+    // cuenta), y solo con un profesional real: nunca como sustituto de un actor sin profesional.
+    const patientWhere: Prisma.PatientWhereInput = seesAll
+      ? {}
+      : noPractitioner
+        ? { id: { in: [] } }
+        : { OR: [{ assignedPractitionerId: scope }, { assignedPractitionerId: null }] };
 
     const [
       todayCount,
@@ -434,7 +451,10 @@ export async function getDashboardData(): Promise<DashboardData> {
   const v = await visibilityForActor(actor);
   const now = new Date();
   const dayKey = toARDateKey(now);
-  const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId;
+  // IAM-4a: sin «ver todo» y sin profesional (Secretaria, Facturación) → `NO_PRACTITIONER_SCOPE`: ningún turno
+  // ni paciente «propio». Antes el scope era el `practitionerId` del actor y con `null` el `{ practitionerId: null }`
+  // de los turnos tiraba en Prisma (y `assignedPractitionerId: null` habría contado todo lo sin asignar).
+  const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId ?? NO_PRACTITIONER_SCOPE;
   const withPlans = modulesFor(actor.entitlements).has("planes");
 
   // Per-tenant cache via dynamically tagged wrapper. The static

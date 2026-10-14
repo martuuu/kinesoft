@@ -697,3 +697,49 @@ describe("buildRoomColumns · capacidad, estados y 'Sin sala'", () => {
     expect(c).toMatchObject({ used: 0, state: "libre", total: 0 });
   });
 });
+
+describe("[IAM-4b] columna «Otros» en «Día por profesional»", () => {
+  // Turno viejo asignado a la Secretaria (antes de IAM-2e toda membresía tenía
+  // Practitioner). Desde 2e la Secretaria no tiene columna (no es reservable):
+  // sin la columna «Otros» el turno desaparecía de la vista.
+  const opts = { dayKey: DAY, zoom: 30 as const, ranges: { p1: range8to19 }, capOf, now: NOW };
+
+  it("[IAM-4b] un turno viejo de la Secretaria (sin columna) cae en «Otros», no desaparece", () => {
+    const mine = bk("10:00");
+    const orphan = bk("07:00", { practitionerId: "secretaria", serviceId: OSTEO });
+    const orphanCancelled = bk("12:00", { practitionerId: "secretaria", status: "CANCELLED" });
+    const tomorrow = { ...bk("10:00", { practitionerId: "secretaria" }), scheduledFor: ar("10:00", "2026-10-06") };
+    const layout = buildPractitionerColumns([P1], [mine, orphan, orphanCancelled, tomorrow], {
+      ...opts,
+      othersColumn: true,
+    });
+    const ids = layout.columns.map((c) => c.practitionerId);
+    expect(ids).toEqual(["p1", agendaLayout.OTHERS_COLUMN_ID]);
+    const others = layout.columns[1];
+    expect(others.name).toBe(agendaLayout.OTHERS_COLUMN_NAME);
+    // El MISMO objeto del caller, en su celda; la ventana se estira a las 7.
+    expect(cell(others.slots, "07:00").bookings[0]).toBe(orphan);
+    expect(layout.window.startMin).toBe(7 * 60);
+    expect(others.bookingCount).toBe(1);
+    // Sin franjas ni cupo: no inventa un «lleno» mezclando profesionales.
+    expect(others.slots.every((s) => s.outOfHours && s.cap === null)).toBe(true);
+    // El profesional real no se mezcla con los huérfanos.
+    expect(layout.columns[0].bookingCount).toBe(1);
+  });
+
+  it("[IAM-4b] sin huérfanos del día no aparece la columna; sin la opción, como siempre", () => {
+    const orphan = bk("10:00", { practitionerId: "secretaria" });
+    expect(buildPractitionerColumns([P1], [bk("10:00")], { ...opts, othersColumn: true }).columns).toHaveLength(1);
+    expect(buildPractitionerColumns([P1], [orphan], opts).columns.map((c) => c.practitionerId)).toEqual(["p1"]);
+  });
+
+  it("[IAM-4b] un bloqueo de «todos» no tapa la columna «Otros» (no es una agenda)", () => {
+    const orphan = bk("10:00", { practitionerId: "secretaria" });
+    const blocks: LayoutBlock[] = [
+      { id: "blk", practitionerId: null, startsAt: ar("09:00"), endsAt: ar("12:00"), allDay: false, reason: "Feriado" },
+    ];
+    const { columns } = buildPractitionerColumns([P1], [orphan], { ...opts, blocks, othersColumn: true });
+    expect(cell(columns[0].slots, "10:00").blocked).toBe(true);
+    expect(columns[1].slots.some((s) => s.blocked)).toBe(false);
+  });
+});

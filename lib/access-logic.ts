@@ -33,8 +33,9 @@ type TenantPref = { cookieTenantId?: string | null; preferredTenantId?: string |
 
 /**
  * Aceptada, sin `disabledAt` y, si hace falta, con `Practitioner`. Hace falta
- * para los roles clínicos siempre, y para todos mientras
- * `PRACTITIONER_FOR_ALL_ROLES` (hoy el Actor exige `practitionerId`).
+ * para los roles clínicos siempre. Desde IAM-4a `PRACTITIONER_FOR_ALL_ROLES`
+ * es `false`: la Secretaria y Facturación son usables sin `Practitioner` (el
+ * Actor los admite con `practitionerId: null`).
  */
 export function isUsableMembership(m: MembershipLite, opts?: AccessOpts): boolean {
   if (!m.acceptedAt) return false;

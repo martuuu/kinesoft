@@ -12,7 +12,10 @@
  *      per-patient PatientShare grants.
  *   3. **Owner** (`Patient.assignedPractitionerId == actor.practitionerId`)
  *      → FULL access. Sprint 16 dropped the "null = consultorio común"
- *      semantic; every patient now has exactly one owner.
+ *      semantic; every patient now has exactly one owner. IAM-4a: un actor
+ *      sin profesional (`practitionerId` null: rol no clínico) nunca es
+ *      dueño: la comparación va por `isActorPractitioner`, que no matchea
+ *      `null === null` contra un paciente sin asignar.
  *   4. **Explicit share** (`PatientShare` row with
  *      `(patientId, practitionerId = actor.practitionerId)`) → FULL access.
  *   5. **Otherwise** → BASIC access: the patient row appears in the
@@ -66,6 +69,7 @@ import { withTenantDb, type DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 import type { Prisma, Role } from "@prisma/client";
 import { capabilitiesFor, type PatientAccessLevel } from "@/lib/capabilities";
+import { isActorPractitioner } from "@/lib/practitioner-scope";
 
 /**
  * = `PatientAccessLevel` de `lib/capabilities.ts` (el puro que importa la UI):
@@ -199,13 +203,17 @@ export const patientAccessFor = cache(
       // PD-13: antes que sharedPatientView / asignación / share, que darían full.
       if (isAdminOnlyRole(role)) return "admin";
       if (tenant?.sharedPatientView) return "full";
-      if (patient.assignedPractitionerId === actor.practitionerId) return "full";
+      // IAM-4a: sin profesional (no debería pasar con un rol clínico: `buildActor` lo exige) no hay «propio» ni
+      // share posible. Nunca `null === null` contra un paciente sin asignar.
+      const pid = actor.practitionerId;
+      if (!pid) return "basic";
+      if (isActorPractitioner(actor, patient.assignedPractitionerId)) return "full";
 
       const share = await c.patientShare.findUnique({
         where: {
           patientId_practitionerId: {
             patientId,
-            practitionerId: actor.practitionerId,
+            practitionerId: pid,
           },
         },
         select: { id: true },
@@ -258,19 +266,21 @@ export async function bulkPatientAccess(
     }
 
     // Practitioner: full for owned + explicitly shared, basic otherwise.
+    // IAM-4a: sin profesional, todo básico (ni «propios» por `null === null` ni query de shares).
+    const pid = actor.practitionerId;
     const ownedIds = new Set(
       patients
-        .filter((p) => p.assignedPractitionerId === actor.practitionerId)
+        .filter((p) => isActorPractitioner(actor, p.assignedPractitionerId))
         .map((p) => p.id)
     );
     const otherIds = patients.filter((p) => !ownedIds.has(p.id)).map((p) => p.id);
 
     const shareRows =
-      otherIds.length > 0
+      pid && otherIds.length > 0
         ? await c.patientShare.findMany({
             where: {
               patientId: { in: otherIds },
-              practitionerId: actor.practitionerId,
+              practitionerId: pid,
             },
             select: { patientId: true },
           })

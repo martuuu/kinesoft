@@ -2,9 +2,10 @@
  * Qué `Practitioner` es reservable (IAM-0c, C-IAM2). Puro: devuelve un
  * fragmento `where` de Prisma, sin importar el cliente.
  *
- * Por qué: `acceptInvite` le crea `Practitioner` + agenda a TODA membresía,
- * así que hoy la Secretaria aparece en la agenda, el turnero y la
- * disponibilidad como si atendiera (§19.1 punto 1). Decisión de Martin
+ * Por qué: hasta IAM-4a `acceptInvite` le creaba `Practitioner` + agenda a
+ * TODA membresía, así que la Secretaria aparecía en la agenda, el turnero y la
+ * disponibilidad como si atendiera (§19.1 punto 1). Desde IAM-4a ya no se le
+ * crea, pero las filas viejas quedan: este filtro sigue siendo la barrera. Decisión de Martin
  * (§19.2 decisión 2): Secretaria = staff sin agenda; igual Facturación.
  * Reservable = tiene membresía ACEPTADA en ESE consultorio con rol clínico.
  * IAM-2e lo enchufa en los 8 lugares que listan profesionales.
@@ -26,13 +27,55 @@ export function bookablePractitionerWhere(
     role: { in: [...CLINICAL_ROLES] },
   };
   if (opts?.includeDisabledFilter) {
-    // `Membership.disabledAt` (M6, IAM-1). Sigue opt-in: nadie suspende
-    // todavía (IAM-4c) y los 8 lugares que listan profesionales lo enchufan
-    // en IAM-2e.
+    // `Membership.disabledAt` (M6, IAM-1): lo escribe `suspendMember` (IAM-4c) y lo
+    // enchufan los 8 lugares que listan profesionales (IAM-2e).
     membership.disabledAt = null;
   }
   return {
     tenantId,
     user: { memberships: { some: membership } },
   };
+}
+
+/*
+ * ── Actor sin profesional (IAM-4a) ────────────────────────────────────────
+ *
+ * Desde IAM-4a `Actor.practitionerId` es `null` para los roles no clínicos
+ * (Secretaria, Facturación). Lo que `tsc` NO ve: contra una columna nullable
+ * (`Patient.assignedPractitionerId`, `TimeBlock.practitionerId` = «todos»)
+ * `{ col: actor.practitionerId }` con `null` compila a `IS NULL`, y
+ * `row.col === actor.practitionerId` da `null === null`: el actor sin
+ * profesional quedaría «dueño» de todo lo SIN asignar. Contra una columna NOT
+ * NULL (o una relación como `shares.some.practitionerId`) Prisma tira en
+ * runtime. Todo `where`/comparación con el profesional del actor pasa por
+ * acá; el guard estático `tests/unit/actor-practitioner-guard.test.ts` lo
+ * exige. Toman `{ practitionerId }` y no el `Actor` para seguir puros (sin
+ * arrastrar `lib/session.ts`).
+ */
+
+type WithPractitioner = { practitionerId: string | null };
+
+/**
+ * Condición que no matchea ninguna fila. `id IN ()` → Prisma 5 lo resuelve
+ * sin ir a la base (o con `1=0`), y combina bien dentro de `AND`/`OR`.
+ */
+const NO_PATIENT: Prisma.PatientWhereInput = { id: { in: [] } };
+
+/**
+ * Pacientes «propios» del actor: asignados a su profesional o compartidos con
+ * él (`PatientShare`). Sin profesional → condición IMPOSIBLE (nunca
+ * `assignedPractitionerId IS NULL`).
+ */
+export function ownPatientsWhere(actor: WithPractitioner): Prisma.PatientWhereInput {
+  const pid = actor.practitionerId;
+  if (!pid) return NO_PATIENT;
+  return { OR: [{ assignedPractitionerId: pid }, { shares: { some: { practitionerId: pid } } }] };
+}
+
+/**
+ * ¿`practitionerId` es el profesional del actor? `false` si el actor no tiene
+ * profesional o si el valor comparado es null (nunca `null === null`).
+ */
+export function isActorPractitioner(actor: WithPractitioner, practitionerId: string | null | undefined): boolean {
+  return actor.practitionerId !== null && !!practitionerId && practitionerId === actor.practitionerId;
 }

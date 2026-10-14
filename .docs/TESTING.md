@@ -231,6 +231,36 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
   mutada (policy `FOR ALL`, `SECURITY DEFINER`, `NEXT_PUBLIC_` en el secreto, write-path sin hook, import estático de
   realtime-js) sin tocar el repo. Corre dentro de `npm run guard:isolation`.
 
+### Patrones nuevos de IAM (Identidad y acceso, 14-oct-2026)
+
+- **Fake de GoTrue** (`tests/helpers/gotrue-fake.ts`): implementa `AuthAdminPort` en memoria (usuarios, links
+  emitidos, `email_exists`, `failNext`, registro a mano de `calls`). Se inyecta con
+  `__setAuthAdminForTests(fake)` y se limpia en el `afterEach` con `__setAuthAdminForTests(null)`. Cada supuesto
+  sobre GoTrue está marcado **[S1]…[S11]** en el archivo y lo verifica `scripts/diagnose-auth.ts` contra Supabase real
+  (lo corre Martin). Si un supuesto cae, se corrige el fake y el puerto, **no el test**. Sin fake, el puerto devuelve
+  `code: "config"` (el setup de integración mockea `getSupabaseAdminClient` a `null`).
+- **Transporte de mail de test + sink de `EmailLog`:** `__setEmailTransportForTests(fn)` (`lib/email/index.ts:65`)
+  reemplaza solo el despacho; normalización, log y el sink a `EmailLog` siguen corriendo, así el test afirma el mail
+  (kind, destinatario, link a `/auth/confirm` con el `next` esperado) **y** la fila de `EmailLog` (`emailToHash`, sin
+  email en claro ni link). Patrón en `tests/integration/team-admin.test.ts`, `invitations-email.test.ts`,
+  `portal-auth.test.ts`, `signup.test.ts`. Los transportes reales (Resend/Mailpit) se prueban en unit con
+  `tests/helpers/email-fetch-fake.ts` (body JSON y headers de respuesta, respeta `signal`).
+- **Guards estáticos de identidad** (unit, sin DB):
+  - `tests/unit/email-match.test.ts` — ningún `email: { equals, mode: "insensitive" }` a mano en `lib/`/`app/`
+    (con canario del detector).
+  - `tests/unit/email-confirm-guard.test.ts` — `email_confirm: true` / `emailConfirm: true` solo en la activación, el
+    puerto, `create-tenant` y `diagnose-auth` (AUDIT §5.26).
+  - `tests/unit/actor-practitioner-guard.test.ts` — `actor.practitionerId` nunca crudo en un `where`, en `===`/`!==`
+    contra algo que no sea `null` ni en SQL; más los helpers (`ownPatientsWhere`, `isActorPractitioner`,
+    `revenueScopeFor`, `canManageBlocksFor`) con `null`.
+  - `tests/integration/invitations-email.test.ts` — `lib/invitations.ts` sin cliente admin ni `inviteUserByEmail`;
+    `signup.test.ts` afirma que no se llama `auth.signUp` ni `resetPasswordForEmail`.
+- **Lógica de acceso pura** (`lib/access-logic.ts`, `tests/unit/access-logic.test.ts`): `resolveAccessState` y
+  `chooseActiveTenant` se prueban por tabla (aceptada/pendiente/suspendida × con/sin `Practitioner` × rol); el bucle
+  [A] quedó como caso «kine de A acepta B» en `tests/integration/access-loop.test.ts`.
+- **M6 objeto por objeto:** `tests/integration/identity-m6.test.ts` (índices de `Practitioner`, columnas nuevas,
+  `EmailLog` con RLS) en los 2 roles; mismo molde que `rooms-m4` y `reception-call-m5`.
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el
@@ -333,6 +363,10 @@ Corren en CI **sin levantar DB ni server**, parseando el repo. Sesión `ci-pipel
   policy `FOR SELECT TO authenticated` sobre `realtime.messages`, la función pura sin `SECURITY DEFINER` ni GRANT a
   los roles de la Data API, todo write-path de `Booking` emite, secretos server-only y realtime-js solo por `import()`
   dinámico. Detalle en [SECURITY.md §17](SECURITY.md).
+- **Guards de identidad (IAM)** — corren dentro de `TZ=UTC npm test` (unit), no en `guard:isolation`:
+  `email-match`, `email-confirm-guard` y `actor-practitioner-guard` (ver «Patrones nuevos de IAM»). Faltan como guard
+  estático `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` (AUDIT
+  `guard-auth-admin-y-getuser`, BO).
 
 ---
 

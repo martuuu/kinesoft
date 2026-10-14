@@ -154,7 +154,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     return db.membership.findMany({ where: { user: { email: email.toLowerCase() } } });
   }
 
-  it("[IAM-2b] el invitado crea su cuenta desde el link (atómico: Auth confirmado, perfil, membresía, profesional con agenda, invitación aceptada)", async () => {
+  it("[IAM-2b] el invitado crea su cuenta desde el link (atómico: Auth confirmado, perfil, membresía, invitación aceptada; Secretaria sin profesional desde IAM-4a)", async () => {
     // El link usado es uno ANTERIOR reenviado (priorTokens): tiene que valer igual.
     const prior = rawToken();
     const inv = await invite(B, { email: uniqEmail("Act").replace("iam2b", "IAM2B"), role: "ASSISTANT", prior });
@@ -179,11 +179,10 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     const m = await db.membership.findUnique({ where: { userId_tenantId: { userId: r.userId, tenantId: B.tenantId } } });
     expect(m?.role).toBe("ASSISTANT");
     expect(m?.acceptedAt).not.toBeNull();
-    // Hoy toda membresía lleva Practitioner (PRACTITIONER_FOR_ALL_ROLES), con la agenda del consultorio.
-    const prac = await db.practitioner.findUnique({ where: { tenantId_userId: { tenantId: B.tenantId, userId: r.userId } } });
-    expect(prac?.specialty).toBe("Kinesiología");
-    expect(await db.practitionerSchedule.count({ where: { practitionerId: prac!.id } })).toBeGreaterThan(0);
-    expect(await db.practitionerService.count({ where: { practitionerId: prac!.id } })).toBeGreaterThan(0);
+    // IAM-4a: la Secretaria es staff sin agenda (§19.2 decisión 2): sin Practitioner ni franjas. El caso del kine
+    // (con Practitioner y agenda) está en tests/integration/actor-sin-profesional.test.ts.
+    expect(await db.practitioner.count({ where: { tenantId: B.tenantId, userId: r.userId } })).toBe(0);
+    expect(await db.practitionerSchedule.count({ where: { tenantId: B.tenantId, practitioner: { userId: r.userId } } })).toBe(0);
     const row = await db.invitation.findUniqueOrThrow({ where: { id: inv.id } });
     expect(row.acceptedAt).not.toBeNull();
     expect(row.acceptedByUserId).toBe(r.userId);

@@ -459,10 +459,14 @@ describe.skipIf(!RUN)("loadAvailabilityInputs (B2.2)", () => {
     expect(onlyB.bookings).toEqual([]);
   });
 
-  it("practitionerIds explícito: valida contra el tenant, no exige membresía aceptada; [] = ninguno", async () => {
+  // IAM-4b: cambia el contrato de B2.2 («con ids explícitos no exige membresía
+  // aceptada»). Un id explícito pasa por `bookablePractitionerWhere`, igual que
+  // «todos»: la Secretaria, un suspendido o un pendiente pedidos por id
+  // ofrecían slots con el horario de fallback del consultorio.
+  it("[IAM-4b] practitionerIds explícito: solo reservables (un pendiente no trae plantilla ni bloqueos); [] = ninguno", async () => {
     const r = await loadBoth({ tenantId: A.tenantId, practitionerIds: [pPending], from: FROM, to: TO });
-    expect(r.templates.map((t) => t.practitionerId)).toEqual([pPending]);
-    expect(r.blocks.map((b) => b.id)).toContain(ids.blkPending);
+    expect(r.templates).toEqual([]);
+    expect(r.blocks.map((b) => b.id)).not.toContain(ids.blkPending);
     const none = await loadBoth({ tenantId: A.tenantId, practitionerIds: [], from: FROM, to: TO });
     expect(none.templates).toEqual([]);
     expect(none.bookings).toEqual([]);

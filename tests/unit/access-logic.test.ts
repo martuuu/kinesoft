@@ -44,8 +44,16 @@ describe("[IAM-0c] isUsableMembership", () => {
     const { disabledAt: _omit, ...rest } = m({ tenantId: "A" });
     expect(isUsableMembership(rest)).toBe(true);
   });
-  it("sin Practitioner, por defecto (practitionerForAllRoles = true) → no usable para NINGÚN rol", () => {
+  it("sin Practitioner, con practitionerForAllRoles = true (antes de IAM-4a) → no usable para NINGÚN rol", () => {
     for (const role of ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+      expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }), { practitionerForAllRoles: true })).toBe(false);
+    }
+  });
+  it("[IAM-4a] por defecto (PRACTITIONER_FOR_ALL_ROLES = false): Secretaria y Facturación usables sin Practitioner; los clínicos no", () => {
+    for (const role of ["ASSISTANT", "BILLING"] as const) {
+      expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }))).toBe(true);
+    }
+    for (const role of ["OWNER", "ADMIN", "PRACTITIONER"] as const) {
       expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }))).toBe(false);
     }
   });
@@ -79,8 +87,9 @@ describe("[IAM-0c] chooseActiveTenant / resolveAccessState: el bucle de §19.1",
     expect(resolveAccessState(kineAAceptaB, pref)).toEqual({ kind: "ok", tenantId: "A" });
   });
 
-  it("kine de A que acepta B como Secretario/a, cuando IAM-4 apague practitionerForAllRoles: B ya es usable", () => {
+  it("kine de A que acepta B como Secretario/a (IAM-4a apagó practitionerForAllRoles): B ya es usable", () => {
     const ms = [kineAAceptaB[0], { ...kineAAceptaB[1], role: "ASSISTANT" as const }];
+    expect(chooseActiveTenant(ms, NO_PREF)).toBe("B");
     expect(chooseActiveTenant(ms, NO_PREF, { practitionerForAllRoles: false })).toBe("B");
     // …pero como kinesiólogo/a en B sigue sin Practitioner: A.
     expect(chooseActiveTenant(kineAAceptaB, NO_PREF, { practitionerForAllRoles: false })).toBe("A");

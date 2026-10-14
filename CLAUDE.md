@@ -43,6 +43,12 @@
     en el plan §18.14) son decisiones con default (no las PD/PQ de Planes); «C-EV1..9» y «C-SV1..10» son contratos de
     EV0 y de SV (no los C1-C14 de Planes). «V1-V7» y «R1-R4» son las verificaciones y prechecks de SV en Supabase
     ([.docs/EXTERNAL-CONFIG.md](.docs/EXTERNAL-CONFIG.md) §3.1).
+  - «IAM-0..4» son las olas del bloque **Identidad y acceso** (14-oct, plan §19.4; sesiones IAM-0a..4c, cierre
+    IAM-Z): no tienen nada que ver con la «IA» de diagnóstico del bloque E. «C-IAM1..7» son sus contratos,
+    «IAM-D1..D12» sus decisiones con default y «S1..S11» los supuestos del fake de GoTrue
+    (`tests/helpers/gotrue-fake.ts`, los verifica `scripts/diagnose-auth.ts`). «M6» = `identity_access` (IAM-1).
+    «BO» = back-office de Plataforma (bloque siguiente; «BO0..BO5» sus olas, «M7» = `platform_backoffice`, «BO-D*»
+    sus decisiones). «VX» = cara pública y pulido visual; «DIR» = directorio público de consultorios (diferido).
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.

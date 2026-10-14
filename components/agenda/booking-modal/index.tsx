@@ -113,7 +113,7 @@ import {
 } from "@/lib/booking-modal-state";
 import type { Props } from "../agenda-client";
 import { Select } from "../controls";
-import { ServiceSection } from "./service-section";
+import { ServiceSection, initialPractitionerId } from "./service-section";
 import { PatientSection } from "./patient-section";
 import { BillingSection } from "./billing-section";
 import { ScheduleSection } from "./schedule-section";
@@ -286,11 +286,10 @@ export function BookingModal({
   // Profesional por defecto (A2b-S-ui): filtro de la agenda → el del usuario →
   // el primero. Antes siempre era el primero de la lista y la secretaria que
   // estaba mirando la agenda de otro kine le cargaba el turno al equivocado.
-  const [practitionerId, setPractitionerId] = useState<string>(
-    () =>
-      (defaultPractitionerId && practitioners.some((p) => p.id === defaultPractitionerId)
-        ? defaultPractitionerId
-        : practitioners[0]?.id) ?? ""
+  // IAM-4b: sin default válido y con varios profesionales, ninguno (obliga a
+  // elegir; ver `initialPractitionerId`).
+  const [practitionerId, setPractitionerId] = useState<string>(() =>
+    initialPractitionerId(defaultPractitionerId, practitioners)
   );
   const [serviceId, setServiceId] = useState("");
   // Duración: `null` = la del profesional para el servicio (no se manda; el
@@ -597,6 +596,13 @@ export function BookingModal({
     setError(null);
     setInlineErrors({});
     clearPrompts();
+    // IAM-4b: sin profesional elegido no se manda nada (y antes de crear la
+    // ficha inline, que quedaría asignada a nadie). El select es `required`;
+    // esto cubre el submit sin validación nativa.
+    if (!practitionerId) {
+      setError("Elegí el profesional del turno.");
+      return;
+    }
     // El link de telemedicina se valida ANTES de crear la ficha del paciente
     // inline: si no, un link mal escrito dejaba la ficha creada y el turno no.
     if (urlError) {
@@ -777,6 +783,12 @@ export function BookingModal({
                 value={practitionerId}
                 onChange={onPractitionerChange}
               >
+                {/* IAM-4b: sin elegir (Secretaria sin filtro), placeholder en vez de mostrar el primero. */}
+                {practitionerId === "" && (
+                  <option value="" disabled>
+                    — Elegí un profesional —
+                  </option>
+                )}
                 {practitioners.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -871,7 +883,7 @@ export function BookingModal({
             onInstantStatus={onInstantStatus}
             // En «Bloquear horario» el form queda oculto: no pedir slots.
             slotPicker={
-              mode === "block" ? null : serviceId ? (
+              mode === "block" ? null : serviceId && practitionerId ? (
                 <SlotPicker
                   practitionerId={practitionerId}
                   serviceId={serviceId}
@@ -887,7 +899,9 @@ export function BookingModal({
                 />
               ) : (
                 <div style={{ fontSize: 12, color: "var(--navy-300)" }}>
-                  Elegí el servicio para ver los horarios libres.
+                  {practitionerId
+                    ? "Elegí el servicio para ver los horarios libres."
+                    : "Elegí el profesional y el servicio para ver los horarios libres."}
                 </div>
               )
             }

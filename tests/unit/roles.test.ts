@@ -96,7 +96,7 @@ describe("[IAM-0c] conjuntos de roles", () => {
     expect([...INVITABLE_ROLES]).toEqual(["PRACTITIONER", "ASSISTANT", "ADMIN", "BILLING"]);
   });
 
-  it("PRACTITIONER_FOR_ALL_ROLES sigue en true hasta IAM-4", () => {
-    expect(PRACTITIONER_FOR_ALL_ROLES).toBe(true);
+  it("[IAM-4a] PRACTITIONER_FOR_ALL_ROLES = false: solo los roles clínicos necesitan Practitioner", () => {
+    expect(PRACTITIONER_FOR_ALL_ROLES).toBe(false);
   });
 });

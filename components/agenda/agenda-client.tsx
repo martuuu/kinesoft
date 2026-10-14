@@ -28,6 +28,7 @@ import {
 } from "@/lib/agenda-filters";
 import {
   buildPractitionerColumns,
+  OTHERS_COLUMN_ID,
   practitionerInitials,
   practitionerOrder,
   type LayoutRange,
@@ -216,8 +217,10 @@ export type Props = {
    * recepción); `practitionerId` es el profesional por defecto del modal de
    * turno nuevo cuando no hay filtro de profesional. Opcional: sin él, la
    * clave es común y el modal cae al primer profesional de la lista.
+   * IAM-4a: `practitionerId` null = el usuario no atiende (Secretaria,
+   * Facturación): sin agenda propia ni profesional por defecto.
    */
-  viewer?: { userId: string; practitionerId: string } | null;
+  viewer?: { userId: string; practitionerId: string | null } | null;
   /** Capabilities del actor (`getCapabilities()` como ARRAY: cruza server→client). */
   capabilities?: string[] | null;
 } & Partial<AgendaBootstrapProps>;
@@ -849,6 +852,11 @@ export function AgendaClient(props: Props) {
         now: layoutNow,
         fallback: tenantWindow,
         locationId,
+        // IAM-4b: los turnos de quien no tiene columna (turnos viejos de la
+        // Secretaria, profesional suspendido) van a «Otros» en vez de
+        // desaparecer de la vista. Con chips elegidos no llegan acá (los
+        // filtra `applyAgendaFilters`).
+        othersColumn: true,
       }
     );
   }, [view, visiblePracs, visibleBookings, dayKey, prefs.zoom, rangesOf, blocks, capOf, layoutNow, tenantWindow, locationId]);
@@ -892,6 +900,9 @@ export function AgendaClient(props: Props) {
   // Profesional por defecto: el de la columna clickeada; si no, el único chip
   // elegido; si no, el del usuario (si está entre los elegidos o no hay
   // filtro); si no, el primero elegido.
+  // IAM-4a/4b: el usuario que no atiende (Secretaria, Facturación) no tiene
+  // `ownPractitionerId`: sin filtro queda null y el modal OBLIGA a elegir
+  // (`initialPractitionerId`), en vez de caer en silencio al primero.
   const defaultPractitionerId =
     selectedIds.length === 1
       ? selectedIds[0]
@@ -1074,11 +1085,24 @@ export function AgendaClient(props: Props) {
                   zoom={prefs.zoom}
                   density={prefs.density}
                   now={now}
-                  onSlotClick={(practitionerId, iso) => setCreating({ defaultISO: iso, practitionerId })}
+                  // IAM-4b: la columna «Otros» no es un profesional: el turno nuevo
+                  // sale sin profesional de columna (cae al default o hay que elegir).
+                  onSlotClick={(practitionerId, iso) =>
+                    setCreating(
+                      practitionerId === OTHERS_COLUMN_ID ? { defaultISO: iso } : { defaultISO: iso, practitionerId }
+                    )
+                  }
                   onBookingClick={setEditing}
                   highlight={highlight}
                   lockStateByPractitioner={availability ? lockStatesOf(dayKey) : undefined}
-                  onDayLockClick={canLockAny && availability ? (pid) => openDayLock(dayKey, pid) : undefined}
+                  onDayLockClick={
+                    canLockAny && availability
+                      ? (pid) =>
+                          pid === OTHERS_COLUMN_ID
+                            ? toast.info("«Otros» junta turnos de quien no tiene agenda: no se bloquea.")
+                            : openDayLock(dayKey, pid)
+                      : undefined
+                  }
                   roomById={cardRooms}
                 />
               )}
