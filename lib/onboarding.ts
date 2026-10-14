@@ -43,6 +43,19 @@ import { bootstrapTenant, OpenOnboardingExistsError } from "@/lib/tenant-bootstr
 import { getSessionUser, isPortalPatientIdentity, loadMemberships } from "@/lib/onboarding-internal";
 import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputType } from "@/lib/validation";
 
+/** Copy compartido de BO1-A para un usuario deshabilitado (mismo texto que /cuenta-desactivada). */
+const USER_DISABLED_ERROR = "Tu cuenta está desactivada. Si creés que es un error, escribinos a soporte.";
+
+/**
+ * BO1-A: `UserProfile.disabledAt` (M7) corta también el alta y la apertura de invitaciones. Sin esto, un usuario
+ * deshabilitado en la plataforma podía crearse un consultorio nuevo (o entrar a uno por invitación) y volver a
+ * tener Actor por la puerta de atrás. Canal service: todavía no hay Actor; el filtro es la sesión verificada.
+ */
+async function isUserDisabled(userId: string): Promise<boolean> {
+  const p = await prismaService.userProfile.findUnique({ where: { id: userId }, select: { disabledAt: true } });
+  return !!p?.disabledAt;
+}
+
 
 /** Paso 2: alta (o edición, si ya existe) del consultorio del usuario. */
 export async function saveOnboardingClinic(
@@ -56,6 +69,7 @@ export async function saveOnboardingClinic(
   if (!user.emailVerified) {
     return { ok: false, error: "Confirmá tu email antes de crear el consultorio. Revisá tu bandeja de entrada." };
   }
+  if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
 
   const parsed = OnboardingClinicInput.safeParse(raw);
   if (!parsed.success) {
@@ -310,6 +324,7 @@ export async function openPendingInvitation(invitationId: string): Promise<Actio
   const user = await getSessionUser();
   if (!user) return { ok: false, error: "Tu sesión expiró. Iniciá sesión de nuevo." };
   if (!user.emailVerified) return { ok: false, error: "Confirmá tu email primero." };
+  if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
   if (typeof invitationId !== "string" || !invitationId || invitationId.length > 64) {
     return { ok: false, error: "Invitación inválida." };
   }

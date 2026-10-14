@@ -233,8 +233,9 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
 }
 
 /** Solo valores primitivos (lo que escribe `applyTenantEntitlementsInTx`); cualquier otra cosa se descarta. */
-function primitive(v: unknown): string | boolean | null | undefined {
-  if (v === null || typeof v === "string" || typeof v === "boolean") return v;
+function primitive(v: unknown): string | boolean | number | null | undefined {
+  // BO1-B: `seatLimitOverride` es numérico; sin esto el cambio se veía como null en «Actividad».
+  if (v === null || typeof v === "string" || typeof v === "boolean" || typeof v === "number") return v;
   return undefined;
 }
 

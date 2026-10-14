@@ -8,6 +8,7 @@ export default function BookingError(props: {
 }) {
   return (
     <RouteError
+      kind="booking"
       {...props}
       title="No pudimos cargar la reserva"
     />

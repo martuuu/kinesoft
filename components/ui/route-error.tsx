@@ -1,26 +1,34 @@
 "use client";
 
 import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { reportClientError, type ClientErrorKind } from "@/lib/client-error-report";
 
 /**
- * Shared presentational error state for per-segment `error.tsx` boundaries.
- * Renders a Spanish, actionable message with a retry — never the raw
- * `error.message` (which can be a Prisma/DB string). Logs the digest to the
- * console so it's still diagnosable in prod.
+ * Estado de error compartido por los `error.tsx` de cada segmento.
+ *
+ * - Nunca muestra `error.message` (puede ser un string de Prisma/DB con datos); sí el `digest`, que es lo
+ *   que Next pone en el log del server para el mismo error: con ese código se lo encuentra en Vercel.
+ * - BO1-D: reporta el error al server UNA vez (`useEffect` + dedupe por objeto en `reportClientError`),
+ *   vía beacon, sin SDK de Sentry en el bundle (AUDIT §5.23). Antes solo hacía `console.error`, que en
+ *   prod no ve nadie.
  */
 export function RouteError({
   error,
   reset,
-  title = "No pudimos cargar esta sección",
+  title = "Algo salió mal",
+  kind = "route",
 }: {
   error: Error & { digest?: string };
   reset: () => void;
   title?: string;
+  kind?: ClientErrorKind;
 }) {
   useEffect(() => {
+    reportClientError(error, { kind });
     // eslint-disable-next-line no-console
     console.error("[route-error]", error?.digest ?? "", error);
-  }, [error]);
+  }, [error, kind]);
 
   return (
     <div
@@ -36,28 +44,20 @@ export function RouteError({
         textAlign: "center",
       }}
     >
-      <h2 className="k-display" style={{ fontSize: 22, margin: 0, color: "var(--navy-900, #0f1e33)" }}>
+      <h2 className="k-display" style={{ fontSize: 22, margin: 0, color: "var(--navy-900)" }}>
         {title}
       </h2>
-      <p style={{ fontSize: 14, color: "var(--navy-500, #51617a)", margin: 0, maxWidth: 380 }}>
-        Ocurrió un error al traer los datos. Puede ser algo temporal —
-        reintentá; si sigue, actualizá la página.
+      <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, maxWidth: 380 }}>
+        Probá de nuevo. Si sigue pasando, actualizá la página.
       </p>
-      <button
-        onClick={() => reset()}
-        style={{
-          padding: "10px 20px",
-          borderRadius: 10,
-          border: "none",
-          background: "var(--sky-700, #1f4fbe)",
-          color: "#fff",
-          fontSize: 14,
-          fontWeight: 600,
-          cursor: "pointer",
-        }}
-      >
+      <Button type="button" onClick={() => reset()}>
         Reintentar
-      </button>
+      </Button>
+      {error?.digest ? (
+        <p style={{ fontSize: 12, color: "var(--navy-400)", margin: 0 }}>
+          Código: <code style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{error.digest}</code>
+        </p>
+      ) : null}
     </div>
   );
 }

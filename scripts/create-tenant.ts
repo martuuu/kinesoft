@@ -12,7 +12,8 @@
  *      la misma lógica que el alta web): UserProfile + Tenant + Practitioner +
  *      Membership(OWNER) + Insurer "Particular" + AuditEvent. El alta queda
  *      completa (`onboardingCompletedAt`), así el OWNER no ve el stepper.
- *   3. Optional: seed a starter set of `Service` rows.
+ *   3. Optional: seed the starter `Service` rows of the vertical
+ *      (`starterServicesFor`, lib/tenant-starter-services.ts); `--skip-services` lo saltea.
  *
  * Idempotency: if the email already exists in Supabase Auth, we re-use
  * the existing user.id. If a tenant with the same slug already exists,
@@ -46,6 +47,7 @@
 import { PrismaClient, type TenantVertical } from "@prisma/client";
 import { bootstrapTenant, OpenOnboardingExistsError } from "../lib/tenant-bootstrap";
 import { enableServiceForPractitioners } from "../lib/agenda-defaults";
+import { starterServicesFor } from "../lib/tenant-starter-services";
 import { RESERVED_SLUGS, SLUG_RE } from "../lib/onboarding-logic";
 import { assertSafeTarget } from "./lib/assert-safe-target";
 import { createClient } from "@supabase/supabase-js";
@@ -250,11 +252,10 @@ async function main() {
   // ── Step 3 — Starter Services ───────────────────────────────────────
   if (!args.skipServices) {
     console.log("[3/3] Seeding starter services");
-    const starter = [
-      { name: "Consulta inicial", durationMin: 45, priceCents: 0 },
-      { name: "Sesión kinésica", durationMin: 45, priceCents: 0 },
-      { name: "RPG / Reeducación postural", durationMin: 60, priceCents: 0 },
-    ];
+    // BO1-C: los servicios iniciales dependen de la vertical
+    // (lib/tenant-starter-services.ts). Antes eran 3 fijos de kine, también en
+    // un consultorio General. Precio 0: el arancel lo carga el consultorio.
+    const starter = starterServicesFor(args.vertical);
     for (const s of starter) {
       const exists = await prisma.service.findFirst({
         where: { tenantId, name: s.name },
@@ -270,7 +271,7 @@ async function main() {
         await enableServiceForPractitioners(tx, { tenantId, serviceId: svc.id, practitionerId: null });
       });
     }
-    console.log(`    Seeded ${starter.length} services (skip with --skip-services).`);
+    console.log(`    Seeded ${starter.length} services for ${args.vertical} (skip with --skip-services).`);
   } else {
     console.log("[3/3] Skipping starter services (--skip-services).");
   }

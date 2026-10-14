@@ -71,7 +71,7 @@ export function auditKeyLabel(key: string): string {
  * label; un valor que no reconocemos (enum nuevo, payload viejo) se muestra
  * crudo en vez de esconderse: es un log de auditoría.
  */
-export function formatAuditValue(key: string, v: string | boolean | null): string {
+export function formatAuditValue(key: string, v: string | boolean | number | null): string {
   if (key === "trialEndsAt") {
     if (v === null) return "Sin trial";
     if (typeof v !== "string") return String(v);
@@ -82,6 +82,8 @@ export function formatAuditValue(key: string, v: string | boolean | null): strin
   // Hoy el único booleano auditado es `publicBookingEnabled` (Turnos online):
   // "Activo"/"Apagado", el mismo par que la lista y el detalle.
   if (typeof v === "boolean") return v ? "Activo" : "Apagado";
+  // BO1-B: cupo de profesionales (`seatLimitOverride`).
+  if (typeof v === "number") return String(v);
   if (key === "vertical") return VERTICAL_LABEL[v as keyof typeof VERTICAL_LABEL] ?? v;
   if (key === "plan") return PLAN_LABEL[v as keyof typeof PLAN_LABEL] ?? v;
   if (key === "subscriptionStatus") return SUBSCRIPTION_STATUS_LABEL[v as SubscriptionStatus] ?? v;

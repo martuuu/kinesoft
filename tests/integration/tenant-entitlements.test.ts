@@ -15,11 +15,21 @@
  *     del superadmin); sin cambios no hay audit;
  *   - `getTenantModulesById` (superficies sin Actor) refleja vertical/plan/switch.
  *
+ * BO1-B (C-BO6): `platform` además escribe `status` y `seatLimitOverride` (ninguna
+ * otra source: `status` suspende o da de baja un consultorio), el escritor estampa
+ * `statusChangedAt` / `subscriptionStatusChangedAt` solo cuando el valor cambia de
+ * verdad (la gracia de PAST_DUE se cuenta desde ahí, C-BO1), y el audit de
+ * plataforma es DOBLE (C-BO5): `platform.tenant.entitlements` en el afectado + la
+ * fila global `PlatformAuditEvent`. Como esa tabla es SERVICE_ONLY (M7), la source
+ * `platform` corre en una tx del canal service (`platformTx`), igual que
+ * `lib/platform-tenants.ts`; las demás, con `runWithRls` del propio consultorio.
+ *
  * Se afirma el efecto observable leyendo con una conexión owner aparte.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
+import { prismaService } from "@/lib/db";
 import {
   applyTenantEntitlementsInTx,
   getTenantModulesById,
@@ -65,12 +75,16 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       where: { tenantId, action: { in: ["tenant.entitlements", "platform.tenant.entitlements"] } },
       orderBy: { createdAt: "asc" },
     });
-  const platformActor = () => ({ userId: H.userId, homeTenantId: H.tenantId });
+  const platformActor = () => ({ userId: H.userId, email: null, homeTenantId: H.tenantId });
+  /** /plataforma escribe por el canal service: `PlatformAuditEvent` no admite al rol app (SERVICE_ONLY). */
+  const platformTx = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) => prismaService.$transaction(fn);
+  const globalRows = (tenantId: string, action: string) =>
+    db.platformAuditEvent.findMany({ where: { tenantId, action }, orderBy: { createdAt: "asc" } });
   const ownerActor = () => ({ userId: T.userId, homeTenantId: T.tenantId });
 
   it("allowlist literal por source (C-EV5)", () => {
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.platform].sort()).toEqual(
-      ["plan", "publicBookingEnabled", "subscriptionStatus", "trialEndsAt", "vertical"].sort()
+      ["plan", "publicBookingEnabled", "seatLimitOverride", "status", "subscriptionStatus", "trialEndsAt", "vertical"].sort()
     );
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.billing].sort()).toEqual(["plan", "subscriptionStatus", "trialEndsAt"].sort());
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.onboarding]).toEqual(["vertical"]);
@@ -80,7 +94,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   it("CAS stale: expectedUpdatedAt viejo → {ok:false, stale} y nada escrito (ni audit)", async () => {
     const before = await row(T.tenantId);
     const auditsBefore = (await entAudits(T.tenantId)).length;
-    const r = await runWithRls(T.tenantId, (tx) =>
+    const r = await platformTx((tx) =>
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
@@ -185,7 +199,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   it("platform, cambio real → escribe, devuelve el updatedAt nuevo y audita en el AFECTADO (ninguno en el home del actor)", async () => {
     const before = await row(T.tenantId);
     const trial = new Date("2026-11-30T03:00:00.000Z");
-    const r = await runWithRls(T.tenantId, (tx) =>
+    const r = await platformTx((tx) =>
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
@@ -217,9 +231,13 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       changed: expect.arrayContaining(["plan", "subscriptionStatus", "trialEndsAt"]),
       before: { plan: "FREE", subscriptionStatus: "ACTIVE", trialEndsAt: null },
       after: { plan: "PRO", subscriptionStatus: "TRIALING", trialEndsAt: trial.toISOString() },
-      platform: { actorHomeTenantId: H.tenantId },
+      platform: { actorHomeTenantId: H.tenantId, platformEventId: expect.any(String) },
     });
     expect(await db.auditEvent.count({ where: { tenantId: H.tenantId } })).toBe(0);
+    // C-BO5: la fila global, enlazada con la del consultorio.
+    const global = (await globalRows(T.tenantId, "platform.tenant.entitlements")).at(-1)!;
+    expect(global).toMatchObject({ actorId: H.userId, tenantId: T.tenantId, entity: "Tenant", entityId: T.tenantId });
+    expect(global.id).toBe((last.payload as { platform: { platformEventId: string } }).platform.platformEventId);
 
     // El updatedAt devuelto sirve de expectedUpdatedAt del próximo cambio.
     const r2 = await runWithRls(T.tenantId, (tx) =>
@@ -245,7 +263,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   it("sin cambios → ok, changed vacío, mismo updatedAt y sin audit", async () => {
     const before = await row(T.tenantId);
     const n = (await entAudits(T.tenantId)).length;
-    const r = await runWithRls(T.tenantId, (tx) =>
+    const r = await platformTx((tx) =>
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
@@ -275,7 +293,8 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
 
   it("platform sin actor → tira (toda escritura de /plataforma tiene un superadmin)", async () => {
     await expect(
-      runWithRls(T.tenantId, (tx) =>
+      platformTx((tx) =>
+        // @ts-expect-error — a propósito: la source platform exige un PlatformActorRef.
         applyTenantEntitlementsInTx(tx, { tenantId: T.tenantId, source: "platform", patch: { plan: "STARTER" }, actor: null })
       )
     ).rejects.toThrow();
@@ -283,7 +302,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
 
   it("tenant inexistente → not-found", async () => {
     const ghost = `no-existe-${uniqueSuffix()}`;
-    const r = await runWithRls(ghost, (tx) =>
+    const r = await platformTx((tx) =>
       applyTenantEntitlementsInTx(tx, { tenantId: ghost, source: "platform", patch: { plan: "PRO" }, actor: platformActor() })
     );
     expect(r).toEqual({ ok: false, reason: "not-found" });
@@ -292,7 +311,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   it("dos escritores simultáneos con el mismo expectedUpdatedAt → uno gana, el otro stale (FOR UPDATE + CAS)", async () => {
     const before = await row(T.tenantId);
     const attempt = (plan: "STARTER" | "ENTERPRISE") =>
-      runWithRls(T.tenantId, (tx) =>
+      platformTx((tx) =>
         applyTenantEntitlementsInTx(tx, {
           tenantId: T.tenantId,
           source: "platform",
@@ -308,6 +327,216 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     expect(stales).toHaveLength(1);
     const winner = a.ok ? "STARTER" : "ENTERPRISE";
     expect((await row(T.tenantId)).plan).toBe(winner);
+  });
+
+  // ── BO1-B (C-BO6): status, cupos y fechas derivadas ─────────────────────────
+  describe("BO1-B · status, seatLimitOverride y fechas derivadas", () => {
+    let X: EphemeralTenant;
+    beforeAll(async () => {
+      X = await createEphemeralTenant(db, { plan: "PRO" });
+    });
+    afterAll(async () => {
+      await X?.cleanup();
+    });
+    const xRow = () =>
+      db.tenant.findUniqueOrThrow({
+        where: { id: X.tenantId },
+        select: {
+          status: true,
+          statusChangedAt: true,
+          subscriptionStatus: true,
+          subscriptionStatusChangedAt: true,
+          seatLimitOverride: true,
+          updatedAt: true,
+        },
+      });
+
+    it.each(["onboarding", "tenant-settings", "billing"] as const)(
+      "status desde %s → tira (bug de programación) y no escribe",
+      async (source) => {
+        if (source === "onboarding") await db.tenant.update({ where: { id: X.tenantId }, data: { onboardingCompletedAt: null } });
+        const before = await xRow();
+        try {
+          await expect(
+            runWithRls(X.tenantId, (tx) =>
+              applyTenantEntitlementsInTx(tx, {
+                tenantId: X.tenantId,
+                source,
+                // @ts-expect-error — a propósito: `status` es solo de la source platform.
+                patch: { status: "SUSPENDED" },
+                actor: source === "billing" ? null : { userId: X.userId, homeTenantId: X.tenantId },
+              })
+            )
+          ).rejects.toThrow(/status/);
+          expect(await xRow()).toEqual(before);
+        } finally {
+          if (source === "onboarding") await db.tenant.update({ where: { id: X.tenantId }, data: { onboardingCompletedAt: new Date() } });
+        }
+      }
+    );
+
+    it("seatLimitOverride desde tenant-settings o billing → tira", async () => {
+      for (const source of ["tenant-settings", "billing"] as const) {
+        await expect(
+          runWithRls(X.tenantId, (tx) =>
+            applyTenantEntitlementsInTx(tx, {
+              tenantId: X.tenantId,
+              source,
+              // @ts-expect-error — a propósito: los cupos son solo de la source platform.
+              patch: { seatLimitOverride: 50 },
+              actor: source === "billing" ? null : { userId: X.userId, homeTenantId: X.tenantId },
+            })
+          )
+        ).rejects.toThrow(/seatLimitOverride/);
+      }
+    });
+
+    it("seatLimitOverride inválido (0, decimal, string) → tira antes de tocar la base", async () => {
+      for (const bad of [0, 1.5, "3"]) {
+        await expect(
+          platformTx((tx) =>
+            applyTenantEntitlementsInTx(tx, {
+              tenantId: X.tenantId,
+              source: "platform",
+              patch: { seatLimitOverride: bad as number },
+              actor: platformActor(),
+            })
+          )
+        ).rejects.toThrow(/seatLimitOverride/);
+      }
+      await expect(
+        platformTx((tx) =>
+          applyTenantEntitlementsInTx(tx, {
+            tenantId: X.tenantId,
+            source: "platform",
+            patch: { status: "BORRADO" as "CLOSED" },
+            actor: platformActor(),
+          })
+        )
+      ).rejects.toThrow(/status/);
+    });
+
+    it("platform suspende y fija cupo: estampa statusChangedAt, no toca subscriptionStatusChangedAt, audita doble", async () => {
+      const before = await xRow();
+      expect(before).toMatchObject({ status: "ACTIVE", statusChangedAt: null, seatLimitOverride: null });
+      const r = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: X.tenantId,
+          source: "platform",
+          patch: { status: "SUSPENDED", seatLimitOverride: 25 },
+          expectedUpdatedAt: before.updatedAt,
+          // Superadmin sin consultorio «casa» (C-BO2): homeTenantId null.
+          actor: { userId: H.userId, email: null, homeTenantId: null },
+        })
+      );
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect([...r.changed].sort()).toEqual(["seatLimitOverride", "status"]);
+      const after = await xRow();
+      expect(after).toMatchObject({ status: "SUSPENDED", seatLimitOverride: 25, subscriptionStatusChangedAt: null });
+      // Mismo instante que el updatedAt de la escritura.
+      expect(after.statusChangedAt?.getTime()).toBe(r.updatedAt.getTime());
+
+      const local = (await entAudits(X.tenantId)).at(-1)!;
+      expect(local).toMatchObject({ action: "platform.tenant.entitlements", actorId: H.userId });
+      expect(local.payload).toEqual({
+        source: "platform",
+        changed: expect.arrayContaining(["status", "seatLimitOverride"]),
+        before: { status: "ACTIVE", seatLimitOverride: null },
+        after: { status: "SUSPENDED", seatLimitOverride: 25 },
+        platform: { actorHomeTenantId: null, platformEventId: expect.any(String) },
+      });
+      const global = (await globalRows(X.tenantId, "platform.tenant.entitlements")).at(-1)!;
+      expect(global).toMatchObject({ actorId: H.userId, tenantId: X.tenantId });
+      expect(global.payload).toMatchObject({ after: { status: "SUSPENDED", seatLimitOverride: 25 } });
+    });
+
+    it("cambio sin efecto en status → no mueve statusChangedAt; cambio de suscripción → estampa subscriptionStatusChangedAt", async () => {
+      const before = await xRow();
+      const noop = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: X.tenantId,
+          source: "platform",
+          patch: { status: before.status, subscriptionStatus: before.subscriptionStatus },
+          actor: platformActor(),
+        })
+      );
+      expect(noop).toEqual({ ok: true, changed: [], updatedAt: before.updatedAt });
+      expect(await xRow()).toEqual(before);
+
+      // Otro campo cambia, status repetido: statusChangedAt queda como estaba.
+      const r = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: X.tenantId,
+          source: "platform",
+          patch: { status: before.status, seatLimitOverride: null },
+          actor: platformActor(),
+        })
+      );
+      expect(r).toMatchObject({ ok: true, changed: ["seatLimitOverride"] });
+      const mid = await xRow();
+      expect(mid.statusChangedAt?.getTime()).toBe(before.statusChangedAt?.getTime());
+      expect(mid.seatLimitOverride).toBeNull();
+
+      // billing (webhook) cambia la suscripción: estampa su fecha, no la del status.
+      const b = await runWithRls(X.tenantId, (tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: X.tenantId,
+          source: "billing",
+          patch: { subscriptionStatus: "PAST_DUE" },
+          actor: null,
+        })
+      );
+      expect(b.ok).toBe(true);
+      if (!b.ok) return;
+      const after = await xRow();
+      expect(after.subscriptionStatus).toBe("PAST_DUE");
+      expect(after.subscriptionStatusChangedAt?.getTime()).toBe(b.updatedAt.getTime());
+      expect(after.statusChangedAt?.getTime()).toBe(before.statusChangedAt?.getTime());
+
+      // Repetir PAST_DUE no reinicia la gracia (C-BO1 cuenta desde subscriptionStatusChangedAt).
+      await runWithRls(X.tenantId, (tx) =>
+        applyTenantEntitlementsInTx(tx, { tenantId: X.tenantId, source: "billing", patch: { subscriptionStatus: "PAST_DUE" }, actor: null })
+      );
+      expect((await xRow()).subscriptionStatusChangedAt?.getTime()).toBe(b.updatedAt.getTime());
+    });
+
+    it("CAS stale con status → rechaza sin escribir ni auditar en ningún registro", async () => {
+      const before = await xRow();
+      const nLocal = (await entAudits(X.tenantId)).length;
+      const nGlobal = (await globalRows(X.tenantId, "platform.tenant.entitlements")).length;
+      const r = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: X.tenantId,
+          source: "platform",
+          patch: { status: "CLOSED" },
+          expectedUpdatedAt: new Date(before.updatedAt.getTime() - 1_000),
+          actor: platformActor(),
+        })
+      );
+      expect(r).toEqual({ ok: false, reason: "stale" });
+      expect(await xRow()).toEqual(before);
+      expect((await entAudits(X.tenantId)).length).toBe(nLocal);
+      expect((await globalRows(X.tenantId, "platform.tenant.entitlements")).length).toBe(nGlobal);
+    });
+
+    it("platform bajo el rol app (runWithRls) no deja nada a medias: el registro global es SERVICE_ONLY", async () => {
+      // Solo tiene sentido con kinesoft_app; con :owner (BYPASSRLS) el insert pasa.
+      if (process.env.DATABASE_URL === process.env.DIRECT_URL) return;
+      const before = await xRow();
+      await expect(
+        runWithRls(X.tenantId, (tx) =>
+          applyTenantEntitlementsInTx(tx, {
+            tenantId: X.tenantId,
+            source: "platform",
+            patch: { status: "ACTIVE" },
+            actor: platformActor(),
+          })
+        )
+      ).rejects.toThrow();
+      // La tx entera hizo rollback: ni el status ni el audit del consultorio.
+      expect(await xRow()).toEqual(before);
+    });
   });
 
   // Ejecuta `modulesFor` de EV-C1 (misma ola): post-integración si C1 no terminó.
@@ -331,7 +560,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       expect(f.has("ejerciciosGlobales")).toBe(false);
 
       // Tras un cambio por el escritor único, la lectura sin Actor lo ve.
-      await runWithRls(G.tenantId, (tx) =>
+      await platformTx((tx) =>
         applyTenantEntitlementsInTx(tx, {
           tenantId: G.tenantId,
           source: "platform",

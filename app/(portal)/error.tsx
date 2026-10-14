@@ -8,6 +8,7 @@ export default function PortalError(props: {
 }) {
   return (
     <RouteError
+      kind="portal"
       {...props}
       title="No pudimos cargar tu portal"
     />

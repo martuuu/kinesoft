@@ -11,7 +11,7 @@ import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { Prisma, TagKind } from "@prisma/client";
-import { getActor, ForbiddenError } from "@/lib/session";
+import { getActor, ForbiddenError, assertWritable, writableError } from "@/lib/session";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
@@ -256,7 +256,9 @@ export async function ensureTag(
   label: string,
   kind: TagKind = "GOAL"
 ): Promise<{ slug: string; label: string }> {
-  await getActor(); // auth gate — throws if no session
+  const actor = await getActor(); // auth gate — throws if no session
+  // BO1-A (C-BO3): el upsert de `Tag` (global, sin RLS) va fuera de `runWithRls` → corte explícito.
+  assertWritable(actor);
   // EV0 V.Z (N2): crear tags es parte de cargar ejercicios propios (módulo
   // `ejercicios`, `gate.canCreate`). Sin el gate, un consultorio General podía
   // escribir en la tabla GLOBAL de tags por RPC. Escritura → tira (C-EV4).
@@ -362,6 +364,10 @@ export async function createExercise(input: {
   // ya muestra `error`; el copy es el del módulo.
   const gate = await gatingForActor();
   if (!gate.canCreate) return { ok: false, error: MODULE_DENIED_COPY.ejercicios };
+  // BO1-A (C-BO3): los upserts de `Tag` de abajo van fuera de `runWithRls`; sin este corte un consultorio en solo
+  // lectura escribiría tags globales antes de que la tx del ejercicio falle.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const name = input.name.trim();
   if (!name) return { ok: false, error: "Nombre requerido." };
 

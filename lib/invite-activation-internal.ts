@@ -75,6 +75,7 @@ export type ActivationFailCode =
   | "patient_identity"
   | "weak_password"
   | "signin_failed"
+  | "user_disabled"
   | "error";
 
 export type ActivationOk = {
@@ -110,6 +111,7 @@ export const INVITE_MESSAGES = {
     "Esta cuenta se usa en el portal de pacientes. Para sumarte al equipo, pedí la invitación con otro email.",
   weak_password: "La contraseña es demasiado débil. Elegí una más larga y menos previsible.",
   signin_failed: "Tu cuenta quedó activa, pero no pudimos iniciar sesión. Ingresá con tu email y tu contraseña.",
+  user_disabled: "Tu cuenta está desactivada. Si creés que es un error, escribinos a soporte.",
   error: "No pudimos activar tu cuenta. Probá de nuevo en unos minutos.",
 } as const;
 
@@ -127,6 +129,18 @@ export class InvitationRaceError extends Error {
   constructor() {
     super("invitation_race_lost");
     this.name = "InvitationRaceError";
+  }
+}
+
+/**
+ * BO1-A: el usuario está deshabilitado en la plataforma (`UserProfile.disabledAt`, M7). Lo tira `joinTenantInTx`
+ * ANTES de escribir: una invitación (con sesión o activando) no puede ser la puerta de vuelta de alguien que
+ * Plataforma deshabilitó.
+ */
+export class UserDisabledError extends Error {
+  constructor() {
+    super("user_disabled");
+    this.name = "UserDisabledError";
   }
 }
 
@@ -174,6 +188,9 @@ export async function joinTenantInTx(
   }
 ): Promise<{ practitionerId: string | null }> {
   const { invitation: inv, userId, now } = p;
+  // BO1-A: primero, sin escribir nada. Un usuario adoptado o recién creado no tiene perfil (null = habilitado).
+  const profile = await tx.userProfile.findUnique({ where: { id: userId }, select: { disabledAt: true } });
+  if (profile?.disabledAt) throw new UserDisabledError();
   const cas = await tx.invitation.updateMany({
     where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
     data: { acceptedAt: now, acceptedByUserId: userId },
@@ -370,6 +387,7 @@ async function activate(p: {
         logger.error("invitation.activate.compensation_failed", { invitationId: inv.id, userId, code: d.code });
       }
     }
+    if (err instanceof UserDisabledError) return fail("user_disabled");
     if (err instanceof InvitationRaceError) {
       const again = await findInvitationByRawToken(p.token, new Date());
       return fail(again && again.status !== "pending" ? again.status : "accepted");

@@ -50,9 +50,25 @@ import {
 } from "@/lib/access-logic";
 import { isClinicalRole } from "@/lib/roles";
 import { logger } from "@/lib/logger";
-import { ensureRequestContext } from "@/lib/request-context";
+import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
 import { clientIp } from "@/lib/client-ip";
 import type { TenantEntitlements } from "@/lib/tenant-modules";
+import { tenantAccessEnforcement } from "@/lib/env";
+import { getRequestContext } from "@/lib/request-context";
+import {
+  ReadOnlyModeError as ReadOnlyModeErrorClass,
+  assertWritableFor,
+  canWrite,
+  effectiveMode,
+  isTenantBlocked,
+  tenantAccessFor,
+  type TenantAccess,
+  type TenantAccessInput,
+} from "@/lib/tenant-access";
+
+// C-BO2: `ReadOnlyModeError` es parte de la API de sesión; vive en lib/tenant-access.ts (puro) porque
+// `runWithRls` también la tira y lib/rls.ts no puede importar este módulo (ciclo).
+export { ReadOnlyModeError } from "@/lib/tenant-access";
 
 export type Actor = {
   tenantId: string;
@@ -80,6 +96,14 @@ export type Actor = {
    * /plataforma se ve en la próxima navegación.
    */
   entitlements: TenantEntitlements;
+  /**
+   * BO1-A (C-BO1): acceso del consultorio activo con el modo REAL (`tenantAccessFor`), calculado de la misma fila
+   * de Tenant que ya trae `loadAccessMemberships` (sin sentencias nuevas). Los cortes usan el modo efectivo
+   * (`effectiveMode` con `TENANT_ACCESS_ENFORCEMENT`); la banda usa este para avisar antes de cortar.
+   */
+  access: TenantAccess;
+  /** BO2-E: sesión de soporte de un superadmin. null hasta que BO2-E arme la rama de soporte. */
+  support: { sessionId: string; superadminEmail: string } | null;
 };
 
 /** Solo las tres columnas: no se cuela el resto de la fila de Tenant en el Actor. */
@@ -140,10 +164,11 @@ export type AccessMembership = MembershipLite & {
     plan: TenantEntitlements["plan"];
     publicBookingEnabled: boolean;
     onboardingCompletedAt: Date | null;
-  };
+  } & TenantAccessInput;
 };
 
-export type AccessProfile = { fullName: string | null; email: string; isPlatformAdmin: boolean };
+/** `disabledAt` (BO1-A): deshabilitado a nivel plataforma (M7): sin acceso a ningún consultorio ni a /plataforma. */
+export type AccessProfile = { fullName: string | null; email: string; isPlatformAdmin: boolean; disabledAt: Date | null };
 
 /**
  * Todo lo que decide a qué consultorio entra una sesión, en una lectura (perfil con membresías y profesionales). Por `prismaService`: todavía no hay Actor ni GUC (ver import arriba), y el filtro es el
@@ -164,6 +189,7 @@ export async function loadAccessMemberships(userId: string): Promise<{
         fullName: true,
         email: true,
         isPlatformAdmin: true,
+        disabledAt: true,
         memberships: {
           select: {
             tenantId: true,
@@ -179,6 +205,11 @@ export async function loadAccessMemberships(userId: string): Promise<{
                 plan: true,
                 publicBookingEnabled: true,
                 onboardingCompletedAt: true,
+                // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
+                status: true,
+                subscriptionStatus: true,
+                trialEndsAt: true,
+                subscriptionStatusChangedAt: true,
               },
             },
           },
@@ -200,7 +231,12 @@ export async function loadAccessMemberships(userId: string): Promise<{
     tenant: m.tenant,
   }));
   return {
-    profile: { fullName: profile.fullName, email: profile.email, isPlatformAdmin: profile.isPlatformAdmin },
+    profile: {
+      fullName: profile.fullName,
+      email: profile.email,
+      isPlatformAdmin: profile.isPlatformAdmin,
+      disabledAt: profile.disabledAt,
+    },
     memberships,
     preferredTenantId: null,
   };
@@ -218,6 +254,13 @@ export type AccessSnapshot = {
   /** `kine_tenant` apunta a una membresía usable (si no, se ignora: nunca se confía). */
   cookieValid: boolean;
   state: AccessState;
+  /** BO1-A: el instante con el que se calculó el acceso de cada consultorio (uno por foto). */
+  now: Date;
+  /**
+   * BO1-A: membresías aceptadas y habilitadas en consultorios suspendidos o dados de baja (modo EFECTIVO). No
+   * cuentan como usables; `getSessionBlock` las usa para explicar por qué no entra.
+   */
+  tenantBlocks: Array<{ tenantId: string; tenantName: string; role: AccessMembership["role"]; kind: "suspended" | "closed" }>;
 };
 
 function readActiveTenantCookie(): string | null {
@@ -229,16 +272,99 @@ function readActiveTenantCookie(): string | null {
   }
 }
 
+/**
+ * BO1-A: un consultorio suspendido/dado de baja (modo efectivo) y un usuario deshabilitado en la plataforma se
+ * ven, para la lógica de acceso, como membresías deshabilitadas: no son usables, nunca ganan la elección y, si no
+ * queda ninguna, el estado es `no_access` (el gate lo manda a la pantalla del bloqueo, no a /onboarding). Así no se
+ * toca `lib/access-logic.ts` y el resto (selector, /elegir-consultorio) hereda el corte. Si hay OTRO consultorio
+ * usable, entra a ese. Las membresías originales quedan tal cual (las pantallas muestran los datos reales).
+ */
+function accessView(
+  memberships: AccessMembership[],
+  profile: Pick<AccessProfile, "disabledAt"> | null,
+  now: Date
+): { logicView: AccessMembership[]; tenantBlocks: AccessSnapshot["tenantBlocks"] } {
+  const enforcement = tenantAccessEnforcement();
+  const userDisabled = !!profile?.disabledAt;
+  const tenantBlocks: AccessSnapshot["tenantBlocks"] = [];
+  const logicView = memberships.map((m) => {
+    const mode = effectiveMode(tenantAccessFor(m.tenant, now).mode, enforcement);
+    const blocked = isTenantBlocked(mode);
+    if (blocked && m.acceptedAt && !m.disabledAt) {
+      tenantBlocks.push({ tenantId: m.tenantId, tenantName: m.tenant.name, role: m.role, kind: mode });
+    }
+    return userDisabled || blocked ? { ...m, disabledAt: m.disabledAt ?? now } : m;
+  });
+  return { logicView, tenantBlocks };
+}
+
+/**
+ * Las membresías USABLES de verdad (BO1-A): `isUsableMembership` + usuario no deshabilitado + consultorio no
+ * suspendido/dado de baja. Para quien lee `loadAccessMemberships` por su cuenta (lectura fresca de
+ * `setActiveTenant`, «done» de /onboarding) y no la foto del request.
+ */
+export function usableAccessMemberships(
+  memberships: AccessMembership[],
+  profile: Pick<AccessProfile, "disabledAt"> | null,
+  now: Date = new Date()
+): AccessMembership[] {
+  const { logicView } = accessView(memberships, profile, now);
+  const ids = new Set(logicView.filter((m) => isUsableMembership(m)).map((m) => m.tenantId));
+  return memberships.filter((m) => ids.has(m.tenantId));
+}
+
 async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
   const user = await getVerifiedSessionUser();
   if (!user) return null;
   const { profile, memberships, preferredTenantId } = await loadAccessMemberships(user.id);
   const cookieTenantId = readActiveTenantCookie();
-  const usable = memberships.filter((m) => isUsableMembership(m));
+  const now = new Date();
+  const { logicView, tenantBlocks } = accessView(memberships, profile, now);
+  const usableIds = new Set(logicView.filter((m) => isUsableMembership(m)).map((m) => m.tenantId));
+  const usable = memberships.filter((m) => usableIds.has(m.tenantId));
   // IAM-0c/IAM-3a: la cookie guarda el tenantId (antes se leía como slug y nadie la escribía).
   const cookieValid = !!cookieTenantId && usable.some((m) => m.tenantId === cookieTenantId);
-  const state = resolveAccessState(memberships, { cookieTenantId, preferredTenantId });
-  return { userId: user.id, profile, memberships, usable, cookieTenantId, preferredTenantId, cookieValid, state };
+  const state = resolveAccessState(logicView, { cookieTenantId, preferredTenantId });
+  return {
+    userId: user.id,
+    profile,
+    memberships,
+    usable,
+    cookieTenantId,
+    preferredTenantId,
+    cookieValid,
+    state,
+    now,
+    tenantBlocks,
+  };
+}
+
+/**
+ * C-BO2: por qué esta sesión no puede entrar a la app, si es por un bloqueo (null = no hay bloqueo; puede igual
+ * no tener acceso por otra razón: /sin-acceso u /onboarding). Misma foto del request: cero queries extra.
+ * - `user_disabled`: `UserProfile.disabledAt` (M7) → /cuenta-desactivada. Gana siempre.
+ * - `tenant_suspended` / `tenant_closed`: SOLO si no quedó ningún consultorio usable (con otro usable, entra a
+ *   ese) y hay una membresía aceptada y habilitada en un consultorio bloqueado → /suspendido.
+ */
+export type SessionBlock =
+  | { kind: "user_disabled" }
+  | { kind: "tenant_suspended"; tenantName: string }
+  | { kind: "tenant_closed"; tenantName: string }
+  | null;
+
+export function sessionBlockOf(s: AccessSnapshot): SessionBlock {
+  if (s.profile?.disabledAt) return { kind: "user_disabled" };
+  if (s.state.kind === "ok") return null;
+  const b = s.tenantBlocks.find((x) => x.kind === "suspended") ?? s.tenantBlocks[0];
+  if (!b) return null;
+  return b.kind === "suspended"
+    ? { kind: "tenant_suspended", tenantName: b.tenantName }
+    : { kind: "tenant_closed", tenantName: b.tenantName };
+}
+
+export async function getSessionBlock(): Promise<SessionBlock> {
+  const s = await getAccessSnapshot();
+  return s ? sessionBlockOf(s) : null;
 }
 
 /**
@@ -263,6 +389,8 @@ function buildActor(s: AccessSnapshot): Actor {
   if (s.state.kind !== "ok" || !s.profile) {
     throw new UnauthenticatedError("no_membership");
   }
+  // BO1-A: red explícita (la foto ya deja `no_access` a un usuario deshabilitado).
+  if (s.profile.disabledAt) throw new UnauthenticatedError("no_membership");
   const tenantId = s.state.tenantId;
   const chosen = s.memberships.find((m) => m.tenantId === tenantId);
   if (!chosen) throw new UnauthenticatedError("no_membership");
@@ -280,6 +408,8 @@ function buildActor(s: AccessSnapshot): Actor {
     userId: s.userId,
     isPlatformAdmin: s.profile.isPlatformAdmin,
     entitlements: entitlementsOf(chosen.tenant),
+    access: tenantAccessFor(chosen.tenant, s.now),
+    support: null,
   };
 }
 
@@ -300,6 +430,8 @@ async function buildDemoActor(): Promise<Actor | null> {
     userId: prac.userId,
     isPlatformAdmin: prac.user.isPlatformAdmin,
     entitlements: entitlementsOf(tenant),
+    access: tenantAccessFor(tenant, new Date()),
+    support: null,
   };
 }
 
@@ -335,6 +467,10 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
       // Minted by middleware; safe to trust because middleware strips
       // any client-supplied value and re-mints if absent.
       requestId: h.get("x-request-id") ?? undefined,
+      // BO1-A (C-BO3): `runWithRls` abre las tx de este tenant en solo lectura con el modo EFECTIVO (con el
+      // default `banner` nunca, salvo soporte de BO2-E).
+      readOnly: isReadOnlyActor(actor),
+      supportSessionId: actor.support?.sessionId ?? null,
     });
   }
   return actor;
@@ -347,6 +483,8 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
  * `tryGetActor()` instead.
  */
 export async function getActor(): Promise<Actor> {
+  // BO1-A: antes del primer await (ver `primeRequestContext`): así el caller ve el contexto (modo lectura, C-BO3).
+  primeRequestContext();
   const a = await cachedResolve();
   if (!a) throw new UnauthenticatedError("no_session");
   return a;
@@ -354,6 +492,7 @@ export async function getActor(): Promise<Actor> {
 
 /** Variant that returns null instead of throwing. */
 export async function tryGetActor(): Promise<Actor | null> {
+  primeRequestContext();
   return cachedResolve();
 }
 
@@ -362,18 +501,54 @@ export async function requireActor(): Promise<Actor> {
   return getActor();
 }
 
+/** El Actor escribe con el modo efectivo vigente (y no es soporte). */
+function isReadOnlyActor(actor: Pick<Actor, "access" | "support">): boolean {
+  return !!actor.support || !canWrite(effectiveMode(actor.access.mode, tenantAccessEnforcement()));
+}
+
 /**
- * Gate for platform-superadmin surfaces (the "Plataforma" owner panel + global
- * catalog authoring). Throws `UnauthenticatedError` if there's no session, or
- * `ForbiddenError` if the actor isn't a platform admin. Superadmin writes to
- * the global catalog go through `prismaService` (BYPASSRLS) — the app role
- * physically can't touch `tenantId IS NULL` rows — so this app-layer check is
- * the single enforcement chokepoint.
+ * C-BO3: para las escrituras que NO pasan por `runWithRls` (canal sin GUC: preferencias, favoritos, tags
+ * globales). Tira `ReadOnlyModeError` si el consultorio está en solo lectura con el modo efectivo, o si es una
+ * sesión de soporte fuera de una action `supportWritable` (C-BO4). Con el default `banner` no corta nada.
+ */
+export function assertWritable(actor: Pick<Actor, "access" | "support">): void {
+  assertWritableFor({
+    access: actor.access,
+    enforcement: tenantAccessEnforcement(),
+    support: !!actor.support,
+    supportWritable: !!getRequestContext()?.supportWritable,
+  });
+}
+
+/**
+ * Variante de `assertWritable` para actions que devuelven `ActionResult` (no tiran): el mensaje en voseo para
+ * devolver como `{ ok: false, error }`, o null si puede escribir. Una excepción tirada desde una server action en
+ * producción llega al cliente como un error genérico de Next; así el usuario lee por qué.
+ */
+export function writableError(actor: Pick<Actor, "access" | "support">): string | null {
+  try {
+    assertWritable(actor);
+    return null;
+  } catch (err) {
+    if (err instanceof ReadOnlyModeErrorClass) return err.message;
+    throw err;
+  }
+}
+
+/**
+ * @deprecated BO1-A (C-BO2): usar `requirePlatformAdmin` (lib/platform-actor.ts), que NO necesita un consultorio
+ * «casa». Queda hasta BO-Z porque los módulos de catálogo global (`catalog-admin`, `exercises-admin`,
+ * `exercise-media`, `tags-admin`, `platform-tenants*`) todavía usan `actor.tenantId`/`userId` para auditar; BO2-F
+ * los pasa al registro de plataforma.
+ *
+ * Delega el chequeo en `requirePlatformAdmin` (superadmin y no deshabilitado) y después arma el Actor de siempre:
+ * un superadmin sin consultorio pasa el chequeo pero acá sigue tirando `UnauthenticatedError` (eso es lo que
+ * arregla migrar al actor de plataforma).
  */
 export async function requireSuperAdmin(): Promise<Actor> {
-  const a = await getActor();
-  if (!a.isPlatformAdmin) throw new ForbiddenError("platform_admin_required");
-  return a;
+  const { requirePlatformAdmin } = await import("@/lib/platform-actor");
+  await requirePlatformAdmin();
+  return getActor();
 }
 
 /**

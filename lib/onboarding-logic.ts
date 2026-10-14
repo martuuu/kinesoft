@@ -26,6 +26,8 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "c", "configuracion", "dashboard", "diagnostico", "elegir-consultorio", "forgot", "invite",
   "login", "logout", "onboarding", "pacientes", "plataforma", "portal",
   "reportes", "reset", "seguimiento", "signup", "sin-acceso", "terapia-manual", "www",
+  // BO1-A: pantallas de bloqueo del gate (fuera de `(app)`).
+  "suspendido", "cuenta-desactivada",
 ]);
 
 export function isValidSlug(slug: string): boolean {
@@ -90,10 +92,31 @@ export type AppGateInput = {
   onboardingCompleted: boolean;
   /** Path pedido, para volver después del login / la elección (ya pasado por safeNext o null). */
   nextPath: string | null;
+  /**
+   * BO1-A: bloqueo de la sesión (`getSessionBlock`, lib/session.ts). Opcional para no romper a los callers de
+   * IAM; ausente = sin bloqueo.
+   */
+  block?: AppGateBlock | null;
+};
+
+/** `SessionBlock["kind"]` de lib/session.ts (acá solo el tipo: este módulo es puro). */
+export type AppGateBlock = "user_disabled" | "tenant_suspended" | "tenant_closed";
+
+const BLOCK_DESTINATION: Record<AppGateBlock, string> = {
+  user_disabled: "/cuenta-desactivada",
+  tenant_suspended: "/suspendido",
+  tenant_closed: "/suspendido",
 };
 
 /** Destinos del gate. Todos viven FUERA del grupo `(app)`: ninguno vuelve a pasar por este layout. */
-export const APP_GATE_DESTINATIONS = ["/login", "/onboarding", "/sin-acceso", "/elegir-consultorio"] as const;
+export const APP_GATE_DESTINATIONS = [
+  "/login",
+  "/onboarding",
+  "/sin-acceso",
+  "/elegir-consultorio",
+  "/suspendido",
+  "/cuenta-desactivada",
+] as const;
 
 function withNext(path: string, next: string | null): string {
   // /dashboard es el default de todos estos destinos: no hace falta ensuciar la URL.
@@ -117,11 +140,17 @@ function withNext(path: string, next: string | null): string {
  * - IAM-3a (decisión 6): 2+ consultorios usables sin cookie válida →
  *   `/elegir-consultorio?next=<path>`. Antes que el alta abierta: primero se
  *   elige DÓNDE entrar.
+ * - BO1-A: usuario deshabilitado en la plataforma → `/cuenta-desactivada`; su
+ *   único consultorio (o todos) suspendido o dado de baja → `/suspendido`. Si
+ *   tiene otro consultorio usable no hay bloqueo: entra a ese (`getAccessSnapshot`).
  * - OWNER de un tenant con el alta sin terminar → `/onboarding`. Los demás
  *   roles NO: un profesional invitado mientras el dueño todavía configura no
  *   tiene nada que hacer en el stepper (y no podría: es OWNER-only).
  */
 export function decideAppGate(i: AppGateInput): string | null {
+  // BO1-A: el bloqueo manda sobre todo lo demás (también sobre un Actor de una carrera). Sin `next`: esas pantallas
+  // no devuelven a la app solas (como /sin-acceso), así que no hay a dónde volver.
+  if (i.hasSession && i.block) return BLOCK_DESTINATION[i.block];
   if (!i.hasActor) {
     if (!i.hasSession) return withNext("/login", i.nextPath);
     if (!i.access || i.access.kind === "needs_onboarding") return "/onboarding";

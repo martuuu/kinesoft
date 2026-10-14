@@ -31,13 +31,27 @@ import "server-only";
  * `actor.homeTenantId === tenantId`: en prod la conexión tiene BYPASSRLS y esta
  * comparación es la única barrera contra escribirle a otro tenant.
  *
+ * BO1-B (C-BO6, plan §19.5): `platform` además escribe `status` (suspender, dar de
+ * baja, reactivar) y `seatLimitOverride` (cupo a medida). Ninguna otra source los
+ * toca: un consultorio no se reactiva solo, y el webhook de MP cambia la
+ * suscripción, no el estado del consultorio. Las fechas derivadas las calcula este
+ * escritor y nadie más: `statusChangedAt` cuando `status` cambia de verdad y
+ * `subscriptionStatusChangedAt` cuando cambia `subscriptionStatus` (cualquier
+ * source). Repetir el mismo valor NO las mueve: la gracia de PAST_DUE se cuenta
+ * desde ahí (`tenantAccessFor`, C-BO1) y un webhook repetido no puede estirarla.
+ * El audit de `platform` es DOBLE (C-BO5, `auditPlatformInTx`): el del consultorio
+ * y la fila global `PlatformAuditEvent`, que es SERVICE_ONLY → la source `platform`
+ * corre en una tx del canal service (`prismaService.$transaction`); con el rol app
+ * el INSERT rebota y la tx entera hace rollback (nada a medias).
+ *
  * Cache: el caller revalida `tenantEntitlementTags(tenantId)` (`lib/cache-tags.ts`)
  * DESPUÉS del commit, y solo si `changed` no está vacío.
  */
-import { Prisma, TenantPlan, TenantVertical, SubscriptionStatus } from "@prisma/client";
+import { Prisma, TenantPlan, TenantVertical, SubscriptionStatus, TenantStatus } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx, auditPlatformInTx } from "@/lib/audit";
+import type { PlatformActorRef } from "@/lib/platform-audit-types";
 import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
 
 export type EntitlementSource = "platform" | "onboarding" | "tenant-settings" | "billing";
@@ -49,12 +63,24 @@ export type EntitlementValues = {
   subscriptionStatus: SubscriptionStatus;
   trialEndsAt: Date | null;
   publicBookingEnabled: boolean;
+  /** BO1-B: ACTIVE / SUSPENDED / CLOSED (baja lógica). Solo `platform`. */
+  status: TenantStatus;
+  /** BO1-B: null = el cupo del plan (`seatLimitFor`); entero ≥ 1 (CHECK en la base). Solo `platform`. */
+  seatLimitOverride: number | null;
 };
 export type EntitlementKey = keyof EntitlementValues;
 
 /** Allowlist literal de C-EV5. `onboarding` además exige `onboardingCompletedAt IS NULL`. */
 export const ENTITLEMENT_KEYS_BY_SOURCE = {
-  platform: ["vertical", "plan", "subscriptionStatus", "trialEndsAt", "publicBookingEnabled"],
+  platform: [
+    "vertical",
+    "plan",
+    "subscriptionStatus",
+    "trialEndsAt",
+    "publicBookingEnabled",
+    "status",
+    "seatLimitOverride",
+  ],
   billing: ["plan", "subscriptionStatus", "trialEndsAt"],
   onboarding: ["vertical"],
   "tenant-settings": ["publicBookingEnabled"],
@@ -65,8 +91,17 @@ export type EntitlementPatchFor<S extends EntitlementSource> = Partial<
   Pick<EntitlementValues, (typeof ENTITLEMENT_KEYS_BY_SOURCE)[S][number]>
 >;
 
-/** `null` = sin usuario (solo `billing`: el webhook de MP no tiene Actor). */
-export type EntitlementActor = { userId: string; homeTenantId: string } | null;
+/** Actor de un consultorio (onboarding, Configuración, billing con usuario). `null` = sin usuario (solo `billing`: el webhook de MP no tiene Actor). */
+export type TenantEntitlementActor = { userId: string; homeTenantId: string } | null;
+
+/**
+ * BO1-B (C-BO6): para `platform` el actor es un `PlatformActorRef` (C-BO5): `homeTenantId`
+ * null = superadmin sin consultorio propio (ya no pasa por `buildActor`, C-BO2) y `userId`
+ * null = script/cron. Sigue siendo obligatorio (objeto): toda escritura de /plataforma dice
+ * quién la hizo.
+ */
+export type EntitlementActor = PlatformActorRef | TenantEntitlementActor;
+type ActorFor<S extends EntitlementSource> = S extends "platform" ? PlatformActorRef : TenantEntitlementActor;
 
 export type ApplyTenantEntitlementsInput = {
   [S in EntitlementSource]: {
@@ -75,7 +110,7 @@ export type ApplyTenantEntitlementsInput = {
     patch: EntitlementPatchFor<S>;
     /** `updatedAt` que vio el caller (Drawer, form). Sin valor = sin CAS (webhook). */
     expectedUpdatedAt?: Date;
-    actor: EntitlementActor;
+    actor: ActorFor<S>;
   };
 }[EntitlementSource];
 
@@ -128,6 +163,18 @@ function validatePatch(source: EntitlementSource, patch: Record<string, unknown>
         if (typeof v !== "boolean") programmingError("publicBookingEnabled tiene que ser boolean");
         out.publicBookingEnabled = v;
         break;
+      case "status":
+        if (!Object.values(TenantStatus).includes(v as TenantStatus)) programmingError(`status inválido: ${String(v)}`);
+        out.status = v as TenantStatus;
+        break;
+      case "seatLimitOverride":
+        // Mismo criterio que el CHECK "Tenant_seatLimitOverride_check" (M7), pero antes del
+        // UPDATE: un 23514 adentro de la tx la aborta con un error opaco.
+        if (v !== null && !(typeof v === "number" && Number.isInteger(v) && v >= 1)) {
+          programmingError(`seatLimitOverride inválido: ${String(v)} (null o entero ≥ 1)`);
+        }
+        out.seatLimitOverride = v as number | null;
+        break;
     }
   }
   return out;
@@ -140,10 +187,10 @@ function sameValue(a: unknown, b: unknown): boolean {
   return a === b;
 }
 
-/** Para el payload del audit: solo enums, booleanos y fechas ISO (sin PHI). */
-function auditValue(v: unknown): string | boolean | null {
+/** Para el payload del audit: solo enums, booleanos, el cupo (entero) y fechas ISO (sin PHI). */
+function auditValue(v: unknown): string | boolean | number | null {
   if (v instanceof Date) return v.toISOString();
-  return v as string | boolean | null;
+  return v as string | boolean | number | null;
 }
 
 export async function applyTenantEntitlementsInTx(
@@ -160,6 +207,7 @@ export async function applyTenantEntitlementsInTx(
     if (actor && actor.homeTenantId !== tenantId) programmingError("billing con un actor de otro consultorio");
   } else {
     // onboarding / tenant-settings: el propio consultorio, siempre con Actor.
+    // (`homeTenantId` null, el de un PlatformActorRef, también rebota acá.)
     if (!actor) programmingError(`source ${source} sin actor`);
     if (actor.homeTenantId !== tenantId) programmingError(`source ${source} sobre un consultorio ajeno`);
   }
@@ -179,6 +227,8 @@ export async function applyTenantEntitlementsInTx(
       subscriptionStatus: true,
       trialEndsAt: true,
       publicBookingEnabled: true,
+      status: true,
+      seatLimitOverride: true,
       onboardingCompletedAt: true,
       updatedAt: true,
     },
@@ -198,8 +248,8 @@ export async function applyTenantEntitlementsInTx(
 
   // ── Diff ───────────────────────────────────────────────────────────────────
   const changed: EntitlementKey[] = [];
-  const before: Record<string, string | boolean | null> = {};
-  const after: Record<string, string | boolean | null> = {};
+  const before: Record<string, string | boolean | number | null> = {};
+  const after: Record<string, string | boolean | number | null> = {};
   const data: Prisma.TenantUpdateInput = {};
   for (const key of ALL_KEYS) {
     if (!(key in patch)) continue;
@@ -220,22 +270,31 @@ export async function applyTenantEntitlementsInTx(
   // dejarían el mismo valor y un `expectedUpdatedAt` viejo pasaría el CAS. Se
   // fuerza estrictamente mayor que el anterior (tenemos el lock: nadie más mueve
   // la fila entre la lectura y este UPDATE).
-  data.updatedAt = new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1));
+  const now = new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1));
+  data.updatedAt = now;
+  // Fechas derivadas (C-BO6): solo si el valor cambió de verdad (`changed` ya filtró los
+  // no-op), con el mismo instante que `updatedAt` para que se puedan correlacionar.
+  if (changed.includes("status")) data.statusChangedAt = now;
+  if (changed.includes("subscriptionStatus")) data.subscriptionStatusChangedAt = now;
   const updated = await tx.tenant.update({ where: { id: tenantId }, data, select: { updatedAt: true } });
 
   // ── Audit en el tenant afectado, en la misma tx ────────────────────────────
   const payload = { source, changed, before, after };
   if (source === "platform") {
-    // `actor` no es null: validado arriba.
-    await auditPlatformInTx(
-      tx,
-      { userId: actor!.userId, tenantId: actor!.homeTenantId },
-      { affectedTenantId: tenantId, action: "tenant.entitlements", entity: "Tenant", entityId: tenantId, payload }
-    );
+    // `actor` no es null: validado arriba. Sin idempotencyKey: el CAS ya evita el doble
+    // write (un segundo submit con el mismo `expectedUpdatedAt` recibe `stale`).
+    await auditPlatformInTx(tx, {
+      actor: actor as PlatformActorRef,
+      affectedTenantId: tenantId,
+      action: "platform.tenant.entitlements",
+      entity: "Tenant",
+      entityId: tenantId,
+      payload,
+    });
   } else {
     await auditInTx(tx, {
       tenantId,
-      actorId: actor?.userId,
+      actorId: (actor as TenantEntitlementActor)?.userId,
       action: "tenant.entitlements",
       entity: "Tenant",
       entityId: tenantId,

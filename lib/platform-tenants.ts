@@ -54,7 +54,8 @@ export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{
       source: "platform",
       patch,
       expectedUpdatedAt: new Date(expectedUpdatedAt),
-      actor: { userId: actor.userId, homeTenantId: actor.tenantId },
+      // PlatformActorRef (C-BO5): el email lo completa el registro desde UserProfile.
+      actor: { userId: actor.userId, email: null, homeTenantId: actor.tenantId },
     })
   );
 

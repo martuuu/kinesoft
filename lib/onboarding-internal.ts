@@ -13,8 +13,7 @@ import type { TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getVerifiedSessionUser } from "@/lib/session-user";
-import { loadAccessMemberships } from "@/lib/session";
-import { isUsableMembership } from "@/lib/access-logic";
+import { loadAccessMemberships, usableAccessMemberships } from "@/lib/session";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { isCustomSchedule, type OnboardingProgress } from "@/lib/onboarding-logic";
@@ -200,7 +199,8 @@ export async function loadOnboardingContext(
   // invitaciones pendientes o crear su propio consultorio (el layout ya lo manda a /sin-acceso, que ofrece esto).
   if (!inProgress && memberships.length > 0) {
     const access = await loadAccessMemberships(user.id);
-    if (access.memberships.some((m) => isUsableMembership(m))) return { kind: "done" };
+    // BO1-A: «usable» también mira usuario deshabilitado y consultorio suspendido/cerrado.
+    if (usableAccessMemberships(access.memberships, access.profile).length > 0) return { kind: "done" };
   }
 
   if (!inProgress) {

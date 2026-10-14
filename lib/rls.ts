@@ -15,6 +15,8 @@
  */
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
+import { getRequestContext } from "@/lib/request-context";
+import { ReadOnlyModeError, isReadOnlyViolation } from "@/lib/tenant-access";
 
 /**
  * A Prisma client usable for tenant-scoped work: either the base client
@@ -47,16 +49,46 @@ export async function runWithRls<T>(
   // Se copian solo las dos claves: así un caller no puede colar
   // `isolationLevel` u otra opción por un objeto más ancho.
   const txOpts = opts ? { timeout: opts.timeout, maxWait: opts.maxWait } : undefined;
-  return prisma.$transaction(async (tx) => {
-    // `set_config('app.current_tenant_id', $1, true)` — `true` makes it
-    // local to the transaction, so the GUC is automatically reset when
-    // the connection returns to the pool.
-    await tx.$executeRawUnsafe(
-      `SELECT set_config('app.current_tenant_id', $1, true)`,
-      tenantId
-    );
-    return fn(tx);
-  }, txOpts);
+  const readOnly = isReadOnlyFor(tenantId);
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // `set_config('app.current_tenant_id', $1, true)` — `true` makes it
+      // local to the transaction, so the GUC is automatically reset when
+      // the connection returns to the pool.
+      //
+      // BO1-A (C-BO3): en modo lectura, la MISMA sentencia pone la transacción
+      // en `transaction_read_only` (= SET LOCAL transaction_read_only). Va en
+      // la misma sentencia a propósito: no suma un round-trip (el techo de
+      // createBooking es 34, tests/integration/bookings-rooms.test.ts). Pasar
+      // a read-only está permitido en cualquier punto de la tx (lo prohibido es
+      // volver a read-write después de una query). Postgres rechaza después
+      // TODO write con 25006 — incluidos los que una action haga por un camino
+      // no previsto — y deja leer: la HC nunca se bloquea.
+      await tx.$executeRawUnsafe(
+        readOnly
+          ? `SELECT set_config('app.current_tenant_id', $1, true), set_config('transaction_read_only', 'on', true)`
+          : `SELECT set_config('app.current_tenant_id', $1, true)`,
+        tenantId
+      );
+      return fn(tx);
+    }, txOpts);
+  } catch (err) {
+    // El 25006 sale de Prisma como error crudo del conector: se traduce a un error con copy en voseo que las
+    // actions pueden mostrar tal cual.
+    if (readOnly && isReadOnlyViolation(err)) throw new ReadOnlyModeError();
+    throw err;
+  }
+}
+
+/**
+ * ¿Esta transacción va en solo lectura? Solo si el contexto del request es del MISMO tenant (una superficie sin
+ * Actor —webhook de MP, turnero, cron— no tiene contexto y nunca se bloquea) y no es una action de soporte
+ * habilitada (`supportWritable`, C-BO4).
+ */
+function isReadOnlyFor(tenantId: string): boolean {
+  const ctx = getRequestContext();
+  if (!ctx || ctx.tenantId !== tenantId) return false;
+  return !!ctx.readOnly && !ctx.supportWritable;
 }
 
 /**

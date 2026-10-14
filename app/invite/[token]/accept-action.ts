@@ -15,6 +15,7 @@ import { findInvitationByRawToken } from "@/lib/invitations-internal";
 import {
   INVITE_MESSAGES,
   InvitationRaceError,
+  UserDisabledError,
   closedInvitationMessage,
   joinTenantInTx,
   setActiveTenantCookie,
@@ -87,6 +88,7 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
       })
     );
   } catch (err) {
+    if (err instanceof UserDisabledError) return { ok: false, error: INVITE_MESSAGES.user_disabled };
     if (err instanceof InvitationRaceError) {
       const again = await findInvitationByRawToken(token, new Date());
       return {

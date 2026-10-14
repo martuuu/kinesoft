@@ -9,7 +9,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { getActor } from "@/lib/session";
+import { getActor, writableError } from "@/lib/session";
 import type { ActionResult } from "@/lib/validation";
 import {
   AgendaViewPrefsPatchSchema,
@@ -58,6 +58,9 @@ export async function updateUserPreferences(
 ): Promise<ActionResult<Preferences>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  // BO1-A (C-BO3): escritura fuera de `runWithRls` (UserPreferences no tiene RLS) → corte explícito.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const palettes: Palette[] = ["sky", "mint", "coral", "violet"];
   if (patch.palette && !palettes.includes(patch.palette)) {
     return { ok: false, error: "Paleta inválida." };
@@ -132,6 +135,9 @@ export async function updateAgendaViewPrefs(
 ): Promise<ActionResult<AgendaViewPrefs>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  // BO1-A (C-BO3): escritura fuera de `runWithRls` (UserPreferences no tiene RLS) → corte explícito.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const parsed = AgendaViewPrefsPatchSchema.safeParse(patch);
   if (!parsed.success) return { ok: false, error: "Preferencias de agenda inválidas." };
   const row = await prisma.userPreferences.findUnique({
@@ -160,6 +166,9 @@ export async function updateDashboardPrefs(
 ): Promise<ActionResult<DashboardPrefs>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  // BO1-A (C-BO3): escritura fuera de `runWithRls` (UserPreferences no tiene RLS) → corte explícito.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const parsed = DashboardPrefsPatchSchema.safeParse(patch);
   if (!parsed.success) return { ok: false, error: "Preferencias del dashboard inválidas." };
   const row = await prisma.userPreferences.findUnique({

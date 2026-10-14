@@ -71,8 +71,8 @@ export type PlatformTenantCounts = {
 /** Un cambio de entitlement de un evento `platform.*` (enums, booleanos o fecha ISO). */
 export type PlatformAuditChange = {
   key: string;
-  before: string | boolean | null;
-  after: string | boolean | null;
+  before: string | boolean | number | null;
+  after: string | boolean | number | null;
 };
 
 export type PlatformAuditEventRow = {

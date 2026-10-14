@@ -10,13 +10,16 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import { getActor, writableError } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
 import type { ActionResult } from "@/lib/validation";
 
 export async function toggleFavourite(exerciseId: string): Promise<ActionResult<{ favourited: boolean }>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
+  // BO1-A (C-BO3): el delete/create de abajo van por el cliente base, fuera de `runWithRls` → corte explícito.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const gate = await gatingForActor();
   if (!gate.canFavourite) {
     return { ok: false, error: "Mejorá tu plan para guardar favoritos." };

@@ -3,7 +3,9 @@ import type { Role } from "@prisma/client";
 import { headers } from "next/headers";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { AppShell } from "@/components/layout/app-shell";
-import { getAccessSnapshot, tryGetActor } from "@/lib/session";
+import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
+import { tenantAccessEnforcement } from "@/lib/env";
+import { AccessBanner } from "@/components/layout/access-banner";
 import { getTenantChoiceState } from "@/lib/tenant-choice";
 import { switchTenant } from "@/lib/tenant-switch";
 import { getUserPreferences } from "@/lib/preferences";
@@ -28,7 +30,9 @@ import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
  *     rebotaba a /dashboard: bucle del 14-oct);
  *   - 2+ consultorios usables sin cookie válida → `/elegir-consultorio?next=`
  *     (decisión 6: se pregunta en cada login);
- *   - OWNER con `Tenant.onboardingCompletedAt == null` → `/onboarding`.
+ *   - OWNER con `Tenant.onboardingCompletedAt == null` → `/onboarding`;
+ *   - BO1-A: usuario deshabilitado → `/cuenta-desactivada`; consultorio suspendido
+ *     o dado de baja sin otro usable → `/suspendido` (con otro usable entra a ese).
  * Ningún destino está dentro de `(app)`, así que el gate no se puede rebotar a sí mismo.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -37,6 +41,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // membresías. null = sin sesión (o actor demo).
   const choice = await getTenantChoiceState();
   const snapshot = await getAccessSnapshot();
+  // BO1-A: misma foto (cero queries): usuario deshabilitado / consultorio suspendido o dado de baja.
+  const block = await getSessionBlock();
 
   // El layout no recibe el pathname: lo lee de `x-pathname`, que el middleware
   // pisa en cada request. safeNext lo deja pasar solo si es un path propio, así
@@ -57,6 +63,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       role: null,
       onboardingCompleted: false,
       nextPath,
+      block: block?.kind ?? null,
     });
   } else {
     const t = await runWithRls(actor.tenantId, async (tx) => {
@@ -79,6 +86,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       role: t.role,
       onboardingCompleted: t.completed,
       nextPath,
+      block: block?.kind ?? null,
     });
   }
   if (gate) redirect(gate);
@@ -133,6 +141,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         activeTenantId={actor.tenantId}
         switchTenantAction={switchTenant}
       >
+        {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). */}
+        <AccessBanner access={actor.access} enforcement={tenantAccessEnforcement()} />
         {children}
       </AppShell>
     </TweaksProvider>

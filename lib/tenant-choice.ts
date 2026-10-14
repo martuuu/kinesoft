@@ -17,9 +17,8 @@ import type { Role, TenantVertical } from "@prisma/client";
 // `tenantId` es un puntero mutable). Mismo canal que la lectura de `loadAccessMemberships`; filtro = la sesión.
 import { prismaService } from "@/lib/db";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
-import { isUsableMembership } from "@/lib/access-logic";
 import { getVerifiedSessionUser } from "@/lib/session-user";
-import { ForbiddenError, UnauthenticatedError, getAccessSnapshot, loadAccessMemberships } from "@/lib/session";
+import { ForbiddenError, UnauthenticatedError, getAccessSnapshot, loadAccessMemberships, usableAccessMemberships } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
 
@@ -76,9 +75,10 @@ export async function setActiveTenant(tenantId: string): Promise<void> {
   if (!user) throw new UnauthenticatedError("no_session");
 
   // Lectura fresca (no la foto del request): entre que se pintó la pantalla y el click, lo pudieron suspender.
-  const { memberships } = await loadAccessMemberships(user.id);
-  const target = memberships.find((m) => m.tenantId === parsed.data);
-  if (!target || !isUsableMembership(target)) {
+  const { memberships, profile } = await loadAccessMemberships(user.id);
+  // BO1-A: un consultorio suspendido/cerrado o un usuario deshabilitado no se pueden elegir.
+  const target = usableAccessMemberships(memberships, profile).find((m) => m.tenantId === parsed.data);
+  if (!target) {
     logger.warn("session.tenant.choose.refused", { userId: user.id, tenantId: parsed.data });
     throw new ForbiddenError("tenant_not_usable");
   }

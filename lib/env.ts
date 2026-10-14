@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
+import { ACCESS_ENFORCEMENTS, type AccessEnforcement } from "@/lib/tenant-access";
 
 // IAM-0b: `.env.example` trae estas variables vacías (`EMAIL_TRANSPORT=""`).
 // Un string vacío cuenta como "no seteada", no como un valor inválido: si no,
@@ -61,6 +62,18 @@ const schema = z.object({
   EMAIL_TRANSPORT: z.preprocess(emptyAsUndefined, z.enum(["resend", "mailpit", "log"]).optional()),
   EMAIL_REPLY_TO: z.preprocess(emptyAsUndefined, z.string().optional()),
   MAILPIT_URL: z.preprocess(emptyAsUndefined, z.string().url().optional()),
+
+  // BO1-A (C-BO1, plan §19.5): despliegue del bloqueo por acceso del consultorio.
+  //   off     = nada se corta (interruptor de emergencia).
+  //   banner  = DEFAULT: la banda avisa (prueba, gracia, solo lectura) y solo se respeta la suspensión/baja
+  //             explícita desde /plataforma. Prod es demo y hay consultorios en TRIALING vencido: no se los
+  //             bloquea hasta que Martin lo decida.
+  //   enforce = solo lectura real (transacciones read-only) y superficies públicas cerradas.
+  // Los cortes leen `tenantAccessEnforcement()` (process.env en cada llamada), no este objeto congelado.
+  TENANT_ACCESS_ENFORCEMENT: z.preprocess(
+    emptyAsUndefined,
+    z.enum(ACCESS_ENFORCEMENTS as unknown as [AccessEnforcement, ...AccessEnforcement[]]).default("banner")
+  ),
 
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
@@ -205,6 +218,17 @@ export const env = parseEnv({
   EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO,
   MAILPIT_URL: process.env.MAILPIT_URL,
   VERCEL_ENV: process.env.VERCEL_ENV,
+  TENANT_ACCESS_ENFORCEMENT: process.env.TENANT_ACCESS_ENFORCEMENT,
 });
+
+/**
+ * `TENANT_ACCESS_ENFORCEMENT` vigente, leído de `process.env` en cada llamada (como el transporte de mail): los
+ * tests de integración lo cambian en caliente y `env` se congela al importar. Un valor inválido cae al default
+ * `banner` (el boot ya lo rechazó en `parseEnv`; acá no se tira en medio de un request).
+ */
+export function tenantAccessEnforcement(): AccessEnforcement {
+  const v = process.env.TENANT_ACCESS_ENFORCEMENT?.trim();
+  return v === "off" || v === "banner" || v === "enforce" ? v : "banner";
+}
 
 export const isProd = env.NODE_ENV === "production";

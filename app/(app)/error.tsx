@@ -6,5 +6,5 @@ export default function AppSectionError(props: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  return <RouteError {...props} />;
+  return <RouteError {...props} kind="app" />;
 }

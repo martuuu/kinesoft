@@ -2,6 +2,8 @@
  * A3c-S-signup — lógica pura del guard de la app, del stepper y del slug.
  * B5.5 ONB — pasos Sede y Tu horario: retome, saltos y "semana propia".
  * IAM-3a — gate sin bucles: /sin-acceso, /elegir-consultorio y ningún destino que rebote a sí mismo.
+ * BO1-A — bloqueos de sesión (usuario deshabilitado, consultorio suspendido/dado de baja): /cuenta-desactivada y
+ * /suspendido, también fuera de (app) y como slugs reservados.
  */
 import { describe, it, expect } from "vitest";
 import type { AccessState } from "@/lib/access-logic";
@@ -18,6 +20,7 @@ import {
   resolveStep,
   slugify,
   type AppGateInput,
+  type AppGateBlock,
   type OnboardingProgress,
 } from "@/lib/onboarding-logic";
 
@@ -85,6 +88,28 @@ describe("decideAppGate", () => {
     expect(gate({ hasSession: false, hasActor: true, access: null, role: "OWNER", onboardingCompleted: true })).toBeNull();
   });
 
+  it("[BO1-A] usuario deshabilitado → /cuenta-desactivada, gane lo que gane el resto", () => {
+    expect(gate({ hasSession: true, block: "user_disabled", access: { kind: "no_access", reason: "all_disabled" } })).toBe(
+      "/cuenta-desactivada"
+    );
+    // Aunque hubiera Actor (carrera entre la foto y el bloqueo), el bloqueo manda.
+    expect(gate({ hasSession: true, hasActor: true, access: OK, role: "OWNER", onboardingCompleted: true, block: "user_disabled" })).toBe(
+      "/cuenta-desactivada"
+    );
+  });
+
+  it("[BO1-A] consultorio suspendido o dado de baja (sin otro usable) → /suspendido, sin next", () => {
+    for (const block of ["tenant_suspended", "tenant_closed"] as const) {
+      expect(gate({ hasSession: true, block, access: { kind: "no_access", reason: "all_disabled" }, nextPath: "/agenda" })).toBe(
+        "/suspendido"
+      );
+    }
+  });
+
+  it("[BO1-A] sin sesión un bloqueo no se aplica (no hay a quién mostrárselo): /login", () => {
+    expect(gate({ hasSession: false, block: "user_disabled" })).toBe("/login");
+  });
+
   it("[IAM-3a] ningún destino rebota a sí mismo: todos viven fuera de (app), en todas las combinaciones", () => {
     const accesses: Array<AccessState | null> = [
       null,
@@ -95,6 +120,7 @@ describe("decideAppGate", () => {
       { kind: "no_access", reason: "pending_only" },
     ];
     const appRoutes = ["/dashboard", "/agenda", "/pacientes", "/configuracion", "/plataforma", "/sala"];
+    const blocks: Array<AppGateBlock | null> = [null, "user_disabled", "tenant_suspended", "tenant_closed"];
     let seen = 0;
     for (const hasSession of [false, true])
       for (const hasActor of [false, true])
@@ -102,8 +128,9 @@ describe("decideAppGate", () => {
           for (const needsChoice of [false, true])
             for (const role of [null, "OWNER", "PRACTITIONER", "ASSISTANT"])
               for (const onboardingCompleted of [false, true])
+                for (const block of blocks)
                 for (const nextPath of [null, "/dashboard", "/agenda?d=1"]) {
-                  const to = decideAppGate({ hasSession, hasActor, access, needsChoice, role, onboardingCompleted, nextPath });
+                  const to = decideAppGate({ hasSession, hasActor, access, needsChoice, role, onboardingCompleted, nextPath, block });
                   seen++;
                   if (to === null) continue;
                   const path = to.split("?")[0];
@@ -113,11 +140,20 @@ describe("decideAppGate", () => {
                   const next = new URLSearchParams(to.split("?")[1] ?? "").get("next");
                   if (next) expect(next.split("?")[0]).not.toBe(path);
                 }
-    expect(seen).toBeGreaterThan(1000);
+    expect(seen).toBeGreaterThan(4000);
   });
 
   it("[IAM-3a] los destinos del gate son slugs reservados (un consultorio no puede tapar la ruta)", () => {
     for (const d of APP_GATE_DESTINATIONS) expect(isValidSlug(d.slice(1))).toBe(false);
+  });
+
+  it("[BO1-A] /suspendido y /cuenta-desactivada están entre los destinos y son slugs reservados", () => {
+    expect(APP_GATE_DESTINATIONS).toContain("/suspendido");
+    expect(APP_GATE_DESTINATIONS).toContain("/cuenta-desactivada");
+    expect(isValidSlug("suspendido")).toBe(false);
+    expect(isValidSlug("cuenta-desactivada")).toBe(false);
+    // slugify nunca propone uno reservado.
+    expect(slugify("Suspendido")).not.toBe("suspendido");
   });
 });
 
