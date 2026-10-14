@@ -915,3 +915,110 @@ describe.skipIf(!RUN || BYPASS)("RLS EmailLog (IAM-1 M6, app role)", () => {
     expect(n).toBe(1);
   });
 });
+
+// ── BO0 (M7 platform_backoffice) ────────────────────────────────────────
+// PlatformAuditEvent y TenantSlugAlias son SERVICE_ONLY (ENABLE + FORCE, cero
+// policies): la app no ve ni escribe nada con ningún GUC. SupportSession es
+// TENANT_READONLY (solo policy SELECT por tenant): el consultorio ve las suyas y
+// no escribe. Acá por `runWithRls` real (kinesoft_app); objetos, trigger
+// append-only, CHECKs y el parcial en platform-backoffice-m7.test.ts (que además
+// prueba el rol de la app con SET ROLE en los dos modos).
+describe.skipIf(!RUN || BYPASS)("RLS plataforma (BO0 M7, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const sfx = `m7-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const superId = `test-user-${sfx}`;
+  const alias = `test-alias-${sfx}`;
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let eventA: string;
+  let sessA: string;
+  let sessB: string;
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    await prismaOwner.userProfile.create({ data: { id: superId, email: `${superId}@test.local`, isPlatformAdmin: true } });
+    eventA = (
+      await prismaOwner.platformAuditEvent.create({
+        data: { actorId: superId, action: "platform.tenant.suspend", tenantId: A.tenantId, entity: "Tenant", entityId: A.tenantId },
+      })
+    ).id;
+    sessA = (
+      await prismaOwner.supportSession.create({
+        data: { tenantId: A.tenantId, superadminId: superId, reason: "Revisar obras sociales", endedAt: new Date() },
+      })
+    ).id;
+    sessB = (
+      await prismaOwner.supportSession.create({
+        data: { tenantId: B.tenantId, superadminId: superId, reason: "Revisar horarios del equipo" },
+      })
+    ).id;
+    await prismaOwner.tenantSlugAlias.create({ data: { slug: alias, tenantId: A.tenantId } });
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra registro (saltando el trigger), sesiones y alias.
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.userProfile.deleteMany({ where: { id: superId } });
+    await prismaOwner.$disconnect();
+  });
+
+  it("PlatformAuditEvent: invisible para la app con el GUC de su consultorio; INSERT rechazado", async () => {
+    expect(await runWithRls(A.tenantId, (tx) => tx.platformAuditEvent.count({ where: { id: eventA } }))).toBe(0);
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.platformAuditEvent.create({ data: { action: "platform.x", tenantId: A.tenantId, entity: "Tenant" } })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    expect(await prismaOwner.platformAuditEvent.count({ where: { id: eventA } })).toBe(1);
+  });
+
+  it("TenantSlugAlias: invisible para la app; INSERT rechazado; UPDATE/DELETE 0 filas", async () => {
+    expect(await runWithRls(A.tenantId, (tx) => tx.tenantSlugAlias.count({ where: { slug: alias } }))).toBe(0);
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.tenantSlugAlias.create({ data: { slug: `${alias}-x`, tenantId: A.tenantId } }))
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.tenantSlugAlias.updateMany({ where: { slug: alias }, data: { tenantId: B.tenantId } })).count,
+      (await tx.tenantSlugAlias.deleteMany({ where: { slug: alias } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    expect((await prismaOwner.tenantSlugAlias.findUniqueOrThrow({ where: { slug: alias } })).tenantId).toBe(A.tenantId);
+  });
+
+  it("SupportSession: cada consultorio ve solo las suyas; sin GUC, ninguna", async () => {
+    const ids = [sessA, sessB];
+    const seenA = await runWithRls(A.tenantId, (tx) =>
+      tx.supportSession.findMany({ where: { id: { in: ids } }, select: { id: true } })
+    );
+    expect(seenA.map((r) => r.id)).toEqual([sessA]);
+    const seenB = await runWithRls(B.tenantId, (tx) =>
+      tx.supportSession.findMany({ where: { id: { in: ids } }, select: { id: true } })
+    );
+    expect(seenB.map((r) => r.id)).toEqual([sessB]);
+    const app = new PrismaClient();
+    try {
+      expect(await app.supportSession.count({ where: { id: { in: ids } } })).toBe(0);
+    } finally {
+      await app.$disconnect();
+    }
+  });
+
+  it("SupportSession: la app no inserta (ni en su consultorio) y no cierra ni borra la propia", async () => {
+    await expect(
+      runWithRls(A.tenantId, (tx) =>
+        tx.supportSession.create({ data: { tenantId: A.tenantId, superadminId: superId, reason: "Intento desde la app" } })
+      )
+    ).rejects.toThrow(/row-level security/i);
+    const counts = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.supportSession.updateMany({ where: { id: sessB }, data: { endedAt: new Date() } })).count,
+      (await tx.supportSession.deleteMany({ where: { id: sessB } })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    expect((await prismaOwner.supportSession.findUniqueOrThrow({ where: { id: sessB } })).endedAt).toBeNull();
+  });
+});

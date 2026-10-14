@@ -1,4 +1,4 @@
-import { PrismaClient, type Role, type RoomKind, type TenantPlan, type TenantVertical } from "@prisma/client";
+import { PrismaClient, type Role, type RoomKind, type TenantPlan, type TenantStatus, type TenantVertical } from "@prisma/client";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -93,6 +93,18 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   await db.userPreferences.deleteMany({ where: { tenantId } });
   // IAM-1 (M6): EmailLog cascadea de Tenant; explícito para que un fallo tire.
   await db.emailLog.deleteMany({ where: { tenantId } });
+  // BO0 (M7): las tres tablas nuevas son RESTRICT hacia Tenant (la baja de un
+  // consultorio real es lógica, status CLOSED). PlatformAuditEvent además es solo
+  // inserción: un trigger rechaza el DELETE incluso al owner, así que la limpieza de
+  // TEST lo saltea con `session_replication_role = replica` LOCAL a esta tx (los
+  // triggers comunes no disparan en modo réplica). Requiere superusuario: el owner
+  // del Docker local lo es; en prod no, y esto nunca corre ahí.
+  await db.$transaction([
+    db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "PlatformAuditEvent" WHERE "tenantId" = ${tenantId}`,
+  ]);
+  await db.supportSession.deleteMany({ where: { tenantId } });
+  await db.tenantSlugAlias.deleteMany({ where: { tenantId } });
   // Membership, Practitioner, Insurer, Invitation, custom Condition/Exercise,
   // Favorite and PlanTemplate cascade from Tenant.
   // SR M4: Location → Room → TimeBlock cascadean; PractitionerSchedule → Room es
@@ -114,6 +126,9 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
       })
     ).map((u) => u.id);
     if (removable.length) {
+      // BO0 (M7): SupportSession → UserProfile es RESTRICT; un usuario de test que
+      // además fue superadmin de soporte en OTRO tenant de test se lleva sus sesiones.
+      await db.supportSession.deleteMany({ where: { superadminId: { in: removable } } });
       await db.userPreferences.deleteMany({ where: { userId: { in: removable } } });
       await db.userProfile.deleteMany({ where: { id: { in: removable } } });
     }
@@ -135,6 +150,12 @@ export async function createEphemeralTenant(
      * está abierta: por eso la factory lo prende salvo que se pida `false`.
      */
     publicBookingEnabled?: boolean;
+    /** BO0 (M7): sin valor → default de la base (ACTIVE). Distinto de ACTIVE estampa `statusChangedAt`. */
+    status?: TenantStatus;
+    /** BO0 (M7): cupo a medida (NULL = el del plan). La base exige ≥ 1. */
+    seatLimitOverride?: number | null;
+    /** BO0 (M7): el UserProfile del OWNER nace deshabilitado a nivel plataforma. */
+    disabled?: boolean;
   } = {}
 ): Promise<EphemeralTenant> {
   const s = uniqueSuffix();
@@ -151,10 +172,18 @@ export async function createEphemeralTenant(
       publicBookingEnabled: opts.publicBookingEnabled ?? true,
       // Como el backfill de tenant_onboarding: los tenants de test ya "terminaron" el alta.
       onboardingCompletedAt: new Date(),
+      status: opts.status,
+      statusChangedAt: opts.status && opts.status !== "ACTIVE" ? new Date() : undefined,
+      seatLimitOverride: opts.seatLimitOverride,
     },
   });
   await prisma.userProfile.create({
-    data: { id: userId, email: `${userId}@test.local`, fullName: `Test ${s}` },
+    data: {
+      id: userId,
+      email: `${userId}@test.local`,
+      fullName: `Test ${s}`,
+      ...(opts.disabled ? { disabledAt: new Date(), disabledReason: "Deshabilitado por el test" } : {}),
+    },
   });
   const practitioner = await prisma.practitioner.create({
     data: { tenantId: tenant.id, userId, specialty: "Test" },
@@ -323,7 +352,14 @@ export async function sweepOrphanTestTenants(prisma: PrismaClient): Promise<numb
   await prisma.userProfile.deleteMany({
     // practitioners none: Practitioner → UserProfile es RESTRICT (IAM-1: un perfil puede quedar como
     // profesional de otro tenant de test todavía vivo).
-    where: { id: { startsWith: "test-user-" }, memberships: { none: {} }, practitioners: { none: {} }, createdAt: { lt: cutoff } },
+    // supportSessions none: SupportSession → UserProfile es RESTRICT (BO0, M7).
+    where: {
+      id: { startsWith: "test-user-" },
+      memberships: { none: {} },
+      practitioners: { none: {} },
+      supportSessions: { none: {} },
+      createdAt: { lt: cutoff },
+    },
   });
   return orphans.length;
 }

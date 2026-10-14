@@ -47,6 +47,7 @@ Orden de corridas (13-oct): ES3 (M3a ✅ local) → SR (M4 ✅ local) → SV (M5
 | `20261009120000_rooms` (**M4**) | SR (SR0, sola) | **escrita y aplicada solo en el Docker local (08-oct), commiteada (`5811ea2`)**. sha256 de `migration.sql` = `5ab748c120edead75ed2c8334a042404d0ced9d5776ce45d793d6e74dc7b5056`. Aditiva, sin backfill, `lock_timeout` 5 s: enum `RoomKind`; tabla `Room` (RLS ENABLE + FORCE + `Room_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES; CHECKs de nombre, `capacity` 1..50 y orden); `Location_id_tenantId_key`; `roomId` nullable en `PractitionerSchedule` (NO ACTION), `Booking` (RESTRICT, CHECK `Booking_room_location_check`) y `TimeBlock` (CASCADE, CHECK `TimeBlock_room_scope_check`), con FKs compuestas `(roomId, tenantId)` y `(roomId, locationId)`; índice parcial `Room_locationId_name_active_key` (**no se borra** si `migrate dev` lo propone: drift aceptado, «SR M4: DRIFT ACEPTADO» en el SQL y en `schema.prisma`). Verificada objeto por objeto en `tests/integration/rooms-m4.test.ts` (2 roles); `migrate status` al día (31); `guard:isolation` OK. Orden para prod abajo («M4») |
 | `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), commiteada (`d70513a`)**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
 | `20261014120000_identity_access` (**M6**) | IAM-1 (sola) | **escrita y aplicada solo en el Docker local (14-oct), commiteada (`972359f`)**; el SQL no se toca. sha256 de `migration.sql` = `c217390839dbf619454cc3c3aef5d0c2e484d319ce18bd1d81cadbe3baef0773`. `lock_timeout` 5 s, con prechequeo interno (marcadores `PRECHECK`) que aborta si hay pares `(tenantId, userId)` repetidos en `Practitioner`. Objetos: único `Practitioner_tenantId_userId_key`, **DROP de `Practitioner_userId_key`** (única excepción a «aditiva», aprobada por Martin el 14-oct, IAM-D2; precedente M1) e índice `Practitioner_userId_idx`; `Membership.disabledAt/disabledById` (nullables); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt` (nullables), `sendCount INT NOT NULL DEFAULT 0`, `priorTokens TEXT[] NOT NULL DEFAULT '{}'`; tabla `EmailLog` (tenantId nullable, FK a Tenant CASCADE, índices `(tenantId, createdAt)` y `(entity, entityId, createdAt)`, CHECK `EmailLog_status_check` sent/skipped/failed/blocked, RLS ENABLE + FORCE + `EmailLog_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES). CHECK y policy no están en Prisma: drift aceptado. Verificada objeto por objeto (psql + `tests/integration/identity-m6.test.ts` y bloque EmailLog de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (33); `guard:isolation` OK. Orden para prod abajo («M6») |
+| `20261015120000_platform_backoffice` (**M7**) | BO0 (sola) | **escrita y aplicada solo en el Docker local (14-oct), sin commitear todavía**. sha256 de `migration.sql` = `ba463441be7235e4274e0e2bf30a7dde0757470b8204b6ae763d8735c625fa9a`. Aditiva, sin backfill, `lock_timeout` 5 s. Objetos: enums `TenantStatus` (ACTIVE/SUSPENDED/CLOSED) y `SupportScope` (ADMIN_CONFIG); `Tenant.status` (NOT NULL default ACTIVE), `statusChangedAt`, `statusReason`, `subscriptionStatusChangedAt`, `seatLimitOverride` (CHECK `Tenant_seatLimitOverride_check`: NULL o ≥ 1); `UserProfile.disabledAt/disabledReason`; tabla `PlatformAuditEvent` (tenantId nullable, FK a Tenant RESTRICT, único `idempotencyKey`, índices `(createdAt DESC, id)`, `(tenantId, createdAt)`, `(actorId, createdAt)`, `(targetUserId, createdAt)`, función `platform_audit_event_append_only()` + triggers `PlatformAuditEvent_append_only` (UPDATE/DELETE) y `PlatformAuditEvent_no_truncate`, RLS ENABLE + FORCE **sin policies**); tabla `SupportSession` (**sin vencimiento**, FKs a Tenant y UserProfile RESTRICT, CHECK `SupportSession_reason_check` 10-500, índice **parcial** único `SupportSession_one_open_per_superadmin`, índices `(tenantId, startedAt)` y `(superadminId, startedAt)`, RLS ENABLE + FORCE + policy `SupportSession_tenant_read` FOR SELECT); tabla `TenantSlugAlias` (PK slug, FK RESTRICT, índice por tenant, RLS ENABLE + FORCE sin policies). Sin GRANT: DEFAULT PRIVILEGES. CHECKs, parcial, triggers y RLS no están en Prisma: drift aceptado (`migrate diff` no propone nada de M7). Verificada objeto por objeto (psql + `tests/integration/platform-backoffice-m7.test.ts` y bloque «RLS plataforma» de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (34); `guard:isolation` OK (categorías nuevas SERVICE_ONLY / TENANT_READONLY). Orden para prod abajo («M7») |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
 cadena completa del deploy único de B (`migrate deploy` desde vacío, paso 4 de abajo). Solo si Martin decidiera
@@ -166,6 +167,44 @@ sobre la base viva:
    reemplaza con un advisory lock por usuario). Recomendado: migrar y deployar el mismo día; si se mergea a `main`
    sin aplicarla a mano, el build de Production la aplica antes de servir. `DROP INDEX` toma lock exclusivo sobre
    `Practitioner` hasta el COMMIT (milisegundos; `lock_timeout` 5 s → P3009 liviano si estuviera tomada).
+
+**M7 en prod (BO0).** Igual que M6: prod conserva sus datos, sin reset y **sin staging**.
+1. Precheck de solo lectura:
+   ```sql
+   -- todavía no aplicada: la primera da NULL | NULL | NULL y la segunda 0 filas
+   SELECT to_regclass('public."PlatformAuditEvent"'), to_regclass('public."SupportSession"'), to_regclass('public."TenantSlugAlias"');
+   SELECT typname FROM pg_type WHERE typname IN ('TenantStatus', 'SupportScope');
+   -- M6 ya aplicada (M7 va después): 1 fila
+   SELECT migration_name FROM _prisma_migrations WHERE migration_name = '20261014120000_identity_access' AND finished_at IS NOT NULL;
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. `npm run db:prod:deploy` y `npm run db:prod:status` → "Database schema is up to date!".
+4. Verificación objeto por objeto (solo lectura):
+   ```sql
+   SELECT table_name, column_name, is_nullable, column_default FROM information_schema.columns
+    WHERE table_schema = 'public' AND ((table_name = 'Tenant' AND column_name IN ('status','statusChangedAt','statusReason','subscriptionStatusChangedAt','seatLimitOverride'))
+      OR (table_name = 'UserProfile' AND column_name IN ('disabledAt','disabledReason')));
+   --   7 filas; status NOT NULL default 'ACTIVE'::"TenantStatus", el resto nullable sin default
+   SELECT count(*) FROM "Tenant" WHERE status <> 'ACTIVE';                                              -- 0
+   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+    WHERE relname IN ('PlatformAuditEvent','SupportSession','TenantSlugAlias');                         -- 3 filas t | t
+   SELECT tablename, policyname, cmd FROM pg_policies
+    WHERE tablename IN ('PlatformAuditEvent','SupportSession','TenantSlugAlias');                       -- 1 fila: SupportSession_tenant_read | SELECT
+   SELECT tgname, tgenabled FROM pg_trigger
+    WHERE tgrelid = 'public."PlatformAuditEvent"'::regclass AND NOT tgisinternal;                       -- _append_only y _no_truncate, O
+   SELECT indexname FROM pg_indexes WHERE indexname = 'SupportSession_one_open_per_superadmin';         -- 1 fila
+   SELECT conname FROM pg_constraint WHERE conname IN ('Tenant_seatLimitOverride_check','SupportSession_reason_check'); -- 2 filas
+   SELECT grantee FROM information_schema.role_table_grants
+    WHERE table_name IN ('PlatformAuditEvent','SupportSession','TenantSlugAlias') AND grantee IN ('anon','authenticated'); -- 0 filas
+   ```
+   Repetir `has_table_privilege('kinesoft_app'|'kinesoft_service', …, 'SELECT,INSERT')` si esos roles existen (t).
+5. **Antes o después del código:** puede ir **antes** (y es lo recomendado: el código de BO1+ lee las columnas nuevas).
+   Compatible hacia atrás: el código viejo no lee ni escribe nada nuevo (Prisma solo selecciona las columnas que
+   conoce; `status` nace ACTIVE en todos). Los `ALTER TABLE` toman lock exclusivo sobre `Tenant` y `UserProfile` hasta
+   el COMMIT (milisegundos, sin rewrite; `lock_timeout` 5 s → P3009 liviano si estuvieran tomadas).
+6. **No se puede limpiar a mano** `PlatformAuditEvent`: el trigger rechaza UPDATE/DELETE/TRUNCATE también al owner, y
+   las FKs RESTRICT impiden borrar un consultorio con registro de plataforma, alias o sesiones de soporte (la baja es
+   `status = CLOSED`). Es a propósito.
 
 **Deploy de SV en escalones** (después de que M5 esté aplicada, con la cadena o sola):
 1. Vercel env `REALTIME_DRIVER=off` (variable nueva) y deploy del código: nada se conecta y la app es idéntica a SR.
@@ -363,6 +402,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 16 | `20261009120000_rooms` | M4: `Room` con RLS + `roomId` en franja, turno y bloqueo (FKs compuestas, CHECKs) | SR — **ver «Go-live con reset»** |
 | 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
 | 18 | `20261014120000_identity_access` | M6: `Practitioner` único por consultorio (DROP del único global, aprobado), `Membership.disabledAt`, campos de `Invitation`, tabla `EmailLog` con RLS | IAM-1 — **ver «M6 en prod»** |
+| 19 | `20261015120000_platform_backoffice` | M7: `Tenant.status` + fechas + `seatLimitOverride`, `UserProfile.disabledAt`, `PlatformAuditEvent` (solo inserción), `SupportSession` (sin vencimiento, parcial una abierta por superadmin), `TenantSlugAlias`; RLS service-only / tenant-readonly | BO0 — **ver «M7 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

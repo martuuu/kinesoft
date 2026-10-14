@@ -14,6 +14,11 @@
  *   • a GLOBAL_READONLY catalog table (B-pre M-cat) is missing ENABLE/FORCE,
  *     has no SELECT policy, or has ANY write policy (ALL/INSERT/UPDATE/DELETE):
  *     the app role must only read the global catalog;
+ *   • (BO0, M7 platform_backoffice) a SERVICE_ONLY table is missing ENABLE/
+ *     FORCE or has ANY policy (the app role must see nothing; only the
+ *     BYPASSRLS service channel touches it), or a TENANT_READONLY table is
+ *     missing ENABLE/FORCE, has no `FOR SELECT` policy on
+ *     app_current_tenant_id(), or has ANY write policy;
  *   • (EV0, M2 tenant_verticals, plan §15.1) any migration or prisma/roles.*.sql
  *     GRANTs anything to the Supabase Data API roles `anon`/`authenticated`, or
  *     the guarded REVOKE block of M2 disappears. The app never uses PostgREST
@@ -36,7 +41,10 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// GUARD_ISOLATION_ROOT: solo para tests/unit/guard-tenant-isolation.test.ts, que
+// corre el guard real contra un repo de juguete (schema + migraciones) para
+// probar que falla ante una tabla con tenantId sin policy. Sin la variable, el repo.
+const ROOT = process.env.GUARD_ISOLATION_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCHEMA = join(ROOT, "prisma", "schema.prisma");
 const MIGRATIONS_DIR = join(ROOT, "prisma", "migrations");
 
@@ -61,6 +69,21 @@ const GLOBAL_READONLY = new Set([
   "CatalogImportRun",
 ]);
 const WRITE_CMDS = new Set(["ALL", "INSERT", "UPDATE", "DELETE"]);
+
+// BO0 (M7 platform_backoffice, plan §19.5): tablas CON tenantId que la app no
+// debe ver nunca. Contrato: ENABLE + FORCE y CERO policies → RLS default-deny
+// para `kinesoft_app` con cualquier GUC (tiene el GRANT por default privileges,
+// pero sin policy no ve ni escribe nada). Solo el canal service (BYPASSRLS) las
+// usa: el registro de plataforma (solo inserción, trigger) y los alias de slug
+// que lee el turnero. Que tengan tenantId sin policy NO es un olvido: por eso
+// están acá y no caen en el "missing" de abajo.
+const SERVICE_ONLY = new Set(["PlatformAuditEvent", "TenantSlugAlias"]);
+
+// BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la
+// plataforma por el canal service. Contrato: ENABLE + FORCE, al menos una policy
+// `FOR SELECT` filtrada por app_current_tenant_id() y NINGUNA de escritura
+// (ALL/INSERT/UPDATE/DELETE). SupportSession: el OWNER ve quién entró como soporte.
+const TENANT_READONLY = new Set(["SupportSession"]);
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`;
 const GREEN = (s) => `\x1b[32m${s}\x1b[0m`;
@@ -90,7 +113,7 @@ const tenantIdModels = new Set();
 /** @type {Map<string, {enabled: boolean, forced: boolean, policies: Map<string, string>}>} */
 const rls = new Map();
 const rlsOf = (t) => {
-  if (!rls.has(t)) rls.set(t, { enabled: false, forced: false, policies: new Map() });
+  if (!rls.has(t)) rls.set(t, { enabled: false, forced: false, policies: new Map(), policyText: new Map() });
   return rls.get(t);
 };
 const migrationDirs = readdirSync(MIGRATIONS_DIR)
@@ -144,8 +167,10 @@ for (const dir of migrationDirs) {
       // Postgres default for CREATE POLICY without FOR is ALL.
       const cmd = (sm[5].match(/\bFOR\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\b/i)?.[1] ?? "ALL").toUpperCase();
       rlsOf(sm[4]).policies.set(sm[3], cmd);
+      rlsOf(sm[4]).policyText.set(sm[3], sm[5]);
     } else if (sm[6]) {
       rlsOf(sm[7]).policies.delete(sm[6]);
+      rlsOf(sm[7]).policyText.delete(sm[6]);
     }
   }
 }
@@ -165,6 +190,7 @@ const missing = [];
 for (const name of tenantIdModels) {
   if (policied.has(name)) continue;
   if (ALLOWLIST.has(name)) continue;
+  if (SERVICE_ONLY.has(name)) continue; // contrato propio en 3c-bis
   missing.push(name);
 }
 
@@ -211,6 +237,54 @@ for (const name of ALLOWLIST) {
     fail(`GLOBAL_READONLY catalog contract broken:\n    ${bad.join("\n    ")}`);
   } else {
     console.log(GREEN(`✓ GLOBAL_READONLY (${GLOBAL_READONLY.size}): ENABLE + FORCE, SELECT-only policies.`));
+  }
+}
+
+// ── 3b-bis. SERVICE_ONLY / TENANT_READONLY (BO0, M7) ──────────────────
+{
+  const bad = [];
+  for (const name of SERVICE_ONLY) {
+    if (!allModels.has(name)) {
+      bad.push(`${name}: not a model in schema.prisma (stale SERVICE_ONLY entry?)`);
+      continue;
+    }
+    const st = rls.get(name);
+    if (!st || !st.enabled) bad.push(`${name}: RLS not ENABLEd`);
+    if (!st || !st.forced) bad.push(`${name}: RLS not FORCEd`);
+    for (const [pol, c] of st ? st.policies.entries() : []) {
+      bad.push(`${name}: policy "${pol}" (FOR ${c}) — SERVICE_ONLY tables must have ZERO policies (service channel only)`);
+    }
+  }
+  for (const name of TENANT_READONLY) {
+    if (!allModels.has(name)) {
+      bad.push(`${name}: not a model in schema.prisma (stale TENANT_READONLY entry?)`);
+      continue;
+    }
+    if (!tenantIdModels.has(name)) bad.push(`${name}: has no tenantId — TENANT_READONLY is tenant-scoped`);
+    const st = rls.get(name);
+    if (!st || !st.enabled) bad.push(`${name}: RLS not ENABLEd`);
+    if (!st || !st.forced) bad.push(`${name}: RLS not FORCEd`);
+    const entries = st ? [...st.policies.entries()] : [];
+    const tenantSelect = entries.some(
+      ([pol, c]) => c === "SELECT" && /"?tenantId"?\s*=\s*app_current_tenant_id\(\)/.test(st.policyText.get(pol) ?? "")
+    );
+    if (!tenantSelect) bad.push(`${name}: no FOR SELECT policy on "tenantId" = app_current_tenant_id()`);
+    for (const [pol, c] of entries) {
+      if (WRITE_CMDS.has(c)) bad.push(`${name}: write policy "${pol}" (FOR ${c}) — only the service channel writes it`);
+    }
+  }
+  for (const name of [...SERVICE_ONLY, ...TENANT_READONLY]) {
+    if (ALLOWLIST.has(name) || GLOBAL_READONLY.has(name)) bad.push(`${name}: listed in more than one RLS category`);
+  }
+  for (const name of SERVICE_ONLY) if (TENANT_READONLY.has(name)) bad.push(`${name}: both SERVICE_ONLY and TENANT_READONLY`);
+  if (bad.length) {
+    fail(`SERVICE_ONLY / TENANT_READONLY contract broken:\n    ${bad.join("\n    ")}`);
+  } else {
+    console.log(
+      GREEN(
+        `✓ SERVICE_ONLY (${SERVICE_ONLY.size}): ENABLE + FORCE, zero policies. TENANT_READONLY (${TENANT_READONLY.size}): ENABLE + FORCE, tenant SELECT only.`
+      )
+    );
   }
 }
 

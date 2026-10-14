@@ -57,6 +57,16 @@ model Tenant {
   phone                 String?
   whatsapp              String?
   publicEmail           String?
+  // BO0 (M7 platform_backoffice, plan §19.5): el acceso del consultorio se CALCULA
+  // (`tenantAccessFor`, lib/tenant-access.ts) con `status` + suscripción + trial.
+  // `status` y `seatLimitOverride` los escribe solo el escritor único de
+  // entitlements (source "platform"); las fechas las calcula él. CHECK en la base:
+  // seatLimitOverride NULL (= cupo del plan, `seatLimitFor`) o ≥ 1 (drift aceptado).
+  status                      TenantStatus @default(ACTIVE)
+  statusChangedAt             DateTime?
+  statusReason                String?
+  subscriptionStatusChangedAt DateTime?
+  seatLimitOverride           Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -92,6 +102,10 @@ model Tenant {
   rooms                   Room[]
   // IAM-1 (M6)
   emailLogs               EmailLog[]
+  // BO0 (M7 platform_backoffice)
+  platformAuditEvents     PlatformAuditEvent[]
+  supportSessions         SupportSession[]
+  slugAliases             TenantSlugAlias[]
 
   @@index([slug])
 }
@@ -115,6 +129,13 @@ enum TenantVertical {
   KINESIOLOGY
 }
 
+// BO0 (M7): estado administrativo del consultorio (suspender / dar de baja sin borrar).
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
 enum SubscriptionStatus {
   ACTIVE
   TRIALING
@@ -131,6 +152,10 @@ model UserProfile {
   // Platform superadmin (cross-tenant): authors the global exercise catalog +
   // the "Plataforma" owner panel. Orthogonal to the tenant-scoped Role enum.
   isPlatformAdmin Boolean     @default(false)
+  // BO0 (M7): deshabilitado a nivel PLATAFORMA (todas sus membresías y el portal);
+  // distinto de Membership.disabledAt (suspensión dentro de un consultorio, M6).
+  disabledAt     DateTime?
+  disabledReason String?
   createdAt    DateTime      @default(now())
 
   memberships  Membership[]
@@ -143,6 +168,8 @@ model UserProfile {
   // consultorios. `Patient.userId` es único POR CONSULTORIO, ya no global → 1:n.
   patients     Patient[]
   customConditionsCreated Condition[] @relation("CustomConditionAuthor")
+  // BO0 (M7): sesiones de soporte que abrió este superadmin.
+  supportSessions SupportSession[]
 }
 
 model Membership {
@@ -469,6 +496,79 @@ model EmailLog {
 
   @@index([tenantId, createdAt])
   @@index([entity, entityId, createdAt])
+}
+
+// BO0 (M7 platform_backoffice): registro GLOBAL de las acciones del superadmin
+// (C-BO5). Existe porque AuditEvent.tenantId es NOT NULL y hay acciones sin
+// consultorio. SOLO INSERCIÓN: un trigger rechaza UPDATE/DELETE/TRUNCATE incluso
+// para el owner. RLS ENABLE + FORCE sin policies (SERVICE_ONLY en el guard): la
+// app no la ve; se escribe solo por el canal service. actorId/targetUserId sin FK
+// a propósito (el registro sobrevive al usuario). Trigger: drift aceptado.
+model PlatformAuditEvent {
+  id             String   @id @default(cuid())
+  actorId        String?
+  actorEmail     String?
+  action         String   // `platform.${string}`
+  tenantId       String?
+  targetUserId   String?
+  entity         String
+  entityId       String?
+  payload        Json?
+  ip             String?
+  userAgent      String?
+  requestId      String?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt(sort: Desc), id])
+  @@index([tenantId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetUserId, createdAt])
+}
+
+enum SupportScope {
+  ADMIN_CONFIG // lectura de todo menos lo clínico + escritura de Configuración (C-BO4)
+}
+
+// BO0 (M7): «Entrar como soporte» (decisión 3 de Martin). SIN VENCIMIENTO: se
+// cierra con «Salir de soporte» o al cerrar sesión (endedAt/endedReason). En la
+// base, NO expresado en Prisma (drift aceptado; NO borrar si `migrate dev` lo
+// propone): índice PARCIAL único "SupportSession_one_open_per_superadmin"
+// (superadminId) WHERE endedAt IS NULL, y CHECK de `reason` (10 a 500 sin contar
+// espacios de los bordes). RLS: solo policy SELECT por tenant (TENANT_READONLY): el
+// OWNER ve quién entró; escribe solo el canal service.
+model SupportSession {
+  id           String       @id @default(cuid())
+  tenantId     String
+  superadminId String
+  scope        SupportScope @default(ADMIN_CONFIG)
+  reason       String
+  startedAt    DateTime     @default(now())
+  endedAt      DateTime?
+  endedReason  String?
+  ip           String?
+  userAgent    String?
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  superadmin UserProfile @relation(fields: [superadminId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, startedAt])
+  @@index([superadminId, startedAt])
+}
+
+// BO0 (M7): slug viejo → consultorio, para el 301 permanente después de un cambio
+// de slug (BO-D9). RLS ENABLE + FORCE sin policies (SERVICE_ONLY): lo lee el
+// turnero por el canal service.
+model TenantSlugAlias {
+  slug      String   @id
+  tenantId  String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
 
 model EmergencyContact {
