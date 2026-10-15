@@ -685,6 +685,17 @@ enum SaasPaymentStatus {
   REFUNDED
 }
 
+// Con qué se pagó (M8c, decisión de Martin 16-oct: columna propia, no en la nota).
+// Distinto de `SaasPaymentSource`, que es el canal por el que entró el pago.
+enum SaasPaymentMethod {
+  TRANSFER
+  CASH
+  CARD
+  WALLET // billetera virtual (no MP)
+  MERCADO_PAGO
+  OTHER
+}
+
 // Una por consultorio. TENANT_READONLY: el consultorio la lee; escribe solo el
 // canal service (lib/saas-billing-internal.ts).
 model SaasSubscription {
@@ -743,6 +754,9 @@ model SaasPayment {
   tenantId              String
   chargeId              String?
   source                SaasPaymentSource
+  // Medio de pago (M8c). NULL = sin informar: las filas previas a M8c quedan NULL
+  // (sin backfill desde `note`). Sin CHECK contra `source` a propósito (ver SQL).
+  method                SaasPaymentMethod?
   status                SaasPaymentStatus
   amountCents           Int
   paidAt                DateTime?
