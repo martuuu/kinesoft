@@ -60,11 +60,6 @@ export default async function Page({ params }: { params: { slug: string } }) {
     chips.push(<Tag key="read" tone="soft">{ex.article.readingMinutes} min de lectura</Tag>);
   }
   if (isManual) chips.push(<Tag key="man" tone="lime">Maniobra</Tag>);
-  chips.push(
-    <Tag key="basic" tone={ex.isBasic ? "soft" : "sky"}>
-      {ex.isBasic ? "Común" : "Pro"}
-    </Tag>,
-  );
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>

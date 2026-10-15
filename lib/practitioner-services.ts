@@ -25,6 +25,7 @@ import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
 import {
   EntityId,
@@ -93,7 +94,13 @@ export async function listPractitionerServices(
   return { ok: true, data: rows };
 }
 
-export async function upsertPractitionerService(
+// EV1-E2 (readonly-residual-actions): el `ReadOnlyModeError` de la tx sale como `{ ok:false, error }` y no
+// como excepción, que en prod Next redacta (lib/read-only-result.ts). Fuera de la allowlist de soporte.
+export async function upsertPractitionerService(...args: Parameters<typeof upsertPractitionerServiceImpl>): ReturnType<typeof upsertPractitionerServiceImpl> {
+  return withReadOnlyResult(() => upsertPractitionerServiceImpl(...args));
+}
+
+async function upsertPractitionerServiceImpl(
   practitionerId: string,
   serviceId: string,
   raw: PractitionerServiceInputT
@@ -160,6 +167,9 @@ export async function upsertPractitionerService(
       };
     });
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("practitionerService.upsert.failed", {
       err: e instanceof Error ? e.message : String(e),
     });

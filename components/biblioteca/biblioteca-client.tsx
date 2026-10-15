@@ -408,6 +408,7 @@ export function BibliotecaClient({
           mode="edit"
           exerciseId={editingId}
           tagOptions={tags}
+          showFichaLink
           onClose={() => setEditingId(null)}
         />
       )}

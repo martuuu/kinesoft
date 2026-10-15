@@ -12,6 +12,7 @@
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 export function PatientBasicView({
   patient,
@@ -25,6 +26,9 @@ export function PatientBasicView({
   };
 }) {
   const fullName = `${patient.firstName} ${patient.lastName}`;
+  // EV1-C2: «profesional» vale para las dos verticales; plan y evolución solo
+  // existen con el módulo `planes` (Clínica general no lo tiene).
+  const hasPlans = useTenantModules().has("planes");
   return (
     <Card glass style={{ padding: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
@@ -73,8 +77,8 @@ export function PatientBasicView({
       </div>
 
       <p style={{ fontSize: 13, color: "var(--navy-700)", lineHeight: 1.5, margin: 0 }}>
-        Este paciente está asignado a otro kinesiólogo del consultorio. Para
-        ver su historia clínica, plan de tratamiento o evolución, pedile al
+        Este paciente está asignado a otro profesional del consultorio. Para
+        ver su historia clínica{hasPlans ? ", plan de tratamiento o evolución" : ""}, pedile al
         responsable que use el botón <strong>Compartir</strong> desde el
         perfil del paciente.
       </p>

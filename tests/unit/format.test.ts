@@ -66,4 +66,11 @@ describe("formatDateAR", () => {
     expect(formatDateAR("2026-10-14T03:30:00Z", "longDateTime")).toContain("00:30");
     expect(formatDateAR("2026-10-14T03:30:00Z", "longDateTime")).not.toContain("24:");
   });
+  it("[EV1-E2] compact en 24h: medianoche AR «00:30», ni «12:30 a. m.» ni «24:30»", () => {
+    // 03:30Z = 00:30 AR del 14. Antes el preset no tenía hourCycle y es-AR caía en 12h.
+    const out = formatDateAR("2026-10-14T03:30:00Z", "compact");
+    expect(out).toBe("14/10/26, 00:30");
+    expect(out).not.toMatch(/a\.\s?m\.|p\.\s?m\.|24:30|12:30/);
+    expect(formatDateAR("2026-10-14T17:05:00Z", "compact")).toBe("14/10/26, 14:05");
+  });
 });

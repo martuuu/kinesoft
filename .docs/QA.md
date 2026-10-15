@@ -1362,3 +1362,51 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] `/plataforma/sistema`: Upstash, Sentry, Resend, MP, realtime y cron como **presente/ausente**; ningún valor de
   secreto en pantalla ni en el HTML. Migraciones aplicadas al día.
 - [ ] `/api/health` → `{ ok, db, maintenance, time }`, nada más. `/robots.txt` y `/sitemap.xml` responden.
+
+## EV1 · Clínica general (14-oct-2026)
+
+> Dos consultorios en local (`TZ=UTC npm run dev` contra el Docker): uno **Clínica general** (alta desde
+> `/plataforma/consultorios` con vertical General, o cambiándole la vertical a uno de prueba) y uno **Kinesiología PRO**
+> como control. En General no tiene que aparecer «kine», «kinesiólogo/a», «sesión/sesiones», «diagnóstico» ni
+> «plan de tratamiento»; en Kine todo tiene que verse **igual que antes**. Sin migraciones.
+
+### Dashboard
+- [ ] 🔴 General: el gráfico de turnos muestra datos al cargar **y al cambiar de rango** (antes se vaciaba).
+- [ ] General: sin KPIs «Planes en curso» ni «Cerca del alta»; «Pacientes atendidos», «Turnos esta semana», «Asistencia
+  semanal». Sin recordatorio de planes ni «Hola, Lic.». «Hoy tenés 1 turno» / «N turnos».
+- [ ] Menú de perfil → Ajustes: el selector de KPIs ofrece lo mismo que el «+ Agregar» de la fila (sin KPIs de planes en
+  General). «Próximos turnos» dice «1 turno» con uno solo.
+- [ ] PRACTITIONER (no titular) en Kine: el gráfico al cambiar de rango cuenta solo sus turnos (mismo número que al cargar).
+
+### Agenda
+- [ ] General: modal de turno con «Motivo de consulta» (no «Título (diagnóstico)»), sin «Usar como diagnóstico del
+  paciente»; modo «Varios turnos» con resumen «N turnos · Semanal …» y «Se generan X de N turnos pedidos.».
+- [ ] General: drawer del turno, recordatorio y avisos de conflicto sin «sesión» ni «kine».
+- [ ] Buscador de pacientes del modal y ⌘K: buscar «%» o «_» no trae a todos.
+
+### Pacientes y perfil
+- [ ] General: lista sin columna ni filtros de plan ni «Último diagnóstico»; «Última visita» = último turno realizado (antes quedaba en «—»).
+- [ ] 🔴 Búsqueda de pacientes con «%», «_» y un apellido con «_»: solo matchea literal. Filtro por obra social igual.
+- [ ] General: perfil con «Profesional asignado» y «Motivo de consulta (opcional)»; compartir paciente sin «kine».
+
+### Configuración
+- [ ] General: Equipo dice «Profesional» (no «Kinesiólogo/a»); Obras sociales «al profesional por turno»; Servicios y
+  General sin ejemplos de kinesiología/osteopatía.
+- [ ] Vincular una obra social escribiendo «O_DE» u «OS%»: **no** se linkea a OSDE.
+- [ ] 🔴 Con `TENANT_ACCESS_ENFORCEMENT=enforce` y el consultorio en solo lectura (o como soporte fuera de la allowlist):
+  guardar en Servicios, Sedes, Horarios, Salas, Obras sociales, Equipo y General muestra el aviso de solo lectura, no
+  «Ocurrió un error». Lo mismo en Diagnóstico (crear caso/plan), ejercicios propios, plantillas de plan y favoritos.
+
+### Onboarding, turnero y portal
+- [ ] Alta de un consultorio General: pasos Servicios y Obras sociales sin copy de kine («por turno»); Equipo con
+  «Profesional».
+- [ ] Turnero público de un General: un profesional sin especialidad no dice «Kinesiología»; textos con «turno».
+- [ ] Portal del paciente de un General: sin «tu plan» ni «tu kinesiólogo»; el de Kine igual que antes. El mismo email en
+  un Kine y un General: cada ficha con su copy.
+- [ ] Login: «pensado para consultorios de salud»; título del sitio neutral.
+
+### Plataforma
+- [ ] `/plataforma/ejercicios`: sin filtro «Todo plan», sin columna «Plan» ni toggle Común/Pro; una URL vieja con
+  `tier=pro&sort=tier` abre ordenada por nombre. Buscar «%» no trae todo el catálogo. Lo mismo en catálogo, usuarios,
+  consultorios y auditoría.
+- [ ] Biblioteca (Kine) → editar un ejercicio global → «Ver ficha completa» aparece; en Plataforma no.

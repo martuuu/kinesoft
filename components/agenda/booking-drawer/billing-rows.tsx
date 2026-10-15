@@ -2,6 +2,7 @@
 
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { formatARS } from "@/lib/format";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import type { DrawerBooking } from "./types";
 
 /** Obra social name to show, or "" when particular (never prints the
@@ -30,6 +31,8 @@ export const COPAGO_PLAN_HINT = "Es la cuota de la sesión del plan: se cambia d
  * debajo, como el aviso de acceso básico) lo pone `index.tsx`.
  */
 export function BillingRows({ booking }: { booking: DrawerBooking }) {
+  // EV1-C1: en Clínica general el título del turno es el motivo de consulta.
+  const diagnostico = useTenantModules().has("diagnostico");
   return (
     <>
       <Row label="Cuándo">
@@ -73,7 +76,7 @@ export function BillingRows({ booking }: { booking: DrawerBooking }) {
           </span>
         )}
       </Row>
-      {booking.title && <Row label="Diagnóstico">{booking.title}</Row>}
+      {booking.title && <Row label={diagnostico ? "Diagnóstico" : "Motivo"}>{booking.title}</Row>}
       {booking.description && <Row label="Descripción">{booking.description}</Row>}
       {booking.notes && <Row label="Notas">{booking.notes}</Row>}
     </>

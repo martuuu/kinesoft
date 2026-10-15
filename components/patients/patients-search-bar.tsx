@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { Card } from "@/components/ui/card";
 import { IconSearch } from "@/components/ui/icons";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 type Filter = "all" | "active" | "no-program" | "archived";
 
@@ -12,9 +13,14 @@ export function PatientsSearchBar({
   totals,
 }: {
   filter: Filter;
-  totals: { all: number; withProgram: number; withoutProgram: number };
+  /** Sin `planes` la página manda solo `all` (EV1-B). */
+  totals: { all: number; withProgram?: number; withoutProgram?: number };
 }) {
   const [q, setQ, flush] = useDebouncedSearchParam("q", 300);
+  // EV1-B: sin `planes` (General) los pills «Con plan/Sin plan» no tienen
+  // sentido y uno solo («Todos») no filtra nada: se va el grupo entero. El
+  // total ya está en el título de la página.
+  const plansEnabled = useTenantModules().has("planes");
   return (
     <Card glass style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
       <div
@@ -60,6 +66,7 @@ export function PatientsSearchBar({
           }}
         />
       </div>
+      {plansEnabled && (
       <div
         style={{
           display: "flex",
@@ -72,8 +79,8 @@ export function PatientsSearchBar({
         {(
           [
             ["all", `Todos · ${totals.all}`],
-            ["active", `Con plan · ${totals.withProgram}`],
-            ["no-program", `Sin plan · ${totals.withoutProgram}`],
+            ["active", `Con plan · ${totals.withProgram ?? 0}`],
+            ["no-program", `Sin plan · ${totals.withoutProgram ?? 0}`],
           ] as const
         ).map(([key, label]) => {
           const on = key === filter;
@@ -98,6 +105,7 @@ export function PatientsSearchBar({
           );
         })}
       </div>
+      )}
     </Card>
   );
 }

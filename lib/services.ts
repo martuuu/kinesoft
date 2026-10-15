@@ -11,6 +11,7 @@
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER can read.
  */
 import { withSupportWritable } from "@/lib/support-writable";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import type { z } from "zod";
@@ -91,7 +92,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
 }
 
 export async function createService(...args: Parameters<typeof createServiceImpl>): ReturnType<typeof createServiceImpl> {
-  return withSupportWritable("lib/services.ts#createService", () => createServiceImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/services.ts#createService", () => createServiceImpl(...args)));
 }
 
 async function createServiceImpl(
@@ -160,6 +161,9 @@ async function createServiceImpl(
     revalidateTag(tags.services(actor.tenantId));
     return { ok: true, data: { id: row.id } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un servicio con ese nombre." };
     }
@@ -169,7 +173,7 @@ async function createServiceImpl(
 }
 
 export async function updateService(...args: Parameters<typeof updateServiceImpl>): ReturnType<typeof updateServiceImpl> {
-  return withSupportWritable("lib/services.ts#updateService", () => updateServiceImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/services.ts#updateService", () => updateServiceImpl(...args)));
 }
 
 async function updateServiceImpl(
@@ -263,6 +267,9 @@ async function updateServiceImpl(
       return auditDiff(before, after);
     });
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof PracticeNotFound) return { ok: false, error: e.message };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un servicio con ese nombre." };
@@ -308,7 +315,7 @@ const DELETE_IN_USE_MSG =
   "No se puede borrar: hay turnos o planes de tratamiento que usan este servicio. Editá el nombre o el precio si querés actualizarlo.";
 
 export async function deleteService(...args: Parameters<typeof deleteServiceImpl>): ReturnType<typeof deleteServiceImpl> {
-  return withSupportWritable("lib/services.ts#deleteService", () => deleteServiceImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/services.ts#deleteService", () => deleteServiceImpl(...args)));
 }
 
 async function deleteServiceImpl(id: string): Promise<ActionResult> {

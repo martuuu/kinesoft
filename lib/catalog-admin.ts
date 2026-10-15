@@ -28,6 +28,7 @@ import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { auditPlatformGlobalInTx, type PlatformAuditAction } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import { matchKey } from "@/lib/catalog/normalize";
+import { escapeLike } from "@/lib/email-match";
 import type { ActionResult } from "@/lib/validation";
 import {
   CATALOG_ADMIN_PAGE_SIZE,
@@ -102,8 +103,6 @@ function unionAliases(name: string, ...lists: string[][]): string[] {
   return out;
 }
 
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
-
 /**
  * Ids cuyo array `aliases` contiene `q` como substring. Prisma solo ofrece
  * `has` (igualdad exacta de un elemento), que no sirve para buscar "osde" y
@@ -148,7 +147,8 @@ const PAYER_KIND_LABEL: Record<string, string> = {
 export async function listCatalogForAdmin(raw: CatalogListQueryInput): Promise<CatalogAdminPage> {
   await requirePlatformAdmin("platform.read");
   const f = CatalogListQuery.parse(raw);
-  const contains = (v: string) => ({ contains: v, mode: "insensitive" as const });
+  // EV1-D: Prisma NO escapa `%`/`_` en `contains`/`equals` con `mode: "insensitive"` (va como ILIKE '%<texto>%'; medido contra el Docker en EV1-D: buscar «%» traía todas las filas). `matchKey` no necesita escape: solo deja [a-z0-9 ].
+  const contains = (v: string) => ({ contains: escapeLike(v), mode: "insensitive" as const });
   const aliasIds = f.q ? await aliasMatchIds(f.entity, f.q) : [];
   // "O.S.D.E." o "Osde S.A." encuentran "OSDE": se compara también la clave
   // normalizada (la misma con la que el import reconoce la fila).
@@ -424,8 +424,9 @@ export async function searchMergeTargets(
   if (term.length < 2) return [];
   const aliasIds = await aliasMatchIds(entity, term);
   const OR = [
-    { name: { contains: term, mode: "insensitive" as const } },
-    { slug: { contains: term, mode: "insensitive" as const } },
+    // EV1-D: escapado (Prisma no escapa `%`/`_` en `contains`; ver listCatalogForAdmin).
+    { name: { contains: escapeLike(term), mode: "insensitive" as const } },
+    { slug: { contains: escapeLike(term), mode: "insensitive" as const } },
     ...(aliasIds.length ? [{ id: { in: aliasIds } }] : []),
   ];
   const args = {

@@ -392,10 +392,9 @@ export const ExerciseAdminCreate = z.object({
   defaultSets: optionalCount(10),
   defaultReps: optionalCount(100),
   durationSeconds: optionalCount(3600),
-  // Común (isBasic true → visible a FREE/STARTER) vs Pro (false → PRO+). The
-  // action converts the form checkbox to a real boolean|undefined so a partial
-  // update that omits it leaves the flag unchanged.
-  isBasic: z.boolean().optional(),
+  // EV1-D: sin `isBasic` («Común/Pro»). Desde EV0 no decide visibilidad
+  // (`catalogScope` en lib/plan-gating.ts); la columna queda en la DB pero ya no
+  // se escribe. zod descarta la clave si un cliente viejo la sigue mandando.
   instructions: z.string().trim().max(4000).optional().or(z.literal("").transform(() => undefined)),
   cues: z.string().trim().max(2000).optional().or(z.literal("").transform(() => undefined)),
   // Deprecados: se mantienen mientras el catálogo migra a tags; el editor usa tagSlugs.

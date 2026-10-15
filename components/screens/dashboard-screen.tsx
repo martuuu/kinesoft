@@ -22,7 +22,13 @@ import {
 import { useTweaks } from "@/components/layout/tweaks-context";
 import type { DashboardData } from "@/lib/dashboard";
 import { dismissReminder, restoreReminder } from "@/lib/notifications";
-import type { KpiKey, Preferences } from "@/lib/preferences-constants";
+import {
+  effectivePinnedKpis,
+  GENERAL_KPI_COPY,
+  type KpiKey,
+  type Preferences,
+} from "@/lib/preferences-constants";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { NotificationsBell } from "@/components/dashboard/notifications-bell";
 import { MiniCalendar } from "@/components/dashboard/mini-calendar";
 import { SessionsChart } from "@/components/dashboard/sessions-chart";
@@ -43,6 +49,14 @@ export function DashboardScreen({
 }) {
   const { t, set } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
+  // EV1-A: el dashboard se arma por módulos (`useTenantModules`, lo publica el
+  // AppShell). Sin `planes` (consultorio General) no hay recordatorio de altas
+  // ni KPIs de planes; sin `sesiones`, lo que decía "sesiones" son "turnos" y
+  // la tarjeta "Últimas sesiones registradas" (siempre vacía ahí) no se monta.
+  // Fuera del provider el default es Kine PRO: lo de siempre.
+  const modules = useTenantModules();
+  const hasPlans = modules.has("planes");
+  const hasSessions = modules.has("sesiones");
 
   // Sync server-persisted palette into the live Tweaks context once on
   // mount. The provider initialises from localStorage; the server-side
@@ -57,20 +71,26 @@ export function DashboardScreen({
   return (
     <div style={{ display: "flex", gap: 18, minHeight: 0 }}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
-        {useSidebar && <DashTopRow name={data.greetingName} todayCount={data.todayCount} />}
-        <ReminderSlot
-          initiallyDismissed={data.reminderDismissed}
-          nearingDischarge={data.pinned.nearingDischarge}
-          reminderKey={data.reminderKey}
-        />
+        {useSidebar && (
+          <DashTopRow name={data.greetingName} todayCount={data.todayCount} kine={hasSessions} />
+        )}
+        {hasPlans && (
+          <ReminderSlot
+            initiallyDismissed={data.reminderDismissed}
+            nearingDischarge={data.pinned.nearingDischarge}
+            reminderKey={data.reminderKey}
+          />
+        )}
         <PinnedRow
           pinned={data.pinned}
-          pinnedKpis={data.pinnedKpis}
+          pinnedKpis={effectivePinnedKpis(data.pinnedKpis, data.revenueScope, modules)}
           todayCount={data.todayCount}
           monthRevenue={data.monthRevenue}
           revenueScope={data.revenueScope}
+          hasPlans={hasPlans}
+          hasSessions={hasSessions}
         />
-        <BottomRow bars={data.weeklyBars} recent={data.recent} />
+        <BottomRow bars={data.weeklyBars} recent={hasSessions ? data.recent : null} />
       </div>
 
       <aside className="dash-aside" style={{ width: 320, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -91,7 +111,12 @@ export function DashboardScreen({
   );
 }
 
-function DashTopRow({ name, todayCount }: { name: string; todayCount: number }) {
+/**
+ * `kine` = el consultorio tiene `sesiones` (Kinesiología). El "Lic." y las
+ * "sesiones" son de Kine; en General el profesional no es necesariamente
+ * licenciado y lo que se agenda son turnos.
+ */
+function DashTopRow({ name, todayCount, kine }: { name: string; todayCount: number; kine: boolean }) {
   // Dispatch the same ⌘K keyboard event so the global palette opens.
   const openPalette = () => {
     window.dispatchEvent(
@@ -101,13 +126,14 @@ function DashTopRow({ name, todayCount }: { name: string; todayCount: number }) 
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
       <div>
-        <div style={{ fontSize: 13, color: "var(--navy-300)", fontWeight: 500 }}>Hola, Lic. {name} 👋</div>
+        <div style={{ fontSize: 13, color: "var(--navy-300)", fontWeight: 500 }}>Hola, {kine ? "Lic. " : ""}{name} 👋</div>
         <h1 className="k-display" style={{ fontSize: 34, margin: "2px 0 0", lineHeight: 1.05 }}>
           Hoy tenés{" "}
           <span style={{ color: "var(--sky-700)" }}>
-            {todayCount} {todayCount === 1 ? "sesión" : "sesiones"}
+            {todayCount}{" "}
+            {kine ? (todayCount === 1 ? "sesión" : "sesiones") : todayCount === 1 ? "turno" : "turnos"}
           </span>{" "}
-          agendadas
+          {kine ? "agendadas" : todayCount === 1 ? "agendado" : "agendados"}
         </h1>
       </div>
       <button
@@ -128,7 +154,7 @@ function DashTopRow({ name, todayCount }: { name: string; todayCount: number }) 
           cursor: "pointer",
         }}
       >
-        <IconSearch size={15} /> Buscar paciente, ejercicio…
+        <IconSearch size={15} /> {kine ? "Buscar paciente, ejercicio…" : "Buscar paciente…"}
         <span style={{ flex: 1 }} />
         <span
           className="k-mono"
@@ -364,29 +390,36 @@ function PinnedRow({
   todayCount,
   monthRevenue,
   revenueScope,
+  hasPlans,
+  hasSessions,
 }: {
   pinned: DashboardData["pinned"];
   pinnedKpis: KpiKey[];
   todayCount: number;
   monthRevenue: DashboardData["monthRevenue"];
   revenueScope: DashboardData["revenueScope"];
+  hasPlans: boolean;
+  hasSessions: boolean;
 }) {
   type Kpi = { ic: typeof IconUsers; n: string; l: string; delta: string; tone: "sky" | "lime" | "soft" };
   // SR-D5I: sin ingresos para este rol (Secretaria) la KPI fijada no se
   // muestra: ni un "$0" que parezca dato. La preferencia guardada no se toca.
+  // EV1-A: en General `pinnedKpis` ya llega sin las de planes
+  // (`effectivePinnedKpis`); acá solo cambia el rótulo de las que se quedan
+  // (mismo texto que el picker, `GENERAL_KPI_COPY`).
   const all: Record<KpiKey, Kpi | null> = {
     activePatients: {
       ic: IconUsers,
       n: pinned.activePatients.toString(),
-      l: "Pacientes activos",
-      delta: `+${pinned.newPatientsMonth} este mes`,
+      l: hasPlans ? "Pacientes activos" : GENERAL_KPI_COPY.activePatients.label,
+      delta: hasPlans ? `+${pinned.newPatientsMonth} este mes` : "Últimos 30 días",
       tone: "sky",
     },
     weekSessions: {
       ic: IconCal,
       n: pinned.weekSessions.toString(),
-      l: "Sesiones esta semana",
-      delta: `${pinned.adherencePct}% adherencia`,
+      l: hasSessions ? "Sesiones esta semana" : GENERAL_KPI_COPY.weekSessions.label,
+      delta: `${pinned.adherencePct}% ${hasSessions ? "adherencia" : "asistencia"}`,
       tone: "lime",
     },
     activePrograms: {
@@ -419,8 +452,13 @@ function PinnedRow({
     adherence: {
       ic: IconActivity,
       n: `${pinned.adherencePct}%`,
-      l: "Adherencia semanal",
-      delta: `${pinned.weekSessions} sesiones`,
+      l: hasSessions ? "Adherencia semanal" : GENERAL_KPI_COPY.adherence.label,
+      // EV1: concordancia de número («1 sesión», no «1 sesiones»).
+      delta: `${pinned.weekSessions} ${
+        hasSessions
+          ? pinned.weekSessions === 1 ? "sesión" : "sesiones"
+          : pinned.weekSessions === 1 ? "turno" : "turnos"
+      }`,
       tone: "lime",
     },
     nearingDischarge: {
@@ -566,15 +604,24 @@ function BottomRow({
   recent,
 }: {
   bars: DashboardData["weeklyBars"];
-  recent: DashboardData["recent"];
+  /** `null` = sin `sesiones` (General): no hay "Últimas sesiones registradas" y el gráfico ocupa la fila. */
+  recent: DashboardData["recent"] | null;
 }) {
   // Adapt the legacy `weeklyBars` shape ({d,c,a}) to the new `ChartBar`
   // shape ({label,done,missed}) for the imported SessionsChart.
   const initialBars = bars.map((b) => ({ label: b.d, done: b.c, missed: b.a }));
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
-      <SessionsChart initialBars={initialBars} />
-      <RecentPatients items={recent} />
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: recent ? "1.4fr 1fr" : "1fr",
+        gap: 12,
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      <SessionsChart initialBars={initialBars} unit={recent ? "sessions" : "bookings"} />
+      {recent && <RecentPatients items={recent} />}
     </div>
   );
 }
@@ -589,7 +636,7 @@ function NextAppts({ items }: { items: DashboardData["next"] }) {
           </div>
           <div style={{ fontSize: 11, color: "var(--navy-300)" }}>Hoy</div>
         </div>
-        <Tag tone="lime">{items.length} turnos</Tag>
+        <Tag tone="lime">{items.length} {items.length === 1 ? "turno" : "turnos"}</Tag>
       </div>
       {items.length === 0 && (
         <div style={{ fontSize: 12, color: "var(--navy-300)", padding: 8 }}>Sin turnos próximos.</div>

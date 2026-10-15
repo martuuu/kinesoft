@@ -91,9 +91,9 @@ export default async function OnboardingPage({
         <StepMyHours key={ctx.schedule.view.version ?? "plantilla"} schedule={ctx.schedule} locations={ctx.locations} />
       ) : step === STEP.services || step === STEP.myHours ? (
         // (Tu horario sin practitioner propio no debería pasar: el bootstrap lo crea.)
-        <StepServices services={ctx.services} />
+        <StepServices services={ctx.services} vertical={ctx.tenant?.vertical} />
       ) : step === STEP.insurers ? (
-        <StepInsurers insurers={ctx.insurers} />
+        <StepInsurers insurers={ctx.insurers} vertical={ctx.tenant?.vertical} />
       ) : step === STEP.team ? (
         <StepTeam invitations={ctx.invitations} vertical={ctx.tenant?.vertical} />
       ) : (

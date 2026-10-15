@@ -28,6 +28,7 @@
  * o retirar código no se lleva el gate). Retirarlos es de EV1 / C.
  */
 import type { z } from "zod";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import type { Actor } from "@/lib/session";
 import { getMembershipRole, requireModule } from "@/lib/authz";
 import { isTenantAdminRole } from "@/lib/capabilities";
@@ -88,7 +89,14 @@ async function requireAdminRole(
  * `cancel` de PD-10 es el de la UI nueva (S22a), que pregunta.
  * `confirm: true` porque ese mismo diálogo ya confirmó la reapertura.
  */
-export async function setProgramStatus(raw: ProgramStatusSetInput): Promise<ActionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `setProgramStatusImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function setProgramStatus(...args: Parameters<typeof setProgramStatusImpl>): ReturnType<typeof setProgramStatusImpl> {
+  return withReadOnlyResult(() => setProgramStatusImpl(...args));
+}
+
+async function setProgramStatusImpl(raw: ProgramStatusSetInput): Promise<ActionResult> {
   const actor = await requireModule("planes");
   const parsed = ProgramStatusSet.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -109,7 +117,14 @@ export async function setProgramStatus(raw: ProgramStatusSetInput): Promise<Acti
  * "primero hay que cancelarlo": este botón nunca cancela turnos de rebote.
  * Restaurar: `restoreProgram` (`lib/plans-lifecycle.ts`).
  */
-export async function deleteProgram(id: string): Promise<ActionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `deleteProgramImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function deleteProgram(...args: Parameters<typeof deleteProgramImpl>): ReturnType<typeof deleteProgramImpl> {
+  return withReadOnlyResult(() => deleteProgramImpl(...args));
+}
+
+async function deleteProgramImpl(id: string): Promise<ActionResult> {
   const actor = await requireModule("planes");
   const denied = await requireAdminRole(actor);
   if (denied) return denied;

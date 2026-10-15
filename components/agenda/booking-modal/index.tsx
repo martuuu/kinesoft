@@ -66,6 +66,7 @@
  */
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useToast } from "@/components/ui/toast";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { FormField } from "@/components/ui/form-field";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
@@ -84,11 +85,11 @@ import type { RoomOption } from "@/lib/rooms-types";
 import { toBatchFields } from "@/lib/sessions-mode-state";
 import { todayDayKey } from "@/lib/slot-picker-state";
 import {
-  BOOKING_MODAL_MODE_LABEL,
   availableModes,
   batchNeedsPrompt,
   batchRunInput,
   blockPermission,
+  bookingModalModeLabel,
   buildBatchPayload,
   buildCreatePayload,
   coerceMode,
@@ -211,6 +212,9 @@ export function BookingModal({
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
+  // EV1-C1: en Clínica general no hay diagnóstico; título/descripción del
+  // turno se rotulan como motivo de consulta (mismo campo, mismo payload).
+  const hasDiagnostico = useTenantModules().has("diagnostico");
 
   // ── Modo ───────────────────────────────────────────────────────────────────
   const perm = blockPermission(capabilities, viewerPractitionerId);
@@ -861,9 +865,13 @@ export function BookingModal({
               completa title/description con el diagnóstico del paciente. */}
           {fieldAccess.title === "rw" && (
             <FormField
-              label="Título (diagnóstico)"
+              label={hasDiagnostico ? "Título (diagnóstico)" : "Motivo de consulta"}
               name="title"
-              placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
+              placeholder={
+                hasDiagnostico
+                  ? "Opcional · si se deja vacío se toma el diagnóstico del paciente"
+                  : "Opcional"
+              }
             />
           )}
 
@@ -953,9 +961,13 @@ export function BookingModal({
           {fieldAccess.description === "rw" && (
             <FormField
               as="textarea"
-              label="Descripción (diagnóstico)"
+              label={hasDiagnostico ? "Descripción (diagnóstico)" : "Detalle"}
               name="description"
-              placeholder="Opcional · si se deja vacío se toma el diagnóstico del paciente"
+              placeholder={
+                hasDiagnostico
+                  ? "Opcional · si se deja vacío se toma el diagnóstico del paciente"
+                  : "Opcional"
+              }
             />
           )}
           {fieldAccess.notes === "rw" && <FormField as="textarea" label="Notas" name="notes" />}
@@ -1086,6 +1098,7 @@ function ModeSelector({
   onChange: (m: BookingModalMode) => void;
   disabled?: boolean;
 }) {
+  const modules = useTenantModules();
   const btn = (on: boolean): CSSProperties => ({
     flex: 1,
     height: 32,
@@ -1130,7 +1143,7 @@ function ModeSelector({
             }}
             style={btn(on)}
           >
-            {BOOKING_MODAL_MODE_LABEL[m]}
+            {bookingModalModeLabel(m, modules.has)}
           </button>
         );
       })}

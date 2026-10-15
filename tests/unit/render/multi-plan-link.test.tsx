@@ -203,10 +203,10 @@ describe("[P3-S18b] MultiSection renderizado", () => {
         <MultiSection {...props} patientId="pat1" capabilities={SECRETARIA} />
       </TenantModulesProvider>
     );
-    for (const html of [g, s]) {
-      expect(html).not.toContain(CREATE_AS_PLAN_LABEL);
-      expect(html).toContain("Sesiones");
-    }
+    for (const html of [g, s]) expect(html).not.toContain(CREATE_AS_PLAN_LABEL);
+    // EV1-C1: en General la cantidad se rotula «Turnos» (sin módulo `sesiones`).
+    expect(g).toContain(">Turnos<");
+    expect(s).toContain("Sesiones");
   });
 });
 

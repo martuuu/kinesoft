@@ -32,6 +32,7 @@ import { DisciplineChip } from "@/components/planes/discipline-chip";
 import type { HeroPlanChip, PatientHeroProps } from "@/components/planes/plan-editor-types";
 import { disciplineLabel } from "@/lib/plan-display";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { Section, Grid2 } from "./ui";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
@@ -61,6 +62,7 @@ export function PatientHero({
   const [askPlans, setAskPlans] = useState(false);
   const router = useRouter();
   const livePlanCount = plansEnabled ? plans.length : 0;
+  const practitionerFact = usePractitionerFactLabel();
 
   // L9: el diálogo junta la elección; la action va acá (single, no bulk).
   const archiveWithPlans = async (plansAction: PatientArchivePlansAction): Promise<ArchivePatientResult> => {
@@ -105,7 +107,7 @@ export function PatientHero({
             <HeroFact label="Email" value={patient.email ?? "—"} />
             <HeroFact label="Cobertura" value={coverageLabel} />
             <HeroFact
-              label="Kine"
+              label={practitionerFact}
               value={
                 patient.assignedPractitionerId
                   ? practitioners.find((p) => p.id === patient.assignedPractitionerId)?.name ?? "—"
@@ -177,6 +179,7 @@ export function PatientAdminHero({
     : null;
   const cov = patient.coverage;
   const coverageLabel = cov ? `${cov.insurer}${cov.planName ? " " + cov.planName : ""}` : "Particular";
+  const practitionerFact = usePractitionerFactLabel();
   return (
     <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
       <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
@@ -197,7 +200,7 @@ export function PatientAdminHero({
           <HeroFact label="Tel." value={patient.phone ?? "—"} />
           <HeroFact label="Email" value={patient.email ?? "—"} />
           <HeroFact label="Cobertura" value={coverageLabel} />
-          <HeroFact label="Kine" value={patient.assignedPractitionerName ?? "Consultorio común"} />
+          <HeroFact label={practitionerFact} value={patient.assignedPractitionerName ?? "Consultorio común"} />
         </div>
       </div>
       {canBook && (
@@ -412,6 +415,9 @@ function EditPatientModal({
   const [assignedKine, setAssignedKine] = useState<string>(
     patient.assignedPractitionerId ?? ""
   );
+  // EV1-C2: en Clínica general no hay «diagnóstico» de kinesiología; los campos
+  // (`diagnosisTitle/Note`) son los mismos, pero se rotulan como motivo de consulta.
+  const isKine = useTenantModules().has("diagnostico");
 
   // ── Plan del catálogo (B1) ────────────────────────────────────────────
   // Si la OS elegida está vinculada a una prestadora del catálogo, el plan
@@ -696,7 +702,7 @@ function EditPatientModal({
         </Section>
 
         {canReassign && (
-          <Section title="Asignación - Kinesiólogo asignado">
+          <Section title={isKine ? "Asignación - Kinesiólogo asignado" : "Asignación - Profesional asignado"}>
             <FormField
               as="select"
               label=""
@@ -714,11 +720,11 @@ function EditPatientModal({
           </Section>
         )}
 
-        <Section title="Diagnóstico (opcional)">
+        <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
           <FormField
             label="Título"
             name="diagnosisTitle"
-            placeholder="ej: Lumbalgia"
+            placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
             defaultValue={patient.diagnosisTitle ?? ""}
             hint="Máx. 80 caracteres."
           />
@@ -792,6 +798,15 @@ function planOptions({
   }
   opts.push({ value: OTHER_PLAN, label: "Otro plan…" });
   return opts;
+}
+
+/**
+ * EV1-C2: rótulo del profesional asignado en el hero. «Kine» es de kinesiología;
+ * un consultorio de Clínica general dice «Profesional». Vertical real del
+ * contexto (EV1; antes se deducía de `has("sesiones")`).
+ */
+function usePractitionerFactLabel(): string {
+  return useTenantModules().vertical === "KINESIOLOGY" ? "Kine" : "Profesional";
 }
 
 function HeroFact({ label, value }: { label: string; value: string }) {

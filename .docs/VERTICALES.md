@@ -5,11 +5,11 @@
 > prompts:** los contratos C-EV1..C-EV9 y las enmiendas de §5 van **literales**, sin parafrasear.
 > Planes sigue en [PLANES.md](PLANES.md); las enmiendas de §5 también están copiadas al tope de PLANES §10, §11 y §12.
 >
-> **Estado (14-oct):** EV0 ✅ (`ddfdff3`), ES2b ✅ (`58ec36f`), ES3 ✅ (`ad50059`), SR ✅ (`5811ea2`) y **SV ✅** (14-oct,
-> sin commit todavía). M2, M3a, M4 y M5 aplicadas solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md),
-> §Ronda 18, §Ronda 19 y §Ronda 20 (SV), QA en [QA.md §EV0](QA.md) y §Sala de Espera realtime (SV), diseño en
-> [ARCHITECTURE.md ADR-005 y ADR-006](ARCHITECTURE.md). Las enmiendas de §5 para ES3 se aplicaron (S22b: EVA con el
-> módulo `evaluaciones` en server y UI). **Siguiente: ES4** → EV1 → reset + deploy único (§2).
+> **Estado (14-oct):** EV0 ✅ (`ddfdff3`), ES2b ✅ (`58ec36f`), ES3 ✅ (`ad50059`), SR ✅ (`5811ea2`), SV ✅ (`d70513a`)
+> y **EV1 ✅** (14-oct, en develop, sin migración). B y SV están en prod desde el go-live del 14-oct (migraciones
+> incrementales, **sin reset**: §6 y §9 quedan como historia). Cierres en [AUDIT.md §Ronda 16](AUDIT.md), §Ronda 18-20 y
+> §Ronda 23 (EV1); QA en [QA.md §EV0](QA.md), §Sala de Espera realtime (SV) y §EV1; diseño en
+> [ARCHITECTURE.md ADR-005 y ADR-006](ARCHITECTURE.md). **Siguiente: VX** → ES4 → DIR (decisión 4 de Martin, 14-oct).
 
 ## 0. Contexto: decisiones de Martin del 07-oct
 
@@ -79,12 +79,13 @@ AUDIT: `data-api-anon-sin-rls` (bloque A, crítico): código cerrado; **la acci�
 | 2 | ES2b (P2) ✅ (`58ec36f`) | Como está planificada + simplificaciones del reset (§6) + enmiendas (§5) | — |
 | 3 | ES3 (P3) ✅ (`ad50059`) | Ídem + S14r (ingresos reales del dashboard, Mes/Semana; decisión 6 del 08-oct, [PLANES §11](PLANES.md)) | **M3a `billing_paid_at`** (sola, P3.0.0) |
 | 3b | **SR** ✅ (`5811ea2`) | Salas/Consultorios: sala por franja y por turno, conflicto y bloqueo de sala, filtro y vista "Por sala" ([ARCHITECTURE §Salas](ARCHITECTURE.md)). **Aplica a General y Kinesiología sin módulo nuevo**: la agenda existe en las dos verticales y un consultorio sin salas cargadas ve todo igual que antes | **M4 `20261009120000_rooms`** (sola) |
-| 4 | **SV** ✅ (14-oct, sin commit) | Sala de Espera realtime (transporte, "Llamar", avisos, `/sala`, agenda en vivo); el evento y "Llamar" llevan `roomId` (§7) | **M5 `20261013120000_reception_call_realtime`** (sola) |
+| 4 | **SV** ✅ (`d70513a`) | Sala de Espera realtime (transporte, "Llamar", avisos, `/sala`, agenda en vivo); el evento y "Llamar" llevan `roomId` (§7) | **M5 `20261013120000_reception_call_realtime`** (sola) |
 | 5 | ES4 (P4) | Ídem, sin las sesiones de legacy; S26a/S26b cubren verticales y realtime | — |
-| 6 | **EV1** (nueva) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional | — |
-| 7 | Deploy único de B | Reset de prod → `migrate deploy` desde vacío (cadena completa hasta M5) → bootstrap (§9) | — |
+| 6 | **EV1** ✅ (14-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional (no se hizo: R-LEGACY y los sobrevivientes de `programs.ts` se quedan, decisiones del 08-oct). Cierres en [AUDIT §Ronda 23](AUDIT.md) | — |
+| 7 | ~~Deploy único de B~~ | Reemplazado por el go-live del 14-oct: migraciones incrementales sobre la base viva, sin reset ([GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)) | — |
 
-**Orden vigente (14-oct):** ES3 ✅ → SR ✅ → SV ✅ → **ES4** → EV1 → reset + deploy. SR fue antes de SV para que el evento y "Llamar" nacieran con la sala.
+**Orden vigente (14-oct, decisión 4 de Martin):** ES3 ✅ → SR ✅ → SV ✅ → IAM ✅ → BO ✅ → EV1 ✅ → **VX** → ES4 → DIR. SR fue
+antes de SV para que el evento y "Llamar" nacieran con la sala.
 
 SV va entre ES3 y ES4 porque necesita `lib/bookings.ts` (S12, ES2b), `agenda-client.tsx` y `reception-row.tsx` (ES3)
 ya cerrados, y así la matriz authz y el E2E de ES4 la cubren. No comparte archivos con ES4 salvo
@@ -210,6 +211,9 @@ verificado** contra la API de MP (nunca del body ni de la query).
 
 ## 6. Simplificaciones por el reset de prod (sin rehacer el planning)
 
+> **Historia:** el reset no ocurrió (go-live del 14-oct con migraciones incrementales). Se deja por las decisiones que
+> sí siguen (sesiones de legacy eliminadas, R-LEGACY).
+
 - **Se caen:** S25L (legacy server), S25n (script de fechas legacy), S25b (UI legacy), "Completar datos", PQ-14,
   escenario E2E "legacy", los prechecks de datos (2)-(10) y (13)-(16), corridas del dedupe, ensayo de datos en staging,
   backfill de `agenda_foundations` y `normalize-patient-emails`, el down-script/ventana sin uso de M1 y el hotfix de E0
@@ -218,13 +222,13 @@ verificado** contra la API de MP (nunca del body ni de la query).
   viejas), las invariantes I1-I8, precheck (0) rol con BYPASSRLS, (17) Storage privado, P3009 liviano, el SQL de M1 tal
   cual (commiteado).
 - **R-LEGACY:** se deja como está en ES2b/ES3 (es barato y protege `develop` mientras conviven las altas viejas); EV1 lo
-  limpia después de S27a/b, opcional. **ES3:** S27a/b ya retiraron las altas viejas; efecto nuevo: un plan sin
+  limpia después de S27a/b, opcional (**EV1 no lo tocó**: se deja). **ES3:** S27a/b ya retiraron las altas viejas; efecto nuevo: un plan sin
   responsable/servicio ya no acepta sesión "a medida" ("Plan inválido."). Decisión de Martin pendiente (recomendado
   dejarlo por el reset; PLANES §11 «Decisiones de ES3»). En EV1 también se recomienda retirar los sobrevivientes de
   `lib/programs.ts` (`setProgramStatus`, `deleteProgram`, `deleteSession`).
 - **Prechecks:** (1) pasa a "base vacía"; (11) y (12) pasan a post-checks después del bootstrap.
 
-## 7. Corrida SV · Sala de Espera realtime ✅ (13/14-oct-2026, sin commit)
+## 7. Corrida SV · Sala de Espera realtime ✅ (13/14-oct-2026, `d70513a`)
 
 Planning en el plan vigente §18 (manda sobre el §15.7 original que vivía acá). Lo que quedó, en una línea por tema;
 el detalle está en [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHITECTURE.md), la seguridad en
@@ -267,6 +271,8 @@ el detalle está en [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHIT
 | SV-D5..D16 | Llamar, claims, publish esperado, `/sala` solo hoy, a quién se avisa, colapso, `local` en prod, `refs: []`, agrupación, multi-pestaña, `kid`, toasts | Plan §18.14; resumen en [ARCHITECTURE.md ADR-006](ARCHITECTURE.md) |
 
 ## 9. Bootstrap después del reset (orden de prod)
+
+> **Historia:** no se usó (go-live sin reset, 14-oct). El orden real está en [GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md).
 
 1. `migrate deploy` desde vacío (cadena completa: … `catalog_global` → `agenda_foundations` → M1 → M2 → M3a → M4 → M5).
 2. Roles SQL.

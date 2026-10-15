@@ -35,6 +35,8 @@ import { revalidatePath, unstable_cache } from "next/cache";
 import { NotificationKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
+import { withReadOnlyResult } from "@/lib/read-only-result";
+import { escapeLike } from "@/lib/email-match";
 import { ForbiddenError, getActor, type Actor } from "@/lib/session";
 import { auditInTx } from "@/lib/audit";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
@@ -258,6 +260,9 @@ export async function searchPatientsForAssignment(
   const v = await visibilityForActor(actor);
   if (v.adminView) return [];
   const term = q.trim();
+  // EV1-E1: Prisma no escapa los comodines de `contains` (ILIKE `'%' || term || '%'`): «_» o «%» matcheaban
+  // cualquier paciente visible. `escapeLike` (lib/email-match.ts).
+  const like = escapeLike(term);
   const where = {
     tenantId: actor.tenantId,
     // Un paciente archivado no se elige para un plan nuevo (hallazgo de P2-FX1).
@@ -268,10 +273,10 @@ export async function searchPatientsForAssignment(
     ...(term
       ? {
           OR: [
-            { firstName: { contains: term, mode: "insensitive" as const } },
-            { lastName: { contains: term, mode: "insensitive" as const } },
-            { documentId: { contains: term, mode: "insensitive" as const } },
-            { email: { contains: term, mode: "insensitive" as const } },
+            { firstName: { contains: like, mode: "insensitive" as const } },
+            { lastName: { contains: like, mode: "insensitive" as const } },
+            { documentId: { contains: like, mode: "insensitive" as const } },
+            { email: { contains: like, mode: "insensitive" as const } },
           ],
         }
       : {}),
@@ -440,7 +445,14 @@ export async function getDiagnosisPlanPrefill(
  * Post-commit, una vez y fuera de la tx: `afterBookingsCommitted`, el aviso
  * al responsable (sin PHI) y los revalidate. Un éxito idempotente no emite.
  */
-export async function createPlanFromDiagnosis(
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `createPlanFromDiagnosisImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function createPlanFromDiagnosis(...args: Parameters<typeof createPlanFromDiagnosisImpl>): ReturnType<typeof createPlanFromDiagnosisImpl> {
+  return withReadOnlyResult(() => createPlanFromDiagnosisImpl(...args));
+}
+
+async function createPlanFromDiagnosisImpl(
   raw: CreatePlanFromDiagnosisInput
 ): Promise<CreatePlanFromDiagnosisResult> {
   const actor = await getActor();

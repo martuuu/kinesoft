@@ -28,6 +28,7 @@ import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { trialDaysLeft } from "@/components/plataforma/tenants/labels";
 import { tenantAccessEnforcement } from "@/lib/env";
+import { escapeLike } from "@/lib/email-match";
 import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
 import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
 import {
@@ -222,14 +223,16 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
   const parsedQuery = PlatformTenantListQuery.safeParse(raw);
   const query = parsedQuery.success ? parsedQuery.data : PlatformTenantListQuery.parse({});
 
+  // EV1-D: Prisma NO escapa `%`/`_` en `contains`/`equals` con `mode: "insensitive"` (va como ILIKE '%<texto>%'; medido contra el Docker en EV1-D: buscar «%» traía todas las filas).
+  const qLike = query.q ? escapeLike(query.q) : "";
   const where: Prisma.TenantWhereInput = {
     ...(query.q
       ? {
           OR: [
-            { name: { contains: query.q, mode: "insensitive" } },
-            { slug: { contains: query.q, mode: "insensitive" } },
+            { name: { contains: qLike, mode: "insensitive" } },
+            { slug: { contains: qLike, mode: "insensitive" } },
             // BO2-D: buscar por un slug viejo (alguien llega con el link que circuló antes del cambio).
-            { slugAliases: { some: { slug: { contains: query.q, mode: "insensitive" } } } },
+            { slugAliases: { some: { slug: { contains: qLike, mode: "insensitive" } } } },
           ],
         }
       : {}),

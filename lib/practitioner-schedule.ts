@@ -30,6 +30,7 @@
  * día por UTC, ver ahí por qué). "Hoy" siempre con `toARDateKey`.
  */
 import { withSupportWritable } from "@/lib/support-writable";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -490,7 +491,7 @@ export async function getPractitionerSchedule(
  *   • contra excepciones futuras de otros: solo `warnings` (se guarda igual).
  */
 export async function savePractitionerWeek(...args: Parameters<typeof savePractitionerWeekImpl>): ReturnType<typeof savePractitionerWeekImpl> {
-  return withSupportWritable("lib/practitioner-schedule.ts#savePractitionerWeek", () => savePractitionerWeekImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/practitioner-schedule.ts#savePractitionerWeek", () => savePractitionerWeekImpl(...args)));
 }
 
 async function savePractitionerWeekImpl(
@@ -636,6 +637,9 @@ async function savePractitionerWeekImpl(
       data: { version: res.version, ...(res.warnings.length > 0 ? { warnings: res.warnings } : {}) },
     };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Abort) return e.result;
     logger.error("schedule.saveWeek.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar el horario." };
@@ -744,7 +748,7 @@ export async function listExceptions(range: {
  * actualiza o crea bajo un advisory lock de la clave.
  */
 export async function upsertException(...args: Parameters<typeof upsertExceptionImpl>): ReturnType<typeof upsertExceptionImpl> {
-  return withSupportWritable("lib/practitioner-schedule.ts#upsertException", () => upsertExceptionImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/practitioner-schedule.ts#upsertException", () => upsertExceptionImpl(...args)));
 }
 
 async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResult<{ id: string }>> {
@@ -911,6 +915,9 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
     revalidateAll();
     return { ok: true, data: { id: res.id } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Abort) return e.result;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya hay una excepción para ese día. Recargá y editala." };
@@ -921,7 +928,7 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
 }
 
 export async function deleteException(...args: Parameters<typeof deleteExceptionImpl>): ReturnType<typeof deleteExceptionImpl> {
-  return withSupportWritable("lib/practitioner-schedule.ts#deleteException", () => deleteExceptionImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/practitioner-schedule.ts#deleteException", () => deleteExceptionImpl(...args)));
 }
 
 async function deleteExceptionImpl(id: string): Promise<ActionResult> {

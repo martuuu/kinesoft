@@ -1,14 +1,15 @@
 /**
  * BO1-A · actor de plataforma (C-BO2, plan §19.1 «el superadmin necesita un consultorio casa» y §19.5).
  *
- * Símbolos REALES: `requirePlatformAdmin` (lib/platform-actor.ts) y el alias deprecado `requireSuperAdmin`
- * (lib/session.ts) contra Postgres en los dos roles. Se mockea solo la sesión de Supabase (integration-setup).
+ * Símbolo REAL: `requirePlatformAdmin` (lib/platform-actor.ts) contra Postgres en los dos roles (el alias deprecado
+ * `requireSuperAdmin` de lib/session.ts se borró en EV1-E2: no lo usaba nadie más que este test).
+ * Se mockea solo la sesión de Supabase (integration-setup).
  * El rate limit corre en memoria (`.env.local` no trae Upstash).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { cookies } from "next/headers";
 import type { PrismaClient } from "@prisma/client";
-import { ForbiddenError, UnauthenticatedError, requireSuperAdmin } from "@/lib/session";
+import { ForbiddenError, UnauthenticatedError } from "@/lib/session";
 import {
   PLATFORM_ACTION_POLICY,
   PlatformMfaRequiredError,
@@ -64,18 +65,14 @@ describe.skipIf(!RUN)("[BO1-A] requirePlatformAdmin", () => {
     asUser(u);
     await expect(requirePlatformAdmin()).resolves.toEqual({ userId: u, email: `${u}@test.local`, homeTenantId: null, mfa: false });
     await expect(requirePlatformAdmin("platform.read")).resolves.toMatchObject({ userId: u, homeTenantId: null });
-    // El alias deprecado delega el chequeo pero sigue armando un Actor: sin consultorio todavía no alcanza (BO2-F lo
-    // retira de los módulos de catálogo).
-    await expect(requireSuperAdmin()).rejects.toBeInstanceOf(UnauthenticatedError);
   });
 
-  it("superadmin con consultorio: homeTenantId = su consultorio, y el alias devuelve el Actor de siempre", async () => {
+  it("superadmin con consultorio: homeTenantId = su consultorio", async () => {
     const t = await createEphemeralTenant(db);
     tenants.push(t);
     await db.userProfile.update({ where: { id: t.userId }, data: { isPlatformAdmin: true } });
     asUser(t.userId);
     await expect(requirePlatformAdmin()).resolves.toMatchObject({ userId: t.userId, homeTenantId: t.tenantId });
-    await expect(requireSuperAdmin()).resolves.toMatchObject({ tenantId: t.tenantId, isPlatformAdmin: true });
   });
 
   it("superadmin con su consultorio SUSPENDED igual entra a Plataforma (homeTenantId null)", async () => {
@@ -93,14 +90,12 @@ describe.skipIf(!RUN)("[BO1-A] requirePlatformAdmin", () => {
     tenants.push(t);
     asUser(t.userId);
     await expect(requirePlatformAdmin()).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(requireSuperAdmin()).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it("superadmin deshabilitado (UserProfile.disabledAt) → ForbiddenError, también por el alias", async () => {
+  it("superadmin deshabilitado (UserProfile.disabledAt) → ForbiddenError", async () => {
     const u = await superadmin({ disabled: true });
     asUser(u);
     await expect(requirePlatformAdmin()).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(requireSuperAdmin()).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("acción fuera de la política → falla cerrado", async () => {

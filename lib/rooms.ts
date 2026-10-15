@@ -35,6 +35,7 @@
  * SOLO entre activas: archivar libera el nombre y restaurar puede chocar.
  */
 import { withSupportWritable } from "@/lib/support-writable";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
@@ -171,7 +172,7 @@ export async function listRoomOptions(): Promise<RoomOption[]> {
  * Nombre repetido entre las activas de la sede → `fieldErrors.name`.
  */
 export async function createRoom(...args: Parameters<typeof createRoomImpl>): ReturnType<typeof createRoomImpl> {
-  return withSupportWritable("lib/rooms.ts#createRoom", () => createRoomImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/rooms.ts#createRoom", () => createRoomImpl(...args)));
 }
 
 async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: string }>> {
@@ -220,6 +221,9 @@ async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: 
     revalidateAll();
     return { ok: true, data: { id: row.id } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (isNameTaken(e)) return nameTaken();
     logger.error("room.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear la sala." };
@@ -235,7 +239,7 @@ async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: 
  * una baja de capacidad no se intercala entre leerla y contar la ocupación.
  */
 export async function updateRoom(...args: Parameters<typeof updateRoomImpl>): ReturnType<typeof updateRoomImpl> {
-  return withSupportWritable("lib/rooms.ts#updateRoom", () => updateRoomImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/rooms.ts#updateRoom", () => updateRoomImpl(...args)));
 }
 
 async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
@@ -266,6 +270,9 @@ async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (isNameTaken(e)) return nameTaken();
     logger.error("room.update.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar la sala." };
@@ -283,7 +290,7 @@ async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
  * quedan como historia). Ya archivada → ok idempotente, sin audit.
  */
 export async function archiveRoom(...args: Parameters<typeof archiveRoomImpl>): ReturnType<typeof archiveRoomImpl> {
-  return withSupportWritable("lib/rooms.ts#archiveRoom", () => archiveRoomImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/rooms.ts#archiveRoom", () => archiveRoomImpl(...args)));
 }
 
 async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult> {
@@ -369,6 +376,9 @@ async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult
         return { ok: true, data: undefined };
     }
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("room.archive.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos archivar la sala." };
   }
@@ -381,7 +391,7 @@ async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult
  * Los bloqueos borrados al archivar no vuelven.
  */
 export async function restoreRoom(...args: Parameters<typeof restoreRoomImpl>): ReturnType<typeof restoreRoomImpl> {
-  return withSupportWritable("lib/rooms.ts#restoreRoom", () => restoreRoomImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/rooms.ts#restoreRoom", () => restoreRoomImpl(...args)));
 }
 
 async function restoreRoomImpl(raw: RoomArchiveInput): Promise<ActionResult> {
@@ -414,6 +424,9 @@ async function restoreRoomImpl(raw: RoomArchiveInput): Promise<ActionResult> {
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (isNameTaken(e)) return nameTaken();
     logger.error("room.restore.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos restaurar la sala." };

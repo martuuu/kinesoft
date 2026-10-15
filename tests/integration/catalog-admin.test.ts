@@ -248,6 +248,26 @@ describe.skipIf(!RUN)("catalog-admin · Plataforma curado del catálogo", () => 
     expect((await db.payer.findUniqueOrThrow({ where: { id: payer.id } })).archivedAt).toBeNull();
   });
 
+  it("[EV1-D] búsqueda: `%` y `_` del texto son literales en lista y merge (Prisma no escapa ILIKE)", async () => {
+    const tag = uniqueSuffix().replace(/[^a-z0-9]/g, "");
+    const pct = await newPayer(`Cobertura 100% ${tag}`);
+    const near = await newPayer(`Cobertura 1000 ${tag}`); // matchea `100%` si `%` fuera comodín
+    const und = await newPractice(`Masaje A_B ${tag}`);
+    const und2 = await newPractice(`Masaje AxB ${tag}`); // matchea `A_B` si `_` fuera comodín
+    asUser(S.userId);
+
+    const byPct = await listCatalogForAdmin({ entity: "payer", q: `100% ${tag}` });
+    expect(byPct.rows.map((r) => r.id)).toEqual([pct.id]);
+    const byUnd = await listCatalogForAdmin({ entity: "practice", q: `A_B ${tag}` });
+    expect(byUnd.rows.map((r) => r.id)).toEqual([und.id]);
+
+    const mergePct = await searchMergeTargets("payer", `100% ${tag}`, near.id);
+    expect(mergePct.map((r) => r.id)).toEqual([pct.id]);
+    const mergeUnd = await searchMergeTargets("practice", `A_B ${tag}`, "nadie");
+    expect(mergeUnd.map((r) => r.id)).toEqual([und.id]);
+    expect(und2.id).not.toBe(und.id);
+  });
+
   it("mergePayer repunta Insurer, planes y coberturas de VARIOS consultorios y archiva el origen", async () => {
     const from = await newPayer("O.S. Petroleros", ["OSPe"]);
     const into = await newPayer("OSPE");

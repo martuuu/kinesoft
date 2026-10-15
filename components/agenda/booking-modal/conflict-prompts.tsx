@@ -28,6 +28,7 @@
  */
 import { useState, type CSSProperties, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import {
   BATCH_ROOM_BUSY_DETAIL,
   BATCH_ROOM_BUSY_LABEL,
@@ -99,6 +100,9 @@ export function BatchConflictPrompt({
   onBack: () => void;
 }) {
   const plan = batchConflict.plan;
+  // EV1-C1: en Clínica general (sin módulo `sesiones`) el batch son «turnos».
+  const sesiones = useTenantModules().has("sesiones");
+  const unit = sesiones ? "sesiones" : "turnos";
   // SR-D7: las fechas con la sala ocupada se OMITEN salvo que el usuario
   // marque agendarlas igual. Es un flag aparte del sobreturno (SR-D2), por
   // eso va como casilla y no se mezcla con "Crear todas". Sin salas
@@ -118,7 +122,7 @@ export function BatchConflictPrompt({
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
       <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
-        {problems.length} de {plan.requested} sesiones con aviso{line ? ` · ${line}` : ""}
+        {problems.length} de {plan.requested} {unit} con aviso{line ? ` · ${line}` : ""}
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
         {creatable.freeOnly} se crean sin conflicto
@@ -190,7 +194,10 @@ export function BatchConflictPrompt({
             disabled={pending || creatable.freeOnly === 0}
             onClick={() => onCreateFreeOnly(forceRoom)}
           >
-            Crear {creatable.freeOnly === 1 ? "la sesión" : `las ${creatable.freeOnly} sesiones`}
+            Crear{" "}
+            {creatable.freeOnly === 1
+              ? sesiones ? "la sesión" : "el turno"
+              : sesiones ? `las ${creatable.freeOnly} sesiones` : `los ${creatable.freeOnly} turnos`}
           </Button>
         )}
         <Button type="button" variant="ghost" onClick={onBack} disabled={pending}>
@@ -337,8 +344,10 @@ export function ConflictPrompt({
         ⚠ {conflict.practitionerName} ya tiene un turno en ese horario
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
-        Otros profesionales pueden tener turnos al mismo tiempo (varios kines en
-        paralelo), pero el mismo kine no puede atender dos pacientes en simultáneo.
+        {/* EV1-C1: neutral en las dos verticales (antes «kine»: en Clínica
+            general el profesional no es kinesiólogo). */}
+        Otros profesionales pueden tener turnos al mismo tiempo (varios en
+        paralelo), pero el mismo profesional no puede atender dos pacientes en simultáneo.
         Tenés dos opciones:
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>

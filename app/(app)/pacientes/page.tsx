@@ -2,7 +2,8 @@ import Link from "next/link";
 import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
 import { loadFilterFacets } from "@/lib/exercises";
-import { getCapabilities } from "@/lib/authz";
+import { getCapabilities, getTenantModules } from "@/lib/authz";
+import { patientsGridColumns } from "@/components/patients/patients-grid";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,13 +41,24 @@ const SORT_OPTIONS: { value: PatientSort; label: string }[] = [
 ];
 
 export default async function PacientesPage({ searchParams }: { searchParams: SP }) {
+  // EV1-B: el directorio se arma por módulos. Sin `planes` (General) no hay
+  // columna de plan, ni pills «Con plan/Sin plan», ni totales por plan; sin
+  // `diagnostico`, no hay filtro por diagnóstico. Un `?filter=active` o
+  // `?diagnosisSlug=` que llegue por URL se normaliza acá para la UI (el pill
+  // y los links no lo arrastran) y `listPatients` también lo ignora: esconder
+  // es UX, la barrera es el server.
+  const modules = await getTenantModules();
+  const plansEnabled = modules.has("planes");
+  const diagnosisEnabled = modules.has("diagnostico");
   const q = searchParams.q ?? "";
-  const filter = (searchParams.filter ?? "all") as NonNullable<SP["filter"]>;
+  const rawFilter = (searchParams.filter ?? "all") as NonNullable<SP["filter"]>;
+  const filter: NonNullable<SP["filter"]> =
+    !plansEnabled && (rawFilter === "active" || rawFilter === "no-program") ? "all" : rawFilter;
   const sort = (searchParams.sort ?? "lastName.asc") as PatientSort;
   const insurer = searchParams.insurer ?? "";
   const ageMin = searchParams.ageMin ? Number(searchParams.ageMin) : undefined;
   const ageMax = searchParams.ageMax ? Number(searchParams.ageMax) : undefined;
-  const diagnosisSlug = searchParams.diagnosisSlug ?? "";
+  const diagnosisSlug = diagnosisEnabled ? (searchParams.diagnosisSlug ?? "") : "";
   const lastVisitFrom = searchParams.lastVisitFrom ?? "";
   const lastVisitTo = searchParams.lastVisitTo ?? "";
 
@@ -74,11 +86,13 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   // Secretaria/BILLING. Ella da de alta desde el modal del turno, que manda el
   // profesional del turno. Un selector "Profesional a cargo" acá queda para C0.
   const canCreateHere = caps.has("clinical.read");
-  const totals = {
-    all: patients.length,
-    withProgram: patients.filter((p) => p.activeProgramTitle).length,
-    withoutProgram: patients.filter((p) => !p.activeProgramTitle).length,
-  };
+  const totals = plansEnabled
+    ? {
+        all: patients.length,
+        withProgram: patients.filter((p) => p.activeProgramTitle).length,
+        withoutProgram: patients.filter((p) => !p.activeProgramTitle).length,
+      }
+    : { all: patients.length };
 
   const baseQS = (override: Record<string, string | undefined>) => {
     const sp = new URLSearchParams();
@@ -229,7 +243,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             style={{
               padding: "12px 18px",
               display: "grid",
-              gridTemplateColumns: "28px 1.6fr 1fr 1fr 1.2fr 100px 90px 40px",
+              gridTemplateColumns: patientsGridColumns(plansEnabled),
               gap: 14,
               fontSize: 10,
               fontWeight: 700,
@@ -241,7 +255,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
           >
             <span />
             <span>Paciente</span>
-            <span>Plan activo</span>
+            {plansEnabled && <span>Plan activo</span>}
             <span>Obra social</span>
             <span>Próx. turno</span>
             <span>Última visita</span>

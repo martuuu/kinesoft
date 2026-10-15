@@ -25,6 +25,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { getActor } from "@/lib/session";
 import { requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -93,7 +94,14 @@ export async function listCustomConditions(): Promise<CustomConditionRow[]> {
   return rows;
 }
 
-export async function createCustomCondition(
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `createCustomConditionImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function createCustomCondition(...args: Parameters<typeof createCustomConditionImpl>): ReturnType<typeof createCustomConditionImpl> {
+  return withReadOnlyResult(() => createCustomConditionImpl(...args));
+}
+
+async function createCustomConditionImpl(
   raw: z.input<typeof ConditionInput>
 ): Promise<ActionResult<{ id: string; slug: string }>> {
   // Módulo antes que la validación: un consultorio sin `diagnostico` recibe
@@ -141,6 +149,9 @@ export async function createCustomCondition(
     revalidateTag(cacheTags.catalog());
     return { ok: true, data: row };
   } catch (e) {
+    // EV1-E1: este catch tapaba el ReadOnlyModeError con el copy genérico; el del modo lectura/soporte va primero.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un diagnóstico con un slug similar. Cambiale el nombre." };
     }
@@ -148,7 +159,14 @@ export async function createCustomCondition(
   }
 }
 
-export async function updateCustomCondition(
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `updateCustomConditionImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function updateCustomCondition(...args: Parameters<typeof updateCustomConditionImpl>): ReturnType<typeof updateCustomConditionImpl> {
+  return withReadOnlyResult(() => updateCustomConditionImpl(...args));
+}
+
+async function updateCustomConditionImpl(
   id: string,
   raw: Partial<z.input<typeof ConditionInput>>
 ): Promise<ActionResult> {
@@ -195,7 +213,14 @@ export async function updateCustomCondition(
   return { ok: true, data: undefined };
 }
 
-export async function deleteCustomCondition(id: string): Promise<ActionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `deleteCustomConditionImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function deleteCustomCondition(...args: Parameters<typeof deleteCustomConditionImpl>): ReturnType<typeof deleteCustomConditionImpl> {
+  return withReadOnlyResult(() => deleteCustomConditionImpl(...args));
+}
+
+async function deleteCustomConditionImpl(id: string): Promise<ActionResult> {
   const actor = await requireModule("diagnostico");
   const owned = await runWithRls(actor.tenantId, (tx) => tx.condition.findFirst({
     where: { id, tenantId: actor.tenantId },

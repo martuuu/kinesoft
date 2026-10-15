@@ -32,6 +32,7 @@ import { PAYER_KIND_LABEL, type PayerOption } from "@/lib/catalog-schemas";
 import { STEP } from "@/lib/onboarding-logic";
 import { formatARS } from "@/lib/format";
 import type { OnboardingInsurer, OnboardingService } from "@/lib/onboarding-internal";
+import type { TenantVertical } from "@prisma/client";
 import { StepHeader } from "./onboarding-shell";
 import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
 
@@ -39,7 +40,17 @@ const DURATIONS = [30, 40, 45, 50, 60, 90];
 
 // ── Servicios ────────────────────────────────────────────────────────────
 
-export function StepServices({ services }: { services: OnboardingService[] }) {
+// EV1-C2: el alta no monta el AppShell (no hay `useTenantModules`), así que la
+// vertical llega por prop desde `app/onboarding/page.tsx`, como en `StepTeam`.
+// Sin vertical → copy de Kinesiología (lo que se veía antes de Clínica general).
+export function StepServices({
+  services,
+  vertical,
+}: {
+  services: OnboardingService[];
+  vertical?: TenantVertical | null;
+}) {
+  const isGeneral = vertical === "GENERAL";
   const { go, refresh } = useStepNav();
   const confirm = useConfirm();
   const toast = useToast();
@@ -132,7 +143,7 @@ export function StepServices({ services }: { services: OnboardingService[] }) {
         }}
       >
         <PracticePicker value={practice} onChange={pickPractice} />
-        <FormField label="Nombre del servicio" value={name} onChange={setName} placeholder="Sesión de kinesiología" />
+        <FormField label="Nombre del servicio" value={name} onChange={setName} placeholder={isGeneral ? "Consulta" : "Sesión de kinesiología"} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
           <FormField
             as="select"
@@ -151,7 +162,11 @@ export function StepServices({ services }: { services: OnboardingService[] }) {
           <FormField
             as="select"
             label="Pacientes a la vez"
-            tooltip="Kinesiología suele atender varios en paralelo; osteopatía, uno por turno."
+            tooltip={
+              isGeneral
+                ? "Cuántos pacientes atendés en el mismo horario. Lo habitual es uno por turno."
+                : "Kinesiología suele atender varios en paralelo; osteopatía, uno por turno."
+            }
             value={cupo}
             onChange={setCupo}
             options={[
@@ -189,7 +204,15 @@ export function StepServices({ services }: { services: OnboardingService[] }) {
 const COMMON_INSURERS = ["OSDE", "Swiss Medical", "Galeno", "Medifé", "Omint", "Sancor Salud", "IOMA", "PAMI", "OSECAC", "Accord Salud"];
 const SUGGEST_MAX = 6;
 
-export function StepInsurers({ insurers }: { insurers: OnboardingInsurer[] }) {
+export function StepInsurers({
+  insurers,
+  vertical,
+}: {
+  insurers: OnboardingInsurer[];
+  vertical?: TenantVertical | null;
+}) {
+  // EV1-C2: en Clínica general la unidad es el turno, no la sesión.
+  const perUnit = vertical === "GENERAL" ? "por turno" : "por sesión";
   const { go, refresh } = useStepNav();
   const confirm = useConfirm();
   const toast = useToast();
@@ -382,7 +405,7 @@ export function StepInsurers({ insurers }: { insurers: OnboardingInsurer[] }) {
               </div>
             )}
           </div>
-          <MoneyInput label="Copago" value={copago} onChange={setCopago} onInvalidChange={setInvalid} hint="Lo que paga el paciente por sesión." />
+          <MoneyInput label="Copago" value={copago} onChange={setCopago} onInvalidChange={setInvalid} hint={`Lo que paga el paciente ${perUnit}.`} />
         </div>
         <div>
           <Button type="button" variant="ghost" onClick={add} disabled={pending || invalid}>

@@ -134,7 +134,7 @@ export function SharePatientButton({
             Compartir con
           </div>
           <p style={{ fontSize: 11.5, color: "var(--navy-500)", margin: "0 0 12px", lineHeight: 1.4 }}>
-            Los kinesiólogos marcados podrán ver la historia clínica completa
+            Los profesionales marcados podrán ver la historia clínica completa
             mientras esté activo el permiso.
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflow: "auto" }}>

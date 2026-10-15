@@ -141,6 +141,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <AppShell
         isPlatformAdmin={actor.isPlatformAdmin}
         modules={modules}
+        vertical={actor.entitlements.vertical}
         caps={caps}
         realtime={realtime}
         alertViewer={alertViewer}

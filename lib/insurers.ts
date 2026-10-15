@@ -12,6 +12,7 @@
  * but not mutate — keeping the catalogue stable across the consultorio.
  */
 import { withSupportWritable } from "@/lib/support-writable";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -87,7 +88,7 @@ const InsurerInput = z.object({
 });
 
 export async function createInsurer(...args: Parameters<typeof createInsurerImpl>): ReturnType<typeof createInsurerImpl> {
-  return withSupportWritable("lib/insurers.ts#createInsurer", () => createInsurerImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/insurers.ts#createInsurer", () => createInsurerImpl(...args)));
 }
 
 async function createInsurerImpl(
@@ -140,6 +141,9 @@ async function createInsurerImpl(
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: { id: row.id } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe una obra social con ese nombre." };
     }
@@ -149,7 +153,7 @@ async function createInsurerImpl(
 }
 
 export async function updateInsurer(...args: Parameters<typeof updateInsurerImpl>): ReturnType<typeof updateInsurerImpl> {
-  return withSupportWritable("lib/insurers.ts#updateInsurer", () => updateInsurerImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/insurers.ts#updateInsurer", () => updateInsurerImpl(...args)));
 }
 
 async function updateInsurerImpl(
@@ -219,6 +223,9 @@ async function updateInsurerImpl(
       return auditDiff(before, after);
     });
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof PayerNotFound) return { ok: false, error: e.message };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe una obra social con ese nombre." };
@@ -261,7 +268,7 @@ function auditDiff<T extends Record<string, unknown>>(before: T, after: T): Audi
 }
 
 export async function deleteInsurer(...args: Parameters<typeof deleteInsurerImpl>): ReturnType<typeof deleteInsurerImpl> {
-  return withSupportWritable("lib/insurers.ts#deleteInsurer", () => deleteInsurerImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/insurers.ts#deleteInsurer", () => deleteInsurerImpl(...args)));
 }
 
 async function deleteInsurerImpl(id: string): Promise<ActionResult> {
@@ -314,7 +321,7 @@ async function deleteInsurerImpl(id: string): Promise<ActionResult> {
  * pisa nada: devuelve `status: "exists"` y la UI ofrece vincularlo.
  */
 export async function addInsurerFromCatalog(...args: Parameters<typeof addInsurerFromCatalogImpl>): ReturnType<typeof addInsurerFromCatalogImpl> {
-  return withSupportWritable("lib/insurers.ts#addInsurerFromCatalog", () => addInsurerFromCatalogImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/insurers.ts#addInsurerFromCatalog", () => addInsurerFromCatalogImpl(...args)));
 }
 
 async function addInsurerFromCatalogImpl(
@@ -358,6 +365,9 @@ async function addInsurerFromCatalogImpl(
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: { status: "created", insurerId: r.insurerId } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     // Carrera con otro alta del mismo nombre entre el findFirst y el create.
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe una obra social con ese nombre." };
@@ -374,7 +384,7 @@ async function addInsurerFromCatalogImpl(
  * "OSDE 210" y "OSDE 310" con copagos distintos: el precio por plan es D).
  */
 export async function linkInsurerToPayer(...args: Parameters<typeof linkInsurerToPayerImpl>): ReturnType<typeof linkInsurerToPayerImpl> {
-  return withSupportWritable("lib/insurers.ts#linkInsurerToPayer", () => linkInsurerToPayerImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/insurers.ts#linkInsurerToPayer", () => linkInsurerToPayerImpl(...args)));
 }
 
 async function linkInsurerToPayerImpl(

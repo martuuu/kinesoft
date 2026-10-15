@@ -7,11 +7,21 @@ import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 import { PortalCheckInForm } from "@/components/portal/check-in-form";
+import type { PortalPatient } from "@/lib/portal-types";
 
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: { slug: string } }) {
   return { title: `Mi plan · ${params.slug} · KineSoft` };
+}
+
+/**
+ * EV1-C2: vertical del consultorio de la ficha (`PortalPatient.tenantVertical`, de `getPortalAuth`). Clínica
+ * general no tiene planes (lib/tenant-modules.ts), así que «tu plan / cuando tu kinesiólogo lo arme» le promete
+ * algo que no existe.
+ */
+function isGeneralTenant(p: PortalPatient): boolean {
+  return p.tenantVertical === "GENERAL";
 }
 
 export default async function PortalTenantPage({ params }: { params: { slug: string } }) {
@@ -42,6 +52,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
     }
     notFound();
   }
+  const general = isGeneralTenant(me);
   const plan = await getPortalPlan(params.slug);
   const now = Date.now();
   const nextSession = plan?.sessions.find(
@@ -60,18 +71,29 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
       <header>
         <Tag tone="lime">{me.tenantName}</Tag>
         <h1 className="k-display" style={{ fontSize: 26, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
-          Tu plan
+          {general && !plan ? "Tu consultorio" : "Tu plan"}
         </h1>
         <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
-          Hola {me.firstName}. Acá ves cómo viene tu recuperación, sesión por sesión.
+          {general && !plan
+            ? `Hola ${me.firstName}.`
+            : `Hola ${me.firstName}. Acá ves cómo viene tu recuperación, sesión por sesión.`}
         </p>
       </header>
 
       {!plan ? (
         <Card glass style={{ padding: 22 }}>
           <p style={{ fontSize: 14, color: "var(--navy-500)" }}>
-            Todavía no tenés un plan activo en este centro. Cuando tu kinesiólogo lo arme va a
-            aparecer acá.
+            {general ? (
+              <>
+                Este consultorio no usa planes de tratamiento. Tus próximos turnos los ves en{" "}
+                <Link href="/portal" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+                  Mis consultorios
+                </Link>
+                .
+              </>
+            ) : (
+              "Todavía no tenés un plan activo en este consultorio. Cuando tu profesional lo arme va a aparecer acá."
+            )}
           </p>
         </Card>
       ) : (

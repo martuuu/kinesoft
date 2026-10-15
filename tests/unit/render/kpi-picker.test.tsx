@@ -19,6 +19,8 @@ vi.mock("@/components/layout/tweaks-context", () => ({ useTweaks: () => ({ set: 
 
 import { PinKpiModal } from "@/components/dashboard/pin-kpi-button";
 import { SettingsModal } from "@/components/global/profile-menu";
+import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
+import { modulesFor } from "@/lib/tenant-modules";
 import {
   DEFAULT_PREFERENCES,
   KPI_OPTIONS,
@@ -78,6 +80,19 @@ describe("PinKpiModal (+ Agregar)", () => {
 });
 
 describe("SettingsModal (Ajustes del menú de perfil)", () => {
+  // EV1-A: el picker de Ajustes usa los módulos del consultorio, igual que el «+ Agregar» de la fila.
+  it("[EV1-A] Clínica general: sin KPIs de planes y con la fila default de General preseleccionada", () => {
+    const html = renderToStaticMarkup(
+      <TenantModulesProvider modules={modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false })}>
+        <SettingsModal preferences={DEFAULT_PREFERENCES} onClose={noop} revenueScope="tenant" />
+      </TenantModulesProvider>
+    );
+    expect(html).not.toContain("Planes en curso");
+    expect(html).not.toContain("Cerca del alta");
+    expect(html).toContain("Pacientes atendidos");
+    expect(html).toContain("Turnos esta semana");
+  });
+
   it("Secretaria (none): no ofrece ingresos", () => {
     const html = settings("none");
     expect(html).not.toContain("ngresos del mes");

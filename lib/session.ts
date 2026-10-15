@@ -105,7 +105,8 @@ export type Actor = {
   access: TenantAccess;
   /**
    * BO2-E (C-BO9): sesión de soporte de un superadmin en un consultorio ajeno (rama de soporte de `resolveActor`).
-   * Con soporte: `practitionerId` null, capacidades `SUPPORT_CAPS` (Secretaria sin clínico, lib/authz.ts), las tx en
+   * Con soporte: `practitionerId` null, capacidades `SUPPORT_CAPS` (Secretaria sin clínico; vive en lib/capabilities.ts y
+   * la aplica `capabilitiesForActor` de lib/authz.ts), las tx en
    * solo lectura salvo `withSupportWritable` (C-BO4) y cada `audit()` estampa `supportSessionId`.
    */
   support: { sessionId: string; superadminEmail: string } | null;
@@ -445,7 +446,8 @@ async function buildDemoActor(): Promise<Actor | null> {
  * la `SupportSession` abierta (no una membresía: el superadmin no es miembro, `startSupportSession` lo exige), sin
  * profesional (nunca «es» un profesional del consultorio: ni agenda propia ni pacientes «propios»), con el acceso
  * REAL del destino (la banda lo muestra) y la marca `support` que pone el request en solo lectura
- * (`isReadOnlyActor`) y que lib/authz.ts traduce a `SUPPORT_CAPS` (Secretaria sin `clinical.read`).
+ * (`isReadOnlyActor`) y que `capabilitiesForActor` (lib/authz.ts) traduce a `SUPPORT_CAPS` (lib/capabilities.ts:
+ * Secretaria sin `clinical.read`).
  * `userId` es el del superadmin: la auditoría del consultorio dice quién fue y el `supportSessionId` dice «como
  * soporte».
  */
@@ -580,22 +582,6 @@ export function writableError(actor: Pick<Actor, "access" | "support">): string 
     if (err instanceof ReadOnlyModeErrorClass) return err.message;
     throw err;
   }
-}
-
-/**
- * @deprecated BO1-A (C-BO2): usar `requirePlatformAdmin` (lib/platform-actor.ts), que NO necesita un consultorio
- * «casa». Queda hasta BO-Z porque los módulos de catálogo global (`catalog-admin`, `exercises-admin`,
- * `exercise-media`, `tags-admin`, `platform-tenants*`) todavía usan `actor.tenantId`/`userId` para auditar; BO2-F
- * los pasa al registro de plataforma.
- *
- * Delega el chequeo en `requirePlatformAdmin` (superadmin y no deshabilitado) y después arma el Actor de siempre:
- * un superadmin sin consultorio pasa el chequeo pero acá sigue tirando `UnauthenticatedError` (eso es lo que
- * arregla migrar al actor de plataforma).
- */
-export async function requireSuperAdmin(): Promise<Actor> {
-  const { requirePlatformAdmin } = await import("@/lib/platform-actor");
-  await requirePlatformAdmin();
-  return getActor();
 }
 
 /**

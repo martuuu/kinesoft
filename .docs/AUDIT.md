@@ -960,6 +960,31 @@ en [ARCHITECTURE.md §Back-office + ADR-009..015](ARCHITECTURE.md); seguridad en
 - **Gate de BO (cierre de BO4-BO5, 14-oct):** tsc 0; unit 179 archivos / 3540 en UTC y en AR; guards OK; integración
   app 137 archivos / 1748 + 19 skip y owner 136 + 1 skip / 1724 + 43 skip; `next build` OK (middleware 124 kB).
 
+**Ronda 23 — EV1 · Clínica general + ajustes pendientes (14-oct-2026) ✅ (sin commitear; lo commitea Martin):**
+ejecutado en develop sobre `7c28705` según el plan vigente §19.6, en 7 sesiones paralelas (A dashboard, B listado de
+pacientes, C1 agenda, C2 pacientes/Configuración/portal/turnero/onboarding, D Plataforma `isBasic` + ILIKE, E1 solo
+lectura clínica + ILIKE, E2 solo lectura de Configuración + varios) y un integrador. **Sin migraciones.** En Kinesiología
+no cambia nada (los render tests de Kine siguen iguales); en Clínica general ya no queda copy de kinesiología en
+dashboard, agenda, pacientes, perfil, Configuración, onboarding, turnero ni portal. QA en [QA.md §EV1](QA.md).
+
+- 🟢 **Cerrados** (filas en «Hallazgos de EV1» y en las tablas de EV0, IAM y BO): bug del gráfico del dashboard en
+  General (al cambiar de rango se vaciaba: contaba `Session` en vez de turnos); fuga chica de conteos del gráfico por
+  rango para PRACTITIONER (ahora el mismo alcance que la carga inicial); ILIKE sin escapar en pacientes (lista, filtro
+  de obra social, buscador de la agenda, ⌘K), ejercicios, Diagnóstico, catálogo, obras sociales («O_DE» linkeaba a
+  OSDE) y Plataforma; `readonly-residual-actions` (todo salvo `ensureTag`, que tiene contrato de tirar);
+  `format-compact-12h`; `isbasic-muerto-en-plataforma`; `exercise-drawer-link-en-general`;
+  `copy-kinesiologo-en-general`; alias `requireSuperAdmin` borrado; tests de guard de `/planes` y `/sala`.
+- **Integrador:** sacó `tier` de las prefs del catálogo (una pref o URL vieja cae a «Nombre»); picker de KPIs de Ajustes
+  por módulos; `vertical` real en `useTenantModules()` (antes los paneles la deducían de `has("sesiones")`);
+  `PublicClinic.vertical` y `PortalPatient.tenantVertical`; escape de ILIKE también en `lib/search.ts` (⌘K) y
+  `lib/patient-search.ts` (buscador de la agenda), que no estaban en el reparto.
+- **Abiertos nuevos / que siguen:** ver «Hallazgos de EV1».
+- **Gate de EV1:** tsc 0 (app y scripts); unit 184 archivos / 3623 en UTC y en AR; guards OK;
+  integración app 142 archivos / 1789 + 19 skip y owner 141 + 1 skip / 1765 + 43 skip; `next build` OK (middleware 124 kB,
+  shared 88.4 kB). Perf: `compare.ts` sin regresiones fuera de umbral (31 escenarios; contra IAM-4b, igual o mejor).
+  Bundle vs BO4-BO5 (First Load): `/configuracion` 210 → 214 kB (+4, sobre el criterio de +1 kB), `/agenda` 197 → 198,
+  `/dashboard` 180 → 181, `/pacientes` 160 → 161; el resto igual.
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -1606,10 +1631,10 @@ Contexto y contratos en [VERTICALES.md](VERTICALES.md) (plan vigente §15). Corr
 | facetas-condiciones-cross-tenant | media | A | `lib/exercises.ts` (`loadFilterFacets`) | 🟢 EV0 V.Z (P1) | Preexistente: `condition.findMany` sin `where` → con BYPASSRLS listaba condiciones custom de todos los consultorios. Ahora tenant + globales y `[]` sin `diagnostico`. Test con el rol owner en `ev0-review-fixes.test.ts` |
 | turnero-prefill-cross-tenant | media | B | `lib/public-booking-internal.ts` (`findPatientByEmailForPrefill`) | 🟢 EV0 V.Z (P2) | Preexistente (PD-14): prefill con PII de una ficha de **otro** consultorio. Ahora `tenantId` obligatorio; `userId` → ficha única por email → nada. Test: ficha en A, sesión en `/c/B` → prefill null |
 | search-conditions-cmdk-sin-tenant | baja | C | `lib/search.ts:76-83` | 🟢 EV0 (EV-G) | ⌘K de condiciones sin filtro de tenant. Cerrado; ver la fila `search-condition-sin-tenant-y-email-basic` (queda el email a nivel basic) |
-| copy-kinesiologo-en-general | baja | B | users-panel, step-team, steps-catalog (placeholder), hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno | 🔴 | **EV1** — copy neutral para la vertical General |
-| isbasic-muerto-en-plataforma | baja | B | `biblioteca/[slug]:64` (tag Común/Pro), exercise-admin-client / exercise-drawer (toggle), `validation.ts:401` | 🔴 | **EV1** — desde EV0 el catálogo global sale del plan (PRO), no de `isBasic` |
-| soporte-escribinos-sin-canal | baja | B | `components/booking/booking-unavailable.tsx`, mensajes "escribinos" | 🔴 | **EV1** — definir el email/canal de soporte |
-| exercise-drawer-link-en-general | baja | B | exercise-drawer (link a `/biblioteca`) | 🔴 | **EV1** — en un tenant General el link lleva a un segmento guardado (redirige a `/dashboard`) |
+| copy-kinesiologo-en-general | baja | B | users-panel, step-team, steps-catalog (placeholder), hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno | 🟢 EV1 | **EV1-C1/C2** — «Profesional», «turnos», «Motivo de consulta» y sin «Usar como diagnóstico» en General; Kine igual |
+| isbasic-muerto-en-plataforma | baja | B | `biblioteca/[slug]:64` (tag Común/Pro), exercise-admin-client / exercise-drawer (toggle), `validation.ts:401` | 🟢 EV1 | **EV1-D** + integrador — sin tag, toggle, filtro ni orden «Plan»; zod ya no acepta `isBasic`; `tier` fuera de `CatalogPrefs`. La columna queda en la DB (sin migración) |
+| soporte-escribinos-sin-canal | baja | B | `components/booking/booking-unavailable.tsx`, mensajes "escribinos" | 🟡 | **BO-Z B4** — `SupportContact` (mailto real) en banda de acceso, «Plan y uso», cuenta desactivada; el turnero muestra solo el contacto del consultorio. Resto: `components/onboarding/steps-basic.tsx:169` («escribinos a soporte» sin canal) → **VX** |
+| exercise-drawer-link-en-general | baja | B | exercise-drawer (link a `/biblioteca`) | 🟢 EV1 | **EV1-D** — el link «Ver ficha completa» sale solo con `showFichaLink`, que pide Biblioteca (`biblioteca-client.tsx`), no Plataforma |
 
 **Notas:**
 - `no-realtime-agenda-compartida` (C2) se adelantó a la corrida **SV** (M5) y se cerró en la Ronda 20
@@ -1739,7 +1764,7 @@ integrador, y se verificó en el archivo.
 | flash-solo-bookingcard | baja | C1 | components/agenda/views/* | 🔴 | **C1** — el flash está en Día / Por profesional / Por sala; Semana, Lista y Recepción no titilan |
 | realtime-leader-election | baja | C1 | components/providers/realtime-provider.tsx | 🔴 | **C1** (SV-D14) — un socket y un mint por pestaña; chime en dos pestañas visibles del mismo usuario |
 | arrival-alerts-refetch-por-pestana | baja | C1 (perf) | components/providers/arrival-alerts.tsx | 🔴 | **C1** — cada pestaña re-pide hoy por lote relevante (coalescido). Medir con el tenant perf |
-| horarios-config-en-vivo | baja | EV1 | lib/practitioner-schedule.ts | 🔴 | **EV1** (SV-D12) — cambios de horarios en Configuración no publican `availability` |
+| horarios-config-en-vivo | baja | C | lib/practitioner-schedule.ts | 🔴 | **C** (SV-D12) — cambios de horarios en Configuración no publican `availability`. No entró en el reparto de EV1 |
 | sala-tv-y-campana | baja | D | — | 🔴 | **D** — pantalla TV de sala (topic propio) y notificaciones persistidas en la campana |
 
 ### Hallazgos de IAM (IAM-Z, 14-oct-2026)
@@ -1757,7 +1782,7 @@ Ronda 21. Los 🟢 se cerraron en las sesiones IAM-0a..4c y se verificaron en el
 | sin-suspension-de-membresia | media | C0 | lib/invitations.ts · lib/access-logic.ts | 🟢 | **IAM-4c** — no había forma de cortar el acceso sin «Quitar» (que exige reasignar todo). `suspendMember`/`reactivateMember` con `Membership.disabledAt` |
 | createbooking-acepta-secretaria | media | B | lib/bookings-core.ts:731 · lib/availability-loader.ts:270 | 🟢 | **IAM-4b** — con el id de la Secretaria, `createBooking`, el batch y el loader con `practitionerIds` explícitos la aceptaban. Ahora `bookablePractitionerWhere`; reprogramar un turno viejo de ella se rechaza, cancelarlo sigue andando |
 | reset-admin-no-existe | baja | C0 | lib/invitations.ts:869 | 🟢 | **IAM-4c** — «Mandar link para nueva contraseña» sin exponer el link (§5.47) |
-| insurers-catalog-ilike-nombre | baja | C | lib/insurers-internal.ts:26 · lib/catalog.ts:168 | 🔴 | **C** — comparan nombre/código de obra social con `ILIKE` sin escapar. Sin PHI (catálogo), pero un `_` matchea de más. Pasar a `escapeLike` |
+| insurers-catalog-ilike-nombre | baja | C | lib/insurers-internal.ts:31 · lib/catalog.ts:106,173 | 🟢 | **EV1-E1/E2** — `escapeLike`: «O_DE» u «OS%» linkeaban la cobertura a «OSDE» |
 | cuentas-auth-huerfanas-sin-reparacion | media | BO | lib/platform-health-{logic,read}.ts · lib/platform-users.ts | 🟢 | **BO2-C/BO3-D** (Ronda 22) — `/plataforma/salud`: detectores (huérfanos de Auth, consultorios sin OWNER, miembros clínicos sin `Practitioner`, altas trabadas, invitaciones vencidas, email de perfil ≠ Auth) y reparaciones (`repairDeleteAuthOrphan`, `repairCreatePractitioner`, `repairSyncProfileEmail`; sin OWNER → transferir desde el equipo) |
 | guard-auth-admin-y-getuser | baja | BO | scripts/guard-* | 🔴 | **BO** (invariantes §19.5) — `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` se cumplen hoy (grep), pero sin guard estático |
 | email-log-sin-webhook-entrega | baja | BO | lib/email/log.ts | 🔴 | **IAM-5 (opcional) / BO** — `EmailLog` registra «Resend lo aceptó», no entregado/rebote/queja |
@@ -1775,12 +1800,30 @@ Ronda 22. Los 🟢 se verificaron en el archivo al cierre.
 | sin-health-endpoint | media | BO | app/api/health/route.ts | 🟢 | **BO1-D** — `{ ok, db, maintenance, time }`, `SELECT 1` con timeout 2 s (`lib/db-ping.ts`), 60/min/IP, sin detalles. Falta el monitor externo (Martin, §19.9) |
 | readonly-error-redactado-agenda-pacientes | media | A | lib/bookings.ts · lib/patients.ts · lib/read-only-result.ts:17 | 🟢 | **BO3-F** — en prod Next redacta los errores de server actions: el `ReadOnlyModeError` se veía como error genérico. `readOnlyFailure(e)` lo devuelve como resultado en los write-paths de agenda y pacientes |
 | medianoche-24-horas | baja | C | lib/format.ts:41,56 | 🟢 | **BO3-F** — `hour12:false` imprimía «24:30»; ahora `hourCycle:"h23"` (00:30) |
-| readonly-residual-actions | media | **A** (operación) | actions de diagnóstico, evaluaciones, ejercicios, plantillas de plan, plans-adopt y Configuración | 🟡 | **EV1 / C** — sin `readOnlyFailure`: con el consultorio en solo lectura (enforce) o como soporte fuera de la allowlist, el usuario ve un error genérico. La banda de acceso / soporte explica por qué; no hay escritura indebida (la tx es read-only). Aplicar el helper antes de pasar a `enforce` |
+| readonly-residual-actions | media | **A** (operación) | actions de diagnóstico, evaluaciones, ejercicios, plantillas de plan, plans-adopt y Configuración | 🟢 | **EV1-E1/E2** — `withReadOnlyResult`/`readOnlyFailure` en todas; los `catch` genéricos dejan pasar primero el copy de solo lectura (`readonly-residual.test.ts`, `readonly-config.test.ts`). Única excepción a propósito: `ensureTag` (lib/exercises.ts), que devuelve `{slug,label}` y su contrato es tirar (C-EV4) |
 | cron-vs-salud-criterios-duplicados | baja | C | lib/cron-jobs-internal.ts:263 (`healthCountsCore`) · lib/platform-health-read.ts | 🟡 | **C** — el resumen diario y `/plataforma/salud` arman sus conteos por separado (comparten solo `authOrphansFrom`, `emailMismatchesFrom`, `stalledOnboardingCutoff`). Mover los criterios a `lib/platform-health-logic.ts` y usarlos en los dos |
-| format-compact-12h | baja | VX | lib/format.ts:48 (preset `compact`) | 🟡 | **VX** — sin `hourCycle`: sale «12:30 a. m.» en vez de 00:30 |
+| format-compact-12h | baja | VX | lib/format.ts:48 (preset `compact`) | 🟢 | **EV1-E2** — `hourCycle: "h23"` (00:30), test en `format.test.ts` |
 | danger-hex-sin-token | baja | VX | components/plataforma/** (`#9F1F1F`, `#9A5B00`) | 🟡 | **VX1** — colores de peligro/aviso a mano; falta el token `--danger-*` en `app/globals.css` |
 | export-error-como-archivo | baja | C | components/configuracion/panels/export-panel.tsx:70 · app/suspendido/page.tsx:66 | 🟡 | **C** — el export es un `<a download>` (streaming sin `fetch`): un 403/429 de la ruta baja como archivo de texto con el mensaje en vez de mostrarse en pantalla |
 | invitacion-plataforma-sin-idempotency | baja | C | components/plataforma/team/invite-drawer.tsx | 🟡 | **C** — el schema strict de la invitación no acepta `idempotencyKey`: un doble click re-invita (el reinvite por email es idempotente; sale un mail más) |
+
+### Hallazgos de EV1 (14-oct-2026)
+
+Ronda 23. Los 🟢 se verificaron en el archivo al cierre.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| dashboard-grafico-general-vacio | media | B | lib/dashboard.ts (`getSessionsChart`) | 🟢 | **EV1-A** — al cargar contaba turnos y al cambiar de rango contaba `Session`: en General (sin sesiones) el gráfico se vaciaba. Ahora cuenta turnos en los dos caminos |
+| dashboard-grafico-rango-alcance-practitioner | baja | A | lib/dashboard.ts (`getSessionsChart`) | 🟢 | **EV1-A** — el cambio de rango contaba turnos de todo el consultorio para un PRACTITIONER (solo números, sin PHI); ahora el mismo alcance que la carga inicial |
+| dashboard-kpis-de-planes-en-general | baja | B | lib/preferences-constants.ts · components/screens/dashboard-screen.tsx · components/global/profile-menu.tsx | 🟢 | **EV1-A** + integrador — KPIs por módulos (`kpiOptionsFor`/`effectivePinnedKpis`), «Pacientes atendidos» por turnos en General; el picker de Ajustes usa la misma regla. Plural «1 turno»/«1 sesión» |
+| ilike-sin-escapar-busquedas | media | A | lib/patients.ts · lib/diagnosis.ts · lib/exercises.ts · lib/catalog*.ts · lib/insurers-internal.ts · lib/exercises-admin.ts · lib/platform-*-read.ts · lib/search.ts · lib/patient-search.ts | 🟢 | **EV1-B/D/E1/E2** + integrador — Prisma no escapa `%`/`_` en `contains`/`equals` con `mode: "insensitive"`: «%» traía todo. `escapeLike` en todas; tests con «%» y «_» |
+| pacientes-lista-plan-en-general | baja | B | components/patients/* · lib/patients.ts | 🟢 | **EV1-B** — sin columna/filtros de plan ni «Último diagnóstico» en General (se superponía con S32 de ES4: resuelto acá) |
+| vertical-por-proxy-de-modulos | baja | B | components/layout/tenant-modules-context.tsx | 🟢 | **Integrador** — `useTenantModules().vertical` real (layout → AppShell); los paneles dejaron de deducirla de `has("sesiones")` |
+| require-superadmin-alias | baja | poda | lib/session.ts | 🟢 | **EV1-E2** — alias `requireSuperAdmin` borrado (sin callers desde BO2-F) |
+| guard-planes-sala-sin-test | baja | B | app/(app)/planes/layout.tsx · app/(app)/sala/layout.tsx | 🟢 | **EV1-E2** — `module-segment-guard.test.ts` cubre `/planes` (General → `/dashboard`) y `/sala` (CORE: nadie rebota) |
+| sessions-mode-unidad-por-regex | baja | C | components/agenda/booking-modal/sessions-mode.tsx (`asTurnos`) · lib/availability/recurrence.ts (`summarizeRange`) · lib/sessions-mode-state.ts | 🔴 | **C** — en General el resumen «N sesiones · …» se reescribe a «turnos» con regex en el cliente. Limpio sería una `unit` en `summarizeRange`/`localSummary`/`shortfallNote`, pero el resumen lo arma también el server (`availability-actions.ts`, `previewRecurrence`): hay que pasar la unidad por la action. No se hizo en la integración |
+| onboarding-escribinos-sin-canal | baja | VX | components/onboarding/steps-basic.tsx:169 | 🔴 | **VX** — «escribinos a soporte» sin `SupportContact` |
+| login-hero-kine | baja | VX | components/screens/login-screen.tsx (titular «la recuperación de tus pacientes, sesión a sesión», «planes de ejercicios») | 🔴 | **VX** — el párrafo ya es neutral («consultorios de salud»); el titular y la lista siguen siendo de kinesiología. Cara pública = VX |
 
 ### Resumen del checklist (al 2026-09-29)
 

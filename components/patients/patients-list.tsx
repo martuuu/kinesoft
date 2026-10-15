@@ -7,6 +7,8 @@ import { Tag } from "@/components/ui/tag";
 import { BulkSelectCheckbox } from "@/components/patients/bulk-select";
 import { PatientRowActions } from "@/components/patients/patient-row-actions";
 import { staggerList, staggerItem } from "@/lib/motion";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { patientsGridColumns } from "@/components/patients/patients-grid";
 import type { PatientRow } from "@/lib/patients-types";
 
 /**
@@ -31,6 +33,10 @@ export function PatientsList({
   archived: boolean;
 }) {
   const signature = rows.map((r) => r.id).join(",");
+  // EV1-B: sin `planes` (General) no hay columna de plan y el «Estado» deja de
+  // ser "tiene plan activo" (que ahí sería siempre «Inactivo") para ser el del
+  // paciente: Activo o Archivado según la vista.
+  const plansEnabled = useTenantModules().has("planes");
 
   return (
     <motion.div
@@ -45,7 +51,7 @@ export function PatientsList({
         // Basic rows: muted styling, no plan info, no insurer line,
         // no archive action (the row's owner controls that), no
         // bulk-select (those mutate PHI).
-        const tone: "sky" | "lime" | "navy" = isBasic
+        const tone: "sky" | "lime" | "navy" = isBasic || !plansEnabled
           ? "sky"
           : p.activeProgramTitle
             ? "lime"
@@ -57,7 +63,7 @@ export function PatientsList({
             style={{
               padding: "14px 18px",
               display: "grid",
-              gridTemplateColumns: "28px 1.6fr 1fr 1fr 1.2fr 100px 90px 40px",
+              gridTemplateColumns: patientsGridColumns(plansEnabled),
               gap: 14,
               alignItems: "center",
               fontSize: 13,
@@ -91,6 +97,7 @@ export function PatientsList({
                 </div>
               </div>
             </Link>
+            {plansEnabled && (
             <div style={{ color: isBasic ? "var(--navy-300)" : p.activeProgramTitle ? "var(--navy-700)" : "var(--navy-300)" }}>
               {isBasic ? (
                 <Tag tone="soft">Sin acceso</Tag>
@@ -105,6 +112,7 @@ export function PatientsList({
                 </>
               )}
             </div>
+            )}
             <div style={{ color: isBasic ? "var(--navy-300)" : "var(--navy-700)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {isBasic || !p.obraSocial || p.obraSocial.toLowerCase() === "particular"
                 ? "—"
@@ -136,6 +144,8 @@ export function PatientsList({
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               {isBasic ? (
                 <Tag tone="soft">—</Tag>
+              ) : !plansEnabled ? (
+                archived ? <Tag tone="soft">Archivado</Tag> : <Tag tone="lime">Activo</Tag>
               ) : p.activeProgramTitle ? (
                 <Tag tone="lime">Activo</Tag>
               ) : (

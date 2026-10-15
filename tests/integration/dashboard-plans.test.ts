@@ -14,6 +14,12 @@
  *     queries (`tests/helpers/query-counter.ts`), no se supone: el tenant
  *     General TIENE un plan y un turno sembrados por insert directo, así que
  *     si el gate faltara los números no darían 0 (anti-falso-verde).
+ *   - EV1-A: el gate de `getSessionsChart` se SACA (contradecía la carga
+ *     inicial, que siempre contó turnos): en General el gráfico es "Turnos" y
+ *     por rango devuelve lo mismo que `weeklyBars`. "Pacientes activos" (0 sin
+ *     planes) pasa a ser "Pacientes atendidos": distintos con turno COMPLETED
+ *     en los últimos 30 días. Y el gráfico por rango respeta el scope del
+ *     profesional, como la carga inicial.
  *
  * Corre con `kinesoft_app` y con el owner BYPASSRLS.
  */
@@ -53,6 +59,7 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
   let K: EphemeralTenant;
   let G: EphemeralTenant;
   let assistantUserId: string;
+  let ownPractitionerUserId: string;
   let patientId: string;
   let archivedPatientId: string;
 
@@ -93,6 +100,8 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
     K = await createEphemeralTenant(db, { vertical: "KINESIOLOGY", plan: "FREE" });
     G = await createEphemeralTenant(db, { vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
     assistantUserId = (await addPractitioner(db, K, "ASSISTANT")).userId;
+    // PRACTITIONER sin `sharedPatientView`: ve solo sus turnos (no "ver todo").
+    ownPractitionerUserId = (await addPractitioner(db, K, "PRACTITIONER")).userId;
 
     patientId = await addPatient(db, K, { firstName: "Reciente", lastName: "Ordinal" });
     await plan(K, { patientId, title: "Cervicalgia S14", completedAt: new Date(Date.now() - DAY) });
@@ -116,6 +125,28 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
         status: "CONFIRMED",
       },
     });
+    // EV1-A · "Pacientes atendidos": gPatient con DOS turnos COMPLETED en los
+    // últimos 30 días (cuenta 1: distintos) y otro paciente con uno de hace 40
+    // días (fuera de la ventana). Antes de ayer: no cambia `todayCount`.
+    const old = await addPatient(db, G, { firstName: "Viejo", lastName: "Atendido" });
+    for (const [pid, daysAgo] of [
+      [gPatient, 2],
+      [gPatient, 9],
+      [old, 40],
+    ] as const) {
+      await db.booking.create({
+        data: {
+          tenantId: G.tenantId,
+          patientId: pid,
+          practitionerId: G.practitionerId,
+          serviceId: G.serviceId,
+          scheduledFor: new Date(Date.now() - daysAgo * DAY),
+          durationMin: 45,
+          idempotencyKey: randomUUID(),
+          status: "COMPLETED",
+        },
+      });
+    }
   });
 
   afterAll(async () => {
@@ -154,7 +185,8 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
   it("GENERAL (sin `planes`): getDashboardData no consulta planes/sesiones y devuelve 0", async () => {
     asUser(G.userId);
     const { result: d } = await measure(() => getDashboardData());
-    expect(d.pinned).toMatchObject({ activePatients: 0, activePrograms: 0, nearingDischarge: 0 });
+    // [EV1-A] activePatients = "Pacientes atendidos" (turnos COMPLETED en 30 días, distintos): 1, no 0.
+    expect(d.pinned).toMatchObject({ activePatients: 1, activePrograms: 0, nearingDischarge: 0 });
     expect(d.recent).toEqual([]);
     expect(touches("TreatmentProgram")).toEqual([]);
     expect(touches("Session")).toEqual([]);
@@ -162,14 +194,26 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
     expect(d.todayCount).toBe(1);
   });
 
-  it("GENERAL (sin `sesiones`): getSessionsChart devuelve 0 sin consultar", async () => {
+  it("[EV1-A] GENERAL: getSessionsChart cuenta turnos por rango, igual que la carga inicial", async () => {
     asUser(G.userId);
-    for (const range of ["week", "month", "3m"] as const) {
-      const { result: bars } = await measure(() => getSessionsChart(range));
-      expect(bars.length).toBeGreaterThan(0);
-      expect(bars.every((b) => b.done === 0 && b.missed === 0)).toBe(true);
-      expect(touches("Booking")).toEqual([]);
-    }
+    const d = await getDashboardData();
+    const initial = d.weeklyBars.map((b) => ({ label: b.d, done: b.c, missed: b.a }));
+    // Anti-falso-verde: la carga inicial TIENE turnos (el de hoy, CONFIRMED).
+    expect(initial.reduce((a, b) => a + b.done, 0)).toBeGreaterThanOrEqual(1);
+
+    const { result: week } = await measure(() => getSessionsChart("week"));
+    expect(touches("Booking").length).toBeGreaterThan(0);
+    expect(week).toEqual(initial);
+
+    // Mes y 3 meses contienen hoy: el turno de hoy cuenta en los dos. 3 meses
+    // contiene al mes, así que nunca cuenta menos.
+    const month = await getSessionsChart("month");
+    const threeM = await getSessionsChart("3m");
+    const done = (bars: { done: number }[]) => bars.reduce((a, b) => a + b.done, 0);
+    expect(done(month)).toBeGreaterThanOrEqual(1);
+    expect(done(threeM)).toBeGreaterThanOrEqual(done(month));
+    // Los 3 COMPLETED (2, 9 y 40 días) + el de hoy caen dentro de los 3 meses.
+    expect(done(threeM)).toBe(4);
   });
 
   it("control: con `sesiones`, getSessionsChart sí cuenta (el gate no apaga todo)", async () => {
@@ -188,5 +232,18 @@ describe.skipIf(!RUN)("S14 · dashboard sobre Planes", () => {
     });
     const bars = await getSessionsChart("week");
     expect(bars.reduce((a, b) => a + b.done, 0)).toBe(1);
+  });
+
+  it("[EV1-A] el gráfico por rango respeta el scope del profesional (como la carga inicial)", async () => {
+    // El turno de esta semana de K es de `K.practitionerId`, no de este profesional.
+    asUser(ownPractitionerUserId);
+    const d = await getDashboardData();
+    const initial = d.weeklyBars.map((b) => ({ label: b.d, done: b.c, missed: b.a }));
+    const week = await getSessionsChart("week");
+    expect(week).toEqual(initial);
+    expect(week.reduce((a, b) => a + b.done, 0)).toBe(0);
+    // Control: el OWNER sí lo ve (la diferencia es el scope, no la falta de datos).
+    asUser(K.userId);
+    expect((await getSessionsChart("week")).reduce((a, b) => a + b.done, 0)).toBe(1);
   });
 });

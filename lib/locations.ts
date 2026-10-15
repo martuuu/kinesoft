@@ -22,6 +22,7 @@
  * RESTRICT y el historial de turnos tiene que seguir diciendo dónde fue.
  */
 import { withSupportWritable } from "@/lib/support-writable";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -93,7 +94,7 @@ export async function listLocations(
  * el motor necesita una (`Booking.locationId` null = principal).
  */
 export async function createLocation(...args: Parameters<typeof createLocationImpl>): ReturnType<typeof createLocationImpl> {
-  return withSupportWritable("lib/locations.ts#createLocation", () => createLocationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/locations.ts#createLocation", () => createLocationImpl(...args)));
 }
 
 async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{ id: string }>> {
@@ -124,6 +125,9 @@ async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{
     revalidateAll();
     return { ok: true, data: { id: row.id } };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("location.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear la sede." };
   }
@@ -131,7 +135,7 @@ async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{
 
 /** Edición de datos de la sede (no toca `isPrimary` ni `active`: tienen su action). */
 export async function updateLocation(...args: Parameters<typeof updateLocationImpl>): ReturnType<typeof updateLocationImpl> {
-  return withSupportWritable("lib/locations.ts#updateLocation", () => updateLocationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/locations.ts#updateLocation", () => updateLocationImpl(...args)));
 }
 
 async function updateLocationImpl(
@@ -173,6 +177,9 @@ async function updateLocationImpl(
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("location.update.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar la sede." };
   }
@@ -189,7 +196,7 @@ async function updateLocationImpl(
  * `agenda_foundations` les puso sede a todos los existentes).
  */
 export async function setPrimaryLocation(...args: Parameters<typeof setPrimaryLocationImpl>): ReturnType<typeof setPrimaryLocationImpl> {
-  return withSupportWritable("lib/locations.ts#setPrimaryLocation", () => setPrimaryLocationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/locations.ts#setPrimaryLocation", () => setPrimaryLocationImpl(...args)));
 }
 
 async function setPrimaryLocationImpl(id: string): Promise<ActionResult> {
@@ -234,6 +241,9 @@ async function setPrimaryLocationImpl(id: string): Promise<ActionResult> {
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     // P2002 = el índice parcial único frenó una carrera que el lock no cubrió
     // (no debería pasar: está para fallar cerrado, no para pisar).
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
@@ -252,7 +262,7 @@ async function setPrimaryLocationImpl(id: string): Promise<ActionResult> {
  * Conteos y archivado en la misma tx con lock exclusivo (ver cabecera).
  */
 export async function archiveLocation(...args: Parameters<typeof archiveLocationImpl>): ReturnType<typeof archiveLocationImpl> {
-  return withSupportWritable("lib/locations.ts#archiveLocation", () => archiveLocationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/locations.ts#archiveLocation", () => archiveLocationImpl(...args)));
 }
 
 async function archiveLocationImpl(id: string): Promise<ArchiveLocationResult> {
@@ -363,6 +373,9 @@ async function archiveLocationImpl(id: string): Promise<ArchiveLocationResult> {
         return { ok: true, data: undefined };
     }
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("location.archive.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos archivar la sede." };
   }
@@ -370,7 +383,7 @@ async function archiveLocationImpl(id: string): Promise<ArchiveLocationResult> {
 
 /** Reactiva una sede archivada (sin esto, archivar por error no tiene vuelta). */
 export async function restoreLocation(...args: Parameters<typeof restoreLocationImpl>): ReturnType<typeof restoreLocationImpl> {
-  return withSupportWritable("lib/locations.ts#restoreLocation", () => restoreLocationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/locations.ts#restoreLocation", () => restoreLocationImpl(...args)));
 }
 
 async function restoreLocationImpl(id: string): Promise<ActionResult> {

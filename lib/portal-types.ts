@@ -1,7 +1,12 @@
+import type { TenantVertical } from "@prisma/client";
+
 export type PortalPatient = {
   id: string;
   tenantSlug: string;
   tenantName: string;
+  /** EV1-C2: vertical del consultorio de esta ficha, para el copy del portal (Clínica general no tiene planes
+   *  ni «sesiones»). Por ficha y no por usuario: el mismo email puede ser paciente de un Kine y de un General. */
+  tenantVertical: TenantVertical;
   firstName: string;
   lastName: string;
   programs: {

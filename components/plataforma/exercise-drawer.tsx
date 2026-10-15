@@ -11,6 +11,12 @@
  * `getGlobalExerciseForAdmin`, which is GLOBAL-only (`tenantId: null`) — a
  * tenant-private exercise has no global row, so callers must only open this for
  * catalog items.
+ *
+ * EV1-D: sin el checkbox «Plan Común/Pro»: desde EV0 `Exercise.isBasic` no
+ * decide nada (`catalogScope` en lib/plan-gating.ts) y el server ya no lo
+ * acepta. El link «Ver ficha completa» sale solo con `showFichaLink`: en
+ * Plataforma el superadmin puede no tener consultorio (o tenerlo en Clínica
+ * general, donde /biblioteca redirige), así que solo lo pide Biblioteca.
  */
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -39,11 +45,14 @@ export function ExerciseDrawer({
   exerciseId,
   tagOptions,
   onClose,
+  showFichaLink = false,
 }: {
   mode: "create" | "edit";
   exerciseId?: string;
   tagOptions: TagOption[];
   onClose: () => void;
+  /** Muestra «Ver ficha completa → /biblioteca/<slug>». Solo desde Biblioteca (ver cabecera). */
+  showFichaLink?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -55,7 +64,6 @@ export function ExerciseDrawer({
   const [full, setFull] = useState<FullExercise>(null);
   const [loading, setLoading] = useState(mode === "edit");
   const [tagSlugs, setTagSlugs] = useState<string[]>([]);
-  const [isBasic, setIsBasic] = useState(true);
   const [kind, setKind] = useState<"EXERCISE" | "MANUAL_THERAPY">("EXERCISE");
 
   useEffect(() => {
@@ -67,7 +75,6 @@ export function ExerciseDrawer({
       setLoading(false);
       if (ex) {
         setTagSlugs(ex.tags.map((t) => t.tag.slug));
-        setIsBasic(ex.isBasic);
         setKind(ex.kind);
       }
     });
@@ -95,7 +102,6 @@ export function ExerciseDrawer({
         defaultSets: fd.get("defaultSets") ? Number(fd.get("defaultSets")) : null,
         defaultReps: fd.get("defaultReps") ? Number(fd.get("defaultReps")) : null,
         durationSeconds: fd.get("durationSeconds") ? Number(fd.get("durationSeconds")) : null,
-        isBasic,
         description: String(fd.get("description") ?? ""),
         instructions: String(fd.get("instructions") ?? ""),
         cues: String(fd.get("cues") ?? ""),
@@ -179,7 +185,7 @@ export function ExerciseDrawer({
         </div>
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
-          {mode === "edit" && ex && (
+          {showFichaLink && mode === "edit" && ex && (
             <a
               href={`/biblioteca/${ex.slug}`}
               style={{
@@ -215,22 +221,6 @@ export function ExerciseDrawer({
                 defaultValue={String(ex?.difficulty ?? 1)}
               />
             </div>
-
-            <label
-              style={{
-                fontSize: 12.5,
-                color: "var(--navy-700)",
-                display: "inline-flex",
-                gap: 8,
-                alignItems: "center",
-              }}
-            >
-              <input type="checkbox" checked={isBasic} onChange={(e) => setIsBasic(e.target.checked)} />
-              Plan <strong>{isBasic ? "Común" : "Pro"}</strong>{" "}
-              <span style={{ color: "var(--navy-400)" }}>
-                ({isBasic ? "visible en todos los planes" : "solo Pro/Enterprise"})
-              </span>
-            </label>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <FormField

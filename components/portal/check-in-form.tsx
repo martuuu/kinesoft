@@ -60,7 +60,7 @@ export function PortalCheckInForm({
           Check-in pre-sesión
         </div>
         <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2 }}>
-          ¿Cómo estás llegando? Tu kinesiólogo lo va a ver antes de la sesión.
+          ¿Cómo estás llegando? Tu profesional lo va a ver antes de la sesión.
         </div>
       </div>
       <label style={{ fontSize: 12, color: "var(--navy-500)", fontWeight: 600 }}>

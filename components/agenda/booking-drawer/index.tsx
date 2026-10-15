@@ -189,7 +189,11 @@ export function BookingDrawer({
   // barrera es el server); sin el módulo `planes` (General) todo en false y la
   // fila no aparece (enmienda EV0: puerta 4, Agendar y Vincular solo con
   // `has('planes')`). `role` no hace falta: solo decide "restaurar plan".
-  const plansModule = useTenantModules().has("planes");
+  const tenantModules = useTenantModules();
+  const plansModule = tenantModules.has("planes");
+  // EV1-C1: sin `diagnostico` (Clínica general) no hay «Usar como diagnóstico
+  // del paciente» ni sus toasts: el formulario no recibe el handler.
+  const diagnosisModule = tenantModules.has("diagnostico");
   const planPerms = useMemo(
     () =>
       planUiPermissions({
@@ -452,7 +456,7 @@ export function BookingDrawer({
   // P0-S07u: solo con `clinicalWritable`. Sin él título y descripción llegan
   // null (ocultos) y esto mandaba "" → borraba el diagnóstico del paciente.
   const applyAsPatientDiagnosis = () => {
-    if (!booking?.patientId || !access.clinicalWritable) return;
+    if (!booking?.patientId || !access.clinicalWritable || !diagnosisModule) return;
     const pid = booking.patientId;
     setError(null);
     start(async () => {
@@ -710,7 +714,7 @@ export function BookingDrawer({
                 if (patch.description !== undefined) setEditDescription(patch.description);
                 if (patch.notes !== undefined) setEditNotes(patch.notes);
               }}
-              onApplyAsPatientDiagnosis={applyAsPatientDiagnosis}
+              onApplyAsPatientDiagnosis={diagnosisModule ? applyAsPatientDiagnosis : undefined}
               onSubmit={() => submitEditDetails()}
               onForce={() => {
                 if (editConflict) submitEditDetails(withForce(editConflict.sent, editConflict.prompt));

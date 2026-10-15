@@ -387,6 +387,26 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     expect(blob).not.toContain(PHI_MARK);
   });
 
+  it("[EV1-D] buscar consultorio: `%` y `_` son literales (Prisma no escapa ILIKE en `contains`)", async () => {
+    const tag = uniqueSuffix().replace(/[^a-z0-9]/gi, "");
+    const C1 = await createEphemeralTenant(db);
+    const C2 = await createEphemeralTenant(db);
+    try {
+      await db.tenant.update({ where: { id: C1.tenantId }, data: { name: `Consultorio 100%_${tag}` } });
+      // Matchea `100%_` si `%`/`_` fueran comodines.
+      await db.tenant.update({ where: { id: C2.tenantId }, data: { name: `Consultorio 1000x${tag}` } });
+      asUser(S.userId);
+      const page = await listPlatformTenants({ q: `100%_${tag}` });
+      expect(page.rows.map((r) => r.id)).toEqual([C1.tenantId]);
+      // `%` solo: sin escape traía todos los consultorios.
+      const pct = await listPlatformTenants({ q: `%${tag}%` });
+      expect(pct.rows).toHaveLength(0);
+    } finally {
+      await C1.cleanup();
+      await C2.cleanup();
+    }
+  });
+
   it("resumen: trial por vencer y onboarding pendiente", async () => {
     asUser(S.userId);
     const soon = new Date(Date.now() + 3 * 86_400_000);

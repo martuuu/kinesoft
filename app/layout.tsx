@@ -3,9 +3,11 @@ import "./globals.css";
 import { UIProviders } from "@/components/providers/ui-providers";
 
 export const metadata: Metadata = {
-  title: "KineSoft — plataforma para kinesiólogos",
+  // EV1-C2: neutral para las dos verticales (Clínica general y Kinesiología): es la metadata de todo el sitio,
+  // incluidos el turnero y el portal de un consultorio que no es de kinesiología. La marca queda.
+  title: "KineSoft — gestión para consultorios de salud",
   description:
-    "Agenda, historia clínica, planes de ejercicios y seguimiento para la práctica kinésica. Argentina.",
+    "Agenda, turnos online, pacientes, historia clínica y cobros para consultorios de salud. Argentina.",
   applicationName: "KineSoft",
 };
 

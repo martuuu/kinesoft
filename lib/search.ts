@@ -17,6 +17,7 @@ import { gatingForActor } from "@/lib/plan-gating";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { shortcutsFor } from "@/lib/nav";
 import { modulesFor } from "@/lib/tenant-modules";
+import { escapeLike } from "@/lib/email-match";
 
 import type { SearchHit } from "@/lib/search-types";
 
@@ -38,16 +39,20 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
   // Sin `ejercicios` el gate tampoco hace falta (su visibilidad sería vacía).
   const gate = withExercises ? await gatingForActor() : null;
   const insensitive = "insensitive" as const;
+  // EV1 (integrador): mismo hallazgo que pacientes/catálogo/Plataforma — Prisma no escapa `%`/`_` en
+  // `contains` + insensitive (ILIKE con el valor tal cual): «%» en la paleta traía todo. Los atajos de abajo
+  // siguen filtrando con el `term` crudo (es un `includes` en JS, no SQL).
+  const like = escapeLike(term);
 
   const [patients, exercises, conditions, bookings] = await Promise.all([
     runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
       where: {
         tenantId: actor.tenantId,
         OR: [
-          { firstName: { contains: term, mode: insensitive } },
-          { lastName: { contains: term, mode: insensitive } },
-          { email: { contains: term, mode: insensitive } },
-          { documentId: { contains: term, mode: insensitive } },
+          { firstName: { contains: like, mode: insensitive } },
+          { lastName: { contains: like, mode: insensitive } },
+          { email: { contains: like, mode: insensitive } },
+          { documentId: { contains: like, mode: insensitive } },
         ],
       },
       take: 6,
@@ -62,9 +67,9 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
           { archivedAt: null },
           {
             OR: [
-              { name: { contains: term, mode: insensitive } },
-              { muscleGroups: { contains: term, mode: insensitive } },
-              { description: { contains: term, mode: insensitive } },
+              { name: { contains: like, mode: insensitive } },
+              { muscleGroups: { contains: like, mode: insensitive } },
+              { description: { contains: like, mode: insensitive } },
             ],
           },
         ],
@@ -83,9 +88,9 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
           { OR: [{ tenantId: null }, { tenantId: actor.tenantId }] },
           {
             OR: [
-              { name: { contains: term, mode: insensitive } },
-              { cie10: { contains: term, mode: insensitive } },
-              { summary: { contains: term, mode: insensitive } },
+              { name: { contains: like, mode: insensitive } },
+              { cie10: { contains: like, mode: insensitive } },
+              { summary: { contains: like, mode: insensitive } },
             ],
           },
         ],
@@ -103,9 +108,9 @@ export async function globalSearch(q: string): Promise<SearchHit[]> {
         },
         status: { notIn: ["CANCELLED"] },
         OR: [
-          { patient: { firstName: { contains: term, mode: insensitive } } },
-          { patient: { lastName: { contains: term, mode: insensitive } } },
-          { guestName: { contains: term, mode: insensitive } },
+          { patient: { firstName: { contains: like, mode: insensitive } } },
+          { patient: { lastName: { contains: like, mode: insensitive } } },
+          { guestName: { contains: like, mode: insensitive } },
         ],
       },
       take: 4,

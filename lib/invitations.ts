@@ -41,6 +41,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, writableError, type Actor } from "@/lib/session";
 import { getMembershipRole } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { invitationStatus } from "@/lib/access-logic";
 import { isClinicalRole } from "@/lib/roles";
 import { tags } from "@/lib/cache-tags";
@@ -256,7 +257,7 @@ const RoleInput = z.enum(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLIN
  * clínico pide un lugar libre del plan; Secretaria y Facturación no ocupan.
  */
 export async function createInvitation(...args: Parameters<typeof createInvitationImpl>): ReturnType<typeof createInvitationImpl> {
-  return withSupportWritable("lib/invitations.ts#createInvitation", () => createInvitationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#createInvitation", () => createInvitationImpl(...args)));
 }
 
 async function createInvitationImpl(
@@ -298,7 +299,7 @@ async function reissue(id: unknown, mode: "resend" | "regenerate"): Promise<Acti
 
 /** «Reenviar»: otro mail con un link nuevo; el link del mail anterior sigue valiendo. */
 export async function resendInvitation(...args: Parameters<typeof resendInvitationImpl>): ReturnType<typeof resendInvitationImpl> {
-  return withSupportWritable("lib/invitations.ts#resendInvitation", () => resendInvitationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#resendInvitation", () => resendInvitationImpl(...args)));
 }
 
 async function resendInvitationImpl(id: string): Promise<ActionResult<InvitationSendResult>> {
@@ -307,7 +308,7 @@ async function resendInvitationImpl(id: string): Promise<ActionResult<Invitation
 
 /** «Generar link nuevo»: anula todos los links anteriores y manda el nuevo. */
 export async function regenerateInvitationUrl(...args: Parameters<typeof regenerateInvitationUrlImpl>): ReturnType<typeof regenerateInvitationUrlImpl> {
-  return withSupportWritable("lib/invitations.ts#regenerateInvitationUrl", () => regenerateInvitationUrlImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#regenerateInvitationUrl", () => regenerateInvitationUrlImpl(...args)));
 }
 
 async function regenerateInvitationUrlImpl(id: string): Promise<ActionResult<InvitationSendResult>> {
@@ -316,7 +317,7 @@ async function regenerateInvitationUrlImpl(id: string): Promise<ActionResult<Inv
 
 /** «Anular»: `revokedAt` + `revokedById`; la fila queda como historia y el link deja de valer. Idempotente. */
 export async function revokeInvitation(...args: Parameters<typeof revokeInvitationImpl>): ReturnType<typeof revokeInvitationImpl> {
-  return withSupportWritable("lib/invitations.ts#revokeInvitation", () => revokeInvitationImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#revokeInvitation", () => revokeInvitationImpl(...args)));
 }
 
 async function revokeInvitationImpl(id: string): Promise<ActionResult> {
@@ -337,7 +338,7 @@ async function revokeInvitationImpl(id: string): Promise<ActionResult> {
  * al pasar de no clínico a clínico.
  */
 export async function changeMemberRole(...args: Parameters<typeof changeMemberRoleImpl>): ReturnType<typeof changeMemberRoleImpl> {
-  return withSupportWritable("lib/invitations.ts#changeMemberRole", () => changeMemberRoleImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#changeMemberRole", () => changeMemberRoleImpl(...args)));
 }
 
 async function changeMemberRoleImpl(
@@ -366,7 +367,7 @@ async function changeMemberRoleImpl(
  * email. Devuelve cuántos turnos futuros activos le quedan, para que la UI avise que NO se cancelan.
  */
 export async function suspendMember(...args: Parameters<typeof suspendMemberImpl>): ReturnType<typeof suspendMemberImpl> {
-  return withSupportWritable("lib/invitations.ts#suspendMember", () => suspendMemberImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#suspendMember", () => suspendMemberImpl(...args)));
 }
 
 async function suspendMemberImpl(membershipId: string): Promise<ActionResult<SuspendMemberResult>> {
@@ -382,7 +383,7 @@ async function suspendMemberImpl(membershipId: string): Promise<ActionResult<Sus
 
 /** «Reactivar» (IAM-4c): vuelve con el rol que tenía. BO-D7: un rol clínico pide un lugar libre del plan. */
 export async function reactivateMember(...args: Parameters<typeof reactivateMemberImpl>): ReturnType<typeof reactivateMemberImpl> {
-  return withSupportWritable("lib/invitations.ts#reactivateMember", () => reactivateMemberImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#reactivateMember", () => reactivateMemberImpl(...args)));
 }
 
 async function reactivateMemberImpl(membershipId: string): Promise<ActionResult> {
@@ -400,7 +401,7 @@ async function reactivateMemberImpl(membershipId: string): Promise<ActionResult>
  * «Mandar link para nueva contraseña» (IAM-4c). Quien lo pide NUNCA ve el link: solo si el mail salió.
  */
 export async function sendMemberPasswordReset(...args: Parameters<typeof sendMemberPasswordResetImpl>): ReturnType<typeof sendMemberPasswordResetImpl> {
-  return withSupportWritable("lib/invitations.ts#sendMemberPasswordReset", () => sendMemberPasswordResetImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#sendMemberPasswordReset", () => sendMemberPasswordResetImpl(...args)));
 }
 
 async function sendMemberPasswordResetImpl(membershipId: string): Promise<ActionResult<MemberPasswordResetResult>> {
@@ -421,7 +422,7 @@ async function sendMemberPasswordResetImpl(membershipId: string): Promise<Action
  * asignados o planes ACTIVE a cargo (S13g): hay que reasignarlos primero.
  */
 export async function removeMember(...args: Parameters<typeof removeMemberImpl>): ReturnType<typeof removeMemberImpl> {
-  return withSupportWritable("lib/invitations.ts#removeMember", () => removeMemberImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#removeMember", () => removeMemberImpl(...args)));
 }
 
 async function removeMemberImpl(membershipId: string): Promise<ActionResult> {

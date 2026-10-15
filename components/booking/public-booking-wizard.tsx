@@ -29,6 +29,7 @@ import { IconArrow, IconCheck, IconChevL, IconChevR, IconClock } from "@/compone
 import { listPublicSlots, submitPublicBooking } from "@/lib/public-booking";
 import { toARDateKey } from "@/lib/datetime-ar";
 import type { PublicClinic, PublicLocation, PublicSlot, PrefillPatient } from "@/lib/public-booking-types";
+import type { TenantVertical } from "@prisma/client";
 import {
   attemptSignature,
   coverageInsurerPrefill,
@@ -104,12 +105,19 @@ const RESPONSIVE_CSS = `
 }
 `;
 
+/**
+ * EV1-C2: la vertical del consultorio, para el copy (Clínica general no es
+ * kinesiología). Opcional: sin ella (o antes de que `getPublicClinic` la sume
+ * a `PublicClinic`) el wizard muestra el copy de Kinesiología de siempre.
+ */
+type WizardClinic = PublicClinic & { vertical?: TenantVertical | null };
+
 export function PublicBookingWizard({
   clinic,
   session,
   prefill,
 }: {
-  clinic: PublicClinic;
+  clinic: WizardClinic;
   session: { email: string; fullName: string | null } | null;
   prefill: PrefillPatient | null;
 }) {
@@ -942,13 +950,14 @@ function DataStep({
   setHc,
   error,
 }: {
-  clinic: PublicClinic;
+  clinic: WizardClinic;
   session: { email: string; fullName: string | null } | null;
   hc: PatientHC;
   setHc: (next: PatientHC) => void;
   error: string | null;
 }) {
   const upd = <K extends keyof PatientHC>(k: K, v: PatientHC[K]) => setHc({ ...hc, [k]: v });
+  const isGeneral = clinic.vertical === "GENERAL";
   return (
     <>
       <StepHeader
@@ -1054,15 +1063,23 @@ function DataStep({
         value={hc.notes}
         onChange={(v) => upd("notes", v)}
         textarea
-        placeholder="Contanos brevemente qué te trae (zona, desde cuándo, qué actividad sentís limitada)."
+        placeholder={
+          isGeneral
+            ? "Contanos brevemente qué te trae y desde cuándo."
+            : "Contanos brevemente qué te trae (zona, desde cuándo, qué actividad sentís limitada)."
+        }
       />
 
-      <Field
-        label="Diagnóstico (opcional)"
-        value={hc.title}
-        onChange={(v) => upd("title", v)}
-        placeholder="Ej. Lumbalgia, esguince de tobillo…"
-      />
+      {/* EV1-C2: en Clínica general no hay diagnóstico de kinesiología, y «Motivo de consulta» ya es el campo
+          de arriba: el título (`hc.title` → `diagnosisTitle`) no se pide. La descripción queda: es texto libre. */}
+      {!isGeneral && (
+        <Field
+          label="Diagnóstico (opcional)"
+          value={hc.title}
+          onChange={(v) => upd("title", v)}
+          placeholder="Ej. Lumbalgia, esguince de tobillo…"
+        />
+      )}
 
       <Field
         label="Descripción (opcional)"

@@ -180,7 +180,7 @@ function humanizeAction(action: string): string {
     "patient.archive": "Paciente archivado",
     "patient.unarchive": "Paciente restaurado",
     "patient.coverage.update": "Cobertura actualizada",
-    "patient.reassign": "Re-asignado a otro kine",
+    "patient.reassign": "Re-asignado a otro profesional",
     "patient.bulk_archive": "Archivado en lote",
     "patient.bulk_unarchive": "Restaurado en lote",
     "patient.portal_invite": "Invitado al portal",

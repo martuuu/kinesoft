@@ -24,6 +24,7 @@ import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
 import {
   EntityId,
@@ -80,7 +81,13 @@ export async function listPractitionerPayers(
  * el resto del tenant queda `active: false`. Particular se fuerza activa aunque
  * no venga. Un id que no es del tenant rechaza TODO (nada se escribe).
  */
-export async function setPractitionerPayers(
+// EV1-E2 (readonly-residual-actions): el `ReadOnlyModeError` de la tx sale como `{ ok:false, error }` y no
+// como excepción, que en prod Next redacta (lib/read-only-result.ts). Fuera de la allowlist de soporte.
+export async function setPractitionerPayers(...args: Parameters<typeof setPractitionerPayersImpl>): ReturnType<typeof setPractitionerPayersImpl> {
+  return withReadOnlyResult(() => setPractitionerPayersImpl(...args));
+}
+
+async function setPractitionerPayersImpl(
   practitionerId: string,
   insurerIds: string[]
 ): Promise<ActionResult<{ active: number; inactive: number }>> {
@@ -148,6 +155,9 @@ export async function setPractitionerPayers(
       return { kind: "ok" as const, activeIds, inactiveIds };
     });
   } catch (e) {
+    // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     logger.error("practitionerPayers.set.failed", {
       err: e instanceof Error ? e.message : String(e),
     });

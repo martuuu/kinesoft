@@ -8,6 +8,7 @@
  * montos de copago: en el turnero público no hay contexto para explicarlos.
  */
 import type { PublicClinic } from "@/lib/public-booking-types";
+import type { TenantVertical } from "@prisma/client";
 import {
   coverageOptions,
   filterPractitioners,
@@ -28,7 +29,8 @@ export function PractitionerStep({
   onPick,
   onAny,
 }: {
-  clinic: PublicClinic;
+  /** `vertical` opcional (EV1-C2): sin ella, el copy de Kinesiología de siempre. */
+  clinic: PublicClinic & { vertical?: TenantVertical | null };
   filters: WizardFilters;
   onFiltersChange: (next: WizardFilters) => void;
   mode: "pick" | "any";
@@ -40,6 +42,9 @@ export function PractitionerStep({
   const coverages = coverageOptions(clinic);
   const pros = filterPractitioners(clinic, filters);
   const filtered = filters.insurerId !== null || filters.locationId !== null;
+  // EV1-C2: sin especialidad cargada, Kine mostraba «Kinesiología»; en Clínica
+  // general eso es falso, así que ahí no se muestra nada (solo la matrícula, si hay).
+  const specialtyFallback = clinic.vertical === "GENERAL" ? null : "Kinesiología";
 
   return (
     <>
@@ -144,10 +149,12 @@ export function PractitionerStep({
                 style={choiceStyle(on)}
               >
                 <div style={{ fontSize: 14, fontWeight: 700 }}>{p.name}</div>
-                <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
-                  {p.specialty ?? "Kinesiología"}
-                  {p.licenseNumber ? ` · MN ${p.licenseNumber}` : ""}
-                </div>
+                {(() => {
+                  const line = [p.specialty ?? specialtyFallback, p.licenseNumber ? `MN ${p.licenseNumber}` : null]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return line ? <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>{line}</div> : null;
+                })()}
                 {p.yearsExp != null && (
                   <div className="k-mono" style={{ fontSize: 11, color: "var(--sky-700)", marginTop: 4 }}>
                     {p.yearsExp} años de experiencia

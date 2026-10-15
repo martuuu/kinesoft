@@ -28,6 +28,7 @@
  *     (`FORCE_PROMPT_ORDER` de `lib/booking-force-flags.ts`).
  */
 import type { BookingCreateInput } from "@/lib/validation";
+import type { TenantModule } from "@/lib/tenant-modules";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Modos
@@ -42,6 +43,21 @@ export const BOOKING_MODAL_MODE_LABEL: Record<BookingModalMode, string> = {
   sessions: "Varias sesiones",
   block: "Bloquear horario",
 };
+
+/**
+ * Etiqueta del modo según los módulos del consultorio (EV1-C1). En Clínica
+ * general no existe el módulo `sesiones` (no hay planes ni "sesión" como
+ * unidad): el mismo batch se llama «Varios turnos». En Kine queda el label de
+ * siempre (`BOOKING_MODAL_MODE_LABEL`, que no cambia para no romper a quien
+ * ya lo importa). `has` es el de `useTenantModules()`; sin él, Kine.
+ */
+export function bookingModalModeLabel(
+  mode: BookingModalMode,
+  has?: (m: TenantModule) => boolean
+): string {
+  if (mode === "sessions" && has && !has("sesiones")) return "Varios turnos";
+  return BOOKING_MODAL_MODE_LABEL[mode];
+}
 
 /** Capabilities que mira el modal (subconjunto de `lib/capabilities.ts`,
  *  como strings para no arrastrar el tipo a un prop serializable). */

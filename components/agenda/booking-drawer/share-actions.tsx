@@ -1,6 +1,7 @@
 "use client";
 
 import { formatDateAR } from "@/lib/format";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { recordatorioHtml } from "@/components/agenda/recordatorio-turno";
 import { miniGhostBtn, sectionCard } from "./styles";
 import type { DrawerBooking } from "./types";
@@ -10,6 +11,8 @@ import type { DrawerBooking } from "./types";
  * el turno; se muestra también con acceso básico.
  */
 export function ShareActions({ booking }: { booking: DrawerBooking }) {
+  // EV1-C1: en Clínica general la sección del recordatorio dice «Motivo».
+  const diagnostico = useTenantModules().has("diagnostico");
   // Recordatorio imprimible / PDF — abre una ventana nueva con el HTML
   // autocontenido y dispara el diálogo de impresión del navegador (que
   // ofrece "Guardar como PDF"). Evitamos `window.print()` sobre la página
@@ -17,7 +20,7 @@ export function ShareActions({ booking }: { booking: DrawerBooking }) {
   const printRecordatorio = () => {
     const w = window.open("", "_blank", "width=480,height=640");
     if (w) {
-      w.document.write(recordatorioHtml(booking));
+      w.document.write(recordatorioHtml(booking, { diagnostico }));
       w.document.close();
       w.focus();
       w.print();

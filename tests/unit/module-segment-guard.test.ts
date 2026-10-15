@@ -40,6 +40,8 @@ import SeguimientoLayout from "@/app/(app)/seguimiento/layout";
 import BibliotecaLayout from "@/app/(app)/biblioteca/layout";
 import TerapiaManualLayout from "@/app/(app)/terapia-manual/layout";
 import ReportesLayout from "@/app/(app)/reportes/layout";
+import PlanesLayout from "@/app/(app)/planes/layout";
+import SalaLayout from "@/app/(app)/sala/layout";
 
 type Layout = (p: { children: ReactNode }) => Promise<ReactElement>;
 
@@ -49,7 +51,13 @@ const LAYOUTS: Array<[string, Layout]> = [
   ["biblioteca (ejercicios)", BibliotecaLayout],
   ["terapia-manual (ejercicios)", TerapiaManualLayout],
   ["reportes (reportes)", ReportesLayout],
+  // EV1-E2: /planes (S21) entra al mismo describe.each: General → /dashboard, Kine FREE ya trae `planes`.
+  ["planes (planes)", PlanesLayout],
 ];
+
+// EV1-E2: /sala requiere `salaEspera`, que es CORE (las dos verticales, todo plan): nadie con consultorio rebota.
+// Si alguien lo saca de CORE sin querer, este test lo marca.
+const CORE_LAYOUTS: Array<[string, Layout]> = [["sala (salaEspera)", SalaLayout]];
 
 function actorWith(e: TenantEntitlements) {
   // Solo `entitlements` importa para el guard; el resto es forma de Actor.
@@ -90,6 +98,25 @@ describe("guards de segmento por módulo", () => {
     });
 
     it("sin actor → no-op (renderiza children; el layout (app) redirige a /login)", async () => {
+      const el = await Layout({ children: CHILD });
+      expect(el.props.children).toBe(CHILD);
+    });
+  });
+
+  describe.each(CORE_LAYOUTS)("%s (módulo CORE)", (_name, Layout) => {
+    it("consultorio General → renderiza children", async () => {
+      session.actor = actorWith(GENERAL);
+      const el = await Layout({ children: CHILD });
+      expect(el.props.children).toBe(CHILD);
+    });
+
+    it("Kine FREE → renderiza children", async () => {
+      session.actor = actorWith(KINE_FREE);
+      const el = await Layout({ children: CHILD });
+      expect(el.props.children).toBe(CHILD);
+    });
+
+    it("sin actor → no-op (renderiza children)", async () => {
       const el = await Layout({ children: CHILD });
       expect(el.props.children).toBe(CHILD);
     });

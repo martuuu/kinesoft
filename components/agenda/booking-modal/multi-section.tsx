@@ -52,6 +52,7 @@ import {
   normalizeSessionsValue,
   type SessionsValue,
 } from "@/lib/sessions-mode-state";
+import { bookingModalModeLabel } from "@/lib/booking-modal-state";
 import { SessionsMode } from "./sessions-mode";
 
 // ─── "Crealo como plan…" (puro, testeado en tests/unit/render/multi-plan-link) ─
@@ -261,7 +262,10 @@ export function MultiSection({
           }}
         >
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Varias sesiones</div>
+            {/* EV1-C1: «Varios turnos» en Clínica general (sin `sesiones`). */}
+            <div style={{ fontSize: 13, fontWeight: 600 }}>
+              {bookingModalModeLabel("sessions", modules.has)}
+            </div>
             <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
               Crea hasta {SESSIONS_UI_MAX_COUNT} turnos sueltos con la
               frecuencia que elijas. Con un solo turno, dejalo apagado.

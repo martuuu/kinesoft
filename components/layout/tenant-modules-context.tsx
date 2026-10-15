@@ -18,15 +18,30 @@
  * llega a un consultorio General.
  */
 import { createContext, useContext, useMemo, type ReactNode } from "react";
+import type { TenantVertical } from "@prisma/client";
 import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
 
 export type TenantModulesValue = {
   has: (m: TenantModule) => boolean;
   list: ReadonlySet<TenantModule>;
+  /**
+   * EV1 (integrador): tipo de consultorio, para el COPY («Kine»/«Profesional», «por sesión»/«por turno»). Antes
+   * los paneles lo deducían de `has("sesiones")`; la vertical real la pasa el layout `(app)` desde
+   * `actor.entitlements`. Para decidir si algo existe se sigue usando `has(módulo)`.
+   */
+  vertical: TenantVertical;
 };
 
-function valueOf(list: ReadonlySet<TenantModule>): TenantModulesValue {
-  return { has: (m) => list.has(m), list };
+/**
+ * Sin `vertical` explícita (render tests que montan el provider solo con módulos) se deduce: `sesiones` existe
+ * solo en Kinesiología y no depende del plan (lib/tenant-modules.ts). En la app real el layout la pasa siempre.
+ */
+function valueOf(list: ReadonlySet<TenantModule>, vertical?: TenantVertical): TenantModulesValue {
+  return {
+    has: (m) => list.has(m),
+    list,
+    vertical: vertical ?? (list.has("sesiones") ? "KINESIOLOGY" : "GENERAL"),
+  };
 }
 
 /** Kine PRO sin turnero: lo que veía todo consultorio antes de EV0. */
@@ -35,7 +50,8 @@ const DEFAULT_VALUE: TenantModulesValue = valueOf(
     vertical: "KINESIOLOGY",
     plan: "PRO",
     publicBookingEnabled: false,
-  })
+  }),
+  "KINESIOLOGY"
 );
 
 const TenantModulesContext = createContext<TenantModulesValue>(DEFAULT_VALUE);
@@ -47,17 +63,20 @@ const TenantModulesContext = createContext<TenantModulesValue>(DEFAULT_VALUE);
  */
 export function TenantModulesProvider({
   modules,
+  vertical,
   children,
 }: {
   modules: readonly TenantModule[] | ReadonlySet<TenantModule>;
+  /** EV1: la vertical real del consultorio (`actor.entitlements.vertical`). */
+  vertical?: TenantVertical;
   children: ReactNode;
 }) {
   // Clave estable: el layout re-renderiza en cada navegación y el array es
   // nuevo cada vez; sin esto todo consumidor del contexto se re-renderiza.
   const key = Array.from(modules).sort().join(",");
   const value = useMemo(
-    () => valueOf(new Set<TenantModule>(key ? (key.split(",") as TenantModule[]) : [])),
-    [key]
+    () => valueOf(new Set<TenantModule>(key ? (key.split(",") as TenantModule[]) : []), vertical),
+    [key, vertical]
   );
   return <TenantModulesContext.Provider value={value}>{children}</TenantModulesContext.Provider>;
 }

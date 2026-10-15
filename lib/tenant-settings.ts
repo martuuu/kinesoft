@@ -18,6 +18,7 @@ import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { audit, auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
@@ -74,7 +75,7 @@ export async function getTenantSettings(): Promise<TenantSettings> {
 }
 
 export async function setBusinessHours(...args: Parameters<typeof setBusinessHoursImpl>): ReturnType<typeof setBusinessHoursImpl> {
-  return withSupportWritable("lib/tenant-settings.ts#setBusinessHours", () => setBusinessHoursImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/tenant-settings.ts#setBusinessHours", () => setBusinessHoursImpl(...args)));
 }
 
 async function setBusinessHoursImpl(input: {
@@ -147,7 +148,14 @@ async function setBusinessHoursImpl(input: {
   return { ok: true, data: undefined };
 }
 
-export async function setSharedPatientView(value: boolean): Promise<ActionResult> {
+// EV1-E2 (readonly-residual-actions): el `ReadOnlyModeError` de la tx sale como `{ ok:false, error }` y no
+// como excepción, que en prod Next redacta (lib/read-only-result.ts). Sin withSupportWritable: soporte no
+// cambia quién ve la HC (fuera de C-BO4).
+export async function setSharedPatientView(...args: Parameters<typeof setSharedPatientViewImpl>): ReturnType<typeof setSharedPatientViewImpl> {
+  return withReadOnlyResult(() => setSharedPatientViewImpl(...args));
+}
+
+async function setSharedPatientViewImpl(value: boolean): Promise<ActionResult> {
   const actor = await requireTenantAdmin();
   await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
     where: { id: actor.tenantId },
@@ -179,7 +187,7 @@ const publicBookingSchema = z.boolean();
  * escritor: ni write ni audit, y no se revalida nada.
  */
 export async function setPublicBookingEnabled(...args: Parameters<typeof setPublicBookingEnabledImpl>): ReturnType<typeof setPublicBookingEnabledImpl> {
-  return withSupportWritable("lib/tenant-settings.ts#setPublicBookingEnabled", () => setPublicBookingEnabledImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/tenant-settings.ts#setPublicBookingEnabled", () => setPublicBookingEnabledImpl(...args)));
 }
 
 async function setPublicBookingEnabledImpl(enabled: boolean): Promise<ActionResult> {
@@ -221,7 +229,7 @@ const TenantBasicsInput = TenantProfileFields.pick({ name: true, legalName: true
  * no se audita (antes cada submit dejaba un `tenant.update` aunque no cambiara nada).
  */
 export async function updateTenantBasics(...args: Parameters<typeof updateTenantBasicsImpl>): ReturnType<typeof updateTenantBasicsImpl> {
-  return withSupportWritable("lib/tenant-settings.ts#updateTenantBasics", () => updateTenantBasicsImpl(...args));
+  return withReadOnlyResult(() => withSupportWritable("lib/tenant-settings.ts#updateTenantBasics", () => updateTenantBasicsImpl(...args)));
 }
 
 async function updateTenantBasicsImpl(input: {

@@ -294,7 +294,9 @@ function NoLinkedPatient({ email }: { email: string }) {
         No encontramos una ficha asociada a {email}
       </h1>
       <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-        Pedile a tu kinesiólogo/a que cargue tu email exacto en tu ficha clínica, o sacá tu primer
+        {/* EV1-C2: sin ficha vinculada no sabemos de qué consultorio viene (puede ser de Clínica general):
+            «tu consultorio» vale para las dos verticales. */}
+        Pedile a tu consultorio que cargue tu email exacto en tu ficha clínica, o sacá tu primer
         turno y nosotros la creamos.
       </p>
     </Card>

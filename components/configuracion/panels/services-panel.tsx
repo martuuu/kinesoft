@@ -103,7 +103,7 @@ export function ServicesPanel({
                 )}
               </div>
               <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
-                {s.practitionerName ?? "Todos los kinesiólogos"}
+                {s.practitionerName ?? "Todos los profesionales"}
               </div>
               <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)", textAlign: "right" }}>
                 {s.durationMin} min
@@ -341,7 +341,13 @@ function ServiceModal({
           max={50}
           placeholder="Ilimitado"
           defaultValue={service?.maxConcurrent ?? ""}
-          hint="Vacío = ilimitado (kinesiología: varios pacientes en paralelo). Poné 1 para osteopatía (un turno por horario)."
+          // EV1-C2: el ejemplo de kinesiología/osteopatía solo tiene sentido en esa vertical
+          // (`hasPlanes` la distingue: Clínica general no tiene el módulo `planes`).
+          hint={
+            hasPlanes
+              ? "Vacío = ilimitado (kinesiología: varios pacientes en paralelo). Poné 1 para osteopatía (un turno por horario)."
+              : "Vacío = ilimitado (varios pacientes en paralelo). Poné 1 para un solo turno por horario."
+          }
         />
         <FormField
           as="select"
@@ -349,7 +355,7 @@ function ServiceModal({
           name="practitionerId"
           defaultValue={service?.practitionerId ?? ""}
           options={[
-            { value: "", label: "Todos los kinesiólogos" },
+            { value: "", label: "Todos los profesionales" },
             ...practitioners.map((p) => ({ value: p.id, label: p.name })),
           ]}
         />

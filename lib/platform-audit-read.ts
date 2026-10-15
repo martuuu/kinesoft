@@ -17,6 +17,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
+import { escapeLike } from "@/lib/email-match";
 import {
   PLATFORM_AUDIT_PAGE_SIZE,
   auditDayRange,
@@ -41,7 +42,8 @@ export async function listPlatformAudit(input: PlatformAuditFilters = {}): Promi
   // Prefijo: `platform.tenant` trae status/slug/perfil; la acción exacta también matchea.
   if (f.action) and.push({ action: { startsWith: f.action } });
   if (f.tenantId) and.push({ tenantId: f.tenantId });
-  if (f.actorEmail) and.push({ actorEmail: { contains: f.actorEmail, mode: "insensitive" } });
+  // EV1-D: Prisma NO escapa `%`/`_` en `contains`/`equals` con `mode: "insensitive"` (va como ILIKE '%<texto>%'; medido contra el Docker en EV1-D: buscar «%» traía todas las filas): `juan_perez` no tiene que traer también a `juanXperez`.
+  if (f.actorEmail) and.push({ actorEmail: { contains: escapeLike(f.actorEmail), mode: "insensitive" } });
   if (f.targetUserId) and.push({ targetUserId: f.targetUserId });
   if (range.gte || range.lt) and.push({ createdAt: { gte: range.gte, lt: range.lt } });
   if (cursor) {

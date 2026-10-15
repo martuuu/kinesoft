@@ -7,14 +7,15 @@ import { Button } from "@/components/ui/button";
 import { IconCheck, IconHome, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
+  effectivePinnedKpis,
   kpiOptionsFor,
-  pinnableKpis,
   type KpiKey,
   type KpiRevenueScope,
   type Palette,
   type Preferences,
 } from "@/lib/preferences-constants";
 import { useTweaks } from "@/components/layout/tweaks-context";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "@/components/layout/tenant-switcher";
 
 const PALETTES: { value: Palette; swatch: [string, string, string]; label: string }[] = [
@@ -230,9 +231,15 @@ export function SettingsModal({
 }) {
   const router = useRouter();
   const { set } = useTweaks();
-  const kpiOptions = kpiOptionsFor(revenueScope);
+  // EV1-A: el picker de Ajustes ofrece y preselecciona lo mismo que la fila del dashboard
+  // (`PinKpiModal`): en Clínica general sin las KPIs de planes y con los rótulos de turnos.
+  // Antes ofrecía «Planes en curso»/«Cerca del alta», que en General valen 0 siempre.
+  const modules = useTenantModules();
+  const kpiOptions = kpiOptionsFor(revenueScope, modules);
   const [palette, setPalette] = useState<Palette>(preferences.palette);
-  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(preferences.pinnedKpis, revenueScope));
+  const [pinned, setPinned] = useState<KpiKey[]>(() =>
+    effectivePinnedKpis(preferences.pinnedKpis, revenueScope, modules)
+  );
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 

@@ -10,6 +10,7 @@ import { FormField } from "@/components/ui/form-field";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { Section } from "@/components/patients/profile/ui";
 import { createPatient } from "@/lib/patients";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 type InsurerOption = { id: string; name: string };
 
@@ -28,6 +29,9 @@ export function NewPatientButton({ insurers = [] }: { insurers?: InsurerOption[]
 function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onClose: () => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  // EV1-C2: Clínica general no tiene `diagnostico` (lib/tenant-modules.ts). Los
+  // campos son los mismos (`diagnosisTitle/Note`), rotulados como motivo de consulta.
+  const isKine = useTenantModules().has("diagnostico");
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   // Coverage (obra social): "particular" | "ins:<id>" | "other".
@@ -107,11 +111,11 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
           />
         )}
 
-        <Section title="Diagnóstico (opcional)">
+        <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
           <FormField
             label="Título"
             name="diagnosisTitle"
-            placeholder="ej: Lumbalgia"
+            placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
             error={fieldErrors.diagnosisTitle?.[0]}
             hint="Máx. 80 caracteres."
           />

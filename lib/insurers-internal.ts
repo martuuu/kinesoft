@@ -1,6 +1,7 @@
 import "server-only";
 
 import { withTenantDb, type DbClient } from "@/lib/rls";
+import { escapeLike } from "@/lib/email-match";
 
 /**
  * Normalize a free-form obra-social name and dedup it against the tenant
@@ -21,9 +22,13 @@ export async function resolveInsurerName(
   if (!name) return { insurerId: null, name: "" };
   // Insurer is RLS-governed (Ola B2): self-prime a tenant tx when called
   // standalone; reuse the caller's `tx` when threaded from a coverage write.
+  //
+  // EV1-E2: Prisma compila `equals` + `mode: "insensitive"` a `"name" ILIKE $2` SIN escapar (verificado contra el
+  // Docker local con el log de queries). Sin `escapeLike`, «O_DE» o «OS%» linkeaban la cobertura a «OSDE» (otra obra
+  // social). Mismo hallazgo que el email de IAM-0a (lib/email-match.ts).
   const match = await withTenantDb(tenantId, tx, (c) =>
     c.insurer.findFirst({
-      where: { tenantId, name: { equals: name, mode: "insensitive" } },
+      where: { tenantId, name: { equals: escapeLike(name), mode: "insensitive" } },
       select: { id: true, name: true },
     })
   );

@@ -146,6 +146,23 @@ type DashboardCounts = Omit<
  */
 const NO_PRACTITIONER_SCOPE = "no-practitioner";
 
+/** Scope de visibilidad del actor como token primitivo (va en las claves de cache). */
+function dashboardScopeFor(actor: { practitionerId: string | null }, seesAll: boolean): "all" | string {
+  return seesAll ? "all" : actor.practitionerId ?? NO_PRACTITIONER_SCOPE;
+}
+
+/**
+ * Turnos que cuenta el dashboard para un scope: todos, los del profesional o
+ * ninguno (condición imposible, nunca `practitionerId: null`). Lo comparten la
+ * carga inicial y `getSessionsChart` (EV1-A) para que el gráfico no cambie de
+ * universo al tocar el rango.
+ */
+function bookingScopeWhere(scope: "all" | string): Prisma.BookingWhereInput {
+  if (scope === "all") return {};
+  if (scope === NO_PRACTITIONER_SCOPE) return { id: { in: [] } };
+  return { practitionerId: scope };
+}
+
 /**
  * Heavy DB work — wrapped in `unstable_cache` so repeated dashboard hits
  * within `ttl.micro` (60s) re-use the result. Cache key includes
@@ -185,11 +202,7 @@ const _loadDashboardCounts = unstable_cache(
     const none = <T,>(v: T) => Promise.resolve(v);
     // IAM-4a: sin profesional, condiciones imposibles (no `IS NULL`): los KPIs «propios» valen 0.
     const noPractitioner = scope === NO_PRACTITIONER_SCOPE;
-    const bookingWhere: Prisma.BookingWhereInput = seesAll
-      ? {}
-      : noPractitioner
-        ? { id: { in: [] } }
-        : { practitionerId: scope };
+    const bookingWhere = bookingScopeWhere(scope);
     // El `assignedPractitionerId: null` de acá es a propósito (pacientes «del consultorio» que todo profesional
     // cuenta), y solo con un profesional real: nunca como sustituto de un actor sin profesional.
     const patientWhere: Prisma.PatientWhereInput = seesAll
@@ -237,7 +250,22 @@ const _loadDashboardCounts = unstable_cache(
               programs: { some: { status: "ACTIVE", ...liveProgramWhere } },
             },
           }))
-        : none(0),
+        // EV1-A: sin planes "Pacientes activos" valía 0 siempre. En General la
+        // misma KPI es "Pacientes atendidos" (`GENERAL_KPI_COPY`): pacientes
+        // distintos con un turno COMPLETED en los últimos 30 días, con el mismo
+        // scope de turnos que `todayCount` (sin profesional → 0). Una sola query
+        // acotada por fecha; no se agrega para Kine.
+        : runWithRls(tenantId, (tx) => tx.booking.findMany({
+            where: {
+              tenantId,
+              ...bookingWhere,
+              status: "COMPLETED",
+              patientId: { not: null },
+              scheduledFor: { gte: new Date(tomorrow.getTime() - 30 * DAY_MS), lt: tomorrow },
+            },
+            distinct: ["patientId"],
+            select: { patientId: true },
+          })).then((rows) => rows.length),
       withPlans
         ? runWithRls(tenantId, (tx) => tx.treatmentProgram.count({
             where: {
@@ -454,7 +482,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   // IAM-4a: sin «ver todo» y sin profesional (Secretaria, Facturación) → `NO_PRACTITIONER_SCOPE`: ningún turno
   // ni paciente «propio». Antes el scope era el `practitionerId` del actor y con `null` el `{ practitionerId: null }`
   // de los turnos tiraba en Prisma (y `assignedPractitionerId: null` habría contado todo lo sin asignar).
-  const scope: "all" | string = v.seesAll ? "all" : actor.practitionerId ?? NO_PRACTITIONER_SCOPE;
+  const scope = dashboardScopeFor(actor, v.seesAll);
   const withPlans = modulesFor(actor.entitlements).has("planes");
 
   // Per-tenant cache via dynamically tagged wrapper. The static
@@ -730,18 +758,23 @@ export type ChartBar = { label: string; done: number; missed: number };
 export async function getSessionsChart(range: ChartRange): Promise<ChartBar[]> {
   const actor = await getActor();
   const now = new Date();
-  // S14 (enmienda EV0, revisión): sin el módulo `sesiones` (consultorio
-  // General) el gráfico devuelve 0 SIN consultar. Se arman los mismos
-  // buckets (mismas etiquetas) con `rows = []` para que la UI no cambie de
-  // forma; `load` es el único lugar que toca la base.
-  const withSessions = modulesFor(actor.entitlements).has("sesiones");
+  // EV1-A: el gráfico cuenta TURNOS (Booking), no `Session`, en los dos
+  // verticales. La enmienda EV0 lo apagaba sin el módulo `sesiones` y en
+  // General la carga inicial (`weeklyBars`, también de turnos) mostraba datos
+  // que se vaciaban al tocar "Semana/Mes/3 meses". Ahora General lo ve como
+  // "Turnos" (rótulo en `SessionsChart`) con los mismos números que la carga
+  // inicial; Kine no cambia.
+  //
+  // Mismo scope que `weeklyBars` (`_loadDashboardCounts`): antes esta action
+  // contaba TODO el consultorio y un profesional sin «ver todo» veía sus turnos
+  // en la carga inicial y los de todos al tocar "Semana". Sin profesional (y
+  // sin ver todo) no hay turnos propios: barras en 0.
+  const own = bookingScopeWhere(dashboardScopeFor(actor, (await visibilityForActor(actor)).seesAll));
   const load = (start: Date, end: Date) =>
-    withSessions
-      ? runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
-          where: { tenantId: actor.tenantId, scheduledFor: { gte: start, lt: end } },
-          select: { scheduledFor: true, status: true },
-        }))
-      : Promise.resolve([] as { scheduledFor: Date; status: string }[]);
+    runWithRls(actor.tenantId, (tx) => tx.booking.findMany({
+      where: { tenantId: actor.tenantId, ...own, scheduledFor: { gte: start, lt: end } },
+      select: { scheduledFor: true, status: true },
+    }));
 
   const DAY_MS = 86_400_000;
   const nowKey = toARDateKey(now); // "YYYY-MM-DD" in AR

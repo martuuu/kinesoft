@@ -29,6 +29,7 @@ import {
   type ActionResult,
 } from "@/lib/validation";
 import { slugify, setExerciseTags, freeTextFromTags } from "@/lib/catalog-tags";
+import { escapeLike } from "@/lib/email-match";
 import {
   DEFAULT_CATALOG_FILTERS,
   type CatalogFilters,
@@ -42,7 +43,6 @@ export type GlobalExerciseAdminRow = {
   name: string;
   kind: "EXERCISE" | "MANUAL_THERAPY";
   difficulty: number;
-  isBasic: boolean;
   archived: boolean;
   defaultSets: number | null;
   defaultReps: number | null;
@@ -66,9 +66,6 @@ const SORT_ORDER: Record<
   CatalogSortCol,
   (dir: CatalogSortDir) => Prisma.ExerciseOrderByWithRelationInput[]
 > = {
-  // `tier` is stored as `isBasic` (true = Común). Postgres sorts false first,
-  // so invert to make "asc" mean Común→Pro (the order the UI lists them in).
-  tier: (dir) => [{ isBasic: dir === "asc" ? "desc" : "asc" }, { name: "asc" }, { id: "asc" }],
   name: (dir) => [{ name: dir }, { id: "asc" }],
   difficulty: (dir) => [{ difficulty: dir }, { name: "asc" }, { id: "asc" }],
   kind: (dir) => [{ kind: dir }, { name: "asc" }, { id: "asc" }],
@@ -91,6 +88,8 @@ export async function listGlobalExercisesForAdmin(opts?: {
   await requirePlatformAdmin("platform.read");
   const f = { ...DEFAULT_CATALOG_FILTERS, ...(opts?.filters ?? {}) };
   const q = f.q.trim();
+  // EV1-D: Prisma NO escapa `%`/`_` en `contains`/`equals` con `mode: "insensitive"` (va como ILIKE '%<texto>%'; medido contra el Docker en EV1-D: buscar «%» traía todas las filas).
+  const qLike = escapeLike(q);
 
   const tagFilter = (kind: "MUSCLE_GROUP" | "EQUIPMENT" | "DISCIPLINE", slugs: string[]) =>
     slugs.length ? [{ tags: { some: { tag: { kind, slug: { in: slugs } } } } }] : [];
@@ -104,7 +103,7 @@ export async function listGlobalExercisesForAdmin(opts?: {
           ? { archivedAt: { not: null } }
           : {},
       f.kind ? { kind: f.kind } : {},
-      f.tier ? { isBasic: f.tier === "comun" } : {},
+      // EV1-D: no hay filtro Común/Pro (`isBasic` ya no gatea nada desde EV0).
       f.difficulty != null ? { difficulty: f.difficulty } : {},
       ...tagFilter("MUSCLE_GROUP", f.muscle),
       ...tagFilter("EQUIPMENT", f.equipment),
@@ -112,16 +111,18 @@ export async function listGlobalExercisesForAdmin(opts?: {
       q
         ? {
             OR: [
-              { name: { contains: q, mode: "insensitive" } },
-              { description: { contains: q, mode: "insensitive" } },
-              { tags: { some: { tag: { label: { contains: q, mode: "insensitive" } } } } },
+              { name: { contains: qLike, mode: "insensitive" } },
+              { description: { contains: qLike, mode: "insensitive" } },
+              { tags: { some: { tag: { label: { contains: qLike, mode: "insensitive" } } } } },
             ],
           }
         : {},
     ],
   };
 
-  const orderBy = SORT_ORDER[opts?.sortCol ?? "name"](opts?.sortDir ?? "asc");
+  // EV1: `tier` salió de `CatalogSortCol`; los callers pasan prefs ya saneadas, pero una columna desconocida
+  // (pref vieja que entrara sin `sanitizeCatalogPrefs`) cae a nombre en vez de tirar `undefined is not a function`.
+  const orderBy = (SORT_ORDER[opts?.sortCol ?? "name"] ?? SORT_ORDER.name)(opts?.sortDir ?? "asc");
 
   const [rows, total] = await Promise.all([
     prismaService.exercise.findMany({
@@ -130,7 +131,7 @@ export async function listGlobalExercisesForAdmin(opts?: {
       skip: opts?.skip ?? 0,
       take: opts?.take ?? 30,
       select: {
-        id: true, slug: true, name: true, kind: true, difficulty: true, isBasic: true,
+        id: true, slug: true, name: true, kind: true, difficulty: true,
         archivedAt: true, defaultSets: true, defaultReps: true, durationSeconds: true,
         createdAt: true,
         tags: { select: { tag: { select: { slug: true, label: true, kind: true } } } },
@@ -144,7 +145,7 @@ export async function listGlobalExercisesForAdmin(opts?: {
   return {
     rows: rows.map((e) => ({
       id: e.id, slug: e.slug, name: e.name, kind: e.kind, difficulty: e.difficulty,
-      isBasic: e.isBasic, archived: e.archivedAt != null,
+      archived: e.archivedAt != null,
       defaultSets: e.defaultSets, defaultReps: e.defaultReps, durationSeconds: e.durationSeconds,
       tags: e.tags.map((t) => ({ slug: t.tag.slug, label: t.tag.label, kind: t.tag.kind })),
       mediaCount: e._count.media, hasArticle: e.article != null,
@@ -243,7 +244,6 @@ export async function createGlobalExercise(
           // Deprecated free-text kept as a denormalized cache for the cards.
           muscleGroups: freeText.muscleGroups,
           equipment: freeText.equipment,
-          isBasic: d.isBasic ?? false,
           tenantId: null, // global catalog
           createdById: actor.userId,
         },
@@ -287,7 +287,6 @@ export async function updateGlobalExercise(raw: unknown): Promise<ActionResult> 
   if (d.durationSeconds !== undefined) data.durationSeconds = d.durationSeconds ?? null;
   if (d.instructions !== undefined) data.instructions = d.instructions ?? null;
   if (d.cues !== undefined) data.cues = d.cues ?? null;
-  if (d.isBasic !== undefined) data.isBasic = d.isBasic;
 
   // Claves (no valores) para el registro: qué tocó el superadmin, sin copiar texto libre.
   const changed = Object.keys(d).filter((k) => d[k as keyof typeof d] !== undefined);

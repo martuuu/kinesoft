@@ -51,6 +51,9 @@ const PRESETS: Record<DatePreset, Intl.DateTimeFormatOptions> = {
     year: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    // EV1-E2 (format-compact-12h): sin esto es-AR sale en 12h («12:30 a. m.» a la medianoche) y con el espacio
+    // angosto que difiere entre el ICU de Node y el del navegador. h23 como longDateTime/time.
+    hourCycle: "h23",
   },
   // h23, no hour12:false: medianoche «00:30» y no «24:30» (ver longDateTime).
   time: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },

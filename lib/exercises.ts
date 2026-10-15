@@ -10,6 +10,8 @@
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
+import { escapeLike } from "@/lib/email-match";
 import { Prisma, TagKind } from "@prisma/client";
 import { getActor, ForbiddenError, assertWritable, writableError } from "@/lib/session";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
@@ -56,6 +58,7 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
   const actor = await getActor();
   const gate = await gatingForActor();
   const q = f.q?.trim();
+  const qLike = q ? escapeLike(q) : q;
   const discipline = await disciplineWhere(actor.tenantId, f.disciplineSlug);
 
   // Default to EXERCISE-only so existing callers (Biblioteca) don't
@@ -73,13 +76,15 @@ export async function listExercises(f: ExerciseFilters = {}): Promise<ExerciseRo
       gate.visibility,
       kindFilter,
       discipline,
-      q
+      // EV1-E1: Prisma pasa el valor de `contains` tal cual al ILIKE (`'%' || q || '%'`, verificado contra
+      // Postgres): sin escapar, buscar «_» o «%» matcheaba cualquier cosa. `escapeLike` (lib/email-match.ts).
+      qLike
         ? {
             OR: [
-              { name: { contains: q, mode: "insensitive" } },
-              { description: { contains: q, mode: "insensitive" } },
-              { muscleGroups: { contains: q, mode: "insensitive" } },
-              { tags: { some: { tag: { label: { contains: q, mode: "insensitive" } } } } },
+              { name: { contains: qLike, mode: "insensitive" } },
+              { description: { contains: qLike, mode: "insensitive" } },
+              { muscleGroups: { contains: qLike, mode: "insensitive" } },
+              { tags: { some: { tag: { label: { contains: qLike, mode: "insensitive" } } } } },
             ],
           }
         : {},
@@ -339,7 +344,14 @@ export async function listAllTags(): Promise<{ slug: string; label: string }[]> 
   );
 }
 
-export async function createExercise(input: {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `createExerciseImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function createExercise(...args: Parameters<typeof createExerciseImpl>): ReturnType<typeof createExerciseImpl> {
+  return withReadOnlyResult(() => createExerciseImpl(...args));
+}
+
+async function createExerciseImpl(input: {
   name: string;
   description?: string;
   difficulty?: number;
@@ -440,6 +452,9 @@ export async function createExercise(input: {
     revalidateTag(cacheTags.exerciseFacets(actor.tenantId));
     return { ok: true, data: { id: ex.id, slug: ex.slug } };
   } catch (e) {
+    // EV1-E1: este catch tapaba el ReadOnlyModeError con el copy genérico; el del modo lectura/soporte va primero.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya existe un ejercicio con ese nombre." };
     }

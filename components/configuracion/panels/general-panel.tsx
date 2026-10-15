@@ -186,9 +186,9 @@ export function GeneralPanel({
               Vista compartida del consultorio
             </div>
             <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
-              <strong>Activado</strong>: todos los kinesiólogos ven la historia clínica completa
+              <strong>Activado</strong>: todos los profesionales ven la historia clínica completa
               de todos los pacientes del consultorio. <strong>Desactivado</strong> (por defecto):
-              cada kine sólo ve los pacientes que cargó. Para compartir un paciente puntual con
+              cada profesional sólo ve los pacientes que cargó. Para compartir un paciente puntual con
               otro profesional, usá el botón <strong>Compartir</strong> en el perfil del paciente.
               OWNER/ADMIN siempre ven todo independientemente del modo.
             </div>
@@ -219,7 +219,7 @@ export function GeneralPanel({
             }}
           >
             <strong>Atención:</strong> con este modo activado se ignoran los permisos
-            individuales otorgados con el botón <em>Compartir</em>. Todos los kinesiólogos
+            individuales otorgados con el botón <em>Compartir</em>. Todos los profesionales
             del consultorio ven los datos completos de todos los pacientes.
           </div>
         )}

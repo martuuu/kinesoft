@@ -107,8 +107,9 @@ export function LoginScreen({
               maxWidth: 420,
             }}
           >
+            {/* EV1-C2: el login es el mismo para todas las verticales; Clínica general no es «práctica kinésica». */}
             Agenda, historia clínica, planes de ejercicios y seguimiento — todo en
-            un mismo lugar, pensado para la práctica kinésica.
+            un mismo lugar, pensado para consultorios de salud.
           </p>
         </div>
 

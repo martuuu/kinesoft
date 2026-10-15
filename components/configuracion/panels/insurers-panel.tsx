@@ -26,6 +26,19 @@ import { listInsurerPayerSuggestions } from "@/lib/catalog";
 import { ErrorBox } from "../controls";
 import { PayerPickerModal } from "../catalog/payer-picker";
 import { PayerPlansInfo } from "../catalog/payer-plans-info";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+
+/**
+ * EV1-C2: en Kinesiología la prestadora paga «al kine por sesión»; en Clínica
+ * general la unidad es el turno y quien cobra es «el profesional». Vertical
+ * real del contexto (EV1, antes se deducía de `has("sesiones")`).
+ */
+function usePayeeCopy() {
+  const isKine = useTenantModules().vertical === "KINESIOLOGY";
+  return isKine
+    ? { payee: "al kine", unit: "por sesión" }
+    : { payee: "al profesional", unit: "por turno" };
+}
 
 export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
   const router = useRouter();
@@ -38,6 +51,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
   // Alta desde el catálogo: al volver el refresh con la OS nueva, se abre su
   // editor para cargar copago y monto fijo (nacen en 0).
   const [openAfterRefresh, setOpenAfterRefresh] = useState<string | null>(null);
+  const payeeCopy = usePayeeCopy();
   // Sugerencias "Vincular a <Payer>" por matchKey para las OS sin vincular.
   // Nunca se vinculan solas (sin auto-link): el usuario confirma por fila.
   const [suggestions, setSuggestions] = useState<Record<string, PayerOption>>({});
@@ -121,7 +135,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
         <div style={{ flex: "1 1 280px", minWidth: 0 }}>
           <EyebrowLabel>Obras Sociales y Prepagas</EyebrowLabel>
           <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4 }}>
-            Cada paciente puede tener una cobertura. El copago lo paga el paciente; el monto fijo es lo que le abona la prestadora al kine por sesión.
+            {`Cada paciente puede tener una cobertura. El copago lo paga el paciente; el monto fijo es lo que le abona la prestadora ${payeeCopy.payee} ${payeeCopy.unit}.`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -257,6 +271,7 @@ function InsurerModal({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(insurer?.active ?? true);
+  const payeeCopy = usePayeeCopy();
   // Montos controlados en centavos (MoneyInput, A2b-S-cfg). Antes eran
   // `type=number step=50` + `parseARS`, con el error ×100 del punto decimal.
   const [copagoCents, setCopagoCents] = useState<number | null>(insurer?.copagoCents ?? 0);
@@ -326,7 +341,7 @@ function InsurerModal({
             hint={
               copagoChanged
                 ? "Afecta los turnos no cobrados sin copago propio."
-                : "Lo que paga el paciente por sesión"
+                : `Lo que paga el paciente ${payeeCopy.unit}`
             }
           />
           <MoneyInput
@@ -334,7 +349,7 @@ function InsurerModal({
             value={fixedFeeCents}
             onChange={setFixedFeeCents}
             onInvalidChange={(v) => setInvalid((p) => ({ ...p, fixedFee: v }))}
-            hint="Lo que abona la prestadora al kine"
+            hint={`Lo que abona la prestadora ${payeeCopy.payee}`}
           />
         </div>
         {insurer && !insurer.isParticular && (

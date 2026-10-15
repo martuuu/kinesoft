@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { PatientPicker, type PickedPatient } from "@/components/patients/patient-picker";
 import { PLAN_PATIENT_CHANGE_ERROR } from "@/lib/bookings-constants";
 import { ConflictBanner } from "./conflict-banner";
@@ -36,7 +37,11 @@ export type EditDetailsValues = {
  *   En un turno de plan no hay picker (`patientLockedByPlan`): nunca se llama.
  * - `onChange(patch)`: cambio de un campo.
  * - `onApplyAsPatientDiagnosis`: solo si el turno tiene paciente y
- *   `clinicalWritable`.
+ *   `clinicalWritable`. Opcional: sin él (o sin el módulo `diagnostico`,
+ *   Clínica general, EV1-C1) el botón no aparece.
+ * - Sin el módulo `diagnostico` (Clínica general) título y descripción se
+ *   rotulan «Motivo de consulta» / «Detalle»: son los mismos campos del turno,
+ *   solo que ahí no hay diagnóstico del paciente que los autocomplete.
  * - `clinicalWritable` / `notesWritable` (P0-S07u, de `bookingDrawerAccess`):
  *   sin ellos título, descripción, "Usar como diagnóstico" y notas NO se
  *   renderizan. "Un campo se escribe si y solo si se puede leer" (E1): con los
@@ -69,11 +74,12 @@ export function EditDetailsForm({
   conflict: ForcePrompt | null;
   onPatientChange: (p: PickedPatient | null) => void;
   onChange: (patch: Partial<EditDetailsValues>) => void;
-  onApplyAsPatientDiagnosis: () => void;
+  onApplyAsPatientDiagnosis?: () => void;
   onSubmit: () => void;
   onForce: () => void;
   onDismissConflict: () => void;
 }) {
+  const diagnostico = useTenantModules().has("diagnostico");
   return (
     <div
       style={{
@@ -127,13 +133,13 @@ export function EditDetailsForm({
       />
       {clinicalWritable && (
         <>
-          <label style={fieldLabel}>Título (diagnóstico)</label>
+          <label style={fieldLabel}>{diagnostico ? "Título (diagnóstico)" : "Motivo de consulta"}</label>
           <input
             type="text"
             maxLength={80}
             value={values.title}
             onChange={(e) => onChange({ title: e.target.value })}
-            placeholder="ej: Lumbalgia — se autocompleta del paciente"
+            placeholder={diagnostico ? "ej: Lumbalgia — se autocompleta del paciente" : "ej: Control anual"}
             style={{
               padding: "10px 12px",
               borderRadius: 10,
@@ -142,12 +148,12 @@ export function EditDetailsForm({
               fontSize: 13,
             }}
           />
-          <label style={fieldLabel}>Descripción</label>
+          <label style={fieldLabel}>{diagnostico ? "Descripción" : "Detalle"}</label>
           <textarea
             value={values.description}
             onChange={(e) => onChange({ description: e.target.value })}
             rows={2}
-            placeholder="Detalle del diagnóstico para este turno…"
+            placeholder={diagnostico ? "Detalle del diagnóstico para este turno…" : "Detalle del motivo de consulta…"}
             style={{
               padding: "10px 12px",
               borderRadius: 10,
@@ -158,7 +164,7 @@ export function EditDetailsForm({
               fontFamily: "inherit",
             }}
           />
-          {booking.patientId && (
+          {diagnostico && booking.patientId && onApplyAsPatientDiagnosis && (
             <button
               type="button"
               onClick={onApplyAsPatientDiagnosis}

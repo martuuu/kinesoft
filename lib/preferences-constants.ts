@@ -6,6 +6,7 @@
  * dragging in the server-only Prisma path.
  */
 import { z } from "zod";
+import type { TenantModule } from "@/lib/tenant-modules";
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
 
@@ -78,7 +79,10 @@ export type DashboardPrefsPatch = z.input<typeof DashboardPrefsPatchSchema>;
 // Platform catalog table (Plataforma → Ejercicios)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type CatalogSortCol = "name" | "difficulty" | "kind" | "tier" | "createdAt";
+// EV1 (integrador): sin `tier` (Común/Pro). Desde EV0 `Exercise.isBasic` no decide nada (`catalogScope` en
+// lib/plan-gating.ts) y EV1-D lo sacó de la tabla; una URL o pref vieja con `tier` cae al default en
+// `sanitizeCatalogPrefs` (orden → «name», filtro → se descarta).
+export type CatalogSortCol = "name" | "difficulty" | "kind" | "createdAt";
 export type CatalogSortDir = "asc" | "desc";
 /** Which slice of the catalog the table shows. */
 export type CatalogArchived = "active" | "archived" | "all";
@@ -86,8 +90,6 @@ export type CatalogArchived = "active" | "archived" | "all";
 export type CatalogFilters = {
   q: string;
   kind: "" | "EXERCISE" | "MANUAL_THERAPY";
-  /** "" = todos · "comun" = isBasic true · "pro" = isBasic false */
-  tier: "" | "comun" | "pro";
   difficulty: number | null;
   /** Tag slugs, by kind. */
   muscle: string[];
@@ -108,14 +110,12 @@ export const CATALOG_SORT_COLS: CatalogSortCol[] = [
   "name",
   "difficulty",
   "kind",
-  "tier",
   "createdAt",
 ];
 
 export const DEFAULT_CATALOG_FILTERS: CatalogFilters = {
   q: "",
   kind: "",
-  tier: "",
   difficulty: null,
   muscle: [],
   equipment: [],
@@ -155,7 +155,6 @@ export function sanitizeCatalogPrefs(raw: unknown): CatalogPrefs {
     filters: {
       q: typeof f.q === "string" ? f.q.slice(0, 120) : "",
       kind: oneOf(f.kind, ["", "EXERCISE", "MANUAL_THERAPY"] as const, ""),
-      tier: oneOf(f.tier, ["", "comun", "pro"] as const, ""),
       difficulty,
       muscle: strArray(f.muscle),
       equipment: strArray(f.equipment),
@@ -203,10 +202,76 @@ export type KpiRevenueScope = "tenant" | "own" | "none";
  * rol: es una preferencia de pantalla, no un dato; lo que filtra la plata es
  * `revenueScopeFor` en `lib/dashboard.ts`.
  */
-export function kpiOptionsFor(scope: KpiRevenueScope): typeof KPI_OPTIONS {
-  if (scope === "tenant") return KPI_OPTIONS;
-  if (scope === "none") return KPI_OPTIONS.filter((o) => o.key !== "monthRevenue");
-  return KPI_OPTIONS.map((o) => (o.key === "monthRevenue" ? { ...o, label: "Tus ingresos del mes" } : o));
+export function kpiOptionsFor(scope: KpiRevenueScope, modules?: KpiModules): typeof KPI_OPTIONS {
+  const byScope =
+    scope === "tenant"
+      ? KPI_OPTIONS
+      : scope === "none"
+        ? KPI_OPTIONS.filter((o) => o.key !== "monthRevenue")
+        : KPI_OPTIONS.map((o) => (o.key === "monthRevenue" ? { ...o, label: "Tus ingresos del mes" } : o));
+  return modules ? byModules(byScope, modules) : byScope;
+}
+
+/**
+ * EV1-A: lo que hace falta de los módulos del consultorio. Lo cumplen tanto el
+ * `ReadonlySet<TenantModule>` del server (`modulesFor`) como el valor de
+ * `useTenantModules()` en el cliente. Sin módulos (`undefined`) = la lista de
+ * Kine de siempre: los callers que todavía no los pasan no cambian.
+ */
+export type KpiModules = { has: (m: TenantModule) => boolean };
+
+/**
+ * EV1-A: KPIs por módulo. En un consultorio sin `planes` (General) los KPIs de
+ * planes valían 0 siempre ("Planes en curso", "Cerca del alta") y "Pacientes
+ * activos" (= con plan ACTIVE) también: se sacan del picker. `activePatients`
+ * se queda, pero en General el loader lo calcula con turnos (pacientes con un
+ * turno COMPLETED en los últimos 30 días, `lib/dashboard.ts`) y se rotula así.
+ * Sin `sesiones`, lo que decía "sesiones"/"adherencia" se dice con turnos: el
+ * número ya salía de turnos, solo cambia el rótulo.
+ */
+function byModules(opts: typeof KPI_OPTIONS, modules: KpiModules): typeof KPI_OPTIONS {
+  const plans = modules.has("planes");
+  const sessions = modules.has("sesiones");
+  return opts
+    .filter((o) => plans || (o.key !== "activePrograms" && o.key !== "nearingDischarge"))
+    .map((o) => {
+      if (!plans && o.key === "activePatients") return { ...o, ...GENERAL_KPI_COPY.activePatients };
+      if (!sessions && o.key === "weekSessions") return { ...o, ...GENERAL_KPI_COPY.weekSessions };
+      if (!sessions && o.key === "adherence") return { ...o, ...GENERAL_KPI_COPY.adherence };
+      return o;
+    });
+}
+
+/** EV1-A: rótulos de General. Los usa también la tarjeta del dashboard (mismo texto en picker y KPI). */
+export const GENERAL_KPI_COPY = {
+  activePatients: { label: "Pacientes atendidos", description: "Con un turno realizado en los últimos 30 días" },
+  weekSessions: { label: "Turnos esta semana", description: "Confirmados + realizados" },
+  adherence: { label: "Asistencia semanal", description: "Realizados / total" },
+} as const;
+
+/** EV1-A: la fila por defecto de un consultorio sin `planes` (la de Kine trae dos KPIs de planes). */
+export const GENERAL_DEFAULT_PINNED_KPIS: KpiKey[] = ["activePatients", "weekSessions", "todayCount"];
+
+/**
+ * EV1-A: lo que se DIBUJA en la fila de KPIs fijados. Las claves guardadas que
+ * no aplican (ingresos sin acceso, planes en General) se ignoran al render; la
+ * preferencia guardada no se toca (si el consultorio vuelve a Kine, reaparecen).
+ * En General, si el usuario nunca eligió (la fila es la default de Kine) o no
+ * le queda ninguna, se usa `GENERAL_DEFAULT_PINNED_KPIS`: la default de Kine
+ * dejaba una sola tarjeta.
+ */
+export function effectivePinnedKpis(
+  pinned: readonly KpiKey[],
+  scope: KpiRevenueScope,
+  modules?: KpiModules
+): KpiKey[] {
+  const keep = pinnableKpis(pinned, scope, modules);
+  if (!modules || modules.has("planes")) return keep;
+  const isKineDefault =
+    pinned.length === DEFAULT_PREFERENCES.pinnedKpis.length &&
+    pinned.every((k, i) => k === DEFAULT_PREFERENCES.pinnedKpis[i]);
+  if (!isKineDefault && keep.length > 0) return keep;
+  return pinnableKpis(GENERAL_DEFAULT_PINNED_KPIS, scope, modules);
 }
 
 /**
@@ -214,8 +279,8 @@ export function kpiOptionsFor(scope: KpiRevenueScope): typeof KPI_OPTIONS {
  * oculta (ingresos para la Secretaria) no cuenta para el "N de 6" ni se
  * re-guarda: al guardar desde el picker se cae, porque ese rol nunca la ve.
  */
-export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope): KpiKey[] {
-  const keys = new Set(kpiOptionsFor(scope).map((o) => o.key));
+export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope, modules?: KpiModules): KpiKey[] {
+  const keys = new Set(kpiOptionsFor(scope, modules).map((o) => o.key));
   return pinned.filter((k) => keys.has(k));
 }
 

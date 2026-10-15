@@ -32,6 +32,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma, type Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { ForbiddenError, getActor, requireActorPractitionerId, type Actor } from "@/lib/session";
 import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -412,7 +413,14 @@ export async function getTemplatePrefill(templateId: string): Promise<ActionResu
 
 // ─── Escrituras ──────────────────────────────────────────────────────────────
 
-export async function createPlanTemplate(raw: PlanTemplateCreateInput): Promise<ActionResult<{ id: string }>> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `createPlanTemplateImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function createPlanTemplate(...args: Parameters<typeof createPlanTemplateImpl>): ReturnType<typeof createPlanTemplateImpl> {
+  return withReadOnlyResult(() => createPlanTemplateImpl(...args));
+}
+
+async function createPlanTemplateImpl(raw: PlanTemplateCreateInput): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
   const parsed = PlanTemplateCreateSchema.safeParse(raw);
   if (!parsed.success) return zodFail(parsed.error);
@@ -480,7 +488,14 @@ export async function createPlanTemplate(raw: PlanTemplateCreateInput): Promise<
  * si cambia alguno; los ejercicios, solo si vienen: renombrar una plantilla
  * no falla porque un ejercicio guardado se archivó después.
  */
-export async function updatePlanTemplate(
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `updatePlanTemplateImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function updatePlanTemplate(...args: Parameters<typeof updatePlanTemplateImpl>): ReturnType<typeof updatePlanTemplateImpl> {
+  return withReadOnlyResult(() => updatePlanTemplateImpl(...args));
+}
+
+async function updatePlanTemplateImpl(
   raw: PlanTemplateUpdateInput
 ): Promise<ActionResult<{ id: string; updatedAt: string }>> {
   const actor = await getActor();
@@ -571,7 +586,14 @@ export async function updatePlanTemplate(
  * defecto, no se prellena y el motor rechaza su `templateId`; los planes que
  * ya la usaron no cambian. Idempotente. Autor o admin.
  */
-export async function setPlanTemplateArchived(id: string, archived: boolean): Promise<ActionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `setPlanTemplateArchivedImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function setPlanTemplateArchived(...args: Parameters<typeof setPlanTemplateArchivedImpl>): ReturnType<typeof setPlanTemplateArchivedImpl> {
+  return withReadOnlyResult(() => setPlanTemplateArchivedImpl(...args));
+}
+
+async function setPlanTemplateArchivedImpl(id: string, archived: boolean): Promise<ActionResult> {
   const actor = await getActor();
   if (typeof id !== "string" || !id || id.length > 64 || typeof archived !== "boolean") return fail(COPY.notFound);
   try {
@@ -620,7 +642,14 @@ export async function setPlanTemplateArchived(id: string, archived: boolean): Pr
  * escrituras. Los planes que la usaron quedan con `templateId` NULL (FK SET
  * NULL de M1). Para sacarla de la vista sin perder el vínculo: archivar.
  */
-export async function deletePlanTemplate(id: string): Promise<ActionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `deletePlanTemplateImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function deletePlanTemplate(...args: Parameters<typeof deletePlanTemplateImpl>): ReturnType<typeof deletePlanTemplateImpl> {
+  return withReadOnlyResult(() => deletePlanTemplateImpl(...args));
+}
+
+async function deletePlanTemplateImpl(id: string): Promise<ActionResult> {
   const actor = await getActor();
   if (typeof id !== "string" || !id) return { ok: false, error: COPY.notFound };
 

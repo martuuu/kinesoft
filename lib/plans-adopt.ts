@@ -24,6 +24,7 @@
  */
 import { Prisma } from "@prisma/client";
 import type { z } from "zod";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor, type Actor } from "@/lib/session";
 import { withTxConflictRetry } from "@/lib/plan-lock";
@@ -118,7 +119,14 @@ export async function previewGeneratePlanBookings(raw: GeneratePlanBookingsInput
  * generación que la del turno cancelado), cobro previo → $0, sesiones movidas
  * con su turno (I3). Si la agenda o el plan cambiaron → preview fresco.
  */
-export async function generatePlanBookings(raw: GeneratePlanBookingsCommitInput): Promise<GeneratePlanBookingsResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `generatePlanBookingsImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function generatePlanBookings(...args: Parameters<typeof generatePlanBookingsImpl>): ReturnType<typeof generatePlanBookingsImpl> {
+  return withReadOnlyResult(() => generatePlanBookingsImpl(...args));
+}
+
+async function generatePlanBookingsImpl(raw: GeneratePlanBookingsCommitInput): Promise<GeneratePlanBookingsResult> {
   const actor = await getActor();
   const parsed = GeneratePlanBookingsCommitSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -161,7 +169,14 @@ export async function generatePlanBookings(raw: GeneratePlanBookingsCommitInput)
  * la fecha del turno (I3); el turno se estampa con la cuota solo si está libre
  * de plata (nunca re-estampa lo cobrado). CAS doble: el turno y el plan.
  */
-export async function linkBookingToSession(raw: LinkBookingToSessionInput): Promise<LinkBookingToSessionResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `linkBookingToSessionImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function linkBookingToSession(...args: Parameters<typeof linkBookingToSessionImpl>): ReturnType<typeof linkBookingToSessionImpl> {
+  return withReadOnlyResult(() => linkBookingToSessionImpl(...args));
+}
+
+async function linkBookingToSessionImpl(raw: LinkBookingToSessionInput): Promise<LinkBookingToSessionResult> {
   const actor = await getActor();
   const parsed = LinkBookingToSessionSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -186,7 +201,14 @@ export async function linkBookingToSession(raw: LinkBookingToSessionInput): Prom
  * esa sesión; sin él, a las pendientes por fecha y, si sobran, a sesiones
  * nuevas con la cuota del plan.
  */
-export async function adoptBookingSeries(raw: AdoptBookingSeriesInput): Promise<AdoptBookingSeriesResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `adoptBookingSeriesImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function adoptBookingSeries(...args: Parameters<typeof adoptBookingSeriesImpl>): ReturnType<typeof adoptBookingSeriesImpl> {
+  return withReadOnlyResult(() => adoptBookingSeriesImpl(...args));
+}
+
+async function adoptBookingSeriesImpl(raw: AdoptBookingSeriesInput): Promise<AdoptBookingSeriesResult> {
   const actor = await getActor();
   const parsed = AdoptBookingSeriesSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -213,7 +235,14 @@ export async function adoptBookingSeries(raw: AdoptBookingSeriesInput): Promise<
  * Sacar un turno del plan (C4): con cobro → rechazo (PD-08); si no, queda como
  * turno suelto sin la cuota del plan y su sesión queda "sin turno".
  */
-export async function removeBookingFromPlan(raw: RemoveBookingFromPlanInput): Promise<RemoveBookingFromPlanResult> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `removeBookingFromPlanImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function removeBookingFromPlan(...args: Parameters<typeof removeBookingFromPlanImpl>): ReturnType<typeof removeBookingFromPlanImpl> {
+  return withReadOnlyResult(() => removeBookingFromPlanImpl(...args));
+}
+
+async function removeBookingFromPlanImpl(raw: RemoveBookingFromPlanInput): Promise<RemoveBookingFromPlanResult> {
   const actor = await getActor();
   const parsed = RemoveBookingFromPlanSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);

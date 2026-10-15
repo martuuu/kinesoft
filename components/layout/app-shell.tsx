@@ -8,6 +8,7 @@ import { useTweaks } from "./tweaks-context";
 import { CommandPalette } from "@/components/global/command-palette";
 import { TenantModulesProvider } from "./tenant-modules-context";
 import type { TenantModule } from "@/lib/tenant-modules";
+import type { TenantVertical } from "@prisma/client";
 import type { Capability } from "@/lib/capabilities";
 import { RealtimeProvider } from "@/components/providers/realtime-provider";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
@@ -45,6 +46,7 @@ export function AppShell({
   children,
   isPlatformAdmin = false,
   modules,
+  vertical,
   caps,
   realtime,
   alertViewer,
@@ -59,6 +61,8 @@ export function AppShell({
   banner?: ReactNode;
   isPlatformAdmin?: boolean;
   modules: readonly TenantModule[];
+  /** EV1: vertical del consultorio para el copy (ver `TenantModulesValue.vertical`). */
+  vertical?: TenantVertical;
   caps: readonly Capability[];
   realtime: RealtimeBootstrap;
   alertViewer: AlertViewer;
@@ -74,7 +78,7 @@ export function AppShell({
 
   return (
     <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
-      <TenantModulesProvider modules={modules}>
+      <TenantModulesProvider modules={modules} vertical={vertical}>
         <RealtimeProvider bootstrap={realtime}>
           <ArrivalAlerts viewer={alertViewer} initialPrefs={initialAlertPrefs} live={realtime.driver !== "off"}>
             <div

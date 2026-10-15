@@ -22,6 +22,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FormField } from "@/components/ui/form-field";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { previewRecurrence } from "@/lib/availability-actions";
 import type { RecurrencePreview } from "@/lib/availability-actions-types";
 import {
@@ -107,6 +108,8 @@ export function SessionsMode({
    *  resume, que son lo que pasa al editor. */
   footer?: ReactNode;
 }) {
+  // EV1-C1: en Clínica general (sin módulo `sesiones`) la unidad es «turnos».
+  const sesiones = useTenantModules().has("sesiones");
   const [preview, setPreview] = useState<PreviewState>({ kind: "idle" });
   const seq = useRef(0);
   // onPreview en ref: un callback inline del padre no re-dispara la consulta.
@@ -166,12 +169,18 @@ export function SessionsMode({
       : preview.kind === "loading"
         ? preview.prev
         : null;
-  const summary = data?.summary ?? localSummary(anchorIso, value);
+  // EV1-C1: el resumen y el aviso de faltantes vienen armados con «sesión»
+  // (`summarizeRange` del server, `localSummary`/`shortfallNote` de
+  // `lib/sessions-mode-state`, ajenos a esta sesión). En Clínica general se
+  // reescribe la unidad acá, solo para mostrar; ver `asTurnos`.
+  const unitText = (t: string) => (sesiones ? t : asTurnos(t));
+  const summary = unitText(data?.summary ?? localSummary(anchorIso, value));
   const rows = data ? data.items.map(sessionRow) : [];
   const counts = data ? countsLine(countSessionStates(data.items)) : "";
-  const shortfall = data
+  const shortfallRaw = data
     ? shortfallNote(data.requested, data.items.length)
     : null;
+  const shortfall = shortfallRaw && unitText(shortfallRaw);
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
@@ -183,7 +192,7 @@ export function SessionsMode({
         }}
       >
         <FormField
-          label="Sesiones"
+          label={sesiones ? "Sesiones" : "Turnos"}
           name="count"
           type="number"
           min={SESSIONS_UI_MIN_COUNT}
@@ -292,7 +301,7 @@ export function SessionsMode({
           <div
             style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}
           >
-            {summary || "Elegí la fecha del turno para ver las sesiones"}
+            {summary || `Elegí la fecha del turno para ver ${sesiones ? "las sesiones" : "los turnos"}`}
           </div>
           {preview.kind === "loading" && (
             <span
@@ -393,4 +402,19 @@ export function SessionsMode({
       {footer}
     </div>
   );
+}
+
+/**
+ * «sesión/sesiones» → «turno/turnos» en los textos fijos del resumen
+ * («8 sesiones · Semanal …», «1 sesión · …», «Sin sesiones», «Se generan 3 de
+ * 8 sesiones pedidas.»). Solo Clínica general (EV1-C1). Exportado para el test.
+ */
+export function asTurnos(text: string): string {
+  return text
+    // Concordancia: «sesiones pedidas» (femenino) → «turnos pedidos».
+    .replace(/\bsesiones pedidas\b/g, "turnos pedidos")
+    .replace(/\bSesiones\b/g, "Turnos")
+    .replace(/\bsesiones\b/g, "turnos")
+    .replace(/\bSesión\b/g, "Turno")
+    .replace(/\bsesión\b/g, "turno");
 }

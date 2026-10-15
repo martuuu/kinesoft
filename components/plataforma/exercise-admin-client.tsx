@@ -8,8 +8,14 @@
  * `catalogPrefs` so the next visit restores the same view (BO3-E: or to this
  * browser's localStorage when the superadmin has no consultorio — see
  * `CatalogPrefsStore`). Quick mutations
- * (plan tier, archive/restore) happen inline on the row — the drawer is only
+ * (archive/restore) happen inline on the row — the drawer is only
  * for full edits (name, tags, media, article).
+ *
+ * EV1-D: se sacaron el filtro «Todo plan», la columna/orden «Plan» y el toggle
+ * Común/Pro. Desde EV0 `Exercise.isBasic` no decide nada (`catalogScope` en
+ * lib/plan-gating.ts: Kine FREE/STARTER ven solo propios, PRO ve todo el
+ * catálogo global), así que editarlo era engañoso. Un `tier` viejo en la URL o
+ * en las prefs guardadas lo descarta `sanitizeCatalogPrefs` (lib/preferences-constants.ts).
  */
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -18,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import type { TagOption } from "@/components/ui/tag-combobox";
 import { IconSearch, IconChevL, IconChevR, IconPlay, IconFile, IconPlus } from "@/components/ui/icons";
-import { updateGlobalExercise, archiveGlobalExercise, restoreGlobalExercise } from "@/lib/exercises-admin";
+import { archiveGlobalExercise, restoreGlobalExercise } from "@/lib/exercises-admin";
 import type { GlobalExerciseAdminRow } from "@/lib/exercises-admin";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
@@ -34,7 +40,7 @@ import { ExerciseDrawer } from "@/components/plataforma/exercise-drawer";
 import { TagFilterMenu, type TagOpt } from "@/components/plataforma/tag-filter-menu";
 
 /** Column track shared by the header and every row so the two never drift. */
-const COLS = "minmax(190px,2.3fr) 108px 58px 92px minmax(150px,1.7fr) 96px 176px";
+const COLS = "minmax(190px,2.3fr) 108px 58px minmax(150px,1.7fr) 96px 176px";
 
 type CatalogTagOptions = { muscle: TagOpt[]; equipment: TagOpt[]; discipline: TagOpt[] };
 
@@ -74,12 +80,12 @@ export function catalogHref(state: CatalogPrefs, page: number): string {
   const p = new URLSearchParams();
   if (f.q) p.set("q", f.q);
   if (f.kind) p.set("kind", f.kind);
-  if (f.tier) p.set("tier", f.tier);
   if (f.difficulty != null) p.set("dif", String(f.difficulty));
   if (f.muscle.length) p.set("muscle", f.muscle.join(","));
   if (f.equipment.length) p.set("equip", f.equipment.join(","));
   if (f.discipline.length) p.set("disc", f.discipline.join(","));
   if (f.archived !== "active") p.set("arch", f.archived);
+  // EV1-D: el orden «Plan» (`tier`) ya no existe; una vista guardada con él la normaliza `sanitizeCatalogPrefs`.
   p.set("sort", state.sortCol);
   p.set("dir", state.sortDir);
   p.set("size", String(state.pageSize));
@@ -173,7 +179,6 @@ export function ExerciseAdminClient({
   const activeCount =
     (filters.q ? 1 : 0) +
     (filters.kind ? 1 : 0) +
-    (filters.tier ? 1 : 0) +
     (filters.difficulty != null ? 1 : 0) +
     filters.muscle.length +
     filters.equipment.length +
@@ -251,15 +256,6 @@ export function ExerciseAdminClient({
           ]}
         />
         <Select
-          value={filters.tier}
-          onChange={(v) => apply({ filters: { tier: v as CatalogFilters["tier"] } })}
-          options={[
-            { v: "", l: "Todo plan" },
-            { v: "comun", l: "Común" },
-            { v: "pro", l: "Pro" },
-          ]}
-        />
-        <Select
           value={filters.difficulty == null ? "" : String(filters.difficulty)}
           onChange={(v) => apply({ filters: { difficulty: v ? Number(v) : null } })}
           options={[{ v: "", l: "Toda dificultad" }, ...[1, 2, 3, 4, 5].map((n) => ({ v: String(n), l: `Nivel ${n}` }))]}
@@ -332,7 +328,6 @@ export function ExerciseAdminClient({
               <SortHead col="name" label="Nombre" state={state} onSort={apply} />
               <SortHead col="kind" label="Tipo" state={state} onSort={apply} />
               <SortHead col="difficulty" label="Dif." state={state} onSort={apply} />
-              <SortHead col="tier" label="Plan" state={state} onSort={apply} />
               <Head>Clasificación</Head>
               <Head>Prescripción</Head>
               <Head align="right">Acciones</Head>
@@ -429,18 +424,6 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
   const toast = useToast();
   const [pending, start] = useTransition();
   const [hover, setHover] = useState(false);
-
-  const toggleTier = () => {
-    start(async () => {
-      const r = await updateGlobalExercise({ id: e.id, isBasic: !e.isBasic });
-      if (!r.ok) {
-        toast.error(r.error);
-        return;
-      }
-      toast.success(!e.isBasic ? "Ahora es plan Común" : "Ahora es plan Pro");
-      router.refresh();
-    });
-  };
 
   const toggleArchive = () => {
     start(async () => {
@@ -550,27 +533,6 @@ function Row({ e, onEdit }: { e: GlobalExerciseAdminRow; onEdit: () => void }) {
         {e.difficulty}
         <span style={{ color: "var(--navy-300)" }}>/5</span>
       </div>
-
-      {/* Plan — inline toggle */}
-      <button
-        type="button"
-        onClick={toggleTier}
-        disabled={pending}
-        title={e.isBasic ? "Cambiar a Pro (solo planes pagos)" : "Cambiar a Común (visible en todos los planes)"}
-        style={{
-          justifySelf: "start",
-          border: `1px solid ${e.isBasic ? "rgba(15,30,51,0.14)" : "rgba(31,79,190,0.3)"}`,
-          background: e.isBasic ? "rgba(15,30,51,0.03)" : "rgba(31,79,190,0.08)",
-          color: e.isBasic ? "var(--navy-500)" : "var(--sky-700)",
-          borderRadius: 999,
-          padding: "3px 10px",
-          fontSize: 11,
-          fontWeight: 700,
-          cursor: pending ? "not-allowed" : "pointer",
-        }}
-      >
-        {e.isBasic ? "Común" : "Pro"}
-      </button>
 
       {/* Clasificación — grouped chips, muscle → equipment → discipline */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 3, minWidth: 0 }}>

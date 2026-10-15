@@ -32,6 +32,7 @@
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
+import { escapeLike } from "@/lib/email-match";
 import type { BookingPatientHit } from "@/lib/patient-search-types";
 
 /** Tope de filas: un dropdown, no un listado. */
@@ -61,11 +62,14 @@ export async function searchPatientsForBooking(q: string): Promise<BookingPatien
   const insensitive = "insensitive" as const;
   const matches = (t: string) => {
     const digits = dniDigitsVariant(t);
+    // EV1 (integrador): Prisma no escapa `%`/`_` en `contains` + insensitive (ILIKE con el valor tal cual);
+    // `digits` son solo [0-9], no necesitan escape.
+    const like = escapeLike(t);
     return {
       OR: [
-        { firstName: { contains: t, mode: insensitive } },
-        { lastName: { contains: t, mode: insensitive } },
-        { documentId: { contains: t, mode: insensitive } },
+        { firstName: { contains: like, mode: insensitive } },
+        { lastName: { contains: like, mode: insensitive } },
+        { documentId: { contains: like, mode: insensitive } },
         ...(digits ? [{ documentId: { contains: digits } }] : []),
       ],
     };

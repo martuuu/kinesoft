@@ -12,7 +12,25 @@ const RANGES: { value: ChartRange; label: string }[] = [
   { value: "3m", label: "3 meses" },
 ];
 
-export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
+/**
+ * EV1-A: `unit` = qué se cuenta en el rótulo. Los números son SIEMPRE turnos
+ * (`getSessionsChart` y `weeklyBars` leen Booking); en Kine se rotulan
+ * "Sesiones" como siempre y en un consultorio sin `sesiones` (General),
+ * "Turnos", con "asistencia" en lugar de "adherencia".
+ */
+const COPY = {
+  sessions: { title: "Sesiones", done: "realizadas", doneLegend: "Realizadas", rate: "adherencia" },
+  bookings: { title: "Turnos", done: "realizados", doneLegend: "Realizados", rate: "asistencia" },
+} as const;
+
+export function SessionsChart({
+  initialBars,
+  unit = "sessions",
+}: {
+  initialBars: ChartBar[];
+  unit?: keyof typeof COPY;
+}) {
+  const copy = COPY[unit];
   const [range, setRange] = useState<ChartRange>("week");
   const [bars, setBars] = useState<ChartBar[]>(initialBars);
   const [pending, start] = useTransition();
@@ -44,12 +62,12 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
       >
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-700)" }}>
-            Sesiones {pending && <span style={{ fontSize: 11, color: "var(--navy-300)" }}>…</span>}
+            {copy.title} {pending && <span style={{ fontSize: 11, color: "var(--navy-300)" }}>…</span>}
           </div>
           <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-            {totalDone} realizadas · {totalMissed} ausentes
+            {totalDone} {copy.done} · {totalMissed} ausentes
             {adherence != null && (
-              <> · <span style={{ color: "var(--sky-700)", fontWeight: 600 }}>{adherence}% adherencia</span></>
+              <> · <span style={{ color: "var(--sky-700)", fontWeight: 600 }}>{adherence}% {copy.rate}</span></>
             )}
           </div>
         </div>
@@ -112,7 +130,7 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
       >
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--sky-700)" }} />{" "}
-          Realizadas
+          {copy.doneLegend}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--lime-400)" }} />{" "}
@@ -165,7 +183,7 @@ export function SessionsChart({ initialBars }: { initialBars: ChartBar[] }) {
                   minHeight: 2,
                   transformOrigin: "bottom",
                 }}
-                aria-label={`${b.label}: ${b.done} realizadas`}
+                aria-label={`${b.label}: ${b.done} ${copy.done}`}
               />
               {b.missed > 0 && (
                 <motion.div

@@ -69,8 +69,16 @@ function fechaAR(iso: string): string {
 /**
  * Devuelve el documento HTML completo del recordatorio. Se escribe tal cual
  * en `window.open(...).document.write(...)`.
+ *
+ * `opts.diagnostico` (EV1-C1): en Clínica general (sin el módulo
+ * `diagnostico`) el título/descripción del turno es el motivo de consulta y
+ * la sección se rotula «Motivo». Default true = Kine, como siempre.
  */
-export function recordatorioHtml(booking: RecordatorioBooking): string {
+export function recordatorioHtml(
+  booking: RecordatorioBooking,
+  opts: { diagnostico?: boolean } = {}
+): string {
+  const motivoTitle = opts.diagnostico === false ? "Motivo" : "Diagnóstico";
   const color = booking.serviceColor || "#1F4FBE";
   const fecha = fechaAR(booking.scheduledFor);
   const sesion = recordatorioSessionLabel(booking);
@@ -79,7 +87,7 @@ export function recordatorioHtml(booking: RecordatorioBooking): string {
     booking.title || booking.description
       ? `
         <div class="section">
-          <div class="section-title">Diagnóstico</div>
+          <div class="section-title">${motivoTitle}</div>
           ${booking.title ? `<div class="value strong">${esc(booking.title)}</div>` : ""}
           ${booking.description ? `<div class="value muted">${esc(booking.description)}</div>` : ""}
         </div>`

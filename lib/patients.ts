@@ -35,7 +35,7 @@ import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { portalInviteEmail } from "@/lib/email/templates";
 import type { EmailTransportName } from "@/lib/email/types";
-import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
+import { emailEqualsFilter, escapeLike, sameEmail } from "@/lib/email-match";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
@@ -85,6 +85,18 @@ export async function listPatients(opts: {
   const actor = await getActor();
   const q = opts.q?.trim();
   const sort = opts.sort ?? "lastName.asc";
+  // EV1-B: el directorio se arma por módulos. Sin `planes` (consultorio
+  // General) no hay plan que mostrar ni por el cual filtrar: "con plan / sin
+  // plan" se ignora (cae a "todos") y no se hace el include de programs, que
+  // era un join + subquery por fila para una columna que la UI ya no muestra.
+  // Sin `diagnostico`, `diagnosisSlug` se ignora igual. Se ignoran en vez de
+  // tirar porque llegan por URL (un link viejo o compartido desde un Kine no
+  // tiene que romper la página). Kine: sin cambios.
+  const modules = modulesFor(actor.entitlements);
+  const plansOn = modules.has("planes");
+  const filter =
+    !plansOn && (opts.filter === "active" || opts.filter === "no-program") ? "all" : opts.filter;
+  const diagnosisSlug = modules.has("diagnostico") ? opts.diagnosisSlug : undefined;
   // Sprint 16: directory shows EVERY patient of the tenant; per-row
   // access (full vs basic) is resolved below via `bulkPatientAccess`
   // and PHI fields are masked accordingly for basic rows.
@@ -134,13 +146,13 @@ export async function listPatients(opts: {
   // Diagnosis filter — patient has a clinical case whose top-rank
   // diagnosis matches the given condition slug. We use `some` on the
   // chain so the SQL stays one tractable subquery.
-  const diagnosisWhere: Prisma.PatientWhereInput = opts.diagnosisSlug
+  const diagnosisWhere: Prisma.PatientWhereInput = diagnosisSlug
     ? {
         programs: {
           some: {
             case: {
               diagnoses: {
-                some: { condition: { slug: opts.diagnosisSlug } },
+                some: { condition: { slug: diagnosisSlug } },
               },
             },
           },
@@ -148,28 +160,37 @@ export async function listPatients(opts: {
       }
     : {};
 
+  // EV1-B: Prisma 5 NO escapa `contains`: arma `ILIKE '%' || $1 || '%'` con el
+  // valor crudo (medido contra el Docker: `contains: "%"` → param `"%%%"`), así
+  // que buscar «%» traía todo el directorio y «_» matcheaba cualquier carácter.
+  // Se escapa con `escapeLike` (backslash es el escape default de ILIKE en PG).
+  // El post-filtro de filas basic de abajo usa `includes` sobre `q` crudo:
+  // ahí no hay comodines.
+  const qLike = q ? escapeLike(q) : undefined;
+  const insurerLike = opts.insurer ? escapeLike(opts.insurer) : undefined;
+
   const where: Prisma.PatientWhereInput = {
     tenantId: actor.tenantId,
-    ...(opts.filter === "archived"
+    ...(filter === "archived"
       ? { archivedAt: { not: null } }
       : { archivedAt: null }),
-    ...(q
+    ...(qLike
       ? {
           OR: [
-            { firstName: { contains: q, mode: "insensitive" } },
-            { lastName: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-            { documentId: { contains: q, mode: "insensitive" } },
+            { firstName: { contains: qLike, mode: "insensitive" } },
+            { lastName: { contains: qLike, mode: "insensitive" } },
+            { email: { contains: qLike, mode: "insensitive" } },
+            { documentId: { contains: qLike, mode: "insensitive" } },
           ],
         }
       : {}),
-    ...(opts.filter === "active"
+    ...(filter === "active"
       ? { programs: { some: { status: "ACTIVE" } } }
-      : opts.filter === "no-program"
+      : filter === "no-program"
         ? { programs: { none: {} } }
         : {}),
-    ...(opts.insurer
-      ? { coverages: { some: { insurer: { contains: opts.insurer, mode: "insensitive" } } } }
+    ...(insurerLike
+      ? { coverages: { some: { insurer: { contains: insurerLike, mode: "insensitive" } } } }
       : {}),
     ...dobWhere,
     ...lastVisitWhere,
@@ -189,31 +210,55 @@ export async function listPatients(opts: {
             ? [{ createdAt: "asc" }]
             : [{ lastName: "asc" }];
 
-  const rows = await runWithRls(actor.tenantId, (tx) => tx.patient.findMany({
-    where,
-    orderBy,
-    include: {
-      programs: {
-        where: { status: "ACTIVE" },
-        // P0-S02a: con 2 planes ACTIVE (legacy o carrera) el `take: 1` sin
-        // `orderBy` devolvía el orden físico de la tabla, así que la columna
-        // "plan activo" del directorio podía mostrar el viejo y cambiar entre
-        // requests. Gana el más reciente, como el resto de los lectores de
-        // "plan activo" de ES1 (`listBookingsInRange`, Seguimiento).
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        include: {
-          sessions: { orderBy: { index: "asc" } },
-        },
-      },
-      bookings: {
-        where: { scheduledFor: { gte: new Date() }, status: { not: "CANCELLED" } },
-        orderBy: { scheduledFor: "asc" },
-        take: 1,
-      },
-      coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 },
+  // P0-S02a: con 2 planes ACTIVE (legacy o carrera) el `take: 1` sin
+  // `orderBy` devolvía el orden físico de la tabla, así que la columna
+  // "plan activo" del directorio podía mostrar el viejo y cambiar entre
+  // requests. Gana el más reciente, como el resto de los lectores de
+  // "plan activo" de ES1 (`listBookingsInRange`, Seguimiento).
+  const programsInclude = {
+    where: { status: "ACTIVE" },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    include: { sessions: { orderBy: { index: "asc" } } },
+  } satisfies Prisma.Patient$programsArgs;
+  const baseInclude = {
+    bookings: {
+      where: { scheduledFor: { gte: new Date() }, status: { not: "CANCELLED" } },
+      orderBy: { scheduledFor: "asc" },
+      take: 1,
     },
-  }));
+    coverages: { include: { insurerRef: true }, orderBy: { id: "desc" }, take: 1 },
+  } satisfies Prisma.PatientInclude;
+  type ProgramsPayload = Prisma.PatientGetPayload<{ include: { programs: typeof programsInclude } }>["programs"];
+
+  const { rows, lastCompletedByPatient } = await runWithRls(actor.tenantId, async (tx) => {
+   // EV1-B: sin `planes` la consulta no lleva el include de programs (Prisma
+   // no toca Program ni ProgramSession); la fila sale con `programs: []` para
+   // que el mapeo de abajo sea uno solo.
+   const rows = plansOn
+     ? await tx.patient.findMany({ where, orderBy, include: { ...baseInclude, programs: programsInclude } })
+     : (await tx.patient.findMany({ where, orderBy, include: baseInclude })).map((r) => ({
+         ...r,
+         programs: [] as ProgramsPayload,
+       }));
+   // EV1-B: en Kine "última visita" sale de la última sesión completada del
+   // plan activo. Sin `planes` no hay sesiones y la columna quedaba siempre en
+   // "—" (y el orden "Última visita" no ordenaba nada): se usa el último turno
+   // COMPLETED, la misma definición que el filtro `lastVisitFrom/To` de arriba.
+   // Una sola agregación por página, no una por fila.
+   const lastCompletedByPatient = new Map<string, Date>();
+   if (!plansOn && rows.length > 0) {
+     const agg = await tx.booking.groupBy({
+       by: ["patientId"],
+       where: { tenantId: actor.tenantId, patientId: { in: rows.map((r) => r.id) }, status: "COMPLETED" },
+       _max: { scheduledFor: true },
+     });
+     for (const a of agg) {
+       if (a.patientId && a._max.scheduledFor) lastCompletedByPatient.set(a.patientId, a._max.scheduledFor);
+     }
+   }
+   return { rows, lastCompletedByPatient };
+  });
 
   // Resolve access per row in one batch — much cheaper than N share
   // lookups when the directory has hundreds of patients.
@@ -235,7 +280,7 @@ export async function listPatients(opts: {
   //    conservan sus filas. En `q`, una fila basic queda solo si matchea por
   //    nombre o DNI (lo que su proyección muestra), no por email.
   const clinicalFilter =
-    Boolean(opts.diagnosisSlug) || opts.filter === "active" || opts.filter === "no-program";
+    Boolean(diagnosisSlug) || filter === "active" || filter === "no-program";
   const maskedFilter =
     Boolean(opts.insurer) || opts.ageMin != null || opts.ageMax != null || Boolean(lvFrom || lvTo);
   const qLower = q?.toLowerCase();
@@ -304,7 +349,7 @@ export async function listPatients(opts: {
         activeProgramTitle: prog?.title ?? null,
         sessionsTotal: prog?.totalSessions ?? 0,
         sessionsDone: done,
-        lastVisit: lastDone?.completedAt ?? null,
+        lastVisit: plansOn ? (lastDone?.completedAt ?? null) : (lastCompletedByPatient.get(p.id) ?? null),
         upcomingAt,
         obraSocial,
         access: "full",

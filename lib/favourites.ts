@@ -10,11 +10,19 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { getActor, writableError } from "@/lib/session";
 import { gatingForActor } from "@/lib/plan-gating";
 import type { ActionResult } from "@/lib/validation";
 
-export async function toggleFavourite(exerciseId: string): Promise<ActionResult<{ favourited: boolean }>> {
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `toggleFavouriteImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function toggleFavourite(...args: Parameters<typeof toggleFavouriteImpl>): ReturnType<typeof toggleFavouriteImpl> {
+  return withReadOnlyResult(() => toggleFavouriteImpl(...args));
+}
+
+async function toggleFavouriteImpl(exerciseId: string): Promise<ActionResult<{ favourited: boolean }>> {
   const actor = await getActor();
   if (!actor.userId) return { ok: false, error: "Sin usuario activo." };
   // BO1-A (C-BO3): el delete/create de abajo van por el cliente base, fuera de `runWithRls` → corte explícito.

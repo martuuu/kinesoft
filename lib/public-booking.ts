@@ -195,6 +195,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     name: tenant.name,
     legalName: tenant.legalName,
     palette: tenant.palette,
+    // EV1-C2: ya viene en PUBLIC_BOOKING_SWITCH_SELECT; el wizard la usa para el copy.
+    vertical: tenant.vertical,
     practitioners: practitioners
       .filter((p) => offering.has(p.id))
       .map((p) => {

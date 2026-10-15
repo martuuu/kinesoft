@@ -22,6 +22,8 @@ import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
+import { escapeLike } from "@/lib/email-match";
 import { getActor } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -98,7 +100,10 @@ async function searchWhere(q: string, kind: "payers" | "practices") {
   const aliasIds = aliasMatchIds((await aliasKeyIndex())[kind], words);
   return {
     OR: [
-      { name: { contains: q, mode: "insensitive" as const } },
+      // EV1-E1: Prisma no escapa los comodines de `contains`/`equals` insensible (ILIKE con el valor tal cual,
+      // verificado contra Postgres): «_» o «%» matcheaban todo el catálogo. Las palabras de la `matchKey` son
+      // [a-z0-9] (normalize.ts), no necesitan escape.
+      { name: { contains: escapeLike(q), mode: "insensitive" as const } },
       ...(words.length ? [{ AND: words.map((w) => ({ matchKey: { contains: w } })) }] : []),
       ...(aliasIds.length ? [{ id: { in: aliasIds } }] : []),
     ],
@@ -165,7 +170,7 @@ export async function searchPractices(rawQ: string): Promise<PracticeOption[]> {
         where: {
           archivedAt: null,
           ...(query
-            ? { OR: [...(where.OR ?? []), { code: { equals: query, mode: "insensitive" as const } }] }
+            ? { OR: [...(where.OR ?? []), { code: { equals: escapeLike(query), mode: "insensitive" as const } }] }
             : {}),
         },
         orderBy: { name: "asc" },
@@ -264,7 +269,14 @@ function planSlug(name: string): string {
  * que edita el profesional). Idempotente: si ya hay un plan global o propio
  * con el mismo slug para esa prestadora, devuelve ese id en vez de duplicar.
  */
-export async function proposePayerPlan(
+// EV1-E1 (readonly-residual-actions): el cuerpo va en `proposePayerPlanImpl`; el wrapper convierte el ReadOnlyModeError
+// (modo lectura / soporte) en `{ ok:false, error }` para que en prod Next no redacte el mensaje
+// (lib/read-only-result.ts, mismo patrón que BO3-F).
+export async function proposePayerPlan(...args: Parameters<typeof proposePayerPlanImpl>): ReturnType<typeof proposePayerPlanImpl> {
+  return withReadOnlyResult(() => proposePayerPlanImpl(...args));
+}
+
+async function proposePayerPlanImpl(
   payerId: string,
   name: string
 ): Promise<ActionResult<{ id: string; created: boolean }>> {
@@ -323,6 +335,9 @@ export async function proposePayerPlan(
     }
     return { ok: true, data: { id: r.id, created: r.created } };
   } catch (e) {
+    // EV1-E1: este catch tapaba el ReadOnlyModeError con el copy genérico; el del modo lectura/soporte va primero.
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     // Índice único parcial (payerId, tenantId, slug): o hubo una carrera con
     // otro alta del mismo plan, o este consultorio ya lo había propuesto y
     // Plataforma lo archivó (descartado): no se resucita desde acá.

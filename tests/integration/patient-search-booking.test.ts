@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { searchPatientsForBooking } from "@/lib/patient-search";
+import { globalSearch } from "@/lib/search";
 import { searchForPicker } from "@/components/patients/patient-picker-search";
 import {
   ownerClient,
@@ -107,6 +108,18 @@ describe.skipIf(!RUN)("P2-FX1 · búsqueda de pacientes de la agenda", () => {
   it("en un consultorio GENERAL el buscador encuentra pacientes", async () => {
     asUser(G.userId);
     expect(ids(await searchForPicker("booking", tok))).toEqual([pG]);
+  });
+
+  // EV1 (integrador): Prisma no escapa `%`/`_` en `contains` + insensitive (ILIKE con el valor tal cual). En G
+  // hay un solo paciente («Gral <tok> General»): sin escape, «%» o «_» lo traían. Mismo fix en la paleta global.
+  it("[EV1] «%» y «_» son literales: picker de la agenda y búsqueda global", async () => {
+    asUser(G.userId);
+    expect(await searchPatientsForBooking("%")).toEqual([]);
+    expect(await searchPatientsForBooking("_")).toEqual([]);
+    const hits = await globalSearch("%");
+    expect(hits.filter((h) => h.category === "patient")).toEqual([]);
+    // Control positivo: el término real sigue encontrando.
+    expect((await globalSearch(tok)).filter((h) => h.category === "patient").map((h) => h.id)).toEqual([`patient:${pG}`]);
   });
 
   it("otro consultorio nunca aparece (ni por nombre ni por DNI repetido)", async () => {

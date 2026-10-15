@@ -92,7 +92,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
   const patients = await prisma.patient.findMany({
     where: { email: emailEqualsFilter(me.email) },
     include: {
-      tenant: { select: { slug: true, name: true } },
+      tenant: { select: { slug: true, name: true, vertical: true } },
       programs: {
         where: { status: "ACTIVE" },
         include: { sessions: { select: { completedAt: true } } },
@@ -121,6 +121,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
       id: p.id,
       tenantSlug: p.tenant.slug,
       tenantName: p.tenant.name,
+      tenantVertical: p.tenant.vertical,
       firstName: p.firstName,
       lastName: p.lastName,
       programs: p.programs.map((pr) => ({

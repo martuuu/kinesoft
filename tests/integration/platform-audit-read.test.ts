@@ -155,4 +155,20 @@ describe.skipIf(!RUN)("[BO3-E] listPlatformAudit · filtros, cursor, barrera y s
       "after.status": "SUSPENDED",
     });
   });
+
+  // Va última: agrega filas del prefijo y los conteos de arriba suponen 56.
+  it("[EV1-D] email del actor: `%` y `_` son literales (Prisma no escapa ILIKE en `contains`)", async () => {
+    await db.platformAuditEvent.createMany({
+      data: [
+        { action: `${prefix}.like`, actorId: superId, actorEmail: "juan_perez@like.test", entity: "Test", entityId: "l1" },
+        { action: `${prefix}.like`, actorId: superId, actorEmail: "juanxperez@like.test", entity: "Test", entityId: "l2" },
+      ],
+    });
+    asUser(superId);
+    const underscore = await listPlatformAudit({ action: `${prefix}.like`, actorEmail: "juan_perez" });
+    expect(underscore.rows.map((r) => r.actorEmail)).toEqual(["juan_perez@like.test"]);
+    // Sin escape, `%` es comodín y traía las 2 filas (y todo el registro sin filtro de acción).
+    const pct = await listPlatformAudit({ action: `${prefix}.like`, actorEmail: "%" });
+    expect(pct.rows).toHaveLength(0);
+  });
 });

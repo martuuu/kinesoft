@@ -12,6 +12,7 @@ import {
   type KpiKey,
   type KpiRevenueScope,
 } from "@/lib/preferences-constants";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 /**
  * The "+ Agregar" button on the pinned-KPIs row.
@@ -75,8 +76,11 @@ export function PinKpiModal({
   revenueScope?: KpiRevenueScope;
 }) {
   const router = useRouter();
-  const options = kpiOptionsFor(revenueScope);
-  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(currentPinned, revenueScope));
+  // EV1-A: sin `planes` (General) el picker no ofrece KPIs de planes y rotula
+  // con turnos (`kpiOptionsFor`). Fuera del AppShell el default es Kine PRO.
+  const modules = useTenantModules();
+  const options = kpiOptionsFor(revenueScope, modules);
+  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(currentPinned, revenueScope, modules));
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -85,7 +89,7 @@ export function PinKpiModal({
   // exit animation).
   useEffect(() => {
     if (open) {
-      setPinned(pinnableKpis(currentPinned, revenueScope));
+      setPinned(pinnableKpis(currentPinned, revenueScope, modules));
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

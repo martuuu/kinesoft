@@ -4,6 +4,7 @@
  * and Next forbids non-async exports there.
  */
 import { z } from "zod";
+import type { TenantVertical } from "@prisma/client";
 
 /**
  * Lo que ve el wizard público (`getPublicClinic`). Desde B3.2 (motor de
@@ -19,6 +20,10 @@ export type PublicClinic = {
   name: string;
   legalName: string | null;
   palette: string;
+  /** EV1-C2: tipo de consultorio, solo para el copy del wizard (Clínica general
+   *  no dice «Kinesiología» ni «sesión»). Opcional para los fixtures viejos:
+   *  sin ella, el copy de Kinesiología de siempre. */
+  vertical?: TenantVertical;
   practitioners: {
     id: string;
     name: string;

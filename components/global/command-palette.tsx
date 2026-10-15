@@ -5,6 +5,22 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { globalSearch } from "@/lib/search";
 import type { SearchHit } from "@/lib/search-types";
 import { IconSearch } from "@/components/ui/icons";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import type { TenantModule } from "@/lib/tenant-modules";
+
+/**
+ * Placeholder del buscador según los módulos (EV1-C1). En Clínica general no
+ * hay ejercicios ni diagnósticos: `globalSearch` ya no los devuelve (gate de
+ * módulo en `lib/search.ts`), así que el grupo «Ejercicios»/«Diagnósticos»
+ * nunca aparece; el placeholder tampoco los promete. Kine: el texto de siempre.
+ */
+export function paletteSearchPlaceholder(has: (m: TenantModule) => boolean): string {
+  const parts = ["paciente"];
+  if (has("ejercicios")) parts.push("ejercicio");
+  if (has("diagnostico")) parts.push("diagnóstico");
+  parts.push("turno");
+  return `Buscar ${parts.join(", ")}…`;
+}
 
 /**
  * ⌘K / Ctrl+K command palette.
@@ -15,6 +31,7 @@ import { IconSearch } from "@/components/ui/icons";
  */
 export function CommandPalette() {
   const router = useRouter();
+  const modules = useTenantModules();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -146,7 +163,7 @@ export function CommandPalette() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onInputKey}
-            placeholder="Buscar paciente, ejercicio, diagnóstico, turno…"
+            placeholder={paletteSearchPlaceholder(modules.has)}
             // Global search — suppress the browser's own autofill dropdown.
             autoComplete="new-password"
             autoCorrect="off"

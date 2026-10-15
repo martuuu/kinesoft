@@ -7,6 +7,7 @@
  * range cover the use case with less surface area.
  */
 import { useState } from "react";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 type ConditionOption = { slug: string; name: string };
 
@@ -26,6 +27,9 @@ export function AdvancedPatientFilters({
     lastVisitTo?: string;
   };
 }) {
+  // EV1-B: sin `diagnostico` (General) no hay «Último diagnóstico»: el select
+  // quedaba vacío (sin condiciones) y `listPatients` ignora el slug igual.
+  const diagnosisEnabled = useTenantModules().has("diagnostico");
   const initialOpen =
     !!(current.ageMin || current.ageMax || current.diagnosisSlug || current.lastVisitFrom || current.lastVisitTo);
   const [open, setOpen] = useState(initialOpen);
@@ -126,6 +130,7 @@ export function AdvancedPatientFilters({
             />
           </Field>
 
+          {diagnosisEnabled && (
           <Field label="Último diagnóstico">
             <select name="diagnosisSlug" defaultValue={current.diagnosisSlug ?? ""} style={inputStyle}>
               <option value="">Cualquiera</option>
@@ -136,6 +141,7 @@ export function AdvancedPatientFilters({
               ))}
             </select>
           </Field>
+          )}
 
           <Field label="Última visita desde">
             <input

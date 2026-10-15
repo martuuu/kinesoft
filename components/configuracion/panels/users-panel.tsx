@@ -106,13 +106,12 @@ export function UsersPanel({
 
 /**
  * Vertical del consultorio para la etiqueta del profesional (IAM-0c):
- * «Kinesiólogo/a» o «Profesional». El contexto de módulos no trae la
- * vertical, pero `sesiones` existe solo en Kinesiología (`lib/tenant-modules.ts`)
- * y es independiente del plan. Fuera del provider (render tests) el default
- * es Kine, igual que el del contexto.
+ * «Kinesiólogo/a» o «Profesional». Desde EV1 el contexto trae la vertical real
+ * (antes se deducía de `has("sesiones")`). Fuera del provider (render tests)
+ * el default es Kine, igual que el resto del contexto.
  */
 function useTenantVertical(): TenantVertical {
-  return useTenantModules().has("sesiones") ? "KINESIOLOGY" : "GENERAL";
+  return useTenantModules().vertical;
 }
 
 type RowNotice = { tone: "ok" | "warn" | "error"; text: string };
@@ -572,7 +571,7 @@ function InviteModal({
   return (
     <Modal onClose={onClose} title="Invitar usuario" width={520}>
       <form action={submit} style={{ display: "grid", gap: 12 }}>
-        <FormField label="Email" name="email" type="email" required placeholder="kine@ejemplo.com" />
+        <FormField label="Email" name="email" type="email" required placeholder="nombre@ejemplo.com" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <FormField label="Nombre" name="firstName" required />
           <FormField label="Apellido" name="lastName" required />
@@ -586,7 +585,12 @@ function InviteModal({
           hint={roleDescription(role, vertical)}
           options={INVITABLE_ROLES.map((r) => ({ value: r, label: roleLabel(r, vertical) }))}
         />
-        <FormField label="Especialidad (opcional)" name="specialty" placeholder="Osteopatía, RPG…" />
+        <FormField
+          label="Especialidad (opcional)"
+          name="specialty"
+          // EV1-C2: el ejemplo de Kine no sirve en Clínica general.
+          placeholder={vertical === "GENERAL" ? "Clínica médica, Nutrición…" : "Osteopatía, RPG…"}
+        />
         {error && <ErrorBox>{error}</ErrorBox>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>

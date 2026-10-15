@@ -14,7 +14,7 @@ export const metadata = { title: "Plataforma · Catálogo de ejercicios" };
 // the scalars; `csv` handles the list params.
 type Param = string | string[] | undefined;
 type SP = {
-  q?: Param; kind?: Param; tier?: Param; dif?: Param;
+  q?: Param; kind?: Param; dif?: Param;
   muscle?: Param; equip?: Param; disc?: Param; arch?: Param;
   sort?: Param; dir?: Param; page?: Param; size?: Param;
 };
@@ -24,7 +24,7 @@ const one = (v: Param): string | undefined => (Array.isArray(v) ? v[0] : v);
 /** URL keys that represent table state — if none is present we restore the
  *  user's saved view instead of showing an unfiltered default. */
 const STATE_KEYS: (keyof SP)[] = [
-  "q", "kind", "tier", "dif", "muscle", "equip", "disc", "arch", "sort", "dir", "page", "size",
+  "q", "kind", "dif", "muscle", "equip", "disc", "arch", "sort", "dir", "page", "size",
 ];
 
 /** "a,b" or ["a","b,c"] → ["a","b","c"]. Total: never throws on array params. */
@@ -62,7 +62,6 @@ export default async function PlataformaEjerciciosPage({ searchParams }: { searc
         filters: {
           q: one(searchParams.q) ?? "",
           kind: one(searchParams.kind) ?? "",
-          tier: one(searchParams.tier) ?? "",
           difficulty: one(searchParams.dif) ? Number(one(searchParams.dif)) : null,
           muscle: csv(searchParams.muscle),
           equipment: csv(searchParams.equip),
