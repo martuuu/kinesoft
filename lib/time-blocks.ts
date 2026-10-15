@@ -57,8 +57,9 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
-import { getActor, ForbiddenError } from "@/lib/session";
-import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
+import { getActor, ForbiddenError, type Actor } from "@/lib/session";
+import { assertModule, memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
+import { roomsEnabled } from "@/lib/tenant-modules";
 import { canManageBlocksFor, type Capability } from "@/lib/capabilities";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
@@ -246,8 +247,15 @@ async function lockAndCheckRoom(
   return findActiveRoom(tx, o);
 }
 
-/** Bloquear / desbloquear una sala: la regla del candado para "todos" (`agenda.manageBlocks`). */
-function assertCanManageRoom(caps: ReadonlySet<Capability>, actorPractitionerId: string | null): void {
+/**
+ * Bloquear / desbloquear una sala: la regla del candado para "todos" (`agenda.manageBlocks`).
+ * PL-2f (C-PL1): y el módulo `salas` (Clínica / Libre) ANTES que la capability: sin el módulo, «Bloquear sala» no
+ * existe (403 con el copy de upsell), y los bloqueos de sala que quedaron de Clínica «duermen» (el loader los
+ * ignora; no se tocan).
+ */
+function assertCanManageRoom(actor: Actor, caps: ReadonlySet<Capability>): void {
+  assertModule(actor, "salas");
+  const actorPractitionerId = actor.practitionerId;
   if (!canManageBlocksFor(caps, actorPractitionerId, null)) {
     throw new ForbiddenError(caps.has("agenda.manageOwnBlocks") ? FORBIDDEN_ROOM : "No tenés permiso para bloquear la agenda.");
   }
@@ -383,6 +391,8 @@ export async function listTimeBlocks(
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const { from, to, practitionerIds, locationId, roomIds } = parsed.data;
+  // PL-2f: sin el módulo `salas`, los bloqueos de sala duermen: la vista «Por sala» no existe y la lectura da vacío.
+  if (roomIds && !roomsEnabled(actor.entitlements)) return { ok: true, data: [] };
   const tenantId = actor.tenantId;
   const fromStart = arDayStart(from);
   const toEnd = new Date(arDayStart(to).getTime() + DAY_MS);
@@ -439,7 +449,7 @@ async function createTimeBlockImpl(
       ? [...new Set(input.practitionerIds)]
       : [input.practitionerId ?? null];
   if (roomId) {
-    assertCanManageRoom(caps, actor.practitionerId);
+    assertCanManageRoom(actor, caps);
   } else {
     for (const t of targets) {
       if (!canManageBlocksFor(caps, actor.practitionerId, t)) {
@@ -731,7 +741,7 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
   const tenantId = actor.tenantId;
   const roomId = input.roomId ?? null;
   const targets = dayLockTargets(input.practitionerIds);
-  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  if (roomId) assertCanManageRoom(actor, caps);
   else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
   const win = dayLockWindow(input.dayKey, input);
@@ -815,7 +825,7 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
   const tenantId = actor.tenantId;
   const roomId = input.roomId ?? null;
   const targets = dayLockTargets(input.practitionerIds);
-  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  if (roomId) assertCanManageRoom(actor, caps);
   else assertCanManageTargets(caps, actor.practitionerId, targets);
   const pracIds = targets.filter((t): t is string => t !== null);
   const win = dayLockWindow(input.dayKey, input);
@@ -1050,7 +1060,7 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
   const roomId = parsed.data.roomId ?? null;
   const { actor, caps } = await actorWithCaps();
   const tenantId = actor.tenantId;
-  if (roomId) assertCanManageRoom(caps, actor.practitionerId);
+  if (roomId) assertCanManageRoom(actor, caps);
   else assertCanManageTargets(caps, actor.practitionerId, [practitionerId]);
   const dayStart = arDayStart(dayKey);
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);

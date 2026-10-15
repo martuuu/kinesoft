@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+// PL-Z (a2#4): el provider de Plataforma monta el `StepUpProvider`, que trae la server action `getStepUpOptions`.
+vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -146,6 +148,15 @@ describe("[BO3-D] detalle de usuario", () => {
 
   it("sin email distinto no ofrece sincronizar", () => {
     expect(renderToStaticMarkup(<UserDetailView user={detail()} actorId="admin" />)).not.toContain("Sincronizar email con Auth");
+  });
+
+  it("[PL-Z FX2] la 2FA de otro superadmin no se resetea desde acá: botón deshabilitado con el porqué", () => {
+    const other = renderToStaticMarkup(<UserDetailView user={detail({ isPlatformAdmin: true })} actorId="admin" />);
+    expect(other).toMatch(/<button[^>]*disabled=""[^>]*>Resetear verificación<\/button>/);
+    expect(other).toContain("Es superadmin: su verificación la cambia esa persona desde Seguridad de la cuenta.");
+    const plain = renderToStaticMarkup(<UserDetailView user={detail({ isPlatformAdmin: false })} actorId="admin" />);
+    expect(plain).not.toMatch(/<button[^>]*disabled=""[^>]*>Resetear verificación<\/button>/);
+    expect(plain).not.toContain("data-reset-other-admin");
   });
 });
 

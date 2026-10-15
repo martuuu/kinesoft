@@ -16,14 +16,14 @@
  *
  * PL-1b (C-PL5): «rol clínico» pasó a «miembro que atiende»
  * (`clinicalMembershipWhere`): un Titular/Admin con `clinical = false` que
- * conserva su `Practitioner` de antes deja de ser reservable.
+ * conserva su `Practitioner` de antes deja de ser reservable. PL-Z M1: el Administrador/a nunca (§20.17).
  */
 import type { Prisma } from "@prisma/client";
 
 /**
  * Espejo SQL de `isClinicalMember` (`lib/roles.ts`): membresía ACEPTADA en
- * `tenantId` de alguien que atiende = PRACTITIONER, u OWNER/ADMIN con
- * `clinical = true`. No filtra `disabledAt` (cada llamador decide; ver
+ * `tenantId` de alguien que atiende = PRACTITIONER, u OWNER con
+ * `clinical = true` (el ADMIN nunca: §20.17, PL-Z M1). No filtra `disabledAt` (cada llamador decide; ver
  * `bookablePractitionerWhere`). Si cambia una, cambia la otra: el unit test
  * de practitioner-scope las cruza.
  */
@@ -31,7 +31,7 @@ export function clinicalMembershipWhere(tenantId: string): Prisma.MembershipWher
   return {
     tenantId,
     acceptedAt: { not: null },
-    OR: [{ role: "PRACTITIONER" }, { role: { in: ["OWNER", "ADMIN"] }, clinical: true }],
+    OR: [{ role: "PRACTITIONER" }, { role: "OWNER", clinical: true }],
   };
 }
 

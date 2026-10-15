@@ -28,6 +28,8 @@ import { ScheduleEditor } from "./schedule-editor";
 import { ExceptionsEditor } from "./exceptions-editor";
 import { ServicesEditor } from "./services-editor";
 import { PayersEditor } from "./payers-editor";
+import { PublicBookingSwitch } from "./public-booking-switch";
+import type { TeamMemberRow } from "@/lib/invitations-types";
 
 type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas";
 const SUB_TABS: { key: SubTab; label: string }[] = [
@@ -42,6 +44,7 @@ export function PractitionerPanel({
   locations,
   rooms,
   onDirtyChange,
+  team,
 }: {
   summary: PractitionerScheduleSummaryRow[];
   locations: LocationRow[];
@@ -53,6 +56,11 @@ export function PractitionerPanel({
   rooms?: ReadonlyArray<RoomCatalogEntry>;
   /** Hay cambios sin guardar en una sub-pestaña en línea (para frenar el cambio de pestaña de arriba). */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * PL-3b (H-TURN): el equipo (`listTeamMembers`), de donde sale si cada profesional aparece en el turnero online
+   * (`TeamMemberRow.practitionerId` / `publicBookingEnabled`). Sin él, la ficha no muestra el switch.
+   */
+  team?: ReadonlyArray<Pick<TeamMemberRow, "practitionerId" | "publicBookingEnabled">>;
 }) {
   const confirm = useConfirm();
   const [selectedId, setSelectedId] = useState<string | null>(summary[0]?.practitionerId ?? null);
@@ -96,6 +104,7 @@ export function PractitionerPanel({
   const activeLocations = locations.filter((l) => l.active);
   const multiLocation = activeLocations.length > 1;
   const selected = summary.find((s) => s.practitionerId === selectedId) ?? null;
+  const selectedTeam = selected ? team?.find((m) => m.practitionerId === selected.practitionerId) : undefined;
 
   if (summary.length === 0) {
     return (
@@ -175,8 +184,20 @@ export function PractitionerPanel({
       {selected && (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <header style={{ padding: "14px 18px 0", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
-            <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-              {selected.name}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div className="k-display" style={{ fontSize: 18, fontWeight: 700, minWidth: 0 }}>
+                {selected.name}
+              </div>
+              {selectedTeam && (
+                <div style={{ flex: "1 1 240px", maxWidth: 420 }}>
+                  <PublicBookingSwitch
+                    key={selected.practitionerId}
+                    practitionerId={selected.practitionerId}
+                    name={selected.name}
+                    enabled={selectedTeam.publicBookingEnabled}
+                  />
+                </div>
+              )}
             </div>
             <div
               role="tablist"

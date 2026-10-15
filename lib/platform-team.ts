@@ -36,6 +36,8 @@ import {
   removeMemberInTx,
   revokeInvitationInTx,
   runTeamTx,
+  setMemberClinicalInTx,
+  setMemberGrantsInTx,
   suspendMemberInTx,
   teamCreateInvitation,
   teamReissueInvitation,
@@ -67,6 +69,11 @@ const InvitationRef = z.object({ tenantId: Id, invitationId: Id }).strict();
 const MemberRef = z.object({ tenantId: Id, membershipId: Id }).strict();
 const RoleChange = z
   .object({ tenantId: Id, membershipId: Id, role: z.enum(["ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]) })
+  .strict();
+
+const ClinicalChange = z.object({ tenantId: Id, membershipId: Id, clinical: z.boolean() }).strict();
+const GrantsChange = z
+  .object({ tenantId: Id, membershipId: Id, grantSettings: z.boolean(), grantBilling: z.boolean() })
   .strict();
 
 const INVALID = { ok: false as const, error: "Datos inválidos" };
@@ -235,6 +242,53 @@ export async function platformSendMemberPasswordReset(raw: unknown): Promise<Act
   const c = await platformCtx(admin, parsed.data.tenantId);
   if (!c) return NO_TENANT;
   const r = await teamSendMemberPasswordReset(c.ctx, parsed.data.membershipId, c.tenant.name);
+  if (r.ok) revalidateTeam(parsed.data.tenantId, false);
+  return r;
+}
+
+/*
+ * PL-3b (C-PL5): lo que en Configuración hace SOLO el Titular (con step-up), acá lo hace el superadmin como último
+ * recurso (decisión de Martin: el Titular que no puede o se fue). Mismos núcleos, con `via: "platform"`: actúa como
+ * dueño. El step-up de Plataforma es su re-verificación (`usePlatformAction` en la UI) según el riesgo de la acción.
+ */
+
+/** «¿Atiende pacientes?» del Titular (§20.17: solo el Titular atiende o no; el resto lo fija el rol). */
+export async function platformSetMemberClinical(raw: unknown): Promise<ActionResult> {
+  const admin = await requirePlatformAdmin("team.grants");
+  const parsed = ClinicalChange.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  const c = await platformCtx(admin, parsed.data.tenantId);
+  if (!c) return NO_TENANT;
+  const ctx = c.ctx;
+  let r: ActionResult;
+  try {
+    r = await runTeamTx(ctx, (tx) =>
+      setMemberClinicalInTx(tx, ctx, { membershipId: parsed.data.membershipId, clinical: parsed.data.clinical })
+    );
+  } catch (err) {
+    if (err instanceof RoleChangeRaceError) return { ok: false, error: ROLE_CHANGE_RACE_MESSAGE };
+    throw err;
+  }
+  if (r.ok) revalidateTeam(parsed.data.tenantId, true);
+  return r;
+}
+
+/** Permisos delegados (PL-D5): «Configuración» y «Planes y pagos». Nunca sobre el Titular (lo rechaza el núcleo). */
+export async function platformSetMemberGrants(raw: unknown): Promise<ActionResult> {
+  const admin = await requirePlatformAdmin("team.grants");
+  const parsed = GrantsChange.safeParse(raw);
+  if (!parsed.success) return invalid(parsed.error);
+  const c = await platformCtx(admin, parsed.data.tenantId);
+  if (!c) return NO_TENANT;
+  const ctx = c.ctx;
+  const { membershipId, grantSettings, grantBilling } = parsed.data;
+  let r: ActionResult;
+  try {
+    r = await runTeamTx(ctx, (tx) => setMemberGrantsInTx(tx, ctx, { membershipId, grantSettings, grantBilling }));
+  } catch (err) {
+    if (err instanceof RoleChangeRaceError) return { ok: false, error: ROLE_CHANGE_RACE_MESSAGE };
+    throw err;
+  }
   if (r.ok) revalidateTeam(parsed.data.tenantId, false);
   return r;
 }

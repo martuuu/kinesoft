@@ -44,8 +44,9 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     assistant = await addPractitioner(db, A, "ASSISTANT");
     billing = await addPractitioner(db, A, "BILLING");
     kine = await addPractitioner(db, A, "PRACTITIONER");

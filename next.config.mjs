@@ -109,8 +109,9 @@ const cspReportOnly = [
   // form-action también rige los REDIRECTS de un submit: el portal postea a
   // /api/auth/google, que redirige a Supabase /auth/v1/authorize y de ahí a
   // accounts.google.com. Sin estos hosts, el login con Google del paciente
-  // quedaría bloqueado el día que la CSP pase a enforcing.
-  `form-action 'self' ${SUPA} https://accounts.google.com https://*.mercadopago.com https://*.mercadolibre.com`,
+  // quedaría bloqueado el día que la CSP pase a enforcing. PL-2e: lo mismo con Facebook
+  // (/api/auth/oauth/facebook → Supabase → www/m.facebook.com).
+  `form-action 'self' ${SUPA} https://accounts.google.com https://www.facebook.com https://m.facebook.com https://*.mercadopago.com https://*.mercadolibre.com`,
   "object-src 'none'",
   "frame-ancestors 'none'",
   // report-uri (legacy, Firefox/Safari) + report-to (Chromium, vía Reporting-Endpoints).
@@ -132,7 +133,7 @@ const cspReportOnly = [
 //     build de prod de estas rutas no tiene eval/new Function: se verificó en los chunks al cerrar BO4).
 //     'unsafe-inline' se queda: el bootstrap de RSC es inline y no hay nonces (middleware de nonce = otra ola).
 //   - img-src / media-src sin `https:` comodín: solo same-origin, data:/blob: (QR del TOTP, previews) y Supabase
-//     (Storage). Avatares de Google (lh3) por la foto del perfil.
+//     (Storage). Avatares de Google (lh3) y de Facebook (platform-lookaside, PL-2e) por la foto del perfil.
 //   - connect-src sin `https:` comodín: same-origin (server actions, RSC), Supabase (REST/Auth/Storage) y su socket.
 //     Un script inyectado no puede sacar datos a un host cualquiera.
 //   - form-action 'self': en Plataforma no hay login con Google ni checkout; el único form nativo es el sign-out.
@@ -143,7 +144,7 @@ const cspPlatformEnforced = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDevServer ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  `img-src 'self' data: blob: ${SUPA} https://lh3.googleusercontent.com`,
+  `img-src 'self' data: blob: ${SUPA} https://lh3.googleusercontent.com https://platform-lookaside.fbsbx.com`,
   `media-src 'self' data: blob: ${SUPA}`,
   // En dev el HMR de Next abre un websocket al mismo host (ws://localhost:3000): 'self' lo cubre en CSP3, el
   // ws://localhost:* queda por los browsers que todavía no mapean 'self' a ws.
@@ -179,7 +180,10 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    serverActions: { allowedOrigins },
+    // PL-2b (PL-D22): el comprobante de pago viaja en el cuerpo de la server action (≤ 4 MB + campos del form). El
+    // default de Next (1 MB) lo cortaba antes de llegar a la validación; 4.5 MB deja el margen del multipart y sigue
+    // acotando el cuerpo de TODAS las actions (el tope fino de 4 MB lo aplica `readReceiptFile`).
+    serverActions: { allowedOrigins, bodySizeLimit: "4.5mb" },
     // Next 14 solo corre instrumentation.ts con este flag. Sin SENTRY_DSN,
     // register() retorna sin importar nada.
     instrumentationHook: true,
@@ -188,6 +192,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: "https", hostname: "*.supabase.co" },
       { protocol: "https", hostname: "lh3.googleusercontent.com" },
+      // PL-2e: avatar de Facebook (= OAUTH_AVATAR_HOSTS de lib/identity/oauth-profile.ts).
+      { protocol: "https", hostname: "platform-lookaside.fbsbx.com" },
     ],
   },
   async headers() {

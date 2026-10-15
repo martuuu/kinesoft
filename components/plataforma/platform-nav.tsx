@@ -5,15 +5,20 @@ import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
   IconActivity,
+  IconBell,
   IconChart,
+  IconCheck,
   IconDumbbell,
   IconFile,
   IconFilter,
   IconHome,
   IconPlans,
   IconSettings,
+  IconStar,
   IconUsers,
 } from "@/components/ui/icons";
+import { useInboxUnread } from "@/components/plataforma/inbox/use-inbox-unread";
+import { unreadBadgeLabel } from "@/components/plataforma/inbox/inbox-logic";
 
 /**
  * Nav de Plataforma (BO3-A, plan §19.5). Hasta EV0-P2 era una sub-nav de pestañas DENTRO del shell del
@@ -26,6 +31,12 @@ import {
  * `match` es el prefijo que activa la sección y puede diferir del `href`: Catálogo linkea a prestadoras (primera
  * pestaña de `CatalogTabs`) pero se marca activo en cualquier `/plataforma/catalogo/*`. Resumen es exacto: con
  * prefijo, `/plataforma` quedaría activo en todas las secciones.
+ *
+ * PL-2d: «Mensajes» (bandeja de soporte y leads) va después de Usuarios, con el contador de conversaciones sin leer
+ * (`badge: "inbox"`, lo pide `useInboxUnread` en cada cambio de ruta).
+ *
+ * PL-3c: «Facturación» (estado contable de los consultorios) y «Precios» (lista de precios de los planes) después de
+ * Mensajes. Íconos del set existente (no hay uno de recibo ni de etiqueta de precio; sumar uno es de `icons.tsx`).
  */
 export type PlatformNavItem = {
   href: string;
@@ -33,6 +44,8 @@ export type PlatformNavItem = {
   match: string;
   exact?: boolean;
   icon: ComponentType<{ size?: number }>;
+  /** PL-2d: contador al lado del label. Hoy solo la bandeja de Mensajes. */
+  badge?: "inbox";
 };
 
 /** `label` null = grupo sin separador (el primero). El separador es solo visual: no cambia el orden. */
@@ -45,6 +58,9 @@ export const PLATFORM_NAV_GROUPS: readonly PlatformNavGroup[] = [
       { href: "/plataforma", label: "Resumen", match: "/plataforma", exact: true, icon: IconChart },
       { href: "/plataforma/consultorios", label: "Consultorios", match: "/plataforma/consultorios", icon: IconHome },
       { href: "/plataforma/usuarios", label: "Usuarios", match: "/plataforma/usuarios", icon: IconUsers },
+      { href: "/plataforma/mensajes", label: "Mensajes", match: "/plataforma/mensajes", icon: IconBell, badge: "inbox" },
+      { href: "/plataforma/facturacion", label: "Facturación", match: "/plataforma/facturacion", icon: IconCheck },
+      { href: "/plataforma/precios", label: "Precios", match: "/plataforma/precios", icon: IconStar },
       { href: "/plataforma/salud", label: "Salud", match: "/plataforma/salud", icon: IconActivity },
       { href: "/plataforma/auditoria", label: "Auditoría", match: "/plataforma/auditoria", icon: IconFile },
       { href: "/plataforma/sistema", label: "Sistema", match: "/plataforma/sistema", icon: IconSettings },
@@ -78,8 +94,11 @@ export function isPlatformNavActive(item: PlatformNavItem, pathname: string | nu
  * La lista de links, agrupada. `onNavigate` lo usa el menú móvil para cerrarse al elegir una sección (el link
  * navega igual; si el drawer quedara abierto taparía la página nueva).
  */
-export function PlatformNav({ onNavigate }: { onNavigate?: () => void }) {
+export function PlatformNav({ onNavigate, inboxUnread }: { onNavigate?: () => void; inboxUnread?: number | null }) {
   const pathname = usePathname();
+  // `inboxUnread` (opcional) es el valor inicial; después manda lo que devuelve el server en cada navegación.
+  const unread = useInboxUnread(pathname ?? null, inboxUnread ?? null);
+  const unreadLabel = unreadBadgeLabel(unread ?? 0);
   return (
     <nav aria-label="Secciones de Plataforma" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {PLATFORM_NAV_GROUPS.map((group, gi) => (
@@ -129,6 +148,24 @@ export function PlatformNav({ onNavigate }: { onNavigate?: () => void }) {
               >
                 <I size={18} />
                 <span>{item.label}</span>
+                {item.badge === "inbox" && unreadLabel && (
+                  <span
+                    aria-label={`${unread} sin leer`}
+                    style={{
+                      marginLeft: "auto",
+                      minWidth: 20,
+                      padding: "1px 7px",
+                      borderRadius: 999,
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      textAlign: "center",
+                      color: active ? "var(--sky-700)" : "#fff",
+                      background: active ? "#fff" : "var(--sky-700)",
+                    }}
+                  >
+                    {unreadLabel}
+                  </span>
+                )}
               </Link>
             );
           })}

@@ -17,7 +17,8 @@ import type {
   PlatformTeamMemberRow,
   PlatformTenantTeam,
 } from "@/lib/invitations-types";
-import { ROLE_ORDER } from "@/lib/roles";
+import { ROLE_ORDER, isClinicalMember, roleLabel } from "@/lib/roles";
+import type { TenantVertical } from "@prisma/client";
 import type { SeatCount } from "@/lib/plan-catalog";
 
 /** Roles que se asignan con el selector. OWNER no: la titularidad tiene su propia acción (`platformTransferOwnership`). */
@@ -154,4 +155,21 @@ export function formatARDateTime(d: Date | string): string {
   const date = formatARDate(d);
   const time = new Date(d).toLocaleTimeString("es-AR", { timeZone: AR_TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   return `${date} ${time}`;
+}
+
+/**
+ * PL-3b: rótulo del miembro con «¿Atiende?» (Titular / Titular (sin agenda)); sin el dato (`clinical` todavía no
+ * viene del lector) cae a la etiqueta del rol.
+ */
+export function platformMemberRoleLabel(m: Pick<PlatformTeamMemberRow, "role" | "clinical">, vertical: TenantVertical): string {
+  return m.clinical === undefined ? roleLabel(m.role, vertical) : roleLabel(m.role, vertical, { clinical: isClinicalMember({ role: m.role, clinical: m.clinical }) });
+}
+
+/**
+ * PL-3b (H-TURN): columna informativa del turnero por profesional. null = no corresponde (no atiende, o el lector
+ * todavía no trae el dato). El switch lo cambia el consultorio (Configuración → Profesionales).
+ */
+export function publicBookingLabel(m: Pick<PlatformTeamMemberRow, "hasAgenda" | "publicBookingEnabled">): string | null {
+  if (!m.hasAgenda || m.publicBookingEnabled == null) return null;
+  return m.publicBookingEnabled ? "Aparece en el turnero online" : "No aparece en el turnero online";
 }

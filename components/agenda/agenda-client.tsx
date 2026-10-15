@@ -304,7 +304,17 @@ export function AgendaClient(props: Props) {
   // SR-U6: "Por sala" sin catálogo de salas (se archivaron todas con la página
   // abierta, o un link viejo) es el Día de siempre. El server ya lo resuelve
   // así (`resolveAgendaView` con `roomCount`); esto cubre lo que llega igual.
-  const view: AgendaView = props.view === "room" && !props.rooms?.length ? "timeline" : props.view;
+  // PL-2f (C-PL1, PL-D6/D7): salas y Sala de Espera son de Clínica / Libre. Sin `salas` no hay «Por sala» ni
+  // filtro de sala (el server ya manda el catálogo vacío; esto cubre un layout que no se re-renderizó tras un
+  // cambio de plan); sin `salaEspera` no hay Recepción (el server ya no la resuelve: un link viejo cae al Día).
+  // Esconder es UX: la barrera es la action (`markReceptionAction` «Llamar», `lib/rooms.ts`).
+  const modules = useTenantModules();
+  const roomsOn = modules.has("salas");
+  const waitingRoomOn = modules.has("salaEspera");
+  const view: AgendaView =
+    (props.view === "room" && (!roomsOn || !props.rooms?.length)) || (props.view === "reception" && !waitingRoomOn)
+      ? "timeline"
+      : props.view;
   const [creating, setCreating] = useState<null | {
     defaultISO?: string;
     defaultPatientId?: string | null;
@@ -338,7 +348,7 @@ export function AgendaClient(props: Props) {
   // P3-C: `AgendaHighlight` (servicio, plan o suelto; `lib/agenda-highlight.ts`).
   const [highlight, setHighlightState] = useState<AgendaHighlight | null>(null);
   // S19b: leyenda/filtro de plan solo con el módulo `planes` (VERTICALES §5).
-  const plansEnabled = useTenantModules().has("planes");
+  const plansEnabled = modules.has("planes");
   // El alcance De plan / Sueltos se recuerda por usuario (como los toggles de
   // cancelados/ausentes): primer render sin resaltado (hidratación) y lo
   // guardado se aplica después de montar. Sin el módulo no se lee.
@@ -429,7 +439,7 @@ export function AgendaClient(props: Props) {
   // ── Capabilities y profesionales ───────────────────────────────────────────
   const caps = useMemo(() => capabilitySet(props.capabilities), [props.capabilities]);
   const ownPractitionerId = props.viewer?.practitionerId ?? null;
-  const canReception = caps.has("agenda.reception");
+  const canReception = caps.has("agenda.reception") && waitingRoomOn;
   const canLockAny = caps.has("agenda.manageBlocks") || caps.has("agenda.manageOwnBlocks");
   // Quién puede cargar salas (Configuración › Sedes): copy del vacío de "Por sala" (SRZ B3).
   const canConfigureRooms = caps.has("tenant.admin") || caps.has("schedule.configure");
@@ -510,7 +520,7 @@ export function AgendaClient(props: Props) {
   // Catálogo del bootstrap (activas de sedes activas); el nombre de `roomId` se
   // resuelve acá, no viaja por turno (C9 compacto). Sin salas: todo lo de abajo
   // da vacío/null y la agenda es la de antes de SR.
-  const rooms = props.rooms ?? EMPTY;
+  const rooms = (roomsOn && props.rooms) || EMPTY;
   // D4: con "Todas las sedes", las salas de la sede principal.
   const scopeRooms = useMemo(
     () => roomsInScope(rooms, locationId, primaryLocationId),
@@ -1281,7 +1291,7 @@ export function AgendaClient(props: Props) {
             capabilities={props.capabilities ?? null}
             viewerPractitionerId={ownPractitionerId}
             defaultLocationId={locationId}
-            rooms={props.rooms ?? null}
+            rooms={roomsOn ? (props.rooms ?? null) : null}
             defaultRoomId={creating.defaultRoomId}
             onClose={() => setCreating(null)}
             onSaved={() => {
@@ -1328,7 +1338,7 @@ export function AgendaClient(props: Props) {
           canBlockAll={caps.has("agenda.manageBlocks")}
           ownPractitionerId={ownPractitionerId}
           existingBlocks={lockDialogBlocks}
-          rooms={props.rooms}
+          rooms={roomsOn ? props.rooms : undefined}
           onClose={() => setLockDialog(null)}
           onDone={() => {
             markOwn(null, { quiet: true });

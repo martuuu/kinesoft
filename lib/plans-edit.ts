@@ -213,8 +213,8 @@ async function restoreSessionImpl(raw: RestorePlanSessionInput): Promise<Restore
   const parsed = RestorePlanSessionSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
   const r = await write(actor, async (tx) => {
-    const { caps, role } = await roleAndCapsInTx(tx, actor);
-    return restoreSessionInTx(tx, actor, caps, role, parsed.data);
+    const { caps } = await roleAndCapsInTx(tx, actor);
+    return restoreSessionInTx(tx, actor, caps, parsed.data);
   });
   if (!r.ok) return r;
   return { ok: true, data: { updatedAt: r.out.updatedAt, totalSessions: r.out.totalSessions } };

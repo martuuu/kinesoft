@@ -4,6 +4,7 @@ import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { readPlatformAssurance } from "@/lib/platform-mfa";
 import { mfaStatusOf, platformNextOrDefault } from "@/lib/platform-mfa-logic";
 import { safeNext } from "@/lib/safe-next";
+import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
 import { ForbiddenError, UnauthenticatedError } from "@/lib/session";
 
 /**
@@ -24,6 +25,11 @@ export async function mfaPageContext(
   try {
     actor = await requirePlatformAdmin(undefined, { mfaStep: true });
   } catch (err) {
+    // PL-2a: 2FA de cuenta pendiente → /verificar-acceso, que vuelve a esta pantalla (mismo motivo que el layout de
+    // `(platform)`: /login con sesión viva no tiene salida).
+    if (err instanceof UnauthenticatedError && err.reason === "two_factor") {
+      redirect(verifyAccessHref(`${selfPath}?next=${encodeURIComponent(next)}`));
+    }
     if (err instanceof UnauthenticatedError) {
       redirect(`/login?next=${encodeURIComponent(`${selfPath}?next=${encodeURIComponent(next)}`)}`);
     }

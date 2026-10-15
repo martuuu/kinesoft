@@ -23,8 +23,7 @@
  * cancelar un legacy tiene que funcionar igual (§2.3: el verificador no corre
  * I3/I5/I6 sobre legacy).
  */
-import { isTenantAdminRole } from "@/lib/capabilities";
-import type { Role } from "@prisma/client";
+import type { Capability } from "@/lib/capabilities";
 import type { ProgramStatusValue } from "@/lib/plans-read-types";
 
 export type { ProgramStatusValue };
@@ -198,9 +197,15 @@ export function decideProgramArchive(
   return { ok: true, cancelFirst: { futureBookings: o.futureBookings ?? DEFAULT_FUTURE_BOOKINGS_ACTION } };
 }
 
-/** PD-10: restaurar un plan archivado = OWNER/ADMIN (vuelve al estado que tenía). */
-export function canRestoreProgram(role: Role | null | undefined): boolean {
-  return isTenantAdminRole(role);
+/**
+ * PD-10: restaurar un plan archivado = quien administra el consultorio (vuelve al estado que tenía). PL-Z a3#9: por
+ * MIEMBRO (`tenant.admin` de `capabilitiesForMember`), no por rol: desde PL-1b «Configuración» se delega a cualquier
+ * rol y se le saca a un ADMIN, así que el rol solo dejaba afuera a un Profesional con «Configuración». Recibe las
+ * capabilities del MIEMBRO (`capabilitiesForMembership` / las del actor); la forma por `Role` se borró en PL-Z
+ * (integrador) cuando los tres callers pasaron a `caps`.
+ */
+export function canRestoreProgram(caps: ReadonlySet<Capability>): boolean {
+  return caps.has("tenant.admin");
 }
 
 /**

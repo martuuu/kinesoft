@@ -21,11 +21,11 @@ import type { PlanLimitOverrides, PlanLimits } from "./saas-plans-types";
 // ─────────────────────────────────────────────────────────────────────────────
 // PL-1c (C-PL3, plan §20.5.3, PL-D3): cupos POR TIPO del plan SaaS nuevo.
 //
-// Decisión de Martin (15-oct): Individual 1 usuario · Consultorio 1 Secretario/a o Admin no clínico + hasta 4
-// profesionales (total 5) · Clínica 10 de cualquier tipo · Libre a medida. Antes (BO-D7) solo contaban los roles
-// clínicos y la Secretaria entraba gratis en cualquier plan: con «1 no clínico» en Consultorio eso dejó de valer.
-// El Titular cuenta según atienda (un Titular que no atiende ocupa el lugar no clínico) y las invitaciones
-// pendientes reservan el lugar del tipo de su rol.
+// Decisión de Martin (§20.17, 15-oct): Individual 1 usuario · Consultorio 5 de cualquier tipo · Clínica 10 de
+// cualquier tipo · Libre a medida (topes por tipo y total solo vía overrides de Plataforma, que valen solo en Libre:
+// `effectiveLimits`). Antes (BO-D7) solo contaban los roles clínicos y la Secretaria entraba gratis en cualquier
+// plan; desde PL-1c todos ocupan lugar. El tipo se sigue contando porque un Libre a medida puede topearlo. El
+// Titular cuenta según atienda y las invitaciones pendientes reservan el lugar del tipo de su rol.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** «professional» = atiende (agenda, HC); «staff» = Secretaria, Facturación, o Titular/Admin que no atiende. */
@@ -59,21 +59,21 @@ export function seatUsageByKind(c: { professional: number; staff: number }, l: P
   };
 }
 
-/** ¿Entra una persona más de este tipo? Tiene que haber lugar en el total Y en su tipo (Consultorio: 4+1 = 5). */
+/** ¿Entra una persona más de este tipo? Tiene que haber lugar en el total Y en su tipo (un Libre a medida con topes por tipo). */
 export function canAddSeat(u: SeatUsageByKind, k: SeatKind): boolean {
   return !u.total.full && !u[k].full;
 }
 
 /**
  * Límites efectivos de un plan: la fila de `SaasPlanConfig` (la edita Plataforma) o, si falta, `PLAN_DEFAULTS` (los
- * mismos valores que sembró M8), pisados por los overrides del consultorio (Libre y excepciones).
+ * mismos valores que sembró M8), pisados por los overrides del consultorio solo en Libre (PL-Z a3#1).
  */
 export function planLimitsFor(
   plan: SaasPlan,
   row: PlanLimits | null | undefined,
   overrides: PlanLimitOverrides
 ): PlanLimits {
-  return effectiveLimits(row ?? PLAN_DEFAULTS[plan].limits, overrides);
+  return effectiveLimits(row ?? PLAN_DEFAULTS[plan].limits, overrides, plan);
 }
 
 /** Lugares ocupados por tipo y total (el total puede no ser la suma cuando se razona sobre «mínimos»). */

@@ -203,7 +203,16 @@ export async function bootstrapTenant(
   const ownerClinical = input.ownerClinical ?? true;
   const practitioner = ownerClinical
     ? await tx.practitioner.create({
-        data: { tenantId: tenant.id, userId: input.userId, licenseNumber: input.licenseNumber || null },
+        // PL-Z A1 (decisión del orquestador): el Titular que atiende nace con SU turnero prendido. El del
+        // consultorio (`Tenant.publicBookingEnabled`) sigue naciendo apagado (EV-D2), así que no se publica nada
+        // hasta que lo prenda en General; pero cuando lo prende, el Titular ya aparece. Antes nacía en false (default
+        // de PL-2f) y prender el turnero del consultorio mostraba «sin profesionales» sin decir por qué.
+        data: {
+          tenantId: tenant.id,
+          userId: input.userId,
+          licenseNumber: input.licenseNumber || null,
+          publicBookingEnabled: true,
+        },
       })
     : null;
   // PL-1c: el Titular delega «Configuración»/«Planes y pagos»; él no los necesita (OWNER los tiene por rol).

@@ -50,7 +50,7 @@ import { getAccessSnapshot, getActor, tryGetActor, assertWritable, Unauthenticat
 import { runWithRls } from "@/lib/rls";
 import { withAccountWritable } from "@/lib/account-writable";
 import { getMemberAccess } from "@/lib/authz";
-import { TWO_FACTOR_COOKIE, makeTwoFactorProofValue } from "@/lib/two-factor-cookie";
+import { TWO_FACTOR_COOKIE, makeTwoFactorProofValue, setStepUpCookie } from "@/lib/two-factor-cookie";
 import { startSupport } from "@/lib/platform-support";
 import { SUPPORT_COOKIE } from "@/lib/support-session-internal";
 
@@ -195,7 +195,12 @@ describe.skipIf(!RUN)("[PL-1e] sesión v2", () => {
 
     it("el soporte: withAccountWritable no le abre nada", async () => {
       cookies().delete(SUPPORT_COOKIE);
+      // PL-Z (a2#4): `support.start` es high y con MFA off pide el step-up de la 2FA del superadmin: TOTP + AAL2 +
+      // step-up fresco de esta sesión (molde de pl3b-team `withStepUp`).
+      await db.userProfile.update({ where: { id: H.userId }, data: { twoFactorTotp: true } });
+      tok.claims = { session_id: "sess-support", aal: "aal2" };
       asUser(H.userId);
+      setStepUpCookie(H.userId, "sess-support");
       const r = await startSupport(A.tenantId, "Ayuda con el pago del consultorio");
       if (!r.ok) throw new Error(r.error);
       const actor = await getActor();

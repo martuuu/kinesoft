@@ -50,6 +50,12 @@ function startOfWeek(d: Date) {
 
 export type DashboardData = {
   greetingName: string;
+  /**
+   * PL-Z (FX4): el switch «Aparece en el turnero online» del propio profesional va en el menú de perfil (el
+   * Profesional no tiene Configuración). `null` = el actor no tiene ficha de profesional (Secretaria, Admin que no
+   * atiende). Se lee FUERA del `unstable_cache` de los counts: es por usuario y cambia con su propio toggle.
+   */
+  ownPublicBooking: { practitionerId: string; enabled: boolean } | null;
   todayCount: number;
   weeklyBars: { d: string; c: number; a: number }[];
   pinned: {
@@ -131,6 +137,7 @@ type DashboardCounts = Omit<
   | "revenue"
   | "monthRevenue"
   | "revenueScope"
+  | "ownPublicBooking"
 > & {
   // Filas crudas: el enmascarado por acceso se aplica FUERA del cache, por
   // request. Si se hiciera adentro, un share revocado seguiría mostrando el
@@ -542,9 +549,18 @@ export async function getDashboardData(): Promise<DashboardData> {
   // Per-user bits computed outside the cache — preferences / reminder
   // dismissal differ per practitioner and would explode cache cardinality.
   const reminderKey = `near-discharge:${isoWeekKey(now)}`;
-  const [reminderDismissed, prefs] = await Promise.all([
+  const practitionerId = actor.practitionerId;
+  const [reminderDismissed, prefs, ownPublicBooking] = await Promise.all([
     isReminderDismissed(reminderKey),
     getUserPreferences(),
+    practitionerId
+      ? runWithRls(actor.tenantId, (tx) =>
+          tx.practitioner.findFirst({
+            where: { id: practitionerId, tenantId: actor.tenantId },
+            select: { id: true, publicBookingEnabled: true },
+          })
+        ).then((p) => (p ? { practitionerId: p.id, enabled: p.publicBookingEnabled } : null))
+      : Promise.resolve(null),
   ]);
   // S14r: el widget arranca en el período que el usuario dejó elegido. El mes
   // ya está (KPI); la semana se pide solo si hace falta, con el mismo scope.
@@ -589,6 +605,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     pinnedKpis: prefs.pinnedKpis,
     reminderDismissed,
     reminderKey,
+    ownPublicBooking,
   };
 }
 

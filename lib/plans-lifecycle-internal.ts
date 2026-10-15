@@ -739,8 +739,8 @@ export async function restoreProgramFlow(
   actor: Actor,
   input: { programId: string; expectedUpdatedAt: string }
 ): Promise<LifecycleFlow<RestorePlanResult>> {
-  return runLifecycleFlow<RestorePlanResult>(actor, input.programId, { structural: true }, async (tx, { program, role }) => {
-    if (!canRestoreProgram(role)) return { result: { ok: false, error: PLAN_LIFECYCLE_COPY.restoreForbidden }, commit: null };
+  return runLifecycleFlow<RestorePlanResult>(actor, input.programId, { structural: true }, async (tx, { program, caps }) => {
+    if (!canRestoreProgram(caps)) return { result: { ok: false, error: PLAN_LIFECYCLE_COPY.restoreForbidden }, commit: null };
     if (!program.archivedAt) return { result: { ok: false, error: PLAN_LIFECYCLE_COPY.notArchived }, commit: null };
     if (!sameInstant(input.expectedUpdatedAt, program.updatedAt)) return { result: staleFail(), commit: null };
     const updatedAt = await casProgramUpdateInTx(tx, actor.tenantId, program, { archivedAt: null });

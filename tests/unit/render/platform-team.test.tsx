@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+// PL-Z (a2#4): el provider de Plataforma monta el `StepUpProvider`, que trae la server action `getStepUpOptions`.
+vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -15,6 +17,8 @@ vi.mock("@/lib/platform-team", () => ({
   platformReactivateMember: vi.fn(),
   platformRemoveMember: vi.fn(),
   platformSendMemberPasswordReset: vi.fn(),
+  platformSetMemberClinical: vi.fn(),
+  platformSetMemberGrants: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({
@@ -37,6 +41,10 @@ const member = (over: Partial<PlatformTeamMemberRow> = {}): PlatformTeamMemberRo
   joinedAt: at,
   disabledAt: null,
   hasAgenda: true,
+  clinical: true,
+  grantSettings: false,
+  grantBilling: false,
+  publicBookingEnabled: true,
   ...over,
 });
 const owner = member();
@@ -47,6 +55,8 @@ const secretaria = member({
   email: "sole@movare.test",
   role: "ASSISTANT",
   hasAgenda: false,
+  clinical: false,
+  publicBookingEnabled: null,
 });
 const team = (over: Partial<PlatformTenantTeam> = {}): PlatformTenantTeam => ({
   tenantId: "t1",
@@ -163,6 +173,40 @@ describe("[BO3-C] acciones del OWNER", () => {
     expect(row).toMatch(/>Reactivar</);
     expect(row).not.toMatch(/>Suspender</);
     expect(row).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Mandar link para cambiar la contraseña \(no disponible:/);
+  });
+});
+
+describe("[PL-3b] «¿Atiende?», permisos y turnero desde Plataforma", () => {
+  it("Titular sin agenda: rótulo, «Atiende pacientes» apagado y sin permisos (ya tiene todo)", () => {
+    const html = renderToStaticMarkup(
+      <ul>
+        <MemberRow tenantId="t1" member={{ ...owner, clinical: false, hasAgenda: false, grantSettings: false, grantBilling: false }} owner={owner} vertical="KINESIOLOGY" />
+      </ul>
+    );
+    const row = rowOf(html, "m1");
+    expect(row).toContain("Titular (sin agenda)");
+    expect(row).toMatch(/data-attends[^>]*><input type="checkbox"(?![^>]*checked)/);
+    expect(row).not.toContain("data-grants");
+  });
+
+  it("miembro: permisos delegados con su valor; Titular que atiende: turnero informativo", () => {
+    const sec = { ...secretaria, clinical: false, grantSettings: false, grantBilling: true, publicBookingEnabled: null };
+    const row = rowOf(renderToStaticMarkup(<ul><MemberRow tenantId="t1" member={sec} owner={owner} vertical="KINESIOLOGY" /></ul>), "m2");
+    expect(row).toContain("data-grants");
+    expect(row).toMatch(/<input type="checkbox"(?![^>]*checked)[^>]*\/>Puede cambiar la Configuración/);
+    expect(row).toMatch(/<input type="checkbox"[^>]*checked=""[^>]*\/>Puede ver y cambiar el plan y los pagos/);
+    expect(row).not.toContain("turnero");
+
+    const own = { ...owner, clinical: true, publicBookingEnabled: false };
+    const ownRow = rowOf(renderToStaticMarkup(<ul><MemberRow tenantId="t1" member={own} owner={owner} vertical="KINESIOLOGY" /></ul>), "m1");
+    expect(ownRow).toContain("No aparece en el turnero online");
+    expect(ownRow).toMatch(/data-attends[^>]*><input type="checkbox"[^>]*checked=""/);
+  });
+
+  it("[PL-3] el lector ya trae permisos y «¿Atiende?»: el no-titular muestra Permisos, no «Atiende»", () => {
+    const row = rowOf(renderToStaticMarkup(<ul><MemberRow tenantId="t1" member={secretaria} owner={owner} vertical="KINESIOLOGY" /></ul>), "m2");
+    expect(row).toContain("data-grants");
+    expect(row).not.toContain("data-attends");
   });
 });
 

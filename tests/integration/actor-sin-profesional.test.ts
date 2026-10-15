@@ -245,8 +245,18 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
     // Sin profesional: los KPIs «propios» no caen en lo sin asignar.
     expect(d.todayCount).toBe(0);
     expect(d.pinned.newPatientsMonth).toBe(0);
+    // PL-Z (FX4): sin ficha no hay switch del propio turnero en el menú de perfil.
+    expect(d.ownPublicBooking).toBeNull();
     const r = await getRevenue("month");
     expect(r.ok).toBe(true);
+  });
+
+  it("[PL-Z FX4] el dashboard trae la ficha propia y su `publicBookingEnabled` (fuera del cache, al día)", async () => {
+    asUser(kine.userId);
+    await db.practitioner.update({ where: { id: kine.practitionerId }, data: { publicBookingEnabled: false } });
+    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: false });
+    await db.practitioner.update({ where: { id: kine.practitionerId }, data: { publicBookingEnabled: true } });
+    expect((await getDashboardData()).ownPublicBooking).toEqual({ practitionerId: kine.practitionerId, enabled: true });
   });
 
   it("[IAM-4a] Secretaria sin Practitioner abre el dashboard sin tirar y sin ingresos", async () => {
@@ -255,6 +265,8 @@ describe.skipIf(!RUN)("[IAM-4a] Actor sin profesional para roles no clínicos", 
     expect(d.revenueScope).toBe("none");
     expect(d.monthRevenue).toBeNull();
     expect(d.pinned.newPatientsMonth).toBe(0);
+    // PL-Z (FX4): sin ficha no hay switch del propio turnero en el menú de perfil.
+    expect(d.ownPublicBooking).toBeNull();
     const r = await getRevenue("month");
     expect(r.ok).toBe(false);
   });

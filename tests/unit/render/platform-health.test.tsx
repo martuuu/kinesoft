@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+// PL-Z (a2#4): el provider de Plataforma monta el `StepUpProvider`, que trae la server action `getStepUpOptions`.
+vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 import { renderToStaticMarkup } from "react-dom/server";
 
 /** [BO3-D] /plataforma/salud — render del tablero con un reporte real (actions, router, toast y confirm mockeados). */

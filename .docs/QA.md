@@ -1415,7 +1415,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 > Local (`TZ=UTC npm run dev` contra el Docker con M8 aplicada). Sin migraciones nuevas en PL-1. Hasta **M8b** (inicio de
 > PL-2) la fila de `SaasPlanConfig` de Consultorio sigue en 4 profesionales + 1 no clínico y los ADMIN viejos siguen
-> clínicos: lo marcado con «(M8b)» se prueba después de esa migración. La 2FA todavía **no tiene UI** (PL-2a).
+> clínicos: lo marcado con «(M8b)» se prueba después de esa migración. **M8b ya está escrita y aplicada en el Docker local** (ver sección siguiente). La 2FA todavía **no tiene UI** (PL-2a).
 
 ### Plan nuevo
 - [ ] Configuración → General → «Plan» dice Individual / Consultorio / Clínica / Libre (no FREE/PRO). «Plan y uso» con el mismo nombre.
@@ -1442,8 +1442,126 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Sesión y 2FA
 - [ ] La navegación entre páginas no hace más idas a la base que antes (el miembro viaja en el Actor).
-- [ ] 2FA: todavía sin pantalla para activarla (PL-2a). Nadie queda cortado; `/cuenta/seguridad` y `/verificar-acceso` no existen aún.
+- [ ] 2FA: ver «PL-2 · Verificación en dos pasos» (las pantallas ya existen).
 
 ### Plataforma (VX0-b)
 - [ ] Detalle de un consultorio: «Titular» muestra el nombre (o «Usuario sin nombre»), el email en «Email del titular». La lista igual (nombre + «Email: …»).
 - [ ] La barra superior de Plataforma muestra tu nombre, no tu email (el email en el tooltip).
+
+## PL-2 · M8b (`20261015200000_pl_admin_consultorio`, solo datos; 15-oct-2026)
+
+> Local, con M8b aplicada (`npx dotenv -e .env.local -- npx prisma migrate deploy`). Lo automatizado está en
+> `tests/integration/pl-m8b.test.ts` y en los `[M8b]` de `tests/integration/seats.test.ts`; esto es el repaso a mano.
+- [ ] Consultorio: invitar hasta 5 personas de cualquier tipo (p. ej. 4 profesionales + el Titular, o 3 + 2 Secretarias); el 6.º rebota con «Tu plan tiene 5 usuarios y están ocupados».
+- [ ] /plataforma → consultorio Consultorio: «Plan y uso» ya no muestra tope por tipo (solo el total de 5).
+- [ ] En una base con un ADMIN de antes (con turnos futuros): después de M8b figura como **Profesional** con «Configuración», conserva su agenda, sus turnos y sus pacientes.
+- [ ] Un ADMIN de antes sin turnos futuros, pacientes asignados ni planes activos: después de M8b sigue como Administrador/a, ya no aparece en la agenda ni en el turnero y no abre historias clínicas; sus turnos pasados siguen en el historial.
+
+## PL-2 · 2FA, cobros manuales, mensajes, Facebook y salas por plan (15-oct-2026)
+
+> Local (Docker + Mailpit). Lo automatizado: `two-factor*.test.ts`, `saas-billing*.test.ts`, `support-threads`/`leads`,
+> `auth-callback.test.ts`, los `rooms`/`public-booking*` de 2f. Esto es el repaso a mano.
+
+### Verificación en dos pasos (PL-2a)
+- [ ] Menú de perfil (y el shell de Plataforma) → «Seguridad de la cuenta» abre `/cuenta/seguridad`.
+- [ ] Activar con app de autenticación (QR + código) y, aparte, con código por email: llega el mail del código (sin el código en el asunto) y el aviso «Activaste…».
+- [ ] Se muestran 10 códigos de recuperación una sola vez.
+- [ ] Login con 2FA: (1) código de la app, (2) código por email, (3) código de recuperación (llega el aviso «Se usó un código de recuperación»). Las tres terminan en el `next` original.
+- [ ] Límites: código vencido (10 min) o 5 intentos fallidos → pide uno nuevo; «Reenviar» espera 60 s.
+- [ ] Apagar la 2FA pide step-up (código otra vez); sin 2FA, una acción con step-up dice «Activá la verificación en dos pasos…».
+- [ ] Superadmin con 2FA pendiente que abre `/plataforma` → `/verificar-acceso?next=/plataforma` (no el login); después vuelve a Plataforma.
+- [ ] /plataforma → Usuarios → «Resetear verificación en dos pasos»: auditado y mail «El equipo de KineSoft reseteó…».
+- [ ] «Cerrar sesión» borra `kine_2fa` y `kine_stepup` (DevTools → Cookies).
+- [ ] Entrar como soporte en un consultorio funciona en prod sin MFA de Plataforma (se quitó el corte).
+
+### Cobros manuales (PL-2b, sin Mercado Pago)
+- [ ] Con `SAAS_BILLING_MODE=off` (default) el cron diario no genera cargos ni manda mails de cobro.
+- [ ] Con `manual`: `curl -H "Authorization: Bearer $CRON_SECRET" localhost:3000/api/cron/daily` crea el cargo del período (repetirlo no duplica cargos ni mails); llega «Ya está tu cuota del mes».
+- [ ] Cargo sin pagar 5 días después del inicio del período → `PAST_DUE` + mail «Tenés una cuota vencida»; un consultorio en prueba vencida sigue TRIALING; CANCELLED nunca cambia.
+- [ ] /plataforma → Facturación: imputar un pago manual con recibo (PDF/JPG/PNG/WEBP ≤ 4 MB; un .exe renombrado rebota), aprobar/rechazar un comprobante (mail con el motivo), anular/condonar un cargo, precio a medida, editor de precios con vigencia (mail «Nuevo precio…»).
+- [ ] El recibo se ve solo con link firmado (vence a los 60 s).
+- [ ] La pantalla del consultorio (`?tab=facturacion`): ver «PL-3 · Configuración».
+
+### Mensajes y leads (PL-2d)
+- [ ] Configuración → pestaña «Soporte»: arriba «Mensajes con soporte», abajo «Accesos de soporte». Crear un mensaje → llega aviso a `PLATFORM_INBOX_EMAIL` SIN el texto del mensaje.
+- [ ] /plataforma → «Mensajes» (en el nav después de Usuarios): responder → el consultorio recibe «Te respondimos» y ve la respuesta; abrir/cerrar la conversación.
+- [ ] Como soporte dentro del consultorio, la pestaña «Soporte» no deja escribir (aviso de sesión de soporte).
+- [ ] Más de 10 mensajes en una hora por usuario → rebota con el aviso de límite.
+- [ ] Lead (hasta que VX arme el formulario, desde un test o la action): llega «Consulta nueva desde la web» con el mensaje escapado; responder desde Plataforma manda el mail al lead; el honeypot `website` lleno no crea nada.
+
+### Ingreso con Google y Facebook (PL-2e)
+- [ ] `POST /api/auth/oauth/google?next=/agenda` y `/facebook` llevan al proveedor y vuelven a `next`; `/api/auth/google` sigue andando (portal, turnero).
+- [ ] Facebook sin compartir el email → `/login?error=oauth_no_email` con «No recibimos tu email…»; no se crea perfil.
+- [ ] Proveedor apagado en Supabase → «Ese método de ingreso no está disponible por ahora…».
+- [ ] Alta nueva por OAuth → consultorio INDIVIDUAL en prueba de 14 días; nombre y foto del proveedor (la foto de Facebook se ve: `platform-lookaside.fbsbx.com` en `remotePatterns`).
+
+### Salas y sala de espera por plan; turnero por profesional (PL-2f)
+- [ ] Consultorio (sin `salas`/`salaEspera`) con salas cargadas de antes: la agenda no muestra «Por sala» ni Recepción, no hay «Llamar»; «Llegó» y «En atención» siguen andando.
+- [ ] Guardar un horario de un profesional cuya franja tiene sala dormida: guarda sin error y conserva la sala.
+- [ ] El modal de turno no avisa «sala ocupada» con salas dormidas; el turno nuevo no lleva sala.
+- [ ] Volver a Clínica: las salas reaparecen con sus franjas y turnos.
+- [ ] Turnero: un profesional con `publicBookingEnabled = false` no aparece (el switch está en Configuración → Profesionales, PL-3b).
+
+## PL-3 · UI de planes, cobros, equipo y Plataforma (15-oct-2026)
+
+> Sin commitear (se commitea en PL-Z). Probar con `TZ=UTC`, M8 + M8b aplicadas en local y `SAAS_BILLING_MODE=manual`
+> para lo de cobros. Anchos: **390** (celular), **1024×768** y **1366×768**: sin desbordes horizontales en ninguna
+> pantalla de esta sección.
+
+### Configuración: plan, facturación y soporte (PL-3a)
+- [ ] Secretaria con «Planes y pagos» (`grantBilling`) y sin «Configuración»: ve **solo** Plan y uso, Facturación y Soporte (3 pestañas), con el desglose de cupos; sin «Planes y pagos» no ve ninguna de las tres.
+- [ ] Bajar de Clínica a Consultorio con 7 usuarios activos: el drawer muestra cuántos sobran y pide elegir **exactamente** quiénes pierden el acceso; «Pasar a Consultorio» queda apagado hasta que la cuenta cierra.
+- [ ] Cambiar de plan sin 2FA activada → modal «Activá la verificación en dos pasos»; con 2FA → pide el código (step-up) y, al confirmar, el menú refleja los módulos del plan nuevo (salas, sala de espera).
+- [ ] Plan Libre: «Consultanos» abre Soporte con el mensaje prellenado; no hay botón de cambio directo.
+- [ ] `?tab=facturacion` abre Facturación directo (y el link del mail de cuota): saldo, cargos, pagos, los datos para transferir y «Informar pago» (sin `SAAS_BILLING_TRANSFER_INFO` no aparece).
+- [ ] Subir comprobante desde el celular con una foto grande (> 1,5 MB): se comprime antes de subir y entra (≤ 4 MB); un PDF entra tal cual; el cargo sugerido es el pendiente más viejo.
+- [ ] `SAAS_BILLING_MODE=off`: Facturación lo dice y no ofrece pagar; cargos y pagos viejos se ven solo si existen.
+- [ ] Consultorio en solo lectura: «Plan y uso» lo dice y se puede subir el comprobante igual.
+
+### Equipo y profesionales (PL-3b)
+- [ ] Titular → Usuarios: «Atiendo pacientes» (su propio switch) pide step-up; apagado, deja de tener agenda.
+- [ ] Permisos de un miembro («Puede cambiar la Configuración», «Puede ver y cambiar el plan y los pagos»): piden step-up y el delegado ve las pestañas que corresponden al recargar.
+- [ ] Transferir titularidad: pide step-up (sin 2FA → modal de activarla) y confirmación tipeada.
+- [ ] Un ADMIN con «Configuración» delegada abre /configuracion sin 500 y ve la pestaña Usuarios (`tenant.admin`).
+- [ ] Usuarios muestra «Lugares: N de M» y «Cupo lleno» cuando corresponde.
+- [ ] Profesionales → switch del turnero online: apagado, el profesional desaparece de `/c/<slug>/booking`; prendido, vuelve. Se ve también en el resumen de cada profesional.
+
+### Plataforma (PL-3c)
+- [ ] /plataforma → Facturación: filtros por vista (con deuda, a revisar, vencidas), plan y estado (los filtra el server: la página trae solo esas cuentas) y búsqueda.
+- [ ] Ledger de un consultorio (`/plataforma/consultorios/<id>/facturacion`): registrar pago con recibo PDF entra; un `.exe` renombrado a `.pdf` rebota con el copy de archivo inválido.
+- [ ] Anular un cargo pide tipear la palabra; condonar y aprobar/rechazar comprobantes (rechazo con motivo).
+- [ ] /plataforma → Precios: precio con vigencia futura queda «pendiente»; con vigencia hoy cambia el catálogo al guardar.
+- [ ] Ficha del consultorio → Editar suscripción: no tiene selector de plan (el plan se cambia con «Cambiar de plan», ADR-018); Libre se puede elegir solo desde Plataforma.
+- [ ] Equipo del consultorio en Plataforma: «Atiende pacientes» del Titular y Permisos de los demás piden la re-verificación (riesgo alto, `team.grants`).
+
+## PL-Z · cierre del bloque PL (15-oct-2026)
+
+> Sin commitear. `TZ=UTC`, M8 + M8b aplicadas en local, `SAAS_BILLING_MODE=manual` y `SAAS_BILLING_TRANSFER_INFO`
+> cargada para lo de cobros. Hallazgos en [AUDIT «Hallazgos de PL-Z»](AUDIT.md).
+
+### Cobros
+- [ ] Registrar desde Plataforma un pago **a cuenta** (sin cargo) y después correr el cron diario: el cargo nuevo del período queda pagado con ese saldo y el consultorio no pasa a «Pago pendiente».
+- [ ] Registrar o aprobar un pago **mayor** que lo que falta del cargo: el cargo queda pagado y el excedente aparece como pago a cuenta (saldo a favor), no se pierde.
+- [ ] Configuración → Facturación muestra los datos para transferir; sin `SAAS_BILLING_TRANSFER_INFO`, no hay «Informar pago» y Plataforma no deja pasar el cobro a `manual`.
+- [ ] /plataforma → Facturación: una cuenta con cargos vencidos se ve con un aviso ámbar en negrita («N cargos vencidos»), más fuerte que una «Con deuda» sin vencer.
+- [ ] «Cambiar de plan» en Plataforma nombra los módulos igual que «Plan y uso» del consultorio (no aparecen «Evoluciones» ni «Reportes»).
+
+### 2FA y seguridad
+- [ ] Usuario con 2FA por email que enrola un TOTP propio contra GoTrue (fuera de KineSoft): igual le pide el código por email en `/verificar-acceso`.
+- [ ] Export completo del consultorio (`/api/consultorio/export`) con la 2FA pendiente → 401; verificada → baja. El Titular que no atiende baja la HC (excepción AUDIT §5.50).
+- [ ] Con `PLATFORM_MFA_ENFORCEMENT=off`, una acción de riesgo alto de Plataforma (permisos, cambiar de plan, reset de 2FA) pide el código de la 2FA del superadmin; sin 2FA activa, pide activarla.
+- [ ] Un superadmin no puede resetear la 2FA de otro superadmin: en su ficha «Resetear verificación» aparece deshabilitado con «Es superadmin: su verificación la cambia esa persona desde Seguridad de la cuenta.».
+- [ ] Usuarios → cambiar el rol de alguien a Administrador/a con la 2FA activada: pide el código (modal de step-up) y al confirmarlo cambia el rol; sin 2FA, ofrece activarla. Antes salía un error crudo en la fila.
+- [ ] Un ADMIN con «Configuración» (no atiende): invitar a un Profesional, pasar a alguien a Profesional o reactivar a un Profesional → «Solo el titular o un profesional del consultorio pueden sumar a alguien que atiende.»; invitar a una Secretaria sí puede.
+- [ ] Un ADMIN no ve la agenda ni la HC aunque su fila diga `clinical = true`.
+
+### Plan y cupos
+- [ ] Consultorio con cupos a medida (Libre con overrides) que intenta cambiar de plan desde Configuración → «Tu consultorio tiene cupos a medida: escribinos para cambiar el plan.»; desde Plataforma se puede.
+- [ ] Consultorio Clínica con un override de cupo legado (de M8): Plan y uso **no** lo muestra «a medida», los cupos son los de Clínica y el cambio de plan no se traba.
+- [ ] Consultorio (5 de cualquier tipo): se pueden sumar 5 profesionales, o 4 + 1 Secretaria, o cualquier mezcla hasta 5; Plataforma lo dice «5 usuarios de cualquier tipo».
+- [ ] Bandeja de Plataforma: el filtro dice «Consultas de la web» y cada fila «Consulta de la web» (no «Lead»).
+
+### Turnero
+- [ ] Alta nueva: el Titular que atiende aparece en el turnero al prenderlo (nace con su switch en sí); General avisa que el turnero arranca apagado.
+- [ ] Profesional sin «Configuración»: el switch de su propio turnero está en el menú de perfil del dashboard (el avatar); apagado, desaparece de `/c/<slug>/booking`; al recargar el dashboard el switch conserva el valor. Con el turnero del consultorio apagado, el switch está deshabilitado con «Primero el consultorio tiene que prender el turnero.». La Secretaria (sin ficha) no lo ve.
+- [ ] El switch del menú de perfil mide 52×30 (< 44 px): pendiente de PF/MB, no es un bug de PL.

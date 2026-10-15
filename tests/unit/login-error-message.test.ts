@@ -29,6 +29,16 @@ describe("[IAM-2d] loginErrorMessage", () => {
   });
 });
 
+describe("[PL-2e] errores de OAuth (Google y Facebook)", () => {
+  it("textos sin nombrar al proveedor; sin email y proveedor apagado tienen el suyo", () => {
+    expect(loginErrorMessage("oauth_failed")).toBe("No pudimos completar el ingreso. Probá de nuevo.");
+    expect(loginErrorMessage("oauth_no_email")).toContain("No recibimos tu email");
+    expect(loginErrorMessage("provider_disabled")).toBe(
+      "Ese método de ingreso no está disponible por ahora. Entrá con tu email y contraseña."
+    );
+  });
+});
+
 describe("[IAM-2d] loginErrorFeedback (salidas)", () => {
   it("email_not_confirmed → reenviar confirmación", () => {
     const f = loginErrorFeedback("email_not_confirmed");
@@ -55,7 +65,16 @@ describe("[IAM-2d] loginErrorFeedback (salidas)", () => {
   });
 
   it("errores sin arreglo propio no ofrecen salidas", () => {
-    for (const code of ["invalid_credentials", "rate_limited", "oauth_failed", "missing_code", "missing_credentials", "otro"]) {
+    for (const code of [
+      "invalid_credentials",
+      "rate_limited",
+      "oauth_failed",
+      "oauth_no_email",
+      "provider_disabled",
+      "missing_code",
+      "missing_credentials",
+      "otro",
+    ]) {
       expect(loginErrorFeedback(code)?.ctas).toEqual([]);
     }
     expect(loginErrorFeedback(undefined)).toBeNull();

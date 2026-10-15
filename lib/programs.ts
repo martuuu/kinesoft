@@ -30,8 +30,7 @@
 import type { z } from "zod";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import type { Actor } from "@/lib/session";
-import { getMembershipRole, requireModule } from "@/lib/authz";
-import { isTenantAdminRole } from "@/lib/capabilities";
+import { memberCapabilitiesForActor, requireModule } from "@/lib/authz";
 import { afterLifecycleCommit, archiveProgramFlow, changeProgramStatusFlow } from "@/lib/plans-lifecycle-internal";
 import { ProgramStatusSet, type ActionResult, type ProgramStatusSetInput } from "@/lib/validation";
 
@@ -59,20 +58,18 @@ function legacyResult(r: { ok: true } | { ok: false; error: string }): ActionRes
 }
 
 /**
- * Gate a hard-delete of a plan/session (or other admin-only mutation) to OWNER/ADMIN.
- * Returns an `ActionResult` error when the actor's membership role is
- * anything else, or `null` when the actor may proceed. Mirrors the inline
- * role check in `assignPatientToPractitioner`.
+ * Gate a hard-delete of a plan/session (or other admin-only mutation) to quien administra el consultorio.
+ * Returns an `ActionResult` error when the actor lacks `tenant.admin`, or `null` when the actor may proceed.
+ * PL-Z a3#9: por MIEMBRO (`memberCapabilitiesForActor`), como `assignPatientToPractitioner`: el rol solo dejaba
+ * pasar a un ADMIN al que el Titular le sacó «Configuración» y frenaba a un Profesional que la tiene.
  */
 async function requireAdminRole(
   actor: Actor
 ): Promise<{ ok: false; error: string } | null> {
-  // B1.7: el rol sale de `lib/authz` (una query por request, cacheada) y el
-  // criterio OWNER/ADMIN de `lib/capabilities` (un solo lugar para C0).
-  if (!isTenantAdminRole(await getMembershipRole(actor))) {
+  if (!(await memberCapabilitiesForActor(actor)).has("tenant.admin")) {
     return {
       ok: false,
-      error: "Solo el dueño o un administrador puede eliminar definitivamente.",
+      error: "Solo el titular o quien tenga permiso de Configuración puede eliminar definitivamente.",
     };
   }
   return null;

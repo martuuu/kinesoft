@@ -6,7 +6,8 @@
  * Por qué no se recalcula nada propio:
  *  - los cupos salen de `getSeatUsageInTx` (lib/team-internal.ts, `seatUsageByKind` de lib/plan-catalog.ts), el
  *    MISMO cálculo que frena la invitación: si la pantalla contara distinto, diría «2 de 4» y la invitación
- *    rebotaría con «están ocupados». PL-1c: por TIPO (Consultorio = 4 profesionales + 1 no clínico, total 5).
+ *    rebotaría con «están ocupados». PL-1c: por TIPO y total (§20.17: Consultorio = 5 de cualquier tipo; los topes
+ *    por tipo solo existen si Plataforma los arma a medida en Libre).
  *  - los días de prueba salen de `tenantAccessFor` (lib/tenant-access.ts), el mismo de la banda de acceso: días
  *    calendario AR contando hoy (el último día es 1). Con `getDay`/`Date` del host, en Vercel (UTC) el número
  *    cambiaba a las 21:00 AR.
@@ -27,7 +28,7 @@ export type TenantPlanUsageInput = {
   trialEndsAt: Date | null;
   subscriptionStatusChangedAt: Date | null;
   publicBookingEnabled: boolean;
-  /** Algún override de cupo del consultorio (`max*Override`) no nulo: el cupo es a medida. */
+  /** Cupo a medida vigente (`hasCustomLimits`: Libre con algún `max*Override` no nulo; en otro plan quedan inertes). */
   customLimits: boolean;
   seats: SeatUsageByKind;
   /** Invitaciones pendientes y vigentes por tipo (ya están sumadas en `seats`). */
@@ -190,15 +191,15 @@ function seatLine(kind: SeatKind | "total", c: SeatCount): SeatLine {
 }
 
 /**
- * Desglose: los tipos con límite propio (Consultorio: profesionales y Secretaría) y el total. Si ningún tipo tiene
- * límite propio (Individual tiene 1/1/1 pero lo que manda es el total; Clínica 10 de cualquier tipo) igual se
- * muestran los dos tipos sin límite, para que se vea quién ocupa qué, y el total con su tope.
+ * Desglose: los tipos con límite propio (solo un Libre a medida con topes por tipo) y el total. Si ningún tipo tiene
+ * límite propio (Individual tiene 1/1/1 pero lo que manda es el total; Consultorio 5 y Clínica 10 de cualquier tipo)
+ * igual se muestran los dos tipos sin límite, para que se vea quién ocupa qué, y el total con su tope.
  */
 function seatLines(u: SeatUsageByKind): SeatLine[] {
   const kindsCapped = u.professional.limit != null && u.staff.limit != null;
   const lines: SeatLine[] = [];
   if (kindsCapped && u.total.limit != null && u.professional.limit! + u.staff.limit! <= u.total.limit) {
-    // Consultorio: 4 + 1 = 5. El total es la suma; se muestra igual (es lo que dice el plan).
+    // Topes por tipo que suman el total (un Libre a medida, p. ej. 4 profesionales + 1 = 5): se muestra igual.
     lines.push(seatLine("professional", u.professional), seatLine("staff", u.staff));
   } else if (kindsCapped && u.total.limit != null && u.total.limit <= Math.min(u.professional.limit!, u.staff.limit!)) {
     // Individual: 1 usuario de cualquier tipo. Los topes por tipo no agregan nada: solo el total.

@@ -39,7 +39,15 @@ vi.mock("@/components/layout/tweaks-context", () => ({
 }));
 // El menú de perfil no es de esta sesión (su picker va como handoff); se
 // reemplaza para no arrastrar el selector de consultorio.
-vi.mock("@/components/global/profile-menu", () => ({ ProfileMenu: () => null }));
+// PL-Z (FX4): el mock guarda las props para verificar que el dashboard le pasa `ownPublicBooking` (el switch del
+// propio turnero; el render del switch lo cubre `plz-fx4-account.test.tsx`).
+const { profileMenuProps } = vi.hoisted(() => ({ profileMenuProps: [] as Record<string, unknown>[] }));
+vi.mock("@/components/global/profile-menu", () => ({
+  ProfileMenu: (p: Record<string, unknown>) => {
+    profileMenuProps.push(p);
+    return null;
+  },
+}));
 
 import { DashboardScreen } from "@/components/screens/dashboard-screen";
 import { PinKpiModal } from "@/components/dashboard/pin-kpi-button";
@@ -81,6 +89,7 @@ const data: DashboardData = {
   revenueScope: "none",
   reminderDismissed: false,
   reminderKey: "near-discharge:2026-W42",
+  ownPublicBooking: null,
 };
 
 function screen(modules: ReadonlySet<TenantModule> | null, d: DashboardData = data) {
@@ -227,5 +236,15 @@ describe("PinKpiModal · General", () => {
     expect(html).toContain("Turnos esta semana");
     // La de planes guardada no cuenta para el tope.
     expect(html).toContain("1 de 6 seleccionados");
+  });
+});
+
+describe("[PL-Z FX4] menú de perfil del dashboard", () => {
+  it("le pasa al ProfileMenu la ficha propia (`ownPublicBooking`) o null si no atiende", () => {
+    profileMenuProps.length = 0;
+    screen(null, { ...data, ownPublicBooking: { practitionerId: "pr-1", enabled: false } });
+    expect(profileMenuProps.at(-1)?.ownPublicBooking).toEqual({ practitionerId: "pr-1", enabled: false });
+    screen(null, data);
+    expect(profileMenuProps.at(-1)?.ownPublicBooking).toBeNull();
   });
 });

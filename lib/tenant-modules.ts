@@ -163,8 +163,9 @@ export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   facturacion: "Tu consultorio no tiene la facturación habilitada.",
   obrasSociales: "Tu consultorio no tiene las obras sociales habilitadas.",
   evoluciones: "Tu consultorio no tiene las evoluciones habilitadas.",
-  salaEspera: "La sala de espera está disponible en el plan Clínica.",
-  salas: "Las salas están disponibles en el plan Clínica.",
+  // PL-Z B6: decir los dos planes que la traen y dónde se cambia (antes solo «en el plan Clínica», sin salida).
+  salaEspera: "La sala de espera viene con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
+  salas: "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
   turneroPublico:
     "Los turnos online no están habilitados. Activalos desde Configuración para recibir reservas.",
   reportes: "Los reportes no están disponibles para tu tipo de consultorio.",

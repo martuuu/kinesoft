@@ -2,6 +2,10 @@
  * [BO3-B] Pestaña «Suscripción» del detalle: tipo, plan, estado de la suscripción, trial, turnos online, cupo de
  * usuarios por tipo y el acceso que resulta (`tenantAccessFor`, C-BO1). Se edita con el Drawer de EV0
  * (`TenantEditDrawer`), que desde PL-1d cambia el plan SaaS y los cupos a medida por tipo (Libre y excepciones).
+ *
+ * PL-3c: el plan se cambia con «Cambiar de plan» (`PlatformPlanChangeDrawer`, mismo núcleo que el consultorio: elegir
+ * a quiénes deshabilitar, Libre permitido); «Editar suscripción» queda para tipo, estado, prueba, turnos online y
+ * cupos a medida. El estado de cuenta vive en la pestaña «Facturación».
  */
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
@@ -13,6 +17,7 @@ import {
 } from "@/components/plataforma/tenants/labels";
 import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
 import { TenantEditDrawer } from "@/components/plataforma/tenants/tenant-edit-drawer";
+import { PlatformPlanChangeDrawer } from "@/components/plataforma/billing/plan-change-drawer";
 
 /** «Acceso completo» / «En gracia · quedan 3 días». Es lo que vive el consultorio, no lo que se cargó. */
 export function accessText(d: Pick<PlatformTenantDetail, "access" | "effectiveAccessMode">): string {
@@ -29,8 +34,13 @@ export function TenantSubscriptionView({ detail: d }: { detail: PlatformTenantDe
   return (
     <Section
       title="Suscripción"
-      description="El estado de la suscripción es informativo hasta que exista la facturación; el acceso lo calcula la app con el estado del consultorio, la suscripción y la prueba."
-      action={<TenantEditDrawer detail={d} />}
+      description="El acceso lo calcula la app con el estado del consultorio, la suscripción y la prueba. Los cargos y pagos están en la pestaña Facturación."
+      action={
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <PlatformPlanChangeDrawer tenantId={d.id} tenantName={d.name} current={d.saasPlan} vertical={d.vertical} />
+          <TenantEditDrawer detail={d} />
+        </div>
+      }
     >
       <Facts
         items={[

@@ -115,7 +115,8 @@ describe.skipIf(!RUN)("P2-C1 · plan-authz-internal", () => {
   // rol → [manage, schedule, authorize] y el acceso que resuelve.
   const MATRIX: Array<[string, [boolean, boolean, boolean], PatientAccessLevel | null]> = [
     ["OWNER", [true, true, true], "full"],
-    ["ADMIN", [true, true, true], "full"],
+    // PL-Z M1: el Administrador/a nunca atiende (§20.17) → como la Secretaria: agenda y autoriza, no gestiona.
+    ["ADMIN", [false, true, true], "admin"],
     ["PRACTITIONER_FULL", [true, true, true], "full"],
     // Básico: tiene las tres capabilities, pero ni full ni operateAll.
     ["PRACTITIONER_BASIC", [false, false, false], null],

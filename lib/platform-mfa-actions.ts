@@ -18,6 +18,9 @@
 import { prismaService } from "@/lib/db";
 import { auditPlatformGlobalInTx } from "@/lib/audit";
 import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
+import { getAccessSnapshot } from "@/lib/session";
+import { requireStepUp } from "@/lib/two-factor-step-up";
+import { hasAnyTwoFactorMethod } from "@/lib/two-factor-logic";
 import { platformMfa, type MfaFactorLite } from "@/lib/platform-mfa";
 import { setPlatformReauthCookie } from "@/lib/platform-reauth";
 import { normalizeTotpCode, type PlatformMfaEnrollment } from "@/lib/platform-mfa-logic";
@@ -62,6 +65,17 @@ function outcomeError(r: Exclude<VerifyOutcome, "ok">): string {
 }
 
 /**
+ * PL-Z (a2#3): si el superadmin ya tiene la 2FA por usuario (app o email, `lib/two-factor.ts`), sumar un TOTP desde
+ * acá también pide step-up: con una sesión robada (ya verificada) se dejaba un factor propio que después alcanza para
+ * la AAL2 de Plataforma. Tira `StepUpRequiredError` (digest): `MfaSetupForm` lo atrapa con `StepUpProvider`. Sin
+ * métodos por usuario no hay con qué pedirlo (es el primer factor): sigue como antes.
+ */
+async function requireStepUpIfUserTwoFactor(userId: string): Promise<void> {
+  const s = await getAccessSnapshot();
+  if (s && hasAnyTwoFactorMethod(s.twoFactor.methods)) await requireStepUp({ userId });
+}
+
+/**
  * Arranca el enrolamiento TOTP: devuelve el QR (SVG de Supabase como data URI) y el secreto para tipear a mano.
  * Si ya tiene un factor verificado no crea otro (agregar uno exige AAL2 y no es este flujo). Un enrolamiento a medias
  * (factor `unverified`, p. ej. cerró la pestaña con el QR abierto) se borra antes: GoTrue no deja repetir el nombre y
@@ -69,6 +83,7 @@ function outcomeError(r: Exclude<VerifyOutcome, "ok">): string {
  */
 export async function startPlatformMfaEnrollment(): Promise<ActionResult<PlatformMfaEnrollment>> {
   const actor = await requirePlatformAdmin("mfa.enroll", { mfaStep: true });
+  await requireStepUpIfUserTwoFactor(actor.userId);
   const port = platformMfa();
   const list = await port.listFactors();
   if (!list.ok) {
@@ -103,6 +118,7 @@ export async function confirmPlatformMfaEnrollment(factorId: unknown, rawCode: u
   if (typeof factorId !== "string" || factorId.length === 0 || factorId.length > 64) {
     return { ok: false, error: "Datos inválidos" };
   }
+  await requireStepUpIfUserTwoFactor(actor.userId);
   // El factor tiene que ser de ESTA persona y TOTP: GoTrue ya lo exige (el JWT es suyo), pero no mandamos ids ajenos.
   const list = await platformMfa().listFactors();
   if (!list.ok) return { ok: false, error: UNAVAILABLE };

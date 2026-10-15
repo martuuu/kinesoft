@@ -26,6 +26,10 @@
  *
  * Los helpers puros (borrador, validación, orden, textos) se exportan para el
  * unit test (`tests/unit/render/rooms-section.test.tsx`).
+ *
+ * PL-2f (C-PL1, PL-D7): las salas son del plan Clínica / Libre (módulo `salas`). Sin el módulo la sección es solo
+ * un aviso corto: ni lista ni «Nueva sala» (las actions tiran 403 y `listRooms` da `[]`). Las salas cargadas en
+ * Clínica no se borran: «duermen» y vuelven al subir de plan.
  */
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -53,12 +57,14 @@ import {
 import type { RoomArchiveBlockers as Blockers, RoomRow } from "@/lib/rooms-types";
 import { archiveRoom, createRoom, restoreRoom, updateRoom } from "@/lib/rooms";
 import { ErrorBox } from "../controls";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
 
 // ─── Copy (voseo, literal del relevamiento SR-U1) ───
 
 export const ROOMS_COPY = {
   title: "Salas",
   lead: "Consultorios, boxes y gimnasios de esta sede. Asigná una sala a cada franja para que nadie se pise.",
+  upsell: "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.",
   add: "Nueva sala",
   empty: "Esta sede todavía no tiene salas. Cargalas si querés saber quién atiende dónde.",
   drawerNew: "Nueva sala",
@@ -202,16 +208,27 @@ const linkBtn: React.CSSProperties = {
   minHeight: 32,
 };
 
-export function RoomsSection({
-  locationId,
-  locationName,
-  rooms,
-}: {
+type RoomsSectionProps = {
   locationId: string;
   locationName: string;
   /** Todas las salas del consultorio (archivadas incluidas); se filtran por sede acá. */
   rooms: readonly RoomRow[];
-}) {
+};
+
+export function RoomsSection(props: RoomsSectionProps) {
+  // PL-2f: el gate va en un componente aparte para no cortar los hooks de la sección.
+  if (!useTenantModules().has("salas")) {
+    return (
+      <section aria-label={`Salas de ${props.locationName}`} style={{ display: "grid", gap: 4, minWidth: 0 }}>
+        <EyebrowLabel>{ROOMS_COPY.title}</EyebrowLabel>
+        <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{ROOMS_COPY.upsell}</div>
+      </section>
+    );
+  }
+  return <RoomsSectionBody {...props} />;
+}
+
+function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps) {
   const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();

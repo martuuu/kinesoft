@@ -116,7 +116,8 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    T = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     osteoId = await addService(db, T, { name: "Osteopatía", durationMin: 60, maxConcurrent: 1 });
   });
   afterAll(async () => {
@@ -509,7 +510,7 @@ describe.skipIf(!RUN)("reserva pública · motor de disponibilidad (B3.2 AV-publ
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db);
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     P2 = (await addPractitioner(db, T)).practitionerId;
     locA = (await db.location.create({ data: { tenantId: T.tenantId, name: "Centro", address: "Av. 1 123", isPrimary: true } })).id;
     locB = (await db.location.create({ data: { tenantId: T.tenantId, name: "Norte", address: "Calle 2 456" } })).id;
@@ -736,7 +737,7 @@ describe.skipIf(!RUN)("SV06a · turnero público → afterBookingsCommitted", ()
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db);
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     room = await addRoom(db, T, { name: "Consultorio SV" });
     await db.practitionerSchedule.createMany({
       data: [1, 2, 3, 4, 5].map((dow) => ({

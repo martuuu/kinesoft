@@ -56,8 +56,9 @@ describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     prac = await addPractitioner(db, A, "PRACTITIONER");
     asst = await addPractitioner(db, A, "ASSISTANT");
     locA1 = (await db.location.create({ data: { tenantId: A.tenantId, name: "Centro", isPrimary: true } })).id;

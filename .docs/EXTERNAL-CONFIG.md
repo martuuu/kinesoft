@@ -149,13 +149,13 @@ vacías = default; cambiar cualquiera pide **redeploy**):
 | Variable | Default | Cuándo cambiarla |
 |---|---|---|
 | `TENANT_ACCESS_ENFORCEMENT` | `banner` (`off` \| `banner` \| `enforce`) | `banner`: la prueba vencida o el impago solo muestran la banda; suspender y dar de baja desde /plataforma **sí** cortan. `enforce`: el consultorio vencido (después de la gracia de 7 días de prueba o 10 de impago) queda en **solo lectura** (nunca se bloquea leer). `off`: interruptor de emergencia (ni la suspensión corta). Pasar a `enforce` cuando decidas cobrar de verdad |
-| `PLATFORM_MFA_ENFORCEMENT` | `off` (`off` \| `enforce`) | `enforce` después de enrolarte (pasos abajo). **Antes de usar «Entrar como soporte»** |
+| `PLATFORM_MFA_ENFORCEMENT` | `off` (`off` \| `enforce`) | `enforce` después de enrolarte (pasos abajo). Desde PL-2 queda en `off` (§20.5.5): la 2FA es por usuario y «Entrar como soporte» ya no la exige |
 | `MAINTENANCE_MODE` | `off` (`off` \| `on`) | `on` + redeploy para cerrar la app con 503 durante una migración larga. Sin bypass para superadmin; Mercado Pago, `/api/health` y los crons siguen. Probar el rewrite una vez en un Preview |
 | `MAINTENANCE_MESSAGE` | vacía | Una línea que ve **cualquiera** en `/mantenimiento` (máx. 280): nada interno |
 | `CRON_SECRET` | — | Cargarla ya: `openssl rand -hex 32`, solo Production. Vercel la manda como `Authorization: Bearer` a los crons; sin ella responden 503 y no corren |
 | `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_REPLY_TO` | — | Ya documentadas en §0.4. BO suma mails: activación del titular, link de acceso, «soporte entró», recordatorio de prueba, resumen diario de salud y pedido de export. Sin Resend, el alta de consultorio muestra el link para copiar |
 
-**MFA de superadmin (Supabase TOTP):**
+**MFA de superadmin (Supabase TOTP; PL-2: la 2FA por usuario está en `/cuenta/seguridad`, ADR-017):**
 1. Supabase → Authentication → **Multi-Factor** → TOTP **habilitado** (viene así por defecto; si está apagado, enrolar
    da error en pantalla).
 2. Deploy con `PLATFORM_MFA_ENFORCEMENT` en `off`.
@@ -169,14 +169,45 @@ vacías = default; cambiar cualquiera pide **redeploy**):
    factor en Supabase → Authentication → Users → el usuario → MFA factors.
 7. La CSP de `/plataforma` es bloqueante: la toolbar de Vercel no aparece ahí en los Preview (es esperado).
 
+**Con `PLATFORM_MFA_ENFORCEMENT=off` (el default desde PL-2), PL-Z:** las acciones de **riesgo alto** de Plataforma
+(suspender/dar de baja, cambiar slug, cortar acceso, transferir titular, permisos y «¿Atiende?» de un equipo,
+deshabilitar usuarios, link de acceso, dar superadmin, reset de 2FA, entrar como soporte, pedir export, cobros, precios y
+cambiar de plan; `PLATFORM_ACTIONS` en `lib/platform-actor.ts`) piden igual el código de la **2FA por usuario** del superadmin (`/cuenta/seguridad`,
+ventana de 10 min). **Cada superadmin tiene que activarla** antes de operar: sin 2FA activa, la acción pide activarla y no
+corre. Un superadmin no puede resetear la 2FA de otro superadmin (recuperación: pasos 6 o Supabase → Users → MFA factors).
+
 **Vercel: Hobby vs Pro.**
-- Crons: en Hobby corren **una vez por día y a una hora inexacta** dentro de la hora configurada (06, 11 y 12 UTC); en Pro,
-  a la hora exacta. Solo en Production.
+- Crons: en Hobby corren **una vez por día y a una hora inexacta** dentro de la hora configurada; en Pro, a la hora exacta.
+  Solo en Production. Desde PL-2 hay **uno solo**: `/api/cron/daily` a las 11:00 UTC (§0.6).
 - `maxDuration`: Hobby 60 s (el export del consultorio está en 60 s; uno grande puede cortarse), Pro hasta 300 s
   (subirlo en `vercel.json`). Pro además es el plan para uso comercial (§19.9 del plan).
 
 **Monitor externo:** apuntar un monitor (UptimeRobot o similar) a `GET /api/health` cada 1-5 min: `200 { ok: true }`;
 `503` = base caída; `maintenance: true` = cerrado a propósito.
+
+### 0.6 PL-2 — Facebook, comprobantes, cron único, cobro y bandeja (15-oct-2026) 🔴
+
+| Qué | Dónde | Cuándo |
+|---|---|---|
+| `CRON_SECRET` | Vercel → Production | Ya estaba (§0.5). Ahora lo usa el **único** cron, `/api/cron/daily` (11:00 UTC = 08:00 AR): cobros + invitaciones + recordatorios de prueba + resumen de salud. Las rutas viejas (`/api/cron/trial-reminders`, etc.) quedan solo para dispararlas a mano con el mismo `Bearer` |
+| `SAAS_BILLING_MODE` | Vercel → Production | Default `off`: se deploya sin cobrar (no genera cargos ni manda mails de cobro). Pasar a **`manual`** cuando cargues los precios en /plataforma y quieras empezar a cobrar por transferencia. `mp` existe en el enum pero **en esta etapa se comporta como `manual`** (sin Mercado Pago para la suscripción) |
+| `SAAS_BILLING_TRANSFER_INFO` | Vercel → Production | **PL-Z (A2).** Texto libre (hasta 500 caracteres) con los datos para transferir: alias, CBU, titular y CUIT. Lo ve el consultorio en Configuración → Facturación. Sin ella **no se ofrece «Informar pago»**: el consultorio no tiene a dónde pagar. **Bloquea pasar `SAAS_BILLING_MODE` a `manual`**: cargarla antes (o en el mismo redeploy). Solo datos de cobro, nada interno |
+| `PLATFORM_INBOX_EMAIL` | Vercel → Production | La casilla que recibe los avisos de mensajes de consultorios y de leads de la web. Sin ella los mensajes quedan en /plataforma → Mensajes, pero no llega aviso por mail |
+| Bucket **`billing-receipts`** | Supabase → Storage → New bucket | **Privado** (Public bucket apagado), límite 4 MB, tipos `application/pdf, image/jpeg, image/png, image/webp`. Sin policies para `anon`/`authenticated`: la app lo usa con service-role y entrega URLs firmadas de 60 s. Crearlo **antes** de pasar a `manual` (sin bucket, subir un comprobante da error) |
+
+**Facebook (Meta + Supabase), solo si se quiere ofrecer el botón:**
+1. developers.facebook.com → crear app → caso de uso **«Autenticar y solicitar datos a usuarios con el inicio de sesión con
+   Facebook»**.
+2. Inicio de sesión con Facebook → Configuración: **Inicio de sesión con OAuth web** y **Forzar HTTPS** prendidos, **modo
+   estricto** para URI de redireccionamiento prendido, URI válida = `https://<ref>.supabase.co/auth/v1/callback`.
+3. Permisos: `email` y `public_profile` (sin revisión de Meta para estos dos).
+4. Configuración básica: URL de política de privacidad, de condiciones y de **eliminación de datos** (las tres públicas),
+   ícono y categoría. Pasar la app a **Live** (en modo desarrollo solo entran los testers).
+5. Supabase → Authentication → Providers → **Facebook**: App ID y App Secret. **«Allow users without an email»
+   apagado** (si no, Facebook puede entregar un usuario sin email; igual la app lo rechaza con `oauth_no_email`, H-PL2).
+6. Verificar: `GET https://<ref>.supabase.co/auth/v1/settings` → `"facebook": true`. Mientras esté en `false`, el botón
+   termina en «Ese método de ingreso no está disponible por ahora».
+7. La CSP ya permite `www.facebook.com`/`m.facebook.com` en `form-action` y el avatar de `platform-lookaside.fbsbx.com`.
 
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
@@ -345,9 +376,9 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Qué configura:**
   1. **Checkout de turnos (existente):** credenciales de prod + `MP_WEBHOOK_SECRET` verificado en
      Vercel (la ruta ya da 503 sin él); credenciales **sandbox** para el QA de `payment-amount-anclado`.
-  2. **Preapproval / suscripción (Ola 2.4):** habilitar pago recurrente para el billing SaaS al
-     consultorio (integración separada del checkout de turnos).
-- **Bloquea:** corte E1 #2; Ola 2.4 (billing SaaS).
+  2. **Preapproval / suscripción:** **no por ahora** (decisión de Martin 16-oct). La suscripción se cobra por
+     transferencia con comprobante (PL-2b, §0.6); el webhook de MP queda solo para los turnos.
+- **Bloquea:** checkout de turnos (corte E1 #2). Ya no bloquea el cobro del plan: es manual (PL-2b, §0.6; la Ola 2.4 quedó superada por PL).
 - **Responsable:** dueño.
 - **Estado:** 🟡 (checkout de turnos funcional; secret/credenciales prod y sandbox por verificar).
 - **Gate de activación:** `MP_WEBHOOK_SECRET` + credenciales prod; sandbox para QA.
@@ -363,11 +394,12 @@ prod `supabase` + redeploy. Volver atrás = `REALTIME_DRIVER=off` + redeploy.
 - **Gate de activación:** `RESEND_API_KEY` + `EMAIL_FROM` en Vercel (Production) con el dominio verificado.
 
 ### 8. Identidad / OAuth
-- **Qué configura:** proveedores OAuth adicionales. **Google** ya está cableado. **Apple** requiere
-  cuenta de Apple Developer (paga). **Meta/Facebook** requiere app + review.
+- **Qué configura:** proveedores OAuth adicionales. **Google** ya está cableado. **Facebook**: el código está
+  (PL-2e, `/api/auth/oauth/facebook`); falta la app de Meta y el provider en Supabase (§0.6). **Apple** requiere
+  cuenta de Apple Developer (paga).
 - **Bloquea:** sesión `oauth-extra` (Ola 2.6) — opcional.
 - **Responsable:** dueño.
-- **Estado:** 🟢 Google · 🔴 Apple/Meta.
+- **Estado:** 🟢 Google · 🟡 Facebook (código listo, consola pendiente) · 🔴 Apple.
 - **Gate de activación:** credenciales del proveedor en Supabase Auth.
 
 ### 9. Analítica de producto/uso — GA / Vercel Analytics / Google Business

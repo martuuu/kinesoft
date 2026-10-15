@@ -27,7 +27,7 @@
 | # | Bloque | Qué incluye | Migración |
 |---|---|---|---|
 | 0 | **Paso 0 + DIR-0 + VX0 + PF-0** | Docs al día; hotfix A del email como nombre (DIR-0); prototipo visual de login y landing en `design_source/vx0/` (no toca la app); diagnóstico de lentitud (H-SLOW) + arreglos rápidos (sesión sin ida y vuelta a Auth, `loading.tsx`, sin doble render) | — |
-| 1 | **PL** Planes, cobros y cuenta | Recorte de auditoría (PL-A), planes Individual/Consultorio/Clínica/Libre en ARS, cupos por tipo y bajar de plan, Titular y permisos delegables, 2FA opcional por usuario, MP débito + pagos manuales + estado contable, mensajes y leads, alta con Google/Facebook, salas y sala de espera solo en Clínica/Libre, turnero por profesional | **M8** `pl_accounts_billing` |
+| 1 | **PL** Planes, cobros y cuenta | Recorte de auditoría (PL-A), planes Individual/Consultorio/Clínica/Libre en ARS, cupos (Consultorio 5 y Clínica 10 de cualquier tipo) y bajar de plan, Titular y permisos delegables, 2FA opcional por usuario, pagos manuales (sin Mercado Pago, ADR-016) + estado contable, mensajes y leads, alta con Google/Facebook, salas y sala de espera solo en Clínica/Libre, turnero por profesional | **M8** `pl_accounts_billing` |
 | 2 | **EV2** Evoluciones | HC base para todas las verticales: evolución por consulta, 24 h para editar, después enmienda o anulación; nunca se borra ni va al portal | **M9** `clinical_notes` |
 | 3 | **VX** Cara pública | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
 | 4 | **ES4** Portal (P4) | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
@@ -35,11 +35,20 @@
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
-**Estado de PL (15-oct):** PL-A ✅ (`68b26f0`) · PL-0 ✅ M8 solo en local (`6b1c50d`) · PL-1 ✅ (contratos `14eb013` +
-integración: matriz por plan SaaS, escritor único, cupos por tipo y cambio de plan, acceso por miembro/H-PL1, sesión v2 y
-corte de 2FA sin UI todavía, Plataforma con planes nuevos). Decisiones de Martin del 15-oct noche aplicadas (plan §20.17):
-el Administrador/a nunca atiende y Consultorio = 5 usuarios de cualquier tipo — la fila de `SaasPlanConfig` y los ADMIN
-existentes los corrige **M8b**, sola al inicio de PL-2. Sigue PL-2.
+**Estado de PL (15-oct): PL ✅ completo (PL-A..PL-Z), sin commitear** desde `7bcfc1b` (PL-1). PL-A (`68b26f0`) ·
+PL-0 M8 (`6b1c50d`) · PL-1 (`14eb013` + `7bcfc1b`) commiteados; **PL-2, M8b, PL-3 y PL-Z en el working tree**. M8b
+(`20261015200000_pl_admin_consultorio`, solo datos: Consultorio = 5 usuarios de cualquier tipo y el Administrador/a nunca
+atiende, plan §20.17) aplicada solo en local. **Prod:** M8 → M8b → deploy, en ese orden (RUNBOOK «Orden de prod de PL»).
+Qué trae PL-2/PL-3: 2FA por usuario (TOTP + email + recuperación, step-up), cobros manuales sin Mercado Pago (cron diario
+único, comprobantes, `SAAS_BILLING_MODE=off`), mensajes y leads, Google + Facebook, salas/sala de espera por plan,
+turnero por profesional, Configuración → Plan y uso / Facturación / Soporte, equipo con «Atiendo pacientes» y permisos,
+Plataforma → Facturación, ledger, Precios y «Cambiar de plan» (ADR-018). PL-Z (4 sub-revisores + revisor del diff + 5
+fixers + integrador, sin migraciones nuevas): pago a cuenta y excedente bien imputados, datos para transferir por
+`SAAS_BILLING_TRANSFER_INFO`, la 2FA ya no se saltea con un TOTP propio de GoTrue, el export pide la 2FA, Plataforma pide
+el código en acciones de riesgo alto, nadie sin atender suma a alguien que atiende, cupos a medida solo en Libre y switch
+propio del turnero en el menú de perfil. Quedan para Martin: **a1#3** (bajar de plan entre cargos; recomendado: desde el
+próximo período), **a3#12** (ADMIN que M8b convierte) y **a2#7** (anti-replay del TOTP, a verificar) ([AUDIT «Hallazgos
+de PL-Z»](AUDIT.md)). **Siguiente:** commit de Martin → **RX** (Recepción, si aprueba el mockup; plan §20) → **EV2**.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,
@@ -632,7 +641,11 @@ cambio de comportamiento** (QA visual + tsc).
 - ✅ **`realtime-agenda`** — hecho en la corrida SV de B (14-oct): Broadcast privado por tenant y re-pedido con las
   actions de la página (no por cache-tags). Cerró `no-realtime-agenda-compartida` ([AUDIT §Ronda 20](AUDIT.md)).
 
-### Ola 2.4 — Billing SaaS completo · ⏳ pendiente
+### Ola 2.4 — Billing SaaS completo · 🔀 superada por PL (§20)
+
+> **Superada por el bloque PL (15-oct).** El plan SaaS (`Tenant.saasPlan` + `SaasPlanConfig`, M8), los cupos, el cambio
+> de plan con preview y el cobro **manual** (cargos, comprobantes, Plataforma → Facturación; ADR-016) los hizo PL. Mercado
+> Pago (preapproval / débito automático) queda **diferido** por decisión de Martin. Lo de abajo es historia.
 
 Regla de dominio: *cada consultorio paga su plan con límite de asientos; el tenant puede deslinkear
 al kine; los profesionales no pagan.*

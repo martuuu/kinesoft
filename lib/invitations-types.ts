@@ -79,6 +79,12 @@ export type TeamMemberRow = {
   grantBilling: boolean;
   /** PL-1c: por qué está deshabilitado (MANUAL | PLAN_DOWNGRADE | PLATFORM); null si está activo. */
   disabledReason: string | null;
+  /**
+   * PL-3b (H-TURN, §20.5.12): su `Practitioner` en este consultorio (null = no atiende o membresía rota) y si aparece
+   * en el turnero online (`Practitioner.publicBookingEnabled`). Lo muestran Equipo y Profesionales con el switch.
+   */
+  practitionerId: string | null;
+  publicBookingEnabled: boolean;
   /** IAM-4c: último «link para nueva contraseña» que se le mandó (de `EmailLog`), para mostrar si salió. */
   lastPasswordResetEmail: InvitationLastEmail | null;
 };
@@ -94,6 +100,12 @@ export type MemberPasswordResetResult = {
   emailStatus: InvitationEmailStatus;
   emailReason: string | null;
 };
+
+/** PL-3b: «¿Atiende pacientes?» del Titular (`setMemberClinical`, solo sobre sí mismo, con step-up). */
+export type SetMemberClinicalInput = { membershipId: string; clinical: boolean };
+
+/** PL-3b (PL-D5): permisos delegados por miembro (`setMemberGrants`, solo el Titular, con step-up; nunca sobre el OWNER). */
+export type SetMemberGrantsInput = { membershipId: string; grantSettings: boolean; grantBilling: boolean };
 
 /** Resultado de suspender (IAM-4c): cuántos turnos futuros activos le quedan, para avisar que no se cancelan. */
 export type SuspendMemberResult = { futureBookings: number };
@@ -130,6 +142,15 @@ export type PlatformTeamMemberRow = {
   disabledAt: Date | null;
   /** Atiende (`isClinicalMember`) y tiene `Practitioner` en este consultorio (agenda propia). */
   hasAgenda: boolean;
+  /**
+   * PL-3b: «¿Atiende?» (`isClinicalMember`), permisos delegados y turnero por profesional, para que el superadmin vea y
+   * cambie lo mismo que el Titular. Los arma `lib/platform-team-read.ts`.
+   */
+  clinical: boolean;
+  grantSettings: boolean;
+  grantBilling: boolean;
+  /** `Practitioner.publicBookingEnabled` (null = no atiende o no tiene `Practitioner` en este consultorio). */
+  publicBookingEnabled: boolean | null;
 };
 
 /** Invitación sin aceptar ni anular vista desde Plataforma (BO2-B). Sin token ni URL. */

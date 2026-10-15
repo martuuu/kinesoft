@@ -19,7 +19,7 @@
  * sesiones y con el superadmin real del Docker); se cubre en unit (`platform-health-logic.test.ts`) y acá solo el
  * caso «hay otro activo → se puede».
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { searchPlatformUsers, getPlatformUser } from "@/lib/platform-users-read";
 import {
@@ -37,6 +37,14 @@ import { __rateLimitInternals } from "@/lib/rate-limit";
 import { GotrueFake } from "@/tests/helpers/gotrue-fake";
 import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+
+// PL-Z (a2#4): con PLATFORM_MFA_ENFORCEMENT != enforce, las acciones `high` de Plataforma piden el step-up de la 2FA
+// por usuario. Este archivo prueba otra cosa: el step-up se da por hecho (el corte real se prueba en
+// tests/integration/two-factor.test.ts, «Plataforma»). Se reemplaza la dependencia, no la action bajo test.
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
+  requireStepUp: async () => {},
+}));
 
 const RUN = process.env.INTEGRATION === "1";
 const PHI_MARK = "Zqxphibo2c";

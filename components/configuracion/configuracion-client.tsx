@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import type { Role } from "@prisma/client";
+import type { Role, TenantVertical } from "@prisma/client";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
@@ -14,7 +14,9 @@ import type { RoomRow } from "@/lib/rooms-types";
 import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule-schemas";
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
-import { TabsBar, parseConfigTab, type Tab } from "./controls";
+import type { BillingOverview } from "@/lib/saas-billing-types";
+import { StepUpProvider } from "@/components/account/step-up-modal";
+import { TabsBar, initialConfigTab, visibleConfigTabs, type ConfigTabAccess, type Tab } from "./controls";
 import { GeneralPanel } from "./panels/general-panel";
 import { ServicesPanel } from "./panels/services-panel";
 import { InsurersPanel } from "./panels/insurers-panel";
@@ -24,13 +26,22 @@ import { LocationsPanel } from "./panels/locations-panel";
 import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
 import { PlanUsagePanel } from "./panels/plan-usage-panel";
 import { SupportAccessPanel } from "./panels/support-access-panel";
+import { SupportMessagesPanel, type SupportDraft } from "./panels/support-messages-panel";
+import { BillingPanel } from "./panels/billing-panel";
+import type { PlanChoice } from "./panels/plan-change-drawer";
 import { ExportPanel, type ExportBlockedTenant } from "./panels/export-panel";
 
 type Props = {
   role: Role;
+  /**
+   * PL-3a: qué pestañas ve, por CAPACIDAD (C-PL5): `tenantAdmin` = «Configuración», `billing` = «Planes y pagos»,
+   * `team` = la página pudo leer el equipo. `canExport` lo calcula este componente (BO5-C / BO-Z B6).
+   */
+  access: Omit<ConfigTabAccess, "canExport">;
   /** Módulos del consultorio (EV0): esconden pestañas sin módulo (solo UI). */
   modules: TenantModule[];
-  tenant: TenantSettings;
+  /** null si no tiene «Configuración» (solo «Planes y pagos»): no ve General. */
+  tenant: TenantSettings | null;
   insurers: InsurerRow[];
   services: ServiceRow[];
   team: TeamMemberRow[];
@@ -42,10 +53,17 @@ type Props = {
   /** Todas las salas, archivadas incluidas (SR-U1): se muestran dentro de cada sede. */
   rooms: RoomRow[];
   scheduleSummary: PractitionerScheduleSummaryRow[];
-  /** BO3-F: Configuración → Plan y uso (OWNER/ADMIN). */
-  planUsage: TenantPlanUsageView;
-  /** BO3-F: Configuración → Accesos de soporte (OWNER/ADMIN). */
-  supportSessions: SupportSessionRow[];
+  /** Plan y uso (`account.billing`). null = la lectura de cupos no lo dejó pasar (se muestra sin el desglose). */
+  planUsage: TenantPlanUsageView | null;
+  /** PL-3a: Facturación (`getBillingOverview`); null sin `account.billing`. */
+  billingOverview?: BillingOverview | null;
+  /** PL-3a: precios y cupos de cada plan (catálogo C-PL2) para el drawer de cambio de plan. */
+  planChoices?: PlanChoice[];
+  vertical?: TenantVertical;
+  /** PL-3a: el consultorio está en modo lectura (modo efectivo): «Plan y uso» lo dice. */
+  readOnly?: boolean;
+  /** BO3-F: Configuración → Accesos de soporte. null = no la puede leer (sin `tenant.admin`, o soporte). */
+  supportSessions: SupportSessionRow[] | null;
   /**
    * BO3-F: el que mira es un superadmin «como soporte». `role` llega como ADMIN (los límites con que el server lo
    * deja gestionar el equipo, lib/invitations.ts) y esto apaga lo que el server no le deja: la vista compartida de la
@@ -61,10 +79,18 @@ type Props = {
 };
 
 export function ConfiguracionClient(props: Props) {
-  const [tab, setTabRaw] = useState<Tab>(() => parseConfigTab(props.initialTab));
+  const exportBlocked = props.exportBlocked ?? [];
+  // BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). BO-Z B6: también quien es
+  // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
+  const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
+  const access: ConfigTabAccess = { ...props.access, canExport };
+  const visible = visibleConfigTabs(access, props.modules);
+  const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
   // B3.4: Servicios/Coberturas de un profesional se editan en línea (no en
   // Drawer); cambiar de pestaña desmonta el editor y perdía lo cargado.
   const [practitionerDirty, setPractitionerDirty] = useState(false);
+  // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
+  const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
   const confirm = useConfirm();
   const setTab = useCallback(
     async (t: Tab) => {
@@ -94,10 +120,10 @@ export function ConfiguracionClient(props: Props) {
     },
     [tab, practitionerDirty, confirm]
   );
-  const exportBlocked = props.exportBlocked ?? [];
-  // BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). BO-Z B6: también quien es
-  // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
-  const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
+  const can = (t: Tab) => visible.includes(t);
+  // «Accesos de soporte»: solo Titular y Administrador/a (y solo si la página pudo leerlos: exige `tenant.admin`).
+  const supportAccessVisible = props.supportSessions !== null && (props.role === "OWNER" || props.role === "ADMIN");
+  const overview = props.billingOverview ?? null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <header>
@@ -107,37 +133,57 @@ export function ConfiguracionClient(props: Props) {
         </h1>
       </header>
 
-      <TabsBar
-        tab={tab}
-        setTab={(t) => void setTab(t)}
-        role={props.role}
-        modules={props.modules}
-        canExport={canExport}
-      />
+      <TabsBar tab={tab} setTab={(t) => void setTab(t)} access={access} modules={props.modules} />
 
-      {tab === "general" && <GeneralPanel tenant={props.tenant} role={props.role} support={props.support} />}
-      {tab === "sedes" && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
-      {tab === "profesionales" && (
+      {tab === "general" && can("general") && props.tenant && (
+        <GeneralPanel tenant={props.tenant} role={props.role} support={props.support} />
+      )}
+      {tab === "sedes" && can("sedes") && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
+      {tab === "profesionales" && can("profesionales") && (
         <PractitionerPanel
           summary={props.scheduleSummary}
           locations={props.locations}
           rooms={props.rooms}
           onDirtyChange={setPractitionerDirty}
+          team={props.team}
         />
       )}
-      {tab === "servicios" && (
+      {tab === "servicios" && can("servicios") && (
         <ServicesPanel services={props.services} practitioners={props.practitioners} />
       )}
-      {tab === "obras-sociales" && <InsurersPanel insurers={props.insurers} />}
-      {tab === "diagnosticos" && props.modules.includes("diagnostico") && <DiagnosticosPanel conditions={props.customConditions} />}
-      {tab === "usuarios" && (props.role === "OWNER" || props.role === "ADMIN") && (
-        <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} />
+      {tab === "obras-sociales" && can("obras-sociales") && <InsurersPanel insurers={props.insurers} />}
+      {tab === "diagnosticos" && can("diagnosticos") && <DiagnosticosPanel conditions={props.customConditions} />}
+      {tab === "usuarios" && can("usuarios") && (
+        <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} seats={props.planUsage?.seats} />
       )}
-      {tab === "plan" && (props.role === "OWNER" || props.role === "ADMIN") && <PlanUsagePanel usage={props.planUsage} />}
-      {tab === "soporte" && (props.role === "OWNER" || props.role === "ADMIN") && (
-        <SupportAccessPanel sessions={props.supportSessions} />
+      {tab === "plan" && can("plan") && overview && (
+        // PL-D11: cambiar de plan pide step-up; el provider monta el modal del código (o el aviso de activar la 2FA).
+        <StepUpProvider>
+          <PlanUsagePanel
+            usage={props.planUsage}
+            overview={overview}
+            modules={props.modules}
+            choices={props.planChoices ?? []}
+            vertical={props.vertical}
+            readOnly={!!props.readOnly}
+            onContactSales={(draft) => {
+              setSupportDraft(draft);
+              void setTab("soporte");
+            }}
+            onGoToBilling={() => void setTab("facturacion")}
+          />
+        </StepUpProvider>
       )}
-      {tab === "exportar" && canExport && (
+      {tab === "facturacion" && can("facturacion") && overview && <BillingPanel initial={overview} />}
+      {tab === "soporte" && can("soporte") && (
+        // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
+        // PL-3a: Mensajes para `tenant.admin || account.billing` (PL-D20); Accesos, solo Titular/Administrador/a.
+        <div style={{ display: "grid", gap: 16 }}>
+          <SupportMessagesPanel support={props.support} draft={supportDraft} onDraftUsed={() => setSupportDraft(null)} />
+          {supportAccessVisible && <SupportAccessPanel sessions={props.supportSessions ?? []} />}
+        </div>
+      )}
+      {tab === "exportar" && can("exportar") && (
         <ExportPanel
           blocked={exportBlocked}
           requestedTenantId={props.exportRequestedTenantId}

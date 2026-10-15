@@ -53,7 +53,7 @@ describe("[IAM-0c] roleLabel", () => {
 describe("[IAM-0c] roleDescription", () => {
   it("Secretario/a y Facturación con el texto acordado", () => {
     expect(roleDescription("ASSISTANT")).toBe("Maneja la agenda y la recepción de todos. No ve historias clínicas.");
-    expect(roleDescription("BILLING")).toBe("Ve cobros y facturación. No ve historias clínicas.");
+    expect(roleDescription("BILLING")).toBe("Ve los cobros y copagos de los pacientes. No ve historias clínicas.");
   });
 
   it("una línea no vacía para cada rol y vertical", () => {
@@ -84,8 +84,9 @@ describe("[IAM-0c] conjuntos de roles", () => {
 
   it("[§20.17] clínicos = OWNER y PRACTITIONER (el Administrador/a nunca atiende)", () => {
     expect([...CLINICAL_ROLES].sort()).toEqual(["OWNER", "PRACTITIONER"]);
-    // La matriz por rol todavía le da `clinical.read` al ADMIN: lo usan solo las filas ADMIN legadas con
-    // `clinical = true` (las normaliza M8b). Para el resto de los roles, «atiende» = «lee clínica».
+    // La matriz por rol (`capabilitiesFor`) todavía le da `clinical.read` al ADMIN, pero la barrera por miembro
+    // (`capabilitiesForMember` → `isClinicalMember`) se lo niega siempre desde PL-Z M1. Para el resto de los roles,
+    // «atiende» = «lee clínica».
     for (const r of ALL.filter((x) => x !== "ADMIN")) {
       expect(isClinicalRole(r)).toBe(capabilitiesFor(r).has("clinical.read"));
     }

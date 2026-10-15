@@ -256,6 +256,22 @@ describe.skipIf(!RUN)("[PL-1c] cambio de plan con cupos por tipo", () => {
     expect(await prismaService.platformAuditEvent.count({ where: { tenantId: t.tenantId, action: "platform.tenant.plan.change" } })).toBe(1);
   });
 
+  it("[PL-Z] a3#1: Libre con cupos a medida no cambia de plan desde el consultorio; un override inerte en otro plan no traba", async () => {
+    const t = await tenant("LIBRE");
+    await db.tenant.update({ where: { id: t.tenantId }, data: { maxUsersOverride: 20 } });
+    const before = await updatedAt(t);
+    expect(await apply(ownerCtx(t), "CLINICA")).toEqual({ ok: false, reason: "invalid_selection", detail: "custom_limits" });
+    expect((await db.tenant.findUniqueOrThrow({ where: { id: t.tenantId } })).saasPlan).toBe("LIBRE");
+    expect((await updatedAt(t)).getTime()).toBe(before.getTime());
+
+    // Legado de M8: Clínica con el seatLimitOverride copiado. El override no rige (effectiveLimits) y no traba el cambio.
+    const legacy = await tenant("CLINICA");
+    await db.tenant.update({ where: { id: legacy.tenantId }, data: { maxUsersOverride: 20 } });
+    const pv = await preview(ownerCtx(legacy), "CONSULTORIO");
+    expect(pv?.limits.maxUsers).toBe(5);
+    expect(await apply(ownerCtx(legacy), "CONSULTORIO")).toMatchObject({ ok: true });
+  });
+
   it("subir: reactiva a los PLAN_DOWNGRADE elegidos (con Practitioner si atiende); a un suspendido a mano no", async () => {
     const t = await tenant("INDIVIDUAL");
     const down = await member(t, "PRACTITIONER", { disabledReason: "PLAN_DOWNGRADE" });
@@ -278,10 +294,14 @@ describe.skipIf(!RUN)("[PL-1c] cambio de plan con cupos por tipo", () => {
 
   it("subir no reactiva por encima del cupo del plan nuevo", async () => {
     const t = await tenant("INDIVIDUAL");
-    const a = await member(t, "ASSISTANT", { disabledReason: "PLAN_DOWNGRADE" });
-    const b = await member(t, "BILLING", { disabledReason: "PLAN_DOWNGRADE" });
-    const r = await apply(ownerCtx(t), "CONSULTORIO", { reactivate: [a.id, b.id] });
-    expect(r).toMatchObject({ ok: false, reason: "does_not_fit", detail: "professional:0,staff:1,total:1" });
+    // M8b (§20.17): Consultorio = 5 de cualquier tipo, sin tope por tipo. Titular + 5 reactivados = 6: sobra 1 por
+    // total (antes el caso era 2 no clínicos contra el tope de 1 que tenía la fila de M8).
+    const ids: string[] = [];
+    for (const role of ["ASSISTANT", "ASSISTANT", "BILLING", "BILLING", "PRACTITIONER"] as const) {
+      ids.push((await member(t, role, { disabledReason: "PLAN_DOWNGRADE" })).id);
+    }
+    const r = await apply(ownerCtx(t), "CONSULTORIO", { reactivate: ids });
+    expect(r).toMatchObject({ ok: false, reason: "does_not_fit", detail: "professional:0,staff:0,total:1" });
     expect((await db.tenant.findUniqueOrThrow({ where: { id: t.tenantId } })).saasPlan).toBe("INDIVIDUAL");
   });
 });

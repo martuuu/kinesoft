@@ -86,7 +86,8 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     expect(v.planLabel).toBe("Consultorio");
     // Titular + kine + invitación de kine = 3 profesionales; Secretaria + Facturación + invitación de Secretaria = 3.
     expect(v.seats).toMatchObject({
-      value: "Profesionales 3 de 4 · Secretaría/administración 3 de 1 · Total 6 de 5",
+      // M8b (§20.17): Consultorio = 5 usuarios de cualquier tipo, sin tope por tipo; solo el total frena.
+      value: "Profesionales 3 (sin límite) · Secretaría/administración 3 (sin límite) · Total 6 de 5",
       used: 6,
       limit: 5,
       full: true,
@@ -99,17 +100,25 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     expect(v.subscription).toEqual({ label: "Activa", tone: "ok", detail: null, contact: null });
   });
 
-  it("[PL-1c] los overrides del consultorio ganan sobre el plan", async () => {
+  it("[PL-1c → PL-Z a3#1] los overrides ganan sobre el plan solo en Libre; en otro plan quedan inertes", async () => {
     await db.tenant.update({ where: { id: T.tenantId }, data: { maxUsersOverride: 8, maxStaffOverride: 3 } });
     try {
       asUser(T.userId);
+      // Consultorio con overrides (legado de M8): rige el plan (5 en total, sin tope por tipo).
+      expect((await getTenantPlanUsage()).seats.value).toBe(
+        "Profesionales 3 (sin límite) · Secretaría/administración 3 (sin límite) · Total 6 de 5"
+      );
+      await db.tenant.update({ where: { id: T.tenantId }, data: { saasPlan: "LIBRE", plan: "ENTERPRISE" } });
       const v = await getTenantPlanUsage();
       expect(v.seats).toMatchObject({
-        value: "Profesionales 3 de 4 · Secretaría/administración 3 de 3 · Total 6 de 8",
+        value: "Profesionales 3 (sin límite) · Secretaría/administración 3 de 3 · Total 6 de 8",
         custom: true,
       });
     } finally {
-      await db.tenant.update({ where: { id: T.tenantId }, data: { maxUsersOverride: null, maxStaffOverride: null } });
+      await db.tenant.update({
+        where: { id: T.tenantId },
+        data: { maxUsersOverride: null, maxStaffOverride: null, saasPlan: "CONSULTORIO", plan: "STARTER" },
+      });
     }
   });
 
@@ -132,8 +141,9 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
   it("otro consultorio cuenta lo suyo (aislamiento)", async () => {
     asUser(U.userId);
     const v = await getTenantPlanUsage();
-    expect(v.seats).toMatchObject({ value: "Profesionales 4 de 4 · Secretaría/administración 0 de 1 · Total 4 de 5", used: 4 });
-    expect(v.nonSeatMembers).toBe(0);
+    // Titular + kine + invitación de kine = 3 profesionales; el Administrador/a no atiende (§20.17, PL-Z M1) = 1 no clínico.
+    expect(v.seats).toMatchObject({ value: "Profesionales 3 (sin límite) · Secretaría/administración 1 (sin límite) · Total 4 de 5", used: 4 });
+    expect(v.nonSeatMembers).toBe(1);
   });
 
   it("[BO2-D → BO3-F] General manda expectedUpdatedAt: un cambio en el medio vuelve con el copy que la UI reconoce", async () => {
@@ -154,6 +164,23 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     for (const u of [practitionerUserId, assistantUserId]) {
       asUser(u);
       await expect(getTenantPlanUsage()).rejects.toThrow("Solo OWNER/ADMIN ven el plan del consultorio.");
+    }
+  });
+
+  it("[PL-3] la Secretaria con «Planes y pagos» (grantBilling → account.billing) sí ve el plan y los cupos", async () => {
+    await db.membership.update({
+      where: { userId_tenantId: { userId: assistantUserId, tenantId: T.tenantId } },
+      data: { grantBilling: true },
+    });
+    try {
+      asUser(assistantUserId);
+      const view = await getTenantPlanUsage();
+      expect(view.seats).toBeTruthy();
+    } finally {
+      await db.membership.update({
+        where: { userId_tenantId: { userId: assistantUserId, tenantId: T.tenantId } },
+        data: { grantBilling: false },
+      });
     }
   });
 });

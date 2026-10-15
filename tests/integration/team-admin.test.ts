@@ -28,6 +28,7 @@ import {
   listTeamMembers,
   createInvitation,
 } from "@/lib/invitations";
+import { CLINICAL_ASSIGN_MESSAGE, changeMemberRoleInTx, runTeamTx, type TeamActorCtx } from "@/lib/team-internal";
 import { getActor, getAccessSnapshot } from "@/lib/session";
 import { listPractitioners } from "@/lib/bookings";
 import { acceptInvite } from "@/app/invite/[token]/accept-action";
@@ -165,7 +166,8 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
   it("ascender a alguien que ya tenía Practitioner lo reusa (no duplica ni pisa la especialidad)", async () => {
     const vieja = await addPractitioner(db, A, "ASSISTANT"); // fila vieja de antes de IAM-4a, specialty "Test"
     const m = await membershipOf(A, vieja.userId);
-    expect((await changeMemberRole(m.id, "ADMIN")).ok).toBe(true);
+    // PL-Z M1: «ascender a clínico» es a Profesional (el Administrador/a nunca atiende, §20.17).
+    expect((await changeMemberRole(m.id, "PRACTITIONER")).ok).toBe(true);
     const rows = await db.practitioner.findMany({ where: { tenantId: A.tenantId, userId: vieja.userId } });
     expect(rows.map((r) => [r.id, r.specialty])).toEqual([[vieja.practitionerId, "Test"]]);
   });
@@ -187,8 +189,10 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
     }
     expect((await membershipOf(A, kine.userId)).role).toBe("PRACTITIONER");
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "membership.role.change", entityId: m.id } })).toBe(0);
-    // §20.17: el Administrador/a no atiende: pasar a ADMIN tiene los mismos bloqueos.
-    const admin = await changeMemberRole(m.id, "ADMIN");
+    // §20.17: el Administrador/a no atiende: pasar a ADMIN tiene los mismos bloqueos. Por el núcleo con el ctx del
+    // Titular: desde PL-Z (a2#7) la action pide step-up para ADMIN (cubierto en pl3b-team.test.ts).
+    const ownerCtx: TeamActorCtx = { via: "tenant", tenantId: A.tenantId, actorUserId: A.userId, actorRole: "OWNER", actorRef: null };
+    const admin = await runTeamTx(ownerCtx, (tx) => changeMemberRoleInTx(tx, ownerCtx, { membershipId: m.id, role: "ADMIN" }));
     expect(admin.ok).toBe(false);
     if (!admin.ok) expect(admin.error).toContain("Reasigná sus 2 turnos futuros y 1 paciente asignado");
     expect((await membershipOf(A, kine.userId)).role).toBe("PRACTITIONER");
@@ -269,10 +273,13 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
     expect((await membershipOf(A, admin.userId)).disabledAt).toBeNull();
     expect(mail.sent).toHaveLength(0);
 
-    // El ADMIN sí suspende y reactiva a un profesional.
+    // El ADMIN sí suspende a un profesional; reactivarlo le devolvería la HC, y eso queda para el Titular o un
+    // profesional (PL-Z a3#5: el Administrador/a no atiende).
     const kine = await addPractitioner(db, A);
     const km = await membershipOf(A, kine.userId);
     expect((await suspendMember(km.id)).ok).toBe(true);
+    expect(await reactivateMember(km.id)).toEqual({ ok: false, error: CLINICAL_ASSIGN_MESSAGE });
+    asUser(A.userId);
     expect((await reactivateMember(km.id)).ok).toBe(true);
   });
 

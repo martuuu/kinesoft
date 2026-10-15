@@ -64,6 +64,14 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 
+// PL-Z (a2#4): con PLATFORM_MFA_ENFORCEMENT != enforce, las acciones `high` de Plataforma piden el step-up de la 2FA
+// por usuario. Este archivo prueba otra cosa: el step-up se da por hecho (el corte real se prueba en
+// tests/integration/two-factor.test.ts, «Plataforma»). Se reemplaza la dependencia, no la action bajo test.
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
+  requireStepUp: async () => {},
+}));
+
 const RUN = process.env.INTEGRATION === "1";
 const REASON = "El OWNER pidió ayuda con las obras sociales";
 const ar = (day: string, hhmm: string) => new Date(localToARIso(`${day}T${hhmm}:00`)).toISOString();
@@ -640,19 +648,20 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect((await db.membership.findUniqueOrThrow({ where: { id: kineMem.id } })).disabledAt).not.toBeNull();
   });
 
-  it("[BO-Z] B3: en Production con PLATFORM_MFA_ENFORCEMENT apagado, «Entrar como soporte» se rechaza; fuera de Production no", async () => {
+  // PL-2a (decisión de Martin, plan §20.5.5): se quitó el corte de BO-Z B3. Arrancó como
+  // `it.fails("[PL-2a] soporte en prod exige MFA")` (con el corte, Production + enforcement `off` rechazaba) y se dio
+  // vuelta al borrar el requisito de `lib/platform-support.ts`.
+  it("[PL-2a] en Production con PLATFORM_MFA_ENFORCEMENT apagado, «Entrar como soporte» abre (sin MFA de Plataforma)", async () => {
     const prev = { v: process.env.VERCEL_ENV, m: process.env.PLATFORM_MFA_ENFORCEMENT };
     try {
       process.env.VERCEL_ENV = "production";
       delete process.env.PLATFORM_MFA_ENFORCEMENT;
       asUser(S);
       const r = await startSupport(T.tenantId, REASON);
-      expect(r).toEqual({ ok: false, error: "Activá la verificación en dos pasos de Plataforma para entrar como soporte." });
-      expect(await db.supportSession.count({ where: { superadminId: S, endedAt: null } })).toBe(0);
-      expect(cookies().get(SUPPORT_COOKIE)).toBeUndefined();
-
-      process.env.VERCEL_ENV = "preview";
-      expect(await startSupport(T.tenantId, REASON)).toMatchObject({ ok: true });
+      expect(r).toMatchObject({ ok: true });
+      const open = await db.supportSession.findFirstOrThrow({ where: { superadminId: S, endedAt: null } });
+      expect(open.tenantId).toBe(T.tenantId);
+      expect(cookies().get(SUPPORT_COOKIE)).toBeDefined();
     } finally {
       if (prev.v === undefined) delete process.env.VERCEL_ENV;
       else process.env.VERCEL_ENV = prev.v;

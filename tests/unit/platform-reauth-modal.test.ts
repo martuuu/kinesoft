@@ -16,7 +16,10 @@ vi.mock("@/lib/session", () => {
   return { ForbiddenError, UnauthenticatedError, getAccessSnapshot: vi.fn() };
 });
 
-import { platformFailureOf } from "@/components/plataforma/reauth-modal";
+import { composePlatformRun, platformFailureOf, type RunPlatformAction } from "@/components/plataforma/reauth-modal";
+import { StepUpRequiredError, TwoFactorSetupRequiredError } from "@/lib/two-factor-step-up";
+import { classifyStepUpError } from "@/lib/two-factor-logic";
+import type { RunStepUpAction } from "@/components/account/step-up-modal";
 import { PlatformMfaRequiredError, PlatformRateLimitedError, PlatformReauthRequiredError } from "@/lib/platform-actor";
 import { PLATFORM_MFA_COPY, classifyPlatformActionError } from "@/lib/platform-mfa-logic";
 
@@ -51,5 +54,50 @@ describe("[BO4] errores de Plataforma → cliente", () => {
   it("cualquier otro error → null (el componente lo maneja como siempre)", () => {
     expect(platformFailureOf(new Error("boom"), () => undefined)).toBeNull();
     expect(platformFailureOf(Object.assign(new Error("x"), { digest: "98765" }), () => undefined)).toBeNull();
+  });
+});
+
+describe("[PL-Z] a2#4 step-up de la 2FA por usuario en Plataforma (MFA != enforce)", () => {
+  it("la capa de Plataforma no se traga el step-up: lo deja pasar al StepUpProvider", () => {
+    for (const e of [asProd(new StepUpRequiredError()), asProd(new TwoFactorSetupRequiredError())]) {
+      expect(platformFailureOf(e, () => undefined)).toBeNull();
+      expect(classifyStepUpError(e)).not.toBeNull();
+    }
+  });
+
+  it("composePlatformRun: el step-up envuelve la capa de Plataforma y el reintento repite la action entera", async () => {
+    const order: string[] = [];
+    let attempts = 0;
+    const action = async () => {
+      attempts++;
+      if (attempts === 1) throw asProd(new StepUpRequiredError());
+      return { ok: true as const, data: "hecho" };
+    };
+    // Plataforma real en forma: traduce lo suyo y re-tira lo ajeno.
+    const platform: RunPlatformAction = async (fn) => {
+      order.push("platform");
+      try {
+        return await fn();
+      } catch (err) {
+        const f = platformFailureOf(err, () => undefined);
+        if (f) return f;
+        throw err;
+      }
+    };
+    // Step-up en forma: ante su digest «pide el código» y reintenta una vez.
+    const stepUp: RunStepUpAction = async (fn) => {
+      order.push("step-up");
+      try {
+        return await fn();
+      } catch (err) {
+        if (classifyStepUpError(err)?.kind !== "step_up") throw err;
+        order.push("modal");
+        return fn();
+      }
+    };
+    const res = await composePlatformRun(stepUp, platform)(action);
+    expect(res).toEqual({ ok: true, data: "hecho" });
+    expect(attempts).toBe(2);
+    expect(order).toEqual(["step-up", "platform", "modal", "platform"]);
   });
 });

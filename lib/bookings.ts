@@ -39,6 +39,7 @@ import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
 import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
+import { MODULE_DENIED_COPY, roomsEnabled, waitingRoomEnabled } from "@/lib/tenant-modules";
 import type { ForceFlags } from "@/lib/booking-force-flags";
 import { tags, ttl } from "@/lib/cache-tags";
 import { NotificationKind } from "@prisma/client";
@@ -322,6 +323,7 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
       : [];
   }
   const tenantId = actor.tenantId;
+  const roomsOn = roomsEnabled(actor.entitlements);
 
   const loaded = await runWithRls(tenantId, async (tx) => {
     // Las sedes del tenant son pocas: una query sirve para el filtro (¿es la
@@ -348,7 +350,9 @@ export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise
         // SR: filtro de sala en el MISMO where (sin queries nuevas, techo +10 %):
         // "none" = solo sin sala; un id = esa sala (una ajena no matchea: el
         // tenantId de arriba va a mano); null/ausente = todas.
-        ...(q.roomId === "none" ? { roomId: null } : q.roomId ? { roomId: q.roomId } : {}),
+        // PL-2f: sin el módulo `salas` el filtro no existe (una pref guardada en Clínica no esconde turnos cuya
+        // sala ahora «duerme»).
+        ...(!roomsOn ? {} : q.roomId === "none" ? { roomId: null } : q.roomId ? { roomId: q.roomId } : {}),
       },
       orderBy: [{ scheduledFor: "asc" }, { id: "asc" }],
       select: {
@@ -567,6 +571,17 @@ export async function listPractitioners() {
   return fetcher(actor.tenantId);
 }
 
+/**
+ * PL-2f (C-PL1, PL-D7): una sala ELEGIDA (`roomId` string) sin el módulo `salas` → `ForbiddenError` con el copy de
+ * upsell. `undefined` (la de la franja) y `null` («Sin sala») no se gatean: sin el módulo, la de la franja ya es
+ * null (`lib/availability-loader.ts`). Síncrono y sin query: el plan viene en `actor.entitlements`.
+ */
+function assertRoomModule(actor: Actor, roomId: string | null | undefined): void {
+  if (typeof roomId === "string" && !roomsEnabled(actor.entitlements)) {
+    throw new ForbiddenError(MODULE_DENIED_COPY.salas);
+  }
+}
+
 export async function createBooking(
   raw: BookingCreateInput & {
     allowOverbooking?: boolean;
@@ -622,6 +637,10 @@ export async function createBooking(
     };
   }
   const data = parsed.data;
+  // PL-2f (PL-D7): elegir sala exige el módulo `salas` (Clínica / Libre). Antes de cualquier lectura: no se escribe
+  // nada. «Sin sala» (null) y la por defecto (ausente) siguen andando: sin el módulo el loader no ve las salas de
+  // las franjas, así que la por defecto da null.
+  assertRoomModule(actor, data.roomId);
   const now = new Date();
 
   // Ids de entrada validados contra el tenant ANTES de escribir: las FK
@@ -1377,6 +1396,12 @@ async function markReceptionActionImpl(
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const input = parsed.data;
+  // PL-2f (PL-D6): «Llamar» es de la Sala de Espera (Clínica / Libre). «Llegó», «En atención», «Atendido»,
+  // «Ausente» y «Deshacer» son estados de agenda y siguen en el núcleo (todos los planes). Sin query: el plan
+  // viene en el Actor. Mismo formato que el resto de los rechazos de esta action (`{ ok:false }`, no throw).
+  if (input.action === "llamar" && !waitingRoomEnabled(actor.entitlements)) {
+    return { ok: false, error: MODULE_DENIED_COPY.salaEspera };
+  }
   const expected = new Date(input.expectedUpdatedAt);
   const now = new Date();
 
@@ -2020,6 +2045,8 @@ async function createBookingsBatchImpl(
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
   const data = parsed.data;
+  // PL-2f: misma regla que `createBooking` (sala elegida sin el módulo → 403, sin escribir ni previsualizar).
+  assertRoomModule(actor, data.roomId);
   const { count } = data;
   // Ids de entrada validados contra el tenant ANTES de escribir (A2a-S06): el
   // paciente solo se usaba para leer el diagnóstico — si era de otro tenant la

@@ -158,11 +158,18 @@ describe("[PL-1c] seatUsageByKind / canAddSeat (decisión 1 de Martin)", () => {
     expect(canAddSeat(seatUsageByKind({ professional: 15, staff: 5 }, o), "staff")).toBe(false);
   });
 
-  it("la fila de SaasPlanConfig manda sobre PLAN_DEFAULTS; el override sobre los dos", () => {
+  it("la fila de SaasPlanConfig manda sobre PLAN_DEFAULTS; el override sobre los dos SOLO en Libre", () => {
     expect(planLimitsFor("CONSULTORIO", null, NO_OVERRIDES)).toEqual(PLAN_DEFAULTS.CONSULTORIO.limits);
     const row = { maxUsers: 6, maxProfessionals: 5, maxStaff: 1 };
     expect(planLimitsFor("CONSULTORIO", row, NO_OVERRIDES)).toEqual(row);
-    expect(planLimitsFor("CONSULTORIO", row, { ...NO_OVERRIDES, maxStaffOverride: 0 })).toEqual({ ...row, maxStaff: 0 });
+    expect(planLimitsFor("LIBRE", row, { ...NO_OVERRIDES, maxStaffOverride: 0 })).toEqual({ ...row, maxStaff: 0 });
+  });
+
+  it("[PL-Z] a3#1: fuera de Libre el override queda inerte (M8 copió seatLimitOverride al plan viejo)", () => {
+    const row = { maxUsers: 6, maxProfessionals: 5, maxStaff: 1 };
+    for (const plan of ["INDIVIDUAL", "CONSULTORIO", "CLINICA"] as const) {
+      expect(planLimitsFor(plan, row, { ...NO_OVERRIDES, maxUsersOverride: 20, maxStaffOverride: 0 })).toEqual(row);
+    }
   });
 });
 

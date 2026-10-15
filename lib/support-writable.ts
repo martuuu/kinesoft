@@ -30,6 +30,7 @@ export const SUPPORT_WRITABLE_FILES: ReadonlySet<string> = new Set([
   "lib/locations.ts",
   "lib/rooms.ts",
   "lib/practitioner-schedule.ts",
+  "lib/practitioner-public.ts",
 ]);
 
 export const SUPPORT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
@@ -58,6 +59,7 @@ export const SUPPORT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
   "lib/practitioner-schedule.ts#savePractitionerWeek",
   "lib/practitioner-schedule.ts#upsertException",
   "lib/practitioner-schedule.ts#deleteException",
+  "lib/practitioner-public.ts#setPractitionerPublicBooking",
   // Datos del consultorio, horario del consultorio y turnero (handoff a BO2-D)
   "lib/tenant-settings.ts#setBusinessHours",
   "lib/tenant-settings.ts#setPublicBookingEnabled",

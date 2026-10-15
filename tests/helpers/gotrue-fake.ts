@@ -31,16 +31,20 @@
  *  [S10] ban_duration "none" desbanea; "<n>h|m|s" banea hasta now + n.
  *  [S11] updateUserById con emailConfirm:false NO des-confirma (GoTrue solo
  *        confirma con true).
+ *  [S12] (PL-2a, `AuthAdminMfaPort`) admin.mfa.listFactors de un usuario sin factores → lista vacía (no error);
+ *        deleteFactor de un factor que no es de ese usuario → not_found.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import type {
   AuthAdminErrorCode,
+  AuthAdminMfaPort,
   AuthAdminPort,
   AuthAdminResult,
+  AuthFactorLite,
   AuthUserLite,
 } from "@/lib/identity/auth-admin";
 
-export type GotrueFakeMethod = keyof AuthAdminPort;
+export type GotrueFakeMethod = keyof AuthAdminPort | keyof AuthAdminMfaPort;
 export type GotrueFakeCall = { method: GotrueFakeMethod; args: unknown[] };
 export type GotrueFakeUser = AuthUserLite & { password: string | null; fullName: string | null };
 export type GotrueFakeLink = {
@@ -54,8 +58,10 @@ export type GotrueFakeLink = {
 
 type VerificationType = GotrueFakeLink["verificationType"];
 
-export class GotrueFake implements AuthAdminPort {
+export class GotrueFake implements AuthAdminPort, AuthAdminMfaPort {
   readonly calls: GotrueFakeCall[] = [];
+  /** PL-2a: factores MFA por userId (se siembran a mano; los borra `deleteFactor`). */
+  readonly factors = new Map<string, AuthFactorLite[]>();
   /** Usuarios por id. Se puede sembrar a mano o con `createUser`. */
   readonly users = new Map<string, GotrueFakeUser>();
   /** Links emitidos por `generateLink`, en orden (el test lee el `hashedToken`). */
@@ -249,5 +255,22 @@ export class GotrueFake implements AuthAdminPort {
       redirectTo: p.redirectTo,
     });
     return { ok: true as const, data: { hashedToken, verificationType, userId: u.id as string | null } };
+  }
+
+  // ── MFA admin (PL-2a) ──────────────────────────────────────────────────────
+
+  async listFactors(userId: string): Promise<AuthAdminResult<AuthFactorLite[]>> {
+    const injected = this.record("listFactors", [userId]);
+    if (injected) return injected;
+    return { ok: true, data: (this.factors.get(userId) ?? []).map((f) => ({ ...f })) };
+  }
+
+  async deleteFactor(userId: string, factorId: string): Promise<AuthAdminResult<null>> {
+    const injected = this.record("deleteFactor", [userId, factorId]);
+    if (injected) return injected;
+    const list = this.factors.get(userId) ?? [];
+    if (!list.some((f) => f.id === factorId)) return this.err("not_found", "Factor not found");
+    this.factors.set(userId, list.filter((f) => f.id !== factorId));
+    return { ok: true, data: null };
   }
 }

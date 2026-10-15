@@ -67,8 +67,9 @@ describe.skipIf(!RUN)("horarios con sala y vigencia (SR1c)", () => {
   beforeAll(async () => {
     db = ownerClient();
     appDb = new PrismaClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     locA = (await db.location.create({ data: { tenantId: A.tenantId, name: "Centro", isPrimary: true } })).id;
     locA2 = (await db.location.create({ data: { tenantId: A.tenantId, name: "Palermo" } })).id;
     ana = await prac(A, "Ana Pérez");
@@ -353,7 +354,7 @@ describe.skipIf(!RUN)("horarios con sala y vigencia (SR1c)", () => {
   });
 
   it("[SR-FX1] consultorio sin salas activas: getPractitionerSchedule no consulta el uso de salas", async () => {
-    const C = await createEphemeralTenant(db);
+    const C = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     try {
       const locC = (await db.location.create({ data: { tenantId: C.tenantId, name: "Única", isPrimary: true } })).id;
       const other = await addPractitioner(db, C, "PRACTITIONER");

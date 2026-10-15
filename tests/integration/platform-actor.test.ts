@@ -6,7 +6,22 @@
  * Se mockea solo la sesión de Supabase (integration-setup).
  * El rate limit corre en memoria (`.env.local` no trae Upstash).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+
+// PL-Z (a2#4): con MFA != enforce, las acciones `high` piden el step-up de la 2FA por usuario (`requireStepUp`). Acá
+// corre el REAL salvo en los tests que prueban otra cosa (rate limit, soporte con off), que lo dan por hecho con
+// `stepUp.pass = true`. El step-up con 2FA y cookie de verdad se prueba en two-factor.test.ts («Plataforma»).
+const stepUp = vi.hoisted(() => ({ pass: false, calls: 0 }));
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/two-factor-step-up")>();
+  return {
+    ...real,
+    requireStepUp: async (a: { userId: string }) => {
+      stepUp.calls++;
+      if (!stepUp.pass) await real.requireStepUp(a);
+    },
+  };
+});
 import { cookies } from "next/headers";
 import type { PrismaClient } from "@prisma/client";
 import { ForbiddenError, UnauthenticatedError } from "@/lib/session";
@@ -20,6 +35,7 @@ import {
 import { __setPlatformMfaForTests } from "@/lib/platform-mfa";
 import { PLATFORM_REAUTH_COOKIE, makePlatformReauthValue } from "@/lib/platform-reauth";
 import { PLATFORM_ERROR_DIGEST, PLATFORM_REAUTH_TTL_S } from "@/lib/platform-mfa-logic";
+import { classifyStepUpError } from "@/lib/two-factor-logic";
 import { PlatformMfaFake } from "@/tests/helpers/platform-mfa-fake";
 import { asAnonymous, asUser } from "@/tests/helpers/actor";
 import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
@@ -108,6 +124,7 @@ describe.skipIf(!RUN)("[BO1-A] requirePlatformAdmin", () => {
     const u = await superadmin();
     const other = await superadmin();
     const { limit } = PLATFORM_ACTION_POLICY["user.superadmin.update"].rateLimit;
+    stepUp.pass = true;
     asUser(u);
     for (let i = 0; i < limit; i++) await requirePlatformAdmin("user.superadmin.update");
     const err = await requirePlatformAdmin("user.superadmin.update").catch((e: unknown) => e);
@@ -120,6 +137,7 @@ describe.skipIf(!RUN)("[BO1-A] requirePlatformAdmin", () => {
     await expect(requirePlatformAdmin("platform.read")).resolves.toMatchObject({ userId: u });
     asUser(other);
     await expect(requirePlatformAdmin("user.superadmin.update")).resolves.toMatchObject({ userId: other });
+    stepUp.pass = false;
   });
 
   it("toda acción tiene riesgo y rate limit", () => {
@@ -151,6 +169,8 @@ describe.skipIf(!RUN)("[BO4] requirePlatformAdmin · segundo paso", () => {
   });
   beforeEach(() => {
     cookies().delete(PLATFORM_REAUTH_COOKIE);
+    stepUp.pass = false;
+    stepUp.calls = 0;
   });
   afterEach(() => {
     delete process.env.PLATFORM_MFA_ENFORCEMENT;
@@ -167,13 +187,34 @@ describe.skipIf(!RUN)("[BO4] requirePlatformAdmin · segundo paso", () => {
   }
   const enforce = () => (process.env.PLATFORM_MFA_ENFORCEMENT = "enforce");
 
-  it("off (default): pasa sin factor y sin consultar a GoTrue, también en acciones high", async () => {
+  it("off (default): low/medium y sin acción pasan sin factor y sin consultar a GoTrue", async () => {
     const fake = new PlatformMfaFake();
     __setPlatformMfaForTests(fake);
     const u = await superadmin();
-    await expect(requirePlatformAdmin("user.disable")).resolves.toMatchObject({ userId: u, mfa: false });
+    await expect(requirePlatformAdmin("platform.read")).resolves.toMatchObject({ userId: u, mfa: false });
+    await expect(requirePlatformAdmin("team.manage")).resolves.toMatchObject({ userId: u, mfa: false });
     await expect(requirePlatformAdmin()).resolves.toMatchObject({ userId: u });
     expect(fake.calls).toEqual([]);
+    expect(stepUp.calls).toBe(0);
+  });
+
+  it("[PL-Z] a2#4 off: una acción high pide el step-up de la 2FA por usuario (sin 2FA → setup, digest)", async () => {
+    const fake = new PlatformMfaFake();
+    __setPlatformMfaForTests(fake);
+    await superadmin();
+    // Antes: resolvía { mfa: false } sin pedir nada (una sesión de superadmin robada hacía todo).
+    const err = await requirePlatformAdmin("user.disable").catch((e: unknown) => e);
+    expect(classifyStepUpError(err)).toEqual({ kind: "setup" });
+    expect(stepUp.calls).toBe(1);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("[PL-Z] a2#4 enforce: la re-verificación TOTP de BO4 manda y el step-up por usuario no corre", async () => {
+    enforce();
+    __setPlatformMfaForTests(PlatformMfaFake.withVerifiedFactor("aal2"));
+    await superadmin();
+    await expect(requirePlatformAdmin("user.disable")).rejects.toBeInstanceOf(PlatformReauthRequiredError);
+    expect(stepUp.calls).toBe(0);
   });
 
   it("enforce sin factor → PlatformMfaRequiredError(setup) con copy claro y digest", async () => {
@@ -260,6 +301,7 @@ describe.skipIf(!RUN)("[BO4] requirePlatformAdmin · segundo paso", () => {
     });
 
     it("off: permitido (desarrollo) y `mfa` dice la verdad para el registro", async () => {
+      stepUp.pass = true; // high: con off pide el step-up por usuario (PL-Z); acá se prueba el `mfa` del registro.
       const fake = new PlatformMfaFake();
       __setPlatformMfaForTests(fake);
       await superadmin();
@@ -270,6 +312,7 @@ describe.skipIf(!RUN)("[BO4] requirePlatformAdmin · segundo paso", () => {
     });
 
     it("off con el puerto real sin GoTrue (mock de integración sin getSession) → permitido con mfa:false, no tira", async () => {
+      stepUp.pass = true;
       await superadmin();
       await expect(requirePlatformAdmin("support.start")).resolves.toMatchObject({ mfa: false });
     });

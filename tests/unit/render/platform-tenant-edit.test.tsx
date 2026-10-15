@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+// PL-Z (a2#4): el provider de Plataforma monta el `StepUpProvider`, que trae la server action `getStepUpOptions`.
+vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -11,6 +13,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("@/lib/platform-tenants", () => ({ updatePlatformTenant: vi.fn() }));
 // BO3-B: el Resumen monta «Editar datos» (lifecycle) y el header el soporte; sin DB en unit.
 vi.mock("@/lib/platform-tenant-lifecycle", () => ({ updatePlatformTenantProfile: vi.fn() }));
+// PL-3c: la pestaña Suscripción monta «Cambiar de plan» (actions de Plataforma → Facturación); sin DB en unit.
+vi.mock("@/lib/platform-billing", () => ({ platformPreviewPlanChange: vi.fn(), platformApplyPlanChange: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
@@ -183,14 +187,16 @@ describe("[EV0-P3] TenantEditForm (render)", () => {
     expect(html).toContain("Tipo de consultorio");
     expect(html).toContain("Plan");
     expect(html).toContain("Estado de la suscripción");
-    expect(html).toContain("informativo hasta que exista la facturación");
+    expect(html).toContain("Cambialo a mano solo como excepción");
     expect(html).toMatch(/<input[^>]*type="date"[^>]*value="2026-10-21"/);
     expect(html).toContain("Turnos online");
   });
 
-  it("[PL-1d] planes SaaS en el select; cupos a medida a la vista con Libre, si no detrás de un botón", () => {
+  it("[PL-1d/PL-3c] el plan se muestra sin select (se cambia con «Cambiar de plan»); cupos a medida a la vista con Libre, si no detrás de un botón", () => {
     const html = render();
-    for (const l of ["Individual", "Consultorio", "Clínica", "Libre"]) expect(html).toContain(l);
+    expect(html).toContain("Individual");
+    expect(html).toContain("Se cambia con «Cambiar de plan»");
+    expect(html).not.toMatch(/<option value="LIBRE"/);
     expect(html).not.toContain("Enterprise");
     expect(html).toContain("Fijar cupos a medida");
     expect(html).not.toContain("Usuarios en total");

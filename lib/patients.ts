@@ -12,13 +12,14 @@
 import { displayMemberName, displayUserName } from "@/lib/display-name";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { bookablePractitionerWhere, clinicalMembershipWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { getActor, writableError, type Actor } from "@/lib/session";
-import { getMembershipRole, memberCapabilitiesForActor, requireModule } from "@/lib/authz";
+import { memberCapabilitiesForActor, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
-import { isTenantAdminRole, canWriteClinical } from "@/lib/capabilities";
+import { canWriteClinical } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { auditInTx } from "@/lib/audit";
@@ -1569,39 +1570,60 @@ export async function assignPatientToPractitioner(...args: Parameters<typeof ass
   return withReadOnlyResult(() => assignPatientToPractitionerImpl(...args));
 }
 
-async function assignPatientToPractitionerImpl(input: {
+/**
+ * PL-Z (pendiente b): `.strict()` — un campo de más es un caller roto, no algo que se ignora en silencio — y los ids
+ * con tope de largo (antes llegaban crudos a Prisma).
+ */
+const AssignPatientInput = z
+  .object({
+    patientId: z.string().min(1).max(64),
+    practitionerId: z.string().min(1).max(64).nullable(),
+  })
+  .strict();
+
+async function assignPatientToPractitionerImpl(raw: {
   patientId: string;
   practitionerId: string | null;
 }): Promise<ActionResult> {
   const actor = await getActor();
-  if (!isTenantAdminRole(await getMembershipRole(actor))) {
-    return { ok: false, error: "Solo OWNER/ADMIN pueden re-asignar pacientes." };
+  // PL-3b (C-PL5): por MIEMBRO (`tenant.admin`: el Titular o quien tenga «Configuración» delegada), no por rol. Antes
+  // `isTenantAdminRole(role)` le dejaba reasignar a un ADMIN al que el Titular le sacó «Configuración» y no a una
+  // Secretaria que la tiene. Soporte vale como la Secretaria (`memberCapabilitiesForActor`): no reasigna.
+  if (!(await memberCapabilitiesForActor(actor)).has("tenant.admin")) {
+    return { ok: false, error: "Solo el titular o quien tenga permiso de Configuración puede reasignar pacientes." };
   }
+  const parsed = AssignPatientInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  const input = parsed.data;
 
-  const owned = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    select: { id: true, assignedPractitionerId: true },
-  }));
-  if (!owned) return { ok: false, error: "Paciente no encontrado." };
+  // PL-Z (pendiente b): lectura, validación del profesional, update y audit en UNA tx. Antes eran tres `runWithRls`:
+  // el `from` del audit podía ser viejo (otra reasignación en el medio) y el profesional validado podía dejar de
+  // atender antes del update. El `FOR UPDATE` del paciente serializa dos reasignaciones simultáneas.
+  const res = await runWithRls(actor.tenantId, async (tx) => {
+    const locked = await tx.$queryRaw<{ assignedPractitionerId: string | null }[]>`
+      SELECT "assignedPractitionerId" FROM "Patient"
+      WHERE "id" = ${input.patientId} AND "tenantId" = ${actor.tenantId}
+      FOR UPDATE`;
+    if (locked.length === 0) return { ok: false as const, error: "Paciente no encontrado." };
+    const from = locked[0].assignedPractitionerId;
 
-  if (input.practitionerId) {
-    // P0.Z (H-b2): mismo filtro que `createPatient` (`clinicalMembershipWhere`, membresía
-    // aceptada). Re-asignar a la Secretaria o a Facturación no les da HC
-    // (PD-13) y dejaba al paciente sin profesional con full salvo OWNER/ADMIN.
-    const prac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
-      where: {
-        id: input.practitionerId!,
-        tenantId: actor.tenantId,
-        user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
-      },
-      select: { id: true },
-    }));
-    if (!prac) return { ok: false, error: "Elegí un profesional activo del consultorio con acceso clínico." };
-  }
+    if (input.practitionerId) {
+      // P0.Z (H-b2): mismo filtro que `createPatient` (`clinicalMembershipWhere`, membresía
+      // aceptada). Re-asignar a la Secretaria o a Facturación no les da HC
+      // (PD-13) y dejaba al paciente sin profesional con full salvo OWNER/ADMIN.
+      const prac = await tx.practitioner.findFirst({
+        where: {
+          id: input.practitionerId,
+          tenantId: actor.tenantId,
+          user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
+        },
+        select: { id: true },
+      });
+      if (!prac) return { ok: false as const, error: "Elegí un profesional activo del consultorio con acceso clínico." };
+    }
 
-  // PL-A (acceso): reasignar cambia quién ve la HC completa → audit en la tx del write.
-  await runWithRls(actor.tenantId, async (tx) => {
-    await tx.patient.update({
+    // PL-A (acceso): reasignar cambia quién ve la HC completa → audit en la tx del write.
+    await tx.patient.updateMany({
       where: { id: input.patientId, tenantId: actor.tenantId },
       data: { assignedPractitionerId: input.practitionerId },
     });
@@ -1611,15 +1633,14 @@ async function assignPatientToPractitionerImpl(input: {
       action: "patient.reassign",
       entity: "Patient",
       entityId: input.patientId,
-      payload: {
-        from: owned.assignedPractitionerId,
-        to: input.practitionerId,
-      },
+      payload: { from, to: input.practitionerId },
     });
+    return { ok: true as const, data: undefined };
   });
+  if (!res.ok) return res;
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath("/pacientes");
-  return { ok: true, data: undefined };
+  return res;
 }
 
 /**
@@ -1919,10 +1940,10 @@ async function requireShareAuthority(patientId: string) {
     select: { id: true, assignedPractitionerId: true },
   }));
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
-  const role = await getMembershipRole(actor);
-  const isAdmin = isTenantAdminRole(role);
   // PL-1b: «dueño» exige que el MIEMBRO atienda (un Titular sin agenda con un paciente asignado de antes no lo es).
   const memberCaps = await memberCapabilitiesForActor(actor);
+  // PL-3b (C-PL5): «administrador» = `tenant.admin` del miembro (Titular o «Configuración» delegada), no el rol.
+  const isAdmin = memberCaps.has("tenant.admin");
   // P0.Z (H-b2): "dueño" = asignado Y con `clinical.read`. En prod hay
   // pacientes asignados a la Secretaria (precheck 15): sin el chequeo de rol,
   // ella manejaba los shares y abría la HC a otros profesionales, aunque por

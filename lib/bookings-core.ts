@@ -63,7 +63,8 @@ import {
 } from "@/lib/booking-cap-lock";
 import { countRoomOverlapsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { patientAccessFor } from "@/lib/visibility";
-import type { Actor } from "@/lib/session";
+import { ForbiddenError, type Actor } from "@/lib/session";
+import { MODULE_DENIED_COPY, roomsEnabled } from "@/lib/tenant-modules";
 import {
   canOperateBooking,
   capabilitiesForMembership,
@@ -1319,7 +1320,7 @@ export async function applyBookingUpdateInTx(
   const {
     id,
     locationId: patchLocationId,
-    roomId: patchRoomId,
+    roomId: rawPatchRoomId,
     isTelemedicine: patchTele,
     telemedicineUrl: patchTeleUrl,
     ...patch
@@ -1332,6 +1333,15 @@ export async function applyBookingUpdateInTx(
     select: UPDATE_BEFORE_SELECT,
   });
   if (!before) return { kind: "notfound" };
+  // PL-2f (PL-D7): sin el módulo `salas` las salas «duermen». Elegir una sala DISTINTA de la que el turno ya tiene
+  // → 403 (antes de escribir nada). Reenviar la que ya tenía (el drawer la manda al guardar notas) se toma como
+  // «no tocar»: el turno la conserva, sin validarla ni chequear ocupación. Con el plan viene del Actor: sin query.
+  const roomsOn = roomsEnabled(actor.entitlements);
+  let patchRoomId = rawPatchRoomId;
+  if (!roomsOn && typeof patchRoomId === "string") {
+    if (patchRoomId !== before.roomId) throw new ForbiddenError(MODULE_DENIED_COPY.salas);
+    patchRoomId = undefined;
+  }
   // Optimistic concurrency (AUDIT §5.7): reject if the row changed since the
   // client (e.g. the BookingDrawer) loaded it — prevents acting on a stale view.
   if (input.expectedUpdatedAt && +before.updatedAt !== +new Date(input.expectedUpdatedAt)) {
@@ -1420,7 +1430,9 @@ export async function applyBookingUpdateInTx(
   // cambiar de sede, la sala vieja no puede quedar: la FK compuesta
   // (roomId, locationId) de M4 revienta con 23503 (contrato de SR0).
   const roomPinned = typeof patchRoomId === "string";
-  const roomDefaulted = patchRoomId === undefined && (slotChanged || locationChanged);
+  // PL-2f: sin salas, mover el horario NO recalcula la sala (la de la franja da null: el turno perdería la suya
+  // dormida); solo un cambio de sede la saca, porque la FK compuesta (roomId, locationId) no admite la vieja.
+  const roomDefaulted = patchRoomId === undefined && ((roomsOn && slotChanged) || locationChanged);
   /** Sala que va a quedar en la fila (provisional: la por defecto se decide después de cargar las franjas). */
   let targetRoomId: string | null = patchRoomId !== undefined ? patchRoomId : before.roomId;
   /** ¿El UPDATE escribe `roomId`? (solo si cambia: sin sala, la sentencia queda idéntica a la de antes). */
@@ -1432,7 +1444,9 @@ export async function applyBookingUpdateInTx(
   // en un turno cancelado, no con `capLocksHeld` (Planes, "este y los
   // siguientes": estampan sin chequear ni tomar la clave de sala) y no si el
   // usuario ya confirmó "Asignar igual" (`allowRoomConflict`).
-  const roomCheckable = finalStatus !== "CANCELLED" && !opts.capLocksHeld && !force.allowRoomConflict;
+  // PL-2f: sin salas no hay ocupación que chequear (ni clave de sala que tomar): la sala dormida que el turno
+  // conserva no choca con nada.
+  const roomCheckable = roomsOn && finalStatus !== "CANCELLED" && !opts.capLocksHeld && !force.allowRoomConflict;
   /** Ya se tomó la clave de sala de la ventana nueva (fusionada con el cupo o sola). */
   let roomKeyHeld = false;
   /** La sala validada (`lockActiveRoomInTx`) con su capacidad y nombre, para el conteo. */
@@ -1646,6 +1660,12 @@ export async function applyBookingUpdateInTx(
     }
   }
 
+  // PL-2f: sin salas el turno conserva su sala dormida, salvo que la sede final cambie (la por defecto de una
+  // reprogramación sin sede elegida): la FK compuesta (roomId, locationId) de M4 no admite la sala con otra sede.
+  if (!roomsOn && before.roomId && newLocationId !== undefined && newLocationId !== before.locationId) {
+    targetRoomId = null;
+    roomTouched = true;
+  }
   // SR: validar la sala que todavía no se validó (elegida, la que tenía con
   // el horario cambiado, o la por defecto con la sede elegida o la de antes),
   // DESPUÉS del lock compartido de sedes (`archiveRoom` toma el exclusivo: con

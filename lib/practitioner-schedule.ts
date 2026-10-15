@@ -28,6 +28,11 @@
  * Fechas: `ScheduleException.date` es `@db.Date` → DayKey con
  * `dayKeyToDbDate`/`dbDateToDayKey` de `lib/schedule-validate.ts` (etiqueta de
  * día por UTC, ver ahí por qué). "Hoy" siempre con `toARDateKey`.
+ *
+ * Salas (PL-2f, C-PL1, PL-D7): la sala por franja es del módulo `salas` (Clínica / Libre). Sin él, una sala NUEVA
+ * en una franja o excepción → `ForbiddenError(MODULE_DENIED_COPY.salas)`; la sala que la franja/excepción YA tenía
+ * (cargada en Clínica, ahora «dormida») se conserva tal cual al guardar, sin validarla ni chequear choques: el
+ * editor la reenvía sin mostrarla, y borrarla en cada guardado sería perder el dato que vuelve al subir de plan.
  */
 import { displayMemberName } from "@/lib/display-name";
 import { withSupportWritable } from "@/lib/support-writable";
@@ -36,6 +41,8 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
+import { ForbiddenError } from "@/lib/session";
+import { MODULE_DENIED_COPY, roomsEnabled } from "@/lib/tenant-modules";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
 // Lock compartido de sedes (ver cabecera); módulo único desde el integrador B2.
@@ -460,7 +467,8 @@ export async function getPractitionerSchedule(
       tenantHours: tenant.hours,
       // SR1c: para que la UI valide la sala en el cliente con roomScheduleConflicts.
       // SRZ (FX1): sin salas activas no se consulta (ver `tenantHoursAndRooms`).
-      roomUsage: tenant.hasActiveRooms
+      // PL-2f: sin el módulo `salas` el editor no muestra salas: no hay choques que validar en el cliente.
+      roomUsage: tenant.hasActiveRooms && roomsEnabled(actor.entitlements)
         ? await loadRoomUsage(tx, actor.tenantId, {
             excludePractitionerId: id.data,
             today: toARDateKey(new Date()),
@@ -525,7 +533,10 @@ async function savePractitionerWeekImpl(
     return { ok: false, error: "Revisá las franjas marcadas.", fieldErrors: rangeErrorsToFieldErrors(shape.errors) };
   }
 
-  const roomIds = [...new Set(input.ranges.flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  const roomsOn = roomsEnabled(actor.entitlements);
+  // PL-2f: sin el módulo, `roomIds` = salas dormidas a conservar (se verifican abajo); con él, las de siempre.
+  const sentRoomIds = [...new Set(input.ranges.flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  const roomIds = roomsOn ? sentRoomIds : [];
   const today = toARDateKey(new Date());
 
   try {
@@ -537,6 +548,20 @@ async function savePractitionerWeekImpl(
       if (!(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
+      if (!roomsOn && sentRoomIds.length > 0) {
+        // PL-2f: sin salas solo pasan las salas que este profesional YA tiene en sus franjas (dormidas). Bajo el
+        // lock del profesional: nadie más escribe sus franjas en el medio. Una sala que conserva su sede queda; si
+        // la franja cambió de sede, la sala se cae (la FK compuesta (roomId, locationId) de M4 no la admite).
+        const kept = await tx.practitionerSchedule.findMany({
+          where: { tenantId: actor.tenantId, practitionerId: input.practitionerId, roomId: { in: sentRoomIds } },
+          select: { roomId: true, locationId: true },
+        });
+        const sleeping = new Map(kept.map((r) => [r.roomId!, r.locationId]));
+        if (sentRoomIds.some((id) => !sleeping.has(id))) throw new ForbiddenError(MODULE_DENIED_COPY.salas);
+        input.ranges = input.ranges.map((r) =>
+          r.roomId && sleeping.get(r.roomId) !== r.locationId ? { ...r, roomId: null } : r
+        );
+      }
       const active = await activeLocationSet(
         tx,
         actor.tenantId,
@@ -544,14 +569,17 @@ async function savePractitionerWeekImpl(
       );
       const full = validateWeekRanges(input.ranges, { activeLocationIds: active });
       // Sala validada DESPUÉS del lock compartido de sedes (archiveRoom toma el exclusivo).
+      // PL-2f: sin salas no se validan (las dormidas pueden estar archivadas: se conservan igual).
       const rooms = await activeRoomMap(tx, actor.tenantId, roomIds);
       const staleRoomIds = input.ranges.flatMap((r) =>
         r.roomId && !rooms.has(r.roomId) && isExpiredRange(r, today) ? [r.roomId] : []
       );
-      const roomErrs = badRoomErrors(input.ranges, rooms, {
-        today,
-        roomLocations: await tenantRoomLocations(tx, actor.tenantId, staleRoomIds),
-      });
+      const roomErrs = roomsOn
+        ? badRoomErrors(input.ranges, rooms, {
+            today,
+            roomLocations: await tenantRoomLocations(tx, actor.tenantId, staleRoomIds),
+          })
+        : [];
       if (!full.ok || roomErrs.length > 0) {
         const shapeErrs = full.ok ? [] : full.errors;
         const taken = new Set(shapeErrs.map((e) => e.index));
@@ -627,6 +655,8 @@ async function savePractitionerWeekImpl(
     const ro = readOnlyFailure(e);
     if (ro) return ro;
     if (e instanceof Abort) return e.result;
+    // PL-2f: el 403 del módulo `salas` sube como 403 (no como «No pudimos guardar»).
+    if (e instanceof ForbiddenError) throw e;
     logger.error("schedule.saveWeek.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar el horario." };
   }
@@ -752,7 +782,14 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
     }
   }
   const date = dayKeyToDbDate(input.date);
-  const roomIds = [...new Set((ranges ?? []).flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  const roomsOn = roomsEnabled(actor.entitlements);
+  const sentRoomIds = [...new Set((ranges ?? []).flatMap((r) => (r.roomId ? [r.roomId] : [])))];
+  // PL-2f: sin el módulo, las salas enviadas solo pueden ser las que la excepción de ese día ya tenía (dormidas:
+  // se verifican en la tx y se conservan sin validar). Una excepción de todo el consultorio nunca tuvo sala.
+  const roomIds = roomsOn ? sentRoomIds : [];
+  if (!roomsOn && sentRoomIds.length > 0 && input.practitionerId == null) {
+    throw new ForbiddenError(MODULE_DENIED_COPY.salas);
+  }
   // SR1c: una excepción de TODO el consultorio no asigna sala: la usarían todos
   // los profesionales a la vez y chocaría consigo misma. La sala va en la
   // excepción de cada profesional.
@@ -775,11 +812,20 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
       if (input.practitionerId && !(await findPractitioner(tx, actor.tenantId, input.practitionerId))) {
         throw new Abort({ ok: false, error: PRAC_NOT_FOUND });
       }
+      if (!roomsOn && sentRoomIds.length > 0) {
+        // Bajo el lock `schedexc` de ese profesional y día: la excepción no cambia en el medio.
+        const prev = await tx.scheduleException.findFirst({
+          where: { tenantId: actor.tenantId, practitionerId: input.practitionerId, date },
+          select: { ranges: true },
+        });
+        const sleeping = new Set((parseStoredRanges(prev?.ranges ?? null) ?? []).flatMap((r) => (r.roomId ? [r.roomId] : [])));
+        if (sentRoomIds.some((id) => !sleeping.has(id))) throw new ForbiddenError(MODULE_DENIED_COPY.salas);
+      }
       if (ranges) {
         const active = await activeLocationSet(tx, actor.tenantId, ranges.map((r) => r.locationId));
         const full = validateDayRanges(ranges, { activeLocationIds: active });
         const rooms = await activeRoomMap(tx, actor.tenantId, roomIds);
-        const roomErrs = badRoomErrors(ranges, rooms);
+        const roomErrs = roomsOn ? badRoomErrors(ranges, rooms) : [];
         if (!full.ok || roomErrs.length > 0) {
           const shapeErrs = full.ok ? [] : full.errors;
           const taken = new Set(shapeErrs.map((e) => e.index));
@@ -892,6 +938,7 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
     const ro = readOnlyFailure(e);
     if (ro) return ro;
     if (e instanceof Abort) return e.result;
+    if (e instanceof ForbiddenError) throw e; // PL-2f: 403 del módulo `salas`
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Ya hay una excepción para ese día. Recargá y editala." };
     }

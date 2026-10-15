@@ -11,6 +11,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { TotpCodeInput } from "@/components/plataforma/reauth-modal";
+import { StepUpProvider, useStepUpAction } from "@/components/account/step-up-modal";
 import { normalizeTotpCode, type PlatformMfaEnrollment } from "@/lib/platform-mfa-logic";
 import type { ActionResult } from "@/lib/validation";
 
@@ -22,16 +23,27 @@ function groupSecret(secret: string): string {
   return secret.replace(/\s+/g, "").replace(/(.{4})/g, "$1 ").trim();
 }
 
-export function MfaSetupForm({
-  next,
-  startAction,
-  confirmAction,
-}: {
+type SetupProps = {
   next: string;
   startAction: () => Promise<ActionResult<PlatformMfaEnrollment>>;
   confirmAction: (factorId: string, code: string) => Promise<ActionResult>;
-}) {
+};
+
+/**
+ * PL-Z (a2#3): si el superadmin ya tiene la 2FA por usuario, generar y confirmar el QR piden step-up
+ * (`lib/platform-mfa-actions.ts`). El provider muestra el mismo modal que en la cuenta y reintenta una vez.
+ */
+export function MfaSetupForm(props: SetupProps) {
+  return (
+    <StepUpProvider>
+      <MfaSetupFormInner {...props} />
+    </StepUpProvider>
+  );
+}
+
+function MfaSetupFormInner({ next, startAction, confirmAction }: SetupProps) {
   const router = useRouter();
+  const runStepUp = useStepUpAction();
   const [enrollment, setEnrollment] = useState<PlatformMfaEnrollment | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +55,7 @@ export function MfaSetupForm({
     setPending(true);
     setError(null);
     try {
-      const res = await startAction();
+      const res = await runStepUp(() => startAction());
       if (!res.ok) setError(res.error);
       else {
         setEnrollment(res.data);
@@ -67,7 +79,7 @@ export function MfaSetupForm({
     setPending(true);
     setError(null);
     try {
-      const res = await confirmAction(enrollment.factorId, normalized);
+      const res = await runStepUp(() => confirmAction(enrollment.factorId, normalized));
       if (!res.ok) {
         setError(res.error);
         setPending(false);

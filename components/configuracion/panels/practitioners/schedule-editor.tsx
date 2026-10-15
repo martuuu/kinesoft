@@ -60,6 +60,16 @@ import {
   type WeekDraft,
 } from "@/lib/schedule-editor-state";
 import { ErrorBox } from "../../controls";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+
+/**
+ * PL-2f (C-PL1, PL-D7): sin el módulo `salas` (Individual / Consultorio) no hay selector de sala ni validación de
+ * choques en el cliente. La sala que una franja YA tiene (cargada en Clínica) queda en el borrador sin mostrarse y
+ * el server la conserva al guardar (`savePractitionerWeek`); cambiar la sede de la franja la suelta (la FK la ata a
+ * su sede). Esconder es UX: la barrera es el server (403 a una sala nueva).
+ */
+const ROOMS_UPSELL = "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso.";
+const NO_ROOM_SELECT = { show: false, options: [] } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Estilos compartidos con exceptions-editor
@@ -160,6 +170,7 @@ export function RangeRowsEditor({
    */
   showValidity?: boolean;
 }) {
+  const roomsOn = useTenantModules().has("salas");
   const active = locations.filter((l) => l.active);
   const canAdd = !disabled && nextRange(rows, defaults) !== null;
   // Vigencia plegada: se abre a pedido ("Solo por un período" / "Cambiar").
@@ -181,7 +192,7 @@ export function RangeRowsEditor({
         const locOpts = active.some((l) => l.id === r.locationId)
           ? active
           : [...active, ...locations.filter((l) => l.id === r.locationId)];
-        const roomSel = roomsForLocation(rooms, r.locationId, r.roomId);
+        const roomSel = roomsOn ? roomsForLocation(rooms, r.locationId, r.roomId) : NO_ROOM_SELECT;
         const validityOpen = openValidity.has(r.key);
         const hasValidity = !!(r.validFrom || r.validUntil);
         return (
@@ -446,6 +457,8 @@ export function ScheduleEditor({
   /** SR-U2: catálogo de salas (archivadas incluidas, para rotular). Opcional: sin salas, todo igual que antes. */
   rooms?: ReadonlyArray<RoomCatalogEntry>;
 }) {
+  // PL-2f: sin el módulo, ni sala en el resumen ni catálogo para el drawer.
+  const shownRooms = useTenantModules().has("salas") ? rooms : undefined;
   const [view, setView] = useState<PractitionerScheduleView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -581,7 +594,7 @@ export function ScheduleEditor({
                       // SR-U2: "· Centro · Consultorio 2 · hasta el 30/11". Sin sala ni vigencia, igual que antes.
                       const detail = rangeDetailLabel(r, {
                         locationName: multiLocation ? locationName(locations, r.locationId) : null,
-                        roomName: r.roomId ? roomLabel(rooms, r.roomId) : null,
+                        roomName: r.roomId && shownRooms ? roomLabel(shownRooms, r.roomId) : null,
                       });
                       return detail ? (
                         <span style={{ fontFamily: "inherit", color: "var(--navy-500)" }}> · {detail}</span>
@@ -601,7 +614,7 @@ export function ScheduleEditor({
           practitionerId={practitionerId}
           practitionerName={practitionerName}
           locations={locations}
-          rooms={rooms}
+          rooms={shownRooms}
           primaryLocationId={primary.id}
           reload={load}
           onClose={() => setEditing(false)}
@@ -658,6 +671,7 @@ export function WeekDrawer({
   const [copyTargets, setCopyTargets] = useState<Set<number>>(new Set());
   const [attempted, setAttempted] = useState(false);
   const [roomUsage, setRoomUsage] = useState(view.roomUsage ?? []);
+  const roomsOn = useTenantModules().has("salas");
 
   const activeSet = useMemo(
     () => new Set(locations.filter((l) => l.active).map((l) => l.id)),
@@ -668,10 +682,10 @@ export function WeekDrawer({
   // lectura (franjas con sala de los DEMÁS) y "hoy AR"; el server repite todo bajo lock.
   const roomCheck = useMemo(
     () =>
-      rooms && rooms.length > 0
+      roomsOn && rooms && rooms.length > 0
         ? { rooms, usage: roomUsage, practitionerId, today: toARDateKey(new Date()) }
         : undefined,
-    [rooms, roomUsage, practitionerId]
+    [roomsOn, rooms, roomUsage, practitionerId]
   );
   const liveErrors = useMemo(() => validateDraft(draft, activeSet, roomCheck), [draft, activeSet, roomCheck]);
   const dirty = weekSignature(draft) !== baseline;
@@ -976,19 +990,21 @@ export function WeekDrawer({
                     defaults={defaults}
                     disabled={pending}
                     dayLabel={label}
-                    rooms={rooms}
+                    rooms={roomsOn ? rooms : undefined}
                     // SRZ-FX3 (M3): sin salas la línea de vigencia no sale (el
                     // cliente vivo, sin salas, veía ~12 líneas "Siempre · Solo por
                     // un período" de más). Su caso de uso es "cambio de
                     // consultorio": sin salas no hace falta. Una franja con
                     // vigencia ya cargada la muestra igual (ver RangeRowsEditor).
-                    showValidity={rooms != null && rooms.length > 0}
+                    showValidity={roomsOn && rooms != null && rooms.length > 0}
                   />
                 </div>
               </section>
             );
           })}
         </div>
+
+        {!roomsOn && <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{ROOMS_UPSELL}</div>}
 
         {formError && <ErrorBox>{formError}</ErrorBox>}
 

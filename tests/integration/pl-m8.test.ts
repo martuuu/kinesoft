@@ -179,7 +179,9 @@ describe.skipIf(!RUN)("M8 pl_accounts_billing · objetos", () => {
       rows.map((r) => [r.plan, r.label, r.priceCents, r.maxUsers, r.maxProfessionals, r.maxStaff, r.trialDays, r.isPublic, r.sortOrder])
     ).toEqual([
       ["INDIVIDUAL", "Individual", null, 1, 1, 1, 14, true, 1],
-      ["CONSULTORIO", "Consultorio", null, 5, 4, 1, 0, true, 2],
+      // M8 la sembró con 4 + 1; M8b (`20261015200000_pl_admin_consultorio`, §20.17: «5 usuarios de cualquier tipo»)
+      // pone los topes por tipo en NULL. Este test lee la base con TODAS las migraciones aplicadas.
+      ["CONSULTORIO", "Consultorio", null, 5, null, null, 0, true, 2],
       ["CLINICA", "Clínica", null, 10, null, null, 0, true, 3],
       ["LIBRE", "Libre", null, null, null, null, 0, true, 4],
     ]);

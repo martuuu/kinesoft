@@ -39,7 +39,8 @@ import type { Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, writableError, type Actor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
+import { capabilitiesForActor, requireAccountOwner } from "@/lib/authz";
+import { requireStepUp } from "@/lib/two-factor-step-up";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { invitationStatus } from "@/lib/access-logic";
@@ -53,6 +54,8 @@ import {
   removeMemberInTx,
   revokeInvitationInTx,
   runTeamTx,
+  setMemberClinicalInTx,
+  setMemberGrantsInTx,
   suspendMemberInTx,
   teamCreateInvitation,
   teamReissueInvitation,
@@ -64,6 +67,8 @@ import type {
   InvitationRow,
   InvitationSendResult,
   MemberPasswordResetResult,
+  SetMemberClinicalInput,
+  SetMemberGrantsInput,
   SuspendMemberResult,
   TeamActorCtx,
   TeamMemberRow,
@@ -71,23 +76,26 @@ import type {
 import type { EmailTransportName } from "@/lib/email/types";
 
 /**
- * Quién gestiona el equipo: OWNER y ADMIN (IAM-D3, default de §19.10). Antes
- * era solo el OWNER y el ADMIN, que «configura el consultorio», no podía sumar
- * a la Secretaria. Límites del ADMIN (los aplica cada action): no toca la
- * membresía del OWNER, no asigna ni transfiere el OWNER y no recibe la URL de
- * la invitación (es una credencial: le alcanza con «Reenviar»).
+ * Quién gestiona el equipo: quien tiene `tenant.admin` (IAM-D3 → PL-3b). Antes era «OWNER o ADMIN» por ROL; desde
+ * PL-1b (C-PL5) «Configuración» es una delegación (`grantSettings`) que el Titular da a CUALQUIER rol y le saca a un
+ * ADMIN, así que el rol solo ya no decía quién configura: `/configuracion` deja entrar a todo `tenant.admin` y su
+ * página llama `listTeamMembers()`, que a un Profesional con «Configuración» le tiraba Forbidden (500 de la página),
+ * mientras un ADMIN al que le sacaron la delegación seguía gestionando el equipo por las actions.
+ * Quien no es Titular actúa con los límites del ADMIN (`actorRole: "ADMIN"`): no toca la membresía del Titular, no lo
+ * transfiere y no recibe la URL de la invitación (es una credencial: le alcanza con «Reenviar»). El Titular sale de
+ * `account.owner` (solo el OWNER, nunca por delegación).
  */
 async function requireTeamManager(): Promise<{ actor: Actor; role: "OWNER" | "ADMIN" }> {
   const actor = await getActor();
   // BO2-E (decisión 3): soporte gestiona usuarios/equipo desde Configuración con los límites del ADMIN (no toca al
-  // OWNER, no lo transfiere, no recibe la URL de la invitación). `getMembershipRole` le daría ASSISTANT (su nivel de
-  // lectura clínica), que acá lo dejaría afuera. La escritura igual exige `withSupportWritable` en cada action.
+  // OWNER, no lo transfiere, no recibe la URL de la invitación). `SUPPORT_CAPS` tiene `tenant.admin` y nunca
+  // `account.*`. La escritura igual exige `withSupportWritable` en cada action.
   if (actor.support) return { actor, role: "ADMIN" as const };
-  const role = await getMembershipRole(actor);
-  if (role !== "OWNER" && role !== "ADMIN") {
-    throw new ForbiddenError("Solo el dueño o un administrador del consultorio pueden gestionar el equipo.");
+  const caps = await capabilitiesForActor(actor);
+  if (!caps.has("tenant.admin")) {
+    throw new ForbiddenError("Solo el titular o quien tenga permiso de Configuración pueden gestionar el equipo.");
   }
-  return { actor, role };
+  return { actor, role: caps.has("account.owner") ? "OWNER" : "ADMIN" };
 }
 
 /** C-BO8: el contexto de los núcleos de `lib/team-internal.ts` para quien gestiona desde Configuración. */
@@ -129,7 +137,11 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
             // IAM-1 (M6): un usuario puede ser profesional en varios
             // consultorios; la especialidad es la de ESTE (tenantId a mano: en
             // prod la conexión es BYPASSRLS).
-            practitioners: { where: { tenantId: actor.tenantId }, select: { specialty: true }, take: 1 },
+            practitioners: {
+              where: { tenantId: actor.tenantId },
+              select: { id: true, specialty: true, publicBookingEnabled: true },
+              take: 1,
+            },
           },
         },
       },
@@ -170,6 +182,10 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
       grantSettings: m.grantSettings,
       grantBilling: m.grantBilling,
       disabledReason: m.disabledReason,
+      // PL-3b: solo quien atiende tiene ficha de profesional que mostrar (un Titular que dejó de atender conserva su
+      // `Practitioner` por historia, pero no aparece en el turnero: `publicPractitionerWhere` exige que atienda).
+      practitionerId: isClinicalMember(m) ? (m.user.practitioners[0]?.id ?? null) : null,
+      publicBookingEnabled: isClinicalMember(m) ? (m.user.practitioners[0]?.publicBookingEnabled ?? false) : false,
       lastPasswordResetEmail: l
         ? {
             status: l.status as InvitationEmailStatus,
@@ -251,6 +267,12 @@ const InviteInput = z.object({
 const IdInput = z.string().min(1).max(64);
 
 const RoleInput = z.enum(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]);
+
+const TRANSFER_VIA_ACTION_MESSAGE = "Para transferir la titularidad usá «Transferir titularidad»: pide confirmar con tu código.";
+const OWNER_ONLY_MESSAGE = "Solo el titular de la cuenta puede hacer esto.";
+
+const ClinicalInput = z.object({ membershipId: IdInput, clinical: z.boolean() }).strict();
+const GrantsInput = z.object({ membershipId: IdInput, grantSettings: z.boolean(), grantBilling: z.boolean() }).strict();
 
 /*
  * BO2-B (C-BO8): de acá para abajo, wrappers delgados. Las reglas (quién puede qué, CAS, cupos, audit, mail)
@@ -357,6 +379,15 @@ async function changeMemberRoleImpl(
   const parsedRole = RoleInput.safeParse(role);
   if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
   if (!parsedRole.success) return { ok: false, error: "Rol inválido." };
+  // PL-3b (PL-D11): transferir la titularidad pide step-up. Por acá no hay step-up, así que el OWNER no se asigna con
+  // el selector de rol: va por `transferOwnership` (confirmación tipeada + código). Antes, el mismo cambio salía con
+  // dos clics y una sesión robada alcanzaba para quedarse con el consultorio.
+  if (parsedRole.data === "OWNER") return { ok: false, error: TRANSFER_VIA_ACTION_MESSAGE };
+  // PL-Z (a2#7): pasar a alguien a Administrador/a le da la gestión de agendas y la Sala de espera de todos (y la
+  // puerta a «Configuración»): con una sesión robada alcanzaba para dejarse a otra cuenta en ese rol. Pide el código
+  // como las acciones del Titular (`useStepUpAction` en Usuarios lo pide y reintenta). Soporte no llega: el ADMIN
+  // tiene `clinical.read` en la matriz por rol y `supportRoleError` lo frena en el núcleo.
+  if (parsedRole.data === "ADMIN" && !actor.support) await requireStepUp(actor);
   const ctx = tenantCtx(actor, actorRole);
   let r: ActionResult;
   try {
@@ -438,6 +469,93 @@ async function removeMemberImpl(membershipId: string): Promise<ActionResult> {
   if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
   const ctx = tenantCtx(actor, role);
   const r = await runTeamTx(ctx, (tx) => removeMemberInTx(tx, ctx, { membershipId: parsedId.data }));
+  if (r.ok) revalidateTeam(actor.tenantId, true);
+  return r;
+}
+
+/*
+ * PL-3b (C-PL5, PL-D11; decisiones de Martin del 15-oct): lo que SOLO hace el Titular. Orden de cada una:
+ * `requireAccountOwner` (account.owner: solo el OWNER, nunca por delegación ni soporte) → zod → `requireStepUp`
+ * (10 min; sin 2FA → «Activá la verificación en dos pasos») → núcleo de `lib/team-internal.ts` en la tx del
+ * consultorio, con su CAS y su audit. Sin `withSupportWritable`: soporte no llega (no tiene `account.owner`).
+ * `withReadOnlyResult`: en solo lectura vuelve el copy, no un error redactado.
+ */
+
+/** Atrapa la carrera del CAS de los núcleos (otro cambio ganó en el medio) y la devuelve con su copy. */
+async function runOwnerTx(actor: Actor, fn: Parameters<typeof runTeamTx<ActionResult>>[1]): Promise<ActionResult> {
+  const ctx = tenantCtx(actor, "OWNER");
+  try {
+    return await runTeamTx(ctx, fn);
+  } catch (err) {
+    if (err instanceof RoleChangeRaceError) return { ok: false, error: ROLE_CHANGE_RACE_MESSAGE };
+    throw err;
+  }
+}
+
+/**
+ * «Atiendo pacientes» del Titular (§20.17: el Administrador/a nunca atiende; solo el Titular elige). Solo sobre SU
+ * membresía: el de los demás lo fija el rol. A «atiende» le crea `Practitioner` + agenda y pide lugar de profesional;
+ * a «no atiende» se frena con turnos futuros, pacientes asignados o planes activos (`setMemberClinicalInTx`).
+ */
+export async function setMemberClinical(...args: Parameters<typeof setMemberClinicalImpl>): ReturnType<typeof setMemberClinicalImpl> {
+  return withReadOnlyResult(() => setMemberClinicalImpl(...args));
+}
+
+async function setMemberClinicalImpl(raw: SetMemberClinicalInput): Promise<ActionResult> {
+  const { actor } = await requireAccountOwner(OWNER_ONLY_MESSAGE);
+  const parsed = ClinicalInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  await requireStepUp(actor);
+  const { membershipId, clinical } = parsed.data;
+  const ctx = tenantCtx(actor, "OWNER");
+  const r = await runOwnerTx(actor, async (tx) => {
+    // `tenantId` a mano (BYPASSRLS en prod). Una membresía de otro consultorio = inexistente.
+    const m = await tx.membership.findFirst({ where: { id: membershipId, tenantId: actor.tenantId }, select: { userId: true } });
+    if (!m) return { ok: false, error: "Miembro no encontrado." };
+    if (m.userId !== actor.userId) {
+      return { ok: false, error: "Solo podés elegir si atendés vos. El de los demás lo define su rol." };
+    }
+    return setMemberClinicalInTx(tx, ctx, { membershipId, clinical });
+  });
+  if (r.ok) revalidateTeam(actor.tenantId, true);
+  return r;
+}
+
+/**
+ * Permisos delegados por miembro (PL-D5): «Puede cambiar la Configuración» (`grantSettings`) y «Puede ver y cambiar
+ * el plan y los pagos» (`grantBilling`). Nunca sobre el Titular (`setMemberGrantsInTx` lo rechaza).
+ */
+export async function setMemberGrants(...args: Parameters<typeof setMemberGrantsImpl>): ReturnType<typeof setMemberGrantsImpl> {
+  return withReadOnlyResult(() => setMemberGrantsImpl(...args));
+}
+
+async function setMemberGrantsImpl(raw: SetMemberGrantsInput): Promise<ActionResult> {
+  const { actor } = await requireAccountOwner(OWNER_ONLY_MESSAGE);
+  const parsed = GrantsInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  await requireStepUp(actor);
+  const ctx = tenantCtx(actor, "OWNER");
+  const r = await runOwnerTx(actor, (tx) => setMemberGrantsInTx(tx, ctx, parsed.data));
+  if (r.ok) revalidateTeam(actor.tenantId, false);
+  return r;
+}
+
+/**
+ * Transferir la titularidad (decisión de Martin: nadie se la revoca al Titular; solo él la transfiere, y el
+ * superadmin como último recurso desde /plataforma). Quien transfiere queda con «Configuración», como Profesional si
+ * atendía o como Administrador/a si no (`changeMemberRoleInTx`). La confirmación tipeada es de la UI; acá, step-up.
+ */
+export async function transferOwnership(...args: Parameters<typeof transferOwnershipImpl>): ReturnType<typeof transferOwnershipImpl> {
+  return withReadOnlyResult(() => transferOwnershipImpl(...args));
+}
+
+async function transferOwnershipImpl(membershipId: string): Promise<ActionResult> {
+  const { actor } = await requireAccountOwner(OWNER_ONLY_MESSAGE);
+  const parsedId = IdInput.safeParse(membershipId);
+  if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
+  await requireStepUp(actor);
+  const ctx = tenantCtx(actor, "OWNER");
+  const r = await runOwnerTx(actor, (tx) => changeMemberRoleInTx(tx, ctx, { membershipId: parsedId.data, role: "OWNER" }));
   if (r.ok) revalidateTeam(actor.tenantId, true);
   return r;
 }

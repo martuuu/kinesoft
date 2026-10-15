@@ -8,22 +8,17 @@
     "app/api/consultorio/export/route.ts": {
       "maxDuration": 60
     },
+    "app/api/cron/daily/route.ts": {
+      "maxDuration": 60
+    },
     "app/**/*": {
       "maxDuration": 30
     }
   },
   "crons": [
     {
-      "path": "/api/cron/invitations-expire",
-      "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/cron/health-digest",
+      "path": "/api/cron/daily",
       "schedule": "0 11 * * *"
-    },
-    {
-      "path": "/api/cron/trial-reminders",
-      "schedule": "0 12 * * *"
     }
   ]
 }

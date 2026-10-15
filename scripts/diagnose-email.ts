@@ -49,6 +49,20 @@ import {
   platformHealthDigestEmail,
   tenantExportRequestEmail,
 } from "../lib/email/templates";
+import { twoFactorCodeEmail, twoFactorChangedEmail, recoveryCodeUsedEmail } from "../lib/email/templates-account";
+import {
+  billingChargeCreatedEmail,
+  billingPaymentReceivedEmail,
+  billingPaymentRejectedEmail,
+  billingPastDueEmail,
+  billingPriceChangeEmail,
+} from "../lib/email/templates-billing";
+import {
+  supportMessagePlatformEmail,
+  supportReplyTenantEmail,
+  leadReceivedEmail,
+  leadReplyEmail,
+} from "../lib/email/templates-support";
 
 const TENANT = "Consultorio de prueba";
 
@@ -63,23 +77,10 @@ function arg(name: string): string | undefined {
 }
 
 /**
- * PL-1a sumó a `EmailKind` los kinds de PL (2FA, cobros, mensajes) pero sus plantillas son de PL-2: hasta
- * entonces quedan afuera del diagnóstico. PL-2 los suma acá y vuelve a `Record<EmailKind, …>` completo.
+ * PL-2 sumó las plantillas de 2FA, cobros y mensajes. Queda afuera solo `billing_auto_debit_changed`: es del débito
+ * automático con Mercado Pago, que no se hace en esta etapa (decisión de Martin 16-oct; no tiene plantilla).
  */
-type PendingPlKind =
-  | "two_factor_code"
-  | "two_factor_changed"
-  | "recovery_codes_used"
-  | "billing_charge_created"
-  | "billing_payment_received"
-  | "billing_payment_rejected"
-  | "billing_past_due"
-  | "billing_price_change"
-  | "billing_auto_debit_changed"
-  | "support_message_platform"
-  | "support_reply_tenant"
-  | "lead_received"
-  | "lead_reply";
+type PendingPlKind = "billing_auto_debit_changed";
 type DiagnosableKind = Exclude<EmailKind, PendingPlKind>;
 
 function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
@@ -110,6 +111,56 @@ function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
         url: link("/plataforma/salud"),
       }),
     tenant_export_request: () => tenantExportRequestEmail({ tenantName: TENANT, url: link("/configuracion?tab=exportar") }),
+    // PL-2a (2FA). El código de prueba es fijo: el mail real lo genera `lib/two-factor-internal.ts`.
+    two_factor_code: () => twoFactorCodeEmail({ code: "123456", purpose: "login", minutes: 10 }),
+    two_factor_changed: () => twoFactorChangedEmail({ change: "totp_enabled", at: new Date(), securityUrl: link("/cuenta/seguridad") }),
+    recovery_codes_used: () => recoveryCodeUsedEmail({ remaining: 9, at: new Date(), securityUrl: link("/cuenta/seguridad") }),
+    // PL-2b (cobros manuales). Mismo link que `billingUrl()` de lib/saas-billing-internal.ts.
+    billing_charge_created: () =>
+      billingChargeCreatedEmail({
+        tenantName: TENANT,
+        amountCents: 2_500_000,
+        periodStart: "2026-11-01",
+        periodEnd: "2026-11-30",
+        dueDate: "2026-11-06",
+        url: link("/configuracion?tab=facturacion"),
+      }),
+    billing_payment_received: () =>
+      billingPaymentReceivedEmail({ tenantName: TENANT, amountCents: 2_500_000, url: link("/configuracion?tab=facturacion") }),
+    billing_payment_rejected: () =>
+      billingPaymentRejectedEmail({
+        tenantName: TENANT,
+        amountCents: 2_500_000,
+        reason: "El comprobante no se lee.",
+        url: link("/configuracion?tab=facturacion"),
+      }),
+    billing_past_due: () =>
+      billingPastDueEmail({ tenantName: TENANT, balanceCents: 2_500_000, graceDays: 10, url: link("/configuracion?tab=facturacion") }),
+    billing_price_change: () =>
+      billingPriceChangeEmail({
+        tenantName: TENANT,
+        planLabel: "Consultorio",
+        priceCents: 3_000_000,
+        previousPriceCents: 2_500_000,
+        effectiveFrom: "2026-12-01",
+        url: link("/configuracion?tab=facturacion"),
+      }),
+    // PL-2d (mensajes y leads).
+    support_message_platform: () =>
+      supportMessagePlatformEmail({ tenantName: TENANT, subject: "No puedo subir el comprobante", isReply: false, url: link("/plataforma/mensajes/diagnostico") }),
+    support_reply_tenant: () =>
+      supportReplyTenantEmail({ tenantName: TENANT, subject: "No puedo subir el comprobante", url: link("/configuracion?tab=soporte") }),
+    lead_received: () =>
+      leadReceivedEmail({
+        name: "Laura Ramos",
+        email: "laura@example.com",
+        phone: null,
+        clinicName: "Kinesio Sur",
+        planLabel: "Consultorio",
+        message: "Quiero saber precios.",
+        url: link("/plataforma/mensajes/diagnostico"),
+      }),
+    lead_reply: () => leadReplyEmail({ name: "Laura Ramos", subject: "Consulta de Laura Ramos", body: "Hola, te cuento los precios…" }),
   };
 }
 

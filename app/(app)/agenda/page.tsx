@@ -24,6 +24,7 @@ import {
   weekStartKey,
 } from "@/lib/agenda-client-state";
 import { logger } from "@/lib/logger";
+import { waitingRoomEnabled } from "@/lib/tenant-modules";
 
 export const metadata = { title: "Agenda · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -137,7 +138,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
   const view = resolveAgendaView(searchParams.view, {
     mode: agendaPrefs.mode,
     practitionerCount: practitioners.length,
-    canReception: capabilities.includes("agenda.reception"),
+    // PL-2f (PL-D6): la vista Recepción es de la Sala de Espera (Clínica / Libre). Sin el módulo, `?view=reception`
+    // cae al Día; «Llegó» y «En atención» siguen en el drawer y las tarjetas.
+    canReception: capabilities.includes("agenda.reception") && waitingRoomEnabled(actor.entitlements),
     roomCount: scopeRooms.length,
   });
 

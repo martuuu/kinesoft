@@ -26,6 +26,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { archiveLocation } from "@/lib/locations";
 import { removeMember, changeMemberRole } from "@/lib/invitations";
+import { changeMemberRoleInTx, runTeamTx, type TeamActorCtx } from "@/lib/team-internal";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -185,8 +186,13 @@ describe.skipIf(!RUN)("S13g · guardas de sede y miembro con planes activos", ()
     await createPlan(db, A, { patientId: await loosePatient(A), practitionerId: kine.practitionerId });
     const mem = await membershipOf(A, kine.userId);
 
+    // ADMIN por el núcleo con el ctx del Titular: desde PL-Z (a2#7) la action pide step-up para ADMIN (pl3b-team).
+    const ctx: TeamActorCtx = { via: "tenant", tenantId: A.tenantId, actorUserId: A.userId, actorRole: "OWNER", actorRef: null };
     for (const role of ["ASSISTANT", "BILLING", "ADMIN"] as const) {
-      const r = await changeMemberRole(mem.id, role);
+      const r =
+        role === "ADMIN"
+          ? await runTeamTx(ctx, (tx) => changeMemberRoleInTx(tx, ctx, { membershipId: mem.id, role }))
+          : await changeMemberRole(mem.id, role);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error).toContain("es responsable de 1 plan activo");
       expect((await db.membership.findUniqueOrThrow({ where: { id: mem.id } })).role).toBe("PRACTITIONER");

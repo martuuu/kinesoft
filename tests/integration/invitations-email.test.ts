@@ -249,7 +249,8 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
   it("ADMIN gestiona el equipo pero no recibe la URL (solo el OWNER la ve)", async () => {
     const admin = await addPractitioner(db, A, "ADMIN");
     asUser(admin.userId);
-    const r = await createInvitation({ email: email(), firstName: "Gabi", lastName: "Luna" });
+    // PL-Z a3#5: el Administrador/a no atiende, así que invita roles que no atienden (Secretaría).
+    const r = await createInvitation({ email: email(), firstName: "Gabi", lastName: "Luna", role: "ASSISTANT" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.url).toBeNull();

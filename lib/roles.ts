@@ -73,7 +73,8 @@ export function roleDescription(role: Role, vertical?: TenantVertical | null): s
     case "ASSISTANT":
       return "Maneja la agenda y la recepción de todos. No ve historias clínicas.";
     case "BILLING":
-      return "Ve cobros y facturación. No ve historias clínicas.";
+      // PL-Z M2: la pestaña se llama «Facturación» (PL-D21) pero el rol no factura: ve los cobros de los pacientes.
+      return "Ve los cobros y copagos de los pacientes. No ve historias clínicas.";
   }
 }
 
@@ -96,12 +97,10 @@ export function isClinicalRole(role: Role): boolean {
  * fila diga `clinical = true`: leerlo en la Secretaria le abriría la HC por un
  * dato mal cargado).
  *
- * ADMIN: desde §20.17 nunca atiende y ninguna escritura lo deja en `clinical =
- * true` (invitación, cambio de rol, «¿Atiende?»). Se sigue leyendo el flag SOLO
- * para las filas de antes (backfill de M8 = true): la migración M8b (inicio de
- * PL-2) las pasa a PRACTITIONER con «Configuración» si tienen agenda en uso, o a
- * `clinical = false`. Cortarlo acá antes de M8b le quitaría la agenda y la HC a
- * esos Administradores de un día para el otro.
+ * ADMIN: nunca atiende (§20.17), aunque la fila diga `clinical = true`. Las filas ADMIN de antes (backfill de M8
+ * = true) las normaliza la migración M8b (`pl_admin_consultorio`: PRACTITIONER con «Configuración» si tenían
+ * agenda en uso, o `clinical = false`), que corre en el build ANTES del deploy de este código; PL-Z M1 cortó acá
+ * la lectura del flag para que ninguna fila ADMIN que quedara mal cargada le abra la HC.
  *
  * Es la regla única de «atiende ⇒ lee HC, es reservable y necesita
  * `Practitioner`»: la usan `capabilitiesForMember`, `lib/visibility.ts`
@@ -109,7 +108,7 @@ export function isClinicalRole(role: Role): boolean {
  */
 export function isClinicalMember(m: Pick<MemberAccess, "role" | "clinical">): boolean {
   if (m.role === "PRACTITIONER") return true;
-  if (m.role === "OWNER" || m.role === "ADMIN") return m.clinical === true;
+  if (m.role === "OWNER") return m.clinical === true;
   return false;
 }
 

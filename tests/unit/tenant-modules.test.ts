@@ -209,8 +209,13 @@ describe("copy y labels", () => {
     for (const m of TENANT_MODULES) expect(MODULE_DENIED_COPY[m]?.length).toBeGreaterThan(10);
   });
   it("[PL-1a] el copy de upsell nombra el plan mínimo (Clínica para salas; Consultorio para plantillas/favoritos/catálogo)", () => {
-    expect(MODULE_DENIED_COPY.salas).toMatch(/en el plan Clínica/);
-    expect(MODULE_DENIED_COPY.salaEspera).toMatch(/en el plan Clínica/);
+    // PL-Z B6: los dos planes que la traen y dónde se cambia.
+    expect(MODULE_DENIED_COPY.salas).toBe(
+      "Las salas vienen con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso."
+    );
+    expect(MODULE_DENIED_COPY.salaEspera).toBe(
+      "La sala de espera viene con los planes Clínica y Libre. El plan se cambia en Configuración → Plan y uso."
+    );
     for (const m of ["plantillas", "favoritos", "ejerciciosGlobales"] as const) {
       expect(MODULE_DENIED_COPY[m]).toMatch(/desde el plan Consultorio/);
     }

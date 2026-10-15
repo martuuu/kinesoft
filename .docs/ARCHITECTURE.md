@@ -1253,6 +1253,58 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   - Suspender una membresía (`disabledAt`) solo afecta ese consultorio: la persona cae al otro o a `/sin-acceso`.
   - El directorio público de profesionales (DIR, §19.7b del plan) se apoya en esto.
 
+### ADR-016 — Cobro de la suscripción a mano, sin Mercado Pago (status: ACCEPTED, PL-2b, 15-oct-2026; decisión de Martin)
+
+- **Contexto.** El plan §20.5.6 preveía débito automático (preapproval) y «Pagar con MP». Martin (16-oct): sin MP para la
+  suscripción por ahora; la app se tiene que poder deployar sin cobrar.
+- **Decisión.** Cargos por período generados por un **único cron diario** (`/api/cron/daily`, 11:00 UTC, presupuesto 45 s,
+  etapas idempotentes; UNIQUE tenant+período) y pagos **manuales**: el consultorio sube el comprobante (bucket privado
+  `billing-receipts`, magic bytes, ≤ 4 MB, URL firmada 60 s; se puede subir en solo lectura) y Plataforma aprueba,
+  rechaza o imputa con recibo. Todas las escrituras de cobro viven en `lib/saas-billing-internal.ts` (guard estático).
+  Flag `SAAS_BILLING_MODE=off|manual` (`mp` = `manual` en esta etapa). Defaults PL2b-D1..D4: anclaje = día siguiente al
+  fin de la prueba (tope 28, sin retroactivos); vence a 5 días → `PAST_DUE` + 10 de gracia; prueba impaga sigue
+  TRIALING; `CANCELLED` solo lo toca Plataforma. Las rutas de cron viejas quedan como disparo manual.
+- **Descartados.** Preapproval y checkout de MP (vuelven con otra ola); un topic nuevo en el webhook (AUDIT §5.4 intacto).
+- **Consecuencias.** Martin revisa comprobantes a mano; el estado contable (`ACTIVE`/`PAST_DUE`) lo escribe solo el cron
+  y Plataforma por el escritor único de entitlements (`source: "billing"`).
+- **Saldo a cuenta (PL-Z, a1#1/#2).** Cada pago APROBADO queda imputado a un solo cargo por, como mucho, lo que le
+  faltaba; el excedente se parte en un pago **hermano** APROBADO sin cargo (mismo comprobante y fecha) y el saldo a
+  cuenta se aplica a los cargos abiertos del más viejo al más nuevo (`applyCreditInTx`): al generar el cargo del cron y
+  al imputar/aprobar. Se parte en vez de sumar una tabla de imputaciones porque `SaasPayment.chargeId` ya es la
+  imputación que leen el ledger, el estado y Plataforma (sin migración). La suma de los pagos aprobados no cambia al
+  partir. Montos y precios topeados al máximo de `INTEGER` (2.147.483.647 centavos).
+- **Límite de cuerpo global (PL-Z, a1#8).** `serverActions.bodySizeLimit: "4.5mb"` (next.config.mjs) vale para
+  **todas** las server actions, no solo la del comprobante: Next 14 no permite un límite por action. Se aceptó porque el
+  costo es acotado (4.5 MB por request autenticado, contra 1 MB del default) y el tope fino de 4 MB del comprobante lo
+  aplica `readReceiptFile` antes de leer los bytes. Si hace falta acotar el resto, la salida es subir el comprobante
+  por un route handler propio (o upload firmado directo a Storage) y volver al default de 1 MB.
+- **Datos para transferir (PL-Z, A2).** `SAAS_BILLING_TRANSFER_INFO` (texto libre, ≤ 500): sin ella no se ofrece
+  «Informar pago»; con ella, los mails de cuota nueva y de vencida la incluyen (escapada).
+
+### ADR-017 — Verificación en dos pasos por usuario (status: ACCEPTED, PL-2a, 15-oct-2026)
+
+- **Contexto.** BO4 tenía MFA solo para superadmins y por flag global; §20.5.5 la pide opcional para cualquier usuario.
+- **Decisión.** Dos métodos: TOTP de Supabase (puerto `lib/mfa-port.ts`, sesión AAL2) y código propio por email (HMAC,
+  10 min, 5 intentos, reenvío cada 60 s, atado al `session_id` del JWT → cookie firmada `kine_2fa`), más 10 códigos de
+  recuperación de un uso. El corte va en la foto de acceso sin queries extra: `UnauthenticatedError("two_factor")` →
+  `/verificar-acceso?next=` (fuera de `(app)` y `(platform)`, lógica pura sin bucle). Step-up `kine_stepup` (10 min) para
+  plan, titularidad, permisos y apagar la 2FA. Todo lo que escribe 2FA vive en `lib/two-factor-internal.ts`.
+- **Descartados.** SMS (costo y SIM swap); el corte «soporte solo con MFA en prod» de BO-Z (se quitó: la 2FA es por
+  usuario y opcional; `PLATFORM_MFA_ENFORCEMENT` sigue existiendo y queda en `off`).
+- **Consecuencias.** El superadmin la maneja en `/cuenta/seguridad` como cualquiera y puede resetear la de otro usuario
+  (auditado + mail). Cerrar sesión borra `kine_2fa` y `kine_stepup`.
+
+### ADR-018 — El plan SaaS se cambia solo por el núcleo de cambio de plan (status: ACCEPTED, PL-3, 15-oct-2026)
+
+- **Contexto.** El drawer «Editar suscripción» de Plataforma escribía `saasPlan` directo, salteando los cupos (quiénes
+  pierden el acceso), los módulos y el audit del cambio de plan que usa el consultorio.
+- **Decisión.** `Tenant.saasPlan` (y el `plan` legado derivado) se escribe **solo** por `applyPlanChangeInTx`
+  (`lib/saas-plan-change-internal.ts`), con `previewPlanChangeInTx` antes: desde Configuración (`lib/saas-billing.ts`,
+  step-up) y desde Plataforma («Cambiar de plan», `components/plataforma/billing/plan-change-drawer.tsx`, con Libre
+  permitido). «Editar suscripción» muestra el plan pero no lo escribe.
+- **Consecuencias.** Un solo lugar decide cupos, módulos, audit doble y mails del cambio; cualquier pantalla nueva que
+  cambie el plan llama al núcleo.
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

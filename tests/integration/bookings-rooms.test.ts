@@ -89,8 +89,9 @@ describe.skipIf(!RUN)("write-paths de turnos con sala (SR3a)", () => {
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    T = await createEphemeralTenant(db);
-    U = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    U = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     // Cupo ilimitado: el cupo del servicio no se mete en los casos de sala.
     svc = (
       await db.service.create({

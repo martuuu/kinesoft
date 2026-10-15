@@ -104,8 +104,9 @@ describe.skipIf(!RUN)("candado de día (B4.4)", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     prac2 = await addPractitioner(db, A, "PRACTITIONER");
     assistant = await addPractitioner(db, A, "ASSISTANT");
     await db.location.create({ data: { tenantId: A.tenantId, name: "Principal", isPrimary: true } });
@@ -656,8 +657,8 @@ describe.skipIf(!RUN)("bloqueo de sala (SR-B, §17.5)", () => {
   beforeAll(async () => {
     db = ownerClient();
     holderDb = ownerClient();
-    C = await createEphemeralTenant(db);
-    D = await createEphemeralTenant(db);
+    C = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
+    D = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     prac = await addPractitioner(db, C, "PRACTITIONER");
     assistant = await addPractitioner(db, C, "ASSISTANT");
     const a = await addRoom(db, C, { name: "Consultorio 1" });
@@ -1110,7 +1111,7 @@ describe.skipIf(!RUN)("SV06b · emisión realtime del candado y los bloqueos", (
 
   beforeAll(async () => {
     db = ownerClient();
-    E = await createEphemeralTenant(db);
+    E = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     prac2 = await addPractitioner(db, E, "PRACTITIONER");
     room = await addRoom(db, E, { name: "Box SV" });
   });

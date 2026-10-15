@@ -11,6 +11,8 @@ vi.mock("@/lib/dashboard", () => ({
   getMonthBookingDays: vi.fn(async () => []),
 }));
 vi.mock("@/lib/preferences", () => ({ updateDashboardPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
+// PL-Z: el menú de perfil monta el switch del propio turnero (server action: red).
+vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: { enabled: true } }) }));
 // SR-D5I: el screen completo monta la campana, el menú de perfil y los
 // recientes; se mockean sus server actions (red) y el router de Next.
 vi.mock("@/lib/notifications", () => ({
@@ -108,6 +110,7 @@ describe("[SR-D5I] ingresos por rol en el dashboard", () => {
       revenueScope: "tenant",
       reminderDismissed: true,
       reminderKey: "near-discharge:2026-W41",
+      ownPublicBooking: null,
       ...over,
     };
   }

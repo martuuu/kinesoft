@@ -25,7 +25,8 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
       "Diagnósticos",
       "Usuarios",
       "Plan y uso",
-      "Accesos de soporte",
+      "Facturación", // PL-3a (PL-D21)
+      "Soporte", // PL-2d: Mensajes + Accesos de soporte
       "Exportar datos",
     ]);
   });

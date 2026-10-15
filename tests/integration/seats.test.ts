@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { randomBytes } from "node:crypto";
 import type { PrismaClient, Role, SaasPlan } from "@prisma/client";
-import { LEGACY_PLAN_OF } from "@/lib/saas-plans-logic";
+import { LEGACY_PLAN_OF, PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import {
   changeMemberRole,
   createInvitation,
@@ -24,6 +24,7 @@ import { platformInviteTeamMember } from "@/lib/platform-team";
 import { getTenantTeamForPlatform } from "@/lib/platform-team-read";
 import { activateInvitation } from "@/lib/invite-activation-internal";
 import {
+  changeMemberRoleInTx,
   checkSeatForJoinInTx,
   INVITE_ADMIN_CLINICAL_MESSAGE,
   runTeamTx,
@@ -91,13 +92,35 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     __setAuthAdminForTests(null);
   });
 
-  async function tenant(saasPlan: SaasPlan, overrides: Partial<Record<"maxUsersOverride" | "maxProfessionalsOverride" | "maxStaffOverride", number>> = {}) {
+  /**
+   * PL-Z a3#1: los overrides de cupo solo valen en Libre. Un «Consultorio con tope por tipo a medida» se arma como
+   * Libre con el total del plan pedido (`maxUsersOverride` = el del plan, salvo que el test lo fije), que es como
+   * Plataforma lo pactaría hoy.
+   */
+  async function tenant(requested: SaasPlan, overrides: Partial<Record<"maxUsersOverride" | "maxProfessionalsOverride" | "maxStaffOverride", number>> = {}) {
+    const custom = Object.keys(overrides).length > 0;
+    const saasPlan: SaasPlan = custom ? "LIBRE" : requested;
     const t = await createEphemeralTenant(db, { saasPlan, plan: LEGACY_PLAN_OF[saasPlan] });
-    if (Object.keys(overrides).length) await db.tenant.update({ where: { id: t.tenantId }, data: overrides });
+    if (custom) {
+      const maxUsers = PLAN_DEFAULTS[requested].limits.maxUsers;
+      await db.tenant.update({
+        where: { id: t.tenantId },
+        data: { ...(maxUsers != null ? { maxUsersOverride: maxUsers } : {}), ...overrides },
+      });
+    }
     tenants.push(t);
     asUser(t.userId);
     return t;
   }
+
+  /**
+   * Pasar a ADMIN por el núcleo con el ctx del Titular: desde PL-Z (a2#7) la action `changeMemberRole` pide step-up
+   * para ADMIN (lo cubre pl3b-team.test.ts con la sesión de 2FA); acá se fija el cupo y el bloqueo, no el step-up.
+   */
+  const toAdmin = (t: EphemeralTenant, membershipId: string) => {
+    const ctx: TeamActorCtx = { via: "tenant", tenantId: t.tenantId, actorUserId: t.userId, actorRole: "OWNER", actorRef: null };
+    return runTeamTx(ctx, (tx) => changeMemberRoleInTx(tx, ctx, { membershipId, role: "ADMIN" }));
+  };
 
   async function staff(t: EphemeralTenant, role: Role, disabled = false, clinical?: boolean) {
     const id = `test-user-${uniqueSuffix()}`;
@@ -137,9 +160,10 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
   });
 
   // §20.17 (Martin, 15-oct): Consultorio = 5 usuarios de CUALQUIER tipo. `PLAN_DEFAULTS` ya lo dice, pero los límites
-  // salen de la fila de `SaasPlanConfig`, que M8 sembró con 4 + 1 y corrige la migración M8b (inicio de PL-2). Hasta
-  // entonces estos tres arrancan como `it.fails("[M8b] …")`; la sesión de M8b los da vuelta.
-  it.fails("[M8b] Consultorio: 5 usuarios de cualquier tipo (entra el 5.º profesional; frena el 6.º usuario)", async () => {
+  // salen de la fila de `SaasPlanConfig`, que M8 sembró con 4 + 1 y corrige la migración M8b (inicio de PL-2:
+  // `20261015200000_pl_admin_consultorio`, límites por tipo a NULL). Estos tres arrancaron como `it.fails("[M8b] …")`
+  // y M8b los dio vuelta: dependen de que la base tenga M8b aplicada.
+  it("[M8b] Consultorio: 5 usuarios de cualquier tipo (entra el 5.º profesional; frena el 6.º usuario)", async () => {
     const t = await tenant("CONSULTORIO");
     await addPractitioner(db, t);
     await addPractitioner(db, t);
@@ -150,7 +174,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     expect(await db.invitation.count({ where: { tenantId: t.tenantId } })).toBe(1);
   });
 
-  it.fails("[M8b] Consultorio: sin tope por tipo, también entran varias personas no clínicas", async () => {
+  it("[M8b] Consultorio: sin tope por tipo, también entran varias personas no clínicas", async () => {
     const t = await tenant("CONSULTORIO");
     await staff(t, "ASSISTANT"); // Titular + Secretaria = 2 de 5
     expect((await invite("BILLING")).ok).toBe(true);
@@ -167,7 +191,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     expect((await invite("PRACTITIONER")).ok).toBe(true);
   });
 
-  it.fails("[M8b] Titular que no atiende igual ocupa uno de los 5 lugares del Consultorio", async () => {
+  it("[M8b] Titular que no atiende igual ocupa uno de los 5 lugares del Consultorio", async () => {
     const t = await tenant("CONSULTORIO");
     await db.membership.updateMany({ where: { tenantId: t.tenantId, userId: t.userId }, data: { clinical: false } });
     expect((await invite("ASSISTANT")).ok).toBe(true);
@@ -220,7 +244,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     // clínico (sin tope por tipo en Consultorio) y deja de atender (sin turnos ni pacientes: no hay bloqueo).
     const kine = await addPractitioner(db, t);
     const km = await db.membership.findFirstOrThrow({ where: { tenantId: t.tenantId, userId: kine.userId } });
-    expect(await changeMemberRole(km.id, "ADMIN")).toEqual({ ok: true, data: undefined });
+    expect(await toAdmin(t, km.id)).toEqual({ ok: true, data: undefined });
     expect((await db.membership.findUniqueOrThrow({ where: { id: km.id } })).clinical).toBe(false);
   });
 
@@ -229,7 +253,7 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
     const kine = await addPractitioner(db, t);
     await addPatient(db, t, { assignedPractitionerId: kine.practitionerId });
     const km = await db.membership.findFirstOrThrow({ where: { tenantId: t.tenantId, userId: kine.userId } });
-    const r = await changeMemberRole(km.id, "ADMIN");
+    const r = await toAdmin(t, km.id);
     expect(r.ok).toBe(false);
     expect(await db.membership.findUniqueOrThrow({ where: { id: km.id } })).toMatchObject({ role: "PRACTITIONER", clinical: true });
   });
@@ -410,7 +434,9 @@ describe.skipIf(!RUN)("[BO2-B → PL-1c] cupos del plan por tipo (PL-D3)", () =>
 
   describe("[PL-1c] setMemberClinicalInTx («¿Atiende?»)", () => {
     it("el Titular deja de atender: libera el lugar de profesional y ocupa el no clínico", async () => {
-      const t = await tenant("CONSULTORIO", { maxProfessionalsOverride: 1 });
+      // M8b: la fila de Consultorio ya no tiene tope por tipo, así que los dos topes van a medida (antes el de no
+      // clínicos salía de la fila: 1).
+      const t = await tenant("CONSULTORIO", { maxProfessionalsOverride: 1, maxStaffOverride: 1 });
       // Sin turnos ni pacientes del Titular (la factory crea un servicio pero no turnos).
       const own = await db.membership.findFirstOrThrow({ where: { tenantId: t.tenantId, userId: t.userId } });
       expect((await invite("PRACTITIONER")).ok).toBe(false);

@@ -55,8 +55,10 @@ export const EMAIL_COLORS = {
 const C = EMAIL_COLORS;
 
 /** Pila de sistema (sin fuentes web). En Outlook (mso) todo cae a Arial. */
-const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace";
+export const EMAIL_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+export const EMAIL_MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace";
+const FONT = EMAIL_FONT;
+const MONO = EMAIL_MONO;
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 
@@ -86,7 +88,7 @@ export function safeHref(url: string): string {
 }
 
 /** Texto de afuera para una línea de texto plano o un asunto: sin saltos ni controles. */
-function plain(s: string | null | undefined): string {
+export function plain(s: string | null | undefined): string {
   return (s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim();
 }
 
@@ -113,7 +115,7 @@ const P = `margin:0 0 16px;font-family:${FONT};font-size:16px;line-height:26px;c
 const P_SMALL = `margin:0 0 8px;font-family:${FONT};font-size:13px;line-height:20px;color:${C.muted};`;
 
 /** Párrafo de cuerpo. `html` ya escapado por quien lo arma. */
-function para(html: string): string {
+export function para(html: string): string {
   return `<p style="${P}">${html}</p>`;
 }
 
@@ -234,22 +236,34 @@ function textBody(t: TextParts): string {
  * Arma un mail completo. `paragraphs` son TEXTO PLANO (se escapan para el html
  * y van tal cual al texto); `htmlParagraphs` permite resaltar partes con
  * `<strong>` armadas con datos ya escapados, y debe decir lo mismo.
+ *
+ * PL-2 (integración): se exporta para que `templates-account/-billing/-support`
+ * tengan EL MISMO layout (antes cada sesión había copiado uno propio). Para eso:
+ *  - `ctas` puede ir vacío (el mail del código de 2FA no lleva links a propósito;
+ *    la respuesta a un lead tampoco): sin botón no hay link de respaldo;
+ *  - `bodyBlocksHtml` reemplaza a los párrafos del html cuando hace falta un bloque
+ *    que no es un párrafo (el código en monoespaciada, una cita). Cada bloque YA
+ *    escapado por quien lo arma; el texto plano sigue saliendo de `paragraphs`.
  */
-function compose(p: {
+export function compose(p: {
   subject: string;
   preheader: string;
   context: string | null;
   title: string;
   paragraphs: string[];
   htmlParagraphs?: string[];
+  bodyBlocksHtml?: string[];
   ctas: Array<{ label: string; url: string; variant?: "primary" | "secondary" }>;
   afterCta?: string[];
   footer: string[];
 }): RenderedEmail {
-  const parasHtml = (p.htmlParagraphs ?? p.paragraphs.map(escapeHtml)).map(para).join("\n");
+  const parasHtml = p.bodyBlocksHtml
+    ? p.bodyBlocksHtml.join("\n")
+    : (p.htmlParagraphs ?? p.paragraphs.map(escapeHtml)).map(para).join("\n");
   const buttons = p.ctas.map((c) => button(c.url, c.label, c.variant ?? "primary")).join("\n");
   const after = (p.afterCta ?? []).map((l) => `<p style="margin:20px 0 0;font-family:${FONT};font-size:14px;line-height:22px;color:${C.muted};">${escapeHtml(l)}</p>`).join("\n");
-  const bodyHtml = `${parasHtml}\n${buttons}\n${after}\n${fallbackLink(p.ctas[0].url)}`;
+  const fallback = p.ctas.length > 0 ? fallbackLink(p.ctas[0].url) : "";
+  const bodyHtml = `${parasHtml}\n${buttons}\n${after}\n${fallback}`;
   return {
     subject: subjectLine(p.subject),
     html: layout({ preheader: p.preheader, context: p.context, title: p.title, bodyHtml, footer: p.footer }),
@@ -262,7 +276,7 @@ function compose(p: {
   };
 }
 
-const strong = (s: string) => `<strong style="color:${C.ink};font-weight:600;">${escapeHtml(s)}</strong>`;
+export const strong = (s: string) => `<strong style="color:${C.ink};font-weight:600;">${escapeHtml(s)}</strong>`;
 
 const NOT_EXPECTED = "Si no esperabas este mail, podés ignorarlo: no se va a hacer ningún cambio.";
 
@@ -538,14 +552,15 @@ export function supportAccessEmail(p: {
 /**
  * BO5-A: recordatorio de fin de prueba al OWNER (BO-D1/2: 14 días PRO, después 7 de gracia). `daysLeft` es el de
  * `tenantAccessFor` (contando hoy; 1 = hoy es el último día), así el mail dice lo mismo que la banda de la app.
- * SIN precios ni planes inventados: el siguiente paso es hablar con nosotros («Escribinos para seguir»); responder
- * el mail llega a `EMAIL_REPLY_TO` (lo pone `sendEmail`). Tampoco promete un corte: con
+ * SIN precios ni planes inventados. PL-Z M9: desde PL el siguiente paso es elegir el plan en Configuración → Plan y
+ * uso (antes «Escribinos para seguir», cuando no había autogestión); responder el mail igual llega a
+ * `EMAIL_REPLY_TO` (lo pone `sendEmail`). Tampoco promete un corte: con
  * `TENANT_ACCESS_ENFORCEMENT=banner` (el default de hoy) nada se bloquea, por eso «puede pasar a modo lectura».
  */
 export function trialReminderEmail(p: { tenantName: string; daysLeft: number; expired: boolean; url: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
   const n = Math.max(1, Math.floor(p.daysLeft));
-  const keep = "Escribinos para seguir: respondé este mail y te ayudamos a elegir cómo continuar. Tus datos no se pierden.";
+  const keep = "Para seguir, elegí tu plan en Configuración → Plan y uso. Tus datos no se pierden.";
   let subject: string;
   let title: string;
   let lead: string;
@@ -566,7 +581,7 @@ export function trialReminderEmail(p: { tenantName: string; daysLeft: number; ex
     title = "Hoy termina tu prueba";
     lead = `Hoy es el último día de la prueba de ${tenant} en KineSoft.`;
     leadHtml = `Hoy es el último día de la prueba de ${strong(tenant)} en KineSoft.`;
-    second = "Si querés seguir sin interrupciones, avisanos antes de que termine el día.";
+    second = "Si querés seguir sin interrupciones, elegí tu plan hoy.";
   } else {
     subject = `Tu prueba de KineSoft vence en ${n} días`;
     title = "Tu prueba está por terminar";

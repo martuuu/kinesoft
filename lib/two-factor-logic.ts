@@ -56,16 +56,18 @@ export function hasAnyTwoFactorMethod(m: TwoFactorMethods): boolean {
  * Estado de la 2FA de la sesión.
  *
  * - Sin ningún método prendido → `not_enabled` (nunca corta: la 2FA es opt-in por usuario).
- * - `aal2` → `satisfied`. Lo da Supabase solo después de verificar un factor MFA (TOTP) en esta sesión; aunque el
- *   flag `twoFactorTotp` estuviera apagado (reset del superadmin a medio camino), sigue siendo un segundo factor
- *   probado.
+ * - `aal2` → `satisfied` SOLO si la persona tiene la app (`m.totp`). PL-Z (a2#1, ALTO): antes bastaba `aal2`. Con
+ *   solo el método email prendido y la contraseña robada, se enrolaba un TOTP PROPIO directo contra la API de GoTrue
+ *   (no pide AAL2 si no hay factores verificados), se verificaba, la sesión subía a AAL2 y quedaba `satisfied`
+ *   salteando el código por email del dueño. Un `aal2` sin el flag (reset del superadmin a medio camino) ya no
+ *   cuenta: si queda el email prendido, pide el código.
  * - Cookie `kine_2fa` válida → `satisfied`, SOLO con `sessionId` (sin él la cookie no está ligada a nada: un
  *   fallback sin token no puede heredar la prueba de otra sesión).
  * - Si no → `required`: la sesión tiene que pasar por `/verificar-acceso` antes de entrar a la app.
  */
 export function twoFactorStateOf(m: TwoFactorMethods, s: SessionAssurance): TwoFactorState {
   if (!hasAnyTwoFactorMethod(m)) return "not_enabled";
-  if (s.aal === "aal2") return "satisfied";
+  if (s.aal === "aal2" && m.totp) return "satisfied";
   if (s.sessionId && s.sessionProofValid) return "satisfied";
   return "required";
 }

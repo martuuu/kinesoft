@@ -1,7 +1,11 @@
 import "server-only";
 /**
  * Jobs diarios de Vercel Cron (BO5-A, plan §19.5): invitaciones vencidas, recordatorios de prueba y resumen de
- * salud. Los llaman las rutas `app/api/cron/<job>/route.ts` (ver `runCronRoute`).
+ * salud. PL-2b (H-PL4, PL-D18): Vercel llama UNA sola ruta, `app/api/cron/daily/route.ts` → `runDaily`, que corre
+ * primero los cobros de la suscripción (`runSaasBilling`) y después estos tres jobs. Las rutas viejas
+ * `app/api/cron/<job>/route.ts` quedan como disparo MANUAL de un job suelto (mismo `CRON_SECRET`), sin entrada en
+ * `vercel.json`: Hobby permite pocos crons y a hora inexacta, y un solo cron ordena las etapas (los mails de cobro
+ * salen después de generar los cargos).
  *
  * Superficie SIN Actor (nadie inició sesión: el que llama es Vercel con `CRON_SECRET`) y que cruza consultorios:
  * por eso `prismaService` (AGENTS.md §4). No lee PHI: ni `Patient` ni nada clínico; los mails llevan solo nombre del
@@ -33,6 +37,7 @@ import { TENANT_ACCESS_SELECT } from "@/lib/tenant-access";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { checkCronAuth } from "@/lib/cron-auth";
 import { maintenanceMode } from "@/lib/maintenance";
+import { runSaasBilling, type SaasBillingRunResult } from "@/lib/saas-billing-internal";
 import {
   healthDigestFindings,
   healthDigestKey,
@@ -61,7 +66,7 @@ function errName(err: unknown): string {
 
 // ── Ruta ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type CronJobName = "invitations-expire" | "trial-reminders" | "health-digest";
+export type CronJobName = "daily" | "invitations-expire" | "trial-reminders" | "health-digest";
 
 const NO_STORE = { "cache-control": "no-store, max-age=0" };
 
@@ -102,6 +107,45 @@ export async function runCronRoute(
     logger.error("cron.failed", { job, ms: Date.now() - startedAt, error: errName(err) });
     return Response.json({ ok: false, job }, { status: 500, headers: NO_STORE });
   }
+}
+
+// ── 0. Cron diario único (PL-2b) ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Presupuesto del cron diario (H-PL4): 45 s de trabajo dentro de los 60 s de función de Vercel Hobby
+ * (`vercel.json#functions`). Los cobros se llevan la mayor parte; los jobs de BO5-A son conteos y unos pocos mails.
+ */
+export const DAILY_BUDGET_MS = 45_000;
+const BILLING_BUDGET_MS = 30_000;
+
+export type DailyStage<T> = { ok: true; result: T } | { ok: false; error: string };
+
+async function stage<T>(name: string, fn: () => Promise<T>): Promise<DailyStage<T>> {
+  try {
+    return { ok: true, result: await fn() };
+  } catch (err) {
+    // Una etapa que falla no frena a las demás (cada una es idempotente y se reintenta mañana).
+    logger.error("cron.daily.stage_failed", { stage: name, error: errName(err) });
+    return { ok: false, error: errName(err) };
+  }
+}
+
+/**
+ * Etapas en orden: cobros (precios con vigencia → suscripciones → cargos del período → vencidos/al día → mails) →
+ * invitaciones → recordatorios de prueba → resumen de salud. Si los cobros agotan su presupuesto, cortan y siguen
+ * mañana (`truncated`); los demás jobs corren igual.
+ */
+export async function runDaily(now: Date): Promise<{
+  billing: DailyStage<SaasBillingRunResult>;
+  invitations: DailyStage<InvitationsExpireResult>;
+  trialReminders: DailyStage<TrialRemindersResult>;
+  healthDigest: DailyStage<HealthDigestResult>;
+}> {
+  const billing = await stage("billing", () => runSaasBilling(now, BILLING_BUDGET_MS));
+  const invitations = await stage("invitations", () => runInvitationsExpire(now));
+  const trialReminders = await stage("trial_reminders", () => runTrialReminders(now));
+  const healthDigest = await stage("health_digest", () => runHealthDigest(now));
+  return { billing, invitations, trialReminders, healthDigest };
 }
 
 // ── 1. Invitaciones vencidas ──────────────────────────────────────────────────────────────────────────────────

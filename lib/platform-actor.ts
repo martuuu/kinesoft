@@ -15,8 +15,8 @@ import "server-only";
  * BO4 (BO-D6): verificación en dos pasos. Con `PLATFORM_MFA_ENFORCEMENT=enforce` (lib/env.ts) toda llamada exige una
  * sesión AAL2 (TOTP de Supabase, `lib/platform-mfa.ts`) y las acciones `high`, además, un código reciente
  * (`lib/platform-reauth.ts`). La decisión es pura (`decidePlatformMfa`, lib/platform-mfa-logic.ts). Con `off`
- * (default) no se bloquea nada y ni siquiera se consulta a GoTrue, salvo en `support.start`, que lee el nivel para
- * dejar `mfa` en el registro.
+ * (default) no se consulta a GoTrue, salvo en `support.start`, que lee el nivel para dejar `mfa` en el registro; las
+ * acciones `high` piden igual el step-up de la 2FA por usuario (PL-Z, `requireStepUp`).
  */
 import { getAccessSnapshot, ForbiddenError, UnauthenticatedError, type AccessSnapshot } from "@/lib/session";
 import { getStrictSessionUser } from "@/lib/session-user";
@@ -25,6 +25,7 @@ import { logger } from "@/lib/logger";
 import { platformMfaEnforcement } from "@/lib/env";
 import { readPlatformAssurance } from "@/lib/platform-mfa";
 import { hasFreshPlatformReauth } from "@/lib/platform-reauth";
+import { requireStepUp } from "@/lib/two-factor-step-up";
 import {
   PLATFORM_ERROR_DIGEST,
   PLATFORM_MFA_COPY,
@@ -73,6 +74,9 @@ export const PLATFORM_ACTION_POLICY = {
   "team.invite": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
   "team.access.revoke": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   "team.transfer_owner": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
+  // PL-3b: «¿Atiende?» del Titular y permisos delegados («Configuración» / «Planes y pagos») hechos por el superadmin
+  // en lugar del Titular: cambian quién administra el consultorio o ve la plata, que en Configuración pide step-up.
+  "team.grants": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   // BO-Z (B2): high. Emite un link de recuperación de la cuenta de OTRA persona (con el mail caído, y si la cuenta no
   // se activó nunca, el superadmin lo ve): con MFA en enforce pide el código reciente, como deshabilitar.
   "user.access_link": { risk: "high", rateLimit: { limit: 30, windowMs: 10 * MIN } },
@@ -163,6 +167,11 @@ async function admitPlatformAdmin(
   if (!s || !s.profile) throw new UnauthenticatedError("no_session");
   if (!strict || strict.id !== s.userId) throw new UnauthenticatedError("no_session");
   if (!s.profile.isPlatformAdmin || s.profile.disabledAt) throw new ForbiddenError("platform_admin_required");
+  // PL-2a (C-PL6): la 2FA por usuario también corta Plataforma, con la misma foto (cero queries). Antes que el rate
+  // limit y que `{ mfaStep: true }`: con solo la contraseña, las pantallas de /plataforma-mfa servirían para sumar un
+  // TOTP propio y llegar a AAL2 salteando el código por email del dueño. El layout de `(platform)` la manda a
+  // `/verificar-acceso?next=` (handoff de PL-2a).
+  if (s.twoFactor?.state === "required") throw new UnauthenticatedError("two_factor");
 
   let policy: PlatformActionPolicy | null = null;
   if (action !== undefined) {
@@ -191,10 +200,14 @@ function actorOf(s: AccessSnapshot & { profile: NonNullable<AccessSnapshot["prof
 const MFA_STEP_ACTIONS = new Set<string | undefined>([undefined, "mfa.enroll", "mfa.verify"]);
 
 /**
- * C-BO2. Sin sesión → `UnauthenticatedError`. Sin `isPlatformAdmin`, o con `UserProfile.disabledAt` →
+ * C-BO2. Sin sesión → `UnauthenticatedError`. Con la 2FA del usuario pendiente (PL-2a) → `UnauthenticatedError("two_factor")`.
+ * Sin `isPlatformAdmin`, o con `UserProfile.disabledAt` →
  * `ForbiddenError("platform_admin_required")`. Con `action`: una clave fuera de la política es un error de
  * programación y falla cerrado (`ForbiddenError("unknown_platform_action")`); si no, aplica su rate limit
  * (`PlatformRateLimitedError`, «Demasiados intentos. Probá de nuevo en N s.»).
+ *
+ * PL-Z: sin `enforce`, riesgo `high` → `requireStepUp` de la 2FA por usuario (`StepUpRequiredError` /
+ * `TwoFactorSetupRequiredError`, por digest).
  *
  * BO4, con `PLATFORM_MFA_ENFORCEMENT=enforce`: sin AAL2 → `PlatformMfaRequiredError` (setup/verify/unavailable); con
  * riesgo `high` y sin re-verificación de los últimos 10 min → `PlatformReauthRequiredError`. Sin `action` (layout,
@@ -219,6 +232,13 @@ export async function requirePlatformAdmin(
   if (opts?.mfaStep) return actorOf(s, false);
 
   const enforcement = platformMfaEnforcement();
+  // PL-Z (a2#4, decisión del orquestador): sin `enforce` (el default en prod hoy), las acciones `high` (suspender,
+  // deshabilitar, dar superadmin, resetear 2FA ajena, plata) no pedían NINGÚN segundo factor: una sesión de
+  // superadmin robada las hacía todas. Mientras el TOTP de Plataforma no se prenda, piden el step-up de la 2FA por
+  // usuario (C-PL6, 10 min), el mismo de cambiar el plan: `usePlatformAction` muestra el modal de step-up y
+  // reintenta. Sin 2FA por usuario → `TwoFactorSetupRequiredError` («Activá la verificación…»). Con `enforce` manda
+  // la re-verificación TOTP de BO4 (abajo) y esto no corre: nunca se piden los dos.
+  if (enforcement !== "enforce" && policy?.risk === "high") await requireStepUp({ userId: s.userId });
   // Con off solo se consulta para el registro de soporte («el soporte no se despliega sin BO4»: con off queda
   // permitido para desarrollo, pero la fila dice que no hubo segundo paso).
   if (enforcement !== "enforce" && action !== "support.start") return actorOf(s, false);

@@ -123,7 +123,7 @@ describe.skipIf(!RUN)("PL-1b · visibilidad por miembro (H-PL1)", () => {
     expect(caps.has("plans.manage")).toBe(false);
   });
 
-  it("controles: Titular y Administrador/a clínicos siguen en full", async () => {
+  it("controles: el Titular clínico sigue en full; un Administrador/a legado con clinical = true ya no (PL-Z M1)", async () => {
     asUser(C.userId);
     const owner = await getActor();
     for (const id of pats.C) expect(await patientAccessFor(owner, id)).toBe("full");
@@ -132,10 +132,12 @@ describe.skipIf(!RUN)("PL-1b · visibilidad por miembro (H-PL1)", () => {
     expect(ov.adminView).toBe(false);
     expect((await capabilitiesForActor(owner)).has("clinical.read")).toBe(true);
 
+    // PL-Z M1: el Administrador/a nunca atiende (§20.17), aunque la fila diga `clinical = true` (M8b las normaliza
+    // antes del deploy): ve como la Secretaria.
     asUser(adminClinical.userId);
     const admin = await getActor();
     const bulk = await bulkPatientAccess(admin, pats.C);
-    expect(pats.C.map((id) => bulk.get(id))).toEqual(["full", "full", "full"]);
-    expect((await visibilityForActor(admin)).seesAll).toBe(true);
+    expect(pats.C.map((id) => bulk.get(id))).toEqual(["admin", "admin", "admin"]);
+    expect((await capabilitiesForActor(admin)).has("clinical.read")).toBe(false);
   });
 });

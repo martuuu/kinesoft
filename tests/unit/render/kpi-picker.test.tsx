@@ -12,6 +12,8 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: vi.fn() }));
+// PL-Z: el menú de perfil monta el switch del propio turnero (server action: red).
+vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: { enabled: true } }) }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {}, push: () => {}, replace: () => {} }),
 }));

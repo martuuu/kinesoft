@@ -109,9 +109,10 @@ describe.skipIf(!RUN)("loadAvailabilityInputs (B2.2)", () => {
 
   beforeAll(async () => {
     owner = ownerClient();
-    A = await createEphemeralTenant(owner);
-    B = await createEphemeralTenant(owner);
-    C = await createEphemeralTenant(owner);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    A = await createEphemeralTenant(owner, { saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(owner, { saasPlan: "CLINICA" });
+    C = await createEphemeralTenant(owner, { saasPlan: "CLINICA" });
     await owner.tenant.update({ where: { id: A.tenantId }, data: { businessHoursStart: 9, businessHoursEnd: 17 } });
     // Horario inválido (invertido): el fallback usa el default 8-19.
     await owner.tenant.update({ where: { id: C.tenantId }, data: { businessHoursStart: 20, businessHoursEnd: 10 } });
@@ -492,7 +493,7 @@ describe.skipIf(!RUN)("loadAvailabilityInputs: salas (SR1a)", () => {
 
   beforeAll(async () => {
     owner = ownerClient();
-    D = await createEphemeralTenant(owner);
+    D = await createEphemeralTenant(owner, { saasPlan: "CLINICA" });
     p2 = (await addPractitioner(owner, D)).practitionerId;
     L.main = (await owner.location.create({ data: { tenantId: D.tenantId, name: "Principal", isPrimary: true } })).id;
     L.norte = (await owner.location.create({ data: { tenantId: D.tenantId, name: "Norte", isPrimary: false } })).id;

@@ -29,7 +29,11 @@ import "server-only";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 
-export type StorageBucket = "patient-files" | "exercise-media";
+/**
+ * PL-2b: `billing-receipts` = comprobantes de pago de la suscripción (PL-D22). Bucket PRIVADO que Martin crea en
+ * Supabase (EXTERNAL-CONFIG); clave `<tenantId>/<paymentId>.<ext>` armada por `lib/saas-receipts-internal.ts`.
+ */
+export type StorageBucket = "patient-files" | "exercise-media" | "billing-receipts";
 
 export type StorageResult<T> =
   | { ok: true; data: T }

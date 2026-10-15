@@ -5,8 +5,11 @@
  * «Accesos de soporte» de Configuración. La lógica vive en `lib/support-session-internal.ts` (server-only): acá solo
  * el orden de cada action.
  *
- * - `startSupport`: `requirePlatformAdmin("support.start")` (riesgo high + rate limit; MFA en BO4: **el soporte no
- *   se despliega sin BO4**, escribe en Configuración) → zod → `startSupportSession`.
+ * - `startSupport`: `requirePlatformAdmin("support.start")` (riesgo high + rate limit; con `PLATFORM_MFA_ENFORCEMENT=
+ *   enforce`, código reciente) → zod → `startSupportSession`. PL-2a (decisión de Martin, 15-oct, plan §20.5.5): se
+ *   QUITÓ el corte de BO-Z B3 («en Production sin MFA de Plataforma no se entra como soporte»). La 2FA pasó a ser por
+ *   usuario y opcional; la barrera de soporte es la misma que la del resto de Plataforma (superadmin + rate limit +
+ *   registro con `mfa` real + aviso al titular).
  * - `endSupport`: `requirePlatformAdmin()` → `endSupportSession("exit")`. El logout lo cierra por su cuenta
  *   (`app/api/auth/sign-out/route.ts`).
  * - `listSupportSessionsForTenant`: es del lado del CONSULTORIO (la ve el OWNER/ADMIN en Configuración), no de
@@ -20,7 +23,6 @@ import { z } from "zod";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { requireCapability } from "@/lib/authz";
 import { ForbiddenError } from "@/lib/session";
-import { isVercelProduction, platformMfaEnforcement } from "@/lib/env";
 import { runWithRls } from "@/lib/rls";
 import {
   SUPPORT_REASON_MAX,
@@ -32,9 +34,6 @@ import {
   type SupportSessionRow,
 } from "@/lib/support-session-internal";
 import type { ActionResult } from "@/lib/validation";
-
-/** BO-Z (B3). No se exporta: un archivo "use server" solo exporta funciones async. */
-const SUPPORT_NEEDS_MFA_MESSAGE = "Activá la verificación en dos pasos de Plataforma para entrar como soporte.";
 
 const StartSupportInput = z.object({
   tenantId: z.string().trim().min(1).max(64),
@@ -50,12 +49,6 @@ export async function startSupport(
   reason: string
 ): Promise<ActionResult<{ sessionId: string; redirectTo: string }>> {
   const actor = await requirePlatformAdmin("support.start");
-  // BO-Z (B3, decisión aplicada; Martin confirma): el soporte ESCRIBE en Configuración de un consultorio ajeno. En
-  // Production no se abre con `PLATFORM_MFA_ENFORCEMENT` apagado: con una sesión de superadmin robada (sin TOTP) se
-  // entraba igual. Fuera de Production (preview, local) sigue permitido para probar el flujo antes de enrolarse.
-  if (isVercelProduction() && platformMfaEnforcement() !== "enforce") {
-    return { ok: false, error: SUPPORT_NEEDS_MFA_MESSAGE };
-  }
   const parsed = StartSupportInput.safeParse({ tenantId, reason });
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};

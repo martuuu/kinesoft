@@ -20,6 +20,9 @@
  * excepción y se abren con «Fijar cupos a medida». Vacío = el del plan. Vive en la
  * pestaña «Suscripción» del detalle.
  *
+ * PL-3c: el plan se muestra pero no se edita acá (ver «Cambiar de plan», `components/plataforma/billing/
+ * plan-change-drawer.tsx`); Libre se elige allá y sus cupos (vacío = sin límite) se cargan acá.
+ *
  * CAS: la primera versión es `detail.updatedAt`; después de cada guardado se usa
  * la `data.updatedAt` que devuelve la action (el `router.refresh()` puede tardar
  * en traer el detail nuevo, y reabrir el Drawer con la versión vieja daría un
@@ -37,7 +40,6 @@ import { updatePlatformTenant } from "@/lib/platform-tenants";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import { REBASED_FORM_COPY, rebaseForm } from "@/components/plataforma/tenants/rebase-form";
 import {
-  SAAS_PLAN_VALUES,
   SUBSCRIPTION_STATUS_VALUES,
   TENANT_VERTICAL_VALUES,
   type UpdatePlatformTenantInput,
@@ -127,7 +129,6 @@ export function isGeneralDowngrade(prev: TenantVertical, next: TenantVertical): 
 }
 
 const verticalOptions = TENANT_VERTICAL_VALUES.map((v) => ({ value: v, label: VERTICAL_LABEL[v] }));
-const planOptions = SAAS_PLAN_VALUES.map((v) => ({ value: v, label: SAAS_PLAN_LABEL[v] }));
 
 /**
  * PL-1d: ¿se muestran los cupos a medida? Con Libre siempre (sin cupos = sin límite, y es donde se pactan); en otro
@@ -185,23 +186,21 @@ export function TenantEditForm({
         error={fieldError("vertical")}
         disabled={pending}
       />
-      <FormField
-        as="select"
-        label="Plan"
-        value={form.saasPlan}
-        options={planOptions}
-        onChange={(v) => onChange("saasPlan", v as SaasPlan)}
-        hint="Si con el plan nuevo no entra el equipo actual, no se guarda: para bajar de plan hay que elegir quiénes pierden el acceso."
-        error={fieldError("saasPlan")}
-        disabled={pending}
-      />
+      {/* PL-3c: el plan ya no se elige acá. Cambiarlo pasa por «Cambiar de plan» (plan-change-drawer.tsx), que usa el
+          núcleo del consultorio: elegir a quiénes deshabilitar, anular invitaciones que no entran, reactivar y
+          conservar la prueba. Un select suelto escribía solo `saasPlan` y rebotaba cuando el equipo no entraba. */}
+      <div style={{ display: "grid", gap: 2, fontSize: 12 }}>
+        <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Plan</span>
+        <span style={{ fontSize: 14, color: "var(--navy-900)" }}>{SAAS_PLAN_LABEL[form.saasPlan]}</span>
+        <span style={{ fontSize: 11, color: "var(--navy-300)" }}>Se cambia con «Cambiar de plan», en esta misma pestaña.</span>
+      </div>
       <FormField
         as="select"
         label="Estado de la suscripción"
         value={form.subscriptionStatus}
         options={statusOptions}
         onChange={(v) => onChange("subscriptionStatus", v as SubscriptionStatus)}
-        hint="Es informativo hasta que exista la facturación."
+        hint="Con el cobro prendido lo actualiza solo (cargo vencido → Pago pendiente; al día → Activa). Cambialo a mano solo como excepción."
         error={fieldError("subscriptionStatus")}
         disabled={pending}
       />

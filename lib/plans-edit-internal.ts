@@ -741,13 +741,12 @@ export async function restoreSessionInTx(
   tx: DbClient,
   actor: Actor,
   caps: ReadonlySet<Capability>,
-  role: Parameters<typeof canRestoreProgram>[0],
   input: RestoreInput
 ): Promise<{ updatedAt: string; totalSessions: number; patientId: string }> {
   const tenantId = actor.tenantId;
   const head = await programHeadInTx(tx, tenantId, input.programId);
   await assertPlanManageInTx(tx, actor, caps, head.patientId);
-  if (!canRestoreProgram(role)) throw new ForbiddenError(PLAN_EDIT_COPY.restoreForbidden);
+  if (!canRestoreProgram(caps)) throw new ForbiddenError(PLAN_EDIT_COPY.restoreForbidden);
   await lockPlanPatient(tx, { tenantId, patientId: head.patientId });
   const program = await lockedProgramInTx(tx, tenantId, input.programId, input.expectedUpdatedAt);
 

@@ -142,8 +142,9 @@ function n(limit: number | null): string {
 
 /**
  * PL-1d: cupos del plan por tipo (C-PL3), dichos corto para la lista y el detalle:
- *  - Individual → «1 usuario»; Consultorio → «5 usuarios: hasta 4 profesionales y 1 no clínico»;
- *  - Clínica → «10 usuarios de cualquier tipo»; Libre sin overrides → «Sin límite».
+ *  - Individual → «1 usuario»; Consultorio → «5 usuarios de cualquier tipo»; Clínica → «10 usuarios de cualquier
+ *    tipo» (§20.17: el «4 profesionales + 1 no clínico» de PL-D3 quedó superado); Libre sin overrides → «Sin límite».
+ *  - Con tope por tipo (solo Libre a medida) → «N usuarios: profesionales X, no clínicos Y».
  * «(a medida)» si Plataforma fijó algún override. Sin «usados»: la fila de la lista no trae el equipo (eso lo
  * muestra el detalle con `getTenantTeamForPlatform`).
  */
@@ -179,15 +180,16 @@ function countOf(c: { used: number; limit: number | null }): string {
 }
 
 /**
- * PL-1d: «En uso: 3 de 5 (2 de 4 profesionales, 1 de 1 no clínico)», contando invitaciones pendientes (PL-D3).
- * Un tipo sin límite propio (Clínica, Libre) sale solo con el número.
+ * PL-1d: «En uso: 3 de 5 (2 profesionales, 1 no clínico)», contando invitaciones pendientes (PL-D3). Un tipo sin
+ * límite propio (todos los planes de lista desde §20.17) sale solo con el número; con tope (Libre a medida),
+ * «2 de 3 profesionales».
  */
 export function seatUsageByKindLabel(s: {
   total: { used: number; limit: number | null };
   professional: { used: number; limit: number | null };
   staff: { used: number; limit: number | null };
 }): string {
-  // Concuerda con el último número dicho: «1 de 1 no clínico», «2 de 4 profesionales», «1 profesional».
+  // Concuerda con el último número dicho: «1 de 1 no clínico», «2 de 3 profesionales», «1 profesional».
   const one = (c: { used: number; limit: number | null }) => (c.limit ?? c.used) === 1;
   const pro = `${countOf(s.professional)} profesional${one(s.professional) ? "" : "es"}`;
   const staff = `${countOf(s.staff)} no clínico${one(s.staff) ? "" : "s"}`;

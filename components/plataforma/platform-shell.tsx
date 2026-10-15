@@ -182,6 +182,14 @@ export function PlatformTopBar({
           Volver a mi consultorio
         </Link>
       )}
+      {/* PL-2a (C-PL6): la 2FA del superadmin se maneja como la de cualquiera, en /cuenta/seguridad (fuera de los grupos). */}
+      <a
+        href="/cuenta/seguridad"
+        className="k-btn k-btn-ghost"
+        style={{ textDecoration: "none", padding: "8px 14px" }}
+      >
+        Seguridad
+      </a>
       <form action="/api/auth/sign-out" method="post" style={{ margin: 0 }}>
         <button
           type="submit"

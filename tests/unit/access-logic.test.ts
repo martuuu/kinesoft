@@ -49,11 +49,12 @@ describe("[IAM-0c] isUsableMembership", () => {
       expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }), { practitionerForAllRoles: true })).toBe(false);
     }
   });
-  it("[IAM-4a] por defecto (PRACTITIONER_FOR_ALL_ROLES = false): Secretaria y Facturación usables sin Practitioner; los clínicos no", () => {
-    for (const role of ["ASSISTANT", "BILLING"] as const) {
+  it("[IAM-4a] por defecto (PRACTITIONER_FOR_ALL_ROLES = false): Secretaria, Facturación y Administrador/a usables sin Practitioner; los clínicos no", () => {
+    // PL-Z M1: el Administrador/a nunca atiende (§20.17), aunque la fila diga `clinical = true`: no necesita Practitioner.
+    for (const role of ["ASSISTANT", "BILLING", "ADMIN"] as const) {
       expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }))).toBe(true);
     }
-    for (const role of ["OWNER", "ADMIN", "PRACTITIONER"] as const) {
+    for (const role of ["OWNER", "PRACTITIONER"] as const) {
       expect(isUsableMembership(m({ tenantId: "A", role, hasPractitioner: false }))).toBe(false);
     }
   });
@@ -63,7 +64,8 @@ describe("[IAM-0c] isUsableMembership", () => {
     expect(isUsableMembership(m({ tenantId: "A", role: "BILLING", hasPractitioner: false }), opts)).toBe(true);
     expect(isUsableMembership(m({ tenantId: "A", role: "PRACTITIONER", hasPractitioner: false }), opts)).toBe(false);
     expect(isUsableMembership(m({ tenantId: "A", role: "OWNER", hasPractitioner: false }), opts)).toBe(false);
-    expect(isUsableMembership(m({ tenantId: "A", role: "ADMIN", hasPractitioner: false }), opts)).toBe(false);
+    // PL-Z M1: el Administrador/a no atiende → entra sin Practitioner.
+    expect(isUsableMembership(m({ tenantId: "A", role: "ADMIN", hasPractitioner: false }), opts)).toBe(true);
   });
 });
 

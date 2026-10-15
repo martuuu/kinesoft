@@ -6,7 +6,7 @@
 
 /**
  * Mensajes de error del login por código (A3b-S-auth). Los emiten `/api/auth/sign-in`, `/api/auth/google`,
- * `/auth/callback` y `/auth/confirm`. Un código desconocido muestra el genérico: nunca se pinta el valor de
+ * `/api/auth/oauth/[provider]` (PL-2e: Google y Facebook), `/auth/callback` y `/auth/confirm`. Un código desconocido muestra el genérico: nunca se pinta el valor de
  * la query (antes `/login?error=<texto libre>` pintaba lo que quisiera el que armaba el link).
  */
 const LOGIN_ERRORS: Record<string, string> = {
@@ -15,8 +15,13 @@ const LOGIN_ERRORS: Record<string, string> = {
   missing_credentials: "Completá tu email y tu contraseña.",
   email_not_confirmed:
     "Todavía no confirmaste tu email. Buscá el mail que te mandamos y seguí el link, o pedí uno nuevo.",
-  oauth_failed: "No pudimos ingresar con Google. Probá de nuevo.",
-  missing_code: "No pudimos ingresar con Google. Probá de nuevo.",
+  // PL-2e: sin nombrar al proveedor (ahora puede ser Google o Facebook).
+  oauth_failed: "No pudimos completar el ingreso. Probá de nuevo.",
+  missing_code: "No pudimos completar el ingreso. Probá de nuevo.",
+  // H-PL2: el proveedor no devolvió email (Facebook lo permite) → nunca se crea un perfil con email vacío.
+  oauth_no_email:
+    "No recibimos tu email y lo necesitamos para tu cuenta. Probá de nuevo y aceptá compartir el email, o registrate con tu email.",
+  provider_disabled: "Ese método de ingreso no está disponible por ahora. Entrá con tu email y contraseña.",
   link_invalid: "El link venció o ya se usó. Pedí uno nuevo.",
 };
 const GENERIC_LOGIN_ERROR = "No pudimos iniciar sesión. Probá de nuevo.";

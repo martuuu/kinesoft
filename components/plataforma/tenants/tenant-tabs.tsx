@@ -3,6 +3,9 @@
 /**
  * [BO3-B] Pestañas del detalle de un consultorio (contrato B ↔ C del brief BO3): Resumen · Suscripción · Equipo
  * (BO3-C) · Ciclo de vida · Actividad. Links reales, como las del catálogo: back/forward y URL compartible.
+ *
+ * PL-3c (PL-D21): «Facturación» (estado de cuenta, pagos y comprobantes) después de Suscripción, que queda para el
+ * plan, el estado y los cupos.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -11,6 +14,7 @@ import { tenantTabHref } from "@/components/plataforma/tenants/labels";
 export const TENANT_TABS = [
   { segment: "", label: "Resumen" },
   { segment: "suscripcion", label: "Suscripción" },
+  { segment: "facturacion", label: "Facturación" },
   { segment: "equipo", label: "Equipo" },
   { segment: "ciclo-de-vida", label: "Ciclo de vida" },
   { segment: "actividad", label: "Actividad" },

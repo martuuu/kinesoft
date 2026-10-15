@@ -115,7 +115,7 @@ export function DashboardScreen({
         {useSidebar && (
           <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
             <NotificationsBell />
-            <ProfileMenu name={data.greetingName || USER_NO_NAME} preferences={preferences} revenueScope={data.revenueScope} />
+            <ProfileMenu name={data.greetingName || USER_NO_NAME} preferences={preferences} revenueScope={data.revenueScope} ownPublicBooking={data.ownPublicBooking} />
           </div>
         )}
         <MiniCalendar initialBookingDays={initialBookingDays} />

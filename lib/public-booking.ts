@@ -87,7 +87,14 @@ function callerIp(): string {
 function publicPractitionerWhere(tenantId: string) {
   // IAM-2e: + rol clínico y sin suspender. La Secretaria y Facturación tienen
   // fila Practitioner (hasta IAM-4) y se les podía reservar desde el turnero.
-  return bookablePractitionerWhere(tenantId, { includeDisabledFilter: true });
+  // PL-2f (§20.5.12, H-TURN, decisión 20 de Martin): + el switch POR PROFESIONAL
+  // (`Practitioner.publicBookingEnabled`, opt-in). El del consultorio ya lo
+  // miran los callers (`isPublicTurneroOpen`); este se suma en el MISMO where,
+  // así que `getPublicClinic`, `listPublicSlots` (`resolvePublicTarget`) y el
+  // submit lo aplican sin sentencias nuevas: un profesional apagado no aparece,
+  // no tiene horarios y un submit armado a mano con su id se rechaza antes de
+  // escribir (ni ficha ni turno).
+  return { ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }), publicBookingEnabled: true };
 }
 
 /**
@@ -331,9 +338,11 @@ export async function findFirstPublicSlot(raw: FirstPublicSlotInput): Promise<Pu
     if (!ins) return null;
   }
 
-  // Sin `practitionerIds`: el loader trae los de membresía aceptada (= los públicos).
+  // Sin `practitionerIds`: el loader trae los reservables; PL-2f: solo los
+  // prendidos en el turnero (`publicBookingOnly`, mismo where que `publicPractitionerWhere`).
   const availability = await loadAvailabilityInputs(prisma, {
     tenantId: tenant.id,
+    publicBookingOnly: true,
     serviceId: input.serviceId,
     locationId: input.locationId,
     from: fromDay,

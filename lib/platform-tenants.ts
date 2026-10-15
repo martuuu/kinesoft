@@ -50,7 +50,7 @@ async function limitsOf(tx: Prisma.TransactionClient, plan: SaasPlan, o: PlanLim
     where: { plan },
     select: { maxUsers: true, maxProfessionals: true, maxStaff: true },
   });
-  return effectiveLimits(cfg ?? PLAN_DEFAULTS[plan].limits, o);
+  return effectiveLimits(cfg ?? PLAN_DEFAULTS[plan].limits, o, plan);
 }
 
 export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{ updatedAt: string }>> {

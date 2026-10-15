@@ -67,6 +67,7 @@ import { formatWallTime, minutesOfDayAR } from "@/lib/availability/day";
 import { defaultLocationFor } from "@/lib/bookings-core";
 import { loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { BAD_ROOM_ERROR } from "@/lib/bookings-constants";
+import { roomsEnabled } from "@/lib/tenant-modules";
 import {
   AgendaAvailabilityQuery,
   ClassifyInstantQuery,
@@ -533,8 +534,12 @@ export async function classifyBookingInstant(raw: ClassifyInstantQueryInput): Pr
     // BAD_ROOM_ERROR: se avisa igual acá).
     const loc = locationId ?? defaultLocationFor(input, q.practitionerId, when, durationMin);
     const roomLoc = loc ?? input.primaryLocationId;
-    let defaultRoomId = defaultRoomFor(input, q.practitionerId, when, durationMin, loc);
-    const target = q.roomId === undefined ? defaultRoomId : q.roomId;
+    // PL-2f (PL-D7): sin el módulo `salas` las salas «duermen»: ni sala por defecto ni la pedida, y sin chequeo de
+    // ocupación (mismo criterio que el loader y `createBooking`; sin esto el aviso del modal decía «sala ocupada» de
+    // una sala que el consultorio ya no ve). El plan viene del Actor: sin query.
+    const roomsOn = roomsEnabled(actor.entitlements);
+    let defaultRoomId = roomsOn ? defaultRoomFor(input, q.practitionerId, when, durationMin, loc) : null;
+    const target = !roomsOn ? null : q.roomId === undefined ? defaultRoomId : q.roomId;
     // El loader trae solo los turnos de ESTE profesional: la sala la ocupan
     // otros, así que la ocupación sale de una carga propia de la sala
     // (`loadRoomBookingsInTx`, una sentencia con turnos + bloqueos de sala) y

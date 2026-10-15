@@ -13,6 +13,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {}, push: () => {} }),
 }));
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: async () => ({ ok: true, data: undefined }) }));
+// PL-Z: el menú de perfil monta el switch del propio turnero (server action: red).
+vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: { enabled: true } }) }));
 
 import { Sidebar } from "@/components/layout/sidebar";
 import { TenantChoiceProvider, TenantSwitcher, switcherKeyIndex } from "@/components/layout/tenant-switcher";

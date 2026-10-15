@@ -289,6 +289,63 @@ const supabasePort: AuthAdminPort = {
   },
 };
 
+/**
+ * MFA del lado ADMIN (PL-2a, C-PL6): listar y borrar los factores de OTRA persona sin su sesión. Lo usan el reset de
+ * la 2FA que hace un superadmin (`lib/platform-users.ts`) y, como respaldo, apagar el TOTP propio desde una sesión
+ * que pasó la 2FA por email (AAL1: GoTrue no deja `unenroll` de un factor verificado sin AAL2, [M6] de
+ * `lib/mfa-port.ts`).
+ *
+ * Puerto aparte (y no dos métodos más en `AuthAdminPort`) para no romper los puertos a mano de los tests de IAM, que
+ * implementan `AuthAdminPort` entero. El fake de GoTrue implementa los dos.
+ *
+ * SUPUESTOS (auth-js 2.105, `GoTrueAdminMFAApi`; `scripts/diagnose-auth.ts` los puede verificar):
+ *  [A1] `auth.admin.mfa.listFactors({ userId })` → `{ factors: Factor[] }` (verificados y no).
+ *  [A2] `auth.admin.mfa.deleteFactor({ id, userId })` borra el factor y, si estaba VERIFICADO, GoTrue cierra todas las
+ *       sesiones de la persona (doc del d.ts). Para el reset del superadmin es lo buscado; para apagar el propio es un
+ *       efecto que la UI avisa.
+ */
+export type AuthFactorLite = { id: string; factorType: string; status: "verified" | "unverified" };
+export interface AuthAdminMfaPort {
+  listFactors(userId: string): Promise<AuthAdminResult<AuthFactorLite[]>>;
+  deleteFactor(userId: string, factorId: string): Promise<AuthAdminResult<null>>;
+}
+
+const supabaseMfaPort: AuthAdminMfaPort = {
+  listFactors(userId) {
+    return withClient("mfa.listFactors", async (c) => {
+      const { data, error } = await c.auth.admin.mfa.listFactors({ userId });
+      if (error) return fail("mfa.listFactors", error);
+      return {
+        ok: true,
+        data: (data?.factors ?? []).map((f) => ({
+          id: f.id,
+          factorType: String(f.factor_type),
+          status: f.status === "verified" ? ("verified" as const) : ("unverified" as const),
+        })),
+      };
+    });
+  },
+  deleteFactor(userId, factorId) {
+    return withClient("mfa.deleteFactor", async (c) => {
+      const { error } = await c.auth.admin.mfa.deleteFactor({ id: factorId, userId });
+      if (error) return fail("mfa.deleteFactor", error);
+      return { ok: true, data: null };
+    });
+  },
+};
+
+let injectedMfa: AuthAdminMfaPort | null = null;
+
+/** El puerto MFA admin vigente: el fake si un test lo inyectó; si no, el real. */
+export function authAdminMfa(): AuthAdminMfaPort {
+  return injectedMfa ?? supabaseMfaPort;
+}
+
+/** Solo tests: inyecta un `AuthAdminMfaPort` (el fake de GoTrue); `null` vuelve al real. */
+export function __setAuthAdminMfaForTests(p: AuthAdminMfaPort | null): void {
+  injectedMfa = p;
+}
+
 let injected: AuthAdminPort | null = null;
 
 /** El puerto vigente: el fake si un test lo inyectó; si no, el real sobre `getSupabaseAdminClient()`. */

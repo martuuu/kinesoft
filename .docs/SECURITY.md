@@ -911,6 +911,8 @@ Diseño en [ARCHITECTURE.md §Back-office de Plataforma + ADR-009..015](ARCHITEC
   `kine_platform_reauth` es `<userId>.<exp>.<hmac>`, httpOnly, `sameSite=strict`, `path=/plataforma`, TTL 10 min, y la
   setean solo las actions de `lib/platform-mfa-actions.ts` después de un `verify` exitoso. `mfaStep` solo vale con
   `mfa.enroll`/`mfa.verify` (`mfa_step_misuse` si no). Si GoTrue no responde, se falla cerrado (`unavailable`).
+  **Desde PL-Z**, con `enforce` apagado (el default de PL-2) las acciones `high` no quedan sueltas: piden el step-up de la
+  2FA por usuario (§20).
 - **CSP enforced en Plataforma** (`next.config.mjs:141`, `/plataforma/:path*` y `/plataforma-mfa/:path*`): sin Mercado
   Pago, sin `unsafe-eval` en prod, `connect-src`/`img-src` sin comodín `https:`, `form-action 'self'`,
   `frame-ancestors 'none'`. Se suma a la Report-Only global (que sigue reportando). Efecto: la toolbar de Vercel no
@@ -919,7 +921,8 @@ Diseño en [ARCHITECTURE.md §Back-office de Plataforma + ADR-009..015](ARCHITEC
   `user.superadmin.update` 5/10 min, `tenant.export.request` 5/10 min, `mfa.verify` 10/10 min; el cupo corre **antes**
   del MFA para frenar adivinar códigos), `/api/health` 60/min/IP, `/api/client-errors` 20/min/IP,
   `/api/consultorio/export` 3/h **por consultorio** (tabla §8).
-- **Export del consultorio** (BO5-C): solo el OWNER aceptado y habilitado, también suspendido o dado de baja (BO-D4);
+- **Export del consultorio** (BO5-C): solo el OWNER aceptado y habilitado (desde PL-Z, además con la 2FA verificada si la
+  tiene: §20), también suspendido o dado de baja (BO-D4);
   ADMIN, el resto de los roles y el soporte → 403. Columnas por allowlist (`EXPORT_FIELDS`); **excluye** tokens de
   invitación y `EmailLog`, `Payment.rawPayload` (MP), `PatientFile.storageKey` y binarios, `ip`/`userAgent` de auditoría
   y soporte, ids de Auth (`Practitioner.userId`, `Patient.userId`, `superadminId`), claves de idempotencia, notas internas
@@ -940,3 +943,36 @@ Diseño en [ARCHITECTURE.md §Back-office de Plataforma + ADR-009..015](ARCHITEC
 - **Activación del titular desde Plataforma** (BO2-A): la cuenta se crea **sin confirmar y sin contraseña**
   (`createUser({ emailConfirm: false })`) y el titular recibe un link de recovery a `/reset` para elegir contraseña; el
   link no viaja al navegador si el mail salió (enmienda AUDIT §5.26).
+
+## 20. 2FA por usuario, step-up y escalada a HC (PL-2 / PL-Z, 15-oct-2026)
+
+Hallazgos en [AUDIT.md «Hallazgos de PL-Z»](AUDIT.md); consola en [EXTERNAL-CONFIG.md §0.5-§0.6](EXTERNAL-CONFIG.md).
+
+- **2FA por usuario** (PL-2a, ADR-017): opcional, en `/cuenta/seguridad`. Métodos: TOTP (puerto MFA de BO4), código por
+  email (HMAC, 10 min, 5 intentos) y 10 códigos de recuperación. Quien la tiene activa pasa por `/verificar-acceso` antes
+  de la app o de Plataforma (`twoFactor.state === "required"` en la foto de acceso).
+  - **Una sesión `aal2` de GoTrue cuenta solo si el usuario tiene TOTP en KineSoft** (PL-Z, a2#1,
+    `lib/two-factor-logic.ts`). Antes, enrolar un TOTP propio contra la API de GoTrue (con el access token) dejaba la
+    sesión en `aal2` y salteaba el código por email.
+  - Enrolar un método nuevo con otro ya activo pide step-up (a2#3): con la sesión robada no se suma un segundo factor.
+  - Regenerar códigos de recuperación toma el lock del usuario (a2#5); onboarding y aceptar invitación cortan con la 2FA
+    pendiente (a2#6).
+  - 🟡 **A verificar (a2#7):** si GoTrue rechaza el reuso de un código TOTP dentro de su ventana (anti-replay). Si no, un
+    código visto (hombro, captura) sirve ~30 s más.
+- **Step-up** (`requireStepUp`, cookie `kine_stepup`, 10 min): re-pide el código antes de las acciones de riesgo del
+  consultorio (permisos, «Atiendo pacientes», transferir la titularidad, cambiar de plan). Sin 2FA activa, la UI pide
+  activarla.
+- **Step-up en Plataforma** (PL-Z, a2#4): con `PLATFORM_MFA_ENFORCEMENT` distinto de `enforce`, `requirePlatformAdmin`
+  pide `requireStepUp({ userId })` para toda acción `high` de `PLATFORM_ACTIONS` (`lib/platform-actor.ts`). Con `enforce`
+  sigue la re-verificación de BO4 (§19). El superadmin tiene que tener la 2FA activa; un superadmin no resetea la 2FA de
+  otro superadmin (a2#8).
+- **Export del consultorio** (a2#2): con la 2FA pendiente, `GET /api/consultorio/export` responde 401. El export del
+  Titular que no atiende incluye la HC: **excepción de portabilidad** (Ley 25.326), AUDIT §5.50.
+- **Guard de escalada a HC** (PL-Z, a3#5, `lib/team-internal.ts`): asignar un rol que atiende (invitar, cambiar de rol,
+  reactivar) exige ser Titular o miembro clínico. Sin esto, un ADMIN con «Configuración» (que no ve HC) podía invitar a
+  una cuenta propia como Profesional y abrirse la HC. Copy: «Solo el titular o un profesional del consultorio pueden
+  sumar a alguien que atiende.»
+- **ADMIN nunca atiende** (§20.17, PL-Z): `isClinicalMember` y `clinicalMembershipWhere` devuelven `false` para ADMIN
+  aunque la fila diga `clinical = true`; ningún camino de lectura le abre la HC por ese flag.
+- **Leads** (a4#1): el tope global diario se consume solo si pasan el de IP y el de email: una IP sola ya no agota el cupo
+  del día.

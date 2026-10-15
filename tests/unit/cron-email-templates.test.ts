@@ -9,11 +9,12 @@ import { platformHealthDigestEmail, trialReminderEmail } from "@/lib/email/templ
 const URL = "https://app.kinesoft.com.ar/configuracion?tab=plan";
 
 describe("[BO5-A] trialReminderEmail", () => {
-  it("N días: asunto «vence en N días», CTA a Plan y uso y «Escribinos para seguir»", () => {
+  it("N días: asunto «vence en N días», CTA a Plan y uso y «elegí tu plan» (PL-Z M9)", () => {
     const m = trialReminderEmail({ tenantName: "Kine Centro", daysLeft: 7, expired: false, url: URL });
     expect(m.subject).toBe("Tu prueba de KineSoft vence en 7 días");
     expect(m.text).toContain("La prueba de Kine Centro en KineSoft vence en 7 días.");
-    expect(m.text).toContain("Escribinos para seguir");
+    expect(m.text).toContain("Para seguir, elegí tu plan en Configuración → Plan y uso. Tus datos no se pierden.");
+    expect(m.text).not.toContain("Escribinos");
     expect(m.text).toContain(URL);
     expect(m.html).toContain("Ver plan y uso");
     // Sin precios inventados.
@@ -24,6 +25,7 @@ describe("[BO5-A] trialReminderEmail", () => {
     const m = trialReminderEmail({ tenantName: "Kine Centro", daysLeft: 1, expired: false, url: URL });
     expect(m.subject).toBe("Tu prueba de KineSoft vence hoy");
     expect(m.text).toContain("Hoy es el último día de la prueba de Kine Centro");
+    expect(m.text).toContain("Si querés seguir sin interrupciones, elegí tu plan hoy.");
   });
 
   it("vencida: avisa la gracia y que se puede seguir consultando la historia clínica", () => {

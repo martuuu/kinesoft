@@ -12,6 +12,7 @@ export type Tab =
   | "diagnosticos"
   | "usuarios"
   | "plan"
+  | "facturacion"
   | "soporte"
   | "exportar";
 
@@ -28,6 +29,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "diagnosticos",
   "usuarios",
   "plan",
+  // PL-3a (PL-D21): `?tab=facturacion` es el link de los mails de cobro (cargo nuevo, vencido, comprobante revisado).
+  "facturacion",
   "soporte",
   // BO5-C: `?tab=exportar` es el link del mail `tenant_export_request` (Plataforma le pide el export al titular).
   "exportar",
@@ -38,39 +41,95 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
   return (CONFIG_TABS as readonly string[]).includes(v ?? "") ? (v as Tab) : "general";
 }
 
+/**
+ * PL-3a: qué pestañas ve cada uno sale de las CAPACIDADES del miembro (C-PL5), no del rol: desde PL-1 un ADMIN sin
+ * «Configuración» delegada no tiene `tenant.admin`, y una Secretaria con «Planes y pagos» (`grantBilling`) sí tiene
+ * `account.billing`. Lo arma la página con `getCapabilities()` y lo que el server efectivamente le dejó leer.
+ *  - `tenantAdmin` (`tenant.admin` = «Configuración»): General, Sedes, Profesionales, Servicios, Obras Sociales,
+ *    Diagnósticos.
+ *  - `team`: Usuarios (la página lo prende solo si `listTeamMembers` no la rechazó).
+ *  - `billing` (`account.billing` = Titular o «Planes y pagos»): Plan y uso y Facturación.
+ *  - Soporte (Mensajes): `tenantAdmin || billing` (PL-D20, la misma regla que `lib/support-threads.ts`).
+ *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
+ */
+export type ConfigTabAccess = { tenantAdmin: boolean; billing: boolean; team: boolean; canExport: boolean };
+
+/**
+ * Default por rol en abstracto, para quien todavía no pasa `access` (tests viejos): OWNER = todo; ADMIN = el ADMIN
+ * legado con «Configuración» (backfill de M8) sin «Planes y pagos»; el resto, nada. Un mapa y no comparaciones de rol
+ * (guard `tests/unit/pl-ownership-guard.test.ts`).
+ */
+const LEGACY_ACCESS: Record<Role, ConfigTabAccess> = {
+  OWNER: { tenantAdmin: true, billing: true, team: true, canExport: true },
+  ADMIN: { tenantAdmin: true, billing: false, team: true, canExport: false },
+  PRACTITIONER: { tenantAdmin: false, billing: false, team: false, canExport: false },
+  ASSISTANT: { tenantAdmin: false, billing: false, team: false, canExport: false },
+  BILLING: { tenantAdmin: false, billing: false, team: false, canExport: false },
+};
+
+export function legacyConfigAccess(role: Role): ConfigTabAccess {
+  return LEGACY_ACCESS[role];
+}
+
+type TabDef = { key: Tab; label: string; module?: TenantModule; visible: (a: ConfigTabAccess) => boolean };
+
+const admin = (a: ConfigTabAccess) => a.tenantAdmin;
+
+// `module`: la pestaña solo existe si el consultorio tiene ese módulo (EV0). Diagnósticos = condiciones propias del
+// catálogo de diagnóstico: un consultorio General no lo tiene. Es UX; cada action tiene su propio gate.
+const TAB_DEFS: readonly TabDef[] = [
+  { key: "general", label: "General", visible: admin },
+  { key: "sedes", label: "Sedes", visible: admin },
+  { key: "profesionales", label: "Profesionales", visible: admin },
+  { key: "servicios", label: "Servicios", visible: admin },
+  { key: "obras-sociales", label: "Obras Sociales", visible: admin },
+  { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
+  { key: "usuarios", label: "Usuarios", visible: (a) => a.team },
+  { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
+  { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
+  // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).
+  { key: "soporte", label: "Soporte", visible: (a) => a.tenantAdmin || a.billing },
+  // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN.
+  { key: "exportar", label: "Exportar datos", visible: (a) => a.canExport },
+];
+
+/** Pestañas visibles, en orden. */
+export function visibleConfigTabs(access: ConfigTabAccess, modules: readonly TenantModule[]): Tab[] {
+  return TAB_DEFS.filter((t) => t.visible(access) && (!t.module || modules.includes(t.module))).map((t) => t.key);
+}
+
+/**
+ * Pestaña inicial: la de `?tab=` si la puede ver; si no, la primera que ve (quien solo tiene «Planes y pagos» no ve
+ * General y entra a «Plan y uso»).
+ */
+export function initialConfigTab(raw: string | string[] | null | undefined, visible: readonly Tab[]): Tab {
+  const t = parseConfigTab(raw);
+  if (visible.includes(t)) return t;
+  return visible[0] ?? "general";
+}
+
 export function TabsBar({
   tab,
   setTab,
   role,
+  access,
   modules,
   canExport,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
-  role: Role;
+  /** @deprecated PL-3a: pasá `access`. Sin `access`, el default del rol (`legacyConfigAccess`). */
+  role?: Role;
+  access?: ConfigTabAccess;
   modules: readonly TenantModule[];
-  /** BO-Z B6: default = OWNER; el cliente lo prende también para el titular de un consultorio suspendido. */
+  /** BO-Z B6: pisa `access.canExport` (el titular de un consultorio suspendido). */
   canExport?: boolean;
 }) {
-  // `module`: la pestaña solo existe si el consultorio tiene ese módulo (EV0).
-  // Diagnósticos = condiciones propias del catálogo de diagnóstico: un
-  // consultorio General no lo tiene. Es UX; las actions de condiciones tienen
-  // su propio gate.
-  const tabs: { key: Tab; label: string; ownerOnly?: boolean; module?: TenantModule }[] = [
-    { key: "general", label: "General" },
-    { key: "sedes", label: "Sedes" },
-    { key: "profesionales", label: "Profesionales" },
-    { key: "servicios", label: "Servicios" },
-    { key: "obras-sociales", label: "Obras Sociales" },
-    { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico" },
-    { key: "usuarios", label: "Usuarios", ownerOnly: true /* IAM-D3: OWNER y ADMIN */ },
-    // BO3-F: plan y accesos de soporte son del titular y de quien administra (los lee `tenant.admin`).
-    { key: "plan", label: "Plan y uso", ownerOnly: true },
-    { key: "soporte", label: "Accesos de soporte", ownerOnly: true },
-    // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN.
-    { key: "exportar", label: "Exportar datos", ownerOnly: true },
-  ];
-  // B3.4: con 7 pestañas (9 desde BO3-F) la píldora no entra en un celular; scrollea en
+  const base = access ?? (role ? legacyConfigAccess(role) : LEGACY_ACCESS.PRACTITIONER);
+  const eff = canExport === undefined ? base : { ...base, canExport };
+  const keys = visibleConfigTabs(eff, modules);
+  const tabs = TAB_DEFS.filter((t) => keys.includes(t.key));
+  // B3.4: con 7 pestañas (11 desde PL-3a) la píldora no entra en un celular; scrollea en
   // horizontal en vez de desbordar la página (`maxWidth: 100%`).
   return (
     <div
@@ -87,10 +146,6 @@ export function TabsBar({
       }}
     >
       {tabs.map((t) => {
-        if (t.key === "exportar") {
-          if (!(canExport ?? role === "OWNER")) return null;
-        } else if (t.ownerOnly && role !== "OWNER" && role !== "ADMIN") return null;
-        if (t.module && !modules.includes(t.module)) return null;
         const on = tab === t.key;
         return (
           <button

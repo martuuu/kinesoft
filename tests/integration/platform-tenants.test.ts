@@ -17,7 +17,7 @@
  * Se llaman los símbolos reales con el getActor real (solo se mockea la sesión de
  * Supabase, `next/headers` y `next/cache`; ver integration-setup.ts).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { updatePlatformTenant } from "@/lib/platform-tenants";
 import {
@@ -37,6 +37,14 @@ import {
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+
+// PL-Z (a2#4): con PLATFORM_MFA_ENFORCEMENT != enforce, las acciones `high` de Plataforma piden el step-up de la 2FA
+// por usuario. Este archivo prueba otra cosa: el step-up se da por hecho (el corte real se prueba en
+// tests/integration/two-factor.test.ts, «Plataforma»). Se reemplaza la dependencia, no la action bajo test.
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
+  requireStepUp: async () => {},
+}));
 
 const RUN = process.env.INTEGRATION === "1";
 const STALE_COPY = "Otro cambio se guardó antes. Recargá y revisá.";

@@ -6,6 +6,7 @@ import { headers } from "next/headers";
 import { revalidateTag } from "next/cache";
 import { prismaService as prisma } from "@/lib/db";
 import { getVerifiedSessionUser } from "@/lib/session-user";
+import { getAccessSnapshot } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { sameEmail } from "@/lib/email-match";
 import { tags } from "@/lib/cache-tags";
@@ -59,6 +60,12 @@ export async function acceptInvite(token: string): Promise<ActionResult> {
   }
   if (!user.emailConfirmedAt) {
     return { ok: false, error: "Tenés que confirmar tu email antes de aceptar." };
+  }
+  // PL-Z (a2#6): con la 2FA del usuario pendiente no se acepta nada. Esta action no pasa por `getActor` (donde se
+  // corta en el resto de la app): con solo la contraseña se sumaba a alguien a un consultorio salteando el segundo
+  // paso. Que verifique primero en /verificar-acceso.
+  if ((await getAccessSnapshot())?.twoFactor?.state === "required") {
+    return { ok: false, error: "Primero terminá de verificar tu acceso." };
   }
 
   const now = new Date();

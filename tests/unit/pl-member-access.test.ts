@@ -1,7 +1,8 @@
 /**
  * PL-1b (C-PL5; decisiones 7 y 8 de Martin) — capacidades por MIEMBRO, «¿atiende?» y etiquetas.
  *
- * - Titular/Admin que no atiende: sin `clinical.read` ni `plans.manage` (ve como la Secretaria, Ley 26.529).
+ * - Titular que no atiende y Administrador/a (nunca atiende, §20.17 / PL-Z M1): sin `clinical.read` ni
+ *   `plans.manage` (ve como la Secretaria, Ley 26.529).
  * - «Configuración» (`grantSettings`) y «Planes y pagos» (`grantBilling`) se delegan a cualquier rol, pero nunca
  *   abren lo clínico.
  * - `account.owner` es solo del Titular; nadie lo recibe por delegación.
@@ -43,14 +44,14 @@ describe("[PL-1b] capabilitiesForMember — matriz", () => {
     expect(sorted(capabilitiesForMember(m("OWNER", { clinical: false })))).toEqual(without(ALL, CLINICAL).sort());
   });
 
-  it("Admin que atiende con «Configuración»: lo de siempre, sin account.*", () => {
+  it("[PL-Z] M1: Admin legado con clinical = true y «Configuración»: sin lo clínico ni account.*", () => {
     expect(sorted(capabilitiesForMember(m("ADMIN", { grantSettings: true })))).toEqual(
-      without(ALL, ACCOUNT).sort()
+      without(ALL, ACCOUNT, CLINICAL).sort()
     );
   });
 
-  it("Admin sin «Configuración»: sin tenant.admin ni schedule.configure", () => {
-    expect(sorted(capabilitiesForMember(m("ADMIN")))).toEqual(without(ALL, ACCOUNT, SETTINGS).sort());
+  it("Admin sin «Configuración»: sin tenant.admin ni schedule.configure (ni lo clínico)", () => {
+    expect(sorted(capabilitiesForMember(m("ADMIN")))).toEqual(without(ALL, ACCOUNT, SETTINGS, CLINICAL).sort());
   });
 
   it("Admin que no atiende con «Configuración»: sin lo clínico", () => {
@@ -112,11 +113,13 @@ describe("[PL-1b] capabilitiesForMember — matriz", () => {
 });
 
 describe("[PL-1b] isClinicalMember / isClinicalRole", () => {
-  it("PRACTITIONER siempre; OWNER según el flag (ADMIN: solo filas legadas hasta M8b); ASSISTANT/BILLING nunca", () => {
+  it("PRACTITIONER siempre; OWNER según el flag; ADMIN/ASSISTANT/BILLING nunca (PL-Z M1)", () => {
     expect(isClinicalMember({ role: "PRACTITIONER", clinical: false })).toBe(true);
     expect(isClinicalMember({ role: "OWNER", clinical: true })).toBe(true);
     expect(isClinicalMember({ role: "OWNER", clinical: false })).toBe(false);
     expect(isClinicalMember({ role: "ADMIN", clinical: false })).toBe(false);
+    // [PL-Z] M1: una fila ADMIN legada con `clinical = true` no le abre la HC (M8b las normaliza antes del deploy).
+    expect(isClinicalMember({ role: "ADMIN", clinical: true })).toBe(false);
     expect(isClinicalMember({ role: "ASSISTANT", clinical: true })).toBe(false);
     expect(isClinicalMember({ role: "BILLING", clinical: true })).toBe(false);
   });

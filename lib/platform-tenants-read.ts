@@ -161,7 +161,7 @@ function toRow(
     maxUsersOverride: t.maxUsersOverride,
     maxProfessionalsOverride: t.maxProfessionalsOverride,
     maxStaffOverride: t.maxStaffOverride,
-    limits: effectiveLimits(limitsByPlan[t.saasPlan], t),
+    limits: effectiveLimits(limitsByPlan[t.saasPlan], t, t.saasPlan),
     access,
     effectiveAccessMode: effectiveMode(access.mode, tenantAccessEnforcement()),
     slugAliases: t.slugAliases.map((a) => a.slug),

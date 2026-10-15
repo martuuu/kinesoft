@@ -517,8 +517,11 @@ function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: 
           label="Turnos online"
           hint={
             <>
-              Tus pacientes reservan solos desde un link público. Solo se ofrecen los servicios
-              marcados como públicos.
+              {/* PL-Z A1: el turnero también filtra por profesional (PL-1); sin decirlo, prender el del consultorio
+                  parecía no hacer nada si nadie tenía prendido el suyo. */}
+              Tus pacientes reservan solos desde un link público. Solo se ofrecen los servicios marcados como
+              públicos y los profesionales que tengan prendido «Aparece en el turnero online» (Configuración →
+              Profesionales).
             </>
           }
           on={booking}

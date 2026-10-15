@@ -7,6 +7,7 @@ import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
 import { linkPortalPatientOnCallback, linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
+import { oauthCallbackErrorCode, oauthProfileFromUser } from "@/lib/identity/oauth-profile";
 
 export const runtime = "nodejs";
 
@@ -36,13 +37,29 @@ export const runtime = "nodejs";
  *     cookie del consultorio activo `kine_tenant`; con más de un consultorio
  *     usable la app pregunta a cuál entrar (IAM-3a/3b). Con el mismo path y
  *     flags con que se escribe, si no el navegador no la reemplaza.
+ *   - PL-2e (C-PL12, H-PL2): sirve a Google y a Facebook. Nombre y avatar salen de
+ *     `lib/identity/oauth-profile.ts` (cada proveedor usa claves distintas en `user_metadata`).
+ *     SIN email no se crea `UserProfile` (antes `email: ""`: perfil inservible y, por el único de
+ *     `email`, la segunda cuenta así tiraba 500): se cierra la sesión recién abierta y se vuelve al login
+ *     con `oauth_no_email`. Si GoTrue vuelve con `?error=` se clasifica (`oauthCallbackErrorCode`) en vez
+ *     de decir `missing_code`.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const next = safeNext(url.searchParams.get("next"));
   const tenantSlug = url.searchParams.get("tenant");
-  if (!code) return NextResponse.redirect(`${url.origin}/login?error=missing_code`);
+  if (!code) {
+    const providerError = url.searchParams.get("error");
+    if (providerError) {
+      const errorCode = url.searchParams.get("error_code");
+      const mapped = oauthCallbackErrorCode(providerError, errorCode, url.searchParams.get("error_description"));
+      // Sin la descripción: es texto libre de GoTrue / del proveedor.
+      logger.warn("auth.callback.provider_error", { error: providerError, errorCode, mapped });
+      return NextResponse.redirect(`${url.origin}/login?error=${mapped}`);
+    }
+    return NextResponse.redirect(`${url.origin}/login?error=missing_code`);
+  }
 
   const supabase = getSupabaseServerClient();
   const { data: session, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -51,29 +68,33 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${url.origin}/login?error=oauth_failed`);
   }
   const user = session.user;
+  const profile = oauthProfileFromUser(user);
+  if (!profile.email) {
+    // H-PL2: Facebook registrado con teléfono o sin permiso de email. La identidad queda en Supabase sin
+    // perfil nuestro; la sesión se cierra para que no quede nadie «logueado» sin UserProfile.
+    const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+    logger.warn("auth.callback.no_email", {
+      provider: profile.provider,
+      ...(signOutError ? { signOutError: signOutError.message } : {}),
+    });
+    return NextResponse.redirect(`${url.origin}/login?error=oauth_no_email`);
+  }
+  const email = profile.email;
   const emailVerified = !!user.email_confirmed_at;
 
   await prisma.userProfile.upsert({
     where: { id: user.id },
-    create: {
-      id: user.id,
-      email: user.email ?? "",
-      fullName: user.user_metadata?.full_name ?? null,
-      avatarUrl: user.user_metadata?.avatar_url ?? null,
-    },
-    update: {
-      email: user.email ?? "",
-      fullName: user.user_metadata?.full_name ?? undefined,
-      avatarUrl: user.user_metadata?.avatar_url ?? undefined,
-    },
+    create: { id: user.id, email, fullName: profile.fullName, avatarUrl: profile.avatarUrl },
+    // Sin nombre/avatar usable no se pisa lo que había (`undefined` = no tocar).
+    update: { email, fullName: profile.fullName ?? undefined, avatarUrl: profile.avatarUrl ?? undefined },
   });
 
-  if (tenantSlug && user.email && emailVerified) {
+  if (tenantSlug && emailVerified) {
     // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable
     // contra Postgres; una ruta de Next no puede exportar helpers).
-    await linkPortalPatientOnCallback({ id: user.id, email: user.email, emailVerified }, tenantSlug);
-  } else if (user.email && emailVerified) {
-    await linkPortalPatientsOnSignIn({ id: user.id, email: user.email, emailVerified }, next);
+    await linkPortalPatientOnCallback({ id: user.id, email, emailVerified }, tenantSlug);
+  } else if (emailVerified) {
+    await linkPortalPatientsOnSignIn({ id: user.id, email, emailVerified }, next);
   } else if (tenantSlug && !emailVerified) {
     // IAM-3c: sin el email en claro (alcanza con el slug y el motivo).
     logger.warn("portal.link.refused", { tenantSlug, reason: "email_not_confirmed" });

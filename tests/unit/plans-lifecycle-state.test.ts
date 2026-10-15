@@ -8,6 +8,7 @@
  * (handoff opcional de S11e) contra el `PlanCreateInputSchema` del que deriva.
  */
 import { describe, it, expect } from "vitest";
+import { capabilitiesForMember, type Capability } from "@/lib/capabilities";
 import {
   PROGRAM_STATUSES,
   PROGRAM_TRANSITIONS,
@@ -171,12 +172,17 @@ describe("P2-C2 · archivar y restaurar el plan", () => {
     expect(decideProgramArchive("CANCELLED", { archived: true })).toMatchObject({ ok: false, code: "already-archived" });
   });
 
-  it("restaurar: solo OWNER y ADMIN", () => {
-    expect(canRestoreProgram("OWNER")).toBe(true);
-    expect(canRestoreProgram("ADMIN")).toBe(true);
-    for (const r of ["PRACTITIONER", "ASSISTANT", "BILLING", null, undefined] as const) {
-      expect(canRestoreProgram(r)).toBe(false);
+  it("restaurar: con las capabilities por defecto, solo OWNER y ADMIN", () => {
+    expect(canRestoreProgram(capabilitiesForMember({ role: "OWNER", clinical: true, grantSettings: false, grantBilling: false }))).toBe(true);
+    for (const r of ["PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+      expect(canRestoreProgram(capabilitiesForMember({ role: r, clinical: r === "PRACTITIONER", grantSettings: false, grantBilling: false }))).toBe(false);
     }
+  });
+
+  it("[PL-Z] a3#9: con capabilities, restaurar = `tenant.admin` del miembro (no el rol)", () => {
+    expect(canRestoreProgram(new Set<Capability>(["plans.manage", "tenant.admin"]))).toBe(true);
+    expect(canRestoreProgram(new Set<Capability>(["plans.manage", "clinical.read"]))).toBe(false);
+    expect(canRestoreProgram(new Set<Capability>())).toBe(false);
   });
 
   it("updatePlanDetails edita solo título y notas", () => {

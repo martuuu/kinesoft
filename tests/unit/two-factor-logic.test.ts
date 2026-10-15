@@ -32,7 +32,9 @@ describe("[PL-1e] twoFactorStateOf", () => {
     ["TOTP con aal1 y prueba de sesión (código de recuperación)", TOTP, s({ sessionProofValid: true }), "satisfied"],
     ["email sin prueba", EMAIL, s({}), "required"],
     ["email con prueba de sesión", EMAIL, s({ sessionProofValid: true }), "satisfied"],
-    ["email con aal2 (TOTP verificado igual)", EMAIL, s({ aal: "aal2" }), "satisfied"],
+    // [PL-Z] a2#1: antes "satisfied". Un TOTP propio enrolado directo contra GoTrue (sin el flag) no saltea el email.
+    ["[PL-Z] email con aal2 de un TOTP ajeno al flag → sigue pidiendo el código", EMAIL, s({ aal: "aal2" }), "required"],
+    ["[PL-Z] email con aal2 y prueba de sesión → satisfied", EMAIL, s({ aal: "aal2", sessionProofValid: true }), "satisfied"],
     ["ambos sin nada", BOTH, s({}), "required"],
     ["ambos con aal2", BOTH, s({ aal: "aal2" }), "satisfied"],
     ["ambos con prueba", BOTH, s({ sessionProofValid: true }), "satisfied"],

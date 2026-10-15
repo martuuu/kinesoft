@@ -103,7 +103,8 @@ describe.skipIf(!RUN)("IAM-2e · profesionales reservables por rol", () => {
       select: { id: true },
     });
     assistantBookingId = b.id;
-    bookable = sorted([A.practitionerId, admin.practitionerId, kine.practitionerId]);
+    // PL-Z M1: el Administrador/a legado (con Practitioner y `clinical = true`) tampoco es reservable (§20.17).
+    bookable = sorted([A.practitionerId, kine.practitionerId]);
   });
 
   afterAll(async () => {

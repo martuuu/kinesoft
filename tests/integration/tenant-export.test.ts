@@ -11,7 +11,7 @@
  * (páginas con cursor) y `requestTenantExport`. Se mockea solo lo externo (sesión de Supabase, cookies, next/cache
  * en integration-setup; el DESPACHO del mail con `__setEmailTransportForTests`).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import type { PrismaClient } from "@prisma/client";
@@ -33,6 +33,14 @@ import {
   uniqueSuffix,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
+
+// PL-Z (a2#4): con PLATFORM_MFA_ENFORCEMENT != enforce, las acciones `high` de Plataforma piden el step-up de la 2FA
+// por usuario. Este archivo prueba otra cosa: el step-up se da por hecho (el corte real se prueba en
+// tests/integration/two-factor.test.ts, «Plataforma»). Se reemplaza la dependencia, no la action bajo test.
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
+  requireStepUp: async () => {},
+}));
 
 const RUN = process.env.INTEGRATION === "1";
 const URL_ = "http://localhost/api/consultorio/export";
@@ -203,6 +211,19 @@ describe.skipIf(!RUN)("[BO5-C] export completo del consultorio", () => {
     expect((await exportTenant(new Request(URL_))).status).toBe(403);
     asUser("test-user-inexistente");
     expect((await exportTenant(new Request(URL_))).status).toBe(401);
+  });
+
+  it("[PL-Z] a2#2 OWNER con la 2FA pendiente (solo la contraseña) → 401 sin datos", async () => {
+    // Sin access token en el mock de la sesión no hay `session_id`: con un método prendido la 2FA queda pendiente.
+    await db.userProfile.update({ where: { id: A.userId }, data: { twoFactorEmail: true } });
+    try {
+      asUser(A.userId);
+      const res = await exportTenant(new Request(URL_));
+      expect(res.status).toBe(401);
+      expect(await res.text()).not.toContain("PHI-");
+    } finally {
+      await db.userProfile.update({ where: { id: A.userId }, data: { twoFactorEmail: false } });
+    }
   });
 
   it("?tenant= de un consultorio ajeno (B) → 403 aunque sea OWNER de A", async () => {

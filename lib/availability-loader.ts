@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import type { DbClient } from "@/lib/rls";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { roomsEnabled } from "@/lib/tenant-modules";
 import { addDays, dayKeyToDbDate, dayWindow, dbDateToDayKey, isDayKey } from "@/lib/availability/day";
 import {
   BOOKING_LOOKBACK_MIN,
@@ -83,6 +84,12 @@ export type LoadAvailabilityParams = {
   /** Ventana en días AR, inclusive en ambos extremos. */
   from: DayKey;
   to: DayKey;
+  /**
+   * PL-2f (§20.5.12, H-TURN): solo profesionales con `Practitioner.publicBookingEnabled` (turnero). Lo pasa el
+   * «cualquier profesional» del turnero, que no manda ids: sin esto ofrecía el primer hueco de un profesional que
+   * se apagó del turnero. Va en el MISMO `where` de la fase 1 (0 sentencias nuevas).
+   */
+  publicBookingOnly?: boolean;
 };
 
 // Día AR ↔ instante y `@db.Date` ↔ DayKey: SOLO los helpers de
@@ -254,7 +261,16 @@ async function loadForRuns(
   const [tenant, practitioners, primary, serviceOk, locationOk, patientOk] = await Promise.all([
     db.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, businessHoursStart: true, businessHoursEnd: true },
+      // PL-2f: vertical + plan SaaS + switch = `TenantEntitlements` (¿hay salas?), en la MISMA sentencia que ya
+      // corría: el techo de statements de `createBooking` no sube.
+      select: {
+        id: true,
+        businessHoursStart: true,
+        businessHoursEnd: true,
+        vertical: true,
+        saasPlan: true,
+        publicBookingEnabled: true,
+      },
     }),
     requestedIds && requestedIds.length === 0
       ? Promise.resolve([] as { id: string }[])
@@ -266,9 +282,11 @@ async function loadForRuns(
           // no reservable no tiene plantilla → sin slots, y el write-path de
           // la edición lo usa para rechazar el movimiento. EXISTS en la misma
           // sentencia: 0 statements nuevos.
-          where: requestedIds
-            ? { ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }), id: { in: requestedIds } }
-            : bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
+          where: {
+            ...bookablePractitionerWhere(tenantId, { includeDisabledFilter: true }),
+            ...(requestedIds ? { id: { in: requestedIds } } : {}),
+            ...(params.publicBookingOnly ? { publicBookingEnabled: true } : {}),
+          },
           select: { id: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
@@ -289,6 +307,16 @@ async function loadForRuns(
   if (!tenant) throw new Error("loadAvailabilityInputs: tenant inexistente");
 
   const tenantHours = tenantHoursOf(tenant);
+  // PL-2f (PL-D7): sin el módulo `salas` (Individual / Consultorio) las salas «duermen»: los datos quedan intactos
+  // (franjas, excepciones, bloqueos y turnos conservan su `roomId`, y reaparecen al volver a Clínica) pero el motor
+  // no los ve. Sin esto, un consultorio que bajó de plan seguía estampando la sala de la franja en cada turno nuevo
+  // y recibiendo «sala ocupada» de una sala que ya no puede ver ni administrar. Se resuelve ACÁ, en la única
+  // puerta del motor a la base, para que agenda, alta, edición, lote, Planes y turnero digan lo mismo.
+  const roomsOn = roomsEnabled({
+    vertical: tenant.vertical,
+    plan: tenant.saasPlan,
+    publicBookingEnabled: tenant.publicBookingEnabled,
+  });
   const primaryLocationId = primary?.id ?? null;
   const resolveLocation = (id: string | null | undefined): string =>
     id ?? primaryLocationId ?? NO_LOCATION_ID;
@@ -492,7 +520,7 @@ async function loadForRuns(
         startMin: r.startMin,
         endMin: r.endMin,
         locationId: r.locationId,
-        ...(r.roomId != null ? { roomId: r.roomId } : {}),
+        ...(roomsOn && r.roomId != null ? { roomId: r.roomId } : {}),
         validFrom,
         validUntil,
       });
@@ -512,7 +540,7 @@ async function loadForRuns(
               startMin: r.startMin,
               endMin: r.endMin,
               locationId: resolveLocation(r.locationId),
-              ...(r.roomId != null ? { roomId: r.roomId } : {}),
+              ...(roomsOn && r.roomId != null ? { roomId: r.roomId } : {}),
             }))
             .filter((r) => inLocation(r.locationId))
         : [];
@@ -537,7 +565,8 @@ async function loadForRuns(
   const roomBlocks: RoomBlock[] = [];
   for (const { roomId, ...b } of blocks) {
     if (roomId != null) {
-      roomBlocks.push({ id: b.id, roomId, startsAt: b.startsAt, endsAt: b.endsAt, reason: b.reason });
+      // PL-2f: sin salas, el bloqueo de sala duerme (no es un bloqueo de «todos»: se descarta, no cae abajo).
+      if (roomsOn) roomBlocks.push({ id: b.id, roomId, startsAt: b.startsAt, endsAt: b.endsAt, reason: b.reason });
     } else {
       blockInputs.push(b);
     }
@@ -555,7 +584,8 @@ async function loadForRuns(
     practitionerId: b.practitionerId,
     serviceId: b.serviceId,
     locationId: resolveLocation(b.locationId),
-    roomId: b.roomId,
+    // PL-2f: sin salas, ocupación de sala = ninguna (el turno conserva su sala en la base).
+    roomId: roomsOn ? b.roomId : null,
   }));
 
   const practitionerServices: PractitionerServiceRule[] = pracServices.map((ps) => ({ ...ps }));

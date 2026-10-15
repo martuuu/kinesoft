@@ -14,6 +14,7 @@ import {
   type TenantPlanUsageInput,
 } from "@/lib/tenant-plan-usage-logic";
 import { planLimitsFor, seatUsageByKind } from "@/lib/plan-catalog";
+import { hasCustomLimits } from "@/lib/saas-plans-logic";
 import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import type { SaasPlan } from "@prisma/client";
 
@@ -22,6 +23,9 @@ const ar = (local: string) => new Date(`${local}:00-03:00`);
 type Overrides = { maxUsersOverride: number | null; maxProfessionalsOverride: number | null; maxStaffOverride: number | null };
 
 /** PL-1c: miembros + invitaciones por tipo, contra los límites del plan (los mismos de `getSeatUsageInTx`). */
+/** Libre a medida con topes por tipo: 4 profesionales + 1 no clínico, total 5. */
+const CUSTOM_4_1 = { maxUsersOverride: 5, maxProfessionalsOverride: 4, maxStaffOverride: 1 };
+
 function input(
   p: Partial<TenantPlanUsageInput> & {
     pro?: number;
@@ -47,7 +51,7 @@ function input(
     trialEndsAt: null,
     subscriptionStatusChangedAt: null,
     publicBookingEnabled: false,
-    customLimits: Object.values(o).some((v) => v != null),
+    customLimits: hasCustomLimits(plan, o),
     seats,
     pendingInvites,
     nonSeatMembers: p.staffN ?? 0,
@@ -124,8 +128,8 @@ describe("[PL-1c] seatsSummary — por tipo, mismos números que frenan la invit
     expect(s.lines.map((l) => l.kind)).toEqual(["professional", "staff", "total"]);
   });
 
-  it("topes por tipo a medida: «Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5»", () => {
-    const s = seatsSummary(input({ pro: 3, staffN: 1, overrides: { maxProfessionalsOverride: 4, maxStaffOverride: 1 } }));
+  it("topes por tipo a medida (Libre): «Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5»", () => {
+    const s = seatsSummary(input({ plan: "LIBRE", pro: 3, staffN: 1, overrides: CUSTOM_4_1 }));
     expect(s.value).toBe("Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5");
     expect(s.full).toBe(true); // el no clínico está lleno
     expect(s.custom).toBe(true);
@@ -133,7 +137,7 @@ describe("[PL-1c] seatsSummary — por tipo, mismos números que frenan la invit
   });
 
   it("las invitaciones pendientes reservan lugar y se dicen", () => {
-    const s = seatsSummary(input({ pro: 3, pendingPro: 1, overrides: { maxProfessionalsOverride: 4, maxStaffOverride: 1 } }));
+    const s = seatsSummary(input({ plan: "LIBRE", pro: 3, pendingPro: 1, overrides: CUSTOM_4_1 }));
     expect(s.value).toBe("Profesionales 4 de 4 · Secretaría/administración 0 de 1 · Total 4 de 5");
     expect(s.detail).toContain("Incluye 1 invitación pendiente");
     expect(s.detail).toContain("No quedan lugares para profesionales");
@@ -161,6 +165,15 @@ describe("[PL-1c] seatsSummary — por tipo, mismos números que frenan la invit
     const o = seatsSummary(input({ plan: "LIBRE", pro: 12, overrides: { maxUsersOverride: 20 } }));
     expect(o.value).toContain("Total 12 de 20");
     expect(o.custom).toBe(true);
+  });
+});
+
+describe("[PL-Z] a3#1: los overrides de cupo solo valen en Libre", () => {
+  it("un Consultorio con override (legado de M8) rige por su plan y no se muestra «a medida»", () => {
+    const s = seatsSummary(input({ plan: "CONSULTORIO", pro: 3, staffN: 1, overrides: CUSTOM_4_1 }));
+    expect(s.value).toContain("Total 4 de 5");
+    expect(s.value).not.toContain("de 4 ·");
+    expect(s.custom).toBe(false);
   });
 });
 

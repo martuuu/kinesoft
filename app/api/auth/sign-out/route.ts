@@ -3,6 +3,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { isAllowedOrigin, safeNext } from "@/lib/safe-next";
 import { clearActiveTenantCookie } from "@/lib/tenant-choice";
+import { clearTwoFactorCookies } from "@/lib/two-factor-cookie";
 import { endSupportSession } from "@/lib/support-session-internal";
 import { logger } from "@/lib/logger";
 
@@ -33,6 +34,9 @@ export async function POST(req: Request) {
   await supabase.auth.signOut();
   // IAM-3a: el consultorio elegido es de esta sesión; el próximo login (quizá otra cuenta) arranca sin él.
   clearActiveTenantCookie();
+  // PL-2a: las pruebas de 2FA (`kine_2fa`, `kine_stepup`) ya no validarían (van ligadas al `session_id` que se
+  // acaba de cerrar), pero no tienen por qué quedar en el browser de una PC compartida.
+  clearTwoFactorCookies();
   const next = safeNext(new URL(req.url).searchParams.get("next"), "/login");
   return NextResponse.redirect(new URL(next, env.NEXT_PUBLIC_APP_URL), { status: 303 });
 }

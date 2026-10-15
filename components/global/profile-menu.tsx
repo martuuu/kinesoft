@@ -17,6 +17,10 @@ import {
 import { useTweaks } from "@/components/layout/tweaks-context";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "@/components/layout/tenant-switcher";
+import {
+  OWN_TURNERO_OFF_HINT,
+  PublicBookingSwitch,
+} from "@/components/configuracion/panels/practitioners/public-booking-switch";
 
 const PALETTES: { value: Palette; swatch: [string, string, string]; label: string }[] = [
   { value: "sky", swatch: ["#1F4FBE", "#C8F564", "#E6EFFA"], label: "Sky" },
@@ -38,16 +42,27 @@ const PALETTES: { value: Palette; swatch: [string, string, string]; label: strin
  * IAM-3b (decisión 6: un usuario puede trabajar en varios consultorios): con 2+ consultorios usables suma
  * «Cambiar de consultorio» → `/elegir-consultorio`. Es la salida con el chrome «topbar», que no tiene el selector
  * del sidebar. Las opciones salen de `TenantChoiceProvider` (AppShell): sin provider o con uno solo, no aparece.
+ *
+ * PL-2a (C-PL6): «Seguridad de la cuenta» → `/cuenta/seguridad` (verificación en dos pasos). `<a>` y no `next/link`:
+ * la pantalla está fuera de `(app)`, navegación dura como «Cambiar de consultorio».
+ *
+ * PL-Z (a): el profesional (con ficha, `ownPublicBooking`) prende/apaga su propio «Aparece en el turnero online» desde
+ * acá: quien no tiene «Configuración» no llega a Configuración → Profesionales. Mismo switch y misma action
+ * (`setPractitionerPublicBooking`, que acepta al propio profesional); con el turnero del consultorio apagado queda
+ * deshabilitado con «Primero el consultorio tiene que prender el turnero».
  */
 export function ProfileMenu({
   name,
   preferences,
   revenueScope = "tenant",
+  ownPublicBooking = null,
   defaultOpen = false,
 }: {
   name: string;
   preferences: Preferences;
   revenueScope?: KpiRevenueScope;
+  /** Ficha propia del usuario y su `publicBookingEnabled`. null = no atiende (sin switch). */
+  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
   /** Solo para el test de render (sin jsdom no hay click). */
   defaultOpen?: boolean;
 }) {
@@ -101,7 +116,7 @@ export function ProfileMenu({
             position: "absolute",
             top: 44,
             right: 0,
-            width: 240,
+            width: ownPublicBooking ? 280 : 240,
             borderRadius: 14,
             padding: 6,
             zIndex: 30,
@@ -146,6 +161,37 @@ export function ProfileMenu({
             >
               <IconHome size={14} /> Cambiar de consultorio
             </a>
+          )}
+          <a
+            href="/cuenta/seguridad"
+            role="menuitem"
+            style={{
+              padding: "10px 12px",
+              fontSize: 13,
+              fontWeight: 500,
+              color: "var(--navy-700)",
+              borderRadius: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              textDecoration: "none",
+            }}
+          >
+            <IconCheck size={14} /> Seguridad de la cuenta
+          </a>
+          {ownPublicBooking && (
+            <div
+              role="none"
+              data-own-public-booking
+              style={{ padding: "10px 12px", margin: "4px 0", borderTop: "1px solid rgba(15,30,51,0.06)", borderBottom: "1px solid rgba(15,30,51,0.06)" }}
+            >
+              <PublicBookingSwitch
+                practitionerId={ownPublicBooking.practitionerId}
+                name={name}
+                enabled={ownPublicBooking.enabled}
+                offHint={OWN_TURNERO_OFF_HINT}
+              />
+            </div>
           )}
           <form action="/api/auth/sign-out" method="post">
             <button

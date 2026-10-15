@@ -29,6 +29,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const snapshot = await getAccessSnapshot();
   if (!snapshot || !snapshot.profile) return new Response("Unauthorized", { status: 401 });
+  // PL-Z (a2#2, ALTO): la 2FA del usuario pendiente corta acá también. Esta ruta no pasa por `getActor` (donde se
+  // corta en el resto de la app) y `tryGetActor` devuelve null con la 2FA pendiente sin cortar: con solo la
+  // contraseña robada del Titular se bajaba el consultorio entero (pacientes e historia clínica).
+  if (snapshot.twoFactor.state === "required") return new Response("Unauthorized", { status: 401 });
   const actor = await tryGetActor();
   if (actor?.support) return new Response("Forbidden", { status: 403 });
 

@@ -18,6 +18,9 @@ const { proxy } = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-dialog", () => ({ useConfirm: () => vi.fn(async () => true) }));
 vi.mock("@/lib/invitations", () => proxy());
+// PL-3b: el panel monta el step-up (`lib/two-factor`) y el switch del turnero (`lib/practitioner-public`): server actions.
+vi.mock("@/lib/two-factor", () => proxy());
+vi.mock("@/lib/practitioner-public", () => proxy());
 
 import { UsersPanel } from "@/components/configuracion/panels/users-panel";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
@@ -36,6 +39,8 @@ const member = (p: Partial<TeamMemberRow> & Pick<TeamMemberRow, "membershipId" |
   isYou: false,
   disabledAt: null,
   hasAgenda: true,
+  practitionerId: p.role === "ASSISTANT" || p.role === "BILLING" ? null : `pr-${p.membershipId}`,
+  publicBookingEnabled: true,
   lastPasswordResetEmail: null,
   ...p,
 });
@@ -118,5 +123,21 @@ describe("[IAM-4c] copy puro", () => {
     expect(passwordResetEmailStatusCopy("sent", null).tone).toBe("ok");
     expect(passwordResetEmailStatusCopy("skipped", "no_api_key").tone).toBe("warn");
     expect(passwordResetEmailStatusCopy("failed", "http_500").tone).toBe("error");
+  });
+});
+
+describe("[PL-Z FX3 H4] cambiar el rol pasa por el step-up", () => {
+  // Sin jsdom no hay click: se fija en la fuente que ninguna action de equipo que puede pedir step-up se llama
+  // pelada (`await changeMemberRole(`). Antes pasar a Administrador/a devolvía el digest del step-up como error de la
+  // fila en vez de abrir el modal. Se ignoran comentarios.
+  it("`changeMemberRole` solo se invoca a través de `run`/`runStepUp`", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const code = readFileSync(join(__dirname, "..", "..", "..", "components/configuracion/panels/users-panel.tsx"), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    expect(code).not.toMatch(/await\s+changeMemberRole\(/);
+    expect(code).toMatch(/run(StepUp)?\(\(\) => changeMemberRole\(/);
   });
 });

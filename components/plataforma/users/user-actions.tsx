@@ -12,6 +12,9 @@
  *   rechaza con «No podés deshabilitarte a vos mismo»).
  * - Superadmin: Modal que exige tipear el email exacto (hasta BO4/MFA, `confirmEmail` en el server).
  * - Sincronizar email: solo si Auth respondió y difiere.
+ * - Resetear la 2FA (PL-2a): `useConfirm` (riesgo high: con MFA en enforce pide el código otra vez). A uno mismo no se
+ *   ofrece (lo cambia desde Seguridad de la cuenta, con step-up). Si quedó un factor en el servicio de acceso, aviso
+ *   con «Reintentá» (el server es idempotente).
  */
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -25,6 +28,7 @@ import { useToast } from "@/components/ui/toast";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   repairSyncProfileEmail,
+  resetPlatformUserTwoFactor,
   sendPlatformAccessLink,
   setPlatformSuperadmin,
   setPlatformUserDisabled,
@@ -468,6 +472,87 @@ function SyncEmailAction({ user }: { user: PlatformUserDetail }) {
   );
 }
 
+// ── Resetear la verificación en dos pasos (PL-2a) ─────────────────────────────
+
+function TwoFactorResetAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boolean }) {
+  // Sin `router.refresh()`: la action ya hace `revalidatePath("/plataforma", "layout")` (PF-0d).
+  const confirm = useConfirm();
+  const toast = useToast();
+  const runPlatform = usePlatformAction();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingSync, setPendingSync] = useState(false);
+  // PL-Z (FX2): el server ya rechaza resetear la 2FA de otro superadmin (`resetPlatformUserTwoFactor`,
+  // RESET_OTHER_ADMIN); acá se deshabilita de entrada con el porqué en vez de dejar que choque al confirmar.
+  const otherAdmin = !isSelf && user.isPlatformAdmin;
+
+  async function run(ask: boolean) {
+    if (ask) {
+      const ok = await confirm({
+        title: "¿Resetear la verificación en dos pasos?",
+        message: `${user.fullName?.trim() || "Esta persona"} va a poder entrar solo con su contraseña hasta que la vuelva a activar. Se borran su app de autenticación, el código por email y sus códigos de recuperación, se cierran sus sesiones y le avisamos por mail. Hacelo solo si confirmaste que es ella quien lo pide.`,
+        confirmLabel: "Resetear",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await runPlatform(() => resetPlatformUserTwoFactor({ userId: user.id }));
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setPendingSync(!r.data.authSynced);
+      if (r.data.authSynced) {
+        toast.success(r.data.hadAny || r.data.factorsRemoved > 0 ? "Verificación reseteada" : "No tenía verificación en dos pasos");
+      }
+    } catch {
+      setError(GENERIC_ERROR);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ActionBlock
+      title="Verificación en dos pasos"
+      hint="Si perdió el teléfono y los códigos de recuperación, la reseteás para que pueda entrar y activarla de nuevo."
+      action={
+        <Button variant="ghost" onClick={() => run(true)} disabled={busy || isSelf || otherAdmin}>
+          {busy ? "Reseteando…" : "Resetear verificación"}
+        </Button>
+      }
+    >
+      {isSelf && (
+        <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>La tuya la cambiás desde Seguridad de la cuenta.</div>
+      )}
+      {otherAdmin && (
+        <div data-reset-other-admin style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
+          Es superadmin: su verificación la cambia esa persona desde Seguridad de la cuenta.
+        </div>
+      )}
+      {error && <ErrorText>{error}</ErrorText>}
+      {pendingSync && (
+        <ResultBox
+          msg={{
+            tone: "warning",
+            title: "Quedó reseteada en KineSoft, pero no pudimos borrar su app del servicio de acceso.",
+            description: "Ya puede entrar sin el segundo paso. Reintentá para terminar de limpiar.",
+          }}
+        >
+          <div style={{ marginTop: 8 }}>
+            <Button variant="ghost" onClick={() => run(false)} disabled={busy}>
+              {busy ? "Reintentando…" : "Reintentá"}
+            </Button>
+          </div>
+        </ResultBox>
+      )}
+    </ActionBlock>
+  );
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 function ActionBlock({
@@ -502,6 +587,7 @@ export function UserActions({ user, actorId }: { user: PlatformUserDetail; actor
       <SyncEmailAction user={user} />
       <AccessLinkAction user={user} />
       <DisableAction user={user} isSelf={isSelf} />
+      <TwoFactorResetAction user={user} isSelf={isSelf} />
       <SuperadminAction user={user} />
     </div>
   );

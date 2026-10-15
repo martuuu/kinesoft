@@ -123,7 +123,9 @@ const schema = z.object({
   // PL (PL-D16, plan §20.5.6): cobro de la suscripción SaaS de los consultorios.
   //   off    = DEFAULT: no se generan cargos ni se habla con MP; la app se deploya sin cobrar.
   //   manual = el cron genera cargos y Plataforma imputa pagos/comprobantes a mano (sin débito de MP).
-  //   mp     = además débito automático y «Pagar con MP» (preapproval / checkout).
+  //   mp     = además débito automático y «Pagar con MP» (preapproval / checkout). EN ESTA ETAPA `mp` SE TRATA
+  //            COMO `manual` (decisión de Martin 16-oct: sin Mercado Pago para la suscripción; PL-2b no tiene
+  //            preapproval ni checkout). Se acepta en el enum para no frenar un deploy con el valor ya cargado.
   // Lo lee `saasBillingMode()` (process.env en cada llamada), no este objeto congelado. Mismo criterio de forma que
   // MAINTENANCE_MODE: un typo frena el deploy en vez de dejar el cobro en un modo que nadie eligió.
   SAAS_BILLING_MODE: z.preprocess(
@@ -324,6 +326,15 @@ export type SaasBillingMode = "off" | "manual" | "mp";
 export function saasBillingMode(): SaasBillingMode {
   const v = process.env.SAAS_BILLING_MODE?.trim().toLowerCase();
   return v === "manual" || v === "mp" ? v : "off";
+}
+
+/**
+ * `SAAS_BILLING_TRANSFER_INFO` (PL-Z, A2): texto libre con los datos para transferir (alias, CBU, titular, CUIT).
+ * Sin esto el consultorio no sabe a dónde pagar, así que sin él no se ofrece «Informar pago». Leído en cada llamada.
+ */
+export function saasBillingTransferInfo(): string | null {
+  const v = process.env.SAAS_BILLING_TRANSFER_INFO?.trim();
+  return v ? v.slice(0, 500) : null;
 }
 
 /** `PLATFORM_INBOX_EMAIL` vigente (C-PL11), leído en cada llamada. Vacío → null (no sale el aviso por mail). */

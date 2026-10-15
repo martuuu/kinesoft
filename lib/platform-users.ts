@@ -19,6 +19,10 @@
  *  - Dar/quitar superadmin: con confirmación tipeada del email hasta que BO4 traiga MFA.
  *  - «Nunca el último superadmin»: las filas de superadmins se bloquean (`FOR UPDATE`) antes de contar, así dos
  *    superadmins que se deshabilitan mutuamente a la vez no dejan la plataforma sin nadie (el segundo espera y ve 1).
+ *  - Resetear la 2FA (PL-2a, plan §20.5.5): la persona perdió el teléfono y los códigos de recuperación. Base primero
+ *    (flags, códigos y desafíos, en la tx del registro: `resetTwoFactorInTx`, único escritor) y los factores TOTP
+ *    de Supabase después (`authAdminMfa`, que además le cierra las sesiones). Si Auth falla, `authSynced: false` y
+ *    reintentar es seguro (la base ya está apagada: el factor que quedó no corta el acceso).
  *  - Reparaciones: crear el `Practitioner` + agenda que falta (bucle `missing_practitioner`), borrar un usuario de
  *    Auth huérfano SOLO si `canSafelyDeleteAuthUser` (borrar de más es irreversible), sincronizar el email del
  *    perfil con Auth (Auth es con lo que la persona entra).
@@ -32,7 +36,10 @@ import { Prisma } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { auditPlatformGlobalInTx, auditPlatformInTx, type PlatformActorRef } from "@/lib/audit";
-import { authAdmin } from "@/lib/identity/auth-admin";
+import { authAdmin, authAdminMfa } from "@/lib/identity/auth-admin";
+import { resetTwoFactorInTx } from "@/lib/two-factor-internal";
+import { twoFactorChangedEmail } from "@/lib/email/templates-account";
+import { env } from "@/lib/env";
 import { issueAccessLink } from "@/lib/identity/access-link";
 import { sendEmail } from "@/lib/email";
 import { platformAccessLinkEmail } from "@/lib/email/templates";
@@ -456,4 +463,81 @@ export async function repairSyncProfileEmail(raw: unknown): Promise<ActionResult
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { ok: false, error: TAKEN };
     throw e;
   }
+}
+
+// ── Resetear la 2FA (PL-2a) ───────────────────────────────────────────────────
+
+const TwoFactorResetInput = z.object({ userId: Id }).strict();
+const RESET_OTHER_ADMIN =
+  "No podés resetear la verificación de otro superadmin: la cambia esa persona desde Seguridad de la cuenta.";
+
+/** `hadAny`: tenía algún método prendido en la base. `authSynced: false` = quedó un factor en Supabase (reintentar). */
+export async function resetPlatformUserTwoFactor(
+  raw: unknown
+): Promise<ActionResult<{ hadAny: boolean; factorsRemoved: number; authSynced: boolean }>> {
+  const actor = await requirePlatformAdmin("user.two_factor.reset");
+  const parsed = TwoFactorResetInput.safeParse(raw);
+  if (!parsed.success) return INVALID;
+  const { userId } = parsed.data;
+  // La propia se apaga desde Seguridad de la cuenta (con step-up): acá no hay segundo factor que pedir.
+  if (userId === actor.userId) return { ok: false, error: "Tu propia verificación se cambia desde Seguridad de la cuenta." };
+
+  const res = await failAsResult(async () => {
+    const out = await prismaService.$transaction(async (tx) => {
+      // PL-Z (a2#8, decisión del orquestador): nunca sobre otro superadmin. Con una sesión de superadmin robada se
+      // le sacaba la 2FA a otro (el que tiene el TOTP de Plataforma) y quedaba todo el back-office con un solo
+      // factor. Que la cambie la persona desde Seguridad de la cuenta. Bajo el lock de la fila: una promoción
+      // simultánea (`setPlatformSuperadmin` toma el mismo lock) no se cuela entre el chequeo y el reset.
+      const [target] = await tx.$queryRaw<Array<{ isPlatformAdmin: boolean }>>`
+        SELECT "isPlatformAdmin" FROM "UserProfile" WHERE "id" = ${userId} FOR UPDATE`;
+      if (target?.isPlatformAdmin) throw new PlatformUserError(RESET_OTHER_ADMIN);
+      const r = await resetTwoFactorInTx(tx, { userId, byUserId: actor.userId });
+      if (!r) throw new PlatformUserError(NOT_FOUND);
+      const email = (await tx.userProfile.findUnique({ where: { id: userId }, select: { email: true } }))?.email ?? null;
+      await auditPlatformGlobalInTx(tx, {
+        actor: refOf(actor),
+        action: "platform.user.two_factor_reset",
+        entity: "UserProfile",
+        entityId: userId,
+        targetUserId: userId,
+        payload: { hadTotp: r.had.totp, hadEmail: r.had.email },
+      });
+      return { hadAny: r.had.totp || r.had.email, email };
+    });
+    return { ok: true, data: out };
+  });
+  if (!res.ok) return res;
+
+  // Siempre (aunque la base no tuviera nada prendido): un factor verificado en Supabase sin flag también cuenta.
+  let factorsRemoved = 0;
+  let authSynced = true;
+  const list = await authAdminMfa().listFactors(userId);
+  if (!list.ok) {
+    authSynced = list.code === "not_found";
+  } else {
+    for (const f of list.data) {
+      const d = await authAdminMfa().deleteFactor(userId, f.id);
+      if (d.ok) factorsRemoved++;
+      else if (d.code !== "not_found") authSynced = false;
+    }
+  }
+  if (!authSynced) logger.warn("platform.user.two_factor_reset.auth_sync_failed", { userId });
+
+  if (res.data.email) {
+    await sendEmail({
+      ...twoFactorChangedEmail({
+        change: "reset_by_platform",
+        at: new Date(),
+        securityUrl: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "")}/cuenta/seguridad`,
+      }),
+      kind: "two_factor_changed",
+      to: res.data.email,
+      tenantId: null,
+      entity: "UserProfile",
+      entityId: userId,
+      actorId: actor.userId,
+    });
+  }
+  revalidatePath("/plataforma", "layout");
+  return { ok: true, data: { hadAny: res.data.hadAny, factorsRemoved, authSynced } };
 }

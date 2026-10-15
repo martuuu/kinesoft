@@ -33,11 +33,23 @@ export const PLAN_DEFAULTS: Record<SaasPlan, Omit<SaasPlanConfigRow, "plan">> = 
   LIBRE: { label: "Libre", priceCents: null, limits: { maxUsers: null, maxProfessionals: null, maxStaff: null }, trialDays: 0, isPublic: true, sortOrder: 4 },
 };
 
-/** Límites efectivos: cada override no nulo pisa el del plan. */
-export function effectiveLimits(cfg: PlanLimits, o: PlanLimitOverrides): PlanLimits {
+/**
+ * Límites efectivos. Los overrides de cupo SOLO valen en Libre (a medida, PL-Z a3#1 / decisión del orquestador): en
+ * el resto de los planes rige la fila del plan. Por qué: M8 copió el `seatLimitOverride` viejo a
+ * `maxUsersOverride` y un cambio de plan desde el consultorio arrastraba ese cupo a medida al plan nuevo (un
+ * Consultorio con override 20 seguía con 20 al bajar a Individual). Un override cargado en otro plan queda inerte
+ * (no se borra: si Plataforma lo pasa a Libre, vuelve a regir).
+ */
+export function effectiveLimits(cfg: PlanLimits, o: PlanLimitOverrides, plan: SaasPlan): PlanLimits {
+  if (plan !== "LIBRE") return { ...cfg };
   return {
     maxUsers: o.maxUsersOverride ?? cfg.maxUsers,
     maxProfessionals: o.maxProfessionalsOverride ?? cfg.maxProfessionals,
     maxStaff: o.maxStaffOverride ?? cfg.maxStaff,
   };
+}
+
+/** ¿El consultorio tiene cupos a medida vigentes? (Libre con algún override no nulo; ver `effectiveLimits`). */
+export function hasCustomLimits(plan: SaasPlan, o: PlanLimitOverrides): boolean {
+  return plan === "LIBRE" && (o.maxUsersOverride != null || o.maxProfessionalsOverride != null || o.maxStaffOverride != null);
 }

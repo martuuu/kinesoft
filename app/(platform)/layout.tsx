@@ -10,6 +10,7 @@ import { verifyPlatformReauth } from "@/lib/platform-mfa-actions";
 import { safeNext } from "@/lib/safe-next";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
 import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
+import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
 
 /**
  * Guard + shell del grupo `(platform)` (BO3-A, plan §19.5 «Superadmin sin consultorio casa»).
@@ -42,6 +43,9 @@ export default async function PlatformLayout({ children }: { children: React.Rea
     // `x-pathname` lo pisa el middleware en cada request; safeNext descarta todo lo que no sea un path propio.
     const raw = headers().get("x-pathname");
     const next = (raw ? safeNext(raw, "") : "") || "/plataforma";
+    // PL-2a (C-PL6): sesión válida con la 2FA pendiente → /verificar-acceso (fuera de este grupo, sin bucle). Antes
+    // caía en /login, que con sesión viva rebotaba de vuelta acá: el superadmin quedaba sin salida.
+    if (err instanceof UnauthenticatedError && err.reason === "two_factor") redirect(verifyAccessHref(next));
     if (err instanceof UnauthenticatedError) redirect(`/login?next=${encodeURIComponent(next)}`);
     // BO-Z B9: `unavailable` (GoTrue no respondió) va a /plataforma-mfa/verificar, que ya tiene su pantalla «No
     // pudimos comprobar tu verificación» con «Reintentar» y no deja pasar. Antes se tiraba y caía en el error genérico

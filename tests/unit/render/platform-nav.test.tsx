@@ -26,7 +26,7 @@ describe("[BO3-A] PlatformNav", () => {
     pathname = "/plataforma";
   });
 
-  it("muestra los 9 links en el orden del plan, con el separador «Catálogo global» antes de Ejercicios", () => {
+  it("muestra los 12 links en el orden del plan (PL-2d: Mensajes después de Usuarios; PL-3c: Facturación y Precios después de Mensajes), con el separador «Catálogo global» antes de Ejercicios", () => {
     const html = render("/plataforma");
     expect(html).toMatch(/<nav[^>]*aria-label="Secciones de Plataforma"/);
     const links = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], m[2].replace(/<[^>]+>/g, "")]);
@@ -34,6 +34,9 @@ describe("[BO3-A] PlatformNav", () => {
       ["/plataforma", "Resumen"],
       ["/plataforma/consultorios", "Consultorios"],
       ["/plataforma/usuarios", "Usuarios"],
+      ["/plataforma/mensajes", "Mensajes"],
+      ["/plataforma/facturacion", "Facturación"],
+      ["/plataforma/precios", "Precios"],
       ["/plataforma/salud", "Salud"],
       ["/plataforma/auditoria", "Auditoría"],
       ["/plataforma/sistema", "Sistema"],
@@ -41,7 +44,7 @@ describe("[BO3-A] PlatformNav", () => {
       ["/plataforma/tags", "Tags"],
       ["/plataforma/catalogo/prestadoras", "Catálogo"],
     ]);
-    expect(PLATFORM_NAV_ITEMS).toHaveLength(9);
+    expect(PLATFORM_NAV_ITEMS).toHaveLength(12);
     const sep = html.indexOf('role="separator"');
     expect(sep).toBeGreaterThan(html.indexOf('href="/plataforma/sistema"'));
     expect(sep).toBeLessThan(html.indexOf('href="/plataforma/ejercicios"'));
@@ -67,6 +70,22 @@ describe("[BO3-A] PlatformNav", () => {
     const tags = PLATFORM_NAV_ITEMS.find((i) => i.label === "Tags")!;
     expect(isPlatformNavActive(tags, "/plataforma/tagsx")).toBe(false);
     expect(activeLabels(render("/plataforma/otra"))).toEqual([]);
+  });
+
+  it("[PL-2d] Mensajes: se activa por prefijo y muestra el contador de no leídos (9+ desde 10; 0 = sin contador)", () => {
+    expect(activeLabels(render("/plataforma/mensajes/abc"))).toEqual(["Mensajes"]);
+    pathname = "/plataforma";
+    const withCount = renderToStaticMarkup(<PlatformNav inboxUnread={3} />);
+    expect(withCount).toMatch(/aria-label="3 sin leer"[^>]*>3</);
+    expect(renderToStaticMarkup(<PlatformNav inboxUnread={12} />)).toMatch(/aria-label="12 sin leer"[^>]*>9\+</);
+    expect(renderToStaticMarkup(<PlatformNav inboxUnread={0} />)).not.toContain("sin leer");
+    expect(renderToStaticMarkup(<PlatformNav />)).not.toContain("sin leer");
+  });
+
+  it("[PL-3c] Facturación y Precios se activan por su prefijo; el ledger de un consultorio sigue en Consultorios", () => {
+    expect(activeLabels(render("/plataforma/facturacion"))).toEqual(["Facturación"]);
+    expect(activeLabels(render("/plataforma/precios"))).toEqual(["Precios"]);
+    expect(activeLabels(render("/plataforma/consultorios/t-1/facturacion"))).toEqual(["Consultorios"]);
   });
 
   it("pathname null (primer render fuera del router) no rompe ni activa nada", () => {

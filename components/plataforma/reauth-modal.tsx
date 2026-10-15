@@ -21,8 +21,15 @@
  *
  * El provider lo monta `app/(platform)/layout.tsx` alrededor del shell; recibe la action por prop (como
  * `endSupportAction` del shell) para que este módulo de cliente no arrastre el árbol de imports del server.
+ *
+ * PL-Z (a2#4): con `PLATFORM_MFA_ENFORCEMENT` distinto de `enforce`, las acciones `high` piden en cambio el step-up
+ * de la 2FA por usuario (`requireStepUp`, digest `KINE_STEP_UP_REQUIRED` / `KINE_2FA_SETUP_REQUIRED`). El provider
+ * monta adentro el mismo `StepUpProvider` de la cuenta (components/account/step-up-modal.tsx) y `runPlatform` corre
+ * la action dentro de `runStepUp`: el error de step-up atraviesa la capa de Plataforma (no es suyo), el modal de
+ * step-up pide el código (o explica que hay que activar la 2FA) y reintenta todo una vez. Nunca se piden los dos:
+ * el server usa uno u otro según el flag.
  */
-import { createContext, useCallback, useContext, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
@@ -33,6 +40,7 @@ import {
   platformRateLimitedCopy,
 } from "@/lib/platform-mfa-logic";
 import type { ActionResult } from "@/lib/validation";
+import { StepUpProvider, stepUpFailureOf, useStepUpAction, type RunStepUpAction } from "@/components/account/step-up-modal";
 
 // `fieldErrors?` opcional (siempre ausente acá): así el fallo tiene la misma forma que la rama de error de
 // `ActionResult` y los componentes que leen `res.fieldErrors ?? {}` no necesitan anotar el tipo (integrador BO4/BO5).
@@ -61,6 +69,14 @@ export function platformFailureOf(err: unknown, refresh: () => void): PlatformAc
 const Ctx = createContext<RunPlatformAction | null>(null);
 
 /**
+ * PL-Z: la capa de Plataforma (re-verificación TOTP, rate limit) por dentro y el step-up de la 2FA por usuario por
+ * fuera. Pura sobre sus dos argumentos; exportada para el test.
+ */
+export function composePlatformRun(runStepUp: RunStepUpAction, runPlatform: RunPlatformAction): RunPlatformAction {
+  return <T,>(fn: () => Promise<T>) => runStepUp(() => runPlatform(fn));
+}
+
+/**
  * Fuera del provider (un componente reusado en otro lado): sin modal, pero con las mismas traducciones. Una acción
  * `high` sin re-verificación vuelve con un error legible en vez de tirar.
  */
@@ -71,7 +87,7 @@ function useFallbackRun(): RunPlatformAction {
       try {
         return await fn();
       } catch (err) {
-        const f = platformFailureOf(err, () => router.refresh());
+        const f = platformFailureOf(err, () => router.refresh()) ?? stepUpFailureOf(err);
         if (f) return f;
         if (classifyPlatformActionError(err)?.kind === "reauth") return { ok: false as const, error: PLATFORM_MFA_COPY.reauth };
         throw err;
@@ -94,7 +110,16 @@ export function PlatformReauthProvider({
   verifyAction: VerifyReauthAction;
   children: ReactNode;
 }) {
+  return (
+    <StepUpProvider>
+      <PlatformReauthLayer verifyAction={verifyAction}>{children}</PlatformReauthLayer>
+    </StepUpProvider>
+  );
+}
+
+function PlatformReauthLayer({ verifyAction, children }: { verifyAction: VerifyReauthAction; children: ReactNode }) {
   const router = useRouter();
+  const runStepUp = useStepUpAction();
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +169,7 @@ export function PlatformReauthProvider({
     },
     [askForCode, router]
   );
+  const runWithStepUp = useMemo(() => composePlatformRun(runStepUp, run), [runStepUp, run]);
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -170,7 +196,7 @@ export function PlatformReauthProvider({
   };
 
   return (
-    <Ctx.Provider value={run}>
+    <Ctx.Provider value={runWithStepUp}>
       {children}
       <Modal
         open={open}

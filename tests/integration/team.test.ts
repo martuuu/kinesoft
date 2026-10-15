@@ -158,57 +158,30 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
   it("cambiar de rol invalida el tag practitioners y audita de/a", async () => {
     const kine = await addPractitioner(db, A);
     const mem = await membershipOf(A, kine.userId);
-    const r = await changeMemberRole(mem.id, "ADMIN");
+    // PL-Z (a2#7): a ADMIN pide step-up (pl3b-team.test.ts); acá alcanza otro rol no clínico.
+    const r = await changeMemberRole(mem.id, "ASSISTANT");
     expect(r.ok).toBe(true);
-    expect((await db.membership.findUniqueOrThrow({ where: { id: mem.id } })).role).toBe("ADMIN");
+    expect((await db.membership.findUniqueOrThrow({ where: { id: mem.id } })).role).toBe("ASSISTANT");
     expect(revalidateTagSpy).toHaveBeenCalledWith(tags.practitioners(A.tenantId));
     const ev = await db.auditEvent.findFirst({
       where: { tenantId: A.tenantId, action: "membership.role.change", entityId: mem.id },
     });
-    expect(ev?.payload).toMatchObject({ from: "PRACTITIONER", role: "ADMIN" });
+    expect(ev?.payload).toMatchObject({ from: "PRACTITIONER", role: "ASSISTANT" });
   });
 
-  it("transferir el OWNER: el anterior (que atendía) queda Profesional con «Configuración» (§20.17)", async () => {
+  it("[PL-3b] transferir el OWNER ya no va por el selector de rol (sin step-up): lo rechaza sin tocar nada", async () => {
+    // El camino bueno (con step-up), el «anterior queda Profesional con Configuración» (§20.17) y las dos
+    // transferencias simultáneas [BO-Z B1] viven en tests/integration/pl3b-team.test.ts con `transferOwnership`.
     const T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     try {
       const kine = await addPractitioner(db, T);
       const mem = await membershipOf(T, kine.userId);
       asUser(T.userId);
       const r = await changeMemberRole(mem.id, "OWNER");
-      expect(r.ok).toBe(true);
-      const roles = await db.membership.findMany({
-        where: { tenantId: T.tenantId },
-        select: { userId: true, role: true },
-      });
-      expect(roles.find((x) => x.userId === kine.userId)?.role).toBe("OWNER");
-      // §20.17: el Administrador/a no atiende; el Titular anterior conserva su agenda como Profesional.
-      expect(await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: T.userId } })).toMatchObject({
-        role: "PRACTITIONER",
-        clinical: true,
-        grantSettings: true,
-      });
-    } finally {
-      await T.cleanup();
-    }
-  });
-
-  it("[BO-Z] B1: dos transferencias simultáneas del mismo OWNER (a X y a Y) → exactamente un OWNER", async () => {
-    const T = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
-    try {
-      const x = await addPractitioner(db, T);
-      const y = await addPractitioner(db, T);
-      const mx = await membershipOf(T, x.userId);
-      const my = await membershipOf(T, y.userId);
-      asUser(T.userId);
-      const results = await Promise.all([changeMemberRole(mx.id, "OWNER"), changeMemberRole(my.id, "OWNER")]);
-      // Una gana; la otra ve que quien transfería ya no es OWNER y revierte con el copy de carrera.
-      expect(results.filter((r) => r.ok)).toHaveLength(1);
-      expect(results.find((r) => !r.ok)).toEqual({ ok: false, error: "El rol cambió mientras tanto. Recargá y probá de nuevo." });
-      const owners = await db.membership.findMany({ where: { tenantId: T.tenantId, role: "OWNER" }, select: { userId: true } });
-      expect(owners).toHaveLength(1);
-      expect([x.userId, y.userId]).toContain(owners[0].userId);
-      const prevOwner = await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: T.userId } });
-      expect(prevOwner.role).toBe("PRACTITIONER"); // §20.17: atendía → Profesional con «Configuración»
+      expect(r.ok).toBe(false);
+      expect(await db.membership.findMany({ where: { tenantId: T.tenantId, role: "OWNER" }, select: { userId: true } })).toEqual([
+        { userId: T.userId },
+      ]);
     } finally {
       await T.cleanup();
     }
@@ -265,7 +238,7 @@ describe.skipIf(!RUN)("equipo · gestión por OWNER y ADMIN (IAM-D3)", () => {
     const admin = await addPractitioner(db, A, "ADMIN");
     asUser(admin.userId);
     const ownerMem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: A.userId } });
-    expect((await changeMemberRole(ownerMem.id, "ADMIN")).ok).toBe(false);
+    expect((await changeMemberRole(ownerMem.id, "ASSISTANT")).ok).toBe(false);
     expect((await removeMember(ownerMem.id)).ok).toBe(false);
     const kine = await addPractitioner(db, A);
     const mem = await db.membership.findFirstOrThrow({ where: { tenantId: A.tenantId, userId: kine.userId } });

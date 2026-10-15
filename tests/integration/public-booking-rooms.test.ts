@@ -91,7 +91,8 @@ describe.skipIf(!RUN)("SR2b · turnero público estampa la sala", () => {
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    T = await createEphemeralTenant(db);
+    // PL-2f (C-PL1): salas y Sala de Espera son de Clínica / Libre; sin el plan, el motor ignora las salas.
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     r1 = await addRoom(db, T, { name: "Consultorio 1" });
     r2 = await addRoom(db, T, { name: "Consultorio 2", locationId: r1.locationId });
     // Lunes con sala 1, martes con sala 2 (la que se archiva), miércoles sin sala. 9 a 13.

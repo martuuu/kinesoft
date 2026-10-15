@@ -2,8 +2,8 @@ import "server-only";
 /**
  * Cambio de plan SaaS con cupos por tipo (PL-1c, contrato C-PL4, plan §20.5.3; decisión 5 de Martin).
  *
- * Por qué existe: con planes que limitan usuarios por tipo (Individual 1 · Consultorio 4 profesionales + 1 no
- * clínico · Clínica 10 · Libre a medida), bajar de plan puede dejar gente de más. Martin (15-oct): **quien cambia el
+ * Por qué existe: con planes que limitan usuarios (Individual 1 · Consultorio 5 · Clínica 10 · Libre a medida, con
+ * topes por tipo solo si Plataforma los arma; §20.17), bajar de plan puede dejar gente de más. Martin (15-oct): **quien cambia el
  * plan elige quiénes pierden el acceso**; se deshabilitan (`disabledAt` + `disabledReason = 'PLAN_DOWNGRADE'`), nunca
  * se borran, y sus turnos NO se cancelan (la agenda los sigue mostrando para reasignarlos). Al subir se pueden
  * reactivar (solo los `PLAN_DOWNGRADE`: una suspensión a mano no se deshace sola por pagar más).
@@ -36,7 +36,7 @@ import {
   seatUsageByKind,
   type SeatKind,
 } from "@/lib/plan-catalog";
-import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import { PLAN_DEFAULTS, hasCustomLimits } from "@/lib/saas-plans-logic";
 import { liveProgramWhere } from "@/lib/plan-predicates";
 import { displayUserName } from "@/lib/display-name";
 import { normalizeEmail } from "@/lib/email-match";
@@ -277,6 +277,10 @@ export async function applyPlanChangeInTx(
   if (!t) return fail("not_found");
   if (t.updatedAt.getTime() !== p.expectedUpdatedAt.getTime()) return fail("stale");
   if (t.saasPlan === p.to) return fail("invalid_selection", "same_plan");
+  // PL-Z a3#1: un consultorio con cupos a medida (Libre con overrides) no cambia de plan solo: los overrides valen
+  // solo en Libre, así que el cambio le haría perder (o arrastrar) lo que se pactó. Lo hace Plataforma después de
+  // hablar. Overrides inertes en otro plan (legado de M8) no traban: ahí ya rige el plan.
+  if (ctx.via !== "platform" && hasCustomLimits(t.saasPlan, t)) return fail("invalid_selection", "custom_limits");
 
   // 2. Lock de las membresías del consultorio (orden: Tenant → Membership, como el resto del equipo).
   await tx.$queryRaw`SELECT "id" FROM "Membership" WHERE "tenantId" = ${tenantId} FOR UPDATE`;

@@ -40,6 +40,9 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
           role: true,
           // PL-1d: un Titular/Admin que no atiende no tiene agenda aunque su rol sea «clínico» (C-PL5).
           clinical: true,
+          // PL-3b: permisos delegados («Configuración» / «Planes y pagos»), los mismos que ve el Titular.
+          grantSettings: true,
+          grantBilling: true,
           acceptedAt: true,
           disabledAt: true,
           user: {
@@ -47,7 +50,7 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
               email: true,
               fullName: true,
               // M6: el Practitioner es por consultorio; `tenantId` a mano (BYPASSRLS).
-              practitioners: { where: { tenantId }, select: { id: true }, take: 1 },
+              practitioners: { where: { tenantId }, select: { id: true, publicBookingEnabled: true }, take: 1 },
             },
           },
         },
@@ -99,6 +102,11 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
       joinedAt: m.acceptedAt,
       disabledAt: m.disabledAt,
       hasAgenda: isClinicalMember(m) && m.user.practitioners.length > 0,
+      // PL-3b: «¿Atiende?», permisos y turnero por profesional (null = no atiende o no tiene `Practitioner` acá).
+      clinical: isClinicalMember(m),
+      grantSettings: m.grantSettings,
+      grantBilling: m.grantBilling,
+      publicBookingEnabled: isClinicalMember(m) ? (m.user.practitioners[0]?.publicBookingEnabled ?? null) : null,
     })),
     invitations: data.invitations.map((i) => ({
       id: i.id,

@@ -7,19 +7,26 @@ import "server-only";
  * No es `"use server"` a propósito: la llama la página de Configuración (Server Component) y nada del cliente la
  * necesita; así no queda expuesta como endpoint RPC.
  *
- * Orden de AGENTS.md: `requireCapability("tenant.admin")` (Titular, ADMIN o quien tenga «Configuración»; también el
- * soporte) → `runWithRls` con `where: { tenantId }` a mano (en prod la conexión es BYPASSRLS: es la única barrera).
+ * Orden de AGENTS.md: `tenant.admin` («Configuración»: Titular, ADMIN o delegada; también el soporte) **o**
+ * `account.billing` («Planes y pagos», PL-3) → `runWithRls` con `where: { tenantId }` a mano (en prod la conexión es
+ * BYPASSRLS: es la única barrera).
  * Los cupos salen de `getSeatUsageInTx` (lib/team-internal.ts), el mismo cálculo que frena la invitación; el
  * desglose de invitaciones y miembros no clínicos, de `countSeatsInTx` (mismos filtros); el copy, de `planUsageView`.
  */
-import { requireCapability } from "@/lib/authz";
+import { capabilitiesForActor } from "@/lib/authz";
+import { ForbiddenError, getActor } from "@/lib/session";
 import { runWithRls } from "@/lib/rls";
 import { countSeatsInTx, getSeatUsageInTx } from "@/lib/team-internal";
-import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import { PLAN_DEFAULTS, hasCustomLimits } from "@/lib/saas-plans-logic";
 import { planUsageView, type TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 
 export async function getTenantPlanUsage(now: Date = new Date()): Promise<TenantPlanUsageView> {
-  const { actor } = await requireCapability("tenant.admin", "Solo OWNER/ADMIN ven el plan del consultorio.");
+  // PL-3a: «Plan y uso» es de quien tiene «Planes y pagos» (`account.billing`) o «Configuración» (`tenant.admin`).
+  const actor = await getActor();
+  const caps = await capabilitiesForActor(actor);
+  if (!caps.has("tenant.admin") && !caps.has("account.billing")) {
+    throw new ForbiddenError("Solo OWNER/ADMIN ven el plan del consultorio.");
+  }
   const tenantId = actor.tenantId;
   const r = await runWithRls(tenantId, async (tx) => {
     const [tenant, seats, counts] = await Promise.all([
@@ -56,7 +63,8 @@ export async function getTenantPlanUsage(now: Date = new Date()): Promise<Tenant
       trialEndsAt: t.trialEndsAt,
       subscriptionStatusChangedAt: t.subscriptionStatusChangedAt,
       publicBookingEnabled: t.publicBookingEnabled,
-      customLimits: t.maxUsersOverride != null || t.maxProfessionalsOverride != null || t.maxStaffOverride != null,
+      // PL-Z (a3#1): los overrides solo valen en LIBRE; uno legado en otro plan es inerte y no se muestra «a medida».
+      customLimits: hasCustomLimits(t.saasPlan, t),
       seats: r.seats,
       pendingInvites: r.counts.invites,
       nonSeatMembers: r.counts.members.staff,

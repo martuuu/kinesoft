@@ -136,6 +136,32 @@ function supportRoleError(ctx: TeamActorCtx, role: Role): { ok: false; error: st
 }
 
 /**
+ * PL-Z (a3#5, decisión del orquestador): escalada a la HC. «Configuración» (`grantSettings`) se delega a CUALQUIER rol
+ * y alcanza para gestionar el equipo (`requireTeamManager`), así que una Secretaria o un Administrador/a con esa
+ * delegación podía invitar (o pasar, o reactivar) a una cuenta suya como Profesional y abrirse las historias
+ * clínicas que su rol no ve (Ley 26.529). Sumar a alguien que ATIENDE (`isClinicalMember` del destino) exige actuar
+ * como Titular (OWNER o superadmin de Plataforma) o ser, uno mismo, miembro clínico activo de este consultorio.
+ * La membresía de quien actúa se lee en la MISMA tx (no del Actor): un cambio de rol en paralelo no la saltea.
+ */
+export const CLINICAL_ASSIGN_MESSAGE = "Solo el titular o un profesional del consultorio pueden sumar a alguien que atiende.";
+
+async function clinicalAssignError(
+  tx: DbClient,
+  ctx: TeamActorCtx,
+  target: { role: Role; clinical: boolean }
+): Promise<{ ok: false; error: string } | null> {
+  if (!isClinicalMember(target) || actsAsOwner(ctx)) return null;
+  if (ctx.via === "tenant" && !ctx.support) {
+    const me = await tx.membership.findFirst({
+      where: { tenantId: ctx.tenantId, userId: ctx.actorUserId, acceptedAt: { not: null }, disabledAt: null },
+      select: { role: true, clinical: true },
+    });
+    if (me && isClinicalMember(me)) return null;
+  }
+  return fail(CLINICAL_ASSIGN_MESSAGE);
+}
+
+/**
  * S13g (I7): planes ACTIVE vivos de los que el usuario es responsable (`TreatmentProgram.practitionerId`, D17)
  * en este consultorio. `practitionerId` es RESTRICT desde M1, pero ni quitar a alguien (borra la Membership; el
  * Practitioner queda por historial) ni cambiarle el rol tocan esa fila, así que la FK no frena nada. Solo ACTIVE:
@@ -474,6 +500,8 @@ export async function createInvitationInTx(
   if (supportDenied) return supportDenied;
   const clinicalDenied = inviteClinicalError(input.role, input.clinical);
   if (clinicalDenied) return clinicalDenied;
+  const escalation = await clinicalAssignError(tx, ctx, { role: input.role, clinical: invitationClinical(input.role) });
+  if (escalation) return escalation;
   if (ctx.support) {
     // BO-Z (A2): soporte no invita a NINGUNA cuenta de Plataforma (ni la suya ni la de otro superadmin): sería entrar
     // al consultorio como miembro, por fuera de la sesión de soporte auditada y con vencimiento.
@@ -825,6 +853,11 @@ export async function changeMemberRoleInTx(
   const nextClinical = nextRole === "OWNER" ? m.clinical : nextRole === "PRACTITIONER";
   const next = { role: nextRole, clinical: nextClinical };
   const nextIsClinical = isClinicalMember(next);
+  // PL-Z a3#5: pasar a alguien a un rol que atiende = darle la HC.
+  if (nextIsClinical && !isClinicalMember(m)) {
+    const escalation = await clinicalAssignError(tx, ctx, next);
+    if (escalation) return escalation;
+  }
 
   // PL-1c (PL-D3): cambiar a otro TIPO de lugar (estando activo) pide lugar en el tipo destino; se excluye a esta
   // persona del conteo (deja su lugar actual). Mismo tipo: nada. Un suspendido no ocupa (pedirá lugar al reactivarse).
@@ -964,6 +997,9 @@ export async function reactivateMemberInTx(
   // BO-Z (A2): reactivar devuelve el rol que tenía; si es clínico, soporte no lo reabre.
   const supportDenied = supportRoleError(ctx, m.role);
   if (supportDenied) return supportDenied;
+  // PL-Z a3#5: reactivar a alguien que atiende le devuelve la HC.
+  const escalation = await clinicalAssignError(tx, ctx, m);
+  if (escalation) return escalation;
   // PL-1c (PL-D3): vuelve a ocupar un lugar de su tipo (antes solo los clínicos pedían lugar).
   const seat = await requireFreeSeatInTx(tx, ctx, new Date(), seatKindOf(m));
   if (!seat.ok) return seat;

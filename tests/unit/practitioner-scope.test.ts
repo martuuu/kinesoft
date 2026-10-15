@@ -45,8 +45,8 @@ describe("[IAM-0c] bookablePractitionerWhere", () => {
           some: {
             tenantId: "t1",
             acceptedAt: { not: null },
-            // PL-1b (C-PL5): OWNER/ADMIN solo si atienden.
-            OR: [{ role: "PRACTITIONER" }, { role: { in: ["OWNER", "ADMIN"] }, clinical: true }],
+            // PL-1b (C-PL5): el OWNER solo si atiende; PL-Z M1: el ADMIN nunca.
+            OR: [{ role: "PRACTITIONER" }, { role: "OWNER", clinical: true }],
           },
         },
       },

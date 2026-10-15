@@ -3,7 +3,7 @@
  *
  * Un consultorio en solo lectura por su suscripción (`TENANT_ACCESS_ENFORCEMENT=enforce`, prueba vencida o deuda:
  * BO1-A) abre todas sus tx con `transaction_read_only`. Justo ahí es cuando tiene que poder PAGAR, cambiar de plan,
- * prender el débito, subir el comprobante y escribirnos. Estas actions son las únicas que saltan ese candado.
+ * subir el comprobante y escribirnos. Estas actions son las únicas que saltan ese candado.
  *
  * Igual que `SUPPORT_WRITABLE_ACTIONS` (lib/support-writable.ts), es una allowlist ESTÁTICA y no una capability: una
  * action nueva nunca queda habilitada en solo lectura por accidente. Nombres `"<archivo>#<export>"`.
@@ -18,11 +18,9 @@
 import { getRequestContext, runWithRequestContext, type RequestContext } from "@/lib/request-context";
 
 export const ACCOUNT_WRITABLE_ACTIONS: ReadonlySet<string> = new Set([
-  // Planes y pagos (PL-2c)
+  // Planes y pagos (PL-2b). Sin débito automático ni «Pagar con MP»: Mercado Pago para la suscripción quedó fuera
+  // de esta etapa (Martin, 16-oct); cuando vuelva, sus actions se suman acá en la misma tanda que las crea.
   "lib/saas-billing.ts#applyPlanChange",
-  "lib/saas-billing.ts#startAutoDebit",
-  "lib/saas-billing.ts#stopAutoDebit",
-  "lib/saas-billing.ts#payChargeWithMp",
   "lib/saas-billing.ts#submitPaymentReceipt",
   // Mensajes a soporte (PL-2d)
   "lib/support-threads.ts#createSupportThread",

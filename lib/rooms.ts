@@ -10,7 +10,10 @@
  *     SR "UI"), igual que los nombres de las sedes. No hay PHI.
  *   - `includeArchived` (Configuración) y toda escritura: `schedule.configure`
  *     (OWNER/ADMIN), como sedes y horarios: la sala define dónde se atiende.
- *   - Sin gate de módulo: las salas aplican a General y a Kine (§17.1).
+ *   - PL-2f (C-PL1, PL-D7): módulo `salas` (Clínica / Libre, las dos verticales). Sin él, las escrituras tiran
+ *     `ForbiddenError(MODULE_DENIED_COPY.salas)` y las lecturas devuelven `[]` (regla de `lib/authz.ts`: una
+ *     lectura compartida no rompe la pantalla). Las salas que el consultorio cargó en Clínica «duermen»: no se
+ *     borran ni se archivan, y vuelven tal cual si vuelve a Clínica.
  *
  * Tenant: TODA query lleva `where: { tenantId }` a mano dentro de `runWithRls`:
  * en prod la conexión es BYPASSRLS y ese filtro es la única barrera. Una sala o
@@ -39,7 +42,8 @@ import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
-import { requireCapability } from "@/lib/authz";
+import { assertModule, requireCapability } from "@/lib/authz";
+import { roomsEnabled } from "@/lib/tenant-modules";
 import { getActor } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -116,6 +120,7 @@ export async function listRooms(query: RoomListQueryInput = {}): Promise<RoomRow
     ? (await requireCapability("schedule.configure", WRITE_MSG)).actor
     : await getActor();
   if (!q) return [];
+  if (!roomsEnabled(actor.entitlements)) return [];
   const today = todayDb(new Date());
   const rows = await runWithRls(actor.tenantId, (tx) =>
     tx.room.findMany({
@@ -156,6 +161,8 @@ export async function listRooms(query: RoomListQueryInput = {}): Promise<RoomRow
  */
 export async function listRoomOptions(): Promise<RoomOption[]> {
   const actor = await getActor();
+  // PL-2f: sin el módulo, la agenda, `/sala` y los avisos arrancan sin catálogo = sin «Por sala» ni filtro de sala.
+  if (!roomsEnabled(actor.entitlements)) return [];
   return runWithRls(actor.tenantId, (tx) =>
     tx.room.findMany({
       where: { tenantId: actor.tenantId, active: true, location: { tenantId: actor.tenantId, active: true } },
@@ -176,6 +183,7 @@ export async function createRoom(...args: Parameters<typeof createRoomImpl>): Re
 
 async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: string }>> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  assertModule(actor, "salas");
   const parsed = RoomCreate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -235,6 +243,7 @@ export async function updateRoom(...args: Parameters<typeof updateRoomImpl>): Re
 
 async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  assertModule(actor, "salas");
   const parsed = RoomUpdate.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -278,6 +287,7 @@ export async function archiveRoom(...args: Parameters<typeof archiveRoomImpl>): 
 
 async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  assertModule(actor, "salas");
   const parsed = RoomArchive.safeParse(raw);
   if (!parsed.success) return { ok: false, error: NOT_FOUND };
   const id = parsed.data.id;
@@ -371,6 +381,7 @@ export async function restoreRoom(...args: Parameters<typeof restoreRoomImpl>): 
 
 async function restoreRoomImpl(raw: RoomArchiveInput): Promise<ActionResult> {
   const { actor } = await requireCapability("schedule.configure", WRITE_MSG);
+  assertModule(actor, "salas");
   const parsed = RoomArchive.safeParse(raw);
   if (!parsed.success) return { ok: false, error: NOT_FOUND };
   const id = parsed.data.id;

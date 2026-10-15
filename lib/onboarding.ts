@@ -34,7 +34,7 @@ import { signupAssistedMessage } from "@/lib/onboarding-logic";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import { getAccessSnapshot, getActor } from "@/lib/session";
 // PL-A (plan §20.5.9): los datos de onboarding dejaron de auditarse (ruido); queda el link de invitación (acceso).
 import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -52,6 +52,18 @@ import { OnboardingClinicInput, type ActionResult, type OnboardingClinicInputTyp
 
 /** Copy compartido de BO1-A para un usuario deshabilitado (mismo texto que /cuenta-desactivada). */
 const USER_DISABLED_ERROR = "Tu cuenta está desactivada. Si creés que es un error, escribinos a soporte.";
+const TWO_FACTOR_PENDING_ERROR = "Primero terminá de verificar tu acceso.";
+
+/**
+ * PL-Z (a2#6): ¿la sesión tiene la 2FA del usuario pendiente? Estas dos actions no pasan por `getActor` (la persona
+ * todavía no tiene consultorio), que es donde se corta la 2FA en el resto de la app: sin esto, con solo la contraseña
+ * se podía crear un consultorio o abrir una invitación salteando el segundo paso del dueño de la cuenta. Misma foto
+ * del request que la sesión (cacheada: cero queries extra si ya se leyó).
+ */
+async function twoFactorPending(): Promise<boolean> {
+  const s = await getAccessSnapshot();
+  return s?.twoFactor?.state === "required";
+}
 
 /**
  * BO1-A: `UserProfile.disabledAt` (M7) corta también el alta y la apertura de invitaciones. Sin esto, un usuario
@@ -84,6 +96,7 @@ export async function saveOnboardingClinic(
     return { ok: false, error: "Confirmá tu email antes de crear el consultorio. Revisá tu bandeja de entrada." };
   }
   if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
+  if (await twoFactorPending()) return { ok: false, error: TWO_FACTOR_PENDING_ERROR };
 
   const { ownerClinical: rawOwnerClinical, ...clinicRaw } = raw ?? ({} as typeof raw);
   const parsed = OnboardingClinicInput.safeParse(clinicRaw);
@@ -346,6 +359,7 @@ export async function openPendingInvitation(invitationId: string): Promise<Actio
   if (!user) return { ok: false, error: "Tu sesión expiró. Iniciá sesión de nuevo." };
   if (!user.emailVerified) return { ok: false, error: "Confirmá tu email primero." };
   if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
+  if (await twoFactorPending()) return { ok: false, error: TWO_FACTOR_PENDING_ERROR };
   if (typeof invitationId !== "string" || !invitationId || invitationId.length > 64) {
     return { ok: false, error: "Invitación inválida." };
   }

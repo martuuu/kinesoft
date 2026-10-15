@@ -19,6 +19,8 @@ import {
   platformResendInvitation,
   platformRevokeInvitation,
   platformSendMemberPasswordReset,
+  platformSetMemberClinical,
+  platformSetMemberGrants,
   platformSuspendMember,
   platformTransferOwnership,
 } from "@/lib/platform-team";
@@ -40,6 +42,8 @@ import {
   invitationStatusLabel,
   memberActions,
   memberDisplayName,
+  platformMemberRoleLabel,
+  publicBookingLabel,
   seatsSummary,
   type ActionState,
 } from "./team-logic";
@@ -143,6 +147,18 @@ const ROW_STYLE: React.CSSProperties = {
   alignItems: "center",
   borderBottom: "1px solid rgba(15,30,51,0.04)",
 };
+
+/** PL-3b: checkboxes de «Atiende» y permisos (nativos: teclado y lector sin trabajo extra; 32 px de alto táctil). */
+const PLATFORM_CHECK: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 12.5,
+  color: "var(--navy-900)",
+  minHeight: 32,
+  cursor: "pointer",
+};
+const CHECK_INPUT: React.CSSProperties = { width: 18, height: 18, accentColor: "var(--sky-700)" };
 
 const LINK_BTN: React.CSSProperties = {
   background: "transparent",
@@ -312,6 +328,42 @@ export function MemberRow({
     );
   };
 
+  const attends = member.clinical;
+  const setAttends = async () => {
+    const next = !attends;
+    const ok = await confirm({
+      title: next ? `¿${who} va a atender pacientes?` : `¿${who} deja de atender pacientes?`,
+      message: next
+        ? "Tiene agenda propia, ve historias clínicas y puede aparecer en el turnero. Ocupa un lugar de profesional del plan; si no tenía agenda, se crea con el horario del consultorio."
+        : "Deja de tener agenda y de ver historias clínicas, y sale del turnero. Ocupa un lugar no clínico. Si tiene turnos futuros, pacientes asignados o planes activos, primero hay que reasignarlos.",
+      confirmLabel: next ? "Sí, atiende" : "Deja de atender",
+      tone: next ? undefined : "danger",
+    });
+    if (!ok) return;
+    run(() => platformSetMemberClinical({ ...ref, clinical: next }), () => toast.success(next ? `${who} ahora atiende.` : `${who} ya no atiende.`));
+  };
+
+  const setGrant = async (key: "grantSettings" | "grantBilling", value: boolean) => {
+    const what = key === "grantSettings" ? "cambiar la Configuración del consultorio" : "ver y cambiar el plan y los pagos";
+    const ok = await confirm({
+      title: value ? `¿Darle permiso a ${who}?` : `¿Sacarle el permiso a ${who}?`,
+      message: value ? `Va a poder ${what}.` : `Deja de poder ${what}.`,
+      confirmLabel: value ? "Dar permiso" : "Sacar permiso",
+      tone: value ? undefined : "danger",
+    });
+    if (!ok) return;
+    run(
+      () =>
+        platformSetMemberGrants({
+          ...ref,
+          grantSettings: key === "grantSettings" ? value : member.grantSettings,
+          grantBilling: key === "grantBilling" ? value : member.grantBilling,
+        }),
+      () => toast.success("Permisos actualizados.")
+    );
+  };
+  const turnero = publicBookingLabel(member);
+
   const transfer = () =>
     run(
       () => platformTransferOwnership(ref),
@@ -324,14 +376,15 @@ export function MemberRow({
       <div style={{ flex: "1 1 200px", minWidth: 0, opacity: suspended ? 0.65 : 1 }}>
         <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span style={{ overflowWrap: "anywhere" }}>{who}</span>
-          {isOwner && <Tag tone="lime">Titular</Tag>}
+          {isOwner && <Tag tone="lime">{platformMemberRoleLabel(member, vertical)}</Tag>}
           {suspended ? <Tag tone="soft">Suspendido</Tag> : null}
           {!member.joinedAt && <Tag tone="soft">Sin aceptar</Tag>}
         </div>
         <div style={{ fontSize: 12, color: "var(--navy-500)", overflowWrap: "anywhere" }}>{member.email}</div>
         <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 2 }}>
           {suspended && member.disabledAt ? `Sin acceso desde el ${formatARDate(member.disabledAt)} · ` : "Activo · "}
-          {member.hasAgenda ? "Tiene agenda" : isClinicalRole(member.role) ? "Sin agenda (revisar en Salud)" : "Sin agenda"}
+          {member.hasAgenda ? "Tiene agenda" : isClinicalRole(member.role) && member.clinical ? "Sin agenda (revisar en Salud)" : "Sin agenda"}
+          {turnero ? ` · ${turnero}` : ""}
         </div>
       </div>
 
@@ -368,6 +421,35 @@ export function MemberRow({
         <RowAction state={acts.suspend} label="Suspender" onClick={suspend} danger busy={busy} />
         <RowAction state={acts.remove} label="Quitar del equipo" onClick={remove} danger busy={busy} />
       </div>
+      {isOwner && (
+        <label data-attends style={PLATFORM_CHECK}>
+          <input type="checkbox" checked={attends} disabled={busy} onChange={setAttends} style={CHECK_INPUT} />
+          Atiende pacientes
+        </label>
+      )}
+      {!isOwner && (
+        <fieldset data-grants disabled={busy} style={{ border: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: "4px 18px", flex: "1 1 100%" }}>
+          <legend style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-500)", padding: 0 }}>Permisos</legend>
+          <label style={PLATFORM_CHECK}>
+            <input
+              type="checkbox"
+              checked={member.grantSettings}
+              onChange={(e) => setGrant("grantSettings", e.target.checked)}
+              style={CHECK_INPUT}
+            />
+            Puede cambiar la Configuración
+          </label>
+          <label style={PLATFORM_CHECK}>
+            <input
+              type="checkbox"
+              checked={member.grantBilling}
+              onChange={(e) => setGrant("grantBilling", e.target.checked)}
+              style={CHECK_INPUT}
+            />
+            Puede ver y cambiar el plan y los pagos
+          </label>
+        </fieldset>
+      )}
       {isOwner && (
         <div style={{ flex: "1 1 100%", fontSize: 11.5, color: "var(--navy-500)" }}>
           Para cambiarle el rol, suspenderlo o quitarlo, primero transferí la titularidad a otra persona del equipo.

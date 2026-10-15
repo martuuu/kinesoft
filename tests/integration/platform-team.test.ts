@@ -9,7 +9,7 @@
  * Arrancó como `it.fails("[BO2-B] …")` con `lib/platform-team.ts` inexistente (el superadmin no tenía cómo tocar el
  * equipo de otro consultorio sin ir a la base); quedó dado vuelta en los casos de abajo.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import {
   platformChangeMemberRole,
@@ -39,6 +39,14 @@ import {
   uniqueSuffix,
   type EphemeralTenant,
 } from "@/tests/helpers/tenant-factory";
+
+// PL-Z (a2#4): con PLATFORM_MFA_ENFORCEMENT != enforce, las acciones `high` de Plataforma piden el step-up de la 2FA
+// por usuario. Este archivo prueba otra cosa: el step-up se da por hecho (el corte real se prueba en
+// tests/integration/two-factor.test.ts, «Plataforma»). Se reemplaza la dependencia, no la action bajo test.
+vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/two-factor-step-up")>()),
+  requireStepUp: async () => {},
+}));
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -179,7 +187,21 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     expect(team!.members.length).toBeGreaterThan(0);
     for (const m of team!.members) {
       expect(Object.keys(m).sort()).toEqual(
-        ["disabledAt", "email", "fullName", "hasAgenda", "joinedAt", "membershipId", "role", "userId"].sort()
+        // PL-3b: + «¿Atiende?», permisos delegados y turnero por profesional.
+        [
+          "clinical",
+          "disabledAt",
+          "email",
+          "fullName",
+          "grantBilling",
+          "grantSettings",
+          "hasAgenda",
+          "joinedAt",
+          "membershipId",
+          "publicBookingEnabled",
+          "role",
+          "userId",
+        ].sort()
       );
     }
     for (const i of team!.invitations) {
@@ -192,7 +214,8 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     expect(Object.keys(team!.seats.total).sort()).toEqual(["full", "limit", "remaining", "used"]);
     expect(team!.seats.total.limit).toBe(10);
     const owner = team!.members.find((m) => m.userId === T.userId)!;
-    expect(owner).toMatchObject({ role: "OWNER", hasAgenda: true, disabledAt: null });
+    expect(owner).toMatchObject({ role: "OWNER", hasAgenda: true, disabledAt: null, clinical: true });
+    expect(typeof owner.publicBookingEnabled).toBe("boolean");
     const json = JSON.stringify(team);
     for (const v of Object.values(PHI)) expect(json).not.toContain(v);
     // Ningún token ni URL de invitación.

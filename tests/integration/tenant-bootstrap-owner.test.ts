@@ -83,4 +83,12 @@ describe.skipIf(!RUN)("[PL-1c] bootstrap con Titular que no atiende", () => {
       r.serviceIds.length
     );
   });
+
+  it("[PL-Z] A1: el Titular que atiende nace con SU turnero prendido; el del consultorio, apagado", async () => {
+    const { r } = await boot();
+    expect(await db.practitioner.findUniqueOrThrow({ where: { id: r.practitionerId! } })).toMatchObject({
+      publicBookingEnabled: true,
+    });
+    expect(await db.tenant.findUniqueOrThrow({ where: { id: r.tenantId } })).toMatchObject({ publicBookingEnabled: false });
+  });
 });

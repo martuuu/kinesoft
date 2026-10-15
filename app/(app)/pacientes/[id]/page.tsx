@@ -130,10 +130,13 @@ export default async function PatientPage({
     getMemberAccess(actor),
   ]);
   const role = membership?.role ?? null;
-  const canReassign = role === "OWNER" || role === "ADMIN";
   // Por MIEMBRO (PL-1, H-PL1): un Titular sin agenda no recibe `clinical.read`. Plantillas: el shell usa el
   // módulo `plantillas` (enmienda EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
   const capabilities = Array.from(await memberCapabilitiesForActor(actor));
+  // PL-Z a3#9: reasignar = `tenant.admin` del miembro, el mismo criterio que `assignPatientToPractitioner`. Por rol,
+  // la UI le ofrecía el selector a un ADMIN sin «Configuración» (la action lo rechaza) y se lo escondía a un
+  // Profesional que la tiene.
+  const canReassign = capabilities.includes("tenant.admin");
   const { tab: initialTab, intent: planIntent } = parseProfilePlanParams(searchParams);
 
   // Strip the `access` discriminator field before passing to the legacy

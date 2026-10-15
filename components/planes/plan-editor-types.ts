@@ -77,7 +77,7 @@ export type PlanPermissions = {
   schedule: boolean;
   /** Renovar la autorización de la OS. */
   authorize: boolean;
-  /** Restaurar un plan archivado (OWNER/ADMIN, `canRestoreProgram`). */
+  /** Restaurar un plan archivado (`tenant.admin` del miembro, `canRestoreProgram`). */
   restore: boolean;
   /** Plantillas (módulo `plantillas` / `gatingForActor().canBuildTemplates`). */
   templates: boolean;
@@ -101,11 +101,12 @@ export const NO_PLAN_PERMISSIONS: PlanPermissions = Object.freeze({
 export function planUiPermissions(input: {
   caps: ReadonlySet<Capability>;
   access: PatientAccessLevel;
-  role: Role | null | undefined;
+  /** Sin uso desde PL-Z (restaurar sale de `caps`, por miembro); queda opcional para no tocar a los callers. */
+  role?: Role | null | undefined;
   plansModule: boolean;
   templatesModule: boolean;
 }): PlanPermissions {
-  const { caps, access, role, plansModule, templatesModule } = input;
+  const { caps, access, plansModule, templatesModule } = input;
   if (!plansModule || access === "none") return NO_PLAN_PERMISSIONS;
   const operable = access === "full" || caps.has("agenda.operateAll");
   const manage = caps.has("plans.manage") && access === "full" && caps.has("clinical.read");
@@ -113,7 +114,7 @@ export function planUiPermissions(input: {
     manage,
     schedule: caps.has("plans.schedule") && operable,
     authorize: caps.has("plans.authorize") && operable,
-    restore: manage && canRestoreProgram(role),
+    restore: manage && canRestoreProgram(caps),
     templates: manage && templatesModule,
   };
 }
