@@ -12,6 +12,8 @@
 | Presión de pool | `npm run test:perf -- tests/perf/pool-pressure.perf.test.ts` | Docker local |
 | Agenda multi-profesional (B4.6) | `npm run test:perf -- tests/perf/agenda-multi.perf.test.ts` | Docker local |
 | Bundle por ruta | `npx next build && npm run perf:bundle` (`-- --write-baseline` para regrabar) | local y CI (paso "Presupuesto de bundle", solo reporte) |
+| TTFB por página contra `next start` (PF-0) | `npx dotenv -e .env.local -- node scripts/perf/ttfb.mjs [--no-build] [--auth-latency=ms] [--db-rtt=ms]` | Docker local; se niega si `DATABASE_URL` no es localhost. Ver §PF-0 |
+| Líneas por request (PF-0) | `PERF_TIMING=1` en el server (`lib/server-timing.ts`) → `[perf] {route, spanMs, authMs, actorMs, txCount, stmtCount, dbMs, roundTrips}` | solo diagnóstico; apagado = cero costo |
 
 - **Harness** (`tests/helpers/query-counter.ts`): instrumenta los clientes `prisma` y `prismaService` de `lib/db` con
   eventos `query` y llama a los **loaders reales** con los mismos argumentos que la página. Cuenta statements,
@@ -262,6 +264,122 @@ se toca Supabase.
 **Bundle (gz, first-load):** `/dashboard` 184,6 → **189,1** (+4,5 = provider realtime + prefs de avisos + toast extendido);
 `/agenda` 204,5 → **212,3**; `/configuracion` 216,2 → 220,8; `/sala` 198,7 (nueva). El motor de avisos, sus controles y el
 hub del cliente van por `import()` dinámico; `@supabase/realtime-js` solo en un chunk async. Decisión en AUDIT Ronda 20.
+
+## PF-0 · lentitud general (15-oct-2026, H-SLOW)
+
+Martin nota lentitud en **todas** las páginas. PF-0a mide el costo por request de la app REAL (`next build` + `next
+start`), no de los loaders sueltos como el harness de arriba. Es la tabla «antes» de PF-0b/c/d.
+
+### Cómo se midió
+
+- `lib/server-timing.ts` (`PERF_TIMING=1`): acumulador por request colgado del `requestAsyncStorage` de Next (envuelve
+  layout, página y server actions). Marcas: `auth` (`getVerifiedSessionUser`, la llamada real a GoTrue), `access`
+  (`loadAccessMemberships`), `actor` (`resolveActor` entero), cada `runWithRls` (cantidad y duración) y cada op de
+  Prisma de los dos canales (`$use`). El middleware emite `Server-Timing: mw-session;dur=…` (su refresh de sesión).
+  Apagado no se instala nada (`$use` incluido) y `timeAsync` devuelve la misma promesa.
+- `scripts/perf/ttfb.mjs`: build + start en :3100 con un **GoTrue falso** (127.0.0.1:3199, `GET /auth/v1/user`) y una
+  cookie `sb-127-auth-token` de verdad. El actor demo (`KINESOFT_ALLOW_DEMO_ACTOR=1`) **no sirve** con `next start`:
+  `lib/session.ts` lo habilita solo con `NODE_ENV !== "production"`. Así el camino es el de prod: middleware →
+  `getUser()` por HTTP → membresías → actor → layout → página. Las 7 claves del `.env` (que puede apuntar a prod) se
+  pisan en el proceso hijo.
+- **Latencia de red simulada**: `--auth-latency` demora el GoTrue falso; `--db-rtt` mete un proxy TCP (127.0.0.1:5499)
+  que demora cada paquete RTT/2 por sentido. Con eso el wall-clock incluye el **camino crítico** real: las tx en
+  paralelo se solapan y las en serie se suman.
+- Tenant `movare` del Docker (8 pacientes, 23 turnos), rol OWNER, mediana de 5 corridas (1 de calentamiento
+  descartada), requests en serie. **Volumen chico a propósito**: mide el costo fijo por request (auth, actor, layout,
+  idas y vueltas), no el de volumen (eso está en las secciones de arriba).
+- Se midió sobre un snapshot `git archive HEAD` (d2092e6) + la instrumentación, en el scratchpad, por el bloqueante
+  de abajo.
+
+> **Bloqueante encontrado (clase A, develop sin pushear):** con `next build` **todas** las páginas de `(app)` dan 500
+> (`TypeError: b is not a function`). `app/(app)/layout.tsx:131` llama a `shellTenantChoice`, que vive en
+> `components/layout/support-banner.tsx` (`"use client"`): en un build de producción un import de un módulo cliente
+> desde un server component es una *client reference*, no la función. Viene de BO3 (`280c96f`). Para medir se aplicó el arreglo solo en el snapshot (la función a un módulo sin `"use client"`); el
+> arreglo real es un handoff (ver el reporte de PF-0a).
+
+### Tabla «antes» (ms, mediana)
+
+Escenarios: **local** (sin latencia), **misma región** (auth 30 ms, DB RTT 3 ms ≈ Vercel `gru1` ↔ Supabase
+`sa-east-1` por Supavisor), **10 ms** (auth 40, DB 10) y **cruzado** (auth 150, DB 120 ≈ Supabase en `us-east-1`).
+`txs`/`ops`/`RT` son por request: ops = operaciones de Prisma (un `include` puede ser más de una sentencia) y
+RT = ops + 3 por tx (BEGIN, `set_config`, COMMIT). **D** = idas y vueltas a la DB **en serie** (camino crítico),
+estimado como `(total₁₂₀ − total₁₀ − Δauth) / ΔRTT`.
+
+| Ruta | TTFB / total local | TTFB / total misma región | total 10 ms | TTFB / total cruzado | auth · access · actor (misma región) | txs | ops | RT | **D** |
+|---|---|---|---|---|---|---|---|---|---|
+| `/dashboard` | 48 / 60 | 113 / 171 | 481 | 1.741 / **3.428** | 37 · 18 · 55 | 5 | 18 | 33 | 26 |
+| `/agenda` | 53 / 78 | 111 / 182 | 531 | 1.617 / **5.349** | 38 · 17 · 54 | 9 | 35 | 62 | 43 |
+| `/pacientes` | 45 / 56 | 103 / 143 | 351 | 1.599 / **2.726** | 37 · 18 · 54 | 4 | 13 | 25 | 21 |
+| `/pacientes/[id]` | 45 / 78 | 90 / 226 | 762 | 1.600 / **6.088** | 35 · 16 · 50 | 13 | 38 | 77 | 47 |
+| `/configuracion` | 37 / 39 | 151 / 153 | 463 | 3.264 / **3.267** | 36 · 17 · 51 | 12 | 35 | 71 | 25 |
+| `/sala` | 38 / 43 | 115 / 134 | 287 | 1.720 / **2.111** | 37 · 18 · 55 | 4 | 14 | 26 | 16 |
+| `/seguimiento` | 73 / 76 | 180 / 183 | 418 | 2.794 / **2.798** | 34 · 18 · 53 | 2 | 19 | 25 | 21 |
+| `router.refresh()` de `/agenda` (GET `RSC: 1`) | 13 / 53 | 12 / 203 | 491 | 16 / **3.794** | 34 · 15 · 49 | 9 | 35 | 62 | 29 |
+| `router.refresh()` de `/pacientes` | 9 / 33 | 11 / 139 | 353 | 17 / **2.615** | 34 · 20 · 56 | 4 | 13 | 25 | 20 |
+| action `listAgendaBookings` (semana) | 37 / 39 | 104 / 105 | 277 | 1.980 / **1.981** | 34 · 17 · 51 | 2 | 7 | 13 | 15 |
+
+Lo que no cambia entre escenarios: middleware 1-3 ms (`getSession()` sin red con el token vigente); 1 sola llamada a
+GoTrue y 1 solo armado del actor por request (la memo de `cache()` funciona en las páginas; la action medida llama a
+`getActor()` una sola vez, así que no dice nada de `react-cache-no-deduplica-en-server-actions`); render +
+framework (total − span del servidor, local) 17-33 ms. HTML: 52-80 kB (`/seguimiento` 160 kB). Dashboard en 5 tx (no
+15) porque los counts salen de `unstable_cache` después del calentamiento. Crudo: `ttfb-a{auth}-d{rtt}.json` del
+scratchpad de la sesión (no versionado; se regenera con el script).
+
+### Diagnóstico: causas en orden
+
+Modelo que ajusta a las cuatro corridas: **total ≈ local + RTT_auth + D × RTT_db** (D entre 15 y 47).
+
+1. **Región de Supabase (sin confirmar) — decide todo.** Vercel está en `gru1` (`vercel.json:3`). Si el proyecto de
+   Supabase está en `sa-east-1`, el servidor tarda 100-230 ms por página; si está en `us-east-1` (RTT ~120 ms desde São
+   Paulo), **2,1-6,1 s por página y ~2 s por action**: es exactamente «lento en todas las páginas». En local no se
+   puede medir la red real. **Martin confirma** en Supabase → Settings → General → Region (o mirando el host del pooler
+   en la `DATABASE_URL` de Vercel: `aws-0-<región>.pooler.supabase.com`). Si no es `sa-east-1`, mover el proyecto es
+   la causa principal y se decide aparte (es una migración de proyecto, no de schema).
+2. **Costo fijo por request, antes de la página: actor + layout ≈ 1 HTTP a GoTrue + ~11 idas y vueltas en serie.**
+   Es el TTFB de las páginas con `loading.tsx` en el escenario cruzado (~1,6 s = auth 160 + membresías 512 + layout
+   ~950). Desglose: `getUser()` 1 HTTP (misma región ≈ 35 ms, **~33 % del TTFB**); `loadAccessMemberships` ~4-5 RT en
+   serie (un `select` anidado de Prisma = una query por relación); el layout de `(app)` encadena
+   `getTenantChoiceState` → tx de tenant+rol (4 RT) → `getUserPreferences` → `realtimeBootstrap`, todo con `await` en
+   serie. **Lo paga cada página y cada server action** (la action de lectura: actor = 51 de 105 ms en misma región).
+3. **Una tx interactiva por lectura (`runwithrls-interactive-tx-per-read`).** Cada tx suma 3 RT de marco: son
+   27 de 62 RT en la agenda, 39 de 77 en el perfil y 36 de 71 en configuración (**~45-50 % de las idas y vueltas**
+   de las tres páginas pesadas). Sobre el camino crítico (D) se estima ~35-45 %. Misma región: ~30-60 ms por página
+   pesada; cruzado: 1,5-2,5 s.
+4. **Doble render (`revalidatePath` + `router.refresh()`).** El refresh es un render ENTERO de la página: +203 ms en
+   la agenda y +139 ms en pacientes por cada mutación en misma región (3,8 s y 2,6 s cruzado), encima de la action
+   que ya devolvió el árbol revalidado.
+5. **Navegación percibida.** `/configuracion` y `/seguimiento` (y planes, biblioteca, plataforma…) no tienen
+   `loading.tsx`: TTFB = total, el click no responde hasta que termina todo. Con `loading.tsx` (dashboard, agenda,
+   pacientes, sala) el esqueleto sale apenas termina el layout. La transición de `(app)/template.tsx` (framer) se suma
+   después.
+6. **Render en el servidor y JS: no es la causa.** 17-33 ms de render; middleware 1-3 ms. El JS inicial
+   (`next build`: agenda 198 kB, configuración 214, perfil 199, dashboard 181) pesa en la hidratación de equipos
+   lentos; es PF1/VX-F, no PF-0.
+7. **No medido, a revisar en Vercel:** arranques en frío (con un solo cliente casi todos los requests pueden caer en
+   una función fría: Prisma + conexión nueva = varios RTT más) y si la `DATABASE_URL` usa `pgbouncer=true` (sin
+   statements preparados cacheados cada query puede costar 2 RT). Ver «Init Duration» en los logs de Functions.
+
+### Recomendación para PF-0b/c/d y PF2
+
+- **PF-0b (sesión local + costo fijo), primero.** (a) `getVerifiedSessionUser` verifica el JWT local: `getClaims()` si
+  el proyecto usa claves asimétricas (JWKS cacheado); si sigue con el secreto HS256, verificación HMAC con
+  `SUPABASE_JWT_SECRET` (ya existe en `lib/env.ts`). −1 HTTP por request y por action (misma región ≈ −35 ms; cruzado
+  −150 ms). Revocación: el token vale hasta su `exp` (≤ 1 h); lo cubren `disabledAt` (se sigue leyendo en cada
+  request) y `getUser()` en los puntos sensibles (contraseña, 2FA, cobros, Plataforma). (b) `loadAccessMemberships` en
+  **una** query (raw SQL con joins, o `relationLoadStrategy: "join"` de Prisma): −3/−4 RT por request. (c) **Sumar al
+  dueño de PF-0b el layout de `(app)`**: `getTenantChoiceState`, la tx de tenant+rol, `getUserPreferences` y
+  `realtimeBootstrap` en `Promise.all` (dependen solo del actor): −4/−6 RT por página. Con las tres, el costo fijo
+  pasa de ~1 HTTP + 11 RT a ~5 RT (misma región: TTFB ~110 → ~50 ms; cruzado: 1,6 → ~0,6 s).
+- **PF-0c (percibida):** `loading.tsx` en configuración, seguimiento, planes, biblioteca, diagnóstico, reportes y
+  plataforma (y uno propio en `/pacientes/[id]` con forma de perfil); `template.tsx` a CSS de 120 ms. No baja el total
+  pero el click responde en el TTFB del layout.
+- **PF-0d (doble render):** sacar `router.refresh()` después de actions con `revalidatePath` en agenda (crear, mover,
+  estado, cobro), pacientes y Recepción: ahorra un render entero por mutación (agenda ~200 ms misma región). Volver a
+  medir con `ttfb.mjs` (filas `router.refresh()`).
+- **PF2 (una tx por loader): adelantarlo a después de PL — sí, acotado a agenda, perfil y configuración.** El marco de
+  tx es la categoría más grande de idas y vueltas en esas tres páginas (~45-50 %) y PL suma loaders. En dashboard,
+  pacientes, sala y seguimiento manda el costo fijo (punto 2), no las tx: ahí alcanza con PF-0b. Si la región resulta
+  ser `us-east-1` y no se mueve el proyecto, PF2 pasa a urgente (−1,5-2,5 s por página pesada).
 
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 

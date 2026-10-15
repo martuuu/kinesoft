@@ -95,8 +95,9 @@ describe("[BO3-C] rótulos", () => {
     expect(emailStatusLabel("skipped").tone).toBe("warn");
     expect(emailStatusLabel(null).text).toBe("Sin registro de mail");
   });
-  it("nombre a mostrar cae al email", () => {
-    expect(memberDisplayName({ fullName: "  ", email: "a@x.test" })).toBe("a@x.test");
+  it("[DIR-0] nombre a mostrar: sin nombre es «Usuario sin nombre», nunca el email", () => {
+    // DIR-0: sin nombre nunca cae al email.
+    expect(memberDisplayName({ fullName: "  ", email: "a@x.test" })).toBe("Usuario sin nombre");
     expect(memberDisplayName({ fullName: "Ana", email: "a@x.test" })).toBe("Ana");
   });
   it("link copiable solo si el mail no salió y hay URL", () => {

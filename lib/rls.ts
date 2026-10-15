@@ -13,10 +13,32 @@
  *       return tx.patient.findMany({});
  *     });
  */
-import { prisma } from "@/lib/db";
+import { prisma, prismaService } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
 import { getRequestContext } from "@/lib/request-context";
 import { ReadOnlyModeError, SUPPORT_READ_ONLY_MESSAGE, isReadOnlyViolation } from "@/lib/tenant-access";
+import { beginTx, perfTimingEnabled, recordStatement } from "@/lib/server-timing";
+
+/**
+ * PF-0a (H-SLOW): con `PERF_TIMING=1` se cuenta y se cronometra cada op de Prisma de los dos canales (también las de
+ * adentro de las tx interactivas, que el middleware de Prisma ve) y se atribuye al request en curso
+ * (`lib/server-timing.ts`). `$use` y no el evento `query`: el evento sale del engine sin el contexto async del
+ * request, así que no se puede saber de qué request es. Apagado no se instala nada: cero costo y mismo cliente.
+ */
+const perfClients = globalThis as unknown as { __kinePerfUse?: boolean };
+if (perfTimingEnabled() && !perfClients.__kinePerfUse) {
+  perfClients.__kinePerfUse = true;
+  for (const c of [prisma, prismaService]) {
+    c.$use(async (params, next) => {
+      const t0 = performance.now();
+      try {
+        return await next(params);
+      } finally {
+        recordStatement(performance.now() - t0);
+      }
+    });
+  }
+}
 
 /**
  * A Prisma client usable for tenant-scoped work: either the base client
@@ -50,6 +72,8 @@ export async function runWithRls<T>(
   // `isolationLevel` u otra opción por un objeto más ancho.
   const txOpts = opts ? { timeout: opts.timeout, maxWait: opts.maxWait } : undefined;
   const readOnly = isReadOnlyFor(tenantId);
+  // PF-0a: null con PERF_TIMING apagado (sin tomar tiempos).
+  const endTx = beginTx();
   try {
     return await prisma.$transaction(async (tx) => {
       // `set_config('app.current_tenant_id', $1, true)` — `true` makes it
@@ -80,6 +104,8 @@ export async function runWithRls<T>(
       throw new ReadOnlyModeError(getRequestContext()?.supportSessionId ? SUPPORT_READ_ONLY_MESSAGE : undefined);
     }
     throw err;
+  } finally {
+    endTx?.();
   }
 }
 

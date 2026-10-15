@@ -1,3 +1,4 @@
+import { displayMemberName } from "@/lib/display-name";
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import type { DbClient } from "@/lib/rls";
@@ -247,7 +248,7 @@ export function authorizationOf(p: RawPlan, linked: boolean): PlanAuthorizationD
 
 function practitionerName(p: RawPlan): string | null {
   const u = p.practitioner?.user;
-  return u ? u.fullName ?? u.email : null;
+  return u ? displayMemberName(u.fullName) : null; // DIR-0: nunca el email
 }
 
 /**

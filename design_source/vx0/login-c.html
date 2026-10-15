@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar · KineSoft (C)</title>
+<link rel="stylesheet" href="shared.css">
+<script src="shared.js"></script>
+<style>
+  /* C · panel de producto. Dos mitades a sangre, pero cada una centra su
+     contenido con un ancho máximo: a 1728 el panel muestra la UI a 600 px
+     y el form a 420, sin huecos raros. < 1024 el panel se va. */
+  body { background: #fff; }
+  .page { min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); }
+  .panel {
+    position: relative; overflow: hidden; color: #fff;
+    background:
+      radial-gradient(70% 55% at 85% 10%, rgba(94, 146, 204, 0.55), rgba(94, 146, 204, 0) 70%),
+      radial-gradient(60% 50% at 0% 100%, rgba(200, 245, 100, 0.16), rgba(200, 245, 100, 0) 70%),
+      linear-gradient(160deg, #1b2d4a 0%, #0f1e33 70%);
+    display: grid; grid-template-rows: auto 1fr auto;
+    padding: 32px clamp(32px, 4vw, 64px);
+  }
+  .panel-body { display: grid; align-content: center; justify-items: center; gap: 40px; padding-block: 40px; }
+  .panel-copy { width: 100%; max-width: 600px; display: grid; gap: 12px; }
+  .panel-title { font-size: clamp(30px, 1.6vw + 14px, 42px); line-height: 1.08; font-weight: 650; letter-spacing: -0.03em; text-wrap: balance; }
+  .panel-sub { color: var(--navy-100); font-size: 17px; line-height: 1.55; max-width: 520px; }
+  .stage { position: relative; width: 100%; max-width: 600px; }
+  .stage .agenda-mock { --ag-row: 50px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35); }
+  .float {
+    position: absolute; right: -24px; bottom: -28px; width: 230px;
+    background: #fff; color: var(--navy-900); border-radius: 14px; padding: 12px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3); display: grid; gap: 8px; font-size: 12px;
+  }
+  .float-h { display: flex; justify-content: space-between; align-items: center; font-weight: 650; font-size: 13px; }
+  .float-row { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 8px; background: var(--bg-panel); }
+  .float-row .mock-bar { flex: 1; }
+  .pill { font-size: 10px; font-weight: 650; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .pill.insala { background: var(--rc-insala-bg); color: var(--rc-insala-fg); }
+  .pill.called { background: var(--rc-called-bg); color: var(--rc-called-fg); }
+  .panel-foot { font-size: 13px; color: var(--navy-200); }
+
+  .side { display: flex; flex-direction: column; min-height: 100dvh; padding: 32px clamp(24px, 4vw, 64px); }
+  .side-top { display: none; height: 48px; align-items: center; }
+  .side main { flex: 1; display: grid; place-items: center; padding-block: 32px; }
+  .form-w { width: 100%; max-width: 420px; }
+  .side-foot { text-align: center; font-size: 14px; color: var(--navy-500); }
+  .side-foot a { display: inline-flex; min-height: 44px; align-items: center; }
+
+  @media (max-width: 1279px) { .float { right: -8px; width: 210px; } }
+  @media (max-width: 1023px) {
+    .page { grid-template-columns: 1fr; }
+    .panel { display: none; }
+    .side { background: var(--bg-public); }
+    .side-top { display: flex; }
+    .form-w { max-width: 440px; }
+    .form-w .auth-card-c { background: #fff; border-radius: var(--r-xl); box-shadow: var(--shadow-card-lg); padding: clamp(24px, 4vw, 40px); }
+  }
+  @media (max-width: 767px) {
+    .side { padding: 16px; }
+    .side main { place-items: start center; padding-top: 16px; }
+    .form-w .auth-card-c { padding: 24px 20px; border-radius: var(--r-lg); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <aside class="panel" aria-label="KineSoft">
+    <div data-include="logo-light"></div>
+    <div class="panel-body">
+      <div class="panel-copy enter">
+        <p class="panel-title">Tu consultorio, ordenado de punta a punta.</p>
+        <p class="panel-sub"><span data-only="kine">Agenda, turnos online, historia clínica y cobros. Con herramientas propias para kinesiología.</span><span data-only="general">Agenda, turnos online, historia clínica y cobros, en un solo lugar.</span></p>
+      </div>
+      <div class="stage enter enter-d1">
+        <div data-include="agenda" data-cols="3" data-rows="5"></div>
+        <div class="float" aria-hidden="true">
+          <div class="float-h"><span>Sala de espera</span><span class="plan-chip" style="height:20px;font-size:10px">Clínica</span></div>
+          <div class="float-row"><span class="avatar" style="background:#3d7010">MR</span><span class="mock-bar w55"></span><span class="pill called">Llamado</span></div>
+          <div class="float-row"><span class="avatar">AL</span><span class="mock-bar w40"></span><span class="pill insala">En sala</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="panel-foot">Para kinesiología y para cualquier consultorio de salud.</p>
+  </aside>
+  <div class="side">
+    <div class="side-top"><div data-include="logo"></div></div>
+    <main id="main">
+      <div class="form-w enter enter-d1"><div class="auth-card-c"><div data-include="login-form"></div></div></div>
+    </main>
+    <footer class="side-foot">© 2026 KineSoft · <a class="link" href="landing-b.html">Conocé KineSoft</a></footer>
+  </div>
+</div>
+</body>
+</html>

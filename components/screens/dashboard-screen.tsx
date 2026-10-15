@@ -1,5 +1,6 @@
 "use client";
 
+import { USER_NO_NAME } from "@/lib/display-name";
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { motion, useReducedMotion } from "framer-motion";
@@ -97,7 +98,7 @@ export function DashboardScreen({
         {useSidebar && (
           <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
             <NotificationsBell />
-            <ProfileMenu name={data.greetingName} preferences={preferences} revenueScope={data.revenueScope} />
+            <ProfileMenu name={data.greetingName || USER_NO_NAME} preferences={preferences} revenueScope={data.revenueScope} />
           </div>
         )}
         <MiniCalendar initialBookingDays={initialBookingDays} />
@@ -126,7 +127,10 @@ function DashTopRow({ name, todayCount, kine }: { name: string; todayCount: numb
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
       <div>
-        <div style={{ fontSize: 13, color: "var(--navy-300)", fontWeight: 500 }}>Hola, {kine ? "Lic. " : ""}{name} 👋</div>
+        {/* DIR-0: sin nombre cargado el saludo va sin nombre (`greetingName` = ""), nunca con el email. */}
+        <div style={{ fontSize: 13, color: "var(--navy-300)", fontWeight: 500 }}>
+          {name ? `Hola, ${kine ? "Lic. " : ""}${name}` : "Hola"} 👋
+        </div>
         <h1 className="k-display" style={{ fontSize: 34, margin: "2px 0 0", lineHeight: 1.05 }}>
           Hoy tenés{" "}
           <span style={{ color: "var(--sky-700)" }}>

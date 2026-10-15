@@ -43,6 +43,7 @@ import { audit } from "@/lib/audit";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { publicSurfacesOpenFor } from "@/lib/public-booking-internal";
+import { publicPractitionerName } from "@/lib/display-name";
 import type { ActionResult } from "@/lib/validation";
 import type {
   PortalAuth,
@@ -103,7 +104,8 @@ export async function getPortalAuth(): Promise<PortalAuth> {
         take: 5,
         include: {
           service: { select: { name: true } },
-          practitioner: { include: { user: { select: { fullName: true, email: true } } } },
+          // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
+          practitioner: { include: { user: { select: { fullName: true } } } },
         },
       },
     },
@@ -136,7 +138,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
         scheduledFor: b.scheduledFor,
         durationMin: b.durationMin,
         serviceName: b.service.name,
-        practitionerName: b.practitioner.user.fullName ?? b.practitioner.user.email,
+        practitionerName: publicPractitionerName(b.practitioner.user.fullName),
       })),
     })),
   };

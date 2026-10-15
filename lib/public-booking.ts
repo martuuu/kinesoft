@@ -55,6 +55,7 @@ import {
 } from "@/lib/public-booking-internal";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
+import { publicPractitionerName } from "@/lib/display-name";
 import {
   FirstPublicSlotSchema,
   ListPublicSlotsSchema,
@@ -114,7 +115,8 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   const [practitioners, services, psRows, insurers, ppRows, locations, schedules] = await Promise.all([
     prisma.practitioner.findMany({
       where: publicPractitionerWhere(tenantId),
-      include: { user: { select: { fullName: true, email: true } } },
+      // DIR-0: sin `email`; el nombre público nunca cae al email (`publicPractitionerName`).
+      include: { user: { select: { fullName: true } } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     prisma.service.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
@@ -205,7 +207,7 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
         const locationIds = own.size > 0 ? locationOrder.filter((id) => own.has(id)) : primary ? [primary.id] : [];
         return {
           id: p.id,
-          name: p.user.fullName ?? p.user.email,
+          name: publicPractitionerName(p.user.fullName),
           specialty: p.specialty,
           licenseNumber: p.licenseNumber,
           yearsExp: p.yearsExp,
@@ -785,7 +787,7 @@ export async function getPublicBookingStatus(
       service: { select: { name: true, priceCents: true } },
       practitioner: {
         select: {
-          user: { select: { fullName: true, email: true } },
+          user: { select: { fullName: true } },
         },
       },
       patient: { select: { firstName: true, lastName: true } },
@@ -807,7 +809,8 @@ export async function getPublicBookingStatus(
     tenantSlug: b.tenant.slug,
     tenantName: b.tenant.name,
     serviceName: b.service.name,
-    practitionerName: b.practitioner.user.fullName ?? b.practitioner.user.email,
+    // DIR-0: página pública; sin nombre → «Profesional», nunca el email.
+    practitionerName: publicPractitionerName(b.practitioner.user.fullName),
     scheduledFor: b.scheduledFor.toISOString(),
     durationMin: b.durationMin,
     patientInitials,

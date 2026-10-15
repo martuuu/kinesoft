@@ -15,6 +15,7 @@ import "server-only";
  */
 import { cache } from "react";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { timeAsync } from "@/lib/server-timing";
 
 export type VerifiedSessionUser = {
   id: string;
@@ -48,10 +49,16 @@ async function readSessionUser(): Promise<VerifiedSessionUser | null> {
   }
 }
 
+/**
+ * PF-0a: la marca `auth` de `lib/server-timing.ts` (con `PERF_TIMING=1`; apagado es `readSessionUser()` tal cual). Va
+ * por debajo de `cache()`: mide la llamada REAL a GoTrue (una por request), no los aciertos de la memo.
+ */
+const readSessionUserTimed = () => timeAsync("auth", readSessionUser);
+
 // `cache` solo existe en el build react-server que empaqueta Next; en el runner de unit (react 18 pelado) no
 // está. Sin él, pass-through: cada llamada lee de nuevo (mismo trato que el mock de integration-setup).
 const memo: <T extends (...a: never[]) => unknown>(fn: T) => T =
   typeof cache === "function" ? (cache as never) : (fn) => fn;
 
 /** El usuario verificado de esta sesión, o null. Nunca tira. Un solo `auth.getUser()` por request. */
-export const getVerifiedSessionUser: () => Promise<VerifiedSessionUser | null> = memo(readSessionUser);
+export const getVerifiedSessionUser: () => Promise<VerifiedSessionUser | null> = memo(readSessionUserTimed);

@@ -33,6 +33,7 @@
  *   - `tryGetActor()`  — returns null instead of throwing. For surfaces
  *                        that can render a "please sign in" state.
  */
+import { displayUserName } from "@/lib/display-name";
 import { cookies, headers } from "next/headers";
 import { cache } from "react";
 // buildActor/buildDemoActor DISCOVER the tenant (unfiltered membership lookup)
@@ -51,6 +52,7 @@ import {
 import { isClinicalRole } from "@/lib/roles";
 import { logger } from "@/lib/logger";
 import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
+import { timeAsync } from "@/lib/server-timing";
 import { clientIp } from "@/lib/client-ip";
 import type { TenantEntitlements } from "@/lib/tenant-modules";
 import { tenantAccessEnforcement } from "@/lib/env";
@@ -322,7 +324,8 @@ export function usableAccessMemberships(
 async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
   const user = await getVerifiedSessionUser();
   if (!user) return null;
-  const { profile, memberships, preferredTenantId } = await loadAccessMemberships(user.id);
+  // PF-0a: marca `access` (la lectura de membresías por el canal service) con PERF_TIMING=1.
+  const { profile, memberships, preferredTenantId } = await timeAsync("access", () => loadAccessMemberships(user.id));
   const cookieTenantId = readActiveTenantCookie();
   const now = new Date();
   const { logicView, tenantBlocks } = accessView(memberships, profile, now);
@@ -410,7 +413,8 @@ function buildActor(s: AccessSnapshot): Actor {
     tenantSlug: chosen.tenant.slug,
     tenantName: chosen.tenant.name,
     practitionerId: clinical ? chosen.practitionerId : null,
-    practitionerName: s.profile.fullName ?? s.profile.email,
+    // DIR-0: el actor puede ser no clínico; sin nombre → «Usuario sin nombre», nunca el email.
+    practitionerName: displayUserName(s.profile.fullName),
     userId: s.userId,
     isPlatformAdmin: s.profile.isPlatformAdmin,
     entitlements: entitlementsOf(chosen.tenant),
@@ -432,7 +436,7 @@ async function buildDemoActor(): Promise<Actor | null> {
     tenantSlug: tenant.slug,
     tenantName: tenant.name,
     practitionerId: prac.id,
-    practitionerName: prac.user.fullName ?? prac.user.email,
+    practitionerName: displayUserName(prac.user.fullName),
     userId: prac.userId,
     isPlatformAdmin: prac.user.isPlatformAdmin,
     entitlements: entitlementsOf(tenant),
@@ -457,7 +461,7 @@ function buildSupportActor(s: AccessSnapshot & { profile: AccessProfile }, t: Su
     tenantSlug: t.tenant.slug,
     tenantName: t.tenant.name,
     practitionerId: null,
-    practitionerName: `${s.profile.fullName ?? s.profile.email} (soporte)`,
+    practitionerName: `${displayUserName(s.profile.fullName)} (soporte)`,
     userId: s.userId,
     isPlatformAdmin: true,
     entitlements: entitlementsOf(t.tenant),
@@ -504,7 +508,8 @@ async function resolveActor(): Promise<Actor | null> {
 }
 
 const cachedResolve = cache(async (): Promise<Actor | null> => {
-  const actor = await resolveActor();
+  // PF-0a: marca `actor` (auth + membresías + soporte) con PERF_TIMING=1; apagado es `resolveActor()` tal cual.
+  const actor = await timeAsync("actor", resolveActor);
   if (actor) {
     const h = headers();
     ensureRequestContext({

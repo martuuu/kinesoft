@@ -10,6 +10,7 @@
  *
  * Auth: every action requires OWNER/ADMIN. PRACTITIONER can read.
  */
+import { displayMemberName } from "@/lib/display-name";
 import { withSupportWritable } from "@/lib/support-writable";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
@@ -70,7 +71,7 @@ export async function listServicesWithCounts(): Promise<ServiceRow[]> {
         priceCents: s.priceCents,
         practitionerId: s.practitionerId,
         practitionerName: s.practitioner
-          ? (s.practitioner.user.fullName ?? s.practitioner.user.email)
+          ? displayMemberName(s.practitioner.user.fullName)
           : null,
         maxConcurrent: s.maxConcurrent,
         bookingsCount: s._count.bookings,

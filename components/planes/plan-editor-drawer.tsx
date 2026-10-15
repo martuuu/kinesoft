@@ -29,6 +29,7 @@
  *     actions existentes: las props del editor están congeladas (C10) y no
  *     las traen.
  */
+import { displayMemberName } from "@/lib/display-name";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
@@ -155,7 +156,7 @@ async function loadOptions(): Promise<PlanEditorOptions> {
       durationMin: s.durationMin,
       priceCents: s.priceCents,
     })),
-    practitioners: practitioners.map((p) => ({ id: p.id, name: p.user.fullName || p.user.email })),
+    practitioners: practitioners.map((p) => ({ id: p.id, name: displayMemberName(p.user.fullName) })),
     locations: locations.map((l) => ({ id: l.id, name: l.name, isPrimary: l.isPrimary })),
   };
 }

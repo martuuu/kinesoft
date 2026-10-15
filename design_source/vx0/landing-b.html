@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KineSoft · Landing (B, editorial)</title>
+<meta name="description" content="Agenda, turnos online, historia clínica y cobros para tu consultorio. Con herramientas propias para kinesiología.">
+<link rel="stylesheet" href="shared.css">
+<script src="shared.js"></script>
+<style>
+  /* B · editorial centrado. El producto entra como pantalla (marco de
+     navegador) debajo del H1; las funciones van en bento. */
+  .hero { position: relative; padding-block: clamp(48px, 8vw, 112px) 0; background: var(--bg-public); overflow: hidden; }
+  .hero-copy { display: grid; justify-items: center; text-align: center; gap: 24px; max-width: 920px; margin-inline: auto; }
+  .hero-pill {
+    display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 14px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(15, 30, 51, 0.08); font-size: 14px; font-weight: 500; color: var(--navy-700);
+  }
+  .hero-pill b { width: 8px; height: 8px; border-radius: 50%; background: var(--lime-500); }
+  .h1 { font-size: var(--fs-display-1); line-height: var(--lh-tight); font-weight: 650; letter-spacing: -0.04em; text-wrap: balance; }
+  .h1 em { font-style: normal; color: var(--sky-700); }
+  .hero .lead { max-width: 640px; }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .hero-note { font-size: 14px; color: var(--navy-500); }
+  @media (max-width: 479px) {
+    .hero-ctas { display: grid; grid-template-columns: 1fr; width: 100%; }
+    .hero-ctas .btn { width: 100%; }
+  }
+
+  .frame-wrap { margin-top: clamp(48px, 6vw, 80px); position: relative; }
+  .frame {
+    max-width: 1120px; margin-inline: auto; border-radius: 18px 18px 0 0; overflow: hidden;
+    background: #fff; border: 1px solid rgba(15, 30, 51, 0.1); border-bottom: 0;
+    box-shadow: 0 -2px 0 rgba(255, 255, 255, 0.6) inset, 0 40px 80px rgba(15, 30, 51, 0.16);
+  }
+  .frame-bar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; background: #f3f6fa; border-bottom: 1px solid rgba(15, 30, 51, 0.07); }
+  .frame-bar i { width: 10px; height: 10px; border-radius: 50%; background: rgba(15, 30, 51, 0.14); }
+  .frame-url { margin-inline: auto; height: 24px; width: min(320px, 50%); border-radius: 8px; background: #fff; border: 1px solid rgba(15, 30, 51, 0.07); }
+  .app { display: grid; grid-template-columns: 200px minmax(0, 1fr); min-height: 420px; }
+  .app-side { border-right: 1px solid rgba(15, 30, 51, 0.07); padding: 16px 12px; display: grid; align-content: start; gap: 4px; background: var(--bg-panel); }
+  .app-side .logo-mark { width: 28px; height: 28px; margin: 0 0 14px 6px; }
+  .nav-i { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--navy-500); }
+  .nav-i i { width: 16px; height: 16px; border-radius: 5px; background: rgba(15, 30, 51, 0.12); }
+  .nav-i.on { background: #fff; color: var(--sky-700); box-shadow: 0 1px 3px rgba(15, 30, 51, 0.08); }
+  .nav-i.on i { background: var(--sky-700); }
+  .app-main { padding: 16px; background: #fbfcfe; }
+  .app-main .agenda-mock { border: 1px solid rgba(15, 30, 51, 0.06); }
+  .only-sm { display: none; }
+  @media (max-width: 899px) {
+    .app { grid-template-columns: 1fr; }
+    .app-side { display: none; }
+  }
+  @media (max-width: 639px) {
+    .only-lg { display: none; }
+    .only-sm { display: block; }
+    .app-main { padding: 10px; }
+    .frame-url { display: none; }
+  }
+
+  /* Bento: 6 columnas; se arma a 2 y a 1 columna sin huecos. */
+  .bento { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
+  .tile { display: grid; gap: 14px; align-content: start; position: relative; overflow: hidden; }
+  .tile p { color: var(--navy-500); line-height: 1.55; }
+  .t-agenda { grid-column: span 4; grid-row: span 2; background: linear-gradient(160deg, #fff 30%, var(--sky-50)); grid-template-rows: auto auto auto auto 1fr; }
+  .t-online, .t-hc { grid-column: span 2; }
+  .t-cobros, .t-roles { grid-column: span 3; }
+  .t-sala { grid-column: span 6; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; gap: 32px;
+    background: var(--navy-900); color: #fff; border-color: transparent; }
+  .t-sala p { color: var(--navy-100); }
+  .views { display: flex; gap: 8px; flex-wrap: wrap; }
+  .views span { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 999px; background: #fff; border: 1px solid rgba(15, 30, 51, 0.1); font-size: 13px; font-weight: 600; color: var(--navy-700); }
+  .mini-week { margin-top: 8px; align-self: stretch; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .mini-week div { display: grid; gap: 6px; align-content: start; padding: 8px; border-radius: 12px; background: #fff; border: 1px solid rgba(15, 30, 51, 0.06); min-height: 132px; }
+  .mini-week b { font: 600 11px/1 var(--font-sans); color: var(--navy-400); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .mini-week s { display: block; height: 18px; border-radius: 6px; text-decoration: none; border-left: 3px solid var(--svc); }
+  .link-pill { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--bg-panel); border: 1px dashed rgba(31, 79, 190, 0.3); font: 500 13px/1.2 var(--font-mono); color: var(--sky-700); overflow: hidden; white-space: nowrap; }
+  .link-pill svg { width: 18px; height: 18px; }
+  .sala-board { display: grid; gap: 10px; }
+  .sala-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); }
+  .sala-row .mock-bar { flex: 1; background: rgba(255, 255, 255, 0.18); max-width: 180px; }
+  .sala-row .pill { margin-left: auto; font-size: 12px; font-weight: 650; padding: 4px 10px; border-radius: 999px; }
+  /* Sobre navy: En sala usa el lime opaco (el --rc-insala-bg es translúcido y
+     sobre fondo oscuro se ensucia); Llamado lleva un filo blanco para separarse. */
+  .pill.insala { background: var(--lime-300); color: var(--navy-900); }
+  .pill.called { background: var(--rc-called-bg); color: var(--rc-called-fg); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
+  .pill.attending { background: #fff; color: var(--navy-900); }
+  @media (max-width: 1023px) {
+    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .t-agenda, .t-sala { grid-column: span 2; grid-row: auto; }
+    .t-online, .t-hc, .t-cobros, .t-roles { grid-column: span 1; }
+    .t-sala { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 639px) {
+    .bento { grid-template-columns: 1fr; }
+    .t-agenda, .t-sala, .t-online, .t-hc, .t-cobros, .t-roles { grid-column: auto; }
+    .mini-week { grid-template-columns: repeat(3, 1fr); }
+    .mini-week div:nth-child(n+4) { display: none; }
+  }
+
+  /* Kinesiología + switch (lo que se toma de C). */
+  .kine { background: #fff; border-block: 1px solid rgba(15, 30, 51, 0.06); }
+  .kine-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(32px, 6vw, 96px); align-items: center; }
+  .kine-list { display: grid; gap: 4px; padding: 0; margin: 24px 0 0; list-style: none; }
+  .kine-list li { display: grid; grid-template-columns: 44px 1fr; gap: 16px; padding: 14px 0; border-top: 1px solid rgba(15, 30, 51, 0.07); }
+  .kine-list li:first-child { border-top: 0; }
+  .kine-list h3 { font-size: 17px; font-weight: 650; margin-bottom: 2px; }
+  .kine-list p { color: var(--navy-500); font-size: 15px; line-height: 1.5; }
+  .plan-mock { display: grid; gap: 16px; padding: 24px; border-radius: var(--r-xl); background: var(--bg-public); border: 1px solid rgba(15, 30, 51, 0.06); }
+  .pm-card { background: #fff; border-radius: 16px; padding: 18px; box-shadow: var(--shadow-card); display: grid; gap: 14px; }
+  .pm-head { display: flex; align-items: center; gap: 10px; }
+  .pm-head strong { font-size: 15px; }
+  .disc { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; }
+  .dots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .dots i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--disc-kine); }
+  .dots i.done { background: var(--disc-kine); }
+  .dots i.next { border-style: dashed; }
+  .eva { width: 100%; height: 80px; display: block; }
+  .row-sk { display: flex; align-items: center; gap: 10px; }
+  .row-sk .mock-bar { flex: 1; }
+  @media (max-width: 1023px) { .kine-grid { grid-template-columns: 1fr; } }
+
+  .contact-sec { background: var(--bg-panel); }
+</style>
+</head>
+<body>
+<div id="top" data-include="header"></div>
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="container">
+      <div class="hero-copy">
+        <span class="hero-pill enter"><b aria-hidden="true"></b>Para kinesiología y cualquier consultorio</span>
+        <h1 class="h1 enter enter-d1" id="hero-title">Tu consultorio, <em>ordenado</em> de punta a punta.</h1>
+        <p class="lead enter enter-d2"><span data-only="kine">Agenda, turnos online, historia clínica y cobros. Con herramientas propias para kinesiología.</span><span data-only="general">Agenda, turnos online, historia clínica y cobros, en un solo lugar.</span></p>
+        <div class="hero-ctas enter enter-d2">
+          <a class="btn btn-primary btn-lg" href="signup.html">Probá 14 días gratis</a>
+          <a class="btn btn-ghost btn-lg" href="#precios">Ver precios</a>
+        </div>
+        <p class="hero-note enter enter-d3">Sin medio de pago para empezar.</p>
+      </div>
+      <div class="frame-wrap enter enter-d3">
+        <div class="frame" aria-hidden="true">
+          <div class="frame-bar"><i></i><i></i><i></i><span class="frame-url"></span></div>
+          <div class="app">
+            <div class="app-side mock">
+              <span class="logo-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="7" cy="6" r="2.5" fill="currentColor"/><path d="M6 9.5C6 12 7.5 13 8 14.5L6 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M9 11.5L13 12.5L16 10.5L19 16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="nav-i"><i></i>Inicio</span>
+              <span class="nav-i on"><i></i>Agenda</span>
+              <span class="nav-i"><i></i>Pacientes</span>
+              <span class="nav-i" data-only="kine"><i></i>Planes</span>
+              <span class="nav-i" data-only="kine"><i></i>Biblioteca</span>
+              <span class="nav-i"><i></i>Sala de espera</span>
+              <span class="nav-i"><i></i>Reportes</span>
+            </div>
+            <div class="app-main">
+              <div class="only-lg" data-include="agenda" data-cols="4" data-rows="6"></div>
+              <div class="only-sm" data-include="agenda" data-cols="2" data-rows="5"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="funciones" aria-labelledby="funciones-title">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow"><span class="eyebrow-dot"></span>Funciones</span>
+        <h2 class="h2" id="funciones-title">Todo lo del día a día, en un mismo lugar</h2>
+        <p class="lead">Lo que usa quien atiende y lo que usa quien organiza: la agenda, los pacientes y la plata del consultorio.</p>
+      </div>
+      <div class="bento">
+        <article class="card tile t-agenda">
+          <span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg></span>
+          <h3 class="h3">La agenda de cada profesional</h3>
+          <p>Día, semana y lista, con varios profesionales lado a lado. Recepción marca llegadas y cobra sin cambiar de pantalla.</p>
+          <div class="views" aria-label="Vistas de la agenda"><span>Día</span><span>Semana</span><span>Lista</span><span>Recepción</span></div>
+          <div class="mini-week" aria-hidden="true">
+            <div><b>Lun</b><s style="--svc:var(--sky-700);background:var(--st-confirmed-bg)"></s><s style="--svc:#8ecc30;background:var(--st-completed-bg)"></s><s style="--svc:var(--sky-700);background:var(--st-pending-bg)"></s></div>
+            <div><b>Mar</b><s style="--svc:#3d7010;background:var(--st-confirmed-bg)"></s><s style="--svc:var(--sky-500);background:var(--st-confirmed-bg);height:36px"></s></div>
+            <div><b>Mié</b><s style="--svc:var(--sky-700);background:var(--st-completed-bg)"></s><s style="--svc:#3d7010;background:var(--st-pending-bg)"></s><s style="--svc:#8ecc30;background:var(--st-confirmed-bg)"></s><s style="--svc:var(--sky-700);background:var(--st-confirmed-bg)"></s></div>
+            <div><b>Jue</b><s style="--svc:var(--sky-500);background:var(--st-confirmed-bg);height:36px"></s><s style="--svc:var(--sky-700);background:var(--st-pending-bg)"></s></div>
+            <div><b>Vie</b><s style="--svc:#3d7010;background:var(--st-confirmed-bg)"></s><s style="--svc:var(--sky-700);background:var(--st-confirmed-bg)"></s></div>
+          </div>
+        </article>
+        <article class="card tile t-online">
+          <span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>
+          <h3 class="h3">Turnos online</h3>
+          <p>Tus pacientes reservan desde tu link: eligen profesional, servicio y horario. Si lo activás, pagan con Mercado Pago.</p>
+          <div class="link-pill" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/></svg>…/c/tu-consultorio</div>
+        </article>
+        <article class="card tile t-hc">
+          <span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4M9 12.5h6M9 16h4"/></svg></span>
+          <h3 class="h3">Pacientes e historia clínica</h3>
+          <p>La ficha de cada paciente con sus turnos, sus archivos y su historia, a mano en cada consulta.</p>
+        </article>
+        <article class="card tile t-cobros">
+          <span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/></svg></span>
+          <h3 class="h3">Cobros en pesos</h3>
+          <p>Copago y obra social en cada turno, y pagos online con Mercado Pago. Sabés qué se cobró y qué falta.</p>
+        </article>
+        <article class="card tile t-roles">
+          <span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.2a4.5 4.5 0 0 1 5.5 4.3"/></svg></span>
+          <h3 class="h3">Un rol para cada persona</h3>
+          <p>Profesionales, secretaría y administración. Cada uno ve lo que necesita; la historia clínica queda para quien atiende.</p>
+        </article>
+        <article class="card tile t-sala">
+          <div style="display:grid;gap:14px">
+            <span class="plan-chip" style="background:var(--lime-300);color:var(--navy-900);justify-self:start">Plan Clínica</span>
+            <h3 class="h3" style="font-size:24px">Salas y sala de espera</h3>
+            <p>Recepción marca quién llegó, cada profesional llama al siguiente y la pantalla de la sala se actualiza sola.</p>
+          </div>
+          <div class="sala-board" aria-hidden="true">
+            <div class="sala-row"><span class="avatar" style="background:#3d7010">MR</span><span class="mock-bar w55"></span><span class="pill called">Llamado</span></div>
+            <div class="sala-row"><span class="avatar">AL</span><span class="mock-bar w40"></span><span class="pill insala">En sala</span></div>
+            <div class="sala-row"><span class="avatar" style="background:#5e92cc">JP</span><span class="mock-bar w70"></span><span class="pill attending">En atención</span></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section kine" id="kinesiologia" aria-labelledby="kinesiologia-title">
+    <div class="container kine-grid">
+      <div>
+        <div class="section-head" style="margin-bottom:24px">
+          <span class="eyebrow"><span class="eyebrow-dot"></span>Por especialidad</span>
+          <h2 class="h2" id="kinesiologia-title"><span data-only="kine">Hecho para kinesiología</span><span data-only="general">Y para cualquier consultorio</span></h2>
+          <p class="lead"><span data-only="kine">Además de la agenda y la historia clínica, herramientas pensadas para tratamientos de varias sesiones.</span><span data-only="general">Pacientes, turnos e historia clínica, sin herramientas que no vas a usar.</span></p>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Tipo de consultorio" data-seg="vertical">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" role="radio" data-value="kine" aria-checked="true">Kinesiología</button>
+          <button type="button" role="radio" data-value="general" aria-checked="false">Clínica general</button>
+        </div>
+        <ul class="kine-list" role="list" data-only="kine">
+          <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h3l2-5 4 10 2-5h5"/></svg></span><div><h3>Planes de tratamiento</h3><p>Kinesiología u osteopatía, sesión por sesión, con los turnos atados al plan.</p></div></li>
+          <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/></svg></span><div><h3>Ejercicios y terapia manual</h3><p>Tu biblioteca de ejercicios y de maniobras, para sumar a cada plan.</p></div></li>
+          <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="2"/><path d="M12 7v7M8 9.5h8M12 14l-3 6.5M12 14l3 6.5"/></svg></span><div><h3>Diagnóstico con mapa corporal</h3><p>Marcás la zona afectada sobre el cuerpo y queda en la historia.</p></div></li>
+          <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5h16M6 16l4-5 3 3 5-7"/></svg></span><div><h3>Seguimiento del dolor</h3><p>La escala EVA de cada sesión, en una curva que se lee de un vistazo.</p></div></li>
+        </ul>
+        <ul class="kine-list" role="list" data-only="general">
+          <li><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4"/></svg></span><div><h3>Pacientes e historia clínica</h3><p>La ficha, los turnos y los archivos de cada paciente.</p></div></li>
+          <li><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18"/></svg></span><div><h3>Agenda y turnos online</h3><p>Por profesional, con tu link de reservas.</p></div></li>
+          <li><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.5"/></svg></span><div><h3>Cobros</h3><p>Copago, obra social y Mercado Pago.</p></div></li>
+          <li><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M3 21h18"/></svg></span><div><h3>Salas y sala de espera</h3><p>En el plan Clínica.</p></div></li>
+        </ul>
+      </div>
+      <div class="plan-mock mock" aria-hidden="true">
+        <div class="pm-card" data-only="kine">
+          <div class="pm-head"><span class="avatar">AL</span><span class="mock-bar w40" style="flex:1"></span><span class="disc" style="background:var(--disc-kine)">Kine</span></div>
+          <strong style="font-size:15px">Plan de tratamiento</strong>
+          <div class="dots"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="next"></i><i></i><i></i><i></i></div>
+          <div class="row-sk"><span class="mock-bar w30"></span><span class="mock-bar w55"></span></div>
+        </div>
+        <div class="pm-card" data-only="kine">
+          <strong style="font-size:15px">Escala EVA</strong>
+          <svg class="eva" viewBox="0 0 300 80" preserveAspectRatio="none" aria-hidden="true"><path d="M0 20H300M0 40H300M0 60H300" stroke="rgba(15,30,51,.07)" stroke-width="1"/><path d="M6 10 L54 16 L102 28 L150 34 L198 48 L246 56 L294 64 L294 80 L6 80 Z" fill="rgba(94,146,204,.14)"/><polyline points="6,10 54,16 102,28 150,34 198,48 246,56 294,64" fill="none" stroke="var(--sky-700)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
+        </div>
+        <div class="pm-card" data-only="general">
+          <div class="pm-head"><span class="avatar">SG</span><span class="mock-bar w40" style="flex:1"></span></div>
+          <strong style="font-size:15px">Historia clínica</strong>
+          <div class="row-sk"><span class="mock-bar w30"></span><span class="mock-bar w70"></span></div>
+          <div class="row-sk"><span class="mock-bar w40"></span><span class="mock-bar w55"></span></div>
+          <div class="row-sk"><span class="mock-bar w30"></span><span class="mock-bar w40"></span></div>
+        </div>
+        <div class="pm-card" data-only="general">
+          <strong style="font-size:15px">Próximos turnos</strong>
+          <div class="row-sk"><span class="appt st-confirmed short" style="position:static;height:28px;flex:1;--svc:var(--sky-700)">Consulta</span></div>
+          <div class="row-sk"><span class="appt st-pending short" style="position:static;height:28px;flex:1;--svc:#8ecc30">Control</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="como-empezar" aria-labelledby="como-empezar-title">
+    <div class="container"><div data-include="steps"></div></div>
+  </section>
+
+  <section class="section" id="precios" aria-labelledby="precios-title" style="background:#fff;border-top:1px solid rgba(15,30,51,.06)">
+    <div class="container"><div data-include="pricing"></div></div>
+  </section>
+
+  <section class="section" id="preguntas" aria-labelledby="preguntas-title">
+    <div class="container"><div data-include="faq"></div></div>
+  </section>
+
+  <section class="section contact-sec" style="background:#fff;border-top:1px solid rgba(15,30,51,.06)" id="contacto" aria-labelledby="contacto-title">
+    <div class="container"><div data-include="contact"></div></div>
+  </section>
+</main>
+<div data-include="footer"></div>
+</body>
+</html>

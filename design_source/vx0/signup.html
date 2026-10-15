@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crear cuenta · KineSoft</title>
+<link rel="stylesheet" href="shared.css">
+<script src="shared.js"></script>
+<style>
+  /* Signup en la dirección B (split contenido, 1200 px). Mismo esqueleto
+     que login-b para que AuthShell v2 sea una sola variante «split». */
+  body { background: var(--bg-public); }
+  .page { min-height: 100dvh; display: flex; flex-direction: column; }
+  .top { height: 80px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .top p { font-size: 15px; color: var(--navy-500); }
+  main { flex: 1; display: grid; align-items: center; padding-block: 24px 56px; }
+  .split {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 460px);
+    grid-template-areas: "intro card" "points card"; column-gap: clamp(48px, 7vw, 120px); row-gap: 40px; align-content: center;
+  }
+  .intro { grid-area: intro; align-self: end; display: grid; gap: 20px; max-width: 560px; }
+  .card-col { grid-area: card; align-self: center; }
+  .points { grid-area: points; align-self: start; max-width: 560px; }
+  .b-title { font-size: clamp(36px, 2.6vw + 14px, 56px); line-height: 1.04; font-weight: 650; letter-spacing: -0.035em; text-wrap: balance; }
+  .points ul { display: grid; gap: 16px; padding: 0; margin: 0; list-style: none; }
+  .points li { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; font-size: 16px; color: var(--navy-700); }
+  .points li svg { width: 24px; height: 24px; color: var(--lime-700); }
+  .points .plans { margin-top: 28px; padding: 18px 20px; border-radius: var(--r-md); background: rgba(255, 255, 255, 0.7); border: 1px solid rgba(15, 30, 51, 0.06); font-size: 15px; color: var(--navy-500); line-height: 1.55; }
+  .foot { padding-block: 20px 28px; font-size: 14px; color: var(--navy-500); }
+  @media (max-width: 1023px) {
+    .split { grid-template-columns: minmax(0, 1fr); grid-template-areas: "intro" "card" "points"; max-width: 560px; margin-inline: auto; row-gap: 32px; }
+    .intro { gap: 12px; }
+    .b-title { font-size: clamp(28px, 3vw + 16px, 40px); }
+  }
+  @media (max-width: 767px) {
+    .intro { display: none; }
+    .top { height: 64px; }
+    .top p { display: none; }
+    main { padding-top: 8px; }
+    .auth-card { padding: 24px 20px; border-radius: var(--r-lg); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top container"><div data-include="logo"></div></header>
+  <main id="main" class="container">
+    <div class="split">
+      <div class="intro enter">
+        <span class="eyebrow"><span class="eyebrow-dot"></span>Plan Individual · 14 días gratis</span>
+        <p class="b-title">Empezá hoy con tu consultorio.</p>
+        <p class="lead"><span data-only="kine">Agenda, turnos online, historia clínica y cobros, con las herramientas de kinesiología incluidas.</span><span data-only="general">Agenda, turnos online, historia clínica y cobros, listos para usar.</span></p>
+      </div>
+      <div class="card-col"><div class="auth-card enter enter-d1"><div data-include="signup-form"></div></div></div>
+      <section class="points enter enter-d2" aria-label="Cómo funciona la prueba">
+        <ul role="list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m8 12.3 2.8 2.7L16.2 9.5"/></svg><span>14 días gratis, sin medio de pago.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m8 12.3 2.8 2.7L16.2 9.5"/></svg><span>Quien crea la cuenta es titular del consultorio.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="m8 12.3 2.8 2.7L16.2 9.5"/></svg><span>Cuando sumes equipo, pasás a Consultorio o Clínica.</span></li>
+        </ul>
+        <p class="plans">¿Vas a trabajar con más de 10 personas? <a class="link" href="landing-b.html#contacto">Escribinos</a> y armamos el plan Libre.</p>
+      </section>
+    </div>
+  </main>
+  <footer class="foot container">© 2026 KineSoft</footer>
+</div>
+</body>
+</html>

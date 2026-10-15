@@ -50,6 +50,12 @@ import {
  * Sin bypass para superadmins: ver la cabecera de `lib/maintenance.ts`.
  */
 
+/**
+ * PF-0a: diagnóstico de lentitud (`lib/server-timing.ts` del lado Node). No se importa ese módulo acá: el middleware
+ * corre en Edge y aquel usa `node:async_hooks`. Se lee `process.env` directo, como `MAINTENANCE_MODE`.
+ */
+const PERF_TIMING = process.env.PERF_TIMING === "1";
+
 function newRequestId(): string {
   // crypto.randomUUID is available in the Edge runtime.
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -120,7 +126,11 @@ export async function middleware(req: NextRequest) {
 
   // Primero el refresh: muta `req.cookies` (y con eso el header `cookie`),
   // así la copia de headers de abajo ya lleva el token nuevo.
+  // PF-0a (H-SLOW): con PERF_TIMING=1 se mide el refresh y sale en `Server-Timing: mw-session;dur=…` (lo lee
+  // `scripts/perf/ttfb.mjs`). Apagado no se toma ningún tiempo. Solo mide: el orden de abajo (AUDIT §5.3) no cambia.
+  const mwT0 = PERF_TIMING ? performance.now() : 0;
   const sessionCookies = maintenance === "pass" ? await refreshSupabaseSession(req) : [];
+  const mwSessionMs = PERF_TIMING ? performance.now() - mwT0 : 0;
 
   const requestHeaders = new Headers(req.headers);
   // Always strip client-supplied tenant headers — only this middleware may set them.
@@ -147,6 +157,7 @@ export async function middleware(req: NextRequest) {
     // correlate fetches to server logs.
     res.headers.set("x-request-id", safeReqId);
     if (mode === "on" && url.pathname.startsWith("/api/health")) res.headers.set("x-maintenance", "on");
+    if (PERF_TIMING) res.headers.set("server-timing", `mw-session;dur=${mwSessionMs.toFixed(1)}`);
     for (const c of sessionCookies) res.cookies.set(c.name, c.value, c.options);
     if (sessionCookies.length > 0) {
       // Una respuesta con Set-Cookie de sesión no se cachea en ningún CDN.

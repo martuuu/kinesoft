@@ -8,6 +8,7 @@
  * La tabla tiene scroll horizontal propio (`overflowX: auto` + `minWidth`), como la de consultorios, para que en
  * 360 px no scrollee la página entera.
  */
+import { displayUserName } from "@/lib/display-name";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
@@ -54,9 +55,10 @@ function Row({ r }: { r: PlatformUserRow }) {
     >
       <div style={{ minWidth: 0 }}>
         <Link href={userHref(r.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none", overflowWrap: "anywhere" }}>
-          {r.fullName || r.email}
+          {displayUserName(r.fullName)}
         </Link>
-        {r.fullName && <div style={{ fontSize: 12, color: "var(--navy-300)", overflowWrap: "anywhere" }}>{r.email}</div>}
+        {/* DIR-0: el email va siempre en su línea (es el dato «Email»), nunca en lugar del nombre. */}
+        <div style={{ fontSize: 12, color: "var(--navy-300)", overflowWrap: "anywhere" }}>{r.email}</div>
       </div>
       <div>{USER_KIND_LABEL[r.kind]}</div>
       <div style={{ fontSize: 12.5 }}>{rowTenantsSummary(r)}</div>

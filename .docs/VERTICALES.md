@@ -9,7 +9,15 @@
 > y **EV1 ✅** (14-oct, en develop, sin migración). B y SV están en prod desde el go-live del 14-oct (migraciones
 > incrementales, **sin reset**: §6 y §9 quedan como historia). Cierres en [AUDIT.md §Ronda 16](AUDIT.md), §Ronda 18-20 y
 > §Ronda 23 (EV1); QA en [QA.md §EV0](QA.md), §Sala de Espera realtime (SV) y §EV1; diseño en
-> [ARCHITECTURE.md ADR-005 y ADR-006](ARCHITECTURE.md). **Siguiente: VX** → ES4 → DIR (decisión 4 de Martin, 14-oct).
+> [ARCHITECTURE.md ADR-005 y ADR-006](ARCHITECTURE.md). **Siguiente (15-oct):** el orden de §20 del plan
+> (0 → PL → EV2 → VX → ES4 → PF → DIR; [ROADMAP.md «Plan vigente (15-oct)»](ROADMAP.md)).
+>
+> **⚠️ La matriz de módulos cambia en PL (§20.5.2 del plan, contrato C-PL1 en `lib/tenant-modules.ts`):** pasa a
+> depender de vertical × plan SaaS (Individual / Consultorio / Clínica / Libre). **`salas` y `salaEspera` salen del
+> núcleo** y quedan solo en Clínica y Libre (las dos verticales; «Llegó» y «En atención» siguen en el núcleo como
+> estados de agenda; al bajar de Clínica las salas «duermen», PL-D6/D7). **`evoluciones` (EV2) entra al núcleo** de todas
+> las verticales y planes. En Kinesiología, plantillas/favoritos/ejercicios globales pasan a Consultorio y Clínica.
+> Hasta que PL cierre, la matriz de §3 describe el código actual.
 
 ## 0. Contexto: decisiones de Martin del 07-oct
 
@@ -84,7 +92,7 @@ AUDIT: `data-api-anon-sin-rls` (bloque A, crítico): código cerrado; **la acci�
 | 6 | **EV1** ✅ (14-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral —"Kinesiólogo" en users-panel, step-team, placeholder de steps-catalog y hero "Kinesiólogo asignado"; "Título (diagnóstico)" en modal/drawer de turno—, lista de pacientes, `isBasic` muerto en Plataforma —tag "Común/Pro", toggle del exercise-drawer, `validation.ts`—, link a `/biblioteca` del exercise-drawer en tenant General, canal de soporte para el "escribinos") + limpieza R-LEGACY opcional (no se hizo: R-LEGACY y los sobrevivientes de `programs.ts` se quedan, decisiones del 08-oct). Cierres en [AUDIT §Ronda 23](AUDIT.md) | — |
 | 7 | ~~Deploy único de B~~ | Reemplazado por el go-live del 14-oct: migraciones incrementales sobre la base viva, sin reset ([GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)) | — |
 
-**Orden vigente (14-oct, decisión 4 de Martin):** ES3 ✅ → SR ✅ → SV ✅ → IAM ✅ → BO ✅ → EV1 ✅ → **VX** → ES4 → DIR. SR fue
+**Orden del 14-oct (historia; el vigente es el de §20, arriba):** ES3 ✅ → SR ✅ → SV ✅ → IAM ✅ → BO ✅ → EV1 ✅ → VX → ES4 → DIR. SR fue
 antes de SV para que el evento y "Llamar" nacieran con la sala.
 
 SV va entre ES3 y ES4 porque necesita `lib/bookings.ts` (S12, ES2b), `agenda-client.tsx` y `reception-row.tsx` (ES3)

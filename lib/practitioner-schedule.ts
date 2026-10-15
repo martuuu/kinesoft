@@ -29,6 +29,7 @@
  * `dayKeyToDbDate`/`dbDateToDayKey` de `lib/schedule-validate.ts` (etiqueta de
  * día por UTC, ver ahí por qué). "Hoy" siempre con `toARDateKey`.
  */
+import { displayMemberName } from "@/lib/display-name";
 import { withSupportWritable } from "@/lib/support-writable";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
@@ -261,7 +262,7 @@ function badRoomErrors(
 }
 
 function nameOfUser(u: { fullName: string | null; email: string }): string {
-  return u.fullName ?? u.email;
+  return displayMemberName(u.fullName); // DIR-0: nunca el email
 }
 
 const ROOM_USAGE_SELECT = {
@@ -678,7 +679,7 @@ export async function getPractitionerScheduleSummary(): Promise<PractitionerSche
         : summarizeWeek(p.schedules);
       return {
         practitionerId: p.id,
-        name: p.user.fullName ?? p.user.email,
+        name: displayMemberName(p.user.fullName),
         summary,
         isFallback,
         rangeCount: p.schedules.length,

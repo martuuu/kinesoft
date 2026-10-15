@@ -1,3 +1,4 @@
+import { displayMemberName } from "@/lib/display-name";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -159,7 +160,7 @@ export default async function PatientPage({
           .map((i) => ({ id: i.id, name: i.name, payerId: i.payerId }))}
         practitioners={practitioners.map((p) => ({
           id: p.id,
-          name: p.user.fullName ?? p.user.email,
+          name: displayMemberName(p.user.fullName),
         }))}
         canReassign={canReassign}
         capabilities={capabilities}

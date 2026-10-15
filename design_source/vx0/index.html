@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VX0 · Prototipo de la cara pública</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  body { background: var(--bg-panel); }
+  /* Más ancho que el contenedor público: «Anchos» necesita lugar para los 4 marcos. */
+  main.container { max-width: calc(1680px + 2 * var(--gutter)); }
+  .top { padding-block: 40px 24px; display: grid; gap: 12px; }
+  .top h1 { font-size: clamp(28px, 1.6vw + 20px, 40px); line-height: 1.1; font-weight: 650; letter-spacing: -0.03em; }
+  .top p { color: var(--navy-500); max-width: 760px; line-height: 1.6; }
+  .tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; background: #fff; border: 1px solid rgba(15, 30, 51, 0.08); margin-top: 8px; width: fit-content; }
+  .tabs [role="tab"] { min-height: 40px; padding: 0 18px; border: 0; border-radius: 999px; background: transparent; font-weight: 600; color: var(--navy-500); }
+  .tabs [aria-selected="true"] { background: var(--navy-900); color: #fff; }
+
+  .group { margin-block: 32px 8px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .group h2 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
+  .group span { font-size: 14px; color: var(--navy-500); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 20px; }
+  .item { background: #fff; border-radius: var(--r-lg); border: 1px solid rgba(15, 30, 51, 0.07); box-shadow: var(--shadow-card); overflow: hidden; display: grid; }
+  .item.rec { box-shadow: 0 0 0 2px var(--sky-700), var(--shadow-card); }
+  .thumb { position: relative; aspect-ratio: 16 / 10; overflow: hidden; background: var(--sky-50); border-bottom: 1px solid rgba(15, 30, 51, 0.06); }
+  .thumb iframe { position: absolute; top: 0; left: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  .meta { padding: 16px 18px 18px; display: grid; gap: 8px; }
+  .meta-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .meta h3 { font-size: 17px; font-weight: 650; }
+  .meta p { color: var(--navy-500); font-size: 14px; line-height: 1.5; }
+  .badge { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--sky-100); color: var(--sky-700); }
+  .badge.rec { background: var(--lime-300); color: var(--navy-900); }
+  .actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+
+  .decisions { margin-block: 40px 64px; }
+  .decisions table { width: 100%; border-collapse: collapse; background: #fff; border-radius: var(--r-md); overflow: hidden; font-size: 14px; }
+  .decisions th, .decisions td { text-align: left; padding: 12px 14px; border-bottom: 1px solid rgba(15, 30, 51, 0.06); vertical-align: top; line-height: 1.5; }
+  .decisions th { background: var(--sky-50); font-weight: 650; color: var(--navy-700); }
+  .decisions td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+  .table-wrap { overflow-x: auto; border-radius: var(--r-md); border: 1px solid rgba(15, 30, 51, 0.07); }
+
+  /* Anchos: cada página a 360/768/1280/1728, escalada para que las 4
+     tengan el mismo alto en pantalla. El iframe se renderiza al ancho real
+     (los media queries ven 360, 768…) y transform: scale lo achica. */
+  .controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; padding: 16px; background: #fff; border-radius: var(--r-md); border: 1px solid rgba(15, 30, 51, 0.07); }
+  .controls .field { min-width: 180px; }
+  .controls .input { height: 44px; }
+  .controls input[type="range"] { width: 200px; accent-color: var(--sky-700); height: 44px; margin: 0; display: block; }
+  .widths { display: flex; flex-wrap: wrap; gap: 24px; margin-block: 24px 64px; align-items: flex-start; }
+  .wbox { display: grid; gap: 8px; }
+  .wlabel { font: 600 13px/1 var(--font-mono); color: var(--navy-500); display: flex; justify-content: space-between; gap: 8px; }
+  .wframe { position: relative; overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 0 0 1px rgba(15, 30, 51, 0.1), var(--shadow-card-lg); }
+  .wframe iframe { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; }
+</style>
+</head>
+<body>
+<main id="main" class="container">
+  <header class="top">
+    <span class="eyebrow"><span class="eyebrow-dot"></span>KineSoft · §20.7 VX0-a</span>
+    <h1>Prototipo de la cara pública</h1>
+    <p>Tres direcciones de login y de landing, más el signup en la dirección B. Usan los tokens reales de <code>app/globals.css</code> y los tokens propuestos para VX1 (marcados en <code>shared.css</code>). En cada página, la barra de abajo cambia la vertical, el estado del formulario, el motion y la grilla de 8 px.</p>
+    <div class="tabs" role="tablist" aria-label="Vista">
+      <button role="tab" id="tab-g" aria-controls="panel-g" aria-selected="true">Galería</button>
+      <button role="tab" id="tab-w" aria-controls="panel-w" aria-selected="false" tabindex="-1">Anchos</button>
+    </div>
+  </header>
+
+  <section id="panel-g" role="tabpanel" aria-labelledby="tab-g">
+    <div id="gallery"></div>
+    <div class="decisions">
+      <div class="group"><h2>Qué decidís en el prototipo</h2><span>Recomendación entre paréntesis</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th scope="col">ID</th><th scope="col">Decisión</th><th scope="col">Recomendado</th></tr></thead>
+        <tbody>
+          <tr><td>D-VX1</td><td>Dirección de login</td><td><strong>B</strong>: split contenido de 1200 px; apila bajo 1024 con el form arriba del pliegue en mobile.</td></tr>
+          <tr><td>D-VX2</td><td>Dirección de landing</td><td><strong>B</strong> + la sección con switch de C (ya incluida en B, en «Kinesiología»).</td></tr>
+          <tr><td>D-VX3</td><td>Visual del producto</td><td>Mock en CSS, sin cifras ni nombres inventados (agenda, sala de espera, plan, EVA).</td></tr>
+          <tr><td>D-VX4</td><td>Botones sociales</td><td>Arriba del email, a lo ancho, con los íconos oficiales.</td></tr>
+          <tr><td>D-VX6</td><td>Motion de la landing</td><td>Solo la entrada del hero y de la card (≤ 300 ms, transform/opacity). Nada por scroll.</td></tr>
+          <tr><td>D-VX7</td><td>Plan Libre</td><td>Banda «¿Hospital o clínica grande? Hablemos» que lleva al contacto.</td></tr>
+          <tr><td>D-VX8</td><td>Escalas</td><td>Grilla de 8, base 16, display en clamp (ver <code>--space-*</code> y <code>--fs-*</code>).</td></tr>
+          <tr><td>D-VX9</td><td>Fondos</td><td>Sin marca de agua; gradientes radiales pintados, sin blobs con blur.</td></tr>
+          <tr><td>D-VX12</td><td>Contraseña</td><td>Botón mostrar/ocultar dentro del campo (44 px, aria-pressed).</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="panel-w" role="tabpanel" aria-labelledby="tab-w" hidden>
+    <form class="controls" onsubmit="return false">
+      <div class="field"><label class="label" for="w-page">Página</label><select class="input" id="w-page"></select></div>
+      <div class="field"><label class="label" for="w-vertical">Vertical</label><select class="input" id="w-vertical"><option value="kine">Kinesiología</option><option value="general">Clínica general</option></select></div>
+      <div class="field"><label class="label" for="w-state">Estado</label><select class="input" id="w-state"><option value="normal">Normal</option><option value="error">Error</option><option value="sending">Enviando</option><option value="success">Enviado (contacto)</option></select></div>
+      <div class="field"><label class="label" for="w-h">Alto en pantalla</label><input id="w-h" type="range" min="320" max="900" step="20" value="520"></div>
+    </form>
+    <div class="widths" id="widths"></div>
+  </section>
+</main>
+<script>
+  // Galería y vista «Anchos». Sin dependencias; los iframes cargan con
+  // ?embed=1 (shared.js oculta la barra del prototipo adentro).
+  var PAGES = [
+    { g: "Login", f: "login-a", t: "A · Card centrada", d: "La card sola, sin columnas: no puede quedar un centro vacío a ningún ancho.", id: "D-VX1" },
+    { g: "Login", f: "login-b", t: "B · Split contenido", d: "Contenedor de 1200 px: marca y 3 bullets reales a la izquierda, card a la derecha. Apila bajo 1024.", id: "D-VX1", rec: true },
+    { g: "Login", f: "login-c", t: "C · Panel de producto", d: "Mitad navy con la agenda en CSS, mitad form. Bajo 1024 queda solo el form.", id: "D-VX1" },
+    { g: "Landing", f: "landing-a", t: "A · Producto al costado", d: "Hero en dos columnas con la agenda y tarjetas flotantes; funciones en grilla de 3.", id: "D-VX2" },
+    { g: "Landing", f: "landing-b", t: "B · Editorial centrado", d: "H1 grande, marco de navegador con la agenda, funciones en bento y sección con switch.", id: "D-VX2", rec: true },
+    { g: "Landing", f: "landing-c", t: "C · Por tipo de consultorio", d: "El switch Kinesiología | Clínica general cambia el H1, el copy y la vitrina.", id: "D-VX2" },
+    { g: "Alta", f: "signup", t: "Signup · dirección B", d: "Mismo esqueleto que login B, con el tipo de consultorio como opción.", id: "D-VX1" },
+  ];
+  var WIDTHS = [[360, 780], [768, 1024], [1280, 800], [1728, 1080]];
+
+  var gallery = document.getElementById("gallery");
+  var groups = {};
+  PAGES.forEach(function (p) {
+    if (!groups[p.g]) {
+      var head = document.createElement("div");
+      head.className = "group";
+      head.innerHTML = "<h2>" + p.g + "</h2>";
+      var grid = document.createElement("div");
+      grid.className = "grid";
+      gallery.appendChild(head); gallery.appendChild(grid);
+      groups[p.g] = grid;
+    }
+    var el = document.createElement("article");
+    el.className = "item" + (p.rec ? " rec" : "");
+    el.innerHTML =
+      '<div class="thumb"><iframe title="Vista previa de ' + p.t + '" tabindex="-1" aria-hidden="true" src="' + p.f + '.html?embed=1&motion=reduce"></iframe></div>' +
+      '<div class="meta"><div class="meta-h"><h3>' + p.t + "</h3>" + (p.rec ? '<span class="badge rec">Recomendado</span>' : "") +
+      '<span class="badge">' + p.id + "</span></div><p>" + p.d + "</p>" +
+      '<div class="actions"><a class="btn btn-primary btn-sm" href="' + p.f + '.html">Abrir</a>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-widths="' + p.f + '">Ver en 4 anchos</button></div></div>';
+    groups[p.g].appendChild(el);
+  });
+  function fitThumbs() {
+    document.querySelectorAll(".thumb").forEach(function (t) {
+      t.querySelector("iframe").style.transform = "scale(" + t.clientWidth / 1440 + ")";
+    });
+  }
+  window.addEventListener("resize", fitThumbs);
+  fitThumbs();
+
+  // Tabs accesibles (flechas izquierda/derecha).
+  var tabs = [document.getElementById("tab-g"), document.getElementById("tab-w")];
+  function select(i) {
+    tabs.forEach(function (t, j) {
+      var on = i === j;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    });
+    if (i === 0) fitThumbs(); else renderWidths();
+    try { history.replaceState(null, "", i ? "#anchos" : "#"); } catch (e) {}
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener("click", function () { select(i); });
+    t.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); var n = (i + 1) % 2; select(n); tabs[n].focus(); }
+    });
+  });
+
+  var sel = document.getElementById("w-page");
+  PAGES.forEach(function (p) { sel.add(new Option(p.g + " · " + p.t, p.f)); });
+  sel.value = "login-b";
+  function renderWidths() {
+    var box = document.getElementById("widths");
+    var h = +document.getElementById("w-h").value;
+    var q = "?embed=1&vertical=" + document.getElementById("w-vertical").value + "&state=" + document.getElementById("w-state").value;
+    box.innerHTML = WIDTHS.map(function (w) {
+      var s = h / w[1];
+      return '<div class="wbox"><div class="wlabel"><span>' + w[0] + " × " + w[1] + "</span><span>" + Math.round(s * 100) + '%</span></div>' +
+        '<div class="wframe" style="width:' + Math.round(w[0] * s) + "px;height:" + h + 'px">' +
+        '<iframe title="' + sel.value + " a " + w[0] + ' px" src="' + sel.value + ".html" + q + '" style="width:' + w[0] + "px;height:" + w[1] + "px;transform:scale(" + s + ')"></iframe></div></div>';
+    }).join("");
+  }
+  ["w-page", "w-vertical", "w-state", "w-h"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", renderWidths);
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-widths]");
+    if (!b) return;
+    sel.value = b.getAttribute("data-widths");
+    select(1);
+    tabs[1].focus();
+  });
+  if (location.hash === "#anchos" || new URLSearchParams(location.search).get("view") === "anchos") {
+    var pp = new URLSearchParams(location.search).get("page"); if (pp) sel.value = pp;
+    select(1);
+  }
+</script>
+</body>
+</html>

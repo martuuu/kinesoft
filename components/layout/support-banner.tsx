@@ -31,19 +31,8 @@ export type EndSupportAction = () => Promise<ActionResult<{ redirectTo: string }
 
 export const SUPPORT_BANNER_PLATFORM_HREF = "/plataforma";
 
-/**
- * Qué selector de consultorio publica el shell. En soporte, ninguno: las opciones son los consultorios PROPIOS del
- * superadmin y el activo es el de soporte (que no está en la lista), así que el selector mostraba el propio como si
- * fuera el actual, y elegirlo cambiaba la cookie de consultorio sin cerrar el soporte (que gana sobre ella). Se sale
- * con «Salir de soporte»; dónde está lo dice la banda. Puro y genérico para que el layout (server) y el test lo usen.
- */
-export function shellTenantChoice<O, A>(
-  support: boolean,
-  options: readonly O[],
-  switchAction: A
-): { options: readonly O[]; switchAction: A | null } {
-  return support ? { options: [], switchAction: null } : { options, switchAction };
-}
+// `shellTenantChoice` vive en `./shell-tenant-choice.ts` (no puede salir de un módulo "use client": PF-0a).
+export { shellTenantChoice } from "./shell-tenant-choice";
 
 /** Texto de la banda (exportado para el test de render). */
 export function supportBannerText(tenantName: string): { title: string; detail: string } {

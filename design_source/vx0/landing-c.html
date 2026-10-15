@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KineSoft · Landing (C, por tipo de consultorio)</title>
+<meta name="description" content="Agenda, turnos online, historia clínica y cobros para tu consultorio. Con herramientas propias para kinesiología.">
+<link rel="stylesheet" href="shared.css">
+<script src="shared.js"></script>
+<style>
+  /* C · vertical primero. El switch de arriba cambia el H1, el copy y la
+     vitrina de funciones. Es el mismo atributo de <html> que la barra del
+     prototipo (data-vertical): en la app sería ?para=kinesiologia|clinica,
+     con SSR del lado elegido para no saltar al hidratar. */
+  .hero { background: var(--bg-public); padding-block: clamp(40px, 6vw, 88px) clamp(56px, 7vw, 104px); }
+  .hero-copy { display: grid; justify-items: center; text-align: center; gap: 24px; max-width: 860px; margin-inline: auto; }
+  .ask { display: grid; gap: 12px; justify-items: center; }
+  .ask-label { font-size: 14px; font-weight: 600; color: var(--navy-500); }
+  .h1 { font-size: clamp(36px, 3.2vw + 20px, 64px); line-height: 1.05; font-weight: 650; letter-spacing: -0.04em; text-wrap: balance; min-height: 2.1em; display: grid; align-items: center; }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  /* Al cambiar de vertical, el bloque nuevo entra con un fade corto. Se
+     reproduce solo porque pasa de display:none a visible; con reduce motion
+     no hay animación. */
+  .swap { animation: fade var(--dur-base) var(--ease-out) both; }
+
+  .showcase { margin-top: clamp(40px, 5vw, 64px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 24px; align-items: stretch; }
+  /* Las 4 filas reparten el alto del mock de al lado: sin hueco abajo. */
+  .sc-list { display: grid; gap: 12px; padding: 0; margin: 0; list-style: none; grid-auto-rows: 1fr; }
+  .sc-item { display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: center; padding: 18px; border-radius: var(--r-md); background: #fff; border: 1px solid rgba(15, 30, 51, 0.07); box-shadow: var(--shadow-card); }
+  .sc-item h3 { font-size: 17px; font-weight: 650; margin-bottom: 2px; }
+  .sc-item p { color: var(--navy-500); font-size: 15px; line-height: 1.5; }
+  .sc-mock { border-radius: var(--r-xl); padding: 20px; background: rgba(255, 255, 255, 0.55); border: 1px solid rgba(255, 255, 255, 0.8); box-shadow: var(--glass-shadow); display: grid; align-content: start; gap: 14px; }
+  .pm-card { background: #fff; border-radius: 16px; padding: 18px; box-shadow: var(--shadow-card); display: grid; gap: 14px; }
+  .pm-head { display: flex; align-items: center; gap: 10px; }
+  .disc { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; }
+  .dots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .dots i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--disc-kine); }
+  .dots i.done { background: var(--disc-kine); }
+  .dots i.next { border-style: dashed; }
+  .eva { width: 100%; height: 88px; display: block; }
+  .ex { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .ex div { aspect-ratio: 4 / 3; border-radius: 12px; background: linear-gradient(160deg, var(--sky-200), var(--sky-100)); position: relative; overflow: hidden; }
+  .ex div::after { content: ""; position: absolute; left: 10px; right: 30%; bottom: 10px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.85); }
+  @media (max-width: 1023px) { .showcase { grid-template-columns: 1fr; max-width: 640px; margin-inline: auto; } .sc-list { grid-auto-rows: auto; } }
+  @media (max-width: 479px) { .hero-ctas { display: grid; grid-template-columns: 1fr; width: 100%; } .h1 { min-height: 0; } }
+
+  .common { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .common .card { display: grid; gap: 12px; align-content: start; }
+  .common p { color: var(--navy-500); font-size: 15px; line-height: 1.55; }
+  @media (max-width: 1023px) { .common { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 559px) { .common { grid-template-columns: 1fr; } }
+
+  .kine { background: #fff; border-block: 1px solid rgba(15, 30, 51, 0.06); }
+  .kine-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; margin-bottom: 40px; }
+  .kine-row .section-head { margin: 0; }
+  .kine-tools { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 0; margin: 0; list-style: none; }
+  .kine-tools li { display: grid; gap: 10px; align-content: start; padding: 20px; border-radius: var(--r-md); background: var(--bg-panel); }
+  .kine-tools h3 { font-size: 17px; font-weight: 650; }
+  .kine-tools p { color: var(--navy-500); font-size: 15px; line-height: 1.5; }
+  .note { display: flex; gap: 10px; align-items: flex-start; padding: 14px 16px; border-radius: 12px; background: var(--sky-50); color: var(--navy-700); font-size: 15px; margin-top: 20px; }
+  .note svg { width: 20px; height: 20px; color: var(--sky-700); }
+  @media (max-width: 1023px) { .kine-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kine-row { grid-template-columns: 1fr; } .kine-row .btn { justify-self: start; } }
+  @media (max-width: 559px) { .kine-tools { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="top" data-include="header"></div>
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="container">
+      <div class="hero-copy">
+        <div class="ask enter">
+          <span class="ask-label" id="ask-label">¿Qué consultorio tenés?</span>
+          <div class="seg" role="radiogroup" aria-labelledby="ask-label" data-seg="vertical">
+            <span class="seg-thumb" aria-hidden="true"></span>
+            <button type="button" role="radio" data-value="kine" aria-checked="true">Kinesiología</button>
+            <button type="button" role="radio" data-value="general" aria-checked="false">Clínica general</button>
+          </div>
+        </div>
+        <h1 class="h1 enter enter-d1" id="hero-title"><span class="swap" data-only="kine">Tu consultorio de kinesiología, de la evaluación al alta.</span><span class="swap" data-only="general">Tu consultorio, ordenado de punta a punta.</span></h1>
+        <p class="lead enter enter-d2" style="max-width:640px"><span class="swap" data-only="kine">Agenda, turnos online, historia clínica y cobros, más planes de tratamiento, ejercicios y seguimiento del dolor.</span><span class="swap" data-only="general">Pacientes, turnos e historia clínica para cualquier consultorio de salud. Sin herramientas que no vas a usar.</span></p>
+        <div class="hero-ctas enter enter-d2">
+          <a class="btn btn-primary btn-lg" href="signup.html">Probá 14 días gratis</a>
+          <a class="btn btn-ghost btn-lg" href="#precios">Ver precios</a>
+        </div>
+      </div>
+
+      <div class="showcase enter enter-d3">
+        <ul class="sc-list swap" role="list" data-only="kine">
+          <li class="sc-item"><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h3l2-5 4 10 2-5h5"/></svg></span><div><h3>Planes de tratamiento</h3><p>Kinesiología u osteopatía, sesión por sesión.</p></div></li>
+          <li class="sc-item"><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/></svg></span><div><h3>Ejercicios y terapia manual</h3><p>Tu biblioteca de ejercicios y maniobras.</p></div></li>
+          <li class="sc-item"><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="2"/><path d="M12 7v7M8 9.5h8M12 14l-3 6.5M12 14l3 6.5"/></svg></span><div><h3>Diagnóstico con mapa corporal</h3><p>La zona afectada, marcada sobre el cuerpo.</p></div></li>
+          <li class="sc-item"><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5h16M6 16l4-5 3 3 5-7"/></svg></span><div><h3>Seguimiento con EVA</h3><p>La escala de dolor de cada sesión, en una curva.</p></div></li>
+        </ul>
+        <ul class="sc-list swap" role="list" data-only="general">
+          <li class="sc-item"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4M9 12.5h6M9 16h4"/></svg></span><div><h3>Pacientes e historia clínica</h3><p>La ficha, los turnos y los archivos de cada paciente.</p></div></li>
+          <li class="sc-item"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg></span><div><h3>Agenda por profesional</h3><p>Día, semana y lista, con vista de recepción.</p></div></li>
+          <li class="sc-item"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span><div><h3>Turnos online</h3><p>Tu link de reservas, con pago por Mercado Pago si lo activás.</p></div></li>
+          <li class="sc-item"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M3 21h18"/></svg></span><div><h3>Salas y sala de espera</h3><p>En el plan Clínica: llegadas y llamados en tiempo real.</p></div></li>
+        </ul>
+        <div class="sc-mock mock" aria-hidden="true">
+          <div class="pm-card swap" data-only="kine">
+            <div class="pm-head"><span class="avatar">AL</span><span class="mock-bar w40" style="flex:1"></span><span class="disc" style="background:var(--disc-kine)">Kine</span></div>
+            <strong style="font-size:15px">Plan de tratamiento</strong>
+            <div class="dots"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="next"></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="pm-card swap" data-only="kine">
+            <strong style="font-size:15px">Escala EVA</strong>
+            <svg class="eva" viewBox="0 0 300 80" preserveAspectRatio="none"><path d="M0 20H300M0 40H300M0 60H300" stroke="rgba(15,30,51,.07)" stroke-width="1"/><path d="M6 10 L54 16 L102 28 L150 34 L198 48 L246 56 L294 64 L294 80 L6 80 Z" fill="rgba(94,146,204,.14)"/><polyline points="6,10 54,16 102,28 150,34 198,48 246,56 294,64" fill="none" stroke="var(--sky-700)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
+          </div>
+          <div class="pm-card swap" data-only="kine">
+            <strong style="font-size:15px">Ejercicios del plan</strong>
+            <div class="ex"><div></div><div></div><div></div></div>
+          </div>
+          <div class="swap" data-only="general" data-include="agenda" data-cols="2" data-rows="6"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="funciones" aria-labelledby="funciones-title">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow"><span class="eyebrow-dot"></span>En todos los planes</span>
+        <h2 class="h2" id="funciones-title">Lo que necesita cualquier consultorio</h2>
+      </div>
+      <div class="common">
+        <article class="card"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg></span><h3 class="h3">Agenda</h3><p>Por profesional, en día, semana o lista.</p></article>
+        <article class="card"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span><h3 class="h3">Turnos online</h3><p>Tus pacientes reservan desde tu link.</p></article>
+        <article class="card"><span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4"/></svg></span><h3 class="h3">Historia clínica</h3><p>La ficha y los archivos de cada paciente.</p></article>
+        <article class="card"><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.5"/></svg></span><h3 class="h3">Cobros</h3><p>Copago, obra social y Mercado Pago.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section kine" id="kinesiologia" aria-labelledby="kinesiologia-title">
+    <div class="container">
+      <div class="kine-row">
+        <div class="section-head">
+          <span class="eyebrow"><span class="eyebrow-dot"></span>Kinesiología</span>
+          <h2 class="h2" id="kinesiologia-title">Si atendés kinesiología, sumás herramientas propias</h2>
+        </div>
+        <a class="btn btn-ghost" href="signup.html">Empezá con Kinesiología</a>
+      </div>
+      <ul class="kine-tools" role="list">
+        <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h3l2-5 4 10 2-5h5"/></svg></span><h3>Planes de tratamiento</h3><p>Kinesiología u osteopatía, con los turnos atados al plan.</p></li>
+        <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/></svg></span><h3>Ejercicios</h3><p>Tus ejercicios propios; en Consultorio y Clínica, también el catálogo y las plantillas.</p></li>
+        <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="2"/><path d="M12 7v7M8 9.5h8M12 14l-3 6.5M12 14l3 6.5"/></svg></span><h3>Terapia manual y mapa corporal</h3><p>Maniobras y zonas afectadas, en la historia clínica.</p></li>
+        <li><span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5h16M6 16l4-5 3 3 5-7"/></svg></span><h3>Seguimiento con EVA</h3><p>La escala de dolor de cada sesión, en una curva.</p></li>
+      </ul>
+      <p class="note" data-only="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.5" r=".6" fill="currentColor"/></svg><span>Con Clínica general no ves estas herramientas: el menú queda con pacientes, turnos e historia clínica.</span></p>
+    </div>
+  </section>
+
+  <section class="section" id="como-empezar" aria-labelledby="como-empezar-title">
+    <div class="container"><div data-include="steps"></div></div>
+  </section>
+  <section class="section" id="precios" aria-labelledby="precios-title" style="background:#fff;border-top:1px solid rgba(15,30,51,.06)">
+    <div class="container"><div data-include="pricing"></div></div>
+  </section>
+  <section class="section" id="preguntas" aria-labelledby="preguntas-title">
+    <div class="container"><div data-include="faq"></div></div>
+  </section>
+  <section class="section" id="contacto" aria-labelledby="contacto-title" style="background:#fff;border-top:1px solid rgba(15,30,51,.06)">
+    <div class="container"><div data-include="contact"></div></div>
+  </section>
+</main>
+<div data-include="footer"></div>
+</body>
+</html>

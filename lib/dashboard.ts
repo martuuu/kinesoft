@@ -5,6 +5,7 @@
  */
 "use server";
 
+import { greetingFirstName } from "@/lib/display-name";
 import { unstable_cache } from "next/cache";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
@@ -584,7 +585,8 @@ export async function getDashboardData(): Promise<DashboardData> {
     next: counts.next.map(({ patientId, serviceName, ...n }) =>
       !patientId || isFull(patientId) ? n : { ...n, tag: serviceName }
     ),
-    greetingName: actor.practitionerName.split(" ")[0],
+    // DIR-0: sin nombre real el saludo va sin nombre («Hola 👋»), no «Hola, Usuario».
+    greetingName: greetingFirstName(actor.practitionerName),
     pinnedKpis: prefs.pinnedKpis,
     reminderDismissed,
     reminderKey,

@@ -1,3 +1,4 @@
+import { displayMemberName } from "@/lib/display-name";
 import { redirect } from "next/navigation";
 import { runWithRls } from "@/lib/rls";
 import { getAccessSnapshot, getActor } from "@/lib/session";
@@ -122,7 +123,7 @@ export default async function ConfiguracionPage({
       pending={pending}
       practitioners={practitioners.map((p) => ({
         id: p.id,
-        name: p.user.fullName ?? p.user.email,
+        name: displayMemberName(p.user.fullName),
       }))}
       customConditions={customConditions}
       locations={locations}

@@ -5,6 +5,7 @@
  * PHI: las membresías (equipo) se nombran con su consultorio; de las fichas de portal solo el conteo
  * («Paciente en N consultorios»). El DTO no trae más que eso.
  */
+import { displayUserName } from "@/lib/display-name";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
@@ -74,7 +75,7 @@ export function UserDetailView({ user, actorId }: { user: PlatformUserDetail; ac
       <Card style={{ padding: 24 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <h1 className="k-display" style={{ fontSize: 24, margin: 0, overflowWrap: "anywhere" }}>
-            {user.fullName || user.email}
+            {displayUserName(user.fullName)}
           </h1>
           {user.isPlatformAdmin && <Tag tone="lime">Superadmin</Tag>}
           {user.disabled && <Tag tone="soft">Deshabilitado</Tag>}

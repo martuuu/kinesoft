@@ -1,5 +1,6 @@
 "use client";
 
+import { displayUserName } from "@/lib/display-name";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Role, TenantVertical } from "@prisma/client";
@@ -133,7 +134,8 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
   const [pending, start] = useTransition();
   const [notice, setNotice] = useState<RowNotice | null>(null);
   const suspended = !!member.disabledAt;
-  const who = member.fullName ?? member.email;
+  // DIR-0: nunca el email como nombre (el email ya va en su propia línea de la fila).
+  const who = displayUserName(member.fullName);
   const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
 
   const confirm = useConfirm();

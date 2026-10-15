@@ -12,7 +12,7 @@
 > 63 menores, 2 refutados. El código es el árbitro: donde un doc decía una cosa y el código otra,
 > mandó el código.
 >
-> **Estado global:** MVP funcional, desplegado, 1 cliente vivo. El núcleo (auth/tenancy, flujo de
+> **Estado global:** MVP funcional, desplegado (desde el 15-oct: prod con datos demo, sin uso real; se trata como pre-producción). El núcleo (auth/tenancy, flujo de
 > booking, visibilidad de pacientes, billing de copago, webhook MP) está **genuinamente sólido**
 > (ver §Inventario de preservar). Los gaps de abajo son la distancia entre "anda para mi hermano"
 > y "SaaS vendible a consultorios".
@@ -960,7 +960,7 @@ en [ARCHITECTURE.md §Back-office + ADR-009..015](ARCHITECTURE.md); seguridad en
 - **Gate de BO (cierre de BO4-BO5, 14-oct):** tsc 0; unit 179 archivos / 3540 en UTC y en AR; guards OK; integración
   app 137 archivos / 1748 + 19 skip y owner 136 + 1 skip / 1724 + 43 skip; `next build` OK (middleware 124 kB).
 
-**Ronda 23 — EV1 · Clínica general + ajustes pendientes (14-oct-2026) ✅ (sin commitear; lo commitea Martin):**
+**Ronda 23 — EV1 · Clínica general + ajustes pendientes (14-oct-2026) ✅ (commit `d2092e6`):**
 ejecutado en develop sobre `7c28705` según el plan vigente §19.6, en 7 sesiones paralelas (A dashboard, B listado de
 pacientes, C1 agenda, C2 pacientes/Configuración/portal/turnero/onboarding, D Plataforma `isBasic` + ILIKE, E1 solo
 lectura clínica + ILIKE, E2 solo lectura de Configuración + varios) y un integrador. **Sin migraciones.** En Kinesiología
@@ -984,6 +984,11 @@ dashboard, agenda, pacientes, perfil, Configuración, onboarding, turnero ni por
   shared 88.4 kB). Perf: `compare.ts` sin regresiones fuera de umbral (31 escenarios; contra IAM-4b, igual o mejor).
   Bundle vs BO4-BO5 (First Load): `/configuracion` 210 → 214 kB (+4, sobre el criterio de +1 kB), `/agenda` 197 → 198,
   `/dashboard` 180 → 181, `/pacientes` 160 → 161; el resto igual.
+
+**Ronda 24 — relevamiento §20 (15-oct-2026), solo lectura:** 3 Explore + 3 diseños sobre `d2092e6` para el planning
+de §20 del plan vigente (PL, EV2, VX, ES4, PF, DIR; resumen en [ROADMAP.md «Plan vigente (15-oct)»](ROADMAP.md)).
+Sin código. Los hallazgos van en la tabla «Hallazgos del relevamiento §20» (abajo, en §2) con su destino; los dos
+**A** inmediatos son DIR-0 (hotfix en el bloque 0) y H-SLOW (PF-0, antes de PL). H-DOC se cierra en el Paso 0.
 
 ## Cómo leer la severidad
 
@@ -1824,6 +1829,25 @@ Ronda 23. Los 🟢 se verificaron en el archivo al cierre.
 | sessions-mode-unidad-por-regex | baja | C | components/agenda/booking-modal/sessions-mode.tsx (`asTurnos`) · lib/availability/recurrence.ts (`summarizeRange`) · lib/sessions-mode-state.ts | 🔴 | **C** — en General el resumen «N sesiones · …» se reescribe a «turnos» con regex en el cliente. Limpio sería una `unit` en `summarizeRange`/`localSummary`/`shortfallNote`, pero el resumen lo arma también el server (`availability-actions.ts`, `previewRecurrence`): hay que pasar la unidad por la action. No se hizo en la integración |
 | onboarding-escribinos-sin-canal | baja | VX | components/onboarding/steps-basic.tsx:169 | 🔴 | **VX** — «escribinos a soporte» sin `SupportContact` |
 | login-hero-kine | baja | VX | components/screens/login-screen.tsx (titular «la recuperación de tus pacientes, sesión a sesión», «planes de ejercicios») | 🔴 | **VX** — el párrafo ya es neutral («consultorios de salud»); el titular y la lista siguen siendo de kinesiología. Cara pública = VX |
+
+### Hallazgos del relevamiento §20 (15-oct-2026)
+
+Ronda 24. Evidencia y diseño en §20.2 del plan vigente; la ola de destino se copia en el brief de cada sesión.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| DIR-0 email-como-nombre-publico | alta | **A** | lib/public-booking.ts:208,810 · lib/portal.ts:139 (+ barrido) | 🔴 | **DIR-0** (bloque 0) — `fullName ?? email` saca el email del profesional en turnero, estado de reserva y portal. Martin (15-oct): el email no se muestra nunca como nombre. `publicPractitionerName` + guard estático |
+| H-PL1 titular-no-clinico-ve-hc | alta | **A** | lib/visibility.ts:165,208,267 | 🔴 | **PL-1b** (bloqueante) — `patientAccessFor` da `full` a OWNER/ADMIN antes de mirar `clinical.read`; un Titular/Admin sin agenda vería toda la HC (decisión 8). Se enmienda §5.6 |
+| H-PL2 facebook-sin-email | alta | **A** (si se prende Facebook) | app/auth/callback/route.ts (upsert) | 🔴 | **PL-2e** — Facebook puede no devolver email: el callback guarda `""` y choca con el único de `UserProfile.email`. Sin email → error, nunca perfil vacío |
+| H-PL3 body-size-server-actions | baja | C1 | next.config.mjs · lib/files.ts:149 | 🔴 | **PL-2c** sube `bodySizeLimit` a 4,5 MB (tope de Vercel); el copy de 25 MB de la UI de archivos → C |
+| H-PL4 tres-crons | baja | simplificación | vercel.json | 🔴 | **PL-2b** — un solo cron diario idempotente `/api/cron/daily` con las etapas de cobro y los jobs existentes |
+| H-TURN turnero-por-profesional | media | B | prisma/schema.prisma:36,1780 · lib/public-booking*.ts (`eligiblePractitioners`) | 🔴 | **M8 + PL-2f + PL-3b** — el turnero se prende solo por consultorio; falta `Practitioner.publicBookingEnabled` (decisión 20) |
+| H-SLOW lentitud-general | alta | **A** (operación) | vercel.json:3 · lib/session-user.ts · lib/rls.ts:43 · .docs/PERF.md | 🔴 | **PF-0a..d** (bloque 0, antes de PL) — `getUser()` por request, una tx por lectura (15 en dashboard), doble render, sin `loading.tsx`, framer en la transición. Falta confirmar Supabase en `sa-east-1` (Martin) |
+| H-EV2 pestana-evolucion-es-eva | baja | B | components/patients/profile/tabs-bar.tsx:45 | 🔴 | **EV2-3** — la pestaña «Evolución» es la curva EVA; pasa a «EVA» |
+| H-LAND landing-claims-inexistentes | media | VX | components/screens/landing-screen.tsx | 🔴 | **VX2-c1** — promete WhatsApp automático, Google Calendar, AFIP, AES-256, HIPAA, SSO, dictado, «servidores en Argentina»; estadísticas y testimonios inventados; CTAs muertos. Guard de claims |
+| H-LOGIN login-layout-roto | media | VX | components/screens/login-screen.tsx · app/globals.css:384-390 · auth-shell.tsx | 🔴 | **Ola F (F-b) + VX2-a** — sin contenedor máximo, no apila en mobile, «Matrícula» y «recordarme» muertos, `outline:none` sin anillo; `AuthShell` (10 pantallas) igual |
+| H-BUNDLE framer-en-root | media | VX / PF | app/layout.tsx:26-33 · components/providers/ui-providers.tsx | 🔴 | **Ola F (F-a/F-d, PF0)** — framer-motion (35 kB gz) en todas las rutas por `UIProviders` en el root; fuentes por `<link>` bloqueante |
+| H-DOC docs-cliente-vivo-y-reset | baja | docs | AGENTS.md:8 · .docs/PLANES.md · .docs/MIGRACIONES-RUNBOOK.md | 🟢 | **Paso 0** (15-oct) — prod con datos demo; ES4 sin E2E, sin legacy, sin reset; orden incremental y M8-M11 reservadas |
 
 ### Resumen del checklist (al 2026-09-29)
 

@@ -1,3 +1,4 @@
+import { displayMemberName } from "@/lib/display-name";
 import { listAgendaBookings, listPractitioners, listServices } from "@/lib/bookings";
 import { listPatients } from "@/lib/patients";
 import { listInsurers } from "@/lib/insurers";
@@ -158,11 +159,11 @@ export default async function AgendaPage({ searchParams }: { searchParams: SP })
       services={services.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, priceCents: s.priceCents, color: s.color, discipline: s.discipline }))}
       practitioners={practitioners.map((p) => ({
         id: p.id,
-        name: p.user.fullName ?? p.user.email,
+        name: displayMemberName(p.user.fullName),
       }))}
       practitionerBadges={practitionerOrder(
         practitioners.map((p) => {
-          const name = p.user.fullName ?? p.user.email;
+          const name = displayMemberName(p.user.fullName);
           return { id: p.id, name, initials: practitionerInitials(name) };
         }),
         agendaPrefs

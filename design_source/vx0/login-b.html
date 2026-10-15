@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar · KineSoft (B)</title>
+<link rel="stylesheet" href="shared.css">
+<script src="shared.js"></script>
+<style>
+  /* B · split CONTENIDO. El bug de prod (H-LOGIN): columna de marca flex:1
+     con contenido de 460 px pegado a la izquierda + form fijo de 540 px →
+     ~700 px vacíos en el centro a 1728. Acá todo vive en un contenedor de
+     1200 px centrado y la card tiene un ancho acotado (400-460 px): a 1728
+     sobra margen a los costados, nunca en el medio. */
+  body { background: var(--bg-public); }
+  .page { min-height: 100dvh; display: flex; flex-direction: column; }
+  .top { height: 80px; display: flex; align-items: center; }
+  main { flex: 1; display: grid; align-items: center; padding-block: 24px 56px; }
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(400px, 460px);
+    grid-template-areas: "intro card" "points card";
+    grid-template-rows: auto auto;
+    column-gap: clamp(48px, 7vw, 120px);
+    row-gap: 40px;
+    align-content: center;
+  }
+  .intro { grid-area: intro; align-self: end; display: grid; gap: 20px; max-width: 560px; }
+  .card-col { grid-area: card; align-self: center; }
+  .points { grid-area: points; align-self: start; max-width: 560px; }
+  .b-title { font-size: clamp(36px, 2.6vw + 14px, 56px); line-height: 1.04; font-weight: 650; letter-spacing: -0.035em; text-wrap: balance; }
+  .points ul { display: grid; gap: 24px; padding: 0; margin: 0; list-style: none; }
+  .points li { display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start; }
+  .points h2 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
+  .points p { color: var(--navy-500); font-size: 15px; line-height: 1.55; }
+  .foot { padding-block: 20px 28px; font-size: 14px; color: var(--navy-500); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .foot a { display: inline-flex; align-items: center; min-height: 44px; margin-block: -12px; }
+
+  /* < 1024: una columna de 560 px. Intro corta arriba, card, y los bullets
+     debajo (no empujan el form fuera del pliegue). */
+  @media (max-width: 1023px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "intro" "card" "points";
+      max-width: 560px; margin-inline: auto; row-gap: 32px;
+    }
+    .intro { gap: 12px; }
+    .b-title { font-size: clamp(28px, 3vw + 16px, 40px); }
+    .points { padding-top: 8px; }
+  }
+  /* < 768: el form arriba del pliegue. La intro se va; queda el logo. */
+  @media (max-width: 767px) {
+    .intro { display: none; }
+    .top { height: 64px; }
+    main { padding-top: 8px; }
+    .auth-card { padding: 24px 20px; border-radius: var(--r-lg); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top container"><div data-include="logo"></div></header>
+  <main id="main" class="container">
+    <div class="split">
+      <div class="intro enter">
+        <span class="eyebrow"><span class="eyebrow-dot"></span><span data-only="kine">Kinesiología y consultorios de salud</span><span data-only="general">Consultorios de salud</span></span>
+        <p class="b-title">Tu consultorio, ordenado de punta a punta.</p>
+        <p class="lead"><span data-only="kine">Agenda, turnos online, historia clínica y cobros. Con herramientas propias para kinesiología.</span><span data-only="general">Agenda, turnos online, historia clínica y cobros, en un solo lugar.</span></p>
+      </div>
+      <div class="card-col"><div class="auth-card enter enter-d1"><div data-include="login-form"></div></div></div>
+      <section class="points enter enter-d2" aria-label="Qué tenés en KineSoft">
+        <ul role="list">
+          <li>
+            <span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 3v3M16 3v3M7.5 13.5h3M7.5 16.5h6"/></svg></span>
+            <div><h2>Agenda por profesional</h2><p>Día, semana y lista. Con recepción para quien atiende el mostrador.</p></div>
+          </li>
+          <li>
+            <span class="icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>
+            <div><h2>Turnos online con tu link</h2><p>Tus pacientes eligen profesional, servicio y horario. Si lo activás, pagan con Mercado Pago.</p></div>
+          </li>
+          <li data-only="kine">
+            <span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="5.5" r="2.2"/><path d="M6 9c0 2.5 1.5 3.5 2 5l-2 6.5M9 11.5l4 1 3-2 3 5.5"/></svg></span>
+            <div><h2>Planes de tratamiento, sesión por sesión</h2><p>Ejercicios, terapia manual y el seguimiento del dolor con la escala EVA.</p></div>
+          </li>
+          <li data-only="general">
+            <span class="icon-tile lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M14 3.5V8h4M9 12.5h6M9 16h4"/></svg></span>
+            <div><h2>Historia clínica y cobros</h2><p>La ficha del paciente, sus archivos y el copago u obra social en un mismo lugar.</p></div>
+          </li>
+        </ul>
+      </section>
+    </div>
+  </main>
+  <footer class="foot container"><span>© 2026 KineSoft</span><a class="link" href="landing-b.html">Conocé KineSoft</a></footer>
+</div>
+</body>
+</html>

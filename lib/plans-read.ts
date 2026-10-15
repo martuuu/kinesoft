@@ -21,6 +21,7 @@
  * Este archivo exporta SOLO funciones async; tipos, zod y copy viven en
  * `lib/plans-read-types.ts`.
  */
+import { displayMemberName } from "@/lib/display-name";
 import type { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
@@ -279,7 +280,7 @@ export async function getPlanHistory(raw: PlanIdInputT): Promise<PlanReadResult<
           select: { userId: true, user: { select: { fullName: true, email: true } } },
         })
       : [];
-    const names = new Map(pros.map((p) => [p.userId, p.user.fullName ?? p.user.email]));
+    const names = new Map(pros.map((p) => [p.userId, displayMemberName(p.user.fullName)]));
 
     const history: PlanHistory = {
       events: events.map((e) => ({

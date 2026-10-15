@@ -9,6 +9,7 @@
  *  - la titularidad no va a una membresía sin aceptar ni a una suspendida (`changeMemberRoleInTx`);
  *  - a un suspendido no se le manda link de contraseña: primero se reactiva (mismo criterio que Configuración).
  */
+import { displayUserName } from "@/lib/display-name";
 import type { Role } from "@prisma/client";
 import type {
   InvitationEmailStatus,
@@ -122,9 +123,9 @@ export function emailStatusLabel(status: InvitationEmailStatus | null): { text: 
   }
 }
 
-/** Nombre a mostrar de un miembro (el perfil puede no tener nombre todavía). */
+/** Nombre a mostrar de un miembro (el perfil puede no tener nombre todavía). DIR-0: nunca el email (va en su línea). */
 export function memberDisplayName(m: Pick<PlatformTeamMemberRow, "fullName" | "email">): string {
-  return m.fullName?.trim() || m.email;
+  return displayUserName(m.fullName);
 }
 
 /** Estado de la invitación recién creada/reenviada: mostrar el link copiable solo si el mail no salió. */

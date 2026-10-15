@@ -14,9 +14,37 @@
 > 3. **Etapa 3 — Productiva final.** Guía de diagnóstico completa, planes, IA local, módulo
 >    contable, features Pro.
 
-## ⭐ Plan vigente (2026-09-29): bloques por urgencia
+## ⭐ Plan vigente (15-oct): §20
 
-> **Esta sección manda sobre las olas de abajo.** La auditoría pre-producción del 23-sep
+> **Manda sobre todo lo de abajo** (incluido el orden «VX → ES4 → DIR» del 14-oct, que queda como historia). El
+> detalle (contratos, olas, tests primero, decisiones con default §20.11) vive en el §20 del plan
+> (`~/.claude/plans/necesito-que-asumas-el-piped-engelbart.md`); los hallazgos que lo motivaron, en
+> [AUDIT.md §Ronda 24](AUDIT.md). Prod tiene **datos demo** y no hay staging ni reset: cada migración va incremental con
+> precheck → backup → `db:prod:deploy` ([MIGRACIONES-RUNBOOK.md](MIGRACIONES-RUNBOOK.md)).
+
+**Orden (decisión 17 de Martin):** 0 → PL → EV2 → VX → ES4 → PF → DIR.
+
+| # | Bloque | Qué incluye | Migración |
+|---|---|---|---|
+| 0 | **Paso 0 + DIR-0 + VX0 + PF-0** | Docs al día; hotfix A del email como nombre (DIR-0); prototipo visual de login y landing en `design_source/vx0/` (no toca la app); diagnóstico de lentitud (H-SLOW) + arreglos rápidos (sesión sin ida y vuelta a Auth, `loading.tsx`, sin doble render) | — |
+| 1 | **PL** Planes, cobros y cuenta | Recorte de auditoría (PL-A), planes Individual/Consultorio/Clínica/Libre en ARS, cupos por tipo y bajar de plan, Titular y permisos delegables, 2FA opcional por usuario, MP débito + pagos manuales + estado contable, mensajes y leads, alta con Google/Facebook, salas y sala de espera solo en Clínica/Libre, turnero por profesional | **M8** `pl_accounts_billing` |
+| 2 | **EV2** Evoluciones | HC base para todas las verticales: evolución por consulta, 24 h para editar, después enmienda o anulación; nunca se borra ni va al portal | **M9** `clinical_notes` |
+| 3 | **VX** Cara pública | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
+| 4 | **ES4** Portal (P4) | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
+| 5 | **PF** Performance + pulido | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
+| 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
+| — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
+
+**Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
+sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,
+una línea, sin co-autor) → siguiente. Al cierre de cada bloque, 2 revisores de solo lectura + fixers + docs + memoria.
+**Nunca** push, `migrate reset`/`db reset`, seeds, checkout de otra rama ni nada contra prod; las migraciones se
+aplican solo en local. Las decisiones que surjan se resuelven con el default recomendado y se anotan para el resumen
+final.
+
+## Plan del 29-sep: bloques por urgencia (historia; el orden vigente es el de §20, arriba)
+
+> **Esta sección mandaba sobre las olas de abajo hasta el 15-oct.** La auditoría pre-producción del 23-sep
 > ([AUDIT.md §Ronda 11](AUDIT.md)) y el benchmark de drapp.com.ar (29-sep) reordenaron todo el trabajo
 > pendiente en **bloques**. Las olas/etapas de más abajo quedan como historial y como catálogo de sesiones;
 > su orden de ejecución ya no es el vigente. El detalle completo (file:line de cada hallazgo, diseño de
@@ -27,10 +55,10 @@
 | Bloque | Qué | Estado |
 |---|---|---|
 | **A · Urgente** | **A0** operación segura + docs al día · **A1** red de tests + baseline de performance · **A2** cero pérdida de datos (H1-H4, turnos, pacientes/cobertura, Seguimiento, reserva pública, paridad de modales, visibilidad, montos de config) · **A3** auth/sesión/cookies/rate-limit (H5) + Sentry | ✅ **código completo** (30-sep, Ronda 12): A0 · A1 · A2 · A3a · A3b · A3c (H1-H6 cerrados). Pendiente del dueño: commit/deploy, A0a/A0d y las tareas de consola de EXTERNAL-CONFIG §0.1 — ver "Bloque A — estado" abajo |
-| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅** (`3ff2e50`, Ronda 13; QA de staging e import del catálogo en el go-live) · **Planes: planning firmado (03-oct)** (**ES1 ✅** `d7ac75f` · **ES2a ✅** `0edb0c8` · **ES2b ✅** `58ec36f` · **ES3 ✅** `ad50059`, M3a solo en local). **Verticales y Sala de Espera (07-oct):** corridas nuevas EV0 (**✅** `ddfdff3`), SV y EV1 ([VERTICALES.md](VERTICALES.md)); **Salas/Consultorios (08-oct):** corrida SR **✅** (`5811ea2`); SV **✅** (`d70513a`). **B y SV en prod desde el 14-oct** (migraciones incrementales, sin reset). Falta ES4 (después de VX; IAM, BO y EV1 ✅) — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
+| **B · Agenda profesional + Planes** | **B-pre** (antes de Planes, completo): catálogo global de especialidades/prácticas/prestadoras (fuentes oficiales + seed inicial), agenda por profesional × sede (horarios con franjas, días excepcionales, bloqueos, candado por día), configuración por práctica, motor de disponibilidad único, **agenda multi-profesional de Secretaria** (crítica en UX) y modal de turno nuevo. **Planes completo** (sin "v1"): `TreatmentProgram` extendido + FK `Booking.programId/sessionId` (ADR-001), generación de turnos con preview, precios, Kinesio/Osteo, 4 puertas de creación | 🟡 **B-pre ✅** (`3ff2e50`, Ronda 13; QA de staging e import del catálogo en el go-live) · **Planes: planning firmado (03-oct)** (**ES1 ✅** `d7ac75f` · **ES2a ✅** `0edb0c8` · **ES2b ✅** `58ec36f` · **ES3 ✅** `ad50059`, M3a solo en local). **Verticales y Sala de Espera (07-oct):** corridas nuevas EV0 (**✅** `ddfdff3`), SV y EV1 ([VERTICALES.md](VERTICALES.md)); **Salas/Consultorios (08-oct):** corrida SR **✅** (`5811ea2`); SV **✅** (`d70513a`). **B y SV en prod desde el 14-oct** (migraciones incrementales, sin reset). Falta ES4 (orden vigente: §20, arriba) — ver [PLANES.md](PLANES.md) y "Bloque B — estado" abajo |
 | **IAM · Identidad y acceso** (14-oct, plan §19.4) | Hotfix ILIKE [A], mails propios por Resend, invitación y activación propias, roles (Secretario/a), un usuario en varios consultorios, acceso sin bucles, selector, portal con magic link, Secretaria/Facturación sin profesional, administración del equipo. **Migración M6 `identity_access`** | ✅ **en develop** (IAM-0 `f53de55` · IAM-1 `972359f` · IAM-2 `67521e7` · IAM-3 `b8762a8` · IAM-4 `d83efa8`); M6 solo en local. Ver «Bloque IAM — estado» abajo |
 | **BO · Back-office y producción** (plan §19.5) | `/plataforma` completa (alta de consultorios y titulares, equipo, usuarios y reparación, ciclo de vida, soporte), auditoría de plataforma, health/errores/cron, superadmin con MFA. **Migración M7 `platform_backoffice`** | ✅ **en develop** (BO0 `a02137e` · BO1 `0d058bb` · BO2 `39299b1` · BO3-A `b97da5b` · BO3 `280c96f` · BO4-BO5 `c60014f`); M7 solo en local. Ver «Bloque BO — estado» abajo |
-| **EV1 → VX → ES4 → DIR** (plan §19.6-§19.8, §19.7b) | Clínica general · cara pública y pulido visual · cierre de Planes · directorio público (diferido, planning propio) | **EV1 ✅** en develop (14-oct, sin migración; [AUDIT §Ronda 23](AUDIT.md), [QA §EV1](QA.md)) · ⏳ resto en ese orden (decisión 4 de Martin, 14-oct); **siguiente: VX** |
+| **EV1 → VX → ES4 → DIR** (plan §19.6-§19.8, §19.7b; historia, reemplazado por §20) | Clínica general · cara pública y pulido visual · cierre de Planes · directorio público (diferido, planning propio) | **EV1 ✅** en develop (14-oct, sin migración; [AUDIT §Ronda 23](AUDIT.md), [QA §EV1](QA.md)) · resto reordenado el 15-oct: ver «Plan vigente (15-oct): §20» arriba |
 | **C · Diferido** | **C0** roles (la matriz de capabilities ya existe desde B-pre), ~~rol Secretaria completo (login sin Practitioner), multi-profesional + selector de consultorio~~ (hechos en IAM), ~~stepper de alta~~ (v1 hecho en A3c; B-pre le suma pasos), membresía aceptada en los write-paths, visibilidad de HC por registro + timeline, documentación del profesional, importar pacientes, reportes, link de pago · **C1** ejercicios editables y compartibles, ~~email transaccional + invitación de pacientes~~ (IAM) + identidad del paciente (portal por consultorio → ES4), fixes de perf, estrategia de cache, CSP enforce, toggle barra superior/lateral · **C2** diferidos de abajo (billing SaaS, soporte, adjuntos, portal v2, etc.; el realtime de la agenda pasó a la corrida SV de B el 07-oct) | ⏳ |
 | **D · Marketplace** | Directorio público de profesionales tipo Crontu: perfil público, búsqueda por especialidad/cobertura/zona, reserva y cobro con reglas, avisos, recordatorios por WhatsApp | ⏳ |
 | **E · IA de diagnóstico** | Guía de diagnóstico completa + IA local (ex Etapa 3) | ⏳ |
@@ -87,7 +115,7 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **EV0** (07-oct) | Tipo de consultorio (General / Kinesiología), matriz de módulos, guards de segmento, nav único, turnero con switch, onboarding con vertical, /plataforma de consultorios, REVOKE de la Data API. **Migración M2 `20261007120000_tenant_verticals`** (sola) | ✅ **ejecutada (07-oct), commit `ddfdff3`**; M2 solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en [QA.md §EV0](QA.md), ADR-005 |
 | **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, bloqueo de sala, filtro y vista "Por sala"; Facturación con cancelados cobrados e ingresos por rol. **Migración M4 `20261009120000_rooms`** (sola) | ✅ **ejecutada (08-oct), commit `5811ea2`**; M4 solo en el Docker local. Cierres en [AUDIT.md §Ronda 19](AUDIT.md), QA en [QA.md §Salas (SR)](QA.md), resumen abajo («SR · Salas/Consultorios») |
 | **SV** (13/14-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado «Llamado», `/sala`, avisos «Llegó» / «Pase …», agenda y Recepción en vivo; evento y "Llamar" con `roomId`. **Migración M5 `20261013120000_reception_call_realtime`** (sola) | ✅ **ejecutada (14-oct), commit `d70513a`**; M5 aplicada en prod el 14-oct. Cierres en [AUDIT.md §Ronda 20](AUDIT.md), QA en [QA.md §Sala de Espera realtime (SV)](QA.md), ADR-006, resumen abajo («SV») |
-| **ES4** (P4) | Cierre de Planes ([PLANES.md](PLANES.md)) | ⏳ después de VX (decisión 4, 14-oct; IAM, BO y EV1 ✅) |
+| **ES4** (P4) | Cierre de Planes ([PLANES.md](PLANES.md)) | ⏳ bloque 4 de §20 (después de PL, EV2 y VX), sin E2E ni legacy |
 | **EV1** (14-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral, lista de pacientes, Plataforma "Común/Pro" muerto), ILIKE escapado en todas las búsquedas, solo lectura en las actions que faltaban. R-LEGACY se dejó (decisión del 08-oct) | ✅ **en develop, sin migración**. Cierres en [AUDIT.md §Ronda 23](AUDIT.md), QA en [QA.md §EV1](QA.md) |
 | **Go-live de B** | Migraciones incrementales sobre la base viva, **sin reset ni staging** (decisiones del 14-oct) | ✅ 14-oct ([GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)) |
 
@@ -181,7 +209,7 @@ Gate de cierre (01-oct): `tsc` 0 · unit 1156/1156 en 51 archivos (UTC y AR) · 
    - **BO ✅** (14-oct; **M7 `20261015120000_platform_backoffice`**, solo en local): abajo, «Bloque BO — estado».
    - **EV1 ✅** (14-oct, **sin migración**): Clínica general sin copy de kinesiología, gráfico del dashboard, ILIKE
      escapado, `readonly-residual-actions` cerrado. Evidencia en [AUDIT.md §Ronda 23](AUDIT.md); QA en [QA.md §EV1](QA.md).
-   - **Siguiente: VX** → ES4 → DIR. ES4 comparte con SV solo `authz-matrix.test.ts` y `package.json` (por handoff).
+   - **Siguiente:** el orden de §20 (arriba: 0 → PL → EV2 → VX → ES4 → PF → DIR). ES4 comparte con SV solo `authz-matrix.test.ts` y `package.json` (por handoff).
    - **No se usa `classifyBatchInstant`** (colapsa "bloqueado" y "superposición" en "sobreturno"): va `classifyPlanRows`
      (`lib/availability/plan.ts`, ADR-003).
 3. **Go-live:** hecho el 14-oct con migraciones incrementales sobre la base viva (prod = datos demo; **sin reset ni

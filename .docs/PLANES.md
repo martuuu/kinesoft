@@ -4,16 +4,18 @@
 > **Criterio cuando hay conflicto:** primero la integridad de los datos del cliente vivo; después, que cada sesión sea chica, tenga un solo dueño por archivo y se pueda verificar.
 > **Estado verificado:** `develop @ 3ff2e50`, working tree limpio, todo en solo lectura.
 
-## Estado y decisiones firmadas (03-oct, actualizado 14-oct)
+## Estado y decisiones firmadas (03-oct, actualizado 15-oct)
 
-- **SV (Sala de Espera realtime) ejecutada el 13/14-oct** en develop sobre `5811ea2` (SR), **sin commit todavía**.
-  **1 migración:** M5 `20261013120000_reception_call_realtime` (SV0, sola), aplicada y verificada **solo en el Docker
-  local** (32 migraciones al día). Planning: plan vigente §18. Toca Planes solo en los refs del post-commit
+- **15-oct: manda el §20 del plan vigente** (resumen en [ROADMAP.md «Plan vigente (15-oct)»](ROADMAP.md)). Orden:
+  0 → PL → EV2 → VX → **ES4** → PF → DIR. B, SR y SV están en prod desde el 14-oct (migraciones incrementales, **sin
+  reset**); prod tiene datos demo. **ES4 sin E2E** (S26a Playwright → roadmap), **sin legacy** (S25L/S25n/S25b no se
+  hacen; precheck de solo lectura que lo confirme) y **sin reset**. Cambios a §12 en la nota de su tope.
+- **SV (Sala de Espera realtime) ejecutada el 13/14-oct** en develop sobre `5811ea2` (SR), commit `d70513a`; M5 en prod desde el 14-oct.
+  **1 migración:** M5 `20261013120000_reception_call_realtime` (SV0, sola). Planning: plan vigente §18. Toca Planes solo en los refs del post-commit
   (`plans-engine-internal`, `plans-lifecycle-internal`, `plans-adopt-internal`, `sessions.ts` ahora informan `roomId` y
   el profesional real del turno adoptado; AUDIT §Ronda 20). Arquitectura en
   [ARCHITECTURE.md §Sala de Espera realtime + ADR-006](ARCHITECTURE.md); QA en [QA.md §SV](QA.md).
-  **Siguiente corrida: ES4** → EV1 → reset + deploy único. ES4 comparte con SV solo `authz-matrix.test.ts` y
-  `package.json` (por handoff).
+  ES4 comparte con SV solo `authz-matrix.test.ts` y `package.json` (por handoff). EV1 ✅ (`d2092e6`).
 - **SR (Salas/Consultorios)** commiteada (`5811ea2`). **1 migración:** M4 `20261009120000_rooms` (SR0, sola), aplicada y verificada **solo en el Docker local**
   (31 migraciones al día). Planning: plan vigente §17 + §17.5 (respuestas de Martin). Entraron también las decisiones
   4 y 5 del cierre de ES3 (SR-D4F Facturación, SR-D5I ingresos por rol; ver §11 «Decididas por Martin»). Locks: enmienda
@@ -32,10 +34,10 @@
   | 6 | Widget de ingresos | Se **arregla**: suma MP + copagos cobrados a mano, con la obra social aparte, y tiene un selector **Mes/Semana** recordado por usuario. |
   | 7 | Salas/Consultorios | Corrida propia **SR**, después de ES3 y antes de SV. |
 
-- **Orden vigente de corridas (14-oct):** ES3 ✅ (con M3a y S14r) → SR ✅ (M4 `rooms`) → SV ✅ (M5 `reception_call_realtime`) → **ES4** → EV1 → reset de prod + deploy único de B.
+- **Orden de corridas (historia):** ES3 ✅ → SR ✅ → SV ✅ → IAM ✅ → BO ✅ → EV1 ✅. El «reset de prod + deploy único» del 07-oct **no se hizo**: el go-live del 14-oct fue incremental. Lo que sigue es el orden de §20 (arriba).
 - **Migraciones nuevas del bloque B después de M2:** **M3a** `billing_paid_at` (ES3, P3.0.0, sola), **M4** `rooms` (SR, sola) y **M5** `reception_call_realtime` (SV, sola).
 - **Decisiones de Martin del 07-oct** (detalle y contratos en [VERTICALES.md](VERTICALES.md); fuente: plan vigente §15):
-  1. **Prod se resetea antes del go-live** (reset total; el cliente vuelve a cargar). No hay datos de prod que preservar:
+  1. **Prod se resetea antes del go-live** — *superada: el reset no se hizo; el go-live del 14-oct fue incremental y prod tiene datos demo (las sesiones de legacy igual no se hacen, §20.8 del plan).* Texto original: No hay datos de prod que preservar:
      el deploy final es `migrate deploy` desde vacío + bootstrap ([VERTICALES.md §9](VERTICALES.md)). Por eso se caen
      las sesiones y prechecks de legacy (ver §0.4 y las marcas "eliminada (reset de prod 07-oct)" en §12 y §16).
   2. **Verticales del SaaS:** Consultorio General (sin Planes, Sesiones, Diagnóstico ni Ejercicios) y Consultorio
@@ -61,7 +63,7 @@
   (editor único y 4 puertas, agenda, drawer, Seguimiento, perfil, `/planes/[disciplina]`, plantillas) + ingresos
   reales del dashboard (S14r) + retiro de las altas viejas. Decisiones que cambiaron el contrato en §11 «Decisiones de
   ES3»; cierres en AUDIT §Ronda 18; QA en [QA.md §Planes P3](QA.md).
-- **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → EV0 → ES2b → ES3 → SR → SV → ES4 → EV1, orden del 08-oct), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
+- **(Historia, superada por el go-live incremental del 14-oct y por §20.)** **Decisión de Martin del 04-oct: nada se despliega hasta cerrar el bloque B.** Se ejecuta wave a wave (ES1 → ES2a → EV0 → ES2b → ES3 → SR → SV → ES4 → EV1, orden del 08-oct), todo en develop, con commit de Martin entre corridas. El deploy, la migración en prod, Playwright y la suite completa van al final del bloque B (§16). Esto reemplaza los "a prod" intermedios del texto original (hotfix de ES1 y M1 expand-first).
 - **Una sola migración en todo Planes:** M1 `plans_booking_link`. Ahora suma 2 tablas con RLS y la relajación de `Patient_userId_key`, una excepción a "todo aditivo" que Martin aprobó el 03-oct. Fuera de Planes, en el mismo bloque B: M2 `tenant_verticals` (EV0), M3a `billing_paid_at` (ES3), M4 `rooms` (SR) y M5 `reception_call_realtime` (SV), cada una sola en su ola.
 - **Abierto para Martin** (el Paso 0 no lo resuelve):
   1. ~~Fugas E0 en prod: ¿hotfix?~~ **Resuelto por el reset (07-oct):** no hay hotfix de E0; prod se resetea y el código nuevo sale en el deploy único. **Pero** queda abierto el hallazgo de bloque A `data-api-anon-sin-rls` (la anon key de Supabase podría leer/escribir 9 tablas sin RLS si la Data API expone `public`): acción de Martin en consola **ya**, independiente del reset ([VERTICALES.md §1](VERTICALES.md), AUDIT).
@@ -2145,7 +2147,21 @@ El checklist manual completo, por superficie, está en [QA.md §Planes P3](QA.md
 
 ---
 
-## 12. ES4 · P4 (= B4): portal ampliado, matriz y E2E (legacy eliminado por el reset) · sin migración
+## 12. ES4 · P4 (= B4): portal ampliado y matriz (E2E al roadmap, sin legacy) · sin migración
+
+> **15-oct — manda §20.8 del plan vigente** (se copia literal en los prompts de ES4; donde choque con el texto de
+> abajo, gana esto):
+> - **S26a (Playwright) → roadmap**; `test:e2e` fuera del gate. **S25L/S25n/S25b no se hacen** (prod demo, sin
+>   reset); precheck de solo lectura que lo confirme (planes sin turnos). **Evoluciones (EV2) nunca en el portal.**
+>   Copy neutral por vertical (`lib/portal-copy.ts`*).
+> - **S24a reconciliado con IAM-3c:** el login del portal sigue (Google + magic link); la autorización pasa a
+>   `(tenantId, userId)` en **`lib/portal-identity-internal.ts`*** (el nombre `portal-auth-internal.ts` ya existe):
+>   `requirePortalPatient(slug)`, `listPortalPatients(userId)`. Invitación = magic link con
+>   `next=/portal/vincular?t=<HMAC 7 días>`; `/portal/vincular` vincula con CAS. Auto-vínculo por email **solo si hay
+>   exactamente una ficha libre** en ese consultorio (PD-15); si hay más → «Pedile a tu consultorio que te invite».
+>   Gate: 0 `emailEqualsFilter` en `lib/portal.ts` y el módulo nuevo.
+> - **Olas:** P4.0 S24a (+ P4-C) → P4.1 tanda A (S24, S24p, S24d, S24r, S24e, S32a) → tanda B (S24i, S32) → P4.2 S26b
+>   (+ columnas GENERAL, SUPPORT, portal × «sin evoluciones», filas de EV2 y PL) + perf/soak → P4.Z. Sin P4.3.
 
 ### Enmiendas EV0/SV (07-oct, se copian literal en los prompts)
 
@@ -2156,18 +2172,15 @@ El checklist manual completo, por superficie, está en [QA.md §Planes P3](QA.md
 - **S26b**: columna "tenant GENERAL (OWNER)" en la matriz + "KINE FREE no asigna globales". **S26a**: escenario General (sin nav clínico; `/diagnostico` → `/dashboard`).
 - **Reset de prod (§15.6):** S25L, S25n y S25b **eliminadas**; PQ-14 y el escenario E2E "legacy" eliminados. ES4 corre después de SV: `authz-matrix.test.ts` y `package.json` se comparten con SV por handoff.
 
-**Orden de ES4:** P4.0 (S24a ∥ P4-C) → P4.1 (10) → P4.2 (2) → P4.3 (E2E) → P4.Z (gate final del bloque B).
+**Orden de ES4:** P4.0 (S24a ∥ P4-C) → P4.1 (8) → P4.2 (S26b) → P4.Z (gate final del bloque B). P4.3 (E2E) → roadmap (§20.8).
 
 **Prerrequisitos:**
 - commit de ES3;
 - ~~prechecks (8)-(10) y (14) con sus números~~ (eliminados por el reset de prod del 07-oct: base vacía);
 - PQ-13 respondida (~~PQ-14~~ eliminada por el reset);
-- commit de SV (orden del 08-oct: ES3 → SR → SV → ES4);
-- **PD-12 lista**:
-  - Playwright instalado por el orquestador con OK de Martin **antes de lanzar agentes** (`npm i -D @playwright/test && npx playwright install chromium`);
-  - `.env.e2e.local` con el Auth de **staging**, provisto por Martin;
-  - usuarios E2E creados por Martin.
-- Si el entorno E2E no está, S26a pasa a ES4b o a C1 y `test:e2e` sale del gate, **dejándolo dicho**.
+- commit de la corrida anterior en el orden de §20 (PL, EV2 y VX ✅);
+- ~~PD-12 (Playwright, `.env.e2e.local` de staging, usuarios E2E)~~: **ya no es prerrequisito** (15-oct). No hay
+  staging; S26a y `test:e2e` van al roadmap (§20.8).
 
 ### P4.0 · Identidad del portal y contratos (2 en paralelo, antes del resto del portal)
 
@@ -2217,7 +2230,7 @@ Tandas sugeridas:
   - **Matriz:** **todas** las actions × cross-tenant / básico / ASSISTANT / BILLING. **Columna ASSISTANT (E1, literal):** opera turnos, incluidos los de plan (crear, reprogramar, "este y los siguientes", cancelar, Recepción, agendar una sesión), y carga y renueva autorizaciones (`plans.authorize`); **no** tiene `plans.manage` (crear, editar, precio, cantidad, ciclo de vida, vincular, sacar → rechazo); nunca ve ni escribe campos clínicos; `getPlanDetail` completo → Forbidden. Las actions del portal × paciente de otro consultorio y sin vínculo.
   - **Perf:** `createPlan` de 20 filas ≤ 60 statements en 1 tx; `previewPlan` ≤ 30; `listOpenSessions` y `getPlanDetail` con presupuesto; agenda ≤ +5 %.
 
-### P4.3 · S26a · E2E Playwright (sola, alto)
+### P4.3 · S26a · E2E Playwright (sola, alto) — **al roadmap (15-oct, §20.8); texto como historia**
 
 - **Archivos:** `playwright.config.ts`*, `tests/e2e/planes.spec.ts`*, `tests/e2e/fixtures.ts`*, `package.json` (solo el script `test:e2e` = `dotenv -e .env.e2e.local -- playwright test`).
 - **Cómo corre:** contra `next build && next start`, con la base del Docker local (5433), el server en TZ=UTC y el browser en AR.

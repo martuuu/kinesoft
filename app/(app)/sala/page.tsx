@@ -1,3 +1,4 @@
+import { displayMemberName } from "@/lib/display-name";
 import { redirect } from "next/navigation";
 import { listPractitioners } from "@/lib/bookings";
 import { listSalaBookings } from "@/lib/sala-bookings";
@@ -65,7 +66,7 @@ export default async function SalaPage() {
       initialNow={new Date().toISOString()}
       initialRows={bookings}
       practitioners={practitioners.map((p) => {
-        const name = p.user.fullName ?? p.user.email;
+        const name = displayMemberName(p.user.fullName);
         return { id: p.id, name, initials: practitionerInitials(name) };
       })}
       rooms={rooms.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity }))}

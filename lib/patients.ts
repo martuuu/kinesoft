@@ -9,6 +9,7 @@
  * extension in `lib/db.ts` is reserved for places where we don't want
  * to hand-write the scope (read queries from React Server Components).
  */
+import { displayMemberName, displayUserName } from "@/lib/display-name";
 import { revalidatePath } from "next/cache";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -538,7 +539,7 @@ export async function getPatientCore(id: string): Promise<PatientCoreWithAccess 
         ? { insurer: cov.insurerRef?.name ?? cov.insurer, planName: cov.planName, memberId: cov.memberId }
         : null,
       emergency: patient.emergency.map((e) => ({ name: e.name, relation: e.relation, phone: e.phone })),
-      assignedPractitionerName: assignedUser ? assignedUser.fullName ?? assignedUser.email : null,
+      assignedPractitionerName: assignedUser ? displayMemberName(assignedUser.fullName) : null,
       nextBookingAt: nextBooking?.scheduledFor ?? null,
       access: "admin",
     };
@@ -1944,7 +1945,8 @@ export async function getPatientActivity(
         select: { id: true, fullName: true, email: true },
       })
     : [];
-  const userMap = new Map(users.map((u) => [u.id, u.fullName ?? u.email]));
+  // DIR-0: el actor puede no ser profesional (Secretaria/Admin) y nunca se muestra su email como nombre.
+  const userMap = new Map(users.map((u) => [u.id, displayUserName(u.fullName)]));
 
   return events.map((e) => ({
     id: e.id,

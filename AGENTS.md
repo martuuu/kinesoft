@@ -5,9 +5,9 @@ pacientes e historia clínica, planes de tratamiento, diagnóstico, biblioteca d
 facturación de copago y obra social. El stack es Next.js 14 (App Router) + TypeScript strict + Prisma 5 +
 PostgreSQL (Supabase) + Vercel + Mercado Pago. Todas las tablas de dominio llevan `tenantId`.
 
-Project lead: Martin Navarro. **Hay un cliente vivo en producción** (un kinesiólogo osteópata): cualquier cosa que
-toque datos, plata o la agenda se trata como pre-producción real. Este archivo resume cómo se ejecuta; el detalle
-vive en `.docs/`.
+Project lead: Martin Navarro. **Prod tiene datos demo y todavía nadie lo usa**, pero se sigue tratando como
+pre-producción real: cualquier cosa que toque datos, plata o la agenda va con precheck → backup → deploy (sin staging
+ni reset). Este archivo resume cómo se ejecuta; el detalle vive en `.docs/`.
 
 ## 1. Planificación: nada se ejecuta sin planning
 
@@ -26,8 +26,8 @@ vive en `.docs/`.
 - Todo hallazgo nuevo se clasifica en A, B, C, D o E y se anota en el momento. Si no, se pierde.
 - Fuentes, en este orden:
   1. El plan vigente, `~/.claude/plans/necesito-que-asumas-el-piped-engelbart.md`: auditoría del 23-sep, bloques
-     A-E, planning detallado de A0/A1 y benchmark de drapp. Hasta que la sesión A0c lo vuelque a `.docs/`, manda
-     sobre `.docs/ROADMAP.md`.
+     A-E, planning detallado de A0/A1 y benchmark de drapp. Desde el 15-oct manda su **§20** (orden 0 → PL → EV2 →
+     VX → ES4 → PF → DIR, resumido en `.docs/ROADMAP.md` «Plan vigente (15-oct)»).
   2. `.docs/AUDIT.md`: checklist de severidad. **§5 = inventario de "preservar"**: son patrones intencionales y
      no se "arreglan".
   3. `.docs/ROADMAP.md`, `.docs/QA.md`, `.docs/ARCHITECTURE.md`, `.docs/SECURITY.md`, `.docs/TESTING.md`.

@@ -49,6 +49,19 @@
     (`tests/helpers/gotrue-fake.ts`, los verifica `scripts/diagnose-auth.ts`). «M6» = `identity_access` (IAM-1).
     «BO» = back-office de Plataforma (bloque siguiente; «BO0..BO5» sus olas, «M7» = `platform_backoffice`, «BO-D*»
     sus decisiones). «VX» = cara pública y pulido visual; «DIR» = directorio público de consultorios (diferido).
+  - **§20 del plan (15-oct; orden 0 → PL → EV2 → VX → ES4 → PF → DIR):**
+    - «PL» = planes SaaS, cobros y cuenta: olas PL-A (recorte de auditoría), PL-0 (M8), PL-1..PL-3, cierre PL-Z;
+      «PL-D*» decisiones con default, «C-PL*» contratos. «H-PL1..4» son hallazgos (no olas).
+    - «EV2» = Evoluciones (HC base; olas EV2-0..3, EV2-Z; «EV2-D*» decisiones). No es la pestaña «Evolución» (curva EVA).
+    - «VX0» = prototipo; «Ola F» (F-a..F-e) y «F2» (codemod) = cimientos; «VX2» (a..f) = superficies públicas;
+      «D-VX*» decisiones, «C-F*» contratos de la Ola F.
+    - «PF» = performance + pulido: «PF-0a..d» (diagnóstico temprano), «PF1», «PF-M» (M10), «PF2»; «D-PF*» decisiones.
+      «PF0» (sin guion) es la parte de bundle de la Ola F.
+    - «ES4-D*» = decisiones del portal en §20.8. «DIR-0» = hotfix del email como nombre; «DIR-1..3» olas del directorio
+      (DIR-1 = M11), «DIR-D*» decisiones.
+    - «M8» = `pl_accounts_billing`, «M9» = `clinical_notes`, «M10» = `perf_fk_indexes`, «M11» = `public_directory`.
+    - «H-SLOW» (lentitud general), «H-TURN» (turnero por profesional), «H-EV2», «H-LAND», «H-LOGIN», «H-BUNDLE», «H-DOC»:
+      hallazgos de §20.2 ([AUDIT §Ronda 24](.docs/AUDIT.md)).
   - «Plan» choca en tres sentidos: plan de tratamiento, plan SaaS del tenant y plan de la obra social.
   - «Vertical» (`Tenant.vertical`: General / Kinesiología) es el tipo de consultorio: no es la «disciplina» de un
     servicio o plan (Kine / Osteo) ni el plan SaaS (`Tenant.plan`). «Kine PRO» = vertical Kinesiología + plan PRO.
