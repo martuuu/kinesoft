@@ -1247,6 +1247,7 @@ export type BookingUpdateTxOutcome =
   | { kind: "plan-session-not-pending"; ordinal: number }
   | { kind: "plan-paid-cancel" }
   | { kind: "plan-patient-change" }
+  | { kind: "clinical-note-patient" }
   // IAM-4b: mover (o reactivar / cambiar de sede) un turno cuyo profesional ya
   // no es reservable (turno viejo de la Secretaria, profesional suspendido).
   // Copy: PRACTITIONER_NOT_BOOKABLE_ERROR. Editar notas o cancelar sigue
@@ -1363,6 +1364,18 @@ export async function applyBookingUpdateInTx(
   if (isPlan && patientChanged) return { kind: "plan-patient-change" };
   let fields = gate.fields;
   if (patientChanged) {
+    // EV2 (C-EV2-7, brief §0 R1): una evolución colgada del turno es del paciente del turno; la FK compuesta
+    // `ClinicalNote_booking_tenant_patient_fkey` frenaría el re-vínculo con un 23503 (500). Se chequea SOLO en esta
+    // rama (cambio de un paciente a otro): el camino normal de `updateBooking*` no suma sentencias (techo STRICT de
+    // tests/perf/compare.ts). Un guest no puede tener evolución (la nota exige paciente): guest → paciente no mira.
+    // Cualquier nota cuenta (viva, enmienda o anulada): la FK no distingue.
+    if (before.patientId != null) {
+      const note = await tx.clinicalNote.findFirst({
+        where: { tenantId: actor.tenantId, bookingId: id },
+        select: { id: true },
+      });
+      if (note) return { kind: "clinical-note-patient" };
+    }
     const owned = await tx.patient.findFirst({
       where: { id: patch.patientId, tenantId: actor.tenantId },
       select: { id: true },

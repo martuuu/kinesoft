@@ -97,6 +97,8 @@ import {
   PLAN_DELETE_ERROR,
   PLAN_PAID_CANCEL_ERROR,
   PLAN_PATIENT_CHANGE_ERROR,
+  BOOKING_HAS_CLINICAL_NOTE_ERROR,
+  BOOKING_CLINICAL_NOTE_PATIENT_ERROR,
   PLAN_SESSION_NOT_PENDING_ERROR,
   PLAN_SESSION_TAKEN_ERROR,
   SESSION_KEPT_DONE_NOTICE,
@@ -1237,6 +1239,7 @@ async function updateBookingImpl(
   if (outcome.kind === "plan-session-taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
   if (outcome.kind === "plan-paid-cancel") return { ok: false, error: PLAN_PAID_CANCEL_ERROR };
   if (outcome.kind === "plan-patient-change") return { ok: false, error: PLAN_PATIENT_CHANGE_ERROR };
+  if (outcome.kind === "clinical-note-patient") return { ok: false, error: BOOKING_CLINICAL_NOTE_PATIENT_ERROR };
   // IAM-4b: turno viejo de un profesional que ya no atiende acá (Secretaria,
   // suspendido): no se mueve; se cancela y se carga con otro profesional.
   if (outcome.kind === "practitioner-not-bookable") return { ok: false, error: PRACTITIONER_NOT_BOOKABLE_ERROR };
@@ -1603,6 +1606,17 @@ async function deleteBookingImpl(
     // sesión queda "sin turno". Después del gate: quien no opera el turno no
     // se entera de que es de un plan.
     if (row.programId) return { kind: "plan-delete" as const };
+    // EV2-D23 (C-EV2-7): un turno con evolución (viva, enmienda o anulada) no se borra en duro: se cancela. La FK
+    // RESTRICT de M9 lo frenaría igual, pero con un P2003 (500). Antes de mirar pagos, después del gate (quien no opera
+    // el turno no se entera de que tiene evolución). Cuesta +1 sentencia SOLO en `deleteBooking` (no está en el techo
+    // STRICT de tests/perf/compare.ts), y solo si el turno tiene paciente: un guest no puede tener evolución.
+    if (row.patientId) {
+      const note = await tx.clinicalNote.findFirst({
+        where: { tenantId: actor.tenantId, bookingId: id },
+        select: { id: true },
+      });
+      if (note) return { kind: "has-clinical-note" as const };
+    }
     // Payment FK is onDelete: Restrict, so a paid turno can't be silently
     // wiped. Refuse the delete if a real payment is attached; for an
     // abandoned checkout (UNPAID/FAILED) clean up the orphan payment first
@@ -1655,6 +1669,7 @@ async function deleteBookingImpl(
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
   if (outcome.kind === "plan-delete") return { ok: false, error: PLAN_DELETE_ERROR };
+  if (outcome.kind === "has-clinical-note") return { ok: false, error: BOOKING_HAS_CLINICAL_NOTE_ERROR };
   if (outcome.kind === "has-payment") {
     return {
       ok: false,

@@ -148,9 +148,23 @@ export type ReopenSessionReason = "not-found" | "not-completed" | "touched";
  *
  * "Untouched" (C4, literal): `notes`, `rpe`, `paInPre` y `paInPost` en null,
  * sin EvaScore con ese `sessionId` (desde P2, S12b) y sin `SessionExercise` en
- * un estado distinto de PENDING. Una sola sentencia (los dos `EXISTS` van en
+ * un estado distinto de PENDING. Una sola sentencia (los `EXISTS` van en
  * la misma fila): `reopenSessionIfUntouchedInTx` corre dentro de
  * `updateBooking`/Recepción, que tienen techo estricto de sentencias.
+ *
+ * EV2-2d (EV2-D18): también cuenta una evolución de HC (`ClinicalNote`) RAÍZ
+ * VIVA (no enmienda, no anulada) del turno ACTIVO de la sesión (el del índice
+ * `Booking_session_active_key`: status fuera de CANCELLED/NO_SHOW). Va como un
+ * `EXISTS` más en esta misma sentencia (0 sentencias nuevas: el techo de
+ * `updateBooking*` no se mueve), por `Booking_sessionId_idx` y
+ * `ClinicalNote_bookingId_idx` (M9). Sin filtro de tenant propio: el turno
+ * cuelga de la sesión ya acotada por `tp.tenantId` y la FK compuesta
+ * (bookingId, tenantId, patientId) ata la nota al tenant del turno.
+ * Consecuencia del «turno ACTIVO»: este lock corre DESPUÉS del UPDATE del
+ * turno, así que COMPLETED → CANCELLED/NO_SHOW ya no ve la evolución de ese
+ * turno y la sesión se reabre (queda «sin turno»; la evolución sigue en la HC,
+ * colgada del turno cancelado). «Deshacer Atendido» (→ CONFIRMED/ARRIVED) sí la
+ * ve y no reabre.
  * `Session.title` NO cuenta: es el nombre de la sesión, no evolución.
  */
 async function lockSessionEvolutionStateInTx(
@@ -163,6 +177,9 @@ async function lockSessionEvolutionStateInTx(
       (s.notes IS NOT NULL OR s.rpe IS NOT NULL OR s."paInPre" IS NOT NULL OR s."paInPost" IS NOT NULL
         OR EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
         OR EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
+        OR EXISTS (SELECT 1 FROM "Booking" b JOIN "ClinicalNote" cn ON cn."bookingId" = b.id
+                   WHERE b."sessionId" = s.id AND b.status NOT IN ('CANCELLED','NO_SHOW')
+                     AND cn."amendsNoteId" IS NULL AND cn."voidedAt" IS NULL)      -- touched (EV2-D18)
       ) AS touched
     FROM "Session" s
     JOIN "TreatmentProgram" tp ON tp.id = s."programId"

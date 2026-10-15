@@ -350,6 +350,8 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
     // ejercicios) contra ~4 ms como owner. Con `NOT EXISTS` correlacionado la
     // policy corre solo sobre los ejercicios de las candidatas, por índice.
     // `count(*) OVER ()` da el total antes del LIMIT en la misma sentencia.
+    // EV2-2d (EV2-D18): una evolución de HC raíz viva del turno ACTIVO de la sesión también la saca del bucket
+    // (mismo `EXISTS` que `lockSessionEvolutionStateInTx`, en esta misma sentencia; anulada, vuelve).
     // Espejo SQL de `ownPatientsWhere`. Acá `actor.practitionerId` no es null (corte de arriba); con null el `=`
     // de SQL igual daría NULL (falso), pero no se depende de eso.
     const ownPid = actor.practitionerId;
@@ -370,6 +372,9 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
         AND s.notes IS NULL AND s.rpe IS NULL AND s."paInPre" IS NULL AND s."paInPost" IS NULL
         AND NOT EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
         AND NOT EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
+        AND NOT EXISTS (SELECT 1 FROM "Booking" b JOIN "ClinicalNote" cn ON cn."bookingId" = b.id
+                        WHERE b."sessionId" = s.id AND b.status NOT IN ('CANCELLED','NO_SHOW')
+                          AND cn."amendsNoteId" IS NULL AND cn."voidedAt" IS NULL)      -- sinEvolucion (EV2-D18)
       ORDER BY s."completedAt" DESC, s.id ASC
       LIMIT ${take}`;
     const sinEvolucion = { ids: sinEvRows.map((r) => r.id), total: sinEvRows[0]?.total ?? 0 };
