@@ -15,7 +15,6 @@ import { escapeLike } from "@/lib/email-match";
 import { Prisma, TagKind } from "@prisma/client";
 import { getActor, ForbiddenError, assertWritable, writableError } from "@/lib/session";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
-import { audit } from "@/lib/audit";
 import { gatingForActor } from "@/lib/plan-gating";
 import { tags as cacheTags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
@@ -438,14 +437,6 @@ async function createExerciseImpl(input: {
           : undefined,
       },
     }));
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "exercise.create",
-      entity: "Exercise",
-      entityId: ex.id,
-      payload: { name },
-    });
     revalidatePath("/biblioteca");
     revalidatePath("/terapia-manual");
     revalidateTag(cacheTags.exercises(actor.tenantId));

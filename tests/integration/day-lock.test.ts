@@ -154,10 +154,8 @@ describe.skipIf(!RUN)("candado de día (B4.4)", () => {
     expect(revalidatePathSpy).toHaveBeenCalledWith("/agenda");
     expect(revalidateTagSpy).toHaveBeenCalledWith(tags.bookingDays(A.tenantId));
     expect(revalidateTagSpy).toHaveBeenCalledWith(tags.dashboard(A.tenantId));
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: A.tenantId, action: "timeBlock.dayLock", entityId: rows[0].id },
-    });
-    expect(ev).not.toBeNull();
+    // [PL-A2] Bloqueos: ruido operativo, sin audit (§20.5.9).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: { startsWith: "timeBlock." } } })).toBe(0);
 
     // Reintento idéntico (doble click): no duplica.
     const again = await applyDayLock({
@@ -474,7 +472,7 @@ describe.skipIf(!RUN)("candado de día (B4.4)", () => {
       expect(revalidatePathSpy).toHaveBeenCalledWith("/agenda");
       expect(
         await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "timeBlock.dayUnlock" } })
-      ).toBeGreaterThanOrEqual(2);
+      ).toBe(0); // [PL-A2] sin audit (§20.5.9)
     });
 
     it("con blockIds solo quita los tildados; día sin bloqueos → error", async () => {
@@ -704,10 +702,8 @@ describe.skipIf(!RUN)("bloqueo de sala (SR-B, §17.5)", () => {
       groupId: null,
       createdById: C.userId,
     });
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: C.tenantId, action: "timeBlock.create", entityId: rows[0].id },
-    });
-    expect(ev?.payload).toMatchObject({ roomId: r1, locationId: loc1 });
+    // [PL-A2] sin audit (§20.5.9); la sala y la sede quedan en la fila (arriba).
+    expect(await db.auditEvent.count({ where: { tenantId: C.tenantId, action: "timeBlock.create" } })).toBe(0);
     // Con la sede de la sala explícita también pasa.
     const same = await createTimeBlock({
       roomId: r2,
@@ -805,10 +801,8 @@ describe.skipIf(!RUN)("bloqueo de sala (SR-B, §17.5)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ roomId: r1, locationId: loc1, practitionerId: null, allDay: true, reason: "Pintura" });
     expect(rows[0].startsAt.toISOString()).toBe("2027-04-12T03:00:00.000Z");
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: C.tenantId, action: "timeBlock.dayLock", entityId: rows[0].id },
-    });
-    expect(ev?.payload).toMatchObject({ roomId: r1, locationId: loc1 });
+    // [PL-A2] sin audit (§20.5.9); la sala y la sede quedan en la fila (arriba).
+    expect(await db.auditEvent.count({ where: { tenantId: C.tenantId, action: "timeBlock.dayLock" } })).toBe(0);
 
     const CANCEL = "2027-04-13";
     const plain = await roomBooking(C.practitionerId, CANCEL, "09:00", { roomId: r1, locationId: loc1 });

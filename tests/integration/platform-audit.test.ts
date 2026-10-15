@@ -10,7 +10,7 @@
  *   - las dos filas en la MISMA tx: si la tx hace rollback, no queda ninguna;
  *   - `idempotencyKey` repetida → no duplica ninguna de las dos y avisa `inserted: false`;
  *   - actor sin email → se toma la foto de `UserProfile`; actor sin usuario (script) → null;
- *   - `audit()`/`auditInTx` estampan `supportSessionId` del contexto del request.
+ *   - `auditSecurityEvent`/`auditInTx` estampan `supportSessionId` del contexto del request (PL-A: `audit()` se borró).
  *
  * `PlatformAuditEvent` es SERVICE_ONLY (M7): se escribe por `prismaService`, como
  * lo hace /plataforma. Es solo inserción: la limpieza de las filas globales (sin
@@ -21,7 +21,7 @@ import type { PrismaClient } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { runWithRequestContext, type RequestContext } from "@/lib/request-context";
-import { audit, auditInTx, auditPlatformInTx, auditPlatformGlobalInTx, type PlatformActorRef } from "@/lib/audit";
+import { auditSecurityEvent, auditInTx, auditPlatformInTx, auditPlatformGlobalInTx, type PlatformActorRef } from "@/lib/audit";
 import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 
 const RUN = process.env.INTEGRATION === "1";
@@ -283,13 +283,13 @@ describe.skipIf(!RUN)("platform audit · doble registro (BO1-B, C-BO5)", () => {
     const ctx = (supportSessionId?: string | null) =>
       ({ tenantId: T.tenantId, userId: S.userId, practitionerId: null, supportSessionId }) as RequestContext;
 
-    it("audit() lo estampa en el payload cuando hay sesión de soporte (y no se puede pisar)", async () => {
+    it("auditSecurityEvent lo estampa en el payload cuando hay sesión de soporte (y no se puede pisar)", async () => {
       const entityId = `ent-${uniqueSuffix()}`;
       await runWithRequestContext(ctx("ss-123"), () =>
-        audit({
+        auditSecurityEvent({
           tenantId: T.tenantId,
           actorId: S.userId,
-          action: "settings.update",
+          action: "patient.export",
           entity: "Tenant",
           entityId,
           payload: { changed: ["phone"], supportSessionId: "pisado" },
@@ -297,6 +297,14 @@ describe.skipIf(!RUN)("platform audit · doble registro (BO1-B, C-BO5)", () => {
       );
       const [row] = await tenantRows(entityId);
       expect(row.payload).toEqual({ changed: ["phone"], supportSessionId: "ss-123" });
+    });
+
+    it("[PL-A] auditSecurityEvent rechaza una acción fuera de la allowlist sin escribir", async () => {
+      const entityId = `ent-${uniqueSuffix()}`;
+      await expect(
+        auditSecurityEvent({ tenantId: T.tenantId, action: "patient.update" as never, entity: "Patient", entityId })
+      ).rejects.toThrow(/SECURITY_EVENT_ACTIONS/);
+      expect(await tenantRows(entityId)).toHaveLength(0);
     });
 
     it("auditInTx lo estampa también sin payload del caller", async () => {
@@ -314,7 +322,9 @@ describe.skipIf(!RUN)("platform audit · doble registro (BO1-B, C-BO5)", () => {
       const a = `ent-${uniqueSuffix()}`;
       const b = `ent-${uniqueSuffix()}`;
       await runWithRequestContext(ctx(null), () =>
-        audit({ tenantId: T.tenantId, action: "x.y", entity: "Tenant", entityId: a, payload: { k: 1 } })
+        runWithRls(T.tenantId, (tx) =>
+          auditInTx(tx, { tenantId: T.tenantId, action: "x.y", entity: "Tenant", entityId: a, payload: { k: 1 } })
+        )
       );
       await runWithRls(T.tenantId, (tx) => auditInTx(tx, { tenantId: T.tenantId, action: "x.y", entity: "Tenant", entityId: b }));
       expect((await tenantRows(a))[0].payload).toEqual({ k: 1 });

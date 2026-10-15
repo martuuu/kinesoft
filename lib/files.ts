@@ -34,7 +34,8 @@ import { randomBytes } from "node:crypto";
 import { PatientFileCategory } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, writableError } from "@/lib/session";
-import { audit } from "@/lib/audit";
+import { auditInTx, auditSecurityEvent } from "@/lib/audit";
+import { reportError } from "@/lib/error-report";
 import type { ActionResult } from "@/lib/validation";
 import { isStorageConfigured, storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
 import { patientAccessFor } from "@/lib/visibility";
@@ -192,15 +193,6 @@ export async function uploadPatientFile(
     throw e;
   }
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patientFile.upload",
-    entity: "PatientFile",
-    entityId: row.id,
-    payload: { name: row.name, sizeBytes: row.sizeBytes, category },
-  });
-
   revalidatePath(`/pacientes/${patientId}`);
   return { ok: true, data: { id: row.id } };
 }
@@ -232,16 +224,17 @@ export async function deletePatientFile(id: string): Promise<ActionResult> {
     if (!rm.ok) return { ok: false, error: "No pudimos borrar el archivo. Probá de nuevo." };
   }
 
-  await runWithRls(actor.tenantId, (tx) =>
-    tx.patientFile.deleteMany({ where: { id, tenantId: actor.tenantId } })
-  );
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patientFile.delete",
-    entity: "PatientFile",
-    entityId: id,
-    payload: { name: row.name, patientId: row.patientId },
+  // PL-A (seguridad): borrar un adjunto (PHI) se audita en la tx del delete de la fila.
+  await runWithRls(actor.tenantId, async (tx) => {
+    await tx.patientFile.deleteMany({ where: { id, tenantId: actor.tenantId } });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patientFile.delete",
+      entity: "PatientFile",
+      entityId: id,
+      payload: { name: row.name, patientId: row.patientId },
+    });
   });
   revalidatePath(`/pacientes/${row.patientId}`);
   return { ok: true, data: undefined };
@@ -268,15 +261,21 @@ export async function getDownloadUrl(id: string): Promise<ActionResult<{ url: st
   // obtener la URL: si la función moría entre los dos pasos (timeout de
   // Vercel, audit perdido) quedaba una URL válida por 10 min sin rastro.
   // Registramos el INTENTO; si la firma falla queda un evento de más, nunca
-  // uno de menos. (`audit()` no tira: un fallo propio solo se loguea.)
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patientFile.download",
-    entity: "PatientFile",
-    entityId: id,
-    payload: { name: row.name, patientId: row.patientId },
-  });
+  // uno de menos. PL-A (PL-D13): `auditSecurityEvent` (canal service, anda en
+  // solo lectura) y falla CERRADO: sin audit no hay URL.
+  try {
+    await auditSecurityEvent({
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patientFile.download",
+      entity: "PatientFile",
+      entityId: id,
+      payload: { name: row.name, patientId: row.patientId },
+    });
+  } catch (err) {
+    reportError("patient_file.download_audit_failed", err, { fileId: id });
+    return { ok: false, error: "No pudimos generar el link." };
+  }
   const signed = await storageSign(BUCKET, row.storageKey, 600);
   if (!signed.ok) return { ok: false, error: "No pudimos generar el link." };
   return { ok: true, data: { url: signed.data } };

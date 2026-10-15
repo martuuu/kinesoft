@@ -41,7 +41,6 @@ import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
 import { getActor } from "@/lib/session";
-import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { dayKeyToDbDate } from "@/lib/schedule-validate";
@@ -207,14 +206,6 @@ async function createRoomImpl(raw: RoomCreateInput): Promise<ActionResult<{ id: 
         },
         select: { id: true },
       });
-      await auditInTx(tx, {
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "room.create",
-        entity: "Room",
-        entityId: room.id,
-        payload: { locationId: loc.id, name: d.name, kind: d.kind, capacity: d.capacity },
-      });
       return room;
     });
     if (!row) return { ok: false, error: BAD_LOCATION, fieldErrors: { locationId: [BAD_LOCATION] } };
@@ -256,14 +247,6 @@ async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
       // updateMany con tenantId: la barrera explícita también en la escritura.
       const r = await tx.room.updateMany({ where: { id, tenantId: actor.tenantId }, data });
       if (r.count === 0) return false;
-      await auditInTx(tx, {
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "room.update",
-        entity: "Room",
-        entityId: id,
-        payload: { fields: Object.keys(data) },
-      });
       return true;
     });
     if (!found) return { ok: false, error: NOT_FOUND };
@@ -287,7 +270,7 @@ async function updateRoomImpl(raw: RoomUpdateInput): Promise<ActionResult> {
  * `archiveLocation`). Los bloqueos de sala (`TimeBlock.roomId`) NO bloquean:
  * los que terminan después de ahora se borran (soft delete) en la misma tx
  * (§17.5: un bloqueo de una sala archivada no tiene sentido; los pasados
- * quedan como historia). Ya archivada → ok idempotente, sin audit.
+ * quedan como historia). Ya archivada → ok idempotente.
  */
 export async function archiveRoom(...args: Parameters<typeof archiveRoomImpl>): ReturnType<typeof archiveRoomImpl> {
   return withReadOnlyResult(() => withSupportWritable("lib/rooms.ts#archiveRoom", () => archiveRoomImpl(...args)));
@@ -339,17 +322,9 @@ async function archiveRoomImpl(raw: RoomArchiveInput): Promise<ArchiveRoomResult
         return { kind: "blocked" as const, blockers };
       }
       await tx.room.updateMany({ where: { id: room.id, tenantId: actor.tenantId }, data: { active: false } });
-      const deleted = await tx.timeBlock.updateMany({
+      await tx.timeBlock.updateMany({
         where: { tenantId: actor.tenantId, roomId: room.id, deletedAt: null, endsAt: { gt: now } },
         data: { deletedAt: now },
-      });
-      await auditInTx(tx, {
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "room.archive",
-        entity: "Room",
-        entityId: room.id,
-        payload: { name: room.name, deletedBlocks: deleted.count },
       });
       return { kind: "done" as const };
     });
@@ -410,13 +385,6 @@ async function restoreRoomImpl(raw: RoomArchiveInput): Promise<ActionResult> {
       if (room.active) return "done" as const;
       if (!room.location.active) return "locationArchived" as const;
       await tx.room.updateMany({ where: { id: room.id, tenantId: actor.tenantId, active: false }, data: { active: true } });
-      await auditInTx(tx, {
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "room.restore",
-        entity: "Room",
-        entityId: room.id,
-      });
       return "done" as const;
     });
     if (res === "notFound") return { ok: false, error: NOT_FOUND };

@@ -29,7 +29,6 @@ import { Prisma } from "@prisma/client";
 import { prismaService as prisma } from "@/lib/db";
 import { createCheckoutPreference } from "@/lib/mercadopago";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
@@ -668,17 +667,8 @@ export async function submitPublicBooking(
         });
       }
       await afterBookingsCommitted(tenant.id, refs);
-      if (created.released) {
-        // Auditado acá (no tras MP): la cancelación ya se commiteó aunque la
-        // preferencia falle después.
-        await audit({
-          tenantId: tenant.id,
-          action: "booking.public.expired_replaced",
-          entity: "Booking",
-          entityId: created.released.id,
-          payload: { replacedBy: created.id, patientId: created.patientId },
-        });
-      }
+      // PL-A (plan §20.5.9): las reservas públicas (y el reemplazo de un hold
+      // vencido) dejaron de auditarse: ruido operativo; queda el log de abajo.
     } catch (e) {
       if (e instanceof PublicLocationGoneError || e instanceof PublicSlotGoneError) {
         return { ok: false, error: SLOT_UNAVAILABLE_ERROR };
@@ -729,18 +719,6 @@ export async function submitPublicBooking(
     return { ok: false, error: "No pudimos iniciar el pago. Probá de nuevo en unos segundos." };
   }
 
-  await audit({
-    tenantId: tenant.id,
-    action: "booking.public.create",
-    entity: "Booking",
-    entityId: bookingId,
-    payload: {
-      patientId,
-      preferenceId: pref.preferenceId,
-      amountCents: service.priceCents,
-      replay: !!prior,
-    },
-  });
   logger.info("booking.public.create", { bookingId, tenant: tenant.slug, replay: !!prior });
 
 

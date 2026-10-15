@@ -36,7 +36,6 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
 // Lock compartido de sedes (ver cabecera); módulo único desde el integrador B2.
@@ -618,20 +617,6 @@ async function savePractitionerWeekImpl(
       });
       return { before, warnings, version: await versionOf(tx, actor.tenantId, input.practitionerId) };
     });
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "schedule.saveWeek",
-      entity: "Practitioner",
-      entityId: input.practitionerId,
-      payload: {
-        before: summarizeWeek(res.before),
-        after: summarizeWeek(input.ranges),
-        locations: [...new Set(input.ranges.map((r) => r.locationId))],
-        ...(roomIds.length > 0 ? { rooms: roomIds } : {}),
-        ...(input.ranges.some((r) => r.validFrom || r.validUntil) ? { withValidity: true } : {}),
-      },
-    });
     revalidateAll();
     return {
       ok: true,
@@ -900,19 +885,6 @@ async function upsertExceptionImpl(raw: UpsertExceptionRaw): Promise<ActionResul
       });
       return { id: row.id, created: true };
     });
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: res.created ? "scheduleException.create" : "scheduleException.update",
-      entity: "ScheduleException",
-      entityId: res.id,
-      payload: {
-        practitionerId: input.practitionerId,
-        date: input.date,
-        kind: input.kind,
-        ...(ranges ? { ranges } : {}),
-      },
-    });
     revalidateAll();
     return { ok: true, data: { id: res.id } };
   } catch (e) {
@@ -946,14 +918,6 @@ async function deleteExceptionImpl(id: string): Promise<ActionResult> {
     return row;
   });
   if (!deleted) return { ok: false, error: "Excepción no encontrada." };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "scheduleException.delete",
-    entity: "ScheduleException",
-    entityId: deleted.id,
-    payload: { practitionerId: deleted.practitionerId, date: dbDateToDayKey(deleted.date), kind: deleted.kind },
-  });
   revalidateAll();
   return { ok: true, data: undefined };
 }

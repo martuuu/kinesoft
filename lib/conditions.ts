@@ -29,7 +29,6 @@ import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { getActor } from "@/lib/session";
 import { requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
-import { audit } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
 
@@ -136,14 +135,6 @@ async function createCustomConditionImpl(
       },
       select: { id: true, slug: true },
     }));
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "condition.create",
-      entity: "Condition",
-      entityId: row.id,
-      payload: { name: data.name },
-    });
     revalidatePath("/configuracion");
     revalidatePath("/diagnostico");
     revalidateTag(cacheTags.catalog());
@@ -200,13 +191,6 @@ async function updateCustomConditionImpl(
       mechanism: data.mechanism === "" ? null : data.mechanism,
     },
   }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "condition.update",
-    entity: "Condition",
-    entityId: id,
-  });
   revalidatePath("/configuracion");
   revalidatePath("/diagnostico");
   revalidateTag(cacheTags.catalog());
@@ -239,13 +223,6 @@ async function deleteCustomConditionImpl(id: string): Promise<ActionResult> {
     };
   }
   await runWithRls(actor.tenantId, (tx) => tx.condition.delete({ where: { id } }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "condition.delete",
-    entity: "Condition",
-    entityId: id,
-  });
   revalidatePath("/configuracion");
   revalidatePath("/diagnostico");
   revalidateTag(cacheTags.catalog());

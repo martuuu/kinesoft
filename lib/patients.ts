@@ -21,7 +21,7 @@ import { modulesFor } from "@/lib/tenant-modules";
 import { isTenantAdminRole, capabilitiesFor, canWriteClinical } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
-import { audit } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
@@ -442,13 +442,6 @@ async function setPatientArchivedImpl(input: {
     throw e;
   }
   if (outcome.denied) return { ok: false, error: outcome.denied };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: input.archived ? "patient.archive" : "patient.unarchive",
-    entity: "Patient",
-    entityId: input.id,
-  });
   // Post-commit, una vez (enmienda Realtime): solo si L9 canceló turnos.
   if (outcome.refs.length) await afterBookingsCommitted(actor.tenantId, outcome.refs);
   revalidatePath("/pacientes");
@@ -515,13 +508,6 @@ export async function getPatientCore(id: string): Promise<PatientCoreWithAccess 
       })),
     ]);
     if (!patient) return null;
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.read.admin",
-      entity: "Patient",
-      entityId: patient.id,
-    });
     const cov = patient.coverages[0];
     const assignedUser = patient.assignedPractitioner?.user;
     // Literal campo por campo (no spread): el tipo congelado es el contrato
@@ -565,13 +551,6 @@ export async function getPatientCore(id: string): Promise<PatientCoreWithAccess 
       })),
     ]);
     if (!patient) return null;
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.read.basic",
-      entity: "Patient",
-      entityId: patient.id,
-    });
     return {
       id: patient.id,
       firstName: patient.firstName,
@@ -605,13 +584,6 @@ export async function getPatientCore(id: string): Promise<PatientCoreWithAccess 
     })
   );
   if (patient) {
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.read",
-      entity: "Patient",
-      entityId: patient.id,
-    });
     return { ...patient, access: "full" as const };
   }
   return null;
@@ -1008,19 +980,6 @@ export async function createPatient(
         fieldErrors: { assignTo: ["Profesional inválido"] },
       };
     }
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "patient.create",
-      entity: "Patient",
-      entityId: p.id,
-      // Solo ids y flags (sin PHI): a cargo de quién quedó y si se descartaron
-      // campos clínicos que mandó un rol sin `clinical.read`.
-      payload: {
-        assignedPractitionerId: p.assignedPractitionerId,
-        ...(clinicalIgnored ? { clinicalIgnored: true } : {}),
-      },
-    });
     if (actor.userId) {
       await notify({
         tenantId: actor.tenantId,
@@ -1152,14 +1111,6 @@ async function updatePatientImpl(
       error: "La ficha cambió en otra sesión mientras la editabas. Cerrá y volvé a abrir para ver los cambios.",
     };
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.update",
-    entity: "Patient",
-    entityId: id,
-    payload: { fields: outcome.changed },
-  });
   revalidatePath("/pacientes");
   revalidatePath(`/pacientes/${id}`);
   return { ok: true, data: { id, updatedAt: outcome.updatedAt.toISOString() } };
@@ -1209,16 +1160,17 @@ async function setPatientDiagnosisImpl(
         diagnosisNote: note.trim() || null,
       },
     });
+    // PL-A (PL-D14, integridad de HC): en la misma tx. Sin el texto (es HC).
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.diagnosis.update",
+      entity: "Patient",
+      entityId: patientId,
+    });
     return { ok: true as const };
   });
   if (!result.ok) return { ok: false, error: result.error };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.diagnosis.update",
-    entity: "Patient",
-    entityId: patientId,
-  });
   revalidatePath(`/pacientes/${patientId}`);
   revalidatePath("/agenda");
   return { ok: true, data: undefined };
@@ -1443,6 +1395,21 @@ async function setPatientCoverageImpl(input: {
         },
       });
     }
+    // PL-A (plata): la cobertura decide el copago; el audit va en la tx del write.
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.coverage.update",
+      entity: "Patient",
+      entityId: patientId,
+      payload: {
+        insurer: resolvedName || "Particular",
+        insurerId: resolvedInsurerId,
+        payerPlanId: resolvedPlan?.id ?? null,
+        osChanged: !sameOs,
+        copagoReset,
+      },
+    });
     return {
       ok: true as const,
       resolvedName,
@@ -1454,22 +1421,6 @@ async function setPatientCoverageImpl(input: {
   });
 
   if (!result.ok) return { ok: false, error: result.error };
-  const { resolvedName, resolvedInsurerId, osChanged, copagoReset } = result;
-
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.coverage.update",
-    entity: "Patient",
-    entityId: patientId,
-    payload: {
-      insurer: resolvedName || "Particular",
-      insurerId: resolvedInsurerId,
-      payerPlanId: result.payerPlanId,
-      osChanged,
-      copagoReset,
-    },
-  });
   revalidatePath(`/pacientes/${patientId}`);
   revalidatePath("/agenda");
   return { ok: true, data: undefined };
@@ -1591,17 +1542,18 @@ async function setPatientDefaultCopagoImpl(input: {
         },
       });
     }
+    // PL-A (plata): en la misma tx; si el audit falla, el copago no queda.
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.copago.update",
+      entity: "Patient",
+      entityId: input.patientId,
+      payload: { copagoCents: copago },
+    });
     return { ok: true as const };
   });
   if (!result.ok) return { ok: false, error: result.error };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.copago.update",
-    entity: "Patient",
-    entityId: input.patientId,
-    payload: { copagoCents: copago },
-  });
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath("/agenda");
   return { ok: true, data: undefined };
@@ -1656,20 +1608,23 @@ async function assignPatientToPractitionerImpl(input: {
     if (!prac) return { ok: false, error: "Elegí un profesional activo del consultorio con acceso clínico." };
   }
 
-  await runWithRls(actor.tenantId, (tx) => tx.patient.update({
-    where: { id: input.patientId, tenantId: actor.tenantId },
-    data: { assignedPractitionerId: input.practitionerId },
-  }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "patient.reassign",
-    entity: "Patient",
-    entityId: input.patientId,
-    payload: {
-      from: owned.assignedPractitionerId,
-      to: input.practitionerId,
-    },
+  // PL-A (acceso): reasignar cambia quién ve la HC completa → audit en la tx del write.
+  await runWithRls(actor.tenantId, async (tx) => {
+    await tx.patient.update({
+      where: { id: input.patientId, tenantId: actor.tenantId },
+      data: { assignedPractitionerId: input.practitionerId },
+    });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "patient.reassign",
+      entity: "Patient",
+      entityId: input.patientId,
+      payload: {
+        from: owned.assignedPractitionerId,
+        to: input.practitionerId,
+      },
+    });
   });
   revalidatePath(`/pacientes/${input.patientId}`);
   revalidatePath("/pacientes");
@@ -1793,15 +1748,19 @@ export async function sendPatientPortalInvite(input: {
         };
   }
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    // Con la ficha ya vinculada es un reenvío (la actividad del paciente lo muestra distinto).
-    action: linked ? "patient.portal_invite.resend" : "patient.portal_invite",
-    entity: "Patient",
-    entityId: patient.id,
-    payload: { emailSent: outcome.emailSent, transport: outcome.transport, emailStatus: outcome.emailStatus, linked },
-  });
+  // PL-A (acceso): la invitación no escribe filas propias (el vínculo lo hace el login), así que el audit es el
+  // único write y va en su propia tx con el GUC del consultorio (`auditInTx`; no el canal service).
+  await runWithRls(actor.tenantId, (tx) =>
+    auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      // Con la ficha ya vinculada es un reenvío (la actividad del paciente lo muestra distinto).
+      action: linked ? "patient.portal_invite.resend" : "patient.portal_invite",
+      entity: "Patient",
+      entityId: patient.id,
+      payload: { emailSent: outcome.emailSent, transport: outcome.transport, emailStatus: outcome.emailStatus, linked },
+    })
+  );
   return { ok: true, data: { ...outcome, portalUrl } };
 }
 
@@ -1873,13 +1832,6 @@ async function bulkArchivePatientsImpl(input: {
           : `No tenés acceso completo a ${outcome.n} de los pacientes elegidos. No se archivó ninguno.`,
     };
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: input.archived ? "patient.bulk_archive" : "patient.bulk_unarchive",
-    entity: "Patient",
-    payload: { count: outcome.count, ids: ids.slice(0, 50) },
-  });
   if (outcome.refs.length) await afterBookingsCommitted(actor.tenantId, outcome.refs);
   revalidatePath("/pacientes");
   return { ok: true, data: { updated: outcome.count } };
@@ -2044,6 +1996,7 @@ async function setPatientSharesImpl(input: {
   const toAdd = [...wanted].filter((id) => !existingSet.has(id));
   const toRemove = [...existingSet].filter((id) => !wanted.has(id));
 
+  // PL-A (acceso): compartir da HC completa a otro profesional → audit en la misma tx que los shares.
   await runWithRls(actor.tenantId, async (tx) => {
     if (toRemove.length > 0) {
       await tx.patientShare.deleteMany({
@@ -2063,18 +2016,17 @@ async function setPatientSharesImpl(input: {
         })),
       });
     }
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "patient.share.update",
+        entity: "Patient",
+        entityId: input.patientId,
+        payload: { added: toAdd, removed: toRemove },
+      });
+    }
   });
-
-  if (toAdd.length > 0 || toRemove.length > 0) {
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "patient.share.update",
-      entity: "Patient",
-      entityId: input.patientId,
-      payload: { added: toAdd, removed: toRemove },
-    });
-  }
 
   // Notify each NEWLY-added practitioner (not the ones already shared, and
   // never the actor doing the sharing) that a patient was shared with them.

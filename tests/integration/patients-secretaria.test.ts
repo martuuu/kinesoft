@@ -9,7 +9,7 @@
  *    paciente quedaba asignado a quien lo creaba: la Secretaria se quedaba con
  *    la ficha y el kine del turno la veía en básico.
  *  - `getPatientCore` con nivel `admin` devuelve la proyección congelada
- *    `PatientAdminCore` (sin HC) y audita `patient.read.admin`.
+ *    `PatientAdminCore` (sin HC); desde PL-A la lectura no se audita.
  *  - Turnos y estado de cobro visibles para `admin`, con title/description/
  *    notes redactados por `bookingFieldAccess`.
  *  - `setPatientDiagnosis` exige `canWriteClinical`.
@@ -229,7 +229,7 @@ describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
 
   // ── Proyección admin ───────────────────────────────────────────────────
 
-  it("getPatientCore admin = PatientAdminCore exacto (sin HC) y audita patient.read.admin", async () => {
+  it("getPatientCore admin = PatientAdminCore exacto (sin HC) y sin audit de lectura (PL-A)", async () => {
     const p = await addPatient(db, A, {
       assignedPractitionerId: kine.practitionerId,
       notes: "Nota clínica privada",
@@ -254,10 +254,8 @@ describe.skipIf(!RUN)("P0-S07sp · Secretaria en pacientes", () => {
       expect(core.phone).not.toBeNull();
     }
 
-    const audits = await db.auditEvent.findMany({
-      where: { tenantId: A.tenantId, entityId: p, action: "patient.read.admin" },
-    });
-    expect(audits).toHaveLength(2);
+    // PL-A (plan §20.5.9): abrir el perfil ya no audita (lectura de PHI).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: p } })).toBe(0);
 
     // Controles: OWNER full (con notas); un PRACTITIONER sin acceso en un
     // tenant sin "Consultorio común" sigue en básico (ver test de abajo).

@@ -104,7 +104,7 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
 
   // ── Recepción ──────────────────────────────────────────────────────────
   describe("markReceptionAction", () => {
-    it("flujo completo: llegó → en atención → atendido → deshacer; cada paso devuelve el updatedAt nuevo y audita", async () => {
+    it("flujo completo: llegó → en atención → atendido → deshacer; cada paso devuelve el updatedAt nuevo (sin audit, PL-A)", async () => {
       asUser(A.userId);
       const b = await seed(A);
       const r1 = await markReceptionAction(b.id, "llego", b.updatedAt.toISOString());
@@ -138,18 +138,8 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       expect(row.arrivedAt).not.toBeNull();
       expect(row.attendingAt).not.toBeNull();
 
-      const audits = await db.auditEvent.findMany({
-        where: { tenantId: A.tenantId, entityId: b.id },
-        orderBy: { createdAt: "asc" },
-        select: { action: true, actorId: true },
-      });
-      expect(audits.map((a) => a.action)).toEqual([
-        "booking.reception.llego",
-        "booking.reception.en-atencion",
-        "booking.reception.atendido",
-        "booking.reception.deshacer",
-      ]);
-      expect(audits.every((a) => a.actorId === A.userId)).toBe(true);
+      // PL-A (plan §20.5.9): la recepción (check-in) es ruido operativo y ya no se audita.
+      expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: b.id } })).toBe(0);
     });
 
     it("ausente → NO_SHOW; deshacer → CONFIRMED", async () => {
@@ -334,7 +324,7 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       return { b, roomId };
     }
 
-    it("[SV05] llamar: en-sala → llamado escribe calledAt, emite 1 vez kind 'called' con roomId y audita", async () => {
+    it("[SV05] llamar: en-sala → llamado escribe calledAt, emite 1 vez kind 'called' con roomId (sin audit, PL-A)", async () => {
       asUser(A.userId);
       const { b, roomId } = await inSala();
       realtimeFake.reset();
@@ -359,14 +349,8 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
         kind: "called",
       });
 
-      const audits = await db.auditEvent.findMany({
-        where: { tenantId: A.tenantId, entityId: b.id },
-        select: { action: true, actorId: true, payload: true },
-      });
-      expect(audits).toHaveLength(1);
-      expect(audits[0].action).toBe("booking.reception.llamar");
-      expect(audits[0].actorId).toBe(A.userId);
-      expect(audits[0].payload).toMatchObject({ from: "en-sala", to: "llamado" });
+      // PL-A: «Llamar» ya no se audita (recepción = ruido operativo).
+      expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: b.id } })).toBe(0);
     });
 
     it("llamar desde por-llegar → error («Primero marcá Llegó»), sin escribir ni emitir", async () => {
@@ -399,7 +383,7 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       expect(realtimeFake.calls).toHaveLength(0);
     });
 
-    it("la Secretaria (ASSISTANT) llama en nombre del profesional (SV-D2): turno de otro profesional, audit con su usuario", async () => {
+    it("la Secretaria (ASSISTANT) llama en nombre del profesional (SV-D2): turno de otro profesional", async () => {
       asUser(assistant.userId);
       const { b } = await inSala({ practitionerId: kine.practitionerId });
       realtimeFake.reset();
@@ -407,8 +391,8 @@ describe.skipIf(!RUN)("B4.1 · recepción, proyección liviana y cancelación en
       expect(r.ok).toBe(true);
       expect((await db.booking.findUniqueOrThrow({ where: { id: b.id } })).calledAt).not.toBeNull();
       expect(realtimeFake.calls[0]?.refs?.[0]).toMatchObject({ practitionerId: kine.practitionerId, kind: "called" });
-      const a = await db.auditEvent.findFirstOrThrow({ where: { entityId: b.id, action: "booking.reception.llamar" } });
-      expect(a.actorId).toBe(assistant.userId);
+      // PL-A: sin audit de recepción; lo observable es `calledAt` y el evento realtime de arriba.
+      expect(await db.auditEvent.count({ where: { entityId: b.id } })).toBe(0);
     });
 
     it("BILLING → forbidden, sin escribir ni emitir", async () => {

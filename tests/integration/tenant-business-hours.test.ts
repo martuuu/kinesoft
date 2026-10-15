@@ -80,11 +80,8 @@ describe.skipIf(!RUN)("setBusinessHours ↔ plantilla por defecto (integrador B2
     // Sin franjas sigue sin franjas (el loader le aplica el fallback del tenant).
     expect(await rowsOf(noRows.practitionerId)).toEqual([]);
 
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: A.tenantId, action: "tenant.business_hours" },
-      orderBy: { createdAt: "desc" },
-    });
-    expect(ev?.payload).toMatchObject({ start: 9, end: 18, syncedPractitioners: 1 });
+    // [PL-A2] Horario del consultorio: ruido operativo, sin audit (§20.5.9).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "tenant.business_hours" } })).toBe(0);
   });
 
   it("un segundo cambio vuelve a arrastrarla (el 'viejo' es el horario ya guardado)", async () => {

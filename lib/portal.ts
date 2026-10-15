@@ -39,7 +39,6 @@ import { prismaService as prisma } from "@/lib/db";
 import { getVerifiedSessionUser } from "@/lib/session-user";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
-import { audit } from "@/lib/audit";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
 import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { publicSurfacesOpenFor } from "@/lib/public-booking-internal";
@@ -278,14 +277,6 @@ export async function submitCheckIn(input: {
     },
   });
   const patientText = input.notes?.trim().slice(0, 500) || null;
-  await audit({
-    tenantId: auth.tenant.id,
-    actorId: auth.user.id,
-    action: "portal.checkin",
-    entity: "Patient",
-    entityId: auth.patient.id,
-    payload: { sessionId: sess.id, sessionIndex: sess.index, pain, notes: patientText },
-  });
   const patientName = `${auth.patient.firstName} ${auth.patient.lastName}`.trim();
   const title = `Check-in de ${patientName} · sesión ${sess.index} · EVA ${pain}/10`;
   const link = `/pacientes/${auth.patient.id}`;

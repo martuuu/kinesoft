@@ -71,7 +71,6 @@ import {
   afterBookingsCommitted,
   type BookingChangeRef,
 } from "@/lib/booking-events-internal";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
 import {
@@ -569,25 +568,6 @@ async function createTimeBlockImpl(
   }
   if (out.kind === "error") return { ok: false, error: out.error };
 
-  await audit({
-    tenantId,
-    actorId: actor.userId,
-    action: "timeBlock.create",
-    entity: "TimeBlock",
-    entityId: groupId ?? out.ids[0],
-    payload: {
-      ids: out.ids,
-      groupId,
-      practitionerIds: targets,
-      locationId: out.locationId,
-      roomId,
-      startsAt: win.startsAt.toISOString(),
-      endsAt: win.endsAt.toISOString(),
-      allDay: input.allDay,
-      reason: input.reason,
-      affectedCount: out.affected.count,
-    },
-  });
   revalidatePath("/agenda");
   // SV06b: el alta no toca turnos, pero cambia los slots (o la ocupación de la
   // sala): las agendas abiertas hacen `router.refresh()` al recibirlo.
@@ -670,14 +650,6 @@ async function deleteTimeBlockImpl(
   if (out.kind === "notFound") return { ok: false, error: "Bloqueo no encontrado." };
   if (out.kind === "forbidden") throw new ForbiddenError(FORBIDDEN_DELETE);
 
-  await audit({
-    tenantId,
-    actorId: actor.userId,
-    action: "timeBlock.delete",
-    entity: "TimeBlock",
-    entityId: "id" in key ? key.id : key.groupId,
-    payload: { ids: out.ids, ...("groupId" in key ? { groupId: key.groupId } : {}) },
-  });
   revalidatePath("/agenda");
   // SV06b: quitar un bloqueo vuelve a ofrecer esos slots.
   await emitAvailability(tenantId, out.scope, out.startsAt, out.endsAt);
@@ -1030,30 +1002,6 @@ async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockRes
   }
 
   const data = out.data;
-  await audit({
-    tenantId,
-    actorId: actor.userId,
-    action: "timeBlock.dayLock",
-    entity: "TimeBlock",
-    entityId: data.groupId ?? data.ids[0],
-    payload: {
-      dayKey: input.dayKey,
-      ids: data.ids,
-      groupId: data.groupId,
-      reused: data.reused,
-      practitionerIds: targets,
-      locationId,
-      roomId,
-      allDay: input.allDay,
-      startsAt: data.startsAt,
-      endsAt: data.endsAt,
-      reason: input.reason,
-      decision: data.decision,
-      keptIds: data.kept.map((b) => b.id),
-      cancelledIds: data.cancelled.map((b) => b.id),
-      skipped: data.skipped.map((s) => ({ id: s.booking.id, reason: s.reason })),
-    },
-  });
   revalidatePath("/agenda");
   // SV06b: antes acá se revalidaban `bookingDays`/`dashboard` inline y no se
   // avisaba a nadie (§18.1: el candado era un write-path de Booking fuera del
@@ -1162,20 +1110,6 @@ async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<
   if (out.kind === "forbidden") throw new ForbiddenError(FORBIDDEN_DELETE);
 
   if (out.deletedIds.length) {
-    await audit({
-      tenantId,
-      actorId: actor.userId,
-      action: "timeBlock.dayUnlock",
-      entity: "TimeBlock",
-      entityId: out.deletedIds[0],
-      payload: {
-        dayKey,
-        practitionerId,
-        roomId,
-        ids: out.deletedIds,
-        remainingIds: out.remaining.map((b) => b.id),
-      },
-    });
     revalidatePath("/agenda");
     // SV06b: desbloquear devuelve los slots del día. Solo si se borró algo: sin
     // cambios no hay nada que avisar. Alcance = el pedido (sala → null).

@@ -293,7 +293,9 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
 
   // ── Auditoría y PHI ────────────────────────────────────────────────────────────────────────────────────────
 
-  it("el perfil del paciente no expone lo clínico y su lectura auditada lleva el supportSessionId", async () => {
+  // PL-A (plan §20.5.9): las lecturas de PHI ya no se auditan; que el audit de soporte lleve `supportSessionId` lo
+  // cubre platform-audit.test.ts (`auditInTx` / `auditSecurityEvent` bajo contexto de soporte).
+  it("el perfil del paciente no expone lo clínico y su lectura no escribe audit", async () => {
     const sessionId = await enter(S);
     const since = new Date();
     const p = await getPatientCore(patientId);
@@ -302,11 +304,8 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect(p!.access).toBe("admin");
     const json = JSON.stringify(p);
     for (const secret of ["NOTA CLÍNICA SECRETA", "DIAG SECRETO", "Lumbalgia"]) expect(json).not.toContain(secret);
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: T.tenantId, actorId: S, entityId: patientId, action: { startsWith: "patient.read" }, createdAt: { gte: since } },
-    });
-    expect(ev).not.toBeNull();
-    expect((ev!.payload as { supportSessionId?: string }).supportSessionId).toBe(sessionId);
+    expect(sessionId).toBeTruthy();
+    expect(await db.auditEvent.count({ where: { tenantId: T.tenantId, actorId: S, entityId: patientId, createdAt: { gte: since } } })).toBe(0);
   });
 
   // «Ve lo que ve la Secretaria» = nivel `admin` (contacto y cobertura para operar, sin HC). Arrancó como it.fails:

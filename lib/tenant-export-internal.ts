@@ -23,7 +23,8 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
-import { audit } from "@/lib/audit";
+import { auditSecurityEvent } from "@/lib/audit";
+import { reportError } from "@/lib/error-report";
 import { logger } from "@/lib/logger";
 import {
   EXPORT_ENTITIES,
@@ -218,19 +219,27 @@ export function streamTenantExport(p: {
   const finish = async (completed: boolean, error?: string) => {
     if (finished) return;
     finished = true;
-    await audit({
-      tenantId: p.tenant.id,
-      actorId: p.actorUserId,
-      action: "tenant.export",
-      entity: "Tenant",
-      entityId: p.tenant.id,
-      payload: { completed, counts, version: TENANT_EXPORT_VERSION, ...(error ? { error } : {}) },
-    });
+    // Los bytes ya salieron: un fallo del audit de cierre no puede romper el stream; se reporta. El rastro de que
+    // alguien bajó la PHI ya quedó con `tenant.export.started` (que sí falla cerrado).
+    try {
+      await auditSecurityEvent({
+        tenantId: p.tenant.id,
+        actorId: p.actorUserId,
+        action: "tenant.export",
+        entity: "Tenant",
+        entityId: p.tenant.id,
+        payload: { completed, counts, version: TENANT_EXPORT_VERSION, ...(error ? { error } : {}) },
+      });
+    } catch (err) {
+      reportError("tenant.export.audit_failed", err, { tenantId: p.tenant.id, completed });
+    }
   };
 
   return new ReadableStream<Uint8Array>({
     async start() {
-      await audit({
+      // PL-A (PL-D13): canal service, anda con el consultorio en solo lectura. Falla CERRADO: si tira, el stream
+      // se corta antes del primer byte.
+      await auditSecurityEvent({
         tenantId: p.tenant.id,
         actorId: p.actorUserId,
         action: "tenant.export.started",

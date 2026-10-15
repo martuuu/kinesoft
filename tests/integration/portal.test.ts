@@ -85,7 +85,7 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(plan?.title).toBe("Plan lumbar");
   });
 
-  it("el check-in no toca Patient.notes: crea la EvaScore, notifica al asignado y audita el texto", async () => {
+  it("el check-in no toca Patient.notes: crea la EvaScore y notifica al asignado (sin audit, PL-A)", async () => {
     const uid = patientIdentity();
     const kineNotes = "Nota clínica del kine: no tocar.";
     const patientId = await addPatient(db, A, { email: `${uid}@test.local`, notes: kineNotes });
@@ -110,11 +110,9 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(notif[0].title).toContain("EVA 6/10");
     expect(notif[0].body).toBe("Me duele al agacharme");
 
-    const ev = await db.auditEvent.findFirstOrThrow({
-      where: { tenantId: A.tenantId, action: "portal.checkin", entityId: patientId },
-    });
-    expect(ev.actorId).toBe(uid);
-    expect(ev.payload).toMatchObject({ sessionId, pain: 6, notes: "Me duele al agacharme" });
+    // PL-A (plan §20.5.9): el check-in es ruido operativo y ya no audita (antes copiaba el texto del paciente al
+    // payload del audit). Queda la EvaScore y la notificación de arriba.
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: patientId } })).toBe(0);
 
     // Segundo check-in de la misma sesión: rechazado, sin tocar nada.
     const again = await submitCheckIn({ tenantSlug: A.slug, sessionId, pain: 2, notes: "otra" });

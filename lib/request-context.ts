@@ -1,8 +1,10 @@
 /**
  * Per-request actor context propagated via AsyncLocalStorage.
  *
- * The Prisma `auditExtension` reads from this to auto-record PHI reads
- * without each call site passing the actor down. `getActor()` in
+ * El logger (requestId/tenantId/userId en cada línea) y `lib/audit.ts`
+ * (`supportSessionId`, ip/userAgent de los eventos de seguridad) leen de acá
+ * sin que cada call site pase el actor. (La extensión que auditaba lecturas de
+ * PHI se borró en PL-A: nunca estuvo cableada.) `getActor()` in
  * `lib/session.ts` enters the context lazily on the first call, so the
  * value is available for the rest of the request without explicit
  * plumbing.
@@ -28,7 +30,7 @@ export type RequestContext = {
    * `runWithRls` lo lee para abrir la transacción en `transaction_read_only` (solo si el tenant coincide).
    */
   readOnly?: boolean;
-  /** BO2-E: id de la `SupportSession` abierta (lo estampa `audit()` en el payload). */
+  /** BO2-E: id de la `SupportSession` abierta (lo estampan `auditInTx`/`auditSecurityEvent` en el payload). */
   supportSessionId?: string | null;
   /**
    * BO2-E (C-BO4): `withSupportWritable` lo prende SOLO alrededor de una action de Configuración de la allowlist;

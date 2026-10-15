@@ -23,7 +23,6 @@
 import { revalidatePath } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
@@ -177,14 +176,6 @@ async function upsertPractitionerServiceImpl(
   }
   if (result.kind === "error") return { ok: false, error: result.error };
 
-  await audit({
-    tenantId,
-    actorId: actor.userId,
-    action: "practitionerService.upsert",
-    entity: "PractitionerService",
-    entityId: result.id,
-    payload: { practitionerId: pid.data, serviceId: sid.data, before: result.before, after: data },
-  });
   // Sin tag de disponibilidad todavía (B3.3 lo crea con getAgendaAvailability):
   // la agenda y Configuración se re-renderizan por path.
   revalidatePath("/agenda");

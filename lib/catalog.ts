@@ -25,7 +25,6 @@ import { runWithRls } from "@/lib/rls";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import { escapeLike } from "@/lib/email-match";
 import { getActor } from "@/lib/session";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import { matchKey } from "@/lib/catalog/normalize";
@@ -322,14 +321,6 @@ async function proposePayerPlanImpl(
     });
     if (!r.ok) return r;
     if (r.created) {
-      await audit({
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "payerPlan.propose",
-        entity: "PayerPlan",
-        entityId: r.id,
-        payload: { payerId: parsed.data.payerId, name: parsed.data.name },
-      });
       revalidateTag(tags.insurers(actor.tenantId));
       revalidatePath("/configuracion");
     }

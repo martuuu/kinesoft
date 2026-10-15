@@ -14,7 +14,7 @@ import { Prisma, type BookingStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { audit } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { notify } from "@/lib/notifications-internal";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
@@ -47,9 +47,13 @@ import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-eve
 // `updateBooking` viven en el core server-only (`lib/bookings-core.ts`), para
 // que Planes (P2.1) los llame dentro de su propia tx con los mismos gates y
 // locks. Este archivo queda como wrapper de las actions: getActor → zod →
-// runWithRls(core) → traducir el outcome → audit/notify/revalidate →
+// runWithRls(core) → traducir el outcome → notify/revalidate →
 // `afterBookingsCommitted` (enmienda Realtime: una vez, después del commit y
 // fuera de `runWithRls`; reemplaza a `invalidateBookingDerivedCaches`).
+// PL-A (plan §20.5.9): solo se auditan borrar un turno y los cobros, con
+// `auditInTx` DENTRO de la tx del write. Alta, lote, edición, reprogramación
+// y recepción (Llegó/Llamar/Atendido) dejaron de auditarse: era ruido y el
+// `audit()` aparte podía divergir del write.
 import {
   acceptClientKey,
   applyBookingUpdateInTx,
@@ -1014,24 +1018,17 @@ export async function createBooking(
       };
     }
     if (w.kind === "foreign-key") return { ok: false, error: "No pudimos crear el turno." };
-    // Éxito idempotente: no se escribió nada → ni audit ni `afterBookingsCommitted`.
+    // Éxito idempotente: no se escribió nada → ni `afterBookingsCommitted`.
     if (w.kind === "adopted") {
       // PF-0d: el cliente ya no hace `router.refresh()` después de crear: la
       // agenda nueva llega SOLO con la respuesta de una action que revalida. Un
       // reintento idempotente (la respuesta del primero se perdió) tiene que
-      // traerla igual, aunque no haya escrito nada (sin audit ni eventos).
+      // traerla igual, aunque no haya escrito nada (sin eventos).
       revalidatePath("/agenda");
       return { ok: true, data: { id: w.id } };
     }
     if (w.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
     const b = w.row;
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "booking.create",
-      entity: "Booking",
-      entityId: b.id,
-    });
     if (actor.userId) {
       let who: string;
       if (data.patientId) {
@@ -1255,18 +1252,6 @@ async function updateBookingImpl(
   }
 
   const before = outcome.before;
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "booking.update",
-    entity: "Booking",
-    entityId: id,
-    // El patch YA filtrado (S07sb): un campo sacado no aparece ni en el audit.
-    payload: {
-      ...(outcome.written as Record<string, unknown>),
-      ...(outcome.roomId !== undefined ? { roomId: outcome.roomId } : {}),
-    },
-  });
   // Surface status transitions in the bell.
   if (patch.status && patch.status !== before.status && actor.userId) {
     const who = before.patient
@@ -1492,14 +1477,6 @@ async function markReceptionActionImpl(
   if (outcome.kind === "taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
 
   const { row, transition, after, plan } = outcome;
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: `booking.reception.${input.action}`,
-    entity: "Booking",
-    entityId: row.id,
-    payload: { from: transition.from, to: transition.to, label: RECEPTION_ACTION_LABEL[input.action] },
-  });
   // Paridad con el drawer (`updateBooking`): un "Ausente" sale en la campana.
   if (transition.patch.status === "NO_SHOW" && actor.userId) {
     await notify({
@@ -1625,6 +1602,15 @@ async function deleteBookingImpl(
     // `updatedAt` in the where: a concurrent edit → P2025 → rollback (the
     // orphan-payment cleanup above too) → "stale".
     await tx.booking.delete({ where: { id, tenantId: actor.tenantId, updatedAt: row.updatedAt } });
+    // PL-A (seguridad): borrar en duro no deja rastro en la agenda; el audit va en la tx del delete (si falla, el
+    // turno sigue). Antes `audit()` aparte: un fallo propio dejaba el borrado sin rastro.
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "booking.delete",
+      entity: "Booking",
+      entityId: id,
+    });
     const ref: BookingChangeRef = {
       bookingId: row.id,
       practitionerId: row.practitionerId,
@@ -1656,13 +1642,6 @@ async function deleteBookingImpl(
     };
   }
   const owned = { patientId: outcome.patientId };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "booking.delete",
-    entity: "Booking",
-    entityId: id,
-  });
   revalidatePath("/agenda");
   if (owned.patientId) revalidatePath(`/pacientes/${owned.patientId}`);
   await afterBookingsCommitted(actor.tenantId, [outcome.ref]);
@@ -1782,6 +1761,14 @@ async function toggleBilling(
     ];
     const sync = planPrior ? await syncPriorPaidReplacementInTx(tx, actor.tenantId, row.sessionId!, new Date()) : null;
     if (sync?.ref) refs.push(sync.ref);
+    // PL-A (plata): el cobro y su audit, o ninguno (un stale de arriba revierte los dos).
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action,
+      entity: "Booking",
+      entityId: id,
+    });
     return { kind: "ok" as const, patientId: row.patientId, updatedAt: after!.updatedAt, refs, notice: sync?.notice ?? null };
   }).catch((e) => {
     if (e instanceof BillingReplacementStale) return { kind: "stale" as const };
@@ -1790,13 +1777,6 @@ async function toggleBilling(
   if (outcome.kind === "notfound") return { ok: false, error: "Turno no encontrado." };
   if (outcome.kind === "stale") return { ok: false, error: STALE_ERROR };
   if (outcome.kind === "basic") return { ok: false, error: BASIC_ACCESS_ERROR };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action,
-    entity: "Booking",
-    entityId: id,
-  });
   if (outcome.patientId) revalidatePath(`/pacientes/${outcome.patientId}`);
   await afterBookingsCommitted(actor.tenantId, outcome.refs);
   return { ok: true, data: { updatedAt: outcome.updatedAt, ...(outcome.notice ? { notice: outcome.notice } : {}) } };
@@ -2413,21 +2393,6 @@ async function createBookingsBatchImpl(
       omitted++;
     }
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "booking.batch.create",
-    entity: "Booking",
-    payload: {
-      created,
-      sobreturnos,
-      omitted,
-      duplicates: duplicatesHit,
-      requested: count,
-      frequency: data.frequency,
-      seriesId,
-    },
-  });
   revalidatePath("/agenda");
   if (data.patientId) revalidatePath(`/pacientes/${data.patientId}`);
   // Como antes, se invalida aunque no se haya creado nada (refs vacío).

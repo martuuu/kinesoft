@@ -26,7 +26,7 @@
  */
 import "server-only";
 import { listPatients } from "@/lib/patients";
-import { audit } from "@/lib/audit";
+import { auditSecurityEvent } from "@/lib/audit";
 import { csvRow } from "@/lib/csv";
 import type { Actor } from "@/lib/session";
 
@@ -77,7 +77,9 @@ export async function exportPatientsCsv(
     )
     .join("\n");
 
-  await audit({
+  // PL-A (PL-D13): evento de seguridad (canal service, anda en solo lectura). Falla CERRADO: si no se puede
+  // auditar, tira y el route no entrega el CSV (antes `audit()` tragaba el error y el CSV salía sin rastro).
+  await auditSecurityEvent({
     tenantId: actor.tenantId,
     actorId: actor.userId ?? undefined,
     action: "patient.export",

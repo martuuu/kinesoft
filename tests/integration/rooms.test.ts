@@ -127,13 +127,8 @@ describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {
       { id: p1, locationId: locA2, name: "Consultorio 1", kind: "CONSULTORIO", capacity: 1 },
     ]);
 
-    const audits = await db.auditEvent.findMany({
-      where: { tenantId: A.tenantId, entity: "Room" },
-      select: { action: true, entityId: true, actorId: true },
-    });
-    expect(audits.filter((a) => a.action === "room.create").map((a) => a.entityId).sort()).toEqual([c1, c2, p1].sort());
-    expect(audits.filter((a) => a.action === "room.update").map((a) => a.entityId)).toEqual([c2]);
-    expect(audits.every((a) => a.actorId === A.userId)).toBe(true);
+    // [PL-A2] Salas = configuración operativa (como sedes): sin AuditEvent (§20.5.9).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entity: "Room" } })).toBe(0);
   });
 
   it("PRACTITIONER y ASSISTANT: leen las activas; escrituras e includeArchived rechazados sin escribir", async () => {
@@ -321,7 +316,7 @@ describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "room.archive", entityId: roomId } })).toBe(0);
   });
 
-  it("archiveRoom sin bloqueantes: archiva, soft-borra los bloqueos futuros (no los pasados ni los de otra sala) y audita; restore", async () => {
+  it("archiveRoom sin bloqueantes: archiva, soft-borra los bloqueos futuros (no los pasados ni los de otra sala), sin audit; restore", async () => {
     asUser(A.userId);
     const { roomId } = await addRoom(db, A, { locationId: locA1, name: "Archivable" });
     const { roomId: otherRoom } = await addRoom(db, A, { locationId: locA1, name: "Vecina" });
@@ -366,8 +361,6 @@ describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {
     });
     const deleted = Object.fromEntries(blocks.map((b) => [b.id, b.deletedAt !== null]));
     expect(deleted).toEqual({ [future.id]: true, [ongoing.id]: true, [past.id]: false, [neighbor.id]: false });
-    const ev = await db.auditEvent.findFirstOrThrow({ where: { tenantId: A.tenantId, action: "room.archive", entityId: roomId } });
-    expect(ev.payload).toMatchObject({ name: "Archivable", deletedBlocks: 2 });
 
     // Archivada: fuera de las activas; visible con includeArchived (OWNER).
     expect((await listRooms()).map((r) => r.id)).not.toContain(roomId);
@@ -377,12 +370,12 @@ describe.skipIf(!RUN)("salas: CRUD (SR1b)", () => {
 
     // Idempotente.
     expect(await archiveRoom({ id: roomId })).toEqual({ ok: true, data: undefined });
-    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "room.archive", entityId: roomId } })).toBe(1);
 
     // Restore feliz.
     expect(await restoreRoom({ id: roomId })).toEqual({ ok: true, data: undefined });
     expect((await db.room.findUniqueOrThrow({ where: { id: roomId } })).active).toBe(true);
-    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "room.restore", entityId: roomId } })).toBe(1);
+    // [PL-A2] sin audit en archivar/restaurar (§20.5.9).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entity: "Room", entityId: roomId } })).toBe(0);
     // Los bloqueos borrados no vuelven.
     expect((await db.timeBlock.findUniqueOrThrow({ where: { id: future.id } })).deletedAt).not.toBeNull();
   });

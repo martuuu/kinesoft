@@ -45,7 +45,9 @@ import { revalidatePath } from "next/cache";
 import { Prisma, type SessionExerciseStatus } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { ForbiddenError, getActor, type Actor } from "@/lib/session";
-import { audit, auditInTx } from "@/lib/audit";
+// PL-A (plan §20.5.9): se auditan las notas de la sesión (HC) y el cierre, en la tx. Reprogramar y los ejercicios
+// de la sesión dejaron de auditarse (ruido; reordenar/sustituir nunca lo estuvieron).
+import { auditInTx } from "@/lib/audit";
 import { assignableExerciseWhere, gatingForActor } from "@/lib/plan-gating";
 import { withTxConflictRetry } from "@/lib/plan-lock";
 import { bulkPatientAccess, patientAccessFor, visibilityForActor } from "@/lib/visibility";
@@ -558,14 +560,6 @@ async function updateSessionExerciseImpl(input: {
   if (!res.ok) return res;
   const r = res.value;
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "sessionExercise.update",
-    entity: "SessionExercise",
-    entityId: sessionExerciseId,
-    payload: data as Record<string, unknown>,
-  });
 
   revalidatePath(`/seguimiento/${r.sessionId}`);
   revalidatePath(`/pacientes/${r.session.program.patientId}`);
@@ -795,29 +789,7 @@ async function rescheduleSessionImpl(input: {
   if (!res.ok) return res;
   const r = res.value;
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.reschedule",
-    entity: "Session",
-    entityId: sessionId,
-    payload: {
-      from: r.from.toISOString(),
-      to: newDate.toISOString(),
-      practitionerId: r.session.practitionerId,
-      bookingMoved: r.movedBookingId,
-      bookingOnDay: r.bookingOnDay?.id ?? null,
-    },
-  });
   if (r.movedBookingId) {
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId ?? undefined,
-      action: "booking.update",
-      entity: "Booking",
-      entityId: r.movedBookingId,
-      payload: { scheduledFor: newDate.toISOString(), source: "session.reschedule", sessionId },
-    });
     revalidatePath("/agenda");
     await afterBookingsCommitted(actor.tenantId, r.refs);
   }
@@ -856,25 +828,26 @@ async function updateSessionMetaImpl(input: SessionMetaUpdateInput): Promise<Act
   const res = await denied(() => runWithRls(actor.tenantId, async (tx) => {
     const g = await sessionForWrite(tx, actor, sessionId);
     await tx.session.update({ where: { id: sessionId }, data: meta });
+    // PL-A (PL-D14, integridad de HC): notas y puntajes de la sesión, auditados en la misma tx.
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId ?? undefined,
+      action: "session.meta.update",
+      entity: "Session",
+      entityId: sessionId,
+      // Los puntajes sí; el texto de las notas es HC y no se copia al audit.
+      payload: {
+        fields: Object.keys(meta).filter((k) => meta[k as keyof typeof meta] !== undefined),
+        paInPre: meta.paInPre,
+        paInPost: meta.paInPost,
+        rpe: meta.rpe,
+      },
+    });
     return g;
   }));
   if (!res.ok) return res;
   const r = res.value;
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "session.meta.update",
-    entity: "Session",
-    entityId: sessionId,
-    // Los puntajes sí; el texto de las notas es HC y no se copia al audit.
-    payload: {
-      fields: Object.keys(meta).filter((k) => meta[k as keyof typeof meta] !== undefined),
-      paInPre: meta.paInPre,
-      paInPost: meta.paInPost,
-      rpe: meta.rpe,
-    },
-  });
   revalidatePath(`/seguimiento/${sessionId}`);
   revalidatePath(`/pacientes/${r.program.patientId}`);
   return { ok: true, data: undefined };
@@ -1230,13 +1203,6 @@ async function addSessionExerciseImpl(input: {
   if (!res.ok) return res;
   const r = res.value;
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "sessionExercise.create",
-    entity: "SessionExercise",
-    entityId: r.rowId,
-  });
   revalidatePath(`/seguimiento/${input.sessionId}`);
   revalidatePath(`/pacientes/${r.session.program.patientId}`);
   return { ok: true, data: { id: r.rowId } };
@@ -1259,13 +1225,6 @@ async function removeSessionExerciseImpl(id: string): Promise<ActionResult> {
   }));
   if (!res.ok) return res;
   const r = res.value;
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "sessionExercise.delete",
-    entity: "SessionExercise",
-    entityId: id,
-  });
   revalidatePath(`/seguimiento/${r.sessionId}`);
   revalidatePath(`/pacientes/${r.session.program.patientId}`);
   return { ok: true, data: undefined };
@@ -1514,19 +1473,6 @@ async function bulkAddSessionExercisesImpl(input: {
   if (!res.ok) return res;
   const r = res.value;
 
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId ?? undefined,
-    action: "sessionExercise.bulkCreate",
-    entity: "TreatmentProgram",
-    entityId: r.program.id,
-    payload: {
-      sessions: r.sessions,
-      exercises: r.exercises,
-      created: r.created,
-      skipped: r.skipped,
-    },
-  });
 
   revalidatePath(`/pacientes/${r.program.patientId}`);
   return { ok: true, data: { created: r.created, skipped: r.skipped } };

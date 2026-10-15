@@ -65,9 +65,11 @@ const ar = (local: string) => new Date(`${local}:00-03:00`);
  * edición (mover) 30 / 1. El techo estricto de `createBooking` /
  * `updateBooking` (tests/perf/compare.ts) exige que sin sala no se muevan.
  * PF-0b (15-oct): membresías en una sentencia, 34→31 / 30→27.
+ * PL-A (15-oct): el alta y la edición ya no auditan (`booking.create` / `booking.update` eran un INSERT aparte por
+ * el canal service), 31→30 / 27→26. El techo baja; no vuelve a subir.
  */
-const HEAD_CREATE_STATEMENTS = 31;
-const HEAD_UPDATE_STATEMENTS = 27;
+const HEAD_CREATE_STATEMENTS = 30;
+const HEAD_UPDATE_STATEMENTS = 26;
 
 describe.skipIf(!RUN)("write-paths de turnos con sala (SR3a)", () => {
   let db: PrismaClient;

@@ -123,10 +123,8 @@ describe.skipIf(!RUN)("config por profesional · servicios y coberturas (B2.4b)"
         maxConcurrent: null,
         notifyOnBooking: false,
       });
-      const ev = await db.auditEvent.findFirst({
-        where: { tenantId: A.tenantId, action: "practitionerService.upsert", entityId: rows[0].id },
-      });
-      expect(ev).not.toBeNull();
+      // [PL-A2] Servicios del profesional: ruido operativo, sin audit (§20.5.9).
+      expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "practitionerService.upsert" } })).toBe(0);
     });
 
     it("override + null = ilimitado; override con 0 se rechaza", async () => {

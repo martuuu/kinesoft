@@ -368,7 +368,6 @@ const SERVICE_FILES = new Set([
   "lib/public-booking-internal.ts",
   "lib/mercadopago.ts",
   "lib/audit.ts",
-  "lib/audit-extension.ts",
   "lib/portal.ts",
   "lib/auth.ts",
   "lib/session.ts",

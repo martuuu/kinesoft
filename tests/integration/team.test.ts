@@ -305,6 +305,13 @@ describe.skipIf(!RUN)("configuración · audit antes/después de montos", () => 
   });
   beforeEach(() => asUser(A.userId));
 
+  // `xmin` = id de la transacción que escribió la versión viva de la fila. Mismo xid en la fila y en su
+  // AuditEvent ⇒ se escribieron en la misma tx (y un rollback se lleva las dos).
+  const rowXmin = async (table: "Service" | "Insurer", id: string) =>
+    (await db.$queryRawUnsafe<{ x: string }[]>(`SELECT xmin::text AS x FROM "${table}" WHERE id = $1`, id))[0]?.x;
+  const auditXmin = async (id: string) =>
+    (await db.$queryRaw<{ x: string }[]>`SELECT xmin::text AS x FROM "AuditEvent" WHERE id = ${id}`)[0]?.x;
+
   it("updateService audita nombre y precio de antes y después (solo lo que cambió)", async () => {
     const r = await updateService(A.serviceId, { priceCents: 150050, durationMin: 60 });
     expect(r.ok).toBe(true);
@@ -315,6 +322,18 @@ describe.skipIf(!RUN)("configuración · audit antes/después de montos", () => 
       orderBy: { createdAt: "desc" },
     });
     expect(ev.payload).toEqual({ before: { priceCents: 5000 }, after: { priceCents: 150050 } });
+    // [PL-A2] El audit del precio va en la MISMA tx que el update (§20.5.9): mismo xid ⇒ un rollback no
+    // deja fila. Antes salía por `audit()` (otra conexión): xid distinto.
+    expect(await auditXmin(ev.id)).toBe(await rowXmin("Service", A.serviceId));
+  });
+
+  it("[PL-A2] updateService que se revierte (práctica inexistente) no deja audit ni cambia el precio", async () => {
+    const before = await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "service.update" } });
+    const price = (await db.service.findUniqueOrThrow({ where: { id: A.serviceId } })).priceCents;
+    const r = await updateService(A.serviceId, { practiceId: `nope-${uniqueSuffix()}`, priceCents: price + 100 });
+    expect(r).toEqual({ ok: false, error: "Práctica no encontrada en el catálogo." });
+    expect((await db.service.findUniqueOrThrow({ where: { id: A.serviceId } })).priceCents).toBe(price);
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "service.update" } })).toBe(before);
   });
 
   it("updateService sin cambios de nombre/monto no guarda payload", async () => {
@@ -339,6 +358,8 @@ describe.skipIf(!RUN)("configuración · audit antes/después de montos", () => 
       before: { name, copagoCents: 5000 },
       after: { name: `${name} Plus`, copagoCents: 7550 },
     });
+    // [PL-A2] Copago = plata: audit en la misma tx que el update (mismo xid ⇒ rollback sin fila).
+    expect(await auditXmin(ev.id)).toBe(await rowXmin("Insurer", id));
   });
 
   it("updateInsurer con un nombre repetido devuelve error en vez de tirar", async () => {
@@ -351,5 +372,7 @@ describe.skipIf(!RUN)("configuración · audit antes/después de montos", () => 
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("Ya existe");
     expect(await db.insurer.count({ where: { tenantId: A.tenantId, name: bName } })).toBe(1);
+    // [PL-A2] La tx revertida no deja audit.
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "insurer.update", entityId: a } })).toBe(0);
   });
 });

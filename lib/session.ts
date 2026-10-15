@@ -110,7 +110,7 @@ export type Actor = {
    * BO2-E (C-BO9): sesión de soporte de un superadmin en un consultorio ajeno (rama de soporte de `resolveActor`).
    * Con soporte: `practitionerId` null, capacidades `SUPPORT_CAPS` (Secretaria sin clínico; vive en lib/capabilities.ts y
    * la aplica `capabilitiesForActor` de lib/authz.ts), las tx en
-   * solo lectura salvo `withSupportWritable` (C-BO4) y cada `audit()` estampa `supportSessionId`.
+   * solo lectura salvo `withSupportWritable` (C-BO4) y cada audit (`auditInTx`/`auditSecurityEvent`) estampa `supportSessionId`.
    */
   support: { sessionId: string; superadminEmail: string } | null;
 };

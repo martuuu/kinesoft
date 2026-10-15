@@ -22,7 +22,7 @@ import { requireTenantAdmin } from "@/lib/authz";
 import { findActivePayer } from "@/lib/catalog-validate";
 import { enableInsurerForPractitioners } from "@/lib/agenda-defaults";
 import { CatalogId, InsurerPayerLink, type AddFromCatalogResult } from "@/lib/catalog-schemas";
-import { audit } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import type { ActionResult } from "@/lib/validation";
@@ -126,17 +126,19 @@ async function createInsurerImpl(
       if (created.active) {
         await enableInsurerForPractitioners(tx, { tenantId: actor.tenantId, insurerId: created.id });
       }
+      // PL-A2 (§20.5.9): plata (el copago de la OS entra en lib/copago.ts) → audit en la
+      // misma tx: el evento existe si y solo si la OS existe.
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "insurer.create",
+        entity: "Insurer",
+        entityId: created.id,
+        payload: { name: created.name, ...(created.payerId ? { payerId: created.payerId } : {}) },
+      });
       return created;
     });
     if (!row) return { ok: false, error: "Prestadora no encontrada en el catálogo." };
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "insurer.create",
-      entity: "Insurer",
-      entityId: row.id,
-      payload: { name: row.name, ...(row.payerId ? { payerId: row.payerId } : {}) },
-    });
     revalidatePath("/configuracion");
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: { id: row.id } };
@@ -175,11 +177,11 @@ async function updateInsurerImpl(
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
-  let changes: AuditDiff;
   try {
-    // "Antes" y update en la misma transacción para que el audit
-    // antes/después (A2b-S-cfg) describa exactamente lo que pisó este update.
-    changes = await runWithRls(actor.tenantId, async (tx) => {
+    // "Antes", update y audit en la misma transacción: el antes/después
+    // (A2b-S-cfg) describe exactamente lo que pisó este update, y (PL-A2,
+    // §20.5.9) si la tx se revierte no queda un audit de algo que no pasó.
+    await runWithRls(actor.tenantId, async (tx) => {
       const { isParticular, active: wasActive, ...before } = await tx.insurer.findFirstOrThrow({
         where: { id, tenantId: actor.tenantId },
         select: {
@@ -220,7 +222,18 @@ async function updateInsurerImpl(
       if (!wasActive && isActive) {
         await enableInsurerForPractitioners(tx, { tenantId: actor.tenantId, insurerId: id });
       }
-      return auditDiff(before, after);
+      const changes = auditDiff(before, after);
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "insurer.update",
+        entity: "Insurer",
+        entityId: id,
+        // Solo nombre y montos, y solo si cambiaron: el copago de la OS entra en
+        // la precedencia de lib/copago.ts de todos los turnos no cobrados sin
+        // copago propio, así que "de cuánto a cuánto" tiene que quedar asentado.
+        ...(changes ? { payload: changes } : {}),
+      });
     });
   } catch (e) {
     // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
@@ -233,17 +246,6 @@ async function updateInsurerImpl(
     logger.error("insurer.update.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar la obra social." };
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "insurer.update",
-    entity: "Insurer",
-    entityId: id,
-    // Solo nombre y montos, y solo si cambiaron: el copago de la OS entra en
-    // la precedencia de lib/copago.ts de todos los turnos no cobrados sin
-    // copago propio, así que "de cuánto a cuánto" tiene que quedar asentado.
-    ...(changes ? { payload: changes } : {}),
-  });
   revalidatePath("/configuracion");
   revalidateTag(tags.insurers(actor.tenantId));
   return { ok: true, data: undefined };
@@ -286,25 +288,29 @@ async function deleteInsurerImpl(id: string): Promise<ActionResult> {
   // Soft-delete when in use: deactivate but keep the row so historical
   // Coverages still resolve. Hard-delete only when zero references.
   if (owned._count.coverages > 0) {
-    await runWithRls(actor.tenantId, (tx) => tx.insurer.update({ where: { id }, data: { active: false } }));
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "insurer.deactivate",
-      entity: "Insurer",
-      entityId: id,
+    await runWithRls(actor.tenantId, async (tx) => {
+      await tx.insurer.update({ where: { id }, data: { active: false } });
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "insurer.deactivate",
+        entity: "Insurer",
+        entityId: id,
+      });
     });
     revalidatePath("/configuracion");
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: undefined };
   }
-  await runWithRls(actor.tenantId, (tx) => tx.insurer.delete({ where: { id } }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "insurer.delete",
-    entity: "Insurer",
-    entityId: id,
+  await runWithRls(actor.tenantId, async (tx) => {
+    await tx.insurer.delete({ where: { id } });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "insurer.delete",
+      entity: "Insurer",
+      entityId: id,
+    });
   });
   revalidatePath("/configuracion");
   revalidateTag(tags.insurers(actor.tenantId));
@@ -349,18 +355,18 @@ async function addInsurerFromCatalogImpl(
       // B2.3 (decisión 7): nace activa → la aceptan todos los profesionales
       // aceptados, en la misma tx (igual que createInsurer).
       await enableInsurerForPractitioners(tx, { tenantId: actor.tenantId, insurerId: row.id });
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "insurer.create",
+        entity: "Insurer",
+        entityId: row.id,
+        payload: { name: row.name, payerId: payer.id, from: "catalog" },
+      });
       return { status: "created" as const, insurerId: row.id, name: row.name };
     });
     if (!r) return { ok: false, error: "Prestadora no encontrada en el catálogo." };
     if (r.status === "exists") return { ok: true, data: r };
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "insurer.create",
-      entity: "Insurer",
-      entityId: r.insurerId,
-      payload: { name: r.name, payerId: payerId.data, from: "catalog" },
-    });
     revalidatePath("/configuracion");
     revalidateTag(tags.insurers(actor.tenantId));
     return { ok: true, data: { status: "created", insurerId: r.insurerId } };
@@ -409,19 +415,19 @@ async function linkInsurerToPayerImpl(
       return { ok: false as const, error: "Prestadora no encontrada en el catálogo." };
     }
     await tx.insurer.update({ where: { id: owned.id }, data: { payerId } });
-    return { ok: true as const, before: owned.payerId };
+    if (owned.payerId !== payerId) {
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: payerId ? "insurer.linkPayer" : "insurer.unlinkPayer",
+        entity: "Insurer",
+        entityId: insurerId,
+        payload: { before: { payerId: owned.payerId }, after: { payerId } },
+      });
+    }
+    return { ok: true as const };
   });
   if (!r.ok) return r;
-  if (r.before !== payerId) {
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: payerId ? "insurer.linkPayer" : "insurer.unlinkPayer",
-      entity: "Insurer",
-      entityId: insurerId,
-      payload: { before: { payerId: r.before }, after: { payerId } },
-    });
-  }
   revalidatePath("/configuracion");
   revalidateTag(tags.insurers(actor.tenantId));
   return { ok: true, data: undefined };

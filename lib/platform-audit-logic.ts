@@ -58,7 +58,7 @@ const NESTED_KEYS = new Set(["before", "after"]);
 
 /**
  * Interno del escritor (`platform.actorHomeTenantId`, `platformEventId`): no dice nada de la acción y repetirlo en
- * cada fila es ruido. `supportSessionId` lo estampa `audit()`; en el registro global no debería aparecer.
+ * cada fila es ruido. `supportSessionId` lo estampa `auditInTx`; en el registro global no debería aparecer.
  */
 const HIDDEN_KEYS = new Set(["platform"]);
 

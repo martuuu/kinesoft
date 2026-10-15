@@ -32,7 +32,8 @@ import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { audit } from "@/lib/audit";
+// PL-A (plan §20.5.9): los datos de onboarding dejaron de auditarse (ruido); queda el link de invitación (acceso).
+import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { hashInviteToken } from "@/lib/invitations-tokens";
@@ -129,14 +130,6 @@ export async function saveOnboardingClinic(
       for (const tag of tenantEntitlementTags(tenantId)) revalidateTag(tag);
       revalidatePath("/", "layout");
     }
-    await audit({
-      tenantId: inProgress.tenantId,
-      actorId: user.id,
-      action: "tenant.update",
-      entity: "Tenant",
-      entityId: inProgress.tenantId,
-      payload: { source: "onboarding" },
-    });
     return { ok: true, data: { tenantId: inProgress.tenantId, created: false } };
   }
   // IAM-1: se mantiene. Desde M6 la base ya permite que un miembro de A sea
@@ -279,14 +272,6 @@ export async function saveOnboardingLocation(
       await tx.location.updateMany({ where: { id, tenantId: actor.tenantId }, data });
       return id;
     });
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "location.update",
-      entity: "Location",
-      entityId: locationId,
-      payload: { fields: Object.keys(data), source: "onboarding" },
-    });
     revalidatePath("/configuracion");
     revalidatePath("/agenda");
     return { ok: true, data: { locationId } };
@@ -312,13 +297,6 @@ export async function completeOnboarding(): Promise<ActionResult> {
       data: { onboardingCompletedAt: new Date() },
     })
   );
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "tenant.onboarding.complete",
-    entity: "Tenant",
-    entityId: actor.tenantId,
-  });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined };
 }
@@ -371,17 +349,23 @@ export async function openPendingInvitation(invitationId: string): Promise<Actio
   const rawToken = randomBytes(24).toString("base64url");
   // Re-chequea el estado en el mismo UPDATE: si se anuló o aceptó entre la
   // lectura y acá, no se agrega un link vivo a una invitación muerta.
-  const upd = await prismaService.invitation.updateMany({
-    where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
-    data: { priorTokens: { push: hashInviteToken(rawToken) } },
+  // PL-A (acceso): un link vivo más a la invitación → audit en la misma tx que el `push` (canal service: el
+  // usuario todavía no es miembro). Si la invitación cambió en el medio, no se escribe ninguno de los dos.
+  const added = await prismaService.$transaction(async (tx) => {
+    const upd = await tx.invitation.updateMany({
+      where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
+      data: { priorTokens: { push: hashInviteToken(rawToken) } },
+    });
+    if (upd.count !== 1) return false;
+    await auditInTx(tx, {
+      tenantId: inv.tenantId,
+      actorId: user.id,
+      action: "invitation.open_self",
+      entity: "Invitation",
+      entityId: inv.id,
+    });
+    return true;
   });
-  if (upd.count !== 1) return { ok: false, error: "La invitación ya no está disponible." };
-  await audit({
-    tenantId: inv.tenantId,
-    actorId: user.id,
-    action: "invitation.open_self",
-    entity: "Invitation",
-    entityId: inv.id,
-  });
+  if (!added) return { ok: false, error: "La invitación ya no está disponible." };
   return { ok: true, data: { url: `/invite/${rawToken}` } };
 }

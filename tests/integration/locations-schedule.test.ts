@@ -110,6 +110,8 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
     const r = await updateLocation(locB, { name: "Hackeada" });
     expect(r).toEqual({ ok: false, error: "Sede no encontrada." });
     expect((await db.location.findUniqueOrThrow({ where: { id: locB } })).name).toBe("Sede B");
+    // [PL-A2] Sedes = configuración operativa: sin AuditEvent (§20.5.9).
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entity: "Location" } })).toBe(0);
   });
 
   it("setPrimaryLocation: una sola principal, también con dos pedidos en carrera", async () => {
@@ -198,7 +200,7 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
     ]);
     expect(
       await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "schedule.saveWeek", entityId: pracA.practitionerId } })
-    ).toBe(2);
+    ).toBe(0); // [PL-A2] horarios: ruido operativo, sin audit (§20.5.9)
   });
 
   it("errores por fila (solape entre sedes, múltiplos de 5) y semana vacía: no tocan lo guardado", async () => {
@@ -371,6 +373,6 @@ describe.skipIf(!RUN)("sedes, franjas y excepciones (B2.4a)", () => {
     expect((await db.location.findUniqueOrThrow({ where: { id: locA2 } })).active).toBe(true);
     expect(
       await db.auditEvent.count({ where: { tenantId: A.tenantId, action: { in: ["location.archive", "location.restore"] } } })
-    ).toBe(2);
+    ).toBe(0); // [PL-A2] sedes: sin audit (§20.5.9)
   });
 });

@@ -20,6 +20,9 @@
  *
  * Archivar = `active = false` (nunca DELETE): `Booking.locationId` es
  * RESTRICT y el historial de turnos tiene que seguir diciendo dónde fue.
+ *
+ * Sin AuditEvent (PL-A2, §20.5.9): sedes, salas, horarios y bloqueos son
+ * configuración operativa (ruido en el registro); se audita plata y acceso.
  */
 import { withSupportWritable } from "@/lib/support-writable";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
@@ -27,7 +30,6 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { dayKeyToDbDate } from "@/lib/schedule-validate";
@@ -114,14 +116,6 @@ async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{
         select: { id: true, name: true, isPrimary: true },
       });
     });
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "location.create",
-      entity: "Location",
-      entityId: row.id,
-      payload: { name: row.name, isPrimary: row.isPrimary },
-    });
     revalidateAll();
     return { ok: true, data: { id: row.id } };
   } catch (e) {
@@ -166,14 +160,6 @@ async function updateLocationImpl(
       return before;
     });
     if (!changed) return { ok: false, error: NOT_FOUND };
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "location.update",
-      entity: "Location",
-      entityId: changed.id,
-      payload: { fields: Object.keys(data) },
-    });
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
@@ -228,16 +214,6 @@ async function setPrimaryLocationImpl(id: string): Promise<ActionResult> {
       return { previous: prev?.id ?? null };
     });
     if ("error" in res) return { ok: false, error: res.error as string };
-    if (res.previous !== idOk.data) {
-      await audit({
-        tenantId: actor.tenantId,
-        actorId: actor.userId,
-        action: "location.setPrimary",
-        entity: "Location",
-        entityId: idOk.data,
-        payload: { previousPrimaryId: res.previous },
-      });
-    }
     revalidateAll();
     return { ok: true, data: undefined };
   } catch (e) {
@@ -359,16 +335,6 @@ async function archiveLocationImpl(id: string): Promise<ArchiveLocationResult> {
         };
       }
       case "done":
-        if (!res.already) {
-          await audit({
-            tenantId: actor.tenantId,
-            actorId: actor.userId,
-            action: "location.archive",
-            entity: "Location",
-            entityId: idOk.data,
-            payload: { name: res.name },
-          });
-        }
         revalidateAll();
         return { ok: true, data: undefined };
     }
@@ -405,13 +371,6 @@ async function restoreLocationImpl(id: string): Promise<ActionResult> {
     );
     return exists ? { ok: true, data: undefined } : { ok: false, error: NOT_FOUND };
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "location.restore",
-    entity: "Location",
-    entityId: idOk.data,
-  });
   revalidateAll();
   return { ok: true, data: undefined };
 }

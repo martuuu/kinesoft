@@ -14,7 +14,8 @@
  * REAL para que la banda pueda avisar antes de cortar.
  *
  * **Nunca se bloquea leer la HC** (Ley 26.529): `read_only` solo frena escrituras (transacción en solo lectura) y
- * la auditoría de lecturas de PHI va por el canal service, fuera de esa transacción (lib/audit-extension.ts).
+ * los eventos de seguridad (exports, descarga de adjunto) van por el canal service, fuera de esa transacción
+ * (`auditSecurityEvent` en lib/audit.ts). Las lecturas de PHI no se auditan desde PL-A (plan §20.5.9).
  */
 import type { SubscriptionStatus, TenantStatus } from "@prisma/client";
 // Relativo: este módulo lo importa `lib/env.ts`, y los scripts de tsx no resuelven el alias `@/`.

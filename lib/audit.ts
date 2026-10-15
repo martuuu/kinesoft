@@ -1,5 +1,5 @@
-// Audit writes fire from webhooks/jobs without an Actor → service channel (BYPASSRLS). See lib/db.ts#prismaService.
-import { prismaService as prisma } from "@/lib/db";
+// `auditSecurityEvent` escribe por el canal service (BYPASSRLS): no depende del GUC ni del modo lectura del consultorio.
+import { prismaService } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
 import { getRequestContext } from "@/lib/request-context";
 import type { PlatformActorRef, PlatformAuditAction, PlatformAuditWriteResult } from "@/lib/platform-audit-types";
@@ -7,10 +7,16 @@ import type { PlatformActorRef, PlatformAuditAction, PlatformAuditWriteResult } 
 export type { PlatformActorRef, PlatformAuditAction, PlatformAuditWriteResult } from "@/lib/platform-audit-types";
 
 /**
- * Append-only audit log for PHI access and important domain events.
+ * Registro de auditoría del consultorio (`AuditEvent`, solo inserción).
  *
- * Usage:
- *   await audit({ tenantId, actorId, action: "patient.read", entity: "Patient", entityId: id });
+ * PL-A (plan §20.5.9, decisión de Martin del 15-oct): no se audita «quién hace qué» al detalle. Queda:
+ *   - seguridad y acceso, plata, integridad de HC → `auditInTx`, en la tx del write (el evento existe si y solo si
+ *     el write existe);
+ *   - lo que no tiene tx de escritura (exports, descarga de adjunto; AUDIT §5.9, PL-D13) → `auditSecurityEvent`;
+ *   - Plataforma → `auditPlatformInTx` / `auditPlatformGlobalInTx`.
+ * Se borraron las lecturas de PHI (`patient.read*`), el ruido operativo y el `audit()` suelto: escribía por otra
+ * conexión y tragaba el error, así que un cambio de plata podía quedar sin rastro y un audit podía sobrevivir a un
+ * write revertido. El guard `tests/unit/audit-guard.test.ts` impide que vuelva.
  */
 export type AuditParams = {
   tenantId: string;
@@ -56,22 +62,12 @@ function auditData(params: AuditParams) {
   };
 }
 
-export async function audit(params: AuditParams) {
-  try {
-    await prisma.auditEvent.create({ data: auditData(params) });
-  } catch (err) {
-    // never block the request on audit failure, but surface in logs
-    console.error("[audit] failed to write", err);
-  }
-}
-
 /**
  * Audit DENTRO de la transacción del caller (Planes P0-Ck, C8).
  *
- * `audit()` escribe por otra conexión (service, BYPASSRLS) y traga errores:
- * sirve para webhooks y jobs sin Actor, pero si la tx del write se revierte
- * queda un audit de algo que nunca pasó, y si commitea y el audit falla no
- * queda rastro. Los writes de Planes (crear, renovar autorización, mover en
+ * El `audit()` viejo escribía por otra conexión (service, BYPASSRLS) y tragaba
+ * errores: si la tx del write se revertía quedaba un audit de algo que nunca
+ * pasó, y si commiteaba y el audit fallaba no quedaba rastro (se borró en PL-A). Los writes de Planes (crear, renovar autorización, mover en
  * serie…) auditan acá, en la misma tx: el evento existe si y solo si el write
  * existe. Mismo criterio que ya usaban `tenant-bootstrap.ts` y
  * `cancelBookingsInTx` a mano.
@@ -85,6 +81,39 @@ export async function audit(params: AuditParams) {
  */
 export async function auditInTx(tx: Prisma.TransactionClient, params: AuditParams): Promise<void> {
   await tx.auditEvent.create({ data: auditData(params) });
+}
+
+/**
+ * Acciones que se auditan SIN una tx de escritura propia (PL-A, PL-D13). Allowlist cerrada: todo lo demás va con
+ * `auditInTx` en la tx del write o no se audita. Agregar una acción acá es una decisión de seguridad, no un atajo
+ * para no abrir la tx.
+ */
+export const SECURITY_EVENT_ACTIONS = [
+  // Descarga de un adjunto (AUDIT §5.9): se registra el INTENTO antes de firmar la URL.
+  "patientFile.download",
+  // CSV de pacientes (lista/selección).
+  "patient.export",
+  // Export completo del consultorio (BO5): el inicio antes del primer byte y el cierre con los conteos.
+  "tenant.export.started",
+  "tenant.export",
+] as const;
+export type SecurityEventAction = (typeof SECURITY_EVENT_ACTIONS)[number];
+
+/**
+ * Evento de seguridad sin write al que atarse (exports, descarga de adjunto). Tx propia del canal service:
+ *   - funciona aunque el consultorio esté en solo lectura o con soporte de solo lectura (el modo lectura se aplica en
+ *     `runWithRls`; exportar es justo lo que hace un consultorio que se va);
+ *   - NO traga el error: el caller decide. Descarga y CSV fallan cerrados (sin audit no hay URL ni archivo); el
+ *     cierre del stream del export lo reporta con `reportError` porque los bytes ya salieron.
+ * Una acción fuera de la allowlist tira antes de escribir (error de programación, no de datos).
+ */
+export async function auditSecurityEvent(params: AuditParams & { action: SecurityEventAction }): Promise<void> {
+  if (!(SECURITY_EVENT_ACTIONS as readonly string[]).includes(params.action)) {
+    throw new Error(`[audit] "${params.action}" no está en SECURITY_EVENT_ACTIONS: usá auditInTx en la tx del write`);
+  }
+  const ctx = getRequestContext();
+  const data = auditData({ ...params, ip: params.ip ?? ctx?.ip, userAgent: params.userAgent ?? ctx?.userAgent });
+  await prismaService.$transaction((tx) => tx.auditEvent.create({ data }));
 }
 
 /**

@@ -16,8 +16,8 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 /**
  * Service-role Prisma client for surfaces that run WITHOUT an Actor and can
  * therefore never set the `app.current_tenant_id` GUC that `runWithRls`
- * relies on: the public booking flow, the Mercado Pago webhook, and audit
- * writes from webhooks/jobs. It connects on a channel that BYPASSes RLS, so
+ * relies on: the public booking flow, the Mercado Pago webhook, and the
+ * security events of `lib/audit.ts#auditSecurityEvent` (exports, descarga de adjunto). It connects on a channel that BYPASSes RLS, so
  * these paths keep working once RLS is forced on the Actor-facing `prisma`.
  *
  * Connection resolution (first defined wins):
@@ -43,20 +43,6 @@ export const prismaService =
   });
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prismaService = prismaService;
-
-// Audit extension is applied lazily on first import to avoid circular
-// imports between `lib/db.ts` and `lib/audit-extension.ts` (which itself
-// reads `prisma` for the AuditEvent write). Use `getAuditedPrisma()` from
-// route handlers / server actions when you want auto-recorded PHI reads
-// on top of the manual `audit(...)` calls.
-let _auditedPrisma: ReturnType<PrismaClient["$extends"]> | null = null;
-export async function getAuditedPrisma() {
-  if (!_auditedPrisma) {
-    const { auditExtension } = await import("@/lib/audit-extension");
-    _auditedPrisma = prisma.$extends(auditExtension);
-  }
-  return _auditedPrisma;
-}
 
 const TENANT_SCOPED_MODELS = new Set<string>([
   "Practitioner",

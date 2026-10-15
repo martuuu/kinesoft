@@ -19,7 +19,7 @@ import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
-import { audit, auditInTx } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { syncDefaultSchedulesToTenantHours } from "@/lib/agenda-defaults";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
@@ -133,14 +133,7 @@ async function setBusinessHoursImpl(input: {
     });
     return syncedIds;
   });
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "tenant.business_hours",
-    entity: "Tenant",
-    entityId: actor.tenantId,
-    payload: { start, end, slotMinutes, syncedPractitioners: synced.length },
-  });
+  // PL-A2 (§20.5.9): el horario del consultorio es configuración operativa, sin audit.
   // Wide blast radius — every booking surface re-reads the window.
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
@@ -157,17 +150,21 @@ export async function setSharedPatientView(...args: Parameters<typeof setSharedP
 
 async function setSharedPatientViewImpl(value: boolean): Promise<ActionResult> {
   const actor = await requireTenantAdmin();
-  await runWithRls(actor.tenantId, (tx) => tx.tenant.update({
-    where: { id: actor.tenantId },
-    data: { sharedPatientView: value },
-  }));
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "tenant.shared_view",
-    entity: "Tenant",
-    entityId: actor.tenantId,
-    payload: { sharedPatientView: value },
+  // PL-A2 (§20.5.9): abre o cierra el acceso del equipo a pacientes ajenos (seguridad) →
+  // audit en la misma tx: el evento existe si y solo si el cambio existe.
+  await runWithRls(actor.tenantId, async (tx) => {
+    await tx.tenant.update({
+      where: { id: actor.tenantId },
+      data: { sharedPatientView: value },
+    });
+    await auditInTx(tx, {
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: "tenant.shared_view",
+      entity: "Tenant",
+      entityId: actor.tenantId,
+      payload: { sharedPatientView: value },
+    });
   });
   revalidatePath("/configuracion");
   revalidatePath("/pacientes");

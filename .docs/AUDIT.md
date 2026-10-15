@@ -1968,10 +1968,12 @@ era intencional.
     `rate_limit.upstash_fallback` (un Upstash caído no rompe el login). Claves con prefijo
     `rl:<VERCEL_ENV|dev>:` (preview y prod no comparten contadores) y purga del `Map` a 10k claves. La IP sale
     **solo** de `clientIp()` (`lib/client-ip.ts`); no volver a parsear `x-forwarded-for` a mano.
-14. **`lib/audit-extension.ts`** — extensión Prisma que audita reads sobre `PHI_MODELS` tras resolver
-    la query. ⚠️ **Corrección 2026-09-29: NO está cableada.** `getAuditedPrisma` (`lib/db.ts:53`) no tiene
-    callers, así que hoy no se audita ninguna lectura automáticamente. Activarla o no es una decisión de
-    C0/C1 (costo: un INSERT por lectura de PHI).
+14. **Auditoría (`lib/audit.ts`)** — enmendado en PL-A (15-oct, plan §20.5.9): `lib/audit-extension.ts` y
+    `getAuditedPrisma` se **borraron** (nunca estuvieron cableados) y `audit()` suelto ya no existe. Las lecturas de
+    PHI no se auditan. Queda: seguridad/acceso, plata e integridad de HC con `auditInTx` **en la tx del write**;
+    exports y descarga de adjunto con `auditSecurityEvent()` (tx propia del canal service, allowlist
+    `SECURITY_EVENT_ACTIONS`, funciona en solo lectura, no traga el error); Plataforma con `auditPlatform*InTx`.
+    Guard: `tests/unit/audit-guard.test.ts` (sin `audit(` ni `console.error` en `lib/`; errores con `reportError`).
 15. **`vercel.json` + `scripts/vercel-build.mjs`** — auto-migración en deploy **solo en Production**
     (`VERCEL_ENV=production`, desde A0b) + región `gru1`; `directUrl=env("DIRECT_URL")`. No volver a
     migrar en Preview.

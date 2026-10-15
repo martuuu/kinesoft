@@ -216,14 +216,11 @@ describe.skipIf(!RUN)("pacientes · cobertura y copago (caracterización)", () =
     expect(again.ok).toBe(true);
   });
 
-  it("[A2-S08] updatePatient audita los campos cambiados (sin valores)", async () => {
+  it("[PL-A] updatePatient (edición demográfica) ya no audita: ruido operativo (plan §20.5.9)", async () => {
     const p = await addPatient(db, A, { notes: "a" });
-    await updatePatient({ id: p, notes: "b", firstName: "Paciente" });
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: A.tenantId, entityId: p, action: "patient.update" },
-      orderBy: { createdAt: "desc" },
-    });
-    expect(ev?.payload).toEqual({ fields: ["notes"] });
+    expect((await updatePatient({ id: p, notes: "b", firstName: "Paciente" })).ok).toBe(true);
+    expect((await db.patient.findUniqueOrThrow({ where: { id: p } })).notes).toBe("b");
+    expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, entityId: p } })).toBe(0);
   });
 
   it("[A2-S08] invite al portal: si el mail no sale → emailSent false (primera vez y reenvío); IAM-3c: el reenvío a un vinculado sale", async () => {

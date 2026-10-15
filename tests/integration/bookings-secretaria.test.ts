@@ -201,15 +201,8 @@ describe.skipIf(!RUN)("Secretaria en turnos (P0-S07sb)", () => {
     expect(row.description).toBe("Trapecio");
     // Las notas de un guest son administrativas: la Secretaria las escribe.
     expect(row.notes).toBe("llamar antes");
-    // Ni el audit registra los campos sacados.
-    const ev = await db.auditEvent.findFirstOrThrow({
-      where: { tenantId: T.tenantId, action: "booking.update", entityId: b.id },
-      orderBy: { createdAt: "desc" },
-    });
-    const payload = (ev.payload ?? {}) as Record<string, unknown>;
-    expect(payload).not.toHaveProperty("title");
-    expect(payload).not.toHaveProperty("description");
-    expect(payload.notes).toBe("llamar antes");
+    // PL-A (plan §20.5.9): la edición del turno ya no se audita (ruido operativo).
+    expect(await db.auditEvent.count({ where: { tenantId: T.tenantId, entityId: b.id } })).toBe(0);
   });
 
   it("[P0-S07sb] re-vínculo con notas → rechazo", async () => {

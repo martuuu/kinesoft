@@ -187,10 +187,8 @@ describe.skipIf(!RUN)("EV-T · turnero público con switch", () => {
       const replay = await submitPublicBooking(input(K, { key, slot: at(DAY, "09:30") }));
       expect(replay).toEqual({ ok: false, error: CLOSED_ERROR });
       expect(await counts(K)).toEqual(before);
-      const events = await db.auditEvent.count({
-        where: { tenantId: K.tenantId, action: "booking.public.create", entityId: first.data.bookingId },
-      });
-      expect(events).toBe(1);
+      // PL-A: las reservas públicas ya no se auditan; el replay rechazado tampoco escribe nada.
+      expect(await db.auditEvent.count({ where: { tenantId: K.tenantId, entityId: first.data.bookingId } })).toBe(0);
 
       // Retorno de MP / página de estado: NO se gatea.
       const st = await getPublicBookingStatus(first.data.bookingId);

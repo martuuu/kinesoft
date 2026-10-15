@@ -24,7 +24,7 @@ import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { suggestDisciplineFromSpecialties } from "@/lib/services-discipline";
 import { findActivePractice } from "@/lib/catalog-validate";
 import { enableServiceForPractitioners } from "@/lib/agenda-defaults";
-import { audit } from "@/lib/audit";
+import { auditInTx } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { tags, ttl } from "@/lib/cache-tags";
 import { ServiceInput, type ActionResult } from "@/lib/validation";
@@ -146,17 +146,18 @@ async function createServiceImpl(
         serviceId: created.id,
         practitionerId: created.practitionerId,
       });
+      // PL-A2 (§20.5.9): el precio es plata (fallback del copago) → audit en la misma tx.
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "service.create",
+        entity: "Service",
+        entityId: created.id,
+        payload: { name: created.name, priceCents: created.priceCents },
+      });
       return created;
     });
     if (!row) return { ok: false, error: "Práctica no encontrada en el catálogo." };
-    await audit({
-      tenantId: actor.tenantId,
-      actorId: actor.userId,
-      action: "service.create",
-      entity: "Service",
-      entityId: row.id,
-      payload: { name: row.name },
-    });
     revalidatePath("/configuracion");
     revalidatePath("/agenda");
     revalidateTag(tags.services(actor.tenantId));
@@ -205,12 +206,12 @@ async function updateServiceImpl(
     }));
     if (!ownedPrac) return { ok: false, error: "Profesional fuera del tenant." };
   }
-  let changes: AuditDiff;
   try {
-    // Lectura del "antes" y update en la misma transacción: el audit
+    // Lectura del "antes", update y audit en la misma transacción: el audit
     // antes/después (A2b-S-cfg) tiene que describir exactamente lo que
-    // pisó este update, no lo que otro guardado dejó un instante antes.
-    changes = await runWithRls(actor.tenantId, async (tx) => {
+    // pisó este update, no lo que otro guardado dejó un instante antes, y
+    // (PL-A2, §20.5.9) un rollback no deja audit de un cambio de precio que no pasó.
+    await runWithRls(actor.tenantId, async (tx) => {
       const { practitionerId: ownerBefore, ...before } = await tx.service.findFirstOrThrow({
         where: { id, tenantId: actor.tenantId },
         select: { name: true, priceCents: true, practiceId: true, discipline: true, practitionerId: true },
@@ -265,7 +266,17 @@ async function updateServiceImpl(
           });
         }
       }
-      return auditDiff(before, after);
+      const changes = auditDiff(before, after);
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "service.update",
+        entity: "Service",
+        entityId: id,
+        // Solo nombre, monto, práctica y disciplina (S13), y solo si cambiaron: el precio es plata (entra en
+        // el fallback del copago) y hasta A2 el audit no decía de cuánto a cuánto.
+        ...(changes ? { payload: changes } : {}),
+      });
     });
   } catch (e) {
     // EV1-E2 (readonly-residual-actions): modo lectura / soporte → su copy, no el genérico de abajo.
@@ -278,16 +289,6 @@ async function updateServiceImpl(
     logger.error("service.update.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos guardar el servicio." };
   }
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "service.update",
-    entity: "Service",
-    entityId: id,
-    // Solo nombre, monto, práctica y disciplina (S13), y solo si cambiaron: el precio es plata (entra en
-    // el fallback del copago) y hasta A2 el audit no decía de cuánto a cuánto.
-    ...(changes ? { payload: changes } : {}),
-  });
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
   revalidateTag(tags.services(actor.tenantId));
@@ -338,6 +339,13 @@ async function deleteServiceImpl(id: string): Promise<ActionResult> {
       if (!owned) return "not-found" as const;
       if (owned._count.bookings > 0 || owned._count.programs > 0) return "in-use" as const;
       await tx.service.delete({ where: { id } });
+      await auditInTx(tx, {
+        tenantId: actor.tenantId,
+        actorId: actor.userId,
+        action: "service.delete",
+        entity: "Service",
+        entityId: id,
+      });
       return "deleted" as const;
     });
   } catch (e) {
@@ -351,13 +359,6 @@ async function deleteServiceImpl(id: string): Promise<ActionResult> {
   }
   if (outcome === "not-found") return { ok: false, error: "Servicio no encontrado." };
   if (outcome === "in-use") return { ok: false, error: DELETE_IN_USE_MSG };
-  await audit({
-    tenantId: actor.tenantId,
-    actorId: actor.userId,
-    action: "service.delete",
-    entity: "Service",
-    entityId: id,
-  });
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
   revalidateTag(tags.services(actor.tenantId));

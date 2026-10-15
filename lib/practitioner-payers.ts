@@ -22,7 +22,6 @@
 import { revalidatePath } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
-import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import type { ActionResult } from "@/lib/validation";
@@ -165,14 +164,6 @@ async function setPractitionerPayersImpl(
   }
   if (result.kind === "error") return { ok: false, error: result.error };
 
-  await audit({
-    tenantId,
-    actorId: actor.userId,
-    action: "practitionerPayers.set",
-    entity: "Practitioner",
-    entityId: parsed.data.practitionerId,
-    payload: { active: result.activeIds, inactive: result.inactiveIds },
-  });
   revalidatePath("/agenda");
   revalidatePath("/configuracion");
   return {

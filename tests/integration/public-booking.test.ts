@@ -423,10 +423,7 @@ describe.skipIf(!RUN)("reserva pública · submitPublicBooking (A2b-S-pub)", () 
     expect(old.status).toBe("CANCELLED");
     expect(fresh.status).toBe("PENDING");
     expect(fresh.patientId).toBe(old.patientId);
-    const ev = await db.auditEvent.findFirst({
-      where: { tenantId: T.tenantId, action: "booking.public.expired_replaced", entityId: old.id },
-    });
-    expect(ev).toBeTruthy();
+    // PL-A (plan §20.5.9): el reemplazo de un hold vencido ya no se audita (ruido); lo observable es el estado.
     // La nueva retiene el cupo 1.
     const slots = await listPublicSlots({ tenantSlug: T.slug, practitionerId: T.practitionerId, serviceId: osteoId, date: day });
     expect(slots.find((s) => s.time === "08:45")!.available).toBe(false);
