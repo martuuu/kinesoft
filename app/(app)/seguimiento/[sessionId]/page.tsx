@@ -2,9 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSessionDetail } from "@/lib/sessions";
 import { listSchedulablePlanSessions } from "@/lib/plans-read";
+import { getBookingClinicalNote } from "@/lib/clinical-notes-read";
 import { formatDateAR } from "@/lib/format";
 import { SessionDetail } from "@/components/seguimiento/session-detail";
-import { AGENDAR_PARAM, sessionCounterLabel } from "@/components/seguimiento/seguimiento-model";
+import {
+  AGENDAR_PARAM,
+  sessionCounterLabel,
+  type SessionClinicalNote,
+} from "@/components/seguimiento/seguimiento-model";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +38,26 @@ export default async function Page({
   // para este actor. `listSchedulablePlanSessions` ya aplica el módulo
   // `planes`, `plans.schedule`, R-LEGACY y plan ACTIVE; acá no se repite
   // ninguna de esas reglas. Un rechazo (`ok:false`) = sin botón.
-  const schedulable = session.completedAt
-    ? null
-    : await listSchedulablePlanSessions({ patientId: session.program.patientId });
+  // EV2-D19: la evolución de HC del turno activo de la sesión, en paralelo con lo agendable.
+  // `getBookingClinicalNote` ya aplica módulo `evoluciones`, `clinical.read` y el acceso al paciente
+  // (null = nada que ofrecer).
+  const b = session.bookings[0] ?? null;
+  const [schedulable, v] = await Promise.all([
+    session.completedAt ? null : listSchedulablePlanSessions({ patientId: session.program.patientId }),
+    b ? getBookingClinicalNote(b.id) : null,
+  ]);
   const canSchedule =
     !!schedulable?.ok && schedulable.data.some((x) => x.sessionId === session.id && x.sinTurno);
   const autoOpenSchedule = canSchedule && searchParams?.[AGENDAR_PARAM] === "1";
+  const clinicalNote: SessionClinicalNote | null =
+    b && v
+      ? {
+          patientId: session.program.patientId,
+          booking: { id: b.id, scheduledFor: b.scheduledFor.toISOString(), serviceName: b.service?.name ?? null },
+          canCreate: v.canCreate,
+          hasLiveNote: v.note !== null,
+        }
+      : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
@@ -55,6 +74,7 @@ export default async function Page({
         scheduledLabel={formatDateAR(session.scheduledFor, "longDateTime")}
         canSchedule={canSchedule}
         autoOpenSchedule={autoOpenSchedule}
+        clinicalNote={clinicalNote}
       />
     </div>
   );

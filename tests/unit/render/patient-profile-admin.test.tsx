@@ -174,7 +174,7 @@ function Providers({ children }: { children: ReactNode }) {
   );
 }
 
-const CLINICAL_TABS = ["Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Facturación", "Resumen"];
+const CLINICAL_TABS = ["Evoluciones", "EVA", "Evolución", "Plan", "Sesiones", "Seguimiento", "Archivos", "Antecedentes", "Actividad", "Facturación", "Resumen"];
 
 /** Etiquetas de los botones de pestaña (la barra de tabs del perfil). */
 function tabLabels(html: string) {

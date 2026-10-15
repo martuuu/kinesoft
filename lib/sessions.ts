@@ -526,6 +526,14 @@ export async function getSessionDetail(id: string) {
           orderBy: { order: "asc" },
           include: { exercise: true },
         },
+        // EV2-3c: el turno activo de la sesión (a lo sumo uno por el único
+        // parcial Booking_session_active_key, mismo predicado) → el detalle
+        // ofrece «Registrar evolución» / «Ver evolución» de ese turno.
+        bookings: {
+          where: { tenantId: actor.tenantId, status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+          select: { id: true, scheduledFor: true, service: { select: { name: true } } },
+          take: 1,
+        },
       },
     });
     if (!s) return null;

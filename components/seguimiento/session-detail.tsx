@@ -27,14 +27,17 @@ import { ExerciseSearchPicker } from "@/components/ui/exercise-search-picker";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useUnsavedGuard } from "@/components/seguimiento/use-unsaved-guard";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
+import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
 import {
   AGENDAR_PARAM,
   SEGUIMIENTO_COPY,
   dischargeCopy,
   isSessionWithoutEvolution,
+  sessionClinicalNoteAction,
   sessionCounterLabel,
   sessionHeading,
   sortByOrdinal,
+  type SessionClinicalNote,
 } from "@/components/seguimiento/seguimiento-model";
 
 /**
@@ -112,6 +115,7 @@ export function SessionDetail({
   scheduledLabel,
   canSchedule = false,
   autoOpenSchedule = false,
+  clinicalNote = null,
 }: {
   session: SessionDTO;
   /** Pre-formatted on the server — see the note in the page component. */
@@ -124,12 +128,27 @@ export function SessionDetail({
   canSchedule?: boolean;
   /** `?agendar=1` desde el bucket "Sin turno": abre el modal al entrar. */
   autoOpenSchedule?: boolean;
+  /**
+   * EV2-D19: la evolución de HC del turno activo de la sesión, calculada en la
+   * página con `getBookingClinicalNote` (null = sin turno, sin acceso o sin el
+   * módulo `evoluciones`: no se ofrece nada). La barrera es `createClinicalNote`.
+   */
+  clinicalNote?: SessionClinicalNote | null;
 }) {
   const router = useRouter();
   const completed = !!session.completedAt;
-  // "Sin evolución": la cerró la agenda ("Atendido") y no tiene nada cargado.
-  // Se habilita el panel de anotaciones para "Cargar evolución".
-  const withoutEvolution = isSessionWithoutEvolution(session);
+  // Guardada en esta pantalla: hasta que la revalidación traiga la prop nueva, ya
+  // no se ofrece crear otra (EV2-D2: una viva por turno).
+  const [noteSaved, setNoteSaved] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const noteState: SessionClinicalNote | null = clinicalNote
+    ? { ...clinicalNote, hasLiveNote: clinicalNote.hasLiveNote || noteSaved }
+    : null;
+  const noteAction = sessionClinicalNoteAction(noteState);
+  // "Sin evolución": la cerró la agenda ("Atendido") y no tiene nada cargado
+  // (ni la meta de la sesión ni una evolución de HC viva del turno, EV2-D18).
+  // Se habilita el panel de anotaciones para "Registrar sesión" (EV2-D19).
+  const withoutEvolution = isSessionWithoutEvolution(session, { hasClinicalNote: !!noteState?.hasLiveNote });
   const editable = !completed || withoutEvolution;
   const diagnosis = session.program.case?.diagnoses?.[0]?.condition?.name ?? null;
   const discipline = session.program.discipline ?? null;
@@ -278,6 +297,19 @@ export function SessionDetail({
               {diagnosis ? ` · ${diagnosis}` : ""}
             </div>
           </div>
+          {noteAction?.kind === "create" && (
+            <Button variant="ghost" onClick={() => setNoteOpen(true)} disabled={pending}>
+              {SEGUIMIENTO_COPY.cargarEvolucionHc}
+            </Button>
+          )}
+          {noteAction?.kind === "view" && (
+            <Link
+              href={noteAction.href}
+              style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none", whiteSpace: "nowrap" }}
+            >
+              {SEGUIMIENTO_COPY.verEvolucionHc}
+            </Link>
+          )}
           {completed ? (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
               <Tag tone="lime">
@@ -363,6 +395,20 @@ export function SessionDetail({
         disabled={!editable}
         evolution={withoutEvolution ? { onLoad: loadEvolution, pending } : null}
       />
+
+      {clinicalNote && noteAction?.kind === "create" && (
+        <NoteEditorDrawer
+          open={noteOpen}
+          onClose={() => setNoteOpen(false)}
+          mode={{ type: "create", patientId: clinicalNote.patientId, booking: clinicalNote.booking }}
+          onSaved={() => {
+            // «Sin evolución» del landing y el tag de acá salen del server (EV2-D18): `createClinicalNote`
+            // revalida el layout de /seguimiento si la raíz es de un turno (EV2-Z), y la respuesta de la action ya
+            // trae este árbol nuevo. Sin `router.refresh()`: era un segundo render entero.
+            setNoteSaved(true);
+          }}
+        />
+      )}
 
       {canSchedule && !completed && (
         <ScheduleSessionModal
@@ -773,8 +819,9 @@ function SessionNotes({
   dirty: boolean;
   disabled: boolean;
   /**
-   * Sesión realizada "Sin evolución" (S12b): el botón pasa a ser "Cargar
-   * evolución" (`loadSessionEvolution`), que además marca los ejercicios
+   * Sesión realizada "Sin evolución" (S12b): el botón pasa a ser "Registrar
+   * sesión" (EV2-D19; antes "Cargar evolución", que ahora es la evolución de
+   * HC) con `loadSessionEvolution`, que además marca los ejercicios
    * pendientes como hechos y registra la EVA post, igual que el cierre.
    */
   evolution?: { onLoad: () => void; pending: boolean } | null;
@@ -839,13 +886,13 @@ function SessionNotes({
       {dirty && !error && (
         <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
           {evolution
-            ? "Cambios sin guardar. Se guardan al apretar «Cargar evolución»."
+            ? `Cambios sin guardar. Se guardan al apretar «${SEGUIMIENTO_COPY.registrarSesion}».`
             : "Cambios sin guardar. También se guardan al cerrar la sesión."}
         </div>
       )}
       {evolution ? (
         <Button variant="primary" onClick={evolution.onLoad} disabled={evolution.pending || !dirty}>
-          {evolution.pending ? "Guardando…" : SEGUIMIENTO_COPY.cargarEvolucion}
+          {evolution.pending ? "Guardando…" : SEGUIMIENTO_COPY.registrarSesion}
         </Button>
       ) : (
         <Button variant="ghost" onClick={save} disabled={pending || disabled || !dirty}>

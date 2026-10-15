@@ -388,7 +388,7 @@ describe("[P3-S22h] Resumen", () => {
       expect(html).not.toContain("Diagnóstico principal");
       expect(html).not.toContain("Lumbalgia secreta");
       expect(html).not.toContain("EVA");
-      expect(html).toContain("Notas clínicas");
+      expect(html).toContain("Notas generales");
     }
     // Kine PRO (control): las mismas props sí muestran Plan y Diagnóstico.
     const pro = renderToStaticMarkup(

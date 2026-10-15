@@ -303,8 +303,8 @@ function SessionCard({
       {(canAgendar || sinEvolucion) && (
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
           {sinEvolucion && (
-            <Link href={sessionHref(s.id)} style={linkButton} aria-label={`${SEGUIMIENTO_COPY.cargarEvolucion} · ${s.patientName}`}>
-              {SEGUIMIENTO_COPY.cargarEvolucion}
+            <Link href={sessionHref(s.id)} style={linkButton} aria-label={`${SEGUIMIENTO_COPY.registrarSesion} · ${s.patientName}`}>
+              {SEGUIMIENTO_COPY.registrarSesion}
             </Link>
           )}
           {canAgendar && (

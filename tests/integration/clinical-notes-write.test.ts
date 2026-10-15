@@ -32,6 +32,7 @@ import { __setEmailTransportForTests } from "@/lib/email";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import { getActor } from "@/lib/session";
 import { asUser } from "@/tests/helpers/actor";
+import { revalidatePathSpy } from "@/tests/helpers/integration-setup";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -407,6 +408,32 @@ describe.skipIf(!RUN)("[EV2-2a] escrituras de evoluciones", () => {
   });
 
   // ── Editar ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+  it("[EV2-Z] revalida /pacientes siempre y /seguimiento solo si cambia la raíz viva de un turno", async () => {
+    const pid = await patient();
+    const b = await booking(A, pid);
+    const paths = () => revalidatePathSpy.mock.calls.map((c) => c.join("|"));
+    revalidatePathSpy.mockClear();
+    const root = await created(P1.userId, pid, { bookingId: b.id });
+    expect(paths()).toEqual([`/pacientes/${pid}`, "/seguimiento|layout"]);
+
+    revalidatePathSpy.mockClear();
+    asUser(P1.userId);
+    expect((await editClinicalNote({ noteId: root.id, expectedRevision: 1, body: "v2" })).ok).toBe(true);
+    const am = await amendClinicalNote({ noteId: root.id, body: "Aclaración", idempotencyKey: randomUUID() });
+    expect(am.ok).toBe(true);
+    // Editar o enmendar no cambia «Sin evolución» ni `hasLiveNote`: solo el perfil.
+    expect(paths()).toEqual([`/pacientes/${pid}`, `/pacientes/${pid}`]);
+
+    revalidatePathSpy.mockClear();
+    expect((await voidClinicalNote({ noteId: root.id, expectedRevision: 2, reason: "Turno equivocado" })).ok).toBe(true);
+    expect(paths()).toEqual([`/pacientes/${pid}`, "/seguimiento|layout"]);
+
+    // Sin turno: nada de /seguimiento.
+    revalidatePathSpy.mockClear();
+    await created(P1.userId, pid);
+    expect(paths()).toEqual([`/pacientes/${pid}`]);
+  });
 
   it("el autor edita dentro de 24 h: revision 2 (la sube el trigger), versión anterior en ClinicalNoteRevision, audit", async () => {
     const pid = await patient();

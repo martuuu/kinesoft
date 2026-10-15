@@ -12,6 +12,30 @@ import { sessionCounterLabel } from "@/components/seguimiento/seguimiento-model"
 import type { PlanDTO, ResumenViewProps } from "@/components/planes/plan-editor-types";
 import type { PatientWithRelations } from "../types";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import { KindTag } from "@/components/clinical-notes/kind-tag";
+import { authorLine, noteDateLabel } from "@/components/clinical-notes/clinical-notes-ui";
+import type { ClinicalNoteDTO, PatientClinicalSummary } from "@/lib/clinical-notes-types";
+
+/**
+ * EV2-3a: lo que Resumen agrega a `ResumenViewProps` (el contrato de Planes vive en plan-editor-types.ts y no se toca).
+ * `clinicalSummary` null = sin módulo `evoluciones` o sin `clinical.read`: la card no existe.
+ */
+export type ResumenClinicalProps = {
+  clinicalSummary?: PatientClinicalSummary | null;
+  onOpenEvoluciones?: () => void;
+};
+
+/** Tope del extracto de «Última evolución»: la nota entera está en la pestaña. */
+export const LATEST_NOTE_EXCERPT_MAX = 280;
+
+/** Extracto de la última evolución (puro): corta en el último espacio antes del tope y agrega «…». */
+export function latestNoteExcerpt(body: string, max = LATEST_NOTE_EXCERPT_MAX): string {
+  const t = body.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+}
 
 /**
  * Resumen del perfil. Historia:
@@ -61,7 +85,9 @@ export function ResumenView({
   permissions,
   onOpenEditor,
   onOpenPlan,
-}: ResumenViewProps) {
+  clinicalSummary = null,
+  onOpenEvoluciones,
+}: ResumenViewProps & ResumenClinicalProps) {
   // P3.Z (F3b): en un consultorio General (sin `planes` / `diagnostico`) el
   // Resumen mostraba la card de Plan y "Diagnóstico principal": la UI tiene que
   // esconder lo que el server ya rechaza (VERTICALES, C-EV8), como `EvaScoreSlot`.
@@ -239,9 +265,18 @@ export function ResumenView({
             </div>
           </Card>
         )}
+        {clinicalSummary && (
+          <LatestNoteCard
+            latest={clinicalSummary.latest}
+            liveCount={clinicalSummary.liveCount}
+            onOpen={onOpenEvoluciones}
+          />
+        )}
+        {/* EV2-D9: `Patient.notes` es «Notas generales» (datos que valen siempre); lo de cada atención va en
+            Evoluciones. Antes decía «Notas clínicas» y competía con la HC. */}
         <Card style={{ padding: 18 }}>
           <div className="k-display" style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
-            Notas clínicas
+            Notas generales
           </div>
           <p
             style={{
@@ -258,6 +293,47 @@ export function ResumenView({
 
       <EvaScoreSlot patient={patient} />
     </div>
+  );
+}
+
+/** EV2-3a · «Última evolución» (raíz viva más reciente por `occurredAt`; las anuladas no cuentan). */
+function LatestNoteCard({
+  latest,
+  liveCount,
+  onOpen,
+}: {
+  latest: ClinicalNoteDTO | null;
+  liveCount: number;
+  onOpen?: () => void;
+}) {
+  return (
+    <Card style={{ padding: 18, display: "grid", gap: 8 }} data-testid="latest-note">
+      <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
+        Última evolución
+      </div>
+      {latest ? (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <KindTag kind={latest.kind} />
+            <span style={{ fontSize: 12, color: "var(--navy-400)" }}>{noteDateLabel(latest.occurredAt)}</span>
+          </div>
+          {latest.title && <strong style={{ fontSize: 14 }}>{latest.title}</strong>}
+          <p style={{ margin: 0, fontSize: 13, color: "var(--navy-700)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {latestNoteExcerpt(latest.body)}
+          </p>
+          <span style={{ fontSize: 12, color: "var(--navy-400)" }}>{authorLine(latest)}</span>
+        </>
+      ) : (
+        <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>Todavía no hay evoluciones.</p>
+      )}
+      {onOpen && (
+        <div>
+          <Button variant="ghost" onClick={onOpen} style={{ fontSize: 12, padding: "8px 12px" }}>
+            {liveCount > 1 ? `Ver las ${liveCount} evoluciones` : "Ir a Evoluciones"}
+          </Button>
+        </div>
+      )}
+    </Card>
   );
 }
 

@@ -34,13 +34,16 @@ export type PatientWithRelations = PatientCore & {
 };
 
 /**
- * Pestañas del perfil. S22b: `plan` → `planes` (C10: `?tab=planes`, con el
+ * Pestañas del perfil. EV2-3a (EV2-D10/D20): `evol` sigue siendo la curva EVA (label «EVA»: las URLs viejas
+ * `?tab=evol` no se rompen) y `evoluciones` es la historia clínica (módulo `evoluciones` + `clinical.read`), segunda
+ * en la barra porque es lo que el profesional abre en cada atención. S22b: `plan` → `planes` (C10: `?tab=planes`, con el
  * alias `plan` resuelto por `normalizeProfileTab` de `lib/plans-deeplink.ts`).
  * Las que dependen de un módulo se filtran con `isProfileTabAllowed`
  * (`lib/tenant-modules.ts`).
  */
 export type Tab =
   | "resumen"
+  | "evoluciones"
   | "turnos"
   | "sesiones"
   | "planes"
@@ -53,6 +56,7 @@ export type Tab =
 /** Todas, en el orden de la barra. */
 export const PROFILE_TABS: readonly Tab[] = [
   "resumen",
+  "evoluciones",
   "turnos",
   "sesiones",
   "planes",

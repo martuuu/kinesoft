@@ -146,6 +146,9 @@ const PROFILE_TAB_MODULE: Readonly<Record<string, TenantModule>> = {
   plan: "planes",
   planes: "planes",
   evol: "evaluaciones",
+  // EV2-D20: la historia clínica (evoluciones). `evol` sigue siendo la curva EVA (módulo `evaluaciones`). La pestaña
+  // además exige `clinical.read` (lo filtra el perfil: `profileTabsFor`), que no es cosa del consultorio sino del miembro.
+  evoluciones: "evoluciones",
 };
 
 export function isProfileTabAllowed(tab: string, modules: ReadonlySet<TenantModule>): boolean {

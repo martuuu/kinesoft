@@ -149,11 +149,24 @@ describe("[S22b] pickProfilePlans", () => {
 });
 
 describe("[S22b] pestañas por módulo y deep-link", () => {
-  it("General: sin Sesiones, Planes ni Evolución; Kinesiología: todas", () => {
+  it("General: sin Sesiones, Planes ni EVA; Kinesiología: todas (sin clinical.read, sin Evoluciones)", () => {
     expect(profileTabsFor(GENERAL)).toEqual(["resumen", "turnos", "archivos", "antec", "fact", "actividad"]);
     expect(profileTabsFor(KINE)).toEqual([
       "resumen", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
     ]);
+  });
+
+  // EV2-3a (EV2-D20): Evoluciones es del núcleo (todas las verticales) pero exige `clinical.read` del miembro.
+  it("[EV2-3a] Evoluciones: con clinical.read en General y Kine; `evol` sigue siendo EVA", () => {
+    expect(profileTabsFor(GENERAL, { clinicalRead: true })).toEqual([
+      "resumen", "evoluciones", "turnos", "archivos", "antec", "fact", "actividad",
+    ]);
+    expect(profileTabsFor(KINE, { clinicalRead: true })).toEqual([
+      "resumen", "evoluciones", "turnos", "sesiones", "planes", "archivos", "antec", "evol", "fact", "actividad",
+    ]);
+    expect(resolveProfileTab("evoluciones", profileTabsFor(KINE))).toBe("resumen");
+    expect(resolveProfileTab("evoluciones", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evoluciones");
+    expect(resolveProfileTab("evol", profileTabsFor(KINE, { clinicalRead: true }))).toBe("evol");
   });
 
   it("?tab=plan es alias de planes; una pestaña oculta o desconocida cae a Resumen", () => {
@@ -212,7 +225,8 @@ describe("[S22b] shell en un consultorio General", () => {
         </ToastProvider>
       </TenantModulesProvider>,
     );
-    expect(tabLabels(html)).toEqual(["Resumen", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
+    // EV2-3a: con `clinical.read`, Evoluciones (núcleo) está también en General.
+    expect(tabLabels(html)).toEqual(["Resumen", "Evoluciones", "Turnos", "Archivos", "Antecedentes", "Facturación", "Actividad"]);
     // Cayó a Resumen (la pestaña pedida no existe en General).
     expect(html).toMatch(/data-profile-tab="resumen" aria-current="true"[^>]*>Resumen/);
     expect(net.getPatientPlans).not.toHaveBeenCalled();
@@ -241,7 +255,7 @@ describe("[S22b] shell en un consultorio General", () => {
       </TenantModulesProvider>,
     );
     expect(tabLabels(html)).toEqual([
-      "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "Evolución", "Facturación", "Actividad",
+      "Resumen", "Turnos", "Sesiones", "Planes", "Archivos", "Antecedentes", "EVA", "Facturación", "Actividad",
     ]);
     expect(html).toMatch(/>Planes<span[^>]*>1</);
     // P0-S02u-perfil (badge = lo que lista la vista), leído del render del

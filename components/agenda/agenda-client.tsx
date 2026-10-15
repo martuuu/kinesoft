@@ -1177,6 +1177,8 @@ export function AgendaClient(props: Props) {
                   practitioners={visiblePracs}
                   now={now}
                   canOperate={canReception}
+                  // EV2-3c: toast «Cargar evolución» al marcar «Atendido» un turno propio.
+                  clinicalNoteViewer={{ practitionerId: ownPractitionerId, canReadClinical: caps.has("clinical.read") }}
                   // La columna "Sala" depende solo de que haya salas (la Secretaria
                   // deriva al paciente aunque haya un solo consultorio).
                   roomById={rooms.length > 0 ? roomById : null}

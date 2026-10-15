@@ -10,6 +10,8 @@ import {
   getPatientName,
 } from "@/lib/patients";
 import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
+import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
+import { canWriteClinicalNotes } from "@/lib/clinical-notes-logic";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
 import { getCapabilities, getMemberAccess, memberCapabilitiesForActor } from "@/lib/authz";
@@ -96,6 +98,15 @@ export default async function PatientPage({
     );
   }
 
+  // EV2-3a · deep link `?tab=evoluciones&turno=<bookingId>` (`clinicalNoteDeepLink`): el id se valida con el mismo
+  // molde que el resto de los ids de URL y el turno se proyecta solo si es de ESTE paciente y del consultorio (fecha,
+  // estado y servicio: lo que la ficha `full` ya ve en Turnos). Sin el módulo no se mira.
+  const notesModule = modules.has("evoluciones");
+  const { tab: initialTab, intent: planIntent } = parseProfilePlanParams(searchParams);
+  const rawTurno = searchParam(searchParams, "turno");
+  const noteBookingId =
+    notesModule && initialTab === "evoluciones" && rawTurno && /^[A-Za-z0-9_-]{1,64}$/.test(rawTurno) ? rawTurno : null;
+
   // Full access — load the rest of the slices in parallel.
   const [
     plansRes,
@@ -106,13 +117,15 @@ export default async function PatientPage({
     insurers,
     practitioners,
     membership,
+    clinicalSummary,
+    noteBookingRow,
   ] = await Promise.all([
     plansEnabled ? getPatientPlans({ patientId: params.id }) : null,
     plansEnabled ? getPatientPlanBalances({ patientId: params.id }) : null,
     getPatientBookingsSummary(params.id, 5),
     getPatientBillableCount(params.id),
     // Enmienda EV0 de S22b: sin `evaluaciones` no se piden EVA (y la pestaña
-    // Evolución no se muestra).
+    // EVA no se muestra).
     modules.has("evaluaciones") ? getPatientEvaScores(params.id) : [],
     listInsurers({ onlyActive: true }),
     runWithRls(actor.tenantId, (tx) =>
@@ -128,6 +141,17 @@ export default async function PatientPage({
     ),
     // PL-1 (H1b-17): el miembro sale del Actor (`Actor.membership`), sin query.
     getMemberAccess(actor),
+    // EV2-3a: contador de la pestaña + «Última evolución» de Resumen. Solo en el perfil `full` (nunca en `admin` ni
+    // en el básico); el gate de la lectura (`clinical.read` + full) devuelve null al Titular sin agenda.
+    notesModule ? getPatientClinicalSummary(params.id) : null,
+    noteBookingId
+      ? runWithRls(actor.tenantId, (tx) =>
+          tx.booking.findFirst({
+            where: { id: noteBookingId, tenantId: actor.tenantId, patientId: params.id },
+            select: { id: true, scheduledFor: true, status: true, service: { select: { name: true } } },
+          })
+        )
+      : null,
   ]);
   const role = membership?.role ?? null;
   // Por MIEMBRO (PL-1, H-PL1): un Titular sin agenda no recibe `clinical.read`. Plantillas: el shell usa el
@@ -137,7 +161,8 @@ export default async function PatientPage({
   // la UI le ofrecía el selector a un ADMIN sin «Configuración» (la action lo rechaza) y se lo escondía a un
   // Profesional que la tiene.
   const canReassign = capabilities.includes("tenant.admin");
-  const { tab: initialTab, intent: planIntent } = parseProfilePlanParams(searchParams);
+  // EV2-D3: escribe quien tiene `clinical.read` + acceso full + profesional (la action vuelve a chequearlo).
+  const canWriteNotes = notesModule && canWriteClinicalNotes(new Set(capabilities), "full", actor.practitionerId);
 
   // Strip the `access` discriminator field before passing to the legacy
   // PatientProfile prop shape — it's a discriminated-union marker that
@@ -167,9 +192,29 @@ export default async function PatientPage({
         initialPlansError={plansRes && !plansRes.ok ? plansRes.error : null}
         initialTab={initialTab}
         planIntent={planIntent}
+        clinicalSummary={clinicalSummary}
+        canWriteNotes={canWriteNotes}
+        noteBookingId={noteBookingId}
+        noteBooking={
+          noteBookingRow
+            ? {
+                id: noteBookingRow.id,
+                scheduledFor: noteBookingRow.scheduledFor.toISOString(),
+                status: noteBookingRow.status,
+                serviceName: noteBookingRow.service?.name ?? null,
+              }
+            : null
+        }
       />
     </div>
   );
+}
+
+/** Un param de la URL (string suelto; un array o nada → null). */
+function searchParam(sp: SearchParamsLike, key: string): string | null {
+  if (sp instanceof URLSearchParams) return sp.get(key);
+  const v = sp[key];
+  return typeof v === "string" ? v : null;
 }
 
 function Breadcrumbs({ name }: { name: string }) {

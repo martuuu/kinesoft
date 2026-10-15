@@ -70,7 +70,13 @@ import { PatientHeader } from "./patient-header";
 import { RecentBookings } from "./recent-bookings";
 import { RescheduleForm } from "./reschedule-form";
 import { ShareActions } from "./share-actions";
-import { STATUS_TOAST, StatusActions } from "./status-actions";
+import {
+  StatusActions,
+  clinicalNoteRowEligible,
+  offersNoteAfterStatus,
+  statusToastPayload,
+} from "./status-actions";
+import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
 import { sectionCard } from "./styles";
 import {
   forcePromptConfirm,
@@ -114,6 +120,21 @@ const RenewAuthorizationDialog = dynamic(
   () => import("@/components/planes/plan-edit-dialogs").then((m) => m.RenewAuthorizationDialog),
   { ssr: false }
 );
+
+// EV2-3b: la fila «Evolución» (con `NoteCard`) y el editor van en chunks
+// aparte: solo los usa quien tiene `clinical.read`, y la Secretaria (la que más
+// vive en la agenda) no los descarga. La lectura `getBookingClinicalNote` se
+// importa al usarla por lo mismo (y para que el drawer no arrastre el módulo de
+// actions de evoluciones a quien no lo usa).
+const ClinicalNoteRow = dynamic(() => import("./clinical-note-row").then((m) => m.ClinicalNoteRow), {
+  ssr: false,
+});
+const NoteEditorDrawer = dynamic(
+  () => import("@/components/clinical-notes/note-editor-drawer").then((m) => m.NoteEditorDrawer),
+  { ssr: false }
+);
+const readBookingClinicalNote = (bookingId: string) =>
+  import("@/lib/clinical-notes-read").then((m) => m.getBookingClinicalNote(bookingId));
 
 /** Sin turno abierto no se muestra nada; el valor solo evita nulls abajo. */
 const CLOSED: BookingDrawerAccess = {
@@ -216,6 +237,17 @@ export function BookingDrawer({
   // cierra el drawer y `booking` pasa a null).
   const [planDialog, setPlanDialog] = useState<PlanDialog | null>(null);
 
+  // EV2-3b · fila «Evolución». Se pide al abrir el turno y solo si vale la pena
+  // (`clinicalNoteRowEligible`: paciente + `clinical.read` + módulo); `null`
+  // del server = sin acceso / guest → la fila no se renderiza. El editor de
+  // «Cargar evolución» va AFUERA del drawer (como `planDialog`: el panel tiene
+  // `transform`) y guarda su propio blanco, porque el drawer se cierra antes.
+  const evolutionsModule = tenantModules.has("evoluciones");
+  const noteRowEligible =
+    !!booking && clinicalNoteRowEligible({ patientId: booking.patientId, caps, evolutionsModule });
+  const [noteView, setNoteView] = useState<BookingClinicalNoteView | null>(null);
+  const [noteEditor, setNoteEditor] = useState<NoteEditorTarget | null>(null);
+
   // Reset reschedule state every time a different booking opens.
   // Uses AR-formatted Intl output instead of `Date.prototype.getHours()`
   // so the input shows the same wall-clock as the agenda regardless of
@@ -253,6 +285,15 @@ export function BookingDrawer({
     // turno". UNA lectura (allowlist sin títulos, apta para la Secretaria) y
     // solo en turnos de plan con `plans.schedule`; un error deja el botón
     // oculto (no hay nada que hacer distinto desde acá).
+    // EV2-3b: lectura perezosa de la evolución del turno (ver arriba).
+    setNoteView(null);
+    if (booking && noteRowEligible) {
+      readBookingClinicalNote(booking.id)
+        .then((v) => {
+          if (!cancelled) setNoteView(v);
+        })
+        .catch(() => {});
+    }
     setNextSession(null);
     if (booking?.patientId && drawerPlanModel(booking, planPerms, { plansModule }).canSchedule) {
       listSchedulablePlanSessions({ patientId: booking.patientId })
@@ -294,7 +335,20 @@ export function BookingDrawer({
       // queda realizada") manda si viene.
       const description =
         r.notice ?? planStatusToastDescription(status, { isPlan: isPlanBooking, ordinal: planOrdinal });
-      toast.success(STATUS_TOAST[status] ?? "Turno actualizado", description ? { description } : undefined);
+      // EV2-3b: al marcar Realizado, si el actor puede crear la evolución de
+      // ESTE turno (se relee después del cambio: `canCreate` depende del estado),
+      // el toast ofrece «Cargar evolución». Solo para quien tiene acceso de
+      // lectura (la Secretaria no paga el viaje); la barrera es la action.
+      let target: NoteEditorTarget | null = null;
+      if (status === "COMPLETED" && noteRowEligible && booking.patientId && !noteView?.note) {
+        const view = await readBookingClinicalNote(booking.id).catch(() => null);
+        if (offersNoteAfterStatus(status, view)) target = noteTargetOf(booking, booking.patientId);
+      }
+      const payload = statusToastPayload(status, {
+        description,
+        onCreateNote: target ? () => setNoteEditor(target) : null,
+      });
+      toast.success(payload.title, payload.options);
       onSaved();
     });
   };
@@ -589,6 +643,14 @@ export function BookingDrawer({
 
   // P3.Z (F3a): "Crear plan desde este turno" / "Ver plan" eran `<Link>` y
   // salían de la agenda sin pasar por el dirty-guard.
+  /** EV2-3b: «Cargar evolución» de la fila: cierra el drawer (dirty-guard) y abre el editor afuera. */
+  const openNoteEditor = async () => {
+    if (!booking?.patientId) return;
+    if (!(await confirmDiscard())) return;
+    setNoteEditor(noteTargetOf(booking, booking.patientId));
+    onClose();
+  };
+
   const navigateFromPlanRow = async (href: string) => {
     if (!(await confirmDiscard())) return;
     onClose();
@@ -688,6 +750,17 @@ export function BookingDrawer({
                 if (booking.patientId && typeof booking.programId === "string")
                   void openPlanDialog({ kind: "renew", programId: booking.programId, patientId: booking.patientId });
               }}
+              onNavigate={(href) => void navigateFromPlanRow(href)}
+            />
+          )}
+
+          {booking.patientId && (
+            <ClinicalNoteRow
+              view={noteRowEligible ? noteView : null}
+              patientId={booking.patientId}
+              bookingId={booking.id}
+              pending={pending}
+              onCreate={() => void openNoteEditor()}
               onNavigate={(href) => void navigateFromPlanRow(href)}
             />
           )}
@@ -873,6 +946,15 @@ export function BookingDrawer({
           }}
         />
       )}
+      {noteEditor && (
+        <NoteEditorDrawer
+          open
+          onClose={() => setNoteEditor(null)}
+          mode={{ type: "create", patientId: noteEditor.patientId, booking: noteEditor.booking }}
+          // El editor ya muestra su toast de guardado; la agenda no cambia.
+          onSaved={() => {}}
+        />
+      )}
       {planDialog?.kind === "renew" && (
         <RenewAuthorizationDialog
           open
@@ -890,6 +972,19 @@ export function BookingDrawer({
       )}
     </>
   );
+}
+
+/** EV2-3b: blanco del editor «Cargar evolución» (el drawer ya se cerró). */
+type NoteEditorTarget = {
+  patientId: string;
+  booking: { id: string; scheduledFor: string; serviceName: string | null };
+};
+
+function noteTargetOf(booking: DrawerBooking, patientId: string): NoteEditorTarget {
+  return {
+    patientId,
+    booking: { id: booking.id, scheduledFor: booking.scheduledFor, serviceName: booking.serviceName ?? null },
+  };
 }
 
 /** Diálogo abierto desde la fila Plan, con su blanco (el drawer ya se cerró). */

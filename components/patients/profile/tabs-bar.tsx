@@ -13,7 +13,7 @@ import type { Tab } from "./types";
  *
  * S22b (ES3): el perfil completo pasa en `only` las pestañas que permite el
  * consultorio (`isProfileTabAllowed`: sin `planes` no hay Planes, sin
- * `sesiones` no hay Sesiones, sin `evaluaciones` no hay Evolución). La pestaña
+ * `sesiones` no hay Sesiones, sin `evaluaciones` no hay EVA). La pestaña
  * "Plan" pasa a "Planes" (`?tab=planes`, alias `plan`).
  *
  * P3.Z (F3b, a11y): era `role="tablist"`/`role="tab"` sin `aria-controls` ni
@@ -21,6 +21,9 @@ import type { Tab } from "./types";
  * 9" y el teclado no respondía como tal). Completarlo exige `role="tabpanel"`
  * con ids en el shell; se eligió lo más simple que queda correcto: botones
  * nativos (Tab/Enter/Espacio) en un `<nav>` con `aria-current` en la activa.
+ *
+ * EV2-3a (EV2-D10/D20): `evol` (la curva EVA) se llamaba «Evolución» y chocaba con la evolución de HC (H-EV2): pasa a
+ * «EVA» con el mismo id. «Evoluciones» (`evoluciones`) cuenta las evoluciones vivas (raíces no anuladas).
  */
 export function TabsBar({
   active,
@@ -31,18 +34,19 @@ export function TabsBar({
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
-  counts: { turnos?: number; sesiones?: number; planes?: number; fact?: number };
+  counts: { evoluciones?: number; turnos?: number; sesiones?: number; planes?: number; fact?: number };
   only?: readonly Tab[];
   labels?: Partial<Record<Tab, string>>;
 }) {
   const all: { id: Tab; label: string; count?: number }[] = [
     { id: "resumen", label: "Resumen" },
+    { id: "evoluciones", label: "Evoluciones", count: counts.evoluciones || undefined },
     { id: "turnos", label: "Turnos", count: counts.turnos || undefined },
     { id: "sesiones", label: "Sesiones", count: counts.sesiones || undefined },
     { id: "planes", label: "Planes", count: counts.planes || undefined },
     { id: "archivos", label: "Archivos" },
     { id: "antec", label: "Antecedentes" },
-    { id: "evol", label: "Evolución" },
+    { id: "evol", label: "EVA" },
     { id: "fact", label: "Facturación", count: counts.fact || undefined },
     { id: "actividad", label: "Actividad" },
   ];

@@ -3,6 +3,7 @@
 import type { BookingStatus } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { IconCheck } from "@/components/ui/icons";
+import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
 import { menuLabel } from "./styles";
 
 /** Toast de éxito por estado (el resto cae en "Turno actualizado"). */
@@ -26,6 +27,50 @@ export function planStatusToastDescription(
   if (!plan.isPlan || (status !== "NO_SHOW" && status !== "CANCELLED")) return null;
   const session = plan.ordinal != null ? `La sesión ${plan.ordinal}` : "La sesión";
   return `${session} queda sin turno para reprogramar.`;
+}
+
+/**
+ * EV2-3b: ¿vale la pena pedir la evolución del turno (fila «Evolución» del drawer)? Espejo de UI: la barrera es
+ * `getBookingClinicalNote`. Sin paciente (guest) no hay HC; sin `clinical.read` (Secretaria, Titular que no
+ * atiende) el server devuelve null igual, así que no se gasta el viaje; sin el módulo `evoluciones` tampoco.
+ * Vive acá y no en `./clinical-note-row` porque esa fila va en un chunk aparte.
+ */
+export function clinicalNoteRowEligible(input: {
+  patientId: string | null;
+  caps: ReadonlySet<string>;
+  evolutionsModule: boolean;
+}): boolean {
+  return !!input.patientId && input.evolutionsModule && input.caps.has("clinical.read");
+}
+
+/**
+ * EV2-3b: toast «Cargar evolución» al marcar Realizado (Atendido) solo si el server dice que el actor puede crear
+ * la evolución de ESTE turno ahora (`canCreate` = escritura clínica con profesional + turno válido + sin raíz
+ * viva). El drawer relee la vista DESPUÉS del cambio: un Ausente que pasa a Realizado no se podía cargar antes.
+ */
+export function offersNoteAfterStatus(status: BookingStatus, view: BookingClinicalNoteView | null): boolean {
+  return status === "COMPLETED" && view?.canCreate === true;
+}
+
+/** EV2-3b: acción del toast de «Realizado» cuando el actor puede cargar la evolución del turno. */
+export const NOTE_TOAST_ACTION_LABEL = "Cargar evolución";
+
+/**
+ * EV2-3b: toast de éxito del cambio de estado. `onCreateNote` llega solo si el server dijo que el actor puede
+ * crear la evolución de este turno (`offersNoteAfterStatus` en `./clinical-note-row`); la acción abre el
+ * editor (la barrera real es `createClinicalNote`). Sin `onCreateNote` es el toast de siempre.
+ */
+export function statusToastPayload(
+  status: BookingStatus,
+  opts: { description?: string | null; onCreateNote?: (() => void) | null } = {}
+): { title: string; options?: { description?: string; action?: { label: string; onClick: () => void } } } {
+  const title = STATUS_TOAST[status] ?? "Turno actualizado";
+  const options: { description?: string; action?: { label: string; onClick: () => void } } = {};
+  if (opts.description) options.description = opts.description;
+  if (status === "COMPLETED" && opts.onCreateNote) {
+    options.action = { label: NOTE_TOAST_ACTION_LABEL, onClick: opts.onCreateNote };
+  }
+  return Object.keys(options).length > 0 ? { title, options } : { title };
 }
 
 /**

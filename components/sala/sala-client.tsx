@@ -26,6 +26,7 @@ import { SALA_CSS } from "./sala-css";
 import { useSalaLive, type SalaLiveWithBoard } from "./use-sala-live";
 import { ReceptionDesk } from "@/components/sala/desk/reception-desk";
 import { salaDayLabel } from "./sala-day-label";
+import { useAttendedNoteToast } from "@/components/agenda/reception/use-attended-note-toast";
 
 /**
  * Cliente de /sala. Los datos vivos (filas de HOY, optimista con rollback,
@@ -40,6 +41,12 @@ import { salaDayLabel } from "./sala-day-label";
  * y sin recargar); sin provider (tests, demo) de `initialLayout` que lee la page
  * de las prefs del server; sin nada, el Tablero. El hook vive ACÁ y no en cada
  * cara: cambiar de cara no re-pide ni pierde overrides en vuelo.
+ *
+ * EV2-3c: `canReadClinical` (`caps.has("clinical.read")`, de la page) + el
+ * `practitionerId` del viewer → al marcar «Atendido» en un turno propio, toast
+ * «Cargar evolución» en las tres caras (`useAttendedNoteToast`, vía
+ * `onCommitted` del hook). PD-13 intacto: el toast solo usa ids, estado y el
+ * nombre que ya viajan en la fila; ningún texto clínico entra a /sala.
  */
 export function SalaClient({
   dayKey,
@@ -50,6 +57,7 @@ export function SalaClient({
   viewer: viewerProp,
   initialGroupBy,
   initialLayout,
+  canReadClinical = false,
 }: {
   dayKey: string;
   initialNow: string;
@@ -62,6 +70,8 @@ export function SalaClient({
   initialGroupBy: SalaGroupBy;
   /** `agendaPrefs.receptionLayout` del server (la page). */
   initialLayout?: ReceptionLayout;
+  /** EV2-3c: `caps.has("clinical.read")`. Sin la prop, sin toast «Cargar evolución». */
+  canReadClinical?: boolean;
 }) {
   const { practitionerId, canReception, canOperateAll, canCollect = false } = viewerProp;
   // Identidad estable por valor: `viewer` es dep de `buildBoard`/`deskEntries` en cada render.
@@ -69,7 +79,8 @@ export function SalaClient({
     () => ({ practitionerId, canReception, canOperateAll, canCollect }),
     [practitionerId, canReception, canOperateAll, canCollect]
   );
-  const live = useSalaLive({ dayKey, initialNow, initialRows, practitioners, rooms, viewer });
+  const onCommitted = useAttendedNoteToast({ practitionerId, canReadClinical });
+  const live = useSalaLive({ dayKey, initialNow, initialRows, practitioners, rooms, viewer, onCommitted });
   const layout: ReceptionLayout = useTweaksOptional()?.receptionLayout ?? initialLayout ?? "board";
 
   if (layout === "board") return <SalaBoardFace live={live} initialGroupBy={initialGroupBy} />;

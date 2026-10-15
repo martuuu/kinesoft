@@ -31,7 +31,7 @@ export function AntecedentesView({ patient }: { patient: PatientWithRelations })
             <span style={{ fontSize: 12, color: "var(--navy-300)" }}>No registrado</span>
           )}
         </Detail>
-        <Detail label="Notas">
+        <Detail label="Notas generales">
           <span style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>
             {patient.notes ?? "Sin notas"}
           </span>

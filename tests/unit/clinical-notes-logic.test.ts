@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from "vitest";
 import type { Capability } from "@/lib/capabilities";
+import { parseProfilePlanParams, stripPlanIntentParams } from "@/lib/plans-deeplink";
 import {
   AmendClinicalNoteSchema,
   CreateClinicalNoteSchema,
@@ -441,5 +442,14 @@ describe("[EV2-1a] deep link", () => {
     expect(clinicalNoteDeepLink("p-1")).toBe("/pacientes/p-1?tab=evoluciones");
     expect(clinicalNoteDeepLink("p-1", null)).toBe("/pacientes/p-1?tab=evoluciones");
     expect(clinicalNoteDeepLink("p-1", "bk 1&x")).toBe("/pacientes/p-1?tab=evoluciones&turno=bk%201%26x");
+  });
+
+  it("[EV2-Z] lo que genera es lo que lee el perfil (`parseProfilePlanParams` + `?turno=`) y lo que limpia", () => {
+    const href = clinicalNoteDeepLink("p-1", "bk_1");
+    const sp = new URL(href, "http://x").searchParams;
+    expect(parseProfilePlanParams(sp).tab).toBe("evoluciones");
+    expect(sp.get("turno")).toBe("bk_1");
+    // La pestaña consume el deep link una vez y saca `turno` (un refresh no reabre el editor); `tab` queda.
+    expect(stripPlanIntentParams(href)).toBe("/pacientes/p-1?tab=evoluciones");
   });
 });

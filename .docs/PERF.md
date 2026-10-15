@@ -430,6 +430,16 @@ Lectura:
   cruzadas quedan en 3-5,3 s. Eso es PF2 (y la región, punto 1 del diagnóstico).
 - Crudo: `pf0b-clean0.json` / `pf0b-clean{,-x}.json` / `pf0b-before-x.json` del scratchpad de la sesión (no versionado; se regenera con el script).
 
+## EV2-Z — Evoluciones (15-oct-2026)
+
+`compare.ts` sin regresiones fuera de umbral (31 escenarios; techo estricto de turnos igual: `f.createBooking` 31,
+`f.createBookingsBatch.20` 182). `seguimiento` da **8 → 17** (info) contra la fila de A1, pero **no es de EV2**: es el
+mismo crecimiento ya explicado en ES3 (8 → 20, buckets «Sin turno» / «Sin evolución» y ordinal; PF-0b lo bajó). EV2-2d
+solo sumó un `NOT EXISTS` (raíz viva de evolución del turno activo, EV2-D18) **dentro** de la sentencia de «Sin
+evolución» que ya existía (`lib/sessions.ts`, `listOpenSessions`): +0 sentencias, 1 tx. El detalle de una sesión
+(`/seguimiento/[id]`) suma el turno activo en el mismo `findFirst` (include) y `getBookingClinicalNote` en paralelo con
+`listSchedulablePlanSessions`.
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |

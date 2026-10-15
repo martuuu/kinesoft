@@ -50,6 +50,8 @@ vi.mock("@/lib/exercises", () => proxy());
 vi.mock("@/lib/diagnosis", () => proxy());
 vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/conditions", () => proxy());
+vi.mock("@/lib/clinical-notes", () => proxy());
+vi.mock("@/lib/clinical-notes-read", () => proxy());
 
 import { AgendaClient, type Props } from "@/components/agenda/agenda-client";
 import type { BookingDTO } from "@/components/agenda/agenda-utils";

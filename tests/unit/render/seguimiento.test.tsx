@@ -35,6 +35,13 @@ vi.mock("@/lib/plans-adopt", () => ({
   generatePlanBookings: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/exercises", () => ({ listExercises: async () => [] }));
+// EV2-3c: el detalle monta el `NoteEditorDrawer` (2e), que importa las actions de evoluciones (red).
+vi.mock("@/lib/clinical-notes", () => ({
+  createClinicalNote: async () => ({ ok: false, error: "x" }),
+  editClinicalNote: async () => ({ ok: false, error: "x" }),
+  amendClinicalNote: async () => ({ ok: false, error: "x" }),
+  voidClinicalNote: async () => ({ ok: false, error: "x" }),
+}));
 
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -51,6 +58,8 @@ import {
   sessionHeading,
   sessionHref,
   sortByOrdinal,
+  sessionClinicalNoteAction,
+  type SessionClinicalNote,
 } from "@/components/seguimiento/seguimiento-model";
 import type { OpenSessionBuckets, OpenSessionRow } from "@/lib/sessions-types";
 import type { PlanPreview } from "@/lib/plans-types";
@@ -187,7 +196,7 @@ describe("[P3-S20] landing de Seguimiento", () => {
     expect(out).not.toContain(">Agendar<");
   });
 
-  it("'Sin evolución': tag en Realizadas y 'Cargar evolución'", () => {
+  it("[EV2-3c] 'Sin evolución': tag en Realizadas y 'Registrar sesión' (EV2-D19, antes 'Cargar evolución')", () => {
     const s = row({ id: "ev1", completedAt: new Date("2026-10-05T13:00:00.000Z") });
     const out = html(
       <SeguimientoLanding
@@ -196,7 +205,8 @@ describe("[P3-S20] landing de Seguimiento", () => {
       />
     );
     expect(out).toContain(">Sin evolución<");
-    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain(">Registrar sesión<");
+    expect(out).not.toContain("Cargar evolución");
     // La realizada sin evolución no dice "Hecho".
     expect(out).not.toContain("Hecho");
   });
@@ -302,12 +312,14 @@ describe("[P3-S20] detalle de sesión", () => {
     expect(urlWithoutAgendarParam("https://app.test/seguimiento/s1")).toBeNull();
   });
 
-  it("realizada sin evolución → tag 'Sin evolución' y botón 'Cargar evolución'", () => {
+  it("[EV2-3c] realizada sin evolución → tag 'Sin evolución' y botón 'Registrar sesión' (EV2-D19)", () => {
     const out = html(
       <SessionDetail session={detail({ completedAt: new Date("2026-10-06T13:00:00.000Z") })} scheduledLabel="x" canSchedule />
     );
     expect(out).toContain(">Sin evolución<");
-    expect(out).toContain("Cargar evolución");
+    expect(out).toContain("Registrar sesión");
+    // Sin `clinicalNote` (la página no la pasó: sin turno / sin acceso) no hay evolución de HC.
+    expect(out).not.toContain("Cargar evolución");
     expect(out).not.toContain("Guardar anotaciones");
     // Realizada: no se agenda ni se cierra.
     expect(out).not.toContain(">Agendar<");
@@ -321,7 +333,62 @@ describe("[P3-S20] detalle de sesión", () => {
         scheduledLabel="x"
       />
     );
-    expect(out).not.toContain("Cargar evolución");
+    expect(out).not.toContain("Registrar sesión");
     expect(out).not.toContain(">Sin evolución<");
+  });
+});
+
+describe("[EV2-3c] Seguimiento: evolución de HC del turno de la sesión (EV2-D19)", () => {
+  const done = { completedAt: new Date("2026-10-06T13:00:00.000Z") };
+  const note = (over: Partial<SessionClinicalNote> = {}): SessionClinicalNote => ({
+    patientId: "pat1",
+    booking: { id: "bk1", scheduledFor: "2026-10-06T12:00:00.000Z", serviceName: "Kinesiología" },
+    canCreate: true,
+    hasLiveNote: false,
+    ...over,
+  });
+
+  it("profesional con escritura (canCreate): 'Cargar evolución' además de 'Registrar sesión'", () => {
+    const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note()} />);
+    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain("Registrar sesión");
+    expect(out).toContain(">Sin evolución<");
+  });
+
+  it("también en una sesión todavía no realizada (el turno puede estar en curso)", () => {
+    const out = html(<SessionDetail session={detail()} scheduledLabel="x" clinicalNote={note()} />);
+    expect(out).toContain(">Cargar evolución<");
+    expect(out).toContain("Cerrar sesión");
+  });
+
+  it("sin escritura (canCreate false, sin nota): ni botón ni link", () => {
+    const out = html(<SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note({ canCreate: false })} />);
+    expect(out).not.toContain("Cargar evolución");
+    expect(out).not.toContain("Ver evolución");
+  });
+
+  it("con evolución viva: 'Ver evolución' al perfil con ?turno= y la sesión deja de estar 'Sin evolución' (EV2-D18)", () => {
+    const out = html(
+      <SessionDetail session={detail(done)} scheduledLabel="x" clinicalNote={note({ canCreate: false, hasLiveNote: true })} />
+    );
+    expect(out).toContain('href="/pacientes/pat1?tab=evoluciones&amp;turno=bk1"');
+    expect(out).toContain(">Ver evolución<");
+    expect(out).not.toContain(">Cargar evolución<");
+    expect(out).not.toContain(">Sin evolución<");
+    // Ya tiene evolución (la de HC): el server no deja registrar la meta encima (`touched`), la UI tampoco.
+    expect(out).not.toContain("Registrar sesión");
+  });
+
+  it("modelo: sessionClinicalNoteAction e isSessionWithoutEvolution con HC", () => {
+    expect(sessionClinicalNoteAction(null)).toBeNull();
+    expect(sessionClinicalNoteAction(note())).toEqual({ kind: "create" });
+    expect(sessionClinicalNoteAction(note({ canCreate: false }))).toBeNull();
+    expect(sessionClinicalNoteAction(note({ hasLiveNote: true, canCreate: false }))).toEqual({
+      kind: "view",
+      href: "/pacientes/pat1?tab=evoluciones&turno=bk1",
+    });
+    const probe = { completedAt: "2026-10-06T13:00:00.000Z", notes: null, rpe: null, paInPre: null, paInPost: null, exercises: [] };
+    expect(isSessionWithoutEvolution(probe)).toBe(true);
+    expect(isSessionWithoutEvolution(probe, { hasClinicalNote: true })).toBe(false);
   });
 });

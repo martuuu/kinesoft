@@ -44,6 +44,18 @@ describe("ReceptionView render", () => {
     // en atención primero
     expect(html.indexOf("Paciente box")).toBeLessThan(html.indexOf("Paciente hecho"));
   });
+  it("[EV2-3c] el toast «Cargar evolución» no cambia el markup: profesional y Secretaria ven la misma tabla", () => {
+    const base = renderToStaticMarkup(<ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} />);
+    const pro = renderToStaticMarkup(
+      <ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} clinicalNoteViewer={{ practitionerId: "p1", canReadClinical: true }} />
+    );
+    const secretaria = renderToStaticMarkup(
+      <ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate onOpenBooking={noop} onChanged={noop} clinicalNoteViewer={{ practitionerId: null, canReadClinical: false }} />
+    );
+    expect(pro).toBe(base);
+    expect(secretaria).toBe(base);
+    expect(base).not.toContain("Cargar evolución");
+  });
   it("solo lectura", () => {
     const html = renderToStaticMarkup(<ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={NOW} canOperate={false} onOpenBooking={noop} onChanged={noop} />);
     expect(html).not.toContain("Marcar ");

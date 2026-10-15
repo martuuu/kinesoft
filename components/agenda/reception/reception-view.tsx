@@ -26,6 +26,7 @@ import {
 import { roomNameOf, type BookingDTO } from "../agenda-utils";
 import { ReceptionRow } from "./reception-row";
 import { noteLocalReception } from "@/lib/arrival-local-notes";
+import { useAttendedNoteToast } from "./use-attended-note-toast";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -64,6 +65,10 @@ import { noteLocalReception } from "@/lib/arrival-local-notes";
  * - RX-1f: fuera de hoy (día AR) no hay «demorado» ni minutos que corran
  *   (`receptionEntriesForDay`, hallazgo G1), y con `canOperate` arriba va el
  *   link «Abrir escritorio de Recepción» → /sala.
+ * - EV2-3c: `clinicalNoteViewer` ({ practitionerId, canReadClinical =
+ *   `caps.has("clinical.read")` }): al marcar «Atendido» en un turno propio el
+ *   profesional ve el toast «Cargar evolución» (`useAttendedNoteToast`). Sin
+ *   la prop (o la Secretaria, sin `clinical.read`) no hay toast.
  */
 export function ReceptionView({
   dayKey,
@@ -74,6 +79,7 @@ export function ReceptionView({
   onOpenBooking,
   onChanged,
   roomById = null,
+  clinicalNoteViewer = null,
 }: {
   dayKey: string;
   bookings: BookingDTO[];
@@ -83,8 +89,10 @@ export function ReceptionView({
   onOpenBooking: (b: BookingDTO) => void;
   onChanged: (b: BookingDTO, opts?: { stale?: boolean }) => void;
   roomById?: Readonly<Record<string, { name: string }>> | null;
+  clinicalNoteViewer?: { practitionerId: string | null; canReadClinical: boolean } | null;
 }) {
   const toast = useToast();
+  const offerNote = useAttendedNoteToast(clinicalNoteViewer);
   const [filter, setFilter] = useState<ReceptionFilter>("todos");
   const [announce, setAnnounce] = useState("");
 
@@ -147,7 +155,10 @@ export function ReceptionView({
       noteLocalReception(b.id, res.data);
       const done = commitReceptionAction(overridesRef.current, b.id, res.data);
       setOverrides(done.overrides);
-      if (done.booking) onChanged(done.booking);
+      if (done.booking) {
+        onChanged(done.booking);
+        offerNote(action, done.booking);
+      }
       return;
     }
     const back = rollbackReceptionAction(overridesRef.current, b.id);

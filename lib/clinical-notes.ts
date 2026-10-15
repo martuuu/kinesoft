@@ -86,6 +86,20 @@ export async function voidClinicalNote(input: VoidClinicalNoteInput): Promise<Ac
 
 // ─── Crear ───────────────────────────────────────────────────────────────────
 
+/**
+ * EV2-Z: qué árboles RSC dependen de una evolución.
+ * - `/pacientes/<id>`: siempre (pestaña, contador, «Última evolución»).
+ * - `/seguimiento` (layout = landing + detalle): solo si cambió la existencia de la RAÍZ VIVA de un turno (crear o
+ *   anular una raíz con `bookingId`). Es lo único que lee: el bucket «Sin evolución» (`listSeguimiento`, EV2-D18:
+ *   raíz viva, sin enmiendas) y `hasLiveNote` del detalle. Antes el detalle hacía `router.refresh()` a mano.
+ * - `/agenda` y `/sala` NO: sus árboles no leen notas (el drawer las pide aparte con `getBookingClinicalNote`; PD-13
+ *   deja /sala sin texto clínico). Editar o enmendar no cambia ninguno de los dos predicados.
+ */
+function revalidateNote(note: ClinicalNoteDTO, opts: { rootLiveChanged: boolean }) {
+  revalidatePath(`/pacientes/${note.patientId}`);
+  if (opts.rootLiveChanged && note.bookingId && note.amendsNoteId === null) revalidatePath("/seguimiento", "layout");
+}
+
 async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<{ note: ClinicalNoteDTO; replayed: boolean }>> {
   try {
     const actor = await getActor();
@@ -108,7 +122,7 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
         return replay ?? fail(COPY.bookingTaken);
       });
     }
-    if (result.ok) revalidatePath(`/pacientes/${p.patientId}`);
+    if (result.ok) revalidateNote(result.data.note, { rootLiveChanged: true });
     return result;
   } catch (e) {
     return forbiddenResult(e);
@@ -232,7 +246,7 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
       if (pgErrorCode(e) === "P0001") return fail(COPY.windowClosed);
       throw e;
     }
-    if (result.ok) revalidatePath(`/pacientes/${result.data.note.patientId}`);
+    if (result.ok) revalidateNote(result.data.note, { rootLiveChanged: false });
     return result;
   } catch (e) {
     return forbiddenResult(e);
@@ -306,7 +320,7 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
         return replay ?? fail(COPY.keyReused);
       });
     }
-    if (result.ok) revalidatePath(`/pacientes/${result.data.note.patientId}`);
+    if (result.ok) revalidateNote(result.data.note, { rootLiveChanged: false });
     return result;
   } catch (e) {
     return forbiddenResult(e);
@@ -365,7 +379,7 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
       });
       return { ok: true, data: { note: dto(row, actor, gate, now) } };
     });
-    if (result.ok) revalidatePath(`/pacientes/${result.data.note.patientId}`);
+    if (result.ok) revalidateNote(result.data.note, { rootLiveChanged: true });
     return result;
   } catch (e) {
     return forbiddenResult(e);

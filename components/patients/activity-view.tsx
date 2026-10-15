@@ -37,6 +37,14 @@ export function ActivityView({ patientId }: { patientId: string }) {
       </Card>
     );
   }
+  return <ActivityTimeline events={events} />;
+}
+
+/**
+ * EV2-3d: la lista sin el fetch, separada para poder montarla en un render test estático (`renderToStaticMarkup` no
+ * corre efectos) con eventos reales de evoluciones e impresión.
+ */
+export function ActivityTimeline({ events }: { events: ActivityEvent[] }) {
   if (events.length === 0) {
     return (
       <Card style={{ padding: 18, textAlign: "center", color: "var(--navy-500)" }}>
@@ -220,7 +228,9 @@ function humanizeAction(action: string): string {
     "planTemplate.apply": "Plantilla aplicada",
     "session.create": "Sesión agregada",
     "session.complete": "Sesión cerrada",
-    "session.evolution": "Evolución cargada",
+    // EV2-D19: lo que la sesión llamaba «Cargar evolución» (notas, RPE, EVA) ahora es «Registrar sesión»; «Evolución»
+    // queda para la evolución de HC (`clinicalNote.*`), así el historial no muestra dos «Evolución cargada» distintas.
+    "session.evolution": "Sesión registrada",
     "session.meta.update": "Sesión editada",
     "session.reschedule": "Sesión reprogramada",
     "session.delete": "Sesión eliminada",
@@ -231,6 +241,12 @@ function humanizeAction(action: string): string {
     "patientFile.upload": "Archivo subido",
     "patientFile.delete": "Archivo eliminado",
     "patientFile.download": "Archivo descargado",
+    // EV2 (EV2-D16, EV2-D11): evoluciones de HC e impresión auditada. El payload trae ids, revisión y tipo; nunca texto.
+    "clinicalNote.create": "Evolución cargada",
+    "clinicalNote.edit": "Evolución editada",
+    "clinicalNote.amend": "Enmienda agregada a una evolución",
+    "clinicalNote.void": "Evolución anulada",
+    "clinicalRecord.print": "Historia clínica impresa",
   };
   return map[action] ?? action;
 }

@@ -579,7 +579,6 @@ function ExerciseCard({
   bulkMode?: boolean;
   selected?: boolean;
 }) {
-  const router = useRouter();
   const [favOptimistic, setFavOptimistic] = useState(ex.isFavourite);
   const [pendingFav, startFav] = useTransition();
 
@@ -593,7 +592,7 @@ function ExerciseCard({
         setFavOptimistic((s) => !s); // revert
         return;
       }
-      router.refresh();
+      // EV2-Z (PF-0d): `toggleFavourite` revalida /biblioteca y la respuesta de la action ya trae el árbol nuevo.
     });
   };
 
@@ -968,7 +967,6 @@ function CreateExerciseModal({
   onClose: () => void;
   kind?: "EXERCISE" | "MANUAL_THERAPY";
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -1001,7 +999,7 @@ function CreateExerciseModal({
         return;
       }
       onClose();
-      router.refresh();
+      // EV2-Z (PF-0d): `createExercise` revalida /biblioteca y /terapia-manual (+ tags): sin segundo render.
     });
   };
 

@@ -12,12 +12,18 @@
  *     en `notes`, que es evolución clínica);
  *   - "Sin evolución" en el detalle = realizada y sin nada cargado (espejo del
  *     "untouched" del server); la EvaScore no viaja en el DTO, así que el
- *     server tiene la última palabra (`loadSessionEvolution` → `loaded:false`).
+ *     server tiene la última palabra (`loadSessionEvolution` → `loaded:false`);
+ *   - EV2-D19 (Martin puede revertir): la acción que guarda la meta de la
+ *     sesión (anotaciones, EVA, RPE) se llama «Registrar sesión»; «Cargar
+ *     evolución» pasa a ser la evolución de la historia clínica del turno de
+ *     la sesión (`NoteEditorDrawer`). EV2-D18: una evolución viva del turno
+ *     también saca la sesión de «Sin evolución».
  */
 import { planSessionLabel } from "@/lib/plan-display";
 import type { OpenSessionBuckets } from "@/lib/sessions-types";
 import type { PlanEngineWriteResult } from "@/lib/plans-edit-types";
 import type { PlanPreview } from "@/lib/plans-types";
+import { clinicalNoteDeepLink } from "@/lib/clinical-notes-logic";
 
 // ─── Copy (C13) ──────────────────────────────────────────────────────────────
 
@@ -27,11 +33,15 @@ export const SEGUIMIENTO_COPY = {
   sinEvolucionTitle: "Sin evolución",
   sinEvolucionHint: "Realizadas en los últimos 14 días que todavía no tienen anotaciones, EVA ni ejercicios marcados.",
   sinEvolucionTag: "Sin evolución",
-  cargarEvolucion: "Cargar evolución",
+  /** EV2-D19: guarda la meta de la sesión (antes decía «Cargar evolución»). */
+  registrarSesion: "Registrar sesión",
+  /** EV2-D19: abre el editor de la evolución de HC del turno de la sesión. */
+  cargarEvolucionHc: "Cargar evolución",
+  verEvolucionHc: "Ver evolución",
   agendar: "Agendar",
   dischargeTitle: "Para dar el alta",
   dischargeAction: "Ver el plan",
-  evolutionAlreadyLoaded: "Esta sesión ya tenía evolución cargada: editala con «Guardar anotaciones».",
+  evolutionAlreadyLoaded: "Esta sesión ya estaba registrada: editala con «Guardar anotaciones».",
   evolutionEmpty: "Cargá al menos una anotación, la EVA, el RPE o un ejercicio hecho.",
   archived: "Sesión archivada",
   scheduleTitle: "Agendar sesión",
@@ -100,10 +110,15 @@ export type EvolutionProbe = {
   exercises: ReadonlyArray<{ status: string }>;
 };
 
-/** Realizada (p. ej. por "Atendido" en la agenda) y sin evolución cargada. */
-export function isSessionWithoutEvolution(s: EvolutionProbe): boolean {
+/**
+ * Realizada (p. ej. por "Atendido" en la agenda) y sin evolución cargada. EV2-D18: `hasClinicalNote` = el turno
+ * activo de la sesión tiene una evolución de HC viva (raíz no anulada); con eso tampoco es "Sin evolución", igual
+ * que en el bucket del server (`listOpenSessions`).
+ */
+export function isSessionWithoutEvolution(s: EvolutionProbe, opts?: { hasClinicalNote?: boolean }): boolean {
   return (
     s.completedAt != null &&
+    !opts?.hasClinicalNote &&
     s.notes == null &&
     s.rpe == null &&
     s.paInPre == null &&
@@ -115,6 +130,35 @@ export function isSessionWithoutEvolution(s: EvolutionProbe): boolean {
 /** Orden del riel de sesiones: el del ordinal (fecha, empate por `index`). */
 export function sortByOrdinal<T extends { scheduledFor: Date | string; index: number }>(sessions: readonly T[]): T[] {
   return [...sessions].sort((a, b) => +new Date(a.scheduledFor) - +new Date(b.scheduledFor) || a.index - b.index);
+}
+
+// ─── Evolución de HC del turno de la sesión (EV2-D19) ────────────────────────
+
+/**
+ * Lo que la página de detalle le pasa a `SessionDetail` sobre la evolución de HC del turno activo de la sesión.
+ * Sale de `getBookingClinicalNote(booking.id)` en el server: `null` (sin turno, sin acceso o sin el módulo
+ * `evoluciones`) = no se ofrece nada.
+ */
+export type SessionClinicalNote = {
+  patientId: string;
+  booking: { id: string; scheduledFor: string; serviceName: string | null };
+  /** `BookingClinicalNoteView.canCreate`: escritura + turno válido + sin raíz viva. */
+  canCreate: boolean;
+  /** Hay una raíz viva en el turno (`BookingClinicalNoteView.note !== null`). */
+  hasLiveNote: boolean;
+};
+
+/**
+ * Qué muestra el detalle: «Cargar evolución» (abre el editor) si el server dice que se puede crear; «Ver
+ * evolución» (perfil con `?turno=`) si ya hay una viva; si no, nada. La barrera es `createClinicalNote`.
+ */
+export function sessionClinicalNoteAction(
+  c: SessionClinicalNote | null | undefined
+): { kind: "create" } | { kind: "view"; href: string } | null {
+  if (!c) return null;
+  if (c.hasLiveNote) return { kind: "view", href: clinicalNoteDeepLink(c.patientId, c.booking.id) };
+  if (c.canCreate) return { kind: "create" };
+  return null;
 }
 
 // ─── Agendar (generar turno de una sesión "sin turno") ──────────────────────

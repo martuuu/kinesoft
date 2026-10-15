@@ -53,6 +53,12 @@ export type SalaLiveInput = {
   practitioners: SalaPractitioner[];
   rooms: SalaRoom[];
   viewer: DeskViewer;
+  /**
+   * EV2-3c: se llama con la fila CONFIRMADA por el server después de cada acción OK (Tablero y escritorio). Lo usa
+   * `SalaClient` para el toast «Cargar evolución» al marcar «Atendido» (`useAttendedNoteToast`). Se lee de un ref:
+   * cambiarlo no recrea `act`/`onBoardAction` (las cards son `memo`).
+   */
+  onCommitted?: (action: ReceptionAction, saved: BookingDTO) => void;
 };
 
 /**
@@ -93,8 +99,11 @@ export function useSalaLive({
   practitioners,
   rooms,
   viewer,
+  onCommitted,
 }: SalaLiveInput): SalaLiveWithBoard {
   const toast = useToast();
+  const onCommittedRef = useRef(onCommitted);
+  onCommittedRef.current = onCommitted;
   const toastRef = useRef(toast);
   toastRef.current = toast;
   const realtime = useRealtime();
@@ -286,7 +295,10 @@ export function useSalaLive({
         const done = commitReceptionAction(overridesRef.current, b.id, res.data);
         setOverrides(done.overrides);
         const saved = done.booking;
-        if (saved) setRows((prev) => prev.map((r) => (r.id === saved.id ? toSalaRow(saved) : r)));
+        if (saved) {
+          setRows((prev) => prev.map((r) => (r.id === saved.id ? toSalaRow(saved) : r)));
+          onCommittedRef.current?.(action, saved);
+        }
         setFocusReq((f) => ({ id: b.id, n: (f?.n ?? 0) + 1 }));
         return;
       }

@@ -31,7 +31,7 @@ const ROOT = process.cwd();
  * pacientes 7) y marcó 2 (agenda: realtime de disponibilidad y Recepción con
  * «cambió en otra sesión», que no revalida).
  */
-const MAX_UNMARKED = 90; // PL-Z (integrador): 91 → 90, cambiar el rol en Usuarios ya no refresca (la action revalida).
+const MAX_UNMARKED = 88; // PL-Z: 91 → 90 (rol en Usuarios). EV2-Z: 90 → 88, favorito y alta de ejercicio en Biblioteca (las actions revalidan).
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

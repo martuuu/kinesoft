@@ -737,7 +737,7 @@ function EditPatientModal({
           />
         </Section>
 
-        <Section title="Notas">
+        <Section title="Notas generales">
           <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
         </Section>
 

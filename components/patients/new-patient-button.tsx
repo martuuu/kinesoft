@@ -131,7 +131,7 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
           />
         </Section>
 
-        <FormField as="textarea" label="Notas" name="notes" error={fieldErrors.notes?.[0]} />
+        <FormField as="textarea" label="Notas generales" name="notes" error={fieldErrors.notes?.[0]} />
 
         {error && (
           <div

@@ -76,6 +76,7 @@ export default async function SalaPage() {
       viewer={deskViewer(actor.practitionerId ?? null, caps)}
       initialGroupBy={prefs.salaGroupBy}
       initialLayout={prefs.receptionLayout}
+      canReadClinical={caps.has("clinical.read")}
     />
   );
 }

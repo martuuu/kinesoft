@@ -6,6 +6,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { getPatientBookingsAll } from "@/lib/patients";
 import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
+import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
+import type { PatientClinicalSummary } from "@/lib/clinical-notes-types";
+import type { DeepLinkBooking } from "@/components/patients/profile/views/evoluciones-view";
 import type {
   PatientCore,
   PatientAdminCore,
@@ -68,6 +71,7 @@ const ArchivosView = dynamic(() => import("@/components/patients/archivos-view")
 const SesionesView = dynamic(() => import("@/components/patients/profile/views/sesiones-view").then((m) => m.SesionesView), { loading: TabLoading });
 const PlanView = dynamic(() => import("@/components/patients/profile/views/plan-view").then((m) => m.PlanView), { loading: TabLoading });
 const AntecedentesView = dynamic(() => import("@/components/patients/profile/views/antecedentes-view").then((m) => m.AntecedentesView), { loading: TabLoading });
+const EvolucionesView = dynamic(() => import("@/components/patients/profile/views/evoluciones-view").then((m) => m.EvolucionesView), { loading: TabLoading });
 const EvolucionView = dynamic(() => import("@/components/patients/profile/views/evolucion-view").then((m) => m.EvolucionView), { loading: TabLoading });
 const FacturacionView = dynamic(() => import("@/components/patients/profile/views/facturacion-view").then((m) => m.FacturacionView), { loading: TabLoading });
 
@@ -89,9 +93,18 @@ export const PROFILE_PLAN_COPY = {
  * S22b: `isProfileTabAllowed` + rol). El rol ya se resolvió antes: el perfil
  * completo solo se monta con acceso `full`; la Secretaria/BILLING van a
  * `PatientAdminProfile` (Datos y Turnos).
+ *
+ * EV2-3a: «Evoluciones» exige además `clinical.read` del MIEMBRO (no del consultorio): un Titular sin agenda o un
+ * Administrador/a pueden tener acceso `full` a la ficha y no tienen HC (PL-1, §20.17). Falla cerrado: sin el flag, no
+ * está.
  */
-export function profileTabsFor(modules: ReadonlySet<TenantModule>): Tab[] {
-  return PROFILE_TABS.filter((t) => isProfileTabAllowed(t, modules));
+export function profileTabsFor(
+  modules: ReadonlySet<TenantModule>,
+  opts: { clinicalRead?: boolean } = {}
+): Tab[] {
+  return PROFILE_TABS.filter(
+    (t) => isProfileTabAllowed(t, modules) && (t !== "evoluciones" || opts.clinicalRead === true)
+  );
 }
 
 /**
@@ -161,6 +174,13 @@ export type PatientProfileProps = {
   initialTab?: string | null;
   /** Intención de Planes del deep-link (C10). Se consume una vez y se limpia la URL. */
   planIntent?: ProfilePlanIntent;
+  /** EV2-3a: `getPatientClinicalSummary` (null sin módulo o sin `clinical.read`): contador y «Última evolución». */
+  clinicalSummary?: PatientClinicalSummary | null;
+  /** EV2-3a: `canWriteClinicalNotes(caps, "full", actor.practitionerId)`; solo esconde «Nueva evolución». */
+  canWriteNotes?: boolean;
+  /** EV2-3a: `?turno=` del deep link de evoluciones (`clinicalNoteDeepLink`) y el turno si es de este paciente. */
+  noteBookingId?: string | null;
+  noteBooking?: DeepLinkBooking | null;
 };
 
 export function PatientProfile({
@@ -178,15 +198,42 @@ export function PatientProfile({
   initialPlansError = null,
   initialTab = null,
   planIntent = { kind: "none" },
+  clinicalSummary = null,
+  canWriteNotes = false,
+  noteBookingId = null,
+  noteBooking = null,
 }: PatientProfileProps) {
   const modules = useTenantModules();
   const toast = useToast();
   const plansEnabled = modules.has("planes");
-  const allowedTabs = useMemo(() => profileTabsFor(modules.list), [modules.list]);
+  const caps = useMemo(() => new Set<Capability>(capabilities), [capabilities]);
+  const clinicalRead = caps.has("clinical.read");
+  const allowedTabs = useMemo(
+    () => profileTabsFor(modules.list, { clinicalRead }),
+    [modules.list, clinicalRead]
+  );
   const [tab, setTab] = useState<Tab>(() => resolveProfileTab(initialTab, allowedTabs));
+  const notesEnabled = allowedTabs.includes("evoluciones");
+
+  // ── Evoluciones (EV2-3a): resumen del server; se relee después de cada escritura de la pestaña ─────────────
+  const [summary, setSummary] = useState<PatientClinicalSummary | null>(notesEnabled ? clinicalSummary : null);
+  const summarySeq = useRef(0);
+  const reloadSummary = useCallback(async () => {
+    if (!notesEnabled) return;
+    const seq = ++summarySeq.current;
+    try {
+      const r = await getPatientClinicalSummary(patientCore.id);
+      if (seq === summarySeq.current) setSummary(r);
+    } catch (e) {
+      // Queda el resumen anterior: el contador puede atrasar uno hasta la próxima visita, nada más.
+      console.error("getPatientClinicalSummary failed", e);
+    }
+  }, [notesEnabled, patientCore.id]);
+  const openEvoluciones = useCallback(() => {
+    if (notesEnabled) setTab("evoluciones");
+  }, [notesEnabled]);
 
   // ── Permisos de Planes (solo esconden; la barrera es el server) ──────────
-  const caps = useMemo(() => new Set<Capability>(capabilities), [capabilities]);
   const permissions = useMemo(
     () =>
       planUiPermissions({
@@ -474,6 +521,7 @@ export function PatientProfile({
         onChange={setTab}
         only={allowedTabs}
         counts={{
+          evoluciones: summary?.liveCount,
           turnos: bookingsAll?.length,
           sesiones: sessionCount,
           planes: livePlanCount,
@@ -503,6 +551,17 @@ export function PatientProfile({
               permissions={permissions}
               onOpenEditor={openEditor}
               onOpenPlan={openPlan}
+              clinicalSummary={notesEnabled ? summary : null}
+              onOpenEvoluciones={notesEnabled ? openEvoluciones : undefined}
+            />
+          )}
+          {tab === "evoluciones" && notesEnabled && (
+            <EvolucionesView
+              patientId={patient.id}
+              canWrite={canWriteNotes}
+              deepLinkBookingId={noteBookingId}
+              deepLinkBooking={noteBooking}
+              onChanged={reloadSummary}
             />
           )}
           {tab === "turnos" && (
