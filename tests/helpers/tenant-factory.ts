@@ -77,6 +77,17 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
     await db.programAuthorization.deleteMany({ where: { programId: { in: programIds } } });
     await db.treatmentProgram.deleteMany({ where: { id: { in: programIds } } });
   }
+  // EV2-0 (M9 clinical_notes): la HC no se borra nunca — el trigger ClinicalNote_guard rechaza DELETE y TRUNCATE
+  // incluso al owner, y ClinicalNoteRevision es solo inserción. ClinicalNote es RESTRICT hacia Booking, Patient,
+  // Practitioner y Tenant, así que va ANTES de los turnos (y la revisión antes que su nota). Misma salida que
+  // PlatformAuditEvent: modo réplica LOCAL a esta tx (los triggers comunes no disparan; requiere superusuario, el
+  // owner del Docker local lo es; en prod no, y esto nunca corre ahí). Las FKs compuestas tampoco garantizan nada
+  // en réplica, por eso el orden hijo → padre es explícito.
+  await db.$transaction([
+    db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "ClinicalNoteRevision" WHERE "tenantId" = ${tenantId}`,
+    db.$executeRaw`DELETE FROM "ClinicalNote" WHERE "tenantId" = ${tenantId}`,
+  ]);
   await db.payment.deleteMany({ where: { booking: { tenantId } } });
   // Planes M1: Booking → TreatmentProgram/Session es RESTRICT; los turnos se
   // borran antes que los planes (ya era así).

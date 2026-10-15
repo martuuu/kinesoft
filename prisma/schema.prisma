@@ -122,6 +122,9 @@ model Tenant {
   saasCharges             SaasCharge[]
   saasPayments            SaasPayment[]
   supportThreads          SupportThread[]
+  // EV2 (M9 clinical_notes)
+  clinicalNotes           ClinicalNote[]
+  clinicalNoteRevisions   ClinicalNoteRevision[]
 
   @@index([slug])
 }
@@ -282,8 +285,11 @@ model Practitioner {
   specialties          PractitionerSpecialty[]
   // Planes M1: profesional responsable del plan (D17). RESTRICT.
   programs             TreatmentProgram[]
+  // EV2 (M9): autor congelado de cada evolución. RESTRICT (la baja es lógica).
+  clinicalNotes        ClinicalNote[]
 
   @@unique([tenantId, userId])
+  @@unique([id, tenantId], map: "Practitioner_id_tenantId_key") // EV2 M9: destino de FK compuesta
   @@index([tenantId])
   @@index([userId])
 }
@@ -331,6 +337,8 @@ model Patient {
   files        PatientFile[]
   shares       PatientShare[]
   changeRequests PatientChangeRequest[]
+  // EV2 (M9): evoluciones de HC. RESTRICT (un paciente con HC no se borra en duro).
+  clinicalNotes  ClinicalNote[]
 
   // Uniqueness within a tenant. On PostgreSQL a composite UNIQUE treats
   // NULLs as distinct, so these enforce "no duplicate VALUE" while still
@@ -1505,6 +1513,79 @@ model EvaScore {
   @@index([sessionId], map: "EvaScore_sessionId_idx")
 }
 
+// EV2 (M9 clinical_notes, plan §20.6; decisión 13 de Martin): evolución por consulta, HC base de TODAS las verticales.
+// Nunca se borra: trigger ClinicalNote_guard rechaza DELETE/TRUNCATE incluso al owner (Ley 26.529). Identidad inmutable;
+// anulada ⇒ congelada; cada cambio de contenido copia la versión anterior a ClinicalNoteRevision y sube `revision` — lo
+// hace el TRIGGER: la app NUNCA escribe `revision` (CAS con `where: { revision: expected }`). `createdAt` lo escribe la
+// app explícito (la regla de 24 h se mide contra él). Una raíz viva por turno (único PARCIAL). FKs compuestas, CHECKs,
+// parcial, triggers y policies: drift aceptado (ver «EV2 M9: DRIFT ACEPTADO» al final).
+enum ClinicalNoteKind {
+  EVOLUTION
+  FIRST_VISIT
+  DISCHARGE
+}
+
+model ClinicalNote {
+  id                   String           @id @default(cuid())
+  tenantId             String
+  patientId            String
+  bookingId            String?
+  // Enmienda (EV2-D14): nota nueva enlazada a la RAÍZ; hereda paciente, turno y tipo.
+  amendsNoteId         String?
+  kind                 ClinicalNoteKind @default(EVOLUTION)
+  title                String?
+  body                 String           // 1..20.000 (CHECK)
+  occurredAt           DateTime
+  // Autor congelado (EV2-D3): usuario + profesional + nombre tal como firmó (nunca email, decisión 19).
+  authorUserId         String
+  authorPractitionerId String
+  authorName           String
+  revision             Int              @default(1)
+  // Anulación (EV2-D15): todo o nada (CHECK); motivo 3..500.
+  voidedAt             DateTime?
+  voidedByUserId       String?
+  voidReason           String?
+  idempotencyKey       String
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  patient    Patient                @relation(fields: [patientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  booking    Booking?               @relation(fields: [bookingId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  author     Practitioner           @relation(fields: [authorPractitionerId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  amends     ClinicalNote?          @relation("ClinicalNoteAmends", fields: [amendsNoteId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  amendments ClinicalNote[]         @relation("ClinicalNoteAmends")
+  revisions  ClinicalNoteRevision[]
+
+  @@unique([tenantId, idempotencyKey], map: "ClinicalNote_tenantId_idempotencyKey_key")
+  // Destinos de FK compuesta (revisión y enmienda).
+  @@unique([id, tenantId], map: "ClinicalNote_id_tenantId_key")
+  @@unique([id, tenantId, patientId], map: "ClinicalNote_id_tenantId_patientId_key")
+  @@index([tenantId, patientId, occurredAt(sort: Desc), id(sort: Desc)])
+  @@index([bookingId])
+  @@index([amendsNoteId])
+  @@index([authorPractitionerId])
+}
+
+// Versión ANTERIOR de cada edición de contenido (solo inserción; la escribe solo el trigger de ClinicalNote).
+model ClinicalNoteRevision {
+  id         String           @id @default(cuid()) // el trigger usa gen_random_uuid(); Prisma nunca inserta acá
+  tenantId   String
+  noteId     String
+  revision   Int
+  kind       ClinicalNoteKind
+  title      String?
+  body       String
+  occurredAt DateTime
+  savedAt    DateTime
+  createdAt  DateTime         @default(now())
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  note   ClinicalNote @relation(fields: [noteId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([noteId, revision])
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // Scheduling & Payments
 // ═════════════════════════════════════════════════════════════════════
@@ -1624,7 +1705,10 @@ model Booking {
   session      Session?          @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   // RESTRICT: una sala con turnos no se borra (se archiva con `active`).
   room         Room?             @relation(fields: [roomId], references: [id], onDelete: Restrict, map: "Booking_roomId_fkey")
+  // EV2 (M9): evolución del turno (a lo sumo una raíz viva: único PARCIAL). RESTRICT.
+  clinicalNotes ClinicalNote[]
 
+  @@unique([id, tenantId, patientId], map: "Booking_id_tenantId_patientId_key") // EV2 M9: destino de FK compuesta (la evolución es del paciente de ESE turno)
   @@index([tenantId, scheduledFor])
   @@index([practitionerId, scheduledFor])
   // Hot read: patient profile bookings list filters by patientId and
@@ -2256,3 +2340,22 @@ model PatientChangeRequest {
 //   • CHECKs: Room_{name,capacity,sortOrder}_check, Booking_room_location_check (sala ⇒ sede explícita, SR-D6),
 //       TimeBlock_room_scope_check (sala ⇒ sede explícita y sin profesional, §17.5).
 //   • Policy RLS: Room_tenant_isolation.
+
+// ── EV2 M9: DRIFT ACEPTADO ───────────────────────────────────────────────
+// Estos objetos viven SOLO en prisma/migrations/20261017120000_clinical_notes y
+// Prisma no los expresa. Si `migrate dev` / `migrate diff` propone borrarlos, NO
+// se borran (y `migrate dev` está prohibido en este repo):
+//   • Único PARCIAL (EV2-D2: a lo sumo una raíz viva por turno):
+//       ClinicalNote_bookingId_live_key  ON ClinicalNote(bookingId) WHERE bookingId IS NOT NULL AND amendsNoteId IS NULL AND voidedAt IS NULL
+//   • FKs COMPUESTAS (las FK saltean RLS y prod es BYPASSRLS → "mismo consultorio" y "mismo paciente" en la base):
+//       ClinicalNote_patient_tenant_fkey          (patientId, tenantId)            → Patient(id, tenantId)                ON DELETE RESTRICT
+//       ClinicalNote_booking_tenant_patient_fkey  (bookingId, tenantId, patientId) → Booking(id, tenantId, patientId)     ON DELETE RESTRICT
+//       ClinicalNote_author_tenant_fkey           (authorPractitionerId, tenantId) → Practitioner(id, tenantId)           ON DELETE RESTRICT
+//       ClinicalNote_amends_tenant_patient_fkey   (amendsNoteId, tenantId, patientId) → ClinicalNote(id, tenantId, patientId) ON DELETE RESTRICT
+//       ClinicalNoteRevision_note_tenant_fkey     (noteId, tenantId)               → ClinicalNote(id, tenantId)           ON DELETE RESTRICT
+//   • CHECKs: ClinicalNote_{body,title,authorName,revision,void,amends_self,idempotencyKey}_check,
+//       ClinicalNoteRevision_revision_check.
+//   • Funciones clinical_note_guard() y clinical_note_revision_insert_guard() y sus triggers
+//       ("ClinicalNote_guard", "ClinicalNote_no_truncate", "ClinicalNoteRevision_insert_guard"), más
+//       "ClinicalNoteRevision_append_only" / "ClinicalNoteRevision_no_truncate" con kinesoft_append_only() (de M8).
+//   • Policies RLS: ClinicalNote_tenant_isolation, ClinicalNoteRevision_tenant_isolation.
