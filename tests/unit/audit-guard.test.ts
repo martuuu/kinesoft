@@ -59,7 +59,7 @@ describe("[PL-A] guard de auditoría y errores", () => {
 
   it("la allowlist de eventos de seguridad es exactamente esta", () => {
     expect([...SECURITY_EVENT_ACTIONS].sort()).toEqual(
-      ["patient.export", "patientFile.download", "tenant.export", "tenant.export.started"].sort()
+      ["clinicalRecord.print", "patient.export", "patientFile.download", "tenant.export", "tenant.export.started"].sort()
     );
   });
 

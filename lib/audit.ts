@@ -96,6 +96,8 @@ export const SECURITY_EVENT_ACTIONS = [
   // Export completo del consultorio (BO5): el inicio antes del primer byte y el cierre con los conteos.
   "tenant.export.started",
   "tenant.export",
+  // «Imprimir historia clínica» (EV2-D11): se registra ANTES de devolver los datos; sin audit no hay impresión.
+  "clinicalRecord.print",
 ] as const;
 export type SecurityEventAction = (typeof SECURITY_EVENT_ACTIONS)[number];
 

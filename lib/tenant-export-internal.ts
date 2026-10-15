@@ -122,6 +122,12 @@ const PAGE: Record<ExportEntity, (tx: Tx, tenantId: string, args: PageArgs, sinc
     }).then(asRows),
   evaScores: (tx, tenantId, a) =>
     tx.evaScore.findMany({ where: { patient: { tenantId } }, select: selectOf("evaScores"), ...a }).then(asRows),
+  // EV2-1b (EV2-D22): TODAS las notas (vivas, enmiendas y anuladas) y todas las revisiones. Las dos tablas tienen
+  // `tenantId` propio (M9), así que el filtro va directo, sin pasar por la relación.
+  clinicalNotes: (tx, tenantId, a) =>
+    tx.clinicalNote.findMany({ where: { tenantId }, select: selectOf("clinicalNotes"), ...a }).then(asRows),
+  clinicalNoteRevisions: (tx, tenantId, a) =>
+    tx.clinicalNoteRevision.findMany({ where: { tenantId }, select: selectOf("clinicalNoteRevisions"), ...a }).then(asRows),
   planTemplates: (tx, tenantId, a) =>
     tx.planTemplate.findMany({ where: { tenantId }, select: selectOf("planTemplates"), ...a }).then(asRows),
   // Solo los PROPIOS (`tenantId` = este): los del catálogo global no son datos del consultorio.

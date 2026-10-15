@@ -43,7 +43,8 @@ export const TENANT_EXPORT_RATE_LIMIT = { limit: 3, windowMs: 60 * 60_000 } as c
  *    de Auth (Supabase), que no sirven fuera de KineSoft («sin datos de Auth»). Del equipo sale nombre y email (de
  *    `UserProfile`). EXCEPCIÓN: `team.userId` sí sale, porque es lo único que permite saber quién es el `actorId`
  *    de cada fila de `auditEvents`; es un id opaco, no un secreto (nada de contraseñas, proveedores ni sesiones).
- *  - `Booking.idempotencyKey`, `TreatmentProgram.idempotencyKey`: claves internas de reintento.
+ *  - `Booking.idempotencyKey`, `TreatmentProgram.idempotencyKey`, `ClinicalNote.idempotencyKey`: claves internas de
+ *    reintento.
  *  - `Payment.rawPayload`: respuesta cruda de Mercado Pago (datos del pagador y del medio de pago de MP).
  *  - `PatientFile.storageKey`: la ruta en el bucket. Los binarios no viajan (ni URLs firmadas): solo metadatos.
  *  - `AuditEvent.ip/userAgent`, `SupportSession.ip/userAgent`: datos de red de cada persona, no del consultorio.
@@ -130,6 +131,16 @@ export const EXPORT_FIELDS = {
   ],
   sessionExercises: ["id", "sessionId", "exerciseId", "order", "sets", "reps", "status", "notes"],
   evaScores: ["id", "patientId", "sessionId", "takenAt", "value", "source", "note"],
+  // EV2-1b (EV2-D22, C-EV2-7): la HC entera — raíces, enmiendas y ANULADAS (con su motivo), y todas las revisiones
+  // (el contenido anterior de cada edición). Portabilidad: mismo criterio que AUDIT §5.50. `authorUserId` y
+  // `voidedByUserId` son ids opacos del equipo (se cruzan con `team.userId`, igual que `auditEvents.actorId`).
+  // Sin `idempotencyKey` (clave interna de reintento, ya en EXPORT_FORBIDDEN_FIELDS).
+  clinicalNotes: [
+    "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "occurredAt", "authorUserId",
+    "authorPractitionerId", "authorName", "revision", "voidedAt", "voidedByUserId", "voidReason", "createdAt",
+    "updatedAt",
+  ],
+  clinicalNoteRevisions: ["id", "noteId", "revision", "kind", "title", "body", "occurredAt", "savedAt", "createdAt"],
   planTemplates: [
     "id", "authorId", "name", "description", "totalSessions", "frequency", "exerciseIds", "discipline", "serviceId",
     "durationMin", "schedule", "pricingMode", "pricePerSessionCents", "totalPriceCents", "notes", "archivedAt",

@@ -91,6 +91,21 @@ describe("[BO5-C] allowlist de columnas", () => {
     for (const e of ["invitations", "emailLogs", "patientTenantLinks", "notifications"]) expect(EXPORT_ENTITIES).not.toContain(e);
   });
 
+  it("[EV2-1b] evoluciones (EV2-D22): clinicalNotes y clinicalNoteRevisions después de evaScores, allowlist literal de C-EV2-7", () => {
+    const i = EXPORT_ENTITIES.indexOf("evaScores");
+    expect(EXPORT_ENTITIES.slice(i + 1, i + 3)).toEqual(["clinicalNotes", "clinicalNoteRevisions"]);
+    expect(EXPORT_FIELDS.clinicalNotes).toEqual([
+      "id", "patientId", "bookingId", "amendsNoteId", "kind", "title", "body", "occurredAt", "authorUserId",
+      "authorPractitionerId", "authorName", "revision", "voidedAt", "voidedByUserId", "voidReason", "createdAt",
+      "updatedAt",
+    ]);
+    expect(EXPORT_FIELDS.clinicalNoteRevisions).toEqual([
+      "id", "noteId", "revision", "kind", "title", "body", "occurredAt", "savedAt", "createdAt",
+    ]);
+    // Anuladas y enmiendas salen (nada clínico se pierde): sus columnas están; la clave de reintento no.
+    expect(EXPORT_FIELDS.clinicalNotes).not.toContain("idempotencyKey");
+  });
+
   it("rate limit: 3 por hora", () => {
     expect(TENANT_EXPORT_RATE_LIMIT).toEqual({ limit: 3, windowMs: 3_600_000 });
   });

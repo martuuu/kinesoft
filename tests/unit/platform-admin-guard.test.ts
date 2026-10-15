@@ -65,6 +65,9 @@ const PHI_MODELS = [
   "evaScore",
   "booking",
   "payment",
+  // EV2: la HC (evoluciones y sus versiones). Plataforma nunca baja PHI.
+  "clinicalNote",
+  "clinicalNoteRevision",
 ];
 const PHI_TABLES = PHI_MODELS.map((m) => m[0].toUpperCase() + m.slice(1));
 

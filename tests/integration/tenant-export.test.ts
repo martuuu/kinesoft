@@ -45,7 +45,12 @@ vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
 const RUN = process.env.INTEGRATION === "1";
 const URL_ = "http://localhost/api/consultorio/export";
 
-type Seeded = { ids: string[]; markers: string[]; patientId: string };
+type Seeded = {
+  ids: string[];
+  markers: string[];
+  patientId: string;
+  notes: { root: string; revision: string; amend: string; voided: string };
+};
 
 /** Una fila con PHI marcada en cada entidad que el export lleva. Devuelve todos los ids y marcas creados. */
 async function seed(db: PrismaClient, t: EphemeralTenant, tag: string): Promise<Seeded> {
@@ -94,9 +99,26 @@ async function seed(db: PrismaClient, t: EphemeralTenant, tag: string): Promise<
     data: { tenantId: t.tenantId, patientId, name: mk("archivo.pdf"), mime: "application/pdf", sizeBytes: 10, storageKey: `STORAGE-${tag}-${s}` },
   });
   const ev = await db.auditEvent.create({ data: { tenantId: t.tenantId, action: "test.seed", entity: "Patient", entityId: patientId, ip: `IP-${tag}` } });
+  // EV2-1b (EV2-D22): la HC entera viaja — raíz editada (deja una revisión con el contenido viejo), enmienda y una
+  // anulada (sin turno). Prisma con el owner: los triggers de M9 corren igual (la revisión la escribe el trigger).
+  const author = { authorUserId: t.userId, authorPractitionerId: t.practitionerId, authorName: mk("autor") };
+  const root = await db.clinicalNote.create({
+    data: { tenantId: t.tenantId, patientId, bookingId: booking.id, body: mk("evolucion-v1"), occurredAt: new Date("2031-05-05T13:00:00Z"), idempotencyKey: `IDEMP-${tag}-${randomUUID()}`, createdAt: new Date(), ...author },
+  });
+  await db.clinicalNote.update({ where: { id: root.id }, data: { body: mk("evolucion-v2") } });
+  const rev = await db.clinicalNoteRevision.findFirstOrThrow({ where: { noteId: root.id } });
+  const amend = await db.clinicalNote.create({
+    data: { tenantId: t.tenantId, patientId, bookingId: booking.id, amendsNoteId: root.id, body: mk("enmienda"), occurredAt: new Date("2031-05-05T14:00:00Z"), idempotencyKey: `IDEMP-${tag}-${randomUUID()}`, createdAt: new Date(), ...author },
+  });
+  const voided = await db.clinicalNote.create({
+    data: { tenantId: t.tenantId, patientId, bookingId: null, body: mk("anulada"), occurredAt: new Date("2031-05-06T13:00:00Z"), idempotencyKey: `IDEMP-${tag}-${randomUUID()}`, createdAt: new Date(), ...author },
+  });
+  await db.clinicalNote.update({ where: { id: voided.id }, data: { voidedAt: new Date(), voidedByUserId: t.userId, voidReason: mk("motivo") } });
   ids.push(loc.id, room.id, cov.id, ec.id, booking.id, pay.id, cond.id, ex.id, cc.id, dx.id, prog.id, ses.id, se.id, eva.id, file.id, ev.id);
+  ids.push(root.id, rev.id, amend.id, voided.id);
   return {
     ids,
+    notes: { root: root.id, revision: rev.id, amend: amend.id, voided: voided.id },
     patientId,
     markers: [`PHI-${tag}-`, `IDEMP-${tag}`, `STORAGE-${tag}`],
   };
@@ -177,6 +199,32 @@ describe.skipIf(!RUN)("[BO5-C] export completo del consultorio", () => {
     for (const r of json.data.bookings) expect(r).not.toHaveProperty("idempotencyKey");
     for (const r of json.data.payments) expect(r).not.toHaveProperty("rawPayload");
     for (const r of json.data.patientFiles) expect(r).not.toHaveProperty("storageKey");
+  });
+
+  it("[EV2-1b] evoluciones: raíz, enmienda, anulada y revisión salen (todas), sin idempotencyKey, con conteos; nada de B", async () => {
+    asUser(A.userId);
+    const { text, json } = await body(await exportTenant(new Request(URL_)));
+    const notes = json.data.clinicalNotes;
+    const revs = json.data.clinicalNoteRevisions;
+    expect(notes.map((n) => n.id).sort()).toEqual([seedA.notes.root, seedA.notes.amend, seedA.notes.voided].sort());
+    expect(revs.map((r) => r.id)).toEqual([seedA.notes.revision]);
+    expect(json.manifest.counts.clinicalNotes).toBe(3);
+    expect(json.manifest.counts.clinicalNoteRevisions).toBe(1);
+    const byId = Object.fromEntries(notes.map((n) => [n.id as string, n]));
+    expect(byId[seedA.notes.root]).toMatchObject({ revision: 2, amendsNoteId: null, voidedAt: null, authorUserId: A.userId });
+    expect(byId[seedA.notes.root].body).toMatch(/^PHI-A-evolucion-v2-/);
+    expect(byId[seedA.notes.amend]).toMatchObject({ amendsNoteId: seedA.notes.root });
+    expect(byId[seedA.notes.voided]).toMatchObject({ bookingId: null, voidedByUserId: A.userId });
+    expect(byId[seedA.notes.voided].voidReason).toMatch(/^PHI-A-motivo-/);
+    // La revisión guarda el contenido ANTERIOR (v1) con su número.
+    expect(revs[0]).toMatchObject({ noteId: seedA.notes.root, revision: 1 });
+    expect(revs[0].body).toMatch(/^PHI-A-evolucion-v1-/);
+    for (const r of [...notes, ...revs]) {
+      expect(r).not.toHaveProperty("idempotencyKey");
+      expect(r).not.toHaveProperty("tenantId");
+    }
+    for (const id of Object.values(seedB.notes)) expect(text).not.toContain(id);
+    expect(text).not.toMatch(/PHI-B-(evolucion|enmienda|anulada|motivo|autor)/);
   });
 
   it("audita tenant.export.started y tenant.export con los conteos (sin PHI)", async () => {
