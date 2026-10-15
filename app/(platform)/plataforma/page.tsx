@@ -10,7 +10,7 @@ export const metadata = { title: "Resumen · Plataforma · KineSoft" };
  * no tenía página propia (la nav iba directo a Ejercicios); la sub-nav de EV-P2
  * apunta "Resumen" acá.
  *
- * El guard de superadmin vive en `plataforma/layout.tsx`, y `getPlatformOverview`
+ * El guard de superadmin vive en `app/(platform)/layout.tsx`, y `getPlatformOverview`
  * lo re-chequea (cruza todos los tenants por el canal service).
  */
 export default async function PlataformaResumenPage() {

@@ -8,7 +8,7 @@ export const metadata = { title: "Categorías · Plataforma · KineSoft" };
 /**
  * /plataforma/tags — platform-superadmin tag (category) authoring.
  *
- * The superadmin guard lives in the parent `plataforma/layout.tsx`; the
+ * The superadmin guard lives in the group layout `app/(platform)/layout.tsx`; the
  * server actions (`createTag` / `renameTag` / `deleteTag`) re-check on their
  * own, so this page only loads the catalog and hands it to the client panel.
  */

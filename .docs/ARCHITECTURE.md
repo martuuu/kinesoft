@@ -846,9 +846,11 @@ platform tier**:
 - `requireSuperAdmin()` (`lib/session.ts`) returns the `Actor` or throws
   `ForbiddenError("platform_admin_required")` (and `UnauthenticatedError` with
   no session at all).
-- The `/plataforma` route group (`app/(app)/plataforma/layout.tsx`) calls it
-  and redirects non-admins to `/dashboard`. The sidebar entry is only rendered
-  for superadmins. Surfaces: `plataforma/ejercicios` (catalog table + drawer
+- `/plataforma` lives in its own route group since BO3-A: `app/(platform)/layout.tsx`
+  calls `requirePlatformAdmin()` (no `buildActor`, so a superadmin without a home
+  consultorio gets in), sends no-session to `/login?next=` and answers `notFound()`
+  to non-admins; it renders `PlatformShell` (`components/plataforma/platform-shell.tsx`),
+  not the tenant `AppShell`. The tenant sidebar entry is only rendered for superadmins. Surfaces: `plataforma/ejercicios` (catalog table + drawer
   editor + media manager + article editor) and `plataforma/tags` (tag CRUD per
   kind). A superadmin browsing `/biblioteca` can also edit a global card
   in place. Since B-pre also `plataforma/catalogo/*` (prestadoras, prácticas,

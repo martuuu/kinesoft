@@ -406,6 +406,30 @@ body {
   }
 }
 
+/* ───── [BO3-A] Shell de Plataforma (components/plataforma/platform-shell.tsx) ─────
+   Bajo 900 px el sidebar no entra junto a las tablas de Plataforma: se esconde y el
+   nav sale en un Drawer desde «Menú». A 640 px el email y el texto de «Cerrar sesión»
+   se van (quedan el ícono y el title) para que el topbar no fuerce scroll horizontal. */
+.k-plat-menu-btn {
+  display: none !important;
+}
+@media (max-width: 899px) {
+  .k-plat-side {
+    display: none !important;
+  }
+  .k-plat-menu-btn {
+    display: inline-flex !important;
+  }
+}
+@media (max-width: 640px) {
+  .k-plat-email {
+    display: none !important;
+  }
+  .k-plat-main {
+    padding: 14px 8px !important;
+  }
+}
+
 /* Diagnostico viewport switch */
 .diag-mobile {
   display: none;

@@ -407,8 +407,8 @@ tenant reads) and its tags.
   `ForbiddenError("platform_admin_required")` for a non-admin. It is the first
   line of every admin action in `lib/exercises-admin.ts`, `lib/tags-admin.ts`
   and `lib/exercise-media.ts`, and it guards the route group via
-  `app/(app)/plataforma/layout.tsx` (non-admins are redirected to
-  `/dashboard`). The sidebar entry only renders for admins — but the layout
+  `app/(platform)/layout.tsx` (BO3-A: `requirePlatformAdmin`, non-admins get
+  `notFound()` so the section is not revealed; no session → `/login`). The sidebar entry only renders for admins — but the layout
   guard, not the hidden link, is the control.
 - **Why enforcement is an app-layer chokepoint, not an RLS policy.** Global
   catalog writes go through `prismaService` (`lib/db.ts`), a second Prisma

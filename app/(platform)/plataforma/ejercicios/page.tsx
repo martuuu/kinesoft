@@ -1,7 +1,8 @@
 import { listGlobalExercisesForAdmin, listCatalogTagOptions } from "@/lib/exercises-admin";
-import { listAllTags } from "@/lib/exercises";
+import { listTagsForAdmin } from "@/lib/tags-admin";
 import { getUserPreferences } from "@/lib/preferences";
-import { sanitizeCatalogPrefs } from "@/lib/preferences-constants";
+import { DEFAULT_PREFERENCES, sanitizeCatalogPrefs, type Preferences } from "@/lib/preferences-constants";
+import { UnauthenticatedError } from "@/lib/session";
 import { ExerciseAdminClient } from "@/components/plataforma/exercise-admin-client";
 
 export const dynamic = "force-dynamic";
@@ -30,8 +31,22 @@ const STATE_KEYS: (keyof SP)[] = [
 const csv = (v: Param): string[] =>
   (Array.isArray(v) ? v : v ? [v] : []).flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean);
 
+/**
+ * BO3-A: `getUserPreferences` pasa por `getActor` (Actor de CONSULTORIO). Un superadmin sin consultorio propio no
+ * tiene Actor (`no_membership`) y, desde que /plataforma no cuelga de `(app)`, llega igual a esta página: sin esto
+ * se caía entera. Sin Actor arranca con la vista por defecto (la URL sigue mandando).
+ */
+async function catalogPrefsOrDefault(): Promise<Preferences["catalogPrefs"]> {
+  try {
+    return (await getUserPreferences()).catalogPrefs;
+  } catch (err) {
+    if (err instanceof UnauthenticatedError) return DEFAULT_PREFERENCES.catalogPrefs;
+    throw err;
+  }
+}
+
 export default async function PlataformaEjerciciosPage({ searchParams }: { searchParams: SP }) {
-  const prefs = await getUserPreferences();
+  const prefs = { catalogPrefs: await catalogPrefsOrDefault() };
   const hasUrlState = STATE_KEYS.some((k) => searchParams[k] != null && searchParams[k] !== "");
 
   // URL wins when present; otherwise fall back to the user's saved view.
@@ -66,7 +81,9 @@ export default async function PlataformaEjerciciosPage({ searchParams }: { searc
   let page = Math.max(1, Number(one(searchParams.page)) || 1);
   const [firstTry, tagOptions, catalogTags] = await Promise.all([
     query(page),
-    listAllTags(),
+    // BO3-A: antes `listAllTags` (de `lib/exercises`, pasa por `getActor`: sin consultorio propio tiraba). Para un
+    // superadmin devolvía todos los tags ordenados por kind y label: lo mismo que la lectura de plataforma.
+    listTagsForAdmin().then((rows) => rows.map(({ slug, label }) => ({ slug, label }))),
     listCatalogTagOptions(),
   ]);
   let { rows, total } = firstTry;

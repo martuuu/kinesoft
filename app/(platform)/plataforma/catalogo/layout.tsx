@@ -4,7 +4,7 @@ import { CatalogTabs } from "@/components/plataforma/catalog/catalog-tabs";
 /**
  * Plataforma → Catálogo global (B1.3 CAT-admin): prestadoras, prácticas y
  * especialidades que comparten todos los consultorios. El guard de superadmin
- * vive en `plataforma/layout.tsx`; cada action de `lib/catalog-admin.ts` lo
+ * vive en `app/(platform)/layout.tsx`; cada action de `lib/catalog-admin.ts` lo
  * vuelve a chequear por su cuenta.
  */
 export default function CatalogoLayout({ children }: { children: React.ReactNode }) {
