@@ -12,8 +12,7 @@ import {
 import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
 import { listInsurers } from "@/lib/insurers";
 import { getActor } from "@/lib/session";
-import { getCapabilities } from "@/lib/authz";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { getCapabilities, getMemberAccess, memberCapabilitiesForActor } from "@/lib/authz";
 import { runWithRls } from "@/lib/rls";
 import { modulesFor } from "@/lib/tenant-modules";
 import { parseProfilePlanParams, type SearchParamsLike } from "@/lib/plans-deeplink";
@@ -127,19 +126,14 @@ export default async function PatientPage({
         orderBy: { createdAt: "asc" },
       })
     ),
-    runWithRls(actor.tenantId, (tx) =>
-      tx.membership.findUnique({
-        where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-        select: { role: true },
-      })
-    ),
+    // PL-1 (H1b-17): el miembro sale del Actor (`Actor.membership`), sin query.
+    getMemberAccess(actor),
   ]);
   const role = membership?.role ?? null;
   const canReassign = role === "OWNER" || role === "ADMIN";
-  // Mismo cálculo que `getCapabilities()` sin otra query de membresía: el rol
-  // ya está acá. Plantillas: el shell usa el módulo `plantillas` (enmienda
-  // EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
-  const capabilities = Array.from(capabilitiesFor(role));
+  // Por MIEMBRO (PL-1, H-PL1): un Titular sin agenda no recibe `clinical.read`. Plantillas: el shell usa el
+  // módulo `plantillas` (enmienda EV0, mismo criterio que `gatingForActor().canBuildTemplates`).
+  const capabilities = Array.from(await memberCapabilitiesForActor(actor));
   const { tab: initialTab, intent: planIntent } = parseProfilePlanParams(searchParams);
 
   // Strip the `access` discriminator field before passing to the legacy

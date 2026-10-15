@@ -88,8 +88,8 @@ describe.skipIf(!RUN)("SV07b · GET /api/realtime/local", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
     billingId = (await addPractitioner(db, A, "BILLING")).userId;
   });
   afterAll(async () => {

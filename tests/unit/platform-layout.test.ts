@@ -60,7 +60,7 @@ import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
 import { __setPlatformMfaForTests } from "@/lib/platform-mfa";
 import { PlatformMfaFake } from "@/tests/helpers/platform-mfa-fake";
 
-type ShellProps = { email: string; hasHome: boolean; support: { tenantName: string } | null };
+type ShellProps = { name: string; email: string; hasHome: boolean; support: { tenantName: string } | null };
 
 /** El layout devuelve `<PlatformReauthProvider><PlatformShell …/></…>` (BO4): se desenvuelve el shell. */
 async function run(): Promise<ReactElement<ShellProps>> {
@@ -72,7 +72,7 @@ async function run(): Promise<ReactElement<ShellProps>> {
 function snap(p: { admin: boolean; disabled?: boolean; home: string | null }) {
   return {
     userId: "u-admin",
-    profile: { email: "admin@kinesoft.app", isPlatformAdmin: p.admin, disabledAt: p.disabled ? new Date() : null },
+    profile: { email: "admin@kinesoft.app", fullName: null, isPlatformAdmin: p.admin, disabledAt: p.disabled ? new Date() : null },
     state: p.home ? { kind: "ok", tenantId: p.home } : { kind: "needs_onboarding" },
   };
 }
@@ -95,7 +95,8 @@ describe("[BO3-A] app/(platform)/layout.tsx", () => {
     h.snapshot = snap({ admin: true, home: null });
     const el = await run();
     expect(el.type).toBe(PlatformShell);
-    expect(el.props).toMatchObject({ email: "admin@kinesoft.app", hasHome: false, support: null });
+    // VX0-b (decisión 19): sin nombre cargado, «Usuario sin nombre»; nunca el email como nombre.
+    expect(el.props).toMatchObject({ name: "Usuario sin nombre", email: "admin@kinesoft.app", hasHome: false, support: null });
   });
 
   it("superadmin con consultorio propio: hasHome", async () => {

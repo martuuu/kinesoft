@@ -28,6 +28,11 @@ const member = (p: Partial<TeamMemberRow> & Pick<TeamMemberRow, "membershipId" |
   email: `${p.membershipId}@test.local`,
   specialty: null,
   joinedAt: new Date("2026-10-01T12:00:00Z"),
+  // PL-1c: «¿Atiende?» y permisos delegados (defaults de un profesional).
+  clinical: p.role !== "ASSISTANT" && p.role !== "BILLING",
+  grantSettings: p.role === "ADMIN",
+  grantBilling: false,
+  disabledReason: null,
   isYou: false,
   disabledAt: null,
   hasAgenda: true,

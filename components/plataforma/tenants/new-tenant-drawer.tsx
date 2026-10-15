@@ -19,7 +19,7 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantVertical } from "@prisma/client";
 import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -31,10 +31,10 @@ import {
   type CreateTenantWithOwnerInputType,
   type CreateTenantWithOwnerResult,
 } from "@/lib/platform-provisioning-schemas";
-import { TENANT_PLAN_VALUES, TENANT_VERTICAL_VALUES } from "@/lib/platform-tenants-schemas";
-import { PLAN_CATALOG } from "@/lib/plan-catalog";
+import { SAAS_PLAN_VALUES, TENANT_VERTICAL_VALUES } from "@/lib/platform-tenants-schemas";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { slugify } from "@/lib/onboarding-logic";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import { tenantHref } from "@/components/plataforma/tenants/labels";
 import { CheckRow, ErrorBox, WarnBox } from "@/components/plataforma/tenants/detail-ui";
 import { ONE_TIME_LINK_COPY, userHref } from "@/components/plataforma/users/users-logic";
@@ -44,27 +44,37 @@ export type NewTenantFormState = {
   /** "" = se deriva del nombre en el server (`freeSlugFor`). */
   slug: string;
   vertical: TenantVertical;
-  plan: TenantPlan;
+  /** PL-1d: plan SaaS. */
+  plan: SaasPlan;
   /** Texto del input: "" = el del catálogo del plan. */
   trialDays: string;
   ownerEmail: string;
   ownerFirstName: string;
   ownerLastName: string;
+  /**
+   * PL-1d (C-PL5): el titular atiende pacientes. false = Titular administrador sin agenda (sin `Practitioner`), que
+   * no ve historia clínica (PL-D4, decisión 8 de Martin).
+   */
+  ownerClinical: boolean;
   starterServices: boolean;
   onboardingCompleted: boolean;
 };
 
-/** Default: Kine PRO con el trial del catálogo (BO-D1: las altas arrancan en PRO para probar todo). */
+/**
+ * Default: Kine Individual con la prueba del plan (PL-1d, §20.5.8: toda alta nace INDIVIDUAL con 14 días, como el
+ * alta web). Consultorio / Clínica / Libre se eligen a mano y nacen sin prueba salvo que se cargue.
+ */
 export function emptyNewTenantForm(): NewTenantFormState {
   return {
     clinicName: "",
     slug: "",
     vertical: "KINESIOLOGY",
-    plan: "PRO",
-    trialDays: String(PLAN_CATALOG.PRO.trialDays),
+    plan: "INDIVIDUAL",
+    trialDays: String(PLAN_DEFAULTS.INDIVIDUAL.trialDays),
     ownerEmail: "",
     ownerFirstName: "",
     ownerLastName: "",
+    ownerClinical: true,
     starterServices: true,
     onboardingCompleted: true,
   };
@@ -99,6 +109,7 @@ export function buildCreatePayload(form: NewTenantFormState, idempotencyKey: str
     ownerEmail: form.ownerEmail,
     ownerFirstName: form.ownerFirstName,
     ownerLastName: form.ownerLastName,
+    ownerClinical: form.ownerClinical,
     starterServices: form.starterServices,
     onboardingCompleted: form.onboardingCompleted,
     idempotencyKey,
@@ -121,11 +132,14 @@ export function newIdempotencyKey(): string {
 }
 
 const verticalOptions = TENANT_VERTICAL_VALUES.map((v) => ({ value: v, label: VERTICAL_LABEL[v] }));
-const planOptions = TENANT_PLAN_VALUES.map((v) => ({ value: v, label: PLAN_LABEL[v] }));
+const planOptions = SAAS_PLAN_VALUES.map((v) => ({ value: v, label: SAAS_PLAN_LABEL[v] }));
 
 function trialHint(form: NewTenantFormState): string {
   const t = form.trialDays.trim();
-  if (t === "") return `Vacío = el del plan (${PLAN_CATALOG[form.plan].trialDays} días). 0 = sin prueba.`;
+  if (t === "") {
+    const d = PLAN_DEFAULTS[form.plan].trialDays;
+    return d > 0 ? `Vacío = el del plan (${d} días). 0 = sin prueba.` : "Vacío o 0 = sin prueba (el plan no trae).";
+  }
   if (t === "0") return "Sin prueba: la suscripción arranca activa.";
   return `Hoy cuenta como el primer día. Máximo ${MAX_TRIAL_DAYS}.`;
 }
@@ -198,7 +212,7 @@ export function NewTenantForm({
             label="Plan"
             value={form.plan}
             options={planOptions}
-            onChange={(v) => onChange("plan", v as TenantPlan)}
+            onChange={(v) => onChange("plan", v as SaasPlan)}
             error={fe("plan")}
             disabled={pending}
           />
@@ -247,6 +261,17 @@ export function NewTenantForm({
             disabled={pending}
           />
         </div>
+        <CheckRow
+          checked={form.ownerClinical}
+          onChange={(v) => onChange("ownerClinical", v)}
+          disabled={pending}
+          title="¿Atiende pacientes el titular?"
+          hint={
+            form.ownerClinical
+              ? "Sí: tiene agenda propia y ocupa un lugar de profesional."
+              : "No: administra el consultorio sin agenda y no ve historias clínicas (como la Secretaria)."
+          }
+        />
       </fieldset>
 
       <div style={{ display: "grid", gap: 8 }}>
@@ -430,8 +455,8 @@ export function NewTenantDrawer() {
   const onChange = <K extends keyof NewTenantFormState>(k: K, v: NewTenantFormState[K]) => {
     setForm((f) => {
       const next = { ...f, [k]: v };
-      // Cambiar el plan trae su trial del catálogo (BO-D1: solo PRO tiene prueba); se puede pisar después.
-      if (k === "plan") next.trialDays = String(PLAN_CATALOG[v as TenantPlan].trialDays);
+      // Cambiar el plan trae su prueba del catálogo (PL-D10: solo Individual tiene); se puede pisar después.
+      if (k === "plan") next.trialDays = String(PLAN_DEFAULTS[v as SaasPlan].trialDays);
       return next;
     });
     if (fieldErrors[k]) setFieldErrors(({ [k]: _drop, ...rest }) => rest);

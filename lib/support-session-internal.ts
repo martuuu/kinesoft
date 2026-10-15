@@ -24,7 +24,7 @@ import "server-only";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
-import type { Prisma, TenantPlan, TenantStatus, TenantVertical, SubscriptionStatus } from "@prisma/client";
+import type { Prisma, SaasPlan, TenantStatus, TenantVertical, SubscriptionStatus } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -131,7 +131,8 @@ export type SupportTarget = {
     slug: string;
     name: string;
     vertical: TenantVertical;
-    plan: TenantPlan;
+    /** PL-1e: el plan SaaS (`Tenant.saasPlan`), igual que `AccessMembership.tenant.plan`. */
+    plan: SaasPlan;
     publicBookingEnabled: boolean;
     status: TenantStatus;
     subscriptionStatus: SubscriptionStatus;
@@ -175,7 +176,7 @@ export async function resolveSupportTarget(userId: string): Promise<SupportTarge
           slug: true,
           name: true,
           vertical: true,
-          plan: true,
+          saasPlan: true,
           publicBookingEnabled: true,
           status: true,
           subscriptionStatus: true,
@@ -191,8 +192,14 @@ export async function resolveSupportTarget(userId: string): Promise<SupportTarge
     return null;
   }
   if (row.tenant.memberships.length > 0) return null;
-  const { memberships: _m, ...tenant } = row.tenant;
-  return { sessionId: row.id, tenantId: row.tenantId, superadminEmail: row.superadmin.email, tenant };
+  const { memberships: _m, saasPlan, ...rest } = row.tenant;
+  // PL-1e: el actor de soporte se arma con `membership: null` (lib/session.ts `buildSupportActor`): no es miembro.
+  return {
+    sessionId: row.id,
+    tenantId: row.tenantId,
+    superadminEmail: row.superadmin.email,
+    tenant: { ...rest, plan: saasPlan },
+  };
 }
 
 /** C-BO9: cookie válida + fila abierta + superadmin vigente. */

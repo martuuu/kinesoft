@@ -21,7 +21,7 @@ import "server-only";
  *    `auditPlatformInTx`, payload de enums/booleanos/fechas) y del payload se
  *    toman solo `changed/before/after` con valores primitivos.
  */
-import { Prisma, type TenantStatus } from "@prisma/client";
+import { Prisma, type SaasPlan, type TenantStatus } from "@prisma/client";
 import { z } from "zod";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
@@ -29,8 +29,11 @@ import { toARDateKey } from "@/lib/datetime-ar";
 import { trialDaysLeft } from "@/components/plataforma/tenants/labels";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { escapeLike } from "@/lib/email-match";
+import { displayUserName } from "@/lib/display-name";
 import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
 import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
+import { PLAN_DEFAULTS, SAAS_PLANS, effectiveLimits } from "@/lib/saas-plans-logic";
+import type { PlanLimits } from "@/lib/saas-plans-types";
 import {
   PlatformTenantId,
   PlatformTenantListQuery,
@@ -73,22 +76,25 @@ const rowSelect = {
   name: true,
   slug: true,
   vertical: true,
-  plan: true,
+  saasPlan: true,
   subscriptionStatus: true,
   trialEndsAt: true,
   publicBookingEnabled: true,
   onboardingCompletedAt: true,
   createdAt: true,
-  // BO2-D: estado, motivo, cupo y las 4 columnas del acceso (`TENANT_ACCESS_SELECT`, C-BO1).
+  // BO2-D: estado, motivo y las 4 columnas del acceso (`TENANT_ACCESS_SELECT`, C-BO1). PL-1d: los cupos a medida
+  // por tipo reemplazan a `seatLimitOverride` (que queda en la base y ya no se lee acá).
   status: true,
   statusReason: true,
   statusChangedAt: true,
-  seatLimitOverride: true,
+  maxUsersOverride: true,
+  maxProfessionalsOverride: true,
+  maxStaffOverride: true,
   subscriptionStatusChangedAt: true,
   slugAliases: { select: { slug: true }, orderBy: [{ createdAt: "desc" }, { slug: "asc" }] },
   memberships: {
     where: { role: "OWNER" },
-    select: { user: { select: { email: true } } },
+    select: { user: { select: { email: true, fullName: true } } },
     orderBy: { invitedAt: "asc" },
   },
   _count: {
@@ -111,19 +117,40 @@ async function platformHomeIds(ids: string[]): Promise<Set<string>> {
   return new Set(rows.map((r) => r.tenantId));
 }
 
-function toRow(t: RowSource, homes: Set<string>, now: Date): PlatformTenantRow {
+/**
+ * PL-1d: límites de cada plan desde `SaasPlanConfig` (GLOBAL_READONLY, 4 filas). Una fila que falte (base sin M8
+ * completa, test que la borró) cae a `PLAN_DEFAULTS`, los mismos valores que siembra la migración: la lista de
+ * Plataforma nunca se rompe por el catálogo.
+ */
+async function planLimitsByPlan(): Promise<Record<SaasPlan, PlanLimits>> {
+  const rows = await prismaService.saasPlanConfig.findMany({
+    select: { plan: true, maxUsers: true, maxProfessionals: true, maxStaff: true },
+  });
+  const out = Object.fromEntries(SAAS_PLANS.map((p) => [p, PLAN_DEFAULTS[p].limits])) as Record<SaasPlan, PlanLimits>;
+  for (const r of rows) out[r.plan] = { maxUsers: r.maxUsers, maxProfessionals: r.maxProfessionals, maxStaff: r.maxStaff };
+  return out;
+}
+
+function toRow(
+  t: RowSource,
+  homes: Set<string>,
+  now: Date,
+  limitsByPlan: Record<SaasPlan, PlanLimits>
+): PlatformTenantRow {
   const access = tenantAccessFor(t, now);
   return {
     id: t.id,
     name: t.name,
     slug: t.slug,
     vertical: t.vertical,
-    plan: t.plan,
+    saasPlan: t.saasPlan,
     subscriptionStatus: t.subscriptionStatus,
     trialEndsOn: t.trialEndsAt ? toARDateKey(t.trialEndsAt) : null,
     publicBookingEnabled: t.publicBookingEnabled,
     onboardingCompleted: t.onboardingCompletedAt !== null,
     ownerEmails: t.memberships.map((m) => m.user.email),
+    // VX0-b (decisión 19): el titular se nombra por su nombre; el email va aparte, rotulado como «Email».
+    ownerNames: t.memberships.map((m) => displayUserName(m.user.fullName)),
     patientCount: t._count.patients,
     memberCount: t._count.memberships,
     createdAt: t.createdAt.toISOString(),
@@ -131,14 +158,17 @@ function toRow(t: RowSource, homes: Set<string>, now: Date): PlatformTenantRow {
     status: t.status,
     statusReason: parseStatusReason(t.statusReason),
     statusChangedAt: t.statusChangedAt ? t.statusChangedAt.toISOString() : null,
-    seatLimitOverride: t.seatLimitOverride,
+    maxUsersOverride: t.maxUsersOverride,
+    maxProfessionalsOverride: t.maxProfessionalsOverride,
+    maxStaffOverride: t.maxStaffOverride,
+    limits: effectiveLimits(limitsByPlan[t.saasPlan], t),
     access,
     effectiveAccessMode: effectiveMode(access.mode, tenantAccessEnforcement()),
     slugAliases: t.slugAliases.map((a) => a.slug),
   };
 }
 
-/** Resumen de /plataforma: consultorios por tipo × plan, trials por vencer, altas sin terminar, turneros prendidos. */
+/** Resumen de /plataforma: consultorios por tipo × plan (SaaS, `saasPlan`), trials por vencer, altas sin terminar, turneros prendidos. */
 export async function getPlatformOverview(): Promise<PlatformOverview> {
   await requirePlatformAdmin("platform.read");
 
@@ -155,22 +185,22 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
 
   const [groups, statusGroups, trialsRaw, trialsCount, pendingRaw, pendingCount, bookingOn] = await Promise.all([
     prismaService.tenant.groupBy({
-      by: ["vertical", "plan"],
+      by: ["vertical", "saasPlan"],
       _count: { _all: true },
-      orderBy: [{ vertical: "asc" }, { plan: "asc" }],
+      orderBy: [{ vertical: "asc" }, { saasPlan: "asc" }],
     }),
     // BO3-B: activos / suspendidos / de baja. Solo COUNT por estado (sin filas).
     prismaService.tenant.groupBy({ by: ["status"], _count: { _all: true }, orderBy: { status: "asc" } }),
     prismaService.tenant.findMany({
       where: trialWhere,
-      select: { id: true, name: true, slug: true, vertical: true, plan: true, trialEndsAt: true },
+      select: { id: true, name: true, slug: true, vertical: true, saasPlan: true, trialEndsAt: true },
       orderBy: { trialEndsAt: "asc" },
       take: PLATFORM_OVERVIEW_LIST_LIMIT,
     }),
     prismaService.tenant.count({ where: trialWhere }),
     prismaService.tenant.findMany({
       where: { onboardingCompletedAt: null },
-      select: { id: true, name: true, slug: true, vertical: true, plan: true, createdAt: true },
+      select: { id: true, name: true, slug: true, vertical: true, saasPlan: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: PLATFORM_OVERVIEW_LIST_LIMIT,
     }),
@@ -186,14 +216,14 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
       name: t.name,
       slug: t.slug,
       vertical: t.vertical,
-      plan: t.plan,
+      saasPlan: t.saasPlan,
       trialEndsOn,
       // BO-Z B5: misma cuenta que `tenantAccessFor` y la banda del consultorio (hoy cuenta; el último día es 1).
       daysLeft: trialDaysLeft(t.trialEndsAt!, now),
     };
   });
 
-  const byVerticalPlan = groups.map((g) => ({ vertical: g.vertical, plan: g.plan, count: g._count._all }));
+  const byVerticalPlan = groups.map((g) => ({ vertical: g.vertical, saasPlan: g.saasPlan, count: g._count._all }));
   const byStatus = Object.fromEntries(TENANT_STATUS_VALUES.map((st) => [st, 0])) as Record<TenantStatus, number>;
   for (const g of statusGroups) byStatus[g.status] = g._count._all;
   return {
@@ -207,7 +237,7 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
       name: t.name,
       slug: t.slug,
       vertical: t.vertical,
-      plan: t.plan,
+      saasPlan: t.saasPlan,
       createdAt: t.createdAt.toISOString(),
     })),
     onboardingPendingCount: pendingCount,
@@ -237,12 +267,12 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
         }
       : {}),
     ...(query.vertical ? { vertical: query.vertical } : {}),
-    ...(query.plan ? { plan: query.plan } : {}),
+    ...(query.plan ? { saasPlan: query.plan } : {}),
     ...(query.status ? { subscriptionStatus: query.status } : {}),
     ...(query.tenantStatus ? { status: query.tenantStatus } : {}),
   };
 
-  const [total, tenants] = await Promise.all([
+  const [total, tenants, limitsByPlan] = await Promise.all([
     prismaService.tenant.count({ where }),
     prismaService.tenant.findMany({
       where,
@@ -251,11 +281,12 @@ export async function listPlatformTenants(raw: PlatformTenantListQueryInput = {}
       skip: (query.page - 1) * PLATFORM_TENANTS_PAGE_SIZE,
       take: PLATFORM_TENANTS_PAGE_SIZE,
     }),
+    planLimitsByPlan(),
   ]);
   const homes = await platformHomeIds(tenants.map((t) => t.id));
   const now = new Date();
   return {
-    rows: tenants.map((t) => toRow(t, homes, now)),
+    rows: tenants.map((t) => toRow(t, homes, now, limitsByPlan)),
     total,
     page: query.page,
     pageSize: PLATFORM_TENANTS_PAGE_SIZE,
@@ -342,7 +373,7 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
   if (!t) return null;
 
   const now = new Date();
-  const [homes, pendingInvitations, bookingsLast30Days, bookingsUpcoming, lastActivity, events] = await Promise.all([
+  const [homes, pendingInvitations, bookingsLast30Days, bookingsUpcoming, lastActivity, events, limitsByPlan] = await Promise.all([
     platformHomeIds([t.id]),
     prismaService.invitation.count({ where: { tenantId, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } } }),
     // Booking tiene PHI: solo count (contrato PHI).
@@ -357,15 +388,17 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: PLATFORM_RECENT_EVENTS,
     }),
+    planLimitsByPlan(),
   ]);
 
   const recentPlatformEvents: PlatformAuditEventRow[] = (await toEventRows(events)).map(
     ({ payloadKeys: _keys, ...e }) => e
   );
 
-  const modules = modulesFor(t);
+  // C-PL1: `TenantEntitlements.plan` es el plan SaaS.
+  const modules = modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled });
   return {
-    ...toRow(t, homes, now),
+    ...toRow(t, homes, now, limitsByPlan),
     legalName: t.legalName,
     taxId: t.taxId,
     phone: t.phone,

@@ -7,6 +7,7 @@ import {
   type TenantStatus,
   type TenantVertical,
 } from "@prisma/client";
+import { LEGACY_PLAN_OF, SAAS_PLAN_OF_LEGACY } from "@/lib/saas-plans-logic";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -172,12 +173,13 @@ export async function createEphemeralTenant(
     sharedPatientView?: boolean;
     /** EV0 (M2): sin valor → default de la base (KINESIOLOGY). */
     vertical?: TenantVertical;
-    /** Sin valor → default de la base (FREE). */
+    /** Legado. Sin valor (y sin `saasPlan`) → default de la base (FREE). */
     plan?: TenantPlan;
     /**
-     * PL-0 (M8): plan nuevo. Sin valor → default de la base (INDIVIDUAL). La factory NO
-     * espeja `plan`↔`saasPlan` (eso es del escritor único, PL-1a): el test que necesite
-     * los dos coherentes pasa los dos.
+     * PL-0 (M8): plan nuevo. Sin valor → default de la base (INDIVIDUAL). PL-1 (integrador): la factory
+     * ESPEJA `plan`↔`saasPlan` como el escritor único (`LEGACY_PLAN_OF` / `SAAS_PLAN_OF_LEGACY`): desde PL-1
+     * la app lee `saasPlan` (`TenantEntitlements.plan`), y ~45 tests todavía pasan el plan legado
+     * (`plan: "PRO"` esperando salas): sin el espejo esos tenants nacían INDIVIDUAL.
      */
     saasPlan?: SaasPlan;
     /**
@@ -210,8 +212,8 @@ export async function createEphemeralTenant(
       name: `Test ${s}`,
       sharedPatientView: opts.sharedPatientView ?? false,
       vertical: opts.vertical,
-      plan: opts.plan,
-      saasPlan: opts.saasPlan,
+      plan: opts.plan ?? (opts.saasPlan ? LEGACY_PLAN_OF[opts.saasPlan] : undefined),
+      saasPlan: opts.saasPlan ?? (opts.plan ? SAAS_PLAN_OF_LEGACY[opts.plan] : undefined),
       publicBookingEnabled: opts.publicBookingEnabled ?? true,
       // Como el backfill de tenant_onboarding: los tenants de test ya "terminaron" el alta.
       onboardingCompletedAt: new Date(),
@@ -236,8 +238,11 @@ export async function createEphemeralTenant(
       publicBookingEnabled: opts.practitionerPublicBooking ?? true,
     },
   });
+  // PL-1 (integrador): un ADMIN nace con «Configuración» delegada, como el backfill de M8 y la invitación de ADMIN
+  // (PL-D5); sin esto `capabilitiesForMember` le saca `tenant.admin` y los tests de antes de PL dejan de representar
+  // a un ADMIN real.
   await prisma.membership.create({
-    data: { userId, tenantId: tenant.id, role: opts.role ?? "OWNER", acceptedAt: new Date() },
+    data: { userId, tenantId: tenant.id, role: opts.role ?? "OWNER", grantSettings: opts.role === "ADMIN", acceptedAt: new Date() },
   });
   const service = await prisma.service.create({
     data: {
@@ -277,7 +282,11 @@ export async function addPractitioner(
   const p = await prisma.practitioner.create({
     data: { tenantId: t.tenantId, userId, specialty: "Test", publicBookingEnabled: true },
   });
-  await prisma.membership.create({ data: { userId, tenantId: t.tenantId, role, acceptedAt: new Date() } });
+  // PL-1: ADMIN con «Configuración» (como el backfill de M8). Sigue con `Practitioner` y `clinical = true`: es la
+  // forma de un ADMIN de antes de §20.17 (lo normaliza M8b), que es lo que asumen los tests que lo usan con agenda.
+  await prisma.membership.create({
+    data: { userId, tenantId: t.tenantId, role, grantSettings: role === "ADMIN", acceptedAt: new Date() },
+  });
   return { userId, practitionerId: p.id };
 }
 

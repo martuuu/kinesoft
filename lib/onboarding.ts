@@ -11,6 +11,9 @@
  *      EV0: elige el tipo de consultorio (`vertical`, default KINESIOLOGY);
  *      al re-entrar la cambia por el escritor único (C-EV5) mientras el alta
  *      siga abierta. El turnero nace apagado (EV-D2).
+ *      PL-1a: nace INDIVIDUAL en prueba de 14 días y pregunta «¿Atendés
+ *      pacientes?» (`ownerClinical`, default sí): un Titular que no atiende
+ *      nace sin Practitioner ni agenda (`bootstrapTenant`, PL-1c).
  *   3. Sede — `saveOnboardingLocation` (B5.5 ONB): confirma/edita la sede
  *      principal que dejó el bootstrap (la crea si falta).
  *   4-8. Horario, tu horario, servicios (+ práctica del catálogo), obras
@@ -61,9 +64,16 @@ async function isUserDisabled(userId: string): Promise<boolean> {
 }
 
 
+/**
+ * PL-1a (C-PL12): «¿Atendés pacientes?». Se valida aparte de `OnboardingClinicInput` (lib/validation.ts no es de
+ * esta sesión): ausente = true, que es lo que pasaba antes (el Titular siempre era profesional). Solo pesa en la
+ * CREACIÓN: re-entrar al paso no cambia si el Titular atiende (eso es Equipo, con su propio flujo).
+ */
+const OwnerClinicalInput = z.boolean({ invalid_type_error: "Respuesta inválida." }).optional().default(true);
+
 /** Paso 2: alta (o edición, si ya existe) del consultorio del usuario. */
 export async function saveOnboardingClinic(
-  raw: OnboardingClinicInputType
+  raw: OnboardingClinicInputType & { ownerClinical?: boolean }
 ): Promise<ActionResult<{ tenantId: string; created: boolean }>> {
   const user = await getSessionUser();
   if (!user) return { ok: false, error: "Tu sesión expiró. Iniciá sesión de nuevo." };
@@ -75,11 +85,21 @@ export async function saveOnboardingClinic(
   }
   if (await isUserDisabled(user.id)) return { ok: false, error: USER_DISABLED_ERROR };
 
-  const parsed = OnboardingClinicInput.safeParse(raw);
-  if (!parsed.success) {
-    return { ok: false, error: "Revisá los datos del consultorio.", fieldErrors: parsed.error.flatten().fieldErrors };
+  const { ownerClinical: rawOwnerClinical, ...clinicRaw } = raw ?? ({} as typeof raw);
+  const parsed = OnboardingClinicInput.safeParse(clinicRaw);
+  const ownerClinicalParsed = OwnerClinicalInput.safeParse(rawOwnerClinical);
+  if (!parsed.success || !ownerClinicalParsed.success) {
+    return {
+      ok: false,
+      error: "Revisá los datos del consultorio.",
+      fieldErrors: {
+        ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
+        ...(ownerClinicalParsed.success ? {} : { ownerClinical: ownerClinicalParsed.error.issues.map((i) => i.message) }),
+      },
+    };
   }
   const d = parsed.data;
+  const ownerClinical = ownerClinicalParsed.data;
   const contact = {
     name: d.name,
     phone: d.phone || null,
@@ -164,6 +184,7 @@ export async function saveOnboardingClinic(
     }
     try {
       const r = await prismaService.$transaction(async (tx) => {
+        // PL-1a: `ownerClinical` (C-PL5, opción de `bootstrapTenant` de PL-1c): false = Titular sin Practitioner.
         const created = await bootstrapTenant(tx, {
           userId: user.id,
           email: user.email,
@@ -175,15 +196,18 @@ export async function saveOnboardingClinic(
           vertical: d.vertical,
           onboardingCompleted: false,
           source: "onboarding",
+          ownerClinical,
         });
-        // BO-Z (BO-D1): el alta web nace en prueba PRO (14 días, hasta el fin del día AR; mismo cálculo que el alta
-        // desde Plataforma). Por el escritor único y en la MISMA tx: o nace con la prueba, o no nace. Antes nacía FREE.
-        const sub = initialSubscriptionFor("PRO", undefined, new Date());
+        // PL-1a (§20.5.8, PL-D10): el alta web nace INDIVIDUAL en prueba de 14 días (hasta el fin del día AR; mismo
+        // cálculo que el alta desde Plataforma). Por el escritor único y en la MISMA tx: o nace con la prueba, o no
+        // nace. Antes (BO-D1) nacía en prueba PRO. `saasPlan` ya es INDIVIDUAL por default de la columna: va igual en
+        // el patch para que el contrato sea explícito (y el escritor espeja `plan` = FREE si hiciera falta).
+        const sub = initialSubscriptionFor("INDIVIDUAL", undefined, new Date());
         const ent = await applyTenantEntitlementsInTx(tx, {
           tenantId: created.tenantId,
           source: "onboarding",
           initial: true,
-          patch: { plan: "PRO", subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
+          patch: { saasPlan: "INDIVIDUAL", subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
           actor: { userId: user.id, homeTenantId: created.tenantId },
         });
         if (!ent.ok) throw new Error(`[onboarding] entitlements: ${ent.reason}`);

@@ -12,9 +12,115 @@
  * `seatLimitOverride` los escribe solo el escritor único de entitlements
  * (`lib/tenant-entitlements-internal.ts`).
  */
-import type { Role, TenantPlan } from "@prisma/client";
-import { isClinicalRole } from "./roles";
+import type { Role, SaasPlan, TenantPlan } from "@prisma/client";
+import { isClinicalMember, isClinicalRole } from "./roles";
 import { PLAN_LABEL } from "./tenant-modules";
+import { PLAN_DEFAULTS, effectiveLimits } from "./saas-plans-logic";
+import type { PlanLimitOverrides, PlanLimits } from "./saas-plans-types";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PL-1c (C-PL3, plan §20.5.3, PL-D3): cupos POR TIPO del plan SaaS nuevo.
+//
+// Decisión de Martin (15-oct): Individual 1 usuario · Consultorio 1 Secretario/a o Admin no clínico + hasta 4
+// profesionales (total 5) · Clínica 10 de cualquier tipo · Libre a medida. Antes (BO-D7) solo contaban los roles
+// clínicos y la Secretaria entraba gratis en cualquier plan: con «1 no clínico» en Consultorio eso dejó de valer.
+// El Titular cuenta según atienda (un Titular que no atiende ocupa el lugar no clínico) y las invitaciones
+// pendientes reservan el lugar del tipo de su rol.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** «professional» = atiende (agenda, HC); «staff» = Secretaria, Facturación, o Titular/Admin que no atiende. */
+export type SeatKind = "professional" | "staff";
+
+/** El tipo de lugar que ocupa un miembro: la misma regla que «atiende» (`isClinicalMember`, C-PL5). */
+export function seatKindOf(m: { role: Role; clinical: boolean }): SeatKind {
+  return isClinicalMember(m) ? "professional" : "staff";
+}
+
+/** Uso de un tipo de lugar (o del total). `limit`/`remaining` null = sin límite. `remaining` nunca es negativo. */
+export type SeatCount = { used: number; limit: number | null; remaining: number | null; full: boolean };
+
+export type SeatUsageByKind = { total: SeatCount; professional: SeatCount; staff: SeatCount };
+
+function seatCount(used: number, limit: number | null): SeatCount {
+  if (limit == null) return { used, limit: null, remaining: null, full: false };
+  return { used, limit, remaining: Math.max(0, limit - used), full: used >= limit };
+}
+
+/**
+ * Uso por tipo con los límites efectivos. `c` = miembros ACTIVOS + invitaciones pendientes vigentes de cada tipo (el
+ * caller cuenta; ver `getSeatUsageInTx`). Bajar de plan sin elegir a nadie (datos viejos, override achicado) puede
+ * dejar `used > limit`: `full` queda true y no entra nadie de ese tipo, pero acá no se saca a nadie.
+ */
+export function seatUsageByKind(c: { professional: number; staff: number }, l: PlanLimits): SeatUsageByKind {
+  return {
+    total: seatCount(c.professional + c.staff, l.maxUsers),
+    professional: seatCount(c.professional, l.maxProfessionals),
+    staff: seatCount(c.staff, l.maxStaff),
+  };
+}
+
+/** ¿Entra una persona más de este tipo? Tiene que haber lugar en el total Y en su tipo (Consultorio: 4+1 = 5). */
+export function canAddSeat(u: SeatUsageByKind, k: SeatKind): boolean {
+  return !u.total.full && !u[k].full;
+}
+
+/**
+ * Límites efectivos de un plan: la fila de `SaasPlanConfig` (la edita Plataforma) o, si falta, `PLAN_DEFAULTS` (los
+ * mismos valores que sembró M8), pisados por los overrides del consultorio (Libre y excepciones).
+ */
+export function planLimitsFor(
+  plan: SaasPlan,
+  row: PlanLimits | null | undefined,
+  overrides: PlanLimitOverrides
+): PlanLimits {
+  return effectiveLimits(row ?? PLAN_DEFAULTS[plan].limits, overrides);
+}
+
+/** Lugares ocupados por tipo y total (el total puede no ser la suma cuando se razona sobre «mínimos»). */
+export type SeatTally = { professional: number; staff: number; total: number };
+
+function over(used: number, limit: number | null): number {
+  return limit == null ? 0 : Math.max(0, used - limit);
+}
+
+/**
+ * Cuántos miembros activos hay que sacar como mínimo para entrar en `l` (C-PL4, bajar de plan). Por tipo y en total:
+ * en Individual (1 usuario) con 1 profesional + 1 Secretaria no sobra ningún tipo (1 ≤ 1 cada uno) pero sobra 1 en
+ * el total, así que `total` puede ser mayor que `professional + staff`. Las invitaciones no cuentan acá: se anulan
+ * después las que no entren (`invitesThatFit`).
+ */
+export function mustDisableFor(m: { professional: number; staff: number }, l: PlanLimits): SeatTally {
+  const professional = over(m.professional, l.maxProfessionals);
+  const staff = over(m.staff, l.maxStaff);
+  const total = Math.max(professional + staff, over(m.professional + m.staff, l.maxUsers));
+  return { professional, staff, total };
+}
+
+/**
+ * Qué invitaciones pendientes siguen entrando después de fijar los miembros (`used`), en el orden dado (el caller
+ * pasa las más viejas primero: la que se mandó antes conserva su lugar). Devuelve un booleano por invitación.
+ */
+export function invitesThatFit(used: SeatTally, l: PlanLimits, invites: readonly { kind: SeatKind }[]): boolean[] {
+  const u = { ...used };
+  const room = (n: number, limit: number | null) => limit == null || n + 1 <= limit;
+  return invites.map((i) => {
+    const kindLimit = i.kind === "professional" ? l.maxProfessionals : l.maxStaff;
+    if (!room(u.total, l.maxUsers) || !room(u[i.kind], kindLimit)) return false;
+    u.total++;
+    u[i.kind]++;
+    return true;
+  });
+}
+
+/** ¿Los miembros (sin invitaciones) entran en los límites? */
+export function membersFit(m: { professional: number; staff: number }, l: PlanLimits): boolean {
+  return mustDisableFor(m, l).total === 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEGADO (BO1-C / BO-D7) — @deprecated desde PL-1c. Lo siguen leyendo Plataforma (alta y edición de consultorio,
+// `components/plataforma/tenants/*`, PL-1d) y sus tests mientras migran al plan SaaS. Lo nuevo usa lo de arriba.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export type PlanCatalogEntry = {
   label: string;
@@ -31,6 +137,7 @@ export type PlanCatalogEntry = {
  * probar todo); los demás planes no tienen trial — Free es gratis y Base o
  * Enterprise se dan de alta ya acordados.
  */
+/** @deprecated PL-1c: usar `PLAN_DEFAULTS` (lib/saas-plans-logic.ts) y `SaasPlanConfig`. */
 export const PLAN_CATALOG: Record<TenantPlan, PlanCatalogEntry> = {
   FREE: { label: PLAN_LABEL.FREE, seats: 1, trialDays: 0 },
   STARTER: { label: PLAN_LABEL.STARTER, seats: 3, trialDays: 0 },
@@ -43,6 +150,7 @@ export const PLAN_CATALOG: Record<TenantPlan, PlanCatalogEntry> = {
  * arriba o para abajo, y también en Enterprise, que es donde se usa); la base
  * tiene un CHECK de que es NULL o ≥ 1. null = sin límite.
  */
+/** @deprecated PL-1c: usar `planLimitsFor` + `seatUsageByKind`. */
 export function seatLimitFor(t: { plan: TenantPlan; seatLimitOverride: number | null }): number | null {
   if (t.seatLimitOverride != null) return t.seatLimitOverride;
   return PLAN_CATALOG[t.plan].seats;
@@ -53,10 +161,12 @@ export function seatLimitFor(t: { plan: TenantPlan; seatLimitOverride: number | 
  * mismos que tienen `Practitioner` y son reservables. Secretaria y Facturación
  * no ocupan (BO-D7): si ocuparan, un Free no podría sumar a la Secretaria.
  */
+/** @deprecated PL-1c: todos ocupan lugar; el tipo lo da `seatKindOf`. */
 export function consumesSeat(role: Role): boolean {
   return isClinicalRole(role);
 }
 
+/** @deprecated PL-1c: usar `SeatCount` / `SeatUsageByKind`. */
 export type SeatUsage = {
   used: number;
   limit: number | null;
@@ -75,6 +185,7 @@ export type SeatUsage = {
  * `limit`; en ese caso `remaining` es 0 y `full` true — no se puede invitar a
  * otro profesional, pero los que están siguen.
  */
+/** @deprecated PL-1c: usar `seatUsageByKind`. */
 export function seatUsage(
   counts: { clinicalMembers: number; pendingClinicalInvites: number },
   limit: number | null,

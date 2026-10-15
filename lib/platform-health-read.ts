@@ -22,7 +22,6 @@ import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { authAdmin, type AuthUserLite } from "@/lib/identity/auth-admin";
 import { canSafelyDeleteAuthUser } from "@/lib/access-logic";
-import { CLINICAL_ROLES } from "@/lib/roles";
 import {
   HEALTH_SAMPLE_LIMIT,
   authOrphansFrom,
@@ -100,15 +99,21 @@ async function authDetectors(): Promise<{
   return { authOrphans: summarize(orphanRows), emailMismatches: summarize(emailMismatchesFrom(profiles, authUsers)) };
 }
 
+/**
+ * PL-1d: «miembro clínico» = `isClinicalMember` de `lib/roles.ts` (PRACTITIONER, u OWNER/ADMIN que atiende), dicho en
+ * SQL. Antes era por rol (OWNER/ADMIN/PRACTITIONER): un Titular que NO atiende (C-PL5, sin `Practitioner` a
+ * propósito) aparecía como «miembro clínico sin profesional» y la reparación le creaba una agenda que no quiere.
+ * ASSISTANT/BILLING se excluyen por rol aunque su `clinical` quedara en true (el default de la columna es true).
+ * Misma condición en `healthCountsCore` (lib/cron-jobs-internal.ts).
+ */
 async function clinicalWithoutPractitioner(): Promise<HealthDetector<MissingPractitionerRow>> {
-  const roles = [...CLINICAL_ROLES] as string[];
   const base = Prisma.sql`
     FROM "Membership" m
     JOIN "Tenant" t ON t."id" = m."tenantId"
     JOIN "UserProfile" u ON u."id" = m."userId"
     WHERE m."acceptedAt" IS NOT NULL
       AND m."disabledAt" IS NULL
-      AND m."role"::text = ANY(${roles}::text[])
+      AND (m."role" = 'PRACTITIONER' OR (m."role" IN ('OWNER', 'ADMIN') AND m."clinical"))
       AND t."status" <> 'CLOSED'
       AND NOT EXISTS (SELECT 1 FROM "Practitioner" p WHERE p."tenantId" = m."tenantId" AND p."userId" = m."userId")`;
   const [rows, [{ n }]] = await Promise.all([

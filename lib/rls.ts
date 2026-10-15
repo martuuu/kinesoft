@@ -113,11 +113,16 @@ export async function runWithRls<T>(
  * ¿Esta transacción va en solo lectura? Solo si el contexto del request es del MISMO tenant (una superficie sin
  * Actor —webhook de MP, turnero, cron— no tiene contexto y nunca se bloquea) y no es una action de soporte
  * habilitada (`supportWritable`, C-BO4).
+ *
+ * PL-1e (C-PL10): tampoco si es una action de cuenta (`accountWritable`: pagar, cambiar de plan, mensajes a
+ * soporte) de un actor que NO es soporte: un consultorio en solo lectura por deuda tiene que poder pagar. En una
+ * sesión de soporte (`supportSessionId`) `accountWritable` no cuenta: el superadmin no paga ni cambia el plan
+ * desde la app del consultorio.
  */
-function isReadOnlyFor(tenantId: string): boolean {
+export function isReadOnlyFor(tenantId: string): boolean {
   const ctx = getRequestContext();
   if (!ctx || ctx.tenantId !== tenantId) return false;
-  return !!ctx.readOnly && !ctx.supportWritable;
+  return !!ctx.readOnly && !ctx.supportWritable && !(ctx.accountWritable && !ctx.supportSessionId);
 }
 
 /**

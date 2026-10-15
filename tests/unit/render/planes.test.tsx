@@ -186,8 +186,8 @@ describe("[P3-S21] filas", () => {
 });
 
 describe("[P3-S21] nav: una entrada Planes + atajo (solo lib/nav.ts)", () => {
-  const kine = modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false });
-  const general = modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
+  const kine = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+  const general = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
 
   it("Kine: Planes después de Pacientes, una sola vez; General: no", () => {
     const h = navFor(kine, OWNER).map((i) => i.href);

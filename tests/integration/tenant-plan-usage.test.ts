@@ -3,9 +3,9 @@
  * roles (kinesoft_app con RLS y owner BYPASSRLS, que reproduce prod: ahí el `where: { tenantId }` a mano es la única
  * barrera).
  *
- * Contrato (BO-D7, lib/plan-catalog.ts): ocupan lugar los miembros clínicos ACTIVOS + las invitaciones clínicas
- * pendientes y vigentes; Secretaria y Facturación no ocupan; un suspendido no ocupa. La pantalla tiene que decir el
- * MISMO número que frena la invitación (`getSeatUsageInTx`). Se mockea solo la sesión.
+ * Contrato (PL-1c, C-PL3, lib/plan-catalog.ts; antes BO-D7): ocupan lugar TODOS los miembros ACTIVOS (profesionales
+ * y no clínicos, cada uno en su tipo) + las invitaciones pendientes y vigentes; un suspendido no ocupa. La pantalla
+ * tiene que decir el MISMO número que frena la invitación (`getSeatUsageInTx`). Se mockea solo la sesión.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomBytes } from "node:crypto";
@@ -51,8 +51,8 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db, { plan: "STARTER", publicBookingEnabled: true });
-    U = await createEphemeralTenant(db, { plan: "STARTER" });
+    T = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO", plan: "STARTER", publicBookingEnabled: true });
+    U = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO", plan: "STARTER" });
 
     practitionerUserId = (await addPractitioner(db, T, "PRACTITIONER")).userId;
     assistantUserId = (await addPractitioner(db, T, "ASSISTANT")).userId;
@@ -63,7 +63,7 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
       data: { disabledAt: new Date() },
     });
     await invite(T, "PRACTITIONER"); // reserva lugar
-    await invite(T, "ASSISTANT"); // no ocupa
+    await invite(T, "ASSISTANT"); // reserva lugar no clínico (PL-1c)
     await invite(T, "PRACTITIONER", { expired: true }); // vencida: no reserva
     await invite(T, "PRACTITIONER", { revoked: true }); // revocada: no reserva
 
@@ -79,25 +79,37 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     }
   });
 
-  it("OWNER: cupos «3 de 3» (OWNER + profesional + 1 invitación clínica), Secretaria y Facturación no ocupan", async () => {
+  it("[PL-1c] OWNER: cupos por tipo (miembros activos + invitaciones vigentes de cada tipo)", async () => {
     asUser(T.userId);
     const v = await getTenantPlanUsage();
-    expect(v.planLabel).toBe("Base");
-    expect(v.seats).toMatchObject({ value: "3 de 3", used: 3, limit: 3, full: true, custom: false });
-    expect(v.seats.detail).toContain("Incluye 1 invitación pendiente");
+    expect(v.plan).toBe("CONSULTORIO");
+    expect(v.planLabel).toBe("Consultorio");
+    // Titular + kine + invitación de kine = 3 profesionales; Secretaria + Facturación + invitación de Secretaria = 3.
+    expect(v.seats).toMatchObject({
+      value: "Profesionales 3 de 4 · Secretaría/administración 3 de 1 · Total 6 de 5",
+      used: 6,
+      limit: 5,
+      full: true,
+      custom: false,
+    });
+    expect(v.seats.detail).toContain("Incluye 2 invitaciones pendientes");
+    expect(v.seats.detail).toContain("las que están siguen");
     expect(v.nonSeatMembers).toBe(2);
     expect(v.publicBookingEnabled).toBe(true);
     expect(v.subscription).toEqual({ label: "Activa", tone: "ok", detail: null, contact: null });
   });
 
-  it("cupo a medida (seatLimitOverride) gana sobre el del plan", async () => {
-    await db.tenant.update({ where: { id: T.tenantId }, data: { seatLimitOverride: 5 } });
+  it("[PL-1c] los overrides del consultorio ganan sobre el plan", async () => {
+    await db.tenant.update({ where: { id: T.tenantId }, data: { maxUsersOverride: 8, maxStaffOverride: 3 } });
     try {
       asUser(T.userId);
       const v = await getTenantPlanUsage();
-      expect(v.seats).toMatchObject({ value: "3 de 5", full: false, custom: true });
+      expect(v.seats).toMatchObject({
+        value: "Profesionales 3 de 4 · Secretaría/administración 3 de 3 · Total 6 de 8",
+        custom: true,
+      });
     } finally {
-      await db.tenant.update({ where: { id: T.tenantId }, data: { seatLimitOverride: null } });
+      await db.tenant.update({ where: { id: T.tenantId }, data: { maxUsersOverride: null, maxStaffOverride: null } });
     }
   });
 
@@ -120,7 +132,7 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
   it("otro consultorio cuenta lo suyo (aislamiento)", async () => {
     asUser(U.userId);
     const v = await getTenantPlanUsage();
-    expect(v.seats).toMatchObject({ value: "4 de 3", used: 4 });
+    expect(v.seats).toMatchObject({ value: "Profesionales 4 de 4 · Secretaría/administración 0 de 1 · Total 4 de 5", used: 4 });
     expect(v.nonSeatMembers).toBe(0);
   });
 

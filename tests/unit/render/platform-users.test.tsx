@@ -66,6 +66,7 @@ const detail = (over: Partial<PlatformUserDetail> = {}): PlatformUserDetail => (
       tenantStatus: "ACTIVE",
       tenantVertical: "KINESIOLOGY",
       role: "PRACTITIONER",
+      clinical: true,
       accepted: true,
       acceptedAt: "2026-09-02T15:00:00.000Z",
       suspended: false,

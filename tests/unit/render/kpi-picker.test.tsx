@@ -83,7 +83,7 @@ describe("SettingsModal (Ajustes del menú de perfil)", () => {
   // EV1-A: el picker de Ajustes usa los módulos del consultorio, igual que el «+ Agregar» de la fila.
   it("[EV1-A] Clínica general: sin KPIs de planes y con la fila default de General preseleccionada", () => {
     const html = renderToStaticMarkup(
-      <TenantModulesProvider modules={modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false })}>
+      <TenantModulesProvider modules={modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false })}>
         <SettingsModal preferences={DEFAULT_PREFERENCES} onClose={noop} revenueScope="tenant" />
       </TenantModulesProvider>
     );

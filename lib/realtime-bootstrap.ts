@@ -1,7 +1,7 @@
 import "server-only";
 import { env } from "@/lib/env";
-import { getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import type { Capability } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { Actor } from "@/lib/session";
 import type { RealtimeBootstrap } from "@/lib/realtime-events";
@@ -36,7 +36,7 @@ export async function realtimeBootstrap(
 ): Promise<RealtimeBootstrap> {
   const off: RealtimeBootstrap = { driver: "off", tenantId: actor.tenantId };
   if (env.REALTIME_DRIVER === "off") return off;
-  const c = caps ?? capabilitiesFor(await getMembershipRole(actor));
+  const c = caps ?? (await memberCapabilitiesForActor(actor));
   if (!realtimeAllowed(actor, c)) return off;
   if (env.REALTIME_DRIVER === "local") return { driver: "local", tenantId: actor.tenantId };
   // supabase: sin URL/anon el cliente no tiene adónde conectarse, y sin secreto

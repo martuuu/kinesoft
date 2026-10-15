@@ -24,6 +24,7 @@ const sb = vi.hoisted(() => ({
   sessionError: null as unknown,
   noGetSession: false,
   getUserCalls: 0,
+  lastGetUserArg: undefined as unknown,
   getClaimsCalls: 0,
   gotrueUser: null as Record<string, unknown> | null,
   claims: null as Record<string, unknown> | null,
@@ -39,8 +40,9 @@ vi.mock("@/lib/supabase/server", () => ({
                 ? { data: { session: null }, error: sb.sessionError }
                 : { data: { session: sb.token ? { access_token: sb.token } : null }, error: null },
           }),
-      getUser: async () => {
+      getUser: async (jwt?: string) => {
         sb.getUserCalls++;
+        sb.lastGetUserArg = jwt;
         return sb.gotrueUser ? { data: { user: sb.gotrueUser }, error: null } : { data: { user: null }, error: { message: "invalid JWT" } };
       },
       getClaims: async () => {
@@ -217,7 +219,47 @@ describe("[PF-0b] getStrictSessionUser", () => {
       emailConfirmedAt: "2026-01-01T00:00:00Z",
       fullName: "Ana Kine",
       avatarUrl: null,
+      // PL-1e: del token que GoTrue validó.
+      aal: "aal1",
+      sessionId: "0b5f6c7d-1111-4222-8333-944455556666",
     });
     expect(sb.getUserCalls).toBe(1);
+  });
+
+  it("[PL-1e] valida con GoTrue EL token de la cookie y le lee aal2/session_id", async () => {
+    const tok = hs256(claims({ aal: "aal2", session_id: "sess-aal2" }));
+    sb.token = tok;
+    expect(await getStrictSessionUser()).toMatchObject({ id: SUB, aal: "aal2", sessionId: "sess-aal2" });
+    expect(sb.lastGetUserArg).toBe(tok);
+  });
+
+  it("[PL-1e] GoTrue rechaza el token → null (los claims nunca se leen solos)", async () => {
+    sb.token = hs256(claims({ aal: "aal2" }));
+    sb.gotrueUser = null;
+    expect(await getStrictSessionUser()).toBeNull();
+  });
+
+  it("[PL-1e] sin getSession (API cambiada): getUser() pelado, sin datos de 2FA", async () => {
+    sb.noGetSession = true;
+    expect(await getStrictSessionUser()).toMatchObject({ id: SUB, aal: null, sessionId: null });
+    expect(sb.lastGetUserArg).toBeUndefined();
+  });
+
+  it("[PL-1e] aal desconocido → null", async () => {
+    sb.token = hs256(claims({ aal: "aal3" }));
+    expect(await getStrictSessionUser()).toMatchObject({ aal: null });
+  });
+});
+
+describe("[PL-1e] getSessionUser trae aal/sessionId también por el camino de GoTrue", () => {
+  it("fallback (secreto distinto) → aal y session_id del token que GoTrue validó", async () => {
+    over.values.SUPABASE_JWT_SECRET = "secreto-desactualizado-xxxxxxxxxxxxxx";
+    sb.token = hs256(claims({ aal: "aal2", session_id: "sess-fb" }));
+    expect(await getSessionUser()).toMatchObject({ id: SUB, verifiedBy: "gotrue", aal: "aal2", sessionId: "sess-fb" });
+  });
+
+  it("JWT local: aal normalizado (valor raro → null)", async () => {
+    sb.token = hs256(claims({ aal: "aal9" }));
+    expect(await getSessionUser()).toMatchObject({ verifiedBy: "jwt", aal: null });
   });
 });

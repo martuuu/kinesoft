@@ -21,6 +21,7 @@
  * Corre con los dos roles de DB (kinesoft_app y owner BYPASSRLS): bajo owner
  * el `where: { tenantId }` a mano es la única barrera.
  */
+import { SAAS_PLAN_OF_LEGACY } from "@/lib/saas-plans-logic";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient, TenantPlan } from "@prisma/client";
@@ -92,7 +93,8 @@ describe.skipIf(!RUN)("[P0-S02t] gates de plantillas (sobre createPlan con templ
   };
 
   async function setPlan(t: EphemeralTenant, plan: TenantPlan) {
-    await db.tenant.update({ where: { id: t.tenantId }, data: { plan } });
+    // PL-1: la app lee `saasPlan`; se escriben los dos como el escritor único (espejo PL-D1).
+    await db.tenant.update({ where: { id: t.tenantId }, data: { plan, saasPlan: SAAS_PLAN_OF_LEGACY[plan] } });
   }
 
   async function addExercise(
@@ -249,11 +251,11 @@ describe.skipIf(!RUN)("[P0-S02t] gates de plantillas (sobre createPlan con templ
       const r = pv.ok
         ? await createPlan({ ...base, stateToken: pv.preview.stateToken, rows: acceptDefaults(pv.preview) })
         : pv;
-      expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/plantillas.*plan Base/) });
+      expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/plantillas.*plan Consultorio/) });
       expect(await programsOf(patFree)).toBe(0);
       // Y el commit directo (sin pasar por el preview) también rechaza por el módulo.
       const direct = await createPlan({ ...base, idempotencyKey: randomUUID() });
-      expect(direct).toMatchObject({ ok: false, error: expect.stringMatching(/plantillas.*plan Base/) });
+      expect(direct).toMatchObject({ ok: false, error: expect.stringMatching(/plantillas.*plan Consultorio/) });
       expect(await programsOf(patFree)).toBe(0);
     });
 

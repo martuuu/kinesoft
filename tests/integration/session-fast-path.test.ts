@@ -225,6 +225,12 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
     await join(u, A, { role: "ADMIN" });
     await join(u, B, { role: "ASSISTANT", practitioner: false });
     await join(u, C, { role: "OWNER", acceptedAt: null, disabledAt: new Date("2026-10-01T12:00:00Z") });
+    // PL-1e: columnas de M8 con valores NO default, para que el mapeo de la sentencia no pase por los defaults.
+    await db.membership.update({
+      where: { userId_tenantId: { userId: u, tenantId: A.tenantId } },
+      data: { clinical: false, grantSettings: true, grantBilling: true },
+    });
+    await db.userProfile.update({ where: { id: u }, data: { twoFactorEmail: true } });
 
     const got = await loadAccessMemberships(u);
     const ref = await db.userProfile.findUniqueOrThrow({
@@ -234,19 +240,24 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
         email: true,
         isPlatformAdmin: true,
         disabledAt: true,
+        twoFactorTotp: true,
+        twoFactorEmail: true,
         memberships: {
           select: {
             tenantId: true,
             role: true,
             acceptedAt: true,
             disabledAt: true,
+            clinical: true,
+            grantSettings: true,
+            grantBilling: true,
             tenant: {
               select: {
                 id: true,
                 slug: true,
                 name: true,
                 vertical: true,
-                plan: true,
+                saasPlan: true,
                 publicBookingEnabled: true,
                 onboardingCompletedAt: true,
                 status: true,
@@ -262,9 +273,22 @@ describe.skipIf(!RUN)("[PF-0b] sesión con JWT local", () => {
     });
     const prac = new Map(ref.practitioners.map((p) => [p.tenantId, p.id]));
     const expected = ref.memberships
-      .map((m) => ({ ...m, hasPractitioner: prac.has(m.tenantId), practitionerId: prac.get(m.tenantId) ?? null }))
+      // PL-1e: `tenant.plan` del Actor/foto es el plan SaaS (`Tenant.saasPlan`).
+      .map(({ tenant: { saasPlan, ...t }, ...m }) => ({
+        ...m,
+        tenant: { ...t, plan: saasPlan },
+        hasPractitioner: prac.has(m.tenantId),
+        practitionerId: prac.get(m.tenantId) ?? null,
+      }))
       .sort((a, b) => (a.tenantId < b.tenantId ? -1 : 1));
-    expect(got.profile).toEqual({ fullName: ref.fullName, email: ref.email, isPlatformAdmin: false, disabledAt: null });
+    expect(got.profile).toEqual({
+      fullName: ref.fullName,
+      email: ref.email,
+      isPlatformAdmin: false,
+      disabledAt: null,
+      twoFactor: { totp: ref.twoFactorTotp, email: ref.twoFactorEmail },
+    });
+    expect(got.profile?.twoFactor).toEqual({ totp: false, email: true });
     expect([...got.memberships].sort((a, b) => (a.tenantId < b.tenantId ? -1 : 1))).toEqual(expected);
     expect(got.memberships).toHaveLength(3);
     expect(got.preferredTenantId).toBeNull();

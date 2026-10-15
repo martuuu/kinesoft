@@ -23,7 +23,24 @@ export type EmailKind =
   | "trial_reminder" // al OWNER: la prueba vence en 7/3/1 días o ya venció (BO-D1/2)
   | "platform_health_digest" // a los superadmins: resumen diario de /plataforma/salud
   // BO5-C (export): Plataforma solo PIDE el export; el titular lo descarga él.
-  | "tenant_export_request"; // al OWNER: «descargá el export de tus datos»
+  | "tenant_export_request" // al OWNER: «descargá el export de tus datos»
+  // PL (plan §20.5, PL-1a deja los tipos; las plantillas son de PL-2). Ninguno lleva datos de pacientes.
+  // 2FA (C-PL6, PL-2a): al propio usuario.
+  | "two_factor_code" // código de verificación por email (login, step-up, alta del método)
+  | "two_factor_changed" // aviso: se prendió/apagó un método o un superadmin reseteó la 2FA
+  | "recovery_codes_used" // aviso: se usó un código de recuperación
+  // Cobros (C-PL7..10, PL-2b/2c): al Titular y a quien tenga `account.billing`.
+  | "billing_charge_created" // cargo nuevo del período
+  | "billing_payment_received" // pago acreditado (MP o manual aprobado)
+  | "billing_payment_rejected" // comprobante rechazado o pago de MP rechazado
+  | "billing_past_due" // cuenta vencida (PAST_DUE)
+  | "billing_price_change" // precio nuevo con vigencia (PL-D8)
+  | "billing_auto_debit_changed" // débito automático prendido, pausado o apagado
+  // Mensajes y leads (C-PL11, PL-2d).
+  | "support_message_platform" // a PLATFORM_INBOX_EMAIL: mensaje nuevo de un consultorio
+  | "support_reply_tenant" // al creador del hilo: Plataforma respondió
+  | "lead_received" // a PLATFORM_INBOX_EMAIL: consulta nueva desde la landing
+  | "lead_reply"; // al lead: respuesta de Plataforma (sin respuesta automática, PL-D15)
 
 /**
  * Por dónde salió (o no) un mail:

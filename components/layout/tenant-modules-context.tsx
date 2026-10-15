@@ -44,11 +44,11 @@ function valueOf(list: ReadonlySet<TenantModule>, vertical?: TenantVertical): Te
   };
 }
 
-/** Kine PRO sin turnero: lo que veía todo consultorio antes de EV0. */
+/** Kine Clínica (ex PRO) sin turnero: lo que veía todo consultorio antes de EV0. */
 const DEFAULT_VALUE: TenantModulesValue = valueOf(
   modulesFor({
     vertical: "KINESIOLOGY",
-    plan: "PRO",
+    plan: "CLINICA",
     publicBookingEnabled: false,
   }),
   "KINESIOLOGY"

@@ -1410,3 +1410,40 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   `tier=pro&sort=tier` abre ordenada por nombre. Buscar «%» no trae todo el catálogo. Lo mismo en catálogo, usuarios,
   consultorios y auditoría.
 - [ ] Biblioteca (Kine) → editar un ejercicio global → «Ver ficha completa» aparece; en Plataforma no.
+
+## PL-1 · Planes SaaS, cupos y acceso por miembro (15-oct-2026)
+
+> Local (`TZ=UTC npm run dev` contra el Docker con M8 aplicada). Sin migraciones nuevas en PL-1. Hasta **M8b** (inicio de
+> PL-2) la fila de `SaasPlanConfig` de Consultorio sigue en 4 profesionales + 1 no clínico y los ADMIN viejos siguen
+> clínicos: lo marcado con «(M8b)» se prueba después de esa migración. La 2FA todavía **no tiene UI** (PL-2a).
+
+### Plan nuevo
+- [ ] Configuración → General → «Plan» dice Individual / Consultorio / Clínica / Libre (no FREE/PRO). «Plan y uso» con el mismo nombre.
+- [ ] Un Individual Kine: Planes, sesiones, diagnóstico y ejercicios propios sí; plantillas, favoritos y ejercicios globales no; sin Salas ni Sala de espera.
+- [ ] Un Consultorio: como Individual + plantillas/favoritos/globales; sin Salas ni Sala de espera. Un Clínica: todo.
+- [ ] /plataforma → consultorio → Editar: el plan se elige entre los 4 nuevos; cupos a medida por tipo («a medida» en la lista).
+
+### Cupos
+- [ ] Individual: no se puede invitar a nadie (ni Secretaria): «Tu plan tiene 1 usuario…».
+- [ ] Consultorio (M8b): entran 5 de cualquier tipo (5 profesionales o 3 + 2 Secretarias); el 6.º rebota por total.
+- [ ] Una invitación pendiente reserva lugar; anularla lo libera. Plataforma → Equipo: «Profesionales N · Secretaría/administración N · Total N de M».
+
+### Titular sin agenda y Administrador/a
+- [ ] Alta desde /plataforma con «¿Atiende pacientes el titular?» = No: entra sin agenda, no figura en el turnero ni en
+  el selector de profesionales, y en Pacientes ve la ficha administrativa (sin HC, sin planes). En Usuarios: «Titular (sin agenda)».
+- [ ] Invitar un Administrador/a: entra **sin agenda** y sin HC, con Configuración. Pedirlo «atendiendo» rebota con copy.
+- [ ] Pasar un Profesional con turnos o pacientes a Administrador/a: se frena pidiendo reasignar; sin carga, pasa y deja de atender.
+- [ ] Transferir la titularidad siendo un Titular que atiende: quedás como Profesional con Configuración (conservás la agenda).
+- [ ] (M8b) Un Administrador/a viejo con agenda en uso queda Profesional con Configuración; uno sin agenda, sin HC.
+
+### Delegación
+- [ ] Un ADMIN sin «Configuración» no entra a Configuración (ni por URL); con ella sí, y sigue sin HC.
+- [ ] Una Secretaria con «Configuración» delegada edita Servicios/Horarios pero no ve HC ni Planes.
+
+### Sesión y 2FA
+- [ ] La navegación entre páginas no hace más idas a la base que antes (el miembro viaja en el Actor).
+- [ ] 2FA: todavía sin pantalla para activarla (PL-2a). Nadie queda cortado; `/cuenta/seguridad` y `/verificar-acceso` no existen aún.
+
+### Plataforma (VX0-b)
+- [ ] Detalle de un consultorio: «Titular» muestra el nombre (o «Usuario sin nombre»), el email en «Email del titular». La lista igual (nombre + «Email: …»).
+- [ ] La barra superior de Plataforma muestra tu nombre, no tu email (el email en el tooltip).

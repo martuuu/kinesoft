@@ -111,7 +111,8 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     return {
       clinicName: `Consultorio BO2A ${s}`,
       vertical: "KINESIOLOGY",
-      plan: "PRO",
+      // PL-1d: plan SaaS; Individual es el default del Drawer (nace con 14 días de prueba).
+      plan: "INDIVIDUAL",
       ownerEmail: `bo2a-${s}@test.local`,
       ownerFirstName: "Ana",
       ownerLastName: "Titular",
@@ -189,13 +190,14 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     expect(r.data.activationUrl).toBeUndefined();
     const { tenantId, ownerUserId } = r.data;
 
-    // Tenant: vertical/plan/trial (PRO → 14 días del catálogo), alta completa, turnero apagado.
+    // Tenant: vertical/plan/trial (Individual → 14 días del catálogo), alta completa, turnero apagado.
     const t = await db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-    const expected = initialSubscriptionFor("PRO", undefined, new Date());
+    const expected = initialSubscriptionFor("INDIVIDUAL", undefined, new Date());
     expect(t).toMatchObject({
       name: i.clinicName,
       vertical: "KINESIOLOGY",
-      plan: "PRO",
+      saasPlan: "INDIVIDUAL",
+      plan: "FREE", // espejo legado (PL-D1)
       subscriptionStatus: "TRIALING",
       status: "ACTIVE",
       publicBookingEnabled: false,
@@ -238,7 +240,7 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     const global = await db.platformAuditEvent.findMany({ where: { tenantId, action: "platform.tenant.create" } });
     expect(global).toHaveLength(1);
     expect(global[0]).toMatchObject({ actorId: superId, idempotencyKey: i.idempotencyKey, entityId: tenantId });
-    expect(global[0].payload).toMatchObject({ ownerUserId, plan: "PRO", vertical: "KINESIOLOGY", source: "platform" });
+    expect(global[0].payload).toMatchObject({ ownerUserId, saasPlan: "INDIVIDUAL", vertical: "KINESIOLOGY", source: "platform" });
     // Sin el email del titular en el registro (solo inserción: lo que entra no sale).
     expect(JSON.stringify(global[0].payload)).not.toContain(i.ownerEmail);
     expect(await homePlatformAudits()).toBe(before);
@@ -258,27 +260,49 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     expect(log).toMatchObject({ status: "sent", kind: "tenant_activation" });
   });
 
-  it("General + FREE sin trial, sin servicios y con el alta abierta: ACTIVE, stepper pendiente, sin audit de entitlements no-op", async () => {
-    const i = input({ vertical: "GENERAL", plan: "FREE", starterServices: false, onboardingCompleted: false });
+  it("General + Individual sin trial, sin servicios y con el alta abierta: ACTIVE, stepper pendiente, sin audit de entitlements no-op", async () => {
+    const i = input({ vertical: "GENERAL", plan: "INDIVIDUAL", trialDays: 0, starterServices: false, onboardingCompleted: false });
     const r = await track(createTenantWithOwner(i));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
-    expect(t).toMatchObject({ vertical: "GENERAL", plan: "FREE", subscriptionStatus: "ACTIVE", trialEndsAt: null });
+    expect(t).toMatchObject({ vertical: "GENERAL", saasPlan: "INDIVIDUAL", plan: "FREE", subscriptionStatus: "ACTIVE", trialEndsAt: null });
     expect(t.onboardingCompletedAt).toBeNull();
     expect(await db.service.count({ where: { tenantId: r.data.tenantId } })).toBe(0);
-    // FREE + ACTIVE son los defaults de la columna: el escritor no escribe ni audita un no-op.
+    // INDIVIDUAL + ACTIVE son los defaults de la columna: el escritor no escribe ni audita un no-op.
     expect(await db.auditEvent.count({ where: { tenantId: r.data.tenantId, action: "platform.tenant.entitlements" } })).toBe(0);
     expect(await db.auditEvent.count({ where: { tenantId: r.data.tenantId, action: "platform.tenant.create" } })).toBe(1);
   });
 
   it("trialDays explícito gana al del catálogo", async () => {
-    const r = await track(createTenantWithOwner(input({ plan: "STARTER", trialDays: 30 })));
+    const r = await track(createTenantWithOwner(input({ plan: "CONSULTORIO", trialDays: 30 })));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+    expect(t.saasPlan).toBe("CONSULTORIO");
     expect(t.subscriptionStatus).toBe("TRIALING");
-    expect(toARDateKey(t.trialEndsAt!)).toBe(toARDateKey(initialSubscriptionFor("STARTER", 30, new Date()).trialEndsAt!));
+    expect(toARDateKey(t.trialEndsAt!)).toBe(toARDateKey(initialSubscriptionFor("CONSULTORIO", 30, new Date()).trialEndsAt!));
+  });
+
+  it("[PL-1d] Clínica sin trialDays nace ACTIVE sin prueba (solo Individual trae prueba)", async () => {
+    const r = await track(createTenantWithOwner(input({ plan: "CLINICA" })));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+    expect(t).toMatchObject({ saasPlan: "CLINICA", plan: "PRO", subscriptionStatus: "ACTIVE", trialEndsAt: null });
+  });
+
+  it("[PL-1d] titular que no atiende: OWNER con clinical=false, sin profesional ni agenda", async () => {
+    const r = await track(createTenantWithOwner(input({ plan: "CONSULTORIO", ownerClinical: false, starterServices: false })));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const { tenantId, ownerUserId } = r.data;
+    const m = await db.membership.findUniqueOrThrow({ where: { userId_tenantId: { userId: ownerUserId, tenantId } } });
+    expect(m).toMatchObject({ role: "OWNER", clinical: false });
+    expect(await db.practitioner.count({ where: { tenantId, userId: ownerUserId } })).toBe(0);
+    expect(await db.practitionerSchedule.count({ where: { tenantId } })).toBe(0);
+    const global = await db.platformAuditEvent.findFirstOrThrow({ where: { tenantId, action: "platform.tenant.create" } });
+    expect(global.payload).toMatchObject({ saasPlan: "CONSULTORIO", ownerClinical: false, practitionerId: null });
   });
 
   it("doble submit con el mismo idempotencyKey (secuencial): un solo consultorio, el resultado del primero, un solo mail", async () => {

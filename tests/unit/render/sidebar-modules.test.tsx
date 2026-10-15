@@ -25,12 +25,12 @@ import type { Role } from "@prisma/client";
 
 const GENERAL = modulesFor({
   vertical: "GENERAL",
-  plan: "FREE",
+  plan: "CLINICA",
   publicBookingEnabled: false,
 });
 const KINE_PRO = modulesFor({
   vertical: "KINESIOLOGY",
-  plan: "PRO",
+  plan: "CLINICA",
   publicBookingEnabled: false,
 });
 

@@ -1,6 +1,6 @@
 /**
  * [EV0-P3] Resumen de /plataforma (plan §15.4): total de consultorios, matriz
- * tipo × plan, trials por vencer (≤ 7 días desde BO3-B, vencidos incluidos), altas
+ * tipo × plan (PL-1d: plan SaaS, Individual/Consultorio/Clínica/Libre), trials por vencer (≤ 7 días desde BO3-B, vencidos incluidos), altas
  * con el onboarding sin terminar y cuántos tienen los turnos online activos.
  * Presentacional puro: los datos vienen de `getPlatformOverview()` en la página.
  *
@@ -9,11 +9,11 @@
  * Usuarios y Salud.
  */
 import Link from "next/link";
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
-import { TENANT_PLAN_VALUES, TENANT_VERTICAL_VALUES } from "@/lib/platform-tenants-schemas";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_VALUES, TENANT_VERTICAL_VALUES } from "@/lib/platform-tenants-schemas";
 import {
   PLATFORM_TRIAL_WARNING_DAYS,
   type PlatformOverview,
@@ -29,23 +29,23 @@ import {
 } from "@/components/plataforma/tenants/labels";
 
 export type VerticalPlanMatrix = {
-  cells: Record<TenantVertical, Record<TenantPlan, number>>;
+  cells: Record<TenantVertical, Record<SaasPlan, number>>;
   rowTotals: Record<TenantVertical, number>;
-  colTotals: Record<TenantPlan, number>;
+  colTotals: Record<SaasPlan, number>;
 };
 
 /** `byVerticalPlan` solo trae combinaciones con ≥ 1 consultorio: acá se completan los ceros. */
 export function verticalPlanMatrix(groups: PlatformVerticalPlanCount[]): VerticalPlanMatrix {
   const zeroPlans = () =>
-    Object.fromEntries(TENANT_PLAN_VALUES.map((p) => [p, 0])) as Record<TenantPlan, number>;
+    Object.fromEntries(SAAS_PLAN_VALUES.map((p) => [p, 0])) as Record<SaasPlan, number>;
   const cells = Object.fromEntries(TENANT_VERTICAL_VALUES.map((v) => [v, zeroPlans()])) as VerticalPlanMatrix["cells"];
   const rowTotals = Object.fromEntries(TENANT_VERTICAL_VALUES.map((v) => [v, 0])) as Record<TenantVertical, number>;
   const colTotals = zeroPlans();
   for (const g of groups) {
-    if (!cells[g.vertical] || cells[g.vertical][g.plan] === undefined) continue;
-    cells[g.vertical][g.plan] += g.count;
+    if (!cells[g.vertical] || cells[g.vertical][g.saasPlan] === undefined) continue;
+    cells[g.vertical][g.saasPlan] += g.count;
     rowTotals[g.vertical] += g.count;
-    colTotals[g.plan] += g.count;
+    colTotals[g.saasPlan] += g.count;
   }
   return { cells, rowTotals, colTotals };
 }
@@ -97,9 +97,9 @@ function Matrix({ groups }: { groups: PlatformVerticalPlanCount[] }) {
             <th scope="col" style={{ ...cell, textAlign: "left" }}>
               <EyebrowLabel as="span">Tipo</EyebrowLabel>
             </th>
-            {TENANT_PLAN_VALUES.map((p) => (
+            {SAAS_PLAN_VALUES.map((p) => (
               <th key={p} scope="col" style={cell}>
-                <EyebrowLabel as="span">{PLAN_LABEL[p]}</EyebrowLabel>
+                <EyebrowLabel as="span">{SAAS_PLAN_LABEL[p]}</EyebrowLabel>
               </th>
             ))}
             <th scope="col" style={cell}>
@@ -113,7 +113,7 @@ function Matrix({ groups }: { groups: PlatformVerticalPlanCount[] }) {
               <th scope="row" style={{ ...cell, textAlign: "left", fontWeight: 600 }}>
                 {VERTICAL_LABEL[v]}
               </th>
-              {TENANT_PLAN_VALUES.map((p) => (
+              {SAAS_PLAN_VALUES.map((p) => (
                 <td key={p} style={{ ...cell, color: m.cells[v][p] === 0 ? "var(--navy-200)" : undefined }}>
                   {m.cells[v][p]}
                 </td>
@@ -125,7 +125,7 @@ function Matrix({ groups }: { groups: PlatformVerticalPlanCount[] }) {
             <th scope="row" style={{ ...cell, textAlign: "left", fontWeight: 700 }}>
               Total
             </th>
-            {TENANT_PLAN_VALUES.map((p) => (
+            {SAAS_PLAN_VALUES.map((p) => (
               <td key={p} style={{ ...cell, fontWeight: 700 }}>
                 {m.colTotals[p]}
               </td>
@@ -223,7 +223,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                   {t.name}
                 </Link>
                 <span style={{ display: "block", fontSize: 12, color: "var(--navy-300)" }}>
-                  {VERTICAL_LABEL[t.vertical]} · {PLAN_LABEL[t.plan]} · {formatDayKeyAR(t.trialEndsOn)}
+                  {VERTICAL_LABEL[t.vertical]} · {SAAS_PLAN_LABEL[t.saasPlan]} · {formatDayKeyAR(t.trialEndsOn)}
                 </span>
               </span>
               <span
@@ -253,7 +253,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                   {t.name}
                 </Link>
                 <span style={{ display: "block", fontSize: 12, color: "var(--navy-300)" }}>
-                  {VERTICAL_LABEL[t.vertical]} · {PLAN_LABEL[t.plan]}
+                  {VERTICAL_LABEL[t.vertical]} · {SAAS_PLAN_LABEL[t.saasPlan]}
                 </span>
               </span>
               <span style={{ flexShrink: 0, fontSize: 12.5, color: "var(--navy-500)" }}>

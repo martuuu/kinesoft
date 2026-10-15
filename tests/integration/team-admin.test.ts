@@ -112,7 +112,7 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
   beforeAll(async () => {
     db = ownerClient();
     // BO2-B (BO-D7): PRO = 10 lugares. Estos casos invitan / ascienden / reactivan profesionales; el cupo se prueba en seats.test.ts.
-    A = await createEphemeralTenant(db, { plan: "PRO" });
+    A = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "LIBRE" });
     B = await createEphemeralTenant(db);
   });
   afterAll(async () => {
@@ -187,8 +187,11 @@ describe.skipIf(!RUN)("[IAM-4c] administración del equipo", () => {
     }
     expect((await membershipOf(A, kine.userId)).role).toBe("PRACTITIONER");
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "membership.role.change", entityId: m.id } })).toBe(0);
-    // Entre roles clínicos no hay nada que reasignar: sigue atendiendo.
-    expect((await changeMemberRole(m.id, "ADMIN")).ok).toBe(true);
+    // §20.17: el Administrador/a no atiende: pasar a ADMIN tiene los mismos bloqueos.
+    const admin = await changeMemberRole(m.id, "ADMIN");
+    expect(admin.ok).toBe(false);
+    if (!admin.ok) expect(admin.error).toContain("Reasigná sus 2 turnos futuros y 1 paciente asignado");
+    expect((await membershipOf(A, kine.userId)).role).toBe("PRACTITIONER");
   });
 
   it("bajar a un rol no clínico sin turnos ni pacientes: OK, la fila Practitioner queda pero deja de ser reservable", async () => {

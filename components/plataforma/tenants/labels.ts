@@ -5,14 +5,22 @@
  * `lib/tenant-modules.ts` (C-EV1), única fuente para que Configuración,
  * onboarding y /plataforma digan lo mismo.
  */
-import type { SubscriptionStatus, TenantPlan, TenantStatus } from "@prisma/client";
-import { PLAN_LABEL, VERTICAL_LABEL, type TenantModule } from "@/lib/tenant-modules";
+import type { SaasPlan, SubscriptionStatus, TenantPlan, TenantStatus } from "@prisma/client";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL, type TenantModule } from "@/lib/tenant-modules";
 import { formatDateAR } from "@/lib/format";
 import { toARDateKey } from "@/lib/datetime-ar";
-import { seatLimitFor } from "@/lib/plan-catalog";
+import { PLAN_DEFAULTS, SAAS_PLAN_OF_LEGACY } from "@/lib/saas-plans-logic";
+import type { PlanLimits } from "@/lib/saas-plans-types";
 import type { TenantAccessMode } from "@/lib/tenant-access";
 import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
 import type { PlatformStatusReason } from "@/lib/platform-tenants-types";
+
+/**
+ * PL-1d: «Individual / Consultorio / Clínica / Libre» (`SAAS_PLAN_LABEL` de `lib/tenant-modules.ts`, C-PL1).
+ */
+export function saasPlanLabel(plan: SaasPlan): string {
+  return SAAS_PLAN_LABEL[plan];
+}
 
 export const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
   ACTIVE: "Activa",
@@ -27,6 +35,9 @@ export const MODULE_LABEL: Record<TenantModule, string> = {
   pacientes: "Pacientes",
   facturacion: "Facturación",
   obrasSociales: "Obras sociales",
+  // PL-1a (C-PL1): evoluciones en el núcleo; salas y sala de espera, de Clínica/Libre.
+  evoluciones: "Evoluciones",
+  salas: "Salas",
   salaEspera: "Sala de espera",
   turneroPublico: "Turnos online",
   reportes: "Reportes",
@@ -124,20 +135,72 @@ export const ACCESS_MODE_LABEL: Record<TenantAccessMode, string> = {
   closed: "De baja",
 };
 
+/** «4», «sin límite». */
+function n(limit: number | null): string {
+  return limit == null ? "sin límite" : String(limit);
+}
+
 /**
- * Cupo de profesionales: «Hasta 10» / «Sin límite», y «a medida» si lo fijó Plataforma. Sin «usados»: la fila de
- * la lista no trae los miembros clínicos (eso lo muestra el detalle con `getTenantTeamForPlatform`).
+ * PL-1d: cupos del plan por tipo (C-PL3), dichos corto para la lista y el detalle:
+ *  - Individual → «1 usuario»; Consultorio → «5 usuarios: hasta 4 profesionales y 1 no clínico»;
+ *  - Clínica → «10 usuarios de cualquier tipo»; Libre sin overrides → «Sin límite».
+ * «(a medida)» si Plataforma fijó algún override. Sin «usados»: la fila de la lista no trae el equipo (eso lo
+ * muestra el detalle con `getTenantTeamForPlatform`).
  */
-export function seatLimitLabel(t: { plan: TenantPlan; seatLimitOverride: number | null }): string {
-  const limit = seatLimitFor(t);
-  const base = limit == null ? "Sin límite" : `Hasta ${limit}`;
-  return t.seatLimitOverride != null ? `${base} (a medida)` : base;
+export function seatLimitLabel(
+  t: { limits: PlanLimits } & {
+    maxUsersOverride: number | null;
+    maxProfessionalsOverride: number | null;
+    maxStaffOverride: number | null;
+  }
+): string {
+  const { maxUsers, maxProfessionals, maxStaff } = t.limits;
+  let base: string;
+  if (maxUsers == null && maxProfessionals == null && maxStaff == null) base = "Sin límite";
+  else if (maxProfessionals == null && maxStaff == null) {
+    base = `${maxUsers} usuario${maxUsers === 1 ? "" : "s"} de cualquier tipo`;
+  } else if (maxUsers === 1) base = "1 usuario";
+  else {
+    const users = maxUsers == null ? "Usuarios sin límite" : `${maxUsers} usuarios`;
+    base = `${users}: profesionales ${n(maxProfessionals)}, no clínicos ${n(maxStaff)}`;
+  }
+  const custom = t.maxUsersOverride != null || t.maxProfessionalsOverride != null || t.maxStaffOverride != null;
+  return custom ? `${base} (a medida)` : base;
 }
 
 /** «3 de 10 lugares» / «3 lugares, sin límite». */
 export function seatUsageLabel(s: { used: number; limit: number | null }): string {
   if (s.limit == null) return s.used === 1 ? "1 lugar usado, sin límite" : `${s.used} lugares usados, sin límite`;
   return `${s.used} de ${s.limit} lugares`;
+}
+
+function countOf(c: { used: number; limit: number | null }): string {
+  return c.limit == null ? String(c.used) : `${c.used} de ${c.limit}`;
+}
+
+/**
+ * PL-1d: «En uso: 3 de 5 (2 de 4 profesionales, 1 de 1 no clínico)», contando invitaciones pendientes (PL-D3).
+ * Un tipo sin límite propio (Clínica, Libre) sale solo con el número.
+ */
+export function seatUsageByKindLabel(s: {
+  total: { used: number; limit: number | null };
+  professional: { used: number; limit: number | null };
+  staff: { used: number; limit: number | null };
+}): string {
+  // Concuerda con el último número dicho: «1 de 1 no clínico», «2 de 4 profesionales», «1 profesional».
+  const one = (c: { used: number; limit: number | null }) => (c.limit ?? c.used) === 1;
+  const pro = `${countOf(s.professional)} profesional${one(s.professional) ? "" : "es"}`;
+  const staff = `${countOf(s.staff)} no clínico${one(s.staff) ? "" : "s"}`;
+  return `En uso: ${countOf(s.total)} (${pro}, ${staff})`;
+}
+
+/** PL-1d: qué tipo ya no tiene lugar (null = hay lugar para los dos). */
+export function seatFullText(s: { total: { full: boolean }; professional: { full: boolean }; staff: { full: boolean } }): string | null {
+  if (s.total.full) return "Sin lugar para otra persona";
+  if (s.professional.full && s.staff.full) return "Sin lugar para otra persona";
+  if (s.professional.full) return "Sin lugar para otro profesional";
+  if (s.staff.full) return "Sin lugar para otra persona no clínica";
+  return null;
 }
 
 /**
@@ -189,7 +252,9 @@ export function platformActionLabel(action: string): string {
 /** Nombre de cada columna que audita `applyTenantEntitlementsInTx` y las acciones de ciclo de vida. */
 const AUDIT_KEY_LABEL: Record<string, string> = {
   vertical: "Tipo",
+  // `plan` = eventos viejos (enum legado) y el espejo; `saasPlan` = el plan vigente (PL-1d).
   plan: "Plan",
+  saasPlan: "Plan",
   subscriptionStatus: "Estado de la suscripción",
   trialEndsAt: "Fin de la prueba",
   publicBookingEnabled: "Turnos online",
@@ -197,6 +262,10 @@ const AUDIT_KEY_LABEL: Record<string, string> = {
   status: "Estado del consultorio",
   statusReason: "Motivo",
   seatLimitOverride: "Cupo a medida",
+  // PL-1d
+  maxUsersOverride: "Usuarios a medida",
+  maxProfessionalsOverride: "Profesionales a medida",
+  maxStaffOverride: "No clínicos a medida",
   slug: "Slug",
   name: "Nombre",
   legalName: "Razón social",
@@ -223,11 +292,11 @@ export function formatAuditValue(key: string, v: string | boolean | number | nul
     const s = formatDateAR(v, "short");
     return s || v;
   }
-  if (v === null) return key === "seatLimitOverride" ? "El del plan" : "—";
+  if (v === null) return key === "seatLimitOverride" || key.endsWith("Override") ? "El del plan" : "—";
   // Hoy el único booleano auditado es `publicBookingEnabled` (Turnos online):
   // "Activo"/"Apagado", el mismo par que la lista y el detalle.
   if (typeof v === "boolean") return v ? "Activo" : "Apagado";
-  // BO1-B: cupo de profesionales (`seatLimitOverride`).
+  // BO1-B / PL-1d: cupos a medida (`seatLimitOverride`, `max*Override`).
   if (typeof v === "number") return String(v);
   if (key === "status") return TENANT_STATUS_LABEL[v as TenantStatus] ?? v;
   if (key === "onboardingCompletedAt") {
@@ -235,7 +304,12 @@ export function formatAuditValue(key: string, v: string | boolean | number | nul
     return s || v;
   }
   if (key === "vertical") return VERTICAL_LABEL[v as keyof typeof VERTICAL_LABEL] ?? v;
-  if (key === "plan") return PLAN_LABEL[v as keyof typeof PLAN_LABEL] ?? v;
+  // PL-1d: el legado se muestra con el nombre nuevo que le corresponde (PL-D2: FREE → Individual, …).
+  if (key === "plan") {
+    const sp = SAAS_PLAN_OF_LEGACY[v as TenantPlan];
+    return sp ? saasPlanLabel(sp) : v;
+  }
+  if (key === "saasPlan") return v in PLAN_DEFAULTS ? saasPlanLabel(v as SaasPlan) : v;
   if (key === "subscriptionStatus") return SUBSCRIPTION_STATUS_LABEL[v as SubscriptionStatus] ?? v;
   return v;
 }

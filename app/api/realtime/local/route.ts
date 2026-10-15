@@ -1,7 +1,6 @@
 import { env } from "@/lib/env";
 import { tryGetActor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { memberCapabilitiesForActor } from "@/lib/authz";
 import { realtimeAllowed } from "@/lib/realtime-bootstrap";
 import { subscribe } from "@/lib/realtime-local-bus";
 
@@ -34,7 +33,7 @@ export async function GET(req: Request) {
 
   const actor = await tryGetActor();
   if (!actor) return new Response("Unauthorized", { status: 401 });
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   if (!realtimeAllowed(actor, caps)) return new Response("Forbidden", { status: 403 });
 
   const tenantId = actor.tenantId;

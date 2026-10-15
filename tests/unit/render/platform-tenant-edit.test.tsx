@@ -42,12 +42,13 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
   name: "Movare",
   slug: "movare",
   vertical: "KINESIOLOGY",
-  plan: "FREE",
+  saasPlan: "INDIVIDUAL",
   subscriptionStatus: "TRIALING",
   trialEndsOn: "2026-10-21",
   publicBookingEnabled: false,
   onboardingCompleted: true,
   ownerEmails: ["owner@movare.test"],
+  ownerNames: ["Ana Pérez"],
   patientCount: 12,
   memberCount: 3,
   createdAt: "2026-09-01T15:00:00.000Z",
@@ -56,7 +57,10 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
   status: "ACTIVE",
   statusReason: null,
   statusChangedAt: null,
-  seatLimitOverride: null,
+  maxUsersOverride: null,
+  maxProfessionalsOverride: null,
+  maxStaffOverride: null,
+  limits: { maxUsers: 1, maxProfessionals: 1, maxStaff: 1 },
   access: { mode: "full", reason: "trial", daysLeft: 7 },
   effectiveAccessMode: "full",
   slugAliases: [],
@@ -113,9 +117,9 @@ describe("[EV0-P3] buildUpdatePayload", () => {
   it("solo manda los campos cambiados", () => {
     const d = detail();
     const initial = formFromDetail(d);
-    const form: TenantEditFormState = { ...initial, plan: "PRO", publicBookingEnabled: true };
+    const form: TenantEditFormState = { ...initial, saasPlan: "CLINICA", publicBookingEnabled: true };
     const payload = buildUpdatePayload(d.id, d.updatedAt, initial, form);
-    expect(payload).toEqual({ tenantId: "t1", expectedUpdatedAt: d.updatedAt, plan: "PRO", publicBookingEnabled: true });
+    expect(payload).toEqual({ tenantId: "t1", expectedUpdatedAt: d.updatedAt, saasPlan: "CLINICA", publicBookingEnabled: true });
     expect(UpdatePlatformTenant.safeParse(payload).success).toBe(true);
   });
 
@@ -184,11 +188,16 @@ describe("[EV0-P3] TenantEditForm (render)", () => {
     expect(html).toContain("Turnos online");
   });
 
-  it("el hint del plan en Clínica general", () => {
-    expect(render({ form: { ...base, vertical: "GENERAL" } })).toContain(
-      "En Clínica general el plan no cambia módulos todavía",
-    );
-    expect(render()).not.toContain("En Clínica general el plan no cambia módulos todavía");
+  it("[PL-1d] planes SaaS en el select; cupos a medida a la vista con Libre, si no detrás de un botón", () => {
+    const html = render();
+    for (const l of ["Individual", "Consultorio", "Clínica", "Libre"]) expect(html).toContain(l);
+    expect(html).not.toContain("Enterprise");
+    expect(html).toContain("Fijar cupos a medida");
+    expect(html).not.toContain("Usuarios en total");
+    const libre = render({ form: { ...base, saasPlan: "LIBRE" } });
+    expect(libre).toContain("Usuarios en total");
+    expect(libre).toContain("En Libre, un cupo vacío es sin límite.");
+    expect(libre).not.toContain("Fijar cupos a medida");
   });
 
   it("muestra el error de stale y deshabilita guardar sin cambios", () => {
@@ -209,7 +218,7 @@ describe("[EV0-P3] TenantList (render)", () => {
     expect(html).toContain("Movare");
     expect(html).toContain("movare");
     expect(html).toContain("Kinesiología y osteopatía");
-    expect(html).toContain("Free");
+    expect(html).toContain("Individual");
     expect(html).toContain("En prueba");
     expect(html).toContain("21 de oct de 2026");
     expect(html).toContain("owner@movare.test");
@@ -256,17 +265,17 @@ describe("[EV0-P3] Resumen (render)", () => {
     totalTenants: 3,
     byStatus: { ACTIVE: 2, SUSPENDED: 1, CLOSED: 0 },
     byVerticalPlan: [
-      { vertical: "KINESIOLOGY", plan: "PRO", count: 2 },
-      { vertical: "GENERAL", plan: "FREE", count: 1 },
+      { vertical: "KINESIOLOGY", saasPlan: "CLINICA", count: 2 },
+      { vertical: "GENERAL", saasPlan: "INDIVIDUAL", count: 1 },
     ],
     trialsEndingSoon: [
-      { id: "t1", name: "Movare", slug: "movare", vertical: "KINESIOLOGY", plan: "FREE", trialEndsOn: "2026-10-10", daysLeft: 3 },
+      { id: "t1", name: "Movare", slug: "movare", vertical: "KINESIOLOGY", saasPlan: "INDIVIDUAL", trialEndsOn: "2026-10-10", daysLeft: 3 },
       // BO-Z B5: `daysLeft` cuenta hoy (como `tenantAccessFor`): -1 = venció hace 2 días.
-      { id: "t2", name: "Vencido", slug: "vencido", vertical: "GENERAL", plan: "FREE", trialEndsOn: "2026-10-05", daysLeft: -1 },
+      { id: "t2", name: "Vencido", slug: "vencido", vertical: "GENERAL", saasPlan: "INDIVIDUAL", trialEndsOn: "2026-10-05", daysLeft: -1 },
     ],
     trialsEndingSoonCount: 2,
     onboardingPending: [
-      { id: "t3", name: "Nuevo", slug: "nuevo", vertical: "GENERAL", plan: "FREE", createdAt: "2026-10-06T12:00:00.000Z" },
+      { id: "t3", name: "Nuevo", slug: "nuevo", vertical: "GENERAL", saasPlan: "INDIVIDUAL", createdAt: "2026-10-06T12:00:00.000Z" },
     ],
     onboardingPendingCount: 1,
     publicBookingEnabledCount: 1,
@@ -274,11 +283,11 @@ describe("[EV0-P3] Resumen (render)", () => {
 
   it("matriz vertical × plan con ceros y totales", () => {
     const m = verticalPlanMatrix(overview.byVerticalPlan);
-    expect(m.cells.KINESIOLOGY.PRO).toBe(2);
-    expect(m.cells.KINESIOLOGY.FREE).toBe(0);
-    expect(m.cells.GENERAL.FREE).toBe(1);
+    expect(m.cells.KINESIOLOGY.CLINICA).toBe(2);
+    expect(m.cells.KINESIOLOGY.INDIVIDUAL).toBe(0);
+    expect(m.cells.GENERAL.INDIVIDUAL).toBe(1);
     expect(m.rowTotals).toEqual({ GENERAL: 1, KINESIOLOGY: 2 });
-    expect(m.colTotals.PRO).toBe(2);
+    expect(m.colTotals.CLINICA).toBe(2);
   });
 
   it("trials con días restantes (negativo = vencido), onboarding pendiente y links al detalle", () => {
@@ -309,7 +318,8 @@ describe("[EV0-P3] Detalle (render)", () => {
     expect(html).toContain("Planes de tratamiento");
     expect(html).toContain("140");
     expect(html).toContain("admin@kinesoft.test");
-    expect(html).toMatch(/Free[\s\S]{0,40}→[\s\S]{0,40}PRO/);
+    // PL-1d: un evento viejo con el enum legado se lee con el plan nuevo que le corresponde (PL-D2).
+    expect(html).toMatch(/Individual[\s\S]{0,40}→[\s\S]{0,40}Clínica/);
     expect(html).toMatch(/href="\/c\/movare\/booking"/);
     expect(html).toContain("Editar datos");
     expect(html).not.toContain("Editar suscripción");

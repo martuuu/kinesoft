@@ -9,7 +9,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import type { PlatformTenantRow } from "@/lib/platform-tenants-types";
 import { formatDateAR } from "@/lib/format";
 import {
@@ -68,7 +68,7 @@ export function TenantDetailHeader({ detail: d }: { detail: PlatformTenantRow })
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               <Tag tone={TENANT_STATUS_TONE[d.status]}>{TENANT_STATUS_LABEL[d.status]}</Tag>
               <Tag tone="sky">{VERTICAL_LABEL[d.vertical]}</Tag>
-              <Tag tone="sky">Plan {PLAN_LABEL[d.plan]}</Tag>
+              <Tag tone="sky">Plan {SAAS_PLAN_LABEL[d.saasPlan]}</Tag>
               <Tag tone="soft">{SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]}</Tag>
               {showAccess && <Tag tone="soft">Acceso: {ACCESS_MODE_LABEL[d.access.mode].toLowerCase()}</Tag>}
             </div>

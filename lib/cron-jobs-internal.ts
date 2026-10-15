@@ -28,7 +28,6 @@ import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { platformHealthDigestEmail, trialReminderEmail } from "@/lib/email/templates";
 import { authAdmin, type AuthUserLite } from "@/lib/identity/auth-admin";
-import { CLINICAL_ROLES } from "@/lib/roles";
 import { authOrphansFrom, emailMismatchesFrom, stalledOnboardingCutoff } from "@/lib/platform-health-logic";
 import { TENANT_ACCESS_SELECT } from "@/lib/tenant-access";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -261,7 +260,6 @@ async function authCounts(): Promise<{ authOrphans: number | null; emailMismatch
  * moverlos a `lib/platform-health-logic.ts` y que lo usen los dos).
  */
 export async function healthCountsCore(now: Date): Promise<HealthDigestCounts> {
-  const roles = [...CLINICAL_ROLES] as string[];
   const [auth, clinical, pracNoMember, profilesWithoutAccess, tenantsWithoutOwner, expiredInvitations, stalledOnboarding] =
     await Promise.all([
       authCounts(),
@@ -272,7 +270,8 @@ export async function healthCountsCore(now: Date): Promise<HealthDigestCounts> {
         JOIN "UserProfile" u ON u."id" = m."userId"
         WHERE m."acceptedAt" IS NOT NULL
           AND m."disabledAt" IS NULL
-          AND m."role"::text = ANY(${roles}::text[])
+          -- PL-1d: miembro clínico = isClinicalMember (un Titular que no atiende no necesita Practitioner).
+          AND (m."role" = 'PRACTITIONER' OR (m."role" IN ('OWNER', 'ADMIN') AND m."clinical"))
           AND t."status" <> 'CLOSED'
           AND NOT EXISTS (SELECT 1 FROM "Practitioner" p WHERE p."tenantId" = m."tenantId" AND p."userId" = m."userId")`,
       prismaService.$queryRaw<Array<{ n: bigint }>>`

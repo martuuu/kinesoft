@@ -170,8 +170,8 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
   beforeAll(async () => {
     db = ownerClient();
     // PRO: estos casos suman varios profesionales al mismo consultorio; FREE (1 lugar) los frena al activar (BO2-B).
-    A = await createEphemeralTenant(db, { plan: "PRO" });
-    C = await createEphemeralTenant(db, { plan: "PRO" });
+    A = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
+    C = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     await db.tenant.update({ where: { id: A.tenantId }, data: { businessHoursStart: 9, businessHoursEnd: 18 } });
     aShared = (
       await db.service.create({
@@ -241,7 +241,7 @@ describe.skipIf(!RUN)("agenda por defecto en las altas (B2.3)", () => {
     expect(snap.schedules.every((x) => x.practitionerId === r.practitionerId)).toBe(true);
     expect(snap.payers).toEqual([
       {
-        id: agendaDefaultIds.payer(r.practitionerId, r.particularInsurerId),
+        id: agendaDefaultIds.payer(r.practitionerId!, r.particularInsurerId),
         practitionerId: r.practitionerId,
         insurerId: r.particularInsurerId,
         active: true,

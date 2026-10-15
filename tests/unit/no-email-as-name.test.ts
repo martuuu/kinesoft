@@ -111,6 +111,29 @@ describe("[DIR-0] el email nunca como nombre", () => {
     expect(found).toEqual([]);
   });
 
+  /**
+   * VX0-b (hallazgo del prototipo, 15-oct): Plataforma mostraba el email donde va un nombre SIN fallback desde un
+   * nombre, así que el patrón de arriba no lo veía: la fila «Titular» del detalle del consultorio era la lista de
+   * emails y la barra del shell mostraba el email del superadmin como su identidad. Este chequeo fija las dos formas:
+   *   - una fila/rótulo de PERSONA (`["Titular", …]`, `["Profesional", …]`, …) cuyo valor es un email;
+   *   - la barra de Plataforma con `{email}` como texto (el email va en el tooltip, rotulado «Email: …»).
+   */
+  const PERSON_LABEL_WITH_EMAIL = /\[\s*"(?:Titular|Profesional|Usuario|Nombre|Responsable)"\s*,[^\]\n]*[eE]mails?\b/g;
+
+  it("[VX0-b] rótulos de persona sin email como valor; la barra de Plataforma muestra el nombre", () => {
+    expect([...'["Titular", d.ownerEmails.join(", ")]'.matchAll(PERSON_LABEL_WITH_EMAIL)]).toHaveLength(1);
+    expect([...'["Email del titular", d.ownerEmails.join(", ")]'.matchAll(PERSON_LABEL_WITH_EMAIL)]).toHaveLength(0);
+    const files = DIRS.flatMap((d) => walk(join(ROOT, d), []));
+    const found = files.flatMap((f) => {
+      const code = stripComments(readFileSync(f, "utf8"));
+      return [...code.matchAll(PERSON_LABEL_WITH_EMAIL)].map((m) => `${relative(ROOT, f)}  ${m[0]}`);
+    });
+    expect(found).toEqual([]);
+    const shell = stripComments(readFileSync(join(ROOT, "components/plataforma/platform-shell.tsx"), "utf8"));
+    expect(shell).not.toMatch(/>\s*\{\s*email\s*\}\s*</);
+    expect(shell).toMatch(/>\s*\{\s*name\s*\}\s*</);
+  });
+
   it("la allowlist no tiene entradas muertas", () => {
     for (const a of ALLOWLIST) {
       const src = stripComments(readFileSync(join(ROOT, a.file), "utf8"));

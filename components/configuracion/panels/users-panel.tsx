@@ -149,14 +149,15 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
       const first = await confirm({
         title: `¿Transferir la titularidad a ${who}?`,
         message:
-          `Pasa a ser el titular del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como ${label("ADMIN")} y no vas a poder deshacerlo desde tu cuenta.`,
+          // §20.17: el Administrador/a no atiende; quien transfiere y atiende queda Profesional con «Configuración».
+          `Pasa a ser el titular del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás con «Configuración», como ${label("PRACTITIONER")} si atendés o como ${label("ADMIN")} si no, y no vas a poder deshacerlo desde tu cuenta.`,
         confirmLabel: "Continuar",
         tone: "danger",
       });
       if (!first) return;
       const second = await confirm({
         title: "Confirmá la transferencia",
-        message: `${who} va a ser ${label("OWNER")} del consultorio y vos pasás a ${label("ADMIN")}. ¿Seguro?`,
+        message: `${who} va a ser ${label("OWNER")} del consultorio y vos dejás de ser titular. ¿Seguro?`,
         confirmLabel: "Sí, transferir",
         tone: "danger",
       });

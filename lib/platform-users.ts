@@ -39,7 +39,7 @@ import { platformAccessLinkEmail } from "@/lib/email/templates";
 import "@/lib/email/log";
 import { canSafelyDeleteAuthUser } from "@/lib/access-logic";
 import { emailEqualsFilter, normalizeEmail } from "@/lib/email-match";
-import { isClinicalRole } from "@/lib/roles";
+import { isClinicalMember } from "@/lib/roles";
 import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
 import { tags } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
@@ -294,14 +294,15 @@ export async function repairCreatePractitioner(raw: unknown): Promise<ActionResu
     const out = await prismaService.$transaction(async (tx) => {
       const m = await tx.membership.findUnique({
         where: { userId_tenantId: { userId, tenantId } },
-        select: { role: true, acceptedAt: true, disabledAt: true, tenant: { select: { status: true } } },
+        select: { role: true, clinical: true, acceptedAt: true, disabledAt: true, tenant: { select: { status: true } } },
       });
       if (!m) throw new PlatformUserError("Esa persona no es miembro de ese consultorio.");
       if (m.tenant.status === "CLOSED") throw new PlatformUserError("El consultorio está dado de baja.");
       if (!m.acceptedAt) throw new PlatformUserError("La invitación todavía no fue aceptada.");
       if (m.disabledAt) throw new PlatformUserError("Está suspendido en ese consultorio: reactivalo primero desde el equipo.");
-      if (!isClinicalRole(m.role)) {
-        throw new PlatformUserError("Su rol no atiende pacientes: no necesita profesional (entra sin agenda propia).");
+      // PL-1d: por miembro, no por rol (C-PL5): un Titular/Admin que no atiende tampoco necesita profesional.
+      if (!isClinicalMember(m)) {
+        throw new PlatformUserError("No atiende pacientes en ese consultorio: no necesita profesional (entra sin agenda propia).");
       }
       // ON CONFLICT DO NOTHING sobre (tenantId, userId): dos reparaciones simultáneas no tiran P2002 en la tx.
       const ins = await tx.practitioner.createMany({ data: [{ tenantId, userId, specialty: null }], skipDuplicates: true });

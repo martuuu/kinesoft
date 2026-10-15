@@ -68,7 +68,7 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: varios miembros
     B = await createEphemeralTenant(db);
   });
   afterAll(async () => {
@@ -168,8 +168,8 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
     expect(ev?.payload).toMatchObject({ from: "PRACTITIONER", role: "ADMIN" });
   });
 
-  it("transferir el OWNER deja al anterior como ADMIN (en un tenant propio)", async () => {
-    const T = await createEphemeralTenant(db);
+  it("transferir el OWNER: el anterior (que atendía) queda Profesional con «Configuración» (§20.17)", async () => {
+    const T = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     try {
       const kine = await addPractitioner(db, T);
       const mem = await membershipOf(T, kine.userId);
@@ -181,14 +181,19 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
         select: { userId: true, role: true },
       });
       expect(roles.find((x) => x.userId === kine.userId)?.role).toBe("OWNER");
-      expect(roles.find((x) => x.userId === T.userId)?.role).toBe("ADMIN");
+      // §20.17: el Administrador/a no atiende; el Titular anterior conserva su agenda como Profesional.
+      expect(await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: T.userId } })).toMatchObject({
+        role: "PRACTITIONER",
+        clinical: true,
+        grantSettings: true,
+      });
     } finally {
       await T.cleanup();
     }
   });
 
   it("[BO-Z] B1: dos transferencias simultáneas del mismo OWNER (a X y a Y) → exactamente un OWNER", async () => {
-    const T = await createEphemeralTenant(db, { plan: "PRO" });
+    const T = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     try {
       const x = await addPractitioner(db, T);
       const y = await addPractitioner(db, T);
@@ -203,7 +208,7 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
       expect(owners).toHaveLength(1);
       expect([x.userId, y.userId]).toContain(owners[0].userId);
       const prevOwner = await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: T.userId } });
-      expect(prevOwner.role).toBe("ADMIN");
+      expect(prevOwner.role).toBe("PRACTITIONER"); // §20.17: atendía → Profesional con «Configuración»
     } finally {
       await T.cleanup();
     }
@@ -222,7 +227,7 @@ describe.skipIf(!RUN)("equipo · gestión por OWNER y ADMIN (IAM-D3)", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" });
     const inv = await db.invitation.create({
       data: {
         tenantId: A.tenantId,

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sala de espera · pantalla TV (VX0-c)</title>
+<link rel="stylesheet" href="shared.css">
+<script>
+  /* Controles de este prototipo en la barra de shared.js (VX0-c). */
+  window.VX_PAGE = {
+    bar: "app",
+    extra: [
+      { k: "tvtheme", label: "Tema", def: "dark", opts: [["dark", "Oscuro"], ["light", "Claro"]] },
+      { k: "screen", label: "Pantalla", def: "call", opts: [["call", "Con llamado"], ["idle", "Sin llamados"]] },
+      { k: "auto", label: "Demo", def: "on", opts: [["on", "Auto (10 s)"], ["off", "Manual"]] },
+    ],
+    actions: [{ label: "Simular llamado", run: function () { window.__tvNext && window.__tvNext(); } }],
+  };
+</script>
+<script src="shared.js"></script>
+<style>
+  /* ─────────────────────────────────────────────────────────────────
+     VX0-c · Pantalla de la sala de espera (TV / monitor en modo kiosco).
+     Todo se mide en --u = min(1vw, 1.78vh): la composición es 16:9 y
+     escala igual a 1920×1080 (u = 19,2 px), 1366×768 (13,7 px) y a un
+     monitor 4:3 de 1024×768 (10,2 px; sobra alto y se reparte). Se lee
+     a 4-5 metros: el nombre llamado va a ~150 px en 1080p.
+     Privacidad: solo nombre + inicial del apellido, consultorio y
+     profesional. Nada de hora del turno, servicio, cobertura ni espera.
+     Motion del llamado ≤ 600 ms, solo transform/opacity/box-shadow; con
+     reduce motion (sistema o barra) el estado final aparece de una.
+     ───────────────────────────────────────────────────────────────── */
+  :root {
+    --u: min(1vw, 1.7778vh);
+    --tv-bg: radial-gradient(70% 60% at 100% 0%, rgba(61, 116, 181, 0.35), rgba(61, 116, 181, 0) 70%),
+      radial-gradient(50% 50% at 0% 100%, rgba(200, 245, 100, 0.08), rgba(200, 245, 100, 0) 70%),
+      linear-gradient(160deg, #13243d 0%, #0b1626 70%);
+    --tv-fg: #ffffff;
+    --tv-muted: #c6cfdd;
+    --tv-faint: #9ba9bf;
+    --tv-panel: rgba(255, 255, 255, 0.05);
+    --tv-panel-border: rgba(255, 255, 255, 0.09);
+    --tv-row: rgba(255, 255, 255, 0.06);
+    --tv-num-bg: rgba(255, 255, 255, 0.1);
+    --tv-shadow: none;
+  }
+  html[data-tvtheme="light"] {
+    --tv-bg: radial-gradient(60% 50% at 100% 0%, rgba(143, 181, 221, 0.4), rgba(143, 181, 221, 0) 70%),
+      radial-gradient(50% 45% at 0% 100%, rgba(200, 245, 100, 0.22), rgba(200, 245, 100, 0) 70%),
+      linear-gradient(170deg, #dbe8f6 0%, #eef4fb 45%, #f7fafd 100%);
+    --tv-fg: var(--navy-900);
+    --tv-muted: var(--navy-500);
+    --tv-faint: var(--navy-400);
+    --tv-panel: #ffffff;
+    --tv-panel-border: rgba(15, 30, 51, 0.07);
+    --tv-row: var(--bg-panel);
+    --tv-num-bg: var(--sky-100);
+    --tv-shadow: 0 calc(var(--u) * 0.1) calc(var(--u) * 0.2) rgba(15, 30, 51, 0.04), 0 calc(var(--u) * 1) calc(var(--u) * 2.6) rgba(15, 30, 51, 0.08);
+  }
+  html, body { height: 100%; overflow: hidden; }
+  html { background: #0b1626; }
+  html[data-tvtheme="light"] { background: #eef4fb; }
+  body { background: var(--tv-bg); color: var(--tv-fg); }
+  body.kiosk-idle { cursor: none; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .tv {
+    height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: calc(var(--u) * 1.8);
+    padding: calc(var(--u) * 2.2) calc(var(--u) * 2.6);
+  }
+
+  /* ── Encabezado: marca del consultorio + hora ─────────────────── */
+  .tv-top { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 2); }
+  .brand { display: flex; align-items: center; gap: calc(var(--u) * 1.2); }
+  .brand-mark {
+    width: calc(var(--u) * 4.4); height: calc(var(--u) * 4.4); border-radius: calc(var(--u) * 1.2);
+    display: grid; place-items: center; font-weight: 700; font-size: calc(var(--u) * 1.7); letter-spacing: -0.02em; color: var(--navy-900);
+    background: linear-gradient(135deg, var(--lime-300), #e6fbb0);
+  }
+  .brand-name { font-size: calc(var(--u) * 2); font-weight: 650; letter-spacing: -0.02em; line-height: 1.1; }
+  .brand-sub { font-size: calc(var(--u) * 1.15); color: var(--tv-muted); margin-top: calc(var(--u) * 0.25); }
+  .time { text-align: right; }
+  .time-h { font: 500 calc(var(--u) * 4.2) / 1 var(--font-mono); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .time-d { font-size: calc(var(--u) * 1.15); color: var(--tv-muted); margin-top: calc(var(--u) * 0.4); }
+
+  /* ── Llamado actual ───────────────────────────────────────────── */
+  .tv-main { display: grid; grid-template-columns: minmax(0, 1.72fr) minmax(0, 1fr); gap: calc(var(--u) * 1.8); min-height: 0; }
+  .hero {
+    position: relative; border-radius: calc(var(--u) * 2.4); padding: calc(var(--u) * 3) calc(var(--u) * 3.4);
+    display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; color: #fff;
+    background:
+      radial-gradient(80% 90% at 100% 0%, rgba(143, 181, 221, 0.45), rgba(143, 181, 221, 0) 60%),
+      radial-gradient(60% 70% at 0% 100%, rgba(200, 245, 100, 0.18), rgba(200, 245, 100, 0) 70%),
+      linear-gradient(150deg, #2a5fd0 0%, #1f4fbe 45%, #173f9c 100%);
+    box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(15, 55, 129, 0.35);
+  }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; gap: var(--u); }
+  .eyebrow-tv {
+    display: inline-flex; align-items: center; gap: calc(var(--u) * 0.8); height: calc(var(--u) * 3); padding: 0 calc(var(--u) * 1.3);
+    border-radius: 999px; background: rgba(255, 255, 255, 0.14); font-size: calc(var(--u) * 1.25); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .eyebrow-tv i { width: calc(var(--u) * 0.8); height: calc(var(--u) * 0.8); border-radius: 50%; background: var(--lime-300); animation: beat 1.6s var(--ease-in-out) infinite; }
+  @keyframes beat { 50% { transform: scale(0.6); opacity: 0.55; } }
+  .hero-at { font: 500 calc(var(--u) * 1.4) / 1 var(--font-mono); color: rgba(255, 255, 255, 0.75); }
+  .hero-body { display: grid; align-content: center; gap: calc(var(--u) * 2.2); min-width: 0; }
+  .hero-name { font-size: calc(var(--u) * 8.2); line-height: 0.98; font-weight: 650; letter-spacing: -0.045em; white-space: nowrap; }
+  .hero-dest { display: flex; align-items: center; gap: calc(var(--u) * 1.6); flex-wrap: wrap; }
+  .room {
+    display: inline-flex; align-items: center; gap: calc(var(--u) * 1); height: calc(var(--u) * 6); padding: 0 calc(var(--u) * 2.2) 0 calc(var(--u) * 1.6);
+    border-radius: calc(var(--u) * 1.6); background: var(--lime-300); color: var(--navy-900); font-size: calc(var(--u) * 3.4); font-weight: 700; letter-spacing: -0.03em;
+  }
+  .room svg { width: calc(var(--u) * 3); height: calc(var(--u) * 3); }
+  .pro-tv { font-size: calc(var(--u) * 2.6); font-weight: 550; color: rgba(255, 255, 255, 0.86); letter-spacing: -0.02em; }
+  .hero-foot { font-size: calc(var(--u) * 1.4); color: rgba(255, 255, 255, 0.8); display: flex; align-items: center; gap: calc(var(--u) * 0.8); }
+  .hero-foot svg { width: calc(var(--u) * 1.8); height: calc(var(--u) * 1.8); }
+
+  /* Animación de llamado (≤ 600 ms en total). */
+  .hero::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+  .hero.is-new::after { animation: flash 520ms var(--ease-out) both; }
+  .hero.is-new { animation: ring 600ms var(--ease-out); }
+  .hero.is-new .hero-name { animation: name-in 440ms var(--ease-out) both; }
+  .hero.is-new .room { animation: chip-in 420ms var(--ease-out) 120ms both; }
+  .hero.is-new .pro-tv { animation: fade 400ms var(--ease-out) 160ms both; }
+  @keyframes flash { from { background: rgba(255, 255, 255, 0.32); } to { background: rgba(255, 255, 255, 0); } }
+  @keyframes ring {
+    from { box-shadow: 0 0 0 0 rgba(200, 245, 100, 0.85), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(15, 55, 129, 0.35); }
+    to { box-shadow: 0 0 0 calc(var(--u) * 2.4) rgba(200, 245, 100, 0), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(15, 55, 129, 0.35); }
+  }
+  @keyframes name-in { from { opacity: 0; transform: translateY(0.22em); } }
+  @keyframes chip-in { from { opacity: 0; transform: scale(0.9); } }
+
+  /* Sin llamados: tarjeta neutra, sin el azul de «Llamado». */
+  .hero.is-idle { background: var(--tv-panel); color: var(--tv-fg); box-shadow: var(--tv-shadow); border: 1px solid var(--tv-panel-border); }
+  .hero.is-idle .hero-name { font-size: calc(var(--u) * 6.4); white-space: normal; }
+  .hero.is-idle .idle-sub { font-size: calc(var(--u) * 2.2); color: var(--tv-muted); line-height: 1.35; max-width: 30ch; }
+  .hero.is-idle .hero-foot { color: var(--tv-muted); }
+
+  /* ── Columna: próximos y recién llamados ──────────────────────── */
+  .side { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: calc(var(--u) * 1.8); min-height: 0; }
+  .panel {
+    border-radius: calc(var(--u) * 2); background: var(--tv-panel); border: 1px solid var(--tv-panel-border); box-shadow: var(--tv-shadow);
+    padding: calc(var(--u) * 1.8) calc(var(--u) * 1.8) calc(var(--u) * 1.4); display: grid; grid-template-rows: auto minmax(0, 1fr); gap: calc(var(--u) * 1.1); min-height: 0; overflow: hidden;
+  }
+  .panel h2 { font-size: calc(var(--u) * 1.3); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tv-muted); display: flex; justify-content: space-between; }
+  .panel ol { list-style: none; margin: 0; padding: 0; display: grid; gap: calc(var(--u) * 0.6); align-content: start; overflow: hidden; }
+  /* Una sola línea por persona (nombre · profesional): entran 4 a 16:9. */
+  .q { display: grid; grid-template-columns: calc(var(--u) * 2.8) minmax(0, 1fr) auto; align-items: center; gap: calc(var(--u) * 1.1);
+    padding: calc(var(--u) * 0.6) calc(var(--u) * 1.1) calc(var(--u) * 0.6) calc(var(--u) * 0.7); border-radius: calc(var(--u) * 1.1); background: var(--tv-row); animation: fade 300ms var(--ease-out); }
+  .q-n { width: calc(var(--u) * 2.8); height: calc(var(--u) * 2.8); border-radius: 50%; display: grid; place-items: center; background: var(--tv-num-bg);
+    font: 600 calc(var(--u) * 1.35) / 1 var(--font-mono); }
+  .q-name { font-size: calc(var(--u) * 2.15); font-weight: 650; letter-spacing: -0.025em; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-pro { font-size: calc(var(--u) * 1.35); color: var(--tv-muted); white-space: nowrap; }
+  .q:first-child .q-n { background: var(--lime-300); color: var(--navy-900); }
+  .r { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--u); padding: calc(var(--u) * 0.55) calc(var(--u) * 0.2);
+    border-bottom: 1px solid var(--tv-panel-border); animation: fade 300ms var(--ease-out); }
+  .r:last-child, .r.is-last { border-bottom: 0; }
+  .panel h2 span { letter-spacing: 0; text-transform: none; font-weight: 500; color: var(--tv-faint); }
+  .r-name { font-size: calc(var(--u) * 1.75); line-height: 1.25; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r-name span { color: var(--tv-muted); font-weight: 500; }
+  .r-ago { font-size: calc(var(--u) * 1.2); color: var(--tv-faint); white-space: nowrap; }
+  .empty-tv { font-size: calc(var(--u) * 1.6); color: var(--tv-muted); padding: var(--u) calc(var(--u) * 0.4); }
+
+  /* ── Pie ──────────────────────────────────────────────────────── */
+  .tv-foot { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 2); font-size: calc(var(--u) * 1.3); color: var(--tv-muted); }
+  .tv-foot .info { display: flex; align-items: center; gap: calc(var(--u) * 0.8); }
+  .tv-foot svg { width: calc(var(--u) * 1.8); height: calc(var(--u) * 1.8); }
+  .tv-foot .by { display: flex; align-items: center; gap: calc(var(--u) * 1.4); white-space: nowrap; }
+  .live-tv { display: inline-flex; align-items: center; gap: calc(var(--u) * 0.5); }
+  .live-tv i { width: calc(var(--u) * 0.6); height: calc(var(--u) * 0.6); border-radius: 50%; background: #36b37e; }
+  .by b { font-weight: 650; color: var(--tv-fg); }
+</style>
+</head>
+<body>
+<div class="tv">
+  <header class="tv-top">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">KC</span>
+      <div><div class="brand-name">Kinesio Centro</div><div class="brand-sub">Sala de espera</div></div>
+    </div>
+    <div class="time" aria-hidden="true"><div class="time-h" id="clock">10:42</div><div class="time-d">miércoles 15 de octubre</div></div>
+  </header>
+
+  <main class="tv-main" id="main">
+    <section class="hero" id="hero" role="status" aria-live="polite" aria-atomic="true"></section>
+    <div class="side">
+      <section class="panel" aria-labelledby="h-next"><h2 id="h-next">Próximos <span id="n-wait"></span></h2><ol id="next" role="list"></ol></section>
+      <section class="panel" aria-labelledby="h-recent"><h2 id="h-recent">Recién llamados</h2><ol id="recent" role="list"></ol></section>
+    </div>
+  </main>
+
+  <footer class="tv-foot">
+    <span class="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>¿Llegaste y no te anunciaste? Acercate a recepción.</span>
+    <span class="by"><span class="live-tv"><i aria-hidden="true"></i>En vivo</span><span>con <b>KineSoft</b></span></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var DOOR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4.5A1.5 1.5 0 0 1 6.5 3h8A1.5 1.5 0 0 1 16 4.5V21M3 21h18M12.5 12.5h.01M16 7h3v14"/></svg>';
+  var WALK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  /* Reloj simulado igual que recepcion.html: 10:42 + tiempo real. */
+  var BASE = 10 * 60 + 42, T0 = Date.now();
+  function now() { return BASE + Math.floor((Date.now() - T0) / 60000); }
+  function hhmm(x) { return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0"); }
+
+  // Mismo día de ejemplo que Recepción: solo nombre + inicial.
+  var current = { name: "Laura P.", room: "Consultorio 2", pro: "Lic. Ríos", at: 10 * 60 + 41 };
+  var queue = [
+    { name: "Tomás K.", room: "Consultorio 3", pro: "Dra. Sosa" },
+    { name: "María G.", room: "Consultorio 1", pro: "Lic. Pérez" },
+    { name: "Gabriela S.", room: "Gimnasio", pro: "Lic. Varela" },
+    { name: "María José G.", room: "Consultorio 3", pro: "Dra. Sosa" },
+    { name: "Ricardo V.", room: "Consultorio 2", pro: "Lic. Ríos" },
+    { name: "Noelia F.", room: "Consultorio 4", pro: "Lic. Funes" },
+  ];
+  var recent = [
+    { name: "Martín S.", room: "Consultorio 1", at: 10 * 60 + 23 },
+    { name: "Silvina H.", room: "Consultorio 3", at: 10 * 60 + 9 },
+    { name: "Elena B.", room: "Gimnasio", at: 10 * 60 + 4 },
+  ];
+
+  var hero = document.getElementById("hero");
+  function S(k) { return (window.VX_STATE && window.VX_STATE[k]) || ""; }
+
+  /* El nombre nunca se corta: si no entra en una línea, se achica. */
+  function fit() {
+    var el = hero.querySelector(".hero-name");
+    if (!el || hero.classList.contains("is-idle")) return;
+    el.style.fontSize = "";
+    var max = el.parentElement.clientWidth, size = parseFloat(getComputedStyle(el).fontSize);
+    while (el.scrollWidth > max && size > 24) { size -= 4; el.style.fontSize = size + "px"; }
+  }
+  function renderHero(animate) {
+    if (S("screen") === "idle" || !current) {
+      hero.className = "hero is-idle";
+      hero.innerHTML = '<div class="hero-top"><span class="eyebrow-tv" style="background:var(--tv-row)">Sala de espera</span></div>' +
+        '<div class="hero-body"><p class="hero-name">Te damos la bienvenida.</p><p class="idle-sub">Cuando sea tu turno, vas a ver tu nombre en esta pantalla con el consultorio al que pasás.</p></div>' +
+        '<p class="hero-foot">Si tenés dudas, preguntá en recepción.</p>';
+      return;
+    }
+    hero.className = "hero";
+    hero.innerHTML = '<div class="hero-top"><span class="eyebrow-tv"><i aria-hidden="true"></i>Llamado</span><span class="hero-at">' + hhmm(current.at) + "</span></div>" +
+      '<div class="hero-body"><p class="hero-name">' + esc(current.name) + "</p>" +
+      '<div class="hero-dest"><span class="room">' + DOOR + esc(current.room) + '</span><span class="pro-tv">' + esc(current.pro) + "</span></div></div>" +
+      '<p class="hero-foot">' + WALK + "Pasá al " + esc(current.room.toLowerCase().indexOf("consultorio") === 0 ? current.room.toLowerCase() : current.room) + ".</p>";
+    fit();
+    if (animate) { void hero.offsetWidth; hero.classList.add("is-new"); }
+  }
+  function renderSide() {
+    var n = now();
+    document.getElementById("next").innerHTML = queue.length ? queue.slice(0, innerWidth / innerHeight < 1.5 ? 5 : 4).map(function (q, i) {
+      return '<li class="q"><span class="q-n" aria-hidden="true">' + (i + 1) + '</span><span class="q-name">' + esc(q.name) + '</span><span class="q-pro">' + esc(q.pro) + "</span></li>";
+    }).join("") : '<li class="empty-tv">Nadie más esperando.</li>';
+    document.getElementById("recent").innerHTML = recent.slice(0, 3).map(function (r) {
+      var ago = Math.max(0, n - r.at);
+      return '<li class="r"><span class="r-name">' + esc(r.name) + " <span>· " + esc(r.room) + '</span></span><span class="r-ago">' + (ago < 1 ? "recién" : "hace " + ago + " min") + "</span></li>";
+    }).join("");
+    document.getElementById("clock").textContent = hhmm(n);
+    document.getElementById("n-wait").textContent = queue.length ? queue.length + " esperando" : "";
+    trim();
+  }
+  /* Una fila a medias en una TV se lee como error: se muestran solo las
+     que entran enteras (el total de Próximos va en el encabezado). */
+  function trim() {
+    ["next", "recent"].forEach(function (id) {
+      var ol = document.getElementById(id), items = Array.prototype.slice.call(ol.children), hidden = 0, last = null;
+      items.forEach(function (li) { li.hidden = false; li.classList.remove("is-last"); });
+      var limit = ol.getBoundingClientRect().bottom + 1;
+      items.forEach(function (li) {
+        if (li.getBoundingClientRect().bottom > limit) { li.hidden = true; hidden++; } else last = li;
+      });
+      if (last) last.classList.add("is-last");
+    });
+  }
+  function call(next) {
+    if (current) recent.unshift({ name: current.name, room: current.room, at: current.at });
+    current = { name: next.name, room: next.room, pro: next.pro, at: now() };
+    if (S("screen") === "idle" && window.VX_SET) window.VX_SET("screen", "call");
+    renderHero(true);
+    renderSide();
+  }
+  window.__tvNext = function () {
+    var next = queue.shift();
+    if (!next) return;
+    call(next);
+    queue.push({ name: next.name, room: next.room, pro: next.pro }); // la demo nunca se queda vacía
+    renderSide();
+  };
+
+  // Llamados reales desde recepcion.html (otra pestaña o ventana).
+  function fromDesk(msg) {
+    if (!msg || !msg.name) return;
+    queue = queue.filter(function (q) { return q.name !== msg.name; });
+    call({ name: msg.name, room: msg.room, pro: msg.pro });
+  }
+  try { var ch = new BroadcastChannel("vx0-sala"); ch.onmessage = function (e) { fromDesk(e.data); }; } catch (e) {}
+  window.addEventListener("storage", function (e) {
+    if (e.key !== "vx0:call" || !e.newValue) return;
+    try { fromDesk(JSON.parse(e.newValue.split("|")[0])); } catch (err) {}
+  });
+
+  var timer = null;
+  function schedule() {
+    clearInterval(timer);
+    if (S("auto") === "on") timer = setInterval(window.__tvNext, 10000);
+  }
+  document.addEventListener("vx:change", function (e) {
+    if (e.detail.k === "screen") renderHero(false);
+    if (e.detail.k === "auto") schedule();
+    if (e.detail.k === "tvtheme") fit();
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === " " || e.key === "Enter") { e.preventDefault(); window.__tvNext(); } });
+  window.addEventListener("resize", function () { fit(); renderSide(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+  // Kiosco: el cursor se esconde a los 3 s sin movimiento.
+  var idleT = null;
+  document.addEventListener("mousemove", function () {
+    document.body.classList.remove("kiosk-idle");
+    clearTimeout(idleT);
+    idleT = setTimeout(function () { document.body.classList.add("kiosk-idle"); }, 3000);
+  });
+
+  renderHero(false);
+  renderSide();
+  schedule();
+  setInterval(renderSide, 30000);
+})();
+</script>
+</body>
+</html>

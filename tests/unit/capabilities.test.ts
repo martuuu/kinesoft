@@ -18,9 +18,12 @@ import {
 
 // Planes E1 (PLANES.md §8 P0-Ck, literal): agenda.operateAll / plans.manage /
 // plans.schedule / plans.authorize. "Con full" NO va en la matriz.
+// PL-1b (C-PL5): el default por ROL nunca trae `account.*` (titularidad y «Planes y pagos» salen de
+// `capabilitiesForMember`, no del rol).
+const ROLE_DEFAULT_ALL = CAPABILITIES.filter((c) => !c.startsWith("account."));
 const EXPECTED: Record<Role, Capability[]> = {
-  OWNER: [...CAPABILITIES],
-  ADMIN: [...CAPABILITIES],
+  OWNER: [...ROLE_DEFAULT_ALL],
+  ADMIN: [...ROLE_DEFAULT_ALL],
   PRACTITIONER: [
     "agenda.viewAll",
     "agenda.reception",

@@ -46,8 +46,8 @@ import type { PatientAdminCore } from "@/lib/patients-types";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { PublicClinic } from "@/lib/public-booking-types";
 
-const GENERAL = Array.from(modulesFor({ vertical: "GENERAL", plan: "FREE", publicBookingEnabled: false }));
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false }));
+const GENERAL = Array.from(modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
 const inV = (mods: typeof GENERAL, node: ReactNode) =>
   renderToStaticMarkup(<TenantModulesProvider modules={mods}>{node}</TenantModulesProvider>);
 

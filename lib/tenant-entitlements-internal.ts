@@ -44,28 +44,41 @@ import "server-only";
  * corre en una tx del canal service (`prismaService.$transaction`); con el rol app
  * el INSERT rebota y la tx entera hace rollback (nada a medias).
  *
+ * PL-1a (C-PL1, PL-D1, plan §20.5.1): el plan es `saasPlan` (enum `SaasPlan`, M8). La key `plan` dejó de existir en
+ * los patches: este escritor escribe `saasPlan` y ESPEJA la columna legada `plan` con `LEGACY_PLAN_OF` en el mismo
+ * UPDATE, así el código viejo que sigue sirviendo durante el deploy (Vercel migra en el build) y un rollback ven un
+ * plan coherente. El espejo no figura en `changed` ni en el audit (es derivado). Los cupos a medida
+ * (`maxUsersOverride`, `maxProfessionalsOverride`, `maxStaffOverride`) son solo de `platform`: el cobro (`billing`)
+ * cambia plan y estado de la suscripción, nunca regala cupos.
+ *
  * Cache: el caller revalida `tenantEntitlementTags(tenantId)` (`lib/cache-tags.ts`)
  * DESPUÉS del commit, y solo si `changed` no está vacío.
  */
-import { Prisma, TenantPlan, TenantVertical, SubscriptionStatus, TenantStatus } from "@prisma/client";
+import { Prisma, SaasPlan, TenantVertical, SubscriptionStatus, TenantStatus } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx, auditPlatformInTx } from "@/lib/audit";
 import type { PlatformActorRef } from "@/lib/platform-audit-types";
 import { modulesFor, type TenantModule } from "@/lib/tenant-modules";
+import { LEGACY_PLAN_OF } from "@/lib/saas-plans-logic";
 
 export type EntitlementSource = "platform" | "onboarding" | "tenant-settings" | "billing";
 
 /** Columnas de `Tenant` que solo escribe este módulo, con su tipo. */
 export type EntitlementValues = {
   vertical: TenantVertical;
-  plan: TenantPlan;
+  /** PL-1a: plan SaaS (`Tenant.saasPlan`). El escritor espeja `Tenant.plan` (legado) con `LEGACY_PLAN_OF`. */
+  saasPlan: SaasPlan;
   subscriptionStatus: SubscriptionStatus;
   trialEndsAt: Date | null;
   publicBookingEnabled: boolean;
   /** BO1-B: ACTIVE / SUSPENDED / CLOSED (baja lógica). Solo `platform`. */
   status: TenantStatus;
-  /** BO1-B: null = el cupo del plan (`seatLimitFor`); entero ≥ 1 (CHECK en la base). Solo `platform`. */
+  /**
+   * BO1-B: null = el cupo del plan (`seatLimitFor`); entero ≥ 1 (CHECK en la base). Solo `platform`.
+   * PL-1a: LEGADO (M8 lo copió a `maxProfessionalsOverride`); los cupos nuevos van por los `max*Override`. Se deja
+   * en la allowlist hasta que Plataforma (PL-1d) deje de escribirlo.
+   */
   seatLimitOverride: number | null;
   /**
    * BO2-D (handoff BO1-B): motivo de la suspensión/baja, «CÓDIGO: nota» (`encodeStatusReason`). Solo `platform`,
@@ -73,6 +86,12 @@ export type EntitlementValues = {
    * consultorio no es lugar para un texto que nadie revisó.
    */
   statusReason: string | null;
+  /** PL-1a (M8): cupos a medida (Libre y excepciones). null = el de `SaasPlanConfig`. Usuarios ≥ 1. Solo `platform`. */
+  maxUsersOverride: number | null;
+  /** PL-1a (M8): profesionales a medida, ≥ 0. Solo `platform`. */
+  maxProfessionalsOverride: number | null;
+  /** PL-1a (M8): personas no clínicas a medida, ≥ 0. Solo `platform`. */
+  maxStaffOverride: number | null;
 };
 export type EntitlementKey = keyof EntitlementValues;
 
@@ -80,27 +99,30 @@ export type EntitlementKey = keyof EntitlementValues;
 export const ENTITLEMENT_KEYS_BY_SOURCE = {
   platform: [
     "vertical",
-    "plan",
+    "saasPlan",
     "subscriptionStatus",
     "trialEndsAt",
     "publicBookingEnabled",
     "status",
     "seatLimitOverride",
     "statusReason",
+    "maxUsersOverride",
+    "maxProfessionalsOverride",
+    "maxStaffOverride",
   ],
-  billing: ["plan", "subscriptionStatus", "trialEndsAt"],
+  billing: ["saasPlan", "subscriptionStatus", "trialEndsAt"],
   onboarding: ["vertical"],
   "tenant-settings": ["publicBookingEnabled"],
 } as const satisfies Record<EntitlementSource, readonly EntitlementKey[]>;
 
 /**
- * BO-Z (BO-D1): las altas web nacen en prueba PRO de 14 días. El plan y la prueba los sigue escribiendo SOLO este
- * módulo, así que `onboarding` los puede escribir, pero únicamente en la CREACIÓN (`initial: true`, en la misma tx que
- * `bootstrapTenant`) y sobre un consultorio todavía en el estado con el que lo deja el bootstrap (FREE, ACTIVE, sin
- * prueba, alta abierta). Re-entrar al paso 2 no pasa `initial` y sigue pudiendo tocar solo la vertical (EV-D5): un
+ * BO-Z (BO-D1) → PL-1a (§20.5.8): las altas web nacen INDIVIDUAL en prueba de 14 días (antes, PRO). El plan y la
+ * prueba los sigue escribiendo SOLO este módulo, así que `onboarding` los puede escribir, pero únicamente en la
+ * CREACIÓN (`initial: true`, en la misma tx que `bootstrapTenant`) y sobre un consultorio todavía en el estado con el
+ * que lo deja el bootstrap (INDIVIDUAL, ACTIVE, sin prueba, alta abierta). Re-entrar al paso 2 no pasa `initial` y sigue pudiendo tocar solo la vertical (EV-D5): un
  * OWNER no se re-asigna la prueba editando su consultorio.
  */
-export const ONBOARDING_INITIAL_KEYS = ["plan", "subscriptionStatus", "trialEndsAt"] as const satisfies readonly EntitlementKey[];
+export const ONBOARDING_INITIAL_KEYS = ["saasPlan", "subscriptionStatus", "trialEndsAt"] as const satisfies readonly EntitlementKey[];
 
 /** Patch permitido para cada source (el compilador ya rechaza keys ajenas en literales). */
 export type EntitlementPatchFor<S extends EntitlementSource> = Partial<
@@ -145,6 +167,9 @@ export type ApplyTenantEntitlementsResult =
 
 const ALL_KEYS: readonly EntitlementKey[] = ENTITLEMENT_KEYS_BY_SOURCE.platform;
 
+/** Mínimo de cada override (mismos CHECK de M8): usuarios ≥ 1, por tipo ≥ 0. */
+const OVERRIDE_MIN = { maxUsersOverride: 1, maxProfessionalsOverride: 0, maxStaffOverride: 0 } as const;
+
 /** Código + «: » + nota de 200 (`STATUS_REASON_NOTE_MAX`) con margen. */
 const STATUS_REASON_MAX = 240;
 
@@ -183,9 +208,9 @@ function validatePatch(
         if (!Object.values(TenantVertical).includes(v as TenantVertical)) programmingError(`vertical inválida: ${String(v)}`);
         out.vertical = v as TenantVertical;
         break;
-      case "plan":
-        if (!Object.values(TenantPlan).includes(v as TenantPlan)) programmingError(`plan inválido: ${String(v)}`);
-        out.plan = v as TenantPlan;
+      case "saasPlan":
+        if (!Object.values(SaasPlan).includes(v as SaasPlan)) programmingError(`saasPlan inválido: ${String(v)}`);
+        out.saasPlan = v as SaasPlan;
         break;
       case "subscriptionStatus":
         if (!Object.values(SubscriptionStatus).includes(v as SubscriptionStatus)) {
@@ -219,6 +244,17 @@ function validatePatch(
         }
         out.statusReason = v as string | null;
         break;
+      case "maxUsersOverride":
+      case "maxProfessionalsOverride":
+      case "maxStaffOverride": {
+        // Como `seatLimitOverride`: el CHECK de M8 se valida antes del UPDATE (un 23514 aborta la tx con un error opaco).
+        const k = key as keyof typeof OVERRIDE_MIN;
+        if (v !== null && !(typeof v === "number" && Number.isInteger(v) && v >= OVERRIDE_MIN[k])) {
+          programmingError(`${k} inválido: ${String(v)} (null o entero ≥ ${OVERRIDE_MIN[k]})`);
+        }
+        out[k] = v as number | null;
+        break;
+      }
     }
   }
   return out;
@@ -268,6 +304,7 @@ export async function applyTenantEntitlementsInTx(
     where: { id: tenantId },
     select: {
       vertical: true,
+      saasPlan: true,
       plan: true,
       subscriptionStatus: true,
       trialEndsAt: true,
@@ -275,6 +312,9 @@ export async function applyTenantEntitlementsInTx(
       status: true,
       seatLimitOverride: true,
       statusReason: true,
+      maxUsersOverride: true,
+      maxProfessionalsOverride: true,
+      maxStaffOverride: true,
       onboardingCompletedAt: true,
       updatedAt: true,
     },
@@ -291,7 +331,7 @@ export async function applyTenantEntitlementsInTx(
     // EV-D5: terminado el alta, la vertical la cambia solo /plataforma.
     return { ok: false, reason: "onboarding-closed" };
   }
-  if (initial && (current.plan !== "FREE" || current.subscriptionStatus !== "ACTIVE" || current.trialEndsAt !== null)) {
+  if (initial && (current.saasPlan !== "INDIVIDUAL" || current.subscriptionStatus !== "ACTIVE" || current.trialEndsAt !== null)) {
     // BO-Z (BO-D1): `initial` es para el consultorio recién salido de `bootstrapTenant`. Si ya tiene plan o prueba,
     // alguien lo está usando fuera de la creación: bug del caller.
     programmingError("initial sobre un consultorio que ya no está en el estado de creación");
@@ -317,6 +357,11 @@ export async function applyTenantEntitlementsInTx(
   if (changed.length === 0) {
     // No-op: ni write ni audit, y el updatedAt del caller sigue vigente.
     return { ok: true, changed, updatedAt: current.updatedAt };
+  }
+  // PL-D1: espejo del enum legado en el MISMO UPDATE. Si el patch trae el plan y la columna vieja no coincide (cambio
+  // real, o una fila que quedó desfasada), se corrige; no va a `changed` ni al audit porque se deriva de `saasPlan`.
+  if (patch.saasPlan !== undefined && current.plan !== LEGACY_PLAN_OF[patch.saasPlan]) {
+    data.plan = LEGACY_PLAN_OF[patch.saasPlan];
   }
 
   // `@updatedAt` lo pone Prisma con el reloj del host: dos writes en el mismo ms
@@ -360,7 +405,8 @@ export async function applyTenantEntitlementsInTx(
 
 /**
  * Módulos de un consultorio para superficies SIN Actor (portal del paciente,
- * turnero público, ICS): no hay `actor.entitlements`, así que se lee la fila.
+ * turnero público, ICS): no hay `actor.entitlements`, así que se lee la fila
+ * (PL-1a: el plan es `saasPlan`, no la columna legada).
  * Default `prismaService` porque esas superficies no tienen GUC; un caller que ya
  * está en una tx pasa su `tx`. Tenant inexistente → set vacío (falla cerrado:
  * ningún módulo, tampoco el turnero).
@@ -371,8 +417,8 @@ export async function getTenantModulesById(
 ): Promise<ReadonlySet<TenantModule>> {
   const t = await db.tenant.findUnique({
     where: { id: tenantId },
-    select: { vertical: true, plan: true, publicBookingEnabled: true },
+    select: { vertical: true, saasPlan: true, publicBookingEnabled: true },
   });
   if (!t) return new Set<TenantModule>();
-  return modulesFor(t);
+  return modulesFor({ vertical: t.vertical, plan: t.saasPlan, publicBookingEnabled: t.publicBookingEnabled });
 }

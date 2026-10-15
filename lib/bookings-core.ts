@@ -64,7 +64,13 @@ import {
 import { countRoomOverlapsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { patientAccessFor } from "@/lib/visibility";
 import type { Actor } from "@/lib/session";
-import { canOperateBooking, capabilitiesFor, type Capability, type PatientAccessLevel } from "@/lib/capabilities";
+import {
+  canOperateBooking,
+  capabilitiesForMembership,
+  MEMBER_ACCESS_SELECT,
+  type Capability,
+  type PatientAccessLevel,
+} from "@/lib/capabilities";
 import { bookingFieldAccess, type BookingFieldAccess, type BookingFieldMode } from "@/lib/booking-field-access";
 import { PLAN_KEY_PREFIX } from "@/lib/plans-constants";
 import type { ForceFlags } from "@/lib/booking-force-flags";
@@ -134,9 +140,10 @@ export function guestOperable(caps: ReadonlySet<Capability>): boolean {
 export async function actorCapsInTx(tx: Tx, actor: Actor): Promise<ReadonlySet<Capability>> {
   const m = await tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
+    // PL-1 (H-PL1): la fila del MIEMBRO (rol + si atiende + delegaciones), no solo el rol.
+    select: MEMBER_ACCESS_SELECT,
   });
-  return capabilitiesFor(m?.role);
+  return capabilitiesForMembership(m);
 }
 
 /** Lee las capabilities a lo sumo una vez por tx, y solo si hacen falta. */

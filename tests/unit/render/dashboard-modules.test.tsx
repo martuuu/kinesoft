@@ -58,8 +58,8 @@ import {
 } from "@/lib/preferences-constants";
 import type { DashboardData } from "@/lib/dashboard";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
-const KINE_FREE = modulesFor({ vertical: "KINESIOLOGY", plan: "FREE", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
+const KINE_FREE = modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false });
 
 const data: DashboardData = {
   greetingName: "Martina",

@@ -35,6 +35,12 @@
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
+**Estado de PL (15-oct):** PL-A ✅ (`68b26f0`) · PL-0 ✅ M8 solo en local (`6b1c50d`) · PL-1 ✅ (contratos `14eb013` +
+integración: matriz por plan SaaS, escritor único, cupos por tipo y cambio de plan, acceso por miembro/H-PL1, sesión v2 y
+corte de 2FA sin UI todavía, Plataforma con planes nuevos). Decisiones de Martin del 15-oct noche aplicadas (plan §20.17):
+el Administrador/a nunca atiende y Consultorio = 5 usuarios de cualquier tipo — la fila de `SaasPlanConfig` y los ADMIN
+existentes los corrige **M8b**, sola al inicio de PL-2. Sigue PL-2.
+
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,
 una línea, sin co-autor) → siguiente. Al cierre de cada bloque, 2 revisores de solo lectura + fixers + docs + memoria.

@@ -2,7 +2,8 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { PlatformMfaRequiredError, requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
 import { platformMfaRedirect } from "@/lib/platform-mfa-logic";
-import { ForbiddenError, UnauthenticatedError } from "@/lib/session";
+import { ForbiddenError, UnauthenticatedError, getAccessSnapshot } from "@/lib/session";
+import { displayUserName } from "@/lib/display-name";
 import { resolveSupportTarget } from "@/lib/support-session-internal";
 import { endSupport } from "@/lib/platform-support";
 import { verifyPlatformReauth } from "@/lib/platform-mfa-actions";
@@ -54,13 +55,16 @@ export default async function PlatformLayout({ children }: { children: React.Rea
 
   // Sin cookie de soporte: null y cero queries. Con cookie: la fila abierta del propio superadmin (o null y se
   // descarta si quedó vieja). `resolveSupportTarget` y no `resolveSupportSession` porque el chip muestra el nombre.
-  const target = await resolveSupportTarget(actor.userId);
+  // VX0-b (decisión 19): la barra muestra el NOMBRE del superadmin (la misma foto que ya leyó `requirePlatformAdmin`,
+  // cacheada por request: sin query); antes mostraba su email como si fuera el nombre.
+  const [target, snapshot] = await Promise.all([resolveSupportTarget(actor.userId), getAccessSnapshot()]);
 
   // El provider del modal de re-verificación envuelve todo el shell: cualquier componente de Plataforma puede usar
   // `usePlatformAction()` para que una acción `high` pida el código y se reintente sola (BO4).
   return (
     <PlatformReauthProvider verifyAction={verifyPlatformReauth}>
       <PlatformShell
+        name={displayUserName(snapshot?.profile?.fullName)}
         email={actor.email}
         hasHome={actor.homeTenantId !== null}
         support={target ? { tenantName: target.tenant.name } : null}

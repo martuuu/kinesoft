@@ -3,8 +3,10 @@
  *
  * Access model:
  *
- *   1. **OWNER / ADMIN** of a tenant always have FULL access to every
- *      patient (audit / oversight requirement).
+ *   1. **OWNER / ADMIN que atienden** (`Membership.clinical`) always have FULL
+ *      access to every patient (audit / oversight requirement). PL-1b (H-PL1,
+ *      decisión 8 de Martin): el Titular/Admin que NO atiende cae en (0), nunca
+ *      acá: el rol solo ya no abre la HC.
  *   2. **`Tenant.sharedPatientView = true`** is the legacy "everyone
  *      sees everything" override — when on, every member of the
  *      tenant gets FULL access regardless of ownership / shares.
@@ -23,9 +25,10 @@
  *      + next appointment time are exposed. Everything else (HC, plans,
  *      sessions, contact info) is hidden until shared.
  *
- *   0. **Nivel `admin` (Planes E1, PD-13, S02p) — se evalúa ANTES que 2-5.**
- *      Un rol SIN `clinical.read` (ASSISTANT = Secretaria, BILLING =
- *      Facturación) tiene SIEMPRE exactamente `admin` sobre todos los
+ *   0. **Nivel `admin` (Planes E1, PD-13, S02p) — se evalúa ANTES que 1-5.**
+ *      Un MIEMBRO que no atiende (`!isClinicalMember`: ASSISTANT = Secretaria,
+ *      BILLING = Facturación y, desde PL-1b, el Titular/Admin con
+ *      `clinical = false`) tiene SIEMPRE exactamente `admin` sobre todos los
  *      pacientes del tenant:
  *        - nunca `full`: ni por `sharedPatientView`, ni por `PatientShare`,
  *          ni por `assignedPractitionerId` (en prod hay pacientes asignados
@@ -68,8 +71,9 @@ import { cache } from "react";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import type { Actor } from "@/lib/session";
 import type { Prisma, Role } from "@prisma/client";
-import { capabilitiesFor, type PatientAccessLevel } from "@/lib/capabilities";
+import type { PatientAccessLevel } from "@/lib/capabilities";
 import { isActorPractitioner } from "@/lib/practitioner-scope";
+import { isClinicalMember } from "@/lib/roles";
 
 /**
  * = `PatientAccessLevel` de `lib/capabilities.ts` (el puro que importa la UI):
@@ -119,18 +123,27 @@ function readTenantSettings(db: DbClient, tenantId: string) {
   });
 }
 
-function readMembershipRole(db: DbClient, userId: string, tenantId: string) {
+// PL-1b: `clinical` viaja en la misma fila (sin query extra). Se lee en la tx del llamador y no de
+// `actor.membership` a propósito: es la barrera de la HC y tiene que ver lo mismo que el resto de la tx.
+function readMembership(db: DbClient, userId: string, tenantId: string) {
   return db.membership.findUnique({
     where: { userId_tenantId: { userId, tenantId } },
-    select: { role: true },
+    select: { role: true, clinical: true },
   });
 }
 
+/** Roles que, si atienden, ven todo el consultorio (supervisión). */
+const OVERSIGHT_ROLES: ReadonlySet<Role> = new Set<Role>(["OWNER", "ADMIN"]);
+
+type MemberTier = { adminOnly: boolean; oversight: boolean };
+
 /**
- * PD-13: ¿el rol queda en el nivel `admin`? = no tiene `clinical.read` en la
- * matriz de `lib/capabilities.ts` (hoy ASSISTANT y BILLING). Se deriva de la
- * matriz y no de una lista de roles para que un rol nuevo sin clínica caiga
- * solo en `admin` y nunca herede `full` por "Consultorio común".
+ * PD-13 + PL-1b (H-PL1): ¿el MIEMBRO queda en el nivel `admin`? = no atiende
+ * (`isClinicalMember` de `lib/roles.ts`: ASSISTANT, BILLING y el Titular/Admin
+ * con `clinical = false`). Es la misma regla que le saca `clinical.read` en
+ * `capabilitiesForMember`, así que nivel y capacidades no se pueden
+ * contradecir. Hasta PL-1b se derivaba de `capabilitiesFor(role)`, que por rol
+ * le daba `clinical.read` a todo OWNER/ADMIN.
  *
  * Membresía ausente: se conserva el default histórico de este módulo
  * (`PRACTITIONER`), que tiene `clinical.read` y por lo tanto sigue el camino
@@ -144,8 +157,16 @@ function readMembershipRole(db: DbClient, userId: string, tenantId: string) {
  * Secretaria → se fuerza `ASSISTANT` (nivel `admin`) cuando `actor.support`,
  * aunque el superadmin además sea miembro del consultorio.
  */
-function isAdminOnlyRole(role: Role): boolean {
-  return !capabilitiesFor(role).has("clinical.read");
+function memberTier(
+  actor: Actor,
+  membership: { role: Role; clinical: boolean } | null | undefined
+): MemberTier {
+  if (actor.support) return { adminOnly: true, oversight: false };
+  const m = membership ?? { role: "PRACTITIONER" as Role, clinical: true };
+  // PL-1b (H-PL1): «¿atiende?» va ANTES que el rol. Un Titular/Admin que no atiende es `admin` como la
+  // Secretaria; hasta PL-1b el `role === OWNER|ADMIN` de abajo le devolvía `full` sin mirar.
+  if (!isClinicalMember(m)) return { adminOnly: true, oversight: false };
+  return { adminOnly: false, oversight: OVERSIGHT_ROLES.has(m.role) };
 }
 
 export async function visibilityForActor(
@@ -155,14 +176,14 @@ export async function visibilityForActor(
   return withTenantDb(actor.tenantId, db, async (c) => {
     const [tenant, membership] = await Promise.all([
       readTenantSettings(c, actor.tenantId),
-      readMembershipRole(c, actor.userId, actor.tenantId),
+      readMembership(c, actor.userId, actor.tenantId),
     ]);
 
     const sharedView = tenant?.sharedPatientView ?? false;
-    const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
-    const adminView = isAdminOnlyRole(role);
+    const tier = memberTier(actor, membership);
+    const adminView = tier.adminOnly;
     // PD-13: sin clinical.read, "Consultorio común" ya no abre todo.
-    const seesAll = !adminView && (role === "OWNER" || role === "ADMIN" || sharedView);
+    const seesAll = !adminView && (tier.oversight || sharedView);
 
     // Sprint 16: lists are NO LONGER filtered by ownership at the SQL
     // layer. Every member sees every patient + booking; per-row access
@@ -199,15 +220,16 @@ export const patientAccessFor = cache(
           select: { tenantId: true, assignedPractitionerId: true },
         }),
         readTenantSettings(c, actor.tenantId),
-        readMembershipRole(c, actor.userId, actor.tenantId),
+        readMembership(c, actor.userId, actor.tenantId),
       ]);
 
       if (!patient || patient.tenantId !== actor.tenantId) return "none";
 
-      const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
-      if (role === "OWNER" || role === "ADMIN") return "full";
-      // PD-13: antes que sharedPatientView / asignación / share, que darían full.
-      if (isAdminOnlyRole(role)) return "admin";
+      const tier = memberTier(actor, membership);
+      // PD-13 + PL-1b: antes que la supervisión del Titular/Admin, sharedPatientView, asignación y share, que
+      // darían full.
+      if (tier.adminOnly) return "admin";
+      if (tier.oversight) return "full";
       if (tenant?.sharedPatientView) return "full";
       // IAM-4a: sin profesional (no debería pasar con un rol clínico: `buildActor` lo exige) no hay «propio» ni
       // share posible. Nunca `null === null` contra un paciente sin asignar.
@@ -251,20 +273,20 @@ export async function bulkPatientAccess(
         select: { id: true, assignedPractitionerId: true },
       }),
       readTenantSettings(c, actor.tenantId),
-      readMembershipRole(c, actor.userId, actor.tenantId),
+      readMembership(c, actor.userId, actor.tenantId),
     ]);
 
-    const role: Role = actor.support ? "ASSISTANT" : (membership?.role ?? "PRACTITIONER");
+    const tier = memberTier(actor, membership);
 
     // PD-13: sin clinical.read, `admin` para todos los pacientes del tenant
     // (los ausentes del mapa siguen siendo "none": no son del tenant). Mismo
     // orden que `patientAccessFor`: antes del corto circuito de sharedView.
-    if (isAdminOnlyRole(role)) {
+    if (tier.adminOnly) {
       for (const p of patients) result.set(p.id, "admin");
       return result;
     }
 
-    const seesAll = role === "OWNER" || role === "ADMIN" || !!tenant?.sharedPatientView;
+    const seesAll = tier.oversight || !!tenant?.sharedPatientView;
 
     if (seesAll) {
       for (const p of patients) result.set(p.id, "full");

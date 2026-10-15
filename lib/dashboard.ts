@@ -9,8 +9,7 @@ import { greetingFirstName } from "@/lib/display-name";
 import { unstable_cache } from "next/cache";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { memberCapabilitiesForActor } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
 import { visibilityForActor, bulkPatientAccess } from "@/lib/visibility";
 import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
@@ -506,11 +505,11 @@ export async function getDashboardData(): Promise<DashboardData> {
     { tags: [tags.dashboard(actor.tenantId)], revalidate: ttl.micro }
   );
 
-  // SR-D5I: el scope de los ingresos sale de las capabilities del rol (no de
-  // `v.seesAll`, ver `revenueScopeFor`). `getMembershipRole` está memoizado
-  // por request: es la misma lectura que ya se hacía para `seesClinical`. El
+  // SR-D5I: el scope de los ingresos sale de las capabilities del miembro (no de
+  // `v.seesAll`, ver `revenueScopeFor`; PL-1: por miembro, H-PL1). Sale del Actor
+  // (`Actor.membership`) sin query extra. El
   // mes va en paralelo con los counts; con scope `none` no se consulta nada.
-  const capsP = getMembershipRole(actor).then(capabilitiesFor);
+  const capsP = memberCapabilitiesForActor(actor);
   const revenueScopeP = capsP.then((c) => revenueScopeFor(c, actor.practitionerId));
   const [counts, caps, revenueScope, monthRevenue] = await Promise.all([
     taggedFetcher(actor.tenantId, scope, dayKey, withPlans),
@@ -744,7 +743,7 @@ export async function getRevenue(range: RevenueRange): Promise<ActionResult<Reve
   const actor = await getActor();
   const parsed = RevenueRangeSchema.safeParse(range);
   if (!parsed.success) return { ok: false, error: "Período inválido." };
-  const scope = revenueScopeFor(capabilitiesFor(await getMembershipRole(actor)), actor.practitionerId);
+  const scope = revenueScopeFor(await memberCapabilitiesForActor(actor), actor.practitionerId);
   if (scope.kind === "none") return { ok: false, error: "No tenés acceso a los ingresos del consultorio." };
   return { ok: true, data: await cachedRevenue(actor.tenantId, scope, parsed.data, toARDateKey(new Date())) };
 }

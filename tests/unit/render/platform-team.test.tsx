@@ -66,7 +66,11 @@ const team = (over: Partial<PlatformTenantTeam> = {}): PlatformTenantTeam => ({
       lastEmailStatus: "failed",
     },
   ],
-  seats: { used: 2, limit: 2, remaining: 0, full: true },
+  seats: {
+    total: { used: 2, limit: 2, remaining: 0, full: true },
+    professional: { used: 2, limit: null, remaining: null, full: false },
+    staff: { used: 0, limit: null, remaining: null, full: false },
+  },
   ...over,
 });
 
@@ -81,9 +85,9 @@ function rowOf(html: string, membershipId: string): string {
 describe("[BO3-C] PlatformTeamPanel", () => {
   it("cupos, miembros con rol / estado / agenda e invitación vencida con último envío y estado del mail", () => {
     const html = renderToStaticMarkup(<PlatformTeamPanel team={team()} vertical="KINESIOLOGY" />);
-    expect(html).toContain("Profesionales 2 de 2");
+    expect(html).toContain("Total 2 de 2");
     expect(html).toContain("Cupo lleno");
-    expect(html).toContain("Secretario/a y Facturación no ocupan lugar");
+    expect(html).toContain("cada uno en su tipo");
     expect(html).toContain("Ana Dueña");
     expect(html).toContain("ana@movare.test");
     expect(html).toContain("Titular");
@@ -175,7 +179,8 @@ describe("[BO3-C] transferir titularidad: confirmación tipeada", () => {
   it("sin el email tipeado, el botón está apagado y explica qué pasa con el dueño actual", () => {
     const html = renderToStaticMarkup(<TransferOwnershipForm {...props} typed="" />);
     expect(html).toContain("Para confirmar, escribí el email de Sole Recepción");
-    expect(html).toContain("Ana Dueña deja de ser titular y queda como Administrador/a");
+    // §20.17: el titular anterior que atiende queda como Profesional (no como Administrador/a, que nunca atiende).
+    expect(html).toContain("Ana Dueña deja de ser titular y queda como Kinesiólogo/a (conserva su agenda), con «Configuración»");
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*>Transferir titularidad</);
   });
   it("con otro email sigue apagado", () => {

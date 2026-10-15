@@ -29,6 +29,13 @@
 
 const TENANT_PREFIX = "tenant:";
 
+/**
+ * PL-1a (C-PL2): catálogo público de planes SaaS (`getPublicPlanCatalog`, landing y /precios). Global: los precios y
+ * cupos de `SaasPlanConfig` son los mismos para todos. Lo revalida quien edita precios o límites en /plataforma
+ * (PL-2c) y el cron que aplica un precio con vigencia (PL-D8), después del commit.
+ */
+export const SAAS_PLANS_TAG = "saas-plans";
+
 function t(tenantId: string, surface: string) {
   return `${TENANT_PREFIX}${tenantId}:${surface}`;
 }
@@ -47,6 +54,7 @@ export const tags = {
   // global (non-tenant) — catalog never changes per tenant
   catalog: () => "global:catalog",
   anatomy: () => "global:anatomy",
+  saasPlans: () => SAAS_PLANS_TAG,
 } as const;
 
 /**

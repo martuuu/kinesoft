@@ -18,7 +18,7 @@ import { runWithRls } from "@/lib/rls";
 import { safeNext } from "@/lib/safe-next";
 import { decideAppGate } from "@/lib/onboarding-logic";
 import { modulesFor } from "@/lib/tenant-modules";
-import { SUPPORT_CAPS, capabilitiesFor } from "@/lib/capabilities";
+import { capabilitiesForActor } from "@/lib/authz";
 import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
 
 /**
@@ -38,6 +38,8 @@ import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
  *   - OWNER con `Tenant.onboardingCompletedAt == null` → `/onboarding`;
  *   - BO1-A: usuario deshabilitado → `/cuenta-desactivada`; consultorio suspendido
  *     o dado de baja sin otro usable → `/suspendido` (con otro usable entra a ese).
+ *   - PL-1e (C-PL6): 2FA prendida y sin pasar en esta sesión → `/verificar-acceso?next=<path>`
+ *     (sin Actor: `getActor` tira `two_factor`; el estado sale de la misma foto, sin queries).
  * Ningún destino está dentro de `(app)`, así que el gate no se puede rebotar a sí mismo.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -58,6 +60,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const rawPath = headers().get("x-pathname");
   const nextPath = rawPath ? safeNext(rawPath, "") || null : null;
 
+  // PL-1e: misma foto; con la 2FA pendiente no hay Actor (`resolveActor` corta antes), así que cae en la rama `!actor`.
+  const twoFactorRequired = snapshot?.twoFactor.state === "required";
   let gate: string | null;
   // Rol de la membresía activa: ya se lee para el gate de onboarding; se
   // reusa para las capabilities del nav (EV-S) sin otra query.
@@ -72,6 +76,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       onboardingCompleted: false,
       nextPath,
       block: block?.kind ?? null,
+      twoFactorRequired,
     });
   } else {
     // PF-0b: el rol y `onboardingCompletedAt` del consultorio activo ya están en la foto (la misma fila de
@@ -104,6 +109,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       // BO2-E: los bloqueos de la foto son los del consultorio PROPIO del superadmin (o su usuario); el destino de
       // soporte suspendido igual se puede mirar (la banda muestra su acceso real y todo va en solo lectura).
       block: actor.support ? null : (block?.kind ?? null),
+      // Red: con Actor no debería estar pendiente (se corta antes de armarlo), pero si una carrera lo dejara, manda.
+      twoFactorRequired,
     });
   }
   if (gate) redirect(gate);
@@ -118,9 +125,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es
   // `assertModule`/`requireCapability` en cada action.
   const modules = Array.from(modulesFor(actor.entitlements));
-  // BO2-E: el soporte no tiene membresía (role null → sin capacidades, nav vacío): sus capacidades son
-  // `SUPPORT_CAPS` (Secretaria sin clínico + Configuración), las mismas que `capabilitiesForActor` en las actions.
-  const capSet = actor.support ? SUPPORT_CAPS : capabilitiesFor(role);
+  // BO2-E: el soporte no tiene membresía: sus capacidades son `SUPPORT_CAPS` (Secretaria sin clínico +
+  // Configuración). PL-1 (H-PL1, H1b-16): para un miembro, por MIEMBRO (rol + si atiende + delegaciones, de
+  // `Actor.membership`, sin query): con `capabilitiesFor(role)` un Titular sin agenda veía el nav clínico y una
+  // Secretaria con «Configuración» no lo veía. Es la misma función que usan las actions.
+  const capSet = await capabilitiesForActor(actor);
   const caps = Array.from(capSet);
   // SV07b: qué driver realtime usa este actor (off/local/supabase) y, con
   // supabase, la URL y la anon key públicas. Se le pasan las caps ya calculadas

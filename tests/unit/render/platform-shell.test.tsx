@@ -20,7 +20,7 @@ function render(p: { hasHome: boolean; support?: PlatformShellSupport; path?: st
   pathname = p.path ?? "/plataforma/consultorios/t-1";
   return renderToStaticMarkup(
     <UIProviders>
-      <PlatformShell email="admin@kinesoft.app" hasHome={p.hasHome} support={p.support ?? null} endSupportAction={endSupport}>
+      <PlatformShell name="Marta Admin" email="admin@kinesoft.app" hasHome={p.hasHome} support={p.support ?? null} endSupportAction={endSupport}>
         <p>contenido</p>
       </PlatformShell>
     </UIProviders>
@@ -50,7 +50,10 @@ describe("[BO3-A] PlatformShell", () => {
       "Consultorios",
     ]);
     expect(html).toContain("<p>contenido</p>");
-    expect(html).toContain("admin@kinesoft.app");
+    // VX0-b (decisión 19): la barra muestra el nombre; el email solo rotulado en el tooltip.
+    expect(html).toContain(">Marta Admin</span>");
+    expect(html).toContain('title="Email: admin@kinesoft.app"');
+    expect(html).not.toContain(">admin@kinesoft.app<");
   });
 
   it("no monta nada del shell del consultorio (selector, buscador, Plataforma como entrada)", () => {

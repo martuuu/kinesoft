@@ -51,8 +51,8 @@ import { BOOKING_MODAL_MODE_LABEL, bookingModalModeLabel } from "@/lib/booking-m
 import { capabilitiesFor } from "@/lib/capabilities";
 import { modulesFor } from "@/lib/tenant-modules";
 
-const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false });
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
+const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
 const kine = (n: ReactNode) => renderToStaticMarkup(<TenantModulesProvider modules={KINE}>{n}</TenantModulesProvider>);
 const general = (n: ReactNode) =>
   renderToStaticMarkup(<TenantModulesProvider modules={GENERAL}>{n}</TenantModulesProvider>);

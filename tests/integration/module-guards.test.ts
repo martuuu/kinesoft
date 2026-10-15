@@ -65,13 +65,13 @@ describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
     asUser(G.userId);
     expect((await getActor()).entitlements).toEqual({
       vertical: "GENERAL",
-      plan: "PRO",
+      plan: "CLINICA", // PL-1: `plan` = `Tenant.saasPlan` (la factory espeja PRO → CLINICA)
       publicBookingEnabled: false,
     });
     asUser(K.userId);
     expect((await getActor()).entitlements).toEqual({
       vertical: "KINESIOLOGY",
-      plan: "PRO",
+      plan: "CLINICA",
       publicBookingEnabled: true,
     });
   });

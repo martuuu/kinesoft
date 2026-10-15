@@ -65,6 +65,11 @@ describe("[BO3-D] users-logic · detalle", () => {
     expect(membershipNeedsPractitioner({ ...base, role: "ASSISTANT" })).toBe(false);
     expect(membershipNeedsPractitioner({ ...base, role: "OWNER", hasPractitioner: true })).toBe(false);
     expect(membershipNeedsPractitioner({ ...base, role: "ADMIN", accepted: false })).toBe(false);
+    // PL-1d (C-PL5): un Titular/Admin que no atiende no necesita profesional; ASSISTANT nunca, aunque venga clinical.
+    expect(membershipNeedsPractitioner({ ...base, role: "OWNER", clinical: false })).toBe(false);
+    expect(membershipNeedsPractitioner({ ...base, role: "ADMIN", clinical: false })).toBe(false);
+    expect(membershipNeedsPractitioner({ ...base, role: "OWNER", clinical: true })).toBe(true);
+    expect(membershipNeedsPractitioner({ ...base, role: "ASSISTANT", clinical: true })).toBe(false);
   });
 
   it("último ingreso en hora AR, sin depender del TZ del host", () => {

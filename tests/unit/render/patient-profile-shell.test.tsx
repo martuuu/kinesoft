@@ -43,8 +43,8 @@ import { modulesFor } from "@/lib/tenant-modules";
 import type { PatientCore } from "@/lib/patients-types";
 import type { PlanDTO, PlanSessionDTO } from "@/lib/plans-read-types";
 
-const GENERAL = modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
-const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false });
+const GENERAL = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
+const KINE = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
 
 const core = {
   id: "pat_000000abcdef",

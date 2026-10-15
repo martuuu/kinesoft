@@ -88,9 +88,9 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db);
-    T2 = await createEphemeralTenant(db);
-    H = await createEphemeralTenant(db);
+    T = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    T2 = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    H = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
     S = H.userId;
     await db.userProfile.update({ where: { id: S }, data: { isPlatformAdmin: true } });
     S2 = `test-user-${uniqueSuffix()}`;

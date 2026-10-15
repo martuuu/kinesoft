@@ -15,7 +15,7 @@ import { emailEqualsFilter, normalizeEmail, sameEmail } from "@/lib/email-match"
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NewPassword } from "@/lib/validation";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
-import { isClinicalRole, PRACTITIONER_FOR_ALL_ROLES } from "@/lib/roles";
+import { isClinicalMember, PRACTITIONER_FOR_ALL_ROLES } from "@/lib/roles";
 import { sendEmail } from "@/lib/email";
 // Registra el sink de EmailLog (handoff IAM-1: todo emisor de sendEmail lo importa).
 import "@/lib/email/log";
@@ -23,7 +23,7 @@ import { welcomeEmail } from "@/lib/email/templates";
 import { tags } from "@/lib/cache-tags";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { checkSeatForJoinInTx, SeatLimitError, SEAT_LIMIT_JOIN_MESSAGE } from "@/lib/team-internal";
+import { checkSeatForJoinInTx, invitationClinical, SeatLimitError, SEAT_LIMIT_JOIN_MESSAGE } from "@/lib/team-internal";
 
 /**
  * Núcleo de la activación de una cuenta desde `/invite/<token>` y de la unión al consultorio (IAM-2b).
@@ -169,7 +169,7 @@ export async function usedAsPortalPatient(p: { userId?: string | null; email: st
  *  - `UserProfile`: upsert por id (Supabase user id).
  *  - `Practitioner` DE ESTE consultorio (clave compuesta, IAM-1/M6): un kine de A que se une a B queda
  *    profesional de B con su agenda; si ya existía (re-invitación) se reusa sin pisar la especialidad. Solo
- *    para roles clínicos (IAM-4a, `PRACTITIONER_FOR_ALL_ROLES = false`): la Secretaria y Facturación son staff
+ *    para quien atiende (IAM-4a, `PRACTITIONER_FOR_ALL_ROLES = false`; PL-1c: `isClinicalMember`): la Secretaria y Facturación son staff
  *    sin agenda (§19.2 decisión 2) y entran sin `Practitioner`; antes se les creaba profesional + franjas.
  *  - `Membership` aceptada con el rol invitado (y sin suspender: una suspendida se reactiva, IAM-4c).
  *  - Agenda por defecto (B2.3, idempotente; regla del backfill: profesional con membresía aceptada), solo si se
@@ -193,9 +193,14 @@ export async function joinTenantInTx(
   // BO1-A: primero, sin escribir nada. Un usuario adoptado o recién creado no tiene perfil (null = habilitado).
   const profile = await tx.userProfile.findUnique({ where: { id: userId }, select: { disabledAt: true } });
   if (profile?.disabledAt) throw new UserDisabledError();
-  // BO2-B (BO-D7): si el plan bajó desde que se invitó, no se entra por encima del cupo. Tenant FOR UPDATE antes
-  // del CAS (mismo orden que crear/reenviar: Tenant primero), así dos aceptaciones simultáneas se serializan.
-  await checkSeatForJoinInTx(tx, { tenantId: inv.tenantId, userId, role: inv.role });
+  // «¿Atiende?» de la invitación: sale del rol (`invitationClinical`, §20.17: solo PRACTITIONER; el Administrador/a
+  // nunca atiende). Decide el tipo de lugar, si se crea `Practitioner` y el `clinical` de la membresía.
+  const clinical = invitationClinical(inv.role);
+  const member = { role: inv.role, clinical };
+  // BO2-B → PL-1c: si el plan bajó desde que se invitó, no se entra por encima del cupo de su TIPO ni del total.
+  // Tenant FOR UPDATE antes del CAS (mismo orden que crear/reenviar: Tenant primero), así dos aceptaciones
+  // simultáneas se serializan.
+  await checkSeatForJoinInTx(tx, { tenantId: inv.tenantId, userId, role: inv.role, clinical });
   const cas = await tx.invitation.updateMany({
     where: { id: inv.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: now } },
     data: { acceptedAt: now, acceptedByUserId: userId },
@@ -210,7 +215,7 @@ export async function joinTenantInTx(
   });
 
   let practitionerId: string | null = null;
-  if (PRACTITIONER_FOR_ALL_ROLES || isClinicalRole(inv.role)) {
+  if (PRACTITIONER_FOR_ALL_ROLES || isClinicalMember(member)) {
     practitionerId = (
       await tx.practitioner.upsert({
         where: { tenantId_userId: { tenantId: inv.tenantId, userId } },
@@ -231,10 +236,23 @@ export async function joinTenantInTx(
     select: { disabledAt: true },
   });
   const reactivated = !!prior?.disabledAt;
+  // PL-1c (PL-D5): un ADMIN entra con «Configuración» delegada (la invitación de ADMIN viene tildada; es lo que
+  // hacía un ADMIN antes de PL). «Planes y pagos» nunca viene por invitación: la delega el Titular. Al re-entrar
+  // (membresía suspendida o deshabilitada) los permisos se recalculan desde la invitación nueva: quien invitó decide
+  // el rol, no hereda delegaciones de antes; y se limpia el motivo de la deshabilitación.
+  const grants = { grantSettings: inv.role === "ADMIN", grantBilling: false };
   await tx.membership.upsert({
     where: { userId_tenantId: { userId, tenantId: inv.tenantId } },
-    create: { userId, tenantId: inv.tenantId, role: inv.role, acceptedAt: now },
-    update: { acceptedAt: now, role: inv.role, disabledAt: null, disabledById: null },
+    create: { userId, tenantId: inv.tenantId, role: inv.role, clinical, ...grants, acceptedAt: now },
+    update: {
+      acceptedAt: now,
+      role: inv.role,
+      clinical,
+      ...grants,
+      disabledAt: null,
+      disabledById: null,
+      disabledReason: null,
+    },
   });
 
   if (practitionerId) {

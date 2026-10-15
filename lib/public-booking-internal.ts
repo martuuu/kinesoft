@@ -44,7 +44,8 @@ import {
  */
 export const PUBLIC_BOOKING_SWITCH_SELECT = {
   vertical: true,
-  plan: true,
+  // PL-1: sin `plan` — el turnero es un switch en todos los planes (C-PL1), y la columna legada
+  // `Tenant.plan` ya no es el tipo de `TenantEntitlements.plan` (SaasPlan).
   publicBookingEnabled: true,
   // BO2-D: + las 4 columnas del acceso (C-BO1), en la misma lectura.
   ...TENANT_ACCESS_SELECT,
@@ -63,7 +64,10 @@ export function publicSurfacesOpenFor(t: TenantAccessInput, now: Date = new Date
 }
 
 /** Turnero abierto = módulo prendido (switch EV0) Y superficies públicas abiertas (acceso BO2-D). */
-export function isPublicTurneroOpen(t: TenantEntitlements & TenantAccessInput, now: Date = new Date()): boolean {
+export function isPublicTurneroOpen(
+  t: Pick<TenantEntitlements, "publicBookingEnabled"> & TenantAccessInput,
+  now: Date = new Date()
+): boolean {
   return isPublicBookingOpen(t) && publicSurfacesOpenFor(t, now);
 }
 

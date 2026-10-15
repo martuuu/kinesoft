@@ -43,7 +43,7 @@ import { getMembershipRole } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { invitationStatus } from "@/lib/access-logic";
-import { isClinicalRole } from "@/lib/roles";
+import { isClinicalMember } from "@/lib/roles";
 import { tags } from "@/lib/cache-tags";
 import {
   ROLE_CHANGE_RACE_MESSAGE,
@@ -165,7 +165,11 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
       joinedAt: m.acceptedAt,
       isYou: m.userId === actor.userId,
       disabledAt: m.disabledAt,
-      hasAgenda: isClinicalRole(m.role) && m.user.practitioners.length > 0,
+      hasAgenda: isClinicalMember(m) && m.user.practitioners.length > 0,
+      clinical: isClinicalMember(m),
+      grantSettings: m.grantSettings,
+      grantBilling: m.grantBilling,
+      disabledReason: m.disabledReason,
       lastPasswordResetEmail: l
         ? {
             status: l.status as InvitationEmailStatus,
@@ -240,6 +244,8 @@ const InviteInput = z.object({
   lastName: z.string().trim().min(1, "Apellido requerido").max(80),
   role: z.enum(["PRACTITIONER", "ADMIN", "ASSISTANT", "BILLING"]).default("PRACTITIONER"),
   specialty: z.string().trim().max(80).optional().or(z.literal("")),
+  // «¿Atiende?»: lo fija el rol (§20.17; el Administrador/a nunca atiende). Ver `InviteCoreInput.clinical` en lib/team-internal.ts.
+  clinical: z.boolean().optional(),
 });
 
 const IdInput = z.string().min(1).max(64);
@@ -253,8 +259,8 @@ const RoleInput = z.enum(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLIN
  */
 
 /**
- * Invitar (o re-invitar el mismo email: actualiza rol y datos y el link anterior sigue valiendo). BO-D7: un rol
- * clínico pide un lugar libre del plan; Secretaria y Facturación no ocupan.
+ * Invitar (o re-invitar el mismo email: actualiza rol y datos y el link anterior sigue valiendo). PL-1c: toda
+ * invitación pide un lugar libre del plan de su tipo (profesional o no clínico) y del total.
  */
 export async function createInvitation(...args: Parameters<typeof createInvitationImpl>): ReturnType<typeof createInvitationImpl> {
   return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#createInvitation", () => createInvitationImpl(...args)));
@@ -280,6 +286,7 @@ async function createInvitationImpl(
       lastName: parsed.data.lastName,
       role: parsed.data.role as Role,
       specialty: parsed.data.specialty || null,
+      clinical: parsed.data.clinical,
     },
     fallbackTenant(actor)
   );
@@ -381,7 +388,7 @@ async function suspendMemberImpl(membershipId: string): Promise<ActionResult<Sus
   return { ok: true, data: { futureBookings: r.data.futureBookings } };
 }
 
-/** «Reactivar» (IAM-4c): vuelve con el rol que tenía. BO-D7: un rol clínico pide un lugar libre del plan. */
+/** «Reactivar» (IAM-4c): vuelve con el rol que tenía. PL-1c: pide un lugar libre del plan de su tipo. */
 export async function reactivateMember(...args: Parameters<typeof reactivateMemberImpl>): ReturnType<typeof reactivateMemberImpl> {
   return withReadOnlyResult(() => withSupportWritable("lib/invitations.ts#reactivateMember", () => reactivateMemberImpl(...args)));
 }

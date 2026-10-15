@@ -12,7 +12,7 @@
  *
  * BO3-B: filtro y columna del estado del CONSULTORIO (`Tenant.status`: activo,
  * suspendido, de baja) con el modo de acceso que aplican hoy los cortes
- * (`effectiveAccessMode`), y el cupo de profesionales bajo el plan. La columna
+ * (`effectiveAccessMode`), y los usuarios del plan por tipo (PL-1d). La columna
  * de la suscripción pasa a llamarse «Suscripción» para no chocar con «Estado».
  */
 import Link from "next/link";
@@ -20,10 +20,10 @@ import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   SUBSCRIPTION_STATUS_VALUES,
-  TENANT_PLAN_VALUES,
+  SAAS_PLAN_VALUES,
   TENANT_STATUS_VALUES,
   TENANT_VERTICAL_VALUES,
 } from "@/lib/platform-tenants-schemas";
@@ -147,9 +147,9 @@ function Filters({ query }: { query: TenantListQuery }) {
       </select>
       <select name="plan" defaultValue={query.plan} aria-label="Plan" style={selectStyle}>
         <option value="">Todos los planes</option>
-        {TENANT_PLAN_VALUES.map((v) => (
+        {SAAS_PLAN_VALUES.map((v) => (
           <option key={v} value={v}>
-            {PLAN_LABEL[v]}
+            {SAAS_PLAN_LABEL[v]}
           </option>
         ))}
       </select>
@@ -227,7 +227,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
       </div>
       <div>{VERTICAL_LABEL[r.vertical]}</div>
       <div>
-        <div style={{ fontWeight: 600 }}>{PLAN_LABEL[r.plan]}</div>
+        <div style={{ fontWeight: 600 }}>{SAAS_PLAN_LABEL[r.saasPlan]}</div>
         <div style={{ fontSize: 12, color: "var(--navy-300)" }}>{seatLimitLabel(r)}</div>
       </div>
       <div>
@@ -243,7 +243,15 @@ function Row({ r }: { r: PlatformTenantRow }) {
         <YesNo on={r.onboardingCompleted} yes="Completo" no="Pendiente" />
       </div>
       <div style={{ minWidth: 0, fontSize: 12.5, overflowWrap: "anywhere" }}>
-        {r.ownerEmails.length > 0 ? r.ownerEmails.join(", ") : <span style={{ color: "var(--navy-300)" }}>—</span>}
+        {/* VX0-b (decisión 19): nombre del titular; el email abajo, rotulado (nunca como nombre). */}
+        {r.ownerNames.length > 0 ? (
+          <>
+            <div>{r.ownerNames.join(", ")}</div>
+            <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>Email: {r.ownerEmails.join(", ")}</div>
+          </>
+        ) : (
+          <span style={{ color: "var(--navy-300)" }}>—</span>
+        )}
       </div>
       <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.patientCount}</div>
     </div>

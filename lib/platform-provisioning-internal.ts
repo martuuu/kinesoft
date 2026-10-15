@@ -26,7 +26,9 @@ import "server-only";
  *       - `bootstrapTenant` (único camino de alta, AUDIT §5.26) con la vertical, los
  *         servicios iniciales de la vertical y `auditByCaller`;
  *       - plan / suscripción / trial por el escritor único (`applyTenantEntitlementsInTx`,
- *         source `platform`, C-EV5/C-BO6): ni el alta escribe `plan` por su cuenta;
+ *         source `platform`, C-EV5/C-BO6): ni el alta escribe `plan` por su cuenta. PL-1d: el plan
+ *         es el SaaS (`saasPlan`; el escritor espeja el legado) y el titular puede no atender
+ *         (`ownerClinical: false` → `bootstrapTenant` no le crea `Practitioner` ni agenda, C-PL5);
  *       - `auditPlatformInTx` con el `idempotencyKey`: `platform.tenant.create` en el log
  *         del consultorio NUEVO y en el registro global, nunca en el consultorio «casa»
  *         del superadmin. DESVÍO del handoff BO1-B («auditar antes del write»): el evento
@@ -265,6 +267,8 @@ export async function provisionTenantWithOwner(
   const { user: owner, createdNow } = ensured.account;
 
   // 4. La tx.
+  // PL-1d: INDIVIDUAL nace con prueba (14 días del catálogo); CONSULTORIO/CLINICA/LIBRE sin prueba salvo que el
+  // superadmin la pida en el Drawer (PL-D10 / `PLAN_DEFAULTS[plan].trialDays`).
   const sub = initialSubscriptionFor(d.plan, d.trialDays, now);
   const starter = d.starterServices ? starterServicesFor(d.vertical) : [];
   const ref = actorRef(actor);
@@ -286,6 +290,7 @@ export async function provisionTenantWithOwner(
           slug: d.slug,
           vertical: d.vertical,
           onboardingCompleted: d.onboardingCompleted,
+          ownerClinical: d.ownerClinical,
           source: "platform",
           auditByCaller: true,
           starterServices: starter,
@@ -297,7 +302,7 @@ export async function provisionTenantWithOwner(
         const ent = await applyTenantEntitlementsInTx(tx, {
           tenantId: r.tenantId,
           source: "platform",
-          patch: { plan: d.plan, subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
+          patch: { saasPlan: d.plan, subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
           actor: ref,
         });
         if (!ent.ok) throw new Error(`[platform-provisioning] entitlements: ${ent.reason}`);
@@ -313,7 +318,8 @@ export async function provisionTenantWithOwner(
             source: "platform",
             slug: r.slug,
             vertical: d.vertical,
-            plan: d.plan,
+            saasPlan: d.plan,
+            ownerClinical: d.ownerClinical,
             subscriptionStatus: sub.subscriptionStatus,
             trialDays: sub.trialDays,
             trialEndsAt: sub.trialEndsAt ? sub.trialEndsAt.toISOString() : null,

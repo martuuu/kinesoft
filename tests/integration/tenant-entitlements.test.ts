@@ -24,6 +24,10 @@
  * `platform` corre en una tx del canal service (`platformTx`), igual que
  * `lib/platform-tenants.ts`; las demás, con `runWithRls` del propio consultorio.
  *
+ * PL-1a (C-PL1, PL-D1): el plan es `saasPlan`; el escritor espeja la columna legada `plan` (LEGACY_PLAN_OF) en el
+ * mismo UPDATE, sin listarla en `changed` ni en el audit. Los cupos `max*Override` son solo de `platform` (`billing`
+ * cambia plan y estado, nunca regala cupos).
+ *
  * Se afirma el efecto observable leyendo con una conexión owner aparte.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -50,7 +54,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   beforeAll(async () => {
     db = ownerClient();
     H = await createEphemeralTenant(db);
-    T = await createEphemeralTenant(db, { plan: "FREE", vertical: "KINESIOLOGY", publicBookingEnabled: false });
+    T = await createEphemeralTenant(db, { plan: "FREE", saasPlan: "INDIVIDUAL", vertical: "KINESIOLOGY", publicBookingEnabled: false });
   });
   afterAll(async () => {
     await H?.cleanup();
@@ -63,6 +67,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       where: { id },
       select: {
         vertical: true,
+        saasPlan: true,
         plan: true,
         subscriptionStatus: true,
         trialEndsAt: true,
@@ -82,10 +87,10 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     db.platformAuditEvent.findMany({ where: { tenantId, action }, orderBy: { createdAt: "asc" } });
   const ownerActor = () => ({ userId: T.userId, homeTenantId: T.tenantId });
 
-  it("allowlist literal por source (C-EV5)", () => {
+  it("[PL-1a] allowlist literal por source (C-EV5 + saasPlan y cupos de M8)", () => {
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.platform].sort()).toEqual(
       [
-        "plan",
+        "saasPlan",
         "publicBookingEnabled",
         "seatLimitOverride",
         "status",
@@ -93,9 +98,12 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
         "subscriptionStatus",
         "trialEndsAt",
         "vertical",
+        "maxUsersOverride",
+        "maxProfessionalsOverride",
+        "maxStaffOverride",
       ].sort()
     );
-    expect([...ENTITLEMENT_KEYS_BY_SOURCE.billing].sort()).toEqual(["plan", "subscriptionStatus", "trialEndsAt"].sort());
+    expect([...ENTITLEMENT_KEYS_BY_SOURCE.billing].sort()).toEqual(["saasPlan", "subscriptionStatus", "trialEndsAt"].sort());
     expect([...ENTITLEMENT_KEYS_BY_SOURCE.onboarding]).toEqual(["vertical"]);
     expect([...ENTITLEMENT_KEYS_BY_SOURCE["tenant-settings"]]).toEqual(["publicBookingEnabled"]);
   });
@@ -107,7 +115,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
-        patch: { plan: "PRO" },
+        patch: { saasPlan: "CLINICA" },
         expectedUpdatedAt: new Date(before.updatedAt.getTime() - 1_000),
         actor: platformActor(),
       })
@@ -118,19 +126,35 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     expect((await entAudits(H.tenantId)).length).toBe(0);
   });
 
-  it("source tenant-settings intentando `plan` → tira (bug de programación) y no escribe", async () => {
+  it("source tenant-settings intentando `saasPlan` → tira (bug de programación) y no escribe", async () => {
     const before = await row(T.tenantId);
     await expect(
       runWithRls(T.tenantId, (tx) =>
         applyTenantEntitlementsInTx(tx, {
           tenantId: T.tenantId,
           source: "tenant-settings",
-          // @ts-expect-error — a propósito: `plan` no está permitido para tenant-settings.
-          patch: { plan: "PRO" },
+          // @ts-expect-error — a propósito: `saasPlan` no está permitido para tenant-settings.
+          patch: { saasPlan: "CLINICA" },
           actor: ownerActor(),
         })
       )
-    ).rejects.toThrow(/plan/);
+    ).rejects.toThrow(/saasPlan/);
+    expect(await row(T.tenantId)).toEqual(before);
+  });
+
+  it("[PL-1a] la key legada `plan` ya no existe para ninguna source (ni platform): tira y no escribe", async () => {
+    const before = await row(T.tenantId);
+    await expect(
+      platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: T.tenantId,
+          source: "platform",
+          // @ts-expect-error — a propósito: el plan se escribe como `saasPlan`; `plan` es el espejo legado.
+          patch: { plan: "PRO" },
+          actor: platformActor(),
+        })
+      )
+    ).rejects.toThrow(/no puede escribir "plan"/);
     expect(await row(T.tenantId)).toEqual(before);
   });
 
@@ -212,7 +236,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
-        patch: { vertical: "KINESIOLOGY", plan: "PRO", subscriptionStatus: "TRIALING", trialEndsAt: trial },
+        patch: { vertical: "KINESIOLOGY", saasPlan: "CLINICA", subscriptionStatus: "TRIALING", trialEndsAt: trial },
         expectedUpdatedAt: before.updatedAt,
         actor: platformActor(),
       })
@@ -220,9 +244,16 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // `vertical` ya era KINESIOLOGY: no figura como cambio.
-    expect([...r.changed].sort()).toEqual(["plan", "subscriptionStatus", "trialEndsAt"]);
+    // PL-1a: el espejo `plan` no figura en `changed` (es derivado de `saasPlan`).
+    expect([...r.changed].sort()).toEqual(["saasPlan", "subscriptionStatus", "trialEndsAt"]);
     const after = await row(T.tenantId);
-    expect(after).toMatchObject({ plan: "PRO", subscriptionStatus: "TRIALING", trialEndsAt: trial, vertical: "KINESIOLOGY" });
+    expect(after).toMatchObject({
+      saasPlan: "CLINICA",
+      plan: "PRO", // espejo LEGACY_PLAN_OF.CLINICA, mismo UPDATE
+      subscriptionStatus: "TRIALING",
+      trialEndsAt: trial,
+      vertical: "KINESIOLOGY",
+    });
     expect(after.updatedAt.getTime()).toBe(r.updatedAt.getTime());
     expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
 
@@ -237,9 +268,9 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     });
     expect(last.payload).toEqual({
       source: "platform",
-      changed: expect.arrayContaining(["plan", "subscriptionStatus", "trialEndsAt"]),
-      before: { plan: "FREE", subscriptionStatus: "ACTIVE", trialEndsAt: null },
-      after: { plan: "PRO", subscriptionStatus: "TRIALING", trialEndsAt: trial.toISOString() },
+      changed: expect.arrayContaining(["saasPlan", "subscriptionStatus", "trialEndsAt"]),
+      before: { saasPlan: "INDIVIDUAL", subscriptionStatus: "ACTIVE", trialEndsAt: null },
+      after: { saasPlan: "CLINICA", subscriptionStatus: "TRIALING", trialEndsAt: trial.toISOString() },
       platform: { actorHomeTenantId: H.tenantId, platformEventId: expect.any(String) },
     });
     expect(await db.auditEvent.count({ where: { tenantId: H.tenantId } })).toBe(0);
@@ -276,7 +307,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       applyTenantEntitlementsInTx(tx, {
         tenantId: T.tenantId,
         source: "platform",
-        patch: { plan: before.plan, vertical: before.vertical, trialEndsAt: before.trialEndsAt },
+        patch: { saasPlan: before.saasPlan, vertical: before.vertical, trialEndsAt: before.trialEndsAt },
         expectedUpdatedAt: before.updatedAt,
         actor: platformActor(),
       })
@@ -304,7 +335,7 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
     await expect(
       platformTx((tx) =>
         // @ts-expect-error — a propósito: la source platform exige un PlatformActorRef.
-        applyTenantEntitlementsInTx(tx, { tenantId: T.tenantId, source: "platform", patch: { plan: "STARTER" }, actor: null })
+        applyTenantEntitlementsInTx(tx, { tenantId: T.tenantId, source: "platform", patch: { saasPlan: "CONSULTORIO" }, actor: null })
       )
     ).rejects.toThrow();
   });
@@ -312,37 +343,40 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
   it("tenant inexistente → not-found", async () => {
     const ghost = `no-existe-${uniqueSuffix()}`;
     const r = await platformTx((tx) =>
-      applyTenantEntitlementsInTx(tx, { tenantId: ghost, source: "platform", patch: { plan: "PRO" }, actor: platformActor() })
+      applyTenantEntitlementsInTx(tx, { tenantId: ghost, source: "platform", patch: { saasPlan: "CLINICA" }, actor: platformActor() })
     );
     expect(r).toEqual({ ok: false, reason: "not-found" });
   });
 
   it("dos escritores simultáneos con el mismo expectedUpdatedAt → uno gana, el otro stale (FOR UPDATE + CAS)", async () => {
     const before = await row(T.tenantId);
-    const attempt = (plan: "STARTER" | "ENTERPRISE") =>
+    const attempt = (saasPlan: "CONSULTORIO" | "LIBRE") =>
       platformTx((tx) =>
         applyTenantEntitlementsInTx(tx, {
           tenantId: T.tenantId,
           source: "platform",
-          patch: { plan },
+          patch: { saasPlan },
           expectedUpdatedAt: before.updatedAt,
           actor: platformActor(),
         })
       );
-    const [a, b] = await Promise.all([attempt("STARTER"), attempt("ENTERPRISE")]);
+    const [a, b] = await Promise.all([attempt("CONSULTORIO"), attempt("LIBRE")]);
     const oks = [a, b].filter((x) => x.ok);
     const stales = [a, b].filter((x) => !x.ok && x.reason === "stale");
     expect(oks).toHaveLength(1);
     expect(stales).toHaveLength(1);
-    const winner = a.ok ? "STARTER" : "ENTERPRISE";
-    expect((await row(T.tenantId)).plan).toBe(winner);
+    const winner = a.ok ? "CONSULTORIO" : "LIBRE";
+    const after = await row(T.tenantId);
+    expect(after.saasPlan).toBe(winner);
+    // El espejo es del ganador (mismo UPDATE): nunca un plan de uno y el legado del otro.
+    expect(after.plan).toBe(winner === "CONSULTORIO" ? "STARTER" : "ENTERPRISE");
   });
 
   // ── BO1-B (C-BO6): status, cupos y fechas derivadas ─────────────────────────
   describe("BO1-B · status, seatLimitOverride y fechas derivadas", () => {
     let X: EphemeralTenant;
     beforeAll(async () => {
-      X = await createEphemeralTenant(db, { plan: "PRO" });
+      X = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     });
     afterAll(async () => {
       await X?.cleanup();
@@ -550,17 +584,23 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
 
   // Ejecuta `modulesFor` de EV-C1 (misma ola): post-integración si C1 no terminó.
   it("getTenantModulesById refleja vertical, plan y switch del turnero", async () => {
-    const G = await createEphemeralTenant(db, { vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
-    const P = await createEphemeralTenant(db, { vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: true });
-    const F = await createEphemeralTenant(db, { vertical: "KINESIOLOGY", plan: "FREE", publicBookingEnabled: true });
+    // PL-1a: el plan que cuenta es `saasPlan`. `plan` (legado) va a propósito DESINCRONIZADO en P: si la lectura
+    // mirara la columna vieja, P (Clínica) saldría como Individual y sin salas.
+    const G = await createEphemeralTenant(db, { vertical: "GENERAL", plan: "PRO", saasPlan: "CLINICA", publicBookingEnabled: false });
+    const P = await createEphemeralTenant(db, { vertical: "KINESIOLOGY", plan: "FREE", saasPlan: "CLINICA", publicBookingEnabled: true });
+    const F = await createEphemeralTenant(db, { vertical: "KINESIOLOGY", plan: "FREE", saasPlan: "INDIVIDUAL", publicBookingEnabled: true });
     try {
       const g = await getTenantModulesById(G.tenantId);
       const p = await getTenantModulesById(P.tenantId);
       const f = await getTenantModulesById(F.tenantId);
       expect([...g].sort()).toEqual(
-        [...modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false })].sort()
+        [...modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false })].sort()
       );
       expect(g.has("agenda")).toBe(true);
+      expect(g.has("salas")).toBe(true);
+      expect(p.has("salas")).toBe(true);
+      expect(f.has("salas")).toBe(false);
+      expect(f.has("salaEspera")).toBe(false);
       expect(g.has("planes")).toBe(false);
       expect(g.has("turneroPublico")).toBe(false);
       expect(p.has("ejerciciosGlobales")).toBe(true);
@@ -587,5 +627,157 @@ describe.skipIf(!RUN)("tenant entitlements — escritor único (EV-C2)", () => {
       await P.cleanup();
       await F.cleanup();
     }
+  });
+
+  // ── PL-1a (C-PL1): espejo legado y cupos de M8 ─────────────────────────────
+  describe("[PL-1a] saasPlan, espejo de plan y overrides", () => {
+    let Y: EphemeralTenant;
+    beforeAll(async () => {
+      Y = await createEphemeralTenant(db, { plan: "FREE", saasPlan: "INDIVIDUAL" });
+    });
+    afterAll(async () => {
+      await Y?.cleanup();
+    });
+    const yRow = () =>
+      db.tenant.findUniqueOrThrow({
+        where: { id: Y.tenantId },
+        select: {
+          saasPlan: true,
+          plan: true,
+          maxUsersOverride: true,
+          maxProfessionalsOverride: true,
+          maxStaffOverride: true,
+          updatedAt: true,
+        },
+      });
+
+    it("el escritor escribe saasPlan y espeja plan con LEGACY_PLAN_OF, para los 4 planes", async () => {
+      const legacy = { INDIVIDUAL: "FREE", CONSULTORIO: "STARTER", CLINICA: "PRO", LIBRE: "ENTERPRISE" } as const;
+      for (const saasPlan of ["CONSULTORIO", "CLINICA", "LIBRE", "INDIVIDUAL"] as const) {
+        const r = await platformTx((tx) =>
+          applyTenantEntitlementsInTx(tx, { tenantId: Y.tenantId, source: "platform", patch: { saasPlan }, actor: platformActor() })
+        );
+        expect(r).toMatchObject({ ok: true, changed: ["saasPlan"] });
+        expect(await yRow()).toMatchObject({ saasPlan, plan: legacy[saasPlan] });
+      }
+    });
+
+    it("billing también espeja (webhook/cron bajan o suben el plan)", async () => {
+      const r = await runWithRls(Y.tenantId, (tx) =>
+        applyTenantEntitlementsInTx(tx, { tenantId: Y.tenantId, source: "billing", patch: { saasPlan: "CONSULTORIO" }, actor: null })
+      );
+      expect(r).toMatchObject({ ok: true, changed: ["saasPlan"] });
+      expect(await yRow()).toMatchObject({ saasPlan: "CONSULTORIO", plan: "STARTER" });
+      const last = (await entAudits(Y.tenantId)).at(-1)!;
+      // El audit lleva el plan nuevo, no el espejo.
+      expect(last.payload).toEqual({
+        source: "billing",
+        changed: ["saasPlan"],
+        before: { saasPlan: "INDIVIDUAL" },
+        after: { saasPlan: "CONSULTORIO" },
+      });
+    });
+
+    it("una fila con el espejo desfasado se corrige en el próximo write que trae el plan", async () => {
+      await db.tenant.update({ where: { id: Y.tenantId }, data: { plan: "ENTERPRISE" } });
+      const r = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: Y.tenantId,
+          source: "platform",
+          patch: { saasPlan: "CONSULTORIO", maxStaffOverride: 2 },
+          actor: platformActor(),
+        })
+      );
+      expect(r).toMatchObject({ ok: true, changed: ["maxStaffOverride"] });
+      expect(await yRow()).toMatchObject({ saasPlan: "CONSULTORIO", plan: "STARTER", maxStaffOverride: 2 });
+    });
+
+    it("billing NO puede escribir overrides (ninguno): tira y no escribe", async () => {
+      for (const key of ["maxUsersOverride", "maxProfessionalsOverride", "maxStaffOverride", "seatLimitOverride"] as const) {
+        const before = await yRow();
+        await expect(
+          runWithRls(Y.tenantId, (tx) =>
+            applyTenantEntitlementsInTx(tx, {
+              tenantId: Y.tenantId,
+              source: "billing",
+              // A propósito: los cupos son solo de la source platform (key computada → `as never`).
+              patch: { [key]: 20 } as never,
+              actor: null,
+            })
+          )
+        ).rejects.toThrow(new RegExp(key));
+        expect(await yRow()).toEqual(before);
+      }
+    });
+
+    it("tenant-settings y onboarding tampoco escriben overrides", async () => {
+      for (const source of ["tenant-settings", "onboarding"] as const) {
+        await expect(
+          runWithRls(Y.tenantId, (tx) =>
+            applyTenantEntitlementsInTx(tx, {
+              tenantId: Y.tenantId,
+              source,
+              // @ts-expect-error — a propósito.
+              patch: { maxUsersOverride: 20 },
+              actor: { userId: Y.userId, homeTenantId: Y.tenantId },
+            })
+          )
+        ).rejects.toThrow(/maxUsersOverride/);
+      }
+    });
+
+    it("platform escribe los tres overrides (null = el del plan) y los audita como números", async () => {
+      const r = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: Y.tenantId,
+          source: "platform",
+          patch: { maxUsersOverride: 30, maxProfessionalsOverride: 25, maxStaffOverride: null },
+          actor: platformActor(),
+        })
+      );
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect([...r.changed].sort()).toEqual(["maxProfessionalsOverride", "maxStaffOverride", "maxUsersOverride"]);
+      expect(await yRow()).toMatchObject({ maxUsersOverride: 30, maxProfessionalsOverride: 25, maxStaffOverride: null });
+      const last = (await entAudits(Y.tenantId)).at(-1)!;
+      expect(last.payload).toMatchObject({
+        after: { maxUsersOverride: 30, maxProfessionalsOverride: 25, maxStaffOverride: null },
+      });
+    });
+
+    it("overrides inválidos (usuarios 0, por tipo negativo, decimal) → tiran antes de tocar la base", async () => {
+      const before = await yRow();
+      for (const patch of [{ maxUsersOverride: 0 }, { maxProfessionalsOverride: -1 }, { maxStaffOverride: 1.5 }]) {
+        await expect(
+          platformTx((tx) =>
+            applyTenantEntitlementsInTx(tx, { tenantId: Y.tenantId, source: "platform", patch, actor: platformActor() })
+          )
+        ).rejects.toThrow(/Override inválido/);
+      }
+      // 0 profesionales / 0 no clínicos sí vale (CHECK ≥ 0 de M8).
+      const ok = await platformTx((tx) =>
+        applyTenantEntitlementsInTx(tx, {
+          tenantId: Y.tenantId,
+          source: "platform",
+          patch: { maxProfessionalsOverride: 0, maxStaffOverride: 0 },
+          actor: platformActor(),
+        })
+      );
+      expect(ok.ok).toBe(true);
+      expect(await yRow()).toMatchObject({ maxUsersOverride: before.maxUsersOverride, maxProfessionalsOverride: 0, maxStaffOverride: 0 });
+    });
+
+    it("saasPlan inválido (un valor legado) → tira", async () => {
+      await expect(
+        platformTx((tx) =>
+          applyTenantEntitlementsInTx(tx, {
+            tenantId: Y.tenantId,
+            source: "platform",
+            patch: { saasPlan: "PRO" as "CLINICA" },
+            actor: platformActor(),
+          })
+        )
+      ).rejects.toThrow(/saasPlan inválido/);
+    });
   });
 });

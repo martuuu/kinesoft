@@ -13,8 +13,9 @@
  * Fechas como string (ISO o "YYYY-MM-DD" del día AR) para que crucen al cliente
  * sin ambigüedad. Solo `import type` de Prisma: el cliente no carga el runtime.
  */
-import type { SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
+import type { SaasPlan, SubscriptionStatus, TenantStatus, TenantVertical } from "@prisma/client";
 import type { TenantModule } from "@/lib/tenant-modules";
+import type { PlanLimits } from "@/lib/saas-plans-types";
 import type { TenantAccess, TenantAccessMode } from "@/lib/tenant-access";
 import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
 
@@ -38,15 +39,18 @@ export type PlatformTenantRow = {
   name: string;
   slug: string;
   vertical: TenantVertical;
-  plan: TenantPlan;
+  /** PL-1d: plan SaaS (`Tenant.saasPlan`). El `plan` legado no sale: lo espeja el escritor y nadie lo muestra. */
+  saasPlan: SaasPlan;
   subscriptionStatus: SubscriptionStatus;
   /** Día AR en que vence el trial ("YYYY-MM-DD"); null = sin trial. */
   trialEndsOn: string | null;
   publicBookingEnabled: boolean;
   /** `Tenant.onboardingCompletedAt != null`. */
   onboardingCompleted: boolean;
-  /** Emails de las cuentas OWNER (staff, no pacientes). */
+  /** Emails de las cuentas OWNER (staff, no pacientes). Se muestran rotulados como «Email», nunca como nombre. */
   ownerEmails: string[];
+  /** Nombres de las cuentas OWNER, en el mismo orden (`displayUserName`: nunca el email, decisión 19). */
+  ownerNames: string[];
   /** Pacientes activos (sin archivar). Solo el número. */
   patientCount: number;
   /** Membresías aceptadas. */
@@ -61,8 +65,15 @@ export type PlatformTenantRow = {
   statusReason: PlatformStatusReason | null;
   /** BO2-D: ISO del último cambio de `status`; null = nunca cambió. */
   statusChangedAt: string | null;
-  /** BO2-D: cupo a medida; null = el del plan. */
-  seatLimitOverride: number | null;
+  /**
+   * PL-1d: cupos a medida por tipo (Libre y excepciones; los escribe solo Plataforma). null = el del plan.
+   * `seatLimitOverride` (BO2-D) queda en la base pero ya no sale (M8 lo copió a `maxProfessionalsOverride`).
+   */
+  maxUsersOverride: number | null;
+  maxProfessionalsOverride: number | null;
+  maxStaffOverride: number | null;
+  /** PL-1d: límites efectivos = `SaasPlanConfig` del plan pisado por los overrides (`effectiveLimits`). null = sin límite. */
+  limits: PlanLimits;
   /** BO2-D: acceso REAL calculado (`tenantAccessFor`, C-BO1), el que la banda le muestra al consultorio. */
   access: TenantAccess;
   /** BO2-D: el modo que aplican hoy los cortes (`effectiveMode` con `TENANT_ACCESS_ENFORCEMENT`). */
@@ -120,7 +131,7 @@ export type PlatformTenantDetail = PlatformTenantRow & {
   publicEmail: string | null;
   /** Solo lectura desde /plataforma (EV-D6). */
   sharedPatientView: boolean;
-  /** `modulesFor(vertical, plan, publicBookingEnabled)`, en el orden de `TENANT_MODULES`. */
+  /** `modulesFor({ vertical, plan: saasPlan, publicBookingEnabled })`, en el orden de `TENANT_MODULES`. */
   modules: TenantModule[];
   counts: PlatformTenantCounts;
   /** ISO de `max(AuditEvent.createdAt)` del consultorio; null = sin actividad registrada. */
@@ -135,7 +146,7 @@ export type PlatformTenantDetail = PlatformTenantRow & {
 
 export type PlatformVerticalPlanCount = {
   vertical: TenantVertical;
-  plan: TenantPlan;
+  saasPlan: SaasPlan;
   count: number;
 };
 
@@ -144,7 +155,7 @@ export type PlatformTrialRow = {
   name: string;
   slug: string;
   vertical: TenantVertical;
-  plan: TenantPlan;
+  saasPlan: SaasPlan;
   trialEndsOn: string;
   /** `trialDaysLeft` (labels.ts): días AR contando hoy, como `tenantAccessFor` (1 = último día; ≤ 0 = ya venció). */
   daysLeft: number;
@@ -155,7 +166,7 @@ export type PlatformOnboardingRow = {
   name: string;
   slug: string;
   vertical: TenantVertical;
-  plan: TenantPlan;
+  saasPlan: SaasPlan;
   /** ISO. */
   createdAt: string;
 };

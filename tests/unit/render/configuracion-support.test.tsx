@@ -27,12 +27,11 @@ import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { planUsageView } from "@/lib/tenant-plan-usage-logic";
-import { seatUsage } from "@/lib/plan-catalog";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantSettings } from "@/lib/tenant-settings";
 
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false }));
 const tabs = (html: string) => Array.from(html.matchAll(/role="tab"[^>]*>([^<]+)</g), (m) => m[1]);
 
 const OPEN: SupportSessionRow = {
@@ -86,38 +85,49 @@ describe("[BO3-F] Accesos de soporte", () => {
   });
 });
 
-describe("[BO3-F] Plan y uso", () => {
+describe("[BO3-F → PL-1d] Plan y uso", () => {
+  const c = (used: number, limit: number | null) => ({
+    used,
+    limit,
+    remaining: limit == null ? null : Math.max(limit - used, 0),
+    full: limit != null && used >= limit,
+  });
   const usage = planUsageView(
     {
-      plan: "STARTER",
+      plan: "CONSULTORIO",
+      planLabel: "Consultorio",
       status: "ACTIVE",
       subscriptionStatus: "ACTIVE",
       trialEndsAt: null,
       subscriptionStatusChangedAt: null,
       publicBookingEnabled: true,
-      seatLimitOverride: null,
-      seats: seatUsage({ clinicalMembers: 2, pendingClinicalInvites: 0 }, 3),
-      pendingClinicalInvites: 0,
+      customLimits: false,
+      seats: { total: c(3, 5), professional: c(2, 4), staff: c(1, 1) },
+      pendingInvites: { professional: 0, staff: 0 },
       nonSeatMembers: 1,
     },
     new Date("2026-10-14T13:00:00Z")
   );
 
-  it("plan, suscripción, cupos, Secretaria/Facturación, turnero y «escribinos» con el canal real (BO-Z B4)", () => {
+  it("plan SaaS, suscripción, usuarios por tipo, turnero y «escribinos» con el canal real (BO-Z B4)", () => {
     const html = renderToStaticMarkup(<PlanUsagePanel usage={usage} supportEmail="soporte@kinesoft.test" />);
-    expect(html).toContain("Base");
+    expect(html).toContain("Consultorio");
     expect(html).toContain("Activa");
-    expect(html).toContain('data-seats="2 de 3"');
-    // C8: «no ocupan lugar» una sola vez (la fila de Secretaria y Facturación), no repetido en el cupo.
-    expect(html.match(/no ocupan lugar/g)?.length).toBe(1);
-    expect(html).toContain("1 en el equipo");
+    expect(html).toContain("Usuarios del plan");
+    expect(html).toContain('data-seat-kind="professional"');
+    expect(html).toContain('data-seat-kind="staff"');
+    expect(html).toContain('data-seat-kind="total"');
+    expect(html).toMatch(/2 de 4/);
+    expect(html).toMatch(/3 de 5/);
+    // PL-D3: la Secretaria ocupa lugar; ya no se dice lo contrario.
+    expect(html).not.toMatch(/no ocupan lugar/);
     expect(html).toContain("Activos");
-    expect(html).toContain("Para cambiar de plan o ampliar el cupo, escribinos a ");
+    expect(html).toContain("Para cambiar de plan o ampliar los cupos, escribinos a ");
     expect(html).toMatch(/href="mailto:soporte@kinesoft\.test\?subject=Plan%20del%20consultorio"/);
     // Sin email configurado: sin mailto, con el texto de respaldo.
     const bare = renderToStaticMarkup(<PlanUsagePanel usage={usage} supportEmail={null} />);
     expect(bare).not.toContain("mailto:");
-    expect(bare).toContain("Para cambiar de plan o ampliar el cupo, escribile al equipo de KineSoft");
+    expect(bare).toContain("Para cambiar de plan o ampliar los cupos, escribile al equipo de KineSoft");
     // Sin billing: nada de botones de pago.
     expect(html).not.toMatch(/<button/);
   });

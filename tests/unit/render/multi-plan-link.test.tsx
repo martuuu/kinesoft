@@ -167,8 +167,8 @@ describe("[P3-S18b] MultiSection renderizado", () => {
     practitionerId: "prac1",
     serviceId: "svc1",
   };
-  const kinePro = modulesFor({ vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false });
-  const general = modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false });
+  const kinePro = modulesFor({ vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false });
+  const general = modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false });
 
   it("Kine con plans.manage y paciente: el botón habilitado con el hint", () => {
     const html = renderToStaticMarkup(

@@ -120,6 +120,20 @@ const schema = z.object({
   ),
   MAINTENANCE_MESSAGE: z.preprocess(emptyAsUndefined, z.string().optional()),
 
+  // PL (PL-D16, plan §20.5.6): cobro de la suscripción SaaS de los consultorios.
+  //   off    = DEFAULT: no se generan cargos ni se habla con MP; la app se deploya sin cobrar.
+  //   manual = el cron genera cargos y Plataforma imputa pagos/comprobantes a mano (sin débito de MP).
+  //   mp     = además débito automático y «Pagar con MP» (preapproval / checkout).
+  // Lo lee `saasBillingMode()` (process.env en cada llamada), no este objeto congelado. Mismo criterio de forma que
+  // MAINTENANCE_MODE: un typo frena el deploy en vez de dejar el cobro en un modo que nadie eligió.
+  SAAS_BILLING_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "manual", "mp"]).default("off")
+  ),
+  // PL (C-PL11): buzón del equipo de KineSoft que recibe el aviso de mensajes de consultorios y leads de la landing.
+  // Opcional: sin él los mensajes quedan en /plataforma → Mensajes y no sale el aviso por mail.
+  PLATFORM_INBOX_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
+
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
 });
@@ -270,6 +284,8 @@ export const env = parseEnv({
   MAINTENANCE_MESSAGE: process.env.MAINTENANCE_MESSAGE,
   PLATFORM_MFA_ENFORCEMENT: process.env.PLATFORM_MFA_ENFORCEMENT,
   SIGNUP_MODE: process.env.SIGNUP_MODE,
+  SAAS_BILLING_MODE: process.env.SAAS_BILLING_MODE,
+  PLATFORM_INBOX_EMAIL: process.env.PLATFORM_INBOX_EMAIL,
 });
 
 /**
@@ -296,6 +312,24 @@ export function platformMfaEnforcement(): PlatformMfaEnforcement {
  */
 export function signupMode(): "open" | "assisted" {
   return process.env.SIGNUP_MODE?.trim().toLowerCase() === "assisted" ? "assisted" : "open";
+}
+
+export type SaasBillingMode = "off" | "manual" | "mp";
+
+/**
+ * `SAAS_BILLING_MODE` vigente (PL-D16), leído en cada llamada: los tests lo cambian en caliente. Cualquier valor que
+ * no sea `manual` ni `mp` → `off` (el boot ya rechazó un valor inválido; acá no se tira en medio de un request ni del
+ * cron, y ante la duda no se cobra).
+ */
+export function saasBillingMode(): SaasBillingMode {
+  const v = process.env.SAAS_BILLING_MODE?.trim().toLowerCase();
+  return v === "manual" || v === "mp" ? v : "off";
+}
+
+/** `PLATFORM_INBOX_EMAIL` vigente (C-PL11), leído en cada llamada. Vacío → null (no sale el aviso por mail). */
+export function platformInboxEmail(): string | null {
+  const v = process.env.PLATFORM_INBOX_EMAIL?.trim();
+  return v ? v : null;
 }
 
 /**

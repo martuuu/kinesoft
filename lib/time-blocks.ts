@@ -58,8 +58,8 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { getActor, ForbiddenError } from "@/lib/session";
-import { getMembershipRole, requireCapability } from "@/lib/authz";
-import { canManageBlocksFor, capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
+import { canManageBlocksFor, type Capability } from "@/lib/capabilities";
 import { isHoldingCapacity } from "@/lib/booking-capacity";
 import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { lockCapacity, lockCapacityAndRoomsMany, roomKeysForWindow } from "@/lib/booking-cap-lock";
@@ -148,7 +148,7 @@ function availabilityScopeOf(practitionerIds: readonly (string | null)[], roomId
 
 async function actorWithCaps() {
   const actor = await getActor();
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   return { actor, caps };
 }
 

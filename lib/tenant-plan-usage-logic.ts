@@ -1,43 +1,48 @@
 /**
- * Configuración → «Plan y uso» (BO3-F): lógica pura de la vista. La lectura (server-only, con `getActor` +
- * `runWithRls`) vive en `lib/tenant-plan-usage.ts`; acá solo se arma el copy, para testearlo en TZ=UTC y TZ=AR sin
- * base.
+ * Configuración → «Plan y uso» (BO3-F; PL-1c cupos por tipo): lógica pura de la vista. La lectura (server-only, con
+ * `getActor` + `runWithRls`) vive en `lib/tenant-plan-usage.ts`; acá solo se arma el copy, para testearlo en TZ=UTC
+ * y TZ=AR sin base.
  *
  * Por qué no se recalcula nada propio:
- *  - los cupos salen de `seatUsage`/`seatLimitFor` (lib/plan-catalog.ts) vía `getSeatUsageInTx` (lib/team-internal.ts),
- *    el MISMO cálculo que frena la invitación: si la pantalla contara distinto, diría «2 de 3» y la invitación
- *    rebotaría con «están ocupados».
+ *  - los cupos salen de `getSeatUsageInTx` (lib/team-internal.ts, `seatUsageByKind` de lib/plan-catalog.ts), el
+ *    MISMO cálculo que frena la invitación: si la pantalla contara distinto, diría «2 de 4» y la invitación
+ *    rebotaría con «están ocupados». PL-1c: por TIPO (Consultorio = 4 profesionales + 1 no clínico, total 5).
  *  - los días de prueba salen de `tenantAccessFor` (lib/tenant-access.ts), el mismo de la banda de acceso: días
  *    calendario AR contando hoy (el último día es 1). Con `getDay`/`Date` del host, en Vercel (UTC) el número
  *    cambiaba a las 21:00 AR.
  *
- * Sin billing (decisión de BO: el cambio de plan lo hace Plataforma): la vista solo informa y dice «escribinos»
- * (BO-Z B4: con el canal real, que agrega el panel a partir de `subscription.contact`).
  * Client-safe: solo `import type` de Prisma y módulos puros.
  */
-import type { SubscriptionStatus, TenantPlan, TenantStatus } from "@prisma/client";
-import { PLAN_CATALOG, type SeatUsage } from "./plan-catalog";
+import type { SaasPlan, SubscriptionStatus, TenantStatus } from "@prisma/client";
+import type { SeatCount, SeatKind, SeatUsageByKind } from "./plan-catalog";
 import { tenantAccessFor } from "./tenant-access";
 import { toARDateKey } from "./datetime-ar";
 
 export type TenantPlanUsageInput = {
-  plan: TenantPlan;
+  plan: SaasPlan;
+  /** Nombre del plan (fila de `SaasPlanConfig` o `PLAN_DEFAULTS`). */
+  planLabel: string;
   status: TenantStatus;
   subscriptionStatus: SubscriptionStatus;
   trialEndsAt: Date | null;
   subscriptionStatusChangedAt: Date | null;
   publicBookingEnabled: boolean;
-  seatLimitOverride: number | null;
-  seats: SeatUsage;
-  /** Invitaciones clínicas pendientes y vigentes (ya están sumadas en `seats.used`). */
-  pendingClinicalInvites: number;
-  /** Miembros activos que NO ocupan lugar (Secretaria y Facturación). */
+  /** Algún override de cupo del consultorio (`max*Override`) no nulo: el cupo es a medida. */
+  customLimits: boolean;
+  seats: SeatUsageByKind;
+  /** Invitaciones pendientes y vigentes por tipo (ya están sumadas en `seats`). */
+  pendingInvites: { professional: number; staff: number };
+  /** Miembros activos no clínicos (Secretaría, Facturación, Titular/Admin sin agenda). Ocupan lugar desde PL-1c. */
   nonSeatMembers: number;
 };
 
 export type PlanUsageTone = "ok" | "info" | "warn";
 
+/** Una fila del desglose: «Profesionales 3 de 4». */
+export type SeatLine = { kind: SeatKind | "total"; label: string; value: string; used: number; limit: number | null; full: boolean };
+
 export type TenantPlanUsageView = {
+  plan: SaasPlan;
   planLabel: string;
   subscription: {
     label: string;
@@ -50,15 +55,20 @@ export type TenantPlanUsageView = {
     contact: string | null;
   };
   seats: {
-    /** «2 de 3» · «2 (sin límite)». */
+    /** «Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5» (solo los tipos con límite propio). */
     value: string;
+    /** Del total de usuarios. */
     used: number;
     limit: number | null;
+    /** Algún lugar (total o tipo) está lleno. */
     full: boolean;
     /** El cupo es a medida (override de Plataforma), no el del plan. */
     custom: boolean;
     detail: string;
+    lines: SeatLine[];
+    byKind: SeatUsageByKind;
   };
+  /** Ver `TenantPlanUsageInput.nonSeatMembers`. */
   nonSeatMembers: number;
   publicBookingEnabled: boolean;
 };
@@ -168,33 +178,82 @@ export function subscriptionDetailText(
   return sub.detail ? `${sub.detail} ${cta}` : cta;
 }
 
+const KIND_LABEL: Record<SeatKind | "total", string> = {
+  professional: "Profesionales",
+  staff: "Secretaría/administración",
+  total: "Total",
+};
+
+function seatLine(kind: SeatKind | "total", c: SeatCount): SeatLine {
+  const value = c.limit == null ? `${KIND_LABEL[kind]} ${c.used} (sin límite)` : `${KIND_LABEL[kind]} ${c.used} de ${c.limit}`;
+  return { kind, label: KIND_LABEL[kind], value, used: c.used, limit: c.limit, full: c.full };
+}
+
+/**
+ * Desglose: los tipos con límite propio (Consultorio: profesionales y Secretaría) y el total. Si ningún tipo tiene
+ * límite propio (Individual tiene 1/1/1 pero lo que manda es el total; Clínica 10 de cualquier tipo) igual se
+ * muestran los dos tipos sin límite, para que se vea quién ocupa qué, y el total con su tope.
+ */
+function seatLines(u: SeatUsageByKind): SeatLine[] {
+  const kindsCapped = u.professional.limit != null && u.staff.limit != null;
+  const lines: SeatLine[] = [];
+  if (kindsCapped && u.total.limit != null && u.professional.limit! + u.staff.limit! <= u.total.limit) {
+    // Consultorio: 4 + 1 = 5. El total es la suma; se muestra igual (es lo que dice el plan).
+    lines.push(seatLine("professional", u.professional), seatLine("staff", u.staff));
+  } else if (kindsCapped && u.total.limit != null && u.total.limit <= Math.min(u.professional.limit!, u.staff.limit!)) {
+    // Individual: 1 usuario de cualquier tipo. Los topes por tipo no agregan nada: solo el total.
+    return [seatLine("total", u.total)];
+  } else {
+    lines.push(seatLine("professional", u.professional), seatLine("staff", u.staff));
+  }
+  lines.push(seatLine("total", u.total));
+  return lines;
+}
+
 export function seatsSummary(
-  t: Pick<TenantPlanUsageInput, "seats" | "seatLimitOverride" | "pendingClinicalInvites">
+  t: Pick<TenantPlanUsageInput, "seats" | "customLimits" | "pendingInvites">
 ): TenantPlanUsageView["seats"] {
-  const { used, limit, full } = t.seats;
-  const value = limit == null ? `${used} (sin límite)` : `${used} de ${limit}`;
+  const u = t.seats;
+  const lines = seatLines(u);
+  const full = u.total.full || u.professional.full || u.staff.full;
+  const over = u.total.limit != null && u.total.used > u.total.limit;
+  const overKind =
+    (u.professional.limit != null && u.professional.used > u.professional.limit) ||
+    (u.staff.limit != null && u.staff.used > u.staff.limit);
   const parts: string[] = [];
-  if (t.pendingClinicalInvites > 0) {
+  const pending = t.pendingInvites.professional + t.pendingInvites.staff;
+  if (pending > 0) {
     parts.push(
-      t.pendingClinicalInvites === 1
+      pending === 1
         ? "Incluye 1 invitación pendiente: reserva el lugar hasta que se acepte, se revoque o venza."
-        : `Incluye ${t.pendingClinicalInvites} invitaciones pendientes: reservan el lugar hasta que se acepten, se revoquen o venzan.`
+        : `Incluye ${pending} invitaciones pendientes: reservan el lugar hasta que se acepten, se revoquen o venzan.`
     );
   }
-  // C8: «Secretaria y Facturación no ocupan lugar» ya lo dice la fila de abajo del panel: no se repite acá.
-  if (full && limit != null) {
-    parts.push(
-      used > limit
-        ? "Hay más profesionales que lugares en el plan: los que están siguen, pero no se puede sumar a otro."
-        : "No quedan lugares libres: para sumar a otro profesional, liberá uno o pedí ampliar el plan (abajo te decimos cómo)."
-    );
+  if (over || overKind) {
+    parts.push("Hay más personas que lugares en el plan: las que están siguen, pero no se puede sumar a nadie de ese tipo.");
+  } else if (u.total.full && u.total.limit != null) {
+    parts.push("No quedan lugares libres: para sumar a alguien, liberá un lugar o cambiá de plan.");
+  } else if (u.professional.full && u.professional.limit != null) {
+    parts.push("No quedan lugares para profesionales: para sumar a otro, liberá uno o cambiá de plan.");
+  } else if (u.staff.full && u.staff.limit != null) {
+    parts.push("No quedan lugares para Secretaría o administración: para sumar a otra persona, liberá uno o cambiá de plan.");
   }
-  return { value, used, limit, full, custom: t.seatLimitOverride != null, detail: parts.join(" ") };
+  return {
+    value: lines.map((l) => l.value).join(" · "),
+    used: u.total.used,
+    limit: u.total.limit,
+    full,
+    custom: t.customLimits,
+    detail: parts.join(" "),
+    lines,
+    byKind: u,
+  };
 }
 
 export function planUsageView(t: TenantPlanUsageInput, now: Date): TenantPlanUsageView {
   return {
-    planLabel: PLAN_CATALOG[t.plan].label,
+    plan: t.plan,
+    planLabel: t.planLabel,
     subscription: subscriptionSummary(t, now),
     seats: seatsSummary(t),
     nonSeatMembers: t.nonSeatMembers,

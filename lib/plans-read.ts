@@ -25,8 +25,8 @@ import { displayMemberName } from "@/lib/display-name";
 import type { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
-import { getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import type { Capability } from "@/lib/capabilities";
 import { modulesFor, MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { patientAccessFor, bulkPatientAccess } from "@/lib/visibility";
 import { assertPlanScheduleInTx, canSeePlanAuthorization, planTitleFor } from "@/lib/plan-authz-internal";
@@ -78,7 +78,7 @@ function hasPlanes(actor: Actor): boolean {
 }
 
 async function capsOf(actor: Actor): Promise<ReadonlySet<Capability>> {
-  return capabilitiesFor(await getMembershipRole(actor));
+  return memberCapabilitiesForActor(actor);
 }
 
 /**

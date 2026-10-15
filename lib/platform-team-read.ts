@@ -18,7 +18,7 @@ import "server-only";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { invitationStatus } from "@/lib/access-logic";
-import { isClinicalRole } from "@/lib/roles";
+import { isClinicalMember } from "@/lib/roles";
 import { getSeatUsageInTx } from "@/lib/team-internal";
 import type { InvitationEmailStatus, PlatformTenantTeam } from "@/lib/invitations-types";
 
@@ -38,6 +38,8 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
           id: true,
           userId: true,
           role: true,
+          // PL-1d: un Titular/Admin que no atiende no tiene agenda aunque su rol sea «clínico» (C-PL5).
+          clinical: true,
           acceptedAt: true,
           disabledAt: true,
           user: {
@@ -96,7 +98,7 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
       role: m.role,
       joinedAt: m.acceptedAt,
       disabledAt: m.disabledAt,
-      hasAgenda: isClinicalRole(m.role) && m.user.practitioners.length > 0,
+      hasAgenda: isClinicalMember(m) && m.user.practitioners.length > 0,
     })),
     invitations: data.invitations.map((i) => ({
       id: i.id,
@@ -111,11 +113,12 @@ export async function getTenantTeamForPlatform(tenantId: string): Promise<Platfo
       sendCount: i.sendCount,
       lastEmailStatus: lastStatus.get(i.id) ?? null,
     })),
+    // PL-1d: cupos por tipo (C-PL3, `SeatUsageByKind`: total / profesionales / no clínicos), tal cual los cuenta
+    // `getSeatUsageInTx` (miembros habilitados + invitaciones pendientes).
     seats: {
-      used: data.seats.used,
-      limit: data.seats.limit,
-      remaining: data.seats.remaining,
-      full: data.seats.full,
+      total: { ...data.seats.total },
+      professional: { ...data.seats.professional },
+      staff: { ...data.seats.staff },
     },
   };
 }

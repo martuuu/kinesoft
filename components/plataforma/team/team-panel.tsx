@@ -129,7 +129,7 @@ export function PlatformTeamPanel({
         onClose={() => setInviting(false)}
         tenantId={team.tenantId}
         vertical={vertical}
-        seatsFull={team.seats.full}
+        seatsFull={team.seats.total.full}
       />
     </div>
   );

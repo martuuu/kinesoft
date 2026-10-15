@@ -12,11 +12,18 @@
  * intento de colar algo (un `status`, un `seatLimitOverride`) y tiene que rebotar.
  */
 import { z } from "zod";
-import type { SubscriptionStatus, TenantPlan } from "@prisma/client";
+import type { SaasPlan, SubscriptionStatus } from "@prisma/client";
 import { RESERVED_SLUGS, SLUG_RE } from "@/lib/onboarding-logic";
-import { PLAN_CATALOG } from "@/lib/plan-catalog";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { toARDateKey } from "@/lib/datetime-ar";
-import { TENANT_PLAN_VALUES, TENANT_VERTICAL_VALUES, trialEndsOnToDate } from "@/lib/platform-tenants-schemas";
+import { SAAS_PLAN_VALUES, TENANT_VERTICAL_VALUES, trialEndsOnToDate } from "@/lib/platform-tenants-schemas";
+
+/**
+ * PL-1a/1d: los planes SaaS como tupla literal para `z.enum` (client-safe). Una sola definición, en
+ * `lib/platform-tenants-schemas.ts` (con su chequeo de exhaustividad); acá se re-exporta para los que ya la
+ * importaban de este módulo.
+ */
+export { SAAS_PLAN_VALUES };
 
 /** Tope del trial que se puede pedir a mano (un año): más que eso es un error de tipeo, no una promo. */
 export const MAX_TRIAL_DAYS = 365;
@@ -51,8 +58,9 @@ export const CreateTenantWithOwnerInput = z
     clinicName: name(120, "Poné el nombre del consultorio."),
     slug: optionalSlug,
     vertical: z.enum(TENANT_VERTICAL_VALUES, { message: "Elegí el tipo de consultorio." }),
-    plan: z.enum(TENANT_PLAN_VALUES, { message: "Elegí el plan." }),
-    /** Ausente = el del catálogo (`PLAN_CATALOG[plan].trialDays`); 0 = sin trial (ACTIVE). */
+    /** PL-1a: plan SaaS (`Tenant.saasPlan`); el escritor único espeja el legado. */
+    plan: z.enum(SAAS_PLAN_VALUES, { message: "Elegí el plan." }),
+    /** Ausente = el del plan (`PLAN_DEFAULTS[plan].trialDays`: Individual 14, el resto 0); 0 = sin trial (ACTIVE). */
     trialDays: z
       .number({ invalid_type_error: "Días de prueba inválidos." })
       .int("Días de prueba inválidos.")
@@ -68,6 +76,11 @@ export const CreateTenantWithOwnerInput = z
      * false = el titular completa el stepper de /onboarding (sede, horario, servicios…).
      */
     onboardingCompleted: z.boolean().default(true),
+    /**
+     * PL-1a (C-PL5, pedido de PL-1d): ¿el titular atiende pacientes? true (default) = como siempre, con Practitioner y
+     * agenda; false = Titular no clínico (sin Practitioner, ve como Secretaria; PL-D4). Lo aplica `bootstrapTenant`.
+     */
+    ownerClinical: z.boolean().default(true),
     /** UUID por instancia del Drawer: el doble submit devuelve el consultorio del primero. */
     idempotencyKey: z.string().uuid("Recargá la página y volvé a intentar."),
   })
@@ -105,7 +118,12 @@ export function addDaysToDateKey(key: string, days: number): string {
 }
 
 /**
- * Suscripción con la que nace un consultorio dado de alta desde Plataforma (BO-D1).
+ * Suscripción con la que nace un consultorio dado de alta desde Plataforma (BO-D1) o desde el alta web (PL-1a:
+ * `initialSubscriptionFor("INDIVIDUAL")` → TRIALING 14 días, PL-D10).
+ *
+ * PL-1a: recibe el plan SaaS. Los días por defecto salen de `PLAN_DEFAULTS` (los mismos valores con los que M8 sembró
+ * `SaasPlanConfig`): es lógica pura y client-safe, así que no lee la tabla; si Plataforma cambia `trialDays` en la
+ * tabla, el caller que quiera respetarlo pasa `trialDays` explícito.
  *
  * Con trial: TRIALING hasta el FIN del día AR número `trialDays` contando hoy como el
  * primero. Así «14 días» son 14 días de calendario completos, y `tenantAccessFor` (C-BO1)
@@ -115,11 +133,11 @@ export function addDaysToDateKey(key: string, days: number): string {
  * Sin trial (0): ACTIVE, sin fecha.
  */
 export function initialSubscriptionFor(
-  plan: TenantPlan,
+  plan: SaasPlan,
   trialDays: number | undefined,
   now: Date
 ): { trialDays: number; subscriptionStatus: SubscriptionStatus; trialEndsAt: Date | null } {
-  const days = trialDays ?? PLAN_CATALOG[plan].trialDays;
+  const days = trialDays ?? PLAN_DEFAULTS[plan].trialDays;
   if (days <= 0) return { trialDays: 0, subscriptionStatus: "ACTIVE", trialEndsAt: null };
   const lastDay = addDaysToDateKey(toARDateKey(now), days - 1);
   return { trialDays: days, subscriptionStatus: "TRIALING", trialEndsAt: trialEndsOnToDate(lastDay) };

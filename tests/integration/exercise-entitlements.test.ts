@@ -259,18 +259,17 @@ describe.skipIf(!RUN)("EV-G · catálogo y ejercicios por módulos", () => {
     expect(await exerciseIdsOf(pat)).toEqual([own[KFree.tenantId]]);
   });
 
-  it("KINE STARTER: la plantilla aplica solo los propios (el global isBasic queda afuera)", async () => {
+  it("[PL-1, C-PL1] KINE CONSULTORIO (ex STARTER): la plantilla aplica propios + globales (catálogo completo)", async () => {
+    // Matriz de PL: Consultorio suma plantillas, favoritos y ejercicios globales; el «solo propios» quedó en Individual.
     asUser(KStarter.userId);
+    expect((await gatingForActor()).catalogScope).toBe("full");
     const pat = await addPatient(db, KStarter);
     const tpl = await template(KStarter, [gBasic.id, own[KStarter.tenantId]]);
-    // El prefill descarta el global (y va sin templateId: el motor rechazaría la plantilla entera).
     const pre = await getTemplatePrefill(tpl);
-    expect(pre.ok && pre.data.droppedExercises).toBe(1);
+    expect(pre.ok && pre.data.droppedExercises).toBe(0);
     const r = await applyTemplate(KStarter, tpl, pat);
     expect(r.ok).toBe(true);
-    const ids = await exerciseIdsOf(pat);
-    expect(ids.length).toBe(2); // 2 sesiones × 1 ejercicio
-    expect(new Set(ids)).toEqual(new Set([own[KStarter.tenantId]]));
+    expect(new Set(await exerciseIdsOf(pat))).toEqual(new Set([gBasic.id, own[KStarter.tenantId]]));
   });
 
   // ── Kine PRO: + catálogo global ──────────────────────────────────────

@@ -208,3 +208,42 @@ describe("parseEnv — flags de Plataforma (BO1/BO4/BO5)", () => {
     expect(parseEnv({ CRON_SECRET: "s3cr3t" }).CRON_SECRET).toBe("s3cr3t");
   });
 });
+
+describe("[PL-1a] SAAS_BILLING_MODE y PLATFORM_INBOX_EMAIL", () => {
+  it("SAAS_BILLING_MODE: default off, acepta manual/mp (mayúsculas/espacios tolerados), typo frena", () => {
+    expect(parseEnv({}).SAAS_BILLING_MODE).toBe("off");
+    expect(parseEnv({ SAAS_BILLING_MODE: "" }).SAAS_BILLING_MODE).toBe("off");
+    expect(parseEnv({ SAAS_BILLING_MODE: " Manual " }).SAAS_BILLING_MODE).toBe("manual");
+    expect(parseEnv({ SAAS_BILLING_MODE: "mp" }).SAAS_BILLING_MODE).toBe("mp");
+    expect(() => parseEnv({ SAAS_BILLING_MODE: "on" })).toThrow(/SAAS_BILLING_MODE/);
+  });
+  it("PLATFORM_INBOX_EMAIL: opcional; vacío = no seteado; un no-email frena", () => {
+    expect(parseEnv({}).PLATFORM_INBOX_EMAIL).toBeUndefined();
+    expect(parseEnv({ PLATFORM_INBOX_EMAIL: "" }).PLATFORM_INBOX_EMAIL).toBeUndefined();
+    expect(parseEnv({ PLATFORM_INBOX_EMAIL: "equipo@kinesoft.app" }).PLATFORM_INBOX_EMAIL).toBe("equipo@kinesoft.app");
+    expect(() => parseEnv({ PLATFORM_INBOX_EMAIL: "equipo" })).toThrow(/PLATFORM_INBOX_EMAIL/);
+  });
+  it("saasBillingMode() y platformInboxEmail() leen process.env en cada llamada (inválido → off)", async () => {
+    const { saasBillingMode, platformInboxEmail } = await import("@/lib/env");
+    const prev = { m: process.env.SAAS_BILLING_MODE, i: process.env.PLATFORM_INBOX_EMAIL };
+    try {
+      delete process.env.SAAS_BILLING_MODE;
+      expect(saasBillingMode()).toBe("off");
+      process.env.SAAS_BILLING_MODE = "MP";
+      expect(saasBillingMode()).toBe("mp");
+      process.env.SAAS_BILLING_MODE = "manual";
+      expect(saasBillingMode()).toBe("manual");
+      process.env.SAAS_BILLING_MODE = "cobrar";
+      expect(saasBillingMode()).toBe("off");
+      process.env.PLATFORM_INBOX_EMAIL = "  ";
+      expect(platformInboxEmail()).toBeNull();
+      process.env.PLATFORM_INBOX_EMAIL = "equipo@kinesoft.app";
+      expect(platformInboxEmail()).toBe("equipo@kinesoft.app");
+    } finally {
+      if (prev.m === undefined) delete process.env.SAAS_BILLING_MODE;
+      else process.env.SAAS_BILLING_MODE = prev.m;
+      if (prev.i === undefined) delete process.env.PLATFORM_INBOX_EMAIL;
+      else process.env.PLATFORM_INBOX_EMAIL = prev.i;
+    }
+  });
+});

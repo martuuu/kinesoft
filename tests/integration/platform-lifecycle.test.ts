@@ -218,7 +218,7 @@ describe.skipIf(!RUN)("BO2-D · ciclo de vida del consultorio", () => {
     expect(d.status).toBe("SUSPENDED");
     expect(d.statusReason).toEqual({ code: "NONPAYMENT", note: `${NOTE_MARK} debe 3 meses` });
     expect(d.statusChangedAt).toBe((await row(B.tenantId)).statusChangedAt!.toISOString());
-    expect(d.seatLimitOverride).toBeNull();
+    expect(d.maxUsersOverride).toBeNull(); // PL-1d: cupos a medida por tipo (antes seatLimitOverride)
     expect(d.access).toEqual({ mode: "suspended", reason: "tenant_suspended", daysLeft: null });
     // Default `banner`: suspendido se respeta igual (desvío aceptado de BO1-A).
     expect(d.effectiveAccessMode).toBe("suspended");

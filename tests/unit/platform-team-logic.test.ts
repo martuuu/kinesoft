@@ -67,22 +67,32 @@ describe("[BO3-C] transferConfirmMatches", () => {
   });
 });
 
-describe("[BO3-C] seatsSummary", () => {
-  it("con tope: «Profesionales 2 de 3», sin aviso de lleno", () => {
-    const s = seatsSummary({ used: 2, limit: 3, remaining: 1, full: false });
-    expect(s.text).toBe("Profesionales 2 de 3");
+describe("[PL-1c] seatsSummary (cupos por tipo)", () => {
+  const c = (used: number, limit: number | null) => ({
+    used,
+    limit,
+    remaining: limit === null ? null : Math.max(0, limit - used),
+    full: limit !== null && used >= limit,
+  });
+  it("con topes: los tres contadores, sin aviso de lleno", () => {
+    const s = seatsSummary({ total: c(2, 5), professional: c(2, 4), staff: c(0, 1) });
+    expect(s.text).toBe("Profesionales 2 de 4 · Secretaría/administración 0 de 1 · Total 2 de 5");
     expect(s.full).toBe(false);
-    expect(s.hint).toMatch(/Secretario\/a y Facturación no ocupan/);
+    expect(s.hint).toMatch(/cada uno en su tipo/);
     expect(s.hint).not.toMatch(/Cupo lleno/);
   });
-  it("lleno: avisa", () => {
-    const s = seatsSummary({ used: 3, limit: 3, remaining: 0, full: true });
-    expect(s.text).toBe("Profesionales 3 de 3");
+  it("lleno por total: avisa", () => {
+    const s = seatsSummary({ total: c(5, 5), professional: c(5, null), staff: c(0, null) });
     expect(s.full).toBe(true);
     expect(s.hint).toMatch(/^Cupo lleno/);
   });
+  it("lleno por tipo: avisa aunque sobre total", () => {
+    expect(seatsSummary({ total: c(2, 5), professional: c(1, 4), staff: c(1, 1) }).full).toBe(true);
+  });
   it("sin tope", () => {
-    expect(seatsSummary({ used: 5, limit: null, remaining: null, full: false }).text).toBe("Profesionales: 5 (sin tope)");
+    expect(seatsSummary({ total: c(5, null), professional: c(4, null), staff: c(1, null) }).text).toBe(
+      "Profesionales 4 (sin tope) · Secretaría/administración 1 (sin tope) · Total 5 (sin tope)"
+    );
   });
 });
 

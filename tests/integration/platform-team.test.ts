@@ -59,7 +59,10 @@ const mail = {
 
 describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () => {
   let db: PrismaClient;
-  /** Consultorio sobre el que actúa el superadmin (PRO: 10 lugares; los cupos se prueban en seats.test.ts). */
+  /**
+   * Consultorio sobre el que actúa el superadmin (Clínica: 10 usuarios de cualquier tipo; los cupos se prueban en
+   * seats.test.ts). PL-1d: la factory no espeja `plan`↔`saasPlan`, se pasan los dos.
+   */
   let T: EphemeralTenant;
   /** Otro consultorio: su OWNER no puede usar las actions de Plataforma. */
   let O: EphemeralTenant;
@@ -71,8 +74,8 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
 
   beforeAll(async () => {
     db = ownerClient();
-    T = await createEphemeralTenant(db, { plan: "PRO" });
-    O = await createEphemeralTenant(db, { plan: "PRO" });
+    T = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
+    O = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     // Fixture de PHI en el consultorio: no tiene que aparecer en nada que devuelva Plataforma.
     await addPatient(db, T, { ...PHI, email: `phi-${uniqueSuffix()}@test.local` });
     superadminId = `test-user-${uniqueSuffix()}`;
@@ -184,8 +187,10 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
         ["email", "expiresAt", "firstName", "id", "invitedAt", "lastEmailStatus", "lastName", "lastSentAt", "role", "sendCount", "status"].sort()
       );
     }
-    expect(Object.keys(team!.seats).sort()).toEqual(["full", "limit", "remaining", "used"]);
-    expect(team!.seats.limit).toBe(10);
+    // PL-1d: cupos por tipo (C-PL3).
+    expect(Object.keys(team!.seats).sort()).toEqual(["professional", "staff", "total"]);
+    expect(Object.keys(team!.seats.total).sort()).toEqual(["full", "limit", "remaining", "used"]);
+    expect(team!.seats.total.limit).toBe(10);
     const owner = team!.members.find((m) => m.userId === T.userId)!;
     expect(owner).toMatchObject({ role: "OWNER", hasAgenda: true, disabledAt: null });
     const json = JSON.stringify(team);
@@ -276,8 +281,8 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     expect((await platformChangeMemberRole({ tenantId: T.tenantId, membershipId: mem.id, role: "ADMIN", extra: 1 })).ok).toBe(false);
   });
 
-  it("transfiere el OWNER: el anterior queda ADMIN, siempre exactamente un OWNER, doble audit", async () => {
-    const X = await createEphemeralTenant(db, { plan: "PRO" });
+  it("transfiere el OWNER: el anterior queda Profesional (atendía; §20.17), siempre exactamente un OWNER, doble audit", async () => {
+    const X = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     try {
       const kine = await addPractitioner(db, X);
       const mem = await membershipOf(X, kine.userId);
@@ -289,7 +294,7 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
       expect(await platformTransferOwnership({ tenantId: X.tenantId, membershipId: mem.id })).toEqual({ ok: true, data: undefined });
       const roles = await db.membership.findMany({ where: { tenantId: X.tenantId }, select: { userId: true, role: true } });
       expect(roles.find((x) => x.userId === kine.userId)?.role).toBe("OWNER");
-      expect(roles.find((x) => x.userId === X.userId)?.role).toBe("ADMIN");
+      expect(roles.find((x) => x.userId === X.userId)?.role).toBe("PRACTITIONER");
       expect(await ownerCount(X)).toBe(1);
       const local = await db.auditEvent.findFirst({ where: { tenantId: X.tenantId, action: "platform.membership.owner.transfer", entityId: mem.id } });
       const global = await db.platformAuditEvent.findFirst({ where: { tenantId: X.tenantId, action: "platform.membership.owner.transfer", entityId: mem.id } });

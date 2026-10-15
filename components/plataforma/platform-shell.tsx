@@ -30,12 +30,15 @@ export type PlatformShellSupport = { tenantName: string } | null;
 export type EndSupportAction = () => Promise<ActionResult<{ redirectTo: string }>>;
 
 export function PlatformShell({
+  name,
   email,
   hasHome,
   support,
   endSupportAction,
   children,
 }: {
+  /** Nombre del superadmin (`displayUserName`): nunca el email (decisión 19). */
+  name: string;
   email: string;
   /** El superadmin tiene un consultorio propio usable (`PlatformActor.homeTenantId`). */
   hasHome: boolean;
@@ -72,6 +75,7 @@ export function PlatformShell({
       </aside>
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <PlatformTopBar
+          name={name}
           email={email}
           hasHome={hasHome}
           support={support}
@@ -92,12 +96,14 @@ export function PlatformShell({
 }
 
 export function PlatformTopBar({
+  name,
   email,
   hasHome,
   support,
   endSupportAction,
   onOpenMenu,
 }: {
+  name: string;
   email: string;
   hasHome: boolean;
   support: PlatformShellSupport;
@@ -149,7 +155,8 @@ export function PlatformTopBar({
 
       <span
         className="k-plat-email"
-        title={email}
+        // VX0-b (decisión 19): el nombre, no el email; el email queda en el tooltip, rotulado.
+        title={`Email: ${email}`}
         style={{
           fontSize: 12.5,
           color: "var(--navy-500)",
@@ -159,7 +166,7 @@ export function PlatformTopBar({
           whiteSpace: "nowrap",
         }}
       >
-        {email}
+        {name}
       </span>
       {/*
         Solo con consultorio propio: sin uno, /dashboard rebota a /onboarding o /sin-acceso. Con soporte abierto

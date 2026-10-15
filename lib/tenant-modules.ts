@@ -11,15 +11,21 @@
  *
  * La UI solo esconde. La barrera es `assertModule`/`requireModule` en cada action
  * (`lib/authz.ts`).
+ *
+ * PL-1a (C-PL1, plan §20.5.2): la matriz pasa a vertical × plan SaaS (`SaasPlan`: Individual, Consultorio, Clínica,
+ * Libre). Núcleo para todos; Kine suma lo clínico en todos los planes y plantillas/favoritos/catálogo global desde
+ * Consultorio; salas y sala de espera son de Clínica/Libre en las dos verticales; el turnero es un switch.
  */
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantPlan, TenantVertical } from "@prisma/client";
 
 export const TENANT_MODULES = [
   "agenda",
   "pacientes",
   "facturacion",
   "obrasSociales",
+  "evoluciones",
   "salaEspera",
+  "salas",
   "turneroPublico",
   "reportes",
   "planes",
@@ -34,64 +40,60 @@ export const TENANT_MODULES = [
 
 export type TenantModule = (typeof TENANT_MODULES)[number];
 
-/** Lo que define los módulos de un consultorio: las tres columnas de `Tenant` de M2. */
+/**
+ * Lo que define los módulos de un consultorio. PL-1a (C-PL1): `plan` es el plan SaaS NUEVO (`Tenant.saasPlan`, M8),
+ * no el enum legado `Tenant.plan` (que el escritor único sigue espejando para el rollback, PL-D1).
+ */
 export type TenantEntitlements = {
   vertical: TenantVertical;
-  plan: TenantPlan;
+  plan: SaasPlan;
   publicBookingEnabled: boolean;
 };
 
-/** Común a las dos verticales (consultorio General = solo esto + turnero). */
-const CORE: readonly TenantModule[] = [
-  "agenda",
-  "pacientes",
-  "facturacion",
-  "obrasSociales",
-  "salaEspera",
-];
+/**
+ * Núcleo: común a las dos verticales y a todos los planes (plan §20.5.2).
+ *
+ * PL-1a: `evoluciones` es clave reservada (la usa EV2, HC base para todas las verticales). `salaEspera` SALIÓ del
+ * núcleo (PL-D6): la sala de espera (`/sala`, vista Recepción, «Llamar», realtime) es de Clínica/Libre; «Llegó» y
+ * «En atención» son estados de agenda y no dependen de este módulo.
+ */
+const CORE: readonly TenantModule[] = ["agenda", "pacientes", "facturacion", "obrasSociales", "evoluciones"];
 
 /**
- * Kine sin suscripción (FREE). Ejercicios = solo los propios del consultorio
- * (decisión del 07-oct): los globales de Plataforma son `ejerciciosGlobales`.
- * `reportes` va con Kine y no con General (EV-D3: hoy es un placeholder).
+ * Kine en TODOS los planes. Ejercicios = los propios del consultorio (decisión del 07-oct): los globales de
+ * Plataforma son `ejerciciosGlobales`. `reportes` va con Kine y no con General (EV-D3).
  */
-const KINE_FREE: readonly TenantModule[] = [
-  ...CORE,
-  "reportes",
-  "planes",
-  "sesiones",
-  "diagnostico",
-  "evaluaciones",
-  "ejercicios",
-];
+const KINE_ALL: readonly TenantModule[] = ["reportes", "planes", "sesiones", "diagnostico", "evaluaciones", "ejercicios"];
 
-/** Kine "Base" (STARTER): + plantillas de plan y favoritos (EV-D1). */
-const KINE_STARTER: readonly TenantModule[] = [...KINE_FREE, "plantillas", "favoritos"];
+/** Kine desde Consultorio: plantillas de plan, favoritos y el catálogo global de Plataforma. */
+const KINE_CONSULTORIO_UP: readonly TenantModule[] = ["plantillas", "favoritos", "ejerciciosGlobales"];
 
-/** Kine PRO / ENTERPRISE: + todo el catálogo global cargado en Plataforma. */
-const KINE_PRO: readonly TenantModule[] = [...KINE_STARTER, "ejerciciosGlobales"];
+/** Clínica / Libre, en las DOS verticales: salas (consultorios físicos) y sala de espera. */
+const CLINICA_UP: readonly TenantModule[] = ["salas", "salaEspera"];
+
+/** Orden de los planes de menor a mayor (para `minimumPlanFor` y las invariantes de monotonía). */
+const PLAN_ORDER: readonly SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
 
 function baseModules(e: TenantEntitlements): readonly TenantModule[] {
-  // Falla cerrado: una vertical desconocida (enum nuevo sin actualizar esta
-  // matriz) cae a lo común, nunca a "todo".
-  if (e.vertical !== "KINESIOLOGY") return CORE;
-  switch (e.plan) {
-    case "PRO":
-    case "ENTERPRISE":
-      return KINE_PRO;
-    case "STARTER":
-      return KINE_STARTER;
-    default:
-      // FREE y cualquier plan desconocido.
-      return KINE_FREE;
+  // Falla cerrado: un plan desconocido (enum nuevo sin actualizar esta matriz, o un valor legado colado por un
+  // caller que todavía lee `Tenant.plan`) se trata como el plan más chico; una vertical desconocida, como General.
+  const rank = PLAN_ORDER.indexOf(e.plan);
+  const clinicaUp = rank >= PLAN_ORDER.indexOf("CLINICA");
+  const consultorioUp = rank >= PLAN_ORDER.indexOf("CONSULTORIO");
+  const out: TenantModule[] = [...CORE];
+  if (e.vertical === "KINESIOLOGY") {
+    out.push(...KINE_ALL);
+    if (consultorioUp) out.push(...KINE_CONSULTORIO_UP);
   }
+  if (clinicaUp) out.push(...CLINICA_UP);
+  return out;
 }
 
 // 2 verticales × 4 planes × 2 switches: memoizado para que el mismo set sea la
 // misma identidad (contexto de React, deps de hooks) y no se arme por request.
 const memo = new Map<string, ReadonlySet<TenantModule>>();
 
-/** Matriz de módulos (plan §15.3). `turneroPublico` = el switch, en cualquier vertical. */
+/** Matriz de módulos (plan §20.5.2, C-PL1). `turneroPublico` = el switch, en cualquier vertical y plan. */
 export function modulesFor(e: TenantEntitlements): ReadonlySet<TenantModule> {
   const key = `${e.vertical}|${e.plan}|${e.publicBookingEnabled === true}`;
   const hit = memo.get(key);
@@ -102,9 +104,34 @@ export function modulesFor(e: TenantEntitlements): ReadonlySet<TenantModule> {
   return set;
 }
 
-/** ¿El turnero público de este consultorio acepta reservas? (EV-D2: opt-in). */
-export function isPublicBookingOpen(e: TenantEntitlements): boolean {
-  return modulesFor(e).has("turneroPublico");
+/**
+ * ¿El turnero público de este consultorio acepta reservas? (EV-D2: opt-in). Solo mira el switch: el turnero no
+ * depende de la vertical ni del plan, así que acepta cualquier fila con `publicBookingEnabled` (las superficies
+ * públicas no necesitan leer el plan para esto).
+ */
+export function isPublicBookingOpen(e: Pick<TenantEntitlements, "publicBookingEnabled">): boolean {
+  return e.publicBookingEnabled === true;
+}
+
+/** Salas (CRUD, sala por franja, «Por sala»): Clínica/Libre. Al bajar, las salas «duermen» (PL-D7). */
+export function roomsEnabled(e: TenantEntitlements): boolean {
+  return modulesFor(e).has("salas");
+}
+
+/** Sala de espera (`/sala`, vista Recepción, «Llamar», realtime, avisos de llegada): Clínica/Libre (PL-D6). */
+export function waitingRoomEnabled(e: TenantEntitlements): boolean {
+  return modulesFor(e).has("salaEspera");
+}
+
+/**
+ * Plan más chico que trae el módulo en esa vertical (copy de upsell, drawer de cambio de plan). `null` = ningún plan
+ * lo trae en esa vertical (p. ej. Diagnóstico en General). `turneroPublico` es un switch: se evalúa prendido.
+ */
+export function minimumPlanFor(m: TenantModule, v: TenantVertical): SaasPlan | null {
+  for (const plan of PLAN_ORDER) {
+    if (modulesFor({ vertical: v, plan, publicBookingEnabled: true }).has(m)) return plan;
+  }
+  return null;
 }
 
 /**
@@ -126,13 +153,18 @@ export function isProfileTabAllowed(tab: string, modules: ReadonlySet<TenantModu
   return m === undefined || modules.has(m);
 }
 
-/** Mensaje de `ForbiddenError` cuando falta el módulo (`assertModule`). */
+/**
+ * Mensaje de `ForbiddenError` cuando falta el módulo (`assertModule`). PL-1a: los que dependen del plan dicen desde
+ * qué plan están (upsell, `minimumPlanFor`); los que dependen de la vertical, que no son para ese tipo de consultorio.
+ */
 export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   agenda: "Tu consultorio no tiene la agenda habilitada.",
   pacientes: "Tu consultorio no tiene la gestión de pacientes habilitada.",
   facturacion: "Tu consultorio no tiene la facturación habilitada.",
   obrasSociales: "Tu consultorio no tiene las obras sociales habilitadas.",
-  salaEspera: "Tu consultorio no tiene la sala de espera habilitada.",
+  evoluciones: "Tu consultorio no tiene las evoluciones habilitadas.",
+  salaEspera: "La sala de espera está disponible en el plan Clínica.",
+  salas: "Las salas están disponibles en el plan Clínica.",
   turneroPublico:
     "Los turnos online no están habilitados. Activalos desde Configuración para recibir reservas.",
   reportes: "Los reportes no están disponibles para tu tipo de consultorio.",
@@ -141,9 +173,9 @@ export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   diagnostico: "El diagnóstico no está disponible para tu tipo de consultorio.",
   evaluaciones: "Las evaluaciones no están disponibles para tu tipo de consultorio.",
   ejercicios: "La biblioteca de ejercicios no está disponible para tu tipo de consultorio.",
-  plantillas: "Las plantillas de plan están disponibles desde el plan Base.",
-  favoritos: "Los favoritos están disponibles desde el plan Base.",
-  ejerciciosGlobales: "El catálogo de ejercicios de la plataforma está disponible en el plan PRO.",
+  plantillas: "Las plantillas de plan están disponibles desde el plan Consultorio.",
+  favoritos: "Los favoritos están disponibles desde el plan Consultorio.",
+  ejerciciosGlobales: "El catálogo de ejercicios de la plataforma está disponible desde el plan Consultorio.",
 };
 
 // BO3 (decisión de producto §19.6 ítem 1): «Clínica general», no «Consultorio general» (que se confundía con el
@@ -153,6 +185,18 @@ export const VERTICAL_LABEL: Record<TenantVertical, string> = {
   KINESIOLOGY: "Kinesiología y osteopatía",
 };
 
+/** Nombre de cada plan SaaS (C-PL1). Mismo texto que `PLAN_DEFAULTS[plan].label` y las filas de `SaasPlanConfig`. */
+export const SAAS_PLAN_LABEL: Record<SaasPlan, string> = {
+  INDIVIDUAL: "Individual",
+  CONSULTORIO: "Consultorio",
+  CLINICA: "Clínica",
+  LIBRE: "Libre",
+};
+
+/**
+ * @deprecated PL-1a: labels del enum LEGADO `Tenant.plan`. Queda solo mientras haya pantallas que lo lean (Plataforma,
+ * Configuración, biblioteca, `lib/plan-catalog.ts`); lo nuevo usa `SAAS_PLAN_LABEL`. Se borra con el DROP de `plan`.
+ */
 export const PLAN_LABEL: Record<TenantPlan, string> = {
   FREE: "Free",
   STARTER: "Base",

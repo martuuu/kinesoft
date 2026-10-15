@@ -4,7 +4,8 @@ import type { DbClient } from "@/lib/rls";
 import { revalidatePath } from "next/cache";
 import { runWithRls } from "@/lib/rls";
 import { ForbiddenError, type Actor } from "@/lib/session";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from "@/lib/capabilities";
+import { isClinicalMember } from "@/lib/roles";
 import { auditInTx } from "@/lib/audit";
 import { lockPlanPatient, planPatientLockKey, withTxConflictRetry } from "@/lib/plan-lock";
 import { assertPlanManageInTx } from "@/lib/plan-authz-internal";
@@ -133,9 +134,10 @@ export async function actorRoleAndCapsInTx(
 ): Promise<{ role: Role | null; caps: ReadonlySet<Capability> }> {
   const m = await tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
+    // PL-1 (H-PL1): la fila del MIEMBRO (rol + si atiende + delegaciones), no solo el rol.
+    select: MEMBER_ACCESS_SELECT,
   });
-  return { role: m?.role ?? null, caps: capabilitiesFor(m?.role) };
+  return { role: m?.role ?? null, caps: capabilitiesForMembership(m) };
 }
 
 /** `expectedUpdatedAt` (ISO de la UI) contra la fila: igualdad al ms. */
@@ -254,11 +256,16 @@ export async function revalidateRefsForReactivationInTx(
   if (program.practitionerId) {
     const prac = await tx.practitioner.findFirst({
       where: { id: program.practitionerId, tenantId },
-      select: { user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true, disabledAt: true } } } } },
+      select: {
+        user: {
+          select: { memberships: { where: { tenantId }, select: { role: true, clinical: true, acceptedAt: true, disabledAt: true } } },
+        },
+      },
     });
     const m = prac?.user.memberships[0];
-    // IAM-4b: un responsable suspendido tampoco (igual que validatePlanRefsInTx).
-    if (!m || m.acceptedAt == null || m.disabledAt != null || !capabilitiesFor(m.role).has("plans.manage")) {
+    // IAM-4b: un responsable suspendido tampoco (igual que validatePlanRefsInTx). PL-1 (H-PL1): «gestiona planes»
+    // = el miembro ATIENDE (`isClinicalMember`), no el rol: un Titular sin agenda no puede ser responsable.
+    if (!m || m.acceptedAt == null || m.disabledAt != null || !isClinicalMember(m)) {
       throw new PlanLifecycleRejected(PLAN_REACTIVATE_COPY.practitioner, "practitionerId");
     }
   }

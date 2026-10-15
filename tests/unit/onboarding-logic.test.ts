@@ -129,8 +129,11 @@ describe("decideAppGate", () => {
             for (const role of [null, "OWNER", "PRACTITIONER", "ASSISTANT"])
               for (const onboardingCompleted of [false, true])
                 for (const block of blocks)
+                for (const twoFactorRequired of [false, true])
                 for (const nextPath of [null, "/dashboard", "/agenda?d=1"]) {
-                  const to = decideAppGate({ hasSession, hasActor, access, needsChoice, role, onboardingCompleted, nextPath, block });
+                  const to = decideAppGate({
+                    hasSession, hasActor, access, needsChoice, role, onboardingCompleted, nextPath, block, twoFactorRequired,
+                  });
                   seen++;
                   if (to === null) continue;
                   const path = to.split("?")[0];
@@ -145,6 +148,28 @@ describe("decideAppGate", () => {
 
   it("[IAM-3a] los destinos del gate son slugs reservados (un consultorio no puede tapar la ruta)", () => {
     for (const d of APP_GATE_DESTINATIONS) expect(isValidSlug(d.slice(1))).toBe(false);
+  });
+
+  it("[PL-1e] 2FA pendiente → /verificar-acceso?next= (antes que alta, elección y sin-acceso; después del bloqueo)", () => {
+    const base = { hasSession: true, twoFactorRequired: true, nextPath: "/agenda?d=1" } as const;
+    const want = `/verificar-acceso?next=${encodeURIComponent("/agenda?d=1")}`;
+    // Sin Actor (lo normal: `resolveActor` corta antes de armarlo), con cualquier estado de acceso.
+    for (const access of [OK, { kind: "needs_onboarding" } as const, { kind: "no_access", reason: "all_disabled" } as const]) {
+      expect(gate({ ...base, hasActor: false, access })).toBe(want);
+    }
+    // Con Actor (carrera) y elección pendiente: igual primero la 2FA.
+    expect(gate({ ...base, hasActor: true, access: OK, needsChoice: true, role: "OWNER", onboardingCompleted: false })).toBe(want);
+    // /dashboard es el default: sin `next`.
+    expect(gate({ ...base, hasActor: false, access: OK, nextPath: "/dashboard" })).toBe("/verificar-acceso");
+    // El bloqueo gana (un usuario deshabilitado no recibe un pedido de código).
+    expect(gate({ ...base, hasActor: false, access: OK, block: "user_disabled" })).toBe("/cuenta-desactivada");
+    // Sin sesión no aplica: /login.
+    expect(gate({ hasSession: false, hasActor: false, twoFactorRequired: true })).toBe("/login");
+    // Sin la marca (o false), nada cambia.
+    expect(gate({ hasSession: true, hasActor: true, access: OK, role: "OWNER", onboardingCompleted: true, twoFactorRequired: false })).toBeNull();
+    expect(APP_GATE_DESTINATIONS).toContain("/verificar-acceso");
+    expect(isValidSlug("verificar-acceso")).toBe(false);
+    expect(isValidSlug("cuenta")).toBe(false);
   });
 
   it("[BO1-A] /suspendido y /cuenta-desactivada están entre los destinos y son slugs reservados", () => {

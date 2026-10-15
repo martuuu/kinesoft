@@ -13,9 +13,12 @@
  * pisaría con el valor viejo una columna que otro superadmin cambió en el medio
  * si el CAS algún día se relajara.
  *
- * BO3-B: suma el cupo de profesionales a medida (`seatLimitOverride`, BO-D7), que
- * `updatePlatformTenant` acepta desde BO3-B. Vacío = el cupo del plan. Vive ahora
- * en la pestaña «Suscripción» del detalle.
+ * BO3-B sumó el cupo de profesionales a medida (`seatLimitOverride`, BO-D7). PL-1d
+ * lo reemplaza: el plan es el SaaS (Individual / Consultorio / Clínica / Libre) y
+ * los cupos a medida son por tipo (usuarios, profesionales, no clínicos). Se ven
+ * con Libre (que vive de ellos) o si ya hay alguno cargado; en otro plan son una
+ * excepción y se abren con «Fijar cupos a medida». Vacío = el del plan. Vive en la
+ * pestaña «Suscripción» del detalle.
  *
  * CAS: la primera versión es `detail.updatedAt`; después de cada guardado se usa
  * la `data.updatedAt` que devuelve la action (el `router.refresh()` puede tardar
@@ -24,7 +27,7 @@
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { SubscriptionStatus, TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, SubscriptionStatus, TenantVertical } from "@prisma/client";
 import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
@@ -34,27 +37,35 @@ import { updatePlatformTenant } from "@/lib/platform-tenants";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import { REBASED_FORM_COPY, rebaseForm } from "@/components/plataforma/tenants/rebase-form";
 import {
+  SAAS_PLAN_VALUES,
   SUBSCRIPTION_STATUS_VALUES,
-  TENANT_PLAN_VALUES,
   TENANT_VERTICAL_VALUES,
   type UpdatePlatformTenantInput,
 } from "@/lib/platform-tenants-schemas";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
-import { PLAN_CATALOG } from "@/lib/plan-catalog";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import type { PlanLimits } from "@/lib/saas-plans-types";
 import { SEAT_LIMIT_OVERRIDE_MAX } from "@/lib/platform-tenants-schemas";
 import { SUBSCRIPTION_STATUS_LABEL } from "@/components/plataforma/tenants/labels";
 
 export type TenantEditFormState = {
   vertical: TenantVertical;
-  plan: TenantPlan;
+  saasPlan: SaasPlan;
   subscriptionStatus: SubscriptionStatus;
   /** Día AR "YYYY-MM-DD" del `<input type="date">`; "" = sin trial. */
   trialEndsOn: string;
   publicBookingEnabled: boolean;
-  /** BO3-B: cupo a medida como texto del input; "" = el del plan (null). */
-  seatLimitOverride: string;
+  /** PL-1d: cupos a medida como texto del input; "" = el del plan (null). */
+  maxUsersOverride: string;
+  maxProfessionalsOverride: string;
+  maxStaffOverride: string;
 };
+
+const OVERRIDE_KEYS = ["maxUsersOverride", "maxProfessionalsOverride", "maxStaffOverride"] as const;
+type OverrideKey = (typeof OVERRIDE_KEYS)[number];
+
+const asText = (n: number | null) => (n == null ? "" : String(n));
 
 /** Copy literal del plan §15.4 para el `useConfirm` al pasar a General. */
 export const GENERAL_DOWNGRADE_COPY =
@@ -63,11 +74,13 @@ export const GENERAL_DOWNGRADE_COPY =
 export function formFromDetail(d: PlatformTenantDetail): TenantEditFormState {
   return {
     vertical: d.vertical,
-    plan: d.plan,
+    saasPlan: d.saasPlan,
     subscriptionStatus: d.subscriptionStatus,
     trialEndsOn: d.trialEndsOn ?? "",
     publicBookingEnabled: d.publicBookingEnabled,
-    seatLimitOverride: d.seatLimitOverride == null ? "" : String(d.seatLimitOverride),
+    maxUsersOverride: asText(d.maxUsersOverride),
+    maxProfessionalsOverride: asText(d.maxProfessionalsOverride),
+    maxStaffOverride: asText(d.maxStaffOverride),
   };
 }
 
@@ -94,12 +107,12 @@ export function buildUpdatePayload(
 ): UpdatePlatformTenantInput {
   const payload: UpdatePlatformTenantInput = { tenantId, expectedUpdatedAt };
   if (form.vertical !== initial.vertical) payload.vertical = form.vertical;
-  if (form.plan !== initial.plan) payload.plan = form.plan;
+  if (form.saasPlan !== initial.saasPlan) payload.saasPlan = form.saasPlan;
   if (form.subscriptionStatus !== initial.subscriptionStatus) payload.subscriptionStatus = form.subscriptionStatus;
   if (form.trialEndsOn !== initial.trialEndsOn) payload.trialEndsOn = form.trialEndsOn === "" ? null : form.trialEndsOn;
   if (form.publicBookingEnabled !== initial.publicBookingEnabled) payload.publicBookingEnabled = form.publicBookingEnabled;
-  if (form.seatLimitOverride.trim() !== initial.seatLimitOverride.trim()) {
-    payload.seatLimitOverride = parseSeatOverride(form.seatLimitOverride);
+  for (const k of OVERRIDE_KEYS) {
+    if (form[k].trim() !== initial[k].trim()) payload[k] = parseSeatOverride(form[k]);
   }
   return payload;
 }
@@ -114,7 +127,27 @@ export function isGeneralDowngrade(prev: TenantVertical, next: TenantVertical): 
 }
 
 const verticalOptions = TENANT_VERTICAL_VALUES.map((v) => ({ value: v, label: VERTICAL_LABEL[v] }));
-const planOptions = TENANT_PLAN_VALUES.map((v) => ({ value: v, label: PLAN_LABEL[v] }));
+const planOptions = SAAS_PLAN_VALUES.map((v) => ({ value: v, label: SAAS_PLAN_LABEL[v] }));
+
+/**
+ * PL-1d: ¿se muestran los cupos a medida? Con Libre siempre (sin cupos = sin límite, y es donde se pactan); en otro
+ * plan, solo si ya hay alguno cargado (una excepción vigente no se esconde) o si el superadmin la abrió a mano.
+ */
+export function showSeatOverrides(form: TenantEditFormState, opened: boolean): boolean {
+  return opened || form.saasPlan === "LIBRE" || OVERRIDE_KEYS.some((k) => form[k].trim() !== "");
+}
+
+const OVERRIDE_FIELDS: { key: OverrideKey; limit: keyof PlanLimits; label: string; min: 0 | 1 }[] = [
+  { key: "maxUsersOverride", limit: "maxUsers", label: "Usuarios en total", min: 1 },
+  { key: "maxProfessionalsOverride", limit: "maxProfessionals", label: "Profesionales", min: 0 },
+  { key: "maxStaffOverride", limit: "maxStaff", label: "No clínicos (Secretaria, Facturación, Administración)", min: 0 },
+];
+
+/** Placeholder del cupo: el del plan (valores sembrados de `SaasPlanConfig`, `PLAN_DEFAULTS`). */
+function planDefaultText(plan: SaasPlan, limit: keyof PlanLimits): string {
+  const v = PLAN_DEFAULTS[plan].limits[limit];
+  return v == null ? "Sin límite (el del plan)" : `${v} (el del plan)`;
+}
 const statusOptions = SUBSCRIPTION_STATUS_VALUES.map((v) => ({ value: v, label: SUBSCRIPTION_STATUS_LABEL[v] }));
 
 /** Cuerpo del Drawer, controlado y sin efectos: se puede montar con props en un render test. */
@@ -138,6 +171,9 @@ export function TenantEditForm({
   onCancel: () => void;
 }) {
   const fieldError = (k: string) => fieldErrors[k]?.[0];
+  // Solo abre la sección: no es parte del form (no viaja ni se rebasea).
+  const [overridesOpened, setOverridesOpened] = useState(false);
+  const overridesVisible = showSeatOverrides(form, overridesOpened);
   return (
     <form onSubmit={onSubmit} style={{ display: "grid", gap: 16 }}>
       <FormField
@@ -152,11 +188,11 @@ export function TenantEditForm({
       <FormField
         as="select"
         label="Plan"
-        value={form.plan}
+        value={form.saasPlan}
         options={planOptions}
-        onChange={(v) => onChange("plan", v as TenantPlan)}
-        hint={form.vertical === "GENERAL" ? "En Clínica general el plan no cambia módulos todavía." : undefined}
-        error={fieldError("plan")}
+        onChange={(v) => onChange("saasPlan", v as SaasPlan)}
+        hint="Si con el plan nuevo no entra el equipo actual, no se guarda: para bajar de plan hay que elegir quiénes pierden el acceso."
+        error={fieldError("saasPlan")}
         disabled={pending}
       />
       <FormField
@@ -199,21 +235,52 @@ export function TenantEditForm({
           </button>
         )}
       </div>
-      <FormField
-        type="number"
-        label="Cupo de profesionales a medida"
-        value={form.seatLimitOverride}
-        min={1}
-        max={SEAT_LIMIT_OVERRIDE_MAX}
-        step={1}
-        placeholder={
-          PLAN_CATALOG[form.plan].seats == null ? "Sin límite (el del plan)" : `${PLAN_CATALOG[form.plan].seats} (el del plan)`
-        }
-        onChange={(v) => onChange("seatLimitOverride", v)}
-        hint="Vacío = el cupo del plan. Bajarlo no saca a nadie: solo frena nuevas invitaciones de profesionales."
-        error={fieldError("seatLimitOverride")}
-        disabled={pending}
-      />
+      {overridesVisible ? (
+        <fieldset style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 10 }}>
+          <legend style={{ padding: 0, marginBottom: 4, fontSize: 13, fontWeight: 600, color: "var(--navy-900)" }}>
+            Cupos a medida
+          </legend>
+          <p style={{ margin: 0, fontSize: 12, color: "var(--navy-300)", lineHeight: 1.45 }}>
+            {form.saasPlan === "LIBRE"
+              ? "En Libre, un cupo vacío es sin límite."
+              : "Excepción al plan. Vacío = el del plan."}{" "}
+            Bajarlo no saca a nadie: solo frena nuevas invitaciones.
+          </p>
+          {OVERRIDE_FIELDS.map((f) => (
+            <FormField
+              key={f.key}
+              type="number"
+              label={f.label}
+              value={form[f.key]}
+              min={f.min}
+              max={SEAT_LIMIT_OVERRIDE_MAX}
+              step={1}
+              placeholder={planDefaultText(form.saasPlan, f.limit)}
+              onChange={(v) => onChange(f.key, v)}
+              error={fieldError(f.key)}
+              disabled={pending}
+            />
+          ))}
+        </fieldset>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOverridesOpened(true)}
+          disabled={pending}
+          style={{
+            justifySelf: "start",
+            background: "none",
+            border: "none",
+            padding: 0,
+            fontSize: 12,
+            fontWeight: 600,
+            color: "var(--sky-700)",
+            cursor: "pointer",
+          }}
+        >
+          Fijar cupos a medida
+        </button>
+      )}
       <label
         style={{
           display: "flex",

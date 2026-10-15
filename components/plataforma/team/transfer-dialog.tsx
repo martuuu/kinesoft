@@ -80,8 +80,12 @@ export function TransferOwnershipForm({
       <p style={{ margin: 0, fontSize: 13.5, color: "var(--navy-700)", lineHeight: 1.5 }}>
         <strong>{who}</strong> pasa a ser {roleLabel("OWNER", vertical)} del consultorio: gestiona el equipo, los roles y
         la configuración.
+        {/* §20.17: el Administrador/a no atiende. El titular anterior que atiende queda como Profesional (conserva su
+            agenda) con «Configuración»; el que no atiende, como Administrador/a (`changeMemberRoleInTx`). */}
         {currentOwner
-          ? ` ${memberDisplayName(currentOwner)} deja de ser titular y queda como ${roleLabel("ADMIN", vertical)}.`
+          ? ` ${memberDisplayName(currentOwner)} deja de ser titular y queda como ${
+              currentOwner.hasAgenda ? `${roleLabel("PRACTITIONER", vertical)} (conserva su agenda)` : roleLabel("ADMIN", vertical)
+            }, con «Configuración».`
           : ""}{" "}
         Desde el consultorio no se puede deshacer.
       </p>

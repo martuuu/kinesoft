@@ -84,6 +84,8 @@ export type PlatformUserMembership = {
   /** BO3 (integrador): para el rótulo del rol («Profesional» en Clínica general, no «Kinesiólogo/a»). */
   tenantVertical: TenantVertical;
   role: Role;
+  /** PL-1 (C-PL5): ¿atiende? (`Membership.clinical`; solo cuenta en el Titular, ver `isClinicalMember`). */
+  clinical: boolean;
   accepted: boolean;
   acceptedAt: string | null;
   suspended: boolean;

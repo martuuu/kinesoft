@@ -35,8 +35,8 @@ import { lockTenantLocationsShared } from "@/lib/location-lock";
 import { countRoomOverlapsInTx, loadRoomBookingsInTx, lockActiveRoomInTx } from "@/lib/booking-rooms-internal";
 import { bulkPatientAccess } from "@/lib/visibility";
 import { ForbiddenError, type Actor } from "@/lib/session";
-import { getMembershipRole, requireCapability } from "@/lib/authz";
-import { canOperateBooking, canWriteClinical, capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { memberCapabilitiesForActor, requireCapability } from "@/lib/authz";
+import { canOperateBooking, canWriteClinical, type Capability } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { applyReceptionAction, RECEPTION_ACTION_LABEL } from "@/lib/reception-state";
 import type { ForceFlags } from "@/lib/booking-force-flags";
@@ -177,17 +177,18 @@ export async function listBookingsInRange(opts: {
   const patientIds = rows
     .map((b) => b.patientId)
     .filter((id): id is string => !!id);
-  const [accessMap, particularCopago, role] = await Promise.all([
+  const [accessMap, particularCopago, caps] = await Promise.all([
     bulkPatientAccess(actor, patientIds),
     getParticularCopagoCents(actor.tenantId),
-    getMembershipRole(actor),
+    memberCapabilitiesForActor(actor),
   ]);
   // E0 (S07k): esta server action se puede llamar por RPC aunque la agenda ya
   // use `listAgendaBookings`. Gateaba solo full/basic, así que la Secretaria
   // (ASSISTANT, sin `clinical.read`) con `sharedPatientView` leía título,
   // descripción, notas y diagnóstico. Ahora: la misma regla que la agenda
   // (`bookingFieldAccess`) y el chip de diagnóstico solo con clinical + full.
-  const clinical = capabilitiesFor(role).has("clinical.read");
+  // PL-1 (H-PL1): por MIEMBRO, no por rol: un Titular que no atiende no ve lo clínico.
+  const clinical = caps.has("clinical.read");
 
   return rows.map((b): BookingRow => {
     const level = b.patientId ? (accessMap.get(b.patientId) ?? "basic") : "none";
@@ -308,7 +309,7 @@ export async function listBookingsInRange(opts: {
 export async function listAgendaBookings(raw: AgendaBookingsQueryInput): Promise<AgendaBookingRow[]> {
   const actor = await getActor();
   const q = AgendaBookingsQuery.parse(raw);
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   const clinical = caps.has("clinical.read");
   let practitionerIds = q.practitionerIds?.length ? [...new Set(q.practitionerIds)] : undefined;
   if (!caps.has("agenda.viewAll")) {

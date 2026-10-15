@@ -69,6 +69,7 @@ const DETAIL_KEYS = [
 const MEMBERSHIP_KEYS = [
   "accepted",
   "acceptedAt",
+  "clinical", // PL-1
   "hasPractitioner",
   "membershipId",
   "role",

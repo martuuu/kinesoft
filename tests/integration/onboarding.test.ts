@@ -578,10 +578,11 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       expect(edit).toEqual({ ok: true, data: { tenantId, created: false } });
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
       // Escritor único (C-EV5): audit `tenant.entitlements` en el tenant, misma tx. [BO-Z] El primero es el de la
-      // creación (prueba PRO, BO-D1); el segundo, el cambio de vertical.
+      // creación (PL-1a: prueba Individual; ya nace INDIVIDUAL, así que el plan no figura como cambio); el segundo, el
+      // cambio de vertical.
       const ev = await db.auditEvent.findMany({ where: { tenantId, action: "tenant.entitlements" }, orderBy: { createdAt: "asc" } });
       expect(ev).toHaveLength(2);
-      expect(ev[0].payload).toMatchObject({ source: "onboarding", changed: ["plan", "subscriptionStatus", "trialEndsAt"] });
+      expect(ev[0].payload).toMatchObject({ source: "onboarding", changed: ["subscriptionStatus", "trialEndsAt"] });
       expect(ev[1]).toMatchObject({ actorId: uid, entity: "Tenant", entityId: tenantId });
       expect(ev[1].payload).toMatchObject({ source: "onboarding", changed: ["vertical"], before: { vertical: "KINESIOLOGY" }, after: { vertical: "GENERAL" } });
       // Cache de módulos invalidada después del commit.
@@ -617,7 +618,7 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
   });
 
   // ── BO-Z · B4: BO-D1 (prueba PRO de 14 días) y BO-D11 (SIGNUP_MODE) ──
-  describe("[BO-Z] alta web: prueba PRO y SIGNUP_MODE", () => {
+  describe("[BO-Z] alta web: prueba (PL-1a: Individual) y SIGNUP_MODE", () => {
     const prevMode = process.env.SIGNUP_MODE;
     afterAll(() => {
       if (prevMode === undefined) delete process.env.SIGNUP_MODE;
@@ -627,23 +628,28 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       delete process.env.SIGNUP_MODE;
     });
 
-    it("[BO-Z] el alta web nace PRO en TRIALING hasta el fin del día AR a 14 días, por el escritor único", async () => {
+    // PL-1a (plan §20.5.8, PL-D10): las altas web nacen INDIVIDUAL en TRIALING 14 días (antes, BO-D1: PRO). El plan
+    // nuevo vive en `saasPlan`; `plan` (legado) queda espejado por el escritor único (FREE = LEGACY_PLAN_OF.INDIVIDUAL).
+    it("[PL-1a] el alta web nace PRO → nace INDIVIDUAL en TRIALING 14 días", async () => {
       const uid = newIdentity();
       const now = new Date();
-      const r = await saveOnboardingClinic({ name: "Prueba PRO" });
+      const r = await saveOnboardingClinic({ name: "Prueba Individual" });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       createdTenants.push(r.data.tenantId);
       const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
-      const expected = initialSubscriptionFor("PRO", undefined, now);
+      const expected = initialSubscriptionFor("INDIVIDUAL", undefined, now);
       expect(expected.trialDays).toBe(14);
-      expect(t.plan).toBe("PRO");
+      expect(t.saasPlan).toBe("INDIVIDUAL");
+      expect(t.plan).toBe("FREE");
       expect(t.subscriptionStatus).toBe("TRIALING");
       expect(t.trialEndsAt?.toISOString()).toBe(expected.trialEndsAt?.toISOString());
       const ev = await db.auditEvent.findMany({ where: { tenantId: t.id, action: "tenant.entitlements" } });
       expect(ev).toHaveLength(1);
       expect(ev[0]).toMatchObject({ actorId: uid });
-      expect(ev[0].payload).toMatchObject({ source: "onboarding", after: { plan: "PRO", subscriptionStatus: "TRIALING" } });
+      expect(ev[0].payload).toMatchObject({ source: "onboarding", after: { subscriptionStatus: "TRIALING" } });
+      // Ya nace INDIVIDUAL (default de la columna): el plan no figura como cambio.
+      expect((ev[0].payload as { changed: string[] }).changed).not.toContain("saasPlan");
     });
 
     it("[BO-Z] `onboarding` sin `initial` sigue sin poder escribir el plan (allowlist intacta)", async () => {
@@ -656,11 +662,11 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
           applyTenantEntitlementsInTx(tx, {
             tenantId: r.data.tenantId,
             source: "onboarding",
-            patch: { plan: "ENTERPRISE" } as never,
+            patch: { saasPlan: "LIBRE" } as never,
             actor: { userId: uid, homeTenantId: r.data.tenantId },
           })
         )
-      ).rejects.toThrow(/no puede escribir "plan"/);
+      ).rejects.toThrow(/no puede escribir "saasPlan"/);
       // Y `initial` sobre un consultorio que ya tiene la prueba tampoco (solo vale en la creación).
       await expect(
         runWithRls(r.data.tenantId, (tx) =>
@@ -668,12 +674,36 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
             tenantId: r.data.tenantId,
             source: "onboarding",
             initial: true,
-            patch: { plan: "ENTERPRISE" },
+            patch: { saasPlan: "LIBRE" },
             actor: { userId: uid, homeTenantId: r.data.tenantId },
           })
         )
       ).rejects.toThrow(/estado de creación/);
-      expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).plan).toBe("PRO");
+      expect(await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId }, select: { saasPlan: true, plan: true } })).toEqual({
+        saasPlan: "INDIVIDUAL",
+        plan: "FREE",
+      });
+    });
+
+    it("[PL-1a] ownerClinical: default true (Titular con Practitioner); false nace sin Practitioner; tipo inválido rebota", async () => {
+      newIdentity();
+      const bad = await saveOnboardingClinic({ name: "Tipo Malo", ownerClinical: "no" as unknown as boolean });
+      expect(bad).toMatchObject({ ok: false, fieldErrors: { ownerClinical: expect.any(Array) } });
+
+      const yes = await saveOnboardingClinic({ name: "Atiende" });
+      if (!yes.ok) throw new Error(yes.error);
+      createdTenants.push(yes.data.tenantId);
+      const m1 = await db.membership.findFirstOrThrow({ where: { tenantId: yes.data.tenantId, role: "OWNER" } });
+      expect(m1.clinical).toBe(true);
+      expect(await db.practitioner.count({ where: { tenantId: yes.data.tenantId, userId: m1.userId } })).toBe(1);
+
+      newIdentity();
+      const no = await saveOnboardingClinic({ name: "No Atiende", ownerClinical: false });
+      if (!no.ok) throw new Error(no.error);
+      createdTenants.push(no.data.tenantId);
+      const m2 = await db.membership.findFirstOrThrow({ where: { tenantId: no.data.tenantId, role: "OWNER" } });
+      expect(m2.clinical).toBe(false);
+      expect(await db.practitioner.count({ where: { tenantId: no.data.tenantId, userId: m2.userId } })).toBe(0);
     });
 
     it("[BO-Z] SIGNUP_MODE=assisted: no crea un consultorio nuevo (copy de «escribinos»)", async () => {

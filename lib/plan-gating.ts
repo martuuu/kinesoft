@@ -10,17 +10,21 @@
  *
  * Alcance del catálogo (`catalogScope`, decisión de Martin del 07-oct):
  *   - **"none"** — sin el módulo `ejercicios` (consultorio General): no ve nada.
- *   - **"own"** — Kine base (FREE / STARTER): **solo los ejercicios propios** del
- *     consultorio. Dejan de ver los globales `isBasic` (la columna queda, ya no
+ *   - **"own"** — Kine Individual: **solo los ejercicios propios** del
+ *     consultorio. No ven los globales `isBasic` (la columna queda, ya no
  *     importa acá): la biblioteca arranca vacía con el empty state "Creá tu
- *     primer ejercicio · PRO suma el catálogo de la plataforma".
- *   - **"full"** — Kine PRO / ENTERPRISE (`ejerciciosGlobales`): propios + todo
- *     el catálogo global (`tenantId IS NULL`) cargado en Plataforma.
+ *     primer ejercicio".
+ *   - **"full"** — Kine Consultorio / Clínica / Libre (`ejerciciosGlobales`):
+ *     propios + todo el catálogo global (`tenantId IS NULL`) cargado en Plataforma.
+ *
+ * PL-1a (C-PL1): el plan es el SaaS nuevo (`Tenant.saasPlan`). Antes (EV0) "own"
+ * eran FREE/STARTER y "full" PRO/ENTERPRISE; con el mapeo PL-D2 (STARTER →
+ * Consultorio) Consultorio pasa a "full" a propósito (§20.5.2).
  *
  * Todo pasa por `gatingForActor()` / `resolveCapabilities()` para que la regla
  * cambie en un solo lugar.
  */
-import type { Prisma, TenantPlan, TenantVertical } from "@prisma/client";
+import type { Prisma, SaasPlan, TenantVertical } from "@prisma/client";
 import { withTenantDb, type DbClient } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -28,7 +32,7 @@ import { modulesFor } from "@/lib/tenant-modules";
 export type CatalogScope = "none" | "own" | "full";
 
 export type ExerciseCapabilities = {
-  plan: TenantPlan;
+  plan: SaasPlan;
   /** "none" sin `ejercicios`; "own" = solo propios; "full" = + catálogo global. */
   catalogScope: CatalogScope;
   /** Prisma where fragment to AND into any Exercise query. */
@@ -46,7 +50,7 @@ export type ExerciseCapabilities = {
 /**
  * Capacidades del actor de la sesión.
  *
- * - **Con `db`** (una tx abierta): lee `{plan, vertical}` del tenant DENTRO de
+ * - **Con `db`** (una tx abierta): lee `{saasPlan, vertical}` del tenant DENTRO de
  *   esa tx, la misma semántica de antes de EV0. La usan los write-paths que
  *   gatean en la tx que escribe (`lib/plan-templates.ts` la aplicación legacy de plantillas,
  *   `lib/diagnosis.ts`, `lib/sessions.ts`): un cambio de plan concurrente se ve
@@ -66,16 +70,16 @@ export async function gatingForActor(db?: DbClient): Promise<ExerciseCapabilitie
   const tenant = await withTenantDb(actor.tenantId, db, (c) =>
     c.tenant.findUnique({
       where: { id: actor.tenantId },
-      select: { plan: true, vertical: true },
+      select: { saasPlan: true, vertical: true },
     })
   );
   // Falla cerrado: sin fila de tenant → General (sin catálogo, sin nada).
-  if (!tenant) return resolveCapabilities("FREE", actor.tenantId, "GENERAL");
-  return resolveCapabilities(tenant.plan, actor.tenantId, tenant.vertical);
+  if (!tenant) return resolveCapabilities("INDIVIDUAL", actor.tenantId, "GENERAL");
+  return resolveCapabilities(tenant.saasPlan, actor.tenantId, tenant.vertical);
 }
 
 export function resolveCapabilities(
-  plan: TenantPlan,
+  plan: SaasPlan,
   tenantId: string,
   vertical: TenantVertical = "KINESIOLOGY"
 ): ExerciseCapabilities {

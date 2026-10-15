@@ -4,13 +4,12 @@
  * Se afirma el fragmento where que reciben los write-paths (Diagnóstico,
  * plantillas, sesiones) con el `resolveCapabilities` real.
  *
- * EV0 (decisión de Martin, 07-oct): Kine base (FREE/STARTER) = solo ejercicios
- * propios (deja de ver los globales `isBasic`); Kine PRO/ENT = propios + todo el
- * catálogo global; GENERAL = ninguno. Antes FREE/STARTER veían
- * `{ tenantId: null, isBasic: true }`: ese caso pasó a "own".
+ * EV0 (decisión de Martin, 07-oct) → PL-1a (C-PL1, §20.5.2): GENERAL = ninguno;
+ * Kine Individual = solo ejercicios propios (no ve los globales `isBasic`); Kine
+ * Consultorio/Clínica/Libre = propios + todo el catálogo global.
  */
 import { describe, it, expect, vi } from "vitest";
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantVertical } from "@prisma/client";
 
 // `plan-gating` importa `getActor` (cookie/sesión, `react.cache`) solo para
 // `gatingForActor`, que acá no se ejercita. Se mockea la sesión, nunca la
@@ -33,7 +32,7 @@ import {
 } from "@/lib/plans-constants";
 
 const T = "tenant-1";
-const PLANS: TenantPlan[] = ["FREE", "STARTER", "PRO", "ENTERPRISE"];
+const PLANS: SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
 const VERTICALS: TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
 
 describe("resolveCapabilities (C-EV9)", () => {
@@ -43,8 +42,8 @@ describe("resolveCapabilities (C-EV9)", () => {
     }
   });
 
-  it("Kine FREE/STARTER → catalogScope own: solo propios, sin globales (ni isBasic)", () => {
-    for (const p of ["FREE", "STARTER"] as const) {
+  it("[PL-1a] Kine Individual → catalogScope own: solo propios, sin globales (ni isBasic)", () => {
+    for (const p of ["INDIVIDUAL"] as const) {
       const g = resolveCapabilities(p, T);
       expect(g.catalogScope).toBe("own");
       expect(g.visibility).toEqual({ tenantId: T });
@@ -53,8 +52,8 @@ describe("resolveCapabilities (C-EV9)", () => {
     }
   });
 
-  it("Kine PRO/ENTERPRISE → catalogScope full: propios + todo el global", () => {
-    for (const p of ["PRO", "ENTERPRISE"] as const) {
+  it("[PL-1a] Kine Consultorio/Clínica/Libre → catalogScope full: propios + todo el global", () => {
+    for (const p of ["CONSULTORIO", "CLINICA", "LIBRE"] as const) {
       const g = resolveCapabilities(p, T);
       expect(g.catalogScope).toBe("full");
       expect(g.visibility).toEqual({ OR: [{ tenantId: T }, { tenantId: null }] });
@@ -90,45 +89,52 @@ describe("resolveCapabilities (C-EV9)", () => {
     }
   });
 
-  it("Kine: mismos flags de plan que antes de EV0 (favoritos/plantillas desde STARTER)", () => {
+  it("[PL-1a] Kine: favoritos/plantillas desde Consultorio; catalogScope GENERAL none · Individual own · resto full", () => {
+    expect(PLANS.map((p) => [p, resolveCapabilities(p, T).catalogScope])).toEqual([
+      ["INDIVIDUAL", "own"],
+      ["CONSULTORIO", "full"],
+      ["CLINICA", "full"],
+      ["LIBRE", "full"],
+    ]);
+    for (const p of PLANS) expect(resolveCapabilities(p, T, "GENERAL").catalogScope).toBe("none");
     expect(
       PLANS.map((p) => {
         const g = resolveCapabilities(p, T);
         return [p, g.canCreate, g.canFavourite, g.canBuildTemplates];
       })
     ).toEqual([
-      ["FREE", true, false, false],
-      ["STARTER", true, true, true],
-      ["PRO", true, true, true],
-      ["ENTERPRISE", true, true, true],
+      ["INDIVIDUAL", true, false, false],
+      ["CONSULTORIO", true, true, true],
+      ["CLINICA", true, true, true],
+      ["LIBRE", true, true, true],
     ]);
   });
 });
 
 describe("assignableExerciseWhere", () => {
-  it("Kine FREE: solo propios, y siempre archivedAt null", () => {
-    const gate = resolveCapabilities("FREE", T);
+  it("Kine Individual: solo propios, y siempre archivedAt null", () => {
+    const gate = resolveCapabilities("INDIVIDUAL", T);
     expect(assignableExerciseWhere(gate)).toEqual({
       AND: [{ tenantId: T }, { archivedAt: null }],
     });
   });
 
-  it("PRO: propios + todo el global, y siempre archivedAt null", () => {
-    const gate = resolveCapabilities("PRO", T);
+  it("Clínica: propios + todo el global, y siempre archivedAt null", () => {
+    const gate = resolveCapabilities("CLINICA", T);
     expect(assignableExerciseWhere(gate)).toEqual({
       AND: [{ OR: [{ tenantId: T }, { tenantId: null }] }, { archivedAt: null }],
     });
   });
 
   it("GENERAL: nada asignable", () => {
-    const gate = resolveCapabilities("PRO", T, "GENERAL");
+    const gate = resolveCapabilities("CLINICA", T, "GENERAL");
     expect(assignableExerciseWhere(gate)).toEqual({
       AND: [{ id: { in: [] } }, { archivedAt: null }],
     });
   });
 
   it("reusa el fragmento de visibilidad del gate tal cual (no lo recalcula)", () => {
-    const gate = resolveCapabilities("STARTER", T);
+    const gate = resolveCapabilities("CONSULTORIO", T);
     const w = assignableExerciseWhere(gate) as { AND: unknown[] };
     expect(w.AND[0]).toBe(gate.visibility);
   });

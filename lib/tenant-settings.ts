@@ -13,7 +13,7 @@
  */
 import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantPlan, TenantVertical } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor } from "@/lib/session";
 import { requireTenantAdmin } from "@/lib/authz";
@@ -32,8 +32,10 @@ export type TenantSettings = {
   slug: string;
   /** Solo lectura en Configuración: la cambia /plataforma (EV-D5). */
   vertical: TenantVertical;
-  /** Solo lectura en Configuración: la cambia /plataforma o el billing (EV-D6). */
+  /** Legado (lo espeja el escritor desde `saasPlan`, PL-D1). Para mostrar el plan usá `saasPlan`. */
   plan: TenantPlan;
+  /** PL-1 (C-PL1): plan SaaS. Solo lectura en Configuración: lo cambia «Cambiar de plan» o /plataforma. */
+  saasPlan: SaasPlan;
   /** Switch del turnero público (EV-D2: nace apagado). */
   publicBookingEnabled: boolean;
   name: string;
@@ -58,6 +60,7 @@ export async function getTenantSettings(): Promise<TenantSettings> {
       slug: true,
       vertical: true,
       plan: true,
+      saasPlan: true,
       publicBookingEnabled: true,
       name: true,
       legalName: true,

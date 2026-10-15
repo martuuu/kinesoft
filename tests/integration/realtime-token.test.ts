@@ -112,8 +112,8 @@ describe.skipIf(!RUN)("SV04b · mintRealtimeToken", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
     assistantId = (await addPractitioner(db, A, "ASSISTANT")).userId;
     billingId = (await addPractitioner(db, A, "BILLING")).userId;
     practitionerId = (await addPractitioner(db, A, "PRACTITIONER")).userId;
@@ -288,7 +288,7 @@ describe.skipIf(!RUN)("SV04b · realtimeBootstrap", () => {
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
     billingId = (await addPractitioner(db, A, "BILLING")).userId;
   });
   afterAll(async () => {

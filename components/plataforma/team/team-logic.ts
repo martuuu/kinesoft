@@ -18,6 +18,7 @@ import type {
   PlatformTenantTeam,
 } from "@/lib/invitations-types";
 import { ROLE_ORDER } from "@/lib/roles";
+import type { SeatCount } from "@/lib/plan-catalog";
 
 /** Roles que se asignan con el selector. OWNER no: la titularidad tiene su propia acción (`platformTransferOwnership`). */
 export const ASSIGNABLE_ROLES: readonly Exclude<Role, "OWNER">[] = ROLE_ORDER.filter(
@@ -85,21 +86,29 @@ export function transferConfirmMatches(typed: string, email: string): boolean {
 }
 
 /**
- * Indicador de cupos (BO-D7). `used` ya cuenta los clínicos activos + las invitaciones clínicas vigentes
- * (`getSeatUsageInTx`); la Secretaria y Facturación no ocupan lugar. `limit` null = sin tope (plan sin límite).
+ * Indicador de cupos (BO-D7 → PL-1c, C-PL3): tres contadores (profesionales, no clínicos y total) porque el
+ * plan pone topes por tipo además del total. `used` cuenta miembros activos + invitaciones pendientes, cada uno
+ * en su tipo (`getSeatUsageInTx`); `limit` null = sin tope en ese tipo (Consultorio/Clínica no topean por tipo
+ * desde la decisión de Martin del 15-oct §20.17, Libre según override).
  */
 export function seatsSummary(seats: PlatformTenantTeam["seats"]): {
   text: string;
   full: boolean;
   hint: string;
 } {
-  const text =
-    seats.limit === null ? `Profesionales: ${seats.used} (sin tope)` : `Profesionales ${seats.used} de ${seats.limit}`;
-  const base = "Cuentan los profesionales activos y las invitaciones pendientes. Secretario/a y Facturación no ocupan lugar.";
-  const hint = seats.full
-    ? `Cupo lleno: no se puede invitar a otro profesional sin ampliar el plan o el cupo a medida. ${base}`
+  const part = (label: string, c: SeatCount) =>
+    c.limit === null ? `${label} ${c.used} (sin tope)` : `${label} ${c.used} de ${c.limit}`;
+  const text = [
+    part("Profesionales", seats.professional),
+    part("Secretaría/administración", seats.staff),
+    part("Total", seats.total),
+  ].join(" · ");
+  const full = seats.total.full || seats.professional.full || seats.staff.full;
+  const base = "Cuentan los miembros activos y las invitaciones pendientes, cada uno en su tipo.";
+  const hint = full
+    ? `Cupo lleno: no se puede sumar a alguien de ese tipo sin cambiar el plan o el cupo a medida. ${base}`
     : base;
-  return { text, full: seats.full, hint };
+  return { text, full, hint };
 }
 
 /** Rótulo del estado de una invitación de la lista (nunca viene "accepted" ni "revoked"). */

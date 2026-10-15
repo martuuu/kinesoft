@@ -55,7 +55,8 @@ import { isTabActive } from "@/components/plataforma/tenants/tenant-tabs";
 import { PlatformOverviewView } from "@/components/plataforma/tenants/tenant-overview";
 import { TenantActivityView } from "@/components/plataforma/tenants/tenant-activity";
 import { TenantSummaryView } from "@/components/plataforma/tenants/tenant-detail";
-import { buildUpdatePayload, formFromDetail } from "@/components/plataforma/tenants/tenant-edit-drawer";
+import { buildUpdatePayload, formFromDetail, showSeatOverrides } from "@/components/plataforma/tenants/tenant-edit-drawer";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
 import { buildProfilePayload, profileFormFromDetail } from "@/components/plataforma/tenants/tenant-profile-drawer";
 import {
   SUPPORT_WARNING_COPY,
@@ -84,12 +85,13 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
   name: "Movare",
   slug: "movare",
   vertical: "KINESIOLOGY",
-  plan: "FREE",
+  saasPlan: "INDIVIDUAL",
   subscriptionStatus: "ACTIVE",
   trialEndsOn: null,
   publicBookingEnabled: false,
   onboardingCompleted: true,
   ownerEmails: ["owner@movare.test"],
+  ownerNames: ["Ana Pérez"],
   patientCount: 12,
   memberCount: 3,
   createdAt: "2026-09-01T15:00:00.000Z",
@@ -97,7 +99,10 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
   status: "ACTIVE",
   statusReason: null,
   statusChangedAt: null,
-  seatLimitOverride: null,
+  maxUsersOverride: null,
+  maxProfessionalsOverride: null,
+  maxStaffOverride: null,
+  limits: { maxUsers: 1, maxProfessionals: 1, maxStaff: 1 },
   access: { mode: "full", reason: "active", daysLeft: null },
   effectiveAccessMode: "full",
   slugAliases: [],
@@ -144,7 +149,14 @@ describe("[BO3-B] lista de consultorios", () => {
               access: { mode: "suspended", reason: "tenant_suspended", daysLeft: null },
               effectiveAccessMode: "suspended",
             }),
-            row({ id: "t2", name: "Grande", slug: "grande", plan: "ENTERPRISE", seatLimitOverride: 40 }),
+            row({
+              id: "t2",
+              name: "Grande",
+              slug: "grande",
+              saasPlan: "LIBRE",
+              maxUsersOverride: 40,
+              limits: { maxUsers: 40, maxProfessionals: null, maxStaff: null },
+            }),
           ],
           total: 2,
           page: 1,
@@ -157,8 +169,11 @@ describe("[BO3-B] lista de consultorios", () => {
     expect(html).toMatch(/<option value="SUSPENDED" selected="">Suspendido<\/option>/);
     expect(html).toMatch(/class="k-tag[^"]*"[^>]*>Suspendido<\/span>/);
     expect(html).toContain("Acceso: suspendido");
-    expect(html).toContain("Hasta 1");
-    expect(html).toContain("Hasta 40 (a medida)");
+    // PL-1d: plan SaaS y cupos por tipo.
+    expect(html).toContain("Individual");
+    expect(html).toContain("1 usuario");
+    expect(html).toContain("Libre");
+    expect(html).toContain("40 usuarios de cualquier tipo (a medida)");
     expect(html).toContain("Suscripción");
     expect(html).toContain("Limpiar");
   });
@@ -167,9 +182,16 @@ describe("[BO3-B] lista de consultorios", () => {
     expect(buildListHref({ ...query, tenantStatus: "CLOSED" }, 2)).toBe("/plataforma/consultorios?tenantStatus=CLOSED&page=2");
   });
 
-  it("seatLimitLabel: Enterprise sin override = sin límite", () => {
-    expect(seatLimitLabel({ plan: "ENTERPRISE", seatLimitOverride: null })).toBe("Sin límite");
-    expect(seatLimitLabel({ plan: "PRO", seatLimitOverride: null })).toBe("Hasta 10");
+  it("[PL-1d] seatLimitLabel: cupos por tipo de cada plan, y «a medida» con un override", () => {
+    const none = { maxUsersOverride: null, maxProfessionalsOverride: null, maxStaffOverride: null };
+    const lim = (p: keyof typeof PLAN_DEFAULTS) => ({ ...none, limits: PLAN_DEFAULTS[p].limits });
+    expect(seatLimitLabel(lim("INDIVIDUAL"))).toBe("1 usuario");
+    expect(seatLimitLabel(lim("CONSULTORIO"))).toBe("5 usuarios de cualquier tipo"); // §20.17
+    expect(seatLimitLabel(lim("CLINICA"))).toBe("10 usuarios de cualquier tipo");
+    expect(seatLimitLabel(lim("LIBRE"))).toBe("Sin límite");
+    expect(
+      seatLimitLabel({ ...none, maxProfessionalsOverride: 6, limits: { maxUsers: 5, maxProfessionals: 6, maxStaff: 1 } })
+    ).toBe("5 usuarios: profesionales 6, no clínicos 1 (a medida)");
   });
 });
 
@@ -182,11 +204,12 @@ describe("[BO3-B] Drawer «Nuevo consultorio»", () => {
     ownerLastName: "Pérez",
   };
 
-  it("default Kine PRO con el trial del catálogo; vacío no es dirty", () => {
+  it("[PL-1d] default Kine Individual con la prueba del plan y titular que atiende; vacío no es dirty", () => {
     const f = emptyNewTenantForm();
     expect(f.vertical).toBe("KINESIOLOGY");
-    expect(f.plan).toBe("PRO");
+    expect(f.plan).toBe("INDIVIDUAL");
     expect(f.trialDays).toBe("14");
+    expect(f.ownerClinical).toBe(true);
     expect(isNewTenantDirty(f)).toBe(false);
     expect(isNewTenantDirty(filled)).toBe(true);
   });
@@ -199,6 +222,10 @@ describe("[BO3-B] Drawer «Nuevo consultorio»", () => {
     const parsed = CreateTenantWithOwnerInput.safeParse(p);
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.ownerEmail).toBe("titular@movare.test");
+    // PL-1d: el titular que no atiende viaja tal cual (C-PL5).
+    const nc = buildCreatePayload({ ...filled, plan: "CONSULTORIO", ownerClinical: false }, KEY);
+    expect(nc).toMatchObject({ plan: "CONSULTORIO", ownerClinical: false });
+    expect(CreateTenantWithOwnerInput.safeParse(nc).success).toBe(true);
 
     const p0 = buildCreatePayload({ ...filled, slug: " movare ", trialDays: "0", onboardingCompleted: false }, KEY);
     expect(p0).toMatchObject({ slug: "movare", trialDays: 0, onboardingCompleted: false, starterServices: true });
@@ -217,6 +244,8 @@ describe("[BO3-B] Drawer «Nuevo consultorio»", () => {
     expect(html).toContain("/c/centro-kinesico-movare/booking");
     expect(html).toContain("Kinesiología y osteopatía");
     expect(html).toContain("Cargar servicios iniciales");
+    expect(html).toContain("¿Atiende pacientes el titular?");
+    expect(html).toContain("Individual");
     expect(html).toContain("Alta terminada");
     expect(html).toContain("Crear consultorio");
   });
@@ -476,7 +505,7 @@ describe("[BO3-B] Resumen de /plataforma y del consultorio", () => {
   const overview: PlatformOverview = {
     totalTenants: 4,
     byStatus: { ACTIVE: 2, SUSPENDED: 1, CLOSED: 1 },
-    byVerticalPlan: [{ vertical: "KINESIOLOGY", plan: "PRO", count: 4 }],
+    byVerticalPlan: [{ vertical: "KINESIOLOGY", saasPlan: "CLINICA", count: 4 }],
     trialsEndingSoon: [],
     trialsEndingSoonCount: 0,
     onboardingPending: [],
@@ -496,17 +525,18 @@ describe("[BO3-B] Resumen de /plataforma y del consultorio", () => {
     expect(html).toContain('href="/plataforma/salud"');
   });
 
-  it("Resumen del consultorio: razón social, CUIT, cupo usado y aviso sin titular", () => {
+  it("Resumen del consultorio: razón social, CUIT, cupos por tipo usados y aviso sin titular", () => {
+    const full = { used: 1, limit: 1, remaining: 0, full: true };
     const html = renderToStaticMarkup(
       <TenantSummaryView
-        detail={detail({ ownerEmails: [], slugAliases: ["movare-viejo"] })}
-        seats={{ used: 1, limit: 1, remaining: 0, full: true }}
+        detail={detail({ ownerEmails: [], ownerNames: [], slugAliases: ["movare-viejo"] })}
+        seats={{ total: full, professional: full, staff: { used: 0, limit: 1, remaining: 1, full: false } }}
       />
     );
     expect(html).toContain("Movare SRL");
     expect(html).toContain("30-12345678-9");
-    expect(html).toContain("1 de 1 lugares");
-    expect(html).toContain("Sin lugar para otro profesional");
+    expect(html).toContain("En uso: 1 de 1 (1 de 1 profesional, 0 de 1 no clínico)");
+    expect(html).toContain("Sin lugar para otra persona");
     expect(html).toContain("movare-viejo");
     expect(html).toContain("no tiene titular");
     expect(html).toContain(`href="${tenantTabHref("t1", "equipo")}"`);
@@ -565,18 +595,36 @@ describe("[BO3-B] Actividad", () => {
 });
 
 describe("[BO3-B] payloads de suscripción (cupo) y datos", () => {
-  it("cupo a medida: vacío = null (el del plan), número = override; pasa el zod; 0 rebota", () => {
-    const d = detail({ seatLimitOverride: 5 });
+  it("[PL-1d] cupos a medida por tipo: vacío = null (el del plan), número = override; pasa el zod; usuarios 0 rebota", () => {
+    const d = detail({ saasPlan: "LIBRE", maxProfessionalsOverride: 5 });
     const initial = formFromDetail(d);
-    expect(initial.seatLimitOverride).toBe("5");
-    const cleared = buildUpdatePayload(d.id, VERSION, initial, { ...initial, seatLimitOverride: "" });
-    expect(cleared).toEqual({ tenantId: "t1", expectedUpdatedAt: VERSION, seatLimitOverride: null });
+    expect(initial.maxProfessionalsOverride).toBe("5");
+    expect(initial.maxUsersOverride).toBe("");
+    const cleared = buildUpdatePayload(d.id, VERSION, initial, { ...initial, maxProfessionalsOverride: "" });
+    expect(cleared).toEqual({ tenantId: "t1", expectedUpdatedAt: VERSION, maxProfessionalsOverride: null });
     expect(UpdatePlatformTenant.safeParse(cleared).success).toBe(true);
-    const set = buildUpdatePayload(d.id, VERSION, initial, { ...initial, seatLimitOverride: "12" });
-    expect(set.seatLimitOverride).toBe(12);
+    const set = buildUpdatePayload(d.id, VERSION, initial, { ...initial, maxUsersOverride: "12", maxStaffOverride: "0" });
+    expect(set).toMatchObject({ maxUsersOverride: 12, maxStaffOverride: 0 });
     expect(UpdatePlatformTenant.safeParse(set).success).toBe(true);
-    expect(UpdatePlatformTenant.safeParse({ ...set, seatLimitOverride: 0 }).success).toBe(false);
-    expect("seatLimitOverride" in buildUpdatePayload(d.id, VERSION, initial, { ...initial })).toBe(false);
+    expect(UpdatePlatformTenant.safeParse({ ...set, maxUsersOverride: 0 }).success).toBe(false);
+    const noop = buildUpdatePayload(d.id, VERSION, initial, { ...initial });
+    expect(Object.keys(noop).sort()).toEqual(["expectedUpdatedAt", "tenantId"]);
+  });
+
+  it("[PL-1d] plan SaaS: viaja `saasPlan`, nunca `plan` ni `seatLimitOverride`", () => {
+    const d = detail();
+    const initial = formFromDetail(d);
+    const p = buildUpdatePayload(d.id, VERSION, initial, { ...initial, saasPlan: "CLINICA" });
+    expect(p).toEqual({ tenantId: "t1", expectedUpdatedAt: VERSION, saasPlan: "CLINICA" });
+    expect(UpdatePlatformTenant.safeParse(p).success).toBe(true);
+  });
+
+  it("[PL-1d] cupos a medida: visibles con Libre o con un override cargado; si no, detrás de «Fijar cupos a medida»", () => {
+    const base = formFromDetail(detail());
+    expect(showSeatOverrides(base, false)).toBe(false);
+    expect(showSeatOverrides(base, true)).toBe(true);
+    expect(showSeatOverrides({ ...base, saasPlan: "LIBRE" }, false)).toBe(true);
+    expect(showSeatOverrides({ ...base, maxStaffOverride: "2" }, false)).toBe(true);
   });
 
   it("datos: solo lo cambiado; vacío = null; pasa el zod .strict", () => {

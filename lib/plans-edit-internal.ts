@@ -30,7 +30,7 @@ import type { Actor } from "@/lib/session";
 import { ForbiddenError } from "@/lib/session";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx } from "@/lib/audit";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from "@/lib/capabilities";
 import { assertPlanAuthorizeInTx, assertPlanManageInTx } from "@/lib/plan-authz-internal";
 import { lockPlanPatient } from "@/lib/plan-lock";
 import { assertProgramInvariantsInTx } from "@/lib/plan-invariants-internal";
@@ -128,9 +128,10 @@ export async function roleAndCapsInTx(
 ): Promise<{ role: Prisma.MembershipGetPayload<{ select: { role: true } }>["role"] | null; caps: ReadonlySet<Capability> }> {
   const m = await tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
+    // PL-1 (H-PL1): la fila del MIEMBRO (rol + si atiende + delegaciones), no solo el rol.
+    select: MEMBER_ACCESS_SELECT,
   });
-  return { role: m?.role ?? null, caps: capabilitiesFor(m?.role) };
+  return { role: m?.role ?? null, caps: capabilitiesForMembership(m) };
 }
 
 /**

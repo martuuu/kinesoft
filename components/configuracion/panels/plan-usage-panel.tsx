@@ -6,8 +6,10 @@ import { SupportContact } from "@/components/ui/support-contact";
 import type { PlanUsageTone, TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 
 /**
- * Configuración → «Plan y uso» (BO3-F). Solo informa: plan, estado de la suscripción y la prueba, cupos de
- * profesionales y turnero. Sin billing: cambiar de plan lo hace el equipo de KineSoft desde Plataforma, así que el
+ * Configuración → «Plan y uso» (BO3-F; PL-1d: plan SaaS y cupos por tipo). Solo informa: plan, estado de la
+ * suscripción y la prueba, usuarios por tipo (profesionales / no clínicos / total, `seats.lines` de PL-1c) y turnero.
+ * Desde PL-1c la Secretaria, Facturación y el Titular que no atiende SÍ ocupan lugar (PL-D3): se sacó la fila «no
+ * ocupan lugar». El cambio de plan y Facturación los suma PL-3a. Sin billing: cambiar de plan lo hace el equipo de KineSoft desde Plataforma, así que el
  * llamado es «escribinos» con el canal real (`SupportContact`, BO-Z B4: antes no decía a dónde). El copy sale armado de `planUsageView` (lib/tenant-plan-usage-logic.ts, puro y testeado
  * en TZ=UTC y TZ=AR); acá no se calcula nada.
  */
@@ -96,23 +98,22 @@ export function PlanUsagePanel({
           }
         />
         <Row
-          label="Profesionales"
+          label="Usuarios del plan"
           hint={
             <>
-              {seats.custom && "Tu consultorio tiene un cupo a medida. "}
+              {seats.custom && "Tu consultorio tiene cupos a medida. "}
               {seats.detail}
             </>
           }
           value={
-            <span data-seats={seats.value}>
-              <Pill tone={seats.full ? "warn" : "ok"}>{seats.value}</Pill>
+            <span data-seats={seats.value} style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+              {seats.lines.map((l) => (
+                <span key={l.kind} data-seat-kind={l.kind}>
+                  <Pill tone={l.full ? "warn" : "ok"}>{l.value}</Pill>
+                </span>
+              ))}
             </span>
           }
-        />
-        <Row
-          label="Secretaria y Facturación"
-          hint="Podés sumar las que necesites: no ocupan lugar en el plan."
-          value={<Pill>{usage.nonSeatMembers === 1 ? "1 en el equipo" : `${usage.nonSeatMembers} en el equipo`}</Pill>}
         />
         <Row
           label="Turnos online"
@@ -131,7 +132,7 @@ export function PlanUsagePanel({
           lineHeight: 1.45,
         }}
       >
-        Para cambiar de plan o ampliar el cupo, <SupportContact email={supportEmail} subject="Plan del consultorio" />: lo
+        Para cambiar de plan o ampliar los cupos, <SupportContact email={supportEmail} subject="Plan del consultorio" />: lo
         hacemos por vos.
       </p>
     </Card>

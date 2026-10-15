@@ -13,19 +13,33 @@
  * La membresía se filtra por `tenantId` además del del Practitioner: un
  * usuario puede ser kine en A y Secretario/a en B; lo que cuenta es su rol
  * en el consultorio del Practitioner.
+ *
+ * PL-1b (C-PL5): «rol clínico» pasó a «miembro que atiende»
+ * (`clinicalMembershipWhere`): un Titular/Admin con `clinical = false` que
+ * conserva su `Practitioner` de antes deja de ser reservable.
  */
 import type { Prisma } from "@prisma/client";
-import { CLINICAL_ROLES } from "@/lib/roles";
+
+/**
+ * Espejo SQL de `isClinicalMember` (`lib/roles.ts`): membresía ACEPTADA en
+ * `tenantId` de alguien que atiende = PRACTITIONER, u OWNER/ADMIN con
+ * `clinical = true`. No filtra `disabledAt` (cada llamador decide; ver
+ * `bookablePractitionerWhere`). Si cambia una, cambia la otra: el unit test
+ * de practitioner-scope las cruza.
+ */
+export function clinicalMembershipWhere(tenantId: string): Prisma.MembershipWhereInput {
+  return {
+    tenantId,
+    acceptedAt: { not: null },
+    OR: [{ role: "PRACTITIONER" }, { role: { in: ["OWNER", "ADMIN"] }, clinical: true }],
+  };
+}
 
 export function bookablePractitionerWhere(
   tenantId: string,
   opts?: { includeDisabledFilter?: boolean }
 ): Prisma.PractitionerWhereInput {
-  const membership: Prisma.MembershipWhereInput = {
-    tenantId,
-    acceptedAt: { not: null },
-    role: { in: [...CLINICAL_ROLES] },
-  };
+  const membership: Prisma.MembershipWhereInput = clinicalMembershipWhere(tenantId);
   if (opts?.includeDisabledFilter) {
     // `Membership.disabledAt` (M6, IAM-1): lo escribe `suspendMember` (IAM-4c) y lo
     // enchufan los 8 lugares que listan profesionales (IAM-2e).

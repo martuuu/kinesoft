@@ -15,7 +15,7 @@ import type { ExerciseRow, FilterFacets } from "@/lib/exercises-types";
 import { toggleFavourite } from "@/lib/favourites";
 import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { BulkAssignModal } from "@/components/biblioteca/bulk-assign-modal";
-import { PLAN_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, minimumPlanFor } from "@/lib/tenant-modules";
 
 // Superadmin-only editor: lazy so the ~everyone-is-not-an-admin case never
 // downloads the drawer + its media/article editors with the page bundle.
@@ -37,14 +37,22 @@ type Active = {
 export type Capabilities = {
   plan: string;
   canFavourite: boolean;
-  /** PRO/ENT (`catalogScope: "full"`): ve el catálogo global de Plataforma. */
+  /** Kine Consultorio/Clínica/Libre (`catalogScope: "full"`, C-PL1): ve el catálogo global de Plataforma. */
   hasFullCatalog: boolean;
 };
 
-/** "Base" para STARTER, "PRO", etc.; un plan desconocido se muestra tal cual. */
+/** PL-1d: «Individual», «Consultorio», …; un plan desconocido se muestra tal cual. */
 function planLabel(plan: string): string {
-  return (PLAN_LABEL as Record<string, string>)[plan] ?? plan;
+  return (SAAS_PLAN_LABEL as Record<string, string>)[plan] ?? plan;
 }
+
+/**
+ * PL-1d: desde qué plan se suma cada cosa, sacado de la matriz (C-PL1, `minimumPlanFor`) y no escrito a mano: la
+ * biblioteca es solo de Kinesiología. Hoy los dos dan «Consultorio» (decisión 4 de Martin).
+ */
+const FULL_CATALOG_FROM = `el plan ${planLabel(minimumPlanFor("ejerciciosGlobales", "KINESIOLOGY") ?? "CONSULTORIO")}`;
+const FAVOURITES_FROM = `plan ${planLabel(minimumPlanFor("favoritos", "KINESIOLOGY") ?? "CONSULTORIO")}`;
+const FULL_CATALOG_UPSELL = `Desde ${FULL_CATALOG_FROM} se suma el catálogo de la plataforma.`;
 
 type Mode = "exercises" | "manual-therapy";
 
@@ -164,8 +172,7 @@ export function BibliotecaClient({
           <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>{pageSubtitle}</div>
           {!capabilities.hasFullCatalog && (
             <div style={{ fontSize: 11, color: "var(--navy-500)", marginTop: 4 }}>
-              {mode === "manual-therapy" ? "Tus maniobras." : "Tus ejercicios."} PRO suma el
-              catálogo de la plataforma.
+              {mode === "manual-therapy" ? "Tus maniobras." : "Tus ejercicios."} {FULL_CATALOG_UPSELL}
             </div>
           )}
         </div>
@@ -357,7 +364,7 @@ export function BibliotecaClient({
                   </div>
                   {!capabilities.hasFullCatalog && (
                     <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 6 }}>
-                      PRO suma el catálogo de la plataforma.
+                      {FULL_CATALOG_UPSELL}
                     </div>
                   )}
                   <div style={{ marginTop: 14 }}>
@@ -707,7 +714,7 @@ function ExerciseCard({
           {ex.kind === "MANUAL_THERAPY" && <Tag tone="lime">Maniobra</Tag>}
           {/* EV0: `isBasic` ya no decide visibilidad (un Kine base no ve
               globales), así que el chip "Básico" no significaba nada. Lo que no
-              es propio viene del catálogo de la plataforma (solo PRO lo ve). */}
+              es propio viene del catálogo de la plataforma (desde Consultorio, PL-1d). */}
           {ex.isPrivate ? <Tag tone="sky">🔒 Mío</Tag> : <Tag tone="soft">Catálogo</Tag>}
         </div>
       </div>
@@ -731,7 +738,7 @@ function QuickPill({
       type="button"
       onClick={locked ? undefined : onToggle}
       disabled={locked}
-      title={locked ? "Los favoritos están disponibles desde el plan Base" : undefined}
+      title={locked ? `Los favoritos están disponibles desde el ${FAVOURITES_FROM}` : undefined}
       style={{
         textAlign: "left",
         padding: "7px 10px",
@@ -746,8 +753,8 @@ function QuickPill({
     >
       {label}
       {locked && (
-        // Favoritos van desde el plan Base (STARTER, EV-D1), no desde PRO.
-        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>plan Base</span>
+        // Favoritos van desde Consultorio (C-PL1), igual que el catálogo global.
+        <span style={{ marginLeft: 6, fontSize: 9, color: "var(--navy-300)" }}>{FAVOURITES_FROM}</span>
       )}
     </button>
   );

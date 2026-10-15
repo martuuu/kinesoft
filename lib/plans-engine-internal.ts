@@ -43,7 +43,8 @@ import { Prisma } from "@prisma/client";
 import type { Actor } from "@/lib/session";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx } from "@/lib/audit";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from "@/lib/capabilities";
+import { isClinicalMember } from "@/lib/roles";
 import { assertPlanManageInTx } from "@/lib/plan-authz-internal";
 import { lockPlanPatient } from "@/lib/plan-lock";
 import { capacityKeysForWindow, lockCapacityMany, type CapacityLockKey } from "@/lib/booking-cap-lock";
@@ -207,7 +208,10 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
         id: true,
         userId: true,
         // IAM-4b: + `disabledAt` (escalar de la misma relación: 0 sentencias nuevas).
-        user: { select: { memberships: { where: { tenantId }, select: { role: true, acceptedAt: true, disabledAt: true } } } },
+        // PL-1 (H-PL1): + `clinical` (misma fila): el responsable tiene que ATENDER, no solo tener un rol clínico.
+        user: {
+          select: { memberships: { where: { tenantId }, select: { role: true, clinical: true, acceptedAt: true, disabledAt: true } } },
+        },
       },
     }),
     tx.service.findFirst({
@@ -230,7 +234,7 @@ export async function validatePlanRefsInTx(tx: DbClient, actor: Actor, refs: Pla
   // `bookablePractitionerWhere`; un suspendido no aparece en la agenda ni
   // ofrece slots, así que un plan nuevo a su nombre quedaría huérfano.
   const m = prac?.user.memberships[0];
-  if (!prac || !m || m.acceptedAt == null || m.disabledAt != null || !capabilitiesFor(m.role).has("plans.manage")) {
+  if (!prac || !m || m.acceptedAt == null || m.disabledAt != null || !isClinicalMember(m)) {
     throw new PlanRejected(PLAN_ENGINE_COPY.practitioner, "practitionerId");
   }
   if (!service) throw new PlanRejected(PLAN_ENGINE_COPY.service, "serviceId");
@@ -1121,12 +1125,14 @@ export async function createPlanInTx(
 ): Promise<CreatePlanInTxResult> {
   const { now } = opts;
   const tenantId = actor.tenantId;
-  const caps = opts.caps ?? capabilitiesFor(
-    (await tx.membership.findUnique({
-      where: { userId_tenantId: { userId: actor.userId, tenantId } },
-      select: { role: true },
-    }))?.role
-  );
+  const caps =
+    opts.caps ??
+    capabilitiesForMembership(
+      await tx.membership.findUnique({
+        where: { userId_tenantId: { userId: actor.userId, tenantId } },
+        select: MEMBER_ACCESS_SELECT,
+      })
+    );
   await assertPlanManageInTx(tx, actor, caps, input.patientId);
   await lockPlanPatient(tx, { tenantId, patientId: input.patientId });
 

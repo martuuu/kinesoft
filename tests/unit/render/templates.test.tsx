@@ -110,11 +110,12 @@ function detail(over: Partial<PlanTemplateDetail> = {}): PlanTemplateDetail {
 }
 
 describe("[S21t] TemplateList — gate de módulo (EV0: has('plantillas'))", () => {
-  it("sin `plantillas` (FREE): se ve deshabilitado con el aviso y no consulta el server", () => {
+  it("sin `plantillas` (Individual): se ve deshabilitado con el aviso y no consulta el server", () => {
     calls.list = 0;
     const html = render(<TemplateList canManage templatesEnabled={false} />);
     expect(html).toContain(MODULE_DENIED_COPY.plantillas);
-    expect(TEMPLATE_LIST_COPY.disabled).toBe("Las plantillas de plan están disponibles desde el plan Base.");
+    // PL-1a: el copy sale de MODULE_DENIED_COPY (plan nuevo).
+    expect(TEMPLATE_LIST_COPY.disabled).toBe("Las plantillas de plan están disponibles desde el plan Consultorio.");
     expect(html).toContain('data-state="disabled"');
     expect(html).toContain('aria-disabled="true"');
     // El botón de alta aparece apagado: nunca abre el drawer.

@@ -66,10 +66,9 @@ describe("[IAM-0c] roleDescription", () => {
     }
   });
 
-  it("coherente con la matriz: dice «No ve historias clínicas» exactamente en los roles sin clinical.read", () => {
+  it("coherente: dice que no ve historias clínicas exactamente en los roles que no atienden (§20.17: ADMIN incluido)", () => {
     for (const r of ALL) {
-      const reads = capabilitiesFor(r).has("clinical.read");
-      expect(roleDescription(r).includes("No ve historias clínicas")).toBe(!reads);
+      expect(/[Nn][io] ve historias clínicas/.test(roleDescription(r))).toBe(!isClinicalRole(r));
     }
   });
 
@@ -83,9 +82,11 @@ describe("[IAM-0c] conjuntos de roles", () => {
     expect([...ROLE_ORDER]).toEqual(["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"]);
   });
 
-  it("clínicos = OWNER, ADMIN, PRACTITIONER (los que leen clínica en la matriz)", () => {
-    expect([...CLINICAL_ROLES].sort()).toEqual(["ADMIN", "OWNER", "PRACTITIONER"]);
-    for (const r of ALL) {
+  it("[§20.17] clínicos = OWNER y PRACTITIONER (el Administrador/a nunca atiende)", () => {
+    expect([...CLINICAL_ROLES].sort()).toEqual(["OWNER", "PRACTITIONER"]);
+    // La matriz por rol todavía le da `clinical.read` al ADMIN: lo usan solo las filas ADMIN legadas con
+    // `clinical = true` (las normaliza M8b). Para el resto de los roles, «atiende» = «lee clínica».
+    for (const r of ALL.filter((x) => x !== "ADMIN")) {
       expect(isClinicalRole(r)).toBe(capabilitiesFor(r).has("clinical.read"));
     }
   });

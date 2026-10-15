@@ -16,12 +16,18 @@
  * `sharedPatientView` sigue siendo solo del consultorio.
  */
 import { z } from "zod";
-import type { SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
+import type { SaasPlan, SubscriptionStatus, TenantPlan, TenantStatus, TenantVertical } from "@prisma/client";
 import { localToARIso } from "@/lib/datetime-ar";
 import { isValidSlug } from "@/lib/onboarding-logic";
 
 export const TENANT_VERTICAL_VALUES = ["GENERAL", "KINESIOLOGY"] as const satisfies readonly TenantVertical[];
+/**
+ * LEGADO (`Tenant.plan`, enum viejo): ya no lo edita ni lo filtra Plataforma (PL-1d). Queda exportado solo para
+ * quien todavía lo importe mientras dura la ola; el plan vigente es `SAAS_PLAN_VALUES` (`Tenant.saasPlan`, PL-D1).
+ */
 export const TENANT_PLAN_VALUES = ["FREE", "STARTER", "PRO", "ENTERPRISE"] as const satisfies readonly TenantPlan[];
+/** PL-1d: planes SaaS (`Tenant.saasPlan`), en el orden en que se venden (= `SAAS_PLANS` de `lib/saas-plans-logic.ts`). */
+export const SAAS_PLAN_VALUES = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"] as const satisfies readonly SaasPlan[];
 export const SUBSCRIPTION_STATUS_VALUES = [
   "ACTIVE",
   "TRIALING",
@@ -36,9 +42,10 @@ type Missing<All, Listed> = [Exclude<All, Listed>] extends [never] ? true : fals
 const _exhaustive: [
   Missing<TenantVertical, (typeof TENANT_VERTICAL_VALUES)[number]>,
   Missing<TenantPlan, (typeof TENANT_PLAN_VALUES)[number]>,
+  Missing<SaasPlan, (typeof SAAS_PLAN_VALUES)[number]>,
   Missing<SubscriptionStatus, (typeof SUBSCRIPTION_STATUS_VALUES)[number]>,
   Missing<TenantStatus, (typeof TENANT_STATUS_VALUES)[number]>,
-] = [true, true, true, true];
+] = [true, true, true, true, true];
 void _exhaustive;
 
 const id = z.string().trim().min(1).max(64);
@@ -64,8 +71,23 @@ export function trialEndsOnToDate(dayKeyAR: string): Date {
   return new Date(localToARIso(`${dayKeyAR}T23:59:59.999`));
 }
 
-/** Tope del cupo a medida que acepta el Drawer de suscripción (un número mayor es un error de tipeo). */
+/** Tope de los cupos a medida que acepta el Drawer de suscripción (un número mayor es un error de tipeo). */
 export const SEAT_LIMIT_OVERRIDE_MAX = 1000;
+
+/**
+ * PL-1d: un cupo a medida por tipo (Libre y excepciones). null = volver al del plan; ausente = no tocar. El mínimo es
+ * el CHECK de M8 (`maxUsersOverride ≥ 1`, `maxProfessionalsOverride ≥ 0`, `maxStaffOverride ≥ 0`: un consultorio
+ * puede no tener profesionales o no tener personal no clínico, pero nunca cero usuarios). El tope es un guard de
+ * tipeo, no una regla del negocio.
+ */
+const seatOverride = (min: 0 | 1) =>
+  z
+    .number({ invalid_type_error: "Cupo inválido" })
+    .int("Cupo inválido")
+    .min(min, `El cupo mínimo es ${min}`)
+    .max(SEAT_LIMIT_OVERRIDE_MAX, `El cupo máximo es ${SEAT_LIMIT_OVERRIDE_MAX}`)
+    .nullable()
+    .optional();
 
 export const UpdatePlatformTenant = z
   .object({
@@ -73,22 +95,18 @@ export const UpdatePlatformTenant = z
     /** ISO de `Tenant.updatedAt` que vio el Drawer (CAS). */
     expectedUpdatedAt: z.string().datetime({ offset: true, message: "Versión inválida. Recargá la página." }),
     vertical: z.enum(TENANT_VERTICAL_VALUES).optional(),
-    plan: z.enum(TENANT_PLAN_VALUES).optional(),
+    /**
+     * PL-1d: el plan SaaS (`Tenant.saasPlan`; el escritor espeja el `plan` legado). Ya no se acepta `plan` (enum
+     * viejo) ni `seatLimitOverride` (queda en la base, PL-D1/M8): `.strict()` los rebota.
+     */
+    saasPlan: z.enum(SAAS_PLAN_VALUES).optional(),
     subscriptionStatus: z.enum(SUBSCRIPTION_STATUS_VALUES).optional(),
     /** Día AR "YYYY-MM-DD"; null = borrar el trial; ausente = no tocar. */
     trialEndsOn: dayKey.nullable().optional(),
     publicBookingEnabled: z.boolean().optional(),
-    /**
-     * BO3-B: cupo de profesionales a medida (BO-D7). null = volver al del plan; ausente = no tocar. ≥ 1 como el
-     * CHECK de M7 (`Tenant_seatLimitOverride_check`); el tope es un guard de tipeo, no una regla del negocio.
-     */
-    seatLimitOverride: z
-      .number({ invalid_type_error: "Cupo inválido" })
-      .int("Cupo inválido")
-      .min(1, "El cupo mínimo es 1")
-      .max(SEAT_LIMIT_OVERRIDE_MAX, `El cupo máximo es ${SEAT_LIMIT_OVERRIDE_MAX}`)
-      .nullable()
-      .optional(),
+    maxUsersOverride: seatOverride(1),
+    maxProfessionalsOverride: seatOverride(0),
+    maxStaffOverride: seatOverride(0),
   })
   .strict();
 export type UpdatePlatformTenantInput = z.input<typeof UpdatePlatformTenant>;
@@ -97,7 +115,8 @@ export type UpdatePlatformTenantInput = z.input<typeof UpdatePlatformTenant>;
 export const PlatformTenantListQuery = z.object({
   q: z.string().trim().max(120).default(""),
   vertical: z.union([z.enum(TENANT_VERTICAL_VALUES), z.literal("")]).default(""),
-  plan: z.union([z.enum(TENANT_PLAN_VALUES), z.literal("")]).default(""),
+  /** PL-1d: filtra por `Tenant.saasPlan` (el searchParam sigue llamándose `plan`). */
+  plan: z.union([z.enum(SAAS_PLAN_VALUES), z.literal("")]).default(""),
   status: z.union([z.enum(SUBSCRIPTION_STATUS_VALUES), z.literal("")]).default(""),
   /** BO2-D: estado del consultorio (ACTIVE / SUSPENDED / CLOSED). */
   tenantStatus: z.union([z.enum(TENANT_STATUS_VALUES), z.literal("")]).default(""),

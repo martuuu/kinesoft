@@ -1,5 +1,6 @@
 import type { Role } from "@prisma/client";
 import type { EmailTransportName } from "@/lib/email/types";
+import type { SeatUsageByKind } from "@/lib/plan-catalog";
 
 /**
  * Estado de una invitación (mismo vocabulario que `invitationStatus` de `lib/access-logic.ts`). En la lista de
@@ -66,10 +67,18 @@ export type TeamMemberRow = {
   /** IAM-4c: suspendido desde (null = activo). Suspendido = no entra a este consultorio ni es reservable. */
   disabledAt: Date | null;
   /**
-   * IAM-4c: tiene profesional (`Practitioner`) en este consultorio con rol clínico, o sea agenda propia y turnos.
-   * La Secretaria y Facturación: false. Un clínico en false es una membresía rota (no puede entrar).
+   * IAM-4c: tiene profesional (`Practitioner`) en este consultorio y atiende, o sea agenda propia y turnos.
+   * La Secretaria, Facturación y el Titular/Admin que no atiende: false. Un clínico en false es una membresía rota.
    */
   hasAgenda: boolean;
+  /** PL-1c (C-PL5): «¿Atiende?». Solo lo elige el Titular; PRACTITIONER siempre true; Admin (§20.17), Secretaría y Facturación false. */
+  clinical: boolean;
+  /** PL-1c (PL-D5): «Configuración» delegada. */
+  grantSettings: boolean;
+  /** PL-1c (PL-D5): «Planes y pagos» delegado. */
+  grantBilling: boolean;
+  /** PL-1c: por qué está deshabilitado (MANUAL | PLAN_DOWNGRADE | PLATFORM); null si está activo. */
+  disabledReason: string | null;
   /** IAM-4c: último «link para nueva contraseña» que se le mandó (de `EmailLog`), para mostrar si salió. */
   lastPasswordResetEmail: InvitationLastEmail | null;
 };
@@ -119,7 +128,7 @@ export type PlatformTeamMemberRow = {
   role: Role;
   joinedAt: Date | null;
   disabledAt: Date | null;
-  /** Rol clínico con `Practitioner` en este consultorio (agenda propia). */
+  /** Atiende (`isClinicalMember`) y tiene `Practitioner` en este consultorio (agenda propia). */
   hasAgenda: boolean;
 };
 
@@ -138,10 +147,13 @@ export type PlatformTeamInvitationRow = {
   lastEmailStatus: InvitationEmailStatus | null;
 };
 
-/** `getTenantTeamForPlatform` (BO2-B). `seats` = uso de lugares del plan (BO-D7, `lib/plan-catalog.ts`). */
+/**
+ * `getTenantTeamForPlatform` (BO2-B). PL-1c: `seats` = uso por tipo (C-PL3, `getSeatUsageInTx`): total de usuarios,
+ * profesionales y no clínicos (Secretaría/administración).
+ */
 export type PlatformTenantTeam = {
   tenantId: string;
   members: PlatformTeamMemberRow[];
   invitations: PlatformTeamInvitationRow[];
-  seats: { used: number; limit: number | null; remaining: number | null; full: boolean };
+  seats: SeatUsageByKind;
 };

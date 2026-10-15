@@ -62,8 +62,8 @@ describe.skipIf(!RUN)("FX2a · listSalaBookings (PD-13 proyectado en el server)"
   beforeAll(async () => {
     db = ownerClient();
     await sweepOrphanTestTenants(db);
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
     assistant = await addPractitioner(db, A, "ASSISTANT");
     billing = await addPractitioner(db, A, "BILLING");
     kine = await addPractitioner(db, A, "PRACTITIONER");

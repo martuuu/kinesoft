@@ -27,7 +27,7 @@
  */
 import type { Prisma, TenantVertical } from "@prisma/client";
 import { pickFreeSlug, slugify } from "./onboarding-logic"; // relativo: el script lo corre tsx
-import { enableServiceForPractitioners, provisionPractitionerAgenda } from "./agenda-defaults";
+import { enableServiceForPractitioners, ensurePrimaryLocation, provisionPractitionerAgenda } from "./agenda-defaults";
 import type { StarterService } from "./tenant-starter-services";
 
 type Tx = Prisma.TransactionClient;
@@ -111,6 +111,13 @@ export type BootstrapTenantInput = {
    * `applyTenantEntitlementsInTx` (C-EV5): el tenant todavía no existe.
    */
   vertical?: TenantVertical;
+  /**
+   * PL-1c (C-PL5, decisión 7/8 de Martin): ¿el Titular atiende? Default `true` (lo de siempre: el Titular es el
+   * kinesiólogo). `false` = Titular «Administrador/a sin agenda»: la membresía OWNER nace con `clinical = false`, sin
+   * `Practitioner` ni franjas (sí la sede «Principal», que es del consultorio) y los servicios iniciales quedan sin
+   * profesional habilitado (los habilita `createService`/el editor cuando se sume uno). No ve HC (PL-D4).
+   */
+  ownerClinical?: boolean;
 };
 
 /**
@@ -141,7 +148,8 @@ export async function bootstrapTenant(
 ): Promise<{
   tenantId: string;
   slug: string;
-  practitionerId: string;
+  /** null = Titular que no atiende (`ownerClinical: false`): no tiene `Practitioner`. */
+  practitionerId: string | null;
   particularInsurerId: string;
   locationId: string;
   /** BO2-A: ids de `starterServices`, en el mismo orden (vacío sin servicios iniciales). */
@@ -192,11 +200,15 @@ export async function bootstrapTenant(
       // General o /plataforma, nunca por el alta.
     },
   });
-  const practitioner = await tx.practitioner.create({
-    data: { tenantId: tenant.id, userId: input.userId, licenseNumber: input.licenseNumber || null },
-  });
+  const ownerClinical = input.ownerClinical ?? true;
+  const practitioner = ownerClinical
+    ? await tx.practitioner.create({
+        data: { tenantId: tenant.id, userId: input.userId, licenseNumber: input.licenseNumber || null },
+      })
+    : null;
+  // PL-1c: el Titular delega «Configuración»/«Planes y pagos»; él no los necesita (OWNER los tiene por rol).
   await tx.membership.create({
-    data: { tenantId: tenant.id, userId: input.userId, role: "OWNER", acceptedAt: new Date() },
+    data: { tenantId: tenant.id, userId: input.userId, role: "OWNER", clinical: ownerClinical, acceptedAt: new Date() },
   });
   // Todo tenant tiene exactamente un "Particular" (sin obra social): es la
   // cobertura por defecto del paciente particular; su precio lo pone el OWNER.
@@ -217,10 +229,11 @@ export async function bootstrapTenant(
   // `setBusinessHours` arrastra esta plantilla mientras siga sin editar) y
   // PractitionerPayer de Particular. Servicios todavía no hay: los que se
   // creen después se habilitan en `createService`.
-  const agenda = await provisionPractitionerAgenda(tx, {
-    tenantId: tenant.id,
-    practitionerId: practitioner.id,
-  });
+  // PL-1c: sin Titular que atienda, solo la sede (es del consultorio; la agenda de cada profesional se arma cuando
+  // se suma, con `provisionPractitionerAgenda`).
+  const locationId = practitioner
+    ? (await provisionPractitionerAgenda(tx, { tenantId: tenant.id, practitionerId: practitioner.id })).locationId
+    : await ensurePrimaryLocation(tx, tenant.id);
   // BO2-A: servicios iniciales en la MISMA tx que el alta (todo o nada) y ya
   // habilitados para el titular, como `createService`. Secuencial a propósito: el
   // orden de creación es el orden en que el consultorio los ve listados.
@@ -238,7 +251,9 @@ export async function bootstrapTenant(
       },
       select: { id: true },
     });
-    await enableServiceForPractitioners(tx, { tenantId: tenant.id, serviceId: svc.id, practitionerId: practitioner.id });
+    if (practitioner) {
+      await enableServiceForPractitioners(tx, { tenantId: tenant.id, serviceId: svc.id, practitionerId: practitioner.id });
+    }
     serviceIds.push(svc.id);
   }
   // En la misma transacción (no `audit()`, que escribe por otra conexión):
@@ -254,7 +269,8 @@ export async function bootstrapTenant(
         payload: {
           slug,
           source: input.source,
-          practitionerId: practitioner.id,
+          practitionerId: practitioner?.id ?? null,
+          ...(ownerClinical ? {} : { ownerClinical: false }),
           vertical: tenant.vertical,
           ...(serviceIds.length ? { starterServices: serviceIds.length } : {}),
         },
@@ -264,9 +280,9 @@ export async function bootstrapTenant(
   return {
     tenantId: tenant.id,
     slug,
-    practitionerId: practitioner.id,
+    practitionerId: practitioner?.id ?? null,
     particularInsurerId: particular.id,
-    locationId: agenda.locationId,
+    locationId,
     serviceIds,
   };
 }

@@ -62,7 +62,27 @@ function arg(name: string): string | undefined {
   return eq ? eq.slice(name.length + 3) : undefined;
 }
 
-function samples(base: string): Record<EmailKind, () => RenderedEmail> {
+/**
+ * PL-1a sumó a `EmailKind` los kinds de PL (2FA, cobros, mensajes) pero sus plantillas son de PL-2: hasta
+ * entonces quedan afuera del diagnóstico. PL-2 los suma acá y vuelve a `Record<EmailKind, …>` completo.
+ */
+type PendingPlKind =
+  | "two_factor_code"
+  | "two_factor_changed"
+  | "recovery_codes_used"
+  | "billing_charge_created"
+  | "billing_payment_received"
+  | "billing_payment_rejected"
+  | "billing_past_due"
+  | "billing_price_change"
+  | "billing_auto_debit_changed"
+  | "support_message_platform"
+  | "support_reply_tenant"
+  | "lead_received"
+  | "lead_reply";
+type DiagnosableKind = Exclude<EmailKind, PendingPlKind>;
+
+function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
   const link = (path: string) => `${base}${path}`;
   const inAWeek = new Date(Date.now() + 7 * 24 * 3600 * 1000);
   return {
@@ -101,13 +121,13 @@ async function main(): Promise<number> {
   }
   const base = (arg("url") || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/+$/, "");
   const all = arg("all") !== undefined;
-  const kindArg = (arg("kind") || "welcome") as EmailKind;
+  const kindArg = (arg("kind") || "welcome") as DiagnosableKind;
   const table = samples(base);
   if (!all && !(kindArg in table)) {
     console.error(`--kind desconocido. Opciones: ${Object.keys(table).join(", ")}`);
     return 1;
   }
-  const kinds = all ? (Object.keys(table) as EmailKind[]) : [kindArg];
+  const kinds = all ? (Object.keys(table) as DiagnosableKind[]) : [kindArg];
 
   const env = process.env;
   const probe = table[kinds[0]]();

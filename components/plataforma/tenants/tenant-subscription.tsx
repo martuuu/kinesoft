@@ -1,10 +1,10 @@
 /**
  * [BO3-B] Pestaña «Suscripción» del detalle: tipo, plan, estado de la suscripción, trial, turnos online, cupo de
- * profesionales y el acceso que resulta (`tenantAccessFor`, C-BO1). Se edita con el Drawer de EV0
- * (`TenantEditDrawer`), que desde BO3-B también cambia el cupo a medida.
+ * usuarios por tipo y el acceso que resulta (`tenantAccessFor`, C-BO1). Se edita con el Drawer de EV0
+ * (`TenantEditDrawer`), que desde PL-1d cambia el plan SaaS y los cupos a medida por tipo (Libre y excepciones).
  */
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   ACCESS_MODE_LABEL,
   SUBSCRIPTION_STATUS_LABEL,
@@ -35,11 +35,11 @@ export function TenantSubscriptionView({ detail: d }: { detail: PlatformTenantDe
       <Facts
         items={[
           ["Tipo", VERTICAL_LABEL[d.vertical]],
-          ["Plan", PLAN_LABEL[d.plan]],
+          ["Plan", SAAS_PLAN_LABEL[d.saasPlan]],
           ["Estado de la suscripción", SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]],
           ["Prueba", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin prueba")],
           ["Turnos online", d.publicBookingEnabled ? "Activo" : "Apagado"],
-          ["Cupo de profesionales", seatLimitLabel(d)],
+          ["Usuarios del plan", seatLimitLabel(d)],
           ["Acceso del consultorio", accessText(d)],
         ]}
       />

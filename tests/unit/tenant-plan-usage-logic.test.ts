@@ -13,27 +13,45 @@ import {
   subscriptionSummary,
   type TenantPlanUsageInput,
 } from "@/lib/tenant-plan-usage-logic";
-import { seatLimitFor, seatUsage } from "@/lib/plan-catalog";
+import { planLimitsFor, seatUsageByKind } from "@/lib/plan-catalog";
+import { PLAN_DEFAULTS } from "@/lib/saas-plans-logic";
+import type { SaasPlan } from "@prisma/client";
 
 const ar = (local: string) => new Date(`${local}:00-03:00`);
 
-function input(p: Partial<TenantPlanUsageInput> & { clinical?: number; pending?: number } = {}): TenantPlanUsageInput {
-  const plan = p.plan ?? "STARTER";
-  const seatLimitOverride = p.seatLimitOverride ?? null;
-  const clinical = p.clinical ?? 1;
-  const pending = p.pending ?? 0;
+type Overrides = { maxUsersOverride: number | null; maxProfessionalsOverride: number | null; maxStaffOverride: number | null };
+
+/** PL-1c: miembros + invitaciones por tipo, contra los límites del plan (los mismos de `getSeatUsageInTx`). */
+function input(
+  p: Partial<TenantPlanUsageInput> & {
+    pro?: number;
+    staffN?: number;
+    pendingPro?: number;
+    pendingStaff?: number;
+    overrides?: Partial<Overrides>;
+  } = {}
+): TenantPlanUsageInput {
+  const plan: SaasPlan = p.plan ?? "CONSULTORIO";
+  const o: Overrides = { maxUsersOverride: null, maxProfessionalsOverride: null, maxStaffOverride: null, ...p.overrides };
+  const pendingInvites = { professional: p.pendingPro ?? 0, staff: p.pendingStaff ?? 0 };
+  const seats = seatUsageByKind(
+    { professional: (p.pro ?? 1) + pendingInvites.professional, staff: (p.staffN ?? 0) + pendingInvites.staff },
+    planLimitsFor(plan, null, o)
+  );
+  const { pro: _p, staffN: _s, pendingPro: _pp, pendingStaff: _ps, overrides: _o, ...rest } = p;
   return {
     plan,
+    planLabel: PLAN_DEFAULTS[plan].label,
     status: "ACTIVE",
     subscriptionStatus: "ACTIVE",
     trialEndsAt: null,
     subscriptionStatusChangedAt: null,
     publicBookingEnabled: false,
-    seatLimitOverride,
-    seats: seatUsage({ clinicalMembers: clinical, pendingClinicalInvites: pending }, seatLimitFor({ plan, seatLimitOverride })),
-    pendingClinicalInvites: pending,
-    nonSeatMembers: 0,
-    ...p,
+    customLimits: Object.values(o).some((v) => v != null),
+    seats,
+    pendingInvites,
+    nonSeatMembers: p.staffN ?? 0,
+    ...rest,
   };
 }
 
@@ -95,43 +113,64 @@ describe("[BO3-F] subscriptionSummary", () => {
   });
 });
 
-describe("[BO3-F] seatsSummary — mismos números que frenan la invitación", () => {
-  it("Base con 2 profesionales → «2 de 3» (C8: «no ocupan lugar» ya lo dice la fila de Secretario/a, no se repite)", () => {
-    const s = seatsSummary(input({ clinical: 2 }));
-    expect(s.value).toBe("2 de 3");
+describe("[PL-1c] seatsSummary — por tipo, mismos números que frenan la invitación", () => {
+  it("[§20.17] Consultorio: 5 de cualquier tipo («… (sin límite) · Total 4 de 5»)", () => {
+    const s = seatsSummary(input({ pro: 3, staffN: 1 }));
+    expect(s.value).toBe("Profesionales 3 (sin límite) · Secretaría/administración 1 (sin límite) · Total 4 de 5");
+    expect(s.used).toBe(4);
+    expect(s.limit).toBe(5);
     expect(s.full).toBe(false);
     expect(s.custom).toBe(false);
-    expect(s.detail).not.toContain("no ocupan lugar");
+    expect(s.lines.map((l) => l.kind)).toEqual(["professional", "staff", "total"]);
+  });
+
+  it("topes por tipo a medida: «Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5»", () => {
+    const s = seatsSummary(input({ pro: 3, staffN: 1, overrides: { maxProfessionalsOverride: 4, maxStaffOverride: 1 } }));
+    expect(s.value).toBe("Profesionales 3 de 4 · Secretaría/administración 1 de 1 · Total 4 de 5");
+    expect(s.full).toBe(true); // el no clínico está lleno
+    expect(s.custom).toBe(true);
+    expect(s.detail).toContain("No quedan lugares para Secretaría o administración");
   });
 
   it("las invitaciones pendientes reservan lugar y se dicen", () => {
-    const s = seatsSummary(input({ clinical: 2, pending: 1 }));
-    expect(s.value).toBe("3 de 3");
-    expect(s.full).toBe(true);
+    const s = seatsSummary(input({ pro: 3, pendingPro: 1, overrides: { maxProfessionalsOverride: 4, maxStaffOverride: 1 } }));
+    expect(s.value).toBe("Profesionales 4 de 4 · Secretaría/administración 0 de 1 · Total 4 de 5");
     expect(s.detail).toContain("Incluye 1 invitación pendiente");
+    expect(s.detail).toContain("No quedan lugares para profesionales");
+  });
+
+  it("Individual: solo el total («Total 1 de 1»)", () => {
+    const s = seatsSummary(input({ plan: "INDIVIDUAL", pro: 1 }));
+    expect(s.value).toBe("Total 1 de 1");
     expect(s.detail).toContain("No quedan lugares libres");
   });
 
-  it("bajar de plan no saca a nadie: más profesionales que lugares", () => {
-    const s = seatsSummary(input({ plan: "FREE", clinical: 3 }));
-    expect(s.value).toBe("3 de 1");
-    expect(s.detail).toContain("los que están siguen");
+  it("más personas que lugares (datos de antes o un override achicado): las que están siguen", () => {
+    const s = seatsSummary(input({ plan: "INDIVIDUAL", pro: 3 }));
+    expect(s.value).toBe("Total 3 de 1");
+    expect(s.detail).toContain("las que están siguen");
   });
 
-  it("Enterprise sin cupo a medida → sin límite; con override → cupo a medida", () => {
-    expect(seatsSummary(input({ plan: "ENTERPRISE", clinical: 12 })).value).toBe("12 (sin límite)");
-    const o = seatsSummary(input({ plan: "ENTERPRISE", clinical: 12, seatLimitOverride: 20 }));
-    expect(o.value).toBe("12 de 20");
+  it("Clínica: tipos sin límite propio y total 10; Libre sin límite; override → a medida", () => {
+    expect(seatsSummary(input({ plan: "CLINICA", pro: 3, staffN: 2 })).value).toBe(
+      "Profesionales 3 (sin límite) · Secretaría/administración 2 (sin límite) · Total 5 de 10"
+    );
+    expect(seatsSummary(input({ plan: "LIBRE", pro: 12 })).value).toBe(
+      "Profesionales 12 (sin límite) · Secretaría/administración 0 (sin límite) · Total 12 (sin límite)"
+    );
+    const o = seatsSummary(input({ plan: "LIBRE", pro: 12, overrides: { maxUsersOverride: 20 } }));
+    expect(o.value).toContain("Total 12 de 20");
     expect(o.custom).toBe(true);
   });
 });
 
-describe("[BO3-F] planUsageView", () => {
-  it("label del plan del catálogo y turnero", () => {
-    const v = planUsageView(input({ plan: "PRO", publicBookingEnabled: true, nonSeatMembers: 2 }), ar("2026-10-14T10:00"));
-    expect(v.planLabel).toBe("PRO");
+describe("[PL-1c] planUsageView", () => {
+  it("plan nuevo con su label, turnero y no clínicos", () => {
+    const v = planUsageView(input({ plan: "CLINICA", publicBookingEnabled: true, staffN: 2 }), ar("2026-10-14T10:00"));
+    expect(v.plan).toBe("CLINICA");
+    expect(v.planLabel).toBe("Clínica");
     expect(v.publicBookingEnabled).toBe(true);
     expect(v.nonSeatMembers).toBe(2);
-    expect(v.seats.value).toBe("1 de 10");
+    expect(v.seats.value).toContain("Total 3 de 10");
   });
 });

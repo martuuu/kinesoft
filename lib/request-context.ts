@@ -37,6 +37,14 @@ export type RequestContext = {
    * con esto `runWithRls` deja escribir al soporte. `ensureRequestContext` nunca lo toca.
    */
   supportWritable?: boolean;
+  /**
+   * PL-1e (C-PL10): `withAccountWritable` (lib/account-writable.ts) lo prende SOLO alrededor de una action de la
+   * allowlist `ACCOUNT_WRITABLE_ACTIONS` (pagar, cambiar de plan, débito, comprobante, mensajes a soporte): un
+   * consultorio en solo lectura por falta de pago tiene que poder pagar y escribirnos. Nunca en una sesión de
+   * soporte (`runWithRls`/`assertWritable` lo ignoran si hay `supportSessionId`). `ensureRequestContext` nunca lo
+   * prende.
+   */
+  accountWritable?: boolean;
 };
 
 const als = new AsyncLocalStorage<RequestContext>();
@@ -96,7 +104,7 @@ export function ensureRequestContext(ctx: RequestContext) {
   }
   // Marco cebado (vacío) u otro actor en la misma cadena: se completa EN EL LUGAR (no `enterWith`, que no llega
   // al caller; ver `primeRequestContext`). `supportWritable` es de `withSupportWritable`: se limpia al cambiar
-  // de actor.
-  Object.assign(existing, ctx, { supportWritable: undefined });
+  // de actor. PL-1e: `accountWritable` igual (es de `withAccountWritable`).
+  Object.assign(existing, ctx, { supportWritable: undefined, accountWritable: undefined });
   return existing;
 }

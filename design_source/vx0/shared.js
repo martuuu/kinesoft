@@ -25,13 +25,27 @@
     motion: params.get("motion") || (embedded ? null : load("motion")) || "full",
     grid: params.get("grid") || load("grid") || "off",
   };
+  /* VX0-c: las pantallas de app (recepcion, sala-tv) declaran sus propios
+     controles ANTES de cargar este script:
+       window.VX_PAGE = { bar: "app",            // sin Vertical/Estado
+         extra: [{ k: "layout", label: "Variante", def: "a", opts: [["a", "A"], ["b", "B"]] }],
+         actions: [{ label: "Simular llamado", run: function () {…} }] };
+     Cada extra queda en <html data-<k>>, la URL manda (?layout=b) y avisa
+     con el evento "vx:change" ({ k, v }) para que la página re-renderice. */
+  var PAGE = window.VX_PAGE || null;
+  var EXTRA = (PAGE && PAGE.extra) || [];
+  EXTRA.forEach(function (x) {
+    S[x.k] = params.get(x.k) || (embedded ? null : load(x.k)) || x.def;
+  });
   function apply() {
     root.setAttribute("data-vertical", S.vertical);
     root.setAttribute("data-state", S.state);
     root.setAttribute("data-motion", S.motion);
     root.setAttribute("data-grid", S.grid);
+    EXTRA.forEach(function (x) { root.setAttribute("data-" + x.k, S[x.k]); });
     if (embedded) root.setAttribute("data-embed", "1");
   }
+  window.VX_STATE = S;
   apply();
 
   /* ── Íconos (trazo 1.8, 24 px, currentColor) ─────────────────── */
@@ -326,7 +340,9 @@
     if (persist !== false && k !== "state") save(k, v);
     apply();
     syncState();
+    try { document.dispatchEvent(new CustomEvent("vx:change", { detail: { k: k, v: v } })); } catch (e) { /* IE */ }
   }
+  window.VX_SET = set;
 
   function syncSeg(group, value) {
     var btns = group.querySelectorAll("[role=radio]");
@@ -367,10 +383,16 @@
       }).join("") + "</div>";
     }
     var isLanding = !!document.querySelector("[data-include=contact]");
+    var appBar = PAGE && PAGE.bar === "app";
     bar.innerHTML =
       '<a class="vx-home" href="index.html">← Galería</a>' +
-      grp("Vertical", "vertical", [["kine", "Kinesiología"], ["general", "Clínica general"]]) +
-      grp("Estado", "state", [["normal", "Normal"], ["error", "Error"], ["sending", "Enviando"]].concat(isLanding ? [["success", "Enviado"]] : [])) +
+      (appBar ? "" :
+        grp("Vertical", "vertical", [["kine", "Kinesiología"], ["general", "Clínica general"]]) +
+        grp("Estado", "state", [["normal", "Normal"], ["error", "Error"], ["sending", "Enviando"]].concat(isLanding ? [["success", "Enviado"]] : []))) +
+      EXTRA.map(function (x) { return grp(x.label, x.k, x.opts); }).join("") +
+      ((PAGE && PAGE.actions) || []).map(function (a, i) {
+        return '<div class="vx-group"><button type="button" data-act="' + i + '">' + a.label + "</button></div>";
+      }).join("") +
       grp("Motion", "motion", [["full", "Animado"], ["reduce", "Reducido"]]) +
       grp("Grilla", "grid", [["off", "No"], ["on", "8 px"]]) +
       '<button type="button" class="vx-collapse" aria-expanded="true">Ocultar</button>';
@@ -385,6 +407,7 @@
         save("bar", c ? "collapsed" : "open");
         return;
       }
+      if (b.hasAttribute("data-act")) { var a = PAGE.actions[+b.getAttribute("data-act")]; if (a && a.run) a.run(); return; }
       if (b.hasAttribute("data-k")) set(b.getAttribute("data-k"), b.getAttribute("data-v"));
     });
     var startCollapsed = load("bar") === "collapsed" || (load("bar") === null && window.innerWidth < 768);

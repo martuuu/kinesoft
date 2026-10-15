@@ -30,6 +30,8 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "reportes", "reset", "seguimiento", "signup", "sin-acceso", "terapia-manual", "www",
   // BO1-A: pantallas de bloqueo del gate (fuera de `(app)`).
   "suspendido", "cuenta-desactivada",
+  // PL-1e (C-PL6): verificación en dos pasos y ajustes de la cuenta (fuera de `(app)`; las páginas son de PL-2a).
+  "verificar-acceso", "cuenta",
 ]);
 
 export function isValidSlug(slug: string): boolean {
@@ -99,6 +101,11 @@ export type AppGateInput = {
    * IAM; ausente = sin bloqueo.
    */
   block?: AppGateBlock | null;
+  /**
+   * PL-1e (C-PL6): la sesión tiene la 2FA prendida y no la pasó (`AccessSnapshot.twoFactor.state === "required"`).
+   * Opcional para no romper a los callers viejos; ausente = no hace falta.
+   */
+  twoFactorRequired?: boolean;
 };
 
 /** `SessionBlock["kind"]` de lib/session.ts (acá solo el tipo: este módulo es puro). */
@@ -118,6 +125,7 @@ export const APP_GATE_DESTINATIONS = [
   "/elegir-consultorio",
   "/suspendido",
   "/cuenta-desactivada",
+  "/verificar-acceso",
 ] as const;
 
 function withNext(path: string, next: string | null): string {
@@ -145,6 +153,10 @@ function withNext(path: string, next: string | null): string {
  * - BO1-A: usuario deshabilitado en la plataforma → `/cuenta-desactivada`; su
  *   único consultorio (o todos) suspendido o dado de baja → `/suspendido`. Si
  *   tiene otro consultorio usable no hay bloqueo: entra a ese (`getAccessSnapshot`).
+ * - PL-1e (C-PL6): 2FA prendida y sin pasar en esta sesión → `/verificar-acceso?next=<path>` (fuera de `(app)`:
+ *   esa página no pasa por este gate y vuelve a `next` recién con la sesión verificada, así que no hay bucle). Va
+ *   después del bloqueo (un usuario deshabilitado ve el bloqueo, no un pedido de código) y ANTES de todo lo demás:
+ *   sin el segundo factor no se le muestra ni el alta, ni la elección de consultorio, ni /sin-acceso.
  * - OWNER de un tenant con el alta sin terminar → `/onboarding`. Los demás
  *   roles NO: un profesional invitado mientras el dueño todavía configura no
  *   tiene nada que hacer en el stepper (y no podría: es OWNER-only).
@@ -153,6 +165,7 @@ export function decideAppGate(i: AppGateInput): string | null {
   // BO1-A: el bloqueo manda sobre todo lo demás (también sobre un Actor de una carrera). Sin `next`: esas pantallas
   // no devuelven a la app solas (como /sin-acceso), así que no hay a dónde volver.
   if (i.hasSession && i.block) return BLOCK_DESTINATION[i.block];
+  if (i.hasSession && i.twoFactorRequired) return withNext("/verificar-acceso", i.nextPath);
   if (!i.hasActor) {
     if (!i.hasSession) return withNext("/login", i.nextPath);
     if (!i.access || i.access.kind === "needs_onboarding") return "/onboarding";

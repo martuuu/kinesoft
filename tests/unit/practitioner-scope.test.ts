@@ -5,10 +5,39 @@
  * `acceptInvite` y aparece como reservable (§19.1 punto 1, §19.2 decisión 2).
  */
 import { describe, it, expect } from "vitest";
-import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import type { Prisma, Role } from "@prisma/client";
+import { bookablePractitionerWhere, clinicalMembershipWhere } from "@/lib/practitioner-scope";
+import { isClinicalMember } from "@/lib/roles";
+
+/**
+ * Evaluador mínimo del fragmento (solo las formas que usa `clinicalMembershipWhere`: `role` igual o `in`,
+ * `clinical` igual y `OR`). Sirve para cruzar el espejo SQL con `isClinicalMember` sin base.
+ */
+function matches(w: Prisma.MembershipWhereInput, m: { role: Role; clinical: boolean }): boolean {
+  if (typeof w.role === "string" && w.role !== m.role) return false;
+  if (w.role && typeof w.role === "object" && "in" in w.role && !(w.role.in as Role[]).includes(m.role)) return false;
+  if (typeof w.clinical === "boolean" && w.clinical !== m.clinical) return false;
+  if (Array.isArray(w.OR) && !w.OR.some((o) => matches(o, m))) return false;
+  return true;
+}
+
+describe("[PL-1b] clinicalMembershipWhere = espejo SQL de isClinicalMember", () => {
+  const ROLES: Role[] = ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"];
+  for (const role of ROLES) {
+    for (const clinical of [true, false]) {
+      it(`${role} clinical=${clinical} → ${isClinicalMember({ role, clinical })}`, () => {
+        expect(matches(clinicalMembershipWhere("t1"), { role, clinical })).toBe(isClinicalMember({ role, clinical }));
+      });
+    }
+  }
+
+  it("membresía aceptada y del tenant pedido", () => {
+    expect(clinicalMembershipWhere("t9")).toMatchObject({ tenantId: "t9", acceptedAt: { not: null } });
+  });
+});
 
 describe("[IAM-0c] bookablePractitionerWhere", () => {
-  it("por defecto: tenant + membresía aceptada EN ESE tenant con rol clínico, sin filtro de disabledAt", () => {
+  it("por defecto: tenant + membresía aceptada EN ESE tenant de alguien que atiende, sin filtro de disabledAt", () => {
     expect(bookablePractitionerWhere("t1")).toEqual({
       tenantId: "t1",
       user: {
@@ -16,19 +45,19 @@ describe("[IAM-0c] bookablePractitionerWhere", () => {
           some: {
             tenantId: "t1",
             acceptedAt: { not: null },
-            role: { in: ["OWNER", "ADMIN", "PRACTITIONER"] },
+            // PL-1b (C-PL5): OWNER/ADMIN solo si atienden.
+            OR: [{ role: "PRACTITIONER" }, { role: { in: ["OWNER", "ADMIN"] }, clinical: true }],
           },
         },
       },
     });
   });
 
-  it("no incluye Secretario/a ni Facturación", () => {
-    const w = bookablePractitionerWhere("t1") as {
-      user: { memberships: { some: { role: { in: string[] } } } };
-    };
-    expect(w.user.memberships.some.role.in).not.toContain("ASSISTANT");
-    expect(w.user.memberships.some.role.in).not.toContain("BILLING");
+  it("no incluye Secretario/a ni Facturación (ni con clinical = true)", () => {
+    const w = bookablePractitionerWhere("t1") as { user: { memberships: { some: Prisma.MembershipWhereInput } } };
+    for (const role of ["ASSISTANT", "BILLING"] as Role[]) {
+      expect(matches(w.user.memberships.some, { role, clinical: true })).toBe(false);
+    }
   });
 
   it("disabledAt solo con includeDisabledFilter (la columna llega con M6)", () => {

@@ -17,8 +17,7 @@ import { env, tenantAccessEnforcement } from "@/lib/env";
 import { effectiveMode, publicSurfacesOpen } from "@/lib/tenant-access";
 import { logger } from "@/lib/logger";
 import { getActor, ForbiddenError, UnauthenticatedError } from "@/lib/session";
-import { assertModule, getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { assertModule, memberCapabilitiesForActor } from "@/lib/authz";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { realtimeAllowed } from "@/lib/realtime-bootstrap";
 import { signRealtimeToken } from "@/lib/realtime-token-internal";
@@ -44,7 +43,7 @@ export async function mintRealtimeToken(): Promise<
       return { ok: false, error: "realtime-off" };
     }
     assertModule(actor, "salaEspera");
-    const caps = capabilitiesFor(await getMembershipRole(actor));
+    const caps = await memberCapabilitiesForActor(actor);
     if (!realtimeAllowed(actor, caps)) return { ok: false, error: NO_ACCESS };
 
     if (env.REALTIME_DRIVER !== "supabase") return { ok: false, error: "realtime-off" };

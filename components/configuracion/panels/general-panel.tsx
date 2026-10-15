@@ -17,7 +17,7 @@ import {
   setBusinessHours,
   setPublicBookingEnabled,
 } from "@/lib/tenant-settings";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { SAAS_PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   BUSINESS_HOUR_MIN,
   BUSINESS_HOUR_MAX,
@@ -561,8 +561,9 @@ function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: 
         >
           <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
         </PrefRow>
-        <PrefRow label="Plan" hint={`Para cambiar de plan, ${supportContactText()}.`}>
-          <ReadOnlyValue>{PLAN_LABEL[tenant.plan]}</ReadOnlyValue>
+        <PrefRow label="Plan" hint="Los usuarios que incluye y el uso, en la pestaña «Plan y uso».">
+          {/* PL-1: plan SaaS (Individual/Consultorio/Clínica/Libre), de `Tenant.saasPlan`. */}
+          <ReadOnlyValue>{SAAS_PLAN_LABEL[tenant.saasPlan]}</ReadOnlyValue>
         </PrefRow>
       </div>
       {error && (

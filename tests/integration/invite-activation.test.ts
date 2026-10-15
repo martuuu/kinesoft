@@ -52,8 +52,8 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
   beforeAll(async () => {
     db = ownerClient();
     // PRO: estos casos suman varios profesionales al mismo consultorio; FREE (1 lugar) los frena al activar (BO2-B).
-    A = await createEphemeralTenant(db, { plan: "PRO" });
-    B = await createEphemeralTenant(db, { plan: "PRO" });
+    A = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
+    B = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" });
     await db.service.create({
       data: { tenantId: B.tenantId, practitionerId: null, name: "Compartido", durationMin: 30, priceCents: 0 },
     });
@@ -413,7 +413,7 @@ describe.skipIf(!RUN)("IAM-2b activación desde /invite/<token>", () => {
     });
 
     it("un link anterior reenviado sirve para aceptar; una anulada no", async () => {
-      const t = await createEphemeralTenant(db, { plan: "PRO" }); // cupo (BO2-B)
+      const t = await createEphemeralTenant(db, { plan: "PRO", saasPlan: "CLINICA" }); // cupo (BO2-B)
       try {
         const prior = rawToken();
         const inv = await invite(t, { email: `${A.userId}@test.local`, prior });

@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
-import type { TenantPlan, TenantVertical } from "@prisma/client";
+import type { SaasPlan, TenantVertical } from "@prisma/client";
 import {
   TENANT_MODULES,
   modulesFor,
   isPublicBookingOpen,
   isProfileTabAllowed,
+  roomsEnabled,
+  waitingRoomEnabled,
+  minimumPlanFor,
   MODULE_DENIED_COPY,
   VERTICAL_LABEL,
+  SAAS_PLAN_LABEL,
   PLAN_LABEL,
   type TenantModule,
   type TenantEntitlements,
@@ -15,49 +19,36 @@ import { NAV_ITEMS, navFor, shortcutsFor } from "@/lib/nav";
 import { capabilitiesFor } from "@/lib/capabilities";
 
 /**
- * EV-C1: matriz de módulos (plan §15.3 / `.docs/VERTICALES.md` §3.1), sus
- * invariantes y el nav único (C-EV2). La matriz se escribe acá a mano (no se
- * deriva del código) para que un cambio en `modulesFor` tenga que pasar por el
- * plan.
+ * EV-C1 → PL-1a (C-PL1): matriz de módulos vertical × plan SaaS (plan §20.5.2), sus invariantes y el nav único
+ * (C-EV2). La matriz se escribe acá a mano (no se deriva del código) para que un cambio en `modulesFor` tenga que
+ * pasar por el plan.
  */
 
-const PLANS: TenantPlan[] = ["FREE", "STARTER", "PRO", "ENTERPRISE"];
+const PLANS: SaasPlan[] = ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"];
 const VERTICALS: TenantVertical[] = ["GENERAL", "KINESIOLOGY"];
 
-const CORE: TenantModule[] = ["agenda", "pacientes", "facturacion", "obrasSociales", "salaEspera"];
-const KINE_ONLY: TenantModule[] = [
-  "reportes",
-  "planes",
-  "sesiones",
-  "diagnostico",
-  "evaluaciones",
-  "ejercicios",
-  "plantillas",
-  "favoritos",
-  "ejerciciosGlobales",
-];
+const CORE: TenantModule[] = ["agenda", "pacientes", "facturacion", "obrasSociales", "evoluciones"];
+const KINE_ALL: TenantModule[] = ["reportes", "planes", "sesiones", "diagnostico", "evaluaciones", "ejercicios"];
+const KINE_CONS: TenantModule[] = ["plantillas", "favoritos", "ejerciciosGlobales"];
+const KINE_ONLY: TenantModule[] = [...KINE_ALL, ...KINE_CONS];
+const CLINICA_UP: TenantModule[] = ["salas", "salaEspera"];
 
-const EXPECTED: Record<TenantVertical, Record<TenantPlan, TenantModule[]>> = {
-  GENERAL: { FREE: CORE, STARTER: CORE, PRO: CORE, ENTERPRISE: CORE },
+const EXPECTED: Record<TenantVertical, Record<SaasPlan, TenantModule[]>> = {
+  GENERAL: {
+    INDIVIDUAL: CORE,
+    CONSULTORIO: CORE,
+    CLINICA: [...CORE, ...CLINICA_UP],
+    LIBRE: [...CORE, ...CLINICA_UP],
+  },
   KINESIOLOGY: {
-    FREE: [...CORE, "reportes", "planes", "sesiones", "diagnostico", "evaluaciones", "ejercicios"],
-    STARTER: [
-      ...CORE,
-      "reportes",
-      "planes",
-      "sesiones",
-      "diagnostico",
-      "evaluaciones",
-      "ejercicios",
-      "plantillas",
-      "favoritos",
-    ],
-    PRO: [...CORE, ...KINE_ONLY],
-    ENTERPRISE: [...CORE, ...KINE_ONLY],
+    INDIVIDUAL: [...CORE, ...KINE_ALL],
+    CONSULTORIO: [...CORE, ...KINE_ALL, ...KINE_CONS],
+    CLINICA: [...CORE, ...KINE_ONLY, ...CLINICA_UP],
+    LIBRE: [...CORE, ...KINE_ONLY, ...CLINICA_UP],
   },
 };
 
-const e = (vertical: TenantVertical, plan: TenantPlan, publicBookingEnabled = false): TenantEntitlements => ({
+const e = (vertical: TenantVertical, plan: SaasPlan, publicBookingEnabled = false): TenantEntitlements => ({
   vertical,
   plan,
   publicBookingEnabled,
@@ -65,7 +56,7 @@ const e = (vertical: TenantVertical, plan: TenantPlan, publicBookingEnabled = fa
 
 const sorted = (s: Iterable<string>) => [...s].sort();
 
-describe("modulesFor — matriz completa (§15.3)", () => {
+describe("[PL-1a] modulesFor — matriz completa (§20.5.2)", () => {
   for (const v of VERTICALS) {
     for (const p of PLANS) {
       for (const sw of [false, true]) {
@@ -77,35 +68,37 @@ describe("modulesFor — matriz completa (§15.3)", () => {
     }
   }
 
-  it("todo módulo devuelto pertenece a TENANT_MODULES", () => {
+  it("todo módulo devuelto pertenece a TENANT_MODULES, y todo TENANT_MODULES aparece en alguna celda", () => {
+    const seen = new Set<string>();
     for (const v of VERTICALS)
       for (const p of PLANS)
-        for (const m of modulesFor(e(v, p, true))) expect(TENANT_MODULES).toContain(m);
+        for (const m of modulesFor(e(v, p, true))) {
+          expect(TENANT_MODULES).toContain(m);
+          seen.add(m);
+        }
+    expect(sorted(seen)).toEqual(sorted(TENANT_MODULES));
   });
 
-  it("falla cerrado ante una vertical o un plan desconocidos", () => {
-    const weird = modulesFor({
-      vertical: "OTRA" as TenantVertical,
-      plan: "PRO",
-      publicBookingEnabled: false,
-    });
-    expect(sorted(weird)).toEqual(sorted(CORE));
-    const weirdPlan = modulesFor({
-      vertical: "KINESIOLOGY",
-      plan: "PLATINO" as TenantPlan,
-      publicBookingEnabled: false,
-    });
-    expect(sorted(weirdPlan)).toEqual(sorted(EXPECTED.KINESIOLOGY.FREE));
+  it("falla cerrado ante una vertical o un plan desconocidos (o un plan LEGADO colado)", () => {
+    const weird = modulesFor({ vertical: "OTRA" as TenantVertical, plan: "CLINICA", publicBookingEnabled: false });
+    expect(sorted(weird)).toEqual(sorted([...CORE, ...CLINICA_UP]));
+    for (const bad of ["PLATINO", "PRO", "ENTERPRISE"]) {
+      const m = modulesFor({ vertical: "KINESIOLOGY", plan: bad as SaasPlan, publicBookingEnabled: false });
+      expect(sorted(m)).toEqual(sorted(EXPECTED.KINESIOLOGY.INDIVIDUAL));
+    }
   });
 
   it("misma combinación → misma identidad (memo)", () => {
-    expect(modulesFor(e("KINESIOLOGY", "PRO", true))).toBe(modulesFor(e("KINESIOLOGY", "PRO", true)));
+    expect(modulesFor(e("KINESIOLOGY", "CLINICA", true))).toBe(modulesFor(e("KINESIOLOGY", "CLINICA", true)));
   });
 });
 
-describe("invariantes de la matriz", () => {
+describe("[PL-1a] invariantes de la matriz", () => {
   const all = VERTICALS.flatMap((v) => PLANS.flatMap((p) => [e(v, p, false), e(v, p, true)]));
 
+  it("núcleo (con evoluciones) en todas las celdas", () => {
+    for (const x of all) for (const m of CORE) expect(modulesFor(x).has(m)).toBe(true);
+  });
   it("sesiones ⇔ planes", () => {
     for (const x of all) {
       const m = modulesFor(x);
@@ -125,16 +118,14 @@ describe("invariantes de la matriz", () => {
       if (m.has("ejerciciosGlobales")) expect(m.has("ejercicios")).toBe(true);
     }
   });
-  it("Kine monótono: FREE ⊆ STARTER ⊆ PRO = ENTERPRISE", () => {
-    for (const sw of [false, true]) {
-      const free = modulesFor(e("KINESIOLOGY", "FREE", sw));
-      const starter = modulesFor(e("KINESIOLOGY", "STARTER", sw));
-      const pro = modulesFor(e("KINESIOLOGY", "PRO", sw));
-      const ent = modulesFor(e("KINESIOLOGY", "ENTERPRISE", sw));
-      for (const m of free) expect(starter.has(m)).toBe(true);
-      for (const m of starter) expect(pro.has(m)).toBe(true);
-      expect(sorted(ent)).toEqual(sorted(pro));
-    }
+  it("monótono en las dos verticales: Individual ⊆ Consultorio ⊆ Clínica = Libre", () => {
+    for (const v of VERTICALS)
+      for (const sw of [false, true]) {
+        const [ind, cons, cli, lib] = PLANS.map((p) => modulesFor(e(v, p, sw)));
+        for (const m of ind) expect(cons.has(m)).toBe(true);
+        for (const m of cons) expect(cli.has(m)).toBe(true);
+        expect(sorted(lib)).toEqual(sorted(cli));
+      }
   });
   it("GENERAL no tiene ningún módulo Kine, para ningún plan", () => {
     for (const p of PLANS)
@@ -143,7 +134,19 @@ describe("invariantes de la matriz", () => {
         for (const k of KINE_ONLY) expect(m.has(k)).toBe(false);
       }
   });
-  it("turneroPublico = switch en cualquier vertical; isPublicBookingOpen lo refleja", () => {
+  it("salas y salaEspera solo en Clínica/Libre (las dos verticales); roomsEnabled/waitingRoomEnabled lo reflejan", () => {
+    for (const v of VERTICALS)
+      for (const p of PLANS)
+        for (const sw of [false, true]) {
+          const want = p === "CLINICA" || p === "LIBRE";
+          const m = modulesFor(e(v, p, sw));
+          expect(m.has("salas"), `${v}/${p}`).toBe(want);
+          expect(m.has("salaEspera"), `${v}/${p}`).toBe(want);
+          expect(roomsEnabled(e(v, p, sw))).toBe(want);
+          expect(waitingRoomEnabled(e(v, p, sw))).toBe(want);
+        }
+  });
+  it("turneroPublico = switch en cualquier vertical y plan; isPublicBookingOpen lo refleja", () => {
     for (const v of VERTICALS)
       for (const p of PLANS) {
         expect(modulesFor(e(v, p, true)).has("turneroPublico")).toBe(true);
@@ -154,9 +157,38 @@ describe("invariantes de la matriz", () => {
   });
 });
 
+describe("[PL-1a] minimumPlanFor", () => {
+  it("el plan más chico que trae el módulo, por vertical", () => {
+    for (const m of CORE) {
+      expect(minimumPlanFor(m, "GENERAL")).toBe("INDIVIDUAL");
+      expect(minimumPlanFor(m, "KINESIOLOGY")).toBe("INDIVIDUAL");
+    }
+    expect(minimumPlanFor("turneroPublico", "GENERAL")).toBe("INDIVIDUAL");
+    for (const m of KINE_ALL) expect(minimumPlanFor(m, "KINESIOLOGY")).toBe("INDIVIDUAL");
+    for (const m of KINE_CONS) expect(minimumPlanFor(m, "KINESIOLOGY")).toBe("CONSULTORIO");
+    for (const m of CLINICA_UP) {
+      expect(minimumPlanFor(m, "GENERAL")).toBe("CLINICA");
+      expect(minimumPlanFor(m, "KINESIOLOGY")).toBe("CLINICA");
+    }
+  });
+  it("null si ningún plan lo trae en esa vertical (Kine en General)", () => {
+    for (const m of KINE_ONLY) expect(minimumPlanFor(m, "GENERAL")).toBeNull();
+  });
+  it("coincide con la matriz: el mínimo lo tiene y el anterior no", () => {
+    for (const v of VERTICALS)
+      for (const m of TENANT_MODULES) {
+        const min = minimumPlanFor(m, v);
+        if (min === null) continue;
+        expect(modulesFor(e(v, min, true)).has(m)).toBe(true);
+        const i = PLANS.indexOf(min);
+        if (i > 0) expect(modulesFor(e(v, PLANS[i - 1], true)).has(m)).toBe(false);
+      }
+  });
+});
+
 describe("isProfileTabAllowed", () => {
-  const general = modulesFor(e("GENERAL", "PRO"));
-  const kine = modulesFor(e("KINESIOLOGY", "FREE"));
+  const general = modulesFor(e("GENERAL", "CLINICA"));
+  const kine = modulesFor(e("KINESIOLOGY", "INDIVIDUAL"));
 
   it("sesiones/plan/planes/evol dependen de su módulo", () => {
     for (const tab of ["sesiones", "plan", "planes", "evol"]) {
@@ -176,7 +208,19 @@ describe("copy y labels", () => {
   it("MODULE_DENIED_COPY tiene un texto no vacío por módulo", () => {
     for (const m of TENANT_MODULES) expect(MODULE_DENIED_COPY[m]?.length).toBeGreaterThan(10);
   });
-  it("labels de vertical y plan", () => {
+  it("[PL-1a] el copy de upsell nombra el plan mínimo (Clínica para salas; Consultorio para plantillas/favoritos/catálogo)", () => {
+    expect(MODULE_DENIED_COPY.salas).toMatch(/en el plan Clínica/);
+    expect(MODULE_DENIED_COPY.salaEspera).toMatch(/en el plan Clínica/);
+    for (const m of ["plantillas", "favoritos", "ejerciciosGlobales"] as const) {
+      expect(MODULE_DENIED_COPY[m]).toMatch(/desde el plan Consultorio/);
+    }
+    // Ninguno nombra los planes viejos.
+    for (const m of TENANT_MODULES) expect(MODULE_DENIED_COPY[m]).not.toMatch(/\b(PRO|Base|Free|Enterprise)\b/);
+  });
+  it("[PL-1a] SAAS_PLAN_LABEL", () => {
+    expect(SAAS_PLAN_LABEL).toEqual({ INDIVIDUAL: "Individual", CONSULTORIO: "Consultorio", CLINICA: "Clínica", LIBRE: "Libre" });
+  });
+  it("labels de vertical y plan legado (deprecado)", () => {
     expect(VERTICAL_LABEL).toEqual({
       GENERAL: "Clínica general",
       KINESIOLOGY: "Kinesiología y osteopatía",
@@ -186,8 +230,9 @@ describe("copy y labels", () => {
 });
 
 describe("nav único (C-EV2)", () => {
-  const general = modulesFor(e("GENERAL", "PRO"));
-  const kine = modulesFor(e("KINESIOLOGY", "PRO"));
+  // Clínica: el nav incluye Sala de espera (desde PL-1a, módulo de Clínica/Libre).
+  const general = modulesFor(e("GENERAL", "CLINICA"));
+  const kine = modulesFor(e("KINESIOLOGY", "CLINICA"));
   const ownerCaps = capabilitiesFor("OWNER");
   const billingCaps = capabilitiesFor("BILLING");
   const hrefs = (items: readonly { href: string }[]) => items.map((i) => i.href);
@@ -257,6 +302,11 @@ describe("nav único (C-EV2)", () => {
       { id: "nav:biblioteca", category: "shortcut", label: "Ejercicios", href: "/biblioteca" },
       { id: "nav:reportes", category: "shortcut", label: "Reportes", href: "/reportes" },
     ]);
+  });
+
+  it("[PL-1a] sin Clínica no hay Sala de espera en el nav (Kine Consultorio, General Individual)", () => {
+    expect(hrefs(navFor(modulesFor(e("KINESIOLOGY", "CONSULTORIO")), ownerCaps))).not.toContain("/sala");
+    expect(hrefs(navFor(modulesFor(e("GENERAL", "INDIVIDUAL")), ownerCaps))).not.toContain("/sala");
   });
 
   it("shortcutsFor: General sin atajos clínicos", () => {

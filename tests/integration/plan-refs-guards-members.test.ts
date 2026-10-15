@@ -17,7 +17,8 @@
  *     membresía sigue; los bloqueos A2b (turnos futuros, pacientes asignados)
  *     se preservan y se suman en el mismo mensaje;
  *   • `changeMemberRole` a un rol que no puede gestionar planes (ASSISTANT,
- *     BILLING) del responsable de planes ACTIVE → rechazo con conteo; a ADMIN sí.
+ *     BILLING y, desde §20.17, ADMIN: el Administrador/a no atiende) del responsable de planes ACTIVE → rechazo
+ *     con conteo.
  *
  * Corre en los dos roles (`kinesoft_app` con RLS y owner BYPASSRLS = prod).
  */
@@ -59,8 +60,8 @@ describe.skipIf(!RUN)("S13g · guardas de sede y miembro con planes activos", ()
 
   beforeAll(async () => {
     db = ownerClient();
-    A = await createEphemeralTenant(db);
-    B = await createEphemeralTenant(db);
+    A = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
+    B = await createEphemeralTenant(db, { saasPlan: "CLINICA" }); // PL-1: sala de espera y equipo son de Clínica
   });
   afterAll(async () => {
     await A?.cleanup();
@@ -178,22 +179,18 @@ describe.skipIf(!RUN)("S13g · guardas de sede y miembro con planes activos", ()
     expect(await db.membership.count({ where: { id: mem.id } })).toBe(0);
   });
 
-  it("changeMemberRole: responsable de planes ACTIVE no pasa a ASSISTANT ni BILLING; a ADMIN sí", async () => {
+  it("changeMemberRole: responsable de planes ACTIVE no pasa a ASSISTANT, BILLING ni ADMIN (§20.17)", async () => {
     asUser(A.userId);
     const kine = await addPractitioner(db, A);
     await createPlan(db, A, { patientId: await loosePatient(A), practitionerId: kine.practitionerId });
     const mem = await membershipOf(A, kine.userId);
 
-    for (const role of ["ASSISTANT", "BILLING"] as const) {
+    for (const role of ["ASSISTANT", "BILLING", "ADMIN"] as const) {
       const r = await changeMemberRole(mem.id, role);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error).toContain("es responsable de 1 plan activo");
       expect((await db.membership.findUniqueOrThrow({ where: { id: mem.id } })).role).toBe("PRACTITIONER");
     }
-
-    const ok = await changeMemberRole(mem.id, "ADMIN");
-    expect(ok.ok).toBe(true);
-    expect((await db.membership.findUniqueOrThrow({ where: { id: mem.id } })).role).toBe("ADMIN");
   });
 
   it("changeMemberRole: sin planes ACTIVE a cargo, pasa a ASSISTANT", async () => {

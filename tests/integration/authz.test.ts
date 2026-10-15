@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { getCapabilities, getMembershipRole, requireCapability, requireTenantAdmin } from "@/lib/authz";
 import { updateTenantBasics } from "@/lib/tenant-settings";
-import { getActor, ForbiddenError } from "@/lib/session";
+import { getActor, ForbiddenError, UnauthenticatedError } from "@/lib/session";
 import {
   ownerClient,
   createEphemeralTenant,
@@ -94,12 +94,19 @@ describe.skipIf(!RUN)("authz · rol desde Membership", () => {
     expect((await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId } })).name).toBe("Consultorio Renombrado");
   });
 
-  it("membresía borrada después de armar el actor → sin capabilities (falla cerrado)", async () => {
+  it("membresía borrada → el PRÓXIMO request no arma Actor (falla cerrado)", async () => {
+    // PL-1e/1b (H1b-T1): el Actor trae su `membership` de la foto del request (sin query extra), así que un Actor
+    // ya armado conserva su acceso hasta que termina ese request. La barrera es el request siguiente: sin fila
+    // no hay Actor (y sin Actor no hay capacidades).
     asUser(pracUser);
-    const actor = await getActor();
+    await getActor();
     await db.membership.delete({ where: { userId_tenantId: { userId: pracUser, tenantId: A.tenantId } } });
     try {
-      expect(await getMembershipRole(actor)).toBeNull();
+      asUser(pracUser);
+      const err = await getActor().catch((e) => e);
+      expect(err).toBeInstanceOf(UnauthenticatedError);
+      // `getActor` expone `no_session` para todo lo que no es 2FA (el `no_membership` fino vive en la foto).
+      expect((err as UnauthenticatedError).reason).toBe("no_session");
     } finally {
       // Se restaura para que el cleanup (que recorre memberships) borre su UserProfile.
       await db.membership.create({ data: { userId: pracUser, tenantId: A.tenantId, role: "PRACTITIONER", acceptedAt: new Date() } });

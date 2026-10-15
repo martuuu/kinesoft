@@ -172,7 +172,7 @@ describe("[S19d] alcance de mover: Solo este / Este y los siguientes", () => {
   });
 
   it("consultorio General (sin módulo planes): no aparece", () => {
-    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "PRO", publicBookingEnabled: false }));
+    const general = Array.from(modulesFor({ vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: false }));
     const html = renderToStaticMarkup(
       <TenantModulesProvider modules={general}>
         <RescheduleForm

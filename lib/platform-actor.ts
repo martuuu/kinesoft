@@ -86,6 +86,17 @@ export const PLATFORM_ACTION_POLICY = {
   // adivinar 6 dígitos (GoTrue tiene el suyo además). `mfa.enroll` frena regenerar QRs en loop.
   "mfa.enroll": { risk: "low", rateLimit: { limit: 10, windowMs: 10 * MIN } },
   "mfa.verify": { risk: "low", rateLimit: { limit: 10, windowMs: 10 * MIN } },
+  // PL-1d (plan §20.5.6/§20.5.7): claves de los cobros, la bandeja de mensajes, el reset de 2FA y el cambio de plan.
+  // Las consumen PL-2a/2c/2d y PL-3c. Plata (imputar, anular, condonar, precio), cambiar el plan (deshabilita usuarios)
+  // y resetear la 2FA de otra persona son `high`: no tienen «deshacer» limpio. Responder un hilo manda un mail en
+  // nombre de Plataforma (medium); leer cuentas y bandeja, low.
+  "billing.read": { risk: "low", rateLimit: { limit: 300, windowMs: MIN } },
+  "billing.write": { risk: "high", rateLimit: { limit: 60, windowMs: 10 * MIN } },
+  "billing.price": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
+  "inbox.read": { risk: "low", rateLimit: { limit: 300, windowMs: MIN } },
+  "inbox.reply": { risk: "medium", rateLimit: { limit: 60, windowMs: 10 * MIN } },
+  "user.two_factor.reset": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
+  "tenant.plan.change": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
 } as const satisfies Record<string, PlatformActionPolicy>;
 
 /** C-BO2: `string` en el contrato; en la práctica, las claves de la política (las demás se rechazan). */

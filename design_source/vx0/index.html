@@ -59,6 +59,7 @@
     <span class="eyebrow"><span class="eyebrow-dot"></span>KineSoft · §20.7 VX0-a</span>
     <h1>Prototipo de la cara pública</h1>
     <p>Tres direcciones de login y de landing, más el signup en la dirección B. Usan los tokens reales de <code>app/globals.css</code> y los tokens propuestos para VX1 (marcados en <code>shared.css</code>). En cada página, la barra de abajo cambia la vertical, el estado del formulario, el motion y la grilla de 8 px.</p>
+    <p><strong>VX0-c (§20.18):</strong> el escritorio de Recepción para la Secretaria (1366×768 y 1024×768, PWA sin barras) en dos variantes, y la pantalla de la sala de espera para TV. Son interactivos: «Llegó», «Llamar», «Cobrar», el alta rápida (tecla N) y la búsqueda (tecla /). Si abrís las dos en pestañas, «Llamar» en Recepción aparece en la TV.</p>
     <div class="tabs" role="tablist" aria-label="Vista">
       <button role="tab" id="tab-g" aria-controls="panel-g" aria-selected="true">Galería</button>
       <button role="tab" id="tab-w" aria-controls="panel-w" aria-selected="false" tabindex="-1">Anchos</button>
@@ -81,6 +82,8 @@
           <tr><td>D-VX8</td><td>Escalas</td><td>Grilla de 8, base 16, display en clamp (ver <code>--space-*</code> y <code>--fs-*</code>).</td></tr>
           <tr><td>D-VX9</td><td>Fondos</td><td>Sin marca de agua; gradientes radiales pintados, sin blobs con blur.</td></tr>
           <tr><td>D-VX12</td><td>Contraseña</td><td>Botón mostrar/ocultar dentro del campo (44 px, aria-pressed).</td></tr>
+          <tr><td>D-RX1</td><td>Escritorio de Recepción</td><td><strong>B · Flujo</strong>: cada carril es un paso del mostrador con una sola acción primaria por tarjeta. La tabla de A sigue en la vista «Lista» de la agenda.</td></tr>
+          <tr><td>D-RX2</td><td>Tema de la pantalla TV</td><td><strong>Oscuro</strong> por defecto (menos brillo en la sala, el azul del llamado resalta más) y claro como opción por consultorio.</td></tr>
         </tbody>
       </table></div>
     </div>
@@ -99,6 +102,8 @@
 <script>
   // Galería y vista «Anchos». Sin dependencias; los iframes cargan con
   // ?embed=1 (shared.js oculta la barra del prototipo adentro).
+  var APP_W = [[1024, 768], [1366, 768], [1920, 1080]];
+  var TV_W = [[1024, 768], [1366, 768], [1920, 1080]];
   var PAGES = [
     { g: "Login", f: "login-a", t: "A · Card centrada", d: "La card sola, sin columnas: no puede quedar un centro vacío a ningún ancho.", id: "D-VX1" },
     { g: "Login", f: "login-b", t: "B · Split contenido", d: "Contenedor de 1200 px: marca y 3 bullets reales a la izquierda, card a la derecha. Apila bajo 1024.", id: "D-VX1", rec: true },
@@ -107,9 +112,17 @@
     { g: "Landing", f: "landing-b", t: "B · Editorial centrado", d: "H1 grande, marco de navegador con la agenda, funciones en bento y sección con switch.", id: "D-VX2", rec: true },
     { g: "Landing", f: "landing-c", t: "C · Por tipo de consultorio", d: "El switch Kinesiología | Clínica general cambia el H1, el copy y la vitrina.", id: "D-VX2" },
     { g: "Alta", f: "signup", t: "Signup · dirección B", d: "Mismo esqueleto que login B, con el tipo de consultorio como opción.", id: "D-VX1" },
+    // VX0-c: pantallas de app. `q` = parámetros, `tw` = tamaño de la miniatura, `w` = presets de «Anchos».
+    { g: "Recepción", k: "recepcion-a", f: "recepcion", q: "layout=a", tw: [1366, 768], w: APP_W, t: "A · Lista + panel", d: "La tabla del día con la línea de «ahora», filtros con contadores y un panel fijo: sala de espera, próximos 30 min y por cobrar.", id: "D-RX1" },
+    { g: "Recepción", k: "recepcion-b", f: "recepcion", q: "layout=b", tw: [1366, 768], w: APP_W, t: "B · Flujo", d: "El día en una columna angosta y tres carriles en el orden del mostrador: llegan pronto → sala de espera → por cobrar.", id: "D-RX1", rec: true },
+    { g: "Sala de espera · TV", k: "sala-tv-dark", f: "sala-tv", q: "tvtheme=dark&auto=off", tw: [1920, 1080], w: TV_W, t: "TV · oscuro", d: "Llamado grande (nombre + inicial, consultorio, profesional), próximos y recién llamados. Se lee a 4-5 m.", id: "D-RX2", rec: true },
+    { g: "Sala de espera · TV", k: "sala-tv-light", f: "sala-tv", q: "tvtheme=light&auto=off", tw: [1920, 1080], w: TV_W, t: "TV · claro", d: "La misma pantalla sobre el fondo público. La tarjeta de llamado sigue en el azul de «Llamado».", id: "D-RX2" },
   ];
   var WIDTHS = [[360, 780], [768, 1024], [1280, 800], [1728, 1080]];
 
+  PAGES.forEach(function (p) { p.k = p.k || p.f; p.tw = p.tw || [1440, 900]; p.w = p.w || WIDTHS; });
+  function byKey(k) { return PAGES.filter(function (p) { return p.k === k; })[0] || PAGES[0]; }
+  function url(p, extra) { return p.f + ".html?" + (extra ? extra + "&" : "") + (p.q || ""); }
   var gallery = document.getElementById("gallery");
   var groups = {};
   PAGES.forEach(function (p) {
@@ -125,16 +138,17 @@
     var el = document.createElement("article");
     el.className = "item" + (p.rec ? " rec" : "");
     el.innerHTML =
-      '<div class="thumb"><iframe title="Vista previa de ' + p.t + '" tabindex="-1" aria-hidden="true" src="' + p.f + '.html?embed=1&motion=reduce"></iframe></div>' +
+      '<div class="thumb" style="aspect-ratio:' + p.tw[0] + " / " + p.tw[1] + '"><iframe title="Vista previa de ' + p.t + '" tabindex="-1" aria-hidden="true" data-tw="' + p.tw[0] + '" src="' + url(p, "embed=1&motion=reduce") + '" style="width:' + p.tw[0] + "px;height:" + p.tw[1] + 'px"></iframe></div>' +
       '<div class="meta"><div class="meta-h"><h3>' + p.t + "</h3>" + (p.rec ? '<span class="badge rec">Recomendado</span>' : "") +
       '<span class="badge">' + p.id + "</span></div><p>" + p.d + "</p>" +
-      '<div class="actions"><a class="btn btn-primary btn-sm" href="' + p.f + '.html">Abrir</a>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-widths="' + p.f + '">Ver en 4 anchos</button></div></div>';
+      '<div class="actions"><a class="btn btn-primary btn-sm" href="' + url(p) + '">Abrir</a>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-widths="' + p.k + '">Ver en ' + p.w.length + " anchos</button></div></div>";
     groups[p.g].appendChild(el);
   });
   function fitThumbs() {
     document.querySelectorAll(".thumb").forEach(function (t) {
-      t.querySelector("iframe").style.transform = "scale(" + t.clientWidth / 1440 + ")";
+      var f = t.querySelector("iframe");
+      f.style.transform = "scale(" + t.clientWidth / +(f.getAttribute("data-tw") || 1440) + ")";
     });
   }
   window.addEventListener("resize", fitThumbs);
@@ -160,17 +174,18 @@
   });
 
   var sel = document.getElementById("w-page");
-  PAGES.forEach(function (p) { sel.add(new Option(p.g + " · " + p.t, p.f)); });
+  PAGES.forEach(function (p) { sel.add(new Option(p.g + " · " + p.t, p.k)); });
   sel.value = "login-b";
   function renderWidths() {
     var box = document.getElementById("widths");
     var h = +document.getElementById("w-h").value;
-    var q = "?embed=1&vertical=" + document.getElementById("w-vertical").value + "&state=" + document.getElementById("w-state").value;
-    box.innerHTML = WIDTHS.map(function (w) {
+    var p = byKey(sel.value);
+    var q = "embed=1&vertical=" + document.getElementById("w-vertical").value + "&state=" + document.getElementById("w-state").value;
+    box.innerHTML = p.w.map(function (w) {
       var s = h / w[1];
       return '<div class="wbox"><div class="wlabel"><span>' + w[0] + " × " + w[1] + "</span><span>" + Math.round(s * 100) + '%</span></div>' +
         '<div class="wframe" style="width:' + Math.round(w[0] * s) + "px;height:" + h + 'px">' +
-        '<iframe title="' + sel.value + " a " + w[0] + ' px" src="' + sel.value + ".html" + q + '" style="width:' + w[0] + "px;height:" + w[1] + "px;transform:scale(" + s + ')"></iframe></div></div>';
+        '<iframe title="' + p.t + " a " + w[0] + ' px" src="' + url(p, q) + '" style="width:' + w[0] + "px;height:" + w[1] + "px;transform:scale(" + s + ')"></iframe></div></div>';
     }).join("");
   }
   ["w-page", "w-vertical", "w-state", "w-h"].forEach(function (id) {

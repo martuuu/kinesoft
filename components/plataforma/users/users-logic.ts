@@ -8,7 +8,7 @@
  * de dónde sacarlos, y el render test lo fija.
  */
 import type { Role, TenantStatus, TenantVertical } from "@prisma/client";
-import { roleLabel } from "@/lib/roles";
+import { isClinicalMember, roleLabel } from "@/lib/roles";
 import { confirmEmailMatches } from "@/lib/platform-health-logic";
 import { SUPABASE_LINK_TTL_COPY } from "@/lib/email/templates";
 import type {
@@ -135,9 +135,17 @@ export function membershipStatusLabel(m: Pick<PlatformUserMembership, "accepted"
   return "Activa";
 }
 
-/** Miembro clínico aceptado y activo sin profesional: el bucle de acceso que repara Salud. */
-export function membershipNeedsPractitioner(m: Pick<PlatformUserMembership, "accepted" | "suspended" | "hasPractitioner" | "role">): boolean {
-  const clinical = m.role === "OWNER" || m.role === "ADMIN" || m.role === "PRACTITIONER";
+/**
+ * Miembro clínico aceptado y activo sin profesional: el bucle de acceso que repara Salud.
+ *
+ * PL-1d: «clínico» es `isClinicalMember` (PRACTITIONER, u OWNER/ADMIN que atiende), no el rol: a un Titular que no
+ * atiende no se le ofrece «Crear profesional». `clinical` viene en el DTO (`PlatformUserMembership`); queda
+ * opcional para los llamadores que arman la fila a mano: ausente = true, el default de la columna.
+ */
+export function membershipNeedsPractitioner(
+  m: Pick<PlatformUserMembership, "accepted" | "suspended" | "hasPractitioner" | "role"> & { clinical?: boolean }
+): boolean {
+  const clinical = isClinicalMember({ role: m.role, clinical: m.clinical ?? true });
   return clinical && m.accepted && !m.suspended && !m.hasPractitioner;
 }
 

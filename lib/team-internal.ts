@@ -20,13 +20,14 @@ import "server-only";
  * escribe `platform.<lo mismo>` con `auditPlatformInTx` (registro del consultorio afectado + fila global), sin
  * emails ni nombres en el payload (el registro de plataforma es solo inserción: lo que entra no se borra).
  *
- * Cupos (BO-D7, `lib/plan-catalog.ts`): invitar a un rol clínico, ascender a uno no clínico a clínico, reactivar
- * a un clínico y reabrir (reenviar) una invitación clínica vencida piden un lugar libre. Se lockea la fila del
- * Tenant (`FOR UPDATE`) antes de contar: dos invitaciones simultáneas en un Free no pueden pasar las dos. Bajar de
- * plan no saca a nadie: el chequeo solo frena altas, nunca toca a los que están.
+ * Cupos POR TIPO (PL-1c, C-PL3, `lib/plan-catalog.ts`; antes BO-D7, solo profesionales): invitar, cambiar de
+ * rol o de «¿Atiende?» a otro tipo, reactivar y reabrir (reenviar) una invitación vencida piden un lugar libre en
+ * el total Y en el tipo. Se lockea la fila del Tenant (`FOR UPDATE`) antes de contar: dos invitaciones simultáneas
+ * por el último lugar no pueden pasar las dos. Estos chequeos solo frenan altas; sacar gente al bajar de plan lo
+ * hace, con la elección de quien cambia el plan, `applyPlanChangeInTx` (lib/saas-plan-change-internal.ts).
  */
 import { randomBytes } from "node:crypto";
-import type { Role, TenantPlan, TenantVertical } from "@prisma/client";
+import type { Prisma, Role, SaasPlan, TenantVertical } from "@prisma/client";
 import { prismaService } from "@/lib/db";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { capabilitiesFor } from "@/lib/capabilities";
@@ -36,8 +37,16 @@ import { env } from "@/lib/env";
 import { hashInviteToken } from "@/lib/invitations-tokens";
 import { INVITE_TTL_MS, appendPriorToken, reassignBeforeRoleChangeCopy } from "@/lib/invitations-constants";
 import { emailEqualsFilter, normalizeEmail } from "@/lib/email-match";
-import { CLINICAL_ROLES, isClinicalRole, roleLabel } from "@/lib/roles";
-import { seatLimitFor, seatUsage, consumesSeat, type SeatUsage } from "@/lib/plan-catalog";
+import { isClinicalMember, roleLabel } from "@/lib/roles";
+import {
+  canAddSeat,
+  planLimitsFor,
+  seatKindOf,
+  seatUsageByKind,
+  type SeatKind,
+  type SeatUsageByKind,
+} from "@/lib/plan-catalog";
+import type { PlanLimitOverrides, PlanLimits } from "@/lib/saas-plans-types";
 import { provisionPractitionerAgenda } from "@/lib/agenda-defaults";
 import { issueAccessLink } from "@/lib/identity/access-link";
 import { logger } from "@/lib/logger";
@@ -79,7 +88,7 @@ function platformRef(ctx: TeamActorCtx): PlatformActorRef {
  * Audit en la tx del caller. `platformPayload` es lo que va al registro de plataforma cuando el payload del
  * consultorio lleva datos de personas (email, nombres): ahí solo van ids, roles y claves.
  */
-async function teamAuditInTx(
+export async function teamAuditInTx(
   tx: DbClient,
   ctx: TeamActorCtx,
   a: { action: string; entity: string; entityId: string; payload?: Record<string, unknown>; platformPayload?: Record<string, unknown> }
@@ -161,7 +170,7 @@ async function countPractitionerLoad(tx: DbClient, tenantId: string, practitione
  * `missing_practitioner`). Upsert por la clave compuesta de M6 (no pisa la especialidad de una fila vieja) y agenda
  * por defecto SOLO si no tenía ninguna franja.
  */
-async function ensureClinicalPractitionerInTx(tx: DbClient, tenantId: string, userId: string) {
+export async function ensureClinicalPractitionerInTx(tx: DbClient, tenantId: string, userId: string) {
   const prac = await tx.practitioner.upsert({
     where: { tenantId_userId: { tenantId, userId } },
     create: { userId, tenantId, specialty: null },
@@ -179,7 +188,18 @@ async function ensureClinicalPractitionerInTx(tx: DbClient, tenantId: string, us
 function findMemberInTx(tx: DbClient, tenantId: string, membershipId: string) {
   return tx.membership.findFirst({
     where: { id: membershipId, tenantId },
-    select: { id: true, userId: true, role: true, acceptedAt: true, disabledAt: true, user: { select: { email: true } } },
+    select: {
+      id: true,
+      userId: true,
+      role: true,
+      clinical: true,
+      grantSettings: true,
+      grantBilling: true,
+      acceptedAt: true,
+      disabledAt: true,
+      disabledReason: true,
+      user: { select: { email: true } },
+    },
   });
 }
 
@@ -192,74 +212,166 @@ function newRawToken() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cupos (BO-D7)
+// Cupos por tipo (PL-1c, C-PL3, PL-D3; antes BO-D7)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CLINICAL_ROLE_LIST: Role[] = [...CLINICAL_ROLES];
+/**
+ * ¿La persona invitada atiende? Sale del ROL (decisión de Martin del 15-oct, plan §20.17): PRACTITIONER sí;
+ * Administrador/a, Secretaría y Facturación no. El Administrador/a NUNCA atiende (organiza las agendas de los
+ * profesionales y la Sala de espera; sin `Practitioner`, sin agenda propia, sin HC — decisión 8): por eso no hace
+ * falta una columna `Invitation.clinical` (se descartó la migración que proponía PL-1c). El OWNER no se invita (se
+ * transfiere) y es el único que elige si atiende (`setMemberClinicalInTx`).
+ */
+export function invitationClinical(role: Role): boolean {
+  return role === "PRACTITIONER";
+}
+
+export function invitationSeatKind(role: Role): SeatKind {
+  return seatKindOf({ role, clinical: invitationClinical(role) });
+}
+
+type TenantSeatRow = {
+  saasPlan: SaasPlan;
+  maxUsersOverride: number | null;
+  maxProfessionalsOverride: number | null;
+  maxStaffOverride: number | null;
+  updatedAt: Date;
+};
 
 /**
- * Uso de lugares del consultorio: miembros clínicos ACTIVOS (sin `disabledAt`: un suspendido no ocupa, y por eso
- * reactivarlo pide lugar) + invitaciones clínicas pendientes y vigentes (reservan el lugar: si no, en un Free se
- * mandaban 10 invitaciones y se aceptaban todas). `excludeInvitationEmail`: la invitación viva de ese email se va
- * a reemplazar (re-invitar), no cuenta dos veces. `lock`: `FOR UPDATE` sobre el Tenant, para chequear y escribir
- * en la misma tx sin que otra alta se cuele en el medio (mismo orden que el escritor de entitlements: Tenant
- * primero). null = el consultorio no existe.
+ * Lee (y opcionalmente lockea) la fila del Tenant con lo que deciden los cupos. `FOR UPDATE` va por SQL (Prisma no
+ * lo expresa) y SIEMPRE primero, en el mismo orden que el escritor de entitlements y el cambio de plan: así dos
+ * altas simultáneas, o un alta y un cambio de plan, se serializan sin deadlock.
  */
-export async function getSeatUsageInTx(
+async function readTenantSeatRowInTx(tx: DbClient, tenantId: string, lock: boolean): Promise<TenantSeatRow | null> {
+  const rows = lock
+    ? await tx.$queryRaw<TenantSeatRow[]>`
+        SELECT "saasPlan", "maxUsersOverride", "maxProfessionalsOverride", "maxStaffOverride", "updatedAt"
+        FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`
+    : await tx.$queryRaw<TenantSeatRow[]>`
+        SELECT "saasPlan", "maxUsersOverride", "maxProfessionalsOverride", "maxStaffOverride", "updatedAt"
+        FROM "Tenant" WHERE "id" = ${tenantId}`;
+  return rows[0] ?? null;
+}
+
+/**
+ * Límites efectivos de un plan para este consultorio: fila de `SaasPlanConfig` (GLOBAL_READONLY: la lee también el
+ * rol app) o `PLAN_DEFAULTS` si falta, con los overrides del Tenant. `plan` puede no ser el actual (cambio de plan).
+ */
+export async function planLimitsInTx(tx: DbClient, plan: SaasPlan, overrides: PlanLimitOverrides): Promise<PlanLimits> {
+  const row = await tx.saasPlanConfig.findUnique({
+    where: { plan },
+    select: { maxUsers: true, maxProfessionals: true, maxStaff: true },
+  });
+  return planLimitsFor(plan, row, overrides);
+}
+
+/** Conteo por tipo de miembros activos y de invitaciones pendientes vigentes (sin límites). */
+export async function countSeatsInTx(
   tx: DbClient,
   tenantId: string,
-  opts: { now: Date; lock?: boolean; excludeInvitationEmail?: string }
-): Promise<SeatUsage | null> {
-  const rows = opts.lock
-    ? await tx.$queryRaw<{ plan: TenantPlan; seatLimitOverride: number | null }[]>`
-        SELECT "plan", "seatLimitOverride" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`
-    : await tx.$queryRaw<{ plan: TenantPlan; seatLimitOverride: number | null }[]>`
-        SELECT "plan", "seatLimitOverride" FROM "Tenant" WHERE "id" = ${tenantId}`;
-  const t = rows[0];
-  if (!t) return null;
-  const [clinicalMembers, pendingClinicalInvites] = await Promise.all([
-    tx.membership.count({ where: { tenantId, disabledAt: null, role: { in: CLINICAL_ROLE_LIST } } }),
-    tx.invitation.count({
+  o: { now: Date; excludeInvitationEmail?: string; excludeMembershipIds?: string[] }
+): Promise<{ members: { professional: number; staff: number }; invites: { professional: number; staff: number } }> {
+  const [members, invites] = await Promise.all([
+    tx.membership.findMany({
+      where: {
+        tenantId,
+        disabledAt: null,
+        ...(o.excludeMembershipIds?.length ? { id: { notIn: o.excludeMembershipIds } } : {}),
+      },
+      select: { role: true, clinical: true },
+    }),
+    tx.invitation.findMany({
       where: {
         tenantId,
         acceptedAt: null,
         revokedAt: null,
-        expiresAt: { gt: opts.now },
-        role: { in: CLINICAL_ROLE_LIST },
-        ...(opts.excludeInvitationEmail ? { email: { not: opts.excludeInvitationEmail } } : {}),
+        expiresAt: { gt: o.now },
+        ...(o.excludeInvitationEmail ? { email: { not: o.excludeInvitationEmail } } : {}),
       },
+      select: { role: true },
     }),
   ]);
-  return seatUsage({ clinicalMembers, pendingClinicalInvites }, seatLimitFor(t));
+  const m = { professional: 0, staff: 0 };
+  for (const r of members) m[seatKindOf(r)]++;
+  const i = { professional: 0, staff: 0 };
+  for (const r of invites) i[invitationSeatKind(r.role)]++;
+  return { members: m, invites: i };
 }
 
-/** Copy del cupo lleno. Desde Configuración habla el consultorio («tu plan»); desde Plataforma, el superadmin. */
-export function seatsFullCopy(ctx: Pick<TeamActorCtx, "via">, u: SeatUsage): string {
-  const n = u.limit ?? 0;
-  const lugares = `${n} lugar${n === 1 ? "" : "es"} para profesionales`;
-  const head = ctx.via === "tenant" ? `Tu plan tiene ${lugares}` : `El plan del consultorio tiene ${lugares}`;
+/**
+ * Uso de lugares POR TIPO (C-PL3): miembros ACTIVOS (sin `disabledAt`: un suspendido o deshabilitado por bajar de
+ * plan no ocupa, y por eso reactivarlo pide lugar) + invitaciones pendientes y vigentes (reservan el lugar del tipo
+ * de su rol: si no, en un Individual se mandaban 10 invitaciones y se aceptaban todas).
+ *  - `excludeInvitationEmail`: la invitación viva de ese email se va a reemplazar (re-invitar): no cuenta doble.
+ *  - `excludeMembershipIds`: miembros que se están moviendo de tipo (cambio de rol, «¿Atiende?»): se cuentan aparte.
+ *  - `lock`: `FOR UPDATE` sobre el Tenant ANTES de contar, para chequear y escribir en la misma tx sin que otra alta
+ *    se cuele (mismo orden que el escritor de entitlements: Tenant primero).
+ * null = el consultorio no existe.
+ */
+export async function getSeatUsageInTx(
+  tx: DbClient,
+  tenantId: string,
+  o: { now: Date; lock?: boolean; excludeInvitationEmail?: string; excludeMembershipIds?: string[] }
+): Promise<SeatUsageByKind | null> {
+  const t = await readTenantSeatRowInTx(tx, tenantId, o.lock === true);
+  if (!t) return null;
+  const [limits, c] = await Promise.all([planLimitsInTx(tx, t.saasPlan, t), countSeatsInTx(tx, tenantId, o)]);
+  return seatUsageByKind(
+    { professional: c.members.professional + c.invites.professional, staff: c.members.staff + c.invites.staff },
+    limits
+  );
+}
+
+const KIND_COPY: Record<SeatKind, { one: string; many: string; who: string }> = {
+  professional: { one: "lugar para profesionales", many: "lugares para profesionales", who: "otro profesional" },
+  staff: {
+    one: "lugar para Secretaría o administración",
+    many: "lugares para Secretaría o administración",
+    who: "otra persona de Secretaría o administración",
+  },
+};
+
+/**
+ * Copy del cupo lleno, por tipo. Desde Configuración habla el consultorio («tu plan»); desde Plataforma, el
+ * superadmin. Dice qué se llenó (el total o el tipo), porque en Consultorio puede haber lugar de profesional y no de
+ * Secretaría (y al revés).
+ */
+export function seatsFullCopy(ctx: Pick<TeamActorCtx, "via">, u: SeatUsageByKind, kind: SeatKind): string {
+  const totalFull = u.total.full && u.total.limit != null;
+  const c = u[kind];
+  const n = totalFull ? (u.total.limit ?? 0) : (c.limit ?? 0);
+  const what = totalFull
+    ? `${n} ${n === 1 ? "usuario" : "usuarios"}`
+    : `${n} ${n === 1 ? KIND_COPY[kind].one : KIND_COPY[kind].many}`;
+  const head = ctx.via === "tenant" ? `Tu plan tiene ${what}` : `El plan del consultorio tiene ${what}`;
+  const used = totalFull ? u.total.used : c.used;
   const tail =
     ctx.via === "tenant"
-      ? // BO-Z (C8): no hay un canal «ampliar el plan» en la app; decía «pedí» sin decir a quién.
-        "Para sumar a otro profesional, liberá un lugar. Para sumar más, el titular puede escribirle al equipo de KineSoft."
-      : "Ampliá el plan o el cupo a medida para sumar a otro profesional.";
-  return `${head} y están ocupados (${u.used} contando invitaciones pendientes). La Secretaria y Facturación no ocupan lugar. ${tail}`;
+      ? // BO-Z (C8): no hay un canal «ampliar el plan» por mail; desde PL el Titular cambia el plan en Configuración.
+        `Para sumar a ${KIND_COPY[kind].who}, liberá un lugar o cambiá de plan en Configuración → Plan y uso.`
+      : `Cambiá el plan o el cupo a medida para sumar a ${KIND_COPY[kind].who}.`;
+  return `${head} y están ocupados (${used} contando invitaciones pendientes). ${tail}`;
 }
 
-/** Lockea el Tenant y dice si entra un clínico más. `{ ok: false }` lleva el copy listo para mostrar. */
+/**
+ * Lockea el Tenant y dice si entra una persona más de `kind`. `{ ok: false }` lleva el copy listo para mostrar.
+ * `excludeMembershipIds`: quien se mueve de tipo (no se cuenta en el tipo que deja).
+ */
 async function requireFreeSeatInTx(
   tx: DbClient,
   ctx: TeamActorCtx,
   now: Date,
-  excludeInvitationEmail?: string
+  kind: SeatKind,
+  o: { excludeInvitationEmail?: string; excludeMembershipIds?: string[] } = {}
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const u = await getSeatUsageInTx(tx, ctx.tenantId, { now, lock: true, excludeInvitationEmail });
+  const u = await getSeatUsageInTx(tx, ctx.tenantId, { now, lock: true, ...o });
   if (!u) return fail("No encontramos el consultorio.");
-  if (u.full) return fail(seatsFullCopy(ctx, u));
+  if (!canAddSeat(u, kind)) return fail(seatsFullCopy(ctx, u, kind));
   return { ok: true };
 }
 
-/** Aceptar/activar una invitación clínica sin lugar libre (ver `checkSeatForJoinInTx`). */
+/** Aceptar/activar una invitación sin lugar libre (ver `checkSeatForJoinInTx`). */
 export class SeatLimitError extends Error {
   constructor() {
     super("seat_limit");
@@ -269,45 +381,63 @@ export class SeatLimitError extends Error {
 
 /** Copy para el invitado (aceptar / activar) cuando el consultorio no tiene lugar. */
 export const SEAT_LIMIT_JOIN_MESSAGE =
-  "El consultorio no tiene lugares libres para profesionales en su plan. Avisale al consultorio para que libere uno o amplíe el plan.";
+  "El consultorio no tiene lugares libres en su plan para tu rol. Avisale al consultorio para que libere uno o cambie de plan.";
 
 /**
- * Chequeo al ACEPTAR / ACTIVAR (lo llama `joinTenantInTx` de IAM: handoff de BO2-B). La invitación reservó el lugar
- * al crearse, pero entre la invitación y la aceptación el plan pudo bajar (o el cupo a medida achicarse): la
- * persona que todavía no entró no tiene que entrar por encima del cupo. Bajar de plan no saca a nadie: esto solo
- * frena a quien no está adentro.
+ * Chequeo al ACEPTAR / ACTIVAR (lo llama `joinTenantInTx`). La invitación reservó el lugar al crearse, pero entre la
+ * invitación y la aceptación el plan pudo bajar: la persona que todavía no entró no entra por encima del cupo. Esto
+ * solo frena a quien no está adentro.
  *
- * Cuenta solo miembros clínicos activos de OTROS usuarios (la propia invitación y las demás pendientes no: la que
- * se acepta primero entra, la siguiente choca). Si el usuario ya es miembro clínico activo, no ocupa un lugar nuevo.
- * `FOR UPDATE` sobre el Tenant ANTES del CAS de la invitación (mismo orden que crear/reenviar: Tenant primero).
+ * Cuenta solo miembros ACTIVOS de OTROS usuarios (la propia invitación y las demás pendientes no: la que se acepta
+ * primero entra, la siguiente choca) y pide lugar en el total y en el tipo de `{role, clinical}`. Si el usuario ya
+ * es miembro activo, su fila se reemplaza (no ocupa dos). `FOR UPDATE` sobre el Tenant ANTES del CAS de la
+ * invitación (mismo orden que crear/reenviar: Tenant primero).
  */
 export async function checkSeatForJoinInTx(
   tx: DbClient,
-  p: { tenantId: string; userId: string; role: Role }
+  p: { tenantId: string; userId: string; role: Role; clinical: boolean }
 ): Promise<void> {
-  if (!consumesSeat(p.role)) return;
-  const rows = await tx.$queryRaw<{ plan: TenantPlan; seatLimitOverride: number | null }[]>`
-    SELECT "plan", "seatLimitOverride" FROM "Tenant" WHERE "id" = ${p.tenantId} FOR UPDATE`;
-  const t = rows[0];
+  const t = await readTenantSeatRowInTx(tx, p.tenantId, true);
   if (!t) return; // sin Tenant la FK de la membresía falla igual; no es un caso de cupo
-  const limit = seatLimitFor(t);
-  if (limit == null) return;
-  const own = await tx.membership.findFirst({
-    where: { tenantId: p.tenantId, userId: p.userId, disabledAt: null, role: { in: CLINICAL_ROLE_LIST } },
-    select: { id: true },
+  const limits = await planLimitsInTx(tx, t.saasPlan, t);
+  if (limits.maxUsers == null && limits.maxProfessionals == null && limits.maxStaff == null) return;
+  const others = await tx.membership.findMany({
+    where: { tenantId: p.tenantId, disabledAt: null, userId: { not: p.userId } },
+    select: { role: true, clinical: true },
   });
-  if (own) return;
-  const others = await tx.membership.count({
-    where: { tenantId: p.tenantId, disabledAt: null, role: { in: CLINICAL_ROLE_LIST }, userId: { not: p.userId } },
-  });
-  if (others >= limit) throw new SeatLimitError();
+  const c = { professional: 0, staff: 0 };
+  for (const r of others) c[seatKindOf(r)]++;
+  if (!canAddSeat(seatUsageByKind(c, limits), seatKindOf(p))) throw new SeatLimitError();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Invitaciones
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type InviteCoreInput = { email: string; firstName: string; lastName: string; role: Role; specialty: string | null };
+export type InviteCoreInput = {
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  specialty: string | null;
+  /**
+   * «¿Atiende?»: lo fija el rol (`invitationClinical`, §20.17). Ausente = el del rol; uno que lo contradiga se frena
+   * con copy (`inviteClinicalError`) en vez de ignorarse en silencio.
+   */
+  clinical?: boolean;
+};
+
+/** §20.17: el Administrador/a no atiende. Si tiene que atender, va como Profesional con «Configuración» delegada. */
+export const INVITE_ADMIN_CLINICAL_MESSAGE =
+  "El Administrador/a no atiende pacientes. Si esta persona va a atender, invitala como Profesional y después dale «Configuración».";
+
+function inviteClinicalError(role: Role, clinical: boolean | undefined): { ok: false; error: string } | null {
+  if (clinical === undefined || clinical === invitationClinical(role)) return null;
+  if (role === "ADMIN") return fail(INVITE_ADMIN_CLINICAL_MESSAGE);
+  // PRACTITIONER siempre atiende y Secretaría/Facturación nunca: un `clinical` que contradice el rol es un error del
+  // caller, no algo que se pueda «respetar».
+  return fail("Ese rol no admite cambiar «¿Atiende?».");
+}
 
 type WrittenInvitation = { id: string; email: string; role: Role; expiresAt: Date };
 
@@ -342,6 +472,8 @@ export async function createInvitationInTx(
 
   const supportDenied = supportRoleError(ctx, input.role);
   if (supportDenied) return supportDenied;
+  const clinicalDenied = inviteClinicalError(input.role, input.clinical);
+  if (clinicalDenied) return clinicalDenied;
   if (ctx.support) {
     // BO-Z (A2): soporte no invita a NINGUNA cuenta de Plataforma (ni la suya ni la de otro superadmin): sería entrar
     // al consultorio como miembro, por fuera de la sesión de soporte auditada y con vencimiento.
@@ -375,9 +507,12 @@ export async function createInvitationInTx(
   });
   if (portalPatient) return fail("Ese email es de un paciente con acceso al portal. Para el equipo usá otro email.");
 
-  // BO-D7: un rol clínico ocupa lugar. La invitación viva del mismo email no cuenta (se reemplaza).
-  if (consumesSeat(input.role)) {
-    const seat = await requireFreeSeatInTx(tx, ctx, input.now, emailLc);
+  // PL-1c (PL-D3): toda invitación reserva un lugar de su tipo (antes solo las clínicas: la Secretaria entraba gratis,
+  // y en Consultorio hay 1 solo lugar no clínico). La invitación viva del mismo email no cuenta (se reemplaza).
+  {
+    const seat = await requireFreeSeatInTx(tx, ctx, input.now, invitationSeatKind(input.role), {
+      excludeInvitationEmail: emailLc,
+    });
     if (!seat.ok) return seat;
   }
 
@@ -542,7 +677,7 @@ export function findReissuableInvitationInTx(tx: DbClient, ctx: TeamActorCtx, id
  * «Reenviar» y «Generar link nuevo» dentro de la tx: token nuevo + TTL extendido.
  *  - resend:     el vigente pasa a `priorTokens` (siguen valiendo).
  *  - regenerate: `priorTokens = []` (se anulan todos).
- * Reabrir una invitación clínica VENCIDA vuelve a reservar un lugar: pide cupo (una vigente ya lo tenía).
+ * Reabrir una invitación VENCIDA vuelve a reservar un lugar de su tipo: pide cupo (una vigente ya lo tenía).
  */
 export async function reissueInvitationInTx(
   tx: DbClient,
@@ -550,8 +685,8 @@ export async function reissueInvitationInTx(
   p: { row: ReissuableInvitation; mode: "resend" | "regenerate"; rawToken: string; now: Date }
 ): Promise<ActionResult<{ expiresAt: Date }>> {
   const { row, now } = p;
-  if (row.expiresAt.getTime() <= now.getTime() && consumesSeat(row.role)) {
-    const seat = await requireFreeSeatInTx(tx, ctx, now);
+  if (row.expiresAt.getTime() <= now.getTime()) {
+    const seat = await requireFreeSeatInTx(tx, ctx, now, invitationSeatKind(row.role));
     if (!seat.ok) return seat;
   }
   const expiresAt = new Date(now.getTime() + INVITE_TTL_MS);
@@ -641,9 +776,10 @@ export const ROLE_CHANGE_RACE_MESSAGE = "El rol cambió mientras tanto. Recargá
 
 /**
  * Cambio de rol (y transferencia del OWNER cuando `role` es OWNER). IAM-4c: el rol decide si la persona ATIENDE:
- *  - a un rol clínico: se crea el `Practitioner` si falta y su agenda por defecto si no tenía; y si viene de un rol
- *    no clínico y está activa, pide un lugar (BO-D7);
- *  - a un rol no clínico: se FRENA si tiene turnos futuros o pacientes asignados (como `removeMember`).
+ *  - a un rol clínico: se crea el `Practitioner` si falta y su agenda por defecto si no tenía;
+ *  - a un rol no clínico: se FRENA si tiene turnos futuros o pacientes asignados (como `removeMember`);
+ *  - PL-1c: si cambia el TIPO de lugar (profesional ↔ no clínico) y está activa, pide lugar en el tipo destino.
+ *    OWNER/ADMIN conservan su «¿Atiende?» (`clinical`); PRACTITIONER lo fuerza a true, Secretaría/Facturación a false.
  * S13g: tampoco a un rol sin `plans.manage` si es responsable de planes ACTIVE.
  *
  * Reglas de quién (siempre exactamente un OWNER):
@@ -683,15 +819,22 @@ export async function changeMemberRoleInTx(
     if (m.disabledAt) return fail("No podés transferir la titularidad a alguien suspendido. Reactivalo primero.");
   }
 
-  // BO-D7: pasar de un rol que no ocupa lugar a uno que sí (estando activo) pide lugar. Entre clínicos no cambia
-  // nada; un suspendido no ocupa (pedirá lugar al reactivarse).
-  if (isClinicalRole(nextRole) && !isClinicalRole(m.role) && !m.disabledAt) {
-    const seat = await requireFreeSeatInTx(tx, ctx, new Date());
+  // PL-1c → §20.17: el rol fija «atiende», salvo el OWNER (el único que elige): PRACTITIONER sí; ADMIN, Secretaría y
+  // Facturación no. Pasar a ADMIN es pasar a un rol no clínico: mismos bloqueos (turnos futuros, pacientes, planes).
+  // Quien pasa a Titular conserva el `clinical` que tenía (un Profesional sigue atendiendo; un Admin, no).
+  const nextClinical = nextRole === "OWNER" ? m.clinical : nextRole === "PRACTITIONER";
+  const next = { role: nextRole, clinical: nextClinical };
+  const nextIsClinical = isClinicalMember(next);
+
+  // PL-1c (PL-D3): cambiar a otro TIPO de lugar (estando activo) pide lugar en el tipo destino; se excluye a esta
+  // persona del conteo (deja su lugar actual). Mismo tipo: nada. Un suspendido no ocupa (pedirá lugar al reactivarse).
+  if (!m.disabledAt && seatKindOf(next) !== seatKindOf(m)) {
+    const seat = await requireFreeSeatInTx(tx, ctx, new Date(), seatKindOf(next), { excludeMembershipIds: [m.id] });
     if (!seat.ok) return seat;
   }
 
   let practitionerCreated = false;
-  if (isClinicalRole(nextRole)) {
+  if (nextIsClinical) {
     practitionerCreated = (await ensureClinicalPractitionerInTx(tx, tenantId, m.userId)).provisioned;
   } else {
     const prac = await tx.practitioner.findFirst({ where: { tenantId, userId: m.userId }, select: { id: true } });
@@ -702,7 +845,9 @@ export async function changeMemberRoleInTx(
       if (copy) return fail(copy);
     }
   }
-  if (!capabilitiesFor(nextRole).has("plans.manage")) {
+  // Un no clínico pierde `plans.manage` aunque su rol lo tenga (C-PL5: − clínico si no atiende). Todo miembro que
+  // atiende (`isClinicalMember`) tiene `plans.manage` por su rol, así que alcanza con mirar si atiende.
+  if (!nextIsClinical) {
     const activePlans = await countActivePlansAsResponsible(tx, tenantId, m.userId);
     if (activePlans > 0) {
       return fail(`No se puede cambiar el rol: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`);
@@ -710,26 +855,39 @@ export async function changeMemberRoleInTx(
   }
   // CAS sobre el rol leído: si otro cambio ganó en el medio, no se pisa. Tirar (no devolver) revierte el
   // Practitioner/agenda que se haya creado arriba en esta misma tx.
-  const upd = await tx.membership.updateMany({ where: { id: m.id, tenantId, role: m.role }, data: { role: nextRole } });
+  const upd = await tx.membership.updateMany({
+    where: { id: m.id, tenantId, role: m.role, clinical: m.clinical },
+    data: { role: nextRole, clinical: nextClinical },
+  });
   if (upd.count !== 1) throw new RoleChangeRaceError();
   let demoted: number | undefined;
   if (transfer) {
-    if (ctx.via === "tenant") {
-      // Quien transfiere queda como ADMIN. BO-Z (B1): con el predicado `role: "OWNER"` y el conteo. Antes el update
-      // no miraba el rol: dos transferencias simultáneas del mismo OWNER (a X y a Y) pasaban cada una su CAS sobre
-      // el destino, las dos «bajaban» al que transfería (la segunda, sobre un ADMIN) y quedaban DOS OWNER. Ahora la
-      // segunda espera el lock de la fila, ve que ya no es OWNER (count 0) y revierte.
-      const self = await tx.membership.updateMany({
-        where: { tenantId, userId: ctx.actorUserId, role: "OWNER" },
-        data: { role: "ADMIN" },
-      });
-      if (self.count !== 1) throw new RoleChangeRaceError();
-    } else {
-      // El superadmin no es (necesariamente) miembro: los dueños anteriores quedan ADMIN (siguen clínicos: no
-      // cambia el cupo).
-      demoted = (
-        await tx.membership.updateMany({ where: { tenantId, role: "OWNER", id: { not: m.id } }, data: { role: "ADMIN" } })
+    // §20.17 (el Administrador/a nunca atiende): el Titular anterior queda con «Configuración» delegada y, según
+    // atendía, como PROFESIONAL (conserva agenda, turnos y pacientes; el mismo criterio que la migración M8b para los
+    // ADMIN con agenda) o como ADMIN sin agenda. Antes quedaba ADMIN a secas y seguía atendiendo. Mismo tipo de
+    // lugar que tenía, así que el cupo no cambia.
+    const demote = async (where: Prisma.MembershipWhereInput) =>
+      (
+        await tx.membership.updateMany({
+          where: { ...where, role: "OWNER", clinical: true },
+          data: { role: "PRACTITIONER", grantSettings: true },
+        })
+      ).count +
+      (
+        await tx.membership.updateMany({
+          where: { ...where, role: "OWNER", clinical: false },
+          data: { role: "ADMIN", grantSettings: true },
+        })
       ).count;
+    if (ctx.via === "tenant") {
+      // BO-Z (B1): con el predicado `role: "OWNER"` y el conteo. Antes el update no miraba el rol: dos
+      // transferencias simultáneas del mismo OWNER (a X y a Y) pasaban cada una su CAS sobre el destino, las dos
+      // «bajaban» al que transfería y quedaban DOS OWNER. Ahora la segunda espera el lock de la fila, ve que ya no es
+      // OWNER (count 0) y revierte.
+      if ((await demote({ tenantId, userId: ctx.actorUserId })) !== 1) throw new RoleChangeRaceError();
+    } else {
+      // El superadmin no es (necesariamente) miembro: bajan todos los dueños anteriores.
+      demoted = await demote({ tenantId, id: { not: m.id } });
     }
     // Invariante en los dos caminos, antes de commitear: exactamente un OWNER.
     const owners = await tx.membership.count({ where: { tenantId, role: "OWNER" } });
@@ -742,6 +900,7 @@ export async function changeMemberRoleInTx(
     payload: {
       from: m.role,
       role: nextRole,
+      ...(nextClinical !== m.clinical ? { clinical: nextClinical } : {}),
       ...(practitionerCreated ? { agendaProvisioned: true } : {}),
       ...(demoted !== undefined ? { userId: m.userId, previousOwnersDemoted: demoted } : {}),
     },
@@ -768,7 +927,8 @@ export async function suspendMemberInTx(
 
   const upd = await tx.membership.updateMany({
     where: { id: m.id, tenantId, disabledAt: null, role: { not: "OWNER" } },
-    data: { disabledAt: input.now, disabledById: ctx.actorUserId },
+    // PL-1c: el motivo separa la suspensión a mano de la de bajar de plan (subir de plan solo reactiva PLAN_DOWNGRADE).
+    data: { disabledAt: input.now, disabledById: ctx.actorUserId, disabledReason: "MANUAL" },
   });
   const prac = await tx.practitioner.findFirst({ where: { tenantId, userId: m.userId }, select: { id: true } });
   const futureBookings = prac ? (await countPractitionerLoad(tx, tenantId, prac.id)).futureBookings : 0;
@@ -788,7 +948,7 @@ export async function suspendMemberInTx(
 
 /**
  * «Reactivar» (IAM-4c): limpia `disabledAt` y la persona vuelve con el rol que tenía. Un rol clínico sin
- * `Practitioner` se le crea en la misma tx. BO-D7: un clínico vuelve a ocupar lugar, así que pide uno libre.
+ * `Practitioner` se le crea en la misma tx. PL-1c: vuelve a ocupar un lugar de su tipo, así que pide uno libre.
  * `changed: false` = ya estaba activo (idempotente).
  */
 export async function reactivateMemberInTx(
@@ -804,23 +964,126 @@ export async function reactivateMemberInTx(
   // BO-Z (A2): reactivar devuelve el rol que tenía; si es clínico, soporte no lo reabre.
   const supportDenied = supportRoleError(ctx, m.role);
   if (supportDenied) return supportDenied;
-  if (consumesSeat(m.role)) {
-    const seat = await requireFreeSeatInTx(tx, ctx, new Date());
-    if (!seat.ok) return seat;
-  }
+  // PL-1c (PL-D3): vuelve a ocupar un lugar de su tipo (antes solo los clínicos pedían lugar).
+  const seat = await requireFreeSeatInTx(tx, ctx, new Date(), seatKindOf(m));
+  if (!seat.ok) return seat;
   const upd = await tx.membership.updateMany({
     where: { id: m.id, tenantId, disabledAt: { not: null } },
-    data: { disabledAt: null, disabledById: null },
+    data: { disabledAt: null, disabledById: null, disabledReason: null },
   });
   if (upd.count !== 1) return { ok: true, data: { changed: false } };
-  if (isClinicalRole(m.role)) await ensureClinicalPractitionerInTx(tx, tenantId, m.userId);
+  if (isClinicalMember(m)) await ensureClinicalPractitionerInTx(tx, tenantId, m.userId);
   await teamAuditInTx(tx, ctx, {
     action: "membership.reactivate",
     entity: "Membership",
     entityId: m.id,
-    payload: { userId: m.userId, role: m.role, suspendedAt: m.disabledAt.toISOString() },
+    payload: { userId: m.userId, role: m.role, suspendedAt: m.disabledAt.toISOString(), reason: m.disabledReason },
   });
   return { ok: true, data: { changed: true } };
+}
+
+/**
+ * «¿Atiende?» del Titular (PL-1c, C-PL5, decisión 8; §20.17: solo el Titular elige). PRACTITIONER siempre atiende;
+ * Administrador/a, Secretaría y Facturación nunca (para eso está el cambio de rol). Única excepción: un ADMIN que
+ * quedó con `clinical = true` de antes de §20.17 (hasta que lo normalice M8b) se puede pasar a «no atiende», nunca
+ * al revés.
+ *  - a «atiende»: pide un lugar de profesional (si está activo; deja el no clínico) y le crea `Practitioner` + agenda
+ *    por defecto si no tenía, como al pasar a un rol clínico;
+ *  - a «no atiende»: se FRENA con los mismos bloqueos que pasar a un rol no clínico (turnos futuros, pacientes
+ *    asignados, planes ACTIVE a cargo): deja de ver HC y de ser reservable. Pide un lugar no clínico.
+ * Quién: el del Titular solo lo toca quien actúa como dueño (el propio Titular, o el superadmin); nadie más cambia el
+ * suyo (un Admin no se abre la HC a sí mismo). Soporte no pasa a nadie a «atiende» (le daría `clinical.read`, BO-Z A2).
+ * CAS sobre `role` + `clinical` leídos; tirar `RoleChangeRaceError` revierte el `Practitioner` creado.
+ */
+export async function setMemberClinicalInTx(
+  tx: DbClient,
+  ctx: TeamActorCtx,
+  i: { membershipId: string; clinical: boolean }
+): Promise<ActionResult> {
+  const { tenantId } = ctx;
+  const m = await findMemberInTx(tx, tenantId, i.membershipId);
+  if (!m) return fail("Miembro no encontrado.");
+  const legacyAdminOff = m.role === "ADMIN" && !i.clinical;
+  if (m.role !== "OWNER" && !legacyAdminOff) {
+    return fail(
+      m.role === "ADMIN"
+        ? "El Administrador/a no atiende pacientes. Si esta persona va a atender, cambiale el rol a Profesional."
+        : "«¿Atiende?» solo se elige para el Titular. Para los demás, cambiá el rol."
+    );
+  }
+  if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el titular puede cambiar si el titular atiende.");
+  if (m.userId === ctx.actorUserId && m.role !== "OWNER") return fail("No podés cambiar si atendés vos mismo. Pedíselo al titular.");
+  if (m.clinical === i.clinical) return { ok: true, data: undefined };
+  if (ctx.support && i.clinical) return fail(SUPPORT_CLINICAL_ROLE_MESSAGE);
+
+  const next = { role: m.role, clinical: i.clinical };
+  if (!m.disabledAt) {
+    const seat = await requireFreeSeatInTx(tx, ctx, new Date(), seatKindOf(next), { excludeMembershipIds: [m.id] });
+    if (!seat.ok) return seat;
+  }
+  let practitionerCreated = false;
+  if (i.clinical) {
+    practitionerCreated = (await ensureClinicalPractitionerInTx(tx, tenantId, m.userId)).provisioned;
+  } else {
+    const prac = await tx.practitioner.findFirst({ where: { tenantId, userId: m.userId }, select: { id: true } });
+    if (prac) {
+      const load = await countPractitionerLoad(tx, tenantId, prac.id);
+      const copy = reassignBeforeRoleChangeCopy(load.futureBookings, load.assignedPatients);
+      if (copy) return fail(copy);
+    }
+    const activePlans = await countActivePlansAsResponsible(tx, tenantId, m.userId);
+    if (activePlans > 0) {
+      return fail(`No puede dejar de atender: ${activePlansCopy(activePlans)}. Cambiá el responsable de esos planes primero.`);
+    }
+  }
+  const upd = await tx.membership.updateMany({
+    where: { id: m.id, tenantId, role: m.role, clinical: m.clinical },
+    data: { clinical: i.clinical },
+  });
+  if (upd.count !== 1) throw new RoleChangeRaceError();
+  await teamAuditInTx(tx, ctx, {
+    action: "membership.clinical.change",
+    entity: "Membership",
+    entityId: m.id,
+    payload: { userId: m.userId, role: m.role, clinical: i.clinical, ...(practitionerCreated ? { agendaProvisioned: true } : {}) },
+  });
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Permisos delegados (PL-1c, C-PL5, PL-D5): «Configuración» (`grantSettings`) y «Planes y pagos» (`grantBilling`).
+ * Solo quien actúa como dueño (el Titular o el superadmin): delegar es del Titular, y un ADMIN con «Configuración» no
+ * se da «Planes y pagos» a sí mismo ni a otro. Nunca sobre la membresía del Titular (ya tiene todo; marcarlo no
+ * significaría nada y desmarcarlo parecería que se lo saca). Sin step-up acá: lo pide la action (PL-D11).
+ */
+export async function setMemberGrantsInTx(
+  tx: DbClient,
+  ctx: TeamActorCtx,
+  i: { membershipId: string; grantSettings: boolean; grantBilling: boolean }
+): Promise<ActionResult> {
+  if (!actsAsOwner(ctx)) return fail("Solo el titular puede delegar permisos.");
+  const { tenantId } = ctx;
+  const m = await findMemberInTx(tx, tenantId, i.membershipId);
+  if (!m) return fail("Miembro no encontrado.");
+  if (m.role === "OWNER") return fail("El titular ya tiene todos los permisos.");
+  if (m.grantSettings === i.grantSettings && m.grantBilling === i.grantBilling) return { ok: true, data: undefined };
+  // CAS sobre lo leído y el rol: si en el medio lo hicieron Titular (transferencia), no se escribe sobre el OWNER.
+  const upd = await tx.membership.updateMany({
+    where: { id: m.id, tenantId, role: { not: "OWNER" }, grantSettings: m.grantSettings, grantBilling: m.grantBilling },
+    data: { grantSettings: i.grantSettings, grantBilling: i.grantBilling },
+  });
+  if (upd.count !== 1) throw new RoleChangeRaceError();
+  await teamAuditInTx(tx, ctx, {
+    action: "membership.grants.change",
+    entity: "Membership",
+    entityId: m.id,
+    payload: {
+      userId: m.userId,
+      from: { grantSettings: m.grantSettings, grantBilling: m.grantBilling },
+      to: { grantSettings: i.grantSettings, grantBilling: i.grantBilling },
+    },
+  });
+  return { ok: true, data: undefined };
 }
 
 /**

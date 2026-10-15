@@ -14,7 +14,7 @@ import { toARDateKey } from "@/lib/datetime-ar";
 const base = {
   clinicName: "Centro Movare",
   vertical: "KINESIOLOGY",
-  plan: "PRO",
+  plan: "CLINICA",
   ownerEmail: "  Ana@Example.COM ",
   ownerFirstName: "Ana",
   ownerLastName: "Pérez",
@@ -28,6 +28,7 @@ describe("[BO2-A] CreateTenantWithOwnerInput", () => {
     expect(r.slug).toBeUndefined();
     expect(r.starterServices).toBe(true);
     expect(r.onboardingCompleted).toBe(true);
+    expect(r.ownerClinical).toBe(true);
     expect(r.trialDays).toBeUndefined();
   });
 
@@ -46,6 +47,20 @@ describe("[BO2-A] CreateTenantWithOwnerInput", () => {
     expect(CreateTenantWithOwnerInput.safeParse({ ...base, idempotencyKey: "abc" }).success).toBe(false);
   });
 
+  it("[PL-1a] plan: los 4 planes SaaS; los valores legados rebotan", () => {
+    for (const plan of ["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"]) {
+      expect(CreateTenantWithOwnerInput.safeParse({ ...base, plan }).success).toBe(true);
+    }
+    for (const plan of ["FREE", "STARTER", "PRO", "ENTERPRISE"]) {
+      expect(CreateTenantWithOwnerInput.safeParse({ ...base, plan }).success).toBe(false);
+    }
+  });
+
+  it("[PL-1a] ownerClinical: boolean (false = titular no clínico); otro tipo rebota", () => {
+    expect(CreateTenantWithOwnerInput.parse({ ...base, ownerClinical: false }).ownerClinical).toBe(false);
+    expect(CreateTenantWithOwnerInput.safeParse({ ...base, ownerClinical: "no" }).success).toBe(false);
+  });
+
   it("trialDays: entero entre 0 y 365", () => {
     expect(CreateTenantWithOwnerInput.safeParse({ ...base, trialDays: 0 }).success).toBe(true);
     expect(CreateTenantWithOwnerInput.safeParse({ ...base, trialDays: -1 }).success).toBe(false);
@@ -58,8 +73,8 @@ describe("[BO2-A] initialSubscriptionFor", () => {
   // 23:30 AR del 14-oct = 02:30 UTC del 15: el «hoy» es el 14 (AR), no el 15 (host UTC).
   const now = new Date("2026-10-15T02:30:00.000Z");
 
-  it("PRO sin override → 14 días: hoy cuenta como el primero, vence al final del 27-oct AR", () => {
-    const s = initialSubscriptionFor("PRO", undefined, now);
+  it("[PL-1a] INDIVIDUAL sin override → 14 días: hoy cuenta como el primero, vence al final del 27-oct AR", () => {
+    const s = initialSubscriptionFor("INDIVIDUAL", undefined, now);
     expect(s.subscriptionStatus).toBe("TRIALING");
     expect(s.trialDays).toBe(14);
     expect(s.trialEndsAt?.toISOString()).toBe("2026-10-28T02:59:59.999Z");
@@ -67,12 +82,14 @@ describe("[BO2-A] initialSubscriptionFor", () => {
   });
 
   it("planes sin trial en el catálogo → ACTIVE sin fecha; override 0 también", () => {
-    expect(initialSubscriptionFor("STARTER", undefined, now)).toEqual({ trialDays: 0, subscriptionStatus: "ACTIVE", trialEndsAt: null });
-    expect(initialSubscriptionFor("PRO", 0, now)).toEqual({ trialDays: 0, subscriptionStatus: "ACTIVE", trialEndsAt: null });
+    for (const p of ["CONSULTORIO", "CLINICA", "LIBRE"] as const) {
+      expect(initialSubscriptionFor(p, undefined, now)).toEqual({ trialDays: 0, subscriptionStatus: "ACTIVE", trialEndsAt: null });
+    }
+    expect(initialSubscriptionFor("INDIVIDUAL", 0, now)).toEqual({ trialDays: 0, subscriptionStatus: "ACTIVE", trialEndsAt: null });
   });
 
   it("override de 1 día → vence hoy a la noche (AR)", () => {
-    const s = initialSubscriptionFor("ENTERPRISE", 1, now);
+    const s = initialSubscriptionFor("LIBRE", 1, now);
     expect(toARDateKey(s.trialEndsAt!)).toBe("2026-10-14");
   });
 

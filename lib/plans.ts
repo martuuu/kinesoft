@@ -37,7 +37,7 @@ import { withTxConflictRetry } from "@/lib/plan-lock";
 import { ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
 import { afterBookingsCommitted } from "@/lib/booking-events-internal";
 import { notify } from "@/lib/notifications-internal";
-import { capabilitiesFor, type Capability } from "@/lib/capabilities";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from "@/lib/capabilities";
 import { disciplineShortLabel } from "@/lib/plan-display";
 import { PlanCreateInputSchema, type PlanCreateInputParsed } from "@/lib/plans-schemas";
 import type { CreatePlanResult, PlanCreateInput, PlanPreview } from "@/lib/plans-types";
@@ -84,9 +84,10 @@ const INCONSISTENT = "El plan tiene datos inconsistentes y no se pudo guardar el
 async function capsInTx(tx: Prisma.TransactionClient, actor: Actor): Promise<ReadonlySet<Capability>> {
   const m = await tx.membership.findUnique({
     where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
+    // PL-1 (H-PL1): la fila del MIEMBRO (rol + si atiende + delegaciones), no solo el rol.
+    select: MEMBER_ACCESS_SELECT,
   });
-  return capabilitiesFor(m?.role);
+  return capabilitiesForMembership(m);
 }
 
 async function previewInNewTx(actor: Actor, input: PlanCreateInputParsed, now: Date): Promise<PlanPreview> {

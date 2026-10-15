@@ -52,10 +52,15 @@ const ROW_KEYS = [
   "name",
   "onboardingCompleted",
   "ownerEmails",
+  "ownerNames", // VX0-b
   "patientCount",
-  "plan",
+  "saasPlan", // PL-1d (antes `plan`)
   "publicBookingEnabled",
-  "seatLimitOverride", // BO2-D
+  // PL-1d: cupos a medida por tipo + límites efectivos (antes `seatLimitOverride`, BO2-D).
+  "maxUsersOverride",
+  "maxProfessionalsOverride",
+  "maxStaffOverride",
+  "limits",
   "slug",
   "slugAliases", // BO2-D
   "status", // BO2-D
@@ -64,7 +69,7 @@ const ROW_KEYS = [
   "subscriptionStatus",
   "trialEndsOn",
   "vertical",
-];
+].sort();
 const DETAIL_KEYS = [
   ...ROW_KEYS,
   "counts",
@@ -119,6 +124,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
       where: { id },
       select: {
         vertical: true,
+        saasPlan: true,
         plan: true,
         subscriptionStatus: true,
         trialEndsAt: true,
@@ -195,7 +201,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
           updatePlatformTenant({
             tenantId: B.tenantId,
             expectedUpdatedAt: before.updatedAt.toISOString(),
-            plan: "PRO",
+            saasPlan: "CLINICA",
           }),
       ],
       ["getPlatformOverview", () => getPlatformOverview()],
@@ -221,7 +227,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
       tenantId: B.tenantId,
       expectedUpdatedAt: before.updatedAt.toISOString(),
       vertical: "GENERAL",
-      plan: "PRO",
+      saasPlan: "CLINICA",
       subscriptionStatus: "TRIALING",
       trialEndsOn: "2026-10-21",
       publicBookingEnabled: true,
@@ -230,6 +236,8 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     const after = await tenantRow(B.tenantId);
     expect(after).toMatchObject({
       vertical: "GENERAL",
+      saasPlan: "CLINICA",
+      // PL-D1: el escritor espeja el enum legado.
       plan: "PRO",
       subscriptionStatus: "TRIALING",
       publicBookingEnabled: true,
@@ -274,7 +282,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     const res = await updatePlatformTenant({
       tenantId: B.tenantId,
       expectedUpdatedAt: before.updatedAt.toISOString(),
-      plan: before.plan,
+      saasPlan: before.saasPlan,
     });
     expect(res).toEqual({ ok: true, data: { updatedAt: before.updatedAt.toISOString() } });
     expect(await platformAudits(B.tenantId)).toHaveLength(n);
@@ -288,12 +296,69 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     const res = await updatePlatformTenant({
       tenantId: B.tenantId,
       expectedUpdatedAt: new Date(before.updatedAt.getTime() - 1).toISOString(),
-      plan: before.plan === "STARTER" ? "PRO" : "STARTER",
+      saasPlan: before.saasPlan === "LIBRE" ? "CLINICA" : "LIBRE",
     });
     expect(res).toMatchObject({ ok: false, error: STALE_COPY });
     expect(await tenantRow(B.tenantId)).toEqual(before);
     expect(await platformAudits(B.tenantId)).toHaveLength(n);
     expect(revalidateTagSpy).not.toHaveBeenCalled();
+  });
+
+  it("[PL-1d] bajar el plan por debajo del equipo actual se rechaza sin escribir; subir y cupos de Libre sí", async () => {
+    asUser(S.userId);
+    const before = await tenantRow(B.tenantId);
+    expect(before.saasPlan).toBe("CLINICA");
+    const n = (await platformAudits(B.tenantId)).length;
+    // B: 2 miembros + 1 invitación pendiente (reserva lugar, PL-D3) → no entra en Individual (1 usuario).
+    const down = await updatePlatformTenant({
+      tenantId: B.tenantId,
+      expectedUpdatedAt: before.updatedAt.toISOString(),
+      saasPlan: "INDIVIDUAL",
+    });
+    expect(down).toMatchObject({ ok: false });
+    if (!down.ok) {
+      expect(down.error).toMatch(/límite es de 1 usuario y hoy hay 3/);
+      expect(down.error).toContain("Cambiar de plan");
+    }
+    expect(await tenantRow(B.tenantId)).toEqual(before);
+    expect(await platformAudits(B.tenantId)).toHaveLength(n);
+
+    // Libre con cupos a medida que entran: escribe y audita como números; achicar por debajo del uso rebota.
+    const libre = await updatePlatformTenant({
+      tenantId: B.tenantId,
+      expectedUpdatedAt: before.updatedAt.toISOString(),
+      saasPlan: "LIBRE",
+      maxUsersOverride: 20,
+      maxProfessionalsOverride: 15,
+    });
+    expect(libre.ok).toBe(true);
+    const t = await db.tenant.findUniqueOrThrow({
+      where: { id: B.tenantId },
+      select: { saasPlan: true, plan: true, maxUsersOverride: true, maxProfessionalsOverride: true, maxStaffOverride: true, updatedAt: true },
+    });
+    expect(t).toMatchObject({ saasPlan: "LIBRE", plan: "ENTERPRISE", maxUsersOverride: 20, maxProfessionalsOverride: 15, maxStaffOverride: null });
+    const ev = (await platformAudits(B.tenantId)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    expect(ev.payload).toMatchObject({ after: { saasPlan: "LIBRE", maxUsersOverride: 20, maxProfessionalsOverride: 15 } });
+    const row = (await listPlatformTenants({ q: B.slug })).rows[0];
+    expect(row.limits).toEqual({ maxUsers: 20, maxProfessionals: 15, maxStaff: null });
+
+    const tooSmall = await updatePlatformTenant({
+      tenantId: B.tenantId,
+      expectedUpdatedAt: t.updatedAt.toISOString(),
+      maxUsersOverride: 2,
+    });
+    expect(tooSmall).toMatchObject({ ok: false });
+    expect((await db.tenant.findUniqueOrThrow({ where: { id: B.tenantId }, select: { maxUsersOverride: true } })).maxUsersOverride).toBe(20);
+
+    // Volver al estado del resto de la suite (Clínica sin overrides).
+    const back = await updatePlatformTenant({
+      tenantId: B.tenantId,
+      expectedUpdatedAt: t.updatedAt.toISOString(),
+      saasPlan: "CLINICA",
+      maxUsersOverride: null,
+      maxProfessionalsOverride: null,
+    });
+    expect(back.ok).toBe(true);
   });
 
   it("strict (key de solo lectura) e inexistente → error sin cambios", async () => {
@@ -308,7 +373,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     const missing = await updatePlatformTenant({
       tenantId: `no-existe-${uniqueSuffix()}`,
       expectedUpdatedAt: before.updatedAt.toISOString(),
-      plan: "PRO",
+      saasPlan: "CLINICA",
     });
     expect(missing).toMatchObject({ ok: false });
     if (!missing.ok) expect(missing.error).toMatch(/no encontramos/i);
@@ -380,7 +445,7 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     expect(overview.totalTenants).toBeGreaterThanOrEqual(3);
     const sum = overview.byVerticalPlan.reduce((acc, r) => acc + r.count, 0);
     expect(sum).toBe(overview.totalTenants);
-    for (const r of overview.byVerticalPlan) expect(keysOf(r)).toEqual(["count", "plan", "vertical"]);
+    for (const r of overview.byVerticalPlan) expect(keysOf(r)).toEqual(["count", "saasPlan", "vertical"]);
 
     // Contrato PHI: nada del paciente/turno fixture en ningún DTO.
     const blob = JSON.stringify({ page, detail, overview });
@@ -420,10 +485,10 @@ describe.skipIf(!RUN)("platform-tenants · /plataforma consultorios (EV-P1)", ()
     expect(trial).toBeDefined();
     expect(trial?.daysLeft).toBeGreaterThanOrEqual(2);
     expect(trial?.daysLeft).toBeLessThanOrEqual(4);
-    expect(keysOf(trial!)).toEqual(["daysLeft", "id", "name", "plan", "slug", "trialEndsOn", "vertical"]);
+    expect(keysOf(trial!)).toEqual(["daysLeft", "id", "name", "saasPlan", "slug", "trialEndsOn", "vertical"]);
     const pending = overview.onboardingPending.find((t) => t.id === B.tenantId);
     expect(pending).toBeDefined();
-    expect(keysOf(pending!)).toEqual(["createdAt", "id", "name", "plan", "slug", "vertical"]);
+    expect(keysOf(pending!)).toEqual(["createdAt", "id", "name", "saasPlan", "slug", "vertical"]);
     expect(overview.onboardingPendingCount).toBeGreaterThanOrEqual(1);
     expect(overview.trialsEndingSoonCount).toBeGreaterThanOrEqual(1);
   });

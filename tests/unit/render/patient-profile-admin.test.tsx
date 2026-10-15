@@ -50,9 +50,9 @@ const data = vi.hoisted(() => ({
   getCapabilities: vi.fn(),
 }));
 const entitlements = vi.hoisted(() => ({
-  current: { vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false } as {
+  current: { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false } as {
     vertical: "KINESIOLOGY" | "GENERAL";
-    plan: "FREE" | "STARTER" | "PRO" | "ENTERPRISE";
+    plan: "INDIVIDUAL" | "CONSULTORIO" | "CLINICA" | "LIBRE";
     publicBookingEnabled: boolean;
   },
 }));
@@ -77,9 +77,25 @@ vi.mock("@/lib/plans-read", () => ({
 vi.mock("@/lib/insurers", () => ({ listInsurers: data.listInsurers }));
 vi.mock("@/lib/rls", () => ({ runWithRls: data.runWithRls }));
 vi.mock("@/lib/session", () => ({
-  getActor: async () => ({ userId: "u1", tenantId: "t1", entitlements: entitlements.current }),
+  getActor: async () => ({
+    userId: "u1",
+    tenantId: "t1",
+    entitlements: entitlements.current,
+    // PL-1 (H1b-17): el miembro viaja en el Actor; la página ya no lo lee con una query.
+    membership: { role: "PRACTITIONER", clinical: true, grantSettings: false, grantBilling: false },
+  }),
 }));
-vi.mock("@/lib/authz", () => ({ getCapabilities: data.getCapabilities }));
+// `getMemberAccess`/`memberCapabilitiesForActor` con la lógica real (capabilitiesForMember sobre el miembro del
+// Actor): se mockea solo la frontera de `server-only`, no el cálculo de capacidades.
+vi.mock("@/lib/authz", async () => {
+  const { capabilitiesForMember } = await import("@/lib/capabilities");
+  type A = { membership: Parameters<typeof capabilitiesForMember>[0] };
+  return {
+    getCapabilities: data.getCapabilities,
+    getMemberAccess: async (a: A) => a.membership,
+    memberCapabilitiesForActor: async (a: A) => capabilitiesForMember(a.membership),
+  };
+});
 
 import { PatientAdminProfile, ADMIN_PROFILE_TABS } from "@/components/patients/patient-profile";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -209,7 +225,7 @@ describe("[P0-S07v] PatientAdminProfile", () => {
 describe("[P0-S07v] página del paciente con nivel admin", () => {
   beforeEach(() => {
     for (const f of Object.values(data)) f.mockReset();
-    entitlements.current = { vertical: "KINESIOLOGY", plan: "PRO", publicBookingEnabled: false };
+    entitlements.current = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false };
     data.getPatientCore.mockResolvedValue(admin);
     data.getPatientPlans.mockResolvedValue({ ok: true, data: [] });
     data.getPatientPlanBalances.mockResolvedValue({
@@ -288,8 +304,8 @@ describe("[S22b] página del paciente con acceso full", () => {
     data.getPatientBillableCount.mockResolvedValue(0);
     data.getPatientEvaScores.mockResolvedValue([]);
     data.listInsurers.mockResolvedValue([]);
-    // 1.ª llamada: profesionales; 2.ª: membresía del actor.
-    data.runWithRls.mockResolvedValueOnce([]).mockResolvedValueOnce({ role: "PRACTITIONER" });
+    // Única llamada: profesionales (PL-1: la membresía sale del Actor).
+    data.runWithRls.mockResolvedValueOnce([]);
   });
 
   /** El `PatientProfile` que arma la página (sin renderizar vistas de otras sesiones). */
@@ -300,7 +316,7 @@ describe("[S22b] página del paciente con acceso full", () => {
   }
 
   it("consultorio General: no pide planes, saldos ni EVA", async () => {
-    entitlements.current = { vertical: "GENERAL", plan: "FREE", publicBookingEnabled: false };
+    entitlements.current = { vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false };
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
     expect(data.getPatientPlans).not.toHaveBeenCalled();
     expect(data.getPatientPlanBalances).not.toHaveBeenCalled();
@@ -311,7 +327,7 @@ describe("[S22b] página del paciente con acceso full", () => {
   });
 
   it("Kinesiología: pide planes y saldos con getPatientPlans/getPatientPlanBalances", async () => {
-    entitlements.current = { vertical: "KINESIOLOGY", plan: "FREE", publicBookingEnabled: false };
+    entitlements.current = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
     const props = profileProps(await PatientPage({ params: { id: admin.id } }));
     expect(data.getPatientPlans).toHaveBeenCalledWith({ patientId: admin.id });
     expect(data.getPatientPlanBalances).toHaveBeenCalledWith({ patientId: admin.id });

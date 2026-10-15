@@ -16,7 +16,7 @@
  * usables, así que una rota nunca tapa a una sana.
  */
 import type { Role } from "@prisma/client";
-import { isClinicalRole, PRACTITIONER_FOR_ALL_ROLES } from "@/lib/roles";
+import { isClinicalMember, PRACTITIONER_FOR_ALL_ROLES } from "@/lib/roles";
 
 export type MembershipLite = {
   tenantId: string;
@@ -24,6 +24,11 @@ export type MembershipLite = {
   acceptedAt: Date | null;
   /** Llega con M6 (IAM-1). Ausente = habilitada. */
   disabledAt?: Date | null;
+  /**
+   * PL-1b (M8, C-PL5): ¿atiende? Solo cuenta en OWNER/ADMIN (`isClinicalMember`). Ausente = `true`, el default de
+   * la columna: así un llamador que todavía no lo lee se comporta como antes de PL-1b (pide `Practitioner`).
+   */
+  clinical?: boolean;
   hasPractitioner: boolean;
 };
 
@@ -33,15 +38,20 @@ type TenantPref = { cookieTenantId?: string | null; preferredTenantId?: string |
 
 /**
  * Aceptada, sin `disabledAt` y, si hace falta, con `Practitioner`. Hace falta
- * para los roles clínicos siempre. Desde IAM-4a `PRACTITIONER_FOR_ALL_ROLES`
- * es `false`: la Secretaria y Facturación son usables sin `Practitioner` (el
- * Actor los admite con `practitionerId: null`).
+ * para los miembros que atienden (`isClinicalMember`). Desde IAM-4a
+ * `PRACTITIONER_FOR_ALL_ROLES` es `false`: la Secretaria y Facturación son
+ * usables sin `Practitioner` (el Actor los admite con `practitionerId: null`).
+ * PL-1b: tampoco lo necesita el Titular/Admin que no atiende (decisión 7: el
+ * alta puede ser de un Administrador/a sin agenda, `bootstrapTenant({
+ * ownerClinical: false })` no le crea profesional). Antes de PL-1b el rol solo
+ * lo pedía y ese Titular quedaba en `missing_practitioner`.
  */
 export function isUsableMembership(m: MembershipLite, opts?: AccessOpts): boolean {
   if (!m.acceptedAt) return false;
   if (m.disabledAt) return false;
   const forAll = opts?.practitionerForAllRoles ?? PRACTITIONER_FOR_ALL_ROLES;
-  if ((forAll || isClinicalRole(m.role)) && !m.hasPractitioner) return false;
+  const clinical = isClinicalMember({ role: m.role, clinical: m.clinical ?? true });
+  if ((forAll || clinical) && !m.hasPractitioner) return false;
   return true;
 }
 

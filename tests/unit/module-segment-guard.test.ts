@@ -55,17 +55,19 @@ const LAYOUTS: Array<[string, Layout]> = [
   ["planes (planes)", PlanesLayout],
 ];
 
-// EV1-E2: /sala requiere `salaEspera`, que es CORE (las dos verticales, todo plan): nadie con consultorio rebota.
-// Si alguien lo saca de CORE sin querer, este test lo marca.
-const CORE_LAYOUTS: Array<[string, Layout]> = [["sala (salaEspera)", SalaLayout]];
+// EV1-E2 → PL-1a (PL-D6, §20.5.2): /sala requiere `salaEspera`, que SALIÓ del núcleo: es de Clínica/Libre en las dos
+// verticales. Clínica (General o Kine) entra; Individual/Consultorio rebota a /dashboard.
+const PLAN_LAYOUTS: Array<[string, Layout]> = [["sala (salaEspera)", SalaLayout]];
 
 function actorWith(e: TenantEntitlements) {
   // Solo `entitlements` importa para el guard; el resto es forma de Actor.
   return { tenantId: "t-1", userId: "u-1", role: "OWNER", entitlements: e };
 }
 
-const GENERAL: TenantEntitlements = { vertical: "GENERAL", plan: "PRO", publicBookingEnabled: true };
-const KINE_FREE: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "FREE", publicBookingEnabled: false };
+const GENERAL: TenantEntitlements = { vertical: "GENERAL", plan: "CLINICA", publicBookingEnabled: true };
+const KINE_FREE: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false };
+const KINE_CONSULTORIO: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CONSULTORIO", publicBookingEnabled: false };
+const KINE_CLINICA: TenantEntitlements = { vertical: "KINESIOLOGY", plan: "CLINICA", publicBookingEnabled: false };
 
 const CHILD = "contenido-del-segmento";
 
@@ -103,17 +105,22 @@ describe("guards de segmento por módulo", () => {
     });
   });
 
-  describe.each(CORE_LAYOUTS)("%s (módulo CORE)", (_name, Layout) => {
-    it("consultorio General → renderiza children", async () => {
-      session.actor = actorWith(GENERAL);
-      const el = await Layout({ children: CHILD });
-      expect(el.props.children).toBe(CHILD);
+  describe.each(PLAN_LAYOUTS)("%s (módulo de Clínica/Libre)", (_name, Layout) => {
+    it("[PL-1a] Clínica, General o Kine → renderiza children", async () => {
+      for (const e of [GENERAL, KINE_CLINICA]) {
+        session.actor = actorWith(e);
+        const el = await Layout({ children: CHILD });
+        expect(el.props.children).toBe(CHILD);
+      }
     });
 
-    it("Kine FREE → renderiza children", async () => {
-      session.actor = actorWith(KINE_FREE);
-      const el = await Layout({ children: CHILD });
-      expect(el.props.children).toBe(CHILD);
+    it("[PL-1a] Kine Individual o Consultorio → NEXT_REDIRECT a /dashboard", async () => {
+      for (const e of [KINE_FREE, KINE_CONSULTORIO]) {
+        session.actor = actorWith(e);
+        const digest = await redirectDigest(Layout({ children: CHILD }));
+        expect(digest.startsWith("NEXT_REDIRECT")).toBe(true);
+        expect(digest.split(";")[2]).toBe("/dashboard");
+      }
     });
 
     it("sin actor → no-op (renderiza children)", async () => {

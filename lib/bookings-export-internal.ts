@@ -23,7 +23,7 @@
 import "server-only";
 import { runWithRls } from "@/lib/rls";
 import { bulkPatientAccess } from "@/lib/visibility";
-import { capabilitiesFor } from "@/lib/capabilities";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import type { Actor } from "@/lib/session";
 
@@ -31,7 +31,7 @@ export async function exportBookingsIcs(
   actor: Actor,
   opts: { from: Date; to: Date }
 ): Promise<string> {
-  const { rows, role, access } = await runWithRls(actor.tenantId, async (tx) => {
+  const { rows, membership: member, access } = await runWithRls(actor.tenantId, async (tx) => {
     const [rows, membership] = await Promise.all([
       tx.booking.findMany({
         where: {
@@ -56,16 +56,17 @@ export async function exportBookingsIcs(
       }),
       tx.membership.findUnique({
         where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-        select: { role: true },
+        select: MEMBER_ACCESS_SELECT,
       }),
     ]);
     const patientIds = [...new Set(rows.map((b) => b.patientId).filter((id): id is string => !!id))];
     const access = await bulkPatientAccess(actor, patientIds, tx);
-    return { rows, role: membership?.role ?? null, access };
+    return { rows, membership, access };
   });
   // Sin membresía → set vacío (AUDIT §5.35: capabilities fallan cerrado) →
   // sin detalle clínico.
-  const clinical = capabilitiesFor(role).has("clinical.read");
+  // PL-1 (H-PL1): por miembro: un Titular que no atiende exporta sin detalle clínico.
+  const clinical = capabilitiesForMembership(member).has("clinical.read");
 
   const lines: string[] = [
     "BEGIN:VCALENDAR",

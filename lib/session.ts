@@ -50,7 +50,11 @@ import {
   type AccessState,
   type MembershipLite,
 } from "@/lib/access-logic";
-import { isClinicalRole } from "@/lib/roles";
+import { isClinicalMember } from "@/lib/roles";
+import type { SaasPlan } from "@prisma/client";
+import type { MemberAccess } from "@/lib/saas-plans-types";
+import { twoFactorStateOf, type TwoFactorMethods, type TwoFactorState } from "@/lib/two-factor-logic";
+import { hasSessionProof } from "@/lib/two-factor-cookie";
 import { logger } from "@/lib/logger";
 import { ensureRequestContext, primeRequestContext } from "@/lib/request-context";
 import { timeAsync } from "@/lib/server-timing";
@@ -113,19 +117,34 @@ export type Actor = {
    * solo lectura salvo `withSupportWritable` (C-BO4) y cada audit (`auditInTx`/`auditSecurityEvent`) estampa `supportSessionId`.
    */
   support: { sessionId: string; superadminEmail: string } | null;
+  /**
+   * PL-1e (C-PL5): rol + «¿atiende?» + permisos delegados del actor en el consultorio activo, de la MISMA fila de
+   * `Membership` que leyó la foto (`loadAccessMemberships`): cero queries (`getMemberAccess` de lib/authz.ts lo
+   * devuelve tal cual). `null` en soporte (no es miembro: sus capacidades son `SUPPORT_CAPS`) y en el actor demo.
+   */
+  membership: MemberAccess | null;
 };
 
-/** Solo las tres columnas: no se cuela el resto de la fila de Tenant en el Actor. */
+/**
+ * Solo las tres columnas: no se cuela el resto de la fila de Tenant en el Actor. PL-1e: `plan` es el plan SaaS
+ * (`Tenant.saasPlan`, PL-D1); el `Tenant.plan` legado lo espeja el escritor y ya no se lee para los módulos.
+ */
 function entitlementsOf(t: {
   vertical: TenantEntitlements["vertical"];
-  plan: TenantEntitlements["plan"];
+  plan: SaasPlan;
   publicBookingEnabled: boolean;
 }): TenantEntitlements {
   return { vertical: t.vertical, plan: t.plan, publicBookingEnabled: t.publicBookingEnabled };
 }
 
+/**
+ * `two_factor` (PL-1e, C-PL6): hay sesión y membresía, pero el usuario tiene la 2FA prendida y esta sesión no la
+ * pasó (ni AAL2 ni `kine_2fa`). El layout lo manda a `/verificar-acceso?next=` (fuera de `(app)`: sin bucle).
+ */
+export type UnauthenticatedReason = "no_session" | "no_membership" | "two_factor";
+
 export class UnauthenticatedError extends Error {
-  constructor(public reason: "no_session" | "no_membership" = "no_session") {
+  constructor(public reason: UnauthenticatedReason = "no_session") {
     super(reason);
     this.name = "UnauthenticatedError";
   }
@@ -165,19 +184,31 @@ const DEMO_ALLOWED =
  */
 export type AccessMembership = MembershipLite & {
   practitionerId: string | null;
+  /** PL-1e (C-PL5): de la misma fila de Membership (M8). `clinical` lo usa `isUsableMembership` (1b). */
+  clinical: boolean;
+  grantSettings: boolean;
+  grantBilling: boolean;
   tenant: {
     id: string;
     slug: string;
     name: string;
     vertical: TenantEntitlements["vertical"];
-    plan: TenantEntitlements["plan"];
+    /** PL-1e: el plan SaaS (`Tenant.saasPlan`), no el legado. */
+    plan: SaasPlan;
     publicBookingEnabled: boolean;
     onboardingCompletedAt: Date | null;
   } & TenantAccessInput;
 };
 
 /** `disabledAt` (BO1-A): deshabilitado a nivel plataforma (M7): sin acceso a ningún consultorio ni a /plataforma. */
-export type AccessProfile = { fullName: string | null; email: string; isPlatformAdmin: boolean; disabledAt: Date | null };
+export type AccessProfile = {
+  fullName: string | null;
+  email: string;
+  isPlatformAdmin: boolean;
+  disabledAt: Date | null;
+  /** PL-1e: métodos de 2FA prendidos (`UserProfile.twoFactorTotp/twoFactorEmail`, M8), en la misma sentencia. */
+  twoFactor: TwoFactorMethods;
+};
 
 /** Fila de `loadAccessMemberships`: el perfil repetido por membresía (LEFT JOIN: sin membresías, una fila con nulls). */
 type AccessRow = {
@@ -185,14 +216,19 @@ type AccessRow = {
   email: string;
   isPlatformAdmin: boolean;
   userDisabledAt: Date | null;
+  twoFactorTotp: boolean;
+  twoFactorEmail: boolean;
   tenantId: string | null;
   role: AccessMembership["role"] | null;
   acceptedAt: Date | null;
   membershipDisabledAt: Date | null;
+  clinical: boolean | null;
+  grantSettings: boolean | null;
+  grantBilling: boolean | null;
   slug: string | null;
   name: string | null;
   vertical: AccessMembership["tenant"]["vertical"] | null;
-  plan: AccessMembership["tenant"]["plan"] | null;
+  saasPlan: AccessMembership["tenant"]["plan"] | null;
   publicBookingEnabled: boolean | null;
   onboardingCompletedAt: Date | null;
   status: AccessMembership["tenant"]["status"] | null;
@@ -225,8 +261,10 @@ export async function loadAccessMemberships(userId: string): Promise<{
   // M6: Practitioner es único por (tenantId, userId): el JOIN da a lo sumo uno por membresía.
   const rows = await prismaService.$queryRaw<AccessRow[]>`
     SELECT u."fullName", u."email", u."isPlatformAdmin", u."disabledAt" AS "userDisabledAt",
+           u."twoFactorTotp", u."twoFactorEmail",
            m."tenantId", m."role"::text AS "role", m."acceptedAt", m."disabledAt" AS "membershipDisabledAt",
-           t."slug", t."name", t."vertical"::text AS "vertical", t."plan"::text AS "plan",
+           m."clinical", m."grantSettings", m."grantBilling",
+           t."slug", t."name", t."vertical"::text AS "vertical", t."saasPlan"::text AS "saasPlan",
            t."publicBookingEnabled", t."onboardingCompletedAt",
            t."status"::text AS "status", t."subscriptionStatus"::text AS "subscriptionStatus",
            t."trialEndsAt", t."subscriptionStatusChangedAt",
@@ -242,7 +280,7 @@ export async function loadAccessMemberships(userId: string): Promise<{
   const memberships: AccessMembership[] = [];
   for (const r of rows) {
     // Sin membresías: una sola fila con la parte de Membership/Tenant en null.
-    if (!r.tenantId || !r.role || !r.slug || r.name === null || !r.vertical || !r.plan || !r.status || !r.subscriptionStatus) {
+    if (!r.tenantId || !r.role || !r.slug || r.name === null || !r.vertical || !r.saasPlan || !r.status || !r.subscriptionStatus) {
       continue;
     }
     memberships.push({
@@ -252,12 +290,17 @@ export async function loadAccessMemberships(userId: string): Promise<{
       disabledAt: r.membershipDisabledAt,
       hasPractitioner: r.practitionerId !== null,
       practitionerId: r.practitionerId,
+      // PL-1e: columnas NOT NULL de M8 (en el LEFT JOIN solo son null sin membresía, caso que se saltea arriba). El
+      // `?? true/false` replica los DEFAULT de M8 por si una fila vieja llegara null: nunca concede de más.
+      clinical: r.clinical ?? true,
+      grantSettings: r.grantSettings ?? false,
+      grantBilling: r.grantBilling ?? false,
       tenant: {
         id: r.tenantId,
         slug: r.slug,
         name: r.name,
         vertical: r.vertical,
-        plan: r.plan,
+        plan: r.saasPlan,
         publicBookingEnabled: !!r.publicBookingEnabled,
         onboardingCompletedAt: r.onboardingCompletedAt,
         // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
@@ -274,6 +317,7 @@ export async function loadAccessMemberships(userId: string): Promise<{
       email: first.email,
       isPlatformAdmin: first.isPlatformAdmin,
       disabledAt: first.userDisabledAt,
+      twoFactor: { totp: !!first.twoFactorTotp, email: !!first.twoFactorEmail },
     },
     memberships,
     preferredTenantId: null,
@@ -299,6 +343,11 @@ export type AccessSnapshot = {
    * cuentan como usables; `getSessionBlock` las usa para explicar por qué no entra.
    */
   tenantBlocks: Array<{ tenantId: string; tenantName: string; role: AccessMembership["role"]; kind: "suspended" | "closed" }>;
+  /**
+   * PL-1e (C-PL6): 2FA de la sesión. `methods` sale de la misma sentencia (UserProfile); `state` cruza eso con el
+   * `aal` del JWT y la cookie `kine_2fa` (`twoFactorStateOf`). Sin perfil: `not_enabled`.
+   */
+  twoFactor: { methods: TwoFactorMethods; state: TwoFactorState };
 };
 
 function readActiveTenantCookie(): string | null {
@@ -364,6 +413,13 @@ async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
   // IAM-0c/IAM-3a: la cookie guarda el tenantId (antes se leía como slug y nadie la escribía).
   const cookieValid = !!cookieTenantId && usable.some((m) => m.tenantId === cookieTenantId);
   const state = resolveAccessState(logicView, { cookieTenantId, preferredTenantId });
+  const methods: TwoFactorMethods = profile?.twoFactor ?? { totp: false, email: false };
+  // La cookie se lee (HMAC) solo si hay algún método prendido: el resto de los usuarios no paga nada.
+  const twoFactorState = twoFactorStateOf(methods, {
+    aal: user.aal,
+    sessionId: user.sessionId,
+    sessionProofValid: (methods.totp || methods.email) && hasSessionProof(user.id, user.sessionId),
+  });
   return {
     userId: user.id,
     profile,
@@ -375,6 +431,7 @@ async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
     state,
     now,
     tenantBlocks,
+    twoFactor: { methods, state: twoFactorState },
   };
 }
 
@@ -420,6 +477,9 @@ export const getAccessSnapshot: () => Promise<AccessSnapshot | null> = cache(loa
  * si no hay ninguna; las rotas se saltean y se loguean (para repararlas desde Plataforma / Usuarios).
  */
 function buildActor(s: AccessSnapshot): Actor {
+  // PL-1e (C-PL6): antes que todo lo del consultorio (también antes de `no_membership`): sin el segundo factor la
+  // sesión no ve ni a qué consultorios pertenece. El bloqueo de usuario deshabilitado lo resuelve el gate antes.
+  if (s.twoFactor.state === "required") throw new UnauthenticatedError("two_factor");
   for (const m of s.memberships) {
     if (m.acceptedAt && !m.disabledAt && !m.hasPractitioner && !isUsableMembership(m)) {
       logger.warn("session.membership.unusable", { userId: s.userId, tenantId: m.tenantId, reason: "missing_practitioner" });
@@ -436,7 +496,15 @@ function buildActor(s: AccessSnapshot): Actor {
   // IAM-4a: los clínicos tienen Practitioner (`isUsableMembership` ya lo exige: esto es la red). Los no clínicos
   // entran sin él y, si tienen una fila vieja, se ignora: un actor no clínico nunca «es» un profesional (ni para
   // `assignedPractitionerId`, ni para shares, ni para la agenda propia).
-  const clinical = isClinicalRole(chosen.role);
+  // PL-1e (PL-D4): «clínico» es por MIEMBRO (`isClinicalMember`): un Titular/Admin que no atiende (`clinical=false`)
+  // es no clínico aunque su rol lo fuera, y no tiene profesional.
+  const membership: MemberAccess = {
+    role: chosen.role,
+    clinical: chosen.clinical,
+    grantSettings: chosen.grantSettings,
+    grantBilling: chosen.grantBilling,
+  };
+  const clinical = isClinicalMember(membership);
   if (clinical && !chosen.practitionerId) throw new UnauthenticatedError("no_membership");
   return {
     tenantId,
@@ -450,6 +518,7 @@ function buildActor(s: AccessSnapshot): Actor {
     entitlements: entitlementsOf(chosen.tenant),
     access: tenantAccessFor(chosen.tenant, s.now),
     support: null,
+    membership,
   };
 }
 
@@ -461,6 +530,11 @@ async function buildDemoActor(): Promise<Actor | null> {
     include: { user: true },
   });
   if (!prac) return null;
+  // PL-1e: el demo (solo dev) también lleva su MemberAccess: con `null` `getMemberAccess` no le daría capacidades.
+  const m = await prismaService.membership.findUnique({
+    where: { userId_tenantId: { userId: prac.userId, tenantId: tenant.id } },
+    select: { role: true, clinical: true, grantSettings: true, grantBilling: true },
+  });
   return {
     tenantId: tenant.id,
     tenantSlug: tenant.slug,
@@ -469,9 +543,10 @@ async function buildDemoActor(): Promise<Actor | null> {
     practitionerName: displayUserName(prac.user.fullName),
     userId: prac.userId,
     isPlatformAdmin: prac.user.isPlatformAdmin,
-    entitlements: entitlementsOf(tenant),
+    entitlements: entitlementsOf({ ...tenant, plan: tenant.saasPlan }),
     access: tenantAccessFor(tenant, new Date()),
     support: null,
+    membership: m,
   };
 }
 
@@ -497,6 +572,8 @@ function buildSupportActor(s: AccessSnapshot & { profile: AccessProfile }, t: Su
     entitlements: entitlementsOf(t.tenant),
     access: tenantAccessFor(t.tenant, s.now),
     support: { sessionId: t.sessionId, superadminEmail: t.superadminEmail },
+    // PL-1e: el soporte no es miembro del destino (C-BO9): sin MemberAccess; sus capacidades son `SUPPORT_CAPS`.
+    membership: null,
   };
 }
 
@@ -516,30 +593,38 @@ async function resolveSupportActor(s: AccessSnapshot): Promise<Actor | null> {
   return target ? buildSupportActor({ ...s, profile }, target) : null;
 }
 
-async function resolveActor(): Promise<Actor | null> {
+/** Actor, o por qué no hay (PL-1e: `getActor` tira con ESE motivo; `tryGetActor` devuelve null igual que antes). */
+type ActorOutcome = { actor: Actor; reason: null } | { actor: null; reason: UnauthenticatedReason };
+
+async function resolveActor(): Promise<ActorOutcome> {
   const snapshot = await getAccessSnapshot();
   if (snapshot) {
+    // PL-1e: la 2FA corta ANTES de la rama de soporte: un superadmin con 2FA prendida y sin pasarla tampoco entra
+    // «como soporte» (la cookie de soporte no reemplaza al segundo factor).
+    if (snapshot.twoFactor.state === "required") return { actor: null, reason: "two_factor" };
     const support = await resolveSupportActor(snapshot);
-    if (support) return support;
+    if (support) return { actor: support, reason: null };
     try {
-      return buildActor(snapshot);
+      return { actor: buildActor(snapshot), reason: null };
     } catch (err) {
       if (!(err instanceof UnauthenticatedError)) throw err;
       // IAM-3a: con sesión pero sin consultorio usable NO se cae al demo (antes sí): en dev eso mostraba el
       // consultorio demo a un usuario suspendido o sin profesional y tapaba justo el caso del bucle. El layout lo
       // manda a /onboarding o /sin-acceso. Prod no cambia (DEMO_ALLOWED es false ahí).
-      return null;
+      return { actor: null, reason: err.reason };
     }
   }
   if (DEMO_ALLOWED) {
-    return buildDemoActor();
+    const demo = await buildDemoActor();
+    return demo ? { actor: demo, reason: null } : { actor: null, reason: "no_session" };
   }
-  return null;
+  return { actor: null, reason: "no_session" };
 }
 
-const cachedResolve = cache(async (): Promise<Actor | null> => {
+const cachedResolve = cache(async (): Promise<ActorOutcome> => {
   // PF-0a: marca `actor` (auth + membresías + soporte) con PERF_TIMING=1; apagado es `resolveActor()` tal cual.
-  const actor = await timeAsync("actor", resolveActor);
+  const outcome = await timeAsync("actor", resolveActor);
+  const actor = outcome.actor;
   if (actor) {
     const h = headers();
     ensureRequestContext({
@@ -557,7 +642,7 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
       supportSessionId: actor.support?.sessionId ?? null,
     });
   }
-  return actor;
+  return outcome;
 });
 
 /**
@@ -569,15 +654,19 @@ const cachedResolve = cache(async (): Promise<Actor | null> => {
 export async function getActor(): Promise<Actor> {
   // BO1-A: antes del primer await (ver `primeRequestContext`): así el caller ve el contexto (modo lectura, C-BO3).
   primeRequestContext();
-  const a = await cachedResolve();
-  if (!a) throw new UnauthenticatedError("no_session");
-  return a;
+  const { actor, reason } = await cachedResolve();
+  if (!actor) {
+    // PL-1e: `two_factor` viaja tal cual (la action/página sabe que tiene que mandar a /verificar-acceso). El resto
+    // sigue siendo `no_session`, como antes (callers que distinguen `no_membership` lo leen de la foto).
+    throw new UnauthenticatedError(reason === "two_factor" ? "two_factor" : "no_session");
+  }
+  return actor;
 }
 
 /** Variant that returns null instead of throwing. */
 export async function tryGetActor(): Promise<Actor | null> {
   primeRequestContext();
-  return cachedResolve();
+  return (await cachedResolve()).actor;
 }
 
 /** Backwards-compatible alias. */
@@ -596,6 +685,9 @@ function isReadOnlyActor(actor: Pick<Actor, "access" | "support">): boolean {
  * sesión de soporte fuera de una action `supportWritable` (C-BO4). Con el default `banner` no corta nada.
  */
 export function assertWritable(actor: Pick<Actor, "access" | "support">): void {
+  // PL-1e (C-PL10): misma regla que `isReadOnlyFor` de lib/rls.ts: una action de cuenta (`withAccountWritable`) de
+  // un actor que no es soporte escribe aunque el consultorio esté en solo lectura (tiene que poder pagar).
+  if (getRequestContext()?.accountWritable && !actor.support) return;
   assertWritableFor({
     access: actor.access,
     enforcement: tenantAccessEnforcement(),

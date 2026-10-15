@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { getPlatformHealth } from "@/lib/platform-health-read";
+import { healthCountsCore } from "@/lib/cron-jobs-internal";
 import { ForbiddenError } from "@/lib/session";
 import { __setAuthAdminForTests } from "@/lib/identity/auth-admin";
 import { __rateLimitInternals } from "@/lib/rate-limit";
@@ -36,6 +37,11 @@ describe.skipIf(!RUN)("[BO2-C] salud de la plataforma", () => {
   let pracSinMembresia: string;
   let invitationId: string;
   let perfilHuerfano: string;
+  /** PL-1d: Titular que NO atiende (clinical=false, sin Practitioner a propósito): no es un caso de salud. */
+  let titularNoClinico: EphemeralTenant;
+  /** PL-1d: Admin que atiende sin profesional (sí es un caso) y Admin que no atiende (no lo es). */
+  let adminClinico: string;
+  let adminNoClinico: string;
 
   async function profile(o: { admin?: boolean; createdAt?: Date } = {}): Promise<string> {
     const id = `test-user-${uniqueSuffix()}`;
@@ -88,6 +94,19 @@ describe.skipIf(!RUN)("[BO2-C] salud de la plataforma", () => {
     await db.tenant.update({ where: { id: stalled.tenantId }, data: { onboardingCompletedAt: null, createdAt: OLD } });
 
     perfilHuerfano = await profile({ createdAt: FUTURE });
+
+    // PL-1d (C-PL5): «miembro clínico» = isClinicalMember. Fixture directa con el owner (no es el código bajo test).
+    titularNoClinico = await createEphemeralTenant(db);
+    tenants.push(titularNoClinico);
+    await db.membership.update({
+      where: { userId_tenantId: { userId: titularNoClinico.userId, tenantId: titularNoClinico.tenantId } },
+      data: { clinical: false },
+    });
+    await db.practitioner.deleteMany({ where: { tenantId: titularNoClinico.tenantId, userId: titularNoClinico.userId } });
+    adminClinico = await profile();
+    await db.membership.create({ data: { userId: adminClinico, tenantId: H.tenantId, role: "ADMIN", clinical: true, acceptedAt: FUTURE } });
+    adminNoClinico = await profile();
+    await db.membership.create({ data: { userId: adminNoClinico, tenantId: H.tenantId, role: "ADMIN", clinical: false, acceptedAt: FUTURE } });
   });
 
   afterAll(async () => {
@@ -116,8 +135,15 @@ describe.skipIf(!RUN)("[BO2-C] salud de la plataforma", () => {
 
     expect(h.clinicalWithoutPractitioner.available).toBe(true);
     const missing = h.clinicalWithoutPractitioner.sample.filter((r) => r.tenantId === H.tenantId);
-    expect(missing.map((r) => r.userId)).toEqual([kineSinProf]);
-    expect(missing[0]).toMatchObject({ role: "PRACTITIONER", email: `${kineSinProf}@test.local` });
+    // PL-1d: el Admin que atiende sin profesional sí; el que no atiende y la Secretaria (clinical=true por default de
+    // la columna, pero ASSISTANT nunca es clínico) no.
+    expect(missing.map((r) => r.userId).sort()).toEqual([adminClinico, kineSinProf].sort());
+    expect(missing.find((r) => r.userId === kineSinProf)).toMatchObject({ role: "PRACTITIONER", email: `${kineSinProf}@test.local` });
+    expect(missing.find((r) => r.userId === adminClinico)).toMatchObject({ role: "ADMIN" });
+    // PL-1d: un Titular que no atiende no es un detector de salud (no se le ofrece «Crear profesional»).
+    expect(h.clinicalWithoutPractitioner.sample.map((r) => r.tenantId)).not.toContain(titularNoClinico.tenantId);
+    // El digest del cron (copia del criterio, lib/cron-jobs-internal.ts) cuenta lo mismo que la pantalla.
+    expect((await healthCountsCore(new Date())).clinicalWithoutPractitioner).toBe(h.clinicalWithoutPractitioner.count);
 
     expect(h.practitionersWithoutMembership.sample.map((r) => r.practitionerId)).toContain(pracSinMembresia);
     expect(h.tenantsWithoutOwner.sample.map((r) => r.tenantId)).toContain(noOwner.tenantId);

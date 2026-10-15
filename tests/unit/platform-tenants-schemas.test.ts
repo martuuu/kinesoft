@@ -22,6 +22,7 @@ import {
   trialEndsOnToDate,
   TENANT_VERTICAL_VALUES,
   TENANT_PLAN_VALUES,
+  SAAS_PLAN_VALUES,
   SUBSCRIPTION_STATUS_VALUES,
   SEAT_LIMIT_OVERRIDE_MAX,
 } from "@/lib/platform-tenants-schemas";
@@ -34,7 +35,7 @@ describe("UpdatePlatformTenant", () => {
     const r = UpdatePlatformTenant.safeParse({
       ...base,
       vertical: "GENERAL",
-      plan: "PRO",
+      saasPlan: "CLINICA",
       subscriptionStatus: "TRIALING",
       trialEndsOn: "2026-10-21",
       publicBookingEnabled: true,
@@ -55,6 +56,9 @@ describe("UpdatePlatformTenant", () => {
     ["sharedPatientView", true],
     ["trialEndsAt", "2026-10-21T00:00:00Z"],
     ["phone", "11 5555-5555"],
+    // PL-1d: el plan legado y el cupo viejo ya no se editan desde Plataforma (quedan en la base).
+    ["plan", "PRO"],
+    ["seatLimitOverride", 3],
   ])("strict: rechaza la key %s (solo lectura desde /plataforma)", (key, value) => {
     const r = UpdatePlatformTenant.safeParse({ ...base, [key]: value });
     expect(r.success).toBe(false);
@@ -69,19 +73,36 @@ describe("UpdatePlatformTenant", () => {
 
   it("rechaza enums fuera de rango y tipos crudos", () => {
     expect(UpdatePlatformTenant.safeParse({ ...base, vertical: "ODONTO" }).success).toBe(false);
-    expect(UpdatePlatformTenant.safeParse({ ...base, plan: "GOLD" }).success).toBe(false);
+    expect(UpdatePlatformTenant.safeParse({ ...base, saasPlan: "GOLD" }).success).toBe(false);
+    expect(UpdatePlatformTenant.safeParse({ ...base, saasPlan: "PRO" }).success).toBe(false);
     expect(UpdatePlatformTenant.safeParse({ ...base, subscriptionStatus: "PAUSED" }).success).toBe(false);
     expect(UpdatePlatformTenant.safeParse({ ...base, publicBookingEnabled: "true" }).success).toBe(false);
   });
 
-  it("[BO3-B] seatLimitOverride: entero ≥ 1 (CHECK de M7) o null (el del plan); ausente = no tocar", () => {
-    expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: 1 }).success).toBe(true);
-    expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: SEAT_LIMIT_OVERRIDE_MAX }).success).toBe(true);
-    const cleared = UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: null });
+  it("[PL-1d] cupos a medida por tipo: usuarios ≥ 1, profesionales y no clínicos ≥ 0 (CHECK de M8), null o ausente", () => {
+    const ok = UpdatePlatformTenant.safeParse({
+      ...base,
+      saasPlan: "LIBRE",
+      maxUsersOverride: 30,
+      maxProfessionalsOverride: 0,
+      maxStaffOverride: SEAT_LIMIT_OVERRIDE_MAX,
+    });
+    expect(ok.success).toBe(true);
+    const cleared = UpdatePlatformTenant.safeParse({
+      ...base,
+      maxUsersOverride: null,
+      maxProfessionalsOverride: null,
+      maxStaffOverride: null,
+    });
     expect(cleared.success).toBe(true);
-    if (cleared.success) expect(cleared.data.seatLimitOverride).toBeNull();
+    if (cleared.success) expect(cleared.data.maxUsersOverride).toBeNull();
     for (const bad of [0, -1, 2.5, Number.NaN, "5", SEAT_LIMIT_OVERRIDE_MAX + 1]) {
-      expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: bad }).success, String(bad)).toBe(false);
+      expect(UpdatePlatformTenant.safeParse({ ...base, maxUsersOverride: bad }).success, `users ${String(bad)}`).toBe(false);
+    }
+    for (const bad of [-1, 2.5, Number.NaN, "5", SEAT_LIMIT_OVERRIDE_MAX + 1]) {
+      for (const k of ["maxProfessionalsOverride", "maxStaffOverride"]) {
+        expect(UpdatePlatformTenant.safeParse({ ...base, [k]: bad }).success, `${k} ${String(bad)}`).toBe(false);
+      }
     }
   });
 
@@ -110,6 +131,7 @@ describe("listas literales de enums (el form del cliente no importa Prisma en ru
   it("cubren los enums del schema", () => {
     expect([...TENANT_VERTICAL_VALUES].sort()).toEqual(["GENERAL", "KINESIOLOGY"]);
     expect([...TENANT_PLAN_VALUES].sort()).toEqual(["ENTERPRISE", "FREE", "PRO", "STARTER"]);
+    expect([...SAAS_PLAN_VALUES]).toEqual(["INDIVIDUAL", "CONSULTORIO", "CLINICA", "LIBRE"]);
     expect([...SUBSCRIPTION_STATUS_VALUES].sort()).toEqual(["ACTIVE", "CANCELLED", "PAST_DUE", "TRIALING"]);
   });
 });
@@ -124,6 +146,9 @@ describe("PlatformTenantListQuery / PlatformTenantId", () => {
     expect(PlatformTenantListQuery.parse({ page: "3", vertical: "GENERAL" }).page).toBe(3);
     expect(PlatformTenantListQuery.safeParse({ page: "0" }).success).toBe(false);
     expect(PlatformTenantListQuery.safeParse({ plan: "GOLD" }).success).toBe(false);
+    // PL-1d: el filtro es por plan SaaS; un valor del enum viejo es un link viejo y cae a «sin filtro» en la página.
+    expect(PlatformTenantListQuery.safeParse({ plan: "PRO" }).success).toBe(false);
+    expect(PlatformTenantListQuery.parse({ plan: "CLINICA" }).plan).toBe("CLINICA");
   });
 
   it("id: no vacío", () => {

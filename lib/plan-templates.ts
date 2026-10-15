@@ -29,15 +29,15 @@
  * con `validatePlanRefsInTx` (C8): las FK saltean RLS.
  */
 import { revalidatePath } from "next/cache";
-import { Prisma, type Role } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
 import { withReadOnlyResult } from "@/lib/read-only-result";
 import { ForbiddenError, getActor, requireActorPractitionerId, type Actor } from "@/lib/session";
 import { isActorPractitioner } from "@/lib/practitioner-scope";
 import { modulesFor } from "@/lib/tenant-modules";
-import { getMembershipRole } from "@/lib/authz";
-import { capabilitiesFor, isTenantAdminRole } from "@/lib/capabilities";
+import { memberCapabilitiesForActor } from "@/lib/authz";
+import { capabilitiesForMembership, MEMBER_ACCESS_SELECT, type Capability } from "@/lib/capabilities";
 import { auditInTx } from "@/lib/audit";
 import { assignableExerciseWhere, gatingForActor, type ExerciseCapabilities } from "@/lib/plan-gating";
 import { PLAN_MAX_SESSIONS, type Discipline } from "@/lib/plans-constants";
@@ -98,13 +98,18 @@ function zodFail(error: z.ZodError): Fail {
   return { ok: false, error: error.issues[0]?.message ?? "Datos inválidos.", fieldErrors };
 }
 
-/** Rol en la tx del caller (sin una segunda conexión del pool). */
-async function roleInTx(tx: Tx, actor: Actor): Promise<Role | null> {
-  const m = await tx.membership.findUnique({
-    where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-    select: { role: true },
-  });
-  return m?.role ?? null;
+/**
+ * Capacidades del MIEMBRO en la tx del caller (sin una segunda conexión del pool). PL-1 (H1b-18, H-PL1): por
+ * miembro y no por rol: un Titular sin agenda no gestiona planes, y «administrador» de plantillas es quien tiene
+ * `tenant.admin` (Titular, o quien tenga «Configuración» delegada), no el rol ADMIN pelado.
+ */
+async function memberCapsInTx(tx: Tx, actor: Actor): Promise<ReadonlySet<Capability>> {
+  return capabilitiesForMembership(
+    await tx.membership.findUnique({
+      where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+      select: MEMBER_ACCESS_SELECT,
+    })
+  );
 }
 
 /**
@@ -118,9 +123,9 @@ async function templateGateInTx(
 ): Promise<{ gate: ExerciseCapabilities; isAdmin: boolean }> {
   const gate = await gatingForActor(tx);
   if (!gate.canBuildTemplates) throw new ForbiddenError(COPY.upgrade);
-  const role = await roleInTx(tx, actor);
-  if (!capabilitiesFor(role).has("plans.manage")) throw new ForbiddenError(COPY.role);
-  return { gate, isAdmin: isTenantAdminRole(role) };
+  const caps = await memberCapsInTx(tx, actor);
+  if (!caps.has("plans.manage")) throw new ForbiddenError(COPY.role);
+  return { gate, isAdmin: caps.has("tenant.admin") };
 }
 
 /**
@@ -271,9 +276,9 @@ export async function listPlanTemplates(
   // plantillas de un consultorio que bajó de plan o es General, y la UI
   // ofrecía aplicarlas aunque el alta después lo rechace.
   if (!modulesFor(actor.entitlements).has("plantillas")) return [];
-  const role = await getMembershipRole(actor);
-  const manage = capabilitiesFor(role).has("plans.manage");
-  const isAdmin = isTenantAdminRole(role);
+  const caps = await memberCapabilitiesForActor(actor);
+  const manage = caps.has("plans.manage");
+  const isAdmin = caps.has("tenant.admin");
   const rows = await runWithRls(actor.tenantId, (tx) => tx.planTemplate.findMany({
     where: {
       tenantId: actor.tenantId,
@@ -298,9 +303,9 @@ export async function getPlanTemplate(id: string): Promise<ActionResult<PlanTemp
     return await runWithRls(actor.tenantId, async (tx) => {
       const gate = await gatingForActor(tx);
       if (!gate.canBuildTemplates) throw new ForbiddenError(COPY.upgrade);
-      const role = await roleInTx(tx, actor);
-      const manage = capabilitiesFor(role).has("plans.manage");
-      const isAdmin = isTenantAdminRole(role);
+      const caps = await memberCapsInTx(tx, actor);
+      const manage = caps.has("plans.manage");
+      const isAdmin = caps.has("tenant.admin");
       const r = await tx.planTemplate.findFirst({ where: { id, tenantId: actor.tenantId }, select: ROW_SELECT });
       if (!r) return fail(COPY.notFound);
       const ids = exerciseIdsOf(r.exerciseIds);
@@ -657,7 +662,7 @@ async function deletePlanTemplateImpl(id: string): Promise<ActionResult> {
     const result = await runWithRls(actor.tenantId, async (tx) => {
       const gate = await gatingForActor(tx);
       if (!gate.canBuildTemplates) throw new ForbiddenError(COPY.upgrade);
-      const isAdmin = isTenantAdminRole(await roleInTx(tx, actor));
+      const isAdmin = (await memberCapsInTx(tx, actor)).has("tenant.admin");
       const tpl = await tx.planTemplate.findFirst({
         where: { id, tenantId: actor.tenantId },
         select: { id: true, authorId: true },

@@ -8,8 +8,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TabsBar, Switch } from "@/components/configuracion/controls";
 import { modulesFor } from "@/lib/tenant-modules";
 
-const GENERAL = Array.from(modulesFor({ vertical: "GENERAL", plan: "FREE", publicBookingEnabled: false }));
-const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "FREE", publicBookingEnabled: false }));
+const GENERAL = Array.from(modulesFor({ vertical: "GENERAL", plan: "INDIVIDUAL", publicBookingEnabled: false }));
+const KINE = Array.from(modulesFor({ vertical: "KINESIOLOGY", plan: "INDIVIDUAL", publicBookingEnabled: false }));
 
 const tabs = (html: string) => Array.from(html.matchAll(/role="tab"[^>]*>([^<]+)</g), (m) => m[1]);
 

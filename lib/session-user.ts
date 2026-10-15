@@ -30,6 +30,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { timeAsync } from "@/lib/server-timing";
+import { normalizeAal } from "@/lib/two-factor-logic";
 import { checkSessionClaims, supabaseIssuer, verifySupabaseAccessToken, type SessionClaims } from "@/lib/session-jwt";
 
 export type VerifiedSessionUser = {
@@ -42,6 +43,12 @@ export type VerifiedSessionUser = {
   fullName: string | null;
   /** `user_metadata.avatar_url` (Google). */
   avatarUrl: string | null;
+  /**
+   * PL-1e (C-PL6): `aal` y `session_id` del access token que GoTrue acaba de validar (`getUser(token)` valida ESE
+   * token, así que leer sus claims es seguro). null si no hubo token legible (fuera de un request, API distinta).
+   */
+  aal: "aal1" | "aal2" | null;
+  sessionId: string | null;
 };
 
 /**
@@ -54,19 +61,49 @@ export type SessionUser = {
   email: string | null;
   fullName: string | null;
   avatarUrl: string | null;
-  /** `session_id` del token (null si vino por GoTrue). */
+  /** `session_id` del token (por GoTrue: el del token que GoTrue validó; null si no hubo token legible). */
   sessionId: string | null;
-  /** `aal1`/`aal2` del token (null si vino por GoTrue): para el 2FA de PL. */
-  aal: string | null;
+  /** `aal1`/`aal2` del token: para la 2FA de PL (`twoFactorStateOf`). Cualquier otro valor → null. */
+  aal: "aal1" | "aal2" | null;
   /** Cómo se probó: `jwt` = local; `gotrue` = cayó a `getUser()`. */
   verifiedBy: "jwt" | "gotrue";
 };
 
 // ── Estricta (GoTrue) ──────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * PL-1e: claims `aal`/`session_id` del token que se le pasa a GoTrue. Sin verificar la firma A PROPÓSITO: solo se
+ * usan si `getUser(token)` aceptó ese mismo token (GoTrue verificó firma, `exp` y que la sesión siga viva).
+ */
+function assuranceOfToken(token: string | null): { aal: "aal1" | "aal2" | null; sessionId: string | null } {
+  const none = { aal: null, sessionId: null };
+  if (!token) return none;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
+    const sid = payload.session_id;
+    return {
+      aal: normalizeAal(payload.aal),
+      sessionId: typeof sid === "string" && sid.length > 0 && sid.length <= 128 ? sid : null,
+    };
+  } catch {
+    return none;
+  }
+}
+
 async function readStrictUser(): Promise<VerifiedSessionUser | null> {
   try {
-    const { data, error } = await getSupabaseServerClient().auth.getUser();
+    const auth = getSupabaseServerClient().auth;
+    // PL-1e: el token de la cookie primero, para validar con GoTrue ESE token (y no otro) y leerle `aal`/`session_id`.
+    // Si `getSession` no está o falla, `getUser()` pelado como antes (sin datos de 2FA: la sesión queda `required`
+    // si el usuario tiene 2FA y no tiene AAL2, nunca se abre por descarte).
+    let token: string | null = null;
+    try {
+      const s = await auth.getSession();
+      token = s.error ? null : (s.data?.session?.access_token ?? null);
+    } catch {
+      token = null;
+    }
+    const { data, error } = token ? await auth.getUser(token) : await auth.getUser();
     // supabase-js no tira: un token vencido o Supabase caído llega como `error`. Se trata como sin sesión.
     if (error || !data?.user?.id) return null;
     const u = data.user;
@@ -77,6 +114,7 @@ async function readStrictUser(): Promise<VerifiedSessionUser | null> {
       emailConfirmedAt: u.email_confirmed_at ?? null,
       fullName: typeof meta.full_name === "string" ? meta.full_name : null,
       avatarUrl: typeof meta.avatar_url === "string" ? meta.avatar_url : null,
+      ...assuranceOfToken(token),
     };
   } catch {
     // Sin configurar (dev sin Supabase) o fuera de un request (cookies() tira): sin sesión.
@@ -121,7 +159,7 @@ function fromClaims(c: SessionClaims): SessionUser {
     fullName: c.fullName,
     avatarUrl: c.avatarUrl,
     sessionId: c.sessionId,
-    aal: c.aal,
+    aal: normalizeAal(c.aal),
     verifiedBy: "jwt",
   };
 }
@@ -130,7 +168,17 @@ async function viaGoTrue(reason: string): Promise<SessionUser | null> {
   warnOnce(reason);
   const u = await getStrictSessionUser();
   if (!u) return null;
-  return { id: u.id, email: u.email, fullName: u.fullName, avatarUrl: u.avatarUrl, sessionId: null, aal: null, verifiedBy: "gotrue" };
+  // PL-1e: `aal`/`session_id` del token que GoTrue validó (antes null: con la 2FA prendida, el fallback dejaba a
+  // todos en `required` aunque hubieran pasado el TOTP).
+  return {
+    id: u.id,
+    email: u.email,
+    fullName: u.fullName,
+    avatarUrl: u.avatarUrl,
+    sessionId: u.sessionId,
+    aal: u.aal,
+    verifiedBy: "gotrue",
+  };
 }
 
 type AuthClient = ReturnType<typeof getSupabaseServerClient>["auth"];

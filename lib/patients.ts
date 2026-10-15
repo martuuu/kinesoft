@@ -11,14 +11,14 @@
  */
 import { displayMemberName, displayUserName } from "@/lib/display-name";
 import { revalidatePath } from "next/cache";
-import { Prisma, Role } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
-import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
+import { bookablePractitionerWhere, clinicalMembershipWhere, isActorPractitioner } from "@/lib/practitioner-scope";
 import { getActor, writableError, type Actor } from "@/lib/session";
-import { getMembershipRole, requireModule } from "@/lib/authz";
+import { getMembershipRole, memberCapabilitiesForActor, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
-import { isTenantAdminRole, capabilitiesFor, canWriteClinical } from "@/lib/capabilities";
+import { isTenantAdminRole, canWriteClinical } from "@/lib/capabilities";
 import { bookingFieldAccess } from "@/lib/booking-field-access";
 import { findUsablePayerPlan } from "@/lib/catalog-validate";
 import { auditInTx } from "@/lib/audit";
@@ -679,7 +679,7 @@ function seesBookings(access: AccessLevel): boolean {
  * null: el campo viaja (forma estable para la UI) pero sin contenido.
  */
 async function bookingTextRedactor(actor: Actor, access: AccessLevel) {
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   const fa = bookingFieldAccess({ clinical: caps.has("clinical.read"), access, hasPatient: true });
   return <T extends { title: string | null; description: string | null; notes: string | null }>(b: T): T => ({
     ...b,
@@ -844,14 +844,13 @@ function patientUniqueError(
   return { ok: false, error: "Ya existe un paciente con esos datos en este consultorio." };
 }
 
-/**
- * Roles que leen clínica (`clinical.read`). Un paciente solo puede quedar "a
- * cargo de" (assignedPractitionerId) un profesional de estos roles: asignar a
- * la Secretaria o a Facturación no le daría HC (PD-13) y dejaría al paciente
- * sin nadie con full salvo OWNER/ADMIN. Derivado de la matriz para no copiar
- * la lista de roles (AUDIT §5.35).
+/*
+ * Un paciente solo puede quedar "a cargo de" (assignedPractitionerId) un miembro que ATIENDE
+ * (`clinicalMembershipWhere`, espejo SQL de `isClinicalMember`): asignar a la Secretaria, a Facturación o
+ * (PL-1b) a un Titular/Admin sin agenda no le daría HC (PD-13, decisión 8) y dejaría al paciente sin nadie con
+ * full. Hasta PL-1b era `CLINICAL_ROLES` derivado de `capabilitiesFor(role)` (AUDIT §5.35), que por rol incluía
+ * a todo OWNER/ADMIN.
  */
-const CLINICAL_ROLES: Role[] = Object.values(Role).filter((r) => capabilitiesFor(r).has("clinical.read"));
 
 /**
  * Alta de paciente.
@@ -890,7 +889,7 @@ export async function createPatient(
   const parsedOpts = PatientCreateOptions.safeParse(opts ?? {});
   if (!parsedOpts.success) return { ok: false, error: "Datos inválidos" };
 
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   const clinical = caps.has("clinical.read");
   if (!clinical && !caps.has("agenda.operateAll")) {
     return { ok: false, error: "Tu rol no puede dar de alta pacientes." };
@@ -916,11 +915,7 @@ export async function createPatient(
           where: {
             id: assignTo,
             tenantId: actor.tenantId,
-            user: {
-              memberships: {
-                some: { tenantId: actor.tenantId, acceptedAt: { not: null }, role: { in: CLINICAL_ROLES } },
-              },
-            },
+            user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
           },
           select: { id: true },
         });
@@ -1146,7 +1141,7 @@ async function setPatientDiagnosisImpl(
   note: string
 ): Promise<ActionResult> {
   const actor = await getActor();
-  const caps = capabilitiesFor(await getMembershipRole(actor));
+  const caps = await memberCapabilitiesForActor(actor);
   const result = await runWithRls(actor.tenantId, async (tx) => {
     const access = await patientAccessFor(actor, patientId, tx);
     if (access === "none") return { ok: false as const, error: "Paciente no encontrado." };
@@ -1590,18 +1585,14 @@ async function assignPatientToPractitionerImpl(input: {
   if (!owned) return { ok: false, error: "Paciente no encontrado." };
 
   if (input.practitionerId) {
-    // P0.Z (H-b2): mismo filtro que `createPatient` (`CLINICAL_ROLES`, membresía
+    // P0.Z (H-b2): mismo filtro que `createPatient` (`clinicalMembershipWhere`, membresía
     // aceptada). Re-asignar a la Secretaria o a Facturación no les da HC
     // (PD-13) y dejaba al paciente sin profesional con full salvo OWNER/ADMIN.
     const prac = await runWithRls(actor.tenantId, (tx) => tx.practitioner.findFirst({
       where: {
         id: input.practitionerId!,
         tenantId: actor.tenantId,
-        user: {
-          memberships: {
-            some: { tenantId: actor.tenantId, acceptedAt: { not: null }, role: { in: CLINICAL_ROLES } },
-          },
-        },
+        user: { memberships: { some: clinicalMembershipWhere(actor.tenantId) } },
       },
       select: { id: true },
     }));
@@ -1930,13 +1921,15 @@ async function requireShareAuthority(patientId: string) {
   if (!patient) return { ok: false as const, error: "Paciente no encontrado." };
   const role = await getMembershipRole(actor);
   const isAdmin = isTenantAdminRole(role);
+  // PL-1b: «dueño» exige que el MIEMBRO atienda (un Titular sin agenda con un paciente asignado de antes no lo es).
+  const memberCaps = await memberCapabilitiesForActor(actor);
   // P0.Z (H-b2): "dueño" = asignado Y con `clinical.read`. En prod hay
   // pacientes asignados a la Secretaria (precheck 15): sin el chequeo de rol,
   // ella manejaba los shares y abría la HC a otros profesionales, aunque por
   // PD-13 nunca tiene full sobre esa ficha.
   // IAM-4a: `isActorPractitioner` (nunca `null === null` con un paciente sin asignar).
   const isOwner =
-    isActorPractitioner(actor, patient.assignedPractitionerId) && capabilitiesFor(role).has("clinical.read");
+    isActorPractitioner(actor, patient.assignedPractitionerId) && memberCaps.has("clinical.read");
   if (!isAdmin && !isOwner) {
     return {
       ok: false as const,

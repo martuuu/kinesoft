@@ -5,8 +5,9 @@
  *     del consultorio pedido, del más nuevo al más viejo, paginado con cursor sin repetir ni saltear, cursor ajeno
  *     o mal formado = desde el principio, DTO allowlist (las claves del payload sin sus valores);
  *   - `getPlatformOverview().byStatus`: conteo por estado del consultorio que suma el total;
- *   - `updatePlatformTenant` con `seatLimitOverride`: escribe, audita como número, null vuelve al del plan, 0 rebota
- *     sin escribir.
+ *   - `updatePlatformTenant` con un cupo a medida (PL-1d: `maxProfessionalsOverride`; `seatLimitOverride` ya no se
+ *     acepta y queda en la base): escribe, audita como número, null vuelve al del plan, 0 de usuarios rebota sin
+ *     escribir.
  *
  * Se llaman los símbolos reales (solo se mockean la sesión de Supabase, `next/headers` y `next/cache`; ver
  * integration-setup.ts).
@@ -133,38 +134,42 @@ describe.skipIf(!RUN)("platform-tenants · BO3-B (actividad, por estado, cupo a 
     expect(o.byStatus.ACTIVE + o.byStatus.SUSPENDED + o.byStatus.CLOSED).toBe(o.totalTenants);
   });
 
-  it("cupo a medida: escribe y audita como número; null vuelve al del plan; 0 rebota sin escribir", async () => {
+  it("[PL-1d] cupo a medida: escribe y audita como número; null vuelve al del plan; inválido rebota sin escribir", async () => {
     asUser(S.userId);
-    const row = () => db.tenant.findUniqueOrThrow({ where: { id: B.tenantId }, select: { seatLimitOverride: true, updatedAt: true } });
+    const row = () =>
+      db.tenant.findUniqueOrThrow({
+        where: { id: B.tenantId },
+        select: { maxProfessionalsOverride: true, seatLimitOverride: true, updatedAt: true },
+      });
     const before = await row();
     const res = await updatePlatformTenant({
       tenantId: B.tenantId,
       expectedUpdatedAt: before.updatedAt.toISOString(),
-      seatLimitOverride: 7,
+      maxProfessionalsOverride: 7,
     });
     expect(res.ok).toBe(true);
     const after = await row();
-    expect(after.seatLimitOverride).toBe(7);
+    expect(after.maxProfessionalsOverride).toBe(7);
+    // La columna vieja no se toca (queda en la base hasta el contract).
+    expect(after.seatLimitOverride).toBe(before.seatLimitOverride);
     const ev = await db.auditEvent.findFirstOrThrow({
       where: { tenantId: B.tenantId, action: "platform.tenant.entitlements", actorId: S.userId },
       orderBy: { createdAt: "desc" },
     });
-    expect(ev.payload).toMatchObject({ changed: ["seatLimitOverride"], after: { seatLimitOverride: 7 } });
+    expect(ev.payload).toMatchObject({ changed: ["maxProfessionalsOverride"], after: { maxProfessionalsOverride: 7 } });
 
-    const bad = await updatePlatformTenant({
-      tenantId: B.tenantId,
-      expectedUpdatedAt: after.updatedAt.toISOString(),
-      seatLimitOverride: 0,
-    });
-    expect(bad.ok).toBe(false);
-    expect((await row()).seatLimitOverride).toBe(7);
+    for (const bad of [{ maxUsersOverride: 0 }, { maxProfessionalsOverride: -1 }, { seatLimitOverride: 3 }]) {
+      const r = await updatePlatformTenant({ tenantId: B.tenantId, expectedUpdatedAt: after.updatedAt.toISOString(), ...bad });
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+    }
+    expect((await row()).maxProfessionalsOverride).toBe(7);
 
     const cleared = await updatePlatformTenant({
       tenantId: B.tenantId,
       expectedUpdatedAt: after.updatedAt.toISOString(),
-      seatLimitOverride: null,
+      maxProfessionalsOverride: null,
     });
     expect(cleared.ok).toBe(true);
-    expect((await row()).seatLimitOverride).toBeNull();
+    expect((await row()).maxProfessionalsOverride).toBeNull();
   });
 });

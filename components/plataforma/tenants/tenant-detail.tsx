@@ -4,7 +4,7 @@
  * (`TenantDetailHeader`) y la suscripción tiene su pestaña.
  *
  * Muestra: datos del consultorio (editables con «Editar datos», BO2-D revisa EV-D6), slug y sus alias (BO-D9),
- * estado del alta, módulos, uso con el cupo de profesionales y los últimos cambios desde Plataforma.
+ * estado del alta, módulos, uso con los cupos por tipo (PL-1d) y los últimos cambios desde Plataforma.
  *
  * Solo lo que traen `PlatformTenantDetail` y los `seats` de `getTenantTeamForPlatform`: datos del consultorio,
  * conteos y eventos `platform.*`. Nada de PHI (el DTO es el allowlist, ver `lib/platform-tenants-types.ts`).
@@ -13,12 +13,20 @@ import Link from "next/link";
 import { Tag } from "@/components/ui/tag";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { formatDateAR } from "@/lib/format";
-import { MODULE_LABEL, seatLimitLabel, seatUsageLabel, tenantTabHref } from "@/components/plataforma/tenants/labels";
+import {
+  MODULE_LABEL,
+  seatFullText,
+  seatLimitLabel,
+  seatUsageByKindLabel,
+  tenantTabHref,
+} from "@/components/plataforma/tenants/labels";
+import type { SeatUsageByKind } from "@/lib/plan-catalog";
 import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
 import { TenantProfileDrawer } from "@/components/plataforma/tenants/tenant-profile-drawer";
 import { ActivityList } from "@/components/plataforma/tenants/tenant-activity";
 
-export type TenantSeats = { used: number; limit: number | null; remaining: number | null; full: boolean };
+/** PL-1d: cupos por tipo (C-PL3), los de `getTenantTeamForPlatform`. */
+export type TenantSeats = SeatUsageByKind;
 
 const linkStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: "var(--sky-700)" };
 
@@ -33,7 +41,9 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
               ["Nombre", d.name],
               ["Razón social", d.legalName ?? muted("—")],
               ["CUIT", d.taxId ?? muted("—")],
-              ["Titular", d.ownerEmails.length ? d.ownerEmails.join(", ") : muted("Sin titular")],
+              // VX0-b (decisión 19): el email nunca como nombre; va en su propia fila, rotulada «Email del titular».
+              ["Titular", d.ownerNames.length ? d.ownerNames.join(", ") : muted("Sin titular")],
+              ["Email del titular", d.ownerEmails.length ? d.ownerEmails.join(", ") : muted("—")],
               ["Email público", d.publicEmail ?? muted("—")],
               ["Teléfono", d.phone ?? muted("—")],
               ["WhatsApp", d.whatsapp ?? muted("—")],
@@ -102,10 +112,13 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
         <Facts
           items={[
             [
-              "Cupo de profesionales",
+              "Usuarios del plan",
               <span key="c" style={{ display: "grid", gap: 2 }}>
-                <span>{seats ? seatUsageLabel(seats) : seatLimitLabel(d)}</span>
-                {seats?.full && <span style={{ fontSize: 12, color: "#9F1F1F" }}>Sin lugar para otro profesional</span>}
+                <span>{seatLimitLabel(d)}</span>
+                {seats && <span>{seatUsageByKindLabel(seats)}</span>}
+                {seats && seatFullText(seats) && (
+                  <span style={{ fontSize: 12, color: "#9F1F1F" }}>{seatFullText(seats)}</span>
+                )}
               </span>,
             ],
             ["Miembros", `${c.members}${c.pendingInvitations ? ` · ${c.pendingInvitations} invitación(es) pendiente(s)` : ""}`],
