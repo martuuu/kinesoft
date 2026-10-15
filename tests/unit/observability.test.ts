@@ -115,8 +115,8 @@ describe("next.config.mjs", () => {
     expect(h("Strict-Transport-Security")).toBeUndefined();
     const csp = h("Content-Security-Policy-Report-Only")!;
     expect(csp).not.toMatch(/report-uri/);
-    expect(csp).toMatch(/style-src [^;]*https:\/\/fonts\.googleapis\.com/);
-    expect(csp).toMatch(/font-src [^;]*https:\/\/fonts\.gstatic\.com/);
+    // VX F-e: fuentes por next/font (same-origin), sin Google Fonts.
+    expect(csp).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
     expect(csp).toMatch(/frame-src [^;]*https:\/\/www\.youtube-nocookie\.com/);
     expect(csp).toMatch(/form-action [^;]*https:\/\/ref\.supabase\.co[^;]*https:\/\/accounts\.google\.com/);
     expect(h("Content-Security-Policy")).toBeUndefined(); // sigue Report-Only

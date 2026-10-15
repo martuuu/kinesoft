@@ -57,16 +57,19 @@ vi.mock("next/navigation", () => ({
 import PlatformLayout from "@/app/(platform)/layout";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
 import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
+import { UIProviders } from "@/components/providers/ui-providers";
 import { __setPlatformMfaForTests } from "@/lib/platform-mfa";
 import { PlatformMfaFake } from "@/tests/helpers/platform-mfa-fake";
 
 type ShellProps = { name: string; email: string; hasHome: boolean; support: { tenantName: string } | null };
 
-/** El layout devuelve `<PlatformReauthProvider><PlatformShell …/></…>` (BO4): se desenvuelve el shell. */
+/** El layout devuelve `<UIProviders><PlatformReauthProvider><PlatformShell …/></…></…>` (BO4 + VX F-d). */
 async function run(): Promise<ReactElement<ShellProps>> {
-  const root = (await PlatformLayout({ children: "x" })) as ReactElement<{ children: ReactElement<ShellProps> }>;
-  expect(root.type).toBe(PlatformReauthProvider);
-  return root.props.children;
+  const root = (await PlatformLayout({ children: "x" })) as ReactElement<{ children: ReactElement<{ children: ReactElement<ShellProps> }> }>;
+  expect(root.type).toBe(UIProviders);
+  const reauth = root.props.children;
+  expect(reauth.type).toBe(PlatformReauthProvider);
+  return reauth.props.children;
 }
 
 function snap(p: { admin: boolean; disabled?: boolean; home: string | null }) {

@@ -1,0 +1,315 @@
+/* [VX F-b1 · C-F4] Panel de producto del login. Portado de design_source/vx0/login-c.html:16-41 y del mock de
+   agenda de shared.css:486-579 (T.agenda). Sin filter: blur (D-VX9): el fondo son gradientes pintados. */
+
+.panel {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  background:
+    radial-gradient(70% 55% at 85% 10%, rgba(94, 146, 204, 0.55), rgba(94, 146, 204, 0) 70%),
+    radial-gradient(60% 50% at 0% 100%, rgba(200, 245, 100, 0.16), rgba(200, 245, 100, 0) 70%),
+    linear-gradient(160deg, #1b2d4a 0%, #0f1e33 70%);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: 32px clamp(32px, 4vw, 64px);
+  min-width: 0;
+}
+
+.logo {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 10px;
+  text-decoration: none;
+}
+.logo:focus-visible {
+  /* El outline lo anula el foco global :where(...) de globals.css (C-F1); acá solo el anillo. */
+  box-shadow: var(--focus-ring);
+}
+
+.body {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 40px;
+  padding-block: 40px;
+}
+.copy {
+  width: 100%;
+  max-width: 600px;
+  display: grid;
+  gap: 12px;
+}
+.title {
+  margin: 0;
+  font-size: clamp(30px, 1.6vw + 14px, 42px);
+  line-height: 1.08;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.sub {
+  margin: 0;
+  max-width: 520px;
+  color: var(--navy-100);
+  font-size: 17px;
+  line-height: 1.55;
+}
+.foot {
+  margin: 0;
+  font-size: 13px;
+  color: var(--navy-200);
+}
+
+.stage {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+}
+
+/* ── Mock de agenda ─────────────────────────────────────────── */
+/* Alto de fila: 50 px (42 en pantallas bajas). Sin custom properties locales: el guard de tokens
+   (design-tokens.test.ts) exige que toda custom property usada exista en globals.css, así que la grilla va con valores literales
+   y los turnos se posicionan en % de la columna. */
+.agenda {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: #fff;
+  color: var(--navy-700);
+  font-size: 12px;
+  user-select: none;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35);
+}
+.agTop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.07);
+  font-size: 13px;
+  color: var(--navy-900);
+}
+.agSeg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(15, 30, 51, 0.05);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-500);
+}
+.agSeg span {
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.agSeg .agSegOn {
+  background: #fff;
+  color: var(--navy-900);
+  box-shadow: 0 1px 2px rgba(15, 30, 51, 0.1);
+}
+.agTopBar {
+  margin-left: auto;
+  width: 30%;
+  max-width: 120px;
+}
+.agGrid {
+  display: grid;
+  grid-template-columns: 48px repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto 250px;
+}
+.agCorner,
+.agHead {
+  border-bottom: 1px solid rgba(15, 30, 51, 0.07);
+}
+.agHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px;
+  border-left: 1px solid rgba(15, 30, 51, 0.06);
+}
+.agHead .bar {
+  flex: 1;
+  max-width: 80px;
+}
+.agHours {
+  display: grid;
+  grid-template-rows: repeat(5, minmax(0, 1fr));
+  font: 500 10px/1 var(--font-mono);
+  color: var(--navy-300);
+}
+.agHours span {
+  padding: 6px 0 0 8px;
+}
+.agCol {
+  position: relative;
+  border-left: 1px solid rgba(15, 30, 51, 0.06);
+  background-image: linear-gradient(rgba(15, 30, 51, 0.06) 1px, transparent 1px);
+  background-size: 100% 20%;
+}
+
+.bar {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(15, 30, 51, 0.1);
+}
+.w40 {
+  width: 40%;
+}
+.w55 {
+  width: 55%;
+}
+
+/* Turno: barra lateral = servicio (--svc), fondo = estado. Los fondos de estado son translúcidos (tokens de la
+   app): se apoyan sobre blanco para que las líneas de la grilla no se vean a través del turno. */
+.appt {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  overflow: hidden;
+  padding: 6px 8px 6px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.apptSvc {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.short {
+  padding-block: 0;
+  align-content: center;
+}
+.apptT {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apptS {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.st_confirmed {
+  background: linear-gradient(var(--st-confirmed-bg), var(--st-confirmed-bg)), #fff;
+  color: var(--st-confirmed-fg);
+}
+.st_pending {
+  background: linear-gradient(var(--st-pending-bg), var(--st-pending-bg)), #fff;
+  color: var(--st-pending-fg);
+}
+.st_completed {
+  background: linear-gradient(var(--st-completed-bg), var(--st-completed-bg)), #fff;
+  color: var(--st-completed-fg);
+}
+.st_insala {
+  background: linear-gradient(var(--rc-insala-bg), var(--rc-insala-bg)), #fff;
+  color: var(--rc-insala-fg);
+}
+.st_attending {
+  background: var(--rc-attending-bg);
+  color: var(--rc-attending-fg);
+}
+
+.avatar {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* ── Tarjeta flotante «Sala de espera» ──────────────────────── */
+.float {
+  position: absolute;
+  right: -24px;
+  bottom: -28px;
+  width: 230px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #fff;
+  color: var(--navy-900);
+  font-size: 12px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+}
+.floatH {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 650;
+}
+.planChip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--navy-900);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.floatRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--bg-panel, #f7fafd);
+}
+.floatRow .bar {
+  flex: 1;
+}
+.pill {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.pillInsala {
+  background: var(--rc-insala-bg);
+  color: var(--rc-insala-fg);
+}
+.pillCalled {
+  background: var(--rc-called-bg);
+  color: var(--rc-called-fg);
+}
+
+@media (max-width: 1279px) {
+  .float {
+    right: -8px;
+    width: 210px;
+  }
+}
+
+/* 1366×768 (y laptops bajas): el login entra sin scroll (§5). Se achica la fila del mock y el aire vertical. */
+@media (max-height: 820px) {
+  .body {
+    gap: 28px;
+    padding-block: 20px;
+  }
+  .agGrid {
+    grid-template-rows: auto 210px;
+  }
+}

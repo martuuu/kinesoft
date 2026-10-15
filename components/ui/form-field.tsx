@@ -13,7 +13,7 @@
  * 24-hour `DateTime24Picker`, backed by a hidden input so uncontrolled
  * (FormData) call sites keep reading `name` exactly as before.
  */
-import { useState } from "react";
+import { useId, useState } from "react";
 import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
 
 /** Small "?" badge that surfaces a one-line explanation on hover. Uses a
@@ -82,21 +82,10 @@ function HelpDot({ text }: { text: string }) {
     </span>
   );
 }
-const baseInputStyle: React.CSSProperties = {
-  marginTop: 6,
-  padding: "10px 12px",
-  borderRadius: 12,
-  // Was rgba(...,0.7) — too transparent against glass modal backgrounds,
-  // the underlying card content showed through and made selects
-  // unreadable (Sprint 18 UX fix). Bumped to 0.96 keeps a subtle glass
-  // feel while staying legible.
-  background: "rgba(255,255,255,0.96)",
-  border: "1px solid rgba(15,30,51,0.08)",
-  width: "100%",
-  fontSize: 14,
-  color: "var(--navy-900)",
-  outline: "none",
-};
+// [VX F-b2] Sobre las clases de C-F2 (`.k-field/.k-label/.k-input/.k-hint/.k-field-error`): fuera el estilo inline
+// que apagaba el outline (el foco ahora lo pinta `.k-input:focus`) y el rojo hex del error (→ `--danger-fg`). Solo queda
+// inline lo que C-F2 no cubre: el estado deshabilitado.
+const disabledStyle: React.CSSProperties = { opacity: 0.5, cursor: "not-allowed" };
 
 type CommonProps = {
   label: string;
@@ -116,6 +105,11 @@ type CommonProps = {
   tooltip?: string;
   disabled?: boolean;
   autoFocus?: boolean;
+  /**
+   * [VX F-b2] Se pasa tal cual al control. Cierra `formfield-sin-autocomplete-new-password`: sin
+   * `autoComplete="new-password"` los gestores de contraseñas no ofrecen generar una en el alta.
+   */
+  autoComplete?: string;
 };
 
 type InputProps = CommonProps & {
@@ -152,25 +146,40 @@ export function FormField(props: FormFieldProps) {
     tooltip,
     disabled,
     autoFocus,
+    autoComplete,
   } = props;
-  const inputStyle: React.CSSProperties = {
-    ...baseInputStyle,
-    borderColor: error ? "rgba(225,75,75,0.4)" : baseInputStyle.border?.toString(),
-    opacity: disabled ? 0.5 : 1,
-    cursor: disabled ? "not-allowed" : undefined,
-  };
+  // useId: ids estables entre SSR e hidratación para `htmlFor` y `aria-describedby`.
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const errorId = `${id}-error`;
+  const describedBy = error ? errorId : hint ? hintId : undefined;
+  const isDateTime = props.as !== "textarea" && props.as !== "select" && props.type === "datetime-local";
+  // Atributos comunes del control (id, aria, autocomplete). El picker de fecha y hora no los recibe: arma sus
+  // propios inputs, así que el label no apunta a él (`htmlFor` solo cuando hay un control nativo).
+  const controlA11y = {
+    id,
+    "aria-invalid": error ? true : undefined,
+    "aria-describedby": describedBy,
+    "aria-errormessage": error ? errorId : undefined,
+    autoComplete,
+  } as const;
+  const controlStyle = disabled ? disabledStyle : undefined;
 
   return (
-    <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
+    <div className="k-field" style={{ minWidth: 0 }}>
       {label !== "" && (
-        <span style={{ fontWeight: 600, color: "var(--navy-500)", display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+        <label
+          htmlFor={isDateTime ? undefined : id}
+          className="k-label"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
+        >
           {label}
           {required && <span style={{ color: "var(--sky-700)" }}>*</span>}
           {tooltip && <HelpDot text={tooltip} />}
-        </span>
+        </label>
       )}
-      {props.as !== "textarea" && props.as !== "select" && props.type === "datetime-local" ? (
-        <div style={{ marginTop: 6 }}>
+      {isDateTime ? (
+        <div>
           <DateTime24FormControl
             name={name}
             required={required}
@@ -182,6 +191,8 @@ export function FormField(props: FormFieldProps) {
         </div>
       ) : props.as === "textarea" ? (
         <textarea
+          {...controlA11y}
+          className="k-input"
           name={name}
           rows={props.rows ?? 3}
           required={required}
@@ -191,10 +202,12 @@ export function FormField(props: FormFieldProps) {
           disabled={disabled}
           autoFocus={autoFocus}
           onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-          style={inputStyle}
+          style={controlStyle}
         />
       ) : props.as === "select" ? (
         <select
+          {...controlA11y}
+          className="k-input"
           name={name}
           required={required}
           defaultValue={defaultValue}
@@ -202,12 +215,9 @@ export function FormField(props: FormFieldProps) {
           disabled={disabled}
           autoFocus={autoFocus}
           onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-          // Force a solid background on the select control + its
-          // native dropdown popup. Without `#fff` on both layers,
-          // browsers in some color modes render the popup with the
-          // page background showing through.
-          style={{ ...inputStyle, background: "#fff", appearance: "auto" }}
+          style={controlStyle}
         >
+          {/* Fondo sólido en cada opción: sin `#fff` algunos modos de color pintan el popup nativo transparente. */}
           {props.options.map((o) => (
             <option key={o.value} value={o.value} style={{ background: "#fff", color: "var(--navy-900)" }}>
               {o.label}
@@ -216,6 +226,8 @@ export function FormField(props: FormFieldProps) {
         </select>
       ) : (
         <input
+          {...controlA11y}
+          className="k-input"
           name={name}
           type={props.type ?? "text"}
           required={required}
@@ -231,22 +243,19 @@ export function FormField(props: FormFieldProps) {
           // `datetime-local` is handled by DateTime24FormControl above.
           lang={props.type === "time" ? "es-ES" : undefined}
           onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-          style={inputStyle}
+          style={controlStyle}
         />
       )}
-      {(hint || error) && (
-        <span
-          style={{
-            display: "block",
-            marginTop: 4,
-            fontSize: 11,
-            color: error ? "#9F1F1F" : "var(--navy-300)",
-          }}
-        >
-          {error ?? hint}
+      {error ? (
+        <span id={errorId} className="k-field-error">
+          {error}
         </span>
-      )}
-    </label>
+      ) : hint ? (
+        <span id={hintId} className="k-hint">
+          {hint}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

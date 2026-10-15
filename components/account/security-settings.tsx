@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { TotpCodeInput } from "@/components/plataforma/reauth-modal";
+import { TotpCodeInput } from "@/components/account/totp-code-input";
 import { StepUpProvider, useStepUpAction } from "@/components/account/step-up-modal";
 import {
   confirmTotpEnrollment,

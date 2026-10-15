@@ -15,7 +15,7 @@
  * / "Cancelar" resolve `false`; the confirm button resolves `true`. Escape
  * no se propaga a overlays de abajo (Drawer, menús): ver el efecto del diálogo.
  */
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import {
   createContext,
   useCallback,
@@ -107,7 +107,7 @@ function ConfirmDialog({
   return (
     <AnimatePresence>
       {state && (
-        <motion.div
+        <m.div
           key="confirm-backdrop"
           role="dialog"
           aria-modal
@@ -129,7 +129,7 @@ function ConfirmDialog({
             padding: 20,
           }}
         >
-          <motion.div
+          <m.div
             className="k-glass-strong"
             onClick={(e) => e.stopPropagation()}
             variants={modalVariants}
@@ -164,8 +164,8 @@ function ConfirmDialog({
                 {state.confirmLabel ?? "Confirmar"}
               </Button>
             </div>
-          </motion.div>
-        </motion.div>
+          </m.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

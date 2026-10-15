@@ -9,6 +9,7 @@ import { endSupport } from "@/lib/platform-support";
 import { verifyPlatformReauth } from "@/lib/platform-mfa-actions";
 import { safeNext } from "@/lib/safe-next";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
+import { UIProviders } from "@/components/providers/ui-providers";
 import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
 import { verifyAccessHref } from "@/app/verificar-acceso/verify-access-logic";
 
@@ -65,17 +66,20 @@ export default async function PlatformLayout({ children }: { children: React.Rea
 
   // El provider del modal de re-verificación envuelve todo el shell: cualquier componente de Plataforma puede usar
   // `usePlatformAction()` para que una acción `high` pida el código y se reintente sola (BO4).
+  // VX F-d (C-F3): `UIProviders` ya no está en el root; Plataforma usa modales, toasts y confirmaciones.
   return (
-    <PlatformReauthProvider verifyAction={verifyPlatformReauth}>
-      <PlatformShell
-        name={displayUserName(snapshot?.profile?.fullName)}
-        email={actor.email}
-        hasHome={actor.homeTenantId !== null}
-        support={target ? { tenantName: target.tenant.name } : null}
-        endSupportAction={endSupport}
-      >
-        {children}
-      </PlatformShell>
-    </PlatformReauthProvider>
+    <UIProviders>
+      <PlatformReauthProvider verifyAction={verifyPlatformReauth}>
+        <PlatformShell
+          name={displayUserName(snapshot?.profile?.fullName)}
+          email={actor.email}
+          hasHome={actor.homeTenantId !== null}
+          support={target ? { tenantName: target.tenant.name } : null}
+          endSupportAction={endSupport}
+        >
+          {children}
+        </PlatformShell>
+      </PlatformReauthProvider>
+    </UIProviders>
   );
 }

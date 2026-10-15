@@ -77,7 +77,7 @@ describe("[P0-S04a] tokens inexistentes", () => {
 
   it("todo var(--x) usado en app/components/lib está definido en globals.css", () => {
     const defined = new Set(Array.from(CSS.matchAll(/(--[a-z0-9-]+)\s*:/gi), (m) => m[1]));
-    const allow = new Set<string>();
+    const allow = new Set<string>(["--font-onest", "--font-jetbrains"]); // [VX F-a] las define next/font (lib/fonts.ts) en el <html> en runtime
     const used = new Map<string, string>();
     const walk = (dir: string) => {
       for (const f of readdirSync(dir)) {

@@ -27,7 +27,8 @@
     "test:tz-ar": "TZ=America/Argentina/Buenos_Aires vitest run",
     "test:integration:owner": "dotenv -e .env.local -- sh -c 'TZ=UTC INTEGRATION=1 DATABASE_URL=\"$DIRECT_URL\" vitest run -c vitest.integration.config.ts \"$@\"' --",
     "test:perf": "dotenv -e .env.local -- sh -c 'TZ=UTC PERF_IT=1 vitest run -c vitest.perf.config.ts \"$@\"' --",
-    "perf:bundle": "node scripts/check-bundle-budget.mjs"
+    "perf:bundle": "node scripts/check-bundle-budget.mjs",
+    "perf:bundle:baseline": "node scripts/check-bundle-budget.mjs --write-baseline"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

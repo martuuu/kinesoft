@@ -1,0 +1,20 @@
+{
+  "measuredAt": "2026-10-15 sobre HEAD 9827545 + ola F (F-Z regrabó solo hacia abajo: outlineNone 36→35, #9F1F1F 157→156)",
+  "linkWrappingButton": 13,
+  "outlineNone": 35,
+  "demoPlaceholders": 11,
+  "statusLiterals": {
+    "#9F1F1F": 156,
+    "rgba(228,70,70,0.1)": 44,
+    "rgba(228,70,70,0.18)": 1,
+    "#C62828": 0,
+    "#E44646": 0,
+    "#7A4A00": 28,
+    "rgba(255,176,32,0.14)": 8,
+    "rgba(255,176,32,0.24)": 0,
+    "#1B704B": 0,
+    "rgba(54,179,126,0.12)": 0,
+    "#4F8A10": 8,
+    "#9A5B00": 14
+  }
+}

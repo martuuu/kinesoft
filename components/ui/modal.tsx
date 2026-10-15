@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { ModalCloseButton } from "@/components/ui/modal-close";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, modalVariants } from "@/lib/motion";
@@ -92,7 +92,7 @@ export function Modal({
   return (
     <AnimatePresence>
       {open && (
-        <motion.div
+        <m.div
           role="dialog"
           aria-modal
           aria-label={title}
@@ -113,7 +113,7 @@ export function Modal({
             padding: 20,
           }}
         >
-          <motion.div
+          <m.div
             ref={trapRef}
             tabIndex={-1}
             className="k-glass-strong k-scroll"
@@ -152,8 +152,8 @@ export function Modal({
               </header>
             )}
             {children}
-          </motion.div>
-        </motion.div>
+          </m.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

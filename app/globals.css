@@ -39,8 +39,12 @@
   --bg-app: linear-gradient(165deg, #c7dbef 0%, #e5eef8 35%, #f2f6fc 100%);
   --bg-panel: #f6f9fd;
 
-  /* Misma pila que .k-mono; users-panel lo pedía con fallback a monospace. */
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Misma pila que .k-mono; users-panel lo pedía con fallback a monospace.
+     [VX F-a · C-F1] Primero la variable de next/font (lib/fonts.ts, self-hosteada en el build): antes venía de un
+     <link> bloqueante a Google Fonts en el root (H-BUNDLE). El nombre literal queda de fallback. */
+  /* [VX F-Z] `var(--font-jetbrains, …)` con fallback propio: una var() sin definir invalida TODA la declaración
+     font-family (no cae al siguiente de la lista) en cualquier <html> sin la clase de next/font. */
+  --font-mono: var(--font-jetbrains, "JetBrains Mono"), "JetBrains Mono", ui-monospace, monospace;
 
   /* ── Disciplina (Planes, P0-S04a) ─────────────────────────────────
      Hex LITERAL a propósito: [data-palette] reasigna todo --sky-*, y el chip
@@ -130,6 +134,76 @@
   --shadow-card-lg:
     0 1px 2px rgba(15, 30, 51, 0.04),
     0 18px 40px rgba(15, 30, 51, 0.1);
+
+  /* [VX F-a · C-F1] Estados. Hoy viven como literales sueltos (#9F1F1F, rgba(228,70,70,.1), #7A4A00…); F2 los
+     reemplaza con un codemod de igualdades exactas. Cada -fg da AA (≥ 4.5:1) sobre su -bg compuesto sobre blanco.
+     Literales como --st-*: ninguna [data-palette] los redefine (lo verifica tests/unit/tokens-contract.test.ts). */
+  --danger-fg: #9f1f1f;
+  --danger-solid: #c62828;            /* texto blanco encima: 5.6:1 */
+  --danger-bg: rgba(228, 70, 70, 0.1);
+  --danger-bg-strong: rgba(228, 70, 70, 0.18);
+  --danger-border: rgba(176, 32, 32, 0.32);
+  --danger-dot: #e44646;
+  --warn-fg: #7a4a00;
+  --warn-bg: rgba(255, 176, 32, 0.14);
+  --warn-bg-strong: rgba(255, 176, 32, 0.24);
+  --warn-border: rgba(154, 91, 0, 0.32);
+  --success-fg: #1b704b;
+  --success-bg: rgba(54, 179, 126, 0.12);
+  --success-border: rgba(27, 112, 75, 0.28);
+
+  /* Espaciado en grilla de 8 (4 solo para ajustes finos). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+
+  /* Tipografía. Base 16 (los inputs a 16 evitan el zoom de iOS). Los display escalan con clamp entre 360 y 1440. */
+  --fs-xs: 12px;
+  --fs-sm: 14px;
+  --fs-base: 16px;
+  --fs-md: 18px;
+  --fs-lg: 20px;
+  --fs-xl: 24px;
+  --fs-2xl: 30px;
+  --fs-3xl: 36px;
+  --fs-display-2: clamp(30px, 2.4vw + 21px, 48px);
+  --fs-display-1: clamp(38px, 3.9vw + 24px, 72px);
+  --lh-tight: 1.05;
+  --lh-snug: 1.2;
+  --lh-normal: 1.5;
+  --lh-relaxed: 1.65;
+
+  /* Motion, en paridad con lib/motion.ts (DUR.fast/base/slow, EASE_OUT, EASE_IN_OUT). Lo verifica un test. */
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 300ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Foco: anillo doble; el blanco separa el azul de cualquier fondo (sky, navy o glass) y el azul da > 3:1 (1.4.11). */
+  --focus-ring: 0 0 0 2px #fff, 0 0 0 4px var(--sky-700);
+
+  /* Layout. */
+  --container-public: 1200px;
+  --container-narrow: 720px;
+  --gutter: clamp(16px, 4vw, 40px);
+  /* --font-onest la define next/font (lib/fonts.ts) en el <html>; "Onest" queda por si la variable no llega. */
+  /* [VX F-Z] Fallback dentro del var(): sin él, si la variable no llega, el font-family entero es inválido en tiempo
+     de cómputo y el texto cae a la fuente por defecto del navegador (serif), no a "Onest"/system-ui. */
+  --font-sans: var(--font-onest, "Onest"), "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Fondo público sin blur (D-VX9): gradientes pintados, no blobs con filter: blur (cuestan GPU en mobile). */
+  --bg-public:
+    radial-gradient(60% 50% at 88% 0%, rgba(143, 181, 221, 0.38) 0%, rgba(143, 181, 221, 0) 70%),
+    radial-gradient(50% 45% at 0% 100%, rgba(200, 245, 100, 0.22) 0%, rgba(200, 245, 100, 0) 70%),
+    linear-gradient(170deg, #dbe8f6 0%, #eef4fb 42%, #f7fafd 100%);
 }
 
 [data-palette="mint"] {
@@ -187,7 +261,7 @@ body {
   height: 100%;
   background: #f0eee9;
   color: var(--navy-900);
-  font-family: "Onest", system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -195,11 +269,11 @@ body {
 
 /* ───── Reusable primitives ───── */
 .k-app {
-  font-family: "Onest", system-ui, sans-serif;
+  font-family: var(--font-sans);
   color: var(--navy-900);
 }
 .k-mono {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   letter-spacing: -0.01em;
 }
 .k-display {
@@ -265,7 +339,7 @@ body {
 }
 .k-photo::after {
   content: attr(data-label);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--sky-700);
@@ -726,3 +800,110 @@ body {
     animation: none;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   [VX F-a · C-F1] Foco global de baja especificidad: :where() pesa 0, así que cualquier componente con su propio
+   :focus-visible lo pisa. No se tocan los outline:none sueltos que ya existen: los congela el ratchet de F-b2 y
+   los baja PF1 (si alguno queda con anillo doble, se limpia ahí, no achicando este).
+   ───────────────────────────────────────────────────────────────── */
+:where(a, button, summary, [role="tab"], [role="radio"], [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   [VX F-a · C-F2] Clases de la cara pública y de los cimientos (traducción literal de
+   design_source/vx0/shared.css:107-291 a prefijo k-). Las consumen F-b1/F-b2 y VX2.
+   ───────────────────────────────────────────────────────────────── */
+
+/* Botones: tamaños (C-F2). La base .k-btn queda como está (densidad del workspace; PF1 migra por área). */
+.k-btn-sm { min-height: 40px; padding: 0 16px; font-size: 14px; justify-content: center; }
+.k-btn-md { min-height: 44px; padding: 0 20px; font-size: 15px; justify-content: center; }
+.k-btn-lg { min-height: 52px; padding: 0 26px; font-size: 16px; justify-content: center; }
+.k-btn-block { width: 100%; justify-content: center; }
+.k-btn-dark { background: var(--navy-900); color: #fff; }
+.k-btn:focus-visible { border-radius: 999px; }
+.k-btn[aria-disabled="true"], .k-btn:disabled { cursor: progress; transform: none; opacity: 0.85; }
+/* Táctil: 44 px mínimos por debajo de 768 (WCAG 2.5.5 / criterio §5). */
+@media (max-width: 767px) { .k-btn-sm { min-height: 44px; } }
+
+.k-btn-social {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; min-height: 48px; padding: 0 16px;
+  border-radius: 12px; border: 1px solid rgba(15, 30, 51, 0.14);
+  background: #fff; color: var(--navy-900); font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.k-btn-social:hover { border-color: rgba(15, 30, 51, 0.28); box-shadow: 0 2px 8px rgba(15, 30, 51, 0.06); }
+.k-btn-social:focus-visible { border-radius: 12px; }
+.k-btn-social svg { width: 20px; height: 20px; }
+
+/* Campos (C-F2). .k-input a 44 px en toda la app (D-VX13, §20.16); .k-input-lg (48) solo en auth y landing. */
+.k-field { display: grid; gap: 8px; }
+.k-field-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.k-label { font-size: 14px; font-weight: 600; color: var(--navy-700); }
+.k-hint { font-size: 13px; color: var(--navy-400); }
+.k-field-error { font-size: 13px; color: var(--danger-fg); display: flex; gap: 6px; align-items: center; }
+.k-input {
+  width: 100%; height: 44px; padding: 0 14px;
+  border-radius: 12px; border: 1px solid rgba(15, 30, 51, 0.16);
+  background: #fff; font-size: 16px; color: var(--navy-900); font-family: inherit;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.k-input-lg { height: 48px; }
+textarea.k-input { height: auto; min-height: 120px; padding: 12px 14px; resize: vertical; line-height: 1.5; }
+select.k-input { appearance: none; padding-right: 40px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%233a4d6c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 16px center; }
+.k-input::placeholder { color: var(--navy-300); }
+.k-input:hover { border-color: rgba(15, 30, 51, 0.3); }
+.k-input:focus { outline: none; border-color: var(--sky-700); box-shadow: 0 0 0 3px rgba(31, 79, 190, 0.18); }
+.k-input[aria-invalid="true"] { border-color: var(--danger-solid); }
+.k-input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px var(--danger-bg-strong); }
+.k-input-wrap { position: relative; }
+.k-input-wrap .k-input { padding-right: 52px; }
+.k-input-action {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 40px; height: 40px;
+  display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--navy-500);
+}
+.k-input-action:hover { color: var(--navy-900); }
+.k-input-action:focus-visible { box-shadow: inset 0 0 0 2px var(--sky-700); }
+.k-input-action svg { width: 20px; height: 20px; }
+
+.k-link { color: var(--sky-700); font-weight: 600; text-decoration: none; border-radius: 4px; }
+.k-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.k-alert {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 12px 14px; border-radius: 12px; font-size: 14px; line-height: 1.45;
+  background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border);
+}
+.k-alert svg { width: 18px; height: 18px; margin-top: 1px; flex-shrink: 0; }
+.k-alert-success { background: var(--success-bg); color: var(--success-fg); border-color: var(--success-border); }
+.k-divider { display: flex; align-items: center; gap: 12px; color: var(--navy-400); font-size: 13px; }
+.k-divider::before, .k-divider::after { content: ""; flex: 1; height: 1px; background: rgba(15, 30, 51, 0.1); }
+.k-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff; animation: k-spin 700ms linear infinite; }
+@keyframes k-spin { to { transform: rotate(360deg); } }
+
+/* Layout público. */
+.k-container { width: 100%; max-width: calc(var(--container-public) + 2 * var(--gutter)); margin-inline: auto; padding-inline: var(--gutter); }
+.k-container-narrow { width: 100%; max-width: calc(var(--container-narrow) + 2 * var(--gutter)); margin-inline: auto; padding-inline: var(--gutter); }
+.k-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.k-skip-link { position: absolute; left: 16px; top: -64px; z-index: 100; padding: 12px 16px; border-radius: var(--r-sm);
+  background: var(--navy-900); color: #fff; font-weight: 600; text-decoration: none;
+  transition: transform var(--dur-fast) var(--ease-out); }
+.k-skip-link:focus-visible { transform: translateY(80px); }
+
+/* Entradas SSR por CSS (C-F3, D-VX6): solo opacity/transform, ≤ 300 ms; el estado final es el natural. Reemplazan a
+   framer en las superficies públicas (que no lo cargan): nada visible en el primer render depende de JS. */
+@keyframes k-rise { from { opacity: 0; transform: translateY(12px); } }
+@keyframes k-fade { from { opacity: 0; } }
+.k-enter { animation: k-rise var(--dur-slow) var(--ease-out) both; }
+.k-enter-fade { animation: k-fade var(--dur-slow) var(--ease-out) both; }
+.k-enter-d1 { animation-delay: 60ms; }
+.k-enter-d2 { animation-delay: 120ms; }
+.k-enter-d3 { animation-delay: 180ms; }
+@media (prefers-reduced-motion: reduce) {
+  .k-enter, .k-enter-fade, .k-spinner { animation: none; }
+  .k-btn-social, .k-input, .k-skip-link { transition: none; }
+}
+/* .k-page-in ya existe (PF-0c, más arriba): no se redefine. */

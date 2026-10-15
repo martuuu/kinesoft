@@ -8,7 +8,9 @@ export type IconProps = {
   style?: CSSProperties;
 };
 
-type InternalProps = IconProps & { children: ReactNode };
+// `decorative`: solo los íconos de VX lo prenden. Ponerle `aria-hidden` a todo el set cambia el markup de cada pantalla
+// y rompe los goldens (p. ej. el de SV09 en agenda-client); el resto lo suma PF1 regrabando a conciencia.
+type InternalProps = IconProps & { children: ReactNode; decorative?: boolean };
 
 function Icon({
   size = 18,
@@ -17,6 +19,7 @@ function Icon({
   className,
   style,
   children,
+  decorative,
 }: InternalProps) {
   return (
     <svg
@@ -30,6 +33,7 @@ function Icon({
       strokeLinejoin="round"
       className={className}
       style={style}
+      aria-hidden={decorative ? true : undefined}
     >
       {children}
     </svg>
@@ -198,5 +202,66 @@ export const IconPalette = (p: IconProps) => (
     <circle cx="7.5" cy="11" r="1" />
     <circle cx="10" cy="7.5" r="1" />
     <circle cx="14.5" cy="7.5" r="1" />
+  </Icon>
+);
+
+// [VX F-b2] Íconos de las superficies públicas (C-F5), copiados de `design_source/vx0/shared.js` `I.*`: trazo 1.8 y
+// 24 px por defecto (el resto del set usa 1.6/18 por la densidad del workspace; se pueden pisar con `size`/`stroke`).
+const VX = { size: 24, stroke: 1.8, decorative: true } as const;
+export const IconEye = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </Icon>
+);
+export const IconEyeOff = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-2.9 3.8M6.6 6.6C3.6 8.5 2 12 2 12s3.6 7 10 7a10 10 0 0 0 5.4-1.6" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    <path d="m3 3 18 18" />
+  </Icon>
+);
+export const IconAlert = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <circle cx="12" cy="12" r="9.5" />
+    <path d="M12 7.5v5.5" />
+    <circle cx="12" cy="16.5" r=".6" fill="currentColor" />
+  </Icon>
+);
+export const IconCheckCircle = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <circle cx="12" cy="12" r="9.5" />
+    <path d="m8 12.3 2.8 2.7L16.2 9.5" />
+  </Icon>
+);
+export const IconMail = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="3" />
+    <path d="m4 7 8 6 8-6" />
+  </Icon>
+);
+// Cierra b-B11 (candado de «Seguridad»): escudo con tilde, no está en el prototipo; mismo trazo que el resto.
+export const IconShield = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6L12 3z" />
+    <path d="m9 12 2.2 2.2L15.5 10" />
+  </Icon>
+);
+export const IconBuilding = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M16 9h2a2 2 0 0 1 2 2v10M3 21h18M8 7h4M8 11h4M8 15h4" />
+  </Icon>
+);
+export const IconHelp = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <circle cx="12" cy="12" r="9.5" />
+    <path d="M9.5 9.2a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.3-2.5 3.9" />
+    <circle cx="12" cy="17" r=".6" fill="currentColor" />
+  </Icon>
+);
+export const IconTag = (p: IconProps) => (
+  <Icon {...VX} {...p}>
+    <path d="M3 12V4.5A1.5 1.5 0 0 1 4.5 3H12l9 9-9 9z" />
+    <circle cx="8" cy="8" r="1.5" />
   </Icon>
 );

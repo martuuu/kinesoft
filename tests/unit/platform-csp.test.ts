@@ -54,8 +54,14 @@ describe("[BO4] next.config.mjs · CSP de Plataforma", () => {
     expect(directive(csp, "connect-src")).not.toContain("https:");
     expect(directive(csp, "connect-src")).toEqual(expect.arrayContaining(["'self'", "https://ref.supabase.co", "wss://ref.supabase.co"]));
     expect(directive(csp, "frame-src")).toEqual(["https://www.youtube-nocookie.com"]);
-    expect(directive(csp, "style-src")).toContain("https://fonts.googleapis.com");
-    expect(directive(csp, "font-src")).toContain("https://fonts.gstatic.com");
+    // VX F-e: fuentes por next/font (same-origin) → sin Google Fonts en la enforced.
+    expect(directive(csp, "style-src")).toEqual(["'self'", "'unsafe-inline'"]);
+    expect(directive(csp, "font-src")).toEqual(["'self'", "data:"]);
+    expect(csp).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
+    // Avatares OAuth (Google + Facebook, PL-2e), cada host una sola vez.
+    const img = directive(csp, "img-src");
+    expect(img.filter((x) => x === "https://lh3.googleusercontent.com")).toHaveLength(1);
+    expect(img.filter((x) => x === "https://platform-lookaside.fbsbx.com")).toHaveLength(1);
     expect(directive(csp, "form-action")).toEqual(["'self'"]);
     expect(directive(csp, "object-src")).toEqual(["'none'"]);
     expect(directive(csp, "frame-ancestors")).toEqual(["'none'"]);

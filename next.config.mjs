@@ -94,9 +94,11 @@ const cspReportOnly = [
   // 'unsafe-inline' + 'unsafe-eval' are required by Next.js (dev overlay, RSC
   // inline bootstrap). Kept permissive intentionally for this first pass.
   `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${MP}`,
-  // Google Fonts: app/layout.tsx carga Onest + JetBrains Mono con <link>
-  // (CSS de fonts.googleapis.com, woff2 de fonts.gstatic.com).
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  // VX F-e: sin fonts.googleapis.com. Onest y JetBrains Mono pasan a next/font (F-a), que descarga los woff2 en
+  // build y los sirve same-origin desde /_next/static/media con su @font-face inline: el browser ya no pide nada a
+  // Google (privacidad del paciente, un handshake menos en la primera carga). Dejar el host habilitado solo abriría
+  // una salida de estilos a un tercero que ya no usamos.
+  "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: blob: https: ${SUPA}`,
   // Supabase Storage: signed URLs de archivos del paciente y media de la biblioteca.
   `media-src 'self' data: blob: https: ${SUPA}`,
@@ -104,7 +106,8 @@ const cspReportOnly = [
   `connect-src 'self' https: ${SUPA_WS} data: blob: ${SUPA} ${MP}`,
   // Videos de ejercicios embebidos (lib/exercise-media.ts → youtube-nocookie) + checkout de MP.
   "frame-src 'self' https://www.youtube-nocookie.com https://*.mercadopago.com https://*.mercadolibre.com",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  // VX F-e: sin fonts.gstatic.com, mismo motivo que style-src (next/font sirve los woff2 desde 'self').
+  "font-src 'self' data:",
   "base-uri 'self'",
   // form-action también rige los REDIRECTS de un submit: el portal postea a
   // /api/auth/google, que redirige a Supabase /auth/v1/authorize y de ahí a
@@ -138,19 +141,21 @@ const cspReportOnly = [
 //     Un script inyectado no puede sacar datos a un host cualquiera.
 //   - form-action 'self': en Plataforma no hay login con Google ni checkout; el único form nativo es el sign-out.
 //   - frame-src solo youtube-nocookie (lo que embebe lib/exercise-media-internal.ts).
+//   - style-src / font-src sin Google Fonts (VX F-e): las fuentes van por next/font, same-origin.
 const isDevServer = process.env.NODE_ENV !== "production";
 export const platformCspPaths = ["/plataforma/:path*", "/plataforma-mfa/:path*"];
 const cspPlatformEnforced = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDevServer ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  // VX F-e: sin Google Fonts (next/font las sirve same-origin; ver la Report-Only).
+  "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: blob: ${SUPA} https://lh3.googleusercontent.com https://platform-lookaside.fbsbx.com`,
   `media-src 'self' data: blob: ${SUPA}`,
   // En dev el HMR de Next abre un websocket al mismo host (ws://localhost:3000): 'self' lo cubre en CSP3, el
   // ws://localhost:* queda por los browsers que todavía no mapean 'self' a ws.
   `connect-src 'self' ${SUPA} ${SUPA_WS}${isDevServer ? " ws://localhost:*" : ""}`,
   "frame-src https://www.youtube-nocookie.com",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  "font-src 'self' data:",
   "base-uri 'self'",
   "form-action 'self'",
   "object-src 'none'",
@@ -223,8 +228,9 @@ const nextConfig = {
  *     project); sin token, `sourcemaps.disable` evita que el plugin intente
  *     subir y falle o ensucie el log.
  *   - sin SDK de cliente (no hay sentry.client.config / instrumentation-client):
- *     las rutas públicas ya están en ~140-148 kB gz con presupuesto de 150 kB y
- *     el SDK de browser suma decenas de kB a TODAS las rutas. Los errores de
+ *     las rutas públicas tienen presupuesto de 120 kB gz (VX F-e,
+ *     scripts/bundle-groups.mjs) y el SDK de browser suma decenas de kB a
+ *     TODAS las rutas. Los errores de
  *     cliente quedan fuera hasta C1 (perf); los reportes de CSP sí llegan.
  *   - buildTimeInstrumentation off: no instrumentamos dependencias (Prisma,
  *     http) en build; solo queremos captura de errores + sampling bajo.

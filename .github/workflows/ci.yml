@@ -54,9 +54,12 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
 
-      # A1.2: reporte de first-load JS por ruta contra scripts/bundle-baseline.json.
-      # Solo informa (exit 0); pasa a bloquear en C1 con los fixes de perf.
-      - name: Presupuesto de bundle (reporte)
+      # VX F-e (C-F6): JS inicial por ruta, con presupuesto por grupo (scripts/bundle-groups.mjs): públicas ≤ 120 kB,
+      # turnero ≤ 135, portal ≤ 125 bloquean (exit 1 si exceden o crecen > 10 % sobre scripts/bundle-baseline.json);
+      # onboarding / Plataforma / workspace solo informan.
+      # Bloqueante desde F-Z (15-oct): con framer fuera del root (F-d) las públicas quedaron ≤ 110, turnero ≤ 115 y
+      # portal ≤ 108 kB; el baseline se regrabó en ese momento.
+      - name: Presupuesto de bundle
         run: node scripts/check-bundle-budget.mjs
 
   # Capa 3 (A1.1): integración contra Postgres real, con las server actions

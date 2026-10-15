@@ -10,7 +10,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { TotpCodeInput } from "@/components/plataforma/reauth-modal";
+import { TotpCodeInput } from "@/components/account/totp-code-input";
 import { StepUpProvider, useStepUpAction } from "@/components/account/step-up-modal";
 import { normalizeTotpCode, type PlatformMfaEnrollment } from "@/lib/platform-mfa-logic";
 import type { ActionResult } from "@/lib/validation";

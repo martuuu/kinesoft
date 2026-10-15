@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { ModalCloseButton } from "@/components/ui/modal-close";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
@@ -94,7 +94,7 @@ export function Drawer({
       {open && (
         <>
           {/* backdrop */}
-          <motion.div
+          <m.div
             onClick={() => void requestClose()}
             aria-hidden
             variants={backdropVariants}
@@ -110,7 +110,7 @@ export function Drawer({
             }}
           />
           {/* panel — slides in from the right */}
-          <motion.aside
+          <m.aside
             ref={trapRef}
             tabIndex={-1}
             role="dialog"
@@ -146,7 +146,7 @@ export function Drawer({
               </header>
             )}
             {children}
-          </motion.aside>
+          </m.aside>
         </>
       )}
     </AnimatePresence>

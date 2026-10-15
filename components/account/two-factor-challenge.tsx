@@ -12,7 +12,7 @@
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { TotpCodeInput } from "@/components/plataforma/reauth-modal";
+import { TotpCodeInput } from "@/components/account/totp-code-input";
 import {
   requestEmailCode,
   useRecoveryCode as redeemRecoveryCode,

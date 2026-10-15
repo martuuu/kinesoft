@@ -43,7 +43,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_OUT, toastVariants } from "@/lib/motion";
 import { IconCheck, IconUsers, IconX } from "@/components/ui/icons";
 
@@ -372,7 +372,7 @@ function Toaster({
         {toasts.map((t) => (
           // key = id: un reemplazo por id NO remonta el card (sin salida y
           // entrada); `layout` acomoda la altura si el texto nuevo es más largo.
-          <motion.div
+          <m.div
             key={t.id}
             layout
             variants={toastVariants}
@@ -392,7 +392,7 @@ function Toaster({
               }}
               onHold={(kind, on) => onHold(t.id, kind, on)}
             />
-          </motion.div>
+          </m.div>
         ))}
       </AnimatePresence>
     </div>,
@@ -486,7 +486,7 @@ export function ToastCard({
             FUERA de este bloque keyed (FX2b): si la Secretaria tabuló hasta «Ver
             sala» y llega el mismo aviso por el resync, remontar el botón le
             sacaba el foco al <body>. */}
-        <motion.div
+        <m.div
           key={item.version}
           data-toast-text
           initial={item.version > 0 ? { opacity: 0.25, y: 3 } : false}
@@ -501,7 +501,7 @@ export function ToastCard({
               {item.description}
             </div>
           )}
-        </motion.div>
+        </m.div>
         {item.action && (
           // Área de toque ≥ 32 px sin cambiar el look: el <button> es un marco
           // transparente con padding (y margen negativo que lo compensa) y la

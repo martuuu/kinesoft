@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import type { Role } from "@prisma/client";
 import { headers } from "next/headers";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
+import { UIProviders } from "@/components/providers/ui-providers";
+import type { Palette } from "@/lib/preferences-constants";
 import { AppShell } from "@/components/layout/app-shell";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
 import { tenantAccessEnforcement } from "@/lib/env";
@@ -164,57 +166,88 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const shellChoice = shellTenantChoice(!!actor.support, choice.options, switchTenant);
   const enforcement = tenantAccessEnforcement();
   return (
-    <TweaksProvider
-      initialAgenda={{
-        agendaShowWeekHeader: prefs.agendaShowWeekHeader,
-        agendaShowSaturday: prefs.agendaShowSaturday,
-        agendaShowSunday: prefs.agendaShowSunday,
-      }}
-      // PL-F1c: la paleta guardada en el server manda desde el primer render (antes solo la aplicaba el dashboard
-      // al montarse, y pisaba lo elegido en Tweaks).
-      initialPalette={prefs.palette}
-      // RX-0 (C-RX2): cara de /sala (`agendaPrefs.receptionLayout`, ya sanitizada) para que Apariencia y el
-      // escritorio arranquen con la elegida, sin flash.
-      initialReceptionLayout={prefs.agendaView.receptionLayout}
-    >
-      <AppShell
-        isPlatformAdmin={actor.isPlatformAdmin}
-        // PL-F1c: avatar y menú de cuenta de la barra superior. `practitionerName` ya pasa por `displayUserName`
-        // (nunca el email, decisión 19).
-        userName={actor.practitionerName}
-        ownPublicBooking={ownPublicBooking}
-        modules={modules}
-        vertical={actor.entitlements.vertical}
-        caps={caps}
-        realtime={realtime}
-        alertViewer={alertViewer}
-        initialAlertPrefs={initialAlertPrefs}
-        // IAM-3b (decisión 6: un usuario, varios consultorios): el selector del sidebar usa la MISMA foto que el
-        // gate (`getTenantChoiceState` de arriba, cache por request): ninguna query más. Solo los consultorios
-        // usables de esta sesión. El activo es el del Actor (lo que la app está mostrando).
-        // BO3-F: en soporte, sin selector (porqué en `shellTenantChoice`).
-        tenantOptions={shellChoice.options}
-        activeTenantId={actor.tenantId}
-        switchTenantAction={shellChoice.switchAction}
-        banner={
-          actor.support ? <SupportBanner tenantName={actor.tenantName} endSupportAction={endSupport} /> : null
-        }
+    <UIProviders>
+      {/* VX F-d: paleta sin flash. Corre antes del primer pintado del shell (está antes en el HTML) y pone
+          `data-palette` en <html> con la misma precedencia que `hydrateTweaks`; sin esto, una paleta distinta de sky
+          pintaba sky hasta que hidrataba `TweaksProvider`. */}
+      <script dangerouslySetInnerHTML={{ __html: paletteScript(prefs.palette) }} />
+      <TweaksProvider
+        initialAgenda={{
+          agendaShowWeekHeader: prefs.agendaShowWeekHeader,
+          agendaShowSaturday: prefs.agendaShowSaturday,
+          agendaShowSunday: prefs.agendaShowSunday,
+        }}
+        // PL-F1c: la paleta guardada en el server manda desde el primer render (antes solo la aplicaba el dashboard
+        // al montarse, y pisaba lo elegido en Tweaks).
+        initialPalette={prefs.palette}
+        // RX-0 (C-RX2): cara de /sala (`agendaPrefs.receptionLayout`, ya sanitizada) para que Apariencia y el
+        // escritorio arranquen con la elegida, sin flash.
+        initialReceptionLayout={prefs.agendaView.receptionLayout}
       >
-        {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
-            soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,
-            que el soporte sí puede mirar. */}
-        {/* BO-Z B4: el llamado a escribir a soporte es para titular/admin; el resto lee «Avisale al titular». */}
-        <AccessBanner
-          access={actor.access}
-          enforcement={enforcement}
-          support={!!actor.support}
-          audience={bannerAudienceFor(role)}
-        />
-        {/* BO-Z B10: red de escrituras rechazadas en solo lectura REAL (modo efectivo). En soporte no: ya la monta la
-            banda de soporte con su propio copy. */}
-        {!actor.support && !canWrite(effectiveMode(actor.access.mode, enforcement)) && <ReadOnlyWriteGuard />}
-        {children}
-      </AppShell>
-    </TweaksProvider>
+        <AppShell
+          isPlatformAdmin={actor.isPlatformAdmin}
+          // PL-F1c: avatar y menú de cuenta de la barra superior. `practitionerName` ya pasa por `displayUserName`
+          // (nunca el email, decisión 19).
+          userName={actor.practitionerName}
+          ownPublicBooking={ownPublicBooking}
+          modules={modules}
+          vertical={actor.entitlements.vertical}
+          caps={caps}
+          realtime={realtime}
+          alertViewer={alertViewer}
+          initialAlertPrefs={initialAlertPrefs}
+          // IAM-3b (decisión 6: un usuario, varios consultorios): el selector del sidebar usa la MISMA foto que el
+          // gate (`getTenantChoiceState` de arriba, cache por request): ninguna query más. Solo los consultorios
+          // usables de esta sesión. El activo es el del Actor (lo que la app está mostrando).
+          // BO3-F: en soporte, sin selector (porqué en `shellTenantChoice`).
+          tenantOptions={shellChoice.options}
+          activeTenantId={actor.tenantId}
+          switchTenantAction={shellChoice.switchAction}
+          banner={
+            actor.support ? <SupportBanner tenantName={actor.tenantName} endSupportAction={endSupport} /> : null
+          }
+        >
+          {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
+              soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,
+              que el soporte sí puede mirar. */}
+          {/* BO-Z B4: el llamado a escribir a soporte es para titular/admin; el resto lee «Avisale al titular». */}
+          <AccessBanner
+            access={actor.access}
+            enforcement={enforcement}
+            support={!!actor.support}
+            audience={bannerAudienceFor(role)}
+          />
+          {/* BO-Z B10: red de escrituras rechazadas en solo lectura REAL (modo efectivo). En soporte no: ya la monta la
+              banda de soporte con su propio copy. */}
+          {!actor.support && !canWrite(effectiveMode(actor.access.mode, enforcement)) && <ReadOnlyWriteGuard />}
+          {children}
+        </AppShell>
+      </TweaksProvider>
+    </UIProviders>
+  );
+}
+
+/**
+ * VX F-d: script inline de paleta sin flash. MISMAS claves y valores que `components/layout/tweaks-context.tsx`
+ * (`STORAGE_KEY` = "kinesoft:tweaks", `PALETTES`, default "sky") y la misma precedencia que `hydrateTweaks`: la
+ * paleta del server (`UserPreferences.palette`) gana; si no hay, la de `localStorage`; si no, sky. Todo en
+ * `try/catch`: con el storage bloqueado (Safari privado) o el JSON roto queda la del server o sky, nunca un error.
+ * Si cambia una clave o una paleta en `tweaks-context.tsx`, se cambia acá también.
+ * La paleta del server es un valor del enum; igual pasa por la lista y por `JSON.stringify` (no se concatena texto
+ * libre dentro de un <script>). `<html>` necesita `suppressHydrationWarning` en el root: este script le agrega el
+ * atributo antes de que React hidrate.
+ */
+const PALETTE_VALUES: readonly Palette[] = ["sky", "mint", "coral", "violet"];
+
+function paletteScript(serverPalette: Palette | null | undefined): string {
+  const server = serverPalette && PALETTE_VALUES.includes(serverPalette) ? serverPalette : null;
+  return (
+    "(function(){var P=" +
+    JSON.stringify(PALETTE_VALUES) +
+    ";var p=" +
+    JSON.stringify(server) +
+    ';if(!p){try{var r=JSON.parse(window.localStorage.getItem("kinesoft:tweaks")||"null");' +
+    "if(r&&P.indexOf(r.palette)>=0)p=r.palette}catch(e){}}" +
+    'try{document.documentElement.setAttribute("data-palette",p||"sky")}catch(e){}})();'
   );
 }
