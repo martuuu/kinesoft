@@ -1,4 +1,12 @@
-import { PrismaClient, type Role, type RoomKind, type TenantPlan, type TenantStatus, type TenantVertical } from "@prisma/client";
+import {
+  PrismaClient,
+  type Role,
+  type RoomKind,
+  type SaasPlan,
+  type TenantPlan,
+  type TenantStatus,
+  type TenantVertical,
+} from "@prisma/client";
 
 /**
  * Ephemeral-tenant factory for integration tests (.docs/TESTING.md capa 3).
@@ -105,6 +113,22 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
   ]);
   await db.supportSession.deleteMany({ where: { tenantId } });
   await db.tenantSlugAlias.deleteMany({ where: { tenantId } });
+  // PL-0 (M8 pl_accounts_billing): cobros y mensajes son RESTRICT hacia Tenant (la
+  // plata y los hilos no se borran en cascada). Orden por FK: pagos → cargos
+  // (FK compuesta RESTRICT) → suscripción; mensajes (RESTRICT al hilo) → marcas de
+  // leído (cascadean igual; explícito para que un fallo tire) → hilos.
+  // UserSecurityEvent no tiene FK pero es solo inserción (trigger): se limpia en
+  // modo réplica como PlatformAuditEvent.
+  await db.saasPayment.deleteMany({ where: { tenantId } });
+  await db.saasCharge.deleteMany({ where: { tenantId } });
+  await db.saasSubscription.deleteMany({ where: { tenantId } });
+  await db.supportMessage.deleteMany({ where: { OR: [{ tenantId }, { thread: { tenantId } }] } });
+  await db.supportThreadRead.deleteMany({ where: { tenantId } });
+  await db.supportThread.deleteMany({ where: { tenantId } });
+  await db.$transaction([
+    db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+    db.$executeRaw`DELETE FROM "UserSecurityEvent" WHERE "tenantId" = ${tenantId}`,
+  ]);
   // Membership, Practitioner, Insurer, Invitation, custom Condition/Exercise,
   // Favorite and PlanTemplate cascade from Tenant.
   // SR M4: Location → Room → TimeBlock cascadean; PractitionerSchedule → Room es
@@ -130,6 +154,12 @@ export async function deleteTenantDeep(db: PrismaClient, tenantId: string): Prom
       // además fue superadmin de soporte en OTRO tenant de test se lleva sus sesiones.
       await db.supportSession.deleteMany({ where: { superadminId: { in: removable } } });
       await db.userPreferences.deleteMany({ where: { userId: { in: removable } } });
+      // PL-0 (M8): TwoFactorChallenge/RecoveryCode y SupportThreadRead cascadean del
+      // perfil; UserSecurityEvent no tiene FK y es solo inserción (modo réplica).
+      await db.$transaction([
+        db.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+        db.$executeRaw`DELETE FROM "UserSecurityEvent" WHERE "userId" = ANY(${removable})`,
+      ]);
       await db.userProfile.deleteMany({ where: { id: { in: removable } } });
     }
   }
@@ -144,6 +174,18 @@ export async function createEphemeralTenant(
     vertical?: TenantVertical;
     /** Sin valor → default de la base (FREE). */
     plan?: TenantPlan;
+    /**
+     * PL-0 (M8): plan nuevo. Sin valor → default de la base (INDIVIDUAL). La factory NO
+     * espeja `plan`↔`saasPlan` (eso es del escritor único, PL-1a): el test que necesite
+     * los dos coherentes pasa los dos.
+     */
+    saasPlan?: SaasPlan;
+    /**
+     * PL-0 (M8, decisión 20): en la base el profesional nace FUERA del turnero (opt-in),
+     * pero los tests previos asumen que aparece (M8 backfilleó true a los existentes):
+     * la factory lo prende salvo que se pida `false`, como `publicBookingEnabled`.
+     */
+    practitionerPublicBooking?: boolean;
     /**
      * EV0 (M2): en la base el turnero nace APAGADO (opt-in, EV-D2), pero los
      * tests de antes de EV0 (turnero, webhook MP) asumen que la reserva pública
@@ -169,6 +211,7 @@ export async function createEphemeralTenant(
       sharedPatientView: opts.sharedPatientView ?? false,
       vertical: opts.vertical,
       plan: opts.plan,
+      saasPlan: opts.saasPlan,
       publicBookingEnabled: opts.publicBookingEnabled ?? true,
       // Como el backfill de tenant_onboarding: los tenants de test ya "terminaron" el alta.
       onboardingCompletedAt: new Date(),
@@ -186,7 +229,12 @@ export async function createEphemeralTenant(
     },
   });
   const practitioner = await prisma.practitioner.create({
-    data: { tenantId: tenant.id, userId, specialty: "Test" },
+    data: {
+      tenantId: tenant.id,
+      userId,
+      specialty: "Test",
+      publicBookingEnabled: opts.practitionerPublicBooking ?? true,
+    },
   });
   await prisma.membership.create({
     data: { userId, tenantId: tenant.id, role: opts.role ?? "OWNER", acceptedAt: new Date() },
@@ -225,7 +273,10 @@ export async function addPractitioner(
   const s = uniqueSuffix();
   const userId = `test-user-${s}`;
   await prisma.userProfile.create({ data: { id: userId, email: `${userId}@test.local`, fullName: `Kine ${s}` } });
-  const p = await prisma.practitioner.create({ data: { tenantId: t.tenantId, userId, specialty: "Test" } });
+  // PL-0 (M8): prendido en el turnero como el titular de la factory (ver createEphemeralTenant).
+  const p = await prisma.practitioner.create({
+    data: { tenantId: t.tenantId, userId, specialty: "Test", publicBookingEnabled: true },
+  });
   await prisma.membership.create({ data: { userId, tenantId: t.tenantId, role, acceptedAt: new Date() } });
   return { userId, practitionerId: p.id };
 }

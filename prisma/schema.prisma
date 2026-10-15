@@ -67,6 +67,17 @@ model Tenant {
   statusReason                String?
   subscriptionStatusChangedAt DateTime?
   seatLimitOverride           Int?
+  // PL-0 (M8 pl_accounts_billing, §20.5.1, PL-D1): plan NUEVO. `plan` (TenantPlan)
+  // queda como espejo legado para el código viejo y el rollback; el escritor único
+  // escribe `saasPlan` y espeja `plan` (LEGACY_PLAN_OF). Backfill PL-D2:
+  // FREE→INDIVIDUAL, STARTER→CONSULTORIO, PRO→CLINICA, ENTERPRISE→LIBRE.
+  saasPlan                    SaasPlan @default(INDIVIDUAL)
+  // M8: cupos a medida (Libre y excepciones). NULL = el límite de SaasPlanConfig.
+  // CHECKs en la base (drift aceptado): usuarios ≥ 1, por tipo ≥ 0.
+  // maxProfessionalsOverride se backfilleó desde seatLimitOverride.
+  maxUsersOverride            Int?
+  maxProfessionalsOverride    Int?
+  maxStaffOverride            Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -106,8 +117,23 @@ model Tenant {
   platformAuditEvents     PlatformAuditEvent[]
   supportSessions         SupportSession[]
   slugAliases             TenantSlugAlias[]
+  // PL-0 (M8 pl_accounts_billing)
+  saasSubscription        SaasSubscription?
+  saasCharges             SaasCharge[]
+  saasPayments            SaasPayment[]
+  supportThreads          SupportThread[]
 
   @@index([slug])
+}
+
+// PL-0 (M8, PL-D1/PL-D3): planes SaaS nuevos. Límites y precio en SaasPlanConfig.
+// Individual 1 usuario · Consultorio 5 (≤4 profesionales + ≤1 no clínico) ·
+// Clínica 10 de cualquier tipo · Libre por override (lo elige solo Plataforma).
+enum SaasPlan {
+  INDIVIDUAL
+  CONSULTORIO
+  CLINICA
+  LIBRE
 }
 
 // EV0 (M2 tenant_verticals, 07-oct): el plan solo cambia módulos en la vertical
@@ -152,6 +178,11 @@ model UserProfile {
   // Platform superadmin (cross-tenant): authors the global exercise catalog +
   // the "Plataforma" owner panel. Orthogonal to the tenant-scoped Role enum.
   isPlatformAdmin Boolean     @default(false)
+  // PL-0 (M8): métodos de 2FA prendidos (C-PL6). El secreto TOTP vive en Supabase
+  // MFA; acá solo si está prendido. Los escribe solo el server (lib/two-factor*).
+  twoFactorEmail     Boolean   @default(false)
+  twoFactorTotp      Boolean   @default(false)
+  twoFactorUpdatedAt DateTime?
   // BO0 (M7): deshabilitado a nivel PLATAFORMA (todas sus membresías y el portal);
   // distinto de Membership.disabledAt (suspensión dentro de un consultorio, M6).
   disabledAt     DateTime?
@@ -170,6 +201,10 @@ model UserProfile {
   customConditionsCreated Condition[] @relation("CustomConditionAuthor")
   // BO0 (M7): sesiones de soporte que abrió este superadmin.
   supportSessions SupportSession[]
+  // PL-0 (M8): 2FA y marcas de leído de mensajes.
+  twoFactorChallenges    TwoFactorChallenge[]
+  twoFactorRecoveryCodes TwoFactorRecoveryCode[]
+  supportThreadReads     SupportThreadRead[]
 }
 
 model Membership {
@@ -183,6 +218,15 @@ model Membership {
   // entra ni es reservable (`isUsableMembership`, `bookablePractitionerWhere`).
   disabledAt   DateTime?
   disabledById String?   // UserProfile id de quien suspendió (sin FK: historia)
+  // PL-0 (M8, C-PL5): el Titular/Admin puede NO atender (PL-D4: sin clinical.read);
+  // grantSettings = «Configuración» delegada (PL-D5; los ADMIN existentes quedaron
+  // en true); grantBilling = «Planes y pagos». disabledReason: MANUAL |
+  // PLAN_DOWNGRADE | PLATFORM (CHECK en la base, drift aceptado; subir de plan
+  // reactiva solo a los PLAN_DOWNGRADE). Backfill: ASSISTANT/BILLING clinical=false.
+  clinical       Boolean @default(true)
+  grantSettings  Boolean @default(false)
+  grantBilling   Boolean @default(false)
+  disabledReason String?
 
   user   UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -214,6 +258,10 @@ model Practitioner {
   bio           String?
   rating        Float?
   yearsExp      Int?
+  // PL-0 (M8, decisión 20 de Martin, §20.5.12): aparece en el turnero público solo
+  // si el consultorio lo tiene prendido Y este flag Y ≥ 1 servicio PUBLIC. Nace
+  // apagado (opt-in); M8 lo backfilleó en true para los profesionales existentes.
+  publicBookingEnabled Boolean @default(false)
   createdAt     DateTime @default(now())
 
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -569,6 +617,296 @@ model TenantSlugAlias {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// PL-0 (M8 pl_accounts_billing, plan §20.5.1): planes, cobros, mensajes y 2FA.
+// En la base y NO en Prisma (drift aceptado; NO borrar si `migrate dev` lo
+// propone): todos los CHECK `<Tabla>_<algo>_check`, el índice PARCIAL único
+// "TwoFactorChallenge_one_open", las funciones kinesoft_append_only() y
+// saas_plan_price_change_guard() con sus triggers, ENABLE/FORCE y las policies.
+// ═════════════════════════════════════════════════════════════════════
+
+// Catálogo de los 4 planes. GLOBAL_READONLY: la app lo lee (catálogo público,
+// cupos), lo escribe solo Plataforma por el canal service. Precio en centavos ARS;
+// NULL = «Consultá» (PL-D19). Límites NULL = sin límite.
+model SaasPlanConfig {
+  plan             SaasPlan @id
+  label            String
+  priceCents       Int?
+  maxUsers         Int?
+  maxProfessionals Int?
+  maxStaff         Int?
+  trialDays        Int      @default(0)
+  isPublic         Boolean  @default(true)
+  sortOrder        Int      @default(0)
+  updatedAt        DateTime @default(now()) @updatedAt
+  updatedById      String? // superadmin; sin FK (historia)
+
+  priceChanges SaasPlanPriceChange[]
+}
+
+// Historial de precios con vigencia (PL-D8). SERVICE_ONLY. Solo inserción por
+// trigger, salvo `appliedAt` NULL → valor (el cron marca que lo aplicó).
+model SaasPlanPriceChange {
+  id                 String    @id @default(cuid())
+  plan               SaasPlan
+  priceCents         Int? // NULL = vuelve a «Consultá»
+  previousPriceCents Int?
+  effectiveFrom      DateTime
+  appliedAt          DateTime?
+  note               String?
+  createdById        String? // superadmin; sin FK (historia)
+  createdAt          DateTime  @default(now())
+
+  config SaasPlanConfig @relation(fields: [plan], references: [plan], onDelete: Restrict)
+
+  @@index([plan, effectiveFrom])
+  @@index([appliedAt, effectiveFrom])
+}
+
+enum SaasChargeStatus {
+  OPEN
+  PAID
+  VOID
+  WAIVED
+}
+
+enum SaasPaymentSource {
+  MP_AUTO // débito automático (preapproval de MP)
+  MP_CHECKOUT // «Pagar con MP» un cargo puntual (PL-D17)
+  MANUAL // transferencia con comprobante o carga de Plataforma
+}
+
+enum SaasPaymentStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+// Una por consultorio. TENANT_READONLY: el consultorio la lee; escribe solo el
+// canal service (lib/saas-billing-internal.ts).
+model SaasSubscription {
+  tenantId                 String    @id
+  customPriceCents         Int? // NULL = el precio del plan
+  anchorDay                Int       @default(1) // 1..28 (CHECK)
+  nextChargeAt             DateTime?
+  autoDebitAllowed         Boolean   @default(false) // lo habilita Plataforma
+  autoDebitEnabled         Boolean   @default(false)
+  mpPreapprovalId          String?   @unique
+  mpPreapprovalStatus      String?
+  mpPayerEmail             String?
+  mpPreapprovalAmountCents Int?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @default(now()) @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([nextChargeAt])
+}
+
+// Un cargo por consultorio y período (UNIQUE: el cron es idempotente). Períodos en
+// fechas civiles (DATE). TENANT_READONLY. RESTRICT hacia Tenant: la plata no se
+// borra en cascada.
+model SaasCharge {
+  id                     String           @id @default(cuid())
+  tenantId               String
+  plan                   SaasPlan // foto del plan al generar el cargo
+  periodStart            DateTime         @db.Date
+  periodEnd              DateTime         @db.Date
+  dueDate                DateTime         @db.Date
+  amountCents            Int
+  status                 SaasChargeStatus @default(OPEN)
+  paidAt                 DateTime? // obligatorio si PAID (CHECK)
+  statusChangedAt        DateTime?
+  statusChangedById      String? // superadmin; sin FK (historia)
+  note                   String?
+  mpCheckoutPreferenceId String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @default(now()) @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  payments SaasPayment[]
+
+  @@unique([tenantId, periodStart])
+  @@unique([id, tenantId])
+  @@index([status, dueDate])
+}
+
+// Pagos (MP_AUTO / MP_CHECKOUT / MANUAL). Ids de MP únicos = webhook idempotente.
+// FK compuesta (chargeId, tenantId): el cargo es del mismo consultorio. CHECKs:
+// MANUAL sin ids de MP, MP con al menos uno; comprobante completo o nada (PDF/JPG/
+// PNG/WEBP ≤ 4 MB). TENANT_READONLY.
+model SaasPayment {
+  id                    String            @id @default(cuid())
+  tenantId              String
+  chargeId              String?
+  source                SaasPaymentSource
+  status                SaasPaymentStatus
+  amountCents           Int
+  paidAt                DateTime?
+  mpPaymentId           String?           @unique
+  mpAuthorizedPaymentId String?           @unique
+  mpStatus              String?
+  receiptPath           String? // bucket privado
+  receiptMimeType       String?
+  receiptSizeBytes      Int?
+  note                  String?
+  submittedById         String? // UserProfile ids; sin FK (historia)
+  reviewedById          String?
+  reviewedAt            DateTime?
+  reviewNote            String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @default(now()) @updatedAt
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  charge SaasCharge? @relation(fields: [chargeId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([chargeId])
+  @@index([status, createdAt])
+}
+
+enum SupportThreadKind {
+  TENANT // de un consultorio (tenantId)
+  LEAD // de la web pública, sin consultorio
+}
+
+enum SupportThreadStatus {
+  OPEN
+  CLOSED
+}
+
+enum SupportAuthorKind {
+  TENANT
+  PLATFORM
+  LEAD
+}
+
+// Mensajes con Plataforma (C-PL11). RLS de tenant: SELECT por consultorio e INSERT
+// solo kind TENANT (los leads, tenantId NULL, son invisibles para la app). Sin
+// UPDATE/DELETE por la app: cerrar y `platformReadAt` van por el canal service.
+// CHECK de coherencia kind/tenant/lead y de subject (1..200).
+model SupportThread {
+  id               String              @id @default(cuid())
+  kind             SupportThreadKind
+  tenantId         String?
+  subject          String
+  status           SupportThreadStatus @default(OPEN)
+  createdById      String? // sin FK (historia)
+  leadName         String?
+  leadEmail        String?
+  leadPhone        String?
+  leadClinicName   String?
+  leadPlanInterest SaasPlan?
+  platformReadAt   DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @default(now()) @updatedAt
+
+  tenant         Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  messages       SupportMessage[]    @relation("SupportMessageThread")
+  tenantMessages SupportMessage[]    @relation("SupportMessageThreadTenant")
+  reads          SupportThreadRead[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@index([leadEmail, createdAt])
+}
+
+// INSERT por la app solo con authorKind TENANT: no se puede forjar una respuesta de
+// Plataforma. body 1..5000 (CHECK). Dos FKs al hilo: la simple (siempre) y la
+// compuesta con tenantId (el hilo es del mismo consultorio; MATCH SIMPLE, los
+// mensajes de lead la saltean).
+model SupportMessage {
+  id           String            @id @default(cuid())
+  threadId     String
+  tenantId     String?
+  authorKind   SupportAuthorKind
+  authorUserId String? // sin FK (historia); NULL para LEAD
+  body         String
+  createdAt    DateTime          @default(now())
+
+  thread         SupportThread  @relation("SupportMessageThread", fields: [threadId], references: [id], onDelete: Restrict)
+  threadOfTenant SupportThread? @relation("SupportMessageThreadTenant", fields: [threadId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@index([threadId, createdAt])
+  @@index([tenantId])
+}
+
+// Marca de leído del CONSULTORIO por usuario (markSupportThreadRead hace upsert).
+// Tabla aparte para no abrirle el UPDATE de SupportThread a la app. RLS normal de
+// tenant (`_tenant_isolation`).
+model SupportThreadRead {
+  threadId String
+  userId   String
+  tenantId String
+  readAt   DateTime @default(now())
+
+  thread SupportThread @relation(fields: [threadId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  user   UserProfile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([threadId, userId])
+  @@index([tenantId, userId])
+}
+
+enum TwoFactorPurpose {
+  LOGIN
+  STEP_UP
+  ENROLL_EMAIL
+}
+
+// Código de 2FA por email (C-PL6). SERVICE_ONLY. Atado a la sesión de Supabase.
+// Índice PARCIAL único "TwoFactorChallenge_one_open" (userId, purpose, sessionId)
+// WHERE closedAt IS NULL: pedir otro código cierra el anterior (REPLACED) en la
+// misma tx. closedReason: VERIFIED | EXPIRED | LOCKED | REPLACED (CHECK).
+model TwoFactorChallenge {
+  id           String           @id @default(cuid())
+  userId       String
+  purpose      TwoFactorPurpose
+  sessionId    String
+  codeHash     String
+  expiresAt    DateTime
+  attempts     Int              @default(0)
+  closedAt     DateTime?
+  closedReason String?
+  createdAt    DateTime         @default(now())
+
+  user UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// Códigos de recuperación (10, hash; PL-D12). SERVICE_ONLY.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+}
+
+// Registro de seguridad de la cuenta. SERVICE_ONLY y SOLO INSERCIÓN (trigger, también
+// para el owner). userId/tenantId sin FK a propósito: sobrevive al usuario y al
+// consultorio.
+model UserSecurityEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  tenantId  String?
+  kind      String
+  payload   Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model EmergencyContact {

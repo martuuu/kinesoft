@@ -52,7 +52,7 @@ ES4 → PF (M10) → DIR (M11). (El «reset + deploy único» del 13-oct no se h
 | `20261013120000_reception_call_realtime` (**M5**) | SV (ola SV0, sola) | **escrita y aplicada solo en el Docker local (13-oct), commiteada (`d70513a`)**. sha256 de `migration.sql` = `bb2aac28b8cf3ec331c93e0f9b1b8cd052dc50b521095febfaa768a40b3db2af`. Aditiva, sin backfill, `lock_timeout` 5 s: `Booking.calledAt TIMESTAMP(3) NULL` (estado «Llamado» de la Sala de Espera) con CHECK `Booking_called_requires_arrived_check` (`calledAt` exige `arrivedAt`); función pura `public.kinesoft_realtime_can_read(topic text, claims jsonb)` (IMMUTABLE, STRICT, PARALLEL SAFE, INVOKER, `search_path=''`, EXECUTE a `PUBLIC`: ningún GRANT a los roles de la Data API, guard 3c verde); bloque **guardado** (marcadores `REALTIME_POLICY`) que crea la policy `kinesoft_agenda_read` FOR SELECT a `authenticated` sobre `realtime.messages` (solo `extension='broadcast'`, sin policy INSERT: ningún cliente publica). En local no existe `realtime.messages` → NOTICE + no-op (0 policies en `realtime`). CHECK, función y policy **no** están en Prisma: drift aceptado, no se borran si `migrate dev` lo propone. Verificada objeto por objeto (psql + `tests/integration/reception-call-m5.test.ts`, 2 roles, con tabla de verdad del predicado y stubs de Supabase en ROLLBACK); `migrate status` al día (32); `guard:isolation` OK. Orden para prod abajo («M5») |
 | `20261014120000_identity_access` (**M6**) | IAM-1 (sola) | **escrita y aplicada solo en el Docker local (14-oct), commiteada (`972359f`)**; el SQL no se toca. sha256 de `migration.sql` = `c217390839dbf619454cc3c3aef5d0c2e484d319ce18bd1d81cadbe3baef0773`. `lock_timeout` 5 s, con prechequeo interno (marcadores `PRECHECK`) que aborta si hay pares `(tenantId, userId)` repetidos en `Practitioner`. Objetos: único `Practitioner_tenantId_userId_key`, **DROP de `Practitioner_userId_key`** (única excepción a «aditiva», aprobada por Martin el 14-oct, IAM-D2; precedente M1) e índice `Practitioner_userId_idx`; `Membership.disabledAt/disabledById` (nullables); `Invitation.revokedAt/revokedById/acceptedByUserId/lastSentAt` (nullables), `sendCount INT NOT NULL DEFAULT 0`, `priorTokens TEXT[] NOT NULL DEFAULT '{}'`; tabla `EmailLog` (tenantId nullable, FK a Tenant CASCADE, índices `(tenantId, createdAt)` y `(entity, entityId, createdAt)`, CHECK `EmailLog_status_check` sent/skipped/failed/blocked, RLS ENABLE + FORCE + `EmailLog_tenant_isolation`, sin GRANT: DEFAULT PRIVILEGES). CHECK y policy no están en Prisma: drift aceptado. Verificada objeto por objeto (psql + `tests/integration/identity-m6.test.ts` y bloque EmailLog de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (33); `guard:isolation` OK. Orden para prod abajo («M6») |
 | `20261015120000_platform_backoffice` (**M7**) | BO0 (sola) | **escrita y aplicada solo en el Docker local (14-oct), commiteada (`a02137e`)**; el SQL no se toca. sha256 de `migration.sql` = `ba463441be7235e4274e0e2bf30a7dde0757470b8204b6ae763d8735c625fa9a`. Aditiva, sin backfill, `lock_timeout` 5 s. Objetos: enums `TenantStatus` (ACTIVE/SUSPENDED/CLOSED) y `SupportScope` (ADMIN_CONFIG); `Tenant.status` (NOT NULL default ACTIVE), `statusChangedAt`, `statusReason`, `subscriptionStatusChangedAt`, `seatLimitOverride` (CHECK `Tenant_seatLimitOverride_check`: NULL o ≥ 1); `UserProfile.disabledAt/disabledReason`; tabla `PlatformAuditEvent` (tenantId nullable, FK a Tenant RESTRICT, único `idempotencyKey`, índices `(createdAt DESC, id)`, `(tenantId, createdAt)`, `(actorId, createdAt)`, `(targetUserId, createdAt)`, función `platform_audit_event_append_only()` + triggers `PlatformAuditEvent_append_only` (UPDATE/DELETE) y `PlatformAuditEvent_no_truncate`, RLS ENABLE + FORCE **sin policies**); tabla `SupportSession` (**sin vencimiento**, FKs a Tenant y UserProfile RESTRICT, CHECK `SupportSession_reason_check` 10-500, índice **parcial** único `SupportSession_one_open_per_superadmin`, índices `(tenantId, startedAt)` y `(superadminId, startedAt)`, RLS ENABLE + FORCE + policy `SupportSession_tenant_read` FOR SELECT); tabla `TenantSlugAlias` (PK slug, FK RESTRICT, índice por tenant, RLS ENABLE + FORCE sin policies). Sin GRANT: DEFAULT PRIVILEGES. CHECKs, parcial, triggers y RLS no están en Prisma: drift aceptado (`migrate diff` no propone nada de M7). Verificada objeto por objeto (psql + `tests/integration/platform-backoffice-m7.test.ts` y bloque «RLS plataforma» de `rls-isolation.test.ts`, 2 roles); `migrate status` al día (34); `guard:isolation` OK (categorías nuevas SERVICE_ONLY / TENANT_READONLY). Orden para prod abajo («M7») |
-| `<ts>_pl_accounts_billing` (**M8**) | PL-0 (sola) | **pendiente, se escribe en su ola** (§20.5.1 del plan). Aditiva, `lock_timeout` 5 s: enum `SaasPlan` + `Tenant.saasPlan` con backfill, overrides de cupos, `Membership.clinical/grantSettings/grantBilling/disabledReason`, `SaasPlanConfig`, cobros (`SaasSubscription`, `SaasCharge`, `SaasPayment`), mensajes, 2FA, `Practitioner.publicBookingEnabled` (backfill `true`). Precheck: distribución de planes y consultorios que usan salas o sala de espera |
+| `20261015180000_pl_accounts_billing` (**M8**) | PL-0 (sola) | **escrita y aplicada solo en el Docker local (15-oct), sin commitear al escribir esto**. sha256 de `migration.sql` = `b9953128eff790f5b010f51f2a578a610dd6b3e75af63c6403c0449314916658`. Aditiva (expand), una tx, `lock_timeout` 5 s, con backfill en la misma tx (sin tocar `updatedAt`). Objetos: enums `SaasPlan` (INDIVIDUAL/CONSULTORIO/CLINICA/LIBRE), `SaasChargeStatus`, `SaasPaymentSource`, `SaasPaymentStatus`, `SupportThreadKind`, `SupportThreadStatus`, `SupportAuthorKind`, `TwoFactorPurpose`; `Tenant.saasPlan` (NOT NULL default INDIVIDUAL; backfill FREE→INDIVIDUAL, STARTER→CONSULTORIO, PRO→CLINICA, ENTERPRISE→LIBRE) + `maxUsersOverride` (CHECK ≥ 1) / `maxProfessionalsOverride` (≥ 0, backfill = `seatLimitOverride`) / `maxStaffOverride` (≥ 0); `Membership.clinical` (default true; backfill ASSISTANT/BILLING false), `grantSettings` (backfill ADMIN true), `grantBilling`, `disabledReason` (CHECK MANUAL/PLAN_DOWNGRADE/PLATFORM; backfill MANUAL donde `disabledAt` no es NULL); `Practitioner.publicBookingEnabled` (default **false**, backfill **true** a todos los existentes, decisión 20); `UserProfile.twoFactorEmail/twoFactorTotp/twoFactorUpdatedAt`; `SaasPlanConfig` (PK plan, 4 filas, precios NULL; **GLOBAL_READONLY**); `SaasPlanPriceChange` (FK a SaasPlanConfig, trigger `SaasPlanPriceChange_guard` solo inserción salvo `appliedAt` NULL→valor + `_no_truncate`; **SERVICE_ONLY**); `SaasSubscription` (PK tenantId), `SaasCharge` (únicos `(tenantId, periodStart)` e `(id, tenantId)`), `SaasPayment` (FK compuesta `(chargeId, tenantId)`, únicos `mpPaymentId` y `mpAuthorizedPaymentId`, CHECKs de origen MP/MANUAL y de comprobante) — las tres **TENANT_READONLY**, FKs a Tenant RESTRICT; `SupportThread` (CHECKs de kind/lead y asunto 1..200, único `(id, tenantId)`, policies SELECT por tenant + INSERT solo `kind='TENANT'`), `SupportMessage` (cuerpo 1..5000, CHECK de autor, FK simple al hilo + compuesta `(threadId, tenantId)`, policies SELECT + INSERT solo `authorKind='TENANT'`), `SupportThreadRead` (marca de leído por usuario, `_tenant_isolation`); `TwoFactorChallenge` (índice **parcial** único `TwoFactorChallenge_one_open` `(userId, purpose, sessionId) WHERE closedAt IS NULL`), `TwoFactorRecoveryCode`, `UserSecurityEvent` (triggers `_append_only` y `_no_truncate` con `kinesoft_append_only()`) — **SERVICE_ONLY**. Sin GRANT: DEFAULT PRIVILEGES. CHECKs, parcial, funciones, triggers y RLS no están en Prisma: drift aceptado (`migrate diff` no propone nada de M8). Verificada objeto por objeto (psql + `tests/integration/pl-m8.test.ts`, 2 roles); `migrate status` al día (35); `guard:isolation` OK. Orden para prod abajo («M8») |
 | `<ts>_clinical_notes` (**M9**) | EV2-0 (sola) | **pendiente, se escribe en su ola** (§20.6). `ClinicalNote` + `ClinicalNoteRevision` (RLS, trigger sin DELETE/TRUNCATE), uniques compuestos en `Booking`/`Practitioner` con `lock_timeout`. Precheck `SELECT version()` (PG ≥ 13) |
 | `<ts>_perf_fk_indexes` (**M10**) | PF-M (sola) | **pendiente, se escribe en su ola** (§20.9). `CREATE INDEX IF NOT EXISTS` sobre FKs sin índice; sin `CONCURRENTLY` (tablas chicas), documentado |
 | `<ts>_public_directory` (**M11**) | DIR-1 (sola) | **pendiente, se escribe en su ola** (§20.10). Aditiva: `Tenant.directoryListed*`, `publicDescription`, `ProfessionalPublicProfile` (RLS); `DIRECTORY_MODE=off` por default |
@@ -213,6 +213,84 @@ sobre la base viva:
 6. **No se puede limpiar a mano** `PlatformAuditEvent`: el trigger rechaza UPDATE/DELETE/TRUNCATE también al owner, y
    las FKs RESTRICT impiden borrar un consultorio con registro de plataforma, alias o sesiones de soporte (la baja es
    `status = CLOSED`). Es a propósito.
+
+**M8 en prod (PL-0).** Igual que M6/M7: prod conserva sus datos, sin reset y **sin staging**. Va **el mismo día que el
+deploy de PL-1** (no antes con días de margen): entre M8 y ese deploy, un cambio de plan hecho por el código viejo no se
+refleja en `saasPlan`, y un profesional creado por el código viejo nace con `publicBookingEnabled = false` (fuera del
+turnero). El postcheck (paso 4) lo detecta.
+1. Precheck de solo lectura (anotar los resultados):
+   ```sql
+   -- (a) todavía no aplicada: NULL | NULL | NULL y 0 filas; M7 ya aplicada: 1 fila
+   SELECT to_regclass('public."SaasPlanConfig"'), to_regclass('public."SaasPayment"'), to_regclass('public."TwoFactorChallenge"');
+   SELECT typname FROM pg_type WHERE typname IN ('SaasPlan','TwoFactorPurpose');
+   SELECT migration_name FROM _prisma_migrations WHERE migration_name = '20261015120000_platform_backoffice' AND finished_at IS NOT NULL;
+   -- (b) distribución de planes y estados (lo que va a quedar en saasPlan: FREE→INDIVIDUAL, STARTER→CONSULTORIO,
+   --     PRO→CLINICA, ENTERPRISE→LIBRE)
+   SELECT plan, "subscriptionStatus", count(*) FROM "Tenant" GROUP BY 1, 2 ORDER BY 1, 2;
+   -- (c) consultorios que USAN salas o la sala de espera («Llamar») y que con el plan mapeado quedarían SIN Clínica
+   --     (PL-D6/PL-D7: las salas «duermen», la sala de espera se oculta). Martin los sube a Clínica/Libre desde
+   --     /plataforma después del deploy de PL-1 (o decide dejarlos).
+   SELECT t.id, t.name, t.plan,
+          (SELECT count(*) FROM "Room" r WHERE r."tenantId" = t.id AND r.active) AS salas_activas,
+          (SELECT count(*) FROM "Booking" b WHERE b."tenantId" = t.id AND b."roomId" IS NOT NULL) AS turnos_con_sala,
+          (SELECT count(*) FROM "Booking" b WHERE b."tenantId" = t.id AND b."calledAt" IS NOT NULL) AS turnos_llamados
+     FROM "Tenant" t
+    WHERE t.plan IN ('FREE', 'STARTER')
+      AND (EXISTS (SELECT 1 FROM "Room" r WHERE r."tenantId" = t.id AND r.active)
+        OR EXISTS (SELECT 1 FROM "Booking" b WHERE b."tenantId" = t.id AND (b."roomId" IS NOT NULL OR b."calledAt" IS NOT NULL)));
+   -- (d) membresías activas por rol vs los límites nuevos (Individual 1 · Consultorio 5 = ≤4 clínicos + ≤1 no clínico ·
+   --     Clínica 10). Excederse NO saca a nadie (M8 no deshabilita); solo frena invitar/subir. Revisar el cliente vivo.
+   SELECT t.id, t.name, t.plan,
+          count(*) FILTER (WHERE m.role IN ('OWNER','ADMIN','PRACTITIONER')) AS clinicos,
+          count(*) FILTER (WHERE m.role IN ('ASSISTANT','BILLING')) AS no_clinicos,
+          count(*) AS total
+     FROM "Tenant" t JOIN "Membership" m ON m."tenantId" = t.id AND m."disabledAt" IS NULL
+    GROUP BY t.id, t.name, t.plan ORDER BY total DESC;
+   -- (e) overrides a medida que pasan a maxProfessionalsOverride
+   SELECT id, name, plan, "seatLimitOverride" FROM "Tenant" WHERE "seatLimitOverride" IS NOT NULL;
+   -- (f) membresías deshabilitadas (quedan con disabledReason = 'MANUAL') y profesionales (quedan en el turnero)
+   SELECT count(*) FROM "Membership" WHERE "disabledAt" IS NOT NULL;
+   SELECT count(*) FROM "Practitioner";
+   ```
+2. Backup (`npm run db:prod:backup`).
+3. `npm run db:prod:deploy` y `npm run db:prod:status` → "Database schema is up to date!". Inmediatamente después, el
+   deploy de PL-1 (merge a `main`; si se mergea sin aplicarla a mano, el build de Production la aplica antes de servir).
+4. Postcheck (solo lectura):
+   ```sql
+   -- backfill: 0 filas incoherentes en las tres
+   SELECT count(*) FROM "Tenant" WHERE "saasPlan"::text <> CASE plan WHEN 'FREE' THEN 'INDIVIDUAL' WHEN 'STARTER' THEN 'CONSULTORIO'
+     WHEN 'PRO' THEN 'CLINICA' WHEN 'ENTERPRISE' THEN 'LIBRE' END;                                          -- 0 (antes del deploy de PL-1)
+   SELECT count(*) FROM "Tenant" WHERE "seatLimitOverride" IS DISTINCT FROM "maxProfessionalsOverride";     -- 0
+   SELECT role, clinical, "grantSettings", count(*) FROM "Membership" GROUP BY 1, 2, 3 ORDER BY 1;
+   --   ASSISTANT/BILLING → clinical f; ADMIN → grantSettings t; el resto clinical t, grantSettings f
+   SELECT count(*) FROM "Membership" WHERE "disabledAt" IS NOT NULL AND "disabledReason" IS DISTINCT FROM 'MANUAL'; -- 0
+   SELECT count(*) FROM "Practitioner" WHERE NOT "publicBookingEnabled";                                    -- 0 justo después;
+   --   si da > 0 después del deploy: profesionales creados por el código viejo en la ventana → revisar y prender a mano
+   --   desde Configuración (o UPDATE puntual por id, con backup)
+   SELECT plan, label, "priceCents", "maxUsers", "maxProfessionals", "maxStaff", "trialDays" FROM "SaasPlanConfig" ORDER BY "sortOrder";
+   --   4 filas, precios NULL; INDIVIDUAL 1/1/1/14 · CONSULTORIO 5/4/1/0 · CLINICA 10/–/–/0 · LIBRE –/–/–/0
+   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('SaasPlanConfig','SaasPlanPriceChange',
+     'SaasSubscription','SaasCharge','SaasPayment','SupportThread','SupportMessage','SupportThreadRead','TwoFactorChallenge',
+     'TwoFactorRecoveryCode','UserSecurityEvent');                                                          -- 11 filas t | t
+   SELECT tablename, policyname, cmd FROM pg_policies WHERE tablename IN ('SaasPlanConfig','SaasPlanPriceChange','SaasSubscription',
+     'SaasCharge','SaasPayment','SupportThread','SupportMessage','SupportThreadRead','TwoFactorChallenge','TwoFactorRecoveryCode',
+     'UserSecurityEvent') ORDER BY 1, 2;
+   --   9 filas: SaasCharge/SaasPayment/SaasSubscription _tenant_read SELECT; SaasPlanConfig_read SELECT; SupportMessage y
+   --   SupportThread _tenant_insert INSERT + _tenant_read SELECT; SupportThreadRead_tenant_isolation ALL. Las 4 SERVICE_ONLY sin policies.
+   SELECT tgname, tgenabled FROM pg_trigger WHERE NOT tgisinternal
+     AND tgrelid IN ('public."SaasPlanPriceChange"'::regclass, 'public."UserSecurityEvent"'::regclass);       -- 4 filas, O
+   SELECT indexdef FROM pg_indexes WHERE indexname = 'TwoFactorChallenge_one_open';                         -- 1 fila, WHERE ("closedAt" IS NULL)
+   SELECT grantee FROM information_schema.role_table_grants WHERE grantee IN ('anon','authenticated')
+     AND table_name IN ('SaasPlanConfig','SaasPayment','SupportThread','TwoFactorChallenge','UserSecurityEvent'); -- 0 filas
+   ```
+   Repetir `has_table_privilege('kinesoft_app'|'kinesoft_service', …, 'SELECT,INSERT')` si esos roles existen (t).
+5. **Antes o después del código:** inmediatamente **antes** del deploy de PL-1 (el código nuevo lee las columnas y tablas
+   nuevas). Compatible hacia atrás: el código viejo no lee ni escribe nada nuevo. Los `ALTER TABLE` + backfill toman lock
+   sobre `Tenant`, `Membership`, `Practitioner` y `UserProfile` hasta el COMMIT (tablas chicas, milisegundos; `lock_timeout`
+   5 s → P3009 liviano si estuvieran tomadas: reintentar).
+6. **No se puede limpiar a mano** `SaasPlanPriceChange` ni `UserSecurityEvent` (triggers de solo inserción, también para el
+   owner), y las FKs RESTRICT impiden borrar un consultorio con cobros o mensajes. Es a propósito. M8 no se revierte
+   (aditiva); el DROP de `Tenant.plan`/`TenantPlan`/`seatLimitOverride` va en una migración posterior (contract).
 
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
@@ -448,6 +526,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 17 | `20261013120000_reception_call_realtime` | M5: `Booking.calledAt` (+ CHECK) + `kinesoft_realtime_can_read` + policy guardada de `realtime.messages` | SV — **ver «Go-live con reset»** |
 | 18 | `20261014120000_identity_access` | M6: `Practitioner` único por consultorio (DROP del único global, aprobado), `Membership.disabledAt`, campos de `Invitation`, tabla `EmailLog` con RLS | IAM-1 — **ver «M6 en prod»** |
 | 19 | `20261015120000_platform_backoffice` | M7: `Tenant.status` + fechas + `seatLimitOverride`, `UserProfile.disabledAt`, `PlatformAuditEvent` (solo inserción), `SupportSession` (sin vencimiento, parcial una abierta por superadmin), `TenantSlugAlias`; RLS service-only / tenant-readonly | BO0 — **ver «M7 en prod»** |
+| 20 | `20261015180000_pl_accounts_billing` | M8: `SaasPlan` + `Tenant.saasPlan` (backfill) y overrides de cupos, `Membership.clinical/grantSettings/grantBilling/disabledReason` (backfill), `Practitioner.publicBookingEnabled` (backfill true), `SaasPlanConfig` (4 filas), historial de precios, cobros (suscripción/cargos/pagos), mensajes, 2FA; RLS global-readonly / service-only / tenant-readonly | PL-0 — **ver «M8 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

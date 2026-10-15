@@ -11,6 +11,10 @@
  *   · acepta PlatformAuditEvent/TenantSlugAlias sin policies y SupportSession con solo SELECT;
  *   · sigue fallando ante una tabla con tenantId SIN policy que no esté en ninguna categoría;
  *   · falla si una SERVICE_ONLY gana una policy o pierde FORCE, o si la TENANT_READONLY gana una de escritura.
+ *
+ * PL-0 (M8 pl_accounts_billing) suma modelos a las tres categorías (el guard exige que cada uno exista en el
+ * schema, así que el repo de juguete los declara con su RLS): GLOBAL_READONLY `SaasPlanConfig`; SERVICE_ONLY
+ * `SaasPlanPriceChange` y las de 2FA (sin tenantId); TENANT_READONLY `SaasSubscription`/`SaasCharge`/`SaasPayment`.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -37,6 +41,30 @@ model TenantSlugAlias {
   tenantId String
 }
 model SupportSession {
+  id       String @id
+  tenantId String
+}
+model SaasPlanPriceChange {
+  id String @id
+}
+model TwoFactorChallenge {
+  id String @id
+}
+model TwoFactorRecoveryCode {
+  id String @id
+}
+model UserSecurityEvent {
+  id       String  @id
+  tenantId String?
+}
+model SaasSubscription {
+  tenantId String @id
+}
+model SaasCharge {
+  id       String @id
+  tenantId String
+}
+model SaasPayment {
   id       String @id
   tenantId String
 }
@@ -72,8 +100,22 @@ CREATE POLICY "SupportSession_tenant_read" ON "SupportSession"
   FOR SELECT USING ("tenantId" = app_current_tenant_id());
 `;
 
-// GLOBAL_READONLY (B-pre M-cat) exige sus 5 modelos: se declaran sin tenantId con su policy SELECT.
-const CATALOG = ["Specialty", "Practice", "PracticeSpecialty", "Payer", "CatalogImportRun"];
+// PL-0 (M8): SERVICE_ONLY sin policies y TENANT_READONLY con solo SELECT por tenant.
+const M8_SERVICE_ONLY = ["SaasPlanPriceChange", "TwoFactorChallenge", "TwoFactorRecoveryCode", "UserSecurityEvent"];
+const M8_TENANT_READONLY = ["SaasSubscription", "SaasCharge", "SaasPayment"];
+const M8 = [
+  ...M8_SERVICE_ONLY.map(
+    (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;\nALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;`
+  ),
+  ...M8_TENANT_READONLY.map(
+    (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "${m}" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "${m}_tenant_read" ON "${m}" FOR SELECT USING ("tenantId" = app_current_tenant_id());`
+  ),
+].join("\n");
+
+// GLOBAL_READONLY (B-pre M-cat + PL-0 SaasPlanConfig) exige sus modelos: se declaran sin tenantId con su policy SELECT.
+const CATALOG = ["Specialty", "Practice", "PracticeSpecialty", "Payer", "CatalogImportRun", "SaasPlanConfig"];
 const CATALOG_SCHEMA = CATALOG.map((m) => `model ${m} {\n  id String @id\n}`).join("\n");
 const CATALOG_SQL = CATALOG.map(
   (m) => `ALTER TABLE "${m}" ENABLE ROW LEVEL SECURITY;
@@ -100,6 +142,7 @@ function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: strin
   };
   mig("20260101000000_base", BASE + CATALOG_SQL + M2_REVOKE);
   mig("20261015120000_platform_backoffice", p.m7 ?? M7);
+  mig("20261015180000_pl_accounts_billing", M8);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -111,8 +154,33 @@ function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: strin
 describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
-    expect(r.out).toContain("SERVICE_ONLY (2): ENABLE + FORCE, zero policies");
+    expect(r.out).toContain("GLOBAL_READONLY (6): ENABLE + FORCE, SELECT-only policies");
+    expect(r.out).toContain("SERVICE_ONLY (6): ENABLE + FORCE, zero policies. TENANT_READONLY (4)");
     expect(r.code).toBe(0);
+  });
+
+  it("[PL-0] falla si una tabla de cobro gana una policy de escritura (la app no puede marcar un pago)", () => {
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "SaasPayment_w" ON "SaasPayment" FOR INSERT WITH CHECK ("tenantId" = app_current_tenant_id());`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/SaasPayment: write policy "SaasPayment_w" \(FOR INSERT\)/);
+  });
+
+  it("[PL-0] falla si una tabla de 2FA gana una policy", () => {
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "TwoFactorChallenge_read" ON "TwoFactorChallenge" FOR SELECT USING (true);`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/TwoFactorChallenge: policy "TwoFactorChallenge_read" \(FOR SELECT\)/);
+  });
+
+  it("[PL-0] falla si el catálogo de planes gana una policy de escritura", () => {
+    const r = runGuard({
+      extraMigration: `CREATE POLICY "SaasPlanConfig_w" ON "SaasPlanConfig" FOR UPDATE USING (true);`,
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/SaasPlanConfig: write policy "SaasPlanConfig_w" \(FOR UPDATE\)/);
   });
 
   it("sigue fallando ante una tabla con tenantId SIN policy que no está en ninguna categoría", () => {

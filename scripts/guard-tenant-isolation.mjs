@@ -67,6 +67,9 @@ const GLOBAL_READONLY = new Set([
   "PracticeSpecialty",
   "Payer",
   "CatalogImportRun",
+  // PL-0 (M8 pl_accounts_billing): catálogo de planes (precios, límites). La app
+  // lo lee (catálogo público, cupos); lo escribe solo Plataforma por el canal service.
+  "SaasPlanConfig",
 ]);
 const WRITE_CMDS = new Set(["ALL", "INSERT", "UPDATE", "DELETE"]);
 
@@ -77,13 +80,28 @@ const WRITE_CMDS = new Set(["ALL", "INSERT", "UPDATE", "DELETE"]);
 // usa: el registro de plataforma (solo inserción, trigger) y los alias de slug
 // que lee el turnero. Que tengan tenantId sin policy NO es un olvido: por eso
 // están acá y no caen en el "missing" de abajo.
-const SERVICE_ONLY = new Set(["PlatformAuditEvent", "TenantSlugAlias"]);
+// PL-0 (M8): historial de precios (solo inserción salvo appliedAt) y las tablas
+// de 2FA (desafíos por email, códigos de recuperación, registro de seguridad de la
+// cuenta): las maneja el server por el canal service; la app no las ve nunca. Las
+// de 2FA no tienen tenantId (son del usuario): el contrato igual aplica.
+const SERVICE_ONLY = new Set([
+  "PlatformAuditEvent",
+  "TenantSlugAlias",
+  "SaasPlanPriceChange",
+  "TwoFactorChallenge",
+  "TwoFactorRecoveryCode",
+  "UserSecurityEvent",
+]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la
 // plataforma por el canal service. Contrato: ENABLE + FORCE, al menos una policy
 // `FOR SELECT` filtrada por app_current_tenant_id() y NINGUNA de escritura
 // (ALL/INSERT/UPDATE/DELETE). SupportSession: el OWNER ve quién entró como soporte.
-const TENANT_READONLY = new Set(["SupportSession"]);
+// PL-0 (M8): suscripción, cargos y pagos del SaaS. El consultorio los ve en
+// «Facturación»; los escribe solo el canal service (cron, webhook, Plataforma), así
+// la app no puede marcar un cargo como pagado. (SupportThread/SupportMessage NO van
+// acá: tienen policy de INSERT acotada y pasan por el chequeo normal de tenant.)
+const TENANT_READONLY = new Set(["SupportSession", "SaasSubscription", "SaasCharge", "SaasPayment"]);
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`;
 const GREEN = (s) => `\x1b[32m${s}\x1b[0m`;
