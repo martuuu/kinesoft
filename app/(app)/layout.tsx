@@ -42,12 +42,15 @@ import { realtimeBootstrap } from "@/lib/realtime-bootstrap";
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const actor = await tryGetActor();
-  // Misma foto que usó `tryGetActor` (cache por request): un solo `auth.getUser()` y una sola lectura de
-  // membresías. null = sin sesión (o actor demo).
-  const choice = await getTenantChoiceState();
-  const snapshot = await getAccessSnapshot();
-  // BO1-A: misma foto (cero queries): usuario deshabilitado / consultorio suspendido o dado de baja.
-  const block = await getSessionBlock();
+  // PF-0b: las preferencias dependen solo del actor: se piden YA, en paralelo con el gate (antes iban en serie
+  // después del gate y del tx de tenant+rol). Si el gate redirige, la lectura se descarta; el `catch` vacío solo
+  // evita el «unhandled rejection» en ese caso: el `await` de abajo vuelve a tirar el error si se usa.
+  const prefsP = actor ? getUserPreferences() : null;
+  prefsP?.catch(() => {});
+  // Misma foto que usó `tryGetActor` (cache por request): una sola verificación de la sesión y una sola lectura de
+  // membresías; las tres salen de esa foto sin queries. null = sin sesión (o actor demo).
+  // BO1-A: `block` = usuario deshabilitado / consultorio suspendido o dado de baja.
+  const [choice, snapshot, block] = await Promise.all([getTenantChoiceState(), getAccessSnapshot(), getSessionBlock()]);
 
   // El layout no recibe el pathname: lo lee de `x-pathname`, que el middleware
   // pisa en cada request. safeNext lo deja pasar solo si es un path propio, así
@@ -71,16 +74,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       block: block?.kind ?? null,
     });
   } else {
-    const t = await runWithRls(actor.tenantId, async (tx) => {
-      const [tenant, m] = await Promise.all([
-        tx.tenant.findUnique({ where: { id: actor.tenantId }, select: { onboardingCompletedAt: true } }),
-        tx.membership.findUnique({
-          where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
-          select: { role: true },
-        }),
-      ]);
-      return { completed: !!tenant?.onboardingCompletedAt, role: m?.role ?? null };
-    });
+    // PF-0b: el rol y `onboardingCompletedAt` del consultorio activo ya están en la foto (la misma fila de
+    // Membership + Tenant de la que salió el actor, leída en este request): sin tx (eran 4 idas y vueltas en serie
+    // en cada página). Soporte (sin membresía en el destino) y el actor demo (sin foto) siguen leyéndolos.
+    const fromSnapshot = !actor.support ? snapshot?.memberships.find((m) => m.tenantId === actor.tenantId) : undefined;
+    const t = fromSnapshot
+      ? { completed: !!fromSnapshot.tenant.onboardingCompletedAt, role: fromSnapshot.role }
+      : await runWithRls(actor.tenantId, async (tx) => {
+          const [tenant, m] = await Promise.all([
+            tx.tenant.findUnique({ where: { id: actor.tenantId }, select: { onboardingCompletedAt: true } }),
+            tx.membership.findUnique({
+              where: { userId_tenantId: { userId: actor.userId, tenantId: actor.tenantId } },
+              select: { role: true },
+            }),
+          ]);
+          return { completed: !!tenant?.onboardingCompletedAt, role: m?.role ?? null };
+        });
     role = t.role;
     gate = decideAppGate({
       hasSession: !!snapshot,
@@ -102,7 +111,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   // Seed the Tweaks context with the user's persisted agenda preferences so
   // the week view + the Tweaks panel render the right state on first paint.
-  const prefs = await getUserPreferences();
+  // `actor` no es null acá (redirect de arriba), así que `prefsP` tampoco.
+  const prefs = await (prefsP ?? getUserPreferences());
   // EV0 (EV-S): módulos del consultorio (vertical × plan × turnero, de
   // `actor.entitlements`) y capabilities del rol para filtrar el nav. Arrays y
   // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es

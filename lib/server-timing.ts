@@ -42,7 +42,7 @@ export type TimingSummary = {
   route: string;
   /** Desde la primera marca del request hasta el fin de la última op/tx (trabajo de servidor medido; sin render). */
   spanMs: number;
-  /** `getVerifiedSessionUser` (en prod = `auth.getUser()` a Supabase, una ida y vuelta). */
+  /** `getSessionUser` (local desde PF-0b; `auth-strict` = GoTrue). */
   authMs: number;
   /** `loadAccessMemberships` (canal service, sin GUC). */
   accessMs: number;

@@ -621,6 +621,72 @@ body {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────────
+   [PF-0c] Navegación percibida: esqueletos de carga y entrada de página.
+   Los `loading.tsx` (components/ui/skeleton.tsx) son server components
+   sin framer: el esqueleto sale en el primer chunk del stream o del
+   prefetch, sin esperar hidratación. El shimmer es solo un gradiente
+   que se corre (background-position): no re-renderiza React. Su versión
+   estática está en el bloque prefers-reduced-motion del final.
+   ───────────────────────────────────────────────────────────────── */
+.k-skel {
+  display: block;
+  border-radius: 8px;
+  /* navy-100 al 45 %: se lee como «hueco» sobre el glass y sobre el
+     fondo de las cuatro paletas sin depender de --sky-*. */
+  background-color: rgba(198, 207, 221, 0.45);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-position: 150% 0;
+  animation: k-skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes k-skel-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+.k-skel-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+/* El aside del tablero (320 px) se esconde en pantallas angostas para que
+   el esqueleto no fuerce scroll horizontal. */
+@media (max-width: 900px) {
+  .k-skel-aside {
+    display: none !important;
+  }
+}
+
+/* Entrada de página de `(app)/template.tsx`: solo opacidad, 120 ms. Sin
+   `transform` a propósito: el framer anterior subía 8 px y, mientras dura,
+   un transform convierte al wrapper en el containing block de los
+   `position: fixed` de la página (un drawer o popover abierto en esos
+   220 ms queda anclado al wrapper y no a la ventana). */
+.k-page-in {
+  animation: k-page-in 120ms ease-out both;
+}
+@keyframes k-page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .k-live-dot::after,
   .k-live-badge[data-state="live"] .k-live-dot::after,
@@ -642,5 +708,13 @@ body {
   }
   .k-live-badge {
     transition: none;
+  }
+  /* [PF-0c] Esqueleto quieto (el bloque gris alcanza) y página sin fade. */
+  .k-skel {
+    animation: none;
+    background-image: none;
+  }
+  .k-page-in {
+    animation: none;
   }
 }

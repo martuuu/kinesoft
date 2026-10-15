@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { setPatientArchived } from "@/lib/patients";
 import { useToast } from "@/components/ui/toast";
 
@@ -17,7 +16,6 @@ export function PatientRowActions({
   patientId: string;
   archived: boolean;
 }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const toast = useToast();
@@ -52,7 +50,9 @@ export function PatientRowActions({
         });
         return;
       }
-      router.refresh();
+      // PF-0d: sin `router.refresh()`. `setPatientArchived` hace
+      // `revalidatePath("/pacientes")` en el OK y la respuesta de la action ya
+      // trae la lista nueva (el refresh era un segundo render, +139 ms).
     });
   };
 

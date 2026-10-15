@@ -3,8 +3,9 @@
  *
  * Authentication model (post-Sprint 11):
  *
- *   1. Supabase auth gives us `user.id` + `user.email` (`getVerifiedSessionUser`,
- *      lib/session-user.ts: un solo `auth.getUser()` por request).
+ *   1. Supabase auth gives us `user.id` (`getSessionUser`, lib/session-user.ts). PF-0b: el access token se
+ *      verifica LOCALMENTE (sin ida y vuelta a GoTrue); la revocación la cubre `UserProfile.disabledAt`, que
+ *      se lee acá en cada request.
  *   2. IAM-3a: se cargan TODAS las membresías del usuario (aceptadas o no, con
  *      `disabledAt`) y si tiene `Practitioner` en cada consultorio
  *      (`getAccessSnapshot`). Solo cuentan las USABLES (`lib/access-logic.ts`).
@@ -41,7 +42,7 @@ import { cache } from "react";
 // service channel, or the flip to the app role locks out every login.
 import { prismaService } from "@/lib/db";
 import { withTenantDb, type DbClient } from "@/lib/rls";
-import { getVerifiedSessionUser } from "@/lib/session-user";
+import { getSessionUser } from "@/lib/session-user";
 import { ACTIVE_TENANT_COOKIE } from "@/lib/active-tenant-cookie";
 import {
   isUsableMembership,
@@ -178,9 +179,40 @@ export type AccessMembership = MembershipLite & {
 /** `disabledAt` (BO1-A): deshabilitado a nivel plataforma (M7): sin acceso a ningún consultorio ni a /plataforma. */
 export type AccessProfile = { fullName: string | null; email: string; isPlatformAdmin: boolean; disabledAt: Date | null };
 
+/** Fila de `loadAccessMemberships`: el perfil repetido por membresía (LEFT JOIN: sin membresías, una fila con nulls). */
+type AccessRow = {
+  fullName: string | null;
+  email: string;
+  isPlatformAdmin: boolean;
+  userDisabledAt: Date | null;
+  tenantId: string | null;
+  role: AccessMembership["role"] | null;
+  acceptedAt: Date | null;
+  membershipDisabledAt: Date | null;
+  slug: string | null;
+  name: string | null;
+  vertical: AccessMembership["tenant"]["vertical"] | null;
+  plan: AccessMembership["tenant"]["plan"] | null;
+  publicBookingEnabled: boolean | null;
+  onboardingCompletedAt: Date | null;
+  status: AccessMembership["tenant"]["status"] | null;
+  subscriptionStatus: AccessMembership["tenant"]["subscriptionStatus"] | null;
+  trialEndsAt: Date | null;
+  subscriptionStatusChangedAt: Date | null;
+  practitionerId: string | null;
+};
+
 /**
- * Todo lo que decide a qué consultorio entra una sesión, en una lectura (perfil con membresías y profesionales). Por `prismaService`: todavía no hay Actor ni GUC (ver import arriba), y el filtro es el
- * `userId` de la sesión verificada.
+ * Todo lo que decide a qué consultorio entra una sesión (perfil, membresías con su consultorio y el `Practitioner`
+ * de cada una), en UNA sentencia. Por `prismaService`: todavía no hay Actor ni GUC (ver import arriba), y el filtro
+ * es el `userId` de la sesión verificada.
+ *
+ * PF-0b: antes era un `findUnique` con `select` anidado, que Prisma 5 ejecuta como una query por relación
+ * (UserProfile → Membership → Tenant + Practitioner: 4 idas y vueltas EN SERIE antes de cada página y action; PF-0a
+ * las midió en ~18 ms en la misma región y ~500 ms cruzado). `relationLoadStrategy: "join"` pide el preview
+ * `relationJoins` en el generator (afecta a toda la app): SQL a mano, con los mismos campos. Los enums vuelven como
+ * texto (`::text`) y se tipan con los de Prisma; los nombres de columna los cubren los tests de integración de
+ * sesión (`tests/integration/session-fast-path.test.ts` compara contra la lectura con Prisma).
  */
 export async function loadAccessMemberships(userId: string): Promise<{
   profile: AccessProfile | null;
@@ -190,60 +222,58 @@ export async function loadAccessMemberships(userId: string): Promise<{
   // Gate de IAM-3: la preferencia guardada (`UserPreferences.tenantId`) NO se lee acá. Con la decisión 6 de Martin
   // (cada login pregunta a qué consultorio entrar) la única fuente del consultorio activo es la cookie `kine_tenant`,
   // y leer la preferencia sumaba una sentencia a CADA request (rompía el techo estricto de createBooking: 34 → 35).
-  const [profile] = await Promise.all([
-    prismaService.userProfile.findUnique({
-      where: { id: userId },
-      select: {
-        fullName: true,
-        email: true,
-        isPlatformAdmin: true,
-        disabledAt: true,
-        memberships: {
-          select: {
-            tenantId: true,
-            role: true,
-            acceptedAt: true,
-            disabledAt: true,
-            tenant: {
-              select: {
-                id: true,
-                slug: true,
-                name: true,
-                vertical: true,
-                plan: true,
-                publicBookingEnabled: true,
-                onboardingCompletedAt: true,
-                // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
-                status: true,
-                subscriptionStatus: true,
-                trialEndsAt: true,
-                subscriptionStatusChangedAt: true,
-              },
-            },
-          },
-        },
-        practitioners: { select: { id: true, tenantId: true } },
+  // M6: Practitioner es único por (tenantId, userId): el JOIN da a lo sumo uno por membresía.
+  const rows = await prismaService.$queryRaw<AccessRow[]>`
+    SELECT u."fullName", u."email", u."isPlatformAdmin", u."disabledAt" AS "userDisabledAt",
+           m."tenantId", m."role"::text AS "role", m."acceptedAt", m."disabledAt" AS "membershipDisabledAt",
+           t."slug", t."name", t."vertical"::text AS "vertical", t."plan"::text AS "plan",
+           t."publicBookingEnabled", t."onboardingCompletedAt",
+           t."status"::text AS "status", t."subscriptionStatus"::text AS "subscriptionStatus",
+           t."trialEndsAt", t."subscriptionStatusChangedAt",
+           p."id" AS "practitionerId"
+      FROM "UserProfile" u
+      LEFT JOIN "Membership" m ON m."userId" = u."id"
+      LEFT JOIN "Tenant" t ON t."id" = m."tenantId"
+      LEFT JOIN "Practitioner" p ON p."tenantId" = m."tenantId" AND p."userId" = u."id"
+     WHERE u."id" = ${userId}
+     ORDER BY m."invitedAt" ASC, m."tenantId" ASC`;
+  const first = rows[0];
+  if (!first) return { profile: null, memberships: [], preferredTenantId: null };
+  const memberships: AccessMembership[] = [];
+  for (const r of rows) {
+    // Sin membresías: una sola fila con la parte de Membership/Tenant en null.
+    if (!r.tenantId || !r.role || !r.slug || r.name === null || !r.vertical || !r.plan || !r.status || !r.subscriptionStatus) {
+      continue;
+    }
+    memberships.push({
+      tenantId: r.tenantId,
+      role: r.role,
+      acceptedAt: r.acceptedAt,
+      disabledAt: r.membershipDisabledAt,
+      hasPractitioner: r.practitionerId !== null,
+      practitionerId: r.practitionerId,
+      tenant: {
+        id: r.tenantId,
+        slug: r.slug,
+        name: r.name,
+        vertical: r.vertical,
+        plan: r.plan,
+        publicBookingEnabled: !!r.publicBookingEnabled,
+        onboardingCompletedAt: r.onboardingCompletedAt,
+        // BO1-A: las 4 columnas de `tenantAccessFor` (TENANT_ACCESS_SELECT), en la misma lectura.
+        status: r.status,
+        subscriptionStatus: r.subscriptionStatus,
+        trialEndsAt: r.trialEndsAt,
+        subscriptionStatusChangedAt: r.subscriptionStatusChangedAt,
       },
-    }),
-  ]);
-  if (!profile) return { profile: null, memberships: [], preferredTenantId: null };
-  // M6: Practitioner es único por (tenantId, userId), así que el mapa no pierde nada.
-  const pracByTenant = new Map(profile.practitioners.map((p) => [p.tenantId, p.id]));
-  const memberships = profile.memberships.map<AccessMembership>((m) => ({
-    tenantId: m.tenantId,
-    role: m.role,
-    acceptedAt: m.acceptedAt,
-    disabledAt: m.disabledAt,
-    hasPractitioner: pracByTenant.has(m.tenantId),
-    practitionerId: pracByTenant.get(m.tenantId) ?? null,
-    tenant: m.tenant,
-  }));
+    });
+  }
   return {
     profile: {
-      fullName: profile.fullName,
-      email: profile.email,
-      isPlatformAdmin: profile.isPlatformAdmin,
-      disabledAt: profile.disabledAt,
+      fullName: first.fullName,
+      email: first.email,
+      isPlatformAdmin: first.isPlatformAdmin,
+      disabledAt: first.userDisabledAt,
     },
     memberships,
     preferredTenantId: null,
@@ -322,7 +352,7 @@ export function usableAccessMemberships(
 }
 
 async function loadAccessSnapshot(): Promise<AccessSnapshot | null> {
-  const user = await getVerifiedSessionUser();
+  const user = await getSessionUser();
   if (!user) return null;
   // PF-0a: marca `access` (la lectura de membresías por el canal service) con PERF_TIMING=1.
   const { profile, memberships, preferredTenantId } = await timeAsync("access", () => loadAccessMemberships(user.id));

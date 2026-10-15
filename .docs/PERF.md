@@ -273,7 +273,7 @@ start`), no de los loaders sueltos como el harness de arriba. Es la tabla «ante
 ### Cómo se midió
 
 - `lib/server-timing.ts` (`PERF_TIMING=1`): acumulador por request colgado del `requestAsyncStorage` de Next (envuelve
-  layout, página y server actions). Marcas: `auth` (`getVerifiedSessionUser`, la llamada real a GoTrue), `access`
+  layout, página y server actions). Marcas: `auth` (antes de PF-0b `getVerifiedSessionUser`, la llamada real a GoTrue; desde PF-0b `getSessionUser`, local; `auth-strict` = `getStrictSessionUser`), `access`
   (`loadAccessMemberships`), `actor` (`resolveActor` entero), cada `runWithRls` (cantidad y duración) y cada op de
   Prisma de los dos canales (`$use`). El middleware emite `Server-Timing: mw-session;dur=…` (su refresh de sesión).
   Apagado no se instala nada (`$use` incluido) y `timeAsync` devuelve la misma promesa.
@@ -361,7 +361,7 @@ Modelo que ajusta a las cuatro corridas: **total ≈ local + RTT_auth + D × RTT
 
 ### Recomendación para PF-0b/c/d y PF2
 
-- **PF-0b (sesión local + costo fijo), primero.** (a) `getVerifiedSessionUser` verifica el JWT local: `getClaims()` si
+- **PF-0b (sesión local + costo fijo), primero.** _Hecho (ver «PF-0b» abajo)._ (a) `getVerifiedSessionUser` verifica el JWT local: `getClaims()` si
   el proyecto usa claves asimétricas (JWKS cacheado); si sigue con el secreto HS256, verificación HMAC con
   `SUPABASE_JWT_SECRET` (ya existe en `lib/env.ts`). −1 HTTP por request y por action (misma región ≈ −35 ms; cruzado
   −150 ms). Revocación: el token vale hasta su `exp` (≤ 1 h); lo cubren `disabledAt` (se sigue leyendo en cada
@@ -380,6 +380,55 @@ Modelo que ajusta a las cuatro corridas: **total ≈ local + RTT_auth + D × RTT
   tx es la categoría más grande de idas y vueltas en esas tres páginas (~45-50 %) y PL suma loaders. En dashboard,
   pacientes, sala y seguimiento manda el costo fijo (punto 2), no las tx: ahí alcanza con PF-0b. Si la región resulta
   ser `us-east-1` y no se mueve el proyecto, PF2 pasa a urgente (−1,5-2,5 s por página pesada).
+
+### PF-0b · sesión sin ida y vuelta a GoTrue + costo fijo (15-oct-2026)
+
+Qué se hizo (detalle de seguridad en SECURITY.md §11.1):
+
+- **JWT local** (`lib/session-user.ts` `getSessionUser` + `lib/session-jwt.ts`): el actor ya no llama a
+  `auth.getUser()`. HS256 con `SUPABASE_JWT_SECRET` (o `getClaims()` con JWKS si el proyecto usa claves asimétricas);
+  lo que no se puede probar local cae a GoTrue (nunca se acepta por descarte). Memo por request de Next y por token
+  (también en server actions, donde `cache()` no deduplica). `getStrictSessionUser()` (= `getVerifiedSessionUser`)
+  sigue con GoTrue para invitación, alta, portal, turnero, reset y Plataforma (handoff).
+- **Membresías en una sentencia** (`loadAccessMemberships`): SQL con `LEFT JOIN` en vez del `select` anidado de Prisma
+  (4 queries en serie). `createBooking` baja de **34 a 31 sentencias** y `updateBooking` de 30 a 27 (el techo estricto
+  de `tests/integration/bookings-rooms.test.ts` se actualiza por handoff).
+- **Layout `(app)`**: rol y `onboardingCompletedAt` salen de la foto de acceso (sin la tx de tenant+rol: −1 tx, −4 RT
+  por página); las preferencias se piden en paralelo con el gate.
+- `scripts/perf/ttfb.mjs` ahora firma el token de la cookie con un secreto propio (`SUPABASE_JWT_SECRET` del hijo) y el
+  `iss` del GoTrue falso: mide el camino de prod. `--legacy-auth` lo firma con otra clave (cae a GoTrue: el «antes»).
+
+**Antes / después.** Medido sobre snapshots `git archive HEAD` (`1553192`) con y sin SOLO los archivos de PF-0b (las
+otras sesiones de la ola tocaban `loading.tsx`/`template.tsx` a la vez y el TTFB de las páginas sin esqueleto cambia
+con eso). `next build` + `next start`, mismo Docker. Misma región = auth 30 / DB 3 ms, mediana de 5. Cruzado = auth
+150 / DB 120 ms, mediana de 3; su «antes» es la corrida del inicio de la sesión sobre el working tree (el snapshot
+limpio se colgó dos veces con 120 ms de RTT): en configuración y seguimiento ya tenía el esqueleto de PF-0c, por eso
+ahí se compara el total. TTFB / total en ms; `HTTP` = llamadas a GoTrue por request.
+
+| Ruta | misma región antes | **después** | cruzado antes (total) | **después** | txs / ops / RT antes → después | HTTP |
+|---|---|---|---|---|---|---|
+| `/dashboard` | 117 / 174 | **45 / 113** | 1.895 / 3.780 | **299 / 2.610** | 5/18/33 → 4/15/27 | 1 → 0 |
+| `/agenda` | 112 / 216 | **40 / 179** | 1.604 / 5.302 | **423 / 3.260** | 9/35/62 → 8/32/56 | 1 → 0 |
+| `/pacientes` | 108 / 150 | **36 / 103** | 1.503 / 2.643 | **303 / 2.115** | 4/13/25 → 3/10/19 | 1 → 0 |
+| `/pacientes/[id]` | 112 / 289 | **54 / 179** | — / 5.471 | **931 / 5.268** | 13/38/77 → 12/35/71 | 1 → 0 |
+| `/configuracion` (sin esqueleto) | 168 / 170 | **116 / 119** | — / 3.203 | **— / 2.990** | 12/35/71 → 11/32/65 | 1 → 0 |
+| `/sala` | 105 / 130 | **41 / 73** | 1.461 / 2.074 | **295 / 1.449** | 4/14/26 → 3/11/20 | 1 → 0 |
+| `/seguimiento` (sin esqueleto) | 174 / 177 | **104 / 107** | — / 2.698 | **— / 2.269** | 2/19/25 → 1/16/19 | 1 → 0 |
+| `router.refresh()` `/agenda` | 15 / 197 | 14 / 124 | 16 / 3.630 | 12 / 3.232 | 9/35/62 → 8/32/56 | 1 → 0 |
+| `router.refresh()` `/pacientes` | 16 / 142 | 14 / 90 | 16 / 2.740 | 17 / 2.193 | 4/13/25 → 3/10/19 | 1 → 0 |
+| action `listAgendaBookings` | 109 / 111 | **69 / 71** | 1.989 / 1.990 | **1.451 / 1.452** | 2/7/13 → 2/7/13 | 1 → 0 |
+
+Lectura:
+
+- **Costo fijo por request** (marca `actor`: sesión + membresías + soporte): misma región **54-57 → 6-10 ms**; cruzado
+  **663-685 → 131-137 ms**. `access` (membresías) 15-20 → 4-8 ms y 490-522 → 128-132 ms (1 ida y vuelta en vez de
+  4). GoTrue: 1 → 0 llamadas en todas las rutas y en la action. Más el layout: −1 tx (−4 RT) por página.
+- El TTFB de las páginas con esqueleto (lo que tarda en responder el click) baja de ~110 a **~35-55 ms** en la misma
+  región y de ~1,5-1,9 s a **~0,3-0,4 s** cruzado. Cada server action ahorra ~40 ms (misma región) / ~540 ms
+  (cruzado).
+- El total de las páginas pesadas sigue mandado por sus loaders (una tx por lectura): agenda, perfil y configuración
+  cruzadas quedan en 3-5,3 s. Eso es PF2 (y la región, punto 1 del diagnóstico).
+- Crudo: `pf0b-clean0.json` / `pf0b-clean{,-x}.json` / `pf0b-before-x.json` del scratchpad de la sesión (no versionado; se regenera con el script).
 
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 

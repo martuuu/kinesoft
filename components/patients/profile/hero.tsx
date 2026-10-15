@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -60,7 +59,6 @@ export function PatientHero({
   // on the card doesn't create a stacking context that traps position:fixed.
   const [editing, setEditing] = useState(false);
   const [askPlans, setAskPlans] = useState(false);
-  const router = useRouter();
   const livePlanCount = plansEnabled ? plans.length : 0;
   const practitionerFact = usePractitionerFactLabel();
 
@@ -68,7 +66,7 @@ export function PatientHero({
   const archiveWithPlans = async (plansAction: PatientArchivePlansAction): Promise<ArchivePatientResult> => {
     const r = await setPatientArchived({ id: patient.id, archived: true, plansAction });
     if (!r.ok) return { ok: false, error: r.error };
-    router.refresh();
+    // PF-0d: sin `router.refresh()`; `setPatientArchived` revalida la ficha.
     return { ok: true };
   };
 
@@ -233,7 +231,6 @@ function PatientHeroActions({
   onAskArchivePlans: () => void;
   onEdit: () => void;
 }) {
-  const router = useRouter();
   const confirm = useConfirm();
   const [archiving, startArchive] = useTransition();
   const [archiveError, setArchiveError] = useState<string | null>(null);
@@ -272,7 +269,8 @@ function PatientHeroActions({
         setArchiveError(r.error);
         return;
       }
-      router.refresh();
+      // PF-0d: sin `router.refresh()`; `setPatientArchived` revalida la ficha
+      // y la respuesta de la action ya trae el árbol nuevo.
     });
   };
 
@@ -398,7 +396,6 @@ function EditPatientModal({
   canReassign: boolean;
   onClose: () => void;
 }) {
-  const router = useRouter();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -610,7 +607,9 @@ function EditPatientModal({
       }
 
       onClose();
-      router.refresh();
+      // PF-0d: sin `router.refresh()`. `updatePatient`, `setPatientCoverage` y
+      // `assignPatientToPractitioner` revalidan `/pacientes/<id>` en su OK:
+      // cada respuesta trae la ficha nueva (la última, el estado final).
     });
   };
 

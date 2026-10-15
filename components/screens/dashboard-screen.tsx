@@ -4,7 +4,8 @@ import { USER_NO_NAME } from "@/lib/display-name";
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { DUR, EASE_OUT, springSoft, staggerItem, staggerList } from "@/lib/motion";
+import type { Variants } from "framer-motion";
+import { DUR, EASE_OUT, springSoft } from "@/lib/motion";
 import { Card, PhotoSlot } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
@@ -38,6 +39,22 @@ import { PinKpiButton } from "@/components/dashboard/pin-kpi-button";
 import { RevenueCard } from "@/components/dashboard/revenue-card";
 import { formatARS } from "@/lib/format";
 import { ProfileMenu } from "@/components/global/profile-menu";
+
+/**
+ * [PF-0c] Entrada de los indicadores fijados, recortada. Con `staggerList`/`staggerItem` (35 ms entre tarjetas,
+ * 220 ms cada una, subida de 8 px) las 6 tarjetas tardaban ~415 ms en asentarse: se sumaba a la carga y el tablero
+ * se sentía lento aunque los datos ya estuvieran. Ahora: ≤ 6 ítems × 15 ms + 120 ms = ≤ 195 ms en total, solo
+ * opacidad (sin desplazamiento, así el `whileHover` no compite con la entrada). Con reduce motion, `MotionConfig`
+ * lo deja estático.
+ */
+const KPI_ENTER_LIST: Variants = {
+  initial: {},
+  animate: { transition: { staggerChildren: 0.015 } },
+};
+const KPI_ENTER_ITEM: Variants = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1, transition: { duration: 0.12, ease: EASE_OUT } },
+};
 
 export function DashboardScreen({
   data,
@@ -499,7 +516,7 @@ function PinnedRow({
         <PinKpiButton currentPinned={pinnedKpis} revenueScope={revenueScope} />
       </div>
       <motion.div
-        variants={staggerList}
+        variants={KPI_ENTER_LIST}
         initial="initial"
         animate="animate"
         style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}
@@ -554,7 +571,7 @@ function KpiCard({
   const shownNumber = useCountUp(it.n);
   return (
     <motion.div
-      variants={staggerItem}
+      variants={KPI_ENTER_ITEM}
       whileHover={{ y: -3, scale: 1.015 }}
       transition={springSoft}
       className="k-glass"

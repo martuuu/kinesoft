@@ -8,6 +8,7 @@
  *     [--json=out.json] [--log=server.log]
  *
  *   --auth-latency=ms  demora del GoTrue falso por `getUser()` (≈ RTT + proceso de GoTrue en prod).
+ *   --legacy-auth      firma el token con otra clave: la sesión cae a `getUser()` (como antes de PF-0b).
  *   --db-rtt=ms        ida y vuelta simulada a Postgres: un proxy TCP en 127.0.0.1:5499 demora cada paquete
  *                      rtt/2 en cada sentido. Con esto el wall-clock incluye el camino crítico real (las tx en
  *                      paralelo se solapan, las en serie se suman), que el conteo de round-trips solo no da.
@@ -29,7 +30,7 @@
  * No escribe en la base (solo lecturas: GET de páginas y una action de lectura). No corre seeds.
  */
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { createServer as createTcpServer, connect as tcpConnect } from "node:net";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -118,11 +119,15 @@ await new Promise((r) => authServer.listen(AUTH_PORT, "127.0.0.1", r));
 
 const b64url = (s) => Buffer.from(s).toString("base64url");
 const nowS = Math.floor(Date.now() / 1000);
-const jwt = [
+// PF-0b: el access token va FIRMADO (HS256) con un secreto propio del script, que se le pasa al server como
+// `SUPABASE_JWT_SECRET`, y con el `iss` del GoTrue falso: así `getSessionUser` lo verifica local, como en prod. Con
+// `--legacy-auth` se firma con otra clave: la verificación local no lo prueba y cae a `getUser()` (el «antes»).
+const PERF_JWT_SECRET = "perf-jwt-secret-solo-local-0123456789abcdef";
+const jwtInput = [
   b64url(JSON.stringify({ alg: "HS256", typ: "JWT" })),
-  b64url(JSON.stringify({ sub: member.userId, aud: "authenticated", role: "authenticated", email: member.user.email, iat: nowS, exp: nowS + 86400, session_id: "perf" })),
-  b64url("perf-signature"),
+  b64url(JSON.stringify({ iss: `http://127.0.0.1:${AUTH_PORT}/auth/v1`, sub: member.userId, aud: "authenticated", role: "authenticated", email: member.user.email, iat: nowS, exp: nowS + 86400, session_id: "perf", aal: "aal1" })),
 ].join(".");
+const jwt = `${jwtInput}.${createHmac("sha256", args["legacy-auth"] === "1" ? "otra-clave" : PERF_JWT_SECRET).update(jwtInput).digest("base64url")}`;
 const session = {
   access_token: jwt,
   token_type: "bearer",
@@ -180,6 +185,7 @@ const childEnv = {
   NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${AUTH_PORT}`,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "perf-anon-key",
   SUPABASE_SERVICE_ROLE_KEY: "perf-service-key",
+  SUPABASE_JWT_SECRET: PERF_JWT_SECRET,
   NEXT_PUBLIC_APP_URL: BASE,
   REALTIME_DRIVER: "off",
   EMAIL_TRANSPORT: "log",

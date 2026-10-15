@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useContext, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { bulkArchivePatients } from "@/lib/patients";
@@ -57,7 +56,6 @@ export function BulkSelectCheckbox({ patientId }: { patientId: string }) {
 }
 
 export function BulkActionBar({ archivedView = false }: { archivedView?: boolean }) {
-  const router = useRouter();
   const ctx = useContext(BulkCtx);
   const [pending, start] = useTransition();
   const toast = useToast();
@@ -76,7 +74,8 @@ export function BulkActionBar({ archivedView = false }: { archivedView?: boolean
         return;
       }
       ctx.clear();
-      router.refresh();
+      // PF-0d: sin `router.refresh()`. `bulkArchivePatients` revalida
+      // "/pacientes" en el OK: la lista nueva llega con la respuesta.
     });
   };
 

@@ -1,17 +1,11 @@
-/** Segment loading state for the patients list while server data resolves. */
+import { PageSkeleton, SkelHeader, SkelRows } from "@/components/ui/skeleton";
+
+/** Esqueleto de la lista de pacientes (PF-0c): header, buscador y filas con avatar. */
 export default function PacientesLoading() {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: 360,
-        color: "var(--navy-300, #94a3bd)",
-        fontSize: 14,
-      }}
-    >
-      Cargando pacientes…
-    </div>
+    <PageSkeleton label="Cargando los pacientes">
+      <SkelHeader actions={1} titleW={180} />
+      <SkelRows rows={8} />
+    </PageSkeleton>
   );
 }

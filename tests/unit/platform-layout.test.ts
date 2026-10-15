@@ -31,6 +31,10 @@ vi.mock("@/lib/session", () => {
     }),
   };
 });
+// PF-0b: Plataforma verifica también contra GoTrue (getStrictSessionUser); acá, el mismo usuario de la foto.
+vi.mock("@/lib/session-user", () => ({
+  getStrictSessionUser: vi.fn(async () => (h.snapshot ? { id: (h.snapshot as { userId: string }).userId } : null)),
+}));
 vi.mock("@/lib/support-session-internal", () => ({
   resolveSupportTarget: vi.fn(async () => h.support),
 }));

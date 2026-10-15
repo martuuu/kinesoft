@@ -490,6 +490,31 @@ tenant reads) and its tags.
   valid cookie of the same user, and deletes it after success (single use);
   without it the current password is required.
 
+### 11.1 Verificación local del access token (PF-0b, 15-oct-2026)
+
+- **Qué cambió.** El actor (`getAccessSnapshot` → `getActor`: toda página, action y /plataforma) ya no llama a
+  `auth.getUser()` (HTTP a GoTrue) en cada request. `getSessionUser()` (`lib/session-user.ts`) toma el access token de
+  la cookie (`getSession()`, sin red salvo refresh) y lo verifica **local** (`lib/session-jwt.ts`): HS256 con
+  `SUPABASE_JWT_SECRET` (`node:crypto`, comparación en tiempo constante) o, con las signing keys asimétricas,
+  `getClaims()` de supabase-js (JWKS cacheado 10 min por proceso). Se exige `exp` (±30 s), `iss` =
+  `<NEXT_PUBLIC_SUPABASE_URL>/auth/v1`, `aud`/`role` = `authenticated`, `session_id` y un `sub` que no sea el del
+  token de realtime (`rt:…`). Memo por request de Next y por token (también dentro de una server action).
+- **Fallar cerrado / degradar.** Malformado, vencido o sin `sub` → sin sesión, sin red. Lo que no se puede PROBAR
+  localmente (firma con otra clave, `iss` distinto, otro `alg`, sin secreto, claims raros, la API de supabase-js
+  cambió) **cae a `getUser()`**: un token falso lo rechaza GoTrue; un error de configuración (secreto rotado, dominio
+  propio) deja la app como antes de PF-0b en vez de desloguear a todos. Nunca se acepta un token por descarte. Se
+  loguea `session.jwt_local_fallback {reason}` una vez por proceso y motivo (nunca el token): **si aparece en Vercel,
+  el camino rápido no está andando** (revisar `SUPABASE_JWT_SECRET` y la URL).
+- **Lo que se acepta perder: revocación inmediata.** Un access token vale hasta su `exp` (≤ 1 h en Supabase) aunque
+  la sesión se cierre en GoTrue o se borre el usuario. Lo cubren: `UserProfile.disabledAt` (se lee en cada request
+  en la misma sentencia de las membresías: deshabilitar corta al instante), las membresías y el estado del
+  consultorio (también por request), y `getStrictSessionUser()` (GoTrue) en los puntos sensibles: invitación, alta,
+  portal y turnero (piden `email_confirmed_at`, que el JWT no trae), reset/cambio de contraseña, elección de
+  consultorio y fin de soporte. **Plataforma** y el 2FA de PL deben sumarlo (handoff de PF-0b a
+  `lib/platform-actor.ts`).
+- **El secreto.** `SUPABASE_JWT_SECRET` ya existía (realtime). Con él se puede FIRMAR una sesión de cualquier usuario:
+  es tan sensible como la service key (server-only, guard (d) de `guard-realtime.mjs`, nunca en logs).
+
 ## 12. Observability & headers (A3b, 30-sep-2026)
 
 - **Next 14.2.35** (from 14.2.18): CVE-2025-29927 (middleware bypass via
@@ -852,7 +877,7 @@ Diseño en [ARCHITECTURE.md §Identidad y acceso + ADR-007/ADR-008](ARCHITECTURE
   `issueAccessLink` y `sendEmail` registran el host, nunca el token ni la URL; el rechazo del vínculo del portal ya no
   loguea el email.
 - **Puerto único de Auth admin**: `auth.admin.*` solo en `lib/identity/auth-admin.ts` (verificado con grep al cierre de IAM y de BO; todavía sin guard estático, AUDIT `guard-auth-admin-y-getuser`);
-  `auth.getUser()` solo en `getVerifiedSessionUser`. `lib/invitations.ts` no usa el cliente admin ni
+  `auth.getUser()` solo en `lib/session-user.ts` (`getStrictSessionUser`, alias `getVerifiedSessionUser`; PF-0b). `lib/invitations.ts` no usa el cliente admin ni
   `inviteUserByEmail` (guard en `tests/integration/invitations-email.test.ts`).
 
 ## 19. Back-office de Plataforma (BO, 14-oct-2026)

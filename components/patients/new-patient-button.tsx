@@ -64,7 +64,9 @@ function NewPatientModal({ insurers, onClose }: { insurers: InsurerOption[]; onC
         return;
       }
       onClose();
-      router.refresh();
+      // PF-0d: sin `router.refresh()` antes del push: `createPatient` ya
+      // revalidó "/pacientes" (la respuesta trajo la lista) y la navegación
+      // renderiza la ficha nueva igual. Eran dos renders de más.
       router.push(`/pacientes/${result.data.id}`);
     });
   };

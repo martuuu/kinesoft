@@ -64,9 +64,10 @@ const ar = (local: string) => new Date(`${local}:00-03:00`);
  * 08-oct: alta 34 statements / 5 tx (= `f.createBooking` de agenda-multi.json),
  * edición (mover) 30 / 1. El techo estricto de `createBooking` /
  * `updateBooking` (tests/perf/compare.ts) exige que sin sala no se muevan.
+ * PF-0b (15-oct): membresías en una sentencia, 34→31 / 30→27.
  */
-const HEAD_CREATE_STATEMENTS = 34;
-const HEAD_UPDATE_STATEMENTS = 30;
+const HEAD_CREATE_STATEMENTS = 31;
+const HEAD_UPDATE_STATEMENTS = 27;
 
 describe.skipIf(!RUN)("write-paths de turnos con sala (SR3a)", () => {
   let db: PrismaClient;

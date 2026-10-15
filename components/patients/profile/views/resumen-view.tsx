@@ -1,7 +1,6 @@
 "use client";
 
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -274,16 +273,16 @@ function EvaScoreSlot({ patient }: { patient: PatientWithRelations }) {
 }
 
 function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const submit = (formData: FormData) => {
     start(async () => {
-      const result = await recordEvaScore({
+      // PF-0d: sin `router.refresh()` después; `recordEvaScore` revalida la
+      // ficha y la respuesta de la action ya trae el EVA nuevo.
+      await recordEvaScore({
         patientId: patient.id,
         value: Number(formData.get("value")),
         source: "manual",
       });
-      if (result.ok) router.refresh();
     });
   };
   const scores = patient.evaScores;

@@ -41,8 +41,10 @@ import { noteLocalReception } from "@/lib/arrival-local-notes";
  *   el padre no re-renderice.
  * - `onChanged(b)`: se llama con la fila NUEVA después de cada acción OK (el
  *   padre la reemplaza en su estado), y con la fila VIEJA cuando la action
- *   devuelve "El turno cambió en otra sesión": en ese caso el padre tiene que
- *   re-listar el día (`listAgendaBookings`) para traer la versión vigente.
+ *   devuelve "El turno cambió en otra sesión" (`opts.stale`): en ese caso el
+ *   padre tiene que traer la versión vigente, porque esa respuesta NO revalida.
+ *   En el OK no hace falta re-listar: la action hace `revalidatePath` y su
+ *   respuesta ya trae el árbol RSC nuevo (PF-0d, sin `router.refresh()`).
  *   Recomendado: en los dos casos reemplazar la fila y re-listar en segundo
  *   plano; el override local se descarta solo cuando llega una versión igual
  *   o más nueva (`mergeReceptionOverrides`).
@@ -74,7 +76,7 @@ export function ReceptionView({
   now: Date;
   canOperate: boolean;
   onOpenBooking: (b: BookingDTO) => void;
-  onChanged: (b: BookingDTO) => void;
+  onChanged: (b: BookingDTO, opts?: { stale?: boolean }) => void;
   roomById?: Readonly<Record<string, { name: string }>> | null;
 }) {
   const toast = useToast();
@@ -149,7 +151,7 @@ export function ReceptionView({
       toast.warning("El turno cambió en otra sesión", {
         description: `Actualizamos la lista con lo último de ${b.patientName}. Revisalo y reintentá.`,
       });
-      onChanged(back.previous ?? b);
+      onChanged(back.previous ?? b, { stale: true });
     } else {
       toast.error(res.error);
     }

@@ -1015,7 +1015,14 @@ export async function createBooking(
     }
     if (w.kind === "foreign-key") return { ok: false, error: "No pudimos crear el turno." };
     // Éxito idempotente: no se escribió nada → ni audit ni `afterBookingsCommitted`.
-    if (w.kind === "adopted") return { ok: true, data: { id: w.id } };
+    if (w.kind === "adopted") {
+      // PF-0d: el cliente ya no hace `router.refresh()` después de crear: la
+      // agenda nueva llega SOLO con la respuesta de una action que revalida. Un
+      // reintento idempotente (la respuesta del primero se perdió) tiene que
+      // traerla igual, aunque no haya escrito nada (sin audit ni eventos).
+      revalidatePath("/agenda");
+      return { ok: true, data: { id: w.id } };
+    }
     if (w.kind === "bad-location") return { ok: false, error: BAD_LOCATION_ERROR };
     const b = w.row;
     await audit({
@@ -1072,7 +1079,11 @@ export async function createBooking(
     // concurrent upserts with the SAME key can also cross on that index; that
     // one resolves to the row the other one wrote (idempotent success).
     const r = await resolveUniqueViolation(actor.tenantId, e, idempotencyKey);
-    if (r.kind === "existing") return { ok: true, data: { id: r.id } };
+    if (r.kind === "existing") {
+      // PF-0d: éxito idempotente → misma razón que la rama `adopted`.
+      revalidatePath("/agenda");
+      return { ok: true, data: { id: r.id } };
+    }
     if (r.kind === "patient-slot") return { ok: false, error: SAME_INSTANT_ERROR };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return { ok: false, error: "Turno duplicado." };

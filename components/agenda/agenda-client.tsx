@@ -531,7 +531,8 @@ export function AgendaClient(props: Props) {
 
   // ── Turnos: recepción optimista + filtros ──────────────────────────────────
   // `ReceptionView` avisa cada cambio con la fila nueva (o la vieja si "cambió
-  // en otra sesión"); se pisa acá al instante y `router.refresh()` re-lista.
+  // en otra sesión"); se pisa acá al instante. En el OK la respuesta de la
+  // action (que revalida) re-lista; en "cambió en otra sesión", `router.refresh()`.
   const [overrides, setOverrides] = useState<Readonly<Record<string, BookingDTO>>>({});
   useEffect(() => setOverrides({}), [props.bookings]);
 
@@ -605,6 +606,7 @@ export function AgendaClient(props: Props) {
       // Candado / bloqueos: cambian franjas y bloqueos, que vienen del server
       // component (`initialAvailability`), no de `listAgendaBookings`. Ahí sí
       // `router.refresh()`; trae también los turnos, así que no se re-pide aparte.
+      // refresh-ok: evento de realtime (otra sesión cambió franjas/bloqueos); no hay action propia que traiga el árbol.
       if (batch.some((m) => m.kind === "availability")) router.refresh();
       else coalescer.request();
     });
@@ -1169,10 +1171,15 @@ export function AgendaClient(props: Props) {
                   // deriva al paciente aunque haya un solo consultorio).
                   roomById={rooms.length > 0 ? roomById : null}
                   onOpenBooking={setEditing}
-                  onChanged={(b) => {
+                  onChanged={(b, opts) => {
                     markOwn(b.id);
                     setOverrides((o) => ({ ...o, [b.id]: b }));
-                    router.refresh();
+                    // PF-0d: en el OK `markReceptionAction` hace `revalidatePath`
+                    // y la respuesta de la action ya trae el árbol RSC nuevo de
+                    // /agenda (`props.bookings` cambia solo): un `router.refresh()`
+                    // acá era un segundo render entero (+203 ms, PERF.md §PF-0).
+                    // refresh-ok: "cambió en otra sesión" — la action NO revalida, hay que traer la versión vigente.
+                    if (opts?.stale) router.refresh();
                   }}
                 />
               )}
@@ -1281,7 +1288,9 @@ export function AgendaClient(props: Props) {
               // El id del alta lo decide el server: silencio general unos segundos.
               markOwn(null, { quiet: true });
               setCreating(null);
-              router.refresh();
+              // PF-0d: sin `router.refresh()`. `createBooking`/`createBookingsBatch`
+              // (y `setPatientDefaultCopago`) hacen `revalidatePath` en todo OK,
+              // así que la respuesta de la action ya trajo la agenda nueva.
             }}
           />
         )}
@@ -1297,7 +1306,15 @@ export function AgendaClient(props: Props) {
           // Mover en serie / re-planificar tocan otros turnos del plan: silencio general.
           markOwn(editing?.id ?? null, { quiet: true });
           setEditing(null);
-          router.refresh();
+          // PF-0d: sin `router.refresh()`. Todas las actions que terminan en
+          // `onSaved` revalidan en su OK (`updateBooking`, `setBookingStatus`,
+          // `deleteBooking` → "/agenda"; `removeBookingFromPlan`,
+          // `linkBookingToSession`, `generatePlanBookings`, `movePlanSeries` →
+          // `/pacientes/<id>` + tags). En Next 14.2 CUALQUIER revalidación en la
+          // action devuelve el árbol de la página actual (revalidate.js:
+          // `pathWasRevalidated = true` sin mirar la ruta; action-handler.js:
+          // `skipFlight: !pathWasRevalidated`); el canario está en
+          // tests/unit/refresh-ratchet.test.ts.
         }}
       />
 
@@ -1316,7 +1333,10 @@ export function AgendaClient(props: Props) {
           onDone={() => {
             markOwn(null, { quiet: true });
             setLockDialog(null);
-            router.refresh();
+            // PF-0d: sin `router.refresh()`. `onDone` solo corre si hubo
+            // escritura (`wrote`), y `applyDayLock`/`removeDayLock` con algo
+            // borrado hacen `revalidatePath("/agenda")`: el árbol ya llegó con la
+            // respuesta de la action, mientras el diálogo seguía abierto.
           }}
         />
       )}

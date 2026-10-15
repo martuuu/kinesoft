@@ -19,6 +19,7 @@ import "server-only";
  * dejar `mfa` en el registro.
  */
 import { getAccessSnapshot, ForbiddenError, UnauthenticatedError, type AccessSnapshot } from "@/lib/session";
+import { getStrictSessionUser } from "@/lib/session-user";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 import { platformMfaEnforcement } from "@/lib/env";
@@ -146,8 +147,10 @@ export class PlatformReauthRequiredError extends ForbiddenError {
 async function admitPlatformAdmin(
   action: PlatformActionKey | undefined
 ): Promise<{ s: AccessSnapshot & { profile: NonNullable<AccessSnapshot["profile"]> }; policy: PlatformActionPolicy | null }> {
-  const s = await getAccessSnapshot();
+  // PF-0b: Plataforma verifica también contra GoTrue (revocación inmediata), no solo el JWT local del actor.
+  const [s, strict] = await Promise.all([getAccessSnapshot(), getStrictSessionUser()]);
   if (!s || !s.profile) throw new UnauthenticatedError("no_session");
+  if (!strict || strict.id !== s.userId) throw new UnauthenticatedError("no_session");
   if (!s.profile.isPlatformAdmin || s.profile.disabledAt) throw new ForbiddenError("platform_admin_required");
 
   let policy: PlatformActionPolicy | null = null;
