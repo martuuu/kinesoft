@@ -167,7 +167,7 @@ const base: Props = {
     { id: "L1", name: "Principal", isPrimary: true },
     { id: "L2", name: "Centro", isPrimary: false },
   ],
-  agendaPrefs: { mode: "day", zoom: 30, density: "comfortable", favoritePractitionerIds: ["p3"], locationId: null, arrivalAlert: "visual", callAlert: "visual", salaGroupBy: "practitioner" },
+  agendaPrefs: { mode: "day", zoom: 30, density: "comfortable", favoritePractitionerIds: ["p3"], locationId: null, arrivalAlert: "visual", callAlert: "visual", salaGroupBy: "practitioner", receptionLayout: "board" },
   initialAvailability: availability,
 };
 const r = (p: Props, name: string) => {

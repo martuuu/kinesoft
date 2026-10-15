@@ -321,6 +321,15 @@ export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope, 
 // toast). `salaGroupBy`: control «Por profesional | Por sala» de `/sala`
 // (SV-D13), default profesional. Mismo patrón que el resto: sanitize total
 // (inválido → default) y patch estricto.
+//
+// RX (brief RX §3, C-RX1): `receptionLayout` = qué cara muestra `/sala`
+// («Tablero» de SV10a, A «Lista y panel» o B «Flujo»), elegida en Apariencia.
+// Va acá y no en el localStorage de Tweaks porque `/sala` se renderiza en SSR
+// (el primer paint sale con la cara correcta, sin flash) y la PC de recepción
+// es compartida: la cara sigue al usuario. Default "board" para todos (RX-D2:
+// queda «detrás de un flag» y nadie ve un cambio sin elegirlo). Cuando Martin
+// elija una cara y se borre otra, se saca del enum y el sanitize lleva lo
+// guardado a "board" (o al default que pase el caller).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -343,6 +352,10 @@ const alertModeSchema = z.enum(["visual", "sound", "off"]);
 export type SalaGroupBy = "practitioner" | "room";
 export const SALA_GROUP_BYS: ReadonlyArray<SalaGroupBy> = ["practitioner", "room"];
 const salaGroupBySchema = z.enum(["practitioner", "room"]);
+/** RX: cara de /sala. "board" = columnas (SV10a), "list" = A · Lista y panel, "flow" = B · Flujo. */
+export type ReceptionLayout = "board" | "list" | "flow";
+export const RECEPTION_LAYOUTS: ReadonlyArray<ReceptionLayout> = ["board", "list", "flow"];
+const receptionLayoutSchema = z.enum(["board", "list", "flow"]);
 /** Tope de favoritos guardados (un consultorio grande ronda los 10-15). */
 export const AGENDA_MAX_FAVORITES = 50;
 const ID_MAX = 64;
@@ -366,6 +379,8 @@ export type AgendaViewPrefs = {
   callAlert: AlertMode;
   /** SV-D13: agrupación de `/sala`. */
   salaGroupBy: SalaGroupBy;
+  /** RX: cara de `/sala` (Apariencia → «Recepción»). */
+  receptionLayout: ReceptionLayout;
 };
 
 export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
@@ -377,6 +392,7 @@ export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
   arrivalAlert: "visual",
   callAlert: "visual",
   salaGroupBy: "practitioner",
+  receptionLayout: "board",
 };
 
 const zoomSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
@@ -414,6 +430,7 @@ export function sanitizeAgendaViewPrefs(
     arrivalAlert: alertModeSchema.catch(defaults.arrivalAlert),
     callAlert: alertModeSchema.catch(defaults.callAlert),
     salaGroupBy: salaGroupBySchema.catch(defaults.salaGroupBy),
+    receptionLayout: receptionLayoutSchema.catch(defaults.receptionLayout),
   });
   const parsed = schema.parse({
     ...o,
@@ -441,6 +458,7 @@ export const AgendaViewPrefsPatchSchema = z
     arrivalAlert: alertModeSchema,
     callAlert: alertModeSchema,
     salaGroupBy: salaGroupBySchema,
+    receptionLayout: receptionLayoutSchema,
   })
   .partial()
   .strict();

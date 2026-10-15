@@ -173,6 +173,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       // PL-F1c: la paleta guardada en el server manda desde el primer render (antes solo la aplicaba el dashboard
       // al montarse, y pisaba lo elegido en Tweaks).
       initialPalette={prefs.palette}
+      // RX-0 (C-RX2): cara de /sala (`agendaPrefs.receptionLayout`, ya sanitizada) para que Apariencia y el
+      // escritorio arranquen con la elegida, sin flash.
+      initialReceptionLayout={prefs.agendaView.receptionLayout}
     >
       <AppShell
         isPlatformAdmin={actor.isPlatformAdmin}

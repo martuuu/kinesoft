@@ -34,6 +34,8 @@ describe("sanitizeAgendaViewPrefs (lectura)", () => {
       arrivalAlert: "visual",
       callAlert: "visual",
       salaGroupBy: "practitioner",
+      // RX (C-RX1, RX-D2): /sala arranca en el Tablero para todos.
+      receptionLayout: "board",
     });
   });
 
@@ -47,6 +49,7 @@ describe("sanitizeAgendaViewPrefs (lectura)", () => {
       arrivalAlert: "sound",
       callAlert: "off",
       salaGroupBy: "room",
+      receptionLayout: "flow",
     };
     expect(sanitizeAgendaViewPrefs(v)).toEqual(v);
   });
@@ -303,5 +306,164 @@ describe("[SV02] agendaPrefs: arrivalAlert, callAlert, salaGroupBy", () => {
       AgendaViewPrefsPatchSchema.parse({ arrivalAlert: "sound", salaGroupBy: "room" })
     );
     expect(next).toEqual({ ...current, arrivalAlert: "sound", salaGroupBy: "room" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RX-0 · C-RX1: `agendaPrefs.receptionLayout` (cara de /sala: Tablero, A · Lista
+// y panel, B · Flujo). Mismo patrón que `salaGroupBy`: un blob anterior a RX lee
+// "board", un valor roto cae a "board" sin tocar el resto, el patch es estricto.
+// ─────────────────────────────────────────────────────────────────────────────
+import { RECEPTION_LAYOUTS } from "@/lib/preferences-constants";
+
+describe("[RX-0] agendaPrefs: receptionLayout", () => {
+  it("dominio exportado", () => {
+    expect(RECEPTION_LAYOUTS).toEqual(["board", "list", "flow"]);
+  });
+
+  it("blob anterior a RX (sin la clave) → board, sin tocar lo demás", () => {
+    const out = sanitizeAgendaViewPrefs({ salaGroupBy: "room", favoritePractitionerIds: ["p1"] });
+    expect(out.receptionLayout).toBe("board");
+    expect(out.salaGroupBy).toBe("room");
+    expect(out.favoritePractitionerIds).toEqual(["p1"]);
+  });
+
+  it("valores válidos pasan", () => {
+    for (const l of RECEPTION_LAYOUTS) expect(sanitizeAgendaViewPrefs({ receptionLayout: l }).receptionLayout).toBe(l);
+  });
+
+  it("valor inválido → board, sin tocar los demás campos", () => {
+    for (const bad of ["grid", "LIST", "", null, 1, true, ["list"], { v: "flow" }]) {
+      const out = sanitizeAgendaViewPrefs({ receptionLayout: bad, zoom: 15, callAlert: "off" });
+      expect(out.receptionLayout, JSON.stringify(bad)).toBe("board");
+      expect(out.zoom).toBe(15);
+      expect(out.callAlert).toBe("off");
+    }
+  });
+
+  it("default del caller (RX-D2: un día puede ser `list` para quien opera todo)", () => {
+    const defaults = { ...DEFAULT_AGENDA_VIEW_PREFS, receptionLayout: "list" as const };
+    expect(sanitizeAgendaViewPrefs({}, defaults).receptionLayout).toBe("list");
+    expect(sanitizeAgendaViewPrefs({ receptionLayout: "grid" }, defaults).receptionLayout).toBe("list");
+    expect(sanitizeAgendaViewPrefs({ receptionLayout: "flow" }, defaults).receptionLayout).toBe("flow");
+  });
+
+  it("patch acepta el dominio", () => {
+    for (const l of RECEPTION_LAYOUTS) {
+      expect(AgendaViewPrefsPatchSchema.parse({ receptionLayout: l })).toEqual({ receptionLayout: l });
+    }
+  });
+
+  it("patch rechaza fuera de dominio (\"grid\", null, mayúsculas) y claves parecidas", () => {
+    for (const bad of [
+      { receptionLayout: "grid" },
+      { receptionLayout: null },
+      { receptionLayout: "List" },
+      { receptionLayout: 1 },
+      { receptionView: "list" },
+      { layout: "flow" },
+    ]) {
+      expect(AgendaViewPrefsPatchSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("merge: cambiar la cara conserva el resto (favoritos, sede, sala, avisos)", () => {
+    const current = sanitizeAgendaViewPrefs({
+      locationId: "L1",
+      roomId: "R1",
+      mode: "room",
+      favoritePractitionerIds: ["p2", "p1"],
+      callAlert: "sound",
+      salaGroupBy: "room",
+    });
+    const next = mergeAgendaViewPrefs(current, AgendaViewPrefsPatchSchema.parse({ receptionLayout: "list" }));
+    expect(next).toEqual({ ...current, receptionLayout: "list" });
+    expect(next.roomId).toBe("R1");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RX-0 · C-RX2: `receptionLayout` en el contexto de Apariencia (ex Tweaks).
+// Se monta el provider REAL con `renderToStaticMarkup` (sin DOM no hay effects ni
+// clicks) y se testea `persistReceptionLayout`, el commit optimista que usa
+// `setReceptionLayout`, con un `save` falso (la red se mockea; la función no).
+// ─────────────────────────────────────────────────────────────────────────────
+import { vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+const rxSaved = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("@/lib/preferences", () => ({
+  updateUserPreferences: async () => ({ ok: true }),
+  updateAgendaViewPrefs: async (patch: unknown) => {
+    rxSaved.calls.push(patch);
+    return { ok: true };
+  },
+}));
+
+import {
+  TweaksProvider,
+  persistReceptionLayout,
+  useTweaksOptional,
+} from "@/components/layout/tweaks-context";
+import type { ReceptionLayout } from "@/lib/preferences-constants";
+
+function readCtx(props: { initialReceptionLayout?: ReceptionLayout } | null) {
+  const out: { ctx?: ReturnType<typeof useTweaksOptional> } = {};
+  function Probe() {
+    out.ctx = useTweaksOptional();
+    return null;
+  }
+  renderToStaticMarkup(props ? createElement(TweaksProvider, { ...props, children: createElement(Probe) }) : createElement(Probe));
+  return out.ctx;
+}
+
+describe("[RX-0] tweaks-context: receptionLayout", () => {
+  it("useTweaksOptional fuera del provider → null (no tira, a diferencia de useTweaks)", () => {
+    expect(readCtx(null)).toBeNull();
+  });
+
+  it("sin prop → board; con prop → la del server; arranca minimizado (enmienda F-c)", () => {
+    expect(readCtx({})?.receptionLayout).toBe("board");
+    expect(readCtx({ initialReceptionLayout: "flow" })?.receptionLayout).toBe("flow");
+    expect(readCtx({})?.t.minimised).toBe(true);
+    expect(typeof readCtx({})?.setReceptionLayout).toBe("function");
+  });
+
+  it("prop fuera de dominio (blob viejo que se coló) → board", () => {
+    expect(readCtx({ initialReceptionLayout: "grid" as ReceptionLayout })?.receptionLayout).toBe("board");
+  });
+
+  it("persist OK: guarda el valor nuevo y no hace rollback", async () => {
+    const applied: ReceptionLayout[] = [];
+    const saved: ReceptionLayout[] = [];
+    const ok = await persistReceptionLayout("list", "board", {
+      save: async (v) => (saved.push(v), { ok: true }),
+      apply: (v) => applied.push(v),
+      isLatest: () => true,
+    });
+    expect(ok).toBe(true);
+    expect(saved).toEqual(["list"]);
+    expect(applied).toEqual([]);
+  });
+
+  it("persist rechazado ({ ok: false }) o con excepción de red → vuelve al previo", async () => {
+    for (const save of [async () => ({ ok: false }), async () => Promise.reject(new Error("red"))]) {
+      const applied: ReceptionLayout[] = [];
+      const ok = await persistReceptionLayout("flow", "list", { save, apply: (v) => applied.push(v), isLatest: () => true });
+      expect(ok).toBe(false);
+      expect(applied).toEqual(["list"]);
+    }
+  });
+
+  it("un rechazo tardío de un pedido viejo no pisa lo elegido después", async () => {
+    const applied: ReceptionLayout[] = [];
+    const ok = await persistReceptionLayout("list", "board", {
+      save: async () => ({ ok: false }),
+      apply: (v) => applied.push(v),
+      isLatest: () => false,
+    });
+    expect(ok).toBe(false);
+    expect(applied).toEqual([]);
   });
 });

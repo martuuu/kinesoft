@@ -6,11 +6,18 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { updateUserPreferences } from "@/lib/preferences";
-import { DEFAULT_PREFERENCES, type AgendaPrefs } from "@/lib/preferences-constants";
+import { updateAgendaViewPrefs, updateUserPreferences } from "@/lib/preferences";
+import {
+  DEFAULT_AGENDA_VIEW_PREFS,
+  DEFAULT_PREFERENCES,
+  RECEPTION_LAYOUTS,
+  type AgendaPrefs,
+  type ReceptionLayout,
+} from "@/lib/preferences-constants";
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
 export type DashChrome = "sidebar" | "topbar";
@@ -74,6 +81,32 @@ const DEFAULT_AGENDA: AgendaPrefs = {
   agendaShowSunday: DEFAULT_PREFERENCES.agendaShowSunday,
 };
 
+/**
+ * RX-0 (C-RX2): guarda la cara de `/sala` elegida en Apariencia. Optimista: `apply(next)` ya se hizo antes de
+ * llamar; acá se espera al server y, si falla (solo lectura, red caída, patch rechazado), se vuelve a `prev`, pero
+ * SOLO si este pedido sigue siendo el último (`isLatest`): con dos clics rápidos (Lista → Flujo) la respuesta tardía
+ * de un pedido viejo no puede pisar lo elegido después. Puro y exportado para el test (sin DOM no hay effects).
+ * Devuelve si quedó guardado.
+ */
+export async function persistReceptionLayout(
+  next: ReceptionLayout,
+  prev: ReceptionLayout,
+  deps: {
+    save: (v: ReceptionLayout) => Promise<{ ok: boolean }>;
+    apply: (v: ReceptionLayout) => void;
+    isLatest: () => boolean;
+  }
+): Promise<boolean> {
+  let ok = false;
+  try {
+    ok = (await deps.save(next)).ok;
+  } catch {
+    ok = false;
+  }
+  if (!ok && deps.isLatest()) deps.apply(prev);
+  return ok;
+}
+
 type Ctx = {
   t: TweaksState;
   set: <K extends keyof TweaksState>(key: K, value: TweaksState[K]) => void;
@@ -85,6 +118,14 @@ type Ctx = {
    */
   agenda: AgendaPrefs;
   setAgenda: <K extends keyof AgendaPrefs>(key: K, value: AgendaPrefs[K]) => void;
+  /**
+   * RX: cara de `/sala` («Tablero», «Lista y panel», «Flujo»). Server-backed en `agendaPrefs.receptionLayout`
+   * (no en localStorage: `/sala` es SSR y la PC de recepción es compartida, brief RX §3). Se llama
+   * `receptionLayout` y nunca «view»: la agenda ya tiene `view` por URL y el contexto tenía `agendaView`.
+   */
+  receptionLayout: ReceptionLayout;
+  /** Optimista; si `updateAgendaViewPrefs` falla vuelve al valor anterior (`persistReceptionLayout`). */
+  setReceptionLayout: (v: ReceptionLayout) => void;
 };
 
 const TweaksContext = createContext<Ctx | null>(null);
@@ -93,17 +134,27 @@ export function TweaksProvider({
   children,
   initialAgenda,
   initialPalette = null,
+  initialReceptionLayout = DEFAULT_AGENDA_VIEW_PREFS.receptionLayout,
 }: {
   children: ReactNode;
   initialAgenda?: AgendaPrefs;
   /** PL-F1c: `UserPreferences.palette` (lo lee el layout `(app)`). null = sin server (tests, demo). */
   initialPalette?: Palette | null;
+  /** RX-0: `agendaPrefs.receptionLayout` ya sanitizado (layout `(app)`). Sin server: "board". */
+  initialReceptionLayout?: ReceptionLayout;
 }) {
   const [t, setT] = useState<TweaksState>(() => ({
     ...DEFAULTS,
     palette: initialPalette && PALETTES.includes(initialPalette) ? initialPalette : DEFAULTS.palette,
   }));
   const [agenda, setAgendaState] = useState<AgendaPrefs>(initialAgenda ?? DEFAULT_AGENDA);
+  const [receptionLayout, setReceptionLayoutState] = useState<ReceptionLayout>(() =>
+    RECEPTION_LAYOUTS.includes(initialReceptionLayout) ? initialReceptionLayout : DEFAULT_AGENDA_VIEW_PREFS.receptionLayout
+  );
+  // Copia sincrónica del valor vigente (el «previo» del rollback no puede salir de un closure viejo) y número del
+  // último pedido (ver `persistReceptionLayout`).
+  const receptionLayoutRef = useRef(receptionLayout);
+  const receptionReq = useRef(0);
 
   // Hydrate from localStorage once (la paleta del server gana: ver `hydrateTweaks`).
   useEffect(() => {
@@ -145,7 +196,26 @@ export function TweaksProvider({
     void updateUserPreferences({ [key]: value } as Partial<AgendaPrefs>);
   }, []);
 
-  const value = useMemo(() => ({ t, set, agenda, setAgenda }), [t, set, agenda, setAgenda]);
+  const setReceptionLayout: Ctx["setReceptionLayout"] = useCallback((v) => {
+    const prev = receptionLayoutRef.current;
+    if (v === prev) return;
+    const apply = (x: ReceptionLayout) => {
+      receptionLayoutRef.current = x;
+      setReceptionLayoutState(x);
+    };
+    apply(v);
+    const req = ++receptionReq.current;
+    void persistReceptionLayout(v, prev, {
+      save: (x) => updateAgendaViewPrefs({ receptionLayout: x }),
+      apply,
+      isLatest: () => receptionReq.current === req,
+    });
+  }, []);
+
+  const value = useMemo(
+    () => ({ t, set, agenda, setAgenda, receptionLayout, setReceptionLayout }),
+    [t, set, agenda, setAgenda, receptionLayout, setReceptionLayout]
+  );
 
   return <TweaksContext.Provider value={value}>{children}</TweaksContext.Provider>;
 }
@@ -154,4 +224,12 @@ export function useTweaks() {
   const ctx = useContext(TweaksContext);
   if (!ctx) throw new Error("useTweaks must be used within TweaksProvider");
   return ctx;
+}
+
+/**
+ * RX-0 (C-RX2): como `useTweaks`, pero null fuera del provider en vez de tirar. Lo usa `SalaClient` para elegir la
+ * cara (`useTweaksOptional()?.receptionLayout ?? initialLayout`): sus render tests lo montan sin `TweaksProvider`.
+ */
+export function useTweaksOptional(): Ctx | null {
+  return useContext(TweaksContext);
 }
