@@ -26,6 +26,7 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
       "Usuarios",
       "Plan y uso",
       "Accesos de soporte",
+      "Exportar datos",
     ]);
   });
 
@@ -44,6 +45,15 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
     for (const role of ["PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
       const html = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role={role} modules={KINE} />);
       expect(tabs(html)).not.toContain("Usuarios");
+    }
+  });
+
+  it("[BO5-C] «Exportar datos» solo para el OWNER (ADMIN tampoco: la route también lo rechaza)", () => {
+    const owner = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role="OWNER" modules={KINE} />);
+    expect(tabs(owner)).toContain("Exportar datos");
+    for (const role of ["ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+      const html = renderToStaticMarkup(<TabsBar tab="general" setTab={() => {}} role={role} modules={KINE} />);
+      expect(tabs(html)).not.toContain("Exportar datos");
     }
   });
 });

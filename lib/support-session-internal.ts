@@ -296,7 +296,9 @@ export async function startSupportSession(p: {
       action: "platform.support.start",
       entity: "SupportSession",
       entityId: session.id,
-      payload: { scope: "ADMIN_CONFIG", reasonLength: reason.length },
+      // BO4: `mfa` deja asentado si la sesión que entró al consultorio pasó por TOTP (con
+      // PLATFORM_MFA_ENFORCEMENT=off se permite igual y queda `false`: es la huella para revisar después).
+      payload: { scope: "ADMIN_CONFIG", reasonLength: reason.length, mfa: p.actor.mfa },
     });
     return { sessionId: session.id, tenantName: tenant.name };
   });

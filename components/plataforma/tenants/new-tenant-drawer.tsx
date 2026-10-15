@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { IconCheck } from "@/components/ui/icons";
 import { createTenantWithOwner } from "@/lib/platform-provisioning";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   MAX_TRIAL_DAYS,
   type CreateTenantWithOwnerInputType,
@@ -386,6 +387,7 @@ export function NewTenantResult({
 /** Botón «Nuevo consultorio» + Drawer. Vive en el header de /plataforma/consultorios. */
 export function NewTenantDrawer() {
   const router = useRouter();
+  const runPlatform = usePlatformAction();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<NewTenantFormState>(emptyNewTenantForm);
   const [key, setKey] = useState<string>(newIdempotencyKey);
@@ -419,7 +421,7 @@ export function NewTenantDrawer() {
     setError(null);
     setFieldErrors({});
     try {
-      const res = await createTenantWithOwner(buildCreatePayload(form, key));
+      const res = await runPlatform(() => createTenantWithOwner(buildCreatePayload(form, key)));
       if (!res.ok) {
         setError(res.error);
         setFieldErrors(res.fieldErrors ?? {});

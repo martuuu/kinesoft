@@ -140,3 +140,44 @@ describe("parseEnv — mail (IAM-0b)", () => {
     spy.mockRestore();
   });
 });
+
+// BO5-B: modo mantenimiento.
+describe("parseEnv — MAINTENANCE_MODE (BO5-B)", () => {
+  it("default off; vacío cuenta como no seteada", () => {
+    expect(parseEnv({}).MAINTENANCE_MODE).toBe("off");
+    expect(parseEnv({ MAINTENANCE_MODE: "" }).MAINTENANCE_MODE).toBe("off");
+  });
+  it("on, tolerando mayúsculas y espacios", () => {
+    expect(parseEnv({ MAINTENANCE_MODE: " ON " }).MAINTENANCE_MODE).toBe("on");
+  });
+  it("un typo frena el boot (no queda abierta creyendo que está en mantenimiento)", () => {
+    expect(() => parseEnv({ MAINTENANCE_MODE: "true" })).toThrow(/MAINTENANCE_MODE/);
+  });
+  it("MAINTENANCE_MESSAGE largo no frena el deploy", () => {
+    expect(parseEnv({ MAINTENANCE_MESSAGE: "x".repeat(1000) }).MAINTENANCE_MESSAGE).toHaveLength(1000);
+  });
+});
+
+// Integración BO4/BO5: lib/env.ts lo editaron BO4 (MFA) y BO5-B (mantenimiento) en paralelo; esto fija que las
+// variables de Plataforma sigan en el schema Y en el objeto que arma `parseEnv` (si una falta en el schema, zod la
+// descarta en silencio y el flag nunca prende).
+describe("parseEnv — flags de Plataforma (BO1/BO4/BO5)", () => {
+  it("TENANT_ACCESS_ENFORCEMENT: default banner, acepta off|banner|enforce, typo frena", () => {
+    expect(parseEnv({}).TENANT_ACCESS_ENFORCEMENT).toBe("banner");
+    expect(parseEnv({ TENANT_ACCESS_ENFORCEMENT: "" }).TENANT_ACCESS_ENFORCEMENT).toBe("banner");
+    for (const v of ["off", "banner", "enforce"] as const)
+      expect(parseEnv({ TENANT_ACCESS_ENFORCEMENT: v }).TENANT_ACCESS_ENFORCEMENT).toBe(v);
+    expect(() => parseEnv({ TENANT_ACCESS_ENFORCEMENT: "on" })).toThrow(/TENANT_ACCESS_ENFORCEMENT/);
+  });
+  it("PLATFORM_MFA_ENFORCEMENT: default off, acepta enforce, typo frena", () => {
+    expect(parseEnv({}).PLATFORM_MFA_ENFORCEMENT).toBe("off");
+    expect(parseEnv({ PLATFORM_MFA_ENFORCEMENT: "" }).PLATFORM_MFA_ENFORCEMENT).toBe("off");
+    expect(parseEnv({ PLATFORM_MFA_ENFORCEMENT: "enforce" }).PLATFORM_MFA_ENFORCEMENT).toBe("enforce");
+    expect(() => parseEnv({ PLATFORM_MFA_ENFORCEMENT: "true" })).toThrow(/PLATFORM_MFA_ENFORCEMENT/);
+  });
+  it("CRON_SECRET: opcional, vacío = no seteada", () => {
+    expect(parseEnv({}).CRON_SECRET).toBeUndefined();
+    expect(parseEnv({ CRON_SECRET: "" }).CRON_SECRET).toBeUndefined();
+    expect(parseEnv({ CRON_SECRET: "s3cr3t" }).CRON_SECRET).toBe("s3cr3t");
+  });
+});

@@ -31,6 +31,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { updatePlatformTenant } from "@/lib/platform-tenants";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   SUBSCRIPTION_STATUS_VALUES,
   TENANT_PLAN_VALUES,
@@ -272,6 +273,7 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
 
   const [open, setOpen] = useState(false);
   // Versión del CAS y foto "guardada" del form. Se resincronizan cuando el
@@ -320,7 +322,7 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
     setError(null);
     setFieldErrors({});
     try {
-      const res = await updatePlatformTenant(buildUpdatePayload(detail.id, version, baseline, form));
+      const res = await runPlatform(() => updatePlatformTenant(buildUpdatePayload(detail.id, version, baseline, form)));
       if (!res.ok) {
         // Stale incluido: el Drawer queda abierto con lo que cargó el superadmin.
         // `router.refresh()` trae el detail actual y el efecto de `detail.updatedAt`

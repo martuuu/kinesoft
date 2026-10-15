@@ -11,6 +11,7 @@ import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { IconPlus } from "@/components/ui/icons";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   platformChangeMemberRole,
   platformReactivateMember,
@@ -203,6 +204,8 @@ export function MemberRow({
   const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
+  // BO4: suspender, quitar y transferir la titularidad son riesgo high (re-verificación con MFA en enforce).
+  const runPlatform = usePlatformAction();
   const [busy, start] = useTransition();
   const [transferring, setTransferring] = useState(false);
   const who = memberDisplayName(member);
@@ -219,7 +222,7 @@ export function MemberRow({
     after?: () => void
   ) => {
     start(async () => {
-      const r = await fn();
+      const r = await runPlatform(fn);
       after?.();
       if (!r.ok) {
         toast.error("No se pudo completar", { description: r.error });
@@ -396,6 +399,7 @@ export function InvitationItem({
   const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
+  const runPlatform = usePlatformAction();
   const [busy, start] = useTransition();
   const [linkResult, setLinkResult] = useState<InvitationSendResult | null>(null);
   const ref = { tenantId, invitationId: invite.id };
@@ -413,7 +417,7 @@ export function InvitationItem({
     });
     if (!ok) return;
     start(async () => {
-      const r = await platformResendInvitation(ref);
+      const r = await runPlatform(() => platformResendInvitation(ref));
       if (!r.ok) {
         toast.error("No se pudo reenviar", { description: r.error });
         return;
@@ -434,7 +438,7 @@ export function InvitationItem({
     });
     if (!ok) return;
     start(async () => {
-      const r = await platformRevokeInvitation(ref);
+      const r = await runPlatform(() => platformRevokeInvitation(ref));
       if (!r.ok) {
         toast.error("No se pudo anular", { description: r.error });
         return;

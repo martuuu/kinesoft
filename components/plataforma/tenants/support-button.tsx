@@ -17,6 +17,7 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { startSupport } from "@/lib/platform-support";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   SUPPORT_REASON_MAX,
   SUPPORT_REASON_MIN,
@@ -93,6 +94,8 @@ export function SupportButton({
   status: TenantStatus;
 }) {
   const router = useRouter();
+  // BO4: `support.start` es riesgo high → con MFA en enforce puede pedir re-verificación (modal del provider).
+  const runPlatform = usePlatformAction();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
@@ -105,7 +108,7 @@ export function SupportButton({
     setPending(true);
     setError(null);
     try {
-      const res = await startSupport(tenantId, reason.trim());
+      const res = await runPlatform(() => startSupport(tenantId, reason.trim()));
       if (!res.ok) {
         setError(res.error);
         setPending(false);

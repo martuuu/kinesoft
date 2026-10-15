@@ -27,13 +27,27 @@ describe.skipIf(!RUN)("GET /api/health", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("no-store");
     const body = await res.json();
-    expect(Object.keys(body).sort()).toEqual(["db", "ok", "time"]);
+    expect(Object.keys(body).sort()).toEqual(["db", "maintenance", "ok", "time"]);
     expect(body.ok).toBe(true);
+    expect(body.maintenance).toBe(false);
     expect(body.db).toBe("ok");
     expect(Number.isNaN(Date.parse(body.time))).toBe(false);
     // Nada de versión, commit, entorno ni URLs.
     const raw = JSON.stringify(body);
     expect(raw).not.toMatch(/postgres|supabase|vercel|version|sha|env/i);
+  });
+
+  it("[BO5-B] con MAINTENANCE_MODE=on informa maintenance: true (el middleware deja pasar /api/health)", async () => {
+    const prev = process.env.MAINTENANCE_MODE;
+    process.env.MAINTENANCE_MODE = " ON ";
+    try {
+      const res = await GET(req());
+      expect(res.status).toBe(200);
+      expect((await res.json()).maintenance).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.MAINTENANCE_MODE;
+      else process.env.MAINTENANCE_MODE = prev;
+    }
   });
 
   it("la base tira: 503 { ok: false, db: 'down' } sin el mensaje del error", async () => {

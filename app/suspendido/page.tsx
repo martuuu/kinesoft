@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AuthShell } from "@/components/screens/auth-shell";
 import { Button } from "@/components/ui/button";
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
+import { exportHref } from "@/components/configuracion/panels/export-panel";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Consultorio suspendido · KineSoft" };
@@ -16,8 +17,9 @@ export const metadata = { title: "Consultorio suspendido · KineSoft" };
  * Las redirecciones automáticas son al login (sin sesión) y a /cuenta-desactivada (usuario deshabilitado, que manda
  * sobre esto); ninguna vuelve acá sola.
  *
- * BO-D4: el OWNER de un consultorio suspendido puede pedir la exportación de sus datos. Por ahora es texto; el
- * botón llega con BO5-C.
+ * BO-D4: el OWNER de un consultorio suspendido descarga él la exportación de sus datos (BO5-C). El link lleva el
+ * `tenantId` porque acá no hay consultorio activo; `/api/consultorio/export` vuelve a exigir OWNER de ese consultorio
+ * (el botón es UX, no la barrera).
  */
 export default async function SuspendidoPage() {
   const s = await getAccessSnapshot();
@@ -37,7 +39,7 @@ export default async function SuspendidoPage() {
 
   const closed = block.kind === "tenant_closed";
   // ¿Es OWNER de alguno de los consultorios bloqueados? (los datos los ve el propio usuario: son suyos).
-  const isOwner = s.tenantBlocks.some((b) => b.tenantName === block.tenantName && b.role === "OWNER");
+  const ownerBlock = s.tenantBlocks.find((b) => b.tenantName === block.tenantName && b.role === "OWNER");
 
   return (
     <AuthShell
@@ -54,10 +56,21 @@ export default async function SuspendidoPage() {
           ? "Tus datos no se borraron. Si necesitás volver a usar el consultorio o tenés dudas, escribinos a soporte."
           : "Mientras esté suspendido no se puede entrar a la agenda ni a los pacientes. Si creés que es un error, escribinos a soporte."}
       </p>
-      {isOwner ? (
-        <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 18px", lineHeight: 1.55 }}>
-          Como titular, podés pedir la exportación de tus datos: escribinos y te la preparamos.
-        </p>
+      {ownerBlock ? (
+        <>
+          <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 12px", lineHeight: 1.55 }}>
+            Como titular, podés descargar el export de todos tus datos: pacientes, turnos, pagos, planes e historia
+            clínica.
+          </p>
+          <a
+            href={exportHref(ownerBlock.tenantId)}
+            download
+            className="k-btn k-btn-primary"
+            style={{ display: "flex", justifyContent: "center", textDecoration: "none", marginBottom: 10 }}
+          >
+            Descargar el export de mis datos
+          </a>
+        </>
       ) : (
         <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>
           Si trabajás también en otro consultorio, o querés armar el tuyo, podés seguir desde acá.

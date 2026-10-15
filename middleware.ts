@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
+import {
+  MAINTENANCE_PATH,
+  MAINTENANCE_RETRY_AFTER_SECONDS,
+  maintenanceDecision,
+  maintenanceMode,
+} from "@/lib/maintenance";
 
 /**
  * Edge middleware — three responsibilities:
@@ -34,6 +40,14 @@ import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
  * aplican DESPUÉS del refresh, sobre los headers ya con la cookie nueva, así
  * que ningún camino de la sesión los saltea. `/api/webhooks` sigue bypass
  * total (Mercado Pago no trae cookies y no debe pagar el costo).
+ *
+ * BO5-B — modo mantenimiento (`MAINTENANCE_MODE=on` + redeploy). La decisión es pura (`lib/maintenance.ts`, con
+ * la tabla de excepciones testeada); acá solo se aplica. Con `off` el camino es idéntico al de antes. Con `on`:
+ *   - lo bloqueado NO refresca la sesión (no se renderiza nada que la use, y durante un mantenimiento no queremos
+ *     ir a Supabase); el strip de `x-tenant-*` y el `x-request-id` corren igual, también en el 503;
+ *   - páginas → rewrite a /mantenimiento con 503 + Retry-After; `/api/**` → 503 JSON `{ error: "maintenance" }`;
+ *   - `/api/health` pasa y lleva `x-maintenance: on` en la respuesta (el monitor lo distingue de una caída).
+ * Sin bypass para superadmins: ver la cabecera de `lib/maintenance.ts`.
  */
 
 function newRequestId(): string {
@@ -100,9 +114,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Se lee `process.env` directo y no `lib/env.ts`: ese módulo valida todo el entorno al importarse.
+  const mode = maintenanceMode(process.env.MAINTENANCE_MODE);
+  const maintenance = maintenanceDecision(url.pathname, mode);
+
   // Primero el refresh: muta `req.cookies` (y con eso el header `cookie`),
   // así la copia de headers de abajo ya lleva el token nuevo.
-  const sessionCookies = await refreshSupabaseSession(req);
+  const sessionCookies = maintenance === "pass" ? await refreshSupabaseSession(req) : [];
 
   const requestHeaders = new Headers(req.headers);
   // Always strip client-supplied tenant headers — only this middleware may set them.
@@ -128,6 +146,7 @@ export async function middleware(req: NextRequest) {
     // Echo the ID on the response too so client-side instrumentation can
     // correlate fetches to server logs.
     res.headers.set("x-request-id", safeReqId);
+    if (mode === "on" && url.pathname.startsWith("/api/health")) res.headers.set("x-maintenance", "on");
     for (const c of sessionCookies) res.cookies.set(c.name, c.value, c.options);
     if (sessionCookies.length > 0) {
       // Una respuesta con Set-Cookie de sesión no se cachea en ningún CDN.
@@ -135,6 +154,24 @@ export async function middleware(req: NextRequest) {
     }
     return res;
   };
+
+  // BO5-B: después del strip y del request-id (corren en todos los caminos, AUDIT §5.3).
+  if (maintenance !== "pass") {
+    const unavailable = {
+      "x-request-id": safeReqId,
+      "retry-after": String(MAINTENANCE_RETRY_AFTER_SECONDS),
+      "cache-control": "no-store",
+    };
+    if (maintenance === "api") {
+      return NextResponse.json({ error: "maintenance" }, { status: 503, headers: unavailable });
+    }
+    const res = NextResponse.rewrite(new URL(MAINTENANCE_PATH, req.url), {
+      status: 503,
+      request: { headers: requestHeaders },
+    });
+    for (const [k, v] of Object.entries(unavailable)) res.headers.set(k, v);
+    return res;
+  }
 
   // 1) path: /c/<slug>/...
   const pathMatch = url.pathname.match(/^\/c\/([a-z0-9-]+)(\/|$)/i);

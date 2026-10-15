@@ -21,6 +21,8 @@ vi.mock("@/lib/platform-tenant-lifecycle", () => ({
   changePlatformTenantSlug: vi.fn(),
   forcePlatformTenantOnboardingComplete: vi.fn(),
 }));
+// Integrador BO5: tenant-lifecycle importa la action de BO5-C («Pedir export al titular»).
+vi.mock("@/lib/platform-export-request", () => ({ requestTenantExport: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
   usePathname: () => "/plataforma/consultorios/t1/ciclo-de-vida",
@@ -368,6 +370,9 @@ describe("[BO3-B] ciclo de vida: confirmación tipeada del slug", () => {
     expect(closed).not.toContain(">Dar de baja<");
     expect(closed).toContain("Consultorio duplicado · es el de prueba");
     expect(closed).not.toContain(">Dar por terminada<");
+    // [BO5-C] «Pedir export al titular» en todos los estados (BO-D4: el titular de uno de baja también exporta).
+    expect(active).toContain(">Pedir export al titular<");
+    expect(closed).toContain(">Pedir export al titular<");
   });
 
   it("typedSlugMatches / statusReasonText", () => {

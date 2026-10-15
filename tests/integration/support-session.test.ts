@@ -181,6 +181,8 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect(ev).toMatchObject({ actorId: S, entity: "SupportSession" });
     // El motivo (texto libre) NO va al registro (solo inserción): queda en la fila.
     expect(JSON.stringify(ev?.payload)).not.toContain(REASON);
+    // [BO4] el registro dice si la sesión pasó por TOTP (acá, con el flag en off y sin factor: false).
+    expect(typeof (ev?.payload as { mfa?: unknown } | null)?.mfa).toBe("boolean");
     const pe = await db.platformAuditEvent.findFirst({ where: { tenantId: T.tenantId, action: "platform.support.start", entityId: sessionId } });
     expect(pe).toMatchObject({ actorId: S, actorEmail: `${S}@test.local` });
     // Nada en el consultorio propio del superadmin.

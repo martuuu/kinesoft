@@ -14,6 +14,7 @@ import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { repairDeleteAuthOrphan } from "@/lib/platform-users";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import type { PlatformAuthOnlyHit } from "@/lib/platform-health-logic";
 import { formatDateTimeAR } from "@/components/plataforma/users/users-logic";
 
@@ -21,6 +22,7 @@ export function AuthOnlyCard({ hit }: { hit: PlatformAuthOnlyHit }) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const [busy, setBusy] = useState(false);
 
   async function onDelete() {
@@ -33,7 +35,7 @@ export function AuthOnlyCard({ hit }: { hit: PlatformAuthOnlyHit }) {
     if (!ok) return;
     setBusy(true);
     try {
-      const r = await repairDeleteAuthOrphan({ authUserId: hit.authUserId });
+      const r = await runPlatform(() => repairDeleteAuthOrphan({ authUserId: hit.authUserId }));
       if (r.ok) {
         toast.success("Cuenta borrada");
         router.refresh();

@@ -121,6 +121,46 @@ const cspReportOnly = [
   .map((d) => d.replace(/\s+/g, " ").trim())
   .join("; ");
 
+// --- Content-Security-Policy ENFORCED solo en Plataforma (BO4) ------------
+// Plan §19.5 fila BO4: «CSP en enforce solo en /plataforma». Plataforma es la superficie de más poder (escribe en
+// todos los consultorios, abre sesiones de soporte, da superadmin) y la más chica: pocas pantallas, sin Mercado Pago,
+// sin portal del paciente, sin embeds de terceros salvo el reproductor de YouTube nocookie del catálogo. Ahí se
+// puede bloquear de verdad sin romper nada; el resto de la app sigue Report-Only hasta medir su tráfico.
+//
+// Qué se cerró respecto de la Report-Only global (y por qué):
+//   - script-src sin Mercado Pago y, en producción, sin 'unsafe-eval' (Next 14 solo lo usa el overlay de dev; el
+//     build de prod de estas rutas no tiene eval/new Function: se verificó en los chunks al cerrar BO4).
+//     'unsafe-inline' se queda: el bootstrap de RSC es inline y no hay nonces (middleware de nonce = otra ola).
+//   - img-src / media-src sin `https:` comodín: solo same-origin, data:/blob: (QR del TOTP, previews) y Supabase
+//     (Storage). Avatares de Google (lh3) por la foto del perfil.
+//   - connect-src sin `https:` comodín: same-origin (server actions, RSC), Supabase (REST/Auth/Storage) y su socket.
+//     Un script inyectado no puede sacar datos a un host cualquiera.
+//   - form-action 'self': en Plataforma no hay login con Google ni checkout; el único form nativo es el sign-out.
+//   - frame-src solo youtube-nocookie (lo que embebe lib/exercise-media-internal.ts).
+const isDevServer = process.env.NODE_ENV !== "production";
+export const platformCspPaths = ["/plataforma/:path*", "/plataforma-mfa/:path*"];
+const cspPlatformEnforced = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDevServer ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  `img-src 'self' data: blob: ${SUPA} https://lh3.googleusercontent.com`,
+  `media-src 'self' data: blob: ${SUPA}`,
+  // En dev el HMR de Next abre un websocket al mismo host (ws://localhost:3000): 'self' lo cubre en CSP3, el
+  // ws://localhost:* queda por los browsers que todavía no mapean 'self' a ws.
+  `connect-src 'self' ${SUPA} ${SUPA_WS}${isDevServer ? " ws://localhost:*" : ""}`,
+  "frame-src https://www.youtube-nocookie.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  cspReportUri ? `report-uri ${cspReportUri}` : "",
+  cspReportUri ? "report-to csp-endpoint" : "",
+]
+  .filter(Boolean)
+  .map((d) => d.replace(/\s+/g, " ").trim())
+  .join("; ");
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -152,10 +192,17 @@ const nextConfig = {
   },
   async headers() {
     return [
+      // Índice 0 = la global (los tests de observability/realtime leen `[0]`).
       {
         source: "/(.*)",
         headers: securityHeaders,
       },
+      // BO4: se SUMA a la global (la Report-Only sigue llegando y reportando); el browser aplica las dos y la
+      // enforced es la que bloquea. `:path*` también matchea `/plataforma` pelado.
+      ...platformCspPaths.map((source) => ({
+        source,
+        headers: [{ key: "Content-Security-Policy", value: cspPlatformEnforced }],
+      })),
     ];
   },
 };

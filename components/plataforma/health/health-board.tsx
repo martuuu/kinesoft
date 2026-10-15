@@ -17,6 +17,7 @@ import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { repairCreatePractitioner, repairDeleteAuthOrphan } from "@/lib/platform-users";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import type { HealthDetector, PlatformHealthReport } from "@/lib/platform-health-logic";
 import { useSyncEmail } from "@/components/plataforma/users/user-actions";
 import {
@@ -37,6 +38,7 @@ function RowAction({ action }: { action: HealthRowAction }) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const syncEmail = useSyncEmail();
   const [busy, setBusy] = useState(false);
 
@@ -78,7 +80,7 @@ function RowAction({ action }: { action: HealthRowAction }) {
               });
               if (!ok) return;
               try {
-                const r = await repairCreatePractitioner({ tenantId: action.tenantId, userId: action.userId });
+                const r = await runPlatform(() => repairCreatePractitioner({ tenantId: action.tenantId, userId: action.userId }));
                 if (!r.ok) {
                   toast.error("No se pudo crear", { description: r.error });
                   return;
@@ -109,7 +111,7 @@ function RowAction({ action }: { action: HealthRowAction }) {
               });
               if (!ok) return;
               try {
-                const r = await repairDeleteAuthOrphan({ authUserId: action.authUserId });
+                const r = await runPlatform(() => repairDeleteAuthOrphan({ authUserId: action.authUserId }));
                 if (!r.ok) {
                   toast.error("No se pudo borrar", { description: r.error });
                   return;

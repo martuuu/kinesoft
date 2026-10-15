@@ -45,6 +45,9 @@ import {
   tenantOwnerActivationEmail,
   platformAccessLinkEmail,
   supportAccessEmail,
+  trialReminderEmail,
+  platformHealthDigestEmail,
+  tenantExportRequestEmail,
 } from "../lib/email/templates";
 
 const TENANT = "Consultorio de prueba";
@@ -76,6 +79,17 @@ function samples(base: string): Record<EmailKind, () => RenderedEmail> {
     platform_access_link: () => platformAccessLinkEmail({ url: link("/reset"), purpose: "activation" }),
     support_access: () =>
       supportAccessEmail({ tenantName: TENANT, superadminEmail: "soporte@kinesoft.com.ar", startedAt: new Date(), url: link("/configuracion") }),
+    // BO5-A (cron) y BO5-C (export). El link de prueba usa los mismos `?tab=` que mandan los jobs y la action
+    // (`plan` y `exportar` son ids reales de CONFIG_TABS en components/configuracion/controls.tsx).
+    trial_reminder: () => trialReminderEmail({ tenantName: TENANT, daysLeft: 3, expired: false, url: link("/configuracion?tab=plan") }),
+    platform_health_digest: () =>
+      platformHealthDigestEmail({
+        dateKey: "2026-10-14",
+        lines: [{ label: "Invitaciones vencidas sin anular", count: 2 }],
+        unavailable: [],
+        url: link("/plataforma/salud"),
+      }),
+    tenant_export_request: () => tenantExportRequestEmail({ tenantName: TENANT, url: link("/configuracion?tab=exportar") }),
   };
 }
 

@@ -18,7 +18,12 @@ export type EmailKind =
   // BO2 (back-office de Plataforma): los mails que manda el equipo de KineSoft, no un consultorio.
   | "tenant_activation" // alta asistida: el titular activa su acceso (BO2-A)
   | "platform_access_link" // Plataforma → Usuarios: link para activar o recuperar el acceso (BO2-C)
-  | "support_access"; // aviso al OWNER: soporte entró al consultorio (BO2-E, decisión 3)
+  | "support_access" // aviso al OWNER: soporte entró al consultorio (BO2-E, decisión 3)
+  // BO5-A (cron): los manda un job, sin Actor.
+  | "trial_reminder" // al OWNER: la prueba vence en 7/3/1 días o ya venció (BO-D1/2)
+  | "platform_health_digest" // a los superadmins: resumen diario de /plataforma/salud
+  // BO5-C (export): Plataforma solo PIDE el export; el titular lo descarga él.
+  | "tenant_export_request"; // al OWNER: «descargá el export de tus datos»
 
 /**
  * Por dónde salió (o no) un mail:

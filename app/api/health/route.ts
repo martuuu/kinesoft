@@ -2,6 +2,7 @@ import { pingDb } from "@/lib/db-ping";
 import { clientIp } from "@/lib/client-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
+import { maintenanceMode } from "@/lib/maintenance";
 
 export const runtime = "nodejs";
 // Nunca estático ni cacheado: un health que responde desde cache dice «ok» con la base caída.
@@ -17,6 +18,9 @@ export const dynamic = "force-dynamic";
  *   público; el detalle de la falla va al log del server.
  * - Rate limit por IP (60/min): un monitor pega cada 30-60 s; más que eso es abuso (cada hit abre una
  *   query a la base).
+ * - BO5-B: `maintenance` (boolean). El middleware deja pasar /api/health con el mantenimiento prendido, así que
+ *   sin este campo el monitor no distingue «arriba» de «arriba pero cerrada al público». Se lee de
+ *   `process.env` con el mismo `maintenanceMode()` del middleware (no de `env`), para que los dos digan lo mismo.
  */
 const RATE = { limit: 60, windowMs: 60_000 };
 
@@ -35,7 +39,12 @@ export async function GET(req: Request): Promise<Response> {
   if (!db.up) logger.error("health.db_down", { reason: db.reason });
 
   return Response.json(
-    { ok: db.up, db: db.up ? "ok" : "down", time: new Date().toISOString() },
+    {
+      ok: db.up,
+      db: db.up ? "ok" : "down",
+      maintenance: maintenanceMode(process.env.MAINTENANCE_MODE) === "on",
+      time: new Date().toISOString(),
+    },
     { status: db.up ? 200 : 503, headers: noStore }
   );
 }

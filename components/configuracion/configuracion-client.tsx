@@ -24,6 +24,7 @@ import { LocationsPanel } from "./panels/locations-panel";
 import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
 import { PlanUsagePanel } from "./panels/plan-usage-panel";
 import { SupportAccessPanel } from "./panels/support-access-panel";
+import { ExportPanel } from "./panels/export-panel";
 
 type Props = {
   role: Role;
@@ -122,6 +123,8 @@ export function ConfiguracionClient(props: Props) {
       {tab === "soporte" && (props.role === "OWNER" || props.role === "ADMIN") && (
         <SupportAccessPanel sessions={props.supportSessions} />
       )}
+      {/* BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). */}
+      {tab === "exportar" && props.role === "OWNER" && !props.support && <ExportPanel />}
     </div>
   );
 }

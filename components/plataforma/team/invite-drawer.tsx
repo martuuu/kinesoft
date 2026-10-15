@@ -9,6 +9,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { platformInviteTeamMember } from "@/lib/platform-team";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import { INVITABLE_ROLES, isClinicalRole, roleDescription, roleLabel } from "@/lib/roles";
 import type { InvitationSendResult } from "@/lib/invitations-types";
 import type { InvitableRole } from "./team-logic";
@@ -70,6 +71,7 @@ export function InviteDrawerBody({
 }) {
   const router = useRouter();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const formRef = useRef<HTMLFormElement>(null);
   const [role, setRole] = useState<InvitableRole>("PRACTITIONER");
   const { dirty, onFormInput } = useFormDirty(formRef, { role });
@@ -84,14 +86,16 @@ export function InviteDrawerBody({
     setError(null);
     setFieldErrors({});
     start(async () => {
-      const r = await platformInviteTeamMember({
-        tenantId,
-        email: String(fd.get("email") ?? "").trim(),
-        firstName: String(fd.get("firstName") ?? ""),
-        lastName: String(fd.get("lastName") ?? ""),
-        role,
-        specialty: String(fd.get("specialty") ?? ""),
-      });
+      const r = await runPlatform(() =>
+        platformInviteTeamMember({
+          tenantId,
+          email: String(fd.get("email") ?? "").trim(),
+          firstName: String(fd.get("firstName") ?? ""),
+          lastName: String(fd.get("lastName") ?? ""),
+          role,
+          specialty: String(fd.get("specialty") ?? ""),
+        })
+      );
       if (!r.ok) {
         setError(r.error);
         setFieldErrors(r.fieldErrors ?? {});

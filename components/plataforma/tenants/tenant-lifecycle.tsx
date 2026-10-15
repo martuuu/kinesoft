@@ -6,7 +6,11 @@
  *   - suspender (ACTIVE → SUSPENDED) y dar de baja (ACTIVE|SUSPENDED → CLOSED) con motivo (código + nota corta, sin
  *     PHI) y **confirmación tipeada del slug**; reactivar (SUSPENDED|CLOSED → ACTIVE) con `useConfirm`;
  *   - cambiar el slug, también con el slug actual tipeado y la explicación del redirect (BO-D9);
- *   - forzar el fin del alta.
+ *   - forzar el fin del alta;
+ *   - pedirle el export al titular (BO5-C): Plataforma solo PIDE, el superadmin nunca baja PHI (plan §19.5).
+ *
+ * BO4: todas las llamadas pasan por `usePlatformAction()`; suspender, dar de baja, cambiar el slug y pedir el export
+ * son riesgo high y, con MFA en enforce, pueden pedir el código otra vez (modal del provider de `(platform)`).
  *
  * Por qué tipear el slug: suspender o dar de baja deja afuera a todo un equipo con pacientes del día, y cambiar el
  * slug rompe los links que circulan (aunque redirijan). Un clic equivocado en la pestaña de otro consultorio no
@@ -29,6 +33,8 @@ import {
   reactivatePlatformTenant,
   suspendPlatformTenant,
 } from "@/lib/platform-tenant-lifecycle";
+import { requestTenantExport } from "@/lib/platform-export-request";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   STATUS_REASON_CODES,
   STATUS_REASON_NOTE_MAX,
@@ -221,6 +227,7 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
 
   const [version, setVersion] = useState(d.updatedAt);
   useEffect(() => setVersion(d.updatedAt), [d.updatedAt]);
@@ -253,7 +260,8 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
     setError(null);
     setFieldErrors({});
     try {
-      const res = await call();
+      // El fallo de `runPlatform` ({ ok:false, error }) es un ActionResult sin fieldErrors: entra en la misma rama.
+      const res: ActionResult<{ updatedAt: string }> = await runPlatform(call);
       if (!res.ok) {
         if (inDialog) {
           setError(res.error);
@@ -335,6 +343,32 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
     );
   };
 
+  /** BO5-C: un mail a cada OWNER activo para que descargue él el export. Vale en cualquier estado (BO-D4). */
+  const askExport = async () => {
+    const ok = await confirm({
+      title: `¿Pedirle el export al titular de ${d.name}?`,
+      message: "Le mandamos un mail al titular para que descargue sus datos. Vos no recibís nada.",
+      confirmLabel: "Mandar el pedido",
+      cancelLabel: "Cancelar",
+    });
+    if (!ok) return;
+    setPending(true);
+    try {
+      const r = await runPlatform(() => requestTenantExport({ tenantId: d.id }));
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      const { sent, owners } = r.data;
+      if (sent === owners) toast.success(owners === 1 ? "Le mandamos el pedido al titular" : `Les mandamos el pedido a los ${owners} titulares`);
+      else toast.warning(`El mail salió a ${sent} de ${owners} titulares. Revisá el registro de mails.`);
+    } catch {
+      toast.error("No se pudo mandar el pedido. Revisá la conexión y probá de nuevo.");
+    } finally {
+      setPending(false);
+    }
+  };
+
   const reason = statusReasonText(d.statusReason);
   const which = dialog?.kind === "status" ? dialog.which : null;
 
@@ -411,6 +445,21 @@ export function TenantLifecyclePanel({ detail: d }: { detail: PlatformTenantDeta
       >
         <p style={{ margin: 0, fontSize: 13.5, color: "var(--navy-900)" }}>
           {d.onboardingCompleted ? "Terminada." : "Sin terminar."}
+        </p>
+      </Section>
+
+      <Section
+        title="Export de datos"
+        description="Le pedimos al titular que descargue él todos los datos del consultorio. El equipo de KineSoft no los ve."
+        action={
+          <Button type="button" variant="ghost" onClick={() => void askExport()} disabled={pending}>
+            Pedir export al titular
+          </Button>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 13.5, color: "var(--navy-900)" }}>
+          Sale un mail a cada titular activo con el link a Configuración → Exportar datos (o al botón de la pantalla de
+          suspendido).
         </p>
       </Section>
 

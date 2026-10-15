@@ -523,3 +523,124 @@ export function supportAccessEmail(p: {
     ],
   });
 }
+
+// ── Cron (BO5-A): mails que dispara un job diario, sin Actor ─────────────────────────────────────────────────
+
+/**
+ * BO5-A: recordatorio de fin de prueba al OWNER (BO-D1/2: 14 días PRO, después 7 de gracia). `daysLeft` es el de
+ * `tenantAccessFor` (contando hoy; 1 = hoy es el último día), así el mail dice lo mismo que la banda de la app.
+ * SIN precios ni planes inventados: el siguiente paso es hablar con nosotros («Escribinos para seguir»); responder
+ * el mail llega a `EMAIL_REPLY_TO` (lo pone `sendEmail`). Tampoco promete un corte: con
+ * `TENANT_ACCESS_ENFORCEMENT=banner` (el default de hoy) nada se bloquea, por eso «puede pasar a modo lectura».
+ */
+export function trialReminderEmail(p: { tenantName: string; daysLeft: number; expired: boolean; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const n = Math.max(1, Math.floor(p.daysLeft));
+  const keep = "Escribinos para seguir: respondé este mail y te ayudamos a elegir cómo continuar. Tus datos no se pierden.";
+  let subject: string;
+  let title: string;
+  let lead: string;
+  let leadHtml: string;
+  let second: string;
+  if (p.expired) {
+    subject = "Tu prueba de KineSoft terminó";
+    title = "Tu prueba terminó";
+    lead = `La prueba de ${tenant} en KineSoft terminó.`;
+    leadHtml = `La prueba de ${strong(tenant)} en KineSoft terminó.`;
+    second =
+      (n === 1
+        ? "Hoy es el último día para seguir usándolo como hasta ahora."
+        : `Tenés ${n} días más para seguir usándolo como hasta ahora.`) +
+      " Después, el consultorio puede pasar a modo lectura: vas a poder consultar todo, incluida la historia clínica, pero no cargar datos nuevos.";
+  } else if (n === 1) {
+    subject = "Tu prueba de KineSoft vence hoy";
+    title = "Hoy termina tu prueba";
+    lead = `Hoy es el último día de la prueba de ${tenant} en KineSoft.`;
+    leadHtml = `Hoy es el último día de la prueba de ${strong(tenant)} en KineSoft.`;
+    second = "Si querés seguir sin interrupciones, avisanos antes de que termine el día.";
+  } else {
+    subject = `Tu prueba de KineSoft vence en ${n} días`;
+    title = "Tu prueba está por terminar";
+    lead = `La prueba de ${tenant} en KineSoft vence en ${n} días.`;
+    leadHtml = `La prueba de ${strong(tenant)} en KineSoft vence en ${strong(`${n} días`)}.`;
+    second = "Hasta entonces podés seguir usando todo como hasta ahora.";
+  }
+  return compose({
+    subject,
+    preheader: keep,
+    context: tenant,
+    title,
+    paragraphs: [lead, second, keep],
+    htmlParagraphs: [leadHtml, escapeHtml(second), escapeHtml(keep)],
+    ctas: [{ label: "Ver plan y uso", url: p.url }],
+    footer: [`Te llegó este mail porque sos titular de ${tenant} en KineSoft y el consultorio está en período de prueba.`],
+  });
+}
+
+/** «14 de octubre de 2026» de una clave AR «YYYY-MM-DD» (mediodía AR: ningún TZ del host la corre de día). */
+function formatDateKeyAR(key: string): string {
+  const d = new Date(`${key}T12:00:00-03:00`);
+  if (Number.isNaN(d.getTime())) return plain(key);
+  return d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric", timeZone: AR_TZ });
+}
+
+/**
+ * BO5-A: resumen diario de `/plataforma/salud` a los superadmins activos. Solo CONTEOS: ni emails ni nombres de
+ * consultorios (el mail sale de la plataforma y queda en buzones que no controlamos; el detalle está detrás del
+ * login con MFA). Sale solo los días con algún conteo > 0 (lo decide el job).
+ */
+export function platformHealthDigestEmail(p: {
+  dateKey: string;
+  lines: ReadonlyArray<{ label: string; count: number }>;
+  unavailable: readonly string[];
+  url: string;
+}): RenderedEmail {
+  const date = formatDateKeyAR(p.dateKey);
+  const total = p.lines.reduce((a, l) => a + l.count, 0);
+  const lead = `Esto es lo que encontraron hoy los controles de salud de la plataforma (${date}):`;
+  const items = p.lines.map((l) => `${plain(l.label)}: ${l.count}`);
+  const itemsHtml = p.lines.map((l) => `${escapeHtml(plain(l.label))}: ${strong(String(l.count))}`);
+  const missing = p.unavailable.length ? [`No se pudo revisar: ${p.unavailable.map(plain).join(", ")}.`] : [];
+  return compose({
+    subject: `Salud de KineSoft: ${total} ${total === 1 ? "caso" : "casos"} para revisar (${date})`,
+    preheader: "Resumen diario de cuentas y consultorios para revisar.",
+    context: "Plataforma",
+    title: "Resumen de salud",
+    paragraphs: [lead, ...items, ...missing],
+    htmlParagraphs: [escapeHtml(lead), ...itemsHtml, ...missing.map(escapeHtml)],
+    ctas: [{ label: "Ver salud de la plataforma", url: p.url }],
+    footer: [
+      "Te llegó este mail porque sos superadmin de KineSoft. Sale solo los días en que hay algo para revisar.",
+    ],
+  });
+}
+
+// ── Export (BO5-C): Plataforma le pide al titular que descargue él sus datos ─────────────────────────────────
+
+/**
+ * BO5-C: mail al OWNER cuando Plataforma pide el export (plan §19.5: el superadmin nunca baja PHI, solo le pide al
+ * titular que la descargue él). Sin datos del consultorio más allá del nombre. Nació con HTML propio en
+ * `lib/tenant-export-logic.ts` porque `compose` no se exporta; el integrador lo movió acá para que use el layout
+ * de la casa (escape de `plain`, `subjectLine` sin saltos, `safeHref` en el botón y el link de respaldo).
+ */
+export function tenantExportRequestEmail(p: { tenantName: string; url: string }): RenderedEmail {
+  const tenant = plain(p.tenantName);
+  const lead = `El equipo de KineSoft te pide que descargues el export de los datos de ${tenant}.`;
+  const leadHtml = `El equipo de KineSoft te pide que descargues el export de los datos de ${strong(tenant)}.`;
+  const how =
+    "Entrá a KineSoft y andá a Configuración → Exportar datos (si el consultorio está suspendido, el botón aparece en la pantalla que ves al entrar).";
+  const what = "El archivo trae pacientes, turnos, pagos, planes e historia clínica: lo descargás vos y el equipo de KineSoft no lo ve.";
+  return compose({
+    subject: `Descargá el export de ${tenant}`,
+    preheader: "Descargá vos el export de tus datos: el equipo de KineSoft no lo ve.",
+    context: tenant,
+    title: "Descargá el export de tu consultorio",
+    paragraphs: [lead, how, what],
+    htmlParagraphs: [leadHtml, escapeHtml(how), escapeHtml(what)],
+    ctas: [{ label: "Ir a Exportar datos", url: p.url }],
+    footer: [
+      `Te llegó este mail porque sos titular de ${tenant} en KineSoft.`,
+      "Si no esperabas este pedido, respondé este mail.",
+    ],
+  });
+}

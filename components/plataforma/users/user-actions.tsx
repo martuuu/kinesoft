@@ -20,6 +20,9 @@ import { Modal } from "@/components/ui/modal";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+// BO4: todas las actions de usuarios pasan por `runPlatform` (rate limit legible; deshabilitar y superadmin son
+// riesgo high y, con MFA en enforce, piden el código otra vez).
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import {
   repairSyncProfileEmail,
   sendPlatformAccessLink,
@@ -111,6 +114,7 @@ export function CopyLinkBox({ url }: { url: string }) {
 
 function AccessLinkAction({ user }: { user: PlatformUserDetail }) {
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlatformAccessLinkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +125,7 @@ function AccessLinkAction({ user }: { user: PlatformUserDetail }) {
     setError(null);
     setResult(null);
     try {
-      const r = await sendPlatformAccessLink({ userId: user.id });
+      const r = await runPlatform(() => sendPlatformAccessLink({ userId: user.id }));
       if (r.ok) {
         setResult(r.data);
         if (r.data.emailSent) toast.success("Le mandamos el mail");
@@ -158,6 +162,7 @@ function DisableAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boo
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -169,7 +174,7 @@ function DisableAction({ user, isSelf }: { user: PlatformUserDetail; isSelf: boo
     setBusy(true);
     setError(null);
     try {
-      const r = await setPlatformUserDisabled({ userId: user.id, disabled, ...(why ? { reason: why } : {}) });
+      const r = await runPlatform(() => setPlatformUserDisabled({ userId: user.id, disabled, ...(why ? { reason: why } : {}) }));
       if (!r.ok) {
         setError(r.error);
         return false;
@@ -334,6 +339,7 @@ export function SuperadminForm({
 function SuperadminAction({ user }: { user: PlatformUserDetail }) {
   const router = useRouter();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -346,7 +352,7 @@ function SuperadminAction({ user }: { user: PlatformUserDetail }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await setPlatformSuperadmin({ userId: user.id, grant, confirmEmail: typed });
+      const r = await runPlatform(() => setPlatformSuperadmin({ userId: user.id, grant, confirmEmail: typed }));
       if (!r.ok) {
         setError(r.error);
         return;
@@ -410,6 +416,7 @@ export function useSyncEmail() {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   return async function syncEmail(p: { userId: string; profileEmail: string; authEmail: string | null }): Promise<void> {
     const ok = await confirm({
       title: "¿Sincronizar el email?",
@@ -418,7 +425,7 @@ export function useSyncEmail() {
     });
     if (!ok) return;
     try {
-      const r = await repairSyncProfileEmail({ userId: p.userId });
+      const r = await runPlatform(() => repairSyncProfileEmail({ userId: p.userId }));
       if (!r.ok) {
         toast.error("No se pudo sincronizar", { description: r.error });
         return;

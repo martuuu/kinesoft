@@ -1,11 +1,14 @@
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
+import { PlatformMfaRequiredError, requirePlatformAdmin, type PlatformActor } from "@/lib/platform-actor";
+import { platformMfaRedirect } from "@/lib/platform-mfa-logic";
 import { ForbiddenError, UnauthenticatedError } from "@/lib/session";
 import { resolveSupportTarget } from "@/lib/support-session-internal";
 import { endSupport } from "@/lib/platform-support";
+import { verifyPlatformReauth } from "@/lib/platform-mfa-actions";
 import { safeNext } from "@/lib/safe-next";
 import { PlatformShell } from "@/components/plataforma/platform-shell";
+import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
 
 /**
  * Guard + shell del grupo `(platform)` (BO3-A, plan §19.5 «Superadmin sin consultorio casa»).
@@ -19,6 +22,11 @@ import { PlatformShell } from "@/components/plataforma/platform-shell";
  * - Sin sesión → `/login?next=<path>`: es lo que hace cualquier ruta privada, no revela nada nuevo.
  * - Con sesión pero sin `isPlatformAdmin` (o deshabilitado) → `notFound()`: un usuario de consultorio no se entera
  *   de que la sección existe (antes se lo mandaba a /dashboard, lo que la confirmaba).
+ * - BO4, con `PLATFORM_MFA_ENFORCEMENT=enforce`: sin factor TOTP → `/plataforma-mfa/configurar`; con factor y la
+ *   sesión en AAL1 → `/plataforma-mfa/verificar`, los dos con `?next=<path>`. Esas pantallas viven FUERA de este
+ *   grupo justamente para no entrar en bucle (este layout las volvería a mandar ahí). Se chequea antes del
+ *   `ForbiddenError` genérico: el error de MFA hereda de él y si no terminaría en 404.
+ *   Si GoTrue no responde (`unavailable`) se propaga: no se puede decidir y no se deja pasar.
  * - Cualquier otro error (DB caída) se propaga al error boundary: no se disfraza de 404.
  *
  * Las páginas y cada lectura/acción de `lib/platform-*` vuelven a llamar `requirePlatformAdmin` por su cuenta: este
@@ -29,12 +37,12 @@ export default async function PlatformLayout({ children }: { children: React.Rea
   try {
     actor = await requirePlatformAdmin();
   } catch (err) {
-    if (err instanceof UnauthenticatedError) {
-      // `x-pathname` lo pisa el middleware en cada request; safeNext descarta todo lo que no sea un path propio.
-      const raw = headers().get("x-pathname");
-      const next = (raw ? safeNext(raw, "") : "") || "/plataforma";
-      redirect(`/login?next=${encodeURIComponent(next)}`);
-    }
+    // `x-pathname` lo pisa el middleware en cada request; safeNext descarta todo lo que no sea un path propio.
+    const raw = headers().get("x-pathname");
+    const next = (raw ? safeNext(raw, "") : "") || "/plataforma";
+    if (err instanceof UnauthenticatedError) redirect(`/login?next=${encodeURIComponent(next)}`);
+    if (err instanceof PlatformMfaRequiredError && err.step !== "unavailable") redirect(platformMfaRedirect(err.step, next));
+    if (err instanceof PlatformMfaRequiredError) throw err;
     if (err instanceof ForbiddenError) notFound();
     throw err;
   }
@@ -43,14 +51,18 @@ export default async function PlatformLayout({ children }: { children: React.Rea
   // descarta si quedó vieja). `resolveSupportTarget` y no `resolveSupportSession` porque el chip muestra el nombre.
   const target = await resolveSupportTarget(actor.userId);
 
+  // El provider del modal de re-verificación envuelve todo el shell: cualquier componente de Plataforma puede usar
+  // `usePlatformAction()` para que una acción `high` pida el código y se reintente sola (BO4).
   return (
-    <PlatformShell
-      email={actor.email}
-      hasHome={actor.homeTenantId !== null}
-      support={target ? { tenantName: target.tenant.name } : null}
-      endSupportAction={endSupport}
-    >
-      {children}
-    </PlatformShell>
+    <PlatformReauthProvider verifyAction={verifyPlatformReauth}>
+      <PlatformShell
+        email={actor.email}
+        hasHome={actor.homeTenantId !== null}
+        support={target ? { tenantName: target.tenant.name } : null}
+        endSupportAction={endSupport}
+      >
+        {children}
+      </PlatformShell>
+    </PlatformReauthProvider>
   );
 }

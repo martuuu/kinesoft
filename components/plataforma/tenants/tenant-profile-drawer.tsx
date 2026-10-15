@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { updatePlatformTenantProfile } from "@/lib/platform-tenant-lifecycle";
+import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import type { UpdatePlatformTenantProfileInput } from "@/lib/platform-tenants-schemas";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { ErrorBox } from "@/components/plataforma/tenants/detail-ui";
@@ -123,6 +124,7 @@ export function TenantProfileForm({
 export function TenantProfileDrawer({ detail }: { detail: PlatformTenantDetail }) {
   const router = useRouter();
   const toast = useToast();
+  const runPlatform = usePlatformAction();
   const [open, setOpen] = useState(false);
   const [version, setVersion] = useState(detail.updatedAt);
   const [baseline, setBaseline] = useState<TenantProfileFormState>(() => profileFormFromDetail(detail));
@@ -147,7 +149,7 @@ export function TenantProfileDrawer({ detail }: { detail: PlatformTenantDetail }
     setError(null);
     setFieldErrors({});
     try {
-      const res = await updatePlatformTenantProfile(buildProfilePayload(detail.id, version, baseline, form));
+      const res = await runPlatform(() => updatePlatformTenantProfile(buildProfilePayload(detail.id, version, baseline, form)));
       if (!res.ok) {
         setError(res.error);
         setFieldErrors(res.fieldErrors ?? {});

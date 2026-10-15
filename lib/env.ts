@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { REALTIME_DRIVERS } from "@/lib/realtime-constants";
 import { ACCESS_ENFORCEMENTS, type AccessEnforcement } from "@/lib/tenant-access";
+import { PLATFORM_MFA_ENFORCEMENTS, type PlatformMfaEnforcement } from "@/lib/platform-mfa-logic";
 
 // IAM-0b: `.env.example` trae estas variables vacías (`EMAIL_TRANSPORT=""`).
 // Un string vacío cuenta como "no seteada", no como un valor inválido: si no,
@@ -75,9 +76,37 @@ const schema = z.object({
     z.enum(ACCESS_ENFORCEMENTS as unknown as [AccessEnforcement, ...AccessEnforcement[]]).default("banner")
   ),
 
+  // BO4 (BO-D6, plan §19.5): verificación en dos pasos (TOTP de Supabase) para superadmins.
+  //   off     = DEFAULT: Plataforma no la exige (las pantallas /plataforma-mfa igual funcionan para enrolarse).
+  //             «Entrar como soporte» sigue permitido y el registro deja `mfa:false`.
+  //   enforce = AAL2 para todo /plataforma y cada action de admin; re-verificación (10 min) en las de riesgo high.
+  // Default off porque prenderlo antes de que el superadmin tenga un factor lo deja afuera de Plataforma (puede
+  // configurarlo igual desde /plataforma-mfa/configurar, pero el orden es: enrolarse con off → probar → enforce).
+  // Lo leen `platformMfaEnforcement()` (process.env en cada llamada) y `next.config.mjs` no: la CSP no depende de él.
+  PLATFORM_MFA_ENFORCEMENT: z.preprocess(
+    emptyAsUndefined,
+    z
+      .enum(PLATFORM_MFA_ENFORCEMENTS as unknown as [PlatformMfaEnforcement, ...PlatformMfaEnforcement[]])
+      .default("off")
+  ),
+
   // BO3-E: secreto de los cron de Vercel (Authorization: Bearer). Opcional hasta BO5-A, que lo usa en el handler;
   // hoy solo lo lee `/plataforma/sistema` para mostrar presencia (nunca el valor).
   CRON_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
+
+  // BO5-B: modo mantenimiento (`lib/maintenance.ts`). Se prende con `on` + redeploy. El middleware NO lee este
+  // objeto (importar `lib/env.ts` en el edge validaría todo el entorno en cada cold start): lee
+  // `process.env.MAINTENANCE_MODE` con `maintenanceMode()`, que trata cualquier otro valor como `off`. Acá se valida
+  // la forma (mayúsculas y espacios se toleran, igual que en el middleware), así un typo como `true` frena el
+  // build del deploy en vez de dejar la app abierta creyendo que está en mantenimiento.
+  //   MAINTENANCE_MESSAGE  línea opcional que ve CUALQUIERA en /mantenimiento: dato público, nada interno. Sin
+  //                        tope acá a propósito: `maintenanceMessage()` la corta a 280 al mostrarla, y un mensaje
+  //                        largo no puede frenar el deploy que justamente prende el mantenimiento.
+  MAINTENANCE_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["off", "on"]).default("off")
+  ),
+  MAINTENANCE_MESSAGE: z.preprocess(emptyAsUndefined, z.string().optional()),
 
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
@@ -224,6 +253,9 @@ export const env = parseEnv({
   VERCEL_ENV: process.env.VERCEL_ENV,
   TENANT_ACCESS_ENFORCEMENT: process.env.TENANT_ACCESS_ENFORCEMENT,
   CRON_SECRET: process.env.CRON_SECRET,
+  MAINTENANCE_MODE: process.env.MAINTENANCE_MODE,
+  MAINTENANCE_MESSAGE: process.env.MAINTENANCE_MESSAGE,
+  PLATFORM_MFA_ENFORCEMENT: process.env.PLATFORM_MFA_ENFORCEMENT,
 });
 
 /**
@@ -234,6 +266,14 @@ export const env = parseEnv({
 export function tenantAccessEnforcement(): AccessEnforcement {
   const v = process.env.TENANT_ACCESS_ENFORCEMENT?.trim();
   return v === "off" || v === "banner" || v === "enforce" ? v : "banner";
+}
+
+/**
+ * `PLATFORM_MFA_ENFORCEMENT` vigente (BO4), leído en cada llamada por la misma razón que el de arriba: los tests lo
+ * cambian en caliente. Inválido o vacío → `off` (el boot ya rechazó un valor inválido; acá no se tira).
+ */
+export function platformMfaEnforcement(): PlatformMfaEnforcement {
+  return process.env.PLATFORM_MFA_ENFORCEMENT?.trim() === "enforce" ? "enforce" : "off";
 }
 
 export const isProd = env.NODE_ENV === "production";

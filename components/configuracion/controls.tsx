@@ -12,7 +12,8 @@ export type Tab =
   | "diagnosticos"
   | "usuarios"
   | "plan"
-  | "soporte";
+  | "soporte"
+  | "exportar";
 
 /**
  * BO3-F: las pestañas se pueden abrir por URL (`/configuracion?tab=soporte`: el mail `support_access` lleva a
@@ -28,6 +29,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "usuarios",
   "plan",
   "soporte",
+  // BO5-C: `?tab=exportar` es el link del mail `tenant_export_request` (Plataforma le pide el export al titular).
+  "exportar",
 ];
 
 export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
@@ -61,6 +64,8 @@ export function TabsBar({
     // BO3-F: plan y accesos de soporte son del titular y de quien administra (los lee `tenant.admin`).
     { key: "plan", label: "Plan y uso", ownerOnly: true },
     { key: "soporte", label: "Accesos de soporte", ownerOnly: true },
+    // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN.
+    { key: "exportar", label: "Exportar datos", ownerOnly: true },
   ];
   // B3.4: con 7 pestañas (9 desde BO3-F) la píldora no entra en un celular; scrollea en
   // horizontal en vez de desbordar la página (`maxWidth: 100%`).
@@ -79,6 +84,7 @@ export function TabsBar({
       }}
     >
       {tabs.map((t) => {
+        if (t.key === "exportar" && role !== "OWNER") return null;
         if (t.ownerOnly && role !== "OWNER" && role !== "ADMIN") return null;
         if (t.module && !modules.includes(t.module)) return null;
         const on = tab === t.key;
