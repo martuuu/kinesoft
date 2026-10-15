@@ -1603,7 +1603,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ## RX · Escritorio de Recepción (15/16-oct-2026)
 
-> RX-0 (`a762130`) y RX-1 (`ee97af3`) commiteados; RX-2 + fixes del revisor RX-Z sin commitear. **Sin migración**: la
+> RX-0 (`a762130`), RX-1 (`ee97af3`) y RX-2 + RX-Z (`a5ca20a`) commiteados. **Sin migración**: la
 > cara se guarda en `agendaPrefs.receptionLayout` (preferencias de usuario). `TZ=UTC`. **Necesita turnos de hoy en
 > local** (3+ profesionales, salas, estados variados): el agente no corre seeds, los carga Martin. Hallazgos en
 > [AUDIT «RX»](AUDIT.md); decisiones RX-D1..D10 en el [ROADMAP](ROADMAP.md).
@@ -1632,3 +1632,55 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Recepción de la agenda
 - [ ] `/agenda?view=reception` en un día **pasado**: ninguna fila dice «Demorado» y los contadores no se ponen en ámbar (G1).
 - [ ] Arriba de la lista está el link «Abrir escritorio de Recepción →» que lleva a `/sala`.
+
+## EV2 · Evoluciones de HC (15/16-oct-2026)
+
+> EV2-0..EV2-3 commiteados (`8e3e9f6` → `55042c5`); EV2-Z sin commitear. **Migración M9** (`clinical_notes`) aplicada en
+> el Docker local; en prod va **antes** del deploy (RUNBOOK «M9 en prod»). `TZ=UTC`. Necesita en local un consultorio
+> **Kinesiología** y uno **General**, cada uno con Titular clínico, 2 profesionales (uno con un paciente compartido),
+> Secretaria y Facturación, y turnos de hoy, de ayer y de mañana: el agente no corre seeds, los carga Martin. Hallazgos
+> en [AUDIT «EV2»](AUDIT.md); decisiones EV2-D13..D24 y las de EV2-Z en el [ROADMAP](ROADMAP.md).
+
+### Alta y edición
+- [ ] Perfil del paciente → pestaña **«Evoluciones»** (la de la curva ahora dice **«EVA»**): «Nueva evolución» abre el Drawer; tipos Evolución / Primera consulta / Alta; sin turno, la fecha arranca en «ahora» redondeada a 5 min.
+- [ ] Guardar con cuerpo vacío o > 20.000 caracteres → error en el campo; el contador avisa solo cerca del límite («Te quedan N caracteres»).
+- [ ] Fecha a más de 12 h en el futuro: **sin turno** → «La fecha de la evolución no puede ser más de 12 h en el futuro.»; **con turno** de mañana → «Todavía no llegó la hora del turno: la evolución se puede cargar desde 12 h antes.»
+- [ ] Doble clic en «Guardar» (o red lenta) → una sola evolución.
+- [ ] El autor la edita dentro de las 24 h («editable hasta mañana HH:MM»); otro profesional o el Titular no ven «Editar». Cerrar el Drawer con cambios pide confirmación.
+- [ ] Editar en dos pestañas a la vez → la segunda recibe «La evolución cambió mientras la editabas…», sin pisar.
+- [ ] Picker de minutos: una nota o turno con hora fuera de la grilla (p. ej. **10:07**) muestra «07» como opción (no salta a 10:05). Revisar también en **reprogramar turno, Planes y bloqueos**, que usan el mismo picker.
+
+### Enmienda, anulación e historial
+- [ ] Pasadas las 24 h (o en una nota de otro profesional con escritura): «Agregar enmienda» copia el texto con el hint «Copiamos tu texto: dejá solo lo que agrega o corrige.»; la enmienda queda colgada de la original.
+- [ ] «Anular» (autor o Titular clínico) pide motivo (3..500) en un Modal; la anulada se ve colapsada, sin tachar, con «Anulada el {fecha} por {quién} · Motivo»; no se puede editar ni enmendar.
+- [ ] «Historial» muestra las versiones anteriores de una editada, también en una anulada.
+
+### Turnos, agenda y Recepción
+- [ ] Drawer del turno: fila de evolución («Cargar evolución» / «Ver evolución» con link «Abrir en la HC» de 44 px). Marcar «Atendido» en un turno **propio** → toast de 10 s con «Cargar evolución» que abre el editor con «Paciente: Apellido, Nombre».
+- [ ] Como Titular sobre el turno de **otro** kine: no aparece el toast.
+- [ ] Turno con evolución: «Eliminar turno» deshabilitado con hint; cancelarlo sí; cambiarle el paciente → «Este turno tiene una evolución: no se puede cambiar el paciente.» (como Secretaria: el error genérico, sin decir que hay evolución).
+- [ ] Turno cancelado o ausente → no admite evolución (mensaje); si ya tenía una, se sigue viendo.
+- [ ] Recepción (`/agenda?view=reception` y `/sala`): «Atendido» ofrece el toast solo a un profesional con `clinical.read`; la sala nunca muestra texto clínico.
+- [ ] Deep link `/pacientes/<id>?tab=evoluciones&turno=<id>`: con nota existente hace scroll y la resalta 2 s (sin animación con «reducir movimiento»), sin abrir el editor.
+- [ ] Kine que atiende un turno de un paciente **de otro kine sin share**: el toast aparece y al guardar dice «No tenés acceso…» (abierto a6, C0: anotar si molesta).
+
+### Seguimiento (vertical Kinesiología)
+- [ ] El detalle de la sesión tiene **«Registrar sesión»** (notas, RPE, EVA) y **«Cargar evolución»** (HC del turno) por separado; una evolución de HC **no** bloquea «Registrar sesión».
+- [ ] El bucket «Sin evolución» lista sesiones realizadas en los últimos 14 días sin evolución ni registro; al cargar la evolución desde el detalle, sale del bucket al volver.
+- [ ] Historial del plan y actividad del paciente dicen «Sesión registrada» (no «evolución»).
+
+### Impresión
+- [ ] «Imprimir historia clínica» (solo con notas) abre `/pacientes/<id>/imprimir`: sin sidebar ni barra en la vista de impresión, «Turno: {servicio}», pie con paciente y DNI, «Cerrar» cierra la pestaña. Queda «Historia clínica impresa» en la actividad.
+- [ ] Con más de 2000 notas se imprimen las más recientes con el aviso «pedile la exportación al/la Titular».
+
+### Por rol y vertical
+- [ ] **Profesional dueño o con share:** ve, crea y enmienda. **Profesional sin acceso al paciente:** no ve ninguna evolución (ni en el perfil ni en el drawer).
+- [ ] **Secretaria, Facturación, ADMIN y Titular que no atiende:** no ven texto de evoluciones en ningún lado (perfil, drawer, Recepción, Seguimiento); `/pacientes/<id>/imprimir` → 404. El Titular sin agenda sí recibe las evoluciones en el **export del consultorio** (§5.50, pide 2FA).
+- [ ] **Soporte** (sesión de soporte): solo lectura, sin HC.
+- [ ] **Portal del paciente y ⌘K:** ninguna evolución.
+- [ ] **Vertical General:** pestaña «Evoluciones» sí; sin «EVA», sin sesiones ni Seguimiento; el drawer del turno ofrece la evolución igual.
+
+### Layout
+- [ ] **390**: búsqueda de 16 px (no hace zoom), botones del header de 44 px, tipo de nota de 44 px; el Drawer ocupa la pantalla.
+- [ ] **1024** con sidebar abierto: perfil y editor sin scroll horizontal (el detalle de Seguimiento todavía no es responsive: abierto, PF/MB).
+- [ ] **1366**: la línea de tiempo agrupa nota y sesión del mismo turno.

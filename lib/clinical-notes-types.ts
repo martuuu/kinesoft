@@ -131,7 +131,9 @@ export const CLINICAL_NOTE_COPY = {
   bookingOtherPatient: "Ese turno es de otro paciente.",
   bookingCancelled: "El turno está cancelado: no se le puede cargar una evolución.",
   bookingNoShow: "El turno quedó como ausente: no se le puede cargar una evolución.",
-  future: "No se puede cargar una evolución de más de 12 h en el futuro.",
+  future: "Todavía no llegó la hora del turno: la evolución se puede cargar desde 12 h antes.",
+  /** EV2-Z: `future` habla del turno; sin turno el límite es la fecha que se eligió (EV2-D12). */
+  futureNoBooking: "La fecha de la evolución no puede ser más de 12 h en el futuro.",
   bookingTaken: "Este turno ya tiene una evolución. Editala o agregale una enmienda.",
   notAuthor: "Solo quien la escribió puede editarla.",
   windowClosed: "Pasaron más de 24 h: agregá una enmienda o anulala con un motivo.",
@@ -140,5 +142,5 @@ export const CLINICAL_NOTE_COPY = {
   voidForbidden: "Solo quien la escribió o el/la Titular pueden anularla.",
   stale: "La evolución cambió mientras la editabas. Recargá para ver la última versión.",
   keyReused: "Ese envío ya se usó para otra evolución. Cerrá y volvé a abrir el editor.",
-  invalid: "Datos inválidos",
+  invalid: "Revisá los datos e intentá de nuevo.",
 } as const;

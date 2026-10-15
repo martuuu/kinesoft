@@ -72,6 +72,12 @@ export const CLINICAL_NOTES_UI_COPY = {
   edited: "Editada",
   emptyBody: "Escribí la evolución.",
   emptyAmend: "Escribí la enmienda.",
+  // EV2-Z M5: al pasar de «editar» a «enmienda» (se cerró la ventana de 24 h) el texto escrito no se pierde.
+  amendCarriedHint: "Copiamos tu texto: dejá solo lo que agrega o corrige.",
+  // EV2-Z bajo: un error de red no es «sin acceso» (antes los dos decían lo mismo y el usuario no reintentaba).
+  historyError: "No pudimos cargar las versiones. Probá de nuevo.",
+  historyRetry: "Reintentar",
+  patientPrefix: "Paciente:",
 } as const;
 
 export const KIND_OPTIONS: readonly { value: ClinicalNoteKind; label: string }[] = CLINICAL_NOTE_KINDS.map((k) => ({
@@ -85,6 +91,9 @@ export const KIND_TAG_TONE: Record<ClinicalNoteKind, "sky" | "lime" | "soft"> = 
   FIRST_VISIT: "lime",
   DISCHARGE: "soft",
 };
+
+/** EV2-Z M8: borde visible para los pills `soft` (Alta, «Anulada»): el de `.k-tag-soft` es blanco sobre blanco. */
+export const SOFT_TAG_BORDER = "1px solid var(--navy-200)";
 
 // ─── Idempotencia ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -108,7 +117,14 @@ export function newIdempotencyKey(): string {
 export type NoteEditorBooking = { id: string; scheduledFor: string; serviceName: string | null };
 
 export type NoteEditorMode =
-  | { type: "create"; patientId: string; booking?: NoteEditorBooking | null; defaultKind?: ClinicalNoteKind }
+  | {
+      type: "create";
+      patientId: string;
+      /** EV2-Z A1: el editor dice de quién es la evolución («Paciente: …»): desde la agenda no está a la vista. */
+      patientName?: string;
+      booking?: NoteEditorBooking | null;
+      defaultKind?: ClinicalNoteKind;
+    }
   | { type: "edit"; note: ClinicalNoteDTO }
   | { type: "amend"; note: ClinicalNoteDTO };
 
@@ -128,8 +144,16 @@ export function initialDraft(mode: NoteEditorMode, now: Date): NoteDraft {
   if (mode.type === "amend") {
     return { kind: mode.note.kind, title: "", body: "", occurredAtLocal: "" };
   }
-  const at = mode.booking ? new Date(mode.booking.scheduledFor) : now;
+  // EV2-Z M6: sin turno, «ahora» redondeado HACIA ABAJO a 5 min (el paso del picker): un 10:07 se mostraba como
+  // 10:05 pero viajaba 10:07. Hacia abajo y no al más cercano: nunca corre la hora al futuro.
+  const at = mode.booking ? new Date(mode.booking.scheduledFor) : floorTo5Min(now);
   return { kind: mode.defaultKind ?? "EVOLUTION", title: "", body: "", occurredAtLocal: isoToARLocalInput(at) };
+}
+
+const FIVE_MIN_MS = 5 * 60 * 1000;
+/** Los husos AR son de hora entera: redondear en epoch a 5 min da lo mismo que en el reloj de pared AR. */
+export function floorTo5Min(d: Date): Date {
+  return new Date(Math.floor(d.getTime() / FIVE_MIN_MS) * FIVE_MIN_MS);
 }
 
 /** Dirty-guard del Drawer: «sucio» = distinto del inicial (escribir y borrar vuelve a limpio), como lib/form-dirty. */
@@ -137,14 +161,34 @@ export function isDraftDirty(initial: NoteDraft, current: NoteDraft): boolean {
   return isFormDirty(formStateKey([], initial), formStateKey([], current));
 }
 
-/** Contador del cuerpo: «1.234 / 20.000». `over` mira el texto recortado (el server hace trim antes de medir). */
-export function bodyCounter(body: string): { label: string; over: boolean; near: boolean } {
+/** «La evolución puede tener hasta 20.000 caracteres.» / «La enmienda …» (EV2-Z: la enmienda decía «evolución»). */
+export function bodyMaxMessage(mode: NoteEditorMode): string {
+  const what = mode.type === "amend" ? "La enmienda" : "La evolución";
+  return `${what} puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`;
+}
+
+/**
+ * Contador del cuerpo: «1.234 / 20.000». `over` mira el texto recortado (el server hace trim antes de medir).
+ * `announce` (EV2-Z M7) es lo que lee el lector de pantalla: vacío lejos del límite (un aria-live que cantaba cada tecla
+ * era ruido), «Te quedan N caracteres» cerca y el mensaje del máximo pasado.
+ */
+export function bodyCounter(
+  body: string,
+  mode?: NoteEditorMode
+): { label: string; over: boolean; near: boolean; announce: string } {
   const fmt = (n: number) => n.toLocaleString("es-AR");
   const over = body.trim().length > CLINICAL_NOTE_BODY_MAX;
+  const near = !over && body.length >= CLINICAL_NOTE_BODY_MAX * 0.9;
+  const left = Math.max(0, CLINICAL_NOTE_BODY_MAX - body.length);
   return {
     label: `${fmt(body.length)} / ${fmt(CLINICAL_NOTE_BODY_MAX)}`,
     over,
-    near: !over && body.length >= CLINICAL_NOTE_BODY_MAX * 0.9,
+    near,
+    announce: over
+      ? bodyMaxMessage(mode ?? { type: "create", patientId: "" })
+      : near
+        ? `Te quedan ${fmt(left)} ${left === 1 ? "carácter" : "caracteres"}`
+        : "",
   };
 }
 
@@ -157,7 +201,7 @@ export function validateDraft(mode: NoteEditorMode, d: NoteDraft, now: Date): Dr
   if (body.length === 0) {
     errors.body = mode.type === "amend" ? CLINICAL_NOTES_UI_COPY.emptyAmend : CLINICAL_NOTES_UI_COPY.emptyBody;
   } else if (body.length > CLINICAL_NOTE_BODY_MAX) {
-    errors.body = `La evolución puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`;
+    errors.body = bodyMaxMessage(mode);
   }
   if (d.title.trim().length > CLINICAL_NOTE_TITLE_MAX) {
     errors.title = `El título puede tener hasta ${CLINICAL_NOTE_TITLE_MAX} caracteres.`;
@@ -166,7 +210,11 @@ export function validateDraft(mode: NoteEditorMode, d: NoteDraft, now: Date): Dr
     const iso = localToARIso(d.occurredAtLocal);
     const at = iso ? new Date(iso) : null;
     if (!at || Number.isNaN(at.getTime())) errors.occurredAt = "Elegí la fecha y la hora.";
-    else if (at.getTime() - now.getTime() > CLINICAL_NOTE_FUTURE_LIMIT_MS) errors.occurredAt = CLINICAL_NOTE_COPY.future;
+    else if (at.getTime() - now.getTime() > CLINICAL_NOTE_FUTURE_LIMIT_MS) {
+      // Mismo copy que el server: «la hora del turno» solo si hay turno; sin turno, el límite es la fecha elegida.
+      const hasBooking = mode.type === "edit" ? mode.note.bookingId !== null : Boolean(mode.booking);
+      errors.occurredAt = hasBooking ? CLINICAL_NOTE_COPY.future : CLINICAL_NOTE_COPY.futureNoBooking;
+    }
   }
   return errors;
 }

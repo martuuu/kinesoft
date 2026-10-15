@@ -17,7 +17,11 @@
  *     sesión (anotaciones, EVA, RPE) se llama «Registrar sesión»; «Cargar
  *     evolución» pasa a ser la evolución de la historia clínica del turno de
  *     la sesión (`NoteEditorDrawer`). EV2-D18: una evolución viva del turno
- *     también saca la sesión de «Sin evolución».
+ *     también saca la sesión de «Sin evolución» (bucket y tag), pero NO
+ *     bloquea «Registrar sesión» (EV2-Z A2, default del orquestador para
+ *     Martin): la evolución de HC y el registro del plan (EVA, ejercicios)
+ *     son cosas distintas; si la HC bloqueaba, una sesión con evolución y
+ *     sin EVA quedaba sin forma de cargarle la EVA.
  */
 import { planSessionLabel } from "@/lib/plan-display";
 import type { OpenSessionBuckets } from "@/lib/sessions-types";
@@ -31,7 +35,7 @@ export const SEGUIMIENTO_COPY = {
   sinTurnoTitle: "Sin turno",
   sinTurnoHint: "Sesiones de planes activos que no tienen turno en la agenda.",
   sinEvolucionTitle: "Sin evolución",
-  sinEvolucionHint: "Realizadas en los últimos 14 días que todavía no tienen anotaciones, EVA ni ejercicios marcados.",
+  sinEvolucionHint: "Realizadas en los últimos 14 días sin evolución ni registro de la sesión (anotaciones, EVA o ejercicios).",
   sinEvolucionTag: "Sin evolución",
   /** EV2-D19: guarda la meta de la sesión (antes decía «Cargar evolución»). */
   registrarSesion: "Registrar sesión",
@@ -41,7 +45,8 @@ export const SEGUIMIENTO_COPY = {
   agendar: "Agendar",
   dischargeTitle: "Para dar el alta",
   dischargeAction: "Ver el plan",
-  evolutionAlreadyLoaded: "Esta sesión ya estaba registrada: editala con «Guardar anotaciones».",
+  /** EV2-Z A2/M3: el registro de la sesión no depende de la evolución de HC; esto es solo «ya tenía meta». */
+  evolutionAlreadyLoaded: "Esta sesión ya tenía un registro: editalo con «Guardar anotaciones».",
   evolutionEmpty: "Cargá al menos una anotación, la EVA, el RPE o un ejercicio hecho.",
   archived: "Sesión archivada",
   scheduleTitle: "Agendar sesión",

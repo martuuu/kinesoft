@@ -56,6 +56,20 @@ export function offersNoteAfterStatus(status: BookingStatus, view: BookingClinic
 export const NOTE_TOAST_ACTION_LABEL = "Cargar evolución";
 
 /**
+ * EV2-Z bajo: con acción el toast dura 10 s. Con el default de éxito se iba antes de que el profesional terminara de
+ * leerlo y llegara al botón (y la acción es la puerta más corta a la evolución del turno).
+ */
+export const NOTE_TOAST_DURATION_MS = 10_000;
+
+/** EV2-Z bajo: «Eliminar turno» deshabilitado si el turno tiene evolución (viva o anulada: el server lo rechaza). */
+export const DELETE_BLOCKED_BY_NOTE_HINT = "Tiene una evolución: cancelalo en vez de eliminarlo.";
+
+/** ¿La vista del turno trae alguna evolución (viva o anulada)? `null` (sin acceso / no leída) = no se sabe → false. */
+export function bookingHasClinicalNote(view: BookingClinicalNoteView | null): boolean {
+  return !!view && (!!view.note || view.voided.length > 0);
+}
+
+/**
  * EV2-3b: toast de éxito del cambio de estado. `onCreateNote` llega solo si el server dijo que el actor puede
  * crear la evolución de este turno (`offersNoteAfterStatus` en `./clinical-note-row`); la acción abre el
  * editor (la barrera real es `createClinicalNote`). Sin `onCreateNote` es el toast de siempre.
@@ -63,14 +77,61 @@ export const NOTE_TOAST_ACTION_LABEL = "Cargar evolución";
 export function statusToastPayload(
   status: BookingStatus,
   opts: { description?: string | null; onCreateNote?: (() => void) | null } = {}
-): { title: string; options?: { description?: string; action?: { label: string; onClick: () => void } } } {
+): {
+  title: string;
+  options?: { description?: string; duration?: number; action?: { label: string; onClick: () => void } };
+} {
   const title = STATUS_TOAST[status] ?? "Turno actualizado";
-  const options: { description?: string; action?: { label: string; onClick: () => void } } = {};
+  const options: { description?: string; duration?: number; action?: { label: string; onClick: () => void } } = {};
   if (opts.description) options.description = opts.description;
   if (status === "COMPLETED" && opts.onCreateNote) {
     options.action = { label: NOTE_TOAST_ACTION_LABEL, onClick: opts.onCreateNote };
+    options.duration = NOTE_TOAST_DURATION_MS;
   }
   return Object.keys(options).length > 0 ? { title, options } : { title };
+}
+
+/**
+ * «Eliminar turno» (turno suelto; el de plan ofrece «Cancelalo»). EV2-Z bajo: con una evolución (viva o anulada) el
+ * server rechaza el borrado (la FK protege la HC): se deshabilita con el porqué en vez de dejar apretar y fallar.
+ * `blockedByNote` solo lo puede saber quien lee la fila «Evolución»; para la Secretaria queda habilitado y la barrera
+ * sigue siendo el server.
+ */
+export function DeleteBookingButton({
+  onDelete,
+  pending,
+  blockedByNote,
+}: {
+  onDelete: () => void;
+  pending: boolean;
+  blockedByNote: boolean;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 2, marginTop: 4, justifyItems: "start" }}>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={pending || blockedByNote}
+        aria-describedby={blockedByNote ? "booking-delete-hint" : undefined}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: blockedByNote ? "var(--navy-300)" : "#9F1F1F",
+          cursor: blockedByNote ? "not-allowed" : "pointer",
+          fontSize: 12.5,
+          fontWeight: 700,
+          padding: 0,
+        }}
+      >
+        Eliminar turno
+      </button>
+      {blockedByNote && (
+        <span id="booking-delete-hint" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+          {DELETE_BLOCKED_BY_NOTE_HINT}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /**

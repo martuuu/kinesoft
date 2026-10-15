@@ -976,3 +976,34 @@ Hallazgos en [AUDIT.md «Hallazgos de PL-Z»](AUDIT.md); consola en [EXTERNAL-CO
   aunque la fila diga `clinical = true`; ningún camino de lectura le abre la HC por ese flag.
 - **Leads** (a4#1): el tope global diario se consume solo si pasan el de IP y el de email: una IP sola ya no agota el cupo
   del día.
+
+## 21. Evoluciones de HC (EV2, 15/16-oct-2026)
+
+Modelo e invariantes en [ARCHITECTURE.md ADR-020](ARCHITECTURE.md); «preservar» en AUDIT §5.50-55; hallazgos en
+[AUDIT.md «Hallazgos de EV2»](AUDIT.md). Un solo gate (`clinicalNoteGateInTx`): módulo `evoluciones` + `clinical.read` +
+acceso `full` al paciente para leer; además `practitionerId` para escribir. Los rechazos no distinguen «no existe» de
+«no podés» (`forbidden` / `notFound` sin pistas).
+
+| Rol | Ver | Crear / enmendar | Editar (24 h) | Anular | Imprimir | Export del consultorio |
+|---|---|---|---|---|---|---|
+| Titular clínico (OWNER que atiende) | todos (supervisión → acceso `full`) | sí | solo las propias | **todas** (EV2-D15) | sí (auditado) | sí, con HC (2FA) |
+| Titular que no atiende | no | no | no | no | no (404) | **sí, con HC** (§5.50, 2FA) |
+| Profesional dueño, con share o con «vista compartida» del consultorio | sí | sí | solo las propias | solo las propias | sí (auditado) | — |
+| Profesional sin acceso o con acceso básico | no | no | no | no | no (404) | — |
+| ADMIN (nunca atiende, §20.17) | no (aunque la fila diga `clinical = true`) | no | no | no | no | — |
+| Secretaria (ASSISTANT) / Facturación (BILLING) | no | no | no | no | no | — |
+| Soporte de Plataforma | no (SUPPORT_CAPS sin clínico) | no | no | no | no | — |
+| Paciente (portal) | **nunca** (EV2-D5) | — | — | — | — | — |
+
+- **Superficies sin HC** (guard `tests/unit/clinical-notes-guard.test.ts`): portal, ⌘K, turnero público, Plataforma,
+  `/sala` y realtime, notificaciones y mails, CSV y exports internos. La sala recibe el toast «Cargar evolución» pero
+  ningún texto clínico.
+- **Audit** en la misma tx: `clinicalNote.create|edit|amend|void` y `clinicalRecord.print` con `entity: "Patient"` y
+  solo ids/kind/revisión — **nunca** el texto ni el motivo de anulación. La impresión audita **antes** de devolver
+  datos: si el audit falla, no hay datos.
+- **Fuga cerrada en EV2-Z (a2):** el replay de un doble envío (23505) devolvía la nota aunque al actor le hubieran
+  sacado el share entre los dos envíos; ahora la tx de recuperación vuelve a pasar por el gate.
+- **Inferencia cerrada (a1):** al cambiar el paciente de un turno con evolución, quien no es clínico recibe el error
+  genérico, no «tiene una evolución».
+- 🔴 **Abierto (a6, C0):** un kine que atiende el turno de un paciente de otro kine sin share no puede cargarle la
+  evolución (falla cerrado), aunque la UI le ofrezca el toast.

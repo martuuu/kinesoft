@@ -36,11 +36,17 @@ vi.mock("@/lib/session", () => proxy());
 vi.mock("@/lib/clinical-notes", () => proxy());
 vi.mock("@/lib/clinical-notes-read", () => proxy());
 
-import { BookingDrawer } from "@/components/agenda/booking-drawer";
+import { BookingDrawer, noteTargetOf } from "@/components/agenda/booking-drawer";
+import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
+import { PlanHistoryBody, planHistoryEventLabel } from "@/components/planes/plan-history";
 import { ClinicalNoteRow, CLINICAL_NOTE_ROW_COPY } from "@/components/agenda/booking-drawer/clinical-note-row";
 import {
+  DELETE_BLOCKED_BY_NOTE_HINT,
+  DeleteBookingButton,
   NOTE_TOAST_ACTION_LABEL,
+  NOTE_TOAST_DURATION_MS,
   STATUS_TOAST,
+  bookingHasClinicalNote,
   clinicalNoteRowEligible,
   offersNoteAfterStatus,
   statusToastPayload,
@@ -191,5 +197,72 @@ describe("[EV2-3b] toast «Cargar evolución» al marcar Realizado", () => {
     // Otro estado nunca ofrece la evolución, aunque llegue el handler.
     expect(statusToastPayload("NO_SHOW", { description: "La sesión 3 queda sin turno para reprogramar.", onCreateNote: open }))
       .toEqual({ title: STATUS_TOAST.NO_SHOW, options: { description: "La sesión 3 queda sin turno para reprogramar." } });
+  });
+});
+
+describe("[EV2-Z] fixes de UI del drawer del turno", () => {
+  it("[EV2-Z A1] el blanco del editor lleva el nombre del turno y el editor lo muestra («Paciente: …»)", () => {
+    const target = noteTargetOf(booking(), "pt1");
+    expect(target.patientName).toBe("Juana Gómez");
+    const html = renderToStaticMarkup(
+      <NoteEditorDrawer
+        open
+        onClose={() => {}}
+        mode={{ type: "create", patientId: target.patientId, patientName: target.patientName, booking: target.booking }}
+        onSaved={() => {}}
+      />
+    );
+    expect(html).toContain("<strong>Paciente: Juana Gómez</strong>");
+    expect(html).toContain("Turno del 15/10/26 09:30 · Kinesio");
+  });
+
+  it("[EV2-Z] el toast de Realizado con «Cargar evolución» dura 10 s; sin acción, el default", () => {
+    const withNote = statusToastPayload("COMPLETED", { onCreateNote: () => {} });
+    expect(NOTE_TOAST_DURATION_MS).toBe(10_000);
+    expect(withNote.options?.duration).toBe(10_000);
+    expect(statusToastPayload("COMPLETED", { description: "x" }).options?.duration).toBeUndefined();
+  });
+
+  it("[EV2-Z] «Eliminar turno» deshabilitado con el porqué si hay evolución viva o anulada", () => {
+    expect(bookingHasClinicalNote(null)).toBe(false);
+    expect(bookingHasClinicalNote(view({ canCreate: true }))).toBe(false);
+    expect(bookingHasClinicalNote(view({ note: note() }))).toBe(true);
+    const voided = note({ voided: { at: "2026-10-15T13:30:00.000Z", byUserId: "u-pro", reason: "Duplicada" } });
+    expect(bookingHasClinicalNote(view({ voided: [voided] }))).toBe(true);
+
+    const blocked = renderToStaticMarkup(<DeleteBookingButton onDelete={() => {}} pending={false} blockedByNote />);
+    expect(blocked).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="booking-delete-hint"/);
+    expect(blocked).toContain(`id="booking-delete-hint"`);
+    expect(blocked).toContain("Tiene una evolución: cancelalo en vez de eliminarlo.");
+    expect(DELETE_BLOCKED_BY_NOTE_HINT).toBe("Tiene una evolución: cancelalo en vez de eliminarlo.");
+
+    const free = renderToStaticMarkup(<DeleteBookingButton onDelete={() => {}} pending={false} blockedByNote={false} />);
+    expect(free).not.toContain("disabled");
+    expect(free).not.toContain(DELETE_BLOCKED_BY_NOTE_HINT);
+    expect(free).toContain("Eliminar turno");
+  });
+
+  it("[EV2-Z] link a la HC con target de 44 px; la tarjeta del drawer no ofrece versiones (Modal fixed en el panel)", () => {
+    const html = row(view({ note: note({ revision: 2 }) }));
+    expect(html).toMatch(/<a[^>]*style="[^"]*min-height:44px[^"]*"[^>]*>[^<]*historia clínica/);
+    expect(html).not.toContain("Ver versiones anteriores");
+  });
+
+  it("[EV2-Z M10] historial del plan: `session.evolution` = «Sesión registrada»", () => {
+    expect(planHistoryEventLabel({ action: "session.evolution", detail: {} })).toBe("Sesión registrada");
+    const html = renderToStaticMarkup(
+      <PlanHistoryBody
+        state={{
+          kind: "ready",
+          history: {
+            events: [
+              { id: "e1", at: NOW, action: "session.evolution", entity: "ProgramSession", entityId: "s1", actorId: null, actorName: "Lic. Pérez", detail: {} },
+            ],
+          },
+        }}
+      />
+    );
+    expect(html).toContain("Sesión registrada");
+    expect(html).not.toContain("Evolución cargada");
   });
 });

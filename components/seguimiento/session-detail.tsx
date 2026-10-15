@@ -145,11 +145,14 @@ export function SessionDetail({
     ? { ...clinicalNote, hasLiveNote: clinicalNote.hasLiveNote || noteSaved }
     : null;
   const noteAction = sessionClinicalNoteAction(noteState);
-  // "Sin evolución": la cerró la agenda ("Atendido") y no tiene nada cargado
+  // Tag "Sin evolución": la cerró la agenda ("Atendido") y no tiene nada cargado
   // (ni la meta de la sesión ni una evolución de HC viva del turno, EV2-D18).
-  // Se habilita el panel de anotaciones para "Registrar sesión" (EV2-D19).
   const withoutEvolution = isSessionWithoutEvolution(session, { hasClinicalNote: !!noteState?.hasLiveNote });
-  const editable = !completed || withoutEvolution;
+  // "Registrar sesión" (EV2-D19) depende SOLO de la meta de la sesión, no de la
+  // evolución de HC (EV2-Z A2): con la HC cargada y sin EVA, el panel tiene que
+  // seguir abierto para registrar la sesión del plan.
+  const unrecorded = isSessionWithoutEvolution(session);
+  const editable = !completed || unrecorded;
   const diagnosis = session.program.case?.diagnoses?.[0]?.condition?.name ?? null;
   const discipline = session.program.discipline ?? null;
   const [pending, start] = useTransition();
@@ -282,13 +285,16 @@ export function SessionDetail({
 
       {/* Center — exercises */}
       <main style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <Card glass style={{ padding: 16, display: "flex", alignItems: "center", gap: 14 }}>
+        {/* EV2-Z M2: con `flexWrap` los botones bajan antes de aplastar el nombre (a 1024 la columna central queda
+            en ~400 px), y «Cargar evolución» / «Ver evolución» van en su propia fila: antes competían con
+            «Agendar» y «Cerrar sesión» y el título se partía letra a letra. */}
+        <Card glass style={{ padding: 16, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <Avatar
             name={`${session.program.patient.firstName} ${session.program.patient.lastName}`}
             size={48}
             tone="sky"
           />
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: "1 1 200px", minWidth: 0 }}>
             <h1 className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
               {session.program.patient.firstName} {session.program.patient.lastName} · {heading}
             </h1>
@@ -297,19 +303,6 @@ export function SessionDetail({
               {diagnosis ? ` · ${diagnosis}` : ""}
             </div>
           </div>
-          {noteAction?.kind === "create" && (
-            <Button variant="ghost" onClick={() => setNoteOpen(true)} disabled={pending}>
-              {SEGUIMIENTO_COPY.cargarEvolucionHc}
-            </Button>
-          )}
-          {noteAction?.kind === "view" && (
-            <Link
-              href={noteAction.href}
-              style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none", whiteSpace: "nowrap" }}
-            >
-              {SEGUIMIENTO_COPY.verEvolucionHc}
-            </Link>
-          )}
           {completed ? (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
               <Tag tone="lime">
@@ -327,6 +320,32 @@ export function SessionDetail({
               <Button variant="primary" onClick={finish} disabled={pending}>
                 {pending ? "Cerrando…" : "Cerrar sesión"} <IconArrow size={12} />
               </Button>
+            </div>
+          )}
+          {noteAction && (
+            <div
+              data-session-note-action=""
+              style={{ flexBasis: "100%", display: "flex", justifyContent: "flex-end", alignItems: "center" }}
+            >
+              {noteAction?.kind === "create" && (
+                <Button variant="ghost" onClick={() => setNoteOpen(true)} disabled={pending}>
+                  {SEGUIMIENTO_COPY.cargarEvolucionHc}
+                </Button>
+              )}
+              {noteAction?.kind === "view" && (
+                <Link
+                  href={noteAction.href}
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "var(--sky-700)",
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {SEGUIMIENTO_COPY.verEvolucionHc}
+                </Link>
+              )}
             </div>
           )}
         </Card>
@@ -393,14 +412,20 @@ export function SessionDetail({
         onChange={setDraft}
         dirty={dirty}
         disabled={!editable}
-        evolution={withoutEvolution ? { onLoad: loadEvolution, pending } : null}
+        evolution={unrecorded ? { onLoad: loadEvolution, pending } : null}
       />
 
       {clinicalNote && noteAction?.kind === "create" && (
         <NoteEditorDrawer
           open={noteOpen}
           onClose={() => setNoteOpen(false)}
-          mode={{ type: "create", patientId: clinicalNote.patientId, booking: clinicalNote.booking }}
+          mode={{
+            type: "create",
+            patientId: clinicalNote.patientId,
+            // Contrato A1 (EV2-Z): el editor dice de quién es la evolución («Paciente: Apellido, Nombre»).
+            patientName: `${session.program.patient.lastName}, ${session.program.patient.firstName}`,
+            booking: clinicalNote.booking,
+          }}
           onSaved={() => {
             // «Sin evolución» del landing y el tag de acá salen del server (EV2-D18): `createClinicalNote`
             // revalida el layout de /seguimiento si la raíz es de un turno (EV2-Z), y la respuesta de la action ya

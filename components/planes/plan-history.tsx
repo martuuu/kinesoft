@@ -38,7 +38,7 @@ const ACTION_LABEL: Readonly<Record<string, string>> = {
   "program.replan": "Plan re-planificado",
   "session.create": "Sesión agregada",
   "session.complete": "Sesión realizada",
-  "session.evolution": "Evolución cargada",
+  "session.evolution": "Sesión registrada",
   "session.meta.update": "Datos de la sesión editados",
   "session.reschedule": "Sesión reprogramada",
 };

@@ -55,7 +55,7 @@ prender el cobro.
 **RX ✅ (15/16-oct) — Escritorio de Recepción** (§20.19): `/sala` con tres caras elegibles en Apariencia → Recepción
 (Tablero, Lista y panel, Flujo; ADR-019), sin migración (`agendaPrefs.receptionLayout`), `useSalaLive` compartido,
 token `--now-line`, Recepción de la agenda sin demora fuera de hoy (G1) y con link al escritorio. RX-0 (`a762130`) y
-RX-1 (`ee97af3`) commiteados; RX-2 + RX-Z en el working tree ([QA «RX»](QA.md), [AUDIT «RX»](AUDIT.md)). Abiertos:
+RX-1 (`ee97af3`) y RX-2 + RX-Z (`a5ca20a`) commiteados ([QA «RX»](QA.md), [AUDIT «RX»](AUDIT.md)). Abiertos:
 nombres de «Por cobrar» cortados a 1024 con sidebar (PF/MB) y sidebar sin modo móvil (MB).
 Decisiones RX con default (para Martin):
 - **RX-D1** dónde vive: `/sala` con tres caras; `/agenda?view=reception` queda.
@@ -69,7 +69,40 @@ Decisiones RX con default (para Martin):
   sidebar). **RX-D8** el nav sigue diciendo «Sala de espera». **RX-D9** la franja muestra solo profesionales con
   turnos hoy; clic = filtrar por uno. **RX-D10** sin flag «1.ª vez» (no hay dato).
 
-**Siguiente:** **EV2** (Evoluciones, M9) → VX → ES4 → PF → DIR → MB.
+**EV2 ✅ (15/16-oct) — Evoluciones de HC** (§20.6, decisión 13): evolución por consulta para todas las verticales, con
+o sin turno; 24 h para que el autor la edite, después enmienda o anulación con motivo; nunca se borra ni va al portal,
+⌘K, sala, mails ni CSV. **M9** `clinical_notes` (inalterabilidad por trigger, una viva por turno, FKs compuestas;
+ADR-020). Pestaña «Evoluciones» en el perfil (la curva pasa a «EVA»), fila en el drawer del turno, toast «Cargar
+evolución» al marcar «Atendido» (agenda, Recepción), Seguimiento con «Registrar sesión» + «Cargar evolución»,
+impresión auditada y export del consultorio con HC. Commiteados EV2-0 (`8e3e9f6`), EV2-1 (`5e11c95`), EV2-2
+(`1597903`), EV2-3 (`55042c5`); EV2-Z en el working tree ([QA «EV2»](QA.md), [AUDIT «EV2»](AUDIT.md)). **Prod:** M9
+antes del deploy (RUNBOOK «M9 en prod»). Abiertos: a6 (C0, decide Martin), detalle de Seguimiento a 1024 (PF/MB),
+Drawer/Modal sin portal (PF), `updateBooking` en perf (PF), borde de `KindTag` (VX F).
+Decisiones EV2 con default (para Martin; las EV2-D1..D12 son suyas, §20.11):
+- **EV2-D13** un turno ausente tampoco admite evolución (igual que cancelado).
+- **EV2-D14** enmienda: cualquier profesional con escritura sobre el paciente, sin límite de tiempo, solo sobre una
+  raíz viva; hereda paciente, turno y tipo; fecha = ahora.
+- **EV2-D15** anular: el autor o el Titular clínico (nunca el ADMIN), motivo 3..500, sin límite de tiempo, idempotente.
+- **EV2-D16** audit en la tx (`clinicalNote.create|edit|amend|void`, `clinicalRecord.print`) sin texto clínico ni motivo.
+- **EV2-D17** la base frena la edición a las 24 h + 10 min (red para prod BYPASSRLS).
+- **EV2-D18** «Sin evolución» y «reabrir la sesión» cuentan una raíz viva del turno activo; «Deshacer Atendido» no
+  reabre esa sesión.
+- **EV2-D19** Seguimiento: «Cargar evolución» (meta de sesión) → **«Registrar sesión»**; «Cargar evolución» = HC.
+  *Martin puede revertirlo.*
+- **EV2-D20** la pestaña `evol` queda como «EVA»; la nueva es `evoluciones`.
+- **EV2-D21** no se cambia el paciente de un turno con evolución (viva o anulada).
+- **EV2-D22** el export del consultorio incluye evoluciones y revisiones (portabilidad, AUDIT §5.50).
+- **EV2-D23** una anulada sigue bloqueando el borrado del turno y se muestra colapsada con su motivo.
+- **EV2-D24** fecha por defecto = hora del turno (o ahora sin turno), editable dentro de las 24 h.
+- **EV2-Z A2** una evolución de HC **no** bloquea «Registrar sesión»: EV2-D18 decide solo el bucket y el tag.
+- **EV2-Z toast** «Cargar evolución» al marcar «Atendido» solo en turnos **propios** (el Titular no lo ve en turnos
+  de otro kine).
+- **EV2-Z labels** `session.evolution` → «Sesión registrada» (historial del plan y actividad).
+- **EV2-Z impresión** corte a 2000 notas = las **más recientes**, con aviso de pedir el export al Titular.
+- **a6** (abierto, *decide Martin*): un kine que atiende un paciente ajeno sin share no puede cargarle la evolución
+  (falla cerrado) pero ve el toast. *Recomendado:* resolverlo en C0 con la visibilidad por registro (EV2-D7).
+
+**Siguiente:** **VX** (cara pública: Ola F + VX2) → ES4 → PF → DIR → MB.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,

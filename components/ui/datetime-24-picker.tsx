@@ -25,16 +25,18 @@ function splitValue(v: string): { date: string; hh: string; mm: string } {
   const [datePart = "", timePart = ""] = v.split("T");
   const [hhRaw = "", mmRaw = ""] = timePart.split(":");
   const hh = HOURS.includes(hhRaw) ? hhRaw : "";
-  // Snap the minute DOWN to a 5' step so it matches an option without ever
-  // wrapping 58→00 (which would silently drop an hour). Legacy bookings
-  // with off-grid minutes are the only ones this touches; new turnos are
-  // always multiples of 5.
-  let mm = "";
-  if (mmRaw !== "") {
-    const snapped = String(Math.floor(Number(mmRaw) / 5) * 5).padStart(2, "0");
-    mm = MINUTES.includes(snapped) ? snapped : "";
-  }
+  // EV2-Z M6: an off-grid minute (a legacy turno at 10:07, an evolución
+  // saved at 10:07) is shown AS IS — `minuteOptions` adds it to the list.
+  // Before, the select snapped it down to 10:05 while the value stayed
+  // 10:07: the screen lied, and touching the date emitted 10:05.
+  const mm = /^[0-5]\d$/.test(mmRaw) ? mmRaw : "";
   return { date: datePart, hh, mm };
+}
+
+/** The 5' grid plus the current minute when it falls off-grid (sorted). */
+export function minuteOptions(current: string): string[] {
+  if (current === "" || MINUTES.includes(current)) return MINUTES;
+  return [...MINUTES, current].sort();
 }
 
 const selectStyle: React.CSSProperties = {
@@ -119,7 +121,7 @@ export function DateTime24Picker({
           <option value="" disabled>
             mm
           </option>
-          {MINUTES.map((m) => (
+          {minuteOptions(mm).map((m) => (
             <option key={m} value={m}>
               {m}
             </option>

@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
-import type { BookingStatus, PrismaClient } from "@prisma/client";
+import type { BookingStatus, Prisma, PrismaClient } from "@prisma/client";
 import {
   amendClinicalNote,
   createClinicalNote,
@@ -50,6 +50,36 @@ vi.mock("@/lib/two-factor-step-up", async (importOriginal) => ({
 }));
 
 const RUN = process.env.INTEGRATION === "1";
+
+/** Holder: tx del owner que toma algo y lo retiene hasta `release()` (mismo patrón que plans-concurrency.test.ts). */
+function hold(db: PrismaClient, take: (tx: Prisma.TransactionClient) => Promise<unknown>) {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let ready!: (pid: number) => void;
+  const readyP = new Promise<number>((r) => (ready = r));
+  const done = db.$transaction(
+    async (tx) => {
+      await take(tx);
+      const [{ pid }] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await gate;
+    },
+    { timeout: 30_000, maxWait: 10_000 }
+  );
+  return { ready: readyP, release, done };
+}
+
+/** Espera a que alguna sesión quede bloqueada por `pid` (barrera determinista, sin sleeps). */
+async function waitBlockedBy(db: PrismaClient, pid: number, timeoutMs = 10_000): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    const [{ c }] = await db.$queryRaw<{ c: number }[]>`
+      SELECT count(*)::int AS c FROM pg_stat_activity a WHERE ${pid}::int = ANY(pg_blocking_pids(a.pid))`;
+    if (c >= 1) return;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`waitBlockedBy: nadie bloqueado por ${pid}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 const H = 60 * 60 * 1000;
 const C = CLINICAL_NOTE_COPY;
 
@@ -336,13 +366,14 @@ describe.skipIf(!RUN)("[EV2-2a] escrituras de evoluciones", () => {
     await expectRejected(await createAs(A.userId, newInput(pid, { bookingId: ns.id })), C.bookingNoShow, pid);
   });
 
-  it("turno a 13 h → future; a 11 h → ok; occurredAt explícito a 13 h → future", async () => {
+  it("turno a 13 h → future; a 11 h → ok; sin turno, occurredAt explícito a 13 h → futureNoBooking", async () => {
     const pid = await patient();
     const far = await booking(A, pid, { at: new Date(Date.now() + 13 * H) });
     await expectRejected(await createAs(A.userId, newInput(pid, { bookingId: far.id })), C.future, pid);
+    // [EV2-Z] sin turno no hay «hora del turno»: el copy habla de la fecha elegida.
     await expectRejected(
       await createAs(A.userId, newInput(pid, { occurredAt: new Date(Date.now() + 13 * H).toISOString() })),
-      C.future,
+      C.futureNoBooking,
       pid
     );
     const near = await booking(A, pid, { at: new Date(Date.now() + 11 * H) });
@@ -407,6 +438,94 @@ describe.skipIf(!RUN)("[EV2-2a] escrituras de evoluciones", () => {
     await expectRejected(await createAs(P1.userId, newInput(other, { idempotencyKey: key })), C.keyReused, other);
   });
 
+  it("[EV2-Z a2] recuperación del 23505 sin acceso de lectura (le sacaron el share en el medio) → forbidden, sin replay", async () => {
+    const pid = await patient();
+    const key = randomUUID();
+    // El holder ocupa la clave (tenant, idempotencyKey) con una nota de P2 SIN commitear: la lectura de replay de
+    // P2 no la ve y su INSERT espera el índice único. Mientras espera, se le saca el share; al commitear, 23505 →
+    // el camino de recuperación vuelve a gatear y ya no puede leer.
+    const h = hold(db, (tx) =>
+      tx.clinicalNote.create({
+        data: {
+          tenantId: A.tenantId,
+          patientId: pid,
+          body: "Nota en carrera",
+          occurredAt: new Date(),
+          authorUserId: P2.userId,
+          authorPractitionerId: P2.practitionerId!,
+          authorName: "Kine Dos",
+          idempotencyKey: key,
+          createdAt: new Date(),
+        },
+      })
+    );
+    const holderPid = await h.ready;
+    const r = createAs(P2.userId, newInput(pid, { idempotencyKey: key }));
+    r.catch(() => {});
+    try {
+      await waitBlockedBy(db, holderPid);
+      await db.patientShare.deleteMany({ where: { patientId: pid, practitionerId: P2.practitionerId! } });
+    } finally {
+      h.release();
+      await h.done;
+    }
+    expect(await r).toEqual({ ok: false, error: C.forbidden });
+    expect(await db.clinicalNote.count({ where: { patientId: pid } })).toBe(1);
+  });
+
+  it("[EV2-Z a2] enmienda: recuperación del 23505 sin acceso de lectura → forbidden, sin replay", async () => {
+    const pid = await patient();
+    const root = await seedNote(A, pid, { userId: P1.userId, practitionerId: P1.practitionerId! });
+    const key = randomUUID();
+    const h = hold(db, (tx) =>
+      tx.clinicalNote.create({
+        data: {
+          tenantId: A.tenantId,
+          patientId: pid,
+          amendsNoteId: root,
+          body: "Enmienda en carrera",
+          occurredAt: new Date(),
+          authorUserId: P2.userId,
+          authorPractitionerId: P2.practitionerId!,
+          authorName: "Kine Dos",
+          idempotencyKey: key,
+          createdAt: new Date(),
+        },
+      })
+    );
+    const holderPid = await h.ready;
+    asUser(P2.userId);
+    const r = amendClinicalNote({ noteId: root, body: "Aclaración", idempotencyKey: key });
+    r.catch(() => {});
+    try {
+      await waitBlockedBy(db, holderPid);
+      await db.patientShare.deleteMany({ where: { patientId: pid, practitionerId: P2.practitionerId! } });
+    } finally {
+      h.release();
+      await h.done;
+    }
+    expect(await r).toEqual({ ok: false, error: C.forbidden });
+    expect(await db.clinicalNote.count({ where: { patientId: pid } })).toBe(2);
+  });
+
+  it("[EV2-Z a3] carrera: el turno se borra entre el chequeo y el INSERT → bookingNotFound, sin fila", async () => {
+    const pid = await patient();
+    const b = await booking(A, pid);
+    // El holder borra el turno SIN commitear: la lectura de createInTx lo ve, y el INSERT espera el FOR KEY SHARE
+    // de la FK. Al commitear, 23503 (P2003).
+    const h = hold(db, (tx) => tx.booking.delete({ where: { id: b.id } }));
+    const holderPid = await h.ready;
+    const r = createAs(P1.userId, newInput(pid, { bookingId: b.id }));
+    r.catch(() => {});
+    try {
+      await waitBlockedBy(db, holderPid);
+    } finally {
+      h.release();
+      await h.done;
+    }
+    await expectRejected(await r, C.bookingNotFound, pid);
+  });
+
   // ── Editar ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   it("[EV2-Z] revalida /pacientes siempre y /seguimiento solo si cambia la raíz viva de un turno", async () => {
@@ -453,6 +572,19 @@ describe.skipIf(!RUN)("[EV2-2a] escrituras de evoluciones", () => {
     expect(audits[0]).toMatchObject({ actorId: P1.userId, entityId: pid });
     expect(audits[0].payload).toMatchObject({ noteId: n.id, revision: 2 });
     expect(JSON.stringify(audits[0].payload)).not.toContain("Dolor");
+  });
+
+  it("[EV2-Z] editar la fecha a más de 12 h en el futuro: sin turno → futureNoBooking; con turno → future; sin cambios", async () => {
+    const pid = await patient();
+    const loose = await created(P1.userId, pid);
+    const b = await booking(A, pid, { at: new Date(Date.now() - 1 * H) });
+    const onBooking = await created(P1.userId, pid, { bookingId: b.id });
+    const far = new Date(Date.now() + 13 * H).toISOString();
+    asUser(P1.userId);
+    expect(await editClinicalNote({ noteId: loose.id, expectedRevision: 1, occurredAt: far })).toMatchObject({ ok: false, error: C.futureNoBooking });
+    expect(await editClinicalNote({ noteId: onBooking.id, expectedRevision: 1, occurredAt: far })).toMatchObject({ ok: false, error: C.future });
+    expect(await db.clinicalNote.count({ where: { patientId: pid, revision: { gt: 1 } } })).toBe(0);
+    expect(await auditsOf(pid, "clinicalNote.edit")).toHaveLength(0);
   });
 
   it("CAS viejo (expectedRevision vieja) → stale, sin cambios", async () => {

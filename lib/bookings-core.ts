@@ -1247,7 +1247,7 @@ export type BookingUpdateTxOutcome =
   | { kind: "plan-session-not-pending"; ordinal: number }
   | { kind: "plan-paid-cancel" }
   | { kind: "plan-patient-change" }
-  | { kind: "clinical-note-patient" }
+  | { kind: "clinical-note-patient"; clinical: boolean }
   // IAM-4b: mover (o reactivar / cambiar de sede) un turno cuyo profesional ya
   // no es reservable (turno viejo de la Secretaria, profesional suspendido).
   // Copy: PRACTITIONER_NOT_BOOKABLE_ERROR. Editar notas o cancelar sigue
@@ -1374,7 +1374,9 @@ export async function applyBookingUpdateInTx(
         where: { tenantId: actor.tenantId, bookingId: id },
         select: { id: true },
       });
-      if (note) return { kind: "clinical-note-patient" };
+      // EV2-Z a1: `clinical` viaja para que el action no le revele a quien no ve HC (Secretaria) que el turno tiene
+      // evolución: sin clínico recibe el copy genérico de «datos clínicos» (CLINICAL_RELINK_ERROR).
+      if (note) return { kind: "clinical-note-patient", clinical: gate.clinical };
     }
     const owned = await tx.patient.findFirst({
       where: { id: patch.patientId, tenantId: actor.tenantId },

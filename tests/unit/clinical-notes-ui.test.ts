@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   CLINICAL_NOTES_UI_COPY as COPY,
   bodyCounter,
+  bodyMaxMessage,
   bookingLabel,
+  floorTo5Min,
   buildAmendInput,
   buildCreateInput,
   buildEditInput,
@@ -26,6 +28,7 @@ import {
   type NoteEditorMode,
 } from "@/components/clinical-notes/clinical-notes-ui";
 import { permissionsFor } from "@/lib/clinical-notes-logic";
+import { minuteOptions } from "@/components/ui/datetime-24-picker";
 import { CLINICAL_NOTE_BODY_MAX, CLINICAL_NOTE_COPY, type ClinicalNoteDTO } from "@/lib/clinical-notes-types";
 
 const AUTHOR = "user-author";
@@ -67,13 +70,23 @@ function note(over: Partial<ClinicalNoteDTO> = {}, ctx: { actor?: string; owner?
 describe("[EV2-2e] borrador del editor", () => {
   const now = new Date("2026-10-15T17:07:00.000Z"); // 14:07 AR
 
-  it("[EV2-2e] crear con turno: fecha = hora del turno en reloj AR (EV2-D24); sin turno: ahora", () => {
+  it("[EV2-2e][EV2-Z M6] crear con turno: fecha = hora del turno en reloj AR (EV2-D24); sin turno: ahora redondeado a 5 min", () => {
     const withBooking = initialDraft(
       { type: "create", patientId: "pat-1", booking: { id: "bk-1", scheduledFor: "2026-10-15T12:30:00.000Z", serviceName: null } },
       now
     );
     expect(withBooking).toEqual({ kind: "EVOLUTION", title: "", body: "", occurredAtLocal: "2026-10-15T09:30" });
-    expect(initialDraft({ type: "create", patientId: "pat-1" }, now).occurredAtLocal).toBe("2026-10-15T14:07");
+    // M6: 14:07 → 14:05 (hacia abajo, el paso del picker; antes viajaba 14:07 mostrando 14:05).
+    expect(initialDraft({ type: "create", patientId: "pat-1" }, now).occurredAtLocal).toBe("2026-10-15T14:05");
+    expect(floorTo5Min(new Date("2026-10-15T17:04:59.999Z")).toISOString()).toBe("2026-10-15T17:00:00.000Z");
+    expect(floorTo5Min(new Date("2026-10-15T17:05:00.000Z")).toISOString()).toBe("2026-10-15T17:05:00.000Z");
+    // Con turno no se redondea: es la hora del turno tal cual (un legacy a las 09:32 queda 09:32).
+    expect(
+      initialDraft(
+        { type: "create", patientId: "pat-1", booking: { id: "bk-1", scheduledFor: "2026-10-15T12:32:00.000Z", serviceName: null } },
+        now
+      ).occurredAtLocal
+    ).toBe("2026-10-15T09:32");
     expect(initialDraft({ type: "create", patientId: "pat-1", defaultKind: "FIRST_VISIT" }, now).kind).toBe("FIRST_VISIT");
   });
 
@@ -105,6 +118,34 @@ describe("[EV2-2e] borrador del editor", () => {
     expect(bodyCounter("a".repeat(18_000)).near).toBe(true);
   });
 
+  it("[EV2-Z M7] el lector solo oye el contador cerca del límite («Te quedan N caracteres») o pasado", () => {
+    expect(bodyCounter("a".repeat(100)).announce).toBe("");
+    expect(bodyCounter("a".repeat(18_000)).announce).toBe("Te quedan 2.000 caracteres");
+    expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX - 1)).announce).toBe("Te quedan 1 carácter");
+    expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX + 1)).announce).toBe(
+      "La evolución puede tener hasta 20.000 caracteres."
+    );
+    const amend: NoteEditorMode = { type: "amend", note: {} as ClinicalNoteDTO };
+    expect(bodyCounter("a".repeat(CLINICAL_NOTE_BODY_MAX + 1), amend).announce).toBe(
+      "La enmienda puede tener hasta 20.000 caracteres."
+    );
+  });
+
+  it("[EV2-Z] cuerpo largo en una enmienda: «La enmienda puede tener hasta…»", () => {
+    const amend: NoteEditorMode = { type: "amend", note: {} as ClinicalNoteDTO };
+    const d = { kind: "EVOLUTION" as const, title: "", body: "a".repeat(CLINICAL_NOTE_BODY_MAX + 1), occurredAtLocal: "" };
+    expect(validateDraft(amend, d, now).body).toBe("La enmienda puede tener hasta 20.000 caracteres.");
+    expect(bodyMaxMessage({ type: "create", patientId: "p" })).toBe("La evolución puede tener hasta 20.000 caracteres.");
+  });
+
+  it("[EV2-Z M6] picker: el minuto fuera de la grilla de 5' se agrega como opción (no se esconde)", () => {
+    expect(minuteOptions("05")).toHaveLength(12);
+    expect(minuteOptions("")).toHaveLength(12);
+    const opts = minuteOptions("07");
+    expect(opts).toHaveLength(13);
+    expect(opts.slice(0, 4)).toEqual(["00", "05", "07", "10"]);
+  });
+
   it("[EV2-2e] validación: cuerpo vacío, largo, título > 200 y más de 12 h en el futuro (copy C-EV2-1)", () => {
     const mode: NoteEditorMode = { type: "create", patientId: "p" };
     const ok = { kind: "EVOLUTION" as const, title: "", body: "Bien", occurredAtLocal: "2026-10-15T14:00" };
@@ -115,7 +156,14 @@ describe("[EV2-2e] borrador del editor", () => {
     expect(validateDraft(mode, { ...ok, title: "t".repeat(201) }, now).title).toContain("200");
     // 14:07 AR + 12 h = 02:07 del 16: 02:05 vale, 02:10 no.
     expect(validateDraft(mode, { ...ok, occurredAtLocal: "2026-10-16T02:05" }, now).occurredAt).toBeUndefined();
-    expect(validateDraft(mode, { ...ok, occurredAtLocal: "2026-10-16T02:10" }, now).occurredAt).toBe(CLINICAL_NOTE_COPY.future);
+    // [EV2-Z] sin turno el copy habla de la fecha; con turno (crear o editar), de la hora del turno.
+    expect(validateDraft(mode, { ...ok, occurredAtLocal: "2026-10-16T02:10" }, now).occurredAt).toBe(CLINICAL_NOTE_COPY.futureNoBooking);
+    const withBooking: NoteEditorMode = { type: "create", patientId: "p", booking: { id: "bk-1", scheduledFor: "2026-10-15T17:00:00.000Z", serviceName: null } };
+    expect(validateDraft(withBooking, { ...ok, occurredAtLocal: "2026-10-16T02:10" }, now).occurredAt).toBe(CLINICAL_NOTE_COPY.future);
+    expect(validateDraft({ type: "edit", note: note() }, { ...ok, occurredAtLocal: "2026-10-16T02:10" }, now).occurredAt).toBe(CLINICAL_NOTE_COPY.future);
+    expect(validateDraft({ type: "edit", note: note({ bookingId: null, booking: null }) }, { ...ok, occurredAtLocal: "2026-10-16T02:10" }, now).occurredAt).toBe(
+      CLINICAL_NOTE_COPY.futureNoBooking
+    );
     expect(validateDraft(mode, { ...ok, occurredAtLocal: "" }, now).occurredAt).toBeTruthy();
     // La enmienda no lleva fecha (la pone el server).
     expect(validateDraft({ type: "amend", note: note() }, { ...ok, occurredAtLocal: "" }, now).occurredAt).toBeUndefined();

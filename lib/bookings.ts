@@ -1239,7 +1239,9 @@ async function updateBookingImpl(
   if (outcome.kind === "plan-session-taken") return { ok: false, error: PLAN_SESSION_TAKEN_ERROR(outcome.ordinal) };
   if (outcome.kind === "plan-paid-cancel") return { ok: false, error: PLAN_PAID_CANCEL_ERROR };
   if (outcome.kind === "plan-patient-change") return { ok: false, error: PLAN_PATIENT_CHANGE_ERROR };
-  if (outcome.kind === "clinical-note-patient") return { ok: false, error: BOOKING_CLINICAL_NOTE_PATIENT_ERROR };
+  if (outcome.kind === "clinical-note-patient") {
+    return { ok: false, error: outcome.clinical ? BOOKING_CLINICAL_NOTE_PATIENT_ERROR : CLINICAL_RELINK_ERROR };
+  }
   // IAM-4b: turno viejo de un profesional que ya no atiende acá (Secretaria,
   // suspendido): no se mueve; se cancela y se carga con otro profesional.
   if (outcome.kind === "practitioner-not-bookable") return { ok: false, error: PRACTITIONER_NOT_BOOKABLE_ERROR };
@@ -1662,6 +1664,16 @@ async function deleteBookingImpl(
   }).catch((e) => {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return { kind: "stale" as const };
+    }
+    // EV2-Z a3: carrera chequeo/escritura. Una evolución que entra entre el `findFirst` de arriba y el DELETE la
+    // frena la RESTRICT de M9 con un P2003; es el mismo caso que «tiene evolución», no un 500. Solo esa FK: otro
+    // P2003 (p. ej. un pago que entró en carrera) sigue su camino.
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2003" &&
+      String((e.meta as { field_name?: unknown } | undefined)?.field_name ?? e.message).includes("ClinicalNote_")
+    ) {
+      return { kind: "has-clinical-note" as const };
     }
     throw e;
   });

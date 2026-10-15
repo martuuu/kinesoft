@@ -114,6 +114,11 @@ describe.skipIf(!RUN)("EV2-2b · getPatientTimeline: sentencias constantes y sin
 
   it("≤ 4 sentencias de datos por página, iguales con 10 y con 1.000 notas + 200 sesiones (1ª página y con cursor)", async () => {
     asUser(T.userId);
+    // Calentamiento sin afirmar nada. En la integración completa (un solo fork, clientes contados compartidos entre
+    // archivos) la PRIMERA medición daba 8 sentencias y las siguientes 7 (gate EV2-Z): se colaba una sentencia
+    // pendiente del archivo anterior o la de un cache de proceso en frío. Solo, el archivo pasaba. Lo que se afirma
+    // abajo (constante entre 10 y 1.000 notas) no cambia: se compara en caliente contra caliente.
+    await capture(small, null);
     const s1 = await capture(small, null);
     const b1 = await capture(big, null);
     expect(b1.result.items).toHaveLength(20);

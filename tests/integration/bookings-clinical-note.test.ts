@@ -17,14 +17,19 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { createBooking, deleteBooking, updateBooking } from "@/lib/bookings";
-import { BOOKING_CLINICAL_NOTE_PATIENT_ERROR, BOOKING_HAS_CLINICAL_NOTE_ERROR } from "@/lib/bookings-constants";
+import {
+  BOOKING_CLINICAL_NOTE_PATIENT_ERROR,
+  BOOKING_HAS_CLINICAL_NOTE_ERROR,
+  CLINICAL_RELINK_ERROR,
+} from "@/lib/bookings-constants";
 import { localToARIso } from "@/lib/datetime-ar";
 import {
   ownerClient,
   createEphemeralTenant,
   addPatient,
+  addPractitioner,
   sweepOrphanTestTenants,
   uniqueSuffix,
   type EphemeralTenant,
@@ -32,6 +37,36 @@ import {
 import { asUser } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
+
+/** Holder: tx del owner que toma algo y lo retiene hasta `release()` (mismo patrón que plans-concurrency.test.ts). */
+function hold(db: PrismaClient, take: (tx: Prisma.TransactionClient) => Promise<unknown>) {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let ready!: (pid: number) => void;
+  const readyP = new Promise<number>((r) => (ready = r));
+  const done = db.$transaction(
+    async (tx) => {
+      await take(tx);
+      const [{ pid }] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await gate;
+    },
+    { timeout: 30_000, maxWait: 10_000 }
+  );
+  return { ready: readyP, release, done };
+}
+
+/** Espera a que alguna sesión quede bloqueada por `pid` (barrera determinista, sin sleeps). */
+async function waitBlockedBy(db: PrismaClient, pid: number, timeoutMs = 10_000): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    const [{ c }] = await db.$queryRaw<{ c: number }[]>`
+      SELECT count(*)::int AS c FROM pg_stat_activity a WHERE ${pid}::int = ANY(pg_blocking_pids(a.pid))`;
+    if (c >= 1) return;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`waitBlockedBy: nadie bloqueado por ${pid}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 /** "2027-03-10", "10:00" → instante ISO del reloj AR (sin depender del host). */
 const ar = (day: string, hhmm: string) => new Date(localToARIso(`${day}T${hhmm}:00`)).toISOString();
@@ -149,5 +184,53 @@ describe.skipIf(!RUN)("turnos con evolución (M9)", () => {
     const d = await deleteBooking(toDelete);
     expect(d.ok).toBe(true);
     expect(await db.booking.count({ where: { id: toDelete } })).toBe(0);
+  });
+
+  it("[EV2-Z a1] la Secretaria (sin clínico) que cambia el paciente no se entera de la evolución: copy de datos clínicos", async () => {
+    const sec = await addPractitioner(db, A, "ASSISTANT");
+    const { bookingId, patientId } = await bookingWithNote("2027-04-08");
+    const other = await addPatient(db, A);
+    asUser(sec.userId);
+    try {
+      const u = await updateBooking({ id: bookingId, patientId: other });
+      expect(u).toMatchObject({ ok: false, error: CLINICAL_RELINK_ERROR });
+    } finally {
+      asUser(A.userId);
+    }
+    const row = await db.booking.findUniqueOrThrow({ where: { id: bookingId }, select: { patientId: true } });
+    expect(row.patientId).toBe(patientId);
+  });
+
+  it("[EV2-Z a3] carrera: una evolución que entra entre el chequeo y el DELETE → «cancelalo», no un 500", async () => {
+    const patientId = await addPatient(db, A);
+    const r = await createBooking({
+      patientId,
+      serviceId: A.serviceId,
+      practitionerId: A.practitionerId,
+      scheduledFor: ar("2027-04-09", "10:00"),
+      durationMin: 45,
+      idempotencyKey: randomUUID(),
+    });
+    if (!r.ok) throw new Error(r.error);
+    const bookingId = r.data.id;
+    // El holder inserta la nota SIN commitear: la lectura de deleteBooking no la ve, y su DELETE espera el
+    // FOR KEY SHARE de la FK. Al commitear, la RESTRICT tira 23503 (P2003).
+    const h = hold(db, (tx) => tx.$executeRaw`
+      INSERT INTO "ClinicalNote" (id, "tenantId", "patientId", "bookingId", body, "occurredAt", "authorUserId",
+                                  "authorPractitionerId", "authorName", "idempotencyKey", "createdAt", "updatedAt")
+      VALUES (${`ev2-bcn-${uniqueSuffix()}`}, ${A.tenantId}, ${patientId}, ${bookingId}, 'Evolución en carrera',
+              now() AT TIME ZONE 'UTC', ${A.userId}, ${A.practitionerId}, 'Kine Test', ${randomUUID()},
+              now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`);
+    const pid = await h.ready;
+    const del = deleteBooking(bookingId);
+    del.catch(() => {});
+    try {
+      await waitBlockedBy(db, pid);
+    } finally {
+      h.release();
+      await h.done;
+    }
+    expect(await del).toMatchObject({ ok: false, error: BOOKING_HAS_CLINICAL_NOTE_ERROR });
+    expect(await db.booking.count({ where: { id: bookingId } })).toBe(1);
   });
 });

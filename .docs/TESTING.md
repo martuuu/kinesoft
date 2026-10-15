@@ -261,6 +261,29 @@ A1.1 los escribió con la expectativa **correcta** (fallaban por la aserción, n
 - **M6 objeto por objeto:** `tests/integration/identity-m6.test.ts` (índices de `Practitioner`, columnas nuevas,
   `EmailLog` con RLS) en los 2 roles; mismo molde que `rooms-m4` y `reception-call-m5`.
 
+### Patrones nuevos de EV2 (Evoluciones de HC, M9, 15/16-oct-2026)
+
+- **Carreras check → escritura con `pg_blocking_pids`.** Para probar la ventana entre el chequeo de la app y el
+  INSERT/DELETE (turno borrado mientras se crea la nota, nota creada mientras se borra el turno, share quitado entre
+  dos envíos): una tx «sostenedora» toma el lock de la fila y queda abierta; el test lanza la action real y espera con
+  `waitBlockedBy(pid)` (`tests/integration/clinical-notes-write.test.ts:73`, polling de `pg_stat_activity` con
+  `pid = ANY(pg_blocking_pids(a.pid))`) a que la action quede bloqueada; recién ahí la sostenedora commitea. Sin
+  sleeps: el orden es determinístico y el test falla siempre si falta la traducción del 23503/P2003/23505.
+- **Presupuesto de sentencias por página** (`tests/integration/clinical-notes-timeline-perf.test.ts`):
+  `installQueryCounter()` (`tests/helpers/query-counter.ts`) en el `vi.mock("@/lib/db")` cuenta las sentencias de
+  datos del símbolo real (`getPatientTimeline`) y las compara entre un paciente con 10 notas y uno con 1.000 + 200
+  sesiones (≤ 4, constante: anti N+1); además hace `EXPLAIN` de la sentencia **exacta** registrada (texto +
+  parámetros, después de `ANALYZE`) y afirma que no hay Seq Scan sobre `ClinicalNote`. **Una medición de calentamiento
+  antes de la primera que se afirma:** la integración corre en un solo fork con los clientes contados compartidos entre
+  archivos, y en la corrida completa la primera medición sumaba una sentencia ajena (8 vs 7; solo el archivo pasaba).
+- **Guard de superficies** (`tests/unit/clinical-notes-guard.test.ts`, unit sin DB): recorre portal, ⌘K, turnero
+  público, Plataforma, sala, realtime, notificaciones, mails, CSV y exports internos y falla si alguno menciona
+  `clinicalNote`/`ClinicalNote`; también que nadie escriba `revision:` en un write de `clinicalNote` (la sube el
+  trigger). El detector de `revision:` tiene su canario (anti falso verde) y el guard falla si no encuentra superficies.
+- **M9 objeto por objeto** en los 2 roles (`tests/integration/clinical-notes-m9.test.ts`): triggers que rechazan
+  DELETE/TRUNCATE **también al owner**, ventana de 24 h + 10 min, revisión por trigger, parcial de una viva por turno,
+  FKs compuestas. Las notas sembradas se limpian con `deleteTenantDeep` (modo réplica, solo superusuario local).
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

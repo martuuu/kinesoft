@@ -351,7 +351,8 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
     // policy corre solo sobre los ejercicios de las candidatas, por índice.
     // `count(*) OVER ()` da el total antes del LIMIT en la misma sentencia.
     // EV2-2d (EV2-D18): una evolución de HC raíz viva del turno ACTIVO de la sesión también la saca del bucket
-    // (mismo `EXISTS` que `lockSessionEvolutionStateInTx`, en esta misma sentencia; anulada, vuelve).
+    // (mismo `EXISTS` que `lockSessionEvolutionStateInTx` al reabrir, en esta misma sentencia; anulada, vuelve).
+    // EV2-Z A2: «Registrar sesión» NO lo mira: la sesión sale del bucket pero se le puede cargar EVA/anotaciones.
     // Espejo SQL de `ownPatientsWhere`. Acá `actor.practitionerId` no es null (corte de arriba); con null el `=`
     // de SQL igual daría NULL (falso), pero no se depende de eso.
     const ownPid = actor.practitionerId;
@@ -373,7 +374,8 @@ export async function listOpenSessions(now: Date = new Date()): Promise<OpenSess
         AND NOT EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
         AND NOT EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
         AND NOT EXISTS (SELECT 1 FROM "Booking" b JOIN "ClinicalNote" cn ON cn."bookingId" = b.id
-                        WHERE b."sessionId" = s.id AND b.status NOT IN ('CANCELLED','NO_SHOW')
+                        WHERE b."sessionId" = s.id AND b."tenantId" = tp."tenantId" AND cn."tenantId" = tp."tenantId"
+                          AND b.status NOT IN ('CANCELLED','NO_SHOW')
                           AND cn."amendsNoteId" IS NULL AND cn."voidedAt" IS NULL)      -- sinEvolucion (EV2-D18)
       ORDER BY s."completedAt" DESC, s.id ASC
       LIMIT ${take}`;

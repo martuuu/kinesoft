@@ -12,7 +12,7 @@
  *   le pasa al caller el DTO que devolvió la action.
  * - Sin animaciones propias: Drawer/Modal ya respetan `MotionConfig reducedMotion="user"`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClinicalNoteKind } from "@prisma/client";
 import { Drawer } from "@/components/ui/drawer";
 import { Button } from "@/components/ui/button";
@@ -65,10 +65,13 @@ export function NoteEditorDrawer({
   const [dirty, setDirty] = useState(false);
   // Pasó la ventana de 24 h mientras editaba: el mismo drawer pasa a «Agregar enmienda».
   const [override, setOverride] = useState<NoteEditorMode | null>(null);
+  // EV2-Z M5: el texto que se estaba editando pasa a la enmienda (antes se abría vacía y se perdía lo escrito).
+  const [carryBody, setCarryBody] = useState<string | null>(null);
   const active = override ?? mode;
 
   const close = () => {
     setOverride(null);
+    setCarryBody(null);
     setDirty(false);
     onClose();
   };
@@ -85,6 +88,7 @@ export function NoteEditorDrawer({
       <NoteEditorForm
         key={active.type}
         mode={active}
+        carryBody={override ? carryBody : null}
         onDirtyChange={setDirty}
         onCancel={close}
         onSaved={(note, replayed) => {
@@ -94,7 +98,10 @@ export function NoteEditorDrawer({
         onSwitchToAmend={
           // Solo una raíz se enmienda (EV2-D14): una enmienda vencida no ofrece nada más que anularla.
           active.type === "edit" && active.note.amendsNoteId == null
-            ? () => setOverride({ type: "amend", note: active.note })
+            ? (body: string) => {
+                setCarryBody(body.trim() === "" ? null : body);
+                setOverride({ type: "amend", note: active.note });
+              }
             : undefined
         }
       />
@@ -104,6 +111,19 @@ export function NoteEditorDrawer({
 
 const hintStyle: React.CSSProperties = { fontSize: 12, color: "var(--navy-500)", margin: 0 };
 const errorStyle: React.CSSProperties = { fontSize: 12, color: "#9F1F1F", marginTop: 4 };
+const fieldLabelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--navy-500)" };
+/** Fuera de pantalla pero leído por el lector (no hay clase sr-only en globals.css). */
+const srOnly: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
 
 export function NoteEditorForm({
   mode,
@@ -111,20 +131,24 @@ export function NoteEditorForm({
   onSaved,
   onDirtyChange,
   onSwitchToAmend,
+  carryBody,
   now: nowProp,
 }: {
   mode: NoteEditorMode;
   onCancel: () => void;
   onSaved: (note: ClinicalNoteDTO, replayed: boolean) => void;
   onDirtyChange?: (dirty: boolean) => void;
-  onSwitchToAmend?: () => void;
+  /** Recibe el texto escrito, que la enmienda arranca copiado (M5). */
+  onSwitchToAmend?: (body: string) => void;
+  /** Texto que viene del editor de 24 h vencido. Queda «sucio» a propósito: cerrar sin guardar lo pierde. */
+  carryBody?: string | null;
   /** Solo tests: reloj fijo. */
   now?: Date;
 }) {
   const toast = useToast();
   const [openedAt] = useState(() => nowProp ?? new Date());
   const [initial] = useState<NoteDraft>(() => initialDraft(mode, openedAt));
-  const [draft, setDraft] = useState<NoteDraft>(initial);
+  const [draft, setDraft] = useState<NoteDraft>(() => (carryBody ? { ...initial, body: carryBody } : initial));
   const [idempotencyKey] = useState(newIdempotencyKey);
   const [errors, setErrors] = useState<DraftErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
@@ -143,7 +167,7 @@ export function NoteEditorForm({
     }
   };
 
-  const counter = bodyCounter(draft.body);
+  const counter = bodyCounter(draft.body, mode);
   const note = mode.type === "create" ? null : mode.note;
   const context = mode.type === "create" ? bookingLabel(mode.booking) : bookingLabel(note?.booking);
   const until = mode.type === "edit" ? editableUntilLabel(mode.note, nowProp ?? new Date()) : null;
@@ -185,12 +209,24 @@ export function NoteEditorForm({
 
   return (
     <form onSubmit={submit} noValidate style={{ display: "grid", gap: 14 }} aria-busy={saving || undefined}>
-      {(context || until || mode.type === "amend") && (
+      {(context || until || mode.type === "amend" || (mode.type === "create" && mode.patientName)) && (
         <div style={{ display: "grid", gap: 4 }}>
+          {mode.type === "create" && mode.patientName && (
+            <p style={{ margin: 0, fontSize: 14, color: "var(--navy-900)" }} data-testid="editor-patient">
+              <strong>
+                {COPY.patientPrefix} {mode.patientName}
+              </strong>
+            </p>
+          )}
           {mode.type === "amend" && (
             <p style={hintStyle}>
               Enmienda a la evolución del {noteDateLabel(mode.note.occurredAt)} de {mode.note.author.name}.{" "}
               {COPY.amendHint}
+            </p>
+          )}
+          {mode.type === "amend" && carryBody && (
+            <p style={{ ...hintStyle, fontWeight: 600, color: "var(--sky-700)" }} data-testid="amend-carried">
+              {COPY.amendCarriedHint}
             </p>
           )}
           {context && <p style={hintStyle}>{context}</p>}
@@ -203,23 +239,13 @@ export function NoteEditorForm({
       )}
 
       <div>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>{COPY.kindLabel}</span>
+        <span style={fieldLabelStyle}>{COPY.kindLabel}</span>
         {mode.type === "amend" ? (
           <div style={{ marginTop: 6 }}>
             <KindTag kind={mode.note.kind} />
           </div>
         ) : (
-          <div role="radiogroup" aria-label={COPY.kindLabel} style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-            {KIND_OPTIONS.map((o) => (
-              <KindChoice
-                key={o.value}
-                kind={o.value}
-                checked={draft.kind === o.value}
-                disabled={saving}
-                onSelect={() => set("kind", o.value)}
-              />
-            ))}
-          </div>
+          <KindRadioGroup value={draft.kind} disabled={saving} onChange={(k) => set("kind", k)} />
         )}
       </div>
 
@@ -246,7 +272,7 @@ export function NoteEditorForm({
           autoFocus
         />
         <div
-          aria-live="polite"
+          aria-hidden="true"
           data-testid="body-counter"
           style={{
             textAlign: "right",
@@ -259,11 +285,16 @@ export function NoteEditorForm({
         >
           {counter.label}
         </div>
+        {/* EV2-Z M7: la región vive siempre (un aria-live que aparece no se anuncia) y solo habla cerca del límite. */}
+        <div aria-live="polite" data-testid="body-counter-live" style={srOnly}>
+          {counter.announce}
+        </div>
       </div>
 
       {mode.type !== "amend" && (
-        <div>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>{COPY.occurredAtLabel}</span>
+        // EV2-Z M7: fieldset/legend agrupa fecha + hora + minutos bajo un nombre (antes era un <span> suelto).
+        <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+          <legend style={{ ...fieldLabelStyle, padding: 0 }}>{COPY.occurredAtLabel}</legend>
           <div style={{ marginTop: 6 }}>
             <DateTime24Picker
               value={draft.occurredAtLocal}
@@ -273,7 +304,7 @@ export function NoteEditorForm({
             />
           </div>
           {errors.occurredAt && <div style={errorStyle}>{errors.occurredAt}</div>}
-        </div>
+        </fieldset>
       )}
 
       {serverError && (
@@ -293,7 +324,7 @@ export function NoteEditorForm({
           <span>{serverError}</span>
           {offersAmendAfterError(serverError) && onSwitchToAmend && (
             <div>
-              <Button type="button" variant="ghost" onClick={onSwitchToAmend}>
+              <Button type="button" variant="ghost" onClick={() => onSwitchToAmend(draft.body)}>
                 {COPY.amend}
               </Button>
             </div>
@@ -314,35 +345,77 @@ export function NoteEditorForm({
   );
 }
 
-/** Opción de tipo: el `Tag` del tipo como radio (seleccionado = tono pleno; el resto, atenuado). */
-function KindChoice({
-  kind,
-  checked,
+/**
+ * Tipo como radiogroup (EV2-Z M7). Patrón WAI-ARIA de radio: un solo tab stop (el elegido) y ←/→ (también ↑/↓) mueven
+ * Y eligen, en ronda. Cada opción mide 44 px de alto (target táctil); el `Tag` adentro queda del tamaño de siempre.
+ */
+function KindRadioGroup({
+  value,
   disabled,
-  onSelect,
+  onChange,
 }: {
-  kind: ClinicalNoteKind;
-  checked: boolean;
+  value: ClinicalNoteKind;
   disabled?: boolean;
-  onSelect: () => void;
+  onChange: (k: ClinicalNoteKind) => void;
 }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKeyDown = (e: React.KeyboardEvent, i: number) => {
+    const step = kindKeyStep(e.key);
+    if (step === 0) return;
+    e.preventDefault();
+    const next = (i + step + KIND_OPTIONS.length) % KIND_OPTIONS.length;
+    onChange(KIND_OPTIONS[next].value);
+    refs.current[next]?.focus();
+  };
+  const hasChecked = KIND_OPTIONS.some((o) => o.value === value);
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onSelect}
-      style={{
-        border: checked ? "2px solid var(--sky-700)" : "2px solid transparent",
-        borderRadius: 999,
-        padding: 1,
-        background: "transparent",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: checked ? 1 : 0.6,
-      }}
-    >
-      <KindTag kind={kind} />
-    </button>
+    <div role="radiogroup" aria-label={COPY.kindLabel} style={{ display: "flex", gap: 2, marginTop: 2, flexWrap: "wrap" }}>
+      {KIND_OPTIONS.map((o, i) => {
+        const checked = o.value === value;
+        return (
+          <button
+            key={o.value}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked || (!hasChecked && i === 0) ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onChange(o.value)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+            style={{
+              minHeight: 44,
+              display: "inline-flex",
+              alignItems: "center",
+              border: "none",
+              padding: "0 2px",
+              background: "transparent",
+              cursor: disabled ? "not-allowed" : "pointer",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                border: checked ? "2px solid var(--sky-700)" : "2px solid transparent",
+                borderRadius: 999,
+                padding: 1,
+                opacity: checked ? 1 : 0.6,
+              }}
+            >
+              <KindTag kind={o.value} />
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
+}
+
+/** ←/↑ = anterior, →/↓ = siguiente; cualquier otra tecla, 0 (no se toca). */
+export function kindKeyStep(key: string): -1 | 0 | 1 {
+  if (key === "ArrowRight" || key === "ArrowDown") return 1;
+  if (key === "ArrowLeft" || key === "ArrowUp") return -1;
+  return 0;
 }

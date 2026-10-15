@@ -48,6 +48,21 @@ function forbiddenSurfaces(): string[] {
     ...libFiles(/^public-.*\.ts$/),
     ...walk(join(ROOT, "app", "api", "public")),
     ...libFiles(/^platform-.*\.ts$/),
+    // EV2-Z a5: más superficies sin HC. Plataforma (UI), turnero público, realtime (el payload viaja a otros
+    // clientes), notificaciones y mails (salen del sistema), CSV y exports de agenda/pacientes (el único export con
+    // HC es el del Titular, `tenant-export-*`, AUDIT §5 «preservar»: portabilidad) y la sala (PD-13: sin texto clínico;
+    // puede importar el toast de «Atendido» de Recepción, que no menciona notas en su ruta).
+    ...walk(join(ROOT, "app", "(platform)")),
+    ...walk(join(ROOT, "app", "(booking)")),
+    ...walk(join(ROOT, "app", "api", "realtime")),
+    ...libFiles(/^realtime-.*\.ts$/),
+    ...libFiles(/^notifications.*\.ts$/),
+    ...walk(join(ROOT, "lib", "email")),
+    join(ROOT, "lib", "csv.ts"),
+    join(ROOT, "lib", "bookings-export-internal.ts"),
+    join(ROOT, "lib", "patients-export-internal.ts"),
+    ...libFiles(/^sala-.*\.ts$/),
+    ...walk(join(ROOT, "components", "sala")),
   ];
   return files.filter((f) => existsSync(f)).map((f) => relative(ROOT, f)).sort();
 }
@@ -93,6 +108,13 @@ describe("[EV2-1a] guard estático de evoluciones", () => {
     expect(files).toContain("lib/platform-users.ts");
     expect(files.some((f) => f.startsWith("app/(portal)/"))).toBe(true);
     expect(files.some((f) => f.startsWith("components/portal/"))).toBe(true);
+    // EV2-Z a5
+    for (const prefix of ["app/(platform)/", "app/(booking)/", "app/api/realtime/", "lib/realtime-", "lib/notifications", "lib/email/", "lib/sala-", "components/sala/"]) {
+      expect(files.some((f) => f.startsWith(prefix)), prefix).toBe(true);
+    }
+    expect(files).toContain("lib/csv.ts");
+    expect(files).toContain("lib/bookings-export-internal.ts");
+    expect(files).toContain("lib/patients-export-internal.ts");
   });
 
   it("portal, ⌘K, superficies públicas y Plataforma no mencionan evoluciones (EV2-D5, EV2-D6)", () => {

@@ -40,14 +40,17 @@ import { ToastProvider } from "@/components/ui/toast";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { PatientProfile } from "@/components/patients/patient-profile";
 import {
+  DEEP_LINK_HIGHLIGHT_MS,
   EvolucionesView,
   addAmendmentToItems,
+  deepLinkOutcome,
   insertNoteInItems,
   replaceNoteInItems,
   sessionDetailLine,
 } from "@/components/patients/profile/views/evoluciones-view";
 import { ResumenView, latestNoteExcerpt } from "@/components/patients/profile/views/resumen-view";
 import { permissionsFor } from "@/lib/clinical-notes-logic";
+import { CLINICAL_NOTE_COPY } from "@/lib/clinical-notes-types";
 import { modulesFor } from "@/lib/tenant-modules";
 import type { ClinicalNoteDTO, TimelineItem, TimelineSessionDTO } from "@/lib/clinical-notes-types";
 import type { PatientCore } from "@/lib/patients-types";
@@ -246,6 +249,12 @@ describe("[EV2-3a] ResumenView: Última evolución", () => {
     expect(buttons(html)).toContain("Ir a Evoluciones");
   });
 
+  it("[EV2-Z] Notas generales vacías: dice cómo cargarlas", () => {
+    const html = resumen({ patient: { ...patient, notes: null } });
+    expect(html).toContain("Sin notas generales. Editá el paciente para agregarlas.");
+    expect(html).not.toContain("antecedentes relevantes");
+  });
+
   it("latestNoteExcerpt corta en una palabra y no toca textos cortos", () => {
     expect(latestNoteExcerpt("  corto  ")).toBe("corto");
     const out = latestNoteExcerpt("abc ".repeat(100), 20);
@@ -332,6 +341,78 @@ describe("[EV2-3a] EvolucionesView: línea de tiempo", () => {
     const html = view();
     expect(html).toContain("Cargando evoluciones…");
     expect(html).not.toContain("Todavía no hay evoluciones");
+  });
+});
+
+describe("[EV2-Z] EvolucionesView: imprimir, mobile y deep link", () => {
+  const view = (props: Partial<Parameters<typeof EvolucionesView>[0]> = {}) =>
+    render(<EvolucionesView patientId={PID} canWrite now={NOW} {...props} />);
+  const PRINT = "Imprimir historia clínica";
+
+  it("«Imprimir historia clínica» solo con alguna evolución (anulada cuenta; solo sesiones o vacía, no)", () => {
+    expect(view({ initialPage: { items: [], nextCursor: null } })).not.toContain(PRINT);
+    expect(view({ initialPage: { items: [sessionItem(session())], nextCursor: null } })).not.toContain(PRINT);
+    expect(view()).not.toContain(PRINT); // todavía cargando
+    expect(view({ initialPage: { items: [noteItem(note())], nextCursor: null } })).toContain(PRINT);
+    const voided = note({ voided: { at: "2026-10-14T15:00:00.000Z", byUserId: ME, reason: "x" } });
+    expect(view({ initialPage: { items: [noteItem(voided)], nextCursor: null } })).toContain(PRINT);
+    // Solo sesiones en la primera página pero hay más: puede haber notas más atrás.
+    expect(view({ initialPage: { items: [sessionItem(session())], nextCursor: "c2" } })).toContain(PRINT);
+  });
+
+  it("mobile: búsqueda a 16 px y botones del encabezado de 44 px", () => {
+    const html = view({ initialPage: { items: [noteItem(note())], nextCursor: null } });
+    expect(html).toMatch(/<input type="search" class="k-evo-search"/);
+    expect(html).toMatch(/<a class="k-btn k-btn-ghost k-evo-head-btn"[^>]*>Imprimir historia clínica</);
+    expect(html).toMatch(/<button class="k-btn[^"]*k-evo-head-btn"[^>]*>[\s\S]*?Nueva evolución/);
+    expect(html).toMatch(/@media \(max-width: 640px\)[\s\S]*\.k-evo-search \{ font-size: 16px !important; min-height: 44px; \}/);
+    expect(html).toMatch(/\.k-evo-head-btn \{ min-height: 44px;/);
+    // Sin búsqueda en curso, la lista no está ocupada.
+    expect(html).not.toContain("aria-busy");
+  });
+
+  it("M4: la nota del deep link se resalta con borde --sky-300 (sin editor abierto)", () => {
+    const other = note({ id: "note-9", bookingId: "bk-9", occurredAt: "2026-10-01T12:00:00.000Z" });
+    const html = view({ initialPage: { items: [noteItem(note()), noteItem(other)], nextCursor: null }, highlightNoteId: "note-1" });
+    expect(html).toMatch(/<li data-timeline-item="note" data-highlighted="" style="outline:2px solid var\(--sky-300\)[^"]*">\s*<div[^>]*>\s*<article[^>]*data-note-id="note-1"/);
+    expect(html.match(/data-highlighted/g)).toHaveLength(1);
+    expect(html).not.toContain('role="dialog"');
+    expect(DEEP_LINK_HIGHLIGHT_MS).toBe(2000);
+  });
+
+  describe("deepLinkOutcome", () => {
+    const bk = { id: "bk-1", scheduledFor: "2026-10-14T12:30:00.000Z", serviceName: "Sesión kinésica", status: "COMPLETED" as const };
+    const ctx = { patientId: PID, canWrite: true, now: NOW };
+    const base = { amendments: [], voided: [] };
+
+    it("con nota viva: scroll + resaltado, aunque se pueda editar (nunca el editor ni un toast)", () => {
+      const editable = note({ createdAt: "2026-10-15T13:30:00.000Z" });
+      expect(editable.permissions.canEdit).toBe(true);
+      expect(deepLinkOutcome({ ...base, note: editable, canCreate: false }, bk, ctx)).toEqual({ kind: "focus", noteId: "note-1" });
+      const foreign = note({}, { actor: "otro" });
+      expect(deepLinkOutcome({ ...base, note: foreign, canCreate: false }, bk, ctx)).toEqual({ kind: "focus", noteId: "note-1" });
+    });
+
+    it("sin nota y con canCreate: abre crear con el turno", () => {
+      expect(deepLinkOutcome({ ...base, note: null, canCreate: true }, bk, ctx)).toEqual({
+        kind: "create",
+        booking: { id: "bk-1", scheduledFor: bk.scheduledFor, serviceName: "Sesión kinésica" },
+      });
+    });
+
+    it("sin acceso o sin escritura: forbidden; turno cancelado: el porqué", () => {
+      expect(deepLinkOutcome(null, bk, ctx)).toEqual({ kind: "toast", level: "error", message: CLINICAL_NOTE_COPY.forbidden });
+      expect(deepLinkOutcome({ ...base, note: null, canCreate: false }, bk, { ...ctx, canWrite: false })).toEqual({
+        kind: "toast",
+        level: "error",
+        message: CLINICAL_NOTE_COPY.forbidden,
+      });
+      expect(deepLinkOutcome({ ...base, note: null, canCreate: false }, { ...bk, status: "CANCELLED" }, ctx)).toEqual({
+        kind: "toast",
+        level: "warning",
+        message: CLINICAL_NOTE_COPY.bookingCancelled,
+      });
+    });
   });
 });
 

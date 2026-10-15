@@ -1331,6 +1331,38 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
 - **Consecuencias.** Sacar una cara cuando Martin elija = borrar su archivo y la opción del enum. «Cobrar» se esconde
   sin `billing.manage`, pero el server todavía no lo exige (`plf-toggle-billing-sin-cap`, C0).
 
+### ADR-020 — HC inalterable en la base (status: ACCEPTED, EV2, 15/16-oct-2026; decisión 13 de Martin)
+
+- **Contexto.** La única «evolución» era la meta de una `Session` de kine; un consultorio General no tenía HC por
+  consulta. Ley 26.529 pide integridad, inalterabilidad y conservación de la HC, y en prod la app conecta con
+  **BYPASSRLS**: una regla que vive solo en la app la saltea cualquier bug, script o acceso directo.
+- **Decisión.**
+  - **M9** (`20261017120000_clinical_notes`): `ClinicalNote` (una por consulta, turno opcional, autor congelado
+    —usuario, profesional y nombre tal como firmó—, enmienda por `amendsNoteId`, anulación con motivo todo-o-nada) y
+    `ClinicalNoteRevision` (versión anterior de cada edición, solo inserción). RLS ENABLE + FORCE en las dos.
+  - **Triggers** (rigen también para el owner): `ClinicalNote_guard` rechaza DELETE, cambios de identidad, cualquier
+    UPDATE de una anulada y cambios de contenido pasadas 24 h + 10 min (EV2-D17); con cambio de contenido copia la
+    versión anterior a `ClinicalNoteRevision` y pone `revision = OLD.revision + 1`. `_no_truncate` y
+    `ClinicalNoteRevision_append_only` / `_insert_guard` cierran el resto. **La app nunca escribe `revision`**: el CAS
+    va en el `where` (`expectedRevision`).
+  - **Una viva por turno:** único parcial `ClinicalNote_bookingId_live_key` (raíz no anulada). Las FKs compuestas
+    RESTRICT (`(bookingId, tenantId, patientId)`, `(patientId, tenantId)`, `(authorPractitionerId, tenantId)`,
+    `(amendsNoteId, tenantId, patientId)`) atan la nota a su consultorio y a su paciente y hacen que un turno con
+    evolución no se borre ni cambie de paciente (la app lo rechaza antes con mensaje y traduce el P2003/23503 de la
+    carrera).
+  - **Gate único:** `clinicalNoteGateInTx` (`lib/clinical-notes-internal.ts`, C-EV2-3) = módulo `evoluciones` +
+    `clinical.read` + acceso `full` (+ `practitionerId` para escribir), dentro de la tx. Lo usan escrituras
+    (`lib/clinical-notes.ts`), lecturas (`-read.ts`) e impresión (`-print-internal.ts`); el replay del 23505 vuelve a
+    pasar por el gate (EV2-Z a2). Lógica pura (24 h, permisos, decisiones de turno y fecha) en
+    `lib/clinical-notes-logic.ts`.
+  - **Revalidaciones:** `/pacientes/<id>` siempre; `/seguimiento` (layout) solo si cambia la existencia de la raíz viva
+    de un turno (crear o anular). `/agenda` y `/sala` no: sus árboles no leen notas (el drawer las pide con
+    `getBookingClinicalNote`).
+- **Consecuencias.** Corregir una evolución vieja = enmienda o anulación, nunca un UPDATE ni un DELETE: no hay
+  rollback de datos de M9 (el backup previo es la red). Un paciente, profesional o consultorio con evoluciones solo se
+  da de baja lógica. Los objetos que Prisma no expresa (parcial, FKs compuestas, CHECKs, triggers, policies) son drift
+  aceptado: no se borran si `migrate diff` lo propone. AUDIT §5.51-55.
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

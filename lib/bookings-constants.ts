@@ -105,7 +105,7 @@ export const BOOKING_HAS_CLINICAL_NOTE_ERROR = "Este turno tiene una evolución:
 export const BOOKING_CLINICAL_NOTE_PATIENT_ERROR = "Este turno tiene una evolución: no se puede cambiar el paciente.";
 /** Salir de COMPLETED con la sesión "tocada" (C4): la sesión queda realizada. */
 export const SESSION_KEPT_DONE_NOTICE =
-  "La sesión tenía evolución cargada: quedó realizada. Revisala en Seguimiento si hace falta.";
+  "La sesión ya tenía un registro o una evolución: quedó realizada. Revisala en Seguimiento si hace falta.";
 
 export const RECEPTION_FORBIDDEN_ERROR ="No tenés permiso para operar la recepción.";
 export const RECEPTION_OTHER_PRACTITIONER_ERROR =

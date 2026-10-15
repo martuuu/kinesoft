@@ -113,11 +113,17 @@ async function createImpl(input: CreateClinicalNoteInput): Promise<ActionResult<
     try {
       result = await runWithRls(actor.tenantId, (tx) => createInTx(tx, actor, p, now));
     } catch (e) {
+      // EV2-Z a3: carrera chequeo/escritura. El turno se borró (o cambió de paciente: FK compuesta) entre la lectura
+      // de `createInTx` y el INSERT → 23503/P2003. Mismo caso que «no encontramos el turno», no un 500.
+      if (isFkViolation(e)) return fail(COPY.bookingNotFound);
       // 23505: la clave de idempotencia (doble envío que corrió en paralelo) o el parcial «una raíz viva por turno»
       // (otro editor ganó el turno). La tx quedó abortada; se decide por los datos en una nueva.
       if (!isUniqueViolation(e)) throw e;
       result = await runWithRls(actor.tenantId, async (tx) => {
         const gate = await clinicalNoteGateInTx(tx, actor, p.patientId);
+        // EV2-Z a2: el acceso se re-gatea en esta tx nueva (pudo cambiar en el medio: share quitado); sin lectura
+        // no hay replay que devuelva la nota.
+        if (!gate.canRead) return fail(COPY.forbidden);
         const replay = await replayByKey(tx, actor, gate, p.idempotencyKey, { patientId: p.patientId, amendsNoteId: null }, now);
         return replay ?? fail(COPY.bookingTaken);
       });
@@ -162,7 +168,7 @@ async function createInTx(
   }
 
   const occurredAt = p.occurredAt ?? defaultOccurredAt(booking, now);
-  if (!occurredAtDecision(occurredAt, now).ok) return fail(COPY.future);
+  if (!occurredAtDecision(occurredAt, now).ok) return fail(bookingId ? COPY.future : COPY.futureNoBooking);
 
   const row = await tx.clinicalNote.create({
     data: {
@@ -214,7 +220,9 @@ async function editImpl(input: EditClinicalNoteInput): Promise<ActionResult<{ no
         if (!gate.canWrite) return fail(COPY.forbidden);
         const d = editDecision(note, actor.userId, now);
         if (!d.ok) return fail(EDIT_REJECTION[d.reason]);
-        if (p.occurredAt && !occurredAtDecision(p.occurredAt, now).ok) return fail(COPY.future);
+        if (p.occurredAt && !occurredAtDecision(p.occurredAt, now).ok) {
+          return fail(note.bookingId ? COPY.future : COPY.futureNoBooking);
+        }
 
         // Solo el contenido que vino (`title: null` borra el título; `undefined` no lo toca). Sin `revision`: el
         // trigger guarda la versión anterior en ClinicalNoteRevision y pone OLD.revision + 1.
@@ -316,6 +324,7 @@ async function amendImpl(input: AmendClinicalNoteInput): Promise<ActionResult<{ 
         const root = await tx.clinicalNote.findFirst({ where: { id: p.noteId, tenantId }, select: { patientId: true } });
         if (!root) return fail(COPY.notFound);
         const gate = await clinicalNoteGateInTx(tx, actor, root.patientId);
+        if (!gate.canRead) return fail(COPY.forbidden); // EV2-Z a2: mismo re-gate que en crear
         const replay = await replayByKey(tx, actor, gate, p.idempotencyKey, { patientId: root.patientId, amendsNoteId: p.noteId }, now);
         return replay ?? fail(COPY.keyReused);
       });
@@ -392,6 +401,7 @@ async function voidImpl(input: VoidClinicalNoteInput): Promise<ActionResult<{ no
 const RULE_SELECT = {
   id: true,
   patientId: true,
+  bookingId: true,
   authorUserId: true,
   createdAt: true,
   voidedAt: true,
@@ -458,6 +468,10 @@ async function replayByKey(
     prev.amendsNoteId === expected.amendsNoteId;
   if (!same) return fail(COPY.keyReused);
   return { ok: true, data: { note: dto(prev, actor, gate, now), replayed: true } };
+}
+
+function isFkViolation(e: unknown): boolean {
+  return (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") || pgErrorCode(e) === "23503";
 }
 
 function isUniqueViolation(e: unknown): boolean {

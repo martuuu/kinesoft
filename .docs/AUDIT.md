@@ -997,11 +997,27 @@ PL-0..PL-3 y 5 fixers. Sin migraciones nuevas (M8 y M8b ya escritas). Tabla «Ha
 candado, VX), el `Switch` de 52×30 (PF/MB) y **a3#12** (permisos de los ADMIN
 que M8b convierte, decide Martin caso por caso). Excepción nueva en §5.50 (export del Titular sin agenda).
 
-**Ronda 26 — RX: escritorio de Recepción (15/16-oct-2026):** RX-0 (`a762130`) y RX-1 (`ee97af3`) commiteados; RX-2
-(caras «Lista y panel» y «Flujo») + revisor RX-Z (14 hallazgos) + 3 fixers + integrador sin commitear. **Sin
+**Ronda 26 — RX: escritorio de Recepción (15/16-oct-2026):** RX-0 (`a762130`), RX-1 (`ee97af3`) y RX-2 + RX-Z
+(caras «Lista y panel» y «Flujo», revisor con 14 hallazgos, 3 fixers, integrador; `a5ca20a`) commiteados. **Sin
 migración** (`agendaPrefs.receptionLayout`). Tabla «Hallazgos y filas de RX» en §2. Abiertos: nombres cortados en «Por
 cobrar» a 1024 con sidebar (PF/MB) y sidebar sin modo móvil a 390 (MB); `toggleBilling` sin `billing.manage` sigue en
 C0 (`plf-toggle-billing-sin-cap`), RX solo esconde «Cobrar» en la UI.
+
+**Ronda 27 — EV2: evoluciones de HC (15/16-oct-2026):** EV2-0 M9 (`8e3e9f6`), EV2-1 (`5e11c95`), EV2-2 (`1597903`) y
+EV2-3 (`55042c5`) commiteados; EV2-Z (2 revisores + 3 fixers + integrador) sin commitear. Tabla «Hallazgos de EV2» en
+§2; §5.51-55 nuevos («preservar» de M9) y §5.50 ampliado. H-EV2 cerrado. Abiertos: **a6** (kine que atiende paciente
+ajeno sin share, C0, decide Martin), detalle de Seguimiento a 1024 (PF/MB), Drawer/Modal sin portal (PF), escenario
+`updateBooking` en perf (PF), borde inline de `KindTag` (VX F).
+- **Gate de EV2-Z:** tsc 0 (app y scripts); unit 228 archivos / 4405 en UTC y en AR; guards OK (refresh-ratchet ≤ 88);
+  integración app 173 archivos / 2144 + 19 skip y owner 172 + 1 skip / 2120 + 43 skip (la primera corrida completa
+  dio rojo `clinical-notes-timeline-perf` en los 2 roles: 8 vs 7 sentencias por una sentencia ajena en la primera
+  medición; se agregó una medición de calentamiento, TESTING «EV2». Con la máquina cargada, 2 timeouts ajenos
+  —`tags-admin-platform-tag` y `tenant-export`— que pasan solos y en la corrida siguiente); `next build` OK; smoke 10
+  rutas 200. Perf: `compare.ts` sin regresiones fuera de umbral (31 escenarios, 4 nuevos); `seguimiento` 17 sentencias
+  vs 8 del baseline A1, pero era 20 en EV1 (antes de EV2): no viene de EV2. `paciente` 64 → 53. Bundle (First Load) vs
+  PF-0b: `/pacientes/[id]` 199 → **204 kB** (+5: pestaña Evoluciones, editor, historial), `/agenda` 198 → 199,
+  `/seguimiento/[sessionId]` 189, `/pacientes/[id]/imprimir` (nueva) 95,8. M9 re-verificada objeto por objeto
+  (RLS ENABLE+FORCE, 2 policies, 5 triggers, 9 FKs, parcial); `migrate status` al día (38).
 
 ## Cómo leer la severidad
 
@@ -1874,7 +1890,7 @@ Ronda 24. Evidencia y diseño en §20.2 del plan vigente; la ola de destino se c
 | PL-3 switch-turnero-sin-ui-propia | baja | PL-Z | components/configuracion/panels/practitioners/public-booking-switch.tsx · lib/practitioner-public.ts · components/global/profile-menu.tsx | 🟢 PL-Z (sin commitear) | **PL-Z** — el switch de su propio turnero va en el menú de perfil para el profesional sin «Configuración»; `setPractitionerPublicBooking` devuelve `{ ok: false, error }` en vez de tirar `ForbiddenError` (a3#15) |
 | PL-3 assign-patient-sin-zod | media | PL-Z | lib/patients.ts (`assignPatientToPractitioner`) | 🟢 PL-Z (sin commitear) | **PL-Z** — zod estricto sobre la entrada y todo en una sola tx |
 | H-SLOW lentitud-general | alta | **A** (operación) | vercel.json:3 · lib/session-user.ts · lib/rls.ts:43 · .docs/PERF.md | 🔴 | **PF-0a..d** (bloque 0, antes de PL) — `getUser()` por request, una tx por lectura (15 en dashboard), doble render, sin `loading.tsx`, framer en la transición. Falta confirmar Supabase en `sa-east-1` (Martin) |
-| H-EV2 pestana-evolucion-es-eva | baja | B | components/patients/profile/tabs-bar.tsx:45 | 🔴 | **EV2-3** — la pestaña «Evolución» es la curva EVA; pasa a «EVA» |
+| H-EV2 pestana-evolucion-es-eva | baja | B | components/patients/profile/tabs-bar.tsx · components/seguimiento/seguimiento-model.ts | 🟢 | **EV2** — la pestaña de la curva pasa a «EVA» (id `evol`, EV2-D10/D20) y la nueva «Evoluciones» (`evoluciones`) es la HC; en Seguimiento la meta de sesión se llama «Registrar sesión» y «Cargar evolución» abre la evolución de HC del turno (EV2-D19) |
 | H-LAND landing-claims-inexistentes | media | VX | components/screens/landing-screen.tsx | 🔴 | **VX2-c1** — promete WhatsApp automático, Google Calendar, AFIP, AES-256, HIPAA, SSO, dictado, «servidores en Argentina»; estadísticas y testimonios inventados; CTAs muertos. Guard de claims |
 | H-LOGIN login-layout-roto | media | VX | components/screens/login-screen.tsx · app/globals.css:384-390 · auth-shell.tsx | 🔴 | **Ola F (F-b) + VX2-a** — sin contenedor máximo, no apila en mobile, «Matrícula» y «recordarme» muertos, `outline:none` sin anillo; `AuthShell` (10 pantallas) igual |
 | H-BUNDLE framer-en-root | media | VX / PF | app/layout.tsx:26-33 · components/providers/ui-providers.tsx | 🔴 | **Ola F (F-a/F-d, PF0)** — framer-motion (35 kB gz) en todas las rutas por `UIProviders` en el root; fuentes por `<link>` bloqueante |
@@ -1998,6 +2014,30 @@ los cerraron los fixers FX-A (Lista), FX-B (Flujo) y FX-C (shell) y el integrado
 | rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🔴 abierto | A 1024 con sidebar abierto (232 px), los nombres largos de «Por cobrar» se cortan con elipsis |
 | rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🔴 abierto | A 390 el sidebar no tiene modo móvil (drawer); el escritorio ya cae a una columna |
 | rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | ↪ ver `plf-toggle-billing-sin-cap` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
+
+### Hallazgos de EV2 (EV2-Z, 15/16-oct-2026)
+
+EV2 = evoluciones de HC por consulta (M9 `clinical_notes`, ADR-020). EV2-Z = 2 revisores de solo lectura sobre el diff
+real — (a) seguridad/RLS/PHI: 0 altos ni medios; (b) UX/copy — + 3 fixers + integrador. «a2» = hallazgo 2 de (a);
+«b-M4» = M4 de (b).
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| a1 secretaria-infiere-evolucion | baja | EV2 (PHI) | lib/bookings-core.ts (`clinical-note-patient`) · lib/bookings.ts | 🟢 EV2-Z | Al cambiar el paciente de un turno con evolución, quien no es clínico recibe el error genérico de re-vínculo (`CLINICAL_RELINK_ERROR`), no «tiene una evolución» (`BOOKING_CLINICAL_NOTE_PATIENT_ERROR` solo con `clinical`) |
+| a2 replay-23505-sin-share | baja | EV2 (PHI) | lib/clinical-notes.ts (crear y enmendar, recuperación del 23505) | 🟢 EV2-Z | **Fuga real confirmada:** el replay del doble envío devolvía la nota aunque al actor le hubieran sacado el share entre los dos envíos. Re-gate `if (!gate.canRead)` en la tx nueva; 2 tests de integración `[EV2-Z a2]` |
+| a3 carrera-borrar-turno | baja | EV2 | lib/bookings.ts (`deleteBookingImpl`) · lib/clinical-notes.ts (`createImpl`) | 🟢 EV2-Z | Turno borrado entre el chequeo y el INSERT de la nota → `bookingNotFound` (23503/P2003); nota creada entre el chequeo y el DELETE del turno → «tiene una evolución» (P2003 de esa FK), no un 500. Test `[EV2-Z a3]` con `pg_blocking_pids` |
+| a4 exists-sin-tenant | baja | EV2 | lib/sessions.ts · lib/sessions-internal.ts (EXISTS de «Sin evolución») | 🟢 EV2-Z | `b."tenantId"` y `cn."tenantId"` = `tp."tenantId"` en la misma sentencia (prod es BYPASSRLS) |
+| a5 guard-superficies-corto | baja | EV2 | tests/unit/clinical-notes-guard.test.ts | 🟢 EV2-Z | El guard «sin HC» cubre también Plataforma, turnero público, realtime, notificaciones, email, CSV, exports internos, `lib/sala-*` y `components/sala/**` |
+| b-A1 editor-sin-paciente | media | EV2 | components/clinical-notes/note-editor-drawer.tsx | 🟢 EV2-Z | El editor abierto desde la agenda dice «Paciente: Apellido, Nombre» |
+| b-A2 registrar-sesion-bloqueado | media | EV2 | components/seguimiento/session-detail.tsx · lib/sessions-internal.ts | 🟢 EV2-Z (decisión para Martin) | EV2-D18 solo decide el bucket y el tag «Sin evolución»: una evolución de HC **no** bloquea «Registrar sesión» (el EXISTS sale del lock de `recordSessionEvolutionInTx`, queda en el de reabrir) |
+| b-M1..M10 copy-y-layout | media | EV2 | components/clinical-notes/** · components/seguimiento/** · components/patients/profile/views/evoluciones-view.tsx · components/planes/plan-history.tsx | 🟢 EV2-Z | Hint de «Sin evolución»; header que envuelve; deep link con nota existente = scroll + resaltado `[data-note-id]` sin abrir el editor; la enmienda copia el borrador; fecha redondeada a 5 min y el picker muestra el minuto fuera de grilla; contador accesible (aria-live solo cerca del límite), fieldset de fecha, tipo con 44 px y roving tabindex; Alta/Anulada con borde; `session.evolution` → «Sesión registrada» |
+| b-bajos impresion-y-copy | baja | EV2 | app/(app)/pacientes/[id]/imprimir/** · lib/bookings-constants.ts · booking-drawer/** | 🟢 EV2-Z | Impresión (shell con `display:none`, anulada sin tachar con quién y motivo, «Turno: …», aviso de corte a 2000, pie con paciente y DNI, sin botón si no hay notas, «Cerrar» = `window.close`); «Eliminar turno» deshabilitado con hint si hay evolución; error de red ≠ sin acceso; búsqueda 16 px en mobile; copy de acciones y `SESSION_KEPT_DONE_NOTICE` |
+| ev2z-future-sin-turno | baja | EV2 | lib/clinical-notes-types.ts (`futureNoBooking`) · lib/clinical-notes.ts · components/clinical-notes/clinical-notes-ui.ts | 🟢 integrador EV2-Z | «Todavía no llegó la hora del turno…» salía también en notas sin turno: sin turno el copy es «La fecha de la evolución no puede ser más de 12 h en el futuro.» (cliente y server, crear y editar; tests unit + integración) |
+| a6 kine-atiende-paciente-ajeno | media | **C0** | lib/clinical-notes-internal.ts (gate) · components/agenda/reception/** (toast) | 🔴 abierto — **decide Martin** | Un profesional que atiende un turno de un paciente asignado a otro kine, sin share, recibe `forbidden` al cargar la evolución (falla cerrado, correcto) pero el toast «Cargar evolución» se le ofrece igual. Opciones: share automático al atender (C0), o esconder el toast si no hay `canCreate`. *Recomendado:* C0 con el modelo de visibilidad por registro (EV2-D7) |
+| ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🔴 abierto | La grilla del detalle de una sesión no es responsive a 1024 con sidebar abierto |
+| ev2-drawer-modal-sin-portal | baja | **PF** | components/ui/Drawer · components/ui/Modal | 🔴 abierto | Sin portal: el «Historial» abierto desde el drawer del turno queda dentro del panel. Evaluar portal en las primitivas (toca todo) |
+| ev2-perf-update-booking | baja | **PF** | tests/perf | 🔴 abierto | Falta el escenario `updateBooking` en el harness de perf (el chequeo de evolución al re-vincular paciente no está medido) |
+| ev2-kindtag-borde-inline | baja | **VX (Ola F)** | components/clinical-notes/kind-tag.tsx | 🔴 abierto | El borde de Alta/Anulada va inline; pasarlo a una variante de `Tag` del design system |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -2326,6 +2366,28 @@ era intencional.
     **única** puerta a la HC para un no clínico; no se extiende a la UI ni a otros roles. Compensación: el export pide la
     2FA (con `twoFactor.state === "required"` responde 401, a2#2) y queda auditado. Si Martin la revierte, el export
     del Titular sin agenda sale sin HC.
+    **EV2 (D22):** ahora incluye `clinicalNotes` y `clinicalNoteRevisions` (evoluciones, enmiendas, anuladas y versiones
+    anteriores): es la misma portabilidad, no se recorta.
+51. **La evolución de HC es inalterable en la base (M9, ADR-020).** `ClinicalNote` nunca se borra (DELETE y TRUNCATE
+    rechazados por trigger **también para el owner BYPASSRLS**); la identidad (paciente, turno, autor, `createdAt`,
+    `idempotencyKey`) es inmutable; anulada = congelada; el contenido se edita solo dentro de 24 h + 10 min (la regla
+    fina de 24 h y «solo el autor» la aplica la app). Corregir después = **enmienda** (nota nueva enlazada a la raíz) o
+    **anulación con motivo**. No agregar un «borrar evolución», ni un `ON DELETE CASCADE` hacia `ClinicalNote`, ni bajar
+    los triggers para «arreglar» datos: el backup es la única red.
+52. **La revisión la escribe el trigger (M9).** `clinical_note_guard()` copia la versión anterior en
+    `ClinicalNoteRevision` (solo inserción, `kinesoft_append_only()`) y pone `revision = OLD.revision + 1`. **La app
+    nunca escribe `revision`** (ni en el `data` de un update ni en un INSERT a `ClinicalNoteRevision`): el CAS va en el
+    `where` (`revision: expectedRevision`). Guard estático en `tests/unit/clinical-notes-guard.test.ts`.
+53. **Una evolución viva por turno (EV2-D2).** Índice único **parcial** `ClinicalNote_bookingId_live_key` (raíz, no
+    anulada). No se expresa en Prisma: si `migrate dev`/`diff` propone borrarlo, no se borra. Una anulada libera el
+    turno; las enmiendas no cuentan. La app da el copy antes (`bookingTaken`) y traduce el 23505 (replay o rechazo).
+54. **Un solo gate de HC (C-EV2-3).** Toda superficie que lee o escribe evoluciones pasa por `clinicalNoteGateInTx`
+    (`lib/clinical-notes-internal.ts`): módulo `evoluciones` + `clinical.read` + acceso `full` al paciente (+ ser
+    profesional para escribir). Ninguna superficie decide por su cuenta (la Secretaria tiene acceso `admin` a todos
+    los pacientes: el error clásico). Nunca en el portal, ⌘K, la sala, realtime, mails ni CSV (guard de superficies).
+55. **Un turno con evolución no se borra ni cambia de paciente (EV2-D21/D23).** FKs compuestas RESTRICT
+    (`(bookingId, tenantId, patientId)`); la app rechaza antes con «cancelalo» / «no se puede cambiar el paciente» y
+    traduce el P2003/23503 de la carrera. Aun anulada, bloquea. No mapear ese P2003 a un borrado ni pasar la FK a CASCADE.
 
 ---
 

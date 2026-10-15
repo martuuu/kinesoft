@@ -10,9 +10,15 @@
  *   (`seq`, mismo patrón que `reloadPlans` del shell).
  * - Después de una escritura NO se refresca la ruta (H-SLOW): el DTO de la action entra en la lista y el shell relee
  *   el resumen (contador de la pestaña y «Última evolución» de Resumen) con `onChanged`.
- * - Deep link `?turno=<bookingId>` (`clinicalNoteDeepLink`, Recepción/sala/agenda): se consume una vez y se saca de la
- *   URL. Si el turno ya tiene evolución viva, abre «Editar» cuando todavía se puede; si no, avisa. La barrera es la
- *   action: esto solo elige qué abrir.
+ * - Deep link `?turno=<bookingId>` (`clinicalNoteDeepLink`, Recepción/sala/agenda/Seguimiento): se consume una vez y
+ *   se saca de la URL. EV2-Z M4: si el turno ya tiene evolución viva se la lleva a la vista y se la resalta 2 s
+ *   (`[data-note-id]`), sin abrir el editor ni avisar: el link es «Ver evolución», no «Editar» (antes abría el editor
+ *   o tiraba el toast «ya tiene evolución» sobre algo que el usuario fue a mirar). Sin nota y con `canCreate` abre
+ *   crear. La barrera es la action: esto solo elige qué abrir. Lógica en `deepLinkOutcome` (pura, con test).
+ * - Búsqueda (EV2-Z): una consulta nueva NO vacía la lista: la anterior queda con `aria-busy` hasta que llega la
+ *   respuesta (antes parpadeaba «Cargando…» por cada búsqueda). 16 px en mobile (iOS hace zoom con menos) y botones
+ *   del encabezado de 44 px en mobile (tamaño táctil).
+ * - «Imprimir historia clínica» solo con al menos una evolución (anulada incluida): sin notas imprimía una hoja vacía.
  * - Nunca se monta sin `clinical.read` + acceso `full` + módulo `evoluciones` (lo filtra `profileTabsFor`); igual, si
  *   la lectura devuelve `null` se muestra el rechazo genérico (no revela nada).
  */
@@ -26,6 +32,7 @@ import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer
 import type { NoteEditorBooking, NoteEditorMode } from "@/components/clinical-notes/clinical-notes-ui";
 import { getBookingClinicalNote, getPatientTimeline } from "@/lib/clinical-notes-read";
 import { bookingTargetDecision } from "@/lib/clinical-notes-logic";
+import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
 import {
   CLINICAL_NOTE_COPY,
   TIMELINE_PAGE_SIZE,
@@ -74,7 +81,59 @@ export type EvolucionesViewProps = {
   initialPage?: { items: TimelineItem[]; nextCursor: string | null } | null;
   /** Solo tests: reloj fijo para las tarjetas. */
   now?: Date;
+  /** Solo tests: nota resaltada por un deep link (el efecto que la elige no corre en render estático). */
+  highlightNoteId?: string | null;
 };
+
+/** Cuánto dura el resaltado de la nota del deep link (EV2-Z M4). */
+export const DEEP_LINK_HIGHLIGHT_MS = 2000;
+
+/** Qué hace el deep link `?turno=` con la respuesta de `getBookingClinicalNote` (EV2-Z M4). */
+export type DeepLinkOutcome =
+  | { kind: "focus"; noteId: string }
+  | { kind: "create"; booking: NoteEditorBooking }
+  | { kind: "toast"; level: "error" | "warning"; message: string };
+
+export function deepLinkOutcome(
+  view: BookingClinicalNoteView | null,
+  booking: DeepLinkBooking,
+  ctx: { patientId: string; canWrite: boolean; now: Date }
+): DeepLinkOutcome {
+  if (!view) return { kind: "toast", level: "error", message: CLINICAL_NOTE_COPY.forbidden };
+  // Con nota viva: se muestra, nunca se abre el editor ni se avisa (M4).
+  if (view.note) return { kind: "focus", noteId: view.note.id };
+  if (view.canCreate) {
+    return { kind: "create", booking: { id: booking.id, scheduledFor: booking.scheduledFor, serviceName: booking.serviceName } };
+  }
+  if (!ctx.canWrite) return { kind: "toast", level: "error", message: CLINICAL_NOTE_COPY.forbidden };
+  // Por qué no: el mismo orden de razones que la action (cancelado → ausente → futuro).
+  const d = bookingTargetDecision(
+    { patientId: ctx.patientId, status: booking.status, scheduledFor: new Date(booking.scheduledFor) },
+    ctx.patientId,
+    ctx.now
+  );
+  const message = d.ok
+    ? EVOLUCIONES_VIEW_COPY.bookingUnavailable
+    : d.reason === "cancelled"
+      ? CLINICAL_NOTE_COPY.bookingCancelled
+      : d.reason === "no-show"
+        ? CLINICAL_NOTE_COPY.bookingNoShow
+        : d.reason === "future"
+          ? CLINICAL_NOTE_COPY.future
+          : EVOLUCIONES_VIEW_COPY.bookingUnavailable;
+  return { kind: "toast", level: "warning", message };
+}
+
+/**
+ * Mobile: búsqueda a 16 px (con menos, iOS Safari hace zoom al enfocar) y botones del encabezado de 44 px (tamaño
+ * táctil). Es CSS local porque son media queries y el resto de la vista va con estilos inline.
+ */
+const EVOLUCIONES_CSS = `
+@media (max-width: 640px) {
+  .k-evo-search { font-size: 16px !important; min-height: 44px; }
+  .k-evo-head-btn { min-height: 44px; display: inline-flex !important; align-items: center; }
+}
+`;
 
 // ─── Helpers puros (los usa el render test) ──────────────────────────────────────────────────────────────────────
 
@@ -150,6 +209,7 @@ export function EvolucionesView({
   onChanged,
   initialPage = null,
   now,
+  highlightNoteId = null,
 }: EvolucionesViewProps) {
   const toast = useToast();
   const [items, setItems] = useState<TimelineItem[]>(initialPage?.items ?? []);
@@ -160,13 +220,25 @@ export function EvolucionesView({
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
   const [editor, setEditor] = useState<NoteEditorMode | null>(null);
+  // Búsqueda en curso con una lista ya en pantalla: la lista queda (aria-busy), no se vacía.
+  const [searching, setSearching] = useState(false);
+  // Nota que pidió el deep link (se busca cuando la lista está) y nota resaltada (2 s).
+  const [focusNoteId, setFocusNoteId] = useState<string | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(highlightNoteId);
+  // ¿El paciente tiene alguna evolución? Decide si se ofrece imprimir. Sale de la lista sin filtro (una búsqueda sin
+  // resultados no esconde el botón); con más páginas se asume que sí (la página siguiente puede tenerla).
+  const [hasNotes, setHasNotes] = useState(
+    () => !!initialPage && (initialPage.items.some((it) => it.type === "note") || initialPage.nextCursor != null)
+  );
   const seq = useRef(0);
   const skipFirstLoad = useRef(initialPage != null);
 
   const loadFirst = useCallback(
     async (q: string) => {
       const mine = ++seq.current;
-      setStatus("loading");
+      // Con una lista ya en pantalla no se pasa a «Cargando…» (parpadeo): queda la anterior con aria-busy.
+      setStatus((s) => (s === "ready" ? s : "loading"));
+      setSearching(true);
       setMoreError(false);
       try {
         const page = await getPatientTimeline({ patientId, q: q || null, limit: TIMELINE_PAGE_SIZE });
@@ -177,10 +249,13 @@ export function EvolucionesView({
         }
         setItems(page.items);
         setNextCursor(page.nextCursor);
+        if (!q) setHasNotes(page.items.some((it) => it.type === "note") || page.nextCursor != null);
         setStatus("ready");
       } catch (e) {
         console.error("getPatientTimeline failed", e);
         if (mine === seq.current) setStatus("error");
+      } finally {
+        if (mine === seq.current) setSearching(false);
       }
     },
     [patientId]
@@ -261,43 +336,11 @@ export function EvolucionesView({
     void (async () => {
       try {
         const view = await getBookingClinicalNote(deepLinkBooking.id);
-        if (!view) {
-          toast.error(CLINICAL_NOTE_COPY.forbidden);
-          return;
-        }
-        if (view.note) {
-          if (view.note.permissions.canEdit) setEditor({ type: "edit", note: view.note });
-          else toast.info(CLINICAL_NOTE_COPY.bookingTaken);
-          return;
-        }
-        if (view.canCreate) {
-          setEditor({
-            type: "create",
-            patientId,
-            booking: { id: deepLinkBooking.id, scheduledFor: deepLinkBooking.scheduledFor, serviceName: deepLinkBooking.serviceName },
-          });
-          return;
-        }
-        if (!canWrite) {
-          toast.error(CLINICAL_NOTE_COPY.forbidden);
-          return;
-        }
-        // Por qué no: el mismo orden de razones que la action (cancelado → ausente → futuro).
-        const d = bookingTargetDecision(
-          { patientId, status: deepLinkBooking.status, scheduledFor: new Date(deepLinkBooking.scheduledFor) },
-          patientId,
-          new Date()
-        );
-        const msg = d.ok
-          ? EVOLUCIONES_VIEW_COPY.bookingUnavailable
-          : d.reason === "cancelled"
-            ? CLINICAL_NOTE_COPY.bookingCancelled
-            : d.reason === "no-show"
-              ? CLINICAL_NOTE_COPY.bookingNoShow
-              : d.reason === "future"
-                ? CLINICAL_NOTE_COPY.future
-                : EVOLUCIONES_VIEW_COPY.bookingUnavailable;
-        toast.warning(msg);
+        const out = deepLinkOutcome(view, deepLinkBooking, { patientId, canWrite, now: new Date() });
+        if (out.kind === "focus") setFocusNoteId(out.noteId);
+        else if (out.kind === "create") setEditor({ type: "create", patientId, booking: out.booking });
+        else if (out.level === "error") toast.error(out.message);
+        else toast.warning(out.message);
       } catch (e) {
         console.error("getBookingClinicalNote failed", e);
         toast.error(EVOLUCIONES_VIEW_COPY.loadFailed);
@@ -305,9 +348,30 @@ export function EvolucionesView({
     })();
   }, [deepLinkBookingId, deepLinkBooking, patientId, canWrite, toast]);
 
+  // Nota del deep link: cuando la lista está, se la lleva a la vista y se la resalta. Si no está en lo cargado (más
+  // vieja que la primera página) no se fuerza nada: aparece con «Cargar más».
+  useEffect(() => {
+    if (!focusNoteId || status !== "ready") return;
+    setFocusNoteId(null);
+    if (!items.some((it) => it.type === "note" && it.note.id === focusNoteId)) return;
+    setHighlighted(focusNoteId);
+    const el = document.querySelector(`[data-note-id="${CSS.escape(focusNoteId)}"]`);
+    // Con «reducir movimiento» el salto es instantáneo; el resaltado no se anima nunca (solo un borde).
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+  }, [focusNoteId, status, items]);
+  useEffect(() => {
+    if (!highlighted) return;
+    const t = setTimeout(() => setHighlighted(null), DEEP_LINK_HIGHLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [highlighted]);
+
   const onEditorSaved = useCallback(
     (note: ClinicalNoteDTO, info: { type: NoteEditorMode["type"] }) => {
-      if (info.type === "create") setItems((prev) => insertNoteInItems(prev, note, nextCursor != null));
+      if (info.type === "create") {
+        setItems((prev) => insertNoteInItems(prev, note, nextCursor != null));
+        setHasNotes(true);
+      }
       else if (info.type === "amend") setItems((prev) => addAmendmentToItems(prev, note));
       else setItems((prev) => replaceNoteInItems(prev, note));
       onChanged?.();
@@ -319,24 +383,28 @@ export function EvolucionesView({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <style dangerouslySetInnerHTML={{ __html: EVOLUCIONES_CSS }} />
       <Card style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <div className="k-display" style={{ fontSize: 16, fontWeight: 700, flex: 1, minWidth: 160 }}>
             {EVOLUCIONES_VIEW_COPY.title}
           </div>
-          <a
-            className="k-btn k-btn-ghost"
-            href={printHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 12, padding: "8px 12px", textDecoration: "none" }}
-          >
-            {EVOLUCIONES_VIEW_COPY.print}
-          </a>
+          {hasNotes && (
+            <a
+              className="k-btn k-btn-ghost k-evo-head-btn"
+              href={printHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 12, padding: "8px 12px", textDecoration: "none" }}
+            >
+              {EVOLUCIONES_VIEW_COPY.print}
+            </a>
+          )}
           {canWrite && (
             <Button
               type="button"
               variant="primary"
+              className="k-evo-head-btn"
               onClick={() => setEditor({ type: "create", patientId })}
               style={{ fontSize: 12, padding: "8px 12px" }}
             >
@@ -346,6 +414,7 @@ export function EvolucionesView({
         </div>
         <input
           type="search"
+          className="k-evo-search"
           aria-label={EVOLUCIONES_VIEW_COPY.searchLabel}
           placeholder={EVOLUCIONES_VIEW_COPY.searchPlaceholder}
           value={query}
@@ -393,9 +462,18 @@ export function EvolucionesView({
       )}
 
       {status === "ready" && items.length > 0 && (
-        <ol aria-label="Línea de tiempo" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 12 }}>
+        <ol aria-label="Línea de tiempo" aria-busy={searching || undefined} style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 12 }}>
           {items.map((it) => (
-            <li key={it.key} data-timeline-item={it.type}>
+            <li
+              key={it.key}
+              data-timeline-item={it.type}
+              data-highlighted={it.type === "note" && it.note.id === highlighted ? "" : undefined}
+              style={
+                it.type === "note" && it.note.id === highlighted
+                  ? { outline: "2px solid var(--sky-300)", outlineOffset: 4, borderRadius: "var(--r-md)" }
+                  : undefined
+              }
+            >
               {it.type === "note" ? (
                 <div style={{ display: "grid", gap: 8 }}>
                   <NoteCard

@@ -286,7 +286,7 @@ export function ResumenView({
               whiteSpace: "pre-wrap",
             }}
           >
-            {patient.notes ?? "Sin notas. Editá el paciente para agregar antecedentes relevantes."}
+            {patient.notes ?? "Sin notas generales. Editá el paciente para agregarlas."}
           </p>
         </Card>
       </div>

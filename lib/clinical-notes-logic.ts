@@ -66,7 +66,7 @@ const BodySchema = z
 /** ISO con zona (el cliente manda `toISOString()`): sin zona sería hora del host, el bug de siempre en Vercel. */
 const IsoDateSchema = z
   .string()
-  .datetime({ offset: true, message: "Fecha inválida" })
+  .datetime({ offset: true, message: "Elegí una fecha válida." })
   .transform((s) => new Date(s));
 
 export const CreateClinicalNoteSchema = z

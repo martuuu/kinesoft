@@ -18,6 +18,7 @@ import { VoidNoteDialog } from "@/components/clinical-notes/void-note-dialog";
 import { NoteHistoryModal } from "@/components/clinical-notes/note-history-modal";
 import {
   CLINICAL_NOTES_UI_COPY as COPY,
+  SOFT_TAG_BORDER,
   authorLine,
   bookingLabel,
   editableUntilLabel,
@@ -36,6 +37,11 @@ export type NoteCardProps = {
   onAmendmentAdded?: (amendment: ClinicalNoteDTO) => void;
   /** Esconde la línea «Turno del …» (p. ej. dentro del drawer del turno, donde es redundante). */
   hideBooking?: boolean;
+  /**
+   * Esconde «Ver versiones anteriores» (el drawer del turno: el Modal es `position: fixed` y dentro del panel con
+   * `transform` quedaría encerrado en el panel; ahí se ofrece el link a la historia clínica).
+   */
+  hideHistory?: boolean;
   /** Solo tests: reloj fijo. */
   now?: Date;
   /** Interno: la tarjeta de una enmienda (sin enmiendas propias, más compacta). */
@@ -58,6 +64,7 @@ export function NoteCard({
   onNoteChange,
   onAmendmentAdded,
   hideBooking = false,
+  hideHistory = false,
   now: nowProp,
   variant = "root",
 }: NoteCardProps) {
@@ -82,12 +89,22 @@ export function NoteCard({
     amendments.length > 0 ? (
       <div style={{ display: "grid", gap: 10, marginTop: 4 }}>
         {amendments.map((a) => (
-          <NoteCard key={a.id} note={a} variant="amendment" onNoteChange={onNoteChange} now={nowProp} hideBooking />
+          <NoteCard
+            key={a.id}
+            note={a}
+            variant="amendment"
+            onNoteChange={onNoteChange}
+            now={nowProp}
+            hideBooking
+            hideHistory={hideHistory}
+          />
         ))}
       </div>
     ) : null;
 
   if (note.voided) {
+    // EV2-Z bajo: las versiones anteriores de una anulada también son HC; se ofrecen dentro del details.
+    const voidedHistory = !hideHistory && note.revision > 1;
     return (
       <article style={{ ...shellStyle, opacity: 0.85 }} data-note-id={note.id} data-voided="">
         <details>
@@ -97,12 +114,14 @@ export function NoteCard({
             ) : (
               <KindTag kind={note.kind} />
             )}
-            <span className="k-tag k-tag-soft" style={{ textTransform: "none" }}>
+            <span className="k-tag k-tag-soft" style={{ textTransform: "none", border: SOFT_TAG_BORDER }}>
               {COPY.voidedBadge}
             </span>
             <span style={metaStyle}>
               {noteDateLabel(note.occurredAt)} · {note.author.name}
             </span>
+            {/* EV2-Z M9: sin esto el summary no decía que se despliega ni qué hay adentro. */}
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }}>{COPY.voidedShowText}</span>
           </summary>
           <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
             <p style={{ margin: 0, fontSize: 13 }}>
@@ -111,14 +130,23 @@ export function NoteCard({
             <span style={metaStyle}>{voidedSummary(note)}</span>
             {note.title && <strong style={{ fontSize: 14, color: "var(--navy-500)" }}>{note.title}</strong>}
             <p style={{ ...bodyStyle, color: "var(--navy-500)" }}>{note.body}</p>
+            {voidedHistory && (
+              <div>
+                <Button type="button" variant="ghost" onClick={() => setHistoryOpen(true)}>
+                  {COPY.history}
+                </Button>
+              </div>
+            )}
           </div>
         </details>
         {amendmentList}
+        {voidedHistory && <NoteHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} note={note} />}
       </article>
     );
   }
 
-  const actions = noteActions(note, now);
+  const raw = noteActions(note, now);
+  const actions = hideHistory ? { ...raw, history: false } : raw;
   const until = editableUntilLabel(note, now);
   const booking = hideBooking ? null : bookingLabel(note.booking);
   const anyAction = actions.edit || actions.amend || actions.void || actions.history;

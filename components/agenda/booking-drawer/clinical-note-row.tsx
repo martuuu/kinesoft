@@ -77,12 +77,13 @@ export function ClinicalNoteRow({
           note={readOnlyNote(view.note)}
           amendments={view.amendments.map(readOnlyNote)}
           hideBooking
+          hideHistory
           now={now}
         />
       ) : (
         <>
           {view.voided.map((n) => (
-            <NoteCard key={n.id} note={readOnlyNote(n)} hideBooking now={now} />
+            <NoteCard key={n.id} note={readOnlyNote(n)} hideBooking hideHistory now={now} />
           ))}
           {view.canCreate && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -102,7 +103,17 @@ export function ClinicalNoteRow({
             e.preventDefault();
             onNavigate(href);
           }}
-          style={{ fontSize: 12.5, fontWeight: 700, color: "var(--sky-700)", textDecoration: "none" }}
+          // EV2-Z bajo: target táctil de 44 px (era una línea de texto de ~16 px de alto).
+          style={{
+            fontSize: 12.5,
+            fontWeight: 700,
+            color: "var(--sky-700)",
+            textDecoration: "none",
+            minHeight: 44,
+            display: "inline-flex",
+            alignItems: "center",
+            justifySelf: "start",
+          }}
         >
           {canChangeInHc(view) ? CLINICAL_NOTE_ROW_COPY.editInHc : CLINICAL_NOTE_ROW_COPY.openHc} →
         </Link>

@@ -20,7 +20,8 @@ import type { ReactElement } from "react";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { NoteCard } from "@/components/clinical-notes/note-card";
-import { NoteEditorDrawer, NoteEditorForm } from "@/components/clinical-notes/note-editor-drawer";
+import { NoteEditorDrawer, NoteEditorForm, kindKeyStep } from "@/components/clinical-notes/note-editor-drawer";
+import { DateTime24Picker } from "@/components/ui/datetime-24-picker";
 import { VoidNoteDialog } from "@/components/clinical-notes/void-note-dialog";
 import { NoteHistoryContent } from "@/components/clinical-notes/note-history-modal";
 import { KindTag } from "@/components/clinical-notes/kind-tag";
@@ -95,9 +96,9 @@ describe("[EV2-2e] editor de evoluciones", () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain("Nueva evolución");
     expect(html.match(/role="radio"/g)?.length).toBe(3);
-    expect(html).toMatch(/role="radio" aria-checked="true"[^>]*><span class="k-tag k-tag-sky">Evolución<\/span>/);
+    expect(html).toMatch(/role="radio" aria-checked="true"[^>]*><span[^>]*><span class="k-tag k-tag-sky">Evolución<\/span>/);
     expect(html).toContain('<span class="k-tag k-tag-lime">Primera consulta</span>');
-    expect(html).toContain('<span class="k-tag k-tag-soft">Alta</span>');
+    expect(html).toContain('<span class="k-tag k-tag-soft" style="border:1px solid var(--navy-200)">Alta</span>');
     expect(html).toContain("Título (opcional)");
     expect(html).toContain("0 / 20.000");
     expect(html).toContain("Turno del 15/10/26 09:30 · Sesión kinésica");
@@ -238,7 +239,102 @@ describe("[EV2-2e] anular en Modal y versiones", () => {
   });
 
   it("[EV2-2e] KindTag", () => {
-    expect(render(<KindTag kind="DISCHARGE" />)).toBe('<span class="k-tag k-tag-soft">Alta</span>');
+    // EV2-Z M8: el pill «Alta» lleva borde visible (el de .k-tag-soft es blanco sobre blanco).
+    expect(render(<KindTag kind="DISCHARGE" />)).toBe(
+      '<span class="k-tag k-tag-soft" style="border:1px solid var(--navy-200)">Alta</span>'
+    );
+    expect(render(<KindTag kind="EVOLUTION" />)).toBe('<span class="k-tag k-tag-sky">Evolución</span>');
+  });
+});
+
+describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
+  const createMode = { type: "create" as const, patientId: "pat-1" };
+
+  it("[EV2-Z A1] modo create con `patientName`: «Paciente: …» arriba y en negrita; sin él, nada", () => {
+    const html = render(
+      <NoteEditorForm mode={{ ...createMode, patientName: "Gómez, Juana" }} onCancel={noop} onSaved={noop} now={NOW} />
+    );
+    expect(html).toMatch(/data-testid="editor-patient"[^>]*><strong>Paciente: Gómez, Juana<\/strong>/);
+    // Va antes que el resto del form (el tipo).
+    expect(html.indexOf("Paciente: Gómez, Juana")).toBeLessThan(html.indexOf('role="radiogroup"'));
+    expect(render(<NoteEditorForm mode={createMode} onCancel={noop} onSaved={noop} now={NOW} />)).not.toContain("Paciente:");
+  });
+
+  it("[EV2-Z M5] enmienda que viene del editor vencido: arranca con el texto escrito y el aviso", () => {
+    const html = render(
+      <NoteEditorForm mode={{ type: "amend", note: note() }} carryBody="Texto que estaba editando" onCancel={noop} onSaved={noop} now={NOW} />
+    );
+    expect(html).toContain("Texto que estaba editando</textarea>");
+    expect(html).toContain("Copiamos tu texto: dejá solo lo que agrega o corrige.");
+    const plain = render(<NoteEditorForm mode={{ type: "amend", note: note() }} onCancel={noop} onSaved={noop} now={NOW} />);
+    expect(plain).not.toContain("Copiamos tu texto");
+  });
+
+  it("[EV2-Z M6] sin turno la hora arranca redondeada a 5 min; el picker muestra un minuto fuera de grilla tal cual", () => {
+    const at = new Date("2026-10-15T14:07:30.000Z"); // 11:07 AR
+    const html = render(<NoteEditorForm mode={createMode} onCancel={noop} onSaved={noop} now={at} />);
+    expect(html).toMatch(/<option value="11" selected="">11<\/option>/);
+    expect(html).toMatch(/<option value="05" selected="">05<\/option>/);
+    const picker = render(<DateTime24Picker value="2026-10-15T10:07" onChange={noop} />);
+    expect(picker).toMatch(/<option value="07" selected="">07<\/option>/);
+    expect(picker).not.toMatch(/<option value="05" selected="">/);
+    const onGrid = render(<DateTime24Picker value="2026-10-15T10:05" onChange={noop} />);
+    expect(onGrid.slice(onGrid.indexOf('aria-label="Minutos"'))).not.toContain('value="07"');
+  });
+
+  it("[EV2-Z M7] contador: visual aria-hidden + región viva vacía lejos del límite; fecha en fieldset/legend", () => {
+    const html = render(<NoteEditorForm mode={createMode} onCancel={noop} onSaved={noop} now={NOW} />);
+    expect(html).toMatch(/aria-hidden="true" data-testid="body-counter"/);
+    expect(html).toMatch(/aria-live="polite" data-testid="body-counter-live"[^>]*><\/div>/);
+    expect(html).toMatch(/<fieldset[^>]*><legend[^>]*>Fecha y hora de la atención<\/legend>/);
+    const near = render(
+      <NoteEditorForm mode={{ type: "edit", note: note({ body: "a".repeat(19_000) }) }} onCancel={noop} onSaved={noop} now={NOW} />
+    );
+    expect(near).toMatch(/data-testid="body-counter-live"[^>]*>Te quedan 1\.000 caracteres<\/div>/);
+  });
+
+  it("[EV2-Z M7] tipo: radios de 44 px con roving tabindex (solo el elegido es tab stop); ←/→ en ronda", () => {
+    const html = render(<NoteEditorForm mode={createMode} onCancel={noop} onSaved={noop} now={NOW} />);
+    const radios = [...html.matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((m) => m[0]);
+    expect(radios).toHaveLength(3);
+    expect(radios.map((r) => /tabindex="(-?\d)"/.exec(r)?.[1])).toEqual(["0", "-1", "-1"]);
+    for (const r of radios) expect(r).toContain("min-height:44px");
+    expect(kindKeyStep("ArrowRight")).toBe(1);
+    expect(kindKeyStep("ArrowDown")).toBe(1);
+    expect(kindKeyStep("ArrowLeft")).toBe(-1);
+    expect(kindKeyStep("ArrowUp")).toBe(-1);
+    expect(kindKeyStep("Tab")).toBe(0);
+  });
+
+  it("[EV2-Z M8/M9] anulada: badge con borde visible y el summary dice «Ver el texto anulado»", () => {
+    const n = note({ voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
+    const html = render(<NoteCard note={n} now={NOW} />);
+    expect(html).toContain('style="text-transform:none;border:1px solid var(--navy-200)">Anulada</span>');
+    const summary = html.slice(html.indexOf("<summary"), html.indexOf("</summary>"));
+    expect(summary).toContain("Ver el texto anulado");
+  });
+
+  it("[EV2-Z] anulada y editada: «Ver versiones anteriores» dentro del details; `hideHistory` lo saca", () => {
+    const n = note({ revision: 2, voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
+    const html = render(<NoteCard note={n} now={NOW} />);
+    const details = html.slice(html.indexOf("<details>"), html.indexOf("</details>"));
+    expect(buttons(details)).toEqual(["Ver versiones anteriores"]);
+    expect(buttons(render(<NoteCard note={n} now={NOW} hideHistory />))).toEqual([]);
+    // Revisión 1: no hay versiones que ver.
+    expect(buttons(render(<NoteCard note={{ ...n, revision: 1 }} now={NOW} />))).toEqual([]);
+    // Viva editada con hideHistory (drawer del turno): tampoco.
+    expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideHistory />))).toEqual([
+      "Agregar enmienda",
+    ]);
+  });
+
+  it("[EV2-Z] historial: error de red ≠ sin acceso, con reintentar", () => {
+    const n = note({ revision: 2 });
+    const html = render(<NoteHistoryContent note={n} state={{ status: "error" }} onRetry={noop} />);
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("No pudimos cargar las versiones. Probá de nuevo.");
+    expect(html).not.toContain("No tenés acceso");
+    expect(buttons(html)).toEqual(["Reintentar"]);
   });
 });
 

@@ -71,7 +71,9 @@ import { RecentBookings } from "./recent-bookings";
 import { RescheduleForm } from "./reschedule-form";
 import { ShareActions } from "./share-actions";
 import {
+  DeleteBookingButton,
   StatusActions,
+  bookingHasClinicalNote,
   clinicalNoteRowEligible,
   offersNoteAfterStatus,
   statusToastPayload,
@@ -898,24 +900,11 @@ export function BookingDrawer({
           )}
 
           {canDelete && typeof booking.programId !== "string" && (
-          <button
-            type="button"
-            onClick={remove}
-            disabled={pending}
-            style={{
-              alignSelf: "flex-start",
-              background: "transparent",
-              border: "none",
-              color: "#9F1F1F",
-              cursor: "pointer",
-              fontSize: 12.5,
-              fontWeight: 700,
-              padding: 0,
-              marginTop: 4,
-            }}
-          >
-            Eliminar turno
-          </button>
+            <DeleteBookingButton
+              onDelete={remove}
+              pending={pending}
+              blockedByNote={bookingHasClinicalNote(noteRowEligible ? noteView : null)}
+            />
           )}
         </div>
       )}
@@ -950,7 +939,12 @@ export function BookingDrawer({
         <NoteEditorDrawer
           open
           onClose={() => setNoteEditor(null)}
-          mode={{ type: "create", patientId: noteEditor.patientId, booking: noteEditor.booking }}
+          mode={{
+            type: "create",
+            patientId: noteEditor.patientId,
+            patientName: noteEditor.patientName,
+            booking: noteEditor.booking,
+          }}
           // El editor ya muestra su toast de guardado; la agenda no cambia.
           onSaved={() => {}}
         />
@@ -975,14 +969,17 @@ export function BookingDrawer({
 }
 
 /** EV2-3b: blanco del editor «Cargar evolución» (el drawer ya se cerró). */
-type NoteEditorTarget = {
+export type NoteEditorTarget = {
   patientId: string;
+  /** EV2-Z A1: el editor se abre con el drawer ya cerrado: sin esto no decía de qué paciente era. */
+  patientName: string;
   booking: { id: string; scheduledFor: string; serviceName: string | null };
 };
 
-function noteTargetOf(booking: DrawerBooking, patientId: string): NoteEditorTarget {
+export function noteTargetOf(booking: DrawerBooking, patientId: string): NoteEditorTarget {
   return {
     patientId,
+    patientName: booking.patientName,
     booking: { id: booking.id, scheduledFor: booking.scheduledFor, serviceName: booking.serviceName ?? null },
   };
 }

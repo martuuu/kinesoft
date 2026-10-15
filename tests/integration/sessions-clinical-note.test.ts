@@ -26,8 +26,8 @@ vi.mock("@/lib/db", async (importOriginal) => {
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { markReceptionAction } from "@/lib/bookings";
-import { listOpenSessions } from "@/lib/sessions";
-import { reopenSessionIfUntouchedInTx } from "@/lib/sessions-internal";
+import { listOpenSessions, loadSessionEvolution } from "@/lib/sessions";
+import { reopenSessionIfUntouchedInTx, recordSessionEvolutionInTx } from "@/lib/sessions-internal";
 import { runWithRls } from "@/lib/rls";
 import { dayWindow } from "@/lib/availability/day";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -176,5 +176,30 @@ describe.skipIf(!RUN)("EV2-2d · «Sin evolución» cuenta la evolución de HC d
     await voidNote(note);
     expect(await reopen()).toEqual({ reopened: true });
     expect((await session(s0)).completedAt).toBeNull();
+  });
+
+  // EV2-Z A2 (default del orquestador, para Martin): EV2-D18 vale para el bucket «Sin evolución» y para reabrir, pero
+  // una evolución de HC NO bloquea «Registrar sesión» (EVA/anotaciones de la sesión): son registros distintos.
+  it("[EV2-Z A2] «Registrar sesión» con evolución de HC viva sigue cargando EVA/anotaciones; el bucket la sigue excluyendo", async () => {
+    const p = await createPlan(db, T, { sessions: 2, bookings: 1, bookingStatus: "COMPLETED" });
+    const [s0] = p.sessionIds;
+    await db.session.update({ where: { id: s0 }, data: { completedAt: new Date() } });
+    await seedNote({ patientId: p.patientId, bookingId: p.bookingIds[0] });
+    expect(await sinEvolucionIds()).not.toContain(s0);
+
+    const res = await loadSessionEvolution(s0, { notes: "Mejor movilidad", paInPost: 3 });
+    expect(res).toEqual({ ok: true, data: { loaded: true } });
+    const after = await session(s0);
+    expect(after.notes).toBe("Mejor movilidad");
+    expect(after.paInPost).toBe(3);
+    expect(await db.evaScore.count({ where: { sessionId: s0 } })).toBe(1);
+    expect(after.completedAt).not.toBeNull();
+
+    // Ya tocada por el registro: el segundo no pisa (idempotente, como siempre).
+    const again = await runWithRls(T.tenantId, (tx) =>
+      recordSessionEvolutionInTx(tx, { tenantId: T.tenantId, sessionId: s0, actorId: T.userId, meta: { notes: "x", paInPre: null, paInPost: null, rpe: null }, now: new Date() })
+    );
+    expect(again).toEqual({ recorded: false, reason: "touched" });
+    expect((await session(s0)).notes).toBe("Mejor movilidad");
   });
 });

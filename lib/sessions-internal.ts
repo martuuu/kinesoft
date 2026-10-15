@@ -24,6 +24,7 @@ import "server-only";
  * Server-only (AUDIT §5.12): no es una server action; no se puede llamar por RPC.
  */
 import type { z } from "zod";
+import { Prisma } from "@prisma/client";
 import type { DbClient } from "@/lib/rls";
 import { auditInTx } from "@/lib/audit";
 import type { SessionMeta } from "@/lib/validation";
@@ -157,9 +158,12 @@ export type ReopenSessionReason = "not-found" | "not-completed" | "touched";
  * `Booking_session_active_key`: status fuera de CANCELLED/NO_SHOW). Va como un
  * `EXISTS` más en esta misma sentencia (0 sentencias nuevas: el techo de
  * `updateBooking*` no se mueve), por `Booking_sessionId_idx` y
- * `ClinicalNote_bookingId_idx` (M9). Sin filtro de tenant propio: el turno
- * cuelga de la sesión ya acotada por `tp.tenantId` y la FK compuesta
- * (bookingId, tenantId, patientId) ata la nota al tenant del turno.
+ * `ClinicalNote_bookingId_idx` (M9). Turno y nota se atan además a
+ * `tp.tenantId` en la misma sentencia (EV2-Z a4: defensa en profundidad, la
+ * conexión de prod tiene BYPASSRLS; la FK compuesta ya lo garantiza).
+ * EV2-Z A2: ese `EXISTS` solo corre para reabrir (`countClinicalNote: true`);
+ * «Registrar sesión» (`recordSessionEvolutionInTx`) no lo mira: una evolución
+ * de HC no bloquea cargar EVA/anotaciones de la sesión.
  * Consecuencia del «turno ACTIVO»: este lock corre DESPUÉS del UPDATE del
  * turno, así que COMPLETED → CANCELLED/NO_SHOW ya no ve la evolución de ese
  * turno y la sesión se reabre (queda «sin turno»; la evolución sigue en la HC,
@@ -170,16 +174,23 @@ export type ReopenSessionReason = "not-found" | "not-completed" | "touched";
 async function lockSessionEvolutionStateInTx(
   tx: DbClient,
   tenantId: string,
-  sessionId: string
+  sessionId: string,
+  opts: { countClinicalNote: boolean }
 ): Promise<{ completedAt: Date | null; touched: boolean } | null> {
+  // EV2-Z A2: el `EXISTS` de ClinicalNote solo cuenta para reabrir («Deshacer Atendido»), no para «Registrar
+  // sesión» (`recordSessionEvolutionInTx`): ahí FALSE y Postgres ni lo evalúa. Sigue siendo una sola sentencia.
+  const clinicalNote = opts.countClinicalNote
+    ? Prisma.sql`EXISTS (SELECT 1 FROM "Booking" b JOIN "ClinicalNote" cn ON cn."bookingId" = b.id
+                   WHERE b."sessionId" = s.id AND b."tenantId" = tp."tenantId" AND cn."tenantId" = tp."tenantId"
+                     AND b.status NOT IN ('CANCELLED','NO_SHOW')
+                     AND cn."amendsNoteId" IS NULL AND cn."voidedAt" IS NULL)`
+    : Prisma.sql`FALSE`;
   const rows = await tx.$queryRaw<{ completedAt: Date | null; touched: boolean }[]>`
     SELECT s."completedAt",
       (s.notes IS NOT NULL OR s.rpe IS NOT NULL OR s."paInPre" IS NOT NULL OR s."paInPost" IS NOT NULL
         OR EXISTS (SELECT 1 FROM "EvaScore" e WHERE e."sessionId" = s.id)
         OR EXISTS (SELECT 1 FROM "SessionExercise" x WHERE x."sessionId" = s.id AND x.status <> 'PENDING')
-        OR EXISTS (SELECT 1 FROM "Booking" b JOIN "ClinicalNote" cn ON cn."bookingId" = b.id
-                   WHERE b."sessionId" = s.id AND b.status NOT IN ('CANCELLED','NO_SHOW')
-                     AND cn."amendsNoteId" IS NULL AND cn."voidedAt" IS NULL)      -- touched (EV2-D18)
+        OR ${clinicalNote}      -- touched (EV2-D18, solo al reabrir)
       ) AS touched
     FROM "Session" s
     JOIN "TreatmentProgram" tp ON tp.id = s."programId"
@@ -210,7 +221,7 @@ export async function reopenSessionIfUntouchedInTx(
   tx: DbClient,
   p: { tenantId: string; sessionId: string; now: Date }
 ): Promise<{ reopened: boolean; reason?: ReopenSessionReason }> {
-  const s = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId);
+  const s = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId, { countClinicalNote: true });
   if (!s) return { reopened: false, reason: "not-found" };
   if (s.completedAt === null) return { reopened: false, reason: "not-completed" };
   if (s.touched) return { reopened: false, reason: "touched" };
@@ -240,7 +251,7 @@ export async function recordSessionEvolutionInTx(
   tx: DbClient,
   p: { tenantId: string; sessionId: string; actorId: string | null; meta: SessionMetaParsed; now: Date }
 ): Promise<{ recorded: boolean; reason?: RecordEvolutionReason }> {
-  const st = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId);
+  const st = await lockSessionEvolutionStateInTx(tx, p.tenantId, p.sessionId, { countClinicalNote: false });
   if (!st) return { recorded: false, reason: "not-found" };
   if (st.completedAt === null) return { recorded: false, reason: "not-completed" };
   if (st.touched) return { recorded: false, reason: "touched" };
