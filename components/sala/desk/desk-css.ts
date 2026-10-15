@@ -20,7 +20,8 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  *   - compact 720-1179: las reglas `@media (max-width:1279px)` del prototipo, pasadas al contenedor (sin KPIs ni
  *     fecha, «Nuevo» corto);
  *   - stack < 720 (390, o 1024 con el sidebar abierto): una columna CON scroll de página, KPIs 2×2, franja con scroll
- *     horizontal propio, targets de 44 px.
+ *     horizontal propio, targets de 44 px (los del menú ⋯ van aparte, por `@media`: está en un portal fuera de
+ *     `.desk`).
  * Fallback sin container queries (Chrome < 105, Safari < 16): los mismos cortes con `@media`, sumando los 64 px del
  * sidebar colapsado.
  *
@@ -73,7 +74,6 @@ const STACK_RULES = `
 .desk-act { height: auto; min-height: 44px; }
 .desk-act[data-kind=more] { width: 44px; }
 .desk-act-ico { display: inline-flex; }
-.desk-menu-item { min-height: 44px; }
 .desk-call { top: 8px; }
 .desk-call-inner { white-space: normal; }
 `;
@@ -106,7 +106,7 @@ export const DESK_CSS = `
 .desk-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--navy-500); cursor: pointer; }
 .desk-search-clear:hover { background: rgba(15,30,51,0.06); color: var(--navy-900); }
 .desk-new { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px; font-size: 14px; white-space: nowrap; }
-.desk-new kbd { background: rgba(255,255,255,0.16); color: #fff; border-color: rgba(255,255,255,0.25); }
+.desk-new kbd { background: rgba(255,255,255,0.16); color: var(--card-bg); border-color: rgba(255,255,255,0.25); }
 .desk-lbl-short { display: none; }
 .desk-clock { font-size: 18px; font-weight: 500; color: var(--navy-700); white-space: nowrap; }
 .desk-view { flex-shrink: 0; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; border: 1px solid rgba(15,30,51,0.12); background: var(--card-bg); color: var(--navy-500); cursor: pointer; transition: border-color ${T_FAST}, color ${T_FAST}; }
@@ -121,7 +121,7 @@ export const DESK_CSS = `
 .desk-pro { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; height: 64px; padding: 8px 10px; border-radius: 14px; border: 1px solid rgba(15,30,51,0.07); background: var(--card-bg); box-shadow: 0 1px 2px rgba(15,30,51,0.04); position: relative; overflow: hidden; font: inherit; color: var(--navy-900); cursor: pointer; transition: border-color ${T_FAST}, box-shadow ${T_FAST}; }
 .desk-pro:hover { border-color: rgba(15,30,51,0.2); }
 .desk-pro[aria-pressed=true] { border-color: var(--navy-900); box-shadow: inset 0 0 0 1px var(--navy-900); }
-.desk-av { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; background: var(--navy-900); color: #fff; }
+.desk-av { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; background: var(--navy-900); color: var(--card-bg); }
 .desk-pro-txt { min-width: 0; }
 .desk-pro-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .desk-pro-name { font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -133,7 +133,7 @@ export const DESK_CSS = `
 .desk-delay[data-status=free] { background: var(--st-pending-bg); color: var(--navy-500); }
 .desk-delay[data-status=on-time] { background: var(--st-completed-bg); color: var(--st-completed-fg); }
 .desk-delay[data-status=late] { background: var(--rc-late-bg); color: var(--rc-late-fg); box-shadow: inset 0 0 0 1px var(--rc-late-border); }
-.desk-delay[data-status=very-late] { background: var(--rc-late-fg); color: #fff; }
+.desk-delay[data-status=very-late] { background: var(--rc-late-fg); color: var(--card-bg); }
 
 .desk-tag { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--st-pending-bg); color: var(--st-pending-fg); }
 .desk-tag[data-state=por-llegar] { background: var(--st-confirmed-bg); color: var(--st-confirmed-fg); }
@@ -150,13 +150,13 @@ export const DESK_CSS = `
 .desk-act:active:not(:disabled) { transform: scale(0.97); }
 .desk-act:disabled { opacity: 0.55; cursor: progress; }
 .desk-act-ico { display: inline-flex; }
-.desk-act[data-kind=arrive] { background: var(--navy-900); color: #fff; }
+.desk-act[data-kind=arrive] { background: var(--navy-900); color: var(--card-bg); }
 .desk-act[data-kind=arrive]:hover:not(:disabled) { background: var(--navy-700); }
 .desk-act[data-kind=call] { background: var(--rc-called-bg); color: var(--rc-called-fg); }
 .desk-act[data-kind=call]:hover:not(:disabled) { background: var(--sky-800); }
 .desk-act[data-kind=attend] { background: var(--card-bg); color: var(--navy-900); border-color: rgba(15,30,51,0.18); }
 .desk-act[data-kind=attend]:hover:not(:disabled) { border-color: var(--navy-900); }
-.desk-act[data-kind=done] { background: var(--st-completed-bg); color: var(--st-completed-fg); border-color: rgba(27,112,75,0.3); }
+.desk-act[data-kind=done] { background: var(--st-completed-bg); color: var(--st-completed-fg); border-color: var(--st-completed-border); }
 .desk-act[data-kind=pay] { background: var(--lime-300); color: var(--navy-900); }
 .desk-act[data-kind=pay]:hover:not(:disabled) { background: var(--lime-400); }
 .desk-act[data-kind=more] { width: 36px; padding: 0; background: transparent; color: var(--navy-500); }
@@ -182,6 +182,12 @@ export const DESK_CSS = `
 @supports not (container-type: inline-size) {
   @media (max-width: ${DESK_COMPACT_MAX + SIDEBAR_PX}px) {${COMPACT_RULES}}
   @media (max-width: ${DESK_STACK_MAX + SIDEBAR_PX}px) {${STACK_RULES}}
+}
+
+/* Menú ⋯ con targets de 44 px en táctil o pantalla angosta. NO va en STACK_RULES: el menú vive en un portal al
+   body, fuera de .desk, y la container query de .desk nunca lo alcanza (RX-Z #13). */
+@media (pointer: coarse), (max-width: ${DESK_STACK_MAX}px) {
+  .desk-menu-item { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

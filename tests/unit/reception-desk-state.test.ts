@@ -24,6 +24,7 @@ import {
   deskShortcut,
   deskViewer,
   matchesDeskFilter,
+  minutesSince,
   minutesUntil,
   nowLineIndex,
   owesCopago,
@@ -259,6 +260,14 @@ describe("[RX-0] listas del panel y carriles", () => {
     expect(minutesUntil(ROWS.porLlegar, NOW)).toBe(8);
     expect(minutesUntil({ scheduledFor: "2026-10-15T13:42:30Z" }, NOW)).toBe(1);
     expect(minutesUntil(ROWS.demorado, NOW)).toBe(-22);
+  });
+
+  it("[RX-Z] minutesSince: piso de minutos, 0 si falta o es futuro (helper único de Lista y Flujo)", () => {
+    expect(minutesSince(at("10:20"), NOW)).toBe(22); // NOW = 10:42 AR
+    expect(minutesSince("2026-10-15T13:41:30Z", NOW)).toBe(0); // 30 s → 0, no 1
+    expect(minutesSince(null, NOW)).toBe(0);
+    expect(minutesSince(undefined, NOW)).toBe(0);
+    expect(minutesSince(at("11:00"), NOW)).toBe(0); // futuro: nunca negativo
   });
 });
 

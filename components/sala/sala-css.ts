@@ -33,7 +33,9 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  * pantalla.
  *
  * VX0-b: la fecha del eyebrow ya viene capitalizada solo en la primera letra
- * (`salaDayLabel`; con `text-transform: capitalize` salía «14 De Octubre»), y
+ * (`salaDayLabel`, que desde RX-Z vive en `components/sala/sala-day-label.ts`
+ * y comparten el Tablero y el escritorio; con `text-transform: capitalize`
+ * salía «14 De Octubre»), y
  * el contador «Llamados» se resalta solo con `data-active` (valor > 0): en 0
  * el borde y el número azules llamaban la atención sin motivo (R2).
  */

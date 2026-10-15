@@ -21,7 +21,14 @@ vi.mock("@/components/ui/toast", () => ({
 import type { BookingDTO } from "@/components/agenda/agenda-utils";
 import type { SalaLive } from "@/components/sala/sala-live-types";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
-import { ReceptionDesk, deskFit, undoCheckOutcome, DESK_MIN_FIT_HEIGHT, DESK_NEW_BOOKING_HREF } from "@/components/sala/desk/reception-desk";
+import {
+  ReceptionDesk,
+  deskFit,
+  deskShortcutInScope,
+  undoCheckOutcome,
+  DESK_MIN_FIT_HEIGHT,
+  DESK_NEW_BOOKING_HREF,
+} from "@/components/sala/desk/reception-desk";
 import { DeskStrip, pulseBadge } from "@/components/sala/desk/desk-strip";
 import {
   DeskActionsProvider,
@@ -29,6 +36,7 @@ import {
   DeskPrimaryAction,
   DeskStateTag,
   deskActionToast,
+  stableDeskActions,
   type DeskActionsApi,
 } from "@/components/sala/desk/desk-actions";
 import { DeskPayModal, applyCopagoPaid } from "@/components/sala/desk/desk-pay-modal";
@@ -125,7 +133,7 @@ describe("[RX-1b] shell del escritorio", () => {
   it("header: KPIs de deskKpis (llamados dentro de En sala, cancelados fuera del total), fecha AR, reloj y Nuevo turno", () => {
     const html = renderToStaticMarkup(<ReceptionDesk live={makeLive(SECRETARIA)} layout="list" />);
     expect(html).toContain(">Recepción</h1>");
-    expect(html).toContain("jueves, 15 de octubre");
+    expect(html).toContain(">Jueves, 15 de octubre<"); // salaDayLabel, la misma fecha que el Tablero
     expect(html).toMatch(/data-kpi="en-sala"><dt>En sala<\/dt><dd class="desk-mono">2<\/dd>/);
     expect(html).toMatch(/data-kpi="en-atencion"><dt>En atención<\/dt><dd class="desk-mono">1<\/dd>/);
     expect(html).toMatch(/data-kpi="demorados" data-warn="true"><dt>Demorados<\/dt><dd class="desk-mono">1<\/dd>/);
@@ -307,7 +315,60 @@ describe("[RX-1b] DESK_CSS", () => {
   it("sin colores fuera de los tokens para los estados (solo var(--st-*) / var(--rc-*))", () => {
     const stateRules = DESK_CSS.split("\n").filter((l) => /data-(state|status)=/.test(l));
     expect(stateRules.length).toBeGreaterThan(8);
-    // Único literal permitido: el texto blanco sobre el fondo sólido de «muy demorado».
-    for (const l of stateRules) expect(l.replace(/#fff\b/g, "")).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
+    for (const l of stateRules) expect(l).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
+  });
+});
+
+describe("[RX-Z] fixes del shell", () => {
+  it("#11 atajos: solo con el foco en el body o adentro del escritorio (Apariencia o sidebar enfocados: se ignora)", () => {
+    const body = { tag: "body" };
+    const inside = { tag: "input#desk-q" };
+    const tweaksPanel = { tag: "button en Apariencia" };
+    const frame = { contains: (n: unknown) => n === inside };
+    expect(deskShortcutInScope(body as unknown as EventTarget, body, frame)).toBe(true);
+    expect(deskShortcutInScope(inside as unknown as EventTarget, body, frame)).toBe(true);
+    expect(deskShortcutInScope(tweaksPanel as unknown as EventTarget, body, frame)).toBe(false);
+    // Antes del mount (sin frame) solo el body.
+    expect(deskShortcutInScope(tweaksPanel as unknown as EventTarget, body, null)).toBe(false);
+    expect(deskShortcutInScope(null, body, frame)).toBe(false);
+  });
+
+  it("#12 contexto estable: el tick (now) y pendingIds no cambian su identidad; un cambio de rol, día o callback sí", () => {
+    const getNow = () => NOW;
+    const base = api(TITULAR);
+    const first = stableDeskActions(null, base, getNow);
+    // Lo que el shell arma en el render del tick siguiente: otro `now`, otro objeto.
+    const nextTick: DeskActionsApi = { ...base, now: new Date(NOW.getTime() + 30_000), pendingIds: new Set(["x"]) };
+    const tick = stableDeskActions(first, nextTick, getNow);
+    expect(tick).toBe(first);
+    expect(first).not.toHaveProperty("now");
+    expect(first).not.toHaveProperty("pendingIds");
+    expect(stableDeskActions(first, { ...base, dayKey: "2026-10-16" }, getNow)).not.toBe(first);
+    expect(stableDeskActions(first, { ...base, viewer: SECRETARIA }, getNow)).not.toBe(first);
+    expect(stableDeskActions(first, { ...base, run: vi.fn() }, getNow)).not.toBe(first);
+    expect(first.getNow()).toBe(NOW);
+  });
+
+  it("#13 menú ⋯ de 44 px fuera del @container (vive en un portal al body: el container nunca lo alcanza)", () => {
+    const rule = ".desk-menu-item { min-height: 44px; }";
+    expect(DESK_CSS.split(rule).length - 1).toBe(1);
+    const at = DESK_CSS.indexOf(rule);
+    const opener = DESK_CSS.lastIndexOf("@", at);
+    expect(DESK_CSS.slice(opener, at)).toMatch(/^@media \(pointer: coarse\), \(max-width: 719px\) \{\s*$/);
+    // Ninguna regla del menú adentro de los bloques @container.
+    const blocks = DESK_CSS.split("@container desk").slice(1);
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      // Cada bloque cierra con una línea que es solo «}» (las reglas de adentro terminan en «; }»).
+      expect(block.slice(0, block.indexOf("\n}"))).not.toContain(".desk-menu-item");
+    }
+  });
+
+  it("#14 y bajos: sin #fff ni rgba(27,112,75,…) literales; fecha unificada con el Tablero", () => {
+    expect(DESK_CSS).not.toMatch(/#fff\b/i);
+    expect(DESK_CSS).not.toContain("rgba(27,112,75");
+    expect(DESK_CSS).toContain("border-color: var(--st-completed-border)");
+    const html = renderToStaticMarkup(<ReceptionDesk live={makeLive(SECRETARIA)} layout="list" />);
+    expect(html).toContain('<span class="desk-date">Jueves, 15 de octubre</span>');
   });
 });

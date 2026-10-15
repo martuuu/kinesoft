@@ -1316,6 +1316,21 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
 - **Consecuencias.** Un solo lugar decide cupos, módulos, audit doble y mails del cambio; cualquier pantalla nueva que
   cambie el plan llama al núcleo.
 
+### ADR-019 — `/sala` con tres caras elegibles por usuario (status: ACCEPTED, RX, 15/16-oct-2026)
+
+- **Contexto.** El prototipo de Recepción traía dos direcciones («Lista y panel» y «Flujo») y Martin quiso poder
+  elegirlas sin perder el Tablero de SV (§20.19). Una ruta nueva duplicaba realtime, banda de llamado y permisos.
+- **Decisión.** `/sala` tiene **tres caras**: Tablero (`board`, default), Lista y panel (`list`) y Flujo (`flow`),
+  elegidas en Apariencia → Recepción. La preferencia es `agendaPrefs.receptionLayout` (JSON de preferencias de usuario,
+  `lib/preferences-constants.ts`; el sanitize lleva cualquier valor viejo a `board`): **sin migración**. Los datos
+  vivos (realtime, polling de respaldo, rollback, banda, reloj único) salen de un hook compartido, `useSalaLive()`
+  (`components/sala/use-sala-live.ts`), y la lógica pura del escritorio vive en `lib/reception-desk-state.ts` (incluido
+  `minutesSince`, uno solo para las dos caras); cada cara es un archivo en `components/sala/desk/`. La línea de
+  «ahora» usa el token `--now-line` (`app/globals.css`, #c2410c, AA con texto blanco) en la agenda y en el escritorio.
+  `/agenda?view=reception` queda, con link al escritorio.
+- **Consecuencias.** Sacar una cara cuando Martin elija = borrar su archivo y la opción del enum. «Cobrar» se esconde
+  sin `billing.manage`, pero el server todavía no lo exige (`plf-toggle-billing-sin-cap`, C0).
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

@@ -39,16 +39,68 @@ export type DeskActionsApi = {
   collect: (entry: DeskEntry) => void;
 };
 
-const DeskActionsContext = createContext<DeskActionsApi | null>(null);
+/**
+ * Lo que no cambia con el reloj: rol, día, nombres y los callbacks estables del shell. `getNow()` lee el reloj
+ * VIGENTE (un ref) en el momento en que se lo pide, sin que el tick cambie la identidad del objeto.
+ */
+export type DeskActionsStable = Pick<DeskActionsApi, "viewer" | "dayKey" | "practitionerName" | "run" | "collect"> & {
+  getNow: () => Date;
+};
+/** Lo que ven las piezas por fila: lo estable más las filas en vuelo. */
+export type DeskActions = DeskActionsStable & Pick<DeskActionsApi, "pendingIds">;
 
-export function DeskActionsProvider({ value, children }: { value: DeskActionsApi; children: ReactNode }) {
-  return <DeskActionsContext.Provider value={value}>{children}</DeskActionsContext.Provider>;
+/**
+ * RX-Z #12: antes el contexto era UN objeto con `now: live.clock` y se rehacía con cada tick (30 s): todas las filas
+ * memoizadas de las dos caras se re-renderizaban por el contexto aunque nada suyo cambiara. Ahora hay dos contextos:
+ * el estable (esta función conserva la identidad mientras sus campos sean los mismos) y `pendingIds`, que solo cambia
+ * cuando sale o vuelve una acción. El `now` deja de viajar por contexto: el menú ⋯ lo pide con `getNow()` al abrirse.
+ * Pura para el test: `prev` es el valor del render anterior.
+ */
+export function stableDeskActions(
+  prev: DeskActionsStable | null,
+  api: Pick<DeskActionsApi, "viewer" | "dayKey" | "practitionerName" | "run" | "collect">,
+  getNow: () => Date
+): DeskActionsStable {
+  if (
+    prev &&
+    prev.viewer === api.viewer &&
+    prev.dayKey === api.dayKey &&
+    prev.practitionerName === api.practitionerName &&
+    prev.run === api.run &&
+    prev.collect === api.collect &&
+    prev.getNow === getNow
+  ) {
+    return prev;
+  }
+  return { viewer: api.viewer, dayKey: api.dayKey, practitionerName: api.practitionerName, run: api.run, collect: api.collect, getNow };
 }
 
-export function useDeskActions(): DeskActionsApi {
-  const ctx = useContext(DeskActionsContext);
-  if (!ctx) throw new Error("useDeskActions va adentro de <ReceptionDesk> (DeskActionsProvider)");
-  return ctx;
+const DeskStableContext = createContext<DeskActionsStable | null>(null);
+const DeskPendingContext = createContext<ReadonlySet<string>>(new Set());
+
+/**
+ * Recibe el `DeskActionsApi` plano (el shell y los tests de las caras lo arman igual que antes) y lo reparte en los
+ * dos contextos. El tick cambia `now` y, con él, este `value`; ninguno de los dos contextos cambia por eso.
+ */
+export function DeskActionsProvider({ value, children }: { value: DeskActionsApi; children: ReactNode }) {
+  const nowRef = useRef(value.now);
+  nowRef.current = value.now;
+  const getNow = useCallback(() => nowRef.current, []);
+  const stableRef = useRef<DeskActionsStable | null>(null);
+  const stable = stableDeskActions(stableRef.current, value, getNow);
+  stableRef.current = stable;
+  return (
+    <DeskStableContext.Provider value={stable}>
+      <DeskPendingContext.Provider value={value.pendingIds}>{children}</DeskPendingContext.Provider>
+    </DeskStableContext.Provider>
+  );
+}
+
+export function useDeskActions(): DeskActions {
+  const stable = useContext(DeskStableContext);
+  const pendingIds = useContext(DeskPendingContext);
+  if (!stable) throw new Error("useDeskActions va adentro de <ReceptionDesk> (DeskActionsProvider)");
+  return { ...stable, pendingIds };
 }
 
 /** «María G., 10:30»: cómo se nombra una fila en los aria-label (mismo formato que las cards del Tablero). */
@@ -194,6 +246,8 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
   const b = entry.row;
   const items = deskMenuItems(entry, api.viewer, api.dayKey);
   const [open, setOpen] = useState(false);
+  // El reloj al abrir el menú (para «Deshacer (quedan N')»): el menú vive segundos, no hace falta seguir el tick.
+  const [openedAt, setOpenedAt] = useState<Date | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -253,7 +307,7 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
   }, [open, close]);
 
   const time = fmtHour(new Date(b.scheduledFor));
-  const hint = undoHint(b, api.now);
+  const hint = open && openedAt ? undoHint(b, openedAt) : null;
   const actionItems = items.filter((i) => i.kind !== "agenda");
 
   const menu = (
@@ -325,7 +379,14 @@ export function DeskMenu({ entry }: { entry: DeskEntry }) {
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label={`Más acciones: ${deskRowLabel(b)}`}
-        onClick={() => (open ? close(true) : setOpen(true))}
+        onClick={() => {
+          if (open) {
+            close(true);
+            return;
+          }
+          setOpenedAt(api.getNow());
+          setOpen(true);
+        }}
       >
         <DotsIcon />
       </button>

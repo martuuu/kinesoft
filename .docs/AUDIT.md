@@ -997,6 +997,12 @@ PL-0..PL-3 y 5 fixers. Sin migraciones nuevas (M8 y M8b ya escritas). Tabla «Ha
 candado, VX), el `Switch` de 52×30 (PF/MB) y **a3#12** (permisos de los ADMIN
 que M8b convierte, decide Martin caso por caso). Excepción nueva en §5.50 (export del Titular sin agenda).
 
+**Ronda 26 — RX: escritorio de Recepción (15/16-oct-2026):** RX-0 (`a762130`) y RX-1 (`ee97af3`) commiteados; RX-2
+(caras «Lista y panel» y «Flujo») + revisor RX-Z (14 hallazgos) + 3 fixers + integrador sin commitear. **Sin
+migración** (`agendaPrefs.receptionLayout`). Tabla «Hallazgos y filas de RX» en §2. Abiertos: nombres cortados en «Por
+cobrar» a 1024 con sidebar (PF/MB) y sidebar sin modo móvil a 390 (MB); `toggleBilling` sin `billing.manage` sigue en
+C0 (`plf-toggle-billing-sin-cap`), RX solo esconde «Cobrar» en la UI.
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -1945,11 +1951,11 @@ auditoría) + el revisor del diff (b). Commiteado en 74642cf; sin migraciones nu
 
 PL-F = recorte de UI sin funcionalidad (regla de Martin del 16-oct: «todo lo que quede sin funcionalidad, se quita»;
 barrido de 14 ítems) + medio de pago del pago SaaS (**M8c** `saas_payment_method`, migración nueva, ver RUNBOOK) +
-Soporte para todos. Todo en local, sin commitear. H/M/B = ítems del barrido.
+Soporte para todos. Commiteado (`cb99c06` M8c, `7e97ba5` UI). H/M/B = ítems del barrido.
 
 | Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
 |---|---|---|---|---|---|
-| M8c saas-payment-method | media | PL (plata, migración) | prisma/migrations/…_saas_payment_method · lib/saas-billing-types.ts · receipt-upload-drawer.tsx · record-payment-drawer.tsx · billing-panel.tsx · ledger-view.tsx | 🟢 PL-F (M8c commiteada en cb99c06; UI sin commitear) | Medio de pago en columna (ADR-016), obligatorio en «Informar pago» y «Registrar pago»; pagos viejos «Sin informar»; cargo sugerido = último impago. 🟡 hasta prod (M8c + deploy) |
+| M8c saas-payment-method | media | PL (plata, migración) | prisma/migrations/…_saas_payment_method · lib/saas-billing-types.ts · receipt-upload-drawer.tsx · record-payment-drawer.tsx · billing-panel.tsx · ledger-view.tsx | 🟢 PL-F (M8c `cb99c06`, UI `7e97ba5`) | Medio de pago en columna (ADR-016), obligatorio en «Informar pago» y «Registrar pago»; pagos viejos «Sin informar»; cargo sugerido = último impago. 🟡 hasta prod (M8c + deploy) |
 | H1 reportes-placeholder | alta (visibilidad) | PL-F | lib/nav.ts · app/(app)/reportes/page.tsx · components/plataforma/tenants/labels.ts | 🟢 PL-F | Fuera del nav/⌘K; `/reportes` redirige a `/dashboard`; Plataforma no muestra el chip |
 | H2 cobrar-proximamente | alta (visibilidad) | PL-F | components/agenda/reception/reception-row.tsx | 🟢 PL-F | Botón «Cobrar» deshabilitado quitado (conectarlo es C0/RX) |
 | H3 topbar-de-mentira | alta (visibilidad) | PL-F | components/layout/topbar.tsx · topbar-account-menu.tsx · app-shell.tsx · app/(app)/layout.tsx | 🟢 PL-F | Búsqueda abre ⌘K, campana real, avatar del usuario de la sesión con menú (Apariencia, Ayuda y soporte, turnero propio, Seguridad, Cambiar de consultorio, Cerrar sesión). En el dashboard con barra superior, botón «Ajustes» |
@@ -1967,6 +1973,31 @@ Soporte para todos. Todo en local, sin commitear. H/M/B = ítems del barrido.
 | plf-soporte-para-todos | media | PL | components/global/profile-menu.tsx · configuracion-client.tsx · support-access-panel.tsx · lib/support-threads*.ts | 🟢 PL-F | Decisión de Martin (16-oct): Mensajes y Accesos de soporte para cualquier miembro (desde el menú de perfil / del topbar); los accesos son solo lectura. Riesgo aceptado: cualquier miembro ve el email del superadmin y el motivo del acceso (sin datos de pacientes) |
 | plf-terminar-acceso-soporte | media | PL (soporte) | components/configuracion/panels/support-access-panel.tsx | 🟡 **decide Martin** | Desde el consultorio no se puede terminar un acceso de soporte abierto (termina cuando soporte sale o cierra sesión; la RLS de M7 es FOR SELECT). Recomendado: action con `tenant.admin` que llame a `closeOpenSessionsInTx` |
 | plf-toggle-billing-sin-cap | alta | **C0** (permisos, plata) | lib/bookings.ts:1686 (`toggleBilling`) | 🔴 abierto · **decide Martin** | `toggleBilling` no exige `billing.manage`: un PRACTITIONER con acceso full al paciente marca cobros (copago/obra social) como pagados. Recomendado: `requireCapability("billing.manage")` (o la capability que decida Martin para el profesional que cobra en mano), con test de rol; `lib/bookings.ts` es serial |
+
+### Hallazgos y filas de RX (15/16-oct-2026)
+
+RX = `/sala` con tres caras elegibles en Apariencia → Recepción (Tablero, Lista y panel, Flujo; ADR-019) y los hallazgos
+de VX0-b que tocaban Recepción. RX-Z = revisor del diff con capturas a 1366/1024/764/390 × 680 de alto; sus 14 hallazgos
+los cerraron los fixers FX-A (Lista), FX-B (Flujo) y FX-C (shell) y el integrador. Sin migración.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| G1 recepcion-demora-dia-pasado | alta | RX | components/agenda/reception/reception-view.tsx · reception-row.tsx · lib/reception-view-state.ts | 🟢 RX-1f | Fuera de hoy no hay demora: estado neutro y contadores sin `warn` (test de `reception-view-state`); link «Abrir escritorio de Recepción» → `/sala` |
+| R1 sala-fecha-De-capitalizado | media | RX | components/sala/sala-day-label.ts | 🟢 RX-1a + RX-Z | `salaDayLabel` capitaliza solo la primera letra; desde RX-Z es un solo módulo que usan el Tablero y el escritorio (el header del escritorio tenía su copia) |
+| R2 sala-vacio-pobre | media | RX | components/sala/sala-client.tsx · sala-header.tsx | 🟢 RX-1a | Vacío con acciones; el contador «Llamados» se resalta solo con valor > 0 (`data-active`) |
+| S2 engranaje-tapa-contenido | alta | PL-F | components/layout/tweaks-panel.tsx | 🟢 PL-F | Apariencia arranca minimizada y sin engranaje flotante; en `/sala` se abre con «Vista» del header del escritorio |
+| rxz-lista-paciente-desaparece | alta | RX-Z | components/sala/desk/desk-list.tsx | 🟢 FX-A | `box-sizing` en celdas y columnas compactas (profesional a la sublínea): el nombre del paciente ya no se pierde a 1024 |
+| rxz-lista-390-tag-tapado | alta | RX-Z | components/sala/desk/desk-list.tsx | 🟢 FX-A | A 390 el estado va en su fila y las acciones abajo |
+| rxz-llamado-0-espera | alta | RX-Z | lib/reception-desk-state.ts (`minutesSince`) · desk-list.tsx · desk-flow.tsx | 🟢 FX-A + integrador | La espera del llamado se mide desde `arrivedAt`; `minutesSince` es uno solo para Lista y Flujo (con test); «esperó 0'» → «—» |
+| rxz-flujo-strip-recortada | alta | RX-Z | components/sala/desk/desk-flow.tsx | 🟢 FX-B | La tira de profesionales no se encoge |
+| rxz-panel-680 / chips / stack sala | media | RX-Z | components/sala/desk/desk-list.tsx | 🟢 FX-A | Panel en tres filas proporcionales a 680 de alto, total de «Por cobrar» en el header, chips que envuelven, acciones de la sala en su fila |
+| rxz-busqueda-todo-lima / compacto-764 / memo-filas | media | RX-Z | components/sala/desk/desk-flow.tsx | 🟢 FX-B | Sin `data-hit`; avatar chico oculto y timeline de 200 px en contenedores ≤ 860; filas memoizadas por firma |
+| rxz-atajos-con-apariencia / contexto-por-tick / menu-44 | media | RX-Z | components/sala/desk/reception-desk.tsx · desk-actions.tsx · desk-css.ts | 🟢 FX-C | Los atajos solo con foco en el body o en el escritorio; contexto estable separado del vivo; ítems del menú de 44 px en puntero grueso o < 720 px |
+| rxz-now-line-contraste | media | RX-Z | app/globals.css (`--now-line`) · components/agenda/grid/now-line.tsx · desk-list/desk-flow | 🟢 FX-C | Token único `--now-line: #c2410c` (5,2:1 con blanco; el anterior #E4572E daba 3,6:1); ningún otro archivo usa el hex como color |
+| rxz-blancos-literales | baja | RX-Z | components/sala/desk/desk-css.ts · reception-view.tsx | 🟢 FX-C | Los fondos `#fff` de `desk-css.ts` y del link de `reception-view` → `var(--card-bg)`; el verde `rgba(27,112,75,…)` → token. Quedan grises `rgba(15,30,51,…)` de bordes, como en el resto de la app |
+| rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🔴 abierto | A 1024 con sidebar abierto (232 px), los nombres largos de «Por cobrar» se cortan con elipsis |
+| rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🔴 abierto | A 390 el sidebar no tiene modo móvil (drawer); el escritorio ya cae a una columna |
+| rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | ↪ ver `plf-toggle-billing-sin-cap` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
 
 ### Resumen del checklist (al 2026-09-29)
 

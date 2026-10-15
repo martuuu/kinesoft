@@ -57,6 +57,20 @@ export function undoCheckOutcome(
   return entry.row.updatedAt !== check.prevUpdatedAt && entry.state === check.to ? "saved" : "dropped";
 }
 
+/**
+ * ¿El atajo es para el escritorio? Solo si el foco está en el body (nadie enfocado) o adentro de `.desk-frame`
+ * (RX-Z #11): con Apariencia abierta (que no es modal) o el foco en el sidebar, `/` o `N` eran del escritorio igual
+ * y se robaban la tecla. Pura para el test: `frame` es el `.desk-frame` (o null antes del mount).
+ */
+export function deskShortcutInScope(
+  target: EventTarget | null,
+  body: unknown,
+  frame: { contains: (n: Node | null) => boolean } | null
+): boolean {
+  if (target != null && target === body) return true;
+  return frame != null && target != null && frame.contains(target as Node);
+}
+
 function isEditable(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
   return t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT";
@@ -79,7 +93,8 @@ function isEditable(t: EventTarget | null): boolean {
  *   - `DeskActionsProvider`: el botón primario y el menú ⋯ de cada fila llaman acá sin callbacks por props.
  *
  * Atajos (`deskShortcut`, puro): `/` enfoca el buscador, `N` va a «Nuevo turno», `Esc` limpia el buscador. Nada con
- * Ctrl/Cmd/Alt, con un modal, drawer o menú abierto, ni escribiendo en un campo.
+ * Ctrl/Cmd/Alt, con un modal, drawer o menú abierto, escribiendo en un campo, ni con el foco fuera del escritorio
+ * (`deskShortcutInScope`: Apariencia, sidebar).
  *
  * PD-13: las filas ya llegan limpias del server (`toSalaWire`/`fromSalaWire`) y acá tampoco se lee nada clínico.
  */
@@ -201,6 +216,7 @@ export function ReceptionDesk({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.repeat) return;
+      if (!deskShortcutInScope(e.target, document.body, frameRef.current)) return;
       const overlayOpen = document.querySelector("[aria-modal], [role=menu], [role=dialog]") != null;
       const s = deskShortcut(e.key, {
         typing: isEditable(e.target),
@@ -223,10 +239,9 @@ export function ReceptionDesk({
     return () => window.removeEventListener("keydown", onKey);
   }, [router]);
 
-  const api = useMemo<DeskActionsApi>(
-    () => ({ viewer, dayKey: live.dayKey, now: live.clock, pendingIds: live.pendingIds, practitionerName, run, collect }),
-    [viewer, live.dayKey, live.clock, live.pendingIds, practitionerName, run, collect]
-  );
+  // Plano a propósito: `DeskActionsProvider` lo reparte en un contexto estable (sin `now`) y otro de `pendingIds`, así
+  // el tick de 30 s no re-renderiza las filas memoizadas (RX-Z #12).
+  const api: DeskActionsApi = { viewer, dayKey: live.dayKey, now: live.clock, pendingIds: live.pendingIds, practitionerName, run, collect };
 
   const faceProps = { live, query, proFilter, onProFilter: setProFilter };
 

@@ -33,7 +33,8 @@ vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
 }));
 
-import { SalaClient, salaDayLabel } from "@/components/sala/sala-client";
+import { SalaClient } from "@/components/sala/sala-client";
+import { salaDayLabel } from "@/components/sala/sala-day-label";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { deskViewer } from "@/lib/reception-desk-state";
 import { SALA_CSS } from "@/components/sala/sala-css";

@@ -25,6 +25,7 @@ import { SalaBoard } from "./sala-board";
 import { SALA_CSS } from "./sala-css";
 import { useSalaLive, type SalaLiveWithBoard } from "./use-sala-live";
 import { ReceptionDesk } from "@/components/sala/desk/reception-desk";
+import { salaDayLabel } from "./sala-day-label";
 
 /**
  * Cliente de /sala. Los datos vivos (filas de HOY, optimista con rollback,
@@ -237,19 +238,4 @@ function SalaBoardFace({ live, initialGroupBy }: { live: SalaLiveWithBoard; init
       )}
     </div>
   );
-}
-
-/**
- * «Miércoles, 14 de octubre» (VX0-b R1): antes el CSS hacía `capitalize` y
- * salía «Miércoles, 14 De Octubre». Mediodía AR del día: ningún huso del host
- * lo corre de fecha; `timeZone` explícito igual (AGENTS §4).
- */
-export function salaDayLabel(dayKey: string): string {
-  const s = new Date(`${dayKey}T12:00:00-03:00`).toLocaleDateString("es-AR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "America/Argentina/Buenos_Aires",
-  });
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }

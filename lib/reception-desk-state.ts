@@ -199,6 +199,16 @@ export function minutesUntil(row: Pick<BookingDTO, "scheduledFor">, now: Date): 
   return Math.ceil((ms(row.scheduledFor) - now.getTime()) / MIN_MS);
 }
 
+/**
+ * Minutos enteros desde `iso` (llegada, entrada al box); 0 si falta o es futuro. Uno solo para Lista y panel y Flujo
+ * (RX-Z): cada cara tenía su copia y el revisor encontró el «0' espera» del llamado por medir desde el campo
+ * equivocado; con un único helper la regla de redondeo (piso, nunca negativo) no puede divergir entre caras.
+ */
+export function minutesSince(iso: string | null | undefined, now: Date): number {
+  if (!iso) return 0;
+  return Math.max(0, Math.floor((now.getTime() - ms(iso)) / MIN_MS));
+}
+
 /** Próximos 30' / Llegan pronto: los demorados + los por llegar que empiezan en ≤ 30'. Cronológico. */
 export function soonEntries<E extends ReceptionEntry<BookingDTO>>(es: ReadonlyArray<E>, now: Date): E[] {
   return chronological(

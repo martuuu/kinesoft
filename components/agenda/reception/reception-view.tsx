@@ -298,7 +298,7 @@ const RECEPTION_CSS = `
 .rcp { display: grid; gap: 12px; }
 .rcp-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .rcp-head { display: flex; justify-content: flex-end; }
-.rcp-desk-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--sky-700); border: 1px solid rgba(15,30,51,0.12); background: #fff; text-decoration: none; }
+.rcp-desk-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--sky-700); border: 1px solid rgba(15,30,51,0.12); background: var(--card-bg); text-decoration: none; }
 .rcp-desk-link:hover { border-color: var(--sky-700); }
 .rcp-desk-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 .rcp-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }

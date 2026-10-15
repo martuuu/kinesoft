@@ -66,6 +66,9 @@
   --st-confirmed-fg: #1f4fbe;
   --st-completed-bg: rgba(54, 179, 126, 0.14);
   --st-completed-fg: #1b704b; /* #1f7a52 de antes daba 4.4:1 sobre el panel */
+  /* [RX-Z] Borde del botón «Atendido» del escritorio de Recepción: el -fg al 30%
+     (era un rgba literal en desk-css.ts). Decorativo: no lleva texto encima. */
+  --st-completed-border: rgba(27, 112, 75, 0.3);
   --st-noshow-bg: rgba(255, 176, 32, 0.18);
   --st-noshow-fg: #9a5b00;
   --st-cancelled-bg: rgba(15, 30, 51, 0.05);
@@ -102,6 +105,11 @@
   --rc-late-fg: #9a5b00;
   --rc-late-border: rgba(154, 91, 0, 0.35);
   --card-bg: #ffffff;
+  /* [RX-Z] Línea de «ahora» (grilla de la agenda y escritorio de Recepción en
+     /sala). Era #E4572E en la grilla, que con texto blanco encima (la etiqueta
+     de la hora) da 3.6:1 y no llega a AA; #c2410c da 5.2:1 con blanco y sobre
+     blanco. Literal: no cambia con la paleta del tenant. */
+  --now-line: #c2410c;
 
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-bg-strong: rgba(255, 255, 255, 0.72);

@@ -10,6 +10,9 @@ import { GUTTER_WIDTH } from "./time-gutter";
  * `lib/datetime-ar.ts`): nunca la hora del host. La vista NO tiene reloj
  * propio: `now` llega por props y el caller decide cada cuánto refrescarlo.
  *
+ * Color: `--now-line` de globals.css (RX-Z), el mismo del escritorio de
+ * Recepción. Antes la línea y el punto eran #E4572E y la hora #C2410C.
+ *
  * Decorativa para lectores de pantalla (`aria-hidden`): el `rowheader` de la
  * fila ya dice "(ahora)".
  */
@@ -42,7 +45,7 @@ export function NowLine({ ratio, time }: { ratio: number; time: string }) {
           paddingRight: 6,
           fontSize: 9.5,
           fontWeight: 700,
-          color: "#C2410C",
+          color: "var(--now-line)",
         }}
       >
         {time}
@@ -53,7 +56,7 @@ export function NowLine({ ratio, time }: { ratio: number; time: string }) {
           left: GUTTER_WIDTH,
           right: 0,
           top: 0,
-          borderTop: "2px solid #E4572E",
+          borderTop: "2px solid var(--now-line)",
         }}
       />
       <span
@@ -64,7 +67,7 @@ export function NowLine({ ratio, time }: { ratio: number; time: string }) {
           width: 8,
           height: 8,
           borderRadius: "50%",
-          background: "#E4572E",
+          background: "var(--now-line)",
         }}
       />
     </div>

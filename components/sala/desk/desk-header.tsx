@@ -5,16 +5,7 @@ import { IconPlus, IconSearch, IconSettings, IconX } from "@/components/ui/icons
 import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { fmtHour } from "@/components/agenda/agenda-utils";
 import type { DeskKpis } from "@/lib/reception-desk-state";
-
-/** «miércoles 15 de octubre» del día AR (mediodía AR: ningún huso lo corre de día). */
-export function deskDayLabel(dayKey: string): string {
-  return new Date(`${dayKey}T12:00:00-03:00`).toLocaleDateString("es-AR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "America/Argentina/Buenos_Aires",
-  });
-}
+import { salaDayLabel } from "@/components/sala/sala-day-label";
 
 /**
  * Header del escritorio de Recepción (RX-1b, prototipo `.top`): «Recepción», fecha, «En vivo», KPIs, buscador con
@@ -24,6 +15,7 @@ export function deskDayLabel(dayKey: string): string {
  *   (ámbar si hay) y Terminados n/N. En compacto se esconden (también la fecha); en una columna van 2×2.
  * - «Nuevo turno» navega a `/agenda?new=1`, que abre el modal de alta de la agenda (RX-D3: el drawer «primer hueco
  *   libre» del prototipo va a backlog). Lo hace el shell; acá solo el botón.
+ * - Fecha: `salaDayLabel`, la misma del Tablero («Jueves, 15 de octubre»).
  * - Reloj HH:MM AR del reloj único del hook (tick de 30 s): no tiene timer propio.
  * - «Vista» abre Apariencia (donde se elige la cara de /sala). Solo se dibuja si hay a dónde ir (`onOpenView`): sin
  *   el provider de Apariencia (tests, demo), no hay botón que no haga nada.
@@ -59,7 +51,7 @@ export function DeskHeader({
     <header className="desk-head">
       <div className="desk-title">
         <h1 className="desk-h1">Recepción</h1>
-        <span className="desk-date">{deskDayLabel(dayKey)}</span>
+        <span className="desk-date">{salaDayLabel(dayKey)}</span>
         <LiveIndicator />
       </div>
 

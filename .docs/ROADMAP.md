@@ -36,8 +36,7 @@
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
 **Estado de PL (16-oct): PL ✅ completo (PL-A..PL-Z) y PL-F ✅.** Commiteados: PL-A (`68b26f0`) · PL-0 M8 (`6b1c50d`) ·
-PL-1 (`14eb013` + `7bcfc1b`) · PL-2/M8b/PL-3/PL-Z (`74642cf`) · PL-F0 M8c `saas_payment_method` (`cb99c06`); **PL-F1 en el
-working tree**. **Prod:** M8 → M8b → M8c → deploy, en ese orden (RUNBOOK «Orden de prod de PL»).
+PL-1 (`14eb013` + `7bcfc1b`) · PL-2/M8b/PL-3/PL-Z (`74642cf`) · PL-F0 M8c `saas_payment_method` (`cb99c06`); PL-F1 (`7e97ba5`). **Prod:** M8 → M8b → M8c → deploy, en ese orden (RUNBOOK «Orden de prod de PL»).
 Qué trae PL: 2FA por usuario (TOTP + email + recuperación, step-up), cobros manuales sin Mercado Pago (cron diario
 único, comprobantes, `SAAS_BILLING_MODE=off`), mensajes y leads, Google + Facebook, salas/sala de espera por plan,
 turnero por profesional, Configuración → Plan y uso / Facturación / Soporte, equipo con «Atiendo pacientes» y permisos,
@@ -51,8 +50,26 @@ funcionan; textos que prometían cosas inexistentes quitados ([QA «PL-F»](QA.m
 Quedan para Martin: **a3#12** (ADMIN que M8b convierte), **a2#7** (anti-replay del TOTP, a verificar),
 **plf-toggle-billing-sin-cap** (C0: `toggleBilling` sin `billing.manage`) y **plf-terminar-acceso-soporte**. a1#3 quedó
 decidido (ADR-016: bajada desde el próximo período, subida con proporcional, fecha fija) y se implementa antes de
-prender el cobro. **Siguiente:** **RX** (Recepción A/B seleccionables en Apariencia, §20.19) → EV2 → VX → ES4 → PF →
-DIR → MB.
+prender el cobro.
+
+**RX ✅ (15/16-oct) — Escritorio de Recepción** (§20.19): `/sala` con tres caras elegibles en Apariencia → Recepción
+(Tablero, Lista y panel, Flujo; ADR-019), sin migración (`agendaPrefs.receptionLayout`), `useSalaLive` compartido,
+token `--now-line`, Recepción de la agenda sin demora fuera de hoy (G1) y con link al escritorio. RX-0 (`a762130`) y
+RX-1 (`ee97af3`) commiteados; RX-2 + RX-Z en el working tree ([QA «RX»](QA.md), [AUDIT «RX»](AUDIT.md)). Abiertos:
+nombres de «Por cobrar» cortados a 1024 con sidebar (PF/MB) y sidebar sin modo móvil (MB).
+Decisiones RX con default (para Martin):
+- **RX-D1** dónde vive: `/sala` con tres caras; `/agenda?view=reception` queda.
+- **RX-D2** cara por defecto: Tablero para todos. *Recomendado:* después del QA, «Lista y panel» para quien tiene
+  `agenda.operateAll` (una línea).
+- **RX-D3** «Nuevo turno» (`N`) navega a `/agenda?new=1`; el drawer «primer hueco libre» va a backlog (C/MB).
+- **RX-D4** «Cobrar» solo con `billing.manage` y sin medio de pago (sería migración en `Booking`); que cobre la
+  Secretaria y el medio de pago del copago → C0, junto con `plf-toggle-billing-sin-cap`.
+- **RX-D5** `sala-tv.html` (pantalla pública) fuera de RX → bloque D.
+- **RX-D6** Apariencia arranca minimizada; en `/sala` se abre con «Vista». **RX-D7** sin riel navy (se usa el
+  sidebar). **RX-D8** el nav sigue diciendo «Sala de espera». **RX-D9** la franja muestra solo profesionales con
+  turnos hoy; clic = filtrar por uno. **RX-D10** sin flag «1.ª vez» (no hay dato).
+
+**Siguiente:** **EV2** (Evoluciones, M9) → VX → ES4 → PF → DIR → MB.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,

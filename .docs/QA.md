@@ -1568,7 +1568,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ## PL-F · UI sin funcionalidad, medio de pago y Soporte para todos (15/16-oct-2026)
 
-> Sin commitear (M8c ya está en cb99c06). `TZ=UTC`, M8 + M8b + **M8c** aplicadas en local y `SAAS_BILLING_MODE=manual`
+> Commiteado: M8c en `cb99c06`, la UI en `7e97ba5`. `TZ=UTC`, M8 + M8b + **M8c** aplicadas en local y `SAAS_BILLING_MODE=manual`
 > con `SAAS_BILLING_TRANSFER_INFO` para lo de cobros. Regla de Martin (16-oct): «todo lo que quede sin funcionalidad,
 > se quita». Hallazgos en [AUDIT «PL-F»](AUDIT.md).
 
@@ -1600,3 +1600,35 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Bloquear un día con turnos: «El paciente no recibe aviso: avisale vos.» (sin «todavía» ni «llega más adelante»).
 - [ ] Plan sin plantillas (Individual): Plantillas muestra solo el aviso del plan, sin el botón «Nueva plantilla» deshabilitado.
 
+
+## RX · Escritorio de Recepción (15/16-oct-2026)
+
+> RX-0 (`a762130`) y RX-1 (`ee97af3`) commiteados; RX-2 + fixes del revisor RX-Z sin commitear. **Sin migración**: la
+> cara se guarda en `agendaPrefs.receptionLayout` (preferencias de usuario). `TZ=UTC`. **Necesita turnos de hoy en
+> local** (3+ profesionales, salas, estados variados): el agente no corre seeds, los carga Martin. Hallazgos en
+> [AUDIT «RX»](AUDIT.md); decisiones RX-D1..D10 en el [ROADMAP](ROADMAP.md).
+
+### Elegir la cara
+- [ ] Apariencia → «Recepción» ofrece tres caras de `/sala`: **Tablero** (la de siempre, default), **Lista y panel** y **Flujo**. Con `/sala` abierta, cambiar de cara la cambia sin recargar.
+- [ ] Recargar: la cara elegida se mantiene; en otro navegador con el mismo usuario, también (se guarda en el server).
+- [ ] Desde el escritorio (Lista o Flujo), «Vista» del header abre Apariencia; con Apariencia abierta, tipear en sus controles **no** dispara los atajos del escritorio.
+
+### Operar desde el escritorio (Lista y panel, y Flujo)
+- [ ] Llegó → Llamar (aparece la banda de llamado) → En atención → Atendido → Deshacer, todo desde el escritorio. Una segunda pestaña con `/sala` (cualquier cara) lo ve en vivo, o en menos de 60 s con el driver realtime en off.
+- [ ] El llamado muestra los minutos **desde que llegó** (no «0' espera»); quien pasó al box sin esperar muestra «—», no «esperó 0'».
+- [ ] Atajos: `/` enfoca el buscador; `N` abre `/agenda?new=1`; `Esc` limpia el buscador. Ninguno se dispara mientras se escribe en un input.
+- [ ] Buscar un paciente filtra las filas sin pintar todo de lima.
+- [ ] La línea de «ahora» se ve al abrir y usa el mismo naranja que la de la agenda.
+
+### Permisos
+- [ ] Como **Secretaria**: no aparecen «Cobrar» ni la card/carril «Por cobrar»; en su lugar se ve «En atención».
+- [ ] Como **Titular o Admin** (permiso de cobros, `billing.manage`): «Cobrar» registra el cobro y la fila sale de «Por cobrar»; el total del header de «Por cobrar» baja.
+
+### Layout (en Chrome, ventana de app o PWA)
+- [ ] **1366×680** y **1024×680**, en Lista y en Flujo, con el sidebar **abierto y cerrado**: sin scroll de página (cada columna scrollea por dentro), la tira de profesionales no se recorta y ninguna fila pierde el nombre del paciente.
+- [ ] A 1024 con sidebar abierto, «Por cobrar» puede cortar nombres largos (abierto, va a PF/MB): anotar si molesta.
+- [ ] **390** (móvil): una sola columna, el estado no tapa el nombre y las acciones bajan a su propia fila; los ítems del menú de acciones tienen 44 px de alto. (El sidebar todavía no tiene modo móvil: abierto, MB.)
+
+### Recepción de la agenda
+- [ ] `/agenda?view=reception` en un día **pasado**: ninguna fila dice «Demorado» y los contadores no se ponen en ámbar (G1).
+- [ ] Arriba de la lista está el link «Abrir escritorio de Recepción →» que lleva a `/sala`.

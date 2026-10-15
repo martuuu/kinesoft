@@ -209,6 +209,31 @@ describe("[SV03u] estado de Recepción/Sala --rc-* (C-SV10)", () => {
   });
 });
 
+describe("[RX-Z] línea de «ahora» --now-line", () => {
+  // Reemplaza #E4572E de la grilla (3.6:1 con la hora en blanco encima: no
+  // llegaba a AA) y los #c2410c sueltos del escritorio de Recepción.
+  it("es hex literal, AA con texto blanco encima y como texto sobre blanco y --bg-panel", () => {
+    const v = tokenValue("--now-line");
+    expect(v).toMatch(/^#[0-9a-f]{6}$/i);
+    const c = parseColor(v!).rgb;
+    expect(contrast(WHITE, c)).toBeGreaterThanOrEqual(AA);
+    expect(contrast(c, PANEL)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("ninguna paleta [data-palette] lo redefine y la grilla ya no usa #E4572E", () => {
+    const palettes = Array.from(CSS.matchAll(/\[data-palette="[^"]+"\]\s*\{([^}]*)\}/g), (m) => m[1]);
+    for (const body of palettes) expect(body).not.toMatch(/--now-line/);
+    // Sin comentarios: el comentario del archivo cuenta qué hex había antes.
+    const nowLine = readFileSync(join(ROOT, "components/agenda/grid/now-line.tsx"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(nowLine).not.toMatch(/#E4572E|#C2410C/i);
+    expect(nowLine).toContain("var(--now-line)");
+  });
+
+  it("--st-completed-border es literal", () => {
+    expect(() => parseColor(tokenValue("--st-completed-border")!)).not.toThrow();
+  });
+});
+
 describe("[SV03u] clases de motion en CSS (C-SV10)", () => {
   it("define .k-live-badge, .k-live-dot, .k-flash, .k-toast-progress y sus @keyframes", () => {
     for (const sel of [".k-live-badge", ".k-live-dot", ".k-flash", ".k-toast-progress", ".k-arrival-ring"]) {
