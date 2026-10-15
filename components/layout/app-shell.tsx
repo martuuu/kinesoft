@@ -45,6 +45,8 @@ import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher
  * PL-F1c: `userName` (= `actor.practitionerName`) es el avatar y el menú de cuenta de la barra superior. El panel
  * «Apariencia» (ex Tweaks) arranca cerrado y ya no deja un engranaje flotante que tapaba el pie de los Drawers: se
  * abre desde el pie del sidebar o desde el menú de cuenta de la barra superior (`openAppearance`).
+ *
+ * RX-1e: `canReception` habilita la sección «Recepción» de Apariencia (la cara de `/sala`); el módulo lo mira el panel.
  */
 export function AppShell({
   children,
@@ -121,7 +123,7 @@ export function AppShell({
                 )}
                 <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
               </div>
-              <TweaksPanel />
+              <TweaksPanel canReception={caps.includes("agenda.reception")} />
               <CommandPalette />
             </div>
           </ArrivalAlerts>

@@ -159,3 +159,31 @@ const withRooms = [
   dto("sin", "09:30", { isOverbooked: false, roomId: null }),
   dto("archivada", "10:30", { isOverbooked: false, roomId: "room_vieja" }),
 ];
+
+describe("[RX-1f] G1 y link al escritorio", () => {
+  const render = (over: { now?: Date; canOperate?: boolean } = {}) =>
+    renderToStaticMarkup(
+      <ReceptionView dayKey={DAY} bookings={rows} practitioners={pr} now={over.now ?? NOW} canOperate={over.canOperate ?? true} onOpenBooking={noop} onChanged={noop} />
+    );
+  it("[RX-1f] día pasado: sin «Demorado», sin filas resaltadas ni contador en ámbar", () => {
+    const html = render({ now: new Date("2026-10-06T10:00:00-03:00") });
+    expect(html).toContain("Este día no es hoy");
+    expect(html).not.toContain("Demorado ");
+    // Atributos, no el selector del CSS embebido (`.rcp-counter[data-warn]`).
+    expect(html).not.toMatch(/ data-warn=/);
+    expect(html).not.toMatch(/ data-highlight=/);
+    expect(html).toContain("Sin marcar");
+    expect(html).toMatch(/Demorados<\/div><div class="rcp-counter-value k-mono">0</);
+  });
+  it("[RX-1f] hoy el demorado sigue destacado y el contador en ámbar", () => {
+    const html = render();
+    expect(html).toContain("Demorado 20&#x27;");
+    expect(html).toMatch(/ data-warn=/);
+    expect(html).toMatch(/ data-highlight=/);
+  });
+  it("[RX-1f] link «Abrir escritorio de Recepción» → /sala solo con agenda.reception + salaEspera", () => {
+    const html = render();
+    expect(html).toMatch(/<a [^>]*href="\/sala"[^>]*>[^<]*Abrir escritorio de Recepción/);
+    expect(render({ canOperate: false })).not.toContain("Abrir escritorio de Recepción");
+  });
+});

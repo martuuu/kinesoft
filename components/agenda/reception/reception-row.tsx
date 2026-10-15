@@ -13,7 +13,7 @@ import {
   type ReceptionEntry,
   type ReceptionState,
 } from "@/lib/reception-state";
-import { stateTagText, undoHint, waitText } from "@/lib/reception-view-state";
+import { stateTagText, undoHint, waitText, type ReceptionDayEntry } from "@/lib/reception-view-state";
 import { ARCHIVED_ROOM_LABEL, fmtHour, type BookingDTO } from "../agenda-utils";
 
 /**
@@ -97,7 +97,7 @@ export function ReceptionRow({
   onOpen,
   room,
 }: {
-  entry: ReceptionEntry<BookingDTO>;
+  entry: ReceptionDayEntry<BookingDTO>;
   /** Acciones a mostrar (ya filtradas por día con `visibleActions`). */
   actions: ReceptionAction[];
   practitioner: { name: string; initials: string } | null;
@@ -114,7 +114,7 @@ export function ReceptionRow({
   const time = fmtHour(new Date(b.scheduledFor));
   const guest = b.patientId == null;
   const who = `${b.patientName}, ${time}`;
-  const wait = waitText(b, entry.state, now);
+  const wait = waitText(b, entry.state, now, { today: !entry.offDay });
   const cancelled = entry.state === "cancelado";
   const plan = bookingPlanMarks(b);
   const primary = primaryAction(actions);

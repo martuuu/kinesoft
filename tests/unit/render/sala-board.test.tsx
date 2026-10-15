@@ -4,7 +4,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 // Red y server actions mockeadas (anti-false-green: se renderiza el SalaClient
 // real con el provider realtime real en su valor por defecto, `off`).
 vi.mock("@/lib/bookings", () => ({ listAgendaBookings: vi.fn(), markReceptionAction: vi.fn() }));
-vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn() }));
+vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
+// RX-1a: el escritorio (RX-1b) se reemplaza por un testigo que expone lo que SalaClient le pasa; acá se prueba
+// la elección de cara y el contrato `SalaLive`, no el escritorio (tiene su propio test).
+vi.mock("@/components/sala/desk/reception-desk", () => ({
+  ReceptionDesk: (p: {
+    live: { entries: unknown[]; rows: unknown[]; dayKey: string; viewer: { canCollect: boolean }; roomById: unknown };
+    layout: string;
+    viewer: { canCollect: boolean };
+  }) => (
+    <div
+      data-testid="desk"
+      data-layout={p.layout}
+      data-entries={p.live.entries.length}
+      data-rows={p.live.rows.length}
+      data-day={p.live.dayKey}
+      data-can-collect={String(p.viewer.canCollect)}
+      data-live-can-collect={String(p.live.viewer.canCollect)}
+      data-rooms={p.live.roomById ? Object.keys(p.live.roomById).join(",") : "none"}
+    />
+  ),
+}));
 vi.mock("@/lib/sala-bookings", () => ({ listSalaBookings: vi.fn() }));
 // El provider realtime real (valor por defecto `off`); su action de token es
 // "use server" (sesión, Prisma) y nunca se invoca con `off`.
@@ -13,7 +33,9 @@ vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
 }));
 
-import { SalaClient } from "@/components/sala/sala-client";
+import { SalaClient, salaDayLabel } from "@/components/sala/sala-client";
+import { TweaksProvider } from "@/components/layout/tweaks-context";
+import { deskViewer } from "@/lib/reception-desk-state";
 import { SALA_CSS } from "@/components/sala/sala-css";
 import SalaLoading from "@/app/(app)/sala/loading";
 import { salaViewer } from "@/lib/sala-board-state";
@@ -255,5 +277,69 @@ describe("[SV10a] /sala render", () => {
 
   it("reduced motion: el CSS apaga las transiciones de la card (el estado final se ve completo)", () => {
     expect(SALA_CSS).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^@]*\.sala-card, \.sala-btn,[^{]*\{ transition: none; \}/);
+  });
+});
+
+describe("[RX-1a] /sala elige la cara y comparte los datos vivos", () => {
+  it("board (default, sin provider ni initialLayout): el Tablero de siempre, sin escritorio", () => {
+    const html = render();
+    expect(html).toContain('class="sala-board k-scroll"');
+    expect(html).not.toContain('data-testid="desk"');
+    expect(render({ initialLayout: "board" })).toBe(html);
+  });
+
+  it.each(["list", "flow"] as const)("%s: monta el escritorio con SalaLive (todas las filas) y no el Tablero", (layout) => {
+    const html = render({ initialLayout: layout, viewer: deskViewer(null, ["agenda.viewAll", "agenda.reception", "agenda.operateAll", "billing.manage"]) });
+    expect(html).toContain(`data-layout="${layout}"`);
+    expect(html).not.toContain("sala-board");
+    expect(html).not.toContain('class="sala-call"');
+    // Todas las filas del día (el atendido también: el escritorio decide qué lista lo muestra).
+    expect(html).toContain(`data-entries="${ROWS.length}"`);
+    expect(html).toContain(`data-rows="${ROWS.length}"`);
+    expect(html).toContain(`data-day="${DAY}"`);
+    expect(html).toContain('data-can-collect="true"');
+    expect(html).toContain('data-live-can-collect="true"');
+    expect(html).toContain('data-rooms="r1,r2"');
+  });
+
+  it("un SalaViewer pelado no cobra; sin salas, roomById es null", () => {
+    const html = render({ initialLayout: "list", rooms: [] });
+    expect(html).toContain('data-can-collect="false"');
+    expect(html).toContain('data-rooms="none"');
+  });
+
+  it("Apariencia manda sobre initialLayout (cambio sin recargar)", () => {
+    const html = renderToStaticMarkup(
+      <TweaksProvider initialReceptionLayout="flow">
+        <SalaClient dayKey={DAY} initialNow={NOW} initialRows={ROWS} practitioners={PRACTITIONERS} rooms={ROOMS} viewer={SECRETARIA} initialGroupBy="practitioner" initialLayout="list" />
+      </TweaksProvider>
+    );
+    expect(html).toContain('data-layout="flow"');
+    const board = renderToStaticMarkup(
+      <TweaksProvider initialReceptionLayout="board">
+        <SalaClient dayKey={DAY} initialNow={NOW} initialRows={ROWS} practitioners={PRACTITIONERS} rooms={ROOMS} viewer={SECRETARIA} initialGroupBy="practitioner" initialLayout="flow" />
+      </TweaksProvider>
+    );
+    expect(board).toContain('class="sala-board k-scroll"');
+  });
+
+  it("[VX0-b R1] la fecha capitaliza solo la primera letra (sin «De»)", () => {
+    expect(salaDayLabel(DAY)).toBe("Miércoles, 14 de octubre");
+    expect(render()).toContain('<div class="sala-eyebrow">Miércoles, 14 de octubre</div>');
+    expect(SALA_CSS).not.toContain("capitalize");
+  });
+
+  it("[VX0-b R2] vacío del día: ícono, explicación y salidas reales; BILLING sin «Nuevo turno»", () => {
+    const vacio = render({ initialRows: [] });
+    expect(vacio).toContain('class="sala-empty-icon"');
+    expect(vacio).toContain('href="/agenda"');
+    expect(vacio).toContain('href="/agenda?new=1"');
+    expect(vacio).toContain("Nuevo turno");
+    const billing = render({ initialRows: [], viewer: BILLING });
+    expect(billing).toContain("Ir a la agenda");
+    expect(billing).not.toContain("Nuevo turno");
+    // «Llamados» resaltado solo con valor > 0 (el header marca `data-active`).
+    expect(SALA_CSS).toMatch(/\.sala-counter\[data-counter=llamados\]\[data-active\] \{/);
+    expect(SALA_CSS).not.toMatch(/\.sala-counter\[data-counter=llamados\] \{/);
   });
 });

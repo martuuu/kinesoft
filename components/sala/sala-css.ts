@@ -31,6 +31,11 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  * 360 px: `.sala-board` pasa a columna, sin scroll horizontal ni alto fijo
  * (la página scrollea), y el header deja de ser sticky para no tapar media
  * pantalla.
+ *
+ * VX0-b: la fecha del eyebrow ya viene capitalizada solo en la primera letra
+ * (`salaDayLabel`; con `text-transform: capitalize` salía «14 De Octubre»), y
+ * el contador «Llamados» se resalta solo con `data-active` (valor > 0): en 0
+ * el borde y el número azules llamaban la atención sin motivo (R2).
  */
 const EASE = `cubic-bezier(${EASE_OUT.join(",")})`;
 const T_BASE = `${DUR.base}s ${EASE}`;
@@ -44,7 +49,7 @@ export const SALA_CSS = `
 .sala-head { display: grid; gap: 12px; padding: 12px 14px; margin: -2px -2px 0; border-radius: var(--r-lg); background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(18px) saturate(160%); backdrop-filter: blur(18px) saturate(160%); border: 1px solid rgba(15,30,51,0.06); box-shadow: 0 6px 20px rgba(15,30,51,0.05); }
 .sala-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px 18px; flex-wrap: wrap; min-width: 0; }
 .sala-head-title { min-width: 0; }
-.sala-eyebrow { font-size: 12px; font-weight: 500; color: var(--navy-400); text-transform: capitalize; min-height: 18px; }
+.sala-eyebrow { font-size: 12px; font-weight: 500; color: var(--navy-400); min-height: 18px; }
 .sala-h1-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sala-h1 { font-size: 28px; margin: 0; line-height: 1.15; }
 
@@ -53,8 +58,8 @@ export const SALA_CSS = `
 .sala-counter dt { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--navy-400); white-space: nowrap; }
 .sala-counter dd { margin: 0; }
 .sala-counter-n { display: inline-block; font-size: 22px; font-weight: 700; line-height: 1.15; color: var(--navy-900); transform-origin: left center; }
-.sala-counter[data-counter=llamados] { border-color: rgba(31,79,190,0.25); }
-.sala-counter[data-counter=llamados] .sala-counter-n { color: var(--rc-called-bg); }
+.sala-counter[data-counter=llamados][data-active] { border-color: rgba(31,79,190,0.25); }
+.sala-counter[data-counter=llamados][data-active] .sala-counter-n { color: var(--rc-called-bg); }
 .sala-counter-ph { color: var(--navy-300); }
 
 .sala-tools { justify-content: flex-start; flex-wrap: nowrap; min-height: 38px; }
@@ -85,6 +90,11 @@ export const SALA_CSS = `
 .sala-empty { display: grid; justify-items: center; gap: 6px; padding: 48px 20px; border-radius: var(--r-lg); background: var(--card-bg); border: 1px solid rgba(15,30,51,0.06); color: var(--navy-500); text-align: center; }
 .sala-empty strong { font-size: 17px; color: var(--navy-900); }
 .sala-empty[aria-busy=true] strong { font-weight: 600; color: var(--navy-500); }
+.sala-empty-day { gap: 8px; padding: 56px 20px; }
+.sala-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 999px; background: rgba(15,30,51,0.05); color: var(--navy-500); }
+.sala-empty-text { margin: 0; max-width: 360px; font-size: 13.5px; line-height: 1.45; color: var(--navy-500); }
+.sala-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.sala-empty-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; text-decoration: none; }
 
 .sala-fade { min-width: 0; }
 .sala-board { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; padding: 2px 2px 10px; scroll-snap-type: x proximity; }

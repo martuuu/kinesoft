@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useTweaks, type Palette } from "./tweaks-context";
+import { useTenantModules } from "./tenant-modules-context";
 import { IconX } from "@/components/ui/icons";
+import { useToast } from "@/components/ui/toast";
+import type { ReceptionLayout } from "@/lib/preferences-constants";
 
 /**
  * Panel «Apariencia» (ex «KineSoft · Tweaks»; Martin lo mantiene, §20.18: «se arreglan las opciones que no
@@ -12,6 +15,9 @@ import { IconX } from "@/components/ui/icons";
  *   - Navegación «Barra lateral / Barra superior» → `dashChrome`, lo lee `AppShell` (monta `Sidebar` o `TopBar`).
  *   - «Barra lateral contraída» → `sidebarCollapsed`, prop `collapsed` del `Sidebar` (solo con barra lateral).
  *   - Vista semanal (encabezado, sábado, domingo) → prefs del server (`setAgenda`), las lee la agenda semanal.
+ *   - RX-1e «Recepción» → «Escritorio de recepción» (`receptionLayout`, server-backed), lo lee `SalaClient` para
+ *     elegir la cara de `/sala`. Solo con el módulo `salaEspera` y la capacidad `agenda.reception` (`canReception`,
+ *     la calcula `AppShell` con sus `caps`); test en `tests/unit/render/tweaks-panel.test.tsx`.
  * Se quitaron «Timeline / Semana / Lista» y «Card de paciente»: nadie los leía (regla del 16-oct).
  *
  * Arranca cerrado y, cerrado, no deja nada flotando: el engranaje fijo abajo a la derecha (zIndex 100) tapaba el pie
@@ -25,8 +31,32 @@ export const PALETTE_OPTIONS: { value: Palette; label: string; swatch: [string, 
   { value: "violet", label: "Violeta", swatch: ["#5F40C7", "#B6F3D8", "#E5E0FB"] },
 ];
 
-export function TweaksPanel() {
+/** RX-1e: las tres caras de `/sala`, con una línea que explica cada una (orden = `RECEPTION_LAYOUTS`). */
+export const RECEPTION_LAYOUT_OPTIONS: ReadonlyArray<{ value: ReceptionLayout; label: string; hint: string }> = [
+  { value: "board", label: "Tablero", hint: "Columnas por estado, como hasta ahora." },
+  { value: "list", label: "Lista y panel", hint: "Los turnos del día en una tabla y la sala de espera al costado." },
+  { value: "flow", label: "Flujo", hint: "La línea del día a la izquierda y la sala en carriles." },
+];
+
+export const RECEPTION_SAVE_ERROR = "No pudimos guardar la vista. Probá de nuevo.";
+
+/**
+ * RX-1e: ¿el valor del contexto volvió solo al anterior? `setReceptionLayout` (C-RX2) es optimista y, si el server
+ * rechaza el cambio (o tira), vuelve al previo sin avisar: «si RX-1e quiere avisar, que lea el valor». `pending` es el
+ * último cambio pedido desde este panel; si el valor actual es su `prev` (y no su `next`), el server lo rechazó.
+ * Puro y exportado para el test (sin DOM no hay effects).
+ */
+export function receptionRolledBack(
+  pending: { next: ReceptionLayout; prev: ReceptionLayout } | null,
+  current: ReceptionLayout
+): boolean {
+  return pending !== null && pending.next !== pending.prev && current === pending.prev;
+}
+
+export function TweaksPanel({ canReception = false }: { canReception?: boolean } = {}) {
   const { t, set, agenda, setAgenda } = useTweaks();
+  const modules = useTenantModules();
+  const showReception = canReception && modules.has("salaEspera");
   const open = !t.minimised;
 
   useEffect(() => {
@@ -175,7 +205,97 @@ export function TweaksPanel() {
           onChange={(v) => setAgenda("agendaShowSunday", v)}
         />
       </Section>
+
+      {/* Componente aparte: el `useToast` solo corre cuando la sección se ve (los render tests de PL-F1c montan el
+          panel sin `ToastProvider`; en la app lo pone `UIProviders` en el layout raíz). */}
+      {showReception && <ReceptionSection />}
     </aside>
+  );
+}
+
+function ReceptionSection() {
+  const { receptionLayout, setReceptionLayout } = useTweaks();
+  const toast = useToast();
+  // Último cambio pedido desde acá. Se limpia al detectar el rechazo para no avisar dos veces.
+  const pending = useRef<{ next: ReceptionLayout; prev: ReceptionLayout } | null>(null);
+
+  useEffect(() => {
+    if (receptionRolledBack(pending.current, receptionLayout)) {
+      pending.current = null;
+      toast.error(RECEPTION_SAVE_ERROR);
+    }
+  }, [receptionLayout, toast]);
+
+  return (
+    <Section label="Recepción">
+      <ReceptionLayoutControl
+        value={receptionLayout}
+        onChange={(v) => {
+          if (v === receptionLayout) return;
+          pending.current = { next: v, prev: receptionLayout };
+          setReceptionLayout(v);
+        }}
+      />
+    </Section>
+  );
+}
+
+/**
+ * RX-1e: segmentado vertical (tres opciones con su línea de explicación no entran a lo ancho en 296 px). Sin hooks y
+ * exportado: el test lo llama como función y dispara el `onClick` real de cada botón (no hay jsdom).
+ */
+export function ReceptionLayoutControl({
+  value,
+  onChange,
+}: {
+  value: ReceptionLayout;
+  onChange: (v: ReceptionLayout) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Escritorio de recepción"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: 3,
+        borderRadius: 12,
+        background: "rgba(15,30,51,0.04)",
+      }}
+    >
+      <div style={{ fontSize: 12.5, color: "var(--navy-700)", padding: "4px 7px 2px" }}>Escritorio de recepción</div>
+      {RECEPTION_LAYOUT_OPTIONS.map((o) => {
+        const on = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={on}
+            data-layout={o.value}
+            onClick={() => onChange(o.value)}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 2,
+              padding: "7px 10px",
+              borderRadius: 9,
+              border: "none",
+              textAlign: "left",
+              cursor: "pointer",
+              background: on ? "#fff" : "transparent",
+              boxShadow: on ? "0 2px 6px rgba(15,30,51,0.08)" : "none",
+            }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 600, color: on ? "var(--navy-900)" : "var(--navy-500)" }}>
+              {o.label}
+            </span>
+            <span style={{ fontSize: 11, lineHeight: 1.35, color: "var(--navy-500)" }}>{o.hint}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

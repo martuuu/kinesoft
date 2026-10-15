@@ -15,6 +15,7 @@ import {
   isStaleError,
   mergeReceptionOverrides,
   receptionCounters,
+  receptionEntriesForDay,
   rollbackReceptionAction,
   stateTagText,
   undoHint,
@@ -308,5 +309,61 @@ describe("[SV03] «Llamado» en la vista", () => {
     // Deshacer confirmado con calledAt null: queda null (no se resucita el optimista viejo).
     const cleared = commitReceptionAction(r.overrides, "s", { ...base, calledAt: null, state: "en-sala" });
     expect(cleared.booking?.calledAt).toBeNull();
+  });
+});
+
+// G1 (VX0b): en un día pasado la vista calculaba la demora contra el reloj de hoy
+// («Demorado 1921 h 39'» en todas las filas, contador DEMORADOS en ámbar) aunque el
+// aviso decía «Este día no es hoy». Fuera de hoy no hay demora ni minutos que corran.
+describe("[RX-1f] G1: fuera de hoy no hay demora", () => {
+  const NEXT = "2026-10-06";
+  it("[RX-1f] día pasado: sin demorado, tag «Sin marcar», contadores en 0 y sin minutos de sala", () => {
+    const later = ar("10:00", NEXT);
+    const es = receptionEntriesForDay(DAY_ROWS, later, DAY);
+    expect(states(es)).not.toContain("demorado");
+    const unmarked = es.find((e) => e.row.id === "demorado")!;
+    expect(unmarked.state).toBe("por-llegar");
+    expect(unmarked.highlight).toBe(false);
+    expect(unmarked.lateMinutes).toBeNull();
+    expect(stateTagText(unmarked)).toBe("Sin marcar");
+    expect(es.some((e) => e.highlight)).toBe(false);
+    const sala = es.find((e) => e.row.id === "sala")!;
+    expect(sala.waitingMinutes).toBeNull();
+    expect(stateTagText(sala)).toBe("En sala");
+    expect(waitText(sala.row, sala.state, later, { today: false })).toBeNull();
+    // «esperó» es un dato cerrado (llegada → atención): ese sí se muestra.
+    const box = es.find((e) => e.row.id === "box")!;
+    expect(waitText(box.row, box.state, later, { today: false })).toBe("esperó 15'");
+    expect(receptionCounters(es).demorados).toBe(0);
+    // Mismo orden que hoy (demorados en su lugar, no reordenados).
+    expect(es.map((e) => e.row.id)).toEqual(sortForReception(DAY_ROWS, NOW).map((e) => e.row.id));
+  });
+  it("[RX-1f] día futuro: «Por llegar» neutro", () => {
+    const before = ar("23:00", "2026-10-04");
+    const es = receptionEntriesForDay(DAY_ROWS, before, DAY);
+    expect(states(es)).not.toContain("demorado");
+    expect(stateTagText(es.find((e) => e.row.id === "demorado")!)).toBe("Por llegar");
+    expect(receptionCounters(es).demorados).toBe(0);
+  });
+  it("[RX-1f] hoy sigue habiendo demora (y minutos de sala)", () => {
+    const es = receptionEntriesForDay(DAY_ROWS, NOW, DAY);
+    const late = es.find((e) => e.row.id === "demorado")!;
+    expect(late.state).toBe("demorado");
+    expect(late.highlight).toBe(true);
+    expect(stateTagText(late)).toBe("Demorado 20'");
+    expect(stateTagText(es.find((e) => e.row.id === "sala")!)).toBe("En sala 15'");
+    expect(receptionCounters(es).demorados).toBe(1);
+  });
+  it("[RX-1f] borde 23:30 AR (02:30 UTC del día siguiente): el día AR sigue siendo hoy", () => {
+    // Con `toISOString().slice(0,10)` del host el día sería el 06 y la demora se apagaría.
+    const late = ar("23:30");
+    expect(late.toISOString().slice(0, 10)).toBe(NEXT);
+    const es = receptionEntriesForDay([dto("noche", "22:00")], late, DAY);
+    expect(es[0].state).toBe("demorado");
+    expect(stateTagText(es[0])).toBe("Demorado 1 h 30'");
+    // Y el 06 a esa hora todavía es futuro: neutro.
+    const tomorrow = receptionEntriesForDay([dto("temprano", "00:15", { scheduledFor: iso("00:15", NEXT) })], late, NEXT);
+    expect(tomorrow[0].state).toBe("por-llegar");
+    expect(stateTagText(tomorrow[0])).toBe("Por llegar");
   });
 });

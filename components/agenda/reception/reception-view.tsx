@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { markReceptionAction } from "@/lib/bookings";
@@ -15,6 +16,7 @@ import {
   isStaleError,
   mergeReceptionOverrides,
   receptionCounters,
+  receptionEntriesForDay,
   rollbackReceptionAction,
   stateTagText,
   visibleActions,
@@ -59,6 +61,9 @@ import { noteLocalReception } from "@/lib/arrival-local-notes";
  *   diferencia de las tarjetas no depende de `showRoomOnCards`: en la tabla
  *   una columna no agrega ruido y la Secretaria la usa para mandar al
  *   paciente al consultorio.
+ * - RX-1f: fuera de hoy (día AR) no hay «demorado» ni minutos que corran
+ *   (`receptionEntriesForDay`, hallazgo G1), y con `canOperate` arriba va el
+ *   link «Abrir escritorio de Recepción» → /sala.
  */
 export function ReceptionView({
   dayKey,
@@ -109,7 +114,8 @@ export function ReceptionView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merged.overrides]);
 
-  const entries = useMemo(() => sortForReception(merged.rows, clock), [merged.rows, clock]);
+  // [RX-1f] G1: fuera de hoy no hay demora (ni minutos de sala que corran).
+  const entries = useMemo(() => receptionEntriesForDay(merged.rows, clock, dayKey), [merged.rows, clock, dayKey]);
   const counters = useMemo(() => receptionCounters(entries), [entries]);
   const shown = useMemo(() => filterEntries(entries, filter), [entries, filter]);
   const byPractitioner = useMemo(() => new Map(practitioners.map((p) => [p.id, p])), [practitioners]);
@@ -171,6 +177,18 @@ export function ReceptionView({
       <h2 id="rcp-title" className="rcp-sr">
         Recepción · {dayLabel}
       </h2>
+
+      {/* [RX-1f] Puente al escritorio de Recepción (/sala). Mismo gate que la
+          página: módulo `salaEspera` + `agenda.reception`. Es exactamente
+          `canOperate` (agenda-client: `canReception = caps.has("agenda.reception")
+          && waitingRoomOn`), y sin el módulo esta vista ni se monta. */}
+      {canOperate && (
+        <div className="rcp-head">
+          <Link href="/sala" className="rcp-desk-link">
+            Abrir escritorio de Recepción <span aria-hidden>→</span>
+          </Link>
+        </div>
+      )}
 
       <div className="rcp-counters" role="group" aria-label="Resumen del día">
         <Counter label="En sala ahora" value={String(counters.enSala)} hint={counters.enAtencion ? `${counters.enAtencion} en atención` : undefined} />
@@ -279,6 +297,10 @@ function Counter({ label, value, hint, warn = false }: { label: string; value: s
 const RECEPTION_CSS = `
 .rcp { display: grid; gap: 12px; }
 .rcp-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.rcp-head { display: flex; justify-content: flex-end; }
+.rcp-desk-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--sky-700); border: 1px solid rgba(15,30,51,0.12); background: #fff; text-decoration: none; }
+.rcp-desk-link:hover { border-color: var(--sky-700); }
+.rcp-desk-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 .rcp-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .rcp-counter { background: var(--card-bg); border: 1px solid rgba(15,30,51,0.06); border-radius: var(--r-md); padding: 10px 14px; }
 .rcp-counter[data-warn] { border-color: rgba(154,91,0,0.35); background: rgba(255,176,32,0.08); }

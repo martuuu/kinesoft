@@ -64,7 +64,7 @@ export function SalaHeader({
         </div>
         <dl className="sala-counters" aria-label="Resumen de hoy">
           {SALA_COUNTERS.map((c) => (
-            <div key={c.key} className="sala-counter" data-counter={c.key}>
+            <div key={c.key} className="sala-counter" data-counter={c.key} data-active={counters[c.key] > 0 ? "" : undefined}>
               <dt>{c.label}</dt>
               <dd>
                 <motion.span

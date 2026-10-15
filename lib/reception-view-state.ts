@@ -22,6 +22,7 @@ import { dayKeyOf } from "@/lib/availability/day";
 import {
   RECEPTION_STATE_LABEL,
   applyReceptionAction,
+  allowedTransitions,
   receptionState,
   sortForReception,
   undoTarget,
@@ -105,6 +106,53 @@ export function bookingsOfDay<T extends { scheduledFor: string }>(bookings: Read
   return bookings.filter((b) => dayKeyOf(new Date(b.scheduledFor)) === dayKey);
 }
 
+/**
+ * Entry de la vista: la de `sortForReception` más `offDay`. "past"/"future" =
+ * el día mostrado no es hoy (AR) y los textos que dependen del reloj se apagan
+ * (`stateTagText`). Opcional para que las entries de `sortForReception` sigan
+ * sirviendo tal cual (sin el campo = hoy, el comportamiento de siempre).
+ */
+export type OffDay = "past" | "future";
+export type ReceptionDayEntry<T extends ReceptionBooking> = ReceptionEntry<T> & { offDay?: OffDay };
+
+/**
+ * [RX-1f] G1 (VX0b): la lista del día `dayKey` vista con el reloj `now`.
+ * Antes la vista llamaba `sortForReception(rows, clock)` sin mirar el día y un
+ * día pasado salía entero «Demorado 1921 h 39'», con el contador DEMORADOS en
+ * ámbar y todas las filas resaltadas, aunque el aviso decía «Este día no es
+ * hoy». La demora (y los minutos de sala/llamado) son del reloj de HOY: fuera
+ * de hoy el demorado vuelve a «por llegar» sin resaltar (el tag dice «Sin
+ * marcar» en un día pasado, «Por llegar» en uno futuro), sin minutos que
+ * corran, y por eso `receptionCounters` da 0 demorados sin tocarlo.
+ * El orden no cambia (demorado y por-llegar tienen el mismo rango). «Hoy» es
+ * el día AR de `dayKeyOf` (a las 23:30 AR el host UTC ya está en el día
+ * siguiente: el `slice(0,10)` lo apagaba una hora y media antes).
+ */
+export function receptionEntriesForDay<T extends ReceptionBooking>(
+  rows: ReadonlyArray<T>,
+  now: Date,
+  dayKey: string
+): ReceptionDayEntry<T>[] {
+  const todayKey = dayKeyOf(now);
+  const sorted = sortForReception(rows, now);
+  if (dayKey === todayKey) return sorted;
+  // DayKey "YYYY-MM-DD": el orden de string es el de calendario.
+  const offDay: OffDay = dayKey < todayKey ? "past" : "future";
+  return sorted.map((e) => {
+    const state: ReceptionState = e.state === "demorado" ? "por-llegar" : e.state;
+    return {
+      ...e,
+      state,
+      highlight: false,
+      lateMinutes: null,
+      waitingMinutes: null,
+      calledMinutes: null,
+      actions: state === e.state ? e.actions : allowedTransitions(state),
+      offDay,
+    };
+  });
+}
+
 /** Las que el server rechaza fuera de hoy (`TODAY_ONLY` de reception-state). */
 const TODAY_ONLY_ACTIONS: ReadonlyArray<ReceptionAction> = ["llego", "llamar", "en-atencion"];
 
@@ -157,8 +205,10 @@ export function stateTagText(
   // `calledMinutes` opcional: los callers que pasan un Pick viejo (sin el
   // campo, p. ej. `ReceptionStateTag`) siguen compilando; sin el dato se lee
   // "Llamado" a secas.
-  entry: Pick<ReceptionEntry<never>, "state" | "waitingMinutes" | "lateMinutes" | "calledMinutes">
+  entry: Pick<ReceptionEntry<never>, "state" | "waitingMinutes" | "lateMinutes" | "calledMinutes"> & { offDay?: OffDay }
 ): string {
+  // [RX-1f] G1: en un día pasado, el que nunca se marcó no está «por llegar».
+  if (entry.offDay === "past" && entry.state === "por-llegar") return "Sin marcar";
   if (entry.state === "demorado" && entry.lateMinutes != null) return `Demorado ${fmtMinutes(entry.lateMinutes)}`;
   if (entry.state === "llamado") {
     return entry.calledMinutes != null ? `Llamado ${fmtMinutes(entry.calledMinutes)}` : "Llamado";
@@ -180,11 +230,18 @@ const MIN_MS = 60_000;
 export function waitText(
   b: Pick<BookingDTO, "arrivedAt" | "attendingAt">,
   state: ReceptionState,
-  now: Date
+  now: Date,
+  // [RX-1f] G1: `today: false` = el día mostrado no es hoy; la espera «que
+  // corre» (en sala / llamado) se mide contra el reloj de hoy y en un día
+  // pasado daba cientos de horas. Sin el dato = hoy (callers de siempre).
+  opts: { today?: boolean } = {}
 ): string | null {
   if (!b.arrivedAt) return null;
   const arrived = new Date(b.arrivedAt).getTime();
-  if (state === "en-sala" || state === "llamado") return fmtMinutes(Math.max(0, Math.floor((now.getTime() - arrived) / MIN_MS)));
+  if (state === "en-sala" || state === "llamado") {
+    if (opts.today === false) return null;
+    return fmtMinutes(Math.max(0, Math.floor((now.getTime() - arrived) / MIN_MS)));
+  }
   if ((state === "en-atencion" || state === "atendido") && b.attendingAt) {
     const waited = Math.max(0, Math.floor((new Date(b.attendingAt).getTime() - arrived) / MIN_MS));
     return `esperó ${fmtMinutes(waited)}`;

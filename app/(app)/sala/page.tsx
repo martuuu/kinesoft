@@ -10,7 +10,7 @@ import { DEFAULT_AGENDA_VIEW_PREFS } from "@/lib/preferences-constants";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { dayWindow } from "@/lib/availability/day";
 import { practitionerInitials } from "@/lib/agenda-layout";
-import { salaViewer } from "@/lib/sala-board-state";
+import { deskViewer } from "@/lib/reception-desk-state";
 import { SalaClient } from "@/components/sala/sala-client";
 import { logger } from "@/lib/logger";
 
@@ -34,6 +34,9 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *   RSC ni en los re-pedidos.
  * - Salas, prefs y profesionales fallan sueltas como en la agenda: sin salas
  *   el tablero es por profesional; sin prefs, el default.
+ * - RX-1a: `initialLayout` (`agendaPrefs.receptionLayout`) elige la cara
+ *   (Tablero, Lista y panel o Flujo) cuando no hay provider de Apariencia, y
+ *   el viewer suma `canCollect` (`billing.manage`) para el cobro del escritorio.
  */
 export default async function SalaPage() {
   const [actor, caps] = await Promise.all([getActor(), getCapabilities()]);
@@ -70,8 +73,9 @@ export default async function SalaPage() {
         return { id: p.id, name, initials: practitionerInitials(name) };
       })}
       rooms={rooms.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity }))}
-      viewer={salaViewer(actor.practitionerId ?? null, caps)}
+      viewer={deskViewer(actor.practitionerId ?? null, caps)}
       initialGroupBy={prefs.salaGroupBy}
+      initialLayout={prefs.receptionLayout}
     />
   );
 }
