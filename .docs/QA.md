@@ -828,7 +828,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 > navegación suave (los guards sí redirigen).
 
 ### /plataforma (superadmin)
-- [ ] 🔴 Un OWNER que no es superadmin no ve "Plataforma" en el nav y `/plataforma/consultorios` lo manda a `/dashboard`.
+- [ ] 🔴 Un OWNER que no es superadmin no ve "Plataforma" en el nav y `/plataforma/consultorios` le da 404 (desde BO3-A).
 - [ ] `/plataforma` (Resumen): cantidades por vertical × plan, trials por vencer, onboarding pendiente. Sub-nav Resumen ·
   Consultorios · Ejercicios · Tags · Catálogo.
 - [ ] Consultorios: lista con filtros, columnas "Turnos online" (Activo / Apagado) y "Titular", sin Miembros ni Creado
@@ -869,7 +869,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
   nacimiento, cobertura ni emergencia (a lo sumo el nombre de la sesión). Con ficha en `movare` → precarga esa.
 
 ### Onboarding y alta
-- [ ] Onboarding nuevo: segmentado "Kinesiología y osteopatía" / "Consultorio general"; el consultorio nace con esa
+- [ ] Onboarding nuevo: segmentado "Kinesiología y osteopatía" / "Clínica general" (rótulo desde BO3); el consultorio nace con esa
   vertical y con los turnos online apagados (el paso lo avisa: "Activalos en Configuración → General"). Las tarjetas no
   desbordan a 320 px.
 - [ ] `create-tenant --vertical general|kinesiologia` crea con esa vertical (solo local).
@@ -1034,7 +1034,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Un pago de MP no se duplica; lo de la obra social se ve aparte. El selector Mes/Semana se recuerda al recargar.
   Borde: un cobro el domingo 23:30 AR cuenta en esa semana.
 
-### Consultorio General
+### Clínica general (vertical GENERAL)
 - [ ] 🔴 Nada de Planes, Diagnóstico ni EVA: sin pestaña Planes, Resumen sin "Plan de tratamiento" ni "Diagnóstico
   principal", sin slot de EVA; agenda sin leyenda ni chip; drawer sin fila Plan; candado sin aviso de plan.
 
@@ -1266,3 +1266,99 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] «Cambiar rol» de Secretaria a Kinesiólogo/a: queda con agenda y aparece en la agenda. De Kinesiólogo/a a
   Secretaria con turnos futuros o pacientes asignados → rechazo con el conteo; sin nada, OK.
 - [ ] Re-invitar a un suspendido → «Usá Reactivar». Las invitaciones pendientes ya no dicen «Compartí el link».
+
+## BO · Plataforma y producción (14-oct-2026)
+
+> Superadmin con `scripts/set-platform-admin.ts` (local) o desde `/plataforma/usuarios`. Fechas y vencimientos con
+> `TZ=UTC` en local (`TZ=UTC npm run dev`). Mails con mailpit en local o Resend en prod (EXTERNAL-CONFIG §0.4). Flags:
+> `TENANT_ACCESS_ENFORCEMENT` (default `banner`), `PLATFORM_MFA_ENFORCEMENT` (default `off`), `MAINTENANCE_MODE`,
+> `CRON_SECRET` (EXTERNAL-CONFIG §0.5). Cada acción de Plataforma tiene que aparecer en **Auditoría** y en la
+> **Actividad** del consultorio afectado.
+
+### Acceso a Plataforma
+- [ ] 🔴 Usuario de consultorio que abre `/plataforma` → 404 (no «sin permiso», no redirige). Sin sesión → `/login`.
+- [ ] 🔴 Superadmin **sin consultorio propio** entra a `/plataforma` (shell propio, sin «Volver a mi consultorio»).
+- [ ] Superadmin deshabilitado → `/cuenta-desactivada`, ni Plataforma ni consultorio.
+
+### Alta de consultorio
+- [ ] 🔴 «Nuevo consultorio» con email nuevo **con Resend/mailpit**: llega «Tu consultorio X ya está en KineSoft» →
+  «Activar mi acceso» → `/reset` para elegir contraseña → entra a su consultorio. El drawer no muestra el link.
+- [ ] Mismo alta **sin mail** (Production sin Resend o falla): el drawer muestra el link para copiar.
+- [ ] Doble click en «Crear» → un solo consultorio (el segundo dice que ya se creó, sin reenviar el mail).
+- [ ] Email de alguien que ya tiene cuenta → reutiliza la cuenta (sin pisar su contraseña); slug pedido en uso → error en
+  el campo.
+- [ ] Servicios iniciales según la vertical (precio 0); PRO con prueba de 14 días; «Clínica general» sin Planes.
+
+### Equipo y cupos
+- [ ] 🔴 Consultorio Free con su titular: «Invitar» un 2º profesional → rechazo con el cupo (en Plataforma **y** en
+  Configuración → Usuarios). Invitar Secretaria o Facturación → OK (no ocupan lugar).
+- [ ] Subir el `seatLimitOverride` o pasar a PRO desde «Suscripción» → ya se puede invitar. Bajar de plan no saca a nadie.
+- [ ] Invitación hecha con lugar, plan bajado después, aceptar → «El consultorio no tiene lugares libres…».
+- [ ] «Transferir la titularidad» exige tipear el email; siempre queda un solo titular.
+- [ ] Configuración → «Plan y uso» (solo titular): plan, lugares usados/total y vencimiento de la prueba.
+
+### Usuarios y salud
+- [ ] Buscador global: miembros, pacientes de portal y huérfanos, con estado de Auth. Un PRACTITIONER de Clínica general
+  se ve «Profesional».
+- [ ] «Mandar link de acceso» (activación o recuperación) con y sin Resend: con mail enviado el link **no** se muestra.
+- [ ] «Deshabilitar usuario» → no entra a ningún consultorio (y queda baneado en Auth); «Habilitar» lo devuelve. No te
+  podés deshabilitar a vos mismo.
+- [ ] «Dar acceso a Plataforma» / «Quitar acceso» exige tipear el email; no se le puede quitar al último superadmin.
+- [ ] `/plataforma/salud`: las 3 reparaciones (borrar huérfano de Auth, crear el profesional que falta, sincronizar email)
+  y «sin titular» lleva al equipo para transferir.
+
+### Ciclo de vida y superficies públicas
+- [ ] 🔴 «Suspender» (motivo + nombre tipeado): los miembros caen en `/suspendido`; el turnero del consultorio dice «no
+  disponible»; el check-in del portal se rechaza; un pago de Mercado Pago en curso **concilia igual**.
+- [ ] «Reactivar» (también desde baja) devuelve todo. «Dar de baja» no borra nada.
+- [ ] «Cambiar el slug»: `/c/<viejo>/booking` redirige (308) a `/c/<nuevo>/booking`; el slug viejo no se puede reusar.
+- [ ] «Forzar fin del alta» saca al titular del onboarding.
+- [ ] Con `TENANT_ACCESS_ENFORCEMENT=enforce` y una prueba vencida hace más de 7 días (TZ=UTC): la banda dice solo
+  lectura; crear un turno o un paciente muestra el mensaje de solo lectura (no un error genérico); leer HC funciona.
+  Con `banner`, mismo consultorio: solo la banda.
+
+### Soporte
+- [ ] 🔴 «Entrar como soporte» (motivo ≥ 10 caracteres) → abre el consultorio con la banda fija; al titular le llega el
+  mail «soporte entró» con link a Configuración → «Accesos de soporte», donde figura la sesión con el motivo.
+- [ ] 🔴 Como soporte: Configuración escribe (servicios, obras sociales, sedes, salas, horarios, datos del consultorio,
+  turnos online, usuarios); la agenda, pacientes, cobros y bloqueos **no** (mensaje «Entraste como soporte: acá solo
+  podés mirar.»).
+- [ ] 🔴 Como soporte no se ve historia clínica (lo mismo que la Secretaria), no hay exports (403) ni sala en vivo; el
+  switch de «compartir pacientes» no se puede cambiar.
+- [ ] «Salir de soporte» (banda o Plataforma) y cerrar sesión cierran la fila; la sesión **no** vence sola.
+- [ ] Lo que hizo soporte aparece en la Actividad del consultorio marcado como soporte.
+
+### MFA de superadmin
+- [ ] Con `off`: `/plataforma-mfa/configurar` → QR → código → «verificado». Nada más cambia.
+- [ ] 🔴 Con `enforce`: sin factor → `/plataforma-mfa/configurar`; con factor y sesión nueva → `/plataforma-mfa/verificar`
+  con `next` de vuelta; sin bucles.
+- [ ] Acción de riesgo (suspender, entrar como soporte, deshabilitar…) pasados 10 min del último código → modal pide el
+  código y reintenta sola.
+- [ ] Códigos mal puestos repetidos → «Demasiados intentos. Probá de nuevo en N s.».
+- [ ] La toolbar de Vercel no aparece en `/plataforma` en Preview (CSP bloqueante, esperado).
+
+### Cron
+- [ ] Sin `CRON_SECRET`: `curl /api/cron/trial-reminders` → 401 en local/Preview (503 en Production).
+- [ ] Con `Authorization: Bearer $CRON_SECRET`: `trial-reminders` manda el mail a los titulares con prueba en 7/3/1 días
+  o vencida (TZ=UTC; una vez por etapa: la segunda corrida no repite); `health-digest` manda el resumen a los
+  superadmins solo si hay hallazgos y una vez por día; `invitations-expire` devuelve el conteo sin escribir.
+- [ ] Con `MAINTENANCE_MODE=on`: los crons responden `skipped`.
+
+### Mantenimiento
+- [ ] `MAINTENANCE_MODE=on` (+ reiniciar en local / redeploy en Vercel): cualquier página → `/mantenimiento` con 503 y el
+  mensaje opcional; `/api/*` → 503 JSON; `/api/health` → 200 con `maintenance: true`; el webhook de MP sigue.
+- [ ] Sin bypass: el superadmin también ve `/mantenimiento`. `off` → todo vuelve.
+
+### Export del consultorio
+- [ ] 🔴 Titular → Configuración → «Exportar datos» → baja un JSON con manifest (incluye pacientes, turnos, HC, cobros;
+  **no** tokens, ips, ruta de archivos ni payload de MP).
+- [ ] ADMIN o Secretaria: la pestaña no aparece y la URL da 403. Soporte: 403.
+- [ ] Titular de un consultorio **suspendido**: en `/suspendido` está «Descargar el export de mis datos».
+- [ ] Cuarto export en una hora → 429 (hoy se baja como archivo de texto: hallazgo `export-error-como-archivo`).
+- [ ] Plataforma → «Ciclo de vida» → «Pedir export al titular»: al titular le llega el mail; el superadmin no baja nada.
+
+### Auditoría y sistema
+- [ ] `/plataforma/auditoria`: filtros y «Cargar más»; cada acción de esta lista figura con quién y cuándo.
+- [ ] `/plataforma/sistema`: Upstash, Sentry, Resend, MP, realtime y cron como **presente/ausente**; ningún valor de
+  secreto en pantalla ni en el HTML. Migraciones aplicadas al día.
+- [ ] `/api/health` → `{ ok, db, maintenance, time }`, nada más. `/robots.txt` y `/sitemap.xml` responden.

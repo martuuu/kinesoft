@@ -186,7 +186,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(170px, 100%), 1fr))", gap: 12 }}>
         <Stat label="Consultorios" value={overview.totalTenants} />
         <Stat
-          label="Trials por vencer"
+          label="Pruebas por vencer"
           value={overview.trialsEndingSoonCount}
           hint={`En ${PLATFORM_TRIAL_WARNING_DAYS} días o vencidos`}
         />
@@ -211,7 +211,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))", gap: 12 }}>
         <ListCard
-          title="Trials por vencer"
+          title="Pruebas por vencer"
           count={overview.trialsEndingSoonCount}
           shown={overview.trialsEndingSoon.length}
           empty={`Ningún trial vence en los próximos ${PLATFORM_TRIAL_WARNING_DAYS} días.`}
@@ -231,7 +231,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                   flexShrink: 0,
                   fontWeight: 700,
                   fontSize: 12.5,
-                  color: t.daysLeft < 0 ? "#9F1F1F" : t.daysLeft <= 3 ? "var(--st-noshow-fg)" : "var(--navy-500)",
+                  color: t.daysLeft <= 0 ? "#9F1F1F" : t.daysLeft <= 3 ? "var(--st-noshow-fg)" : "var(--navy-500)",
                 }}
               >
                 {trialDaysLabel(t.daysLeft)}

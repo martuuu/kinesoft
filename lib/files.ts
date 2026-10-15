@@ -33,7 +33,7 @@ import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { PatientFileCategory } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import { getActor, writableError } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import type { ActionResult } from "@/lib/validation";
 import { isStorageConfigured, storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
@@ -125,6 +125,11 @@ export async function uploadPatientFile(
   formData: FormData
 ): Promise<ActionResult<{ id: string }>> {
   const actor = await getActor();
+  // BO-Z (A1): el corte de solo lectura va ANTES de Storage. `runWithRls` frena el INSERT de la fila, pero la
+  // subida al bucket va por service role fuera de la tx: sin este corte un consultorio en solo lectura (enforce)
+  // o una sesión de soporte dejaba el objeto subido y lo borraba recién en el catch.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const access = await runWithRls(actor.tenantId, (tx) => patientAccessFor(actor, patientId, tx));
   if (access === "none") return { ok: false, error: "Paciente no encontrado." };
   if (access !== "full") return { ok: false, error: NO_ACCESS };
@@ -202,6 +207,11 @@ export async function uploadPatientFile(
 
 export async function deletePatientFile(id: string): Promise<ActionResult> {
   const actor = await getActor();
+  // BO-Z (A1): sin este corte, en solo lectura (enforce) se borraba el objeto de Storage (service role, fuera de
+  // la tx) y DESPUÉS la tx del `deleteMany` fallaba por read-only: la fila quedaba apuntando a un estudio que ya
+  // no existe. Pérdida de datos clínicos. El corte va antes de tocar Storage.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const found = await runWithRls(actor.tenantId, async (tx) => {
     const row = await tx.patientFile.findFirst({
       where: { id, tenantId: actor.tenantId },

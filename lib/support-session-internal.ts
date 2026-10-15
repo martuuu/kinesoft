@@ -268,40 +268,55 @@ export async function startSupportSession(p: {
   const meta = requestMeta();
   const now = new Date();
 
-  const result = await prismaService.$transaction(async (tx) => {
-    const tenant = await tx.tenant.findUnique({
-      where: { id: p.tenantId },
-      select: { id: true, name: true, status: true, memberships: { where: { userId: p.actor.userId }, select: { id: true } } },
+  let result: { sessionId: string; tenantName: string };
+  try {
+    result = await prismaService.$transaction(async (tx) => {
+      // BO-Z (C2): dos «Entrar como soporte» simultáneos del mismo superadmin (doble clic, dos pestañas) leían las dos
+      // «ninguna abierta» y la segunda chocaba con el índice parcial único de M7 (una abierta por superadmin) → P2002
+      // sin atrapar = error genérico. El lock serializa por superadmin: la segunda espera, cierra la de la primera
+      // («replaced») y abre la suya. Se suelta en el COMMIT/ROLLBACK.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`kinesoft:support-session:${p.actor.userId}`}, 0))`;
+      const tenant = await tx.tenant.findUnique({
+        where: { id: p.tenantId },
+        select: { id: true, name: true, status: true, memberships: { where: { userId: p.actor.userId }, select: { id: true } } },
+      });
+      if (!tenant) throw new SupportSessionError("No encontramos ese consultorio.");
+      if (tenant.status === "CLOSED") throw new SupportSessionError("El consultorio está dado de baja: no se puede entrar como soporte.");
+      if (tenant.memberships.length > 0) {
+        throw new SupportSessionError("Ya sos parte de este consultorio: entrá con tu usuario desde el selector de consultorios.");
+      }
+      await closeOpenSessionsInTx(tx, actorRef, "replaced", now);
+      const session = await tx.supportSession.create({
+        data: {
+          tenantId: tenant.id,
+          superadminId: p.actor.userId,
+          reason,
+          startedAt: now,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+        },
+        select: { id: true },
+      });
+      await auditPlatformInTx(tx, {
+        actor: actorRef,
+        affectedTenantId: tenant.id,
+        action: "platform.support.start",
+        entity: "SupportSession",
+        entityId: session.id,
+        // BO4: `mfa` deja asentado si la sesión que entró al consultorio pasó por TOTP (con
+        // PLATFORM_MFA_ENFORCEMENT=off se permite igual y queda `false`: es la huella para revisar después).
+        payload: { scope: "ADMIN_CONFIG", reasonLength: reason.length, mfa: p.actor.mfa },
+      });
+      return { sessionId: session.id, tenantName: tenant.name };
     });
-    if (!tenant) throw new SupportSessionError("No encontramos ese consultorio.");
-    if (tenant.status === "CLOSED") throw new SupportSessionError("El consultorio está dado de baja: no se puede entrar como soporte.");
-    if (tenant.memberships.length > 0) {
-      throw new SupportSessionError("Ya sos parte de este consultorio: entrá con tu usuario desde el selector de consultorios.");
+  } catch (err) {
+    // Red de seguridad del lock: si igual choca con el índice único (otra puerta que abra filas sin el lock), copy
+    // controlado en vez del genérico de Next.
+    if ((err as { code?: string } | null)?.code === "P2002") {
+      throw new SupportSessionError("Ya estabas entrando como soporte en otra pestaña. Probá de nuevo.");
     }
-    await closeOpenSessionsInTx(tx, actorRef, "replaced", now);
-    const session = await tx.supportSession.create({
-      data: {
-        tenantId: tenant.id,
-        superadminId: p.actor.userId,
-        reason,
-        startedAt: now,
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-      },
-      select: { id: true },
-    });
-    await auditPlatformInTx(tx, {
-      actor: actorRef,
-      affectedTenantId: tenant.id,
-      action: "platform.support.start",
-      entity: "SupportSession",
-      entityId: session.id,
-      // BO4: `mfa` deja asentado si la sesión que entró al consultorio pasó por TOTP (con
-      // PLATFORM_MFA_ENFORCEMENT=off se permite igual y queda `false`: es la huella para revisar después).
-      payload: { scope: "ADMIN_CONFIG", reasonLength: reason.length, mfa: p.actor.mfa },
-    });
-    return { sessionId: session.id, tenantName: tenant.name };
-  });
+    throw err;
+  }
 
   setCookie(makeSupportCookieValue(result.sessionId, p.actor.userId));
   await notifyOwners({

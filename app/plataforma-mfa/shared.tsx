@@ -39,8 +39,12 @@ export function MfaGoButton({ href, children }: { href: string; children: React.
   );
 }
 
-/** Salida siempre visible: quien no tiene el teléfono a mano no queda encerrado en esta pantalla. */
-export function MfaFooter() {
+/**
+ * Salida siempre visible: quien no tiene el teléfono a mano no queda encerrado en esta pantalla. BO-Z C3: «Ir a mi
+ * consultorio» solo si tiene uno (`homeTenantId`): a un superadmin sin consultorio propio lo mandaba a /dashboard, que
+ * lo rebotaba a /onboarding a crear uno.
+ */
+export function MfaFooter({ hasHome }: { hasHome: boolean }) {
   return (
     <div style={{ marginTop: 18, display: "grid", gap: 10 }}>
       <form action="/api/auth/sign-out" method="post">
@@ -48,9 +52,11 @@ export function MfaFooter() {
           Cerrar sesión
         </Button>
       </form>
-      <Link href="/dashboard" style={{ fontSize: 12.5, color: "var(--sky-700)", fontWeight: 600, textAlign: "center" }}>
-        Ir a mi consultorio
-      </Link>
+      {hasHome && (
+        <Link href="/dashboard" style={{ fontSize: 12.5, color: "var(--sky-700)", fontWeight: 600, textAlign: "center" }}>
+          Ir a mi consultorio
+        </Link>
+      )}
     </div>
   );
 }

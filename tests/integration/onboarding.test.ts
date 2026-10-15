@@ -39,6 +39,7 @@ import { __rateLimitInternals } from "@/lib/rate-limit";
 import { runWithRls } from "@/lib/rls";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
+import { initialSubscriptionFor } from "@/lib/platform-provisioning-schemas";
 import { revalidateTagSpy } from "@/tests/helpers/integration-setup";
 import {
   ownerClient,
@@ -576,18 +577,20 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       const edit = await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" });
       expect(edit).toEqual({ ok: true, data: { tenantId, created: false } });
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
-      // Escritor único (C-EV5): audit `tenant.entitlements` en el tenant, misma tx.
-      const ev = await db.auditEvent.findMany({ where: { tenantId, action: "tenant.entitlements" } });
-      expect(ev).toHaveLength(1);
-      expect(ev[0]).toMatchObject({ actorId: uid, entity: "Tenant", entityId: tenantId });
-      expect(ev[0].payload).toMatchObject({ source: "onboarding", changed: ["vertical"], before: { vertical: "KINESIOLOGY" }, after: { vertical: "GENERAL" } });
+      // Escritor único (C-EV5): audit `tenant.entitlements` en el tenant, misma tx. [BO-Z] El primero es el de la
+      // creación (prueba PRO, BO-D1); el segundo, el cambio de vertical.
+      const ev = await db.auditEvent.findMany({ where: { tenantId, action: "tenant.entitlements" }, orderBy: { createdAt: "asc" } });
+      expect(ev).toHaveLength(2);
+      expect(ev[0].payload).toMatchObject({ source: "onboarding", changed: ["plan", "subscriptionStatus", "trialEndsAt"] });
+      expect(ev[1]).toMatchObject({ actorId: uid, entity: "Tenant", entityId: tenantId });
+      expect(ev[1].payload).toMatchObject({ source: "onboarding", changed: ["vertical"], before: { vertical: "KINESIOLOGY" }, after: { vertical: "GENERAL" } });
       // Cache de módulos invalidada después del commit.
       for (const tag of tenantEntitlementTags(tenantId)) expect(revalidateTagSpy).toHaveBeenCalledWith(tag);
 
       // Re-entrar sin vertical (o con la misma) no audita de nuevo.
       expect((await saveOnboardingClinic({ name: "Cambia Vertical" })).ok).toBe(true);
       expect((await saveOnboardingClinic({ name: "Cambia Vertical", vertical: "GENERAL" })).ok).toBe(true);
-      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(1);
+      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(2);
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
 
       // Cierra el alta.
@@ -609,7 +612,90 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       );
       expect(direct).toEqual({ ok: false, reason: "onboarding-closed" });
       expect((await db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).vertical).toBe("GENERAL");
-      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(1);
+      expect(await db.auditEvent.count({ where: { tenantId, action: "tenant.entitlements" } })).toBe(2);
+    });
+  });
+
+  // ── BO-Z · B4: BO-D1 (prueba PRO de 14 días) y BO-D11 (SIGNUP_MODE) ──
+  describe("[BO-Z] alta web: prueba PRO y SIGNUP_MODE", () => {
+    const prevMode = process.env.SIGNUP_MODE;
+    afterAll(() => {
+      if (prevMode === undefined) delete process.env.SIGNUP_MODE;
+      else process.env.SIGNUP_MODE = prevMode;
+    });
+    beforeEach(() => {
+      delete process.env.SIGNUP_MODE;
+    });
+
+    it("[BO-Z] el alta web nace PRO en TRIALING hasta el fin del día AR a 14 días, por el escritor único", async () => {
+      const uid = newIdentity();
+      const now = new Date();
+      const r = await saveOnboardingClinic({ name: "Prueba PRO" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      createdTenants.push(r.data.tenantId);
+      const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+      const expected = initialSubscriptionFor("PRO", undefined, now);
+      expect(expected.trialDays).toBe(14);
+      expect(t.plan).toBe("PRO");
+      expect(t.subscriptionStatus).toBe("TRIALING");
+      expect(t.trialEndsAt?.toISOString()).toBe(expected.trialEndsAt?.toISOString());
+      const ev = await db.auditEvent.findMany({ where: { tenantId: t.id, action: "tenant.entitlements" } });
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ actorId: uid });
+      expect(ev[0].payload).toMatchObject({ source: "onboarding", after: { plan: "PRO", subscriptionStatus: "TRIALING" } });
+    });
+
+    it("[BO-Z] `onboarding` sin `initial` sigue sin poder escribir el plan (allowlist intacta)", async () => {
+      const uid = newIdentity();
+      const r = await saveOnboardingClinic({ name: "Allowlist" });
+      if (!r.ok) throw new Error(r.error);
+      createdTenants.push(r.data.tenantId);
+      await expect(
+        runWithRls(r.data.tenantId, (tx) =>
+          applyTenantEntitlementsInTx(tx, {
+            tenantId: r.data.tenantId,
+            source: "onboarding",
+            patch: { plan: "ENTERPRISE" } as never,
+            actor: { userId: uid, homeTenantId: r.data.tenantId },
+          })
+        )
+      ).rejects.toThrow(/no puede escribir "plan"/);
+      // Y `initial` sobre un consultorio que ya tiene la prueba tampoco (solo vale en la creación).
+      await expect(
+        runWithRls(r.data.tenantId, (tx) =>
+          applyTenantEntitlementsInTx(tx, {
+            tenantId: r.data.tenantId,
+            source: "onboarding",
+            initial: true,
+            patch: { plan: "ENTERPRISE" },
+            actor: { userId: uid, homeTenantId: r.data.tenantId },
+          })
+        )
+      ).rejects.toThrow(/estado de creación/);
+      expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).plan).toBe("PRO");
+    });
+
+    it("[BO-Z] SIGNUP_MODE=assisted: no crea un consultorio nuevo (copy de «escribinos»)", async () => {
+      process.env.SIGNUP_MODE = "assisted";
+      const uid = newIdentity();
+      const before = await db.tenant.count();
+      const r = await saveOnboardingClinic({ name: "Asistido" });
+      expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
+      expect(await db.tenant.count()).toBe(before);
+      expect((await ownedState(uid)).memberships).toHaveLength(0);
+    });
+
+    it("[BO-Z] SIGNUP_MODE=assisted: un alta abierta (p. ej. creada desde Plataforma) se sigue editando en el paso 2", async () => {
+      const uid = newIdentity();
+      const r = await saveOnboardingClinic({ name: "Abierta Antes" });
+      if (!r.ok) throw new Error(r.error);
+      createdTenants.push(r.data.tenantId);
+      process.env.SIGNUP_MODE = "assisted";
+      const edit = await saveOnboardingClinic({ name: "Abierta Después" });
+      expect(edit).toEqual({ ok: true, data: { tenantId: r.data.tenantId, created: false } });
+      expect((await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } })).name).toBe("Abierta Después");
+      expect((await ownedState(uid)).memberships).toHaveLength(1);
     });
   });
 });

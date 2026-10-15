@@ -15,7 +15,7 @@ export const metadata = { title: "Verificación en dos pasos · KineSoft" };
  * prenderlo). Con factor y sesión AAL1 → a verificar; ya AAL2 → avisa y ofrece volver.
  */
 export default async function ConfigurarMfaPage({ searchParams }: { searchParams: { next?: string | string[] } }) {
-  const { next, status } = await mfaPageContext("/plataforma-mfa/configurar", searchParams.next);
+  const { actor, next, status } = await mfaPageContext("/plataforma-mfa/configurar", searchParams.next);
 
   if (status === "pending") redirect(platformMfaRedirect("verify", next));
 
@@ -27,7 +27,7 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
         <MfaHeading eyebrow="Todo en orden" title="Ya la tenés configurada" />
         <MfaText>Esta sesión ya pasó por el código. Podés seguir a Plataforma.</MfaText>
         <MfaGoButton href={next}>Ir a Plataforma</MfaGoButton>
-        <MfaFooter />
+        <MfaFooter hasHome={actor.homeTenantId !== null} />
       </AuthShell>
     );
   }
@@ -38,7 +38,7 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
         <MfaHeading eyebrow="Sin conexión" title="No pudimos comprobar tu verificación" />
         <MfaText>El servicio de verificación no respondió. Probá de nuevo en unos segundos.</MfaText>
         <MfaGoButton href={`/plataforma-mfa/configurar?next=${encodeURIComponent(next)}`}>Reintentar</MfaGoButton>
-        <MfaFooter />
+        <MfaFooter hasHome={actor.homeTenantId !== null} />
       </AuthShell>
     );
   }
@@ -48,7 +48,7 @@ export default async function ConfigurarMfaPage({ searchParams }: { searchParams
       <MfaHeading eyebrow="Seguridad" title="Configurá la verificación en dos pasos" />
       <MfaText>Vas a usar una app de autenticación del teléfono. Te lleva un minuto y se hace una sola vez.</MfaText>
       <MfaSetupForm next={next} startAction={startPlatformMfaEnrollment} confirmAction={confirmPlatformMfaEnrollment} />
-      <MfaFooter />
+      <MfaFooter hasHome={actor.homeTenantId !== null} />
     </AuthShell>
   );
 }

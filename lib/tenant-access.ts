@@ -133,8 +133,13 @@ export function isTenantBlocked(mode: TenantAccessMode): mode is "suspended" | "
   return mode === "suspended" || mode === "closed";
 }
 
+/**
+ * BO-Z B4: sin «Escribinos» pelado. Este texto lo ve CUALQUIER rol (es el error de toda escritura rechazada) y no
+ * puede llevar un link: el canal real (mailto) lo muestra la banda de acceso solo a titular/admin. Acá se dice
+ * quién lo reactiva.
+ */
 export const READ_ONLY_MESSAGE =
-  "Tu consultorio está en modo lectura: podés consultar todo, pero no cargar ni modificar datos. Escribinos para reactivarlo.";
+  "Tu consultorio está en modo lectura: podés consultar todo, pero no cargar ni modificar datos. Para reactivarlo, el titular del consultorio tiene que escribirle al equipo de KineSoft.";
 
 /** Escritura de una sesión de soporte fuera de Configuración (BO2-E): no es el consultorio el que está en lectura. */
 export const SUPPORT_READ_ONLY_MESSAGE = "Entraste como soporte: acá solo podés mirar.";

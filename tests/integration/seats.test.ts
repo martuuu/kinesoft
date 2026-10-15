@@ -104,6 +104,11 @@ describe.skipIf(!RUN)("[BO2-B] cupos del plan (BO-D7)", () => {
     const t = await tenant("FREE");
     const r = await invite("PRACTITIONER");
     expect(r).toEqual({ ok: false, error: expect.stringContaining("Tu plan tiene 1 lugar para profesionales") });
+    // [BO-Z] C8: sin «pedí ampliar el plan» (no hay ese canal en la app): dice a quién escribir.
+    if (!r.ok) {
+      expect(r.error).not.toContain("ampliar el plan");
+      expect(r.error).toContain("el titular puede escribirle al equipo de KineSoft");
+    }
     expect((await invite("ADMIN")).ok).toBe(false);
     expect(await db.invitation.count({ where: { tenantId: t.tenantId, role: { in: ["PRACTITIONER", "ADMIN"] } } })).toBe(0);
     expect((await invite("ASSISTANT")).ok).toBe(true);

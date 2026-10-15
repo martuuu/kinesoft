@@ -7,6 +7,8 @@
  */
 // Solo tipo (se borra al compilar) y relativo: `tenant-bootstrap` lo importa desde un script de tsx.
 import type { AccessState } from "./access-logic";
+// Relativo por lo mismo (script de tsx). `support-contact` es puro: no arrastra nada al script.
+import { supportContactText, supportEmail } from "./support-contact";
 
 // ──────────────────────────────────────────────────────────────────────
 // Slug del consultorio
@@ -166,6 +168,14 @@ export function decideAppGate(i: AppGateInput): string | null {
 // ──────────────────────────────────────────────────────────────────────
 // Pasos del stepper
 // ──────────────────────────────────────────────────────────────────────
+
+/**
+ * BO-Z (BO-D11): copy de `SIGNUP_MODE=assisted`, el mismo en /signup y en el rechazo del server (alta del consultorio
+ * y `signUpPractitioner`). Con el canal de soporte configurado dice a dónde escribir; sin él, a quién.
+ */
+export function signupAssistedMessage(email: string | null = supportEmail()): string {
+  return `Por ahora damos de alta los consultorios nosotros: ${supportContactText({ email })} y lo armamos con vos.`;
+}
 
 /**
  * El paso 1 fue la cuenta (signup + verificación); el stepper arranca en el 2.

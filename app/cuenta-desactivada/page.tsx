@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AuthShell } from "@/components/screens/auth-shell";
 import { Button } from "@/components/ui/button";
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
+import { SupportContact } from "@/components/ui/support-contact";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Cuenta desactivada · KineSoft" };
@@ -37,8 +38,10 @@ export default async function CuentaDesactivadaPage() {
     <AuthShell eyebrow="Acceso" heading="No podés entrar con esta cuenta." blurb="Tu usuario de KineSoft está desactivado.">
       <Heading eyebrow="Cuenta desactivada" title="Tu cuenta está desactivada" />
       <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 18px", lineHeight: 1.55 }}>
-        Mientras esté desactivada no podés entrar a ningún consultorio. Si creés que es un error, escribinos a soporte
-        desde el email de tu cuenta.
+        {/* BO-Z B4: con el canal real (mailto o «escribile al equipo de KineSoft»); antes «escribinos a soporte» sin
+            decir a dónde. */}
+        Mientras esté desactivada no podés entrar a ningún consultorio. Si creés que es un error,{" "}
+        <SupportContact subject="Cuenta desactivada" /> desde el email de tu cuenta.
       </p>
       <SignOut variant="primary" />
     </AuthShell>

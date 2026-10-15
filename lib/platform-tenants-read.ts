@@ -26,6 +26,7 @@ import { z } from "zod";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { toARDateKey } from "@/lib/datetime-ar";
+import { trialDaysLeft } from "@/components/plataforma/tenants/labels";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { effectiveMode, tenantAccessFor } from "@/lib/tenant-access";
 import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
@@ -53,13 +54,6 @@ import {
 } from "@/lib/platform-tenants-types";
 
 const DAY_MS = 86_400_000;
-
-/** Días entre dos claves "YYYY-MM-DD" (aritmética de calendario, sin reloj del host). */
-function daysBetweenKeys(from: string, to: string): number {
-  const [y1, m1, d1] = from.split("-").map(Number);
-  const [y2, m2, d2] = to.split("-").map(Number);
-  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / DAY_MS);
-}
 
 /** Clave "YYYY-MM-DD" + n días de calendario (UTC solo como aritmética de fechas, no como reloj). */
 function addDaysToKey(key: string, n: number): string {
@@ -193,7 +187,8 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
       vertical: t.vertical,
       plan: t.plan,
       trialEndsOn,
-      daysLeft: daysBetweenKeys(todayKey, trialEndsOn),
+      // BO-Z B5: misma cuenta que `tenantAccessFor` y la banda del consultorio (hoy cuenta; el último día es 1).
+      daysLeft: trialDaysLeft(t.trialEndsAt!, now),
     };
   });
 

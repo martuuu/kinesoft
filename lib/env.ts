@@ -62,6 +62,8 @@ const schema = z.object({
   EMAIL_FROM: z.preprocess(emptyAsUndefined, z.string().optional()),
   EMAIL_TRANSPORT: z.preprocess(emptyAsUndefined, z.enum(["resend", "mailpit", "log"]).optional()),
   EMAIL_REPLY_TO: z.preprocess(emptyAsUndefined, z.string().optional()),
+  // BO-Z: canal de soporte público (banda de acceso, /suspendido, Plan y uso). Lo lee lib/support-contact.ts.
+  NEXT_PUBLIC_SUPPORT_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
   MAILPIT_URL: z.preprocess(emptyAsUndefined, z.string().url().optional()),
 
   // BO1-A (C-BO1, plan §19.5): despliegue del bloqueo por acceso del consultorio.
@@ -88,6 +90,16 @@ const schema = z.object({
     z
       .enum(PLATFORM_MFA_ENFORCEMENTS as unknown as [PlatformMfaEnforcement, ...PlatformMfaEnforcement[]])
       .default("off")
+  ),
+
+  // BO-Z (BO-D11, plan §19.5): alta web de consultorios.
+  //   open     = DEFAULT: /signup crea consultorios nuevos (nacen en prueba PRO de 14 días, BO-D1).
+  //   assisted = el alta la hace el equipo desde /plataforma: /signup muestra «escribinos» y el server rechaza
+  //              crear un consultorio nuevo. Unirse por invitación sigue funcionando (no crea consultorio).
+  // Lo lee `signupMode()` (process.env en cada llamada), no este objeto congelado.
+  SIGNUP_MODE: z.preprocess(
+    (v) => (typeof v === "string" ? emptyAsUndefined(v.trim().toLowerCase()) : v),
+    z.enum(["open", "assisted"]).default("open")
   ),
 
   // BO3-E: secreto de los cron de Vercel (Authorization: Bearer). Opcional hasta BO5-A, que lo usa en el handler;
@@ -250,12 +262,14 @@ export const env = parseEnv({
   EMAIL_TRANSPORT: process.env.EMAIL_TRANSPORT,
   EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO,
   MAILPIT_URL: process.env.MAILPIT_URL,
+  NEXT_PUBLIC_SUPPORT_EMAIL: process.env.NEXT_PUBLIC_SUPPORT_EMAIL,
   VERCEL_ENV: process.env.VERCEL_ENV,
   TENANT_ACCESS_ENFORCEMENT: process.env.TENANT_ACCESS_ENFORCEMENT,
   CRON_SECRET: process.env.CRON_SECRET,
   MAINTENANCE_MODE: process.env.MAINTENANCE_MODE,
   MAINTENANCE_MESSAGE: process.env.MAINTENANCE_MESSAGE,
   PLATFORM_MFA_ENFORCEMENT: process.env.PLATFORM_MFA_ENFORCEMENT,
+  SIGNUP_MODE: process.env.SIGNUP_MODE,
 });
 
 /**
@@ -274,6 +288,22 @@ export function tenantAccessEnforcement(): AccessEnforcement {
  */
 export function platformMfaEnforcement(): PlatformMfaEnforcement {
   return process.env.PLATFORM_MFA_ENFORCEMENT?.trim() === "enforce" ? "enforce" : "off";
+}
+
+/**
+ * `SIGNUP_MODE` vigente (BO-Z, BO-D11), leído en cada llamada: los tests lo cambian en caliente. Cualquier valor que
+ * no sea `assisted` → `open` (el boot ya rechazó un valor inválido; acá no se tira en medio de un request).
+ */
+export function signupMode(): "open" | "assisted" {
+  return process.env.SIGNUP_MODE?.trim().toLowerCase() === "assisted" ? "assisted" : "open";
+}
+
+/**
+ * BO-Z (B3): ¿es el deploy de Production de Vercel? Leído en cada llamada (no de `env`, congelado al importar) para
+ * que los tests puedan simularlo. Preview y local NO cuentan: ahí el soporte sin MFA sigue permitido para probar.
+ */
+export function isVercelProduction(): boolean {
+  return process.env.VERCEL_ENV?.trim() === "production";
 }
 
 export const isProd = env.NODE_ENV === "production";

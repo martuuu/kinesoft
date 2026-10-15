@@ -10,6 +10,7 @@
 import type { Role, TenantStatus, TenantVertical } from "@prisma/client";
 import { roleLabel } from "@/lib/roles";
 import { confirmEmailMatches } from "@/lib/platform-health-logic";
+import { SUPABASE_LINK_TTL_COPY } from "@/lib/email/templates";
 import type {
   PlatformAccessLinkResult,
   PlatformUserAuthState,
@@ -21,6 +22,14 @@ import type {
 } from "@/lib/platform-health-logic";
 
 export const USERS_PATH = "/plataforma/usuarios";
+
+/**
+ * [BO-Z B3] Aviso que acompaña a todo link de un clic que el superadmin ve para copiar (alta de consultorio sin
+ * mail, «Mandar link de acceso» sin mail). Antes cada caja decía otra cosa y ninguna decía cuándo vence: el
+ * superadmin lo pegaba en un grupo de WhatsApp al día siguiente y ya no andaba. El TTL sale de la MISMA constante
+ * que usan los mails (`SUPABASE_LINK_TTL_COPY`): si Martin cambia el vencimiento en Supabase, cambia en un lugar.
+ */
+export const ONE_TIME_LINK_COPY = `Es como una contraseña: sirve una sola vez y vence en ${SUPABASE_LINK_TTL_COPY}. No lo compartas en grupos.`;
 
 export const USER_KIND_LABEL: Record<PlatformUserKind, string> = {
   team: "Equipo",
@@ -223,7 +232,7 @@ export function accessLinkMessage(r: PlatformAccessLinkResult): ResultMessage {
     return {
       tone: "warning",
       title: "El mail no salió",
-      description: `Copiá el link y mandáselo por otro canal. Sirve para ${what}; no lo compartas con nadie más.`,
+      description: `Copiá el link y mandáselo por otro canal. Sirve para ${what}.`,
     };
   }
   return {

@@ -25,6 +25,9 @@
 import { randomBytes } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { applyTenantEntitlementsInTx } from "@/lib/tenant-entitlements-internal";
+import { initialSubscriptionFor } from "@/lib/platform-provisioning-schemas";
+import { signupMode } from "@/lib/env";
+import { signupAssistedMessage } from "@/lib/onboarding-logic";
 import { tenantEntitlementTags } from "@/lib/cache-tags";
 import { prismaService } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
@@ -145,6 +148,10 @@ export async function saveOnboardingClinic(
   if (memberships.length > 0) {
     return { ok: false, error: "Tu cuenta ya pertenece a un consultorio. Entrá desde el panel." };
   }
+  // BO-Z (BO-D11): con SIGNUP_MODE=assisted los consultorios nuevos los da de alta Plataforma. Va DESPUÉS del
+  // re-entrar (un consultorio creado desde Plataforma con el alta abierta sigue su stepper) y del «ya sos miembro»:
+  // solo corta la CREACIÓN de un consultorio nuevo.
+  if (signupMode() === "assisted") return { ok: false, error: signupAssistedMessage() };
 
   // Staff ≠ paciente (misma regla que acceptInvite). Acá la identidad ya está
   // verificada, así que se puede decir el motivo sin filtrar nada ajeno.
@@ -163,8 +170,8 @@ export async function saveOnboardingClinic(
       if (mine) return { ok: true, data: { tenantId: mine, created: false } };
     }
     try {
-      const r = await prismaService.$transaction((tx) =>
-        bootstrapTenant(tx, {
+      const r = await prismaService.$transaction(async (tx) => {
+        const created = await bootstrapTenant(tx, {
           userId: user.id,
           email: user.email,
           fullName: user.fullName,
@@ -175,8 +182,20 @@ export async function saveOnboardingClinic(
           vertical: d.vertical,
           onboardingCompleted: false,
           source: "onboarding",
-        })
-      );
+        });
+        // BO-Z (BO-D1): el alta web nace en prueba PRO (14 días, hasta el fin del día AR; mismo cálculo que el alta
+        // desde Plataforma). Por el escritor único y en la MISMA tx: o nace con la prueba, o no nace. Antes nacía FREE.
+        const sub = initialSubscriptionFor("PRO", undefined, new Date());
+        const ent = await applyTenantEntitlementsInTx(tx, {
+          tenantId: created.tenantId,
+          source: "onboarding",
+          initial: true,
+          patch: { plan: "PRO", subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
+          actor: { userId: user.id, homeTenantId: created.tenantId },
+        });
+        if (!ent.ok) throw new Error(`[onboarding] entitlements: ${ent.reason}`);
+        return created;
+      });
       logger.info("onboarding.tenant_created", { tenantId: r.tenantId, slug: r.slug });
       return { ok: true, data: { tenantId: r.tenantId, created: true } };
     } catch (e) {

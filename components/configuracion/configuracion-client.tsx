@@ -24,7 +24,7 @@ import { LocationsPanel } from "./panels/locations-panel";
 import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
 import { PlanUsagePanel } from "./panels/plan-usage-panel";
 import { SupportAccessPanel } from "./panels/support-access-panel";
-import { ExportPanel } from "./panels/export-panel";
+import { ExportPanel, type ExportBlockedTenant } from "./panels/export-panel";
 
 type Props = {
   role: Role;
@@ -54,6 +54,10 @@ type Props = {
   support?: boolean;
   /** `?tab=` de la URL (el mail de soporte abre «Accesos de soporte»). */
   initialTab?: string;
+  /** BO-Z B6: consultorios bloqueados de los que es titular (export desde acá). */
+  exportBlocked?: ExportBlockedTenant[];
+  /** BO-Z B6: `?tenant=` de la URL (link del mail de pedido de export). */
+  exportRequestedTenantId?: string | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -90,6 +94,10 @@ export function ConfiguracionClient(props: Props) {
     },
     [tab, practitionerDirty, confirm]
   );
+  const exportBlocked = props.exportBlocked ?? [];
+  // BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). BO-Z B6: también quien es
+  // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
+  const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <header>
@@ -99,7 +107,13 @@ export function ConfiguracionClient(props: Props) {
         </h1>
       </header>
 
-      <TabsBar tab={tab} setTab={(t) => void setTab(t)} role={props.role} modules={props.modules} />
+      <TabsBar
+        tab={tab}
+        setTab={(t) => void setTab(t)}
+        role={props.role}
+        modules={props.modules}
+        canExport={canExport}
+      />
 
       {tab === "general" && <GeneralPanel tenant={props.tenant} role={props.role} support={props.support} />}
       {tab === "sedes" && <LocationsPanel locations={props.locations} rooms={props.rooms} />}
@@ -123,8 +137,13 @@ export function ConfiguracionClient(props: Props) {
       {tab === "soporte" && (props.role === "OWNER" || props.role === "ADMIN") && (
         <SupportAccessPanel sessions={props.supportSessions} />
       )}
-      {/* BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). */}
-      {tab === "exportar" && props.role === "OWNER" && !props.support && <ExportPanel />}
+      {tab === "exportar" && canExport && (
+        <ExportPanel
+          blocked={exportBlocked}
+          requestedTenantId={props.exportRequestedTenantId}
+          showActive={props.role === "OWNER"}
+        />
+      )}
     </div>
   );
 }

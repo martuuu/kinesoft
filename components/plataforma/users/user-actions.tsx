@@ -34,6 +34,7 @@ import {
   accessLinkBlockReason,
   accessLinkMessage,
   canOfferEmailSync,
+  ONE_TIME_LINK_COPY,
   superadminConfirmReady,
   superadminCopy,
   toggleMessage,
@@ -70,42 +71,45 @@ function ErrorText({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Link copiable (solo cuando el mail no salió). */
+/** Link copiable (solo cuando el mail no salió), con el aviso de credencial y vencimiento (BO-Z B3). */
 export function CopyLinkBox({ url }: { url: string }) {
   const toast = useToast();
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-      <input
-        readOnly
-        value={url}
-        aria-label="Link de acceso"
-        onFocus={(e) => e.currentTarget.select()}
-        style={{
-          flex: "1 1 200px",
-          minWidth: 0,
-          padding: "8px 10px",
-          borderRadius: 10,
-          border: "1px solid rgba(15,30,51,0.12)",
-          background: "#fff",
-          fontSize: 12,
-          fontFamily: "var(--font-mono)",
-          color: "var(--navy-900)",
-        }}
-      />
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(url);
-            toast.success("Link copiado");
-          } catch {
-            toast.error("No se pudo copiar", { description: "Seleccioná el link y copialo a mano." });
-          }
-        }}
-      >
-        Copiar
-      </Button>
+    <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input
+          readOnly
+          value={url}
+          aria-label="Link de acceso"
+          onFocus={(e) => e.currentTarget.select()}
+          style={{
+            flex: "1 1 200px",
+            minWidth: 0,
+            padding: "8px 10px",
+            borderRadius: 10,
+            border: "1px solid rgba(15,30,51,0.12)",
+            background: "#fff",
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+            color: "var(--navy-900)",
+          }}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(url);
+              toast.success("Link copiado");
+            } catch {
+              toast.error("No se pudo copiar", { description: "Seleccioná el link y copialo a mano." });
+            }
+          }}
+        >
+          Copiar
+        </Button>
+      </div>
+      <div style={{ fontSize: 12, lineHeight: 1.45, color: "var(--navy-700)" }}>{ONE_TIME_LINK_COPY}</div>
     </div>
   );
 }

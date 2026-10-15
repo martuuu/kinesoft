@@ -19,6 +19,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { requireCapability } from "@/lib/authz";
+import { ForbiddenError } from "@/lib/session";
+import { isVercelProduction, platformMfaEnforcement } from "@/lib/env";
 import { runWithRls } from "@/lib/rls";
 import {
   SUPPORT_REASON_MAX,
@@ -30,6 +32,9 @@ import {
   type SupportSessionRow,
 } from "@/lib/support-session-internal";
 import type { ActionResult } from "@/lib/validation";
+
+/** BO-Z (B3). No se exporta: un archivo "use server" solo exporta funciones async. */
+const SUPPORT_NEEDS_MFA_MESSAGE = "Activá la verificación en dos pasos de Plataforma para entrar como soporte.";
 
 const StartSupportInput = z.object({
   tenantId: z.string().trim().min(1).max(64),
@@ -45,6 +50,12 @@ export async function startSupport(
   reason: string
 ): Promise<ActionResult<{ sessionId: string; redirectTo: string }>> {
   const actor = await requirePlatformAdmin("support.start");
+  // BO-Z (B3, decisión aplicada; Martin confirma): el soporte ESCRIBE en Configuración de un consultorio ajeno. En
+  // Production no se abre con `PLATFORM_MFA_ENFORCEMENT` apagado: con una sesión de superadmin robada (sin TOTP) se
+  // entraba igual. Fuera de Production (preview, local) sigue permitido para probar el flujo antes de enrolarse.
+  if (isVercelProduction() && platformMfaEnforcement() !== "enforce") {
+    return { ok: false, error: SUPPORT_NEEDS_MFA_MESSAGE };
+  }
   const parsed = StartSupportInput.safeParse({ tenantId, reason });
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -72,6 +83,10 @@ export async function endSupport(): Promise<ActionResult<{ redirectTo: string }>
 /** «Accesos de soporte» del consultorio activo, del más reciente al más viejo (las abiertas primero no: por fecha). */
 export async function listSupportSessionsForTenant(): Promise<SupportSessionRow[]> {
   const { actor } = await requireCapability("tenant.admin", "Solo OWNER/ADMIN ven los accesos de soporte.");
+  // BO-Z (C3): la lista es del CONSULTORIO (quién entró, cuándo y por qué). Un superadmin como soporte no la lee:
+  // vería los motivos y los mails de los otros accesos de Plataforma. Hoy SUPPORT_CAPS no trae `tenant.admin`; esto
+  // es explícito para que un cambio de capacidades no la abra por accidente.
+  if (actor.support) throw new ForbiddenError("Solo OWNER/ADMIN ven los accesos de soporte.");
   const rows = await runWithRls(actor.tenantId, (tx) =>
     tx.supportSession.findMany({
       where: { tenantId: actor.tenantId },

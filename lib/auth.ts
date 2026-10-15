@@ -48,7 +48,8 @@ import "@/lib/email/log";
 import { accountExistsEmail, emailVerificationEmail, passwordResetEmail } from "@/lib/email/templates";
 import type { EmailKind, RenderedEmail } from "@/lib/email/types";
 import { logger } from "@/lib/logger";
-import { env } from "@/lib/env";
+import { env, signupMode } from "@/lib/env";
+import { signupAssistedMessage } from "@/lib/onboarding-logic";
 import { z } from "zod";
 import {
   ResetPasswordInput,
@@ -126,6 +127,10 @@ export async function signUpPractitioner(
       data: { email: "", joining: true, message: "", redirectTo: `/invite/${encodeURIComponent(rawInvite)}` },
     };
   }
+
+  // BO-Z (BO-D11): con SIGNUP_MODE=assisted /signup no crea cuentas para un consultorio nuevo (la pantalla ya no
+  // ofrece el form; esto cierra la action, que es un endpoint público). La unión por invitación ya salió arriba.
+  if (signupMode() === "assisted") return { ok: false, error: signupAssistedMessage() };
 
   const parsed = SignupInput.safeParse(raw);
   if (!parsed.success) {

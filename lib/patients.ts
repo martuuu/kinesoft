@@ -14,7 +14,7 @@ import { Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runWithRls } from "@/lib/rls";
 import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
-import { getActor, type Actor } from "@/lib/session";
+import { getActor, writableError, type Actor } from "@/lib/session";
 import { getMembershipRole, requireModule } from "@/lib/authz";
 import { modulesFor } from "@/lib/tenant-modules";
 import { isTenantAdminRole, capabilitiesFor, canWriteClinical } from "@/lib/capabilities";
@@ -1665,6 +1665,10 @@ export async function sendPatientPortalInvite(input: {
   }>
 > {
   const actor = await getActor();
+  // BO-Z (A1): emite el link y manda el mail ANTES de escribir nada; sin este corte un consultorio en solo lectura
+  // (o una sesión de soporte) mandaba la invitación igual.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const patient = await runWithRls(actor.tenantId, (tx) => tx.patient.findFirst({
     where: { id: input.patientId, tenantId: actor.tenantId },
     select: {

@@ -122,6 +122,28 @@ describe("[IAM-2d] Signup", () => {
     expect(nav.redirects).toEqual(["/dashboard"]);
   });
 
+  it("[BO-Z] SIGNUP_MODE=assisted: sin form, con «escribinos» y la salida para invitados y para quien ya tiene cuenta", async () => {
+    const prev = { m: process.env.SIGNUP_MODE, e: process.env.NEXT_PUBLIC_SUPPORT_EMAIL };
+    try {
+      process.env.SIGNUP_MODE = "assisted";
+      process.env.NEXT_PUBLIC_SUPPORT_EMAIL = "soporte@kinesoft.test";
+      const html = renderToStaticMarkup(await SignupPage({ searchParams: {} }));
+      expect(html).toContain("Por ahora damos de alta los consultorios nosotros: escribinos a soporte@kinesoft.test");
+      expect(html).not.toContain('name="email"');
+      expect(html).not.toContain("Crear mi cuenta");
+      expect(html).toContain("link del mail de invitación");
+      expect(html).toContain('href="/login"');
+      // Con invitación sigue yendo a /invite (unirse a un equipo no crea consultorio).
+      await expect(SignupPage({ searchParams: { invite: "tok_9" } })).rejects.toBeInstanceOf(RedirectSignal);
+      expect(nav.redirects).toEqual(["/invite/tok_9"]);
+    } finally {
+      if (prev.m === undefined) delete process.env.SIGNUP_MODE;
+      else process.env.SIGNUP_MODE = prev.m;
+      if (prev.e === undefined) delete process.env.NEXT_PUBLIC_SUPPORT_EMAIL;
+      else process.env.NEXT_PUBLIC_SUPPORT_EMAIL = prev.e;
+    }
+  });
+
   it("form inicial: sin modo invitación", () => {
     const html = renderToStaticMarkup(<SignupScreen />);
     expect(html).toContain("Crear mi cuenta");

@@ -113,6 +113,20 @@ function actsAsOwner(ctx: TeamActorCtx): boolean {
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
 /**
+ * BO-Z (A2, default seguro que Martin confirma): soporte gestionaba el equipo con los límites del ADMIN, y eso
+ * incluía invitar/ascender/reactivar a PRACTITIONER o ADMIN. Un superadmin como soporte podía así invitarse a sí
+ * mismo (u otra cuenta suya) con un rol clínico y darse acceso a la historia clínica, que soporte no tiene. Con
+ * `ctx.support` solo se asignan roles SIN `clinical.read` (hoy ASSISTANT y BILLING).
+ */
+export const SUPPORT_CLINICAL_ROLE_MESSAGE =
+  "Como soporte solo podés dar roles sin acceso a historias clínicas (Secretaría o Facturación). Para un rol clínico, que lo haga el titular.";
+
+function supportRoleError(ctx: TeamActorCtx, role: Role): { ok: false; error: string } | null {
+  if (ctx.support && capabilitiesFor(role).has("clinical.read")) return fail(SUPPORT_CLINICAL_ROLE_MESSAGE);
+  return null;
+}
+
+/**
  * S13g (I7): planes ACTIVE vivos de los que el usuario es responsable (`TreatmentProgram.practitionerId`, D17)
  * en este consultorio. `practitionerId` es RESTRICT desde M1, pero ni quitar a alguien (borra la Membership; el
  * Practitioner queda por historial) ni cambiarle el rol tocan esa fila, así que la FK no frena nada. Solo ACTIVE:
@@ -226,7 +240,8 @@ export function seatsFullCopy(ctx: Pick<TeamActorCtx, "via">, u: SeatUsage): str
   const head = ctx.via === "tenant" ? `Tu plan tiene ${lugares}` : `El plan del consultorio tiene ${lugares}`;
   const tail =
     ctx.via === "tenant"
-      ? "Para sumar a otro profesional, liberá un lugar o pedí ampliar el plan."
+      ? // BO-Z (C8): no hay un canal «ampliar el plan» en la app; decía «pedí» sin decir a quién.
+        "Para sumar a otro profesional, liberá un lugar. Para sumar más, el titular puede escribirle al equipo de KineSoft."
       : "Ampliá el plan o el cupo a medida para sumar a otro profesional.";
   return `${head} y están ocupados (${u.used} contando invitaciones pendientes). La Secretaria y Facturación no ocupan lugar. ${tail}`;
 }
@@ -324,6 +339,18 @@ export async function createInvitationInTx(
 ): Promise<ActionResult<WrittenInvitation>> {
   const emailLc = normalizeEmail(input.email);
   const { tenantId } = ctx;
+
+  const supportDenied = supportRoleError(ctx, input.role);
+  if (supportDenied) return supportDenied;
+  if (ctx.support) {
+    // BO-Z (A2): soporte no invita a NINGUNA cuenta de Plataforma (ni la suya ni la de otro superadmin): sería entrar
+    // al consultorio como miembro, por fuera de la sesión de soporte auditada y con vencimiento.
+    const platformAdmin = await tx.userProfile.findFirst({
+      where: { email: emailEqualsFilter(emailLc), isPlatformAdmin: true },
+      select: { id: true },
+    });
+    if (platformAdmin) return fail("Ese email es de una cuenta de Plataforma: no se puede sumar al equipo desde soporte.");
+  }
 
   const existing = await tx.membership.findFirst({
     where: { tenantId, user: { email: emailLc } },
@@ -473,8 +500,10 @@ async function sendInvitationEmail(
 
 function sendResult(ctx: TeamActorCtx, id: string, rawToken: string, mail: MailOutcome): InvitationSendResult {
   // El link es una credencial: solo lo ve quien puede actuar como dueño (OWNER o superadmin, para «copiar link»
-  // cuando el mail no sale); el ADMIN se arregla con «Reenviar».
-  return { id, url: actsAsOwner(ctx) ? inviteUrl(rawToken) : null, ...mail };
+  // cuando el mail no sale); el ADMIN se arregla con «Reenviar». BO-Z (C4): y SOLO si el mail no salió. Si salió, el
+  // link ya está en la casilla del invitado: devolverlo igual dejaba una credencial viva en la pantalla (y en el
+  // historial del navegador) de quien invita, también la del superadmin, sin ninguna necesidad.
+  return { id, url: actsAsOwner(ctx) && !mail.emailSent ? inviteUrl(rawToken) : null, ...mail };
 }
 
 /**
@@ -641,6 +670,8 @@ export async function changeMemberRoleInTx(
     return fail(ctx.actorRole === "OWNER" ? "No podés cambiar tu propio rol de dueño." : "No podés cambiar tu propio rol.");
   }
   if (m.role === nextRole) return { ok: true, data: undefined };
+  const supportDenied = supportRoleError(ctx, nextRole);
+  if (supportDenied) return supportDenied;
   if (ctx.via === "platform" && m.role === "OWNER") {
     return fail("Para cambiarle el rol al dueño, transferí primero la titularidad a otra persona del equipo.");
   }
@@ -684,17 +715,25 @@ export async function changeMemberRoleInTx(
   let demoted: number | undefined;
   if (transfer) {
     if (ctx.via === "tenant") {
-      // Quien transfiere queda como ADMIN.
-      await tx.membership.updateMany({ where: { tenantId, userId: ctx.actorUserId }, data: { role: "ADMIN" } });
+      // Quien transfiere queda como ADMIN. BO-Z (B1): con el predicado `role: "OWNER"` y el conteo. Antes el update
+      // no miraba el rol: dos transferencias simultáneas del mismo OWNER (a X y a Y) pasaban cada una su CAS sobre
+      // el destino, las dos «bajaban» al que transfería (la segunda, sobre un ADMIN) y quedaban DOS OWNER. Ahora la
+      // segunda espera el lock de la fila, ve que ya no es OWNER (count 0) y revierte.
+      const self = await tx.membership.updateMany({
+        where: { tenantId, userId: ctx.actorUserId, role: "OWNER" },
+        data: { role: "ADMIN" },
+      });
+      if (self.count !== 1) throw new RoleChangeRaceError();
     } else {
       // El superadmin no es (necesariamente) miembro: los dueños anteriores quedan ADMIN (siguen clínicos: no
-      // cambia el cupo) y se verifica el invariante antes de commitear.
+      // cambia el cupo).
       demoted = (
         await tx.membership.updateMany({ where: { tenantId, role: "OWNER", id: { not: m.id } }, data: { role: "ADMIN" } })
       ).count;
-      const owners = await tx.membership.count({ where: { tenantId, role: "OWNER" } });
-      if (owners !== 1) throw new RoleChangeRaceError();
     }
+    // Invariante en los dos caminos, antes de commitear: exactamente un OWNER.
+    const owners = await tx.membership.count({ where: { tenantId, role: "OWNER" } });
+    if (owners !== 1) throw new RoleChangeRaceError();
   }
   await teamAuditInTx(tx, ctx, {
     action: transfer && ctx.via === "platform" ? "membership.owner.transfer" : "membership.role.change",
@@ -762,6 +801,9 @@ export async function reactivateMemberInTx(
   if (!m) return fail("Miembro no encontrado.");
   if (m.role === "OWNER" && !actsAsOwner(ctx)) return fail("Solo el dueño puede tocar la membresía del dueño.");
   if (!m.disabledAt) return { ok: true, data: { changed: false } };
+  // BO-Z (A2): reactivar devuelve el rol que tenía; si es clínico, soporte no lo reabre.
+  const supportDenied = supportRoleError(ctx, m.role);
+  if (supportDenied) return supportDenied;
   if (consumesSeat(m.role)) {
     const seat = await requireFreeSeatInTx(tx, ctx, new Date());
     if (!seat.ok) return seat;

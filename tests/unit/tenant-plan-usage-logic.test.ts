@@ -6,7 +6,13 @@
  * es el último día» aunque en UTC ya sea el día siguiente.
  */
 import { describe, it, expect } from "vitest";
-import { planUsageView, seatsSummary, subscriptionSummary, type TenantPlanUsageInput } from "@/lib/tenant-plan-usage-logic";
+import {
+  planUsageView,
+  seatsSummary,
+  subscriptionDetailText,
+  subscriptionSummary,
+  type TenantPlanUsageInput,
+} from "@/lib/tenant-plan-usage-logic";
 import { seatLimitFor, seatUsage } from "@/lib/plan-catalog";
 
 const ar = (local: string) => new Date(`${local}:00-03:00`);
@@ -33,7 +39,7 @@ function input(p: Partial<TenantPlanUsageInput> & { clinical?: number; pending?:
 
 describe("[BO3-F] subscriptionSummary", () => {
   it("ACTIVE → «Activa», sin detalle", () => {
-    expect(subscriptionSummary(input(), ar("2026-10-14T10:00"))).toEqual({ label: "Activa", tone: "ok", detail: null });
+    expect(subscriptionSummary(input(), ar("2026-10-14T10:00"))).toEqual({ label: "Activa", tone: "ok", detail: null, contact: null });
   });
 
   it("TRIALING: días AR que quedan contando hoy, con la fecha de fin", () => {
@@ -61,7 +67,9 @@ describe("[BO3-F] subscriptionSummary", () => {
     );
     expect(s.label).toBe("Prueba terminada");
     expect(s.tone).toBe("warn");
-    expect(s.detail).toMatch(/^La prueba terminó\. Te quedan \d+ días para elegir un plan/);
+    // BO-Z B4: el llamado a escribir lo cierra el panel con el canal real; acá va el «para qué».
+    expect(s.detail).toMatch(/^La prueba terminó\. Te quedan \d+ días antes de que el consultorio pase a modo lectura\.$/);
+    expect(s.contact).toBe("para elegir un plan");
   });
 
   it("TRIALING sin fecha de fin → «En prueba» sin cuenta regresiva", () => {
@@ -69,23 +77,31 @@ describe("[BO3-F] subscriptionSummary", () => {
       label: "En prueba",
       tone: "info",
       detail: null,
+      contact: null,
     });
   });
 
   it("PAST_DUE y CANCELLED → warn", () => {
     expect(subscriptionSummary(input({ subscriptionStatus: "PAST_DUE" }), ar("2026-10-14T10:00")).tone).toBe("warn");
     const c = subscriptionSummary(input({ subscriptionStatus: "CANCELLED" }), ar("2026-10-14T10:00"));
-    expect(c).toEqual({ label: "Cancelada", tone: "warn", detail: "La suscripción no está activa. Escribinos para reactivarla." });
+    expect(c).toEqual({ label: "Cancelada", tone: "warn", detail: "La suscripción no está activa.", contact: "para reactivarla" });
+    // Texto plano completo (con y sin email de soporte).
+    expect(subscriptionDetailText(c, "escribinos a soporte@kinesoft.test")).toBe(
+      "La suscripción no está activa. Escribinos a soporte@kinesoft.test para reactivarla."
+    );
+    expect(subscriptionDetailText(c, "escribile al equipo de KineSoft")).toBe(
+      "La suscripción no está activa. Escribile al equipo de KineSoft para reactivarla."
+    );
   });
 });
 
 describe("[BO3-F] seatsSummary — mismos números que frenan la invitación", () => {
-  it("Base con 2 profesionales → «2 de 3», aclara que Secretaria y Facturación no ocupan", () => {
+  it("Base con 2 profesionales → «2 de 3» (C8: «no ocupan lugar» ya lo dice la fila de Secretario/a, no se repite)", () => {
     const s = seatsSummary(input({ clinical: 2 }));
     expect(s.value).toBe("2 de 3");
     expect(s.full).toBe(false);
     expect(s.custom).toBe(false);
-    expect(s.detail).toContain("La Secretaria y Facturación no ocupan lugar.");
+    expect(s.detail).not.toContain("no ocupan lugar");
   });
 
   it("las invitaciones pendientes reservan lugar y se dicen", () => {

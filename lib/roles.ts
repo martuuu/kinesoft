@@ -29,7 +29,9 @@ export const ROLE_ORDER: readonly Role[] = ["OWNER", "ADMIN", "PRACTITIONER", "A
 export function roleLabel(role: Role, vertical?: TenantVertical | null): string {
   switch (role) {
     case "OWNER":
-      return "Dueño/a";
+      // BO-Z C8: «Titular», como lo dicen la banda, los mails y Plataforma («Transferir titularidad»). «Dueño/a»
+      // convivía con «titular» en la misma pantalla y parecían dos roles distintos.
+      return "Titular";
     case "ADMIN":
       return "Administrador/a";
     case "PRACTITIONER":
@@ -56,7 +58,7 @@ export function roleDescription(role: Role, vertical?: TenantVertical | null): s
     case "OWNER":
       return "Maneja todo el consultorio, incluido el equipo y quién puede hacer qué.";
     case "ADMIN":
-      return "Configura el consultorio, ve todo (historias clínicas incluidas) y administra el equipo, salvo al dueño.";
+      return "Configura el consultorio, ve todo (historias clínicas incluidas) y administra el equipo, salvo al titular.";
     case "PRACTITIONER":
       // General no tiene el módulo de planes (lib/tenant-modules.ts): no se promete.
       return vertical === "GENERAL"

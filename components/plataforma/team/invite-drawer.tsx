@@ -80,6 +80,17 @@ export function InviteDrawerBody({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [result, setResult] = useState<InvitationSendResult | null>(initialResult);
 
+  // BO-Z B1: cerrar limpia TODO (resultado, rol, errores) además del remount por `key` del wrapper. El remount solo
+  // corre cuando el cierre pasa por el `onClose` del wrapper; si el padre cierra el Drawer por su cuenta (o lo monta
+  // sin el wrapper), al reabrir quedaba el resultado de la invitación anterior (con su link) en vez del form vacío.
+  const close = () => {
+    setResult(null);
+    setRole("PRACTITIONER");
+    setError(null);
+    setFieldErrors({});
+    onClose();
+  };
+
   const submit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -110,12 +121,12 @@ export function InviteDrawerBody({
   const fe = (k: string) => fieldErrors[k]?.[0];
 
   return (
-    <Drawer open={open} onClose={onClose} title="Invitar al equipo" dirty={!result && dirty}>
+    <Drawer open={open} onClose={close} title="Invitar al equipo" dirty={!result && dirty}>
       {result ? (
         <div style={{ display: "grid", gap: 14 }}>
           <InviteResultNotice result={result} />
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <Button variant="primary" onClick={onClose}>
+            <Button variant="primary" onClick={close}>
               Listo
             </Button>
           </div>
@@ -148,7 +159,7 @@ export function InviteDrawerBody({
           {seatsFull && isClinicalRole(role) && (
             <div role="note" style={warnBox}>
               El cupo de profesionales está lleno: esta invitación va a ser rechazada. Ampliá el plan o el cupo a medida, o
-              invitala como {roleLabel("ASSISTANT", vertical)} o {roleLabel("BILLING", vertical)}, que no ocupan lugar.
+              invitá a esa persona como {roleLabel("ASSISTANT", vertical)} o {roleLabel("BILLING", vertical)}, que no ocupan lugar.
             </div>
           )}
           {error && (
@@ -157,7 +168,7 @@ export function InviteDrawerBody({
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-            <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+            <Button type="button" variant="ghost" onClick={close} disabled={pending}>
               Cancelar
             </Button>
             <Button type="submit" variant="primary" disabled={pending}>

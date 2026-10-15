@@ -32,6 +32,7 @@ import type {
 } from "@/lib/invitations-types";
 import {
   ASSIGNABLE_ROLES,
+  disabledReasons,
   OWNER_LOCKED_REASON,
   emailStatusLabel,
   formatARDate,
@@ -264,11 +265,11 @@ export function MemberRow({
       () => platformSuspendMember(ref),
       ({ futureBookings: n }) => {
         if (n > 0) {
-          toast.warning(`${who} quedó suspendido`, {
+          toast.warning(`${who} quedó suspendido/a`, {
             description: `Tiene ${n} turno${n === 1 ? "" : "s"} futuro${n === 1 ? "" : "s"}: siguen agendados. El consultorio tiene que reasignarlos o cancelarlos.`,
             duration: 0,
           });
-        } else toast.success(`${who} quedó suspendido.`);
+        } else toast.success(`${who} quedó suspendido/a.`);
       }
     );
   };
@@ -372,6 +373,12 @@ export function MemberRow({
           Para cambiarle el rol, suspenderlo o quitarlo, primero transferí la titularidad a otra persona del equipo.
         </div>
       )}
+      {/* BO-Z C5: el porqué de lo apagado, visible (antes solo en el tooltip). */}
+      {disabledReasons(acts, isOwner).map((r) => (
+        <div key={r} data-disabled-reason style={{ flex: "1 1 100%", fontSize: 11.5, color: "var(--navy-500)", lineHeight: 1.4 }}>
+          {r}
+        </div>
+      ))}
 
       {transferring && (
         <TransferOwnershipDialog

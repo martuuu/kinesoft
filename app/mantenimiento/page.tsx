@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { AuthShell } from "@/components/screens/auth-shell";
-import { Button } from "@/components/ui/button";
+import { ReloadButton } from "./reload-button";
 import { maintenanceMessage } from "@/lib/maintenance";
 
 export const metadata: Metadata = {
@@ -54,11 +53,7 @@ export default function MantenimientoPage() {
       <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>
         Los pagos que ya hiciste se registran igual.
       </p>
-      <Link href="/" style={{ display: "block" }}>
-        <Button variant="primary" style={{ width: "100%", justifyContent: "center", padding: "12px 18px" }}>
-          Probar de nuevo
-        </Button>
-      </Link>
+      <ReloadButton />
     </AuthShell>
   );
 }

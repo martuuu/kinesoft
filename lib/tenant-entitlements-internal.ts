@@ -93,6 +93,15 @@ export const ENTITLEMENT_KEYS_BY_SOURCE = {
   "tenant-settings": ["publicBookingEnabled"],
 } as const satisfies Record<EntitlementSource, readonly EntitlementKey[]>;
 
+/**
+ * BO-Z (BO-D1): las altas web nacen en prueba PRO de 14 días. El plan y la prueba los sigue escribiendo SOLO este
+ * módulo, así que `onboarding` los puede escribir, pero únicamente en la CREACIÓN (`initial: true`, en la misma tx que
+ * `bootstrapTenant`) y sobre un consultorio todavía en el estado con el que lo deja el bootstrap (FREE, ACTIVE, sin
+ * prueba, alta abierta). Re-entrar al paso 2 no pasa `initial` y sigue pudiendo tocar solo la vertical (EV-D5): un
+ * OWNER no se re-asigna la prueba editando su consultorio.
+ */
+export const ONBOARDING_INITIAL_KEYS = ["plan", "subscriptionStatus", "trialEndsAt"] as const satisfies readonly EntitlementKey[];
+
 /** Patch permitido para cada source (el compilador ya rechaza keys ajenas en literales). */
 export type EntitlementPatchFor<S extends EntitlementSource> = Partial<
   Pick<EntitlementValues, (typeof ENTITLEMENT_KEYS_BY_SOURCE)[S][number]>
@@ -119,7 +128,16 @@ export type ApplyTenantEntitlementsInput = {
     expectedUpdatedAt?: Date;
     actor: ActorFor<S>;
   };
-}[EntitlementSource];
+}[EntitlementSource]
+  | {
+      // BO-Z (BO-D1): la creación desde el alta web (ver `ONBOARDING_INITIAL_KEYS`).
+      tenantId: string;
+      source: "onboarding";
+      initial: true;
+      patch: Partial<Pick<EntitlementValues, "vertical" | (typeof ONBOARDING_INITIAL_KEYS)[number]>>;
+      expectedUpdatedAt?: undefined;
+      actor: TenantEntitlementActor;
+    };
 
 export type ApplyTenantEntitlementsResult =
   | { ok: true; changed: EntitlementKey[]; updatedAt: Date }
@@ -144,8 +162,15 @@ function programmingError(msg: string): never {
  * fuera del enum haría fallar el UPDATE con un error opaco, o peor, un `trialEndsAt`
  * Invalid Date).
  */
-function validatePatch(source: EntitlementSource, patch: Record<string, unknown>): Partial<EntitlementValues> {
-  const allowed = ENTITLEMENT_KEYS_BY_SOURCE[source] as readonly string[];
+function validatePatch(
+  source: EntitlementSource,
+  patch: Record<string, unknown>,
+  initial = false
+): Partial<EntitlementValues> {
+  if (initial && source !== "onboarding") programmingError(`initial solo vale para la source onboarding (vino ${source})`);
+  const allowed: readonly string[] = initial
+    ? [...ENTITLEMENT_KEYS_BY_SOURCE.onboarding, ...ONBOARDING_INITIAL_KEYS]
+    : ENTITLEMENT_KEYS_BY_SOURCE[source];
   const out: Partial<EntitlementValues> = {};
   for (const key of Object.keys(patch)) {
     if (!allowed.includes(key)) {
@@ -219,7 +244,8 @@ export async function applyTenantEntitlementsInTx(
   const { tenantId, source, expectedUpdatedAt, actor } = input;
 
   // ── Precondiciones de programación (antes de cualquier statement) ──────────
-  const patch = validatePatch(source, input.patch as Record<string, unknown>);
+  const initial = "initial" in input && input.initial === true;
+  const patch = validatePatch(source, input.patch as Record<string, unknown>, initial);
   if (source === "platform") {
     if (!actor) programmingError("source platform sin actor (toda escritura de /plataforma tiene un superadmin)");
   } else if (source === "billing") {
@@ -264,6 +290,11 @@ export async function applyTenantEntitlementsInTx(
   if (source === "onboarding" && current.onboardingCompletedAt !== null) {
     // EV-D5: terminado el alta, la vertical la cambia solo /plataforma.
     return { ok: false, reason: "onboarding-closed" };
+  }
+  if (initial && (current.plan !== "FREE" || current.subscriptionStatus !== "ACTIVE" || current.trialEndsAt !== null)) {
+    // BO-Z (BO-D1): `initial` es para el consultorio recién salido de `bootstrapTenant`. Si ya tiene plan o prueba,
+    // alguien lo está usando fuera de la creación: bug del caller.
+    programmingError("initial sobre un consultorio que ya no está en el estado de creación");
   }
 
   // ── Diff ───────────────────────────────────────────────────────────────────

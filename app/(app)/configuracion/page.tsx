@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { runWithRls } from "@/lib/rls";
-import { getActor } from "@/lib/session";
+import { getAccessSnapshot, getActor } from "@/lib/session";
 import { getCapabilities, getMembershipRole } from "@/lib/authz";
 import { getTenantSettings } from "@/lib/tenant-settings";
 import { modulesFor } from "@/lib/tenant-modules";
@@ -29,7 +29,7 @@ export const metadata = { title: "Configuración · KineSoft" };
 export default async function ConfiguracionPage({
   searchParams,
 }: {
-  searchParams?: { tab?: string | string[] };
+  searchParams?: { tab?: string | string[]; tenant?: string | string[] };
 }) {
   const actor = await getActor();
   // B1.7: rol desde `lib/authz` (cacheado por request) y criterio de
@@ -97,12 +97,22 @@ export default async function ConfiguracionPage({
   // por el contexto de módulos del shell para no depender de que esté montado.
   const modules = [...modulesFor(actor.entitlements)];
 
+  // [BO-Z B6] Consultorios suspendidos/dados de baja de los que es titular (misma foto del request que usó el gate:
+  // sin query extra). El soporte no baja PHI: lista vacía. `?tenant=` viene del mail de Plataforma.
+  const snapshot = actor.support ? null : await getAccessSnapshot();
+  const exportBlocked = (snapshot?.tenantBlocks ?? [])
+    .filter((b) => b.role === "OWNER")
+    .map((b) => ({ tenantId: b.tenantId, tenantName: b.tenantName, kind: b.kind }));
+  const rawTenant = Array.isArray(searchParams?.tenant) ? searchParams?.tenant[0] : searchParams?.tenant;
+
   return (
     <ConfiguracionClient
       role={uiRole}
       support={!!actor.support}
       initialTab={Array.isArray(searchParams?.tab) ? searchParams?.tab[0] : searchParams?.tab}
       planUsage={planUsage}
+      exportBlocked={exportBlocked}
+      exportRequestedTenantId={rawTenant?.trim().slice(0, 64) || null}
       supportSessions={supportSessions}
       modules={modules}
       tenant={tenant}

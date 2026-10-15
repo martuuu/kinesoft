@@ -890,12 +890,12 @@ revisores de solo lectura, fixers FX1a/FX1b server y FX2a/FX2b UI, gate en solit
 - **Pendiente de Martin:** R1-R4 y V1-V7 en staging ([EXTERNAL-CONFIG.md §3.1](EXTERNAL-CONFIG.md)); deploy en escalones
   `off → env → staging → supabase` (RUNBOOK «Deploy de SV»).
 
-**Ronda 21 — Bloque IAM: Identidad y acceso (14-oct-2026) ✅ (IAM-0..3 commiteados, IAM-4 sin commit todavía):**
+**Ronda 21 — Bloque IAM: Identidad y acceso (14-oct-2026) ✅ (commiteado; IAM-4 `d83efa8`):**
 ejecutado en develop sobre `73a0752` según el plan vigente §19.4 (decisiones IAM-D1..D12 y 2/6 de Martin del 14-oct,
 contratos C-IAM1..7). Commits: IAM-0 `f53de55` (hotfix ILIKE, mails con Resend, roles, puerto de Auth admin), IAM-1
 `972359f` (**M6** `20261014120000_identity_access`, sola), IAM-2 `67521e7` (invitaciones y activación propias, auth
 con mails propios, Secretaria fuera de agenda), IAM-3 `b8762a8` (acceso sin bucles, elegir consultorio, selector,
-portal con magic link); IAM-4 (actor sin profesional, superficies, administración del equipo) en el árbol. **1 migración
+portal con magic link), IAM-4 `d83efa8` (actor sin profesional, superficies, administración del equipo). **1 migración
 nueva**, M6, aplicada y verificada **solo en el Docker local**; en prod va sobre la base viva (sin reset ni staging,
 decisiones del 14-oct): [MIGRACIONES-RUNBOOK «M6 en prod»](MIGRACIONES-RUNBOOK.md). Arquitectura en
 [ARCHITECTURE.md §Identidad y acceso + ADR-007/ADR-008](ARCHITECTURE.md); seguridad en [SECURITY.md §18](SECURITY.md);
@@ -930,6 +930,35 @@ consola en [EXTERNAL-CONFIG.md §0.4](EXTERNAL-CONFIG.md); QA en [QA.md §Identi
 - **Gate de IAM (cierre de IAM-4, 14-oct):** tsc 0 (app y scripts); unit 3099 en UTC y en AR; guards OK; integración
   app 114 archivos / 1498 + 19 skip y owner 113 + 1 skip / 1478 + 39 skip; `next build` OK; perf sin regresiones (techo
   estricto de `createBooking` 34 intacto). Intermitente bajo carga: `locations-schedule-rooms` (hook; pasa solo 8/8).
+
+**Ronda 22 — Bloque BO: Back-office de Plataforma y preparación para producción (14-oct-2026) ✅ (commiteado):**
+ejecutado en develop sobre `d83efa8` según el plan vigente §19.5 (decisión 3 de Martin para el soporte, defaults
+BO-D1..D11 de §19.10, contratos C-BO1..9). Commits: BO0 `a02137e` (**M7** `20261015120000_platform_backoffice`, sola),
+BO1 `0d058bb` (acceso del consultorio y solo lectura, `PlatformActor`, registro de plataforma, catálogo de planes,
+health, robots/sitemap, beacon de errores), BO2 `39299b1` (alta de consultorio, equipo y cupos, usuarios y salud, ciclo de
+vida y alias de slug, soporte, catálogo al registro de plataforma), BO3-A `b97da5b` (grupo `(platform)` y shell), BO3
+`280c96f` (UI de Plataforma, banda de soporte, «Plan y uso»), BO4-BO5 `c60014f` (MFA de superadmin, CSP enforced en
+Plataforma, cron, mantenimiento, export). **1 migración nueva**, M7, aplicada y verificada **solo en el Docker local**;
+en prod va sobre la base viva: [MIGRACIONES-RUNBOOK «M7 en prod» y «Deploy de BO»](MIGRACIONES-RUNBOOK.md). Arquitectura
+en [ARCHITECTURE.md §Back-office + ADR-009..015](ARCHITECTURE.md); seguridad en [SECURITY.md §19](SECURITY.md); consola en
+[EXTERNAL-CONFIG.md §0.5](EXTERNAL-CONFIG.md); QA en [QA.md §BO](QA.md).
+
+- 🟢 **Cerrados:** `sin-panel-owner`, `plan-fields-inert-no-upgrade-no-enforcement`, `no-seat-usage-limits`,
+  `sin-sitemap-robots`, `cuentas-auth-huerfanas-sin-reparacion` (detector + reparación) y los de «Hallazgos del bloque
+  BO» marcados 🟢 (superadmin sin consultorio, health, error de solo lectura en agenda/pacientes, medianoche «24:xx»).
+- **Desvíos aceptados:** con `banner` se respetan suspendido y baja (C-BO1 decía «off/banner → full»); alias de slug con
+  **308** (`permanentRedirect`) en vez de 301; reactivar vale desde CLOSED; el job `invitations-expire` no escribe
+  («vencida» se deriva de `expiresAt`); el alta desde Plataforma audita al final de la tx (FK a Tenant) con lock por
+  `idempotencyKey`; el replay del alta no reenvía el mail; `maxDuration` del export en 60 s (entra en Hobby), no 300.
+- **Nuevos abiertos** (filas en «Hallazgos del bloque BO»): `readonly-residual-actions` (A, operación),
+  `cron-vs-salud-criterios-duplicados`, `format-compact-12h` (VX), `danger-hex-sin-token` (VX),
+  `export-error-como-archivo`, `invitacion-plataforma-sin-idempotency`. Siguen abiertos de IAM con destino BO:
+  `guard-auth-admin-y-getuser` y `email-log-sin-webhook-entrega`.
+- **Pendiente de Martin:** M7 en prod (precheck → backup → deploy), variables nuevas con los flags en default, enrolar
+  MFA y pasar a `enforce` antes de usar soporte, `CRON_SECRET`, plan o `seatLimitOverride` del cliente vivo antes del
+  deploy (los cupos rigen también en Configuración) ([EXTERNAL-CONFIG §0.5](EXTERNAL-CONFIG.md)).
+- **Gate de BO (cierre de BO4-BO5, 14-oct):** tsc 0; unit 179 archivos / 3540 en UTC y en AR; guards OK; integración
+  app 137 archivos / 1748 + 19 skip y owner 136 + 1 skip / 1724 + 43 skip; `next build` OK (middleware 124 kB).
 
 ## Cómo leer la severidad
 
@@ -1261,10 +1290,10 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | c2-no-tests-ci | alta | B | package.json | 🟢 | Ronda 1 + Ronda 3 (mismo cierre que `no-test-suite`) |
 | no-static-security-guard | alta | B | .github/workflows/ci.yml | 🟢 | Ronda 10 — step `npm run guard:isolation` en CI; desde A0b (Ronda 11) el CI corre en todas las ramas, no solo `main` |
 | no-saas-billing-charge-clinic | alta | B | lib/mercadopago.ts | 🔴 | mp-preapproval-webhook (Ola 2.4) |
-| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🔴 | subscription-entitlements (Ola 2.4). **07-oct:** EV0 le da efecto al plan (matriz de módulos) y lo hace editable desde /plataforma; el billing SaaS (webhook MP `source:"billing"`) sigue diferido |
+| plan-fields-inert-no-upgrade-no-enforcement | media | B | schema.prisma:28 | 🟢 | **BO (Ronda 22)** — el plan tiene efecto: módulos (EV0), cupos de profesionales (`PLAN_CATALOG`, `lib/plan-catalog.ts:34`; `checkSeatForJoinInTx`), trial 14 días PRO y vencimiento calculado (`tenantAccessFor`, `lib/tenant-access.ts:68`, con `TENANT_ACCESS_ENFORCEMENT`); se cambia desde /plataforma por el escritor único y se ve en Configuración → «Plan y uso». El cobro (billing SaaS con MP) sigue en `no-saas-billing-charge-clinic` (D) |
 | c1-ratelimit-inmemory | alta | C | lib/rate-limit.ts:38 | 🟡 | Código endurecido en A3a (30-sep: timeout, fallback con log, prefijo por entorno, purga). **Falta la env de Upstash** (EXTERNAL-CONFIG §4, dueño) |
 | booking-same-patient-slot-toctou | baja | B | lib/bookings.ts (create/update/batch) | 🟢 | Ronda 6 — guard de app + **backstop DB**: índice único parcial `("tenantId","patientId","scheduledFor") WHERE patientId IS NOT NULL AND status <> 'CANCELLED'`, `P2002` manejado en los 4 paths de escritura |
-| sin-panel-owner | alta | B | lib/session.ts / app/(app)/plataforma | 🟡 | Ronda 7 — **parcial**: entregados `UserProfile.isPlatformAdmin`, `requireSuperAdmin()`, guard + sidebar y el panel `plataforma/{ejercicios,tags}` con CRUD del catálogo global. **Faltan** tickets/feedback, formulario de contacto e impersonación cross-tenant |
+| sin-panel-owner | alta | B | lib/platform-actor.ts · app/(platform)/** | 🟢 | **BO (Ronda 22)** — `/plataforma` completa: alta de consultorio + titular, equipo, usuarios y reparación, ciclo de vida, soporte, auditoría, salud, sistema; superadmin sin consultorio (`PlatformActor`) con MFA. Tickets/feedback y formulario de contacto quedan para C2 |
 
 ### Menores (63) — agrupados por tema
 
@@ -1310,7 +1339,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | upload-sin-magic-bytes | media | lib/files.ts:118 | 🔴 | files-magic-bytes — sin sniffing de firma en el código |
 | password-sin-complejidad | baja | lib/auth.ts:53 | 🟢 | password-policy (Ronda 2; el lado Supabase es del dueño) |
 | rate-limit-inmemory-activo-prod | media | lib/rate-limit.ts | 🟡 | Código listo (A3a, 30-sep); EXTERNAL-CONFIG: Upstash (dueño) |
-| m1-sentry-no-wired | media | instrumentation.ts | 🟡 | A3b-S-obs (30-sep): `@sentry/nextjs` 11.1.0 instalado, no-op sin DSN, PII redactada. **Falta `SENTRY_DSN`** (dueño). Sin SDK de cliente hasta C1 |
+| m1-sentry-no-wired | media | instrumentation.ts | 🟡 | A3b-S-obs (30-sep): `@sentry/nextjs` 11.1.0 instalado, no-op sin DSN, PII redactada. **Falta `SENTRY_DSN`** (dueño). Sin SDK de cliente: desde BO1-D los error boundaries mandan un beacon a `/api/client-errors` (redactado) |
 | sentry-no-cableado | media | instrumentation.ts | 🟡 | mismo estado que `m1-sentry-no-wired` |
 | m2-silent-catches | media | notifications-internal.ts:37 | 🟢 | sentry-observabilidad (Ronda 2) |
 | audit-fire-and-forget | media | audit-extension.ts:74 | 🟢 | sentry-observabilidad (Ronda 2) |
@@ -1341,7 +1370,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | deuda-archivos-grandes | media | components varios | 🟢 | split-* (Ronda 3) |
 | role-gating-disperso-sin-matriz-central | media | lib/capabilities.ts · lib/authz.ts | 🟡 | capabilities-matrix — B-pre B1.7 (matriz única, los 6 chequeos copiados reemplazados); falta que `Actor` lleve el rol (C0) |
 | roles-assistant-billing-cosmeticos | media | lib/roles.ts · lib/session.ts · lib/practitioner-scope.ts | 🟢 | **IAM-0c/2e/4a** (Ronda 21) — etiquetas únicas (`roleLabel`: Secretario/a, Facturación), no reservables (`bookablePractitionerWhere` mira rol clínico), entran sin `Practitioner` (`Actor.practitionerId` null) |
-| no-seat-usage-limits | media | lib/plan-gating.ts:36 | 🔴 | seats-limits |
+| no-seat-usage-limits | media | lib/plan-catalog.ts · lib/team-internal.ts | 🟢 | **BO1-C/BO2-B** (Ronda 22) — Free 1 · Base 3 · PRO 10 · Enterprise sin tope, `seatLimitOverride`; rige al invitar, subir de rol y aceptar (`lib/team-internal.ts:269`); Secretaria/Facturación no ocupan |
 | no-realtime-agenda-compartida | media | lib/booking-events-internal.ts · lib/realtime-*.ts · components/providers/realtime-provider.tsx | 🟢 | **SV** (Ronda 20, 14-oct) — Broadcast privado por tenant publicado desde el hook post-commit; agenda, Recepción y `/sala` re-piden en vivo (ADR-006) |
 | portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
 | patient-tenancy-single-home-row | baja | schema.prisma:250 | 🔴 | Planes P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + P4-S24a (una cuenta, fichas por consultorio, sin compartir nada clínico) |
@@ -1363,7 +1392,7 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | money-input-sin-parser-ar | media | configuracion-client.tsx:565, agenda-client.tsx:218 | 🟢 | money-input-parser — `parseARS` en `lib/format.ts` + call sites migrados (Ronda 2) |
 | dicom-fuera-de-allowlist | baja | lib/files.ts:33 | 🔴 | booking-adjuntos |
 | sin-not-found-403-custom | baja | app/ | 🟡 | error-loading-boundaries — `app/not-found.tsx` ✅ (Ronda 1); **403 custom sigue diferido** |
-| sin-sitemap-robots | baja | app/ | 🔴 | seo-analytics |
+| sin-sitemap-robots | baja | app/robots.ts · app/sitemap.ts | 🟢 | **BO1-D** (Ronda 22) — `robots.ts` y `sitemap.ts`; test `tests/unit/robots-sitemap.test.ts` |
 
 ### Hallazgos de la auditoría 23-sep y de A2/A3 (30-sep-2026)
 
@@ -1729,12 +1758,29 @@ Ronda 21. Los 🟢 se cerraron en las sesiones IAM-0a..4c y se verificaron en el
 | createbooking-acepta-secretaria | media | B | lib/bookings-core.ts:731 · lib/availability-loader.ts:270 | 🟢 | **IAM-4b** — con el id de la Secretaria, `createBooking`, el batch y el loader con `practitionerIds` explícitos la aceptaban. Ahora `bookablePractitionerWhere`; reprogramar un turno viejo de ella se rechaza, cancelarlo sigue andando |
 | reset-admin-no-existe | baja | C0 | lib/invitations.ts:869 | 🟢 | **IAM-4c** — «Mandar link para nueva contraseña» sin exponer el link (§5.47) |
 | insurers-catalog-ilike-nombre | baja | C | lib/insurers-internal.ts:26 · lib/catalog.ts:168 | 🔴 | **C** — comparan nombre/código de obra social con `ILIKE` sin escapar. Sin PHI (catálogo), pero un `_` matchea de más. Pasar a `escapeLike` |
-| cuentas-auth-huerfanas-sin-reparacion | media | BO | — | 🔴 | **BO2-C** — usuarios de Auth huérfanos (zombies viejos de `inviteUserByEmail`, altas trabadas), miembros sin `Practitioner`, consultorios sin OWNER: detectores y reparación desde `/plataforma` (absorbe la «4d» de IAM). Hoy la activación adopta zombies solo si `canSafelyDeleteAuthUser` |
+| cuentas-auth-huerfanas-sin-reparacion | media | BO | lib/platform-health-{logic,read}.ts · lib/platform-users.ts | 🟢 | **BO2-C/BO3-D** (Ronda 22) — `/plataforma/salud`: detectores (huérfanos de Auth, consultorios sin OWNER, miembros clínicos sin `Practitioner`, altas trabadas, invitaciones vencidas, email de perfil ≠ Auth) y reparaciones (`repairDeleteAuthOrphan`, `repairCreatePractitioner`, `repairSyncProfileEmail`; sin OWNER → transferir desde el equipo) |
 | guard-auth-admin-y-getuser | baja | BO | scripts/guard-* | 🔴 | **BO** (invariantes §19.5) — `auth.admin.` solo en el puerto y `auth.getUser()` solo en `getVerifiedSessionUser` se cumplen hoy (grep), pero sin guard estático |
 | email-log-sin-webhook-entrega | baja | BO | lib/email/log.ts | 🔴 | **IAM-5 (opcional) / BO** — `EmailLog` registra «Resend lo aceptó», no entregado/rebote/queja |
 | formfield-sin-autocomplete-new-password | baja | VX | components/ui/form-field.tsx | 🔴 | **VX** — los campos de contraseña nueva (activación, reset) no pasan `autoComplete="new-password"` |
 | invitedat-membresia-preexistente | baja | C0 | lib/invite-activation-internal.ts (`joinTenantInTx`) | 🔴 | **C0** — al aceptar una invitación nueva sobre una membresía existente no se actualiza `invitedAt` |
 | comentarios-viejos-iam | baja | poda | lib/supabase/admin.ts:12 | 🔴 | **Poda** — el comentario todavía dice que el admin client se usa para `auth.admin.inviteUserByEmail` (`lib/practitioner-scope.ts:30-31` ya se corrigió) |
+
+### Hallazgos del bloque BO (BO-Z, 14-oct-2026)
+
+Ronda 22. Los 🟢 se verificaron en el archivo al cierre.
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| superadmin-necesita-consultorio-casa | alta | BO | lib/platform-actor.ts:197 · app/(platform)/layout.tsx:35 | 🟢 | **BO1-A/BO3-A** — `requirePlatformAdmin` no pasa por `buildActor`; grupo `(platform)` con `notFound()` para no admins (§19.1) |
+| sin-health-endpoint | media | BO | app/api/health/route.ts | 🟢 | **BO1-D** — `{ ok, db, maintenance, time }`, `SELECT 1` con timeout 2 s (`lib/db-ping.ts`), 60/min/IP, sin detalles. Falta el monitor externo (Martin, §19.9) |
+| readonly-error-redactado-agenda-pacientes | media | A | lib/bookings.ts · lib/patients.ts · lib/read-only-result.ts:17 | 🟢 | **BO3-F** — en prod Next redacta los errores de server actions: el `ReadOnlyModeError` se veía como error genérico. `readOnlyFailure(e)` lo devuelve como resultado en los write-paths de agenda y pacientes |
+| medianoche-24-horas | baja | C | lib/format.ts:41,56 | 🟢 | **BO3-F** — `hour12:false` imprimía «24:30»; ahora `hourCycle:"h23"` (00:30) |
+| readonly-residual-actions | media | **A** (operación) | actions de diagnóstico, evaluaciones, ejercicios, plantillas de plan, plans-adopt y Configuración | 🟡 | **EV1 / C** — sin `readOnlyFailure`: con el consultorio en solo lectura (enforce) o como soporte fuera de la allowlist, el usuario ve un error genérico. La banda de acceso / soporte explica por qué; no hay escritura indebida (la tx es read-only). Aplicar el helper antes de pasar a `enforce` |
+| cron-vs-salud-criterios-duplicados | baja | C | lib/cron-jobs-internal.ts:263 (`healthCountsCore`) · lib/platform-health-read.ts | 🟡 | **C** — el resumen diario y `/plataforma/salud` arman sus conteos por separado (comparten solo `authOrphansFrom`, `emailMismatchesFrom`, `stalledOnboardingCutoff`). Mover los criterios a `lib/platform-health-logic.ts` y usarlos en los dos |
+| format-compact-12h | baja | VX | lib/format.ts:48 (preset `compact`) | 🟡 | **VX** — sin `hourCycle`: sale «12:30 a. m.» en vez de 00:30 |
+| danger-hex-sin-token | baja | VX | components/plataforma/** (`#9F1F1F`, `#9A5B00`) | 🟡 | **VX1** — colores de peligro/aviso a mano; falta el token `--danger-*` en `app/globals.css` |
+| export-error-como-archivo | baja | C | components/configuracion/panels/export-panel.tsx:70 · app/suspendido/page.tsx:66 | 🟡 | **C** — el export es un `<a download>` (streaming sin `fetch`): un 403/429 de la ruta baja como archivo de texto con el mensaje en vez de mostrarse en pantalla |
+| invitacion-plataforma-sin-idempotency | baja | C | components/plataforma/team/invite-drawer.tsx | 🟡 | **C** — el schema strict de la invitación no acepta `idempotencyKey`: un doble click re-invita (el reinvite por email es idempotente; sale un mail más) |
 
 ### Resumen del checklist (al 2026-09-29)
 
@@ -1802,12 +1848,15 @@ era intencional.
    la transacción. No romper la semántica local-a-tx.
 2. **`lib/session.ts`** — `getActor()` throws / `tryGetActor()` null; demo actor gateado por
    `KINESOFT_ALLOW_DEMO_ACTOR` + `NODE_ENV !== "production"` + tenant `movare`. No relajar el gate.
-3. **`middleware.ts:109-144`** — borra `x-tenant-slug` y `x-tenant-id` de cada request y solo re-setea
-   `x-tenant-slug` para `/c/<slug>` y subdominios (anti-smuggling). Preservar el orden delete-then-set.
-   Desde A3b (30-sep) el mismo middleware **refresca la sesión de Supabase** (`getAll`/`setAll` +
-   `getSession()`, `:69-87`), copia las cookies al request y a la respuesta, marca `private, no-store` si hubo
-   Set-Cookie (`:129`) y deja pasar `/_next` y `/api/webhooks` sin tocarlos (`:99`). El strip y el
-   `x-request-id` corren en **todos** los caminos, también cuando hubo refresh: no separarlos.
+3. **`middleware.ts:109-189`** — borra `x-tenant-slug` y `x-tenant-id` de cada request (`:127-128`) y solo re-setea
+   `x-tenant-slug` para `/c/<slug>` y subdominios (`:176-186`, anti-smuggling). Preservar el orden delete-then-set.
+   Desde A3b (30-sep) el mismo middleware **refresca la sesión de Supabase** (`refreshSupabaseSession`, `getAll`/`setAll`
+   + `getSession()`, `:77-107`), copia las cookies al request y a la respuesta, marca `private, no-store` si hubo
+   Set-Cookie (`:151-154`) y deja pasar `/_next` y `/api/webhooks` sin tocarlos (`:113-115`). El strip y el
+   `x-request-id` (`:132-137`) corren en **todos** los caminos, también cuando hubo refresh: no separarlos.
+   **Nota BO5-B (14-oct):** el modo mantenimiento (`lib/maintenance.ts`; `:117-119` y `:158-174`) va **después** del
+   bypass de webhooks (MP nunca se corta) y **después** del strip y del `x-request-id`, que corren igual en el 503; con
+   el modo prendido lo bloqueado no refresca la sesión. Con `off` el camino es idéntico al de antes.
 4. **`lib/mercadopago.ts`** — firma HMAC-SHA256 con `timingSafeEqual`, ventana de replay 5 min,
    `consumeWebhook` idempotente por `(externalId, status)`, `redactPayload` allow-list; prod 503 sin
    `MP_WEBHOOK_SECRET`. No reintroducir carve-out por `NODE_ENV` en la firma. **Desde A2b (30-sep):**
@@ -1919,6 +1968,11 @@ era intencional.
     (`updateUserById({ emailConfirm: true })`, solo si `canSafelyDeleteAuthUser`) entra en la misma excepción. Lo
     vigila `tests/unit/email-confirm-guard.test.ts` (fuera de esos archivos, del puerto y de
     `scripts/diagnose-auth.ts`, un `email_confirm: true` / `emailConfirm: true` rompe el test).
+    **Enmienda BO2-A (14-oct):** el alta desde Plataforma (`lib/platform-provisioning-internal.ts`) es un segundo
+    llamador de `bootstrapTenant` (con la vertical, los servicios iniciales y el plan/trial por el escritor único). Crea
+    la cuenta del titular **sin confirmar y sin contraseña** (`createUser({ emailConfirm: false })`, `:163`; no entra en
+    la excepción de IAM-D1) y le manda un link de recovery a `/reset` (`issueAccessLink`, `:365`): el email lo confirma
+    ese link, que llega a esa casilla. El signup sigue sin crear tenant.
 
 27. **Motor de disponibilidad y su paridad (B-pre).** `lib/availability/*` es puro (sin DB, `now` inyectado,
     reloj por `lib/datetime-ar.ts`); el único punto de DB es `lib/availability-loader.ts`, con `db` inyectado (tx
@@ -1959,7 +2013,7 @@ era intencional.
 31. **Catálogo GLOBAL_READONLY.** Specialty, Practice, PracticeSpecialty, Payer y CatalogImportRun: ENABLE +
     FORCE + **solo** `FOR SELECT USING (true)`, ninguna policy de escritura (`scripts/guard-tenant-isolation.mjs`
     lo exige). PayerPlan: split (lectura global + propia, escritura propia). Escriben solo el import (conexión
-    owner, verifica `rolbypassrls`) y Plataforma (`prismaService` detrás de `requireSuperAdmin`). Las actions del
+    owner, verifica `rolbypassrls`) y Plataforma (`prismaService` detrás de `requirePlatformAdmin`, BO). Las actions del
     consultorio validan `payerId`/`practiceId`/`payerPlanId` (global o propio, no archivado, plan de esa
     prestadora): las FK saltean RLS. No agregar una policy de escritura "para simplificar".
 32. **`curatedAt` protegido por el import.** `scripts/catalog-import.ts` / `lib/catalog/import-core.ts` nunca

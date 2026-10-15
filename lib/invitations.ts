@@ -38,7 +38,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import type { Role } from "@prisma/client";
 import { z } from "zod";
 import { runWithRls } from "@/lib/rls";
-import { getActor, ForbiddenError, type Actor } from "@/lib/session";
+import { getActor, ForbiddenError, writableError, type Actor } from "@/lib/session";
 import { getMembershipRole } from "@/lib/authz";
 import { withSupportWritable } from "@/lib/support-writable";
 import { invitationStatus } from "@/lib/access-logic";
@@ -91,7 +91,14 @@ async function requireTeamManager(): Promise<{ actor: Actor; role: "OWNER" | "AD
 
 /** C-BO8: el contexto de los núcleos de `lib/team-internal.ts` para quien gestiona desde Configuración. */
 function tenantCtx(actor: Actor, role: "OWNER" | "ADMIN"): TeamActorCtx {
-  return { via: "tenant", tenantId: actor.tenantId, actorUserId: actor.userId, actorRole: role, actorRef: null };
+  return {
+    via: "tenant",
+    tenantId: actor.tenantId,
+    actorUserId: actor.userId,
+    actorRole: role,
+    actorRef: null,
+    ...(actor.support ? { support: true } : {}),
+  };
 }
 
 function fallbackTenant(actor: Actor) {
@@ -398,6 +405,10 @@ export async function sendMemberPasswordReset(...args: Parameters<typeof sendMem
 
 async function sendMemberPasswordResetImpl(membershipId: string): Promise<ActionResult<MemberPasswordResetResult>> {
   const { actor, role } = await requireTeamManager();
+  // BO-Z (C1): el link de recuperación y el mail salen ANTES de la única escritura (el audit). En solo lectura
+  // (enforce) la persona recibía el mail y la tx del audit fallaba: una llave entregada sin rastro. Corte al inicio.
+  const readOnly = writableError(actor);
+  if (readOnly) return { ok: false, error: readOnly };
   const parsedId = IdInput.safeParse(membershipId);
   if (!parsedId.success) return { ok: false, error: "Miembro no encontrado." };
   const r = await teamSendMemberPasswordReset(tenantCtx(actor, role), parsedId.data, actor.tenantName);

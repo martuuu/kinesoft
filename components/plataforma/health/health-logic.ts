@@ -30,7 +30,7 @@ export const HEALTH_DETECTORS: readonly HealthDetectorCopy[] = [
   {
     key: "tenantsWithoutOwner",
     title: "Consultorios sin titular",
-    description: "Nadie con rol de dueño activo: no hay quién gestione el equipo.",
+    description: "Nadie con rol de titular activo: no hay quién gestione el equipo.",
     emptyText: "Todos los consultorios tienen titular.",
   },
   {

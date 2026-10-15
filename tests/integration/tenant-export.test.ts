@@ -277,6 +277,9 @@ describe.skipIf(!RUN)("[BO5-C] Plataforma «Pedir export»: el superadmin no rec
     expect(mails).toHaveLength(1);
     expect(mails[0]).toMatchObject({ to: `${A.userId}@test.local`, kind: "tenant_export_request", tenantId: A.tenantId });
     expect(mails[0].html).toContain("/configuracion?tab=exportar");
+    // [BO-Z] B6: el link lleva al export de ESTE consultorio (titular de varios, con este suspendido).
+    expect(mails[0].text).toContain(`/configuracion?tab=exportar&tenant=${A.tenantId}`);
+    expect(mails[0].text).not.toContain("la pantalla que ves al entrar");
     expect(mails[0].html + mails[0].text).not.toContain("PHI-PEDIDO");
     expect(await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "platform.tenant.export.request", actorId: H.userId } })).toBe(1);
     expect(await db.platformAuditEvent.count({ where: { tenantId: A.tenantId, action: "platform.tenant.export.request", actorId: H.userId } })).toBe(1);

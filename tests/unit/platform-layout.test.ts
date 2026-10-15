@@ -164,13 +164,15 @@ describe("[BO3-A] app/(platform)/layout.tsx", () => {
     expect((await run()).type).toBe(PlatformShell);
   });
 
-  it("[BO4] enforce y GoTrue caído → se propaga (ni 404 ni pasa)", async () => {
+  it("[BO-Z B9] enforce y GoTrue caído → /plataforma-mfa/verificar con next (su «Reintentar»; ni 404 ni pasa)", async () => {
     process.env.PLATFORM_MFA_ENFORCEMENT = "enforce";
     const fake = PlatformMfaFake.withVerifiedFactor("aal2");
     fake.failAssurance = true;
     __setPlatformMfaForTests(fake);
     h.snapshot = snap({ admin: true, home: null });
-    await expect(run()).rejects.toMatchObject({ name: "PlatformMfaRequiredError", step: "unavailable" });
+    await expect(run()).rejects.toThrow(
+      `NEXT_REDIRECT:/plataforma-mfa/verificar?next=${encodeURIComponent("/plataforma/consultorios")}`
+    );
   });
 
   it("[BO4] enforce: un usuario de consultorio sigue viendo 404 (no se le revela el MFA de Plataforma)", async () => {

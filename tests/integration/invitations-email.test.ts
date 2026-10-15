@@ -64,6 +64,16 @@ const tokenOf = (url: string | null) => {
   return m[1];
 };
 
+/**
+ * [BO-Z] C4: con el mail enviado, el resultado ya no trae la URL (es una credencial que ya está en la casilla del
+ * invitado). Los tests sacan el link del mail que salió, que es lo que recibe la persona.
+ */
+const urlFromMail = (i: number) => {
+  const m = /https?:\/\/\S+\/invite\/[A-Za-z0-9_-]+/.exec(mail.sent[i]?.text ?? "");
+  if (!m) throw new Error(`mail #${i} sin link de invitación`);
+  return m[0];
+};
+
 describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => {
   let db: PrismaClient;
   let A: EphemeralTenant;
@@ -100,7 +110,10 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data).toMatchObject({ emailSent: true, transport: "resend", emailStatus: "sent" });
-    expect(r.data.url).toMatch(new RegExp(`^${env.NEXT_PUBLIC_APP_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/invite/[A-Za-z0-9_-]+$`));
+    // [BO-Z] C4: mail enviado → sin URL en el resultado.
+    expect(r.data.url).toBeNull();
+    const url = urlFromMail(0);
+    expect(url).toMatch(new RegExp(`^${env.NEXT_PUBLIC_APP_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/invite/[A-Za-z0-9_-]+$`));
 
     expect(gotrue.calls).toHaveLength(0);
     expect(mail.sent).toHaveLength(1);
@@ -113,12 +126,11 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
     expect(m.replyTo).toBe("turnos@consultorio.test");
     const tenant = await db.tenant.findUniqueOrThrow({ where: { id: A.tenantId }, select: { name: true } });
     expect(m.fromName).toBe(tenant.name);
-    expect(m.html).toContain(r.data.url!);
-    expect(m.text).toContain(r.data.url!);
+    expect(m.html).toContain(url);
     expect(m.text).toContain("Secretario/a");
 
     const row = await db.invitation.findUniqueOrThrow({ where: { id: r.data.id } });
-    expect(row.token).toBe(hashInviteToken(tokenOf(r.data.url)));
+    expect(row.token).toBe(hashInviteToken(tokenOf(url)));
     expect(row.sendCount).toBe(1);
     expect(row.lastSentAt).not.toBeNull();
 
@@ -142,17 +154,17 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
   it("Reenviar: token nuevo, el link anterior sigue valiendo, lastSentAt y sendCount+1, audita", async () => {
     const r1 = await createInvitation({ email: email(), firstName: "Caro", lastName: "Díaz" });
     if (!r1.ok) throw new Error(r1.error);
-    const t1 = tokenOf(r1.data.url);
+    const t1 = tokenOf(urlFromMail(0));
     const before = await db.invitation.findUniqueOrThrow({ where: { id: r1.data.id } });
     __rateLimitInternals.reset();
 
     const r2 = await resendInvitation(r1.data.id);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
-    const t2 = tokenOf(r2.data.url);
-    expect(t2).not.toBe(t1);
+    expect(r2.data.url).toBeNull();
     expect(mail.sent).toHaveLength(2);
-    expect(mail.sent[1].html).toContain(r2.data.url!);
+    const t2 = tokenOf(urlFromMail(1));
+    expect(t2).not.toBe(t1);
 
     const row = await db.invitation.findUniqueOrThrow({ where: { id: r1.data.id } });
     expect(row.token).toBe(hashInviteToken(t2));
@@ -179,15 +191,14 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
     const r3 = await regenerateInvitationUrl(r1.data.id);
     expect(r3.ok).toBe(true);
     if (!r3.ok) return;
-    const t3 = tokenOf(r3.data.url);
+    const t3 = tokenOf(urlFromMail(2));
 
-    expect(await findInvitationByRawToken(tokenOf(r1.data.url))).toBeNull();
-    expect(await findInvitationByRawToken(tokenOf(r2.data.url))).toBeNull();
+    expect(await findInvitationByRawToken(tokenOf(urlFromMail(0)))).toBeNull();
+    expect(await findInvitationByRawToken(tokenOf(urlFromMail(1)))).toBeNull();
     expect((await findInvitationByRawToken(t3))?.status).toBe("pending");
     const row = await db.invitation.findUniqueOrThrow({ where: { id: r1.data.id } });
     expect(row.priorTokens).toEqual([]);
     expect(row.sendCount).toBe(3);
-    expect(mail.sent.at(-1)?.html).toContain(r3.data.url!);
     expect(
       await db.auditEvent.count({ where: { tenantId: A.tenantId, action: "invitation.regenerate", entityId: r1.data.id } })
     ).toBe(1);
@@ -196,7 +207,7 @@ describe.skipIf(!RUN)("IAM-2a · invitaciones sin Supabase, mail propio", () => 
   it("Anular deja la fila con revokedAt/revokedById y el link deja de valer", async () => {
     const r1 = await createInvitation({ email: email(), firstName: "Eli", lastName: "Sosa" });
     if (!r1.ok) throw new Error(r1.error);
-    const t1 = tokenOf(r1.data.url);
+    const t1 = tokenOf(urlFromMail(0));
 
     const r = await revokeInvitation(r1.data.id);
     expect(r.ok).toBe(true);

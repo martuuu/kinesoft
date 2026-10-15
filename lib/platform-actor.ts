@@ -72,7 +72,9 @@ export const PLATFORM_ACTION_POLICY = {
   "team.invite": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
   "team.access.revoke": { risk: "high", rateLimit: { limit: 20, windowMs: 10 * MIN } },
   "team.transfer_owner": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
-  "user.access_link": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },
+  // BO-Z (B2): high. Emite un link de recuperación de la cuenta de OTRA persona (con el mail caído, y si la cuenta no
+  // se activó nunca, el superadmin lo ve): con MFA en enforce pide el código reciente, como deshabilitar.
+  "user.access_link": { risk: "high", rateLimit: { limit: 30, windowMs: 10 * MIN } },
   "user.disable": { risk: "high", rateLimit: { limit: 10, windowMs: 10 * MIN } },
   "user.superadmin.update": { risk: "high", rateLimit: { limit: 5, windowMs: 10 * MIN } },
   "repair.run": { risk: "medium", rateLimit: { limit: 30, windowMs: 10 * MIN } },

@@ -141,6 +141,43 @@ Desde IAM **la app manda todos los mails y Supabase solo emite tokens** (ARCHITE
 7. **Local:** mailpit (`docker compose --profile mail up -d mailpit`, UI en http://localhost:8025) y
    `EMAIL_TRANSPORT="mailpit"` en `.env.local`. Sin eso, los mails de dev quedan en el log.
 
+### 0.5 BO — Back-office, MFA, cron y mantenimiento (14-oct-2026) 🔴
+
+Orden del deploy en [MIGRACIONES-RUNBOOK «Deploy de BO»](MIGRACIONES-RUNBOOK.md). Variables nuevas (Vercel → Production;
+vacías = default; cambiar cualquiera pide **redeploy**):
+
+| Variable | Default | Cuándo cambiarla |
+|---|---|---|
+| `TENANT_ACCESS_ENFORCEMENT` | `banner` (`off` \| `banner` \| `enforce`) | `banner`: la prueba vencida o el impago solo muestran la banda; suspender y dar de baja desde /plataforma **sí** cortan. `enforce`: el consultorio vencido (después de la gracia de 7 días de prueba o 10 de impago) queda en **solo lectura** (nunca se bloquea leer). `off`: interruptor de emergencia (ni la suspensión corta). Pasar a `enforce` cuando decidas cobrar de verdad |
+| `PLATFORM_MFA_ENFORCEMENT` | `off` (`off` \| `enforce`) | `enforce` después de enrolarte (pasos abajo). **Antes de usar «Entrar como soporte»** |
+| `MAINTENANCE_MODE` | `off` (`off` \| `on`) | `on` + redeploy para cerrar la app con 503 durante una migración larga. Sin bypass para superadmin; Mercado Pago, `/api/health` y los crons siguen. Probar el rewrite una vez en un Preview |
+| `MAINTENANCE_MESSAGE` | vacía | Una línea que ve **cualquiera** en `/mantenimiento` (máx. 280): nada interno |
+| `CRON_SECRET` | — | Cargarla ya: `openssl rand -hex 32`, solo Production. Vercel la manda como `Authorization: Bearer` a los crons; sin ella responden 503 y no corren |
+| `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_REPLY_TO` | — | Ya documentadas en §0.4. BO suma mails: activación del titular, link de acceso, «soporte entró», recordatorio de prueba, resumen diario de salud y pedido de export. Sin Resend, el alta de consultorio muestra el link para copiar |
+
+**MFA de superadmin (Supabase TOTP):**
+1. Supabase → Authentication → **Multi-Factor** → TOTP **habilitado** (viene así por defecto; si está apagado, enrolar
+   da error en pantalla).
+2. Deploy con `PLATFORM_MFA_ENFORCEMENT` en `off`.
+3. Cada superadmin entra a **`/plataforma-mfa/configurar`**, escanea el QR con su app de autenticación y confirma con un
+   código.
+4. Probar **`/plataforma-mfa/verificar`** (cerrar sesión, volver a entrar, poner el código).
+5. `PLATFORM_MFA_ENFORCEMENT=enforce` + redeploy. Desde ahí `/plataforma` pide el código al entrar y otra vez (cada 10
+   min) para acciones de riesgo: suspender/dar de baja/cambiar slug, cortar acceso, transferir titular, deshabilitar
+   usuarios, dar superadmin, entrar como soporte, pedir export.
+6. **Recuperación** si se pierde el teléfono: `PLATFORM_MFA_ENFORCEMENT=off` + redeploy y volver a enrolar, o borrar el
+   factor en Supabase → Authentication → Users → el usuario → MFA factors.
+7. La CSP de `/plataforma` es bloqueante: la toolbar de Vercel no aparece ahí en los Preview (es esperado).
+
+**Vercel: Hobby vs Pro.**
+- Crons: en Hobby corren **una vez por día y a una hora inexacta** dentro de la hora configurada (06, 11 y 12 UTC); en Pro,
+  a la hora exacta. Solo en Production.
+- `maxDuration`: Hobby 60 s (el export del consultorio está en 60 s; uno grande puede cortarse), Pro hasta 300 s
+  (subirlo en `vercel.json`). Pro además es el plan para uso comercial (§19.9 del plan).
+
+**Monitor externo:** apuntar un monitor (UptimeRobot o similar) a `GET /api/health` cada 1-5 min: `200 { ok: true }`;
+`503` = base caída; `maintenance: true` = cerrado a propósito.
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`

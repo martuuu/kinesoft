@@ -404,6 +404,33 @@ describe.skipIf(!RUN)("[BO2-A] alta de consultorio + titular desde Plataforma", 
     extraProfiles.delete(other.userId); // lo borra la limpieza de `other`
   });
 
+  it("[BO-Z] B2/B7: titular con cuenta YA activa + mail caído → sin activationUrl; el mail no le pide elegir contraseña", async () => {
+    const u = `test-user-${uniqueSuffix()}`;
+    const ownerEmail = `${u}@test.local`;
+    await db.userProfile.create({ data: { id: u, email: ownerEmail } });
+    extraProfiles.add(u);
+    gotrue.users.set(u, {
+      id: u,
+      email: ownerEmail,
+      emailConfirmedAt: new Date().toISOString(),
+      lastSignInAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      bannedUntil: null,
+      password: "clave-de-siempre",
+      fullName: "Activa",
+    });
+    mail.next = { ok: false, transport: "resend", skipped: false, reason: "bounce" };
+    const r = await track(createTenantWithOwner(input({ ownerEmail })));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.emailSent).toBe(false);
+    // El link de recuperación de una cuenta ajena y activa NO viaja al navegador del superadmin.
+    expect(r.data.activationUrl).toBeUndefined();
+    expect(mail.sent[0]?.text).toContain("Entrar al consultorio");
+    expect(mail.sent[0]?.text).toContain("tu contraseña de siempre");
+    expect(mail.sent[0]?.text).not.toContain("elegir tu contraseña");
+  });
+
   it("email de un paciente con portal (§5.22) → rechazo sin crear cuenta ni consultorio", async () => {
     const portalUser = `test-user-${uniqueSuffix()}`;
     await db.userProfile.create({ data: { id: portalUser, email: `${portalUser}@test.local` } });

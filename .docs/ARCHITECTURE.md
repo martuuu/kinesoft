@@ -432,6 +432,159 @@ tabla `EmailLog` (`tenantId` nullable, RLS ENABLE + FORCE). Orden para prod en M
 | `app/invite/[token]/*` · `app/sin-acceso` · `app/elegir-consultorio` · `app/auth/confirm/continuar` | Activación/aceptación, pantalla sin acceso, elección de consultorio, paso intermedio anti-escáner |
 | `scripts/diagnose-email.ts` · `scripts/diagnose-auth.ts` | Los corre Martin: camino real del mail y contrato del puerto contra Supabase real (EXTERNAL-CONFIG §0.4) |
 
+## Back-office de Plataforma (BO, 14-oct-2026)
+
+Bloque BO del plan vigente §19.5 (olas BO0..BO5, migración **M7** `20261015120000_platform_backoffice`, contratos
+C-BO1..C-BO9, defaults BO-D1..D11 de §19.10 y decisión 3 de Martin para el soporte). Commits: BO0 `a02137e` (M7, sola),
+BO1 `0d058bb`, BO2 `39299b1`, BO3-A `b97da5b`, BO3 `280c96f`, BO4-BO5 `c60014f`. Lo motivó §19.1: el superadmin
+necesitaba un consultorio «casa» para llegar a `/plataforma`, no había forma de dar de alta, suspender ni reparar un
+consultorio desde la app, y el plan del tenant no tenía efecto (ni cupos ni vencimiento). Seguridad en
+[SECURITY.md §19](SECURITY.md); prod en [MIGRACIONES-RUNBOOK «M7 en prod» y «Deploy de BO»](MIGRACIONES-RUNBOOK.md).
+
+**Modelo (M7).** `Tenant.status` (ACTIVE · SUSPENDED · CLOSED) + `statusChangedAt`/`statusReason`,
+`subscriptionStatusChangedAt`, `seatLimitOverride`; `UserProfile.disabledAt/disabledReason` (deshabilitado en toda la
+plataforma, distinto de `Membership.disabledAt` de M6); tablas `PlatformAuditEvent` (SERVICE_ONLY), `SupportSession`
+(TENANT_READONLY) y `TenantSlugAlias` (SERVICE_ONLY). Las categorías nuevas las clasifica `npm run guard:isolation`.
+
+### ADR-009 — Superadmin sin consultorio (status: ACCEPTED, BO1-A/BO3-A)
+
+- `requirePlatformAdmin(action?)` (`lib/platform-actor.ts:197`) devuelve un `PlatformActor` (`{ userId, email,
+  homeTenantId, mfa }`) mirando solo la sesión verificada y el perfil (`getAccessSnapshot`): **no pasa por
+  `buildActor`**, así que un superadmin sin consultorio, o con el suyo suspendido, entra igual. `homeTenantId` es una
+  referencia para el registro, nunca un permiso.
+- Cada clave de acción está en `PLATFORM_ACTION_POLICY` (`lib/platform-actor.ts:54`) con riesgo (`low` · `medium` ·
+  `high`) y rate limit por superadmin y acción. Una clave desconocida falla cerrado (`unknown_platform_action`).
+- `/plataforma` vive en su grupo de rutas `app/(platform)/**` (misma URL) con `PlatformShell` propio. El layout
+  (`app/(platform)/layout.tsx:35`) manda sin sesión a `/login?next=`, contesta **`notFound()`** a quien no es
+  superadmin (no revela que la sección existe) y, con MFA en `enforce`, manda a `/plataforma-mfa/*`. El layout es UX:
+  la barrera real es la llamada a `requirePlatformAdmin` al principio de **cada export** de `lib/platform-*`, fijada por
+  el guard estático `tests/unit/platform-admin-guard.test.ts` (que además prohíbe `find*` de tablas clínicas en esos
+  módulos: Plataforma ve consultorios, usuarios y salud, nunca pacientes ni HC).
+- `requireSuperAdmin` (`lib/session.ts:595`) queda como alias `@deprecated` **sin llamadores**: el catálogo global
+  (`catalog-admin`, `exercises-admin`, `exercise-media`, `tags-admin`) pasó a `requirePlatformAdmin` en BO2-F.
+
+### ADR-010 — Registro de plataforma append-only y doble auditoría (status: ACCEPTED, BO0/BO1-B)
+
+- `PlatformAuditEvent`: `tenantId` nullable (dar superadmin o deshabilitar un usuario no tiene consultorio), FK a
+  Tenant RESTRICT, `idempotencyKey` único. Un trigger rechaza UPDATE, DELETE y TRUNCATE **también al owner** (M7,
+  `PlatformAuditEvent_append_only` y `_no_truncate`).
+- `auditPlatformInTx` (`lib/audit.ts:184`) escribe **las dos filas**: el `platform.*` en el `AuditEvent` del consultorio
+  afectado (lo ve el consultorio en su actividad) y la fila global. `auditPlatformGlobalInTx` (`lib/audit.ts:226`) solo
+  la global. Las dos devuelven `{ inserted }`: con `idempotencyKey`, un replay no repite el efecto. Van por
+  `prismaService.$transaction` (la tabla es SERVICE_ONLY).
+- `audit()`/`auditInTx` estampan `supportSessionId` del contexto en el payload (`lib/audit.ts:36-43`): lo que hizo el
+  soporte se distingue en el registro del consultorio.
+
+### ADR-011 — Acceso del consultorio calculado (status: ACCEPTED, BO1-A/BO2-D)
+
+- `tenantAccessFor` (`lib/tenant-access.ts:68`, puro) da `full · grace · read_only · suspended · closed` a partir de
+  `Tenant.status` + suscripción + fin de prueba (fin del día AR). Trial con más de 7 días → full; últimos 7 → full con
+  banda; vencido ≤ 7 días → grace; después → read_only. PAST_DUE ≤ 10 días desde `subscriptionStatusChangedAt` →
+  grace, después read_only; CANCELLED → read_only; SUSPENDED/CLOSED → suspended/closed (BO-D1/2/3).
+- **Despliegue por flag** `TENANT_ACCESS_ENFORCEMENT` (`lib/env.ts:74`, default **`banner`**, leído en cada llamada,
+  `lib/env.ts:266`): `off` = todo full (interruptor de emergencia, ni la suspensión corta); `banner` = solo se avisa lo
+  de la suscripción, pero **suspendido y dado de baja se respetan** (desvío aceptado de C-BO1, `effectiveMode`,
+  `lib/tenant-access.ts:125`); `enforce` = el modo calculado manda.
+- **Solo lectura a nivel transacción:** con el actor en solo lectura, `runWithRls` abre la tx con
+  `set_config('transaction_read_only','on',true)` (`lib/rls.ts:68-69`) y traduce el 25006 de Postgres a
+  `ReadOnlyModeError` en voseo (`lib/rls.ts:79-80`). Las escrituras fuera de `runWithRls` llaman
+  `assertWritable(actor)` (`lib/session.ts:561`). **Leer nunca se bloquea** (HC, Ley 26.529) y el webhook de MP no pasa
+  por acá (un pago siempre concilia).
+- **Corte de sesión:** `getSessionBlock` (`lib/session.ts:370`) → `/cuenta-desactivada` (usuario deshabilitado, gana
+  siempre) o `/suspendido` (consultorio suspendido o dado de baja), pantallas fuera de `(app)` (sin bucle). Turnero,
+  check-in del portal y token realtime solo con `publicSurfacesOpen` (`lib/public-booking-internal.ts:61`,
+  `lib/portal.ts:244`, `lib/realtime-token.ts`).
+- Las actions de agenda y pacientes devuelven el `ReadOnlyModeError` como resultado (`readOnlyFailure`,
+  `lib/read-only-result.ts:17`, usado en `lib/bookings.ts` y `lib/patients.ts`); el resto todavía no (AUDIT
+  «Hallazgos del bloque BO», `readonly-residual-actions`).
+
+### ADR-012 — Soporte (status: ACCEPTED, BO2-E; decisión 3 de Martin)
+
+- «Entrar como soporte» (`startSupportSession`, `lib/support-session-internal.ts:258`): fila `SupportSession` (motivo
+  10-500 caracteres) + cookie firmada `kine_support` = `<sessionId>.<userId>.<hmac>` (HMAC derivado de la service key
+  con etiqueta propia, `:65-74`) + doble audit + mail al OWNER con link a Configuración → «Accesos de soporte».
+  **Sin vencimiento**: termina con «Salir de soporte» o al cerrar sesión; la cookie lleva `maxAge` de 400 días solo
+  para que cerrar el navegador no deje la fila abierta (`:47`). Un índice parcial deja una sesión abierta por
+  superadmin. `resolveSupportSession` exige cookie válida del mismo usuario + fila abierta + superadmin vigente.
+- Actor sintético en el consultorio destino (rama de soporte de `buildActor`, `lib/session.ts:448-463`):
+  `practitionerId` null, capacidades `SUPPORT_CAPS` (`lib/capabilities.ts:131`: las de la Secretaria + Configuración,
+  sin `clinical.read`, `plans.manage` ni `billing.manage`), visibilidad de pacientes forzada a la de la Secretaria
+  (`lib/visibility.ts:162,207,257`), sin selector de consultorio ni bloqueo de sesión (`app/(app)/layout.tsx:88-110`).
+- **Todo en solo lectura salvo Configuración:** el request lleva `readOnly`; `withSupportWritable(name, fn)`
+  (`lib/support-writable.ts:95`) habilita la escritura solo si la action está en la allowlist estática
+  `SUPPORT_WRITABLE_ACTIONS` (obras sociales, servicios, sedes, salas, horarios, datos del consultorio, turnero,
+  usuarios y equipo) y vive en un archivo de `SUPPORT_WRITABLE_FILES` (guard `tests/unit/support-writable.test.ts`).
+  Afuera a propósito: `setSharedPatientView` (decide quién ve la HC) y bloqueos de agenda. Si el consultorio está en
+  solo lectura por su suscripción (`enforce`), soporte tampoco escribe.
+- Rechazados para soporte: exports de agenda, pacientes y consultorio (403) y el realtime (`realtimeAllowed`,
+  `lib/realtime-bootstrap.ts:30`). Banda fija (`components/layout/support-banner.tsx`) y lista para el OWNER.
+
+### ADR-013 — Cupos por plan (status: ACCEPTED, BO1-C/BO2-B)
+
+- `PLAN_CATALOG` (`lib/plan-catalog.ts:34`): Free 1 · Base (`STARTER`) 3 · PRO 10 · Enterprise sin tope; trial de 14
+  días solo en PRO. `seatLimitOverride` es el «a medida» (CHECK ≥ 1). Ocupan lugar los roles clínicos (OWNER, ADMIN,
+  PRACTITIONER, `consumesSeat`); Secretaria y Facturación no.
+- El cupo rige al invitar, al subir de rol y al aceptar (`checkSeatForJoinInTx`, `lib/team-internal.ts:269`, con
+  `FOR UPDATE` del Tenant antes del CAS de la invitación). Bajar de plan **no saca a nadie**: solo frena a quien no
+  entró. Rige también en Configuración y onboarding (un Free no invita a un 2º profesional).
+- Los núcleos de equipo son compartidos (`lib/team-internal.ts`, `via: "tenant" | "platform"`): Configuración
+  (`lib/invitations.ts`) y Plataforma (`lib/platform-team.ts`) son wrappers delgados; siempre queda un OWNER.
+
+### ADR-014 — MFA de superadmin (status: ACCEPTED, BO4; BO-D6)
+
+- Flag `PLATFORM_MFA_ENFORCEMENT` (`lib/env.ts:86`, `off` por defecto | `enforce`). Con `enforce`, toda llamada a
+  `requirePlatformAdmin` exige sesión **AAL2** (TOTP de Supabase, puerto `lib/platform-mfa.ts`), y las acciones `high`
+  además una **re-verificación** de los últimos 10 minutos (cookie `kine_platform_reauth`, `lib/platform-reauth.ts:29`).
+  La decisión es pura (`decidePlatformMfa`, `lib/platform-mfa-logic.ts`). Con `off` no se consulta GoTrue, salvo en
+  `support.start`, que deja `mfa` en el registro.
+- Enrolar y verificar en `/plataforma-mfa/{configurar,verificar}`, **fuera** del grupo `(platform)` para no hacer bucle,
+  con `requirePlatformAdmin(…, { mfaStep: true })` (solo vale con `mfa.enroll`, `mfa.verify` o sin acción). Funcionan
+  con el flag en `off`: así se enrola antes de prender `enforce`.
+- `usePlatformAction()` (`components/plataforma/reauth-modal.tsx`) atrapa el error de re-verificación, pide el código
+  y reintenta la acción.
+- CSP **enforced** solo en `/plataforma/**` y `/plataforma-mfa/**` (`next.config.mjs:141`); el resto sigue Report-Only.
+
+### ADR-015 — Cron, mantenimiento y export (status: ACCEPTED, BO5)
+
+- **Cron** (`vercel.json#crons`, `lib/cron-jobs-internal.ts`): `invitations-expire` 06:00 UTC (**no escribe**: «vencida»
+  se deriva de `expiresAt`; deja el conteo en el log), `health-digest` 11:00 UTC (resumen diario de salud a los
+  superadmins, solo si hay hallazgos; idempotente por día con `idempotencyKey` en el registro de plataforma) y
+  `trial-reminders` 12:00 UTC (09:00 AR; aviso al OWNER a 7/3/1 días y al vencer, una vez por etapa). Auth:
+  `Authorization: Bearer CRON_SECRET` en tiempo constante (`lib/cron-auth.ts`; sin secreto → 503 en Production, 401
+  fuera). Con mantenimiento prendido los crons responden 200 `skipped` sin correr.
+- **Mantenimiento** (`MAINTENANCE_MODE=on` + redeploy): lógica pura en `lib/maintenance.ts`; el middleware reescribe las
+  páginas a `/mantenimiento` con 503 + `Retry-After` y los `/api/**` a 503 JSON. Pasan `/api/health` (con
+  `x-maintenance: on` y `maintenance: true` en el JSON), `/api/webhooks/**` (MP nunca se corta), `/api/cron/**`,
+  assets y la página misma. **Sin bypass para superadmin** (el edge no sabe el rol sin ir a la base).
+- **Export del consultorio** (`GET /api/consultorio/export`): un único JSON en streaming (manifest al final), páginas de
+  1000 filas por id, columnas por **allowlist** (`EXPORT_FIELDS`, `lib/tenant-export-logic.ts:54`). Solo el OWNER
+  aceptado y habilitado, **también suspendido o dado de baja** (BO-D4): decide con `getAccessSnapshot` porque un OWNER
+  bloqueado no tiene Actor. Plataforma solo **pide** el export al titular por mail (`lib/platform-export-request.ts`):
+  el superadmin nunca baja PHI.
+
+### Módulos nuevos
+
+| Módulo | Qué es |
+| --- | --- |
+| `lib/tenant-access.ts` | C-BO1, puro: `tenantAccessFor`, `canWrite`, `publicSurfacesOpen`, `effectiveMode`, `ReadOnlyModeError`, `isReadOnlyViolation`, `assertWritableFor` |
+| `lib/platform-actor.ts` | C-BO2: `PlatformActor`, `requirePlatformAdmin`, `PLATFORM_ACTION_POLICY`, errores de rate limit / MFA / re-verificación |
+| `lib/plan-catalog.ts` · `lib/tenant-starter-services.ts` | C-BO7: catálogo de planes y cupos; servicios iniciales por vertical (precio 0) |
+| `lib/platform-audit-types.ts` · `lib/audit.ts` | C-BO5: doble auditoría y registro global |
+| `lib/support-session-internal.ts` · `lib/support-writable.ts` · `lib/platform-support.ts` | C-BO9/C-BO4: sesión de soporte, cookie firmada, allowlist de escrituras de Configuración; actions de entrar/salir y lista del consultorio |
+| `lib/team-internal.ts` · `lib/platform-team{,-read}.ts` | C-BO8: núcleos de equipo compartidos y su cara de Plataforma; cupos |
+| `lib/platform-provisioning{,-internal,-schemas}.ts` | Alta de consultorio + titular (idempotente, servicios iniciales, plan/trial por el escritor único, link de activación) |
+| `lib/platform-tenant-lifecycle.ts` · `lib/tenant-profile-internal.ts` | Suspender / reactivar / dar de baja, cambio de slug con alias (308), forzar fin del alta, datos del consultorio |
+| `lib/platform-users{,-read}.ts` · `lib/platform-health-{logic,read}.ts` | Directorio global de usuarios, link de acceso, deshabilitar, dar/quitar superadmin; detectores y reparaciones |
+| `lib/platform-system-read.ts` · `lib/db-ping.ts` | `/plataforma/sistema` (solo presencia de la config externa, nunca valores) y el ping compartido con `/api/health` |
+| `lib/platform-mfa{,-logic,-actions}.ts` · `lib/platform-reauth.ts` · `app/plataforma-mfa/**` | BO4: puerto TOTP, decisión pura, enrolar/verificar, cookie de re-verificación |
+| `lib/cron-auth.ts` · `lib/cron-jobs-{logic,internal}.ts` · `app/api/cron/*` | BO5-A: los tres crons |
+| `lib/maintenance.ts` · `app/mantenimiento` | BO5-B: modo mantenimiento |
+| `lib/tenant-export-{logic,internal}.ts` · `app/api/consultorio/export` · `lib/platform-export-request.ts` | BO5-C: export del OWNER y pedido desde Plataforma |
+| `lib/read-only-result.ts` | `readOnlyFailure(e)`: el `ReadOnlyModeError` como resultado de action (Next redacta los errores de server actions en prod) |
+| `app/api/health` · `app/api/client-errors` · `lib/client-error-report.ts` · `app/robots.ts` · `app/sitemap.ts` | BO1-D: health para el monitor externo, beacon de errores del navegador (sin SDK de cliente, §5.23), SEO básico |
+| `app/(platform)/**` · `components/plataforma/**` | BO3: shell y pantallas (Consultorios con pestañas, Usuarios, Salud, Auditoría, Sistema, catálogo) |
+| `app/suspendido` · `app/cuenta-desactivada` · `components/layout/{access,support}-banner.tsx` · Configuración → «Plan y uso», «Accesos de soporte», «Exportar datos» | Lado del consultorio |
+
 ## Timezone (a core invariant)
 
 Argentina is fixed UTC−3, **no DST**. All wall-clock logic uses the helpers in
@@ -774,7 +927,7 @@ hides; the action is the barrier. Details in SECURITY.md §13.
   CatalogImportRun have ENABLE + FORCE and **only** `FOR SELECT USING (true)`:
   the app role reads, cannot write. PayerPlan is split (read global + own,
   write own). Writers: the import script (owner connection, checks
-  `rolbypassrls`) and Plataforma (`prismaService` behind `requireSuperAdmin`).
+  `rolbypassrls`) and Plataforma (`prismaService` behind `requirePlatformAdmin`).
   The guard enforces it (`scripts/guard-tenant-isolation.mjs:52,188-209`).
 - **Import** `scripts/catalog-import.ts` + pure `lib/catalog/{normalize,csv,import-core}.ts`:
   data in `prisma/catalog/*.csv` (SSS RNOS/RNEMP/COSSPRA payers, plans, REFEPS
@@ -843,9 +996,11 @@ platform tier**:
 
 - `UserProfile.isPlatformAdmin` (boolean, default false) is the flag; it is
   surfaced on the session as `Actor.isPlatformAdmin` (`lib/session.ts`).
-- `requireSuperAdmin()` (`lib/session.ts`) returns the `Actor` or throws
+- `requirePlatformAdmin(action?)` (`lib/platform-actor.ts`, BO1-A) returns a
+  `PlatformActor` (no tenant needed) or throws
   `ForbiddenError("platform_admin_required")` (and `UnauthenticatedError` with
-  no session at all).
+  no session at all). The old `requireSuperAdmin()` (`lib/session.ts`) is a
+  deprecated alias with no callers. Details: §Back-office de Plataforma, ADR-009.
 - `/plataforma` lives in its own route group since BO3-A: `app/(platform)/layout.tsx`
   calls `requirePlatformAdmin()` (no `buildActor`, so a superadmin without a home
   consultorio gets in), sends no-session to `/login?next=` and answers `notFound()`
@@ -863,18 +1018,20 @@ platform tier**:
   BYPASSRLS channel — because the RLS-forced app role *physically cannot*
   write `tenantId IS NULL` rows (`exercise_write` requires
   `tenantId = app_current_tenant_id()`, and `ExerciseMedia`/`ExerciseArticle`
-  have no write policy at all). That is the point: `requireSuperAdmin()` is
+  have no write policy at all). That is the point: `requirePlatformAdmin()` is
   the single app-layer chokepoint, and the DB is the wall behind it.
-  `lib/exercises-admin.ts`, `lib/tags-admin.ts` and `lib/exercise-media.ts`
-  all follow the same shape — `requireSuperAdmin()` first, `prismaService`
-  after.
+  `lib/exercises-admin.ts`, `lib/tags-admin.ts`, `lib/exercise-media.ts`,
+  `lib/catalog-admin.ts` and every `lib/platform-*` follow the same shape —
+  `requirePlatformAdmin()` first, `prismaService` after (since BO2-F the
+  catalog writes go to the platform audit log, `platform.catalog.*`).
 - `prismaService` resolves its connection as `DATABASE_URL_SERVICE` →
   `DIRECT_URL` → `DATABASE_URL`. Local needs no extra config (the Docker owner
   is a superuser); **prod must set `DATABASE_URL_SERVICE`** to the
   `kinesoft_service` role. See DEPLOYMENT.md.
-- The flag is granted only out-of-band, DB-level:
-  `scripts/set-platform-admin.ts` (`<email>`, `--revoke`, `--list`). There is
-  no in-app way to promote a user.
+- The flag is granted out-of-band with `scripts/set-platform-admin.ts`
+  (`<email>`, `--revoke`, `--list`) — the bootstrap path — and, since BO2-C,
+  by an existing superadmin from `/plataforma/usuarios` (`setPlatformSuperadmin`,
+  risk `high`: re-verification with MFA on, platform audit log).
 
 ## Architecture decisions (ADR)
 
@@ -1144,9 +1301,17 @@ needed (list them in the privacy policy). Browser storage:
 role change; the dashboard resolves patient access **outside** the
 `unstable_cache` and re-hydrates `Date`s after a cache hit.
 
+**BO cookies (14-oct):** `kine_support` (httpOnly, `sameSite=lax`, 400 days,
+`<sessionId>.<userId>.<hmac>`; only while a superadmin is in support mode,
+ADR-012) and `kine_platform_reauth` (httpOnly, `sameSite=strict`,
+`path=/plataforma`, 10 min, `<userId>.<exp>.<hmac>`; MFA re-verification,
+ADR-014). With `MAINTENANCE_MODE=on` the middleware skips the session refresh
+for blocked paths and rewrites them to `/mantenimiento` (ADR-015).
+
 **Known gaps** (C1): public booking / patient creation / MP webhook don't
 invalidate dashboard caches; dashboard PHI lives in the Vercel Data Cache
-(owner decision); CSP still Report-Only.
+(owner decision); CSP still Report-Only outside `/plataforma` (enforced there
+since BO4).
 
 ## Build / verify
 

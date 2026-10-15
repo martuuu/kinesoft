@@ -186,6 +186,28 @@ describe.skipIf(!RUN)("equipo · baja de profesional y listPractitioners", () =>
       await T.cleanup();
     }
   });
+
+  it("[BO-Z] B1: dos transferencias simultáneas del mismo OWNER (a X y a Y) → exactamente un OWNER", async () => {
+    const T = await createEphemeralTenant(db, { plan: "PRO" });
+    try {
+      const x = await addPractitioner(db, T);
+      const y = await addPractitioner(db, T);
+      const mx = await membershipOf(T, x.userId);
+      const my = await membershipOf(T, y.userId);
+      asUser(T.userId);
+      const results = await Promise.all([changeMemberRole(mx.id, "OWNER"), changeMemberRole(my.id, "OWNER")]);
+      // Una gana; la otra ve que quien transfería ya no es OWNER y revierte con el copy de carrera.
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      expect(results.find((r) => !r.ok)).toEqual({ ok: false, error: "El rol cambió mientras tanto. Recargá y probá de nuevo." });
+      const owners = await db.membership.findMany({ where: { tenantId: T.tenantId, role: "OWNER" }, select: { userId: true } });
+      expect(owners).toHaveLength(1);
+      expect([x.userId, y.userId]).toContain(owners[0].userId);
+      const prevOwner = await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: T.userId } });
+      expect(prevOwner.role).toBe("ADMIN");
+    } finally {
+      await T.cleanup();
+    }
+  });
 });
 
 /**

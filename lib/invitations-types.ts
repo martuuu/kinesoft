@@ -103,6 +103,11 @@ export type TeamActorCtx = {
   actorUserId: string;
   actorRole: Role | "SUPERADMIN";
   actorRef: { userId: string | null; email: string | null; homeTenantId: string | null } | null;
+  /**
+   * BO-Z (A2): un superadmin «como soporte» desde Configuración (`actor.support`). Gestiona el equipo con los límites
+   * del ADMIN y, además, solo con roles sin `clinical.read` (ver `supportRoleError` en team-internal).
+   */
+  support?: boolean;
 };
 
 /** Miembro del equipo visto desde Plataforma (BO2-B). Lista cerrada: nada clínico, nada del Actor del consultorio. */

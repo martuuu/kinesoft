@@ -51,7 +51,7 @@ import { createService, updateService } from "@/lib/services";
 import { createLocation } from "@/lib/locations";
 import { createRoom } from "@/lib/rooms";
 import { setPublicBookingEnabled, setSharedPatientView } from "@/lib/tenant-settings";
-import { createInvitation, listTeamMembers } from "@/lib/invitations";
+import { changeMemberRole, createInvitation, listTeamMembers, reactivateMember } from "@/lib/invitations";
 import { GET as exportPatients } from "@/app/api/pacientes/export/route";
 import { GET as exportAgenda } from "@/app/api/agenda/export/route";
 import { asUser } from "@/tests/helpers/actor";
@@ -596,6 +596,82 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
 
     const kine = await addPractitioner(db, T, "PRACTITIONER");
     asUser(kine.userId);
+    await expect(listSupportSessionsForTenant()).rejects.toMatchObject({ name: "ForbiddenError" });
+  });
+  // ── BO-Z ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  it("[BO-Z] A2: soporte no invita roles clínicos ni cuentas de Plataforma; Secretaria sí", async () => {
+    await enter(S);
+    const deny = /Como soporte solo podés dar roles sin acceso a historias clínicas/;
+    for (const role of ["PRACTITIONER", "ADMIN"] as const) {
+      const email = `sop-clin-${uniqueSuffix()}@test.local`;
+      const r = await createInvitation({ email, firstName: "No", lastName: "Clínico", role });
+      expect(r).toEqual({ ok: false, error: expect.stringMatching(deny) });
+      expect(await db.invitation.count({ where: { tenantId: T.tenantId, email } })).toBe(0);
+    }
+    // Email de un superadmin (otro o el propio): ni como Secretaria.
+    for (const email of [`${S2}@test.local`, `${S}@test.local`]) {
+      const r = await createInvitation({ email, firstName: "Super", lastName: "Admin", role: "ASSISTANT" });
+      expect(r).toEqual({ ok: false, error: expect.stringContaining("cuenta de Plataforma") });
+      expect(await db.invitation.count({ where: { tenantId: T.tenantId, email } })).toBe(0);
+    }
+    const email = `sop-ok-${uniqueSuffix()}@test.local`;
+    const ok = await createInvitation({ email, firstName: "Sí", lastName: "Secretaria", role: "ASSISTANT" });
+    expect(ok).toMatchObject({ ok: true });
+    await db.invitation.deleteMany({ where: { tenantId: T.tenantId, email } });
+  });
+
+  it("[BO-Z] A2: soporte no asciende a un rol clínico ni reactiva a un clínico suspendido", async () => {
+    const sec = await addPractitioner(db, T, "ASSISTANT");
+    const kine = await addPractitioner(db, T, "PRACTITIONER");
+    const secMem = await db.membership.findFirstOrThrow({ where: { tenantId: T.tenantId, userId: sec.userId } });
+    const kineMem = await db.membership.update({
+      where: { userId_tenantId: { userId: kine.userId, tenantId: T.tenantId } },
+      data: { disabledAt: new Date() },
+    });
+    await enter(S);
+    const deny = /Como soporte solo podés dar roles sin acceso a historias clínicas/;
+    for (const role of ["PRACTITIONER", "ADMIN"] as const) {
+      expect(await changeMemberRole(secMem.id, role)).toEqual({ ok: false, error: expect.stringMatching(deny) });
+    }
+    expect((await db.membership.findUniqueOrThrow({ where: { id: secMem.id } })).role).toBe("ASSISTANT");
+    // Entre roles no clínicos, sí.
+    expect(await changeMemberRole(secMem.id, "BILLING")).toMatchObject({ ok: true });
+    expect(await reactivateMember(kineMem.id)).toEqual({ ok: false, error: expect.stringMatching(deny) });
+    expect((await db.membership.findUniqueOrThrow({ where: { id: kineMem.id } })).disabledAt).not.toBeNull();
+  });
+
+  it("[BO-Z] B3: en Production con PLATFORM_MFA_ENFORCEMENT apagado, «Entrar como soporte» se rechaza; fuera de Production no", async () => {
+    const prev = { v: process.env.VERCEL_ENV, m: process.env.PLATFORM_MFA_ENFORCEMENT };
+    try {
+      process.env.VERCEL_ENV = "production";
+      delete process.env.PLATFORM_MFA_ENFORCEMENT;
+      asUser(S);
+      const r = await startSupport(T.tenantId, REASON);
+      expect(r).toEqual({ ok: false, error: "Activá la verificación en dos pasos de Plataforma para entrar como soporte." });
+      expect(await db.supportSession.count({ where: { superadminId: S, endedAt: null } })).toBe(0);
+      expect(cookies().get(SUPPORT_COOKIE)).toBeUndefined();
+
+      process.env.VERCEL_ENV = "preview";
+      expect(await startSupport(T.tenantId, REASON)).toMatchObject({ ok: true });
+    } finally {
+      if (prev.v === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = prev.v;
+      if (prev.m === undefined) delete process.env.PLATFORM_MFA_ENFORCEMENT;
+      else process.env.PLATFORM_MFA_ENFORCEMENT = prev.m;
+    }
+  });
+
+  it("[BO-Z] C2: dos «Entrar como soporte» simultáneos del mismo superadmin → los dos responden, queda UNA abierta", async () => {
+    asUser(S);
+    const [a, b] = await Promise.all([startSupport(T.tenantId, REASON), startSupport(T2.tenantId, REASON)]);
+    expect(a).toMatchObject({ ok: true });
+    expect(b).toMatchObject({ ok: true });
+    expect(await db.supportSession.count({ where: { superadminId: S, endedAt: null } })).toBe(1);
+  });
+
+  it("[BO-Z] C3: soporte no lee «Accesos de soporte» del consultorio", async () => {
+    await enter(S);
     await expect(listSupportSessionsForTenant()).rejects.toMatchObject({ name: "ForbiddenError" });
   });
 });

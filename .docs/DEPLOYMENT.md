@@ -188,6 +188,11 @@ From `lib/env.ts` (all optional in the schema, but prod needs the real ones):
 | `SENTRY_DSN` | Error reporting + CSP reports (build **and** runtime). No-op when absent. Optional: `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (sourcemaps), `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_DEBUG` | ⚠️ code ready since A3b (30-sep-2026); DSN not set |
 | System Environment Variables (`VERCEL_ENV`) | CSP/HSTS/`allowedOrigins` are computed at build time from `VERCEL_ENV` | ⚠️ "Automatically expose System Environment Variables" must be ON |
 | `LOG_LEVEL` | `debug`/`info`/`warn`/`error` | optional (default `info`) |
+| `RESEND_API_KEY` / `EMAIL_FROM` / `EMAIL_REPLY_TO` | Mails propios (IAM, ADR-007). Production sin key o sin from → los mails van a `log` (warning al arrancar); Preview nunca manda. `EMAIL_REPLY_TO` opcional | ⚠️ owner — [EXTERNAL-CONFIG §0.4](EXTERNAL-CONFIG.md) |
+| `TENANT_ACCESS_ENFORCEMENT` | BO1: `off` \| `banner` (default) \| `enforce`. Qué pasa con un consultorio en prueba vencida o impago (`banner` avisa; suspendido/baja se respetan igual) | 🆕 dejar vacía (= `banner`); `enforce` cuando Martin decida |
+| `PLATFORM_MFA_ENFORCEMENT` | BO4: `off` (default) \| `enforce`. TOTP obligatorio para superadmins + re-verificación en acciones de riesgo | 🆕 `off` al deployar → enrolar → `enforce` + redeploy |
+| `MAINTENANCE_MODE` / `MAINTENANCE_MESSAGE` | BO5-B: `on` cierra la app con 503 (`/mantenimiento`); webhooks MP, `/api/health` y crons pasan. El mensaje es público (máx. 280) | 🆕 vacías (= `off`); se leen en el edge: cambiar pide **redeploy** |
+| `CRON_SECRET` | BO5-A: `Authorization: Bearer` que Vercel manda a `/api/cron/*`. Sin él: 503 en Production y los crons no corren | 🆕 required (`openssl rand -hex 32`, Production) |
 
 ## Prod one-time setup (owner)
 
@@ -285,6 +290,19 @@ Exact runbook: [MIGRACIONES-RUNBOOK.md §2.2](MIGRACIONES-RUNBOOK.md). Summary:
    Importaciones → **"Refrescar catálogo"**. Local: `npm run catalog:import`.
 
 No new environment variables. No new console tasks besides the import.
+
+## Deploy del bloque BO (back-office, 14-oct-2026)
+
+Orden exacto, prechecks y vuelta atrás en [MIGRACIONES-RUNBOOK «M7 en prod» y «Deploy de BO»](MIGRACIONES-RUNBOOK.md).
+Resumen: **M7** (aditiva, puede ir antes) → variables con los flags en default (`TENANT_ACCESS_ENFORCEMENT` = `banner`,
+`PLATFORM_MFA_ENFORCEMENT` = `off`, `MAINTENANCE_MODE` = `off`) + `CRON_SECRET` → deploy → enrolar el TOTP en
+`/plataforma-mfa/configurar` → `PLATFORM_MFA_ENFORCEMENT=enforce` + redeploy → recién ahí usar soporte.
+
+`vercel.json` desde BO5:
+- `functions`: `app/api/consultorio/export/route.ts` 60 s (clave propia **antes** de `app/**/*` 30 s; con Vercel Pro se
+  puede subir a 300 s: un consultorio grande puede cortarse en 60 s y el archivo queda como JSON inválido).
+- `crons`: `/api/cron/invitations-expire` 06:00 UTC, `/api/cron/health-digest` 11:00 UTC, `/api/cron/trial-reminders`
+  12:00 UTC (09:00 AR). Hobby: una vez por día y hora inexacta; Pro: hora exacta. Solo corren en Production.
 
 ## Deploy flow (summary)
 

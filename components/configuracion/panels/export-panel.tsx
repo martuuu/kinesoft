@@ -29,7 +29,39 @@ const LIST_STYLE = {
   color: "var(--navy-700)",
 } as const;
 
-export function ExportPanel({ tenantId }: { tenantId?: string | null }) {
+/** Consultorio bloqueado del que el usuario es OWNER (`AccessSnapshot.tenantBlocks` con `role === "OWNER"`). */
+export type ExportBlockedTenant = { tenantId: string; tenantName: string; kind: "suspended" | "closed" };
+
+/**
+ * [BO-Z B6] Orden de los botones de consultorios bloqueados: el que pide la URL (`?tenant=`, el link del mail de
+ * Plataforma) primero. Puro, para el test.
+ */
+export function orderExportBlocks(blocks: ExportBlockedTenant[], requestedTenantId?: string | null): ExportBlockedTenant[] {
+  if (!requestedTenantId) return blocks;
+  const hit = blocks.find((b) => b.tenantId === requestedTenantId);
+  return hit ? [hit, ...blocks.filter((b) => b !== hit)] : blocks;
+}
+
+export function ExportPanel({
+  tenantId,
+  blocked = [],
+  requestedTenantId = null,
+  showActive = true,
+}: {
+  tenantId?: string | null;
+  /**
+   * [BO-Z B6] Consultorios suspendidos o dados de baja de los que es titular. Un titular de VARIOS consultorios con
+   * uno suspendido entra al activo (el gate no lo manda a /suspendido): antes el link del mail lo dejaba en el export
+   * del activo y no había cómo bajar el del suspendido. La ruta acepta `?tenant=` (OWNER de ese consultorio).
+   */
+  blocked?: ExportBlockedTenant[];
+  /** `?tenant=` de la URL: ese va primero y en primario. */
+  requestedTenantId?: string | null;
+  /** false = no es OWNER del consultorio activo (solo ve los bloqueados). */
+  showActive?: boolean;
+}) {
+  const ordered = orderExportBlocks(blocked, requestedTenantId);
+  const requestedBlocked = !!requestedTenantId && blocked.some((b) => b.tenantId === requestedTenantId);
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <Card style={{ padding: 20 }}>
@@ -66,15 +98,31 @@ export function ExportPanel({ tenantId }: { tenantId?: string | null }) {
           El archivo es un <strong>JSON</strong> (formato estándar que cualquier sistema puede leer). Tiene datos de
           salud de tus pacientes: guardalo en un lugar seguro y no lo mandes por mail ni chat.
         </p>
-        <a
-          href={exportHref(tenantId)}
-          download
-          className="k-btn k-btn-primary"
-          data-export-download
-          style={{ display: "inline-flex", textDecoration: "none" }}
-        >
-          Descargar export
-        </a>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {ordered.map((b) => (
+            <a
+              key={b.tenantId}
+              href={exportHref(b.tenantId)}
+              download
+              className={`k-btn ${b.tenantId === requestedTenantId || !showActive ? "k-btn-primary" : "k-btn-ghost"}`}
+              data-export-download={b.tenantId}
+              style={{ display: "inline-flex", textDecoration: "none", maxWidth: "100%", whiteSpace: "normal" }}
+            >
+              Descargar el export de {b.tenantName} ({b.kind === "closed" ? "dado de baja" : "suspendido"})
+            </a>
+          ))}
+          {showActive && (
+            <a
+              href={exportHref(tenantId)}
+              download
+              className={`k-btn ${requestedBlocked ? "k-btn-ghost" : "k-btn-primary"}`}
+              data-export-download
+              style={{ display: "inline-flex", textDecoration: "none" }}
+            >
+              {ordered.length > 0 ? "Descargar el export de este consultorio" : "Descargar export"}
+            </a>
+          )}
+        </div>
         <p style={{ margin: "12px 0 0", fontSize: 12.5, lineHeight: 1.5, color: "var(--navy-500)" }}>
           Con muchos pacientes puede tardar unos minutos: dejá la pestaña abierta hasta que termine. Podés descargarlo
           hasta 3 veces por hora. Cada descarga queda registrada.

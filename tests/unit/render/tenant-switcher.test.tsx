@@ -89,7 +89,7 @@ describe("[IAM-3b] sidebar con 2+ consultorios", () => {
     expect(opts.filter((o) => o.includes('aria-selected="true"'))).toHaveLength(1);
     expect(html).toMatch(/<li[^>]*id="[^"]*t-b"[^>]*aria-selected="true"|<li[^>]*aria-selected="true"[^>]*id="[^"]*t-b"/);
     // Rol con la etiqueta de la vertical de CADA consultorio (Kine: «Kinesiólogo/a»; General: «Profesional»).
-    expect(html).toContain("Dueño/a");
+    expect(html).toContain("Titular");
     expect(html).toContain("Profesional");
     expect(html).toContain("Secretario/a");
     expect(html).toContain("Kinesiología y osteopatía");

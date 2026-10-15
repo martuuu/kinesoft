@@ -266,11 +266,33 @@ describe("[BO3-B] Drawer «Nuevo consultorio»", () => {
   });
 
   it("replay: «Ya estaba creado», sin decir que salió un mail ni mostrar link", () => {
-    const html = result({ replayed: true, emailSent: false, activationUrl: "https://app.test/x" });
+    const html = result({ replayed: true, emailSent: true, activationUrl: "https://app.test/x" });
     expect(html).toContain("Ya estaba creado.");
     expect(html).not.toContain("Le mandamos");
     expect(html).not.toContain("activation-link");
     expect(html).not.toContain("no salió");
+  });
+
+  it("[BO-Z B2] replay cuyo primer pedido no mandó el mail: lo avisa y manda a Usuarios (sin link)", () => {
+    const html = result({ replayed: true, emailSent: false, activationUrl: "https://app.test/x" });
+    expect(html).toContain("Ya estaba creado.");
+    expect(html).toContain("El mail de activación del primer pedido no salió: mandalo desde");
+    expect(html).toMatch(/href="\/plataforma\/usuarios\/u1"/);
+    expect(html).not.toContain("activation-link");
+  });
+
+  it("[BO-Z B2] mail fallido SIN link generado: no pide copiar nada, manda a Usuarios → «Mandar link de acceso»", () => {
+    const html = result({ emailSent: false });
+    expect(html).toContain("No pudimos generar el link de activación.");
+    expect(html).toContain("«Mandar link de acceso»");
+    expect(html).toMatch(/href="\/plataforma\/usuarios\/u1"/);
+    expect(html).not.toContain("Copiá el link");
+    expect(html).not.toContain("activation-link");
+  });
+
+  it("[BO-Z B3] el link para copiar dice que es una credencial, de un uso y que vence (TTL de los mails)", () => {
+    const html = result({ emailSent: false, activationUrl: "https://app.test/auth/confirm?token=abc" });
+    expect(html).toContain("Es como una contraseña: sirve una sola vez y vence en 1 hora. No lo compartas en grupos.");
   });
 });
 
@@ -434,7 +456,7 @@ describe("[BO3-B] header del detalle y soporte", () => {
         <SupportForm tenantName="Movare" reason={reason} pending={false} error={null} onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} />
       );
     expect(SUPPORT_WARNING_COPY).toBe(
-      "Vas a ver el consultorio como la Secretaria, sin historia clínica, y el dueño recibe un mail. Solo podés modificar Configuración."
+      "Vas a ver el consultorio como el rol Secretario/a, sin historia clínica, y el titular recibe un mail. Solo podés modificar Configuración."
     );
     expect(render("")).toContain(SUPPORT_WARNING_COPY);
     expect(render("corto")).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*>Entrar como soporte<\/button>/);

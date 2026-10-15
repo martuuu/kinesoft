@@ -31,6 +31,12 @@ Estado al decidir: ES1 (`d7ac75f`) y ES2a (`0edb0c8`, M1) commiteadas, árbol li
 5. **No se rehace el planning de P2-P4**: se ejecuta como está; lo nuevo entra en **corridas nuevas** y como
    **enmiendas de una línea** a sesiones pendientes (§5).
 
+**Etiqueta en la UI (BO3, 14-oct, decisión de producto §19.6 ítem 1):** la vertical `GENERAL` se muestra como
+**«Clínica general»** (no «Consultorio general», que se confundía con «el consultorio» de cualquier vertical):
+`VERTICAL_LABEL` en `lib/tenant-modules.ts:152`, ya aplicado en todo el copy (onboarding, Plataforma, confirmaciones). Un
+PRACTITIONER de Clínica general se rotula «Profesional», no «Kinesiólogo/a» (`roleLabel` por vertical). En este doc
+«General» sigue siendo el nombre corto.
+
 **Ojo con los nombres:** "vertical" = tipo de consultorio (`Tenant.vertical`: General / Kinesiología). No es la
 **disciplina** de un servicio o plan (Kine / Osteo) ni el **plan SaaS** del tenant (`Tenant.plan`: FREE / STARTER /
 PRO / ENTERPRISE). "Kine PRO" = vertical KINESIOLOGY + `plan = PRO`.
@@ -143,7 +149,7 @@ defecto al generar turnos) ya está detrás del módulo `planes`.
 | V.1 | **EV-G** catálogo y ejercicios | `lib/plan-gating.ts`, `tests/unit/plan-gating.test.ts`, `lib/search.ts`, `lib/conditions.ts`, `components/biblioteca/biblioteca-client.tsx`, `tests/integration/exercise-entitlements.test.ts`* |
 | V.1 | **EV-T** turnero con switch | `lib/public-booking.ts`, `lib/public-booking-internal.ts`, `app/(booking)/c/[slug]/booking/page.tsx`, `components/booking/booking-unavailable.tsx`*, `tests/integration/public-booking-disabled.test.ts`* (no se toca webhook MP §5.4 ni middleware §5.3) |
 | V.1 | **EV-K** Configuración | `lib/tenant-settings.ts`, `configuracion/page.tsx`, `configuracion-client.tsx`, `controls.tsx` (tab Diagnósticos solo con `diagnostico`), `panels/general-panel.tsx` ("Funciones del consultorio": switch del turnero + tipo y plan de solo lectura), test* |
-| V.1 | **EV-O** onboarding | `lib/validation.ts` (un campo), `lib/onboarding.ts`, `lib/onboarding-internal.ts`, `lib/tenant-bootstrap.ts`, `components/onboarding/steps-basic.tsx` (segmentado "Kinesiología y osteopatía" / "Consultorio general"), `scripts/create-tenant.ts --vertical`, `tests/integration/onboarding.test.ts` |
+| V.1 | **EV-O** onboarding | `lib/validation.ts` (un campo), `lib/onboarding.ts`, `lib/onboarding-internal.ts`, `lib/tenant-bootstrap.ts`, `components/onboarding/steps-basic.tsx` (segmentado "Kinesiología y osteopatía" / "Clínica general" desde BO3), `scripts/create-tenant.ts --vertical`, `tests/integration/onboarding.test.ts` |
 | V.1 | **EV-P1** plataforma server | `lib/platform-tenants{,-schemas,-types,-read}.ts`* (todo `prismaService` + `requireSuperAdmin` por export; solo `count`/`_count` sobre modelos con PHI), tests* |
 | V.1 | **EV-P2** shell de plataforma | `app/(app)/plataforma/layout.tsx` (sub-nav Resumen · Consultorios · Ejercicios · Tags · Catálogo), `components/plataforma/platform-nav.tsx`* |
 | V.2 | **EV-P3** plataforma UI | `app/(app)/plataforma/page.tsx`* (resumen por vertical × plan, trials por vencer, onboarding pendiente), `consultorios/page.tsx`* (lista con filtros), `consultorios/[id]/page.tsx`* (detalle + Drawer "Editar suscripción" con `useConfirm` al cambiar de vertical y `expectedUpdatedAt`), componentes* + render test |

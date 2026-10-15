@@ -72,6 +72,21 @@ export function buildListHref(query: TenantListQuery, page: number): string {
 const COLS = "minmax(200px,1.6fr) 120px 150px 110px 150px 90px 100px minmax(180px,1.2fr) 80px";
 const MIN_WIDTH = 1310;
 
+/**
+ * BO-Z C6: la tabla scrollea en horizontal (1310 px) y en un celular, al ir a «Suscripción» o «Titular», se perdía de
+ * qué consultorio era la fila. La primera columna queda fija a la izquierda (sticky dentro del `overflowX`), con fondo
+ * opaco (`--bg-panel`) para que no se transparente lo que pasa por abajo y un filete a la derecha.
+ */
+const STICKY_FIRST: React.CSSProperties = {
+  position: "sticky",
+  left: 0,
+  zIndex: 1,
+  background: "var(--bg-panel)",
+  boxShadow: "1px 0 0 rgba(15,30,51,0.06)",
+  marginLeft: -16,
+  paddingLeft: 16,
+};
+
 const selectStyle: React.CSSProperties = {
   padding: "9px 10px",
   borderRadius: 12,
@@ -195,7 +210,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
         color: "var(--navy-700)",
       }}
     >
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, ...STICKY_FIRST, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <Link href={tenantHref(r.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none" }}>
             {r.name}
@@ -218,7 +233,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
       <div>
         <div>{SUBSCRIPTION_STATUS_LABEL[r.subscriptionStatus]}</div>
         {r.trialEndsOn && (
-          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Trial hasta {formatDayKeyAR(r.trialEndsOn)}</div>
+          <div style={{ fontSize: 12, color: "var(--navy-300)" }}>Prueba hasta {formatDayKeyAR(r.trialEndsOn)}</div>
         )}
       </div>
       <div>
@@ -289,7 +304,9 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
                 background: "rgba(246,249,253,0.6)",
               }}
             >
-              <Head>Consultorio</Head>
+              <div style={STICKY_FIRST}>
+                <Head>Consultorio</Head>
+              </div>
               <Head>Estado</Head>
               <Head>Tipo</Head>
               <Head>Plan y cupo</Head>

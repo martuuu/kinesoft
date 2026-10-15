@@ -26,7 +26,8 @@ import { PlatformReauthProvider } from "@/components/plataforma/reauth-modal";
  *   sesión en AAL1 → `/plataforma-mfa/verificar`, los dos con `?next=<path>`. Esas pantallas viven FUERA de este
  *   grupo justamente para no entrar en bucle (este layout las volvería a mandar ahí). Se chequea antes del
  *   `ForbiddenError` genérico: el error de MFA hereda de él y si no terminaría en 404.
- *   Si GoTrue no responde (`unavailable`) se propaga: no se puede decidir y no se deja pasar.
+ *   Si GoTrue no responde (`unavailable`) → `/plataforma-mfa/verificar` (su pantalla de «Reintentar»): no se puede
+ *   decidir y no se deja pasar (BO-Z B9; antes se propagaba al error genérico).
  * - Cualquier otro error (DB caída) se propaga al error boundary: no se disfraza de 404.
  *
  * Las páginas y cada lectura/acción de `lib/platform-*` vuelven a llamar `requirePlatformAdmin` por su cuenta: este
@@ -41,8 +42,12 @@ export default async function PlatformLayout({ children }: { children: React.Rea
     const raw = headers().get("x-pathname");
     const next = (raw ? safeNext(raw, "") : "") || "/plataforma";
     if (err instanceof UnauthenticatedError) redirect(`/login?next=${encodeURIComponent(next)}`);
-    if (err instanceof PlatformMfaRequiredError && err.step !== "unavailable") redirect(platformMfaRedirect(err.step, next));
-    if (err instanceof PlatformMfaRequiredError) throw err;
+    // BO-Z B9: `unavailable` (GoTrue no respondió) va a /plataforma-mfa/verificar, que ya tiene su pantalla «No
+    // pudimos comprobar tu verificación» con «Reintentar» y no deja pasar. Antes se tiraba y caía en el error genérico
+    // de la app, sin salida. Sigue sin dejar pasar: la pantalla de verificar vuelve a consultar a GoTrue.
+    if (err instanceof PlatformMfaRequiredError) {
+      redirect(platformMfaRedirect(err.step === "unavailable" ? "verify" : err.step, next));
+    }
     if (err instanceof ForbiddenError) notFound();
     throw err;
   }

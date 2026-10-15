@@ -10,7 +10,8 @@
  *
  * Resultado (contrato del brief BO3):
  *   - `replayed` → «Ya estaba creado» (no se dice «mail enviado»: este pedido no mandó nada);
- *   - `!emailSent` → caja con el `activationUrl` para copiar y el aviso de que es una credencial;
+ *   - `!emailSent` → caja con el `activationUrl` para copiar y el aviso de que es una credencial; sin
+ *     `activationUrl` (tampoco se pudo generar), link a Usuarios → «Mandar link de acceso» (BO-Z B2);
  *   - si no, «Le mandamos el mail de activación a …». Siempre con link al detalle.
  *
  * El form es controlado y sin efectos (`NewTenantForm`, `NewTenantResult`): se montan con props en el render test.
@@ -36,6 +37,7 @@ import { slugify } from "@/lib/onboarding-logic";
 import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import { tenantHref } from "@/components/plataforma/tenants/labels";
 import { CheckRow, ErrorBox, WarnBox } from "@/components/plataforma/tenants/detail-ui";
+import { ONE_TIME_LINK_COPY, userHref } from "@/components/plataforma/users/users-logic";
 
 export type NewTenantFormState = {
   clinicName: string;
@@ -332,10 +334,31 @@ export function NewTenantResult({
         </div>
       )}
 
-      {!result.replayed && !result.emailSent && (
+      {/* [BO-Z B2] El mail no salió: con link → copiarlo; SIN link (generateLink también falló) antes quedaba solo
+          «copiá el link» sin link que copiar. Ahora se manda desde Usuarios, que genera uno nuevo. En un replay el
+          pedido original pudo haber fallado el mail: se avisa igual (el link no se re-emite en un replay). */}
+      {!result.replayed && !result.emailSent && url && (
         <WarnBox>
-          <strong>El mail de activación no salió.</strong> Copiá el link y mandáselo al titular por otro medio. Es como
-          una contraseña: sirve una sola vez y no lo compartas en grupos.
+          <strong>El mail de activación no salió.</strong> Copiá el link y mandáselo al titular por otro medio.{" "}
+          {ONE_TIME_LINK_COPY}
+        </WarnBox>
+      )}
+      {!result.replayed && !result.emailSent && !url && (
+        <WarnBox>
+          <strong>El mail de activación no salió.</strong> No pudimos generar el link de activación. Mandáselo desde{" "}
+          <Link href={userHref(result.ownerUserId)} style={{ fontWeight: 700, color: "var(--sky-700)" }}>
+            Usuarios
+          </Link>{" "}
+          → «Mandar link de acceso».
+        </WarnBox>
+      )}
+      {result.replayed && !result.emailSent && (
+        <WarnBox>
+          El mail de activación del primer pedido no salió: mandalo desde{" "}
+          <Link href={userHref(result.ownerUserId)} style={{ fontWeight: 700, color: "var(--sky-700)" }}>
+            Usuarios
+          </Link>
+          .
         </WarnBox>
       )}
       {url && (

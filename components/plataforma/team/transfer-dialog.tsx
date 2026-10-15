@@ -81,7 +81,7 @@ export function TransferOwnershipForm({
         <strong>{who}</strong> pasa a ser {roleLabel("OWNER", vertical)} del consultorio: gestiona el equipo, los roles y
         la configuración.
         {currentOwner
-          ? ` ${memberDisplayName(currentOwner)} deja de ser dueño/a y queda como ${roleLabel("ADMIN", vertical)}.`
+          ? ` ${memberDisplayName(currentOwner)} deja de ser titular y queda como ${roleLabel("ADMIN", vertical)}.`
           : ""}{" "}
         Desde el consultorio no se puede deshacer.
       </p>

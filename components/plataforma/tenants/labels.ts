@@ -8,6 +8,7 @@
 import type { SubscriptionStatus, TenantPlan, TenantStatus } from "@prisma/client";
 import { PLAN_LABEL, VERTICAL_LABEL, type TenantModule } from "@/lib/tenant-modules";
 import { formatDateAR } from "@/lib/format";
+import { toARDateKey } from "@/lib/datetime-ar";
 import { seatLimitFor } from "@/lib/plan-catalog";
 import type { TenantAccessMode } from "@/lib/tenant-access";
 import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
@@ -16,7 +17,7 @@ import type { PlatformStatusReason } from "@/lib/platform-tenants-types";
 export const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
   ACTIVE: "Activa",
   TRIALING: "En prueba",
-  PAST_DUE: "Pago vencido",
+  PAST_DUE: "Pago pendiente", // C8: el mismo rótulo que ve el consultorio (lib/tenant-plan-usage-logic.ts)
   CANCELLED: "Cancelada",
 };
 
@@ -48,13 +49,24 @@ export function formatDayKeyAR(key: string): string {
   return formatDateAR(`${key}T12:00:00-03:00`, "short");
 }
 
-/** Días AR hasta el vencimiento del trial (0 = hoy; negativo = ya venció y sigue TRIALING). */
+/**
+ * [BO-Z B5] Días de prueba que quedan, con la MISMA convención que `tenantAccessFor` (lib/tenant-access.ts) y la
+ * banda del consultorio: días calendario AR CONTANDO HOY, el último día es 1, el día siguiente al fin es 0 y de ahí
+ * para abajo. Antes Plataforma contaba sin hoy («Vence mañana») mientras el titular leía «Te quedan 2 días»: dos
+ * números para el mismo `trialEndsAt`. Aritmética sobre las claves AR (`Date.UTC` de la clave no depende del TZ).
+ */
+export function trialDaysLeft(trialEndsAt: Date, now: Date): number {
+  const [y1, m1, d1] = toARDateKey(now).split("-").map(Number);
+  const [y2, m2, d2] = toARDateKey(trialEndsAt).split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000) + 1;
+}
+
+/** Label de `trialDaysLeft` (1 = último día; 0 = venció ayer; negativo = venció hace más y sigue TRIALING). */
 export function trialDaysLabel(daysLeft: number): string {
-  if (daysLeft === 0) return "Vence hoy";
-  if (daysLeft === 1) return "Vence mañana";
+  if (daysLeft === 1) return "Último día";
   if (daysLeft > 1) return `Quedan ${daysLeft} días`;
-  if (daysLeft === -1) return "Venció ayer";
-  return `Venció hace ${-daysLeft} días`;
+  if (daysLeft === 0) return "Venció ayer";
+  return `Venció hace ${-daysLeft + 1} días`;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -138,7 +150,7 @@ export const SUPPORT_REASON_MAX = 500;
 
 /** Copy literal del brief BO3 para el Modal «Entrar como soporte». */
 export const SUPPORT_WARNING_COPY =
-  "Vas a ver el consultorio como la Secretaria, sin historia clínica, y el dueño recibe un mail. Solo podés modificar Configuración.";
+  "Vas a ver el consultorio como el rol Secretario/a, sin historia clínica, y el titular recibe un mail. Solo podés modificar Configuración.";
 
 /** Confirmación tipeada (suspender, dar de baja, cambiar el slug): hay que escribir el slug actual tal cual. */
 export function typedSlugMatches(typed: string, slug: string): boolean {
@@ -179,7 +191,7 @@ const AUDIT_KEY_LABEL: Record<string, string> = {
   vertical: "Tipo",
   plan: "Plan",
   subscriptionStatus: "Estado de la suscripción",
-  trialEndsAt: "Fin del trial",
+  trialEndsAt: "Fin de la prueba",
   publicBookingEnabled: "Turnos online",
   // BO3-B
   status: "Estado del consultorio",
@@ -206,7 +218,7 @@ export function auditKeyLabel(key: string): string {
  */
 export function formatAuditValue(key: string, v: string | boolean | number | null): string {
   if (key === "trialEndsAt") {
-    if (v === null) return "Sin trial";
+    if (v === null) return "Sin prueba";
     if (typeof v !== "string") return String(v);
     const s = formatDateAR(v, "short");
     return s || v;

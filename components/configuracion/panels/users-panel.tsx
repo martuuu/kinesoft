@@ -148,7 +148,7 @@ function TeamRow({ member, viewerIsAdmin = false }: { member: TeamMemberRow; vie
       const first = await confirm({
         title: `¿Transferir la titularidad a ${who}?`,
         message:
-          `Pasa a ser el dueño del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como ${label("ADMIN")} y no vas a poder deshacerlo desde tu cuenta.`,
+          `Pasa a ser el titular del consultorio: gestiona el equipo, los roles y la configuración. Vos quedás como ${label("ADMIN")} y no vas a poder deshacerlo desde tu cuenta.`,
         confirmLabel: "Continuar",
         tone: "danger",
       });

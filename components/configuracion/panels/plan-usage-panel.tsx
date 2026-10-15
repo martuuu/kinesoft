@@ -2,12 +2,13 @@ import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
+import { SupportContact } from "@/components/ui/support-contact";
 import type { PlanUsageTone, TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 
 /**
  * Configuración → «Plan y uso» (BO3-F). Solo informa: plan, estado de la suscripción y la prueba, cupos de
  * profesionales y turnero. Sin billing: cambiar de plan lo hace el equipo de KineSoft desde Plataforma, así que el
- * llamado es «escribinos». El copy sale armado de `planUsageView` (lib/tenant-plan-usage-logic.ts, puro y testeado
+ * llamado es «escribinos» con el canal real (`SupportContact`, BO-Z B4: antes no decía a dónde). El copy sale armado de `planUsageView` (lib/tenant-plan-usage-logic.ts, puro y testeado
  * en TZ=UTC y TZ=AR); acá no se calcula nada.
  */
 
@@ -59,7 +60,14 @@ function Pill({ children, tone = "ok" }: { children: ReactNode; tone?: PlanUsage
   );
 }
 
-export function PlanUsagePanel({ usage }: { usage: TenantPlanUsageView }) {
+export function PlanUsagePanel({
+  usage,
+  supportEmail,
+}: {
+  usage: TenantPlanUsageView;
+  /** Solo para el render test; si no, `NEXT_PUBLIC_SUPPORT_EMAIL`. */
+  supportEmail?: string | null;
+}) {
   const { subscription, seats } = usage;
   return (
     <Card style={{ padding: 20 }}>
@@ -68,7 +76,19 @@ export function PlanUsagePanel({ usage }: { usage: TenantPlanUsageView }) {
         <Row label="Plan" value={<Pill>{usage.planLabel}</Pill>} />
         <Row
           label="Suscripción"
-          hint={subscription.detail}
+          hint={
+            subscription.detail || subscription.contact ? (
+              <>
+                {subscription.detail}
+                {subscription.contact && (
+                  <>
+                    {subscription.detail ? " " : ""}
+                    <SupportContact capital email={supportEmail} subject="Plan del consultorio" /> {subscription.contact}.
+                  </>
+                )}
+              </>
+            ) : null
+          }
           value={
             <span data-subscription-tone={subscription.tone}>
               <Pill tone={subscription.tone}>{subscription.label}</Pill>
@@ -111,7 +131,8 @@ export function PlanUsagePanel({ usage }: { usage: TenantPlanUsageView }) {
           lineHeight: 1.45,
         }}
       >
-        Para cambiar de plan o ampliar el cupo, escribinos y lo hacemos por vos.
+        Para cambiar de plan o ampliar el cupo, <SupportContact email={supportEmail} subject="Plan del consultorio" />: lo
+        hacemos por vos.
       </p>
     </Card>
   );

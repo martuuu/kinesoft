@@ -72,7 +72,7 @@ describe("[BO3-C] seatsSummary", () => {
     const s = seatsSummary({ used: 2, limit: 3, remaining: 1, full: false });
     expect(s.text).toBe("Profesionales 2 de 3");
     expect(s.full).toBe(false);
-    expect(s.hint).toMatch(/Secretaria y Facturación no ocupan/);
+    expect(s.hint).toMatch(/Secretario\/a y Facturación no ocupan/);
     expect(s.hint).not.toMatch(/Cupo lleno/);
   });
   it("lleno: avisa", () => {

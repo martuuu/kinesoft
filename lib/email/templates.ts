@@ -443,18 +443,24 @@ export function welcomeEmail(p: { tenantName: string; url: string }): RenderedEm
  * (lleva a /reset: elige su contraseña y entra). Antes salía `welcome`, que dice «ya podés entrar con tu
  * contraseña» a alguien que todavía no tiene.
  */
-export function tenantOwnerActivationEmail(p: { tenantName: string; url: string }): RenderedEmail {
+export function tenantOwnerActivationEmail(p: { tenantName: string; url: string; needsPassword?: boolean }): RenderedEmail {
   const tenant = plain(p.tenantName);
   const ttl = `El link vence en ${SUPABASE_LINK_TTL_COPY} y sirve una sola vez.`;
-  const second = `Tocá el botón para elegir tu contraseña y entrar. ${ttl}`;
+  // BO-Z (B7): el titular puede ser alguien que YA tiene cuenta (titular de otro consultorio): a esa persona no se le
+  // pide «elegí tu contraseña» (la tiene) sino que entre. `needsPassword` lo calcula el alta (cuenta creada ahora o sin
+  // confirmar). Default true: el caso histórico.
+  const needsPassword = p.needsPassword ?? true;
+  const second = needsPassword
+    ? `Tocá el botón para elegir tu contraseña y entrar. ${ttl}`
+    : `Tocá el botón para entrar al consultorio. También podés entrar con tu email y tu contraseña de siempre. ${ttl}`;
   return compose({
     subject: `Tu consultorio ${tenant} ya está en KineSoft`,
-    preheader: "Elegí tu contraseña para entrar.",
+    preheader: needsPassword ? "Elegí tu contraseña para entrar." : "Ya podés entrar a tu consultorio nuevo.",
     context: tenant,
-    title: "Activá tu acceso",
+    title: needsPassword ? "Activá tu acceso" : "Tu consultorio nuevo está listo",
     paragraphs: [`Te dimos de alta como titular de ${tenant} en KineSoft.`, second],
     htmlParagraphs: [`Te dimos de alta como titular de ${strong(tenant)} en KineSoft.`, escapeHtml(second)],
-    ctas: [{ label: "Activar mi acceso", url: p.url }],
+    ctas: [{ label: needsPassword ? "Activar mi acceso" : "Entrar al consultorio", url: p.url }],
     footer: [
       `Te llegó este mail porque el equipo de KineSoft creó el consultorio ${tenant} con este email como titular. Si el link venció, escribinos y te mandamos otro.`,
       NOT_EXPECTED,
@@ -503,11 +509,14 @@ export function supportAccessEmail(p: {
 }): RenderedEmail {
   const tenant = plain(p.tenantName);
   const who = plain(p.superadminEmail);
-  const when = formatExpiryAR(p.startedAt);
+  // BO-Z (C8): «el 20 de octubre de 2026 a las 13:27» (antes «…de 2026, 13:27», que en una oración se leía mal).
+  const date = p.startedAt.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric", timeZone: AR_TZ });
+  const time = p.startedAt.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: AR_TZ });
+  const when = `${date} a las ${time}`;
   const lead = `El equipo de soporte de KineSoft (${who}) entró a ${tenant} el ${when} para ayudarte con el consultorio.`;
   const leadHtml = `El equipo de soporte de KineSoft (${strong(who)}) entró a ${strong(tenant)} el ${escapeHtml(when)} para ayudarte con el consultorio.`;
   const second =
-    "Mientras dure el acceso, soporte ve lo mismo que una Secretaria (nada de historia clínica) y solo puede cambiar la Configuración. Todo lo que hace queda registrado.";
+    "Mientras dure el acceso, soporte ve lo mismo que un/a Secretario/a (nada de historia clínica) y solo puede cambiar la Configuración. Todo lo que hace queda registrado.";
   return compose({
     subject: `Soporte de KineSoft entró a ${tenant}`,
     preheader: "Podés ver el detalle en Configuración → Accesos de soporte.",
@@ -627,8 +636,9 @@ export function tenantExportRequestEmail(p: { tenantName: string; url: string })
   const tenant = plain(p.tenantName);
   const lead = `El equipo de KineSoft te pide que descargues el export de los datos de ${tenant}.`;
   const leadHtml = `El equipo de KineSoft te pide que descargues el export de los datos de ${strong(tenant)}.`;
-  const how =
-    "Entrá a KineSoft y andá a Configuración → Exportar datos (si el consultorio está suspendido, el botón aparece en la pantalla que ves al entrar).";
+  // BO-Z (B6): sin «el botón aparece en la pantalla que ves al entrar»: con varios consultorios esa pantalla podía
+  // ser la de otro. El botón del mail lleva directo a ESTE consultorio (`&tenant=<id>`, lib/platform-export-request.ts).
+  const how = "Tocá el botón para ir directo a Exportar datos de este consultorio (también está en Configuración → Exportar datos).";
   const what = "El archivo trae pacientes, turnos, pagos, planes e historia clínica: lo descargás vos y el equipo de KineSoft no lo ve.";
   return compose({
     subject: `Descargá el export de ${tenant}`,

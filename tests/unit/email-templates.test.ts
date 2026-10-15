@@ -153,6 +153,16 @@ describe("plantillas de Plataforma (BO2)", () => {
     expect(m.text).toContain("creó el consultorio Consultorio Ramos con este email como titular");
   });
 
+  it("[BO-Z] tenant_activation con needsPassword:false (ya tiene cuenta): no pide elegir contraseña", () => {
+    const m = tenantOwnerActivationEmail({ tenantName: "Consultorio Ramos", url: URL, needsPassword: false });
+    expect(m.text).toContain(
+      "Tocá el botón para entrar al consultorio. También podés entrar con tu email y tu contraseña de siempre."
+    );
+    expect(m.text).toContain("Entrar al consultorio");
+    expect(m.text).not.toMatch(/elegir tu contraseña|Activar mi acceso/);
+    expect(m.text).toContain("Te dimos de alta como titular de Consultorio Ramos en KineSoft.");
+  });
+
   it("platform_access_link: activación y recuperación con copy distinto, firmado por soporte de KineSoft", () => {
     const a = platformAccessLinkEmail({ url: URL, purpose: "activation" });
     const r = platformAccessLinkEmail({ url: URL, purpose: "recovery" });
@@ -168,6 +178,9 @@ describe("plantillas de Plataforma (BO2)", () => {
     expect(m.subject).toBe("Soporte de KineSoft entró a Consultorio Ramos");
     expect(m.text).toContain("soporte@kinesoft.com.ar");
     expect(m.text).toContain("20 de octubre de 2026");
+    // [BO-Z] C8: «… a las HH:MM …» y rol con género neutro.
+    expect(m.text).toMatch(/20 de octubre de 2026 a las \d{2}:\d{2}/);
+    expect(m.text).toContain("un/a Secretario/a");
     expect(m.text).toContain("nada de historia clínica");
     expect(m.text).toContain("Configuración → Accesos de soporte");
     expect(m.text).not.toMatch(/Motivo:/);

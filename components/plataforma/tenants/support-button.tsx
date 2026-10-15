@@ -65,7 +65,7 @@ export function SupportForm({
         value={reason}
         onChange={onChange}
         placeholder={`Ej.: el titular de ${tenantName} pidió ayuda con la configuración de turnos online`}
-        hint={`Lo ve el dueño en el mail y en Configuración. Sin datos de pacientes. ${n}/${SUPPORT_REASON_MAX}${
+        hint={`Lo ve el titular en Configuración → Accesos de soporte (el mail no lo incluye). Sin datos de pacientes. ${n}/${SUPPORT_REASON_MAX}${
           n < SUPPORT_REASON_MIN ? ` (mínimo ${SUPPORT_REASON_MIN})` : ""
         }`}
         disabled={pending}

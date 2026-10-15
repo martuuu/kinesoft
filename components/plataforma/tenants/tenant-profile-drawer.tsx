@@ -16,6 +16,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { updatePlatformTenantProfile } from "@/lib/platform-tenant-lifecycle";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
+import { REBASED_FORM_COPY, rebaseForm } from "@/components/plataforma/tenants/rebase-form";
 import type { UpdatePlatformTenantProfileInput } from "@/lib/platform-tenants-schemas";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { ErrorBox } from "@/components/plataforma/tenants/detail-ui";
@@ -133,10 +134,19 @@ export function TenantProfileDrawer({ detail }: { detail: PlatformTenantDetail }
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
 
-  // Mismo patrón que «Editar suscripción»: el refresh trae otra versión → se resincronizan versión y baseline.
+  // El refresh trae otra versión → se resincronizan versión y baseline. BO-Z B8: con el Drawer abierto y una versión
+  // AJENA (no la del propio guardado, que ya quedó en `version`), el form se rebasea sobre la baseline nueva solo en
+  // los campos no tocados (`rebaseForm`, porqué allá) y se avisa. Solo cuando cambia la versión del server: el resto
+  // del objeto es nuevo en cada render.
   useEffect(() => {
+    const next = profileFormFromDetail(detail);
+    if (open && detail.updatedAt !== version) {
+      const r = rebaseForm(baseline, next, form);
+      setForm(r.form);
+      if (r.changed) setError(REBASED_FORM_COPY);
+    }
     setVersion(detail.updatedAt);
-    setBaseline(profileFormFromDetail(detail));
+    setBaseline(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.updatedAt]);
 

@@ -259,6 +259,23 @@ describe.skipIf(!RUN)("signup · forgot · reenviar verificación · reset (IAM-
       expect(r.ok).toBe(false);
       expect(sent).toHaveLength(0);
     });
+
+    it("[BO-Z] SIGNUP_MODE=assisted: sin invitación no crea cuenta ni manda mail; con invitación sigue al /invite", async () => {
+      const prev = process.env.SIGNUP_MODE;
+      process.env.SIGNUP_MODE = "assisted";
+      try {
+        const email = fresh("asistido");
+        const r = await signUpPractitioner({ fullName: "A Sistido", email, password: "clave1234" });
+        expect(r).toEqual({ ok: false, error: expect.stringContaining("Por ahora damos de alta los consultorios nosotros") });
+        expect(fake.calls).toHaveLength(0);
+        expect(sent).toHaveLength(0);
+        const inv = await signUpPractitioner({ fullName: "", email: "", password: "", inviteToken: "tok-asistido" });
+        expect(inv).toMatchObject({ ok: true, data: { joining: true, redirectTo: "/invite/tok-asistido" } });
+      } finally {
+        if (prev === undefined) delete process.env.SIGNUP_MODE;
+        else process.env.SIGNUP_MODE = prev;
+      }
+    });
   });
 
   describe("olvidé mi contraseña", () => {

@@ -103,15 +103,21 @@ describe("[BO3-F] Plan y uso", () => {
     new Date("2026-10-14T13:00:00Z")
   );
 
-  it("plan, suscripción, cupos, Secretaria/Facturación, turnero y «escribinos»", () => {
-    const html = renderToStaticMarkup(<PlanUsagePanel usage={usage} />);
+  it("plan, suscripción, cupos, Secretaria/Facturación, turnero y «escribinos» con el canal real (BO-Z B4)", () => {
+    const html = renderToStaticMarkup(<PlanUsagePanel usage={usage} supportEmail="soporte@kinesoft.test" />);
     expect(html).toContain("Base");
     expect(html).toContain("Activa");
     expect(html).toContain('data-seats="2 de 3"');
-    expect(html).toContain("La Secretaria y Facturación no ocupan lugar.");
+    // C8: «no ocupan lugar» una sola vez (la fila de Secretaria y Facturación), no repetido en el cupo.
+    expect(html.match(/no ocupan lugar/g)?.length).toBe(1);
     expect(html).toContain("1 en el equipo");
     expect(html).toContain("Activos");
-    expect(html).toContain("Para cambiar de plan o ampliar el cupo, escribinos");
+    expect(html).toContain("Para cambiar de plan o ampliar el cupo, escribinos a ");
+    expect(html).toMatch(/href="mailto:soporte@kinesoft\.test\?subject=Plan%20del%20consultorio"/);
+    // Sin email configurado: sin mailto, con el texto de respaldo.
+    const bare = renderToStaticMarkup(<PlanUsagePanel usage={usage} supportEmail={null} />);
+    expect(bare).not.toContain("mailto:");
+    expect(bare).toContain("Para cambiar de plan o ampliar el cupo, escribile al equipo de KineSoft");
     // Sin billing: nada de botones de pago.
     expect(html).not.toMatch(/<button/);
   });

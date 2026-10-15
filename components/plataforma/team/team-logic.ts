@@ -27,9 +27,24 @@ export const ASSIGNABLE_ROLES: readonly Exclude<Role, "OWNER">[] = ROLE_ORDER.fi
 export type InvitableRole = "PRACTITIONER" | "ADMIN" | "ASSISTANT" | "BILLING";
 
 export const OWNER_LOCKED_REASON =
-  "Es el dueño del consultorio. Para cambiarle el rol, suspenderlo o quitarlo, primero transferí la titularidad a otra persona del equipo.";
+  "Es el titular del consultorio. Para cambiarle el rol, suspenderlo o quitarlo, primero transferí la titularidad a otra persona del equipo.";
 
 export type ActionState = { enabled: boolean; reason?: string };
+
+/**
+ * [BO-Z C5] Porqués de las acciones apagadas de una fila, sin repetir, para mostrarlos VISIBLES debajo (11.5 px). Antes
+ * vivían solo en el `title` (tooltip): en un celular o con teclado no se veían nunca, y el superadmin veía «Suspender»
+ * gris sin saber por qué. El del titular no se repite: la fila ya lo dice en su propia línea.
+ */
+export function disabledReasons(acts: Partial<Record<string, ActionState | null>>, isOwner: boolean): string[] {
+  const out: string[] = [];
+  for (const a of Object.values(acts)) {
+    if (!a || a.enabled || !a.reason) continue;
+    if (isOwner && a.reason === OWNER_LOCKED_REASON) continue;
+    if (!out.includes(a.reason)) out.push(a.reason);
+  }
+  return out;
+}
 
 export type MemberActionKey = "changeRole" | "transfer" | "suspend" | "reactivate" | "remove" | "passwordReset";
 
@@ -51,7 +66,7 @@ export function memberActions(m: Pick<PlatformTeamMemberRow, "role" | "disabledA
       : suspended
         ? { enabled: false, reason: "No se puede transferir la titularidad a alguien suspendido. Reactivalo primero." }
         : !m.joinedAt
-          ? { enabled: false, reason: "Todavía no aceptó la invitación: no puede ser el dueño." }
+          ? { enabled: false, reason: "Todavía no aceptó la invitación: no puede ser el titular." }
           : { enabled: true },
     suspend: suspended ? null : isOwner ? locked : { enabled: true },
     reactivate: suspended ? { enabled: true } : null,
@@ -79,7 +94,7 @@ export function seatsSummary(seats: PlatformTenantTeam["seats"]): {
 } {
   const text =
     seats.limit === null ? `Profesionales: ${seats.used} (sin tope)` : `Profesionales ${seats.used} de ${seats.limit}`;
-  const base = "Cuentan los profesionales activos y las invitaciones pendientes. La Secretaria y Facturación no ocupan lugar.";
+  const base = "Cuentan los profesionales activos y las invitaciones pendientes. Secretario/a y Facturación no ocupan lugar.";
   const hint = seats.full
     ? `Cupo lleno: no se puede invitar a otro profesional sin ampliar el plan o el cupo a medida. ${base}`
     : base;

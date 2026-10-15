@@ -83,7 +83,7 @@ describe("[BO3-C] PlatformTeamPanel", () => {
     const html = renderToStaticMarkup(<PlatformTeamPanel team={team()} vertical="KINESIOLOGY" />);
     expect(html).toContain("Profesionales 2 de 2");
     expect(html).toContain("Cupo lleno");
-    expect(html).toContain("La Secretaria y Facturación no ocupan lugar");
+    expect(html).toContain("Secretario/a y Facturación no ocupan lugar");
     expect(html).toContain("Ana Dueña");
     expect(html).toContain("ana@movare.test");
     expect(html).toContain("Titular");
@@ -125,12 +125,12 @@ describe("[BO3-C] acciones del OWNER", () => {
     expect(row).toMatch(/<select[^>]*disabled=""[^>]*aria-label="Rol de Ana Dueña"/);
     expect(row).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Suspender \(no disponible: [^"]*transferí la titularidad/);
     expect(row).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Quitar del equipo \(no disponible:/);
-    expect(row).toContain('title="Es el dueño del consultorio.');
+    expect(row).toContain('title="Es el titular del consultorio.');
     expect(row).not.toContain("Transferir titularidad");
     expect(row).toMatch(/<button type="button"(?![^>]*disabled="")[^>]*>Mandar link para cambiar la contraseña</);
     expect(row).toContain("primero transferí la titularidad");
-    // El select muestra Dueño/a pero no lo ofrece a nadie más.
-    expect(row).toContain('<option value="OWNER" selected="">Dueño/a</option>');
+    // El select muestra Titular pero no lo ofrece a nadie más.
+    expect(row).toContain('<option value="OWNER" selected="">Titular</option>');
   });
 
   it("un miembro común tiene todo habilitado y el select no ofrece OWNER", () => {
@@ -175,7 +175,7 @@ describe("[BO3-C] transferir titularidad: confirmación tipeada", () => {
   it("sin el email tipeado, el botón está apagado y explica qué pasa con el dueño actual", () => {
     const html = renderToStaticMarkup(<TransferOwnershipForm {...props} typed="" />);
     expect(html).toContain("Para confirmar, escribí el email de Sole Recepción");
-    expect(html).toContain("Ana Dueña deja de ser dueño/a y queda como Administrador/a");
+    expect(html).toContain("Ana Dueña deja de ser titular y queda como Administrador/a");
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*>Transferir titularidad</);
   });
   it("con otro email sigue apagado", () => {
@@ -190,14 +190,14 @@ describe("[BO3-C] transferir titularidad: confirmación tipeada", () => {
 
 describe("[BO3-C] Drawer de invitación", () => {
   const base = { open: true, onClose: () => {}, tenantId: "t1", vertical: "KINESIOLOGY" as const };
-  it("formulario: email, nombre, apellido, rol (sin Dueño/a) y aviso de cupo lleno para un profesional", () => {
+  it("formulario: email, nombre, apellido, rol (sin Titular) y aviso de cupo lleno para un profesional", () => {
     const html = renderToStaticMarkup(<InviteDrawerBody {...base} seatsFull />);
     expect(html).toContain("Invitar al equipo");
     expect(html).toContain('name="email"');
     expect(html).toContain('name="firstName"');
     expect(html).toContain('name="lastName"');
     expect(html).toContain("Secretario/a");
-    expect(html).not.toContain(">Dueño/a<");
+    expect(html).not.toContain(">Titular<");
     expect(html).toContain("El cupo de profesionales está lleno");
     expect(html).toContain("Mandar invitación");
   });

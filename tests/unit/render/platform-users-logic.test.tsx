@@ -56,7 +56,7 @@ describe("[BO3-D] users-logic · detalle", () => {
   it("[BO3 integrador] rótulo del rol con la vertical del consultorio", () => {
     expect(membershipRoleLabel("PRACTITIONER", "GENERAL")).toBe("Profesional");
     expect(membershipRoleLabel("PRACTITIONER", "KINESIOLOGY")).toBe("Kinesiólogo/a");
-    expect(membershipRoleLabel("OWNER", "GENERAL")).toBe("Dueño/a");
+    expect(membershipRoleLabel("OWNER", "GENERAL")).toBe("Titular");
   });
 
   it("solo los roles clínicos aceptados y activos necesitan profesional", () => {

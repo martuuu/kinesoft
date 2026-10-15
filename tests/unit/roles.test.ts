@@ -21,7 +21,7 @@ const ALL: Role[] = ["OWNER", "ADMIN", "PRACTITIONER", "ASSISTANT", "BILLING"];
 
 describe("[IAM-0c] roleLabel", () => {
   it("una etiqueta por rol, la Secretaria es «Secretario/a»", () => {
-    expect(roleLabel("OWNER")).toBe("Dueño/a");
+    expect(roleLabel("OWNER")).toBe("Titular");
     expect(roleLabel("ADMIN")).toBe("Administrador/a");
     expect(roleLabel("PRACTITIONER")).toBe("Kinesiólogo/a");
     expect(roleLabel("ASSISTANT")).toBe("Secretario/a");

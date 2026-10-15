@@ -29,7 +29,7 @@ export function TenantSubscriptionView({ detail: d }: { detail: PlatformTenantDe
   return (
     <Section
       title="Suscripción"
-      description="El estado de la suscripción es informativo hasta que exista la facturación; el acceso lo calcula la app con el estado del consultorio, la suscripción y el trial."
+      description="El estado de la suscripción es informativo hasta que exista la facturación; el acceso lo calcula la app con el estado del consultorio, la suscripción y la prueba."
       action={<TenantEditDrawer detail={d} />}
     >
       <Facts
@@ -37,7 +37,7 @@ export function TenantSubscriptionView({ detail: d }: { detail: PlatformTenantDe
           ["Tipo", VERTICAL_LABEL[d.vertical]],
           ["Plan", PLAN_LABEL[d.plan]],
           ["Estado de la suscripción", SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]],
-          ["Trial", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin trial")],
+          ["Prueba", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin prueba")],
           ["Turnos online", d.publicBookingEnabled ? "Activo" : "Apagado"],
           ["Cupo de profesionales", seatLimitLabel(d)],
           ["Acceso del consultorio", accessText(d)],

@@ -45,8 +45,14 @@ const RUN = process.env.INTEGRATION === "1";
 /** Registro a mano (no `vi.fn`: vitest 2.1.9 rompe con un fn que tira a través de un mock). */
 const mail = {
   sent: [] as SendEmailInput[],
+  /** [BO-Z] C4: el próximo envío falla (rebote): ahí el superadmin sí recibe la URL para copiar. */
+  failNext: false,
   transport: async (i: SendEmailInput): Promise<SendEmailResult> => {
     mail.sent.push(i);
+    if (mail.failNext) {
+      mail.failNext = false;
+      return { ok: false, transport: "resend", skipped: false, reason: "bounce" } as SendEmailResult;
+    }
     return { ok: true, transport: "resend", providerId: `re_${mail.sent.length}` };
   },
 };
@@ -193,7 +199,8 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     const email = `pt-inv-${uniqueSuffix()}@test.local`;
     const r = await platformInviteTeamMember({ tenantId: T.tenantId, email, firstName: "Ana", lastName: "Paz", role: "ASSISTANT" });
     if (!r.ok) throw new Error(r.error);
-    expect(r.data.url).toMatch(/\/invite\//);
+    // [BO-Z] C4: con el mail enviado, ni el superadmin recibe la URL (la credencial ya está en la casilla).
+    expect(r.data.url).toBeNull();
     expect(r.data.emailSent).toBe(true);
     const row = await db.invitation.findUniqueOrThrow({ where: { id: r.data.id } });
     expect(row).toMatchObject({ tenantId: T.tenantId, email, role: "ASSISTANT", invitedById: superadminId, sendCount: 1 });
@@ -209,6 +216,20 @@ describe.skipIf(!RUN)("[BO2-B] equipo de un consultorio desde /plataforma", () =
     expect(await db.auditEvent.count({ where: { tenantId: T.tenantId, action: "invitation.create", entityId: r.data.id } })).toBe(0);
     const listed = await getTenantTeamForPlatform(T.tenantId);
     expect(listed!.invitations.find((i) => i.id === r.data.id)).toMatchObject({ status: "pending", sendCount: 1, lastEmailStatus: "sent" });
+  });
+
+  it("[BO-Z] C4: si el mail NO sale, el superadmin sí recibe la URL para copiar", async () => {
+    mail.failNext = true;
+    const r = await platformInviteTeamMember({
+      tenantId: T.tenantId,
+      email: `pt-fail-${uniqueSuffix()}@test.local`,
+      firstName: "Bo",
+      lastName: "Rebote",
+      role: "ASSISTANT",
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.data.emailSent).toBe(false);
+    expect(r.data.url).toMatch(/\/invite\//);
   });
 
   it("reenvía y anula una invitación de otro consultorio, con doble audit", async () => {

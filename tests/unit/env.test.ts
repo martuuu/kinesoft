@@ -175,6 +175,33 @@ describe("parseEnv — flags de Plataforma (BO1/BO4/BO5)", () => {
     expect(parseEnv({ PLATFORM_MFA_ENFORCEMENT: "enforce" }).PLATFORM_MFA_ENFORCEMENT).toBe("enforce");
     expect(() => parseEnv({ PLATFORM_MFA_ENFORCEMENT: "true" })).toThrow(/PLATFORM_MFA_ENFORCEMENT/);
   });
+  it("[BO-Z] SIGNUP_MODE: default open, acepta assisted (mayúsculas/espacios tolerados), typo frena", () => {
+    expect(parseEnv({}).SIGNUP_MODE).toBe("open");
+    expect(parseEnv({ SIGNUP_MODE: "" }).SIGNUP_MODE).toBe("open");
+    expect(parseEnv({ SIGNUP_MODE: " Assisted " }).SIGNUP_MODE).toBe("assisted");
+    expect(() => parseEnv({ SIGNUP_MODE: "closed" })).toThrow(/SIGNUP_MODE/);
+  });
+  it("[BO-Z] signupMode() e isVercelProduction() leen process.env en cada llamada", async () => {
+    const { signupMode, isVercelProduction } = await import("@/lib/env");
+    const prev = { s: process.env.SIGNUP_MODE, v: process.env.VERCEL_ENV };
+    try {
+      delete process.env.SIGNUP_MODE;
+      expect(signupMode()).toBe("open");
+      process.env.SIGNUP_MODE = "assisted";
+      expect(signupMode()).toBe("assisted");
+      process.env.SIGNUP_MODE = "cualquiera";
+      expect(signupMode()).toBe("open");
+      process.env.VERCEL_ENV = "preview";
+      expect(isVercelProduction()).toBe(false);
+      process.env.VERCEL_ENV = "production";
+      expect(isVercelProduction()).toBe(true);
+    } finally {
+      if (prev.s === undefined) delete process.env.SIGNUP_MODE;
+      else process.env.SIGNUP_MODE = prev.s;
+      if (prev.v === undefined) delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV = prev.v;
+    }
+  });
   it("CRON_SECRET: opcional, vacío = no seteada", () => {
     expect(parseEnv({}).CRON_SECRET).toBeUndefined();
     expect(parseEnv({ CRON_SECRET: "" }).CRON_SECRET).toBeUndefined();

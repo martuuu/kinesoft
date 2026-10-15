@@ -59,10 +59,10 @@ export function SupportAccessPanel({ sessions }: { sessions: SupportSessionRow[]
         >
           <li>
             Cuando nos pedís ayuda, el equipo de KineSoft puede entrar a tu consultorio <strong>como soporte</strong>.
-            Te avisamos por mail al titular cada vez que entra.
+            Cada vez que entra, le avisamos por mail al titular.
           </li>
           <li>
-            Ve lo mismo que una Secretaria: agenda, pacientes y turnos, <strong>sin historia clínica</strong>.
+            Ve lo mismo que el rol Secretario/a: agenda, pacientes y turnos, <strong>sin historia clínica</strong>.
           </li>
           <li>
             Todo es <strong>solo lectura</strong>, salvo Configuración: ahí puede crear y modificar (equipo, obras

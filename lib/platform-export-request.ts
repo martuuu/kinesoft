@@ -63,7 +63,9 @@ export async function requestTenantExport(
 
   const mail = tenantExportRequestEmail({
     tenantName: tenant.name,
-    url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/configuracion?tab=exportar`,
+    // BO-Z (B6): `&tenant=<id>` para que un titular de VARIOS consultorios (con este suspendido) caiga en el export
+    // de ESTE y no en el del consultorio activo de su sesión. El panel de export lo respeta (fixer U).
+    url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/configuracion?tab=exportar&tenant=${encodeURIComponent(tenantId)}`,
   });
   let sent = 0;
   for (const o of owners) {

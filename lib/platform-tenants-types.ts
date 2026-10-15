@@ -146,7 +146,7 @@ export type PlatformTrialRow = {
   vertical: TenantVertical;
   plan: TenantPlan;
   trialEndsOn: string;
-  /** Días AR hasta el vencimiento (0 = vence hoy; negativo = ya venció y sigue TRIALING). */
+  /** `trialDaysLeft` (labels.ts): días AR contando hoy, como `tenantAccessFor` (1 = último día; ≤ 0 = ya venció). */
   daysLeft: number;
 };
 

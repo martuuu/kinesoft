@@ -14,7 +14,7 @@ export const metadata = { title: "Ingresá el código · KineSoft" };
  * código y vuelve a `next`. Sin factor → configurar; ya AAL2 → directo a `next` (no se pide dos veces).
  */
 export default async function VerificarMfaPage({ searchParams }: { searchParams: { next?: string | string[] } }) {
-  const { next, status } = await mfaPageContext("/plataforma-mfa/verificar", searchParams.next);
+  const { actor, next, status } = await mfaPageContext("/plataforma-mfa/verificar", searchParams.next);
 
   if (status === "none") redirect(platformMfaRedirect("setup", next));
   if (status === "verified") redirect(next);
@@ -27,7 +27,7 @@ export default async function VerificarMfaPage({ searchParams }: { searchParams:
         <MfaHeading eyebrow="Sin conexión" title="No pudimos comprobar tu verificación" />
         <MfaText>El servicio de verificación no respondió. Probá de nuevo en unos segundos.</MfaText>
         <MfaGoButton href={`/plataforma-mfa/verificar?next=${encodeURIComponent(next)}`}>Reintentar</MfaGoButton>
-        <MfaFooter />
+        <MfaFooter hasHome={actor.homeTenantId !== null} />
       </AuthShell>
     );
   }
@@ -37,7 +37,7 @@ export default async function VerificarMfaPage({ searchParams }: { searchParams:
       <MfaHeading eyebrow="Seguridad" title="Ingresá el código" />
       <MfaText>Abrí tu app de autenticación y escribí el código de 6 números de KineSoft.</MfaText>
       <MfaVerifyForm next={next} verifyAction={verifyPlatformMfaLogin} />
-      <MfaFooter />
+      <MfaFooter hasHome={actor.homeTenantId !== null} />
     </AuthShell>
   );
 }

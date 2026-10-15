@@ -6,6 +6,24 @@ import { ModalCloseButton } from "@/components/ui/modal-close";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, modalVariants } from "@/lib/motion";
 
+/** Modales abiertos, en orden de apertura (para que Esc cierre solo el de arriba, BO-Z C2). */
+const openModals: number[] = [];
+let modalSeq = 0;
+
+/**
+ * BO-Z C2 (puro, para el test): ¿este Modal se queda con el Esc? Solo si es el último abierto y el foco no está en
+ * OTRO diálogo modal (un `useConfirm` encima). Foco en el body o en este mismo diálogo → sí.
+ */
+export function modalOwnsEscape(p: {
+  stack: readonly number[];
+  id: number;
+  focusedDialog: unknown | null;
+  ownDialog: unknown | null;
+}): boolean {
+  if (p.stack[p.stack.length - 1] !== p.id) return false;
+  return !(p.focusedDialog && p.ownDialog && p.focusedDialog !== p.ownDialog);
+}
+
 /**
  * Standard centered modal.
  *
@@ -39,18 +57,36 @@ export function Modal({
 }) {
   const trapRef = useFocusTrap<HTMLDivElement>(open);
 
+  // BO-Z C2: Esc cierra SOLO el modal de arriba. Antes era un listener en burbuja sobre `document` que no frenaba el
+  // evento: con un Modal abierto sobre un Drawer (p. ej. el de re-verificación de Plataforma sobre «Editar
+  // suscripción»), un Esc cerraba el Modal Y el Drawer, y con dos Modales cerraba los dos. Mismo molde que
+  // confirm-dialog.tsx: CAPTURA sobre `window` (corre antes que el Drawer, que escucha en burbuja) + preventDefault +
+  // stopImmediatePropagation. «De arriba» = el último Modal abierto (`openModals`) y, si el foco está en OTRO
+  // diálogo modal (un `useConfirm` abierto encima, que hace autoFocus), se lo deja a él.
   useEffect(() => {
     if (!open) return;
+    const id = ++modalSeq;
+    openModals.push(id);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      const focusedDialog = (document.activeElement as HTMLElement | null)?.closest?.("[aria-modal]") ?? null;
+      const ownDialog = trapRef.current?.closest("[aria-modal]") ?? null;
+      if (!modalOwnsEscape({ stack: openModals, id, focusedDialog, ownDialog })) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
     };
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
+      const i = openModals.indexOf(id);
+      if (i >= 0) openModals.splice(i, 1);
       document.body.style.overflow = prev;
     };
+    // `trapRef` es estable (useRef).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, onClose]);
 
   return (

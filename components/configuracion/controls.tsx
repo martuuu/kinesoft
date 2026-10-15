@@ -43,11 +43,14 @@ export function TabsBar({
   setTab,
   role,
   modules,
+  canExport,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
   role: Role;
   modules: readonly TenantModule[];
+  /** BO-Z B6: default = OWNER; el cliente lo prende también para el titular de un consultorio suspendido. */
+  canExport?: boolean;
 }) {
   // `module`: la pestaña solo existe si el consultorio tiene ese módulo (EV0).
   // Diagnósticos = condiciones propias del catálogo de diagnóstico: un
@@ -84,8 +87,9 @@ export function TabsBar({
       }}
     >
       {tabs.map((t) => {
-        if (t.key === "exportar" && role !== "OWNER") return null;
-        if (t.ownerOnly && role !== "OWNER" && role !== "ADMIN") return null;
+        if (t.key === "exportar") {
+          if (!(canExport ?? role === "OWNER")) return null;
+        } else if (t.ownerOnly && role !== "OWNER" && role !== "ADMIN") return null;
         if (t.module && !modules.includes(t.module)) return null;
         const on = tab === t.key;
         return (

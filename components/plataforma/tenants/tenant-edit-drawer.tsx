@@ -32,6 +32,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { updatePlatformTenant } from "@/lib/platform-tenants";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
+import { REBASED_FORM_COPY, rebaseForm } from "@/components/plataforma/tenants/rebase-form";
 import {
   SUBSCRIPTION_STATUS_VALUES,
   TENANT_PLAN_VALUES,
@@ -171,10 +172,10 @@ export function TenantEditForm({
       <div style={{ display: "grid", gap: 6 }}>
         <FormField
           type="date"
-          label="Vencimiento del trial"
+          label="Fin de la prueba"
           value={form.trialEndsOn}
           onChange={(v) => onChange("trialEndsOn", v)}
-          hint="Vacío = sin trial. El día que elijas cuenta entero."
+          hint="Vacío = sin prueba. El día que elijas cuenta entero."
           error={fieldError("trialEndsOn")}
           disabled={pending}
         />
@@ -285,10 +286,19 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
 
+  // El refresh trae otra versión → se resincronizan versión y baseline. BO-Z B8: con el Drawer abierto y una versión
+  // AJENA (no la del propio guardado, que ya quedó en `version`), el form se rebasea sobre la baseline nueva solo en
+  // los campos no tocados (`rebaseForm`, porqué allá) y se avisa. Solo cuando cambia la versión del server: el resto
+  // del objeto es nuevo en cada render.
   useEffect(() => {
+    const next = formFromDetail(detail);
+    if (open && detail.updatedAt !== version) {
+      const r = rebaseForm(baseline, next, form);
+      setForm(r.form);
+      if (r.changed) setError(REBASED_FORM_COPY);
+    }
     setVersion(detail.updatedAt);
-    setBaseline(formFromDetail(detail));
-    // Solo cuando cambia la versión del server: el resto del objeto es nuevo en cada render.
+    setBaseline(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.updatedAt]);
 

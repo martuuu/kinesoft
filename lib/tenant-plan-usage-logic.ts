@@ -11,7 +11,8 @@
  *    calendario AR contando hoy (el último día es 1). Con `getDay`/`Date` del host, en Vercel (UTC) el número
  *    cambiaba a las 21:00 AR.
  *
- * Sin billing (decisión de BO: el cambio de plan lo hace Plataforma): la vista solo informa y dice «escribinos».
+ * Sin billing (decisión de BO: el cambio de plan lo hace Plataforma): la vista solo informa y dice «escribinos»
+ * (BO-Z B4: con el canal real, que agrega el panel a partir de `subscription.contact`).
  * Client-safe: solo `import type` de Prisma y módulos puros.
  */
 import type { SubscriptionStatus, TenantPlan, TenantStatus } from "@prisma/client";
@@ -38,7 +39,16 @@ export type PlanUsageTone = "ok" | "info" | "warn";
 
 export type TenantPlanUsageView = {
   planLabel: string;
-  subscription: { label: string; tone: PlanUsageTone; detail: string | null };
+  subscription: {
+    label: string;
+    tone: PlanUsageTone;
+    detail: string | null;
+    /**
+     * BO-Z B4: para qué escribir a soporte («para elegir un plan»). El panel lo cierra con el canal real
+     * (`SupportContact`: mailto o «escribile al equipo de KineSoft»); acá no hay email (puro, sin env).
+     */
+    contact: string | null;
+  };
   seats: {
     /** «2 de 3» · «2 (sin límite)». */
     value: string;
@@ -99,10 +109,10 @@ export function subscriptionSummary(
   const access = tenantAccessFor({ ...t, status: "ACTIVE" }, now);
   switch (access.reason) {
     case "active":
-      return { label, tone: "ok", detail: null };
+      return { label, tone: "ok", detail: null, contact: null };
     case "trial":
     case "trial_ending": {
-      if (access.daysLeft === null || !t.trialEndsAt) return { label, tone: "info", detail: null };
+      if (access.daysLeft === null || !t.trialEndsAt) return { label, tone: "info", detail: null, contact: null };
       const until = trialEndLabel(t.trialEndsAt);
       return {
         label,
@@ -111,6 +121,7 @@ export function subscriptionSummary(
           access.daysLeft === 1
             ? `Hoy es el último día de prueba (${until}).`
             : `${quedan(access.daysLeft)} de prueba (hasta el ${until}).`,
+        contact: null,
       };
     }
     case "trial_grace":
@@ -119,27 +130,42 @@ export function subscriptionSummary(
         tone: "warn",
         detail:
           access.daysLeft === null
-            ? "La prueba terminó. Escribinos para elegir un plan."
-            : `La prueba terminó. ${quedan(access.daysLeft)} para elegir un plan antes de que el consultorio pase a modo lectura.`,
+            ? "La prueba terminó."
+            : `La prueba terminó. ${quedan(access.daysLeft)} antes de que el consultorio pase a modo lectura.`,
+        contact: "para elegir un plan",
       };
     case "trial_expired":
-      return { label: "Prueba terminada", tone: "warn", detail: "La prueba terminó. Escribinos para elegir un plan." };
+      return { label: "Prueba terminada", tone: "warn", detail: "La prueba terminó.", contact: "para elegir un plan" };
     case "past_due_grace":
       return {
         label,
         tone: "warn",
         detail:
           access.daysLeft === null
-            ? "Hay un pago pendiente. Escribinos para regularizarlo."
-            : `Hay un pago pendiente. ${quedan(access.daysLeft)} para regularizarlo antes de que el consultorio pase a modo lectura.`,
+            ? "Hay un pago pendiente."
+            : `Hay un pago pendiente. ${quedan(access.daysLeft)} antes de que el consultorio pase a modo lectura.`,
+        contact: "para regularizarlo",
       };
     case "past_due":
-      return { label, tone: "warn", detail: "Hay un pago pendiente. Escribinos para regularizarlo." };
+      return { label, tone: "warn", detail: "Hay un pago pendiente.", contact: "para regularizarlo" };
     case "cancelled":
-      return { label, tone: "warn", detail: "La suscripción no está activa. Escribinos para reactivarla." };
+      return { label, tone: "warn", detail: "La suscripción no está activa.", contact: "para reactivarla" };
     default:
-      return { label, tone: "info", detail: null };
+      return { label, tone: "info", detail: null, contact: null };
   }
+}
+
+/**
+ * La frase completa en texto plano (para tests y lectores sin link): «La prueba terminó. Escribinos a X para elegir
+ * un plan.». El panel arma lo mismo con el `mailto:`.
+ */
+export function subscriptionDetailText(
+  sub: TenantPlanUsageView["subscription"],
+  contactText: string
+): string | null {
+  if (!sub.contact) return sub.detail;
+  const cta = `${contactText.charAt(0).toUpperCase()}${contactText.slice(1)} ${sub.contact}.`;
+  return sub.detail ? `${sub.detail} ${cta}` : cta;
 }
 
 export function seatsSummary(
@@ -155,12 +181,12 @@ export function seatsSummary(
         : `Incluye ${t.pendingClinicalInvites} invitaciones pendientes: reservan el lugar hasta que se acepten, se revoquen o venzan.`
     );
   }
-  parts.push("La Secretaria y Facturación no ocupan lugar.");
+  // C8: «Secretaria y Facturación no ocupan lugar» ya lo dice la fila de abajo del panel: no se repite acá.
   if (full && limit != null) {
     parts.push(
       used > limit
         ? "Hay más profesionales que lugares en el plan: los que están siguen, pero no se puede sumar a otro."
-        : "No quedan lugares libres: para sumar a otro profesional, liberá uno o escribinos para ampliar el plan."
+        : "No quedan lugares libres: para sumar a otro profesional, liberá uno o pedí ampliar el plan (abajo te decimos cómo)."
     );
   }
   return { value, used, limit, full, custom: t.seatLimitOverride != null, detail: parts.join(" ") };

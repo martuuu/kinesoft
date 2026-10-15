@@ -26,6 +26,7 @@ import { Switch, ErrorBox } from "../controls";
 import { TENANT_BASICS_STALE_ERROR } from "../config-copy";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
+import { supportContactText } from "@/lib/support-contact";
 
 export function GeneralPanel({
   tenant,
@@ -556,11 +557,11 @@ function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: 
         )}
         <PrefRow
           label="Tipo de consultorio"
-          hint="Define qué secciones ves en KineSoft. Para cambiarlo, escribinos."
+          hint={`Define qué secciones ves en KineSoft. Para cambiarlo, ${supportContactText()}.`}
         >
           <ReadOnlyValue>{VERTICAL_LABEL[tenant.vertical]}</ReadOnlyValue>
         </PrefRow>
-        <PrefRow label="Plan" hint="Para cambiar de plan, escribinos.">
+        <PrefRow label="Plan" hint={`Para cambiar de plan, ${supportContactText()}.`}>
           <ReadOnlyValue>{PLAN_LABEL[tenant.plan]}</ReadOnlyValue>
         </PrefRow>
       </div>

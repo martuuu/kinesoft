@@ -142,7 +142,12 @@ export async function sendPlatformAccessLink(raw: unknown): Promise<ActionResult
   });
   const emailStatus: EmailDeliveryStatus = r.ok ? "sent" : r.transport === "blocked" ? "blocked" : r.skipped ? "skipped" : "failed";
   // `blocked` = Production con un link a localhost: el link no sirve, no se muestra (es un error de config).
-  const copyUrl = r.ok || emailStatus === "blocked" ? null : link.url;
+  // BO-Z (B2): y SOLO para una cuenta que nunca se activó (sin email confirmado ni ingreso). Antes, con el mail caído,
+  // el superadmin recibía el link de recuperación de CUALQUIER cuenta, también la de un titular activo: un clic y
+  // entraba como esa persona (que puede ser miembro de otros consultorios). Para una cuenta activa el link solo va
+  // por mail a su casilla.
+  const neverActivated = auth.data.emailConfirmedAt === null && auth.data.lastSignInAt === null;
+  const copyUrl = r.ok || emailStatus === "blocked" || !neverActivated ? null : link.url;
 
   await prismaService.$transaction((tx) =>
     auditPlatformGlobalInTx(tx, {
@@ -155,6 +160,14 @@ export async function sendPlatformAccessLink(raw: unknown): Promise<ActionResult
       payload: { purpose, emailStatus, transport: r.transport, linkShown: copyUrl !== null },
     })
   );
+  if (!r.ok && emailStatus !== "blocked" && !neverActivated) {
+    // Mensaje claro en vez de un «copiá el link» que no llega: la cuenta ya está activa y el link no se muestra.
+    return {
+      ok: false,
+      error:
+        "El mail no salió y, como la cuenta ya está activa, no mostramos el link. Reintentá en unos minutos o pedile que use «¿Olvidaste tu contraseña?» al entrar.",
+    };
+  }
   return { ok: true, data: { purpose, emailSent: r.ok, emailStatus, copyUrl } };
 }
 

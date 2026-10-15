@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 import { SignupScreen } from "@/components/screens/signup-screen";
 import { getSessionUser } from "@/lib/onboarding-internal";
+import { signupMode } from "@/lib/env";
+import { signupAssistedMessage } from "@/lib/onboarding-logic";
+import { supportEmail, supportMailto } from "@/lib/support-contact";
 
 export const metadata = { title: "Crear cuenta · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -27,5 +30,10 @@ export default async function SignupPage({
   const user = await getSessionUser();
   if (user) redirect("/dashboard");
 
+  // BO-Z (BO-D11): con SIGNUP_MODE=assisted no se ofrece el form (el server igual lo rechaza): el consultorio lo da de
+  // alta el equipo. El copy y el mailto se arman acá, del lado del server, con el mismo canal que el rechazo.
+  if (signupMode() === "assisted") {
+    return <SignupScreen assisted={{ message: signupAssistedMessage(), mailto: supportMailto(supportEmail(), "Alta de consultorio") }} />;
+  }
   return <SignupScreen />;
 }

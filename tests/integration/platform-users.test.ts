@@ -302,6 +302,16 @@ describe.skipIf(!RUN)("[BO2-C] directorio de usuarios y cuentas", () => {
     expect(JSON.stringify(ev?.payload)).not.toContain("token_hash");
   });
 
+  it("[BO-Z] B2: link de acceso a una cuenta YA activa con el mail caído → sin link para copiar y mensaje claro", async () => {
+    seedAuth(teamUser);
+    mail.result = { ok: false, transport: "resend", skipped: false, reason: "bounce" };
+    const r = await sendPlatformAccessLink({ userId: teamUser });
+    expect(r).toEqual({ ok: false, error: expect.stringContaining("como la cuenta ya está activa, no mostramos el link") });
+    expect(JSON.stringify(r)).not.toContain("token_hash");
+    const ev = (await platformEvents(teamUser)).filter((e) => e.action === "platform.user.access_link").at(-1);
+    expect(ev?.payload).toMatchObject({ purpose: "recovery", emailStatus: "failed", linkShown: false });
+  });
+
   it("link de acceso: sin cuenta en Auth o con el email desincronizado, no se emite nada", async () => {
     const lonely = await profile();
     expect(await sendPlatformAccessLink({ userId: lonely })).toMatchObject({ ok: false });

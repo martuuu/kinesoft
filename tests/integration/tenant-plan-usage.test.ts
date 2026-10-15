@@ -87,7 +87,7 @@ describe.skipIf(!RUN)("[BO3-F] getTenantPlanUsage", () => {
     expect(v.seats.detail).toContain("Incluye 1 invitación pendiente");
     expect(v.nonSeatMembers).toBe(2);
     expect(v.publicBookingEnabled).toBe(true);
-    expect(v.subscription).toEqual({ label: "Activa", tone: "ok", detail: null });
+    expect(v.subscription).toEqual({ label: "Activa", tone: "ok", detail: null, contact: null });
   });
 
   it("cupo a medida (seatLimitOverride) gana sobre el del plan", async () => {

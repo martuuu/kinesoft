@@ -20,7 +20,7 @@ import { ResendVerification } from "@/components/screens/resend-verification";
  * muestra «te mandamos un email»: ese era el bug del QA del 14-oct (§19.1 #4), la pantalla prometía un mail
  * que nunca salía.
  */
-export function SignupScreen() {
+export function SignupScreen({ assisted }: { assisted?: { message: string; mailto: string | null } } = {}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -184,8 +184,12 @@ export function SignupScreen() {
               marginBottom: 10,
             }}
           >
-            Paso 1 de 7 · Tu cuenta
+            {assisted ? "Alta de consultorio" : "Paso 1 de 7 · Tu cuenta"}
           </div>
+          {assisted ? (
+            <SignupAssisted message={assisted.message} mailto={assisted.mailto} />
+          ) : (
+          <>
           <h2 className="k-display" style={{ fontSize: 28, margin: "0 0 10px", lineHeight: 1.1 }}>
             {sentTo ? "Revisá tu email" : "Creá tu cuenta en KineSoft"}
           </h2>
@@ -258,7 +262,46 @@ export function SignupScreen() {
             </div>
           </form>
           )}
+          </>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * BO-Z (BO-D11): `SIGNUP_MODE=assisted`. Sin form: el consultorio lo damos de alta nosotros desde Plataforma. Quien
+ * tiene una invitación entra por el link del mail (`/invite/<token>`, que no pasa por acá) y quien ya tiene cuenta,
+ * por /login. Exportado para el render test.
+ */
+export function SignupAssisted({ message, mailto }: { message: string; mailto: string | null }) {
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <h2 className="k-display" style={{ fontSize: 28, margin: 0, lineHeight: 1.1 }}>
+        Escribinos para sumar tu consultorio
+      </h2>
+      <p style={{ fontSize: 14, color: "var(--navy-700)", margin: 0, lineHeight: 1.55 }}>{message}</p>
+      {mailto && (
+        <Button
+          variant="primary"
+          type="button"
+          onClick={() => {
+            window.location.href = mailto;
+          }}
+          style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
+        >
+          Escribinos <IconArrow size={16} />
+        </Button>
+      )}
+      <p style={{ fontSize: 12, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+        ¿Te invitaron a sumarte a un equipo? Abrí el link del mail de invitación: desde ahí creás tu cuenta.
+      </p>
+      <div style={{ fontSize: 13, color: "var(--navy-500)", textAlign: "center" }}>
+        ¿Ya tenés cuenta?{" "}
+        <Link href="/login" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+          Ingresar
+        </Link>
       </div>
     </div>
   );

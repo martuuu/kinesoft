@@ -5,7 +5,9 @@ import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { AppShell } from "@/components/layout/app-shell";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
 import { tenantAccessEnforcement } from "@/lib/env";
-import { AccessBanner } from "@/components/layout/access-banner";
+import { AccessBanner, bannerAudienceFor } from "@/components/layout/access-banner";
+import { ReadOnlyWriteGuard } from "@/components/layout/read-only-write-guard";
+import { canWrite, effectiveMode } from "@/lib/tenant-access";
 import { SupportBanner, shellTenantChoice } from "@/components/layout/support-banner";
 import { endSupport } from "@/lib/platform-support";
 import { getTenantChoiceState } from "@/lib/tenant-choice";
@@ -127,6 +129,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     callAlert: prefs.agendaView.callAlert,
   };
   const shellChoice = shellTenantChoice(!!actor.support, choice.options, switchTenant);
+  const enforcement = tenantAccessEnforcement();
   return (
     <TweaksProvider
       initialAgenda={{
@@ -156,7 +159,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
             soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,
             que el soporte sí puede mirar. */}
-        <AccessBanner access={actor.access} enforcement={tenantAccessEnforcement()} support={!!actor.support} />
+        {/* BO-Z B4: el llamado a escribir a soporte es para titular/admin; el resto lee «Avisale al titular». */}
+        <AccessBanner
+          access={actor.access}
+          enforcement={enforcement}
+          support={!!actor.support}
+          audience={bannerAudienceFor(role)}
+        />
+        {/* BO-Z B10: red de escrituras rechazadas en solo lectura REAL (modo efectivo). En soporte no: ya la monta la
+            banda de soporte con su propio copy. */}
+        {!actor.support && !canWrite(effectiveMode(actor.access.mode, enforcement)) && <ReadOnlyWriteGuard />}
         {children}
       </AppShell>
     </TweaksProvider>

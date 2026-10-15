@@ -345,7 +345,12 @@ export async function provisionTenantWithOwner(
         if (d.slug) failure = fieldError("slug", MSG.slugTaken);
         else continue;
       } else {
-        logger.error("platform.tenant_create.failed", { error: e instanceof Error ? e.message : String(e) });
+        // BO-Z (C5): nombre y código, no el mensaje: el de Prisma/Postgres puede traer valores de la fila (email del
+        // titular, nombre del consultorio) y los logs no son lugar para eso.
+        logger.error("platform.tenant_create.failed", {
+          error: e instanceof Error ? e.name : "unknown",
+          code: (e as { code?: unknown } | null)?.code ?? null,
+        });
         failure = { ok: false, error: MSG.failed };
       }
     }
@@ -361,6 +366,7 @@ export async function provisionTenantWithOwner(
 
   // 6. Activación (después del commit: un mail no se des-manda si la tx se revierte).
   const needsPassword = createdNow || owner.emailConfirmedAt === null;
+  const neverActivated = createdNow || (owner.emailConfirmedAt === null && owner.lastSignInAt === null);
   const next = activationNextFor({ needsPassword, onboardingCompleted: d.onboardingCompleted });
   const link = await issueAccessLink({ email, kind: "recovery", next });
   if (!link.ok) {
@@ -374,7 +380,8 @@ export async function provisionTenantWithOwner(
   }
 
   const mail = await sendEmail({
-    ...tenantOwnerActivationEmail({ tenantName: d.clinicName, url: link.url }),
+    // BO-Z (B7): a un titular que ya tiene contraseña no se le dice «elegí tu contraseña».
+    ...tenantOwnerActivationEmail({ tenantName: d.clinicName, url: link.url, needsPassword }),
     kind: ACTIVATION_EMAIL_KIND,
     to: email,
     tenantId: created.tenantId,
@@ -390,7 +397,10 @@ export async function provisionTenantWithOwner(
       slug: created.slug,
       ownerUserId: owner.id,
       emailSent: mail.ok,
-      ...(mail.ok ? {} : { activationUrl: link.url }),
+      // BO-Z (B2): el link para copiar SOLO si la cuenta nunca se activó (creada ahora, o sin confirmar ni ingreso).
+      // Con el email de un titular ya activo (de otro consultorio), un mail caído le daba al superadmin un link de
+      // recuperación de esa cuenta ajena. Para esa persona alcanza con el mail o con «Mandar link de acceso».
+      ...(mail.ok || !neverActivated ? {} : { activationUrl: link.url }),
       replayed: false,
     },
   };

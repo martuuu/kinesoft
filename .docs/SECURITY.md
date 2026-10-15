@@ -298,6 +298,10 @@ How the Upstash path behaves since A3a:
 | `acceptInvite` | 10 / 10 min / IP |
 | `/api/pacientes/export` | 5 / min / user |
 | `/api/agenda/export` | 10 / min / user |
+| `/api/consultorio/export` (BO5-C) | 3 / h / **tenant** (two owners don't add up) |
+| `/api/health` (BO1-D) | 60 / min / IP → 429 |
+| `/api/client-errors` (BO1-D) | 20 / min / IP → 429 |
+| Plataforma actions (BO) | per superadmin and action key, `PLATFORM_ACTION_POLICY` (`lib/platform-actor.ts:54`), checked before MFA |
 
 Accepted trade-off: the per-email login limit lets someone lock a third party's
 account out of password login for up to 15 minutes (Google login and the
@@ -402,11 +406,13 @@ tenant reads) and its tags.
 - **The flag.** `UserProfile.isPlatformAdmin` (boolean, default `false`),
   orthogonal to the tenant-scoped `Role` enum. Surfaced on the session as
   `Actor.isPlatformAdmin`.
-- **The gate.** `requireSuperAdmin()` (`lib/session.ts`) throws
+- **The gate.** `requirePlatformAdmin()` (`lib/platform-actor.ts`, BO1-A; the
+  old `requireSuperAdmin()` is a deprecated alias with no callers) throws
   `UnauthenticatedError` with no session and
-  `ForbiddenError("platform_admin_required")` for a non-admin. It is the first
-  line of every admin action in `lib/exercises-admin.ts`, `lib/tags-admin.ts`
-  and `lib/exercise-media.ts`, and it guards the route group via
+  `ForbiddenError("platform_admin_required")` for a non-admin or a disabled
+  user. It is the first line of every admin action in `lib/exercises-admin.ts`,
+  `lib/tags-admin.ts`, `lib/exercise-media.ts`, `lib/catalog-admin.ts` and every
+  `lib/platform-*` (static guard, §19), and it guards the route group via
   `app/(platform)/layout.tsx` (BO3-A: `requirePlatformAdmin`, non-admins get
   `notFound()` so the section is not revealed; no session → `/login`). The sidebar entry only renders for admins — but the layout
   guard, not the hidden link, is the control.
@@ -417,7 +423,7 @@ tenant reads) and its tags.
   a `tenantId IS NULL` row (`exercise_write` demands
   `tenantId = app_current_tenant_id()`, and `NULL = <uuid>` is never true), so
   there is exactly one code path into the global catalog and
-  `requireSuperAdmin()` sits at the top of it. An RLS policy could not express
+  `requirePlatformAdmin()` sits at the top of it. An RLS policy could not express
   "is a platform admin" anyway — the GUC carries a tenant, not a role.
 - **RLS posture of the new catalog tables.** `ExerciseMedia` and
   `ExerciseArticle` carry **no `tenantId`** (they inherit visibility from the
@@ -435,7 +441,7 @@ tenant reads) and its tags.
   re-emitted as a privacy-enhanced `youtube-nocookie` embed — the raw
   user-supplied URL is never used as an embed src.
 - **Global reference catalog (B-pre).** `plataforma/catalogo/*` over
-  `lib/catalog-admin.ts`: same shape — `requireSuperAdmin()` first,
+  `lib/catalog-admin.ts`: same shape — `requirePlatformAdmin()` first,
   `prismaService` after (the app role physically can't write the
   GLOBAL_READONLY tables, §9). Edit (marks `curatedAt`), archive, merge
   payers/practices (repoints tenant FKs), promote a tenant-proposed plan,
@@ -443,11 +449,13 @@ tenant reads) and its tags.
   is an owner-run script: `assertSafeTarget` (`KINESOFT_CONFIRM_PROD=<ref>` for
   a remote DB, also for the dry-run), aborts without BYPASSRLS, dry-run by
   default, one transaction.
-- **Granting the flag** is deliberately out-of-band and DB-level:
+- **Granting the flag**: the first superadmin is bootstrapped out-of-band with
   `scripts/set-platform-admin.ts` (`<email>` to grant, `--revoke`, `--list`),
-  run by the owner against the owner/`DIRECT_URL` connection. There is **no
-  in-app path** to promote a user, no invitation flow, and no self-service —
-  which keeps the tier out of reach of any tenant-level compromise.
+  run by the owner against the owner/`DIRECT_URL` connection. Since BO2-C an
+  existing superadmin can grant/revoke it from `/plataforma/usuarios`
+  (`setPlatformSuperadmin`, risk `high`: MFA re-verification with `enforce`,
+  5 / 10 min, platform audit log; the last active superadmin can't be removed).
+  No tenant-level role can reach it and there is no self-service.
 
 ## 11. Session, cookies & redirects (A3b, 30-sep-2026)
 
@@ -491,14 +499,16 @@ tenant reads) and its tags.
   `SENTRY_DSN`**: `next.config.mjs` is not wrapped and `register()` returns
   early. With a DSN: `sendDefaultPii: false`, and `beforeSend`,
   `beforeSendTransaction` and `beforeBreadcrumb` pass through `redact()`.
-  **No client SDK** (bundle budget): client-side errors are not captured until
-  C1.
+  **No client SDK** (bundle budget). Since BO1-D the error boundaries send a
+  beacon to `/api/client-errors` (own origin, 20/min/IP, redacted before
+  `captureException`), so client-side render errors do reach Sentry (§19).
 - **PII redaction** (`lib/redact.ts`, used by the logger and by Sentry): by key
   (password, secret, token, authorization, cookie, apikey, dni, documentId,
   cuit, cuil, phone, whatsapp) and by value (emails, JWTs, Bearer/Basic, MP
   tokens, `?token=` / `code=`, formatted DNI). Audit payloads carry field
   names, not values (e.g. `updatePatient`, `session.meta.update`).
-- **CSP** is still **Report-Only**; reports go to Sentry (`report-uri` +
+- **CSP** is still **Report-Only** outside Plataforma (enforced on
+  `/plataforma/**` and `/plataforma-mfa/**` since BO4, §19); reports go to Sentry (`report-uri` +
   `report-to`, derived from the DSN). Allow-listed: Google Fonts,
   youtube-nocookie, and `form-action` to Supabase + accounts.google.com (the
   portal/wizard POST redirects there). Enforce = C1, after two weeks without
@@ -623,7 +633,8 @@ Diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md); contratos en [VERTICALES.
 - **Escritor único de entitlements** (`lib/tenant-entitlements-internal.ts`, server-only): después de
   `bootstrapTenant`, nadie más escribe `vertical`, `plan`, `subscriptionStatus`, `trialEndsAt` ni
   `publicBookingEnabled`. Allowlist por `source` (tira ante una key fuera de la lista):
-  - `platform`: todo; exige actor superadmin, cruza tenants por `prismaService`;
+  - `platform`: todo (desde BO también `status`, `statusReason` (se audita solo la clave) y `seatLimitOverride`, con `statusChangedAt`/`subscriptionStatusChangedAt`
+    derivadas); exige actor superadmin, cruza tenants por `prismaService`;
   - `tenant-settings`: solo `publicBookingEnabled`; exige `homeTenantId === tenantId`, tx con `runWithRls`;
   - `onboarding`: solo `vertical`, mientras el onboarding siga abierto;
   - `billing`: `plan/subscriptionStatus/trialEndsAt`, para el webhook futuro, que **deriva el `tenantId` del pago
@@ -631,10 +642,12 @@ Diseño en [ARCHITECTURE.md ADR-005](ARCHITECTURE.md); contratos en [VERTICALES.
   FOR UPDATE + CAS (`expectedUpdatedAt`) y revalidación de `tenantEntitlementTags` solo si hubo cambio. Gate: grep 1
   (excepción: los seeds, que no corren en prod).
 - **Audit de plataforma en el tenant afectado.** `auditPlatformInTx` escribe el `AuditEvent` en el consultorio que se
-  editó (`action: "platform.*"`, `payload.platform.actorHomeTenantId`), no en el del superadmin: el dueño del tenant ve
+  editó (`action: "platform.*"`, `payload.platform.actorHomeTenantId`) **y**, desde BO, la fila global de
+  `PlatformAuditEvent` (§19), no en el del superadmin: el dueño del tenant ve
   quién le cambió el plan, y el tenant del superadmin no acumula eventos ajenos.
 - **Lecturas de /plataforma** (`lib/platform-tenants-read.ts`): `import "server-only"` (no son server actions: no se
-  pueden invocar por POST), `requireSuperAdmin()` en **cada** export (grep 2) y **sin PHI**: sobre Patient, Booking,
+  pueden invocar por POST), `requirePlatformAdmin()` en **cada** export (desde BO lo fija el guard
+  `tests/unit/platform-admin-guard.test.ts` para todo `lib/platform-*`) y **sin PHI**: sobre Patient, Booking,
   Session, etc. solo `count`/`_count` (grep 3); los DTOs de `-types.ts` son el allowlist y el test de integración los
   fija. El superadmin no es equipo clínico de nadie.
 - **Data API de Supabase.** M2 revoca a `anon` y `authenticated` todo en `public` (tablas, secuencias, rutinas y
@@ -838,6 +851,67 @@ Diseño en [ARCHITECTURE.md §Identidad y acceso + ADR-007/ADR-008](ARCHITECTURE
   del link (el link lleva el token). RLS ENABLE + FORCE; escribe `prismaService` (envíos sin Actor). Los logs de
   `issueAccessLink` y `sendEmail` registran el host, nunca el token ni la URL; el rechazo del vínculo del portal ya no
   loguea el email.
-- **Puerto único de Auth admin**: `auth.admin.*` solo en `lib/identity/auth-admin.ts` (verificado con grep al cierre; todavía sin guard estático, va a BO);
+- **Puerto único de Auth admin**: `auth.admin.*` solo en `lib/identity/auth-admin.ts` (verificado con grep al cierre de IAM y de BO; todavía sin guard estático, AUDIT `guard-auth-admin-y-getuser`);
   `auth.getUser()` solo en `getVerifiedSessionUser`. `lib/invitations.ts` no usa el cliente admin ni
   `inviteUserByEmail` (guard en `tests/integration/invitations-email.test.ts`).
+
+## 19. Back-office de Plataforma (BO, 14-oct-2026)
+
+Diseño en [ARCHITECTURE.md §Back-office de Plataforma + ADR-009..015](ARCHITECTURE.md); consola en
+[EXTERNAL-CONFIG.md §0.5](EXTERNAL-CONFIG.md); hallazgos en [AUDIT.md «Hallazgos del bloque BO»](AUDIT.md).
+
+- **Una barrera por export.** Todo `lib/platform-*` corre por `prismaService` (BYPASSRLS) y cruza consultorios: la
+  única barrera es `requirePlatformAdmin(action)` al principio de cada export (`lib/platform-actor.ts:197`). Lo fija el
+  guard estático `tests/unit/platform-admin-guard.test.ts` (lee el código: cada `export async function` la llama o
+  delega en un `*-internal` que la llama; puros exceptuados por lista) y prohíbe `find*` sobre tablas clínicas en esos
+  módulos (Plataforma cuenta, nunca lee pacientes, turnos ni HC). Un superadmin deshabilitado (`UserProfile.disabledAt`)
+  queda afuera igual que uno sin flag. A quien no es superadmin, `/plataforma` le contesta 404 (`notFound()`).
+- **Registro de plataforma** (`PlatformAuditEvent`): solo inserción por trigger (UPDATE/DELETE/TRUNCATE rechazados
+  también al owner), SERVICE_ONLY (RLS sin policies), doble escritura con el `AuditEvent` del consultorio afectado.
+  Payloads con nombres de campos, no valores (`statusReason` se audita como clave, no como texto).
+- **Soporte** (decisión 3 de Martin, ADR-012):
+  - cookie `kine_support` firmada con HMAC (clave derivada de `SUPABASE_SERVICE_ROLE_KEY` con etiqueta propia) y ligada
+    al `userId`: copiada a otra cuenta no vale; se ignora y borra si la fila está cerrada o el superadmin perdió el flag;
+  - **sin vencimiento** por decisión de producto (termina al salir o al cerrar sesión): por eso el MFA y la
+    re-verificación de `support.start` (`high`) son la defensa, y **el soporte no se despliega sin MFA en enforce**;
+  - capacidades de Secretaria sin `clinical.read` y visibilidad de pacientes de la Secretaria (sin HC);
+  - transacciones en solo lectura (`transaction_read_only`) salvo las actions de Configuración de la allowlist estática
+    `SUPPORT_WRITABLE_ACTIONS` (`lib/support-writable.ts`, guard `tests/unit/support-writable.test.ts`);
+    `setSharedPatientView` queda afuera a propósito;
+  - exports (agenda, pacientes, consultorio) → 403 y token realtime rechazado; cada `audit()` lleva `supportSessionId`;
+  - el OWNER recibe un mail al empezar (motivo genérico; el texto libre queda en Configuración → «Accesos de soporte»).
+- **MFA de superadmin** (BO4, ADR-014): con `PLATFORM_MFA_ENFORCEMENT=enforce`, AAL2 (TOTP de Supabase) para todo
+  `requirePlatformAdmin` y re-verificación de 10 min para las acciones `high` (suspender/baja/slug, cortar acceso de un
+  miembro, transferir OWNER, deshabilitar usuario, dar superadmin, entrar como soporte, pedir export). La cookie
+  `kine_platform_reauth` es `<userId>.<exp>.<hmac>`, httpOnly, `sameSite=strict`, `path=/plataforma`, TTL 10 min, y la
+  setean solo las actions de `lib/platform-mfa-actions.ts` después de un `verify` exitoso. `mfaStep` solo vale con
+  `mfa.enroll`/`mfa.verify` (`mfa_step_misuse` si no). Si GoTrue no responde, se falla cerrado (`unavailable`).
+- **CSP enforced en Plataforma** (`next.config.mjs:141`, `/plataforma/:path*` y `/plataforma-mfa/:path*`): sin Mercado
+  Pago, sin `unsafe-eval` en prod, `connect-src`/`img-src` sin comodín `https:`, `form-action 'self'`,
+  `frame-ancestors 'none'`. Se suma a la Report-Only global (que sigue reportando). Efecto: la toolbar de Vercel no
+  carga en Preview dentro de `/plataforma`.
+- **Rate limits nuevos:** cada clave de `PLATFORM_ACTION_POLICY` por superadmin (p. ej. `support.start` 10/10 min,
+  `user.superadmin.update` 5/10 min, `tenant.export.request` 5/10 min, `mfa.verify` 10/10 min; el cupo corre **antes**
+  del MFA para frenar adivinar códigos), `/api/health` 60/min/IP, `/api/client-errors` 20/min/IP,
+  `/api/consultorio/export` 3/h **por consultorio** (tabla §8).
+- **Export del consultorio** (BO5-C): solo el OWNER aceptado y habilitado, también suspendido o dado de baja (BO-D4);
+  ADMIN, el resto de los roles y el soporte → 403. Columnas por allowlist (`EXPORT_FIELDS`); **excluye** tokens de
+  invitación y `EmailLog`, `Payment.rawPayload` (MP), `PatientFile.storageKey` y binarios, `ip`/`userAgent` de auditoría
+  y soporte, ids de Auth (`Practitioner.userId`, `Patient.userId`, `superadminId`), claves de idempotencia, notas internas
+  de Plataforma (`statusReason`, `seatLimitOverride`) y `PlatformAuditEvent`. Sale `team.userId` (id opaco, para mapear el
+  `actorId` del audit; decisión de Martin). Audit doble `started`/final. `no-store` + `nosniff`. El superadmin solo
+  **pide** el export al titular por mail.
+- **Cron** (BO5-A): `/api/cron/*` son públicas a nivel red; la única barrera es `Authorization: Bearer CRON_SECRET`,
+  comparada en tiempo constante sobre sha256 (`lib/cron-auth.ts`). Sin secreto: 503 en Production (se ve como config
+  faltante), 401 fuera; nunca «abierto porque no hay secreto». El log no guarda el header.
+- **Mantenimiento** (BO5-B): `MAINTENANCE_MODE=on` cierra todo con 503; el webhook de MP y `/api/health` siguen. El strip
+  de `x-tenant-*` y el `x-request-id` corren igual en el 503 (AUDIT §5.3 preservado). `MAINTENANCE_MESSAGE` es público
+  (se renderiza como texto, máx. 280). Sin bypass de superadmin.
+- **`/plataforma/sistema`** muestra solo **presencia** de la configuración externa (Upstash, Sentry, Resend, MP, realtime,
+  cron) y enums re-validados, nunca valores (`lib/platform-system-logic.ts`, test `platform-system.test.ts`).
+- **`/api/health`** responde solo `{ ok, db, maintenance, time }`: sin entorno, versión ni mensaje de error.
+- **`/api/client-errors`** (beacon de los error boundaries, sin SDK de cliente): origen propio, cuerpo ≤ 16 KB leído como
+  texto, `scrubTokenPaths` + `redact()` antes de Sentry, respuestas sin cuerpo.
+- **Activación del titular desde Plataforma** (BO2-A): la cuenta se crea **sin confirmar y sin contraseña**
+  (`createUser({ emailConfirm: false })`) y el titular recibe un link de recovery a `/reset` para elegir contraseña; el
+  link no viaja al navegador si el mail salió (enmienda AUDIT §5.26).

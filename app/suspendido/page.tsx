@@ -4,6 +4,7 @@ import { AuthShell } from "@/components/screens/auth-shell";
 import { Button } from "@/components/ui/button";
 import { getAccessSnapshot, sessionBlockOf } from "@/lib/session";
 import { exportHref } from "@/components/configuracion/panels/export-panel";
+import { SupportContact } from "@/components/ui/support-contact";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Consultorio suspendido · KineSoft" };
@@ -38,8 +39,15 @@ export default async function SuspendidoPage() {
   }
 
   const closed = block.kind === "tenant_closed";
-  // ¿Es OWNER de alguno de los consultorios bloqueados? (los datos los ve el propio usuario: son suyos).
-  const ownerBlock = s.tenantBlocks.find((b) => b.tenantName === block.tenantName && b.role === "OWNER");
+  // ¿Es OWNER de alguno de los consultorios bloqueados? (los datos los ve el propio usuario: son suyos). BO-Z B6:
+  // TODOS los que tenga como titular, no solo el del bloqueo que se muestra (un titular de dos suspendidos solo
+  // podía bajar uno). El de este bloqueo, primero.
+  const ownerBlocks = s.tenantBlocks
+    .filter((b) => b.role === "OWNER")
+    .sort((a, b) => Number(b.tenantName === block.tenantName) - Number(a.tenantName === block.tenantName));
+  // BO-Z B4: el contacto con soporte es del titular/admin; el resto del equipo no decide nada sobre el consultorio.
+  const thisBlock = s.tenantBlocks.find((b) => b.tenantName === block.tenantName);
+  const canContact = !thisBlock || thisBlock.role === "OWNER" || thisBlock.role === "ADMIN";
 
   return (
     <AuthShell
@@ -53,23 +61,33 @@ export default async function SuspendidoPage() {
       />
       <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 10px", lineHeight: 1.55 }}>
         {closed
-          ? "Tus datos no se borraron. Si necesitás volver a usar el consultorio o tenés dudas, escribinos a soporte."
-          : "Mientras esté suspendido no se puede entrar a la agenda ni a los pacientes. Si creés que es un error, escribinos a soporte."}
+          ? "Tus datos no se borraron. Si necesitás volver a usar el consultorio o tenés dudas, "
+          : "Mientras esté suspendido no se puede entrar a la agenda ni a los pacientes. Si creés que es un error, "}
+        {canContact ? (
+          <>
+            <SupportContact subject={`Consultorio ${block.tenantName}`} />.
+          </>
+        ) : (
+          "avisale al titular del consultorio."
+        )}
       </p>
-      {ownerBlock ? (
+      {ownerBlocks.length > 0 ? (
         <>
           <p style={{ fontSize: 14, color: "var(--navy-700)", margin: "0 0 12px", lineHeight: 1.55 }}>
             Como titular, podés descargar el export de todos tus datos: pacientes, turnos, pagos, planes e historia
             clínica.
           </p>
-          <a
-            href={exportHref(ownerBlock.tenantId)}
-            download
-            className="k-btn k-btn-primary"
-            style={{ display: "flex", justifyContent: "center", textDecoration: "none", marginBottom: 10 }}
-          >
-            Descargar el export de mis datos
-          </a>
+          {ownerBlocks.map((b) => (
+            <a
+              key={b.tenantId}
+              href={exportHref(b.tenantId)}
+              download
+              className="k-btn k-btn-primary"
+              style={{ display: "flex", justifyContent: "center", textDecoration: "none", marginBottom: 10, whiteSpace: "normal", textAlign: "center" }}
+            >
+              {ownerBlocks.length === 1 ? "Descargar el export de mis datos" : `Descargar el export de ${b.tenantName}`}
+            </a>
+          ))}
         </>
       ) : (
         <p style={{ fontSize: 13, color: "var(--navy-500)", margin: "0 0 18px", lineHeight: 1.55 }}>

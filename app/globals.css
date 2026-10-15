@@ -430,6 +430,15 @@ body {
   }
 }
 
+/* [BO-Z C6] Banda de soporte (components/layout/support-banner.tsx): en un celular el detalle
+   («Solo lectura, salvo Configuración…») pasaba la banda sticky a 3-4 líneas y tapaba la agenda.
+   Queda el título («Estás como soporte en …») y los botones. */
+@media (max-width: 640px) {
+  .k-support-detail {
+    display: none !important;
+  }
+}
+
 /* Diagnostico viewport switch */
 .diag-mobile {
   display: none;

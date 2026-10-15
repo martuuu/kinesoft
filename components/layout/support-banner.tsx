@@ -20,11 +20,12 @@
  *   atrapado de una action se muestra como Toast con el copy de soporte. Es una red, no el arreglo: cada action
  *   debería devolver `{ ok:false, error }` (handoffs en el reporte de BO3-F).
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/ui/toast";
 import { SUPPORT_READ_ONLY_MESSAGE } from "@/lib/tenant-access";
 import type { ActionResult } from "@/lib/validation";
+import { isWriteRejection, useWriteRejectionToast } from "@/hooks/use-write-rejection-toast";
 
 export type EndSupportAction = () => Promise<ActionResult<{ redirectTo: string }>>;
 
@@ -55,14 +56,30 @@ export function supportBannerText(tenantName: string): { title: string; detail: 
 /**
  * ¿Este rechazo no atrapado es una escritura frenada por el modo soporte? En dev llega el `ReadOnlyModeError` con su
  * mensaje; en producción Next lo reemplaza por un Error genérico con `digest` (el mensaje real no sale del server).
- * Cualquier otra cosa (un fetch del cliente, un bug de UI) no se toca.
+ * Cualquier otra cosa (un fetch del cliente, un bug de UI) no se toca. La lógica es la común de
+ * `hooks/use-write-rejection-toast.ts` (BO-Z B10).
  */
 export function isSupportWriteRejection(reason: unknown): boolean {
-  if (!reason || typeof reason !== "object") return false;
-  const r = reason as { name?: unknown; message?: unknown; digest?: unknown };
-  if (r.name === "ReadOnlyModeError" || r.message === SUPPORT_READ_ONLY_MESSAGE) return true;
-  return typeof r.digest === "string" && r.digest.length > 0;
+  return isWriteRejection(reason, [SUPPORT_READ_ONLY_MESSAGE]);
 }
+
+/**
+ * [BO-Z C4] En /configuracion el soporte SÍ puede escribir (C-BO4): un rechazo redactado ahí no es el modo lectura
+ * sino un error de verdad, y decirle «acá solo podés mirar» lo mandaba a buscar un permiso que ya tiene.
+ */
+export const SUPPORT_CONFIG_ERROR_MESSAGE = "Probá de nuevo; si sigue, avisá al equipo.";
+
+export function supportRejectionMessage(pathname: string, reason: unknown): string {
+  const r = (reason ?? {}) as { name?: unknown; message?: unknown };
+  const explicitReadOnly = r.name === "ReadOnlyModeError" || r.message === SUPPORT_READ_ONLY_MESSAGE;
+  if (!explicitReadOnly && (pathname === "/configuracion" || pathname.startsWith("/configuracion/"))) {
+    return SUPPORT_CONFIG_ERROR_MESSAGE;
+  }
+  return SUPPORT_READ_ONLY_MESSAGE;
+}
+
+const supportDescription = (reason: unknown) =>
+  supportRejectionMessage(typeof window === "undefined" ? "" : window.location.pathname, reason);
 
 export function SupportBanner({
   tenantName,
@@ -75,15 +92,7 @@ export function SupportBanner({
   const [pending, setPending] = useState(false);
   const { title, detail } = supportBannerText(tenantName);
 
-  useEffect(() => {
-    const onRejection = (e: PromiseRejectionEvent) => {
-      if (!isSupportWriteRejection(e.reason)) return;
-      e.preventDefault();
-      toast.error("No se guardó", { description: SUPPORT_READ_ONLY_MESSAGE });
-    };
-    window.addEventListener("unhandledrejection", onRejection);
-    return () => window.removeEventListener("unhandledrejection", onRejection);
-  }, [toast]);
+  useWriteRejectionToast({ enabled: true, matches: isSupportWriteRejection, description: supportDescription });
 
   const exit = async () => {
     if (!endSupportAction || pending) return;
@@ -125,7 +134,10 @@ export function SupportBanner({
     >
       <div style={{ flex: "1 1 240px", minWidth: 0, lineHeight: 1.4 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, overflowWrap: "anywhere" }}>{title}</div>
-        <div style={{ fontSize: 12.5, color: "#d9e2ef" }}>{detail}</div>
+        {/* C6: bajo 640 px el detalle se esconde (globals.css) para que la banda sticky no se coma media pantalla. */}
+        <div className="k-support-detail" style={{ fontSize: 12.5, color: "#d9e2ef" }}>
+          {detail}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Link

@@ -261,7 +261,8 @@ describe("[EV0-P3] Resumen (render)", () => {
     ],
     trialsEndingSoon: [
       { id: "t1", name: "Movare", slug: "movare", vertical: "KINESIOLOGY", plan: "FREE", trialEndsOn: "2026-10-10", daysLeft: 3 },
-      { id: "t2", name: "Vencido", slug: "vencido", vertical: "GENERAL", plan: "FREE", trialEndsOn: "2026-10-05", daysLeft: -2 },
+      // BO-Z B5: `daysLeft` cuenta hoy (como `tenantAccessFor`): -1 = venció hace 2 días.
+      { id: "t2", name: "Vencido", slug: "vencido", vertical: "GENERAL", plan: "FREE", trialEndsOn: "2026-10-05", daysLeft: -1 },
     ],
     trialsEndingSoonCount: 2,
     onboardingPending: [
@@ -291,10 +292,11 @@ describe("[EV0-P3] Resumen (render)", () => {
     expect(html).not.toContain("Turnero");
   });
 
-  it("trialDaysLabel / formatDayKeyAR", () => {
-    expect(trialDaysLabel(0)).toBe("Vence hoy");
-    expect(trialDaysLabel(1)).toBe("Vence mañana");
-    expect(trialDaysLabel(-1)).toBe("Venció ayer");
+  it("trialDaysLabel / formatDayKeyAR (BO-Z B5: 1 = último día, como la banda del consultorio)", () => {
+    expect(trialDaysLabel(2)).toBe("Quedan 2 días");
+    expect(trialDaysLabel(1)).toBe("Último día");
+    expect(trialDaysLabel(0)).toBe("Venció ayer");
+    expect(trialDaysLabel(-1)).toBe("Venció hace 2 días");
     expect(formatDayKeyAR("2026-10-21")).toBe("21 de oct de 2026");
     expect(formatDayKeyAR("2026-01-01")).toBe("01 de ene de 2026");
   });
@@ -325,7 +327,7 @@ describe("[EV0-P3] Detalle (render)", () => {
     expect(formatAuditValue("vertical", "GENERAL")).toBe("Clínica general");
     expect(formatAuditValue("publicBookingEnabled", true)).toBe("Activo");
     expect(formatAuditValue("publicBookingEnabled", false)).toBe("Apagado");
-    expect(formatAuditValue("trialEndsAt", null)).toBe("Sin trial");
+    expect(formatAuditValue("trialEndsAt", null)).toBe("Sin prueba");
     // Último ms del día AR (lo que guarda `trialEndsOnToDate`): sigue siendo ese día en AR.
     expect(formatAuditValue("trialEndsAt", "2026-10-22T02:59:59.999Z")).toBe("21 de oct de 2026");
   });
