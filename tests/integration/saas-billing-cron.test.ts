@@ -135,6 +135,7 @@ describe.skipIf(!RUN)("[PL-2b] cron diario: cobros", () => {
         paidAt: null,
         receipt: null,
         note: null,
+        method: "TRANSFER",
         submittedById: null,
         now: new Date(),
       })

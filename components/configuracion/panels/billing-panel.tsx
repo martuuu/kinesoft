@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { formatARS } from "@/lib/format";
 import { getBillingOverview, getReceiptUrl } from "@/lib/saas-billing";
-import type { BillingOverview } from "@/lib/saas-billing-types";
+import { paymentMethodLabel, type BillingOverview } from "@/lib/saas-billing-types";
 import {
   balanceView,
   chargeStatusView,
@@ -96,10 +96,6 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
 
   const off = o.mode === "off";
   const balance = balanceView(o.balanceCents, (c) => formatARS(c));
-  // El más viejo primero: es el que se sugiere pagar (el ledger los trae del más nuevo al más viejo).
-  const openCharges = o.charges
-    .filter((c) => c.status === "OPEN" && c.remainingCents > 0)
-    .sort((a, b) => (a.periodStart < b.periodStart ? -1 : a.periodStart > b.periodStart ? 1 : 0));
 
   return (
     <div style={{ display: "grid", gap: 14 }} data-billing-mode={o.mode}>
@@ -220,9 +216,13 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
                       </span>
                       <span style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
                         {p.chargePeriodStart ? `Cargo del ${formatDateKey(p.chargePeriodStart)}` : "A cuenta"}
-                        {/* Hoy todo pago es MANUAL (C-PL9 sin Mercado Pago); la rama de MP queda para cuando se sume. */}
-                        {p.source === "MANUAL" ? "" : " · Mercado Pago"}
+                        {/* PL-F1a: el medio sale de su columna (M8c); los pagos de antes dicen «Sin informar». La rama
+                            «· Mercado Pago» por `source` se quitó: sin cobro por MP nunca se mostraba. */}
+                        <span data-payment-method={p.method ?? ""}> · {paymentMethodLabel(p.method)}</span>
                       </span>
+                      {p.note && (
+                        <span style={{ fontSize: 12.5, color: "var(--navy-500)", overflowWrap: "anywhere" }}>«{p.note}»</span>
+                      )}
                       {p.status === "REJECTED" && (
                         <span data-reject-reason style={{ fontSize: 12.5, color: "#9F1F1F", overflowWrap: "anywhere" }}>
                           Motivo: {p.reviewNote ?? "sin detalle. Escribinos desde Soporte."}
@@ -252,7 +252,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
         <ReceiptUploadDrawer
           open={uploadOpen}
           onClose={() => setUploadOpen(false)}
-          charges={openCharges}
+          charges={o.charges}
           transferInfo={o.transferInfo}
           onSubmitted={async () => {
             setUploadOpen(false);

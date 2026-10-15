@@ -1103,8 +1103,9 @@ function DataStep({
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-        Al continuar aceptás que la clínica use estos datos para tu atención. Cancelás gratis hasta
-        6 hs antes.
+        {/* PL-F1c: sin «Cancelás gratis hasta 6 hs antes»: el paciente no tiene cómo cancelar y no hay regla de
+            6 hs. Si VX2 rehace el turnero, que no la reintroduzca. */}
+        Al continuar aceptás que la clínica use estos datos para tu atención.
       </div>
     </>
   );
@@ -1211,7 +1212,7 @@ function SummaryAside({
             </span>
           </div>
           <div style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 6 }}>
-            Pago seguro vía Mercado Pago. Cancelás gratis hasta 6 hs antes.
+            Pago seguro vía Mercado Pago.
           </div>
         </div>
       </Card>

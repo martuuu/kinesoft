@@ -18,6 +18,7 @@ import type { BillingChargeRow, BillingPaymentRow } from "@/lib/saas-billing-typ
 import { ErrorBox } from "@/components/plataforma/tenants/detail-ui";
 import { formatDayKeyAR } from "@/components/plataforma/tenants/labels";
 import { chargeOptionLabel } from "@/components/plataforma/billing/record-payment-drawer";
+import { suggestedChargeId } from "@/lib/saas-billing-logic";
 import { NOTE_MAX, VOID_CONFIRM_WORD, voidConfirmMatches } from "@/components/plataforma/billing/billing-logic";
 
 // ── Revisar comprobante ─────────────────────────────────────────────────────────────────────────────────────────
@@ -25,10 +26,13 @@ import { NOTE_MAX, VOID_CONFIRM_WORD, voidConfirmMatches } from "@/components/pl
 export type ReviewDecision = "approve" | "reject";
 export type ReviewState = { decision: ReviewDecision; chargeId: string; reason: string };
 
-/** Default de «imputar a»: el cargo que eligió el consultorio al subirlo, si sigue pendiente; si no, el más viejo. */
+/**
+ * Default de «imputar a»: el cargo que eligió el consultorio al subirlo, si sigue pendiente; si no, el último impago
+ * (PL-F1a, decisión de Martin del 16-oct; antes era el más viejo).
+ */
 export function defaultReviewCharge(p: BillingPaymentRow, openCharges: readonly BillingChargeRow[]): string {
   if (p.chargeId && openCharges.some((c) => c.id === p.chargeId)) return p.chargeId;
-  return openCharges[0]?.id ?? "";
+  return suggestedChargeId(openCharges);
 }
 
 export function reviewCanSubmit(s: ReviewState): boolean {

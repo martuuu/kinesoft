@@ -22,6 +22,9 @@ import {
   RECEIPT_MAX_BYTES,
   type ReceiptMimeType,
 } from "@/lib/saas-billing-logic";
+import { z } from "zod";
+import type { SaasPaymentMethod } from "@prisma/client";
+import { BILLING_COPY, SAAS_PAYMENT_METHODS } from "@/lib/saas-billing-types";
 import { parseMoneyInput } from "@/lib/format";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { storageRemove, storageSign, storageUpload } from "@/lib/storage-internal";
@@ -108,7 +111,12 @@ export type PaymentFormFields = {
   /** Instante del pago (mediodía AR del día elegido) o null si no lo dijo. */
   paidAt: Date | null;
   note: string | null;
+  /** PL-F1a (M8c): obligatorio en todo pago nuevo (consultorio y Plataforma). */
+  method: SaasPaymentMethod;
 };
+
+/** El medio viaja con el valor del enum (`TRANSFER`…), no con la etiqueta: el server no adivina textos. */
+const METHOD = z.enum(SAAS_PAYMENT_METHODS);
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /** Máximo de un `INTEGER` de Postgres (la columna `SaasPayment.amountCents`). */
@@ -120,7 +128,8 @@ function field(form: FormData, name: string): string | null {
 }
 
 /**
- * Lee y valida el FormData del pago. Nada de esto toca Storage ni la base. El monto pasa por `parseMoneyInput`
+ * Lee y valida el FormData del pago. Nada de esto toca Storage ni la base. El medio (`method`, PL-F1a) es obligatorio
+ * y va a su columna: la nota ya no lleva el «Medio: …» de antes de M8c. El monto pasa por `parseMoneyInput`
  * (aritmética exacta, nunca `Number()*100`); la fecha es la de un `<input type="date">` (clave civil, sin TZ del
  * host) y no puede ser futura en AR.
  */
@@ -145,5 +154,7 @@ export function parsePaymentForm(form: FormData, now: Date): { ok: true; data: P
   }
   const note = field(form, "note");
   if (note !== null && note.length > 500) return { ok: false, error: "La nota puede tener hasta 500 caracteres.", field: "note" };
-  return { ok: true, data: { file, chargeId, amountCents: money.cents, paidAt, note } };
+  const method = METHOD.safeParse(field(form, "method"));
+  if (!method.success) return { ok: false, error: BILLING_COPY.methodRequired, field: "method" };
+  return { ok: true, data: { file, chargeId, amountCents: money.cents, paidAt, note, method: method.data } };
 }

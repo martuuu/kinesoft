@@ -20,6 +20,7 @@ import {
   IconUsers,
   IconChart,
   IconHeart,
+  IconSettings,
 } from "@/components/ui/icons";
 import { useTweaks } from "@/components/layout/tweaks-context";
 import type { DashboardData } from "@/lib/dashboard";
@@ -38,7 +39,7 @@ import { RecentPatients } from "@/components/dashboard/recent-patients";
 import { PinKpiButton } from "@/components/dashboard/pin-kpi-button";
 import { RevenueCard } from "@/components/dashboard/revenue-card";
 import { formatARS } from "@/lib/format";
-import { ProfileMenu } from "@/components/global/profile-menu";
+import { ProfileMenu, SettingsModal } from "@/components/global/profile-menu";
 
 /**
  * [PF-0c] Entrada de los indicadores fijados, recortada. Con `staggerList`/`staggerItem` (35 ms entre tarjetas,
@@ -65,7 +66,7 @@ export function DashboardScreen({
   preferences: Preferences;
   initialBookingDays: number[];
 }) {
-  const { t, set } = useTweaks();
+  const { t } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
   // EV1-A: el dashboard se arma por módulos (`useTenantModules`, lo publica el
   // AppShell). Sin `planes` (consultorio General) no hay recordatorio de altas
@@ -76,15 +77,9 @@ export function DashboardScreen({
   const hasPlans = modules.has("planes");
   const hasSessions = modules.has("sesiones");
 
-  // Sync server-persisted palette into the live Tweaks context once on
-  // mount. The provider initialises from localStorage; the server-side
-  // preference takes precedence when present.
-  useEffect(() => {
-    if (preferences.palette && preferences.palette !== t.palette) {
-      set("palette", preferences.palette);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // PL-F1c: acá había un efecto que, al montar, pisaba la paleta de Tweaks con `preferences.palette`: elegías otra
+  // en Tweaks (que solo iba a localStorage) y al pasar por Inicio volvía la anterior. Ahora la paleta del server la
+  // siembra el layout `(app)` en `TweaksProvider` y Tweaks la guarda en el server: no hay nada que sincronizar acá.
 
   return (
     <div style={{ display: "flex", gap: 18, minHeight: 0 }}>
@@ -118,6 +113,13 @@ export function DashboardScreen({
             <ProfileMenu name={data.greetingName || USER_NO_NAME} preferences={preferences} revenueScope={data.revenueScope} ownPublicBooking={data.ownPublicBooking} />
           </div>
         )}
+        {/* PL-F (handoff 8): con la barra superior el `ProfileMenu` no se monta (lo reemplaza el menú de cuenta del
+            topbar), y «Ajustes» (paleta y KPIs fijadas) quedaba sin entrada. Este botón abre el mismo modal. */}
+        {!useSidebar && (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <DashSettingsButton preferences={preferences} revenueScope={data.revenueScope} />
+          </div>
+        )}
         <MiniCalendar initialBookingDays={initialBookingDays} />
         <NextAppts items={data.next} />
         {/* SR-D5I: `revenue` null = el rol no ve ingresos (Secretaria): sin widget. */}
@@ -126,6 +128,24 @@ export function DashboardScreen({
         )}
       </aside>
     </div>
+  );
+}
+
+function DashSettingsButton({
+  preferences,
+  revenueScope,
+}: {
+  preferences: Preferences;
+  revenueScope: DashboardData["revenueScope"];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="ghost" type="button" onClick={() => setOpen(true)}>
+        <IconSettings size={14} /> Ajustes
+      </Button>
+      {open && <SettingsModal preferences={preferences} revenueScope={revenueScope} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 

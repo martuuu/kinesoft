@@ -285,27 +285,8 @@ export function balanceView(balanceCents: number, fmt: (cents: number) => string
 
 // ── Comprobante: validación en el cliente ────────────────────────────────────────────────────────────────────────
 
-export const PAYMENT_METHODS = [
-  { value: "transferencia", label: "Transferencia" },
-  { value: "deposito", label: "Depósito" },
-  { value: "efectivo", label: "Efectivo" },
-  { value: "otro", label: "Otro" },
-] as const;
-export type PaymentMethod = (typeof PAYMENT_METHODS)[number]["value"];
-
-/** Tope de la nota en el server (`parsePaymentForm`). */
+/** Tope de la nota en el server (`parsePaymentForm`). PL-F1a: entera para la persona (el medio ya no ocupa lugar). */
 export const RECEIPT_NOTE_MAX = 500;
-
-/**
- * El medio de pago no tiene columna (M8 no la trae y esta ola no migra): viaja al comienzo de la nota, que es lo que
- * lee Plataforma al revisar. Recorta para que medio + nota no pasen el tope del server.
- */
-export function composeReceiptNote(method: PaymentMethod, note: string): string {
-  const label = PAYMENT_METHODS.find((m) => m.value === method)?.label ?? "Otro";
-  const head = `Medio: ${label}`;
-  const rest = note.trim();
-  return (rest ? `${head}. ${rest}` : head).slice(0, RECEIPT_NOTE_MAX);
-}
 
 /** Tamaño desde el que una foto se achica en el navegador antes de mandarla (una foto de celular pesa 3-8 MB). */
 export const RECEIPT_COMPRESS_FROM_BYTES = 1.5 * 1024 * 1024;
@@ -329,7 +310,8 @@ export type ReceiptFormInput = {
   note: string;
 };
 
-export type ReceiptFormErrors = Partial<Record<"file" | "amount" | "paidOn" | "note", string>>;
+/** `method` solo lo devuelve el server (en el cliente el select siempre tiene un valor). */
+export type ReceiptFormErrors = Partial<Record<"file" | "amount" | "paidOn" | "note" | "method", string>>;
 
 /**
  * Lo mismo que rechaza el server (`parsePaymentForm` + `readReceiptFile`), antes de subir 4 MB para nada. Los magic
@@ -348,6 +330,6 @@ export function validateReceiptForm(i: ReceiptFormInput, now: Date): ReceiptForm
   } else {
     e.paidOn = "Indicá la fecha del pago.";
   }
-  if (i.note.trim().length > RECEIPT_NOTE_MAX - 30) e.note = `La nota puede tener hasta ${RECEIPT_NOTE_MAX - 30} caracteres.`;
+  if (i.note.trim().length > RECEIPT_NOTE_MAX) e.note = `La nota puede tener hasta ${RECEIPT_NOTE_MAX} caracteres.`;
   return e;
 }

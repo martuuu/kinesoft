@@ -106,11 +106,14 @@ export function TemplateList({ discipline, canManage, templatesEnabled, initialT
 /**
  * Kine FREE (sin `plantillas`): la sección se ve, apagada, con el aviso. No
  * se ofrece crear ni se consulta el server.
+ *
+ * PL-F1c (B4 del barrido, regla de Martin del 16-oct): antes mostraba un «Nueva plantilla» deshabilitado con
+ * `onNew={() => {}}`. Un botón que no hace nada se quita: queda solo el aviso del plan.
  */
 function TemplateListDisabled() {
   return (
     <Card style={{ padding: 16 }} aria-disabled="true" data-testid="template-list" data-state="disabled">
-      <Header canCreate={false} disabled onNew={() => {}} />
+      <Header canCreate={false} />
       <p role="note" style={{ ...muted, marginTop: 12, padding: "10px 12px", borderRadius: 12, background: "rgba(15,30,51,0.04)", color: "var(--navy-700)" }}>
         {TEMPLATE_LIST_COPY.disabled}
       </p>
@@ -118,7 +121,7 @@ function TemplateListDisabled() {
   );
 }
 
-function Header({ canCreate, disabled, onNew }: { canCreate: boolean; disabled?: boolean; onNew: () => void }) {
+function Header({ canCreate, onNew }: { canCreate: boolean; onNew?: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
       <div style={{ minWidth: 0, flex: "1 1 220px" }}>
@@ -127,8 +130,8 @@ function Header({ canCreate, disabled, onNew }: { canCreate: boolean; disabled?:
         </h2>
         <p style={{ ...muted, marginTop: 4 }}>{TEMPLATE_LIST_COPY.subtitle}</p>
       </div>
-      {(canCreate || disabled) && (
-        <Button type="button" variant="lime" onClick={onNew} disabled={disabled} aria-disabled={disabled || undefined}>
+      {canCreate && onNew && (
+        <Button type="button" variant="lime" onClick={onNew}>
           {TEMPLATE_LIST_COPY.newTemplate}
         </Button>
       )}

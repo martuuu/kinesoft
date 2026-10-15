@@ -12,8 +12,10 @@ import type { SupportSessionRow } from "@/lib/support-session-internal";
  *
  * Es la contracara del mail `support_access`: el mail lleva un motivo GENÉRICO a propósito (el que tipea el
  * superadmin es una nota interna que puede nombrar un paciente o un ticket) y remite acá, detrás del login, donde
- * el OWNER/ADMIN ve quién entró, cuándo, por qué y cuándo terminó. Sin estado ni acciones: los datos llegan de la
- * página (`listSupportSessionsForTenant`, `tenant.admin` + RLS del consultorio).
+ * cualquier miembro del consultorio (PL-F1b, decisión de Martin del 16-oct) ve quién entró, cuándo, por qué y cuándo
+ * terminó. Sin estado ni acciones: desde el consultorio no se termina un acceso (termina cuando soporte sale o cierra
+ * sesión; la RLS de M7 es FOR SELECT). Los datos llegan de la página (`listSupportSessionsForTenant`, cualquier
+ * miembro + RLS del consultorio).
  */
 
 /** Cómo terminó cada acceso (`SupportSession.endedReason`). Exportada para el test de render. */

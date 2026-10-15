@@ -12,17 +12,16 @@
  *   registro con `mfa` real + aviso al titular).
  * - `endSupport`: `requirePlatformAdmin()` → `endSupportSession("exit")`. El logout lo cierra por su cuenta
  *   (`app/api/auth/sign-out/route.ts`).
- * - `listSupportSessionsForTenant`: es del lado del CONSULTORIO (la ve el OWNER/ADMIN en Configuración), no de
- *   Plataforma: `requireCapability("tenant.admin")` + `runWithRls` (M7 le dio a `SupportSession` una policy SELECT por
- *   tenant justo para esto). Desvío del invariante «un `requirePlatformAdmin` por export de lib/platform-*»: el prompt
+ * - `listSupportSessionsForTenant`: es del lado del CONSULTORIO (Configuración → Soporte), no de Plataforma:
+ *   `getActor()` (cualquier miembro activo, PL-F1b) + corte de soporte + `runWithRls` (M7 le dio a `SupportSession` una
+ *   policy SELECT por tenant justo para esto). Desvío del invariante «un `requirePlatformAdmin` por export de lib/platform-*»: el prompt
  *   de BO2-E la pone en este archivo; el guard de BO-Z la tiene que exceptuar (o BO3-F la mueve a un archivo del
  *   consultorio).
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
-import { requireCapability } from "@/lib/authz";
-import { ForbiddenError } from "@/lib/session";
+import { ForbiddenError, getActor } from "@/lib/session";
 import { runWithRls } from "@/lib/rls";
 import {
   SUPPORT_REASON_MAX,
@@ -73,13 +72,21 @@ export async function endSupport(): Promise<ActionResult<{ redirectTo: string }>
   return { ok: true, data: { redirectTo: "/plataforma" } };
 }
 
-/** «Accesos de soporte» del consultorio activo, del más reciente al más viejo (las abiertas primero no: por fecha). */
+/**
+ * «Accesos de soporte» del consultorio activo, del más reciente al más viejo (las abiertas primero no: por fecha).
+ *
+ * PL-F1b, decisión de Martin (16-oct, literal: «profesionales también, porque pueden necesitar ayuda con algo»): la ve
+ * CUALQUIER miembro activo del consultorio, no solo `tenant.admin`. Es transparencia de quién de KineSoft entró y por
+ * qué (el registro que promete el mail al titular), no configuración: el DTO es cerrado y no trae PHI. `getActor()` ya
+ * exige membresía aceptada y habilitada en ESTE consultorio; `where: { tenantId }` a mano + RLS de M7.
+ * Solo lectura para todos: desde el consultorio no hay action para terminar un acceso (la policy de M7 es FOR SELECT;
+ * termina cuando soporte sale o cierra sesión).
+ */
 export async function listSupportSessionsForTenant(): Promise<SupportSessionRow[]> {
-  const { actor } = await requireCapability("tenant.admin", "Solo OWNER/ADMIN ven los accesos de soporte.");
+  const actor = await getActor();
   // BO-Z (C3): la lista es del CONSULTORIO (quién entró, cuándo y por qué). Un superadmin como soporte no la lee:
-  // vería los motivos y los mails de los otros accesos de Plataforma. Hoy SUPPORT_CAPS no trae `tenant.admin`; esto
-  // es explícito para que un cambio de capacidades no la abra por accidente.
-  if (actor.support) throw new ForbiddenError("Solo OWNER/ADMIN ven los accesos de soporte.");
+  // vería los motivos y los mails de los otros accesos de Plataforma.
+  if (actor.support) throw new ForbiddenError("Entraste como soporte: los accesos de soporte los ve el consultorio.");
   const rows = await runWithRls(actor.tenantId, (tx) =>
     tx.supportSession.findMany({
       where: { tenantId: actor.tenantId },

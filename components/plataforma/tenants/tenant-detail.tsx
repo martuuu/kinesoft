@@ -14,7 +14,7 @@ import { Tag } from "@/components/ui/tag";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { formatDateAR } from "@/lib/format";
 import {
-  MODULE_LABEL,
+  visibleModuleChips,
   seatFullText,
   seatLimitLabel,
   seatUsageByKindLabel,
@@ -134,13 +134,13 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
       </Section>
 
       <Section title="Módulos activos">
-        {d.modules.length === 0 ? (
+        {visibleModuleChips(d.modules).length === 0 ? (
           <p style={{ margin: 0, fontSize: 13, color: "var(--navy-300)" }}>Sin módulos.</p>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {d.modules.map((m) => (
-              <li key={m}>
-                <Tag tone="sky">{MODULE_LABEL[m]}</Tag>
+            {visibleModuleChips(d.modules).map((c) => (
+              <li key={c.module}>
+                <Tag tone="sky">{c.label}</Tag>
               </li>
             ))}
           </ul>

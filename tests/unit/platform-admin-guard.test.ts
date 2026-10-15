@@ -40,10 +40,11 @@ const PURE_SUFFIX = /-(types|schemas|logic)\.ts$/;
 /**
  * Exports puntuales sin `requirePlatformAdmin`, cada uno con su porqué:
  *  - listSupportSessionsForTenant: es del LADO CONSULTORIO (Configuración → Accesos de soporte). La barrera es
- *    `requireCapability("tenant.admin")` + `runWithRls` del consultorio activo (handoff BO2-E).
+ *    `getActor()` (cualquier miembro activo del consultorio, PL-F1b) + `runWithRls` del consultorio activo
+ *    (handoff BO2-E). El corte de soporte se prueba en tests/integration/support-session.test.ts (BO-Z C3).
  */
 const EXEMPT_EXPORTS = new Map<string, string>([
-  ["lib/platform-support.ts#listSupportSessionsForTenant", "requireCapability(\"tenant.admin\""],
+  ["lib/platform-support.ts#listSupportSessionsForTenant", "await getActor()"],
 ]);
 
 /** Modelos con PHI o datos del paciente (Prisma delegates en camelCase). */

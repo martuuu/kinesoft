@@ -288,13 +288,14 @@ function payment(p: Partial<BillingPaymentRow>): BillingPaymentRow {
     chargeId: "c1",
     chargePeriodStart: "2026-10-05",
     source: "MANUAL",
+    method: "TRANSFER",
     status: "PENDING_REVIEW",
     amountCents: 2500000,
     paidAt: "2026-10-09T15:00:00.000Z",
     createdAt: "2026-10-09T15:05:00.000Z",
     hasReceipt: true,
     receiptMimeType: "application/pdf",
-    note: "Medio: Transferencia",
+    note: null,
     reviewNote: null,
     reviewedAt: null,
     ...p,
@@ -402,15 +403,36 @@ describe("[PL-3a] Facturación", () => {
     expect(text(html)).toContain("Motivo: El monto no coincide con la transferencia");
     expect(html.match(/Ver comprobante/g)).toHaveLength(1);
   });
+
+  it("[PL-F1a] cada pago con su medio (columna M8c); los de antes, «Sin informar»; nada de «Mercado Pago» por origen", () => {
+    const html = wrap(
+      <BillingPanel
+        initial={ov({
+          payments: [
+            payment({ id: "pay1", method: "CARD", note: "cuotas" }),
+            payment({ id: "pay2", method: null, source: "MP_CHECKOUT" }),
+          ],
+        })}
+      />
+    );
+    expect(html).toMatch(/data-payment-method="CARD"[^>]*> · Tarjeta</);
+    expect(html).toMatch(/data-payment-method=""[^>]*> · Sin informar</);
+    expect(text(html)).toContain("«cuotas»");
+    expect(text(html)).not.toContain("Mercado Pago");
+  });
 });
 
 describe("[PL-3a] drawer del comprobante", () => {
-  it("abre con el cargo pendiente, monto, fecha, medio, nota y archivo con los tipos permitidos", () => {
+  it("abre con el último impago, su monto, fecha, medio (Transferencia), nota y archivo con los tipos permitidos", () => {
     const html = wrap(
       <ReceiptUploadDrawer
         open
         onClose={() => {}}
-        charges={[charge({ remainingCents: 1250000, paidCents: 1250000 })]}
+        charges={[
+          charge({ id: "c-old", periodStart: "2026-09-05", periodEnd: "2026-10-04", remainingCents: 900000, overdue: true }),
+          charge({ id: "c-paid", periodStart: "2026-11-05", periodEnd: "2026-12-04", status: "PAID", remainingCents: 0 }),
+          charge({ remainingCents: 1250000, paidCents: 1250000 }),
+        ]}
         transferInfo="Alias kinesoft.pagos"
         onSubmitted={() => {}}
       />
@@ -421,10 +443,16 @@ describe("[PL-3a] drawer del comprobante", () => {
     expect(text(html)).toContain("Informar pago");
     expect(text(html)).toContain("Cargo que pagás");
     expect(text(html)).toMatch(/faltan \$\s?12\.500/);
-    expect(text(html)).toContain("Sin cargo (a cuenta)");
+    // PL-F1a: el sugerido es el último impago (c1, oct), no el más viejo; el pagado no se ofrece; «A cuenta» al final.
+    expect(html).toMatch(/<option(?=[^>]*value="c1")(?=[^>]*selected="")[^>]*>/);
+    expect(html).not.toMatch(/<option(?=[^>]*value="c-old")(?=[^>]*selected="")[^>]*>/);
+    expect(html).not.toContain('value="c-paid"');
+    expect(html.indexOf('value="c1"')).toBeLessThan(html.indexOf('value="c-old"'));
+    expect(html).toMatch(/<option[^>]*value=""[^>]*>A cuenta<\/option>/);
     expect(html).toMatch(/value="12\.500"/);
     expect(html).toContain('type="date"');
-    expect(text(html)).toContain("Transferencia");
+    expect(html).toMatch(/<option(?=[^>]*value="TRANSFER")(?=[^>]*selected="")[^>]*>Transferencia<\/option>/);
+    for (const m of ["Efectivo", "Tarjeta", "Billetera virtual", "Mercado Pago", "Otro"]) expect(html).toContain(`>${m}</option>`);
     expect(html).toContain(`accept="${RECEIPT_ACCEPT}"`);
     expect(text(html)).toContain("PDF, JPG, PNG o WEBP de hasta 4 MB.");
   });

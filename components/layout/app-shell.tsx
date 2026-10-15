@@ -41,6 +41,10 @@ import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher
  *
  * BO3-F: `banner` es la banda de soporte (`SupportBanner`, la arma el layout cuando `actor.support`). Va arriba de la
  * columna de contenido y no arriba de todo: el sidebar es sticky y una banda sticky de ancho completo lo pisaba.
+ *
+ * PL-F1c: `userName` (= `actor.practitionerName`) es el avatar y el menú de cuenta de la barra superior. El panel
+ * «Apariencia» (ex Tweaks) arranca cerrado y ya no deja un engranaje flotante que tapaba el pie de los Drawers: se
+ * abre desde el pie del sidebar o desde el menú de cuenta de la barra superior (`openAppearance`).
  */
 export function AppShell({
   children,
@@ -55,7 +59,13 @@ export function AppShell({
   activeTenantId = null,
   switchTenantAction = null,
   banner = null,
+  userName,
+  ownPublicBooking = null,
 }: {
+  /** PL-F1c: nombre visible del usuario (ya sin email, `displayUserName`). */
+  userName?: string;
+  /** PL-F: ficha propia y su `publicBookingEnabled` para el switch del menú de cuenta del topbar. null = no atiende. */
+  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
   children: ReactNode;
   /** BO3-F: banda de soporte (null fuera de soporte). */
   banner?: ReactNode;
@@ -73,8 +83,9 @@ export function AppShell({
   /** Server action `switchTenant` (la pasa el layout: un módulo cliente no la importa, ver tenant-switcher). */
   switchTenantAction?: SwitchTenantAction | null;
 }) {
-  const { t } = useTweaks();
+  const { t, set } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
+  const openAppearance = () => set("minimised", false);
 
   return (
     <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
@@ -90,11 +101,24 @@ export function AppShell({
               }}
             >
               {useSidebar && (
-                <Sidebar collapsed={t.sidebarCollapsed} isPlatformAdmin={isPlatformAdmin} caps={caps} />
+                <Sidebar
+                  collapsed={t.sidebarCollapsed}
+                  isPlatformAdmin={isPlatformAdmin}
+                  caps={caps}
+                  onOpenAppearance={openAppearance}
+                />
               )}
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
                 {banner}
-                {!useSidebar && <TopBar caps={caps} isPlatformAdmin={isPlatformAdmin} />}
+                {!useSidebar && (
+                  <TopBar
+                    caps={caps}
+                    isPlatformAdmin={isPlatformAdmin}
+                    userName={userName}
+                    ownPublicBooking={ownPublicBooking}
+                    onOpenAppearance={openAppearance}
+                  />
+                )}
                 <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
               </div>
               <TweaksPanel />

@@ -27,7 +27,7 @@ import "server-only";
  * `auditPlatformInTx`; cron: el registro de plataforma de los mails). Así cada caller dice quién fue.
  */
 import { randomUUID } from "node:crypto";
-import type { Prisma, SaasChargeStatus, SaasPaymentSource, SaasPlan, SubscriptionStatus } from "@prisma/client";
+import type { Prisma, SaasChargeStatus, SaasPaymentMethod, SaasPaymentSource, SaasPlan, SubscriptionStatus } from "@prisma/client";
 import { revalidateTag } from "next/cache";
 import { prismaService } from "@/lib/db";
 import type { DbClient } from "@/lib/rls";
@@ -266,6 +266,7 @@ type PaymentForSplit = {
   id: string;
   amountCents: number;
   source: SaasPaymentSource;
+  method: SaasPaymentMethod | null;
   paidAt: Date | null;
   receiptPath: string | null;
   receiptMimeType: string | null;
@@ -279,6 +280,7 @@ const SPLIT_SELECT = {
   id: true,
   amountCents: true,
   source: true,
+  method: true,
   paidAt: true,
   receiptPath: true,
   receiptMimeType: true,
@@ -315,6 +317,8 @@ async function allocatePaymentInTx(
       tenantId,
       chargeId: null,
       source: pay.source,
+      // PL-F1a: el resto es la misma plata, pagada con el mismo medio.
+      method: pay.method,
       status: "APPROVED",
       amountCents: restCents,
       paidAt: pay.paidAt,
@@ -441,6 +445,8 @@ export async function recordPaymentInTx(
     paidAt: Date | null;
     receipt: ReceiptRef | null;
     note: string | null;
+    /** PL-F1a (M8c): medio de pago. null solo para quien no lo sepa (las actions lo exigen siempre). */
+    method: SaasPaymentMethod | null;
     submittedById: string | null;
     reviewedById?: string | null;
     now: Date;
@@ -468,6 +474,7 @@ export async function recordPaymentInTx(
       // a los abiertos del más viejo). PENDIENTE: guarda el cargo que eligió el consultorio, para la revisión.
       chargeId: p.status === "APPROVED" ? null : chargeId,
       source: "MANUAL",
+      method: p.method,
       status: p.status,
       amountCents: p.amountCents,
       paidAt: p.paidAt ?? (p.status === "APPROVED" ? p.now : null),
@@ -806,6 +813,7 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
         id: true,
         chargeId: true,
         source: true,
+        method: true,
         status: true,
         amountCents: true,
         paidAt: true,
@@ -857,6 +865,7 @@ export async function readLedger(db: DbClient, tenantId: string, now: Date): Pro
     chargeId: p.chargeId,
     chargePeriodStart: p.chargeId ? periodOf.get(p.chargeId) ?? null : null,
     source: p.source,
+    method: p.method,
     status: p.status,
     amountCents: p.amountCents,
     paidAt: p.paidAt?.toISOString() ?? null,

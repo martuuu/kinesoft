@@ -9,7 +9,6 @@ import {
   canReactivate,
   candidateLoadLabel,
   chargeStatusView,
-  composeReceiptNote,
   formatDateKey,
   formatInstantAR,
   moduleLabels,
@@ -231,10 +230,9 @@ describe("[PL-3a] comprobante: validación en el cliente", () => {
     expect(validateReceiptForm({ ...base, paidOn: "" }, now).paidOn).toBeDefined();
   });
 
-  it("medio de pago viaja en la nota sin pasar el tope del server", () => {
-    expect(composeReceiptNote("transferencia", "")).toBe("Medio: Transferencia");
-    expect(composeReceiptNote("efectivo", "  en recepción ")).toBe("Medio: Efectivo. en recepción");
-    expect(composeReceiptNote("otro", "x".repeat(600)).length).toBe(RECEIPT_NOTE_MAX);
+  it("[PL-F1a] la nota es entera de la persona (el medio va en su columna): el tope es el del server", () => {
+    expect(validateReceiptForm({ ...base, note: "x".repeat(RECEIPT_NOTE_MAX) }, now).note).toBeUndefined();
+    expect(validateReceiptForm({ ...base, note: "x".repeat(RECEIPT_NOTE_MAX + 1) }, now).note).toBe("La nota puede tener hasta 500 caracteres.");
   });
 
   it("solo se achican fotos pesadas, nunca un PDF", () => {

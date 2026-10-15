@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { KineLogo } from "@/components/ui/kine-logo";
-import { Avatar } from "@/components/ui/avatar";
-import { IconBell, IconSearch } from "@/components/ui/icons";
+import { IconSearch } from "@/components/ui/icons";
+import { NotificationsBell } from "@/components/dashboard/notifications-bell";
+import { USER_NO_NAME } from "@/lib/display-name";
 import type { Capability } from "@/lib/capabilities";
 import { useTenantModules } from "./tenant-modules-context";
 import { TenantSwitcher } from "./tenant-switcher";
+import { TopbarAccountMenu } from "./topbar-account-menu";
 import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } from "./sidebar";
 
 /**
@@ -18,17 +20,31 @@ import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } f
  * "Config" (pill corta) y Plataforma, que antes no estaba en el topbar,
  * aparece para el admin de plataforma: con el chrome "topbar" no tenía
  * forma de llegar.
+ *
+ * PL-F1c (H3 del barrido de UI muerta): el buscador era un `<div>` sin handler, la campana un ícono inerte y el
+ * avatar decía «Lucía Méndez» (prototipo) para todos. Ahora: el buscador abre ⌘K (el mismo evento que dispara el
+ * buscador del dashboard), la campana es `NotificationsBell` (la real) y el avatar es el usuario de la sesión con
+ * su menú de cuenta (`TopbarAccountMenu`: Apariencia, Ayuda y soporte, turnero propio, Seguridad, Cambiar de
+ * consultorio, Cerrar sesión).
  */
 export function TopBar({
   caps = [],
   isPlatformAdmin = false,
+  userName = USER_NO_NAME,
+  onOpenAppearance,
+  ownPublicBooking = null,
 }: {
+  /** PL-F: switch del turnero propio en el menú de cuenta (null = no atiende). */
+  ownPublicBooking?: { practitionerId: string; enabled: boolean } | null;
   caps?: readonly Capability[];
   isPlatformAdmin?: boolean;
+  /** `actor.practitionerName` (pasa por `displayUserName`: nunca el email, decisión 19). */
+  userName?: string;
+  onOpenAppearance?: () => void;
 }) {
   const pathname = usePathname();
   const search = useSearchParams();
-  const { list: modules } = useTenantModules();
+  const { list: modules, has } = useTenantModules();
   const capSet = useCapSet(caps);
   const links = useMemo(() => {
     const items = shellNavItems(modules, capSet).map((it) => ({
@@ -43,6 +59,10 @@ export function TopBar({
     pathname,
     search
   );
+  // El mismo ⌘K que escucha `CommandPalette` (lo hace igual el buscador del dashboard).
+  const openPalette = () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+  };
   return (
     <header
       className="k-glass"
@@ -80,7 +100,10 @@ export function TopBar({
         })}
       </nav>
       <div style={{ flex: 1 }} />
-      <div
+      <button
+        type="button"
+        onClick={openPalette}
+        aria-label="Abrir búsqueda rápida"
         className="k-glass"
         style={{
           display: "flex",
@@ -92,30 +115,23 @@ export function TopBar({
           fontSize: 13,
           color: "var(--navy-300)",
           background: "rgba(255,255,255,0.5)",
+          border: "none",
+          cursor: "pointer",
         }}
       >
-        <IconSearch size={15} /> Buscar paciente, ejercicio…
-      </div>
+        <IconSearch size={15} /> {has("sesiones") ? "Buscar paciente, ejercicio…" : "Buscar paciente…"}
+        <span style={{ flex: 1 }} />
+        <span className="k-mono" style={{ fontSize: 10, fontWeight: 700, color: "var(--navy-500)" }}>
+          ⌘K
+        </span>
+      </button>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         {/* IAM-3b: con 2+ consultorios, el selector también en el chrome de barra superior. */}
         <div style={{ width: 220 }}>
           <TenantSwitcher />
         </div>
-        <span
-          className="k-glass"
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: "50%",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--navy-700)",
-          }}
-        >
-          <IconBell size={16} />
-        </span>
-        <Avatar name="Lucía Méndez" size={36} />
+        <NotificationsBell />
+        <TopbarAccountMenu name={userName} onOpenAppearance={onOpenAppearance} ownPublicBooking={ownPublicBooking} />
       </div>
     </header>
   );

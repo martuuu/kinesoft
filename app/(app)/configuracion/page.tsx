@@ -41,10 +41,11 @@ async function unlessForbidden<T>(p: () => Promise<T>): Promise<T | null> {
 /**
  * /configuracion — panel del consultorio.
  *
- * PL-3a: se abre con `tenant.admin` («Configuración»: Titular o delegada) **o** `account.billing` («Planes y pagos»:
- * Titular o delegada, PL-D5). Las pestañas salen de las capacidades (`ConfigTabAccess`), no del rol. Cada lectura se
- * pide solo si la pestaña se puede ver: quien tiene solo «Planes y pagos» no baja sedes, servicios ni equipo (y esas
- * lecturas lo rechazarían). Las actions exigen lo suyo igual.
+ * PL-F1b: se abre para CUALQUIER miembro del consultorio (decisión de Martin, 16-oct: «profesionales también, porque
+ * pueden necesitar ayuda con algo»). Antes (PL-3a) exigía `tenant.admin` o `account.billing` y redirigía al resto.
+ * Las pestañas salen de las capacidades (`ConfigTabAccess`), no del rol: un Profesional sin delegaciones ve solo
+ * «Soporte» (Mensajes + Accesos de soporte). Cada lectura se pide solo si la pestaña se puede ver: quien no tiene
+ * «Configuración» no baja sedes, servicios ni equipo (y esas lecturas lo rechazarían). Las actions exigen lo suyo igual.
  */
 export default async function ConfiguracionPage({
   searchParams,
@@ -57,7 +58,7 @@ export default async function ConfiguracionPage({
   const caps = await getCapabilities();
   const tenantAdmin = caps.has("tenant.admin");
   const billing = caps.has("account.billing");
-  if (!role || (!tenantAdmin && !billing)) {
+  if (!role) {
     redirect("/dashboard");
   }
 
@@ -110,8 +111,8 @@ export default async function ConfiguracionPage({
     // «Plan y uso»: `getTenantPlanUsage` acepta `account.billing` o `tenant.admin` (PL-3), así que quien tiene solo
     // «Planes y pagos» también ve el desglose de cupos.
     billing ? unlessForbidden(() => getTenantPlanUsage()) : none(null),
-    // BO3-F: «Accesos de soporte» (la lectura exige `tenant.admin` y rechaza al soporte).
-    tenantAdmin && !actor.support ? unlessForbidden(() => listSupportSessionsForTenant()) : none(null),
+    // BO3-F: «Accesos de soporte». PL-F1b: la lee cualquier miembro; el soporte no (la lectura lo rechaza igual).
+    !actor.support ? unlessForbidden(() => listSupportSessionsForTenant()) : none(null),
     // PL-3a: Facturación y el drawer de cambio de plan (`requireAccountBilling`).
     billing ? getBillingOverview() : none(null),
     billing ? getPublicPlanCatalog() : none([]),

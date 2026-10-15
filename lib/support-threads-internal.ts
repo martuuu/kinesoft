@@ -9,7 +9,7 @@ import "server-only";
  *  - RLS de M8 en local/futuro: SELECT por tenant e INSERT solo `kind='TENANT'` / `authorKind='TENANT'`. La app no
  *    tiene policy de UPDATE sobre `SupportThread`: no puede cerrar un hilo, ni tocar `platformReadAt`, ni forjar una
  *    respuesta de Plataforma. Por eso acá NUNCA se escribe otro `authorKind` que `TENANT` (constante, no parámetro).
- *  - La marca de leído es por usuario (`SupportThreadRead`, policy normal de tenant): cada admin tiene sus no leídos.
+ *  - La marca de leído es por usuario (`SupportThreadRead`, policy normal de tenant): cada miembro tiene sus no leídos (PL-F1b: escribe cualquier miembro).
  *
  * Los hilos de LEAD (tenantId NULL) no aparecen nunca: `tenantId = <el del actor>` no matchea NULL.
  */

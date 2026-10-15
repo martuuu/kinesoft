@@ -77,11 +77,11 @@ function arg(name: string): string | undefined {
 }
 
 /**
- * PL-2 sumó las plantillas de 2FA, cobros y mensajes. Queda afuera solo `billing_auto_debit_changed`: es del débito
- * automático con Mercado Pago, que no se hace en esta etapa (decisión de Martin 16-oct; no tiene plantilla).
+ * PL-2 sumó las plantillas de 2FA, cobros y mensajes. PL-F quitó `billing_auto_debit_changed` del union: era del débito
+ * automático con Mercado Pago, que no se hace en esta etapa (decisión de Martin 16-oct), así que hoy todo kind tiene
+ * plantilla y muestra.
  */
-type PendingPlKind = "billing_auto_debit_changed";
-type DiagnosableKind = Exclude<EmailKind, PendingPlKind>;
+type DiagnosableKind = EmailKind;
 
 function samples(base: string): Record<DiagnosableKind, () => RenderedEmail> {
   const link = (path: string) => `${base}${path}`;

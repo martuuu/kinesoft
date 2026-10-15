@@ -10,6 +10,8 @@ import { guardModuleSegment } from "@/lib/authz";
  * El layout es UX, la barrera es la action: en el App Router un layout no se
  * re-ejecuta en cada navegación y las server actions se invocan sin pasar por
  * él, así que cada action del módulo chequea `assertModule`/`requireModule`.
+ *
+ * PL-F1c: la página ahora redirige siempre a /dashboard; el guard queda igual (los dos destinos coinciden).
  */
 export default async function ReportesLayout({ children }: { children: React.ReactNode }) {
   await guardModuleSegment("reportes");

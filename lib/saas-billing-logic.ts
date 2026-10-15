@@ -222,6 +222,28 @@ export function priceChangeMailKey(priceChangeId: string, tenantId: string): str
   return `cron.billing_price_change:${priceChangeId}:${tenantId}`;
 }
 
+// ── Cargo sugerido al pagar (PL-F1a) ───────────────────────────────────────────────────────────────────────────
+//
+// Decisión de Martin (16-oct): «deberíamos poder seleccionar qué paga, pero sí, debería ser el último impago (por
+// deducción, no se puede deber dos meses: cuando se debe uno solo la plataforma se bloquea)». Antes los drawers
+// sugerían el cargo pendiente MÁS VIEJO; ahora el más reciente. Esto es solo el default de la UI: la imputación
+// automática del saldo a cuenta (`applyCreditInTx`) sigue yendo del más viejo al más nuevo, que es lo correcto
+// contablemente cuando no se eligió cargo.
+
+export type PayableChargeLike = { id: string; status: SaasChargeStatus; periodStart: DateKey; remainingCents: number };
+
+/** Cargos que se pueden pagar (OPEN con saldo), del período más reciente al más viejo (el primero es el sugerido). */
+export function payableChargesNewestFirst<T extends PayableChargeLike>(charges: readonly T[]): T[] {
+  return charges
+    .filter((c) => c.status === "OPEN" && c.remainingCents > 0)
+    .sort((a, b) => (a.periodStart > b.periodStart ? -1 : a.periodStart < b.periodStart ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Id del último impago (el período OPEN con saldo más reciente); "" = no hay, se paga a cuenta. */
+export function suggestedChargeId(charges: readonly PayableChargeLike[]): string {
+  return payableChargesNewestFirst(charges)[0]?.id ?? "";
+}
+
 // ── Comprobantes (PL-D22) ───────────────────────────────────────────────────────────────────────────────────────
 
 export const RECEIPT_MAX_BYTES = 4 * 1024 * 1024;

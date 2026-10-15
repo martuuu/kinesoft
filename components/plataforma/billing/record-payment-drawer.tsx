@@ -2,8 +2,9 @@
 
 /**
  * «Registrar pago» desde Plataforma (PL-3c; decisión de Martin: imputar pagos manuales ADJUNTANDO el recibo). Drawer
- * con dirty-guard: monto (`MoneyInput`, centavos), a qué cargo se imputa (vacío = el pendiente más viejo, lo elige el
- * núcleo), fecha (no futura), medio (va en la nota: no hay columna), nota y el comprobante, obligatorio.
+ * con dirty-guard: monto (`MoneyInput`, centavos), a qué cargo se imputa (PL-F1a: por defecto el ÚLTIMO impago,
+ * decisión de Martin del 16-oct; «A cuenta» = sin cargo, el núcleo lo aplica a los pendientes del más viejo), fecha (no
+ * futura), medio (`SaasPaymentMethod`, su columna desde M8c), nota y el comprobante, obligatorio.
  *
  * `recordManualPayment` (FormData) valida tamaño y magic bytes ANTES de Storage y deja el pago APPROVED con audit
  * doble y mail; esto corre por `usePlatformAction` (`billing.write` es `high`: re-verificación y rate limit).
@@ -16,19 +17,19 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { useToast } from "@/components/ui/toast";
 import { formatARS } from "@/lib/format";
 import { recordManualPayment } from "@/lib/platform-billing";
-import type { BillingChargeRow } from "@/lib/saas-billing-types";
+import type { SaasPaymentMethod } from "@prisma/client";
+import { SAAS_PAYMENT_METHODS, SAAS_PAYMENT_METHOD_LABEL, type BillingChargeRow } from "@/lib/saas-billing-types";
+import { suggestedChargeId } from "@/lib/saas-billing-logic";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import { ErrorBox } from "@/components/plataforma/tenants/detail-ui";
 import { formatDayKeyAR } from "@/components/plataforma/tenants/labels";
 import {
   NOTE_MAX,
-  PAYMENT_METHODS,
   RECEIPT_ACCEPT,
   buildPaymentFormData,
   emptyRecordPayment,
   isRecordPaymentDirty,
   validateRecordPayment,
-  type PaymentMethod,
   type RecordPaymentState,
 } from "@/components/plataforma/billing/billing-logic";
 
@@ -60,9 +61,10 @@ export function RecordPaymentForm({
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onCancel: () => void;
 }) {
+  // `openCharges` llega del más reciente al más viejo (`openChargesOf`): el primero es el sugerido.
   const chargeOptions = [
-    { value: "", label: openCharges.length ? "El cargo pendiente más viejo" : "A cuenta (no hay cargos pendientes)" },
     ...openCharges.map((c) => ({ value: c.id, label: chargeOptionLabel(c) })),
+    { value: "", label: openCharges.length ? "A cuenta" : "A cuenta (no hay cargos pendientes)" },
   ];
   return (
     <form onSubmit={onSubmit} style={{ display: "grid", gap: 16 }} noValidate>
@@ -81,7 +83,7 @@ export function RecordPaymentForm({
         value={state.chargeId}
         options={chargeOptions}
         onChange={(v) => onChange("chargeId", v)}
-        hint="Si sobra, queda a cuenta del consultorio."
+        hint="Si sobra, queda a cuenta del consultorio. «A cuenta» se aplica a los pendientes, del más viejo."
         error={errors.chargeId}
         disabled={pending}
       />
@@ -96,10 +98,12 @@ export function RecordPaymentForm({
       />
       <FormField
         as="select"
-        label="Medio"
+        label="Medio de pago"
+        required
         value={state.method}
-        options={PAYMENT_METHODS.map((m) => ({ value: m.value, label: m.label }))}
-        onChange={(v) => onChange("method", v as PaymentMethod)}
+        options={SAAS_PAYMENT_METHODS.map((m) => ({ value: m, label: SAAS_PAYMENT_METHOD_LABEL[m] }))}
+        onChange={(v) => onChange("method", v as SaasPaymentMethod)}
+        error={errors.method}
         disabled={pending}
       />
       <FormField
@@ -109,7 +113,7 @@ export function RecordPaymentForm({
         value={state.note}
         onChange={(v) => onChange("note", v)}
         placeholder="Ej.: número de operación"
-        hint={`La ve el consultorio en su historial. Hasta ${NOTE_MAX - 40} caracteres.`}
+        hint={`La ve el consultorio en su historial. Hasta ${NOTE_MAX} caracteres.`}
         error={errors.note}
         disabled={pending}
       />
@@ -170,9 +174,10 @@ export function RecordPaymentDrawer({
   const [pending, setPending] = useState(false);
 
   const openDrawer = () => {
-    // Monto sugerido: lo que falta del cargo pendiente más viejo (el caso común: pagó el mes). Se puede cambiar.
-    const oldest = openCharges[0];
-    initial.current = emptyRecordPayment(new Date(), oldest ? oldest.remainingCents : null);
+    // PL-F1a: cargo sugerido = el último impago (no se puede deber dos meses: con uno vencido la cuenta queda en solo
+    // lectura); monto sugerido = lo que le falta. Las dos cosas se pueden cambiar.
+    const suggested = openCharges.find((c) => c.id === suggestedChargeId(openCharges));
+    initial.current = emptyRecordPayment(new Date(), suggested ? suggested.remainingCents : null, suggested?.id ?? "");
     setState(initial.current);
     setFile(null);
     setErrors({});
@@ -181,7 +186,9 @@ export function RecordPaymentDrawer({
   };
 
   const onChange = <K extends keyof RecordPaymentState>(k: K, v: RecordPaymentState[K]) => {
-    setState((s) => ({ ...s, [k]: v }));
+    // Al cambiar de cargo, el monto pasa a lo que le falta a ese cargo (como en «Informar pago» del consultorio).
+    const picked = k === "chargeId" ? openCharges.find((c) => c.id === v) : undefined;
+    setState((s) => ({ ...s, [k]: v, ...(picked ? { amountCents: picked.remainingCents } : {}) }));
     setErrors((e) => {
       const { [k === "amountCents" ? "amount" : (k as string)]: _drop, ...rest } = e;
       return rest;

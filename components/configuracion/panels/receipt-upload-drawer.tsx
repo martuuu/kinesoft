@@ -4,8 +4,9 @@
  * Facturación → «Informar pago» (PL-3a; PL-D22). El consultorio pagó por transferencia (o como haya acordado) y sube
  * el comprobante: queda «En revisión» hasta que Plataforma lo apruebe o lo rechace con un motivo.
  *
- * - Campos: cargo (opcional: sin cargo, Plataforma lo imputa al más viejo), monto (`MoneyInput`, centavos; por
- *   defecto lo que falta del cargo), fecha (hoy en AR), medio (viaja en la nota: M8 no tiene columna), nota y archivo.
+ * - Campos: cargo (PL-F1a: por defecto el ÚLTIMO impago, decisión de Martin del 16-oct; «A cuenta» = sin cargo, y al
+ *   aprobarse se aplica a los pendientes del más viejo), monto (`MoneyInput`, centavos; por defecto lo que falta del
+ *   cargo), fecha (hoy en AR), medio (`method`, su columna desde M8c; Transferencia por defecto), nota y archivo.
  * - Validación en el cliente (`validateReceiptForm`, lib/saas-billing-view.ts): tipo PDF/JPG/PNG/WEBP y ≤ 4 MB ANTES
  *   de mandar 4 MB al server para que rebote. La barrera es el server (`readReceiptFile`: tamaño + magic bytes).
  * - Una foto pesada se achica en el navegador (canvas → JPEG, lado mayor 2000 px) antes de validarla: las fotos de
@@ -23,15 +24,14 @@ import { useToast } from "@/components/ui/toast";
 import { formatARS, formatMoneyInput } from "@/lib/format";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { submitPaymentReceipt } from "@/lib/saas-billing";
-import type { BillingChargeRow } from "@/lib/saas-billing-types";
+import type { SaasPaymentMethod } from "@prisma/client";
+import { SAAS_PAYMENT_METHODS, SAAS_PAYMENT_METHOD_LABEL, type BillingChargeRow } from "@/lib/saas-billing-types";
+import { payableChargesNewestFirst, suggestedChargeId } from "@/lib/saas-billing-logic";
 import {
-  PAYMENT_METHODS,
-  composeReceiptNote,
   formatBytes,
   periodLabel,
   shouldCompressReceipt,
   validateReceiptForm,
-  type PaymentMethod,
   type ReceiptFormErrors,
 } from "@/lib/saas-billing-view";
 
@@ -77,18 +77,21 @@ export function ReceiptUploadDrawer({
   onClose: () => void;
   /** PL-Z A2: a dónde transferir (`SAAS_BILLING_TRANSFER_INFO`). Va arriba del formulario: es lo primero que se busca. */
   transferInfo: string | null;
-  /** Cargos pendientes (OPEN con saldo), el más viejo primero o como vengan del ledger. */
+  /** Cargos del ledger: acá se quedan los pendientes con saldo, del más reciente al más viejo. */
   charges: readonly BillingChargeRow[];
   onSubmitted: () => void | Promise<void>;
 }) {
   const toast = useToast();
-  const firstCharge = charges[0] ?? null;
+  const payable = useMemo(() => payableChargesNewestFirst(charges), [charges]);
+  // PL-F1a: el sugerido es el último impago (no el más viejo). No se puede deber dos meses: con uno vencido la cuenta
+  // ya queda en solo lectura, así que en la práctica hay uno solo.
+  const firstCharge = payable.find((c) => c.id === suggestedChargeId(payable)) ?? null;
   const today = () => toARDateKey(new Date());
   const [chargeId, setChargeId] = useState<string>(firstCharge?.id ?? "");
   const [amountCents, setAmountCents] = useState<number | null>(firstCharge?.remainingCents ?? null);
   const [amountInvalid, setAmountInvalid] = useState(false);
   const [paidOn, setPaidOn] = useState<string>(today);
-  const [method, setMethod] = useState<PaymentMethod>("transferencia");
+  const [method, setMethod] = useState<SaasPaymentMethod>("TRANSFER");
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileInfo, setFileInfo] = useState<string | null>(null);
@@ -103,7 +106,7 @@ export function ReceiptUploadDrawer({
     setAmountCents(firstCharge?.remainingCents ?? null);
     setAmountInvalid(false);
     setPaidOn(today());
-    setMethod("transferencia");
+    setMethod("TRANSFER");
     setNote("");
     setFile(null);
     setFileInfo(null);
@@ -112,7 +115,7 @@ export function ReceiptUploadDrawer({
     setFileKey((k) => k + 1);
   }
 
-  // Al abrir: el primer cargo pendiente del ledger (puede haber cambiado desde la última vez) y la fecha de hoy.
+  // Al abrir: el último impago del ledger (puede haber cambiado desde la última vez) y la fecha de hoy.
   useEffect(() => {
     if (open) reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,10 +123,10 @@ export function ReceiptUploadDrawer({
 
   const chargeOptions = useMemo(
     () => [
-      ...charges.map((c) => ({ value: c.id, label: `${periodLabel(c.periodStart, c.periodEnd)} · faltan ${formatARS(c.remainingCents)}` })),
-      { value: "", label: "Sin cargo (a cuenta)" },
+      ...payable.map((c) => ({ value: c.id, label: `${periodLabel(c.periodStart, c.periodEnd)} · faltan ${formatARS(c.remainingCents)}` })),
+      { value: "", label: "A cuenta" },
     ],
-    [charges]
+    [payable]
   );
 
   // Lo que cuesta volver a cargar: el archivo y la nota (cargo, monto y fecha vienen sugeridos).
@@ -165,14 +168,16 @@ export function ReceiptUploadDrawer({
     if (chargeId) fd.set("chargeId", chargeId);
     fd.set("amount", formatMoneyInput(amountCents));
     fd.set("paidOn", paidOn);
-    fd.set("note", composeReceiptNote(method, note));
+    fd.set("method", method);
+    // PL-F1a: la nota va tal cual (antes llevaba «Medio: …» adelante porque M8 no tenía columna).
+    if (note.trim()) fd.set("note", note.trim());
     setPending(true);
     try {
       const r = await submitPaymentReceipt(fd);
       if (!r.ok) {
         setFormError(r.error);
         const fe = r.fieldErrors ?? {};
-        setErrors({ file: fe.file?.[0], amount: fe.amount?.[0], paidOn: fe.paidOn?.[0], note: fe.note?.[0] });
+        setErrors({ file: fe.file?.[0], amount: fe.amount?.[0], paidOn: fe.paidOn?.[0], note: fe.note?.[0], method: fe.method?.[0] });
         return;
       }
       toast.success("Comprobante enviado", { description: "Lo revisamos y te avisamos por mail." });
@@ -216,7 +221,7 @@ export function ReceiptUploadDrawer({
           value={chargeId}
           onChange={(v) => {
             setChargeId(v);
-            const c = charges.find((x) => x.id === v);
+            const c = payable.find((x) => x.id === v);
             if (c) setAmountCents(c.remainingCents);
           }}
           options={chargeOptions}
@@ -250,9 +255,14 @@ export function ReceiptUploadDrawer({
           as="select"
           label="Medio de pago"
           name="method"
+          required
           value={method}
-          onChange={(v) => setMethod(v as PaymentMethod)}
-          options={PAYMENT_METHODS.map((m) => ({ value: m.value, label: m.label }))}
+          onChange={(v) => {
+            setMethod(v as SaasPaymentMethod);
+            setErrors((p) => ({ ...p, method: undefined }));
+          }}
+          options={SAAS_PAYMENT_METHODS.map((m) => ({ value: m, label: SAAS_PAYMENT_METHOD_LABEL[m] }))}
+          error={errors.method}
         />
         <FormField
           as="textarea"

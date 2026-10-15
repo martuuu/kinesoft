@@ -14,15 +14,19 @@ import { DEFAULT_PREFERENCES, type AgendaPrefs } from "@/lib/preferences-constan
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
 export type DashChrome = "sidebar" | "topbar";
-export type AgendaView = "timeline" | "grilla" | "lista";
-export type PatientCard = "rich" | "compact" | "clinical";
 
+/**
+ * Lo que guarda «Apariencia» (ex «Tweaks», §20.18: se mantiene y se arreglan sus opciones rotas).
+ *
+ * PL-F1c: se quitaron `agendaView` («Timeline / Semana / Lista») y `patientCard` («Card de paciente»): eran del
+ * prototipo y nadie los leía (la agenda decide la vista por URL y `mode-toggle.tsx`; la ficha no tiene variantes).
+ * Si vuelven, que sea con un lector real y su test (`tests/unit/render/pl-f1c-tweaks.test.tsx`).
+ */
 export type TweaksState = {
   palette: Palette;
   dashChrome: DashChrome;
   sidebarCollapsed: boolean;
-  agendaView: AgendaView;
-  patientCard: PatientCard;
+  /** Panel cerrado. No se persiste: cada carga arranca cerrado (el panel abierto tapaba contenido). */
   minimised: boolean;
 };
 
@@ -30,12 +34,39 @@ const DEFAULTS: TweaksState = {
   palette: "sky",
   dashChrome: "sidebar",
   sidebarCollapsed: true,
-  agendaView: "lista",
-  patientCard: "clinical",
-  minimised: false,
+  minimised: true,
 };
 
 const STORAGE_KEY = "kinesoft:tweaks";
+const PALETTES: readonly Palette[] = ["sky", "mint", "coral", "violet"];
+
+/**
+ * Estado inicial desde lo guardado en el navegador. Puro (exportado para el test). Ignora claves viejas
+ * (`agendaView`, `patientCard`), valores fuera de rango y `minimised` (siempre arranca cerrado). La paleta del
+ * server (`serverPalette`), si viene, gana sobre la del navegador: es la que sigue al usuario entre dispositivos y
+ * la misma que guarda Perfil → Ajustes.
+ */
+export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null): TweaksState {
+  let stored: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object") stored = parsed as Record<string, unknown>;
+  } catch {
+    /* JSON roto: defaults */
+  }
+  const palette =
+    serverPalette && PALETTES.includes(serverPalette)
+      ? serverPalette
+      : PALETTES.includes(stored.palette as Palette)
+        ? (stored.palette as Palette)
+        : DEFAULTS.palette;
+  return {
+    palette,
+    dashChrome: stored.dashChrome === "topbar" ? "topbar" : "sidebar",
+    sidebarCollapsed: typeof stored.sidebarCollapsed === "boolean" ? stored.sidebarCollapsed : DEFAULTS.sidebarCollapsed,
+    minimised: true,
+  };
+}
 
 const DEFAULT_AGENDA: AgendaPrefs = {
   agendaShowWeekHeader: DEFAULT_PREFERENCES.agendaShowWeekHeader,
@@ -61,27 +92,37 @@ const TweaksContext = createContext<Ctx | null>(null);
 export function TweaksProvider({
   children,
   initialAgenda,
+  initialPalette = null,
 }: {
   children: ReactNode;
   initialAgenda?: AgendaPrefs;
+  /** PL-F1c: `UserPreferences.palette` (lo lee el layout `(app)`). null = sin server (tests, demo). */
+  initialPalette?: Palette | null;
 }) {
-  const [t, setT] = useState<TweaksState>(DEFAULTS);
+  const [t, setT] = useState<TweaksState>(() => ({
+    ...DEFAULTS,
+    palette: initialPalette && PALETTES.includes(initialPalette) ? initialPalette : DEFAULTS.palette,
+  }));
   const [agenda, setAgendaState] = useState<AgendaPrefs>(initialAgenda ?? DEFAULT_AGENDA);
 
-  // Hydrate from localStorage once.
+  // Hydrate from localStorage once (la paleta del server gana: ver `hydrateTweaks`).
   useEffect(() => {
+    let raw: string | null = null;
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) setT({ ...DEFAULTS, ...JSON.parse(raw) });
+      raw = window.localStorage.getItem(STORAGE_KEY);
     } catch {
-      /* ignore */
+      /* storage bloqueado: defaults */
     }
+    setT(hydrateTweaks(raw, initialPalette));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist + apply palette to <html>.
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(t));
+      // `minimised` no se guarda: cada carga arranca con el panel cerrado.
+      const persisted = { palette: t.palette, dashChrome: t.dashChrome, sidebarCollapsed: t.sidebarCollapsed };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
     } catch {
       /* ignore */
     }
@@ -90,6 +131,10 @@ export function TweaksProvider({
 
   const set: Ctx["set"] = useCallback((key, value) => {
     setT((prev) => ({ ...prev, [key]: value }));
+    // PL-F1c (M1 del barrido): la paleta solo iba a localStorage y el dashboard la pisaba con la del server al
+    // cargar: elegías «mint» acá y al pasar por Inicio volvía la anterior. Ahora se guarda en el server, como
+    // `setAgenda` (fire-and-forget: si falla, p. ej. en solo lectura, solo no sobrevive a la recarga).
+    if (key === "palette") void updateUserPreferences({ palette: value as Palette });
   }, []);
 
   const setAgenda: Ctx["setAgenda"] = useCallback((key, value) => {

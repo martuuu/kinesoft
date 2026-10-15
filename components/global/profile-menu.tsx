@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { IconCheck, IconHome, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
+import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconX } from "@/components/ui/icons";
 import { updateUserPreferences } from "@/lib/preferences";
 import {
   effectivePinnedKpis,
@@ -15,6 +15,8 @@ import {
   type Preferences,
 } from "@/lib/preferences-constants";
 import { useTweaks } from "@/components/layout/tweaks-context";
+// PL-F: las mismas cuatro paletas y rótulos que «Apariencia» (antes acá decían «Sky/Mint/Violet», en inglés).
+import { PALETTE_OPTIONS as PALETTES } from "@/components/layout/tweaks-panel";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "@/components/layout/tenant-switcher";
 import {
@@ -22,12 +24,14 @@ import {
   PublicBookingSwitch,
 } from "@/components/configuracion/panels/practitioners/public-booking-switch";
 
-const PALETTES: { value: Palette; swatch: [string, string, string]; label: string }[] = [
-  { value: "sky", swatch: ["#1F4FBE", "#C8F564", "#E6EFFA"], label: "Sky" },
-  { value: "mint", swatch: ["#1F8A5B", "#DBFD8C", "#DBF4EA"], label: "Mint" },
-  { value: "coral", swatch: ["#C9622E", "#FFD66A", "#FAE5D6"], label: "Coral" },
-  { value: "violet", swatch: ["#5F40C7", "#B6F3D8", "#E5E0FB"], label: "Violet" },
-];
+/**
+ * PL-F1b (decisión de Martin, 16-oct: «profesionales también, porque pueden necesitar ayuda con algo»): Soporte
+ * (Mensajes + Accesos de soporte) es de cualquier miembro, pero «Configuración» del nav sigue siendo de `tenant.admin`
+ * (a un Profesional le mostraría una pantalla con una sola pestaña bajo un nombre que no es lo suyo). La entrada para
+ * todos está acá, en el menú de perfil. Exportado para el test de render.
+ */
+export const SUPPORT_HELP_HREF = "/configuracion?tab=soporte";
+
 
 /**
  * Profile menu — the avatar in the dashboard top-right.
@@ -179,6 +183,23 @@ export function ProfileMenu({
           >
             <IconCheck size={14} /> Seguridad de la cuenta
           </a>
+          <a
+            href={SUPPORT_HELP_HREF}
+            role="menuitem"
+            style={{
+              padding: "10px 12px",
+              fontSize: 13,
+              fontWeight: 500,
+              color: "var(--navy-700)",
+              borderRadius: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              textDecoration: "none",
+            }}
+          >
+            <IconBell size={14} /> Ayuda y soporte
+          </a>
           {ownPublicBooking && (
             <div
               role="none"
@@ -276,7 +297,7 @@ export function SettingsModal({
   revenueScope?: KpiRevenueScope;
 }) {
   const router = useRouter();
-  const { set } = useTweaks();
+  const { t, set } = useTweaks();
   // EV1-A: el picker de Ajustes ofrece y preselecciona lo mismo que la fila del dashboard
   // (`PinKpiModal`): en Clínica general sin las KPIs de planes y con los rótulos de turnos.
   // Antes ofrecía «Planes en curso»/«Cerca del alta», que en General valen 0 siempre.
@@ -296,14 +317,15 @@ export function SettingsModal({
   const save = () => {
     setError(null);
     start(async () => {
-      const r = await updateUserPreferences({ palette, pinnedKpis: pinned });
+      // PL-F: la paleta se guardaba dos veces (acá y otra vez en `set("palette")`, que desde PL-F1c también la
+      // persiste). Ahora este guardado lleva solo las KPIs y la paleta la escribe `set` una vez, si cambió.
+      const r = await updateUserPreferences({ pinnedKpis: pinned });
       if (!r.ok) {
         setError(r.error);
         return;
       }
-      // Apply palette to the live `data-palette` attribute via Tweaks
-      // context so the UI updates without a refresh.
-      set("palette", palette);
+      // Aplica `data-palette` en vivo vía el contexto de Tweaks (y la guarda en el server).
+      if (palette !== t.palette) set("palette", palette);
       onClose();
       router.refresh();
     });

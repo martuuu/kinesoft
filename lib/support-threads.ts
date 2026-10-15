@@ -3,16 +3,21 @@
 /**
  * Mensajes a soporte desde el consultorio (PL-2d, contrato C-PL11, plan §20.5.7). Configuración → Soporte.
  *
- * Quién: `tenant.admin` (Titular o «Configuración» delegada) o `account.billing` (Titular o «Planes y pagos»), PL-D20.
- * El superadmin «como soporte» NO: tiene `tenant.admin` por `SUPPORT_CAPS`, pero escribirle a Plataforma en nombre
- * del consultorio no tiene sentido (responde desde /plataforma) y dejaría mensajes del consultorio firmados por
- * alguien que no es del consultorio. Se corta antes de todo, también las lecturas (no es su bandeja).
+ * Quién: CUALQUIER miembro activo del consultorio (Titular, Administrador/a, Profesional, Secretario/a, Facturación).
+ * PL-F1b, decisión de Martin (16-oct, literal): «profesionales también, porque pueden necesitar ayuda con algo».
+ * Antes (PL-D20) era `tenant.admin || account.billing`: un Profesional con una duda de la agenda no tenía por dónde
+ * escribirnos. La bandeja es la del CONSULTORIO (todos ven todos los hilos del consultorio; el no leído es por
+ * usuario), igual que antes entre Titular y Administrador/a; el mail a Plataforma sigue sin llevar el texto. `getActor()` ya
+ * exige una membresía aceptada y habilitada, así que no hay capacidad que pedir.
+ * El superadmin «como soporte» NO: escribirle a Plataforma en nombre del consultorio no tiene sentido (responde desde
+ * /plataforma) y dejaría mensajes del consultorio firmados por alguien que no es del consultorio. Se corta antes de
+ * todo, también las lecturas (no es su bandeja).
  *
  * Solo lectura: las tres escrituras van por `withAccountWritable` (C-PL10). Un consultorio en solo lectura por deuda
  * o prueba vencida es justo el que más necesita escribirnos. `withAccountWritable` no le abre nada a soporte (doble
  * red con el corte de arriba).
  *
- * Cada action: `getActor()` → corte de soporte → capacidad → zod → rate limit (10/h por usuario, crear y responder
+ * Cada action: `getActor()` → corte de soporte → zod → rate limit (10/h por usuario, crear y responder
  * comparten cupo) → `runWithRls(tenantId, …)` con `where: { tenantId }` a mano (núcleo `-internal`) → mail a
  * `PLATFORM_INBOX_EMAIL` DESPUÉS del commit (un mail que no sale no deshace el mensaje; `sendEmail` nunca tira).
  *
@@ -20,7 +25,6 @@
  */
 import { z } from "zod";
 import { getActor, ForbiddenError, type Actor } from "@/lib/session";
-import { capabilitiesForActor } from "@/lib/authz";
 import { runWithRls } from "@/lib/rls";
 import { withAccountWritable } from "@/lib/account-writable";
 import { withReadOnlyResult } from "@/lib/read-only-result";
@@ -41,7 +45,6 @@ import {
 } from "@/lib/support-threads-internal";
 import {
   SUPPORT_BODY_MAX,
-  SUPPORT_NO_PERMISSION,
   SUPPORT_SESSION_COPY,
   SUPPORT_SUBJECT_MAX,
   SUPPORT_THREAD_CLOSED,
@@ -71,12 +74,13 @@ function invalid(e: z.ZodError): { ok: false; error: string; fieldErrors: Record
   return { ok: false, error: first ?? "Revisá los datos.", fieldErrors };
 }
 
-/** Actor + corte de soporte + `tenant.admin || account.billing`. Tira `ForbiddenError` con el copy. */
+/**
+ * Actor (cualquier miembro activo, PL-F1b) + corte de soporte. Tira `ForbiddenError` con el copy. Sin chequeo de
+ * capacidad a propósito: ver la cabecera (decisión de Martin del 16-oct).
+ */
 async function requireSupportWriter(): Promise<Actor> {
   const actor = await getActor();
   if (actor.support) throw new ForbiddenError(SUPPORT_SESSION_COPY);
-  const caps = await capabilitiesForActor(actor);
-  if (!caps.has("tenant.admin") && !caps.has("account.billing")) throw new ForbiddenError(SUPPORT_NO_PERMISSION);
   return actor;
 }
 

@@ -118,8 +118,9 @@ describe("[S21t] TemplateList — gate de módulo (EV0: has('plantillas'))", () 
     expect(TEMPLATE_LIST_COPY.disabled).toBe("Las plantillas de plan están disponibles desde el plan Consultorio.");
     expect(html).toContain('data-state="disabled"');
     expect(html).toContain('aria-disabled="true"');
-    // El botón de alta aparece apagado: nunca abre el drawer.
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Nueva plantilla<\/button>/);
+    // [PL-F1c] Sin botón de alta apagado (era un control muerto): queda solo el aviso.
+    expect(html).not.toContain("Nueva plantilla");
+    expect(html).not.toContain("<button");
     expect(html).not.toContain("template-row");
     expect(calls.list).toBe(0);
   });

@@ -35,20 +35,24 @@
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
-**Estado de PL (15-oct): PL ✅ completo (PL-A..PL-Z), sin commitear** desde `7bcfc1b` (PL-1). PL-A (`68b26f0`) ·
-PL-0 M8 (`6b1c50d`) · PL-1 (`14eb013` + `7bcfc1b`) commiteados; **PL-2, M8b, PL-3 y PL-Z en el working tree**. M8b
-(`20261015200000_pl_admin_consultorio`, solo datos: Consultorio = 5 usuarios de cualquier tipo y el Administrador/a nunca
-atiende, plan §20.17) aplicada solo en local. **Prod:** M8 → M8b → deploy, en ese orden (RUNBOOK «Orden de prod de PL»).
-Qué trae PL-2/PL-3: 2FA por usuario (TOTP + email + recuperación, step-up), cobros manuales sin Mercado Pago (cron diario
+**Estado de PL (16-oct): PL ✅ completo (PL-A..PL-Z) y PL-F ✅.** Commiteados: PL-A (`68b26f0`) · PL-0 M8 (`6b1c50d`) ·
+PL-1 (`14eb013` + `7bcfc1b`) · PL-2/M8b/PL-3/PL-Z (`74642cf`) · PL-F0 M8c `saas_payment_method` (`cb99c06`); **PL-F1 en el
+working tree**. **Prod:** M8 → M8b → M8c → deploy, en ese orden (RUNBOOK «Orden de prod de PL»).
+Qué trae PL: 2FA por usuario (TOTP + email + recuperación, step-up), cobros manuales sin Mercado Pago (cron diario
 único, comprobantes, `SAAS_BILLING_MODE=off`), mensajes y leads, Google + Facebook, salas/sala de espera por plan,
 turnero por profesional, Configuración → Plan y uso / Facturación / Soporte, equipo con «Atiendo pacientes» y permisos,
-Plataforma → Facturación, ledger, Precios y «Cambiar de plan» (ADR-018). PL-Z (4 sub-revisores + revisor del diff + 5
-fixers + integrador, sin migraciones nuevas): pago a cuenta y excedente bien imputados, datos para transferir por
-`SAAS_BILLING_TRANSFER_INFO`, la 2FA ya no se saltea con un TOTP propio de GoTrue, el export pide la 2FA, Plataforma pide
-el código en acciones de riesgo alto, nadie sin atender suma a alguien que atiende, cupos a medida solo en Libre y switch
-propio del turnero en el menú de perfil. Quedan para Martin: **a1#3** (bajar de plan entre cargos; recomendado: desde el
-próximo período), **a3#12** (ADMIN que M8b convierte) y **a2#7** (anti-replay del TOTP, a verificar) ([AUDIT «Hallazgos
-de PL-Z»](AUDIT.md)). **Siguiente:** commit de Martin → **RX** (Recepción, si aprueba el mockup; plan §20) → **EV2**.
+Plataforma → Facturación, ledger, Precios y «Cambiar de plan» (ADR-018); PL-Z: pago a cuenta y excedente bien
+imputados, datos para transferir, 2FA endurecida y switch propio del turnero.
+**PL-F (§20.19, regla de Martin: «todo lo que quede sin funcionalidad, se quita»):** medio de pago en columna (M8c,
+ADR-016) y cargo sugerido = último impago; Soporte (Mensajes + Accesos, solo lectura) para cualquier miembro desde el
+menú de perfil; Reportes fuera del nav (`/reportes` → `/dashboard`); barra superior con usuario real, búsqueda, campana
+y menú de cuenta (Ayuda y soporte, turnero propio); Apariencia (ex Tweaks) minimizada y solo con opciones que
+funcionan; textos que prometían cosas inexistentes quitados ([QA «PL-F»](QA.md), [AUDIT «PL-F»](AUDIT.md)).
+Quedan para Martin: **a3#12** (ADMIN que M8b convierte), **a2#7** (anti-replay del TOTP, a verificar),
+**plf-toggle-billing-sin-cap** (C0: `toggleBilling` sin `billing.manage`) y **plf-terminar-acceso-soporte**. a1#3 quedó
+decidido (ADR-016: bajada desde el próximo período, subida con proporcional, fecha fija) y se implementa antes de
+prender el cobro. **Siguiente:** **RX** (Recepción A/B seleccionables en Apariencia, §20.19) → EV2 → VX → ES4 → PF →
+DIR → MB.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,

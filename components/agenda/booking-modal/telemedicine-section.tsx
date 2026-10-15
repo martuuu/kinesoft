@@ -118,7 +118,7 @@ export function TelemedicineSection({
         <div>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Telemedicina</div>
           <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-            Consulta por videollamada. El link se puede cargar ahora o después, desde el turno.
+            Consulta por videollamada. Si ya tenés el link, pegalo acá (es opcional).
           </div>
         </div>
         <input

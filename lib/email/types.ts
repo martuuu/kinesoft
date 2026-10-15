@@ -35,7 +35,6 @@ export type EmailKind =
   | "billing_payment_rejected" // comprobante rechazado o pago de MP rechazado
   | "billing_past_due" // cuenta vencida (PAST_DUE)
   | "billing_price_change" // precio nuevo con vigencia (PL-D8)
-  | "billing_auto_debit_changed" // débito automático prendido, pausado o apagado
   // Mensajes y leads (C-PL11, PL-2d).
   | "support_message_platform" // a PLATFORM_INBOX_EMAIL: mensaje nuevo de un consultorio
   | "support_reply_tenant" // al creador del hilo: Plataforma respondió

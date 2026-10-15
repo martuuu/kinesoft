@@ -1509,7 +1509,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 > pantalla de esta sección.
 
 ### Configuración: plan, facturación y soporte (PL-3a)
-- [ ] Secretaria con «Planes y pagos» (`grantBilling`) y sin «Configuración»: ve **solo** Plan y uso, Facturación y Soporte (3 pestañas), con el desglose de cupos; sin «Planes y pagos» no ve ninguna de las tres.
+- [ ] Secretaria con «Planes y pagos» (`grantBilling`) y sin «Configuración»: ve **solo** Plan y uso, Facturación y Soporte (3 pestañas), con el desglose de cupos; sin «Planes y pagos» ve solo Soporte (desde PL-F, Soporte es de cualquier miembro; ver «PL-F»).
 - [ ] Bajar de Clínica a Consultorio con 7 usuarios activos: el drawer muestra cuántos sobran y pide elegir **exactamente** quiénes pierden el acceso; «Pasar a Consultorio» queda apagado hasta que la cuenta cierra.
 - [ ] Cambiar de plan sin 2FA activada → modal «Activá la verificación en dos pasos»; con 2FA → pide el código (step-up) y, al confirmar, el menú refleja los módulos del plan nuevo (salas, sala de espera).
 - [ ] Plan Libre: «Consultanos» abre Soporte con el mensaje prellenado; no hay botón de cambio directo.
@@ -1565,3 +1565,38 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Alta nueva: el Titular que atiende aparece en el turnero al prenderlo (nace con su switch en sí); General avisa que el turnero arranca apagado.
 - [ ] Profesional sin «Configuración»: el switch de su propio turnero está en el menú de perfil del dashboard (el avatar); apagado, desaparece de `/c/<slug>/booking`; al recargar el dashboard el switch conserva el valor. Con el turnero del consultorio apagado, el switch está deshabilitado con «Primero el consultorio tiene que prender el turnero.». La Secretaria (sin ficha) no lo ve.
 - [ ] El switch del menú de perfil mide 52×30 (< 44 px): pendiente de PF/MB, no es un bug de PL.
+
+## PL-F · UI sin funcionalidad, medio de pago y Soporte para todos (15/16-oct-2026)
+
+> Sin commitear (M8c ya está en cb99c06). `TZ=UTC`, M8 + M8b + **M8c** aplicadas en local y `SAAS_BILLING_MODE=manual`
+> con `SAAS_BILLING_TRANSFER_INFO` para lo de cobros. Regla de Martin (16-oct): «todo lo que quede sin funcionalidad,
+> se quita». Hallazgos en [AUDIT «PL-F»](AUDIT.md).
+
+### Medio de pago (M8c)
+- [ ] Configuración → Facturación → «Informar pago»: el select «Medio de pago» es obligatorio, arranca en Transferencia y ofrece Efectivo, Tarjeta, Billetera, Mercado Pago y Otro. La nota llega a Plataforma tal cual se escribió (sin «Medio: …» adelante).
+- [ ] Plataforma → ledger del consultorio → «Registrar pago»: mismo select «Medio de pago», obligatorio.
+- [ ] Con dos cargos impagos, los dos drawers sugieren el **último** (el período más reciente) y el monto es lo que le falta; al cambiar de cargo en «Registrar pago», el monto pasa a lo que le falta a ese cargo. «A cuenta» sigue disponible.
+- [ ] Un pago cargado antes de M8c se ve con «Sin informar» en la lista de pagos del consultorio y en el ledger de Plataforma; ningún pago dice «Mercado Pago» por su origen.
+
+### Soporte y accesos
+- [ ] Profesional y Secretaria (sin «Configuración»): el menú de perfil (avatar del dashboard) tiene «Ayuda y soporte» → `/configuracion?tab=soporte`, con Mensajes y Accesos de soporte; pueden escribir un mensaje nuevo. En el nav sigue sin aparecer «Configuración».
+- [ ] Accesos de soporte: es **solo lectura** para todos (quién entró, cuándo, motivo y cuándo terminó); no hay botón para terminar un acceso abierto (decisión pendiente de Martin).
+
+### Navegación y barra superior
+- [ ] «Reportes» no aparece en el sidebar, en la barra superior ni en ⌘K; `/reportes` lleva a `/dashboard`. En Plataforma, la ficha del consultorio no muestra el chip «Reportes».
+- [ ] Apariencia → «Barra superior»: el avatar es el usuario de la sesión (sin nombre → «Usuario sin nombre», nunca el email); la búsqueda abre ⌘K; la campana es la real (notificaciones y «marcar leídas»).
+- [ ] Menú del avatar de la barra superior: Apariencia, Ayuda y soporte, Seguridad de la cuenta, Cambiar de consultorio (solo con 2+), Cerrar sesión. Un Profesional con ficha ve además el switch «Aparece en el turnero online» (con el turnero del consultorio apagado, deshabilitado con «Primero el consultorio tiene que prender el turnero.»); la Secretaria no.
+- [ ] Dashboard con barra superior: botón «Ajustes» arriba del calendario → abre el modal de paleta y KPIs fijadas; guardar aplica la paleta sin recargar.
+
+### Apariencia (ex Tweaks)
+- [ ] Al cargar cualquier pantalla, Apariencia está cerrada y no queda ningún engranaje flotante tapando el pie de los Drawers («Guardar»). Se abre desde el pie del sidebar o desde el menú del avatar de la barra superior.
+- [ ] Opciones: Paleta (Celeste, Verde, Coral, Violeta), Navegación (Barra lateral / Barra superior), Barra lateral contraída y Vista semanal (encabezado, sábado, domingo). No están «Timeline / Semana / Lista» ni «Card de paciente».
+- [ ] Elegir otra paleta en Apariencia, ir a Inicio y recargar: la paleta se mantiene (se guarda en el server). En Ajustes del perfil, las paletas tienen los mismos nombres.
+
+### Textos quitados
+- [ ] Recepción: ninguna fila tiene el botón «Cobrar» gris «Próximamente».
+- [ ] Turnero público: no dice «Cancelás gratis hasta 6 hs antes» (ni en datos ni en el resumen); al confirmar no promete «Te mandamos un email».
+- [ ] Alta de turno con Telemedicina: «Si ya tenés el link, pegalo acá (es opcional).» (no «después, desde el turno»).
+- [ ] Bloquear un día con turnos: «El paciente no recibe aviso: avisale vos.» (sin «todavía» ni «llega más adelante»).
+- [ ] Plan sin plantillas (Individual): Plantillas muestra solo el aviso del plan, sin el botón «Nueva plantilla» deshabilitado.
+

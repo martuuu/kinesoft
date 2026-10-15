@@ -588,7 +588,7 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
 
   // ── Lista de Configuración ──────────────────────────────────────────────────────────────────────────────────
 
-  it("OWNER: «Accesos de soporte» con DTO cerrado; un profesional no la ve", async () => {
+  it("OWNER: «Accesos de soporte» con DTO cerrado", async () => {
     await enter(S);
     asUser(T.userId);
     cookies().delete(SUPPORT_COOKIE);
@@ -600,10 +600,28 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect(rows[0]).toMatchObject({ superadminEmail: `${S}@test.local`, reason: REASON, open: true });
     // Solo los de este consultorio.
     expect(await db.supportSession.count({ where: { id: { in: rows.map((r) => r.id) }, tenantId: { not: T.tenantId } } })).toBe(0);
+  });
 
+  // PL-F1b (decisión de Martin, 16-oct: «profesionales también, porque pueden necesitar ayuda con algo»): la lista la
+  // ve CUALQUIER miembro del consultorio, no solo Titular/Administrador/a. Sigue siendo de solo lectura: desde el
+  // consultorio no hay action para terminar un acceso (la RLS de M7 es FOR SELECT) y eso no cambia acá.
+  it("[PL-F1b] Profesional y Secretaria ven «Accesos de soporte» de SU consultorio, no los de otro", async () => {
+    await enter(S, T);
+    cookies().delete(SUPPORT_COOKIE);
     const kine = await addPractitioner(db, T, "PRACTITIONER");
-    asUser(kine.userId);
-    await expect(listSupportSessionsForTenant()).rejects.toMatchObject({ name: "ForbiddenError" });
+    const secre = await addPractitioner(db, T, "ASSISTANT");
+    for (const userId of [kine.userId, secre.userId]) {
+      asUser(userId);
+      const rows = await listSupportSessionsForTenant();
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows[0]).toMatchObject({ superadminEmail: `${S}@test.local`, reason: REASON, open: true });
+      expect(await db.supportSession.count({ where: { id: { in: rows.map((r) => r.id) }, tenantId: { not: T.tenantId } } })).toBe(0);
+    }
+    // Un Profesional de OTRO consultorio no ve los accesos de T.
+    const other = await addPractitioner(db, T2, "PRACTITIONER");
+    asUser(other.userId);
+    const rows2 = await listSupportSessionsForTenant();
+    expect(await db.supportSession.count({ where: { id: { in: rows2.map((r) => r.id) }, tenantId: T.tenantId } })).toBe(0);
   });
   // ── BO-Z ────────────────────────────────────────────────────────────────────────────────────────────────────
 

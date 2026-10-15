@@ -80,6 +80,7 @@ describe.skipIf(!RUN)("[PL-Z] cobros: saldo a cuenta, excedentes, precios y mail
         paidAt: null,
         receipt: { path: `${t.tenantId}/r-${amountCents}.pdf`, mimeType: "application/pdf", sizeBytes: 10 },
         note: null,
+        method: "TRANSFER",
         submittedById: null,
         now: new Date(),
       })

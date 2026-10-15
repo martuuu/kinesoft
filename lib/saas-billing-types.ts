@@ -9,6 +9,7 @@
  */
 import type {
   SaasChargeStatus,
+  SaasPaymentMethod,
   SaasPaymentSource,
   SaasPaymentStatus,
   SaasPlan,
@@ -17,6 +18,34 @@ import type {
 import type { SaasBillingMode } from "@/lib/env";
 
 export type { SaasBillingMode };
+
+/**
+ * Medio de pago de un `SaasPayment` (PL-F1a sobre M8c; decisión de Martin del 16-oct: «la columna y los medios de pago
+ * típicos»). Antes de M8c el medio viajaba como prefijo de la nota («Medio: Transferencia. …»): ahora va en la columna
+ * y la nota queda como la escribió la persona. El orden es el de los selects. Mismo set que el enum de Postgres
+ * (tests/integration/pl-m8c.test.ts lo fija contra `pg_enum`).
+ */
+export const SAAS_PAYMENT_METHODS = ["TRANSFER", "CASH", "CARD", "WALLET", "MERCADO_PAGO", "OTHER"] as const satisfies readonly SaasPaymentMethod[];
+
+export const SAAS_PAYMENT_METHOD_LABEL: Record<SaasPaymentMethod, string> = {
+  TRANSFER: "Transferencia",
+  CASH: "Efectivo",
+  CARD: "Tarjeta",
+  WALLET: "Billetera virtual",
+  MERCADO_PAGO: "Mercado Pago",
+  OTHER: "Otro",
+};
+
+/** Pagos de antes de M8c (columna NULL): no se sabe con qué se pagó. */
+export const SAAS_PAYMENT_METHOD_UNKNOWN = "Sin informar";
+
+export function paymentMethodLabel(m: SaasPaymentMethod | null | undefined): string {
+  return m ? SAAS_PAYMENT_METHOD_LABEL[m] : SAAS_PAYMENT_METHOD_UNKNOWN;
+}
+
+export function isSaasPaymentMethod(v: unknown): v is SaasPaymentMethod {
+  return typeof v === "string" && (SAAS_PAYMENT_METHODS as readonly string[]).includes(v);
+}
 
 export type BillingChargeRow = {
   id: string;
@@ -41,6 +70,8 @@ export type BillingPaymentRow = {
   /** Período del cargo imputado («YYYY-MM-DD»), para mostrarlo sin buscar el cargo. */
   chargePeriodStart: string | null;
   source: SaasPaymentSource;
+  /** null = pago de antes de M8c («Sin informar»). */
+  method: SaasPaymentMethod | null;
   status: SaasPaymentStatus;
   amountCents: number;
   paidAt: string | null;
@@ -105,6 +136,7 @@ export const BILLING_COPY = {
   reasonRequired: "Escribí el motivo del rechazo (lo va a ver el consultorio).",
   hasPayments: "El cargo tiene pagos aprobados: condonalo en vez de anularlo.",
   noReceipt: "Ese pago no tiene comprobante.",
+  methodRequired: "Elegí el medio de pago.",
 } as const;
 
 /** Resultado de `applyPlanChange` / `platformApplyPlanChange`: en el error va la razón para que el drawer reaccione. */

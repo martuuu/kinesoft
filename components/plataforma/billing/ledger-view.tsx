@@ -22,7 +22,8 @@ import { useToast } from "@/components/ui/toast";
 import { formatARS, formatDateAR } from "@/lib/format";
 import { SAAS_PLAN_LABEL } from "@/lib/tenant-modules";
 import { getPlatformReceiptUrl, reviewPayment, setCustomPrice, voidCharge, waiveCharge } from "@/lib/platform-billing";
-import type { BillingChargeRow, BillingPaymentRow } from "@/lib/saas-billing-types";
+import { paymentMethodLabel, type BillingChargeRow, type BillingPaymentRow } from "@/lib/saas-billing-types";
+import { payableChargesNewestFirst } from "@/lib/saas-billing-logic";
 import type { PlatformTenantLedger } from "@/lib/platform-billing-types";
 import { usePlatformAction } from "@/components/plataforma/reauth-modal";
 import { ErrorBox, Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
@@ -31,14 +32,16 @@ import { RecordPaymentDrawer } from "@/components/plataforma/billing/record-paym
 import { ReviewPaymentDialog, VoidChargeDialog, type ReviewState } from "@/components/plataforma/billing/ledger-dialogs";
 import {
   CHARGE_STATUS_LABEL,
-  PAYMENT_SOURCE_LABEL,
   PAYMENT_STATUS_LABEL,
   balanceText,
 } from "@/components/plataforma/billing/billing-logic";
 
-/** Cargos pendientes, el más viejo primero (el núcleo imputa ahí cuando no se elige). */
+/**
+ * Cargos pendientes con saldo, del más reciente al más viejo (PL-F1a): el primero es el sugerido para imputar (el
+ * último impago, decisión de Martin del 16-oct). Lo que se imputa «a cuenta» el núcleo lo aplica del más viejo.
+ */
 export function openChargesOf(charges: readonly BillingChargeRow[]): BillingChargeRow[] {
-  return charges.filter((c) => c.status === "OPEN").sort((a, b) => (a.periodStart < b.periodStart ? -1 : a.periodStart > b.periodStart ? 1 : 0));
+  return payableChargesNewestFirst(charges);
 }
 
 const rowStyle = {
@@ -121,6 +124,7 @@ export function PendingReviewsList({
           <li key={p.id} data-review={p.id} style={rowStyle}>
             <Money cents={p.amountCents} strong />
             <span>{p.paidAt ? `Pagado el ${formatDateAR(p.paidAt, "short")}` : `Enviado el ${formatDateAR(p.createdAt, "short")}`}</span>
+            <span data-payment-method={p.method ?? ""} style={{ color: "var(--navy-500)" }}>{paymentMethodLabel(p.method)}</span>
             {p.note && <span style={{ color: "var(--navy-500)", overflowWrap: "anywhere", minWidth: 0 }}>«{p.note}»</span>}
             <span style={{ marginLeft: "auto", display: "flex", gap: 12, flexWrap: "wrap" }}>
               {p.hasReceipt && (
@@ -218,7 +222,8 @@ export function PaymentsList({
               <Money cents={p.amountCents} strong />
               <Tag tone={p.status === "APPROVED" ? "lime" : p.status === "PENDING_REVIEW" ? "sky" : "soft"}>{PAYMENT_STATUS_LABEL[p.status]}</Tag>
               <span>{p.paidAt ? formatDateAR(p.paidAt, "short") : formatDateAR(p.createdAt, "short")}</span>
-              <span style={{ color: "var(--navy-500)" }}>{PAYMENT_SOURCE_LABEL[p.source]}</span>
+              {/* PL-F1a: el medio (M8c) en lugar del `source` («Manual» siempre: sin cobro por MP). */}
+              <span data-payment-method={p.method ?? ""} style={{ color: "var(--navy-500)" }}>{paymentMethodLabel(p.method)}</span>
               <span style={{ color: "var(--navy-500)" }}>
                 {p.chargePeriodStart ? `Período del ${formatDayKeyAR(p.chargePeriodStart)}` : p.status === "APPROVED" ? "A cuenta" : ""}
               </span>

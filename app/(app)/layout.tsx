@@ -120,6 +120,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // the week view + the Tweaks panel render the right state on first paint.
   // `actor` no es null acá (redirect de arriba), así que `prefsP` tampoco.
   const prefs = await (prefsP ?? getUserPreferences());
+  // PL-F (handoff 8): con la barra superior el dashboard esconde su `ProfileMenu`, así que el switch «Aparezco en el
+  // turnero online» del propio profesional también va en el menú de cuenta del topbar. Se lee una vez acá, solo si
+  // el actor tiene ficha (misma query que `lib/dashboard.ts`); el soporte no tiene ficha propia en el destino.
+  let practitionerId: string | null = null;
+  if (!actor.support) practitionerId = actor.practitionerId;
+  const ownPublicBooking = practitionerId
+    ? await runWithRls(actor.tenantId, (tx) =>
+        tx.practitioner.findFirst({
+          where: { id: practitionerId, tenantId: actor.tenantId },
+          select: { id: true, publicBookingEnabled: true },
+        })
+      ).then((p) => (p ? { practitionerId: p.id, enabled: p.publicBookingEnabled } : null))
+    : null;
   // EV0 (EV-S): módulos del consultorio (vertical × plan × turnero, de
   // `actor.entitlements`) y capabilities del rol para filtrar el nav. Arrays y
   // no Sets porque cruzan al AppShell cliente. Solo UI: la barrera es
@@ -157,9 +170,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         agendaShowSaturday: prefs.agendaShowSaturday,
         agendaShowSunday: prefs.agendaShowSunday,
       }}
+      // PL-F1c: la paleta guardada en el server manda desde el primer render (antes solo la aplicaba el dashboard
+      // al montarse, y pisaba lo elegido en Tweaks).
+      initialPalette={prefs.palette}
     >
       <AppShell
         isPlatformAdmin={actor.isPlatformAdmin}
+        // PL-F1c: avatar y menú de cuenta de la barra superior. `practitionerName` ya pasa por `displayUserName`
+        // (nunca el email, decisión 19).
+        userName={actor.practitionerName}
+        ownPublicBooking={ownPublicBooking}
         modules={modules}
         vertical={actor.entitlements.vertical}
         caps={caps}

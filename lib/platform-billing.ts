@@ -222,9 +222,10 @@ export async function getPlatformReceiptUrl(paymentId: unknown): Promise<ActionR
 // ── Pagos ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Imputar un pago manual CON recibo (decisión de Martin): queda APPROVED, se imputa al cargo elegido (o al abierto más
- * viejo) y recalcula el estado. FormData: `tenantId`, `file`, `amount` (obligatorio), `chargeId?`, `paidOn?`,
- * `note?`. El archivo se valida (tamaño + magic bytes) ANTES de Storage.
+ * Imputar un pago manual CON recibo (decisión de Martin): queda APPROVED, se imputa al cargo elegido (la UI sugiere el
+ * último impago; sin cargo queda a cuenta y se aplica a los pendientes del más viejo) y recalcula el estado. FormData:
+ * `tenantId`, `file`, `amount` (obligatorio), `method` (obligatorio, PL-F1a: va a la columna), `chargeId?`,
+ * `paidOn?`, `note?`. El archivo se valida (tamaño + magic bytes) ANTES de Storage.
  */
 export async function recordManualPayment(form: FormData): Promise<ActionResult<{ paymentId: string }>> {
   const actor = await requirePlatformAdmin("billing.write");
@@ -256,6 +257,7 @@ export async function recordManualPayment(form: FormData): Promise<ActionResult<
         paidAt: f.paidAt,
         receipt: { path: up.path, mimeType: receipt.mimeType, sizeBytes: receipt.sizeBytes },
         note: f.note,
+        method: f.method,
         submittedById: actor.userId,
         reviewedById: actor.userId,
         now,
@@ -267,7 +269,7 @@ export async function recordManualPayment(form: FormData): Promise<ActionResult<
           action: "platform.billing.payment.recorded",
           entity: "SaasPayment",
           entityId: paymentId,
-          payload: { amountCents: f.amountCents, chargeId: res.chargeId, chargePaid: res.chargePaid, statusChanged: res.statusChanged },
+          payload: { amountCents: f.amountCents, method: f.method, chargeId: res.chargeId, chargePaid: res.chargePaid, statusChanged: res.statusChanged },
         });
       }
       return res;

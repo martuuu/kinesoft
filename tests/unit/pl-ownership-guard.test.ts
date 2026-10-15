@@ -69,7 +69,8 @@ const ROLE_EQ_ALLOW: Record<string, number> = {
   "app/(app)/configuracion/page.tsx": 1,
   "app/(app)/pacientes/[id]/page.tsx": 2,
   "app/suspendido/page.tsx": 3,
-  "components/configuracion/configuracion-client.tsx": 8,
+  // PL-F1b: Soporte para todos sacó las comparaciones de rol de las pestañas; quedan 2 (eran 8).
+  "components/configuracion/configuracion-client.tsx": 2,
   "components/configuracion/controls.tsx": 3,
   "components/configuracion/panels/general-panel.tsx": 4,
   "components/configuracion/panels/users-panel.tsx": 7,

@@ -62,7 +62,10 @@ type Props = {
   vertical?: TenantVertical;
   /** PL-3a: el consultorio está en modo lectura (modo efectivo): «Plan y uso» lo dice. */
   readOnly?: boolean;
-  /** BO3-F: Configuración → Accesos de soporte. null = no la puede leer (sin `tenant.admin`, o soporte). */
+  /**
+   * BO3-F: Configuración → Accesos de soporte. PL-F1b: la lee cualquier miembro; null = no se pudo leer (el
+   * superadmin «como soporte», o el server la rechazó): sin la tarjeta.
+   */
   supportSessions: SupportSessionRow[] | null;
   /**
    * BO3-F: el que mira es un superadmin «como soporte». `role` llega como ADMIN (los límites con que el server lo
@@ -121,8 +124,9 @@ export function ConfiguracionClient(props: Props) {
     [tab, practitionerDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
-  // «Accesos de soporte»: solo Titular y Administrador/a (y solo si la página pudo leerlos: exige `tenant.admin`).
-  const supportAccessVisible = props.supportSessions !== null && (props.role === "OWNER" || props.role === "ADMIN");
+  // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
+  // era solo Titular y Administrador/a; ahora el filtro es solo el del server (`listSupportSessionsForTenant`).
+  const supportAccessVisible = props.supportSessions !== null;
   const overview = props.billingOverview ?? null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -177,7 +181,7 @@ export function ConfiguracionClient(props: Props) {
       {tab === "facturacion" && can("facturacion") && overview && <BillingPanel initial={overview} />}
       {tab === "soporte" && can("soporte") && (
         // PL-2d (C-PL11): la pestaña «Soporte» junta los Mensajes con el equipo de KineSoft y los Accesos de soporte.
-        // PL-3a: Mensajes para `tenant.admin || account.billing` (PL-D20); Accesos, solo Titular/Administrador/a.
+        // PL-F1b: Mensajes y Accesos para cualquier miembro (antes PL-D20: `tenant.admin || account.billing`).
         <div style={{ display: "grid", gap: 16 }}>
           <SupportMessagesPanel support={props.support} draft={supportDraft} onDraftUsed={() => setSupportDraft(null)} />
           {supportAccessVisible && <SupportAccessPanel sessions={props.supportSessions ?? []} />}

@@ -157,11 +157,11 @@ describe.skipIf(!RUN)("[PL-2b] Plataforma → Facturación", () => {
     await db.tenant.update({ where: { id: A.tenantId }, data: { subscriptionStatus: "PAST_DUE", subscriptionStatusChangedAt: changedBefore } });
 
     // Recibo inválido: ni Storage ni fila.
-    const bad = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "10.000" }, EXE));
+    const bad = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "10.000", method: "TRANSFER" }, EXE));
     expect(bad.ok).toBe(false);
     expect(supa.calls).toHaveLength(0);
 
-    const r = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "10.000", chargeId: charge.id, note: "Transferencia" }));
+    const r = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "10.000", chargeId: charge.id, method: "TRANSFER", note: "Transferencia" }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(supa.calls).toEqual([{ op: "upload", key: `${A.tenantId}/${r.data.paymentId}.pdf` }]);
@@ -227,6 +227,48 @@ describe.skipIf(!RUN)("[PL-2b] Plataforma → Facturación", () => {
     expect(await db.platformAuditEvent.count({ where: { tenantId: A.tenantId, action: "platform.billing.payment.approved", entityId: p1.id } })).toBe(1);
   });
 
+  it("[PL-F1a] medio de pago: registrar lo guarda en la columna (nota sin prefijo), el excedente lo hereda y aprobar lo conserva", async () => {
+    const C = await createEphemeralTenant(db, { saasPlan: "CONSULTORIO" });
+    try {
+      const charge = await overdueCharge(C, 100_000);
+      // Faltante o inválido: ni Storage ni fila.
+      for (const bad of [{}, { method: "CHEQUE" }] as Record<string, string>[]) {
+        const r = await recordManualPayment(receiptForm({ tenantId: C.tenantId, amount: "1.500", chargeId: charge.id, ...bad }));
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.fieldErrors?.method?.length).toBe(1);
+      }
+      expect(supa.calls).toHaveLength(0);
+      expect(await db.saasPayment.count({ where: { tenantId: C.tenantId } })).toBe(0);
+
+      // $ 1.500 contra un cargo de $ 1.000: el pago queda por $ 1.000 y el hermano a cuenta por $ 500, mismo medio.
+      const r = await recordManualPayment(receiptForm({ tenantId: C.tenantId, amount: "1.500", chargeId: charge.id, method: "WALLET", note: "op 123" }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const rows = await db.saasPayment.findMany({ where: { tenantId: C.tenantId }, orderBy: { amountCents: "desc" } });
+      expect(rows.map((p) => ({ chargeId: p.chargeId, amountCents: p.amountCents, method: p.method }))).toEqual([
+        { chargeId: charge.id, amountCents: 100_000, method: "WALLET" },
+        { chargeId: null, amountCents: 50_000, method: "WALLET" },
+      ]);
+      expect(rows[0].note).toBe("op 123");
+      const global = await db.platformAuditEvent.findFirstOrThrow({ where: { tenantId: C.tenantId, action: "platform.billing.payment.recorded" } });
+      expect(global.payload).toMatchObject({ method: "WALLET" });
+
+      // Aprobar un comprobante del consultorio conserva el medio que informó.
+      const charge2 = await overdueCharge(C, 300_000, -40);
+      const pending = await db.saasPayment.create({
+        data: { tenantId: C.tenantId, chargeId: charge2.id, source: "MANUAL", status: "PENDING_REVIEW", amountCents: 250_000, method: "CARD", submittedById: C.userId },
+      });
+      expect((await reviewPayment({ paymentId: pending.id, decision: "approve" })).ok).toBe(true);
+      expect(await db.saasPayment.findUniqueOrThrow({ where: { id: pending.id } })).toMatchObject({ status: "APPROVED", method: "CARD" });
+
+      // El ledger de Plataforma devuelve el medio de cada pago.
+      const ledger = await getTenantLedger(C.tenantId);
+      expect(new Set(ledger!.payments.map((p) => p.method))).toEqual(new Set(["WALLET", "CARD"]));
+    } finally {
+      await C.cleanup();
+    }
+  });
+
   it("anular con pagos aprobados no; condonar sí; un cargo cerrado no se toca de nuevo", async () => {
     const c1 = await overdueCharge(A, 200_000, -70);
     await db.saasPayment.create({
@@ -245,7 +287,7 @@ describe.skipIf(!RUN)("[PL-2b] Plataforma → Facturación", () => {
   it("[PL-Z] a1#6: montos por encima de un INTEGER se rechazan antes de Storage y de la base", async () => {
     const before = await db.saasPayment.count({ where: { tenantId: A.tenantId } });
     // 21.474.836,48 = 2_147_483_648 centavos: uno más que el máximo de la columna.
-    const r = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "21.474.836,48" }));
+    const r = await recordManualPayment(receiptForm({ tenantId: A.tenantId, amount: "21.474.836,48", method: "TRANSFER" }));
     expect(r).toMatchObject({ ok: false, fieldErrors: { amount: ["Revisá el monto: es demasiado alto."] } });
     expect(supa.calls).toHaveLength(0);
     expect(await db.saasPayment.count({ where: { tenantId: A.tenantId } })).toBe(before);

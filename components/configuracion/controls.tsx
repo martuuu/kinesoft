@@ -49,14 +49,16 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *    Diagnósticos.
  *  - `team`: Usuarios (la página lo prende solo si `listTeamMembers` no la rechazó).
  *  - `billing` (`account.billing` = Titular o «Planes y pagos»): Plan y uso y Facturación.
- *  - Soporte (Mensajes): `tenantAdmin || billing` (PL-D20, la misma regla que `lib/support-threads.ts`).
+ *  - Soporte (Mensajes + Accesos de soporte): SIEMPRE, cualquier miembro (PL-F1b, decisión de Martin del 16-oct:
+ *    «profesionales también, porque pueden necesitar ayuda con algo»; la misma regla que `lib/support-threads.ts` y
+ *    `listSupportSessionsForTenant`). Un Profesional sin delegaciones ve solo esta pestaña.
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
  */
 export type ConfigTabAccess = { tenantAdmin: boolean; billing: boolean; team: boolean; canExport: boolean };
 
 /**
  * Default por rol en abstracto, para quien todavía no pasa `access` (tests viejos): OWNER = todo; ADMIN = el ADMIN
- * legado con «Configuración» (backfill de M8) sin «Planes y pagos»; el resto, nada. Un mapa y no comparaciones de rol
+ * legado con «Configuración» (backfill de M8) sin «Planes y pagos»; el resto, solo Soporte (PL-F1b). Un mapa y no comparaciones de rol
  * (guard `tests/unit/pl-ownership-guard.test.ts`).
  */
 const LEGACY_ACCESS: Record<Role, ConfigTabAccess> = {
@@ -88,7 +90,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
   // PL-2d: «Soporte» = Mensajes + Accesos de soporte (la key no cambia: los mails ya linkean `?tab=soporte`).
-  { key: "soporte", label: "Soporte", visible: (a) => a.tenantAdmin || a.billing },
+  // PL-F1b: visible para cualquier miembro (antes `tenantAdmin || billing`, PL-D20).
+  { key: "soporte", label: "Soporte", visible: () => true },
   // BO5-C (BO-D4): el export completo es SOLO del titular (la route también lo exige), no de ADMIN.
   { key: "exportar", label: "Exportar datos", visible: (a) => a.canExport },
 ];
@@ -100,7 +103,7 @@ export function visibleConfigTabs(access: ConfigTabAccess, modules: readonly Ten
 
 /**
  * Pestaña inicial: la de `?tab=` si la puede ver; si no, la primera que ve (quien solo tiene «Planes y pagos» no ve
- * General y entra a «Plan y uso»).
+ * General y entra a «Plan y uso»; un Profesional sin delegaciones entra a «Soporte», PL-F1b).
  */
 export function initialConfigTab(raw: string | string[] | null | undefined, visible: readonly Tab[]): Tab {
   const t = parseConfigTab(raw);

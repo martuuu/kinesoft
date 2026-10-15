@@ -36,7 +36,6 @@ import {
   balanceText,
   buildPaymentFormData,
   buildPlanPricePayload,
-  composePaymentNote,
   emptyRecordPayment,
   filterAccountRows,
   parseAccountsQuery,
@@ -97,6 +96,7 @@ const payment = (over: Partial<BillingPaymentRow> = {}): BillingPaymentRow => ({
   chargeId: "c1",
   chargePeriodStart: "2026-10-05",
   source: "MANUAL",
+  method: "TRANSFER",
   status: "APPROVED",
   amountCents: 5_500_000,
   paidAt: "2026-10-06T15:00:00.000Z",
@@ -216,8 +216,8 @@ describe("[PL-3c] ledger del consultorio", () => {
     charge({ id: "c-waived", periodStart: "2026-06-05", status: "WAIVED", remainingCents: 0 }),
   ];
 
-  it("cargos pendientes ordenados del más viejo al más nuevo", () => {
-    expect(openChargesOf(charges).map((c) => c.id)).toEqual(["c-old", "c-new"]);
+  it("[PL-F1a] cargos pendientes del más reciente al más viejo (el primero es el sugerido: el último impago)", () => {
+    expect(openChargesOf(charges).map((c) => c.id)).toEqual(["c-new", "c-old"]);
   });
 
   it("resumen: saldo, precio de lista/a medida y próximo cargo", () => {
@@ -250,9 +250,12 @@ describe("[PL-3c] ledger del consultorio", () => {
   });
 
   it("comprobantes a revisar: solo los PENDING_REVIEW, con «Ver comprobante» y «Revisar»", () => {
-    const pays = [payment({ id: "p-rev", status: "PENDING_REVIEW", note: "transferí ayer" }), payment({ id: "p-ok" })];
+    const pays = [payment({ id: "p-rev", status: "PENDING_REVIEW", method: "CASH", note: "transferí ayer" }), payment({ id: "p-ok" })];
     const html = renderToStaticMarkup(<PendingReviewsList payments={pays} onReview={noop} onViewReceipt={noop} />);
     expect(html).toContain("1 comprobante a revisar");
+    // PL-F1a: el medio que informó el consultorio, de la columna (la nota va limpia).
+    expect(html).toMatch(/data-payment-method="CASH"[^>]*>Efectivo</);
+    expect(html).toContain("«transferí ayer»");
     expect(html).toContain('data-review="p-rev"');
     expect(html).not.toContain('data-review="p-ok"');
     expect(html).toContain("Ver comprobante");
@@ -260,13 +263,14 @@ describe("[PL-3c] ledger del consultorio", () => {
     expect(renderToStaticMarkup(<PendingReviewsList payments={[payment()]} onReview={noop} onViewReceipt={noop} />)).toBe("");
   });
 
-  it("pagos: estados, origen, a cuenta y motivo del rechazo", () => {
+  it("pagos: estados, medio (o «Sin informar»), a cuenta y motivo del rechazo", () => {
     const html = renderToStaticMarkup(
       <PaymentsList
         payments={[
           payment(),
           payment({ id: "p2", status: "REJECTED", reviewNote: "El monto no coincide", hasReceipt: false }),
-          payment({ id: "p3", chargeId: null, chargePeriodStart: null }),
+          payment({ id: "p3", chargeId: null, chargePeriodStart: null, method: "WALLET" }),
+          payment({ id: "p4", method: null }),
         ]}
         onViewReceipt={noop}
       />
@@ -275,13 +279,21 @@ describe("[PL-3c] ledger del consultorio", () => {
     expect(html).toContain(">Rechazado<");
     expect(html).toContain("Motivo del rechazo: El monto no coincide");
     expect(html).toContain("A cuenta");
-    expect(html).toContain(">Manual<");
+    expect(html).toMatch(/data-payment-method="TRANSFER"[^>]*>Transferencia</);
+    expect(html).toMatch(/data-payment-method="WALLET"[^>]*>Billetera virtual</);
+    // Pagos de antes de M8c (columna NULL).
+    expect(html).toMatch(/data-payment-method=""[^>]*>Sin informar</);
+    // PL-F1a: el `source` ya no se muestra (sin MP siempre era «Manual»).
+    expect(html).not.toContain(">Manual<");
+    expect(html).not.toContain("Mercado Pago<");
   });
 
-  it("revisar: aprobar imputa al cargo del comprobante (o al más viejo); rechazar exige motivo", () => {
+  it("revisar: aprobar imputa al cargo del comprobante (o al último impago); rechazar exige motivo", () => {
     const open = openChargesOf(charges);
-    expect(defaultReviewCharge(payment({ chargeId: "c-new" }), open)).toBe("c-new");
-    expect(defaultReviewCharge(payment({ chargeId: "c-paid" }), open)).toBe("c-old");
+    expect(defaultReviewCharge(payment({ chargeId: "c-old" }), open)).toBe("c-old");
+    // PL-F1a: si el del comprobante ya no está pendiente, el último impago (antes: el más viejo).
+    expect(defaultReviewCharge(payment({ chargeId: "c-paid" }), open)).toBe("c-new");
+    expect(defaultReviewCharge(payment({ chargeId: null }), [...open].reverse())).toBe("c-new");
     expect(defaultReviewCharge(payment({ chargeId: null }), [])).toBe("");
     expect(reviewCanSubmit({ decision: "approve", chargeId: "", reason: "" })).toBe(true);
     expect(reviewCanSubmit({ decision: "reject", chargeId: "", reason: "  " })).toBe(false);
@@ -345,23 +357,29 @@ describe("[PL-3c] registrar pago", () => {
     expect(validateRecordPayment(base({ file: { ...pdf, type: "application/zip" } }), NOW).file).toMatch(/PDF, JPG/);
   });
 
-  it("FormData: el monto viaja en TEXTO de pesos (el server lo lee con parseMoneyInput: nunca ×100) y el medio en la nota", () => {
-    const fd = buildPaymentFormData("t1", base({ amountCents: 1_500_050, note: "op 123", method: "cash", chargeId: "c1" }), new Blob(["x"]));
+  it("FormData: el monto viaja en TEXTO de pesos (el server lo lee con parseMoneyInput: nunca ×100) y el medio en su campo", () => {
+    const fd = buildPaymentFormData("t1", base({ amountCents: 1_500_050, note: " op 123 ", method: "CASH", chargeId: "c1" }), new Blob(["x"]));
     expect(fd.get("amount")).toBe("15.000,50");
     const back = parseMoneyInput(fd.get("amount") as string);
     expect(back.ok && back.cents).toBe(1_500_050);
     expect(fd.get("tenantId")).toBe("t1");
     expect(fd.get("chargeId")).toBe("c1");
-    expect(fd.get("note")).toBe("Medio: Efectivo. op 123");
+    // PL-F1a: la nota va tal cual (sin «Medio: …») y el medio con el valor del enum.
+    expect(fd.get("note")).toBe("op 123");
+    expect(fd.get("method")).toBe("CASH");
     expect(fd.get("file")).toBeInstanceOf(Blob);
-    expect(buildPaymentFormData("t1", base(), new Blob(["x"])).get("chargeId")).toBeNull();
-    expect(composePaymentNote("transfer", "")).toBe("Medio: Transferencia.");
+    const empty = buildPaymentFormData("t1", base(), new Blob(["x"]));
+    expect(empty.get("chargeId")).toBeNull();
+    expect(empty.get("note")).toBeNull();
+    expect(empty.get("method")).toBe("TRANSFER");
+    expect(validateRecordPayment(base({ file: pdf, note: "x".repeat(500) }), NOW).note).toBeUndefined();
+    expect(validateRecordPayment(base({ file: pdf, note: "x".repeat(501) }), NOW).note).toBeDefined();
   });
 
   it("render: campo de comprobante obligatorio, cargos pendientes en «Imputar a» y el error del server", () => {
     const html = renderToStaticMarkup(
       <RecordPaymentForm
-        state={base()}
+        state={base({ chargeId: "c1" })}
         openCharges={[charge()]}
         errors={{ file: "Adjuntá el comprobante (PDF, JPG, PNG o WEBP de hasta 4 MB)." }}
         serverError="Adjuntá el comprobante (PDF, JPG, PNG o WEBP de hasta 4 MB)."
@@ -374,11 +392,15 @@ describe("[PL-3c] registrar pago", () => {
     );
     expect(html).toMatch(/<input[^>]*type="file"[^>]*required=""/);
     expect(html).toContain('accept="application/pdf,image/jpeg,image/png,image/webp"');
-    expect(html).toContain("El cargo pendiente más viejo");
+    expect(html).not.toContain("El cargo pendiente más viejo");
+    expect(html).toMatch(/<option(?=[^>]*value="c1")(?=[^>]*selected="")[^>]*>/);
+    expect(html).toMatch(/<option[^>]*value=""[^>]*>A cuenta<\/option>/);
     expect(html).toMatch(/falta \$\s?55\.000/);
     expect(html).toContain("Comprobante");
     expect(html).toMatch(/role="alert"[^>]*>Adjuntá el comprobante/);
-    for (const m of ["Transferencia", "Efectivo", "Depósito"]) expect(html).toContain(m);
+    for (const m of ["Transferencia", "Efectivo", "Tarjeta", "Billetera virtual", "Mercado Pago", "Otro"]) expect(html).toContain(`>${m}</option>`);
+    expect(html).toMatch(/<option(?=[^>]*value="TRANSFER")(?=[^>]*selected="")[^>]*>Transferencia<\/option>/);
+    expect(html).not.toContain("Depósito");
   });
 });
 

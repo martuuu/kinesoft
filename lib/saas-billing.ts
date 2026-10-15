@@ -147,8 +147,9 @@ export async function applyPlanChange(raw: unknown): Promise<PlanChangeActionRes
 
 /**
  * Subir el comprobante de una transferencia (queda `PENDING_REVIEW` hasta que Plataforma lo apruebe). Campos del
- * FormData: `file` (obligatorio), `chargeId` (opcional: sin él, Plataforma lo imputa al cargo abierto más viejo),
- * `amount` (vacío con cargo = lo que falta), `paidOn` (YYYY-MM-DD), `note`.
+ * FormData: `file` (obligatorio), `method` (obligatorio, PL-F1a: valor de `SAAS_PAYMENT_METHODS`, va a la columna),
+ * `chargeId` (opcional: la UI sugiere el último impago; sin cargo queda a cuenta y, al aprobarse, se aplica a los
+ * pendientes del más viejo), `amount` (vacío con cargo = lo que falta), `paidOn` (YYYY-MM-DD), `note`.
  *
  * Orden: barrera → modo → rate limit → validación del formulario y del ARCHIVO (tamaño + magic bytes) → cargo del
  * consultorio → Storage → fila (+ audit) en una tx; si la tx falla se borra el objeto subido.
@@ -209,6 +210,7 @@ export async function submitPaymentReceipt(form: FormData): Promise<ActionResult
           paidAt: f.paidAt,
           receipt: { path: up.path, mimeType: receipt.mimeType, sizeBytes: receipt.sizeBytes },
           note: f.note,
+          method: f.method,
           submittedById: actor.userId,
           now,
         });
@@ -219,7 +221,7 @@ export async function submitPaymentReceipt(form: FormData): Promise<ActionResult
             action: "billing.payment.submitted",
             entity: "SaasPayment",
             entityId: paymentId,
-            payload: { amountCents: amountCents!, chargeId: f.chargeId, mimeType: receipt.mimeType, sizeBytes: receipt.sizeBytes },
+            payload: { amountCents: amountCents!, chargeId: f.chargeId, method: f.method, mimeType: receipt.mimeType, sizeBytes: receipt.sizeBytes },
           });
         }
         return r;

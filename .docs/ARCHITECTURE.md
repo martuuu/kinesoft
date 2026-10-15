@@ -1280,6 +1280,17 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   por un route handler propio (o upload firmado directo a Storage) y volver al default de 1 MB.
 - **Datos para transferir (PL-Z, A2).** `SAAS_BILLING_TRANSFER_INFO` (texto libre, ≤ 500): sin ella no se ofrece
   «Informar pago»; con ella, los mails de cuota nueva y de vencida la incluyen (escapada).
+- **Medio de pago en columna (PL-F, M8c `saas_payment_method`).** `SaasPayment.method` (enum `SaasPaymentMethod`:
+  Transferencia, Efectivo, Tarjeta, Billetera, Mercado Pago, Otro; nullable). Antes viajaba como prefijo de la nota
+  («Medio: …»); ahora lo eligen «Informar pago» (consultorio) y «Registrar pago» (Plataforma), obligatorio, con
+  Transferencia por defecto, y la nota queda como la escribió la persona. Los pagos de antes de M8c (NULL) se muestran
+  «Sin informar»: no se hace backfill parseando notas. El cargo sugerido en los dos drawers es el **último impago**
+  (decisión de Martin, 16-oct); «A cuenta» sigue imputándose del más viejo (`applyCreditInTx`).
+- **Cambios de plan cuando se active el cobro (decisión de Martin, 16-oct; ⏳ pendiente de implementar, cierra AUDIT
+  a1#3).** La **bajada** rige desde el próximo período (el período en curso se cobra al plan que se usó); la **subida**
+  rige ya y cobra el **proporcional del resto del período** a la diferencia de precio; la **fecha de cobro queda fija**
+  (el anclaje no se mueve con el cambio). Hoy no hace falta: `SAAS_BILLING_MODE=off` y sin cobros activos. Se
+  implementa antes de prender `manual` en prod.
 
 ### ADR-017 — Verificación en dos pasos por usuario (status: ACCEPTED, PL-2a, 15-oct-2026)
 

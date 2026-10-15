@@ -543,7 +543,7 @@ export function DayLockDialog({
       const ok = await confirm({
         title: cancellable === 1 ? "¿Cancelar 1 turno?" : `¿Cancelar ${cancellable} turnos?`,
         message:
-          "Se bloquea el día y se cancelan los turnos de la lista. El paciente todavía no recibe aviso: avisale vos.",
+          "Se bloquea el día y se cancelan los turnos de la lista. El paciente no recibe aviso: avisale vos.",
         confirmLabel: "Cancelar turnos y bloquear",
         cancelLabel: "Volver",
         tone: "danger",
@@ -873,8 +873,8 @@ export function DayLockDialog({
           )}
           {preview.affected.length > 0 && (
             <div style={noteStyle}>
-              Si los cancelás, <strong>el paciente no recibe aviso todavía</strong> (el aviso por email llega
-              más adelante): avisale vos.
+              {/* PL-F1c: sin «todavía… llega más adelante»: no se promete una función que no está planificada. */}
+              Si los cancelás, <strong>el paciente no recibe aviso</strong>: avisale vos.
               {preview.affected.some((a) => a.hasPayment) &&
                 " Los que tienen un cobro registrado no se cancelan: quedan en la agenda para que los reprogrames o devuelvas el pago."}
               {(() => {

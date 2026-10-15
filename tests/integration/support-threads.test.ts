@@ -5,7 +5,8 @@
  * (`__setEmailTransportForTests`: el sink a EmailLog sigue corriendo).
  *
  * Se fija:
- *  - quién escribe: Titular, Admin con «Configuración», cualquiera con «Planes y pagos»; la Secretaria sin permisos no;
+ *  - quién escribe: cualquier miembro del consultorio (PL-F1b: Titular, Administrador/a, Profesional, Secretario/a,
+ *    Facturación), con o sin delegaciones; el superadmin «como soporte» no;
  *  - aislamiento: otro consultorio no lista, no abre, no responde ni marca un hilo ajeno (y no ve los leads);
  *  - la app no forja una respuesta de Plataforma (ni por la action, ni por SQL con RLS) ni cierra un hilo;
  *  - mail a `PLATFORM_INBOX_EMAIL` sin el texto del mensaje (puede traer un dato de paciente pegado);
@@ -24,7 +25,6 @@ import {
   replySupportThread,
 } from "@/lib/support-threads";
 import {
-  SUPPORT_NO_PERMISSION,
   SUPPORT_SESSION_COPY,
   SUPPORT_TEAM_NAME,
   SUPPORT_THREAD_CLOSED,
@@ -152,13 +152,42 @@ describe.skipIf(!RUN)("[PL-2d] Mensajes a soporte (consultorio)", () => {
     expect(await db.supportMessage.count({ where: { threadId: id, authorKind: "PLATFORM" } })).toBe(0);
   });
 
-  it("permisos: la Secretaria sin delegaciones no; con «Planes y pagos» sí", async () => {
-    asUser(secretaria);
-    expect(await createSupportThread({ subject: "Hola", body: "x" })).toEqual({ ok: false, error: SUPPORT_NO_PERMISSION });
-    expect(await listSupportThreads()).toEqual({ ok: false, error: SUPPORT_NO_PERMISSION });
+  it("con «Planes y pagos» (Secretaria delegada) escribe", async () => {
     asUser(facturacion);
     const r = await createSupportThread({ subject: `Factura ${uniqueSuffix()}`, body: "¿Me mandan la factura?" });
     expect(r.ok).toBe(true);
+  });
+
+  // PL-F1b (decisión de Martin, 16-oct, literal: «profesionales también, porque pueden necesitar ayuda con algo»):
+  // Mensajes es de CUALQUIER miembro. La bandeja es la del consultorio (un hilo del Titular lo ve y responde el
+  // Profesional), y el aislamiento entre consultorios no cambia.
+  it("[PL-F1b] Profesional, Secretaria sin delegaciones y Facturación escriben y leen los hilos de su consultorio, no los de otro", async () => {
+    const titular = await newThread(`Del titular ${uniqueSuffix()}`);
+    const kine = (await addPractitioner(db, A, "PRACTITIONER")).userId;
+    const billingRole = (await addPractitioner(db, A, "BILLING")).userId;
+    for (const userId of [kine, secretaria, billingRole]) {
+      asUser(userId);
+      const own = await createSupportThread({ subject: `Ayuda ${uniqueSuffix()}`, body: "¿Cómo cargo un turno?" });
+      expect(own.ok).toBe(true);
+      const list = await listSupportThreads();
+      expect(list.ok && list.data.some((t) => t.id === titular)).toBe(true);
+      expect(await getSupportThread(titular)).toMatchObject({ ok: true, data: { id: titular } });
+      expect(await replySupportThread({ threadId: titular, body: "Me sumo a la consulta" })).toMatchObject({ ok: true });
+      expect(await markSupportThreadRead(titular)).toEqual({ ok: true, data: undefined });
+      if (own.ok) {
+        const row = await db.supportMessage.findFirstOrThrow({ where: { threadId: own.data.threadId } });
+        expect(row).toMatchObject({ tenantId: A.tenantId, authorKind: "TENANT", authorUserId: userId });
+      }
+    }
+    expect(await db.supportMessage.count({ where: { threadId: titular, authorKind: "TENANT" } })).toBe(4);
+    // Un Profesional de OTRO consultorio no lo ve ni lo responde.
+    const kineB = (await addPractitioner(db, B, "PRACTITIONER")).userId;
+    asUser(kineB);
+    const listB = await listSupportThreads();
+    expect(listB.ok && listB.data.some((t) => t.id === titular)).toBe(false);
+    expect(await getSupportThread(titular)).toEqual({ ok: false, error: SUPPORT_THREAD_NOT_FOUND });
+    expect(await replySupportThread({ threadId: titular, body: "intruso" })).toEqual({ ok: false, error: SUPPORT_THREAD_NOT_FOUND });
+    expect(await db.supportMessage.count({ where: { threadId: titular } })).toBe(4);
   });
 
   it("aislamiento: otro consultorio no lista, no abre, no responde ni marca un hilo ajeno", async () => {

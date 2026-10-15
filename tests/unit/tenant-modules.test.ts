@@ -253,6 +253,12 @@ describe("nav único (C-EV2)", () => {
     expect(shortcutsFor(general).some((s) => s.href === "/planes")).toBe(false);
   });
 
+  it("[PL-F1b] «Reportes» (placeholder sin funcionalidad) no está en el nav ni en el ⌘K, en ningún consultorio", () => {
+    expect(NAV_ITEMS.some((i) => i.href === "/reportes")).toBe(false);
+    expect(hrefs(navFor(kine, ownerCaps))).not.toContain("/reportes");
+    expect(shortcutsFor(kine).some((s) => s.href === "/reportes")).toBe(false);
+  });
+
   it("General: sin Diagnóstico/Seguimiento/Ejercicios/Terapia manual/Reportes; con Sala de espera", () => {
     const h = hrefs(navFor(general, ownerCaps));
     for (const x of ["/diagnostico", "/seguimiento", "/biblioteca", "/terapia-manual", "/reportes"])
@@ -272,7 +278,6 @@ describe("nav único (C-EV2)", () => {
       "/seguimiento",
       "/biblioteca",
       "/terapia-manual",
-      "/reportes",
       "/configuracion",
     ]);
   });
@@ -305,7 +310,6 @@ describe("nav único (C-EV2)", () => {
       { id: "nav:diagnostico", category: "shortcut", label: "Diagnóstico", href: "/diagnostico" },
       { id: "nav:seguimiento", category: "shortcut", label: "Seguimiento", href: "/seguimiento" },
       { id: "nav:biblioteca", category: "shortcut", label: "Ejercicios", href: "/biblioteca" },
-      { id: "nav:reportes", category: "shortcut", label: "Reportes", href: "/reportes" },
     ]);
   });
 

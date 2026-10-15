@@ -184,10 +184,10 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
     const big = new Uint8Array(RECEIPT_MAX_BYTES + 1);
     big.set(PDF);
     const cases: FormData[] = [
-      form({ file: file(big, "application/pdf"), chargeId }),
-      form({ file: file(EXE, "application/pdf"), chargeId }), // MIME falso: un ejecutable que dice ser PDF
-      form({ file: file(PNG, "application/pdf"), chargeId }), // un PNG declarado como PDF
-      form({ file: file(EXE, "application/x-msdownload", "c.exe"), chargeId }),
+      form({ file: file(big, "application/pdf"), chargeId, method: "TRANSFER" }),
+      form({ file: file(EXE, "application/pdf"), chargeId, method: "TRANSFER" }), // MIME falso: un ejecutable que dice ser PDF
+      form({ file: file(PNG, "application/pdf"), chargeId, method: "TRANSFER" }), // un PNG declarado como PDF
+      form({ file: file(EXE, "application/x-msdownload", "c.exe"), chargeId, method: "TRANSFER" }),
     ];
     for (const fd of cases) {
       const r = await submitPaymentReceipt(fd);
@@ -201,7 +201,7 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
   });
 
   it("comprobante bueno → Storage con la clave del server, fila PENDING_REVIEW por lo que falta, audit en tx", async () => {
-    const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), chargeId, paidOn: toARDateKey(new Date()), note: "Transferencia" }));
+    const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), chargeId, paidOn: toARDateKey(new Date()), method: "TRANSFER", note: "Transferencia" }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const pay = await db.saasPayment.findUniqueOrThrow({ where: { id: r.data.paymentId } });
@@ -233,9 +233,40 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
     expect(supa.calls).toHaveLength(1);
   });
 
+  it("[PL-F1a] medio de pago: va a la columna (no a la nota); faltante o inválido → rechazo antes de Storage", async () => {
+    // Con la delegada: el rate limit de comprobantes es por usuario (10 cada 10 min) y el Titular ya lo usa en el resto.
+    asUser(billingUserId);
+    const before = await db.saasPayment.count({ where: { tenantId: A.tenantId } });
+    for (const bad of [{}, { method: "CHEQUE" }, { method: "transferencia" }] as Record<string, string>[]) {
+      const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), amount: "1.000", ...bad }));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.fieldErrors?.method?.length).toBe(1);
+    }
+    expect(supa.calls).toHaveLength(0);
+    expect(await db.saasPayment.count({ where: { tenantId: A.tenantId } })).toBe(before);
+
+    const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), amount: "1.000", method: "CASH", note: "en recepción" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const pay = await db.saasPayment.findUniqueOrThrow({ where: { id: r.data.paymentId } });
+    // La nota queda tal cual la escribió: sin el «Medio: …» que se usaba antes de M8c.
+    expect(pay).toMatchObject({ method: "CASH", note: "en recepción", status: "PENDING_REVIEW", amountCents: 100_000 });
+    const audit = await db.auditEvent.findFirstOrThrow({ where: { tenantId: A.tenantId, action: "billing.payment.submitted", entityId: r.data.paymentId } });
+    expect(audit.payload).toMatchObject({ method: "CASH" });
+    // Sin nota: queda null (antes quedaba «Medio: Transferencia»).
+    const r2 = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), amount: "1.000", method: "TRANSFER" }));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(await db.saasPayment.findUniqueOrThrow({ where: { id: r2.data.paymentId } })).toMatchObject({ method: "TRANSFER", note: null });
+    // La lectura del consultorio devuelve el medio (y null en los viejos, que la UI muestra «Sin informar»).
+    const o = await getBillingOverview();
+    expect(o.payments.find((p) => p.id === r.data.paymentId)).toMatchObject({ method: "CASH", note: "en recepción" });
+    await db.saasPayment.deleteMany({ where: { id: { in: [r.data.paymentId, r2.data.paymentId] } } });
+  });
+
   it("un cargo de otro consultorio → no encontrado, sin subir nada", async () => {
     asUser(B.userId);
-    const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), chargeId }));
+    const r = await submitPaymentReceipt(form({ file: file(PDF, "application/pdf"), chargeId, method: "TRANSFER" }));
     expect(r.ok).toBe(false);
     expect(supa.calls).toHaveLength(0);
     expect(await db.saasPayment.count({ where: { tenantId: B.tenantId } })).toBe(0);
@@ -370,7 +401,7 @@ describe.skipIf(!RUN)("[PL-2b] Configuración → Facturación", () => {
       const actor = await getActor();
       expect(actor.access.mode).toBe("read_only");
       expect(() => assertWritable(actor)).toThrow(ReadOnlyModeError);
-      const r = await submitPaymentReceipt(form({ file: file(PNG, "image/png", "c.png"), amount: "5.000" }));
+      const r = await submitPaymentReceipt(form({ file: file(PNG, "image/png", "c.png"), amount: "5.000", method: "TRANSFER" }));
       expect(r.ok).toBe(true);
       if (r.ok) {
         expect(await db.saasPayment.findUniqueOrThrow({ where: { id: r.data.paymentId } })).toMatchObject({

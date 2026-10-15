@@ -17,6 +17,7 @@ import {
   IconSettings,
   IconLogout,
   IconBookmark,
+  IconPalette,
 } from "@/components/ui/icons";
 import { useMemo, type ComponentType } from "react";
 import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
@@ -51,8 +52,9 @@ export const PLATFORM_HREF = "/plataforma";
 /**
  * Entradas del nav para el actor: módulos del tenant + capabilities del rol.
  * Es `navFor` pelado: Configuración declara `capability: "tenant.admin"` en
- * `lib/nav.ts` (configuracion/page.tsx redirige a cualquier otro rol), así que
- * no hace falta un filtro propio acá. Se mantiene el nombre porque lo comparten
+ * `lib/nav.ts` (la página se abre para cualquier miembro desde PL-F1b, pero el
+ * resto llega a Soporte por el menú de perfil), así que no hace falta un filtro
+ * propio acá. Se mantiene el nombre porque lo comparten
  * sidebar, topbar y los tests de render.
  */
 export function shellNavItems(
@@ -111,9 +113,15 @@ export function Sidebar({
   collapsed = false,
   isPlatformAdmin = false,
   caps = [],
+  onOpenAppearance,
 }: {
   collapsed?: boolean;
   isPlatformAdmin?: boolean;
+  /**
+   * PL-F1c: abre el panel «Apariencia» (ex Tweaks). Antes era un engranaje flotante fijo abajo a la derecha que
+   * tapaba el pie de los Drawers (zIndex 100 > 45); ahora vive acá, en el pie. Sin handler (tests), no se muestra.
+   */
+  onOpenAppearance?: () => void;
   /** Capabilities del rol (array: llega de un Server Component). Sin caps, falla cerrado. */
   caps?: readonly Capability[];
 }) {
@@ -272,6 +280,32 @@ export function Sidebar({
             on={active === config.href}
             collapsed={collapsed}
           />
+        )}
+        {onOpenAppearance && (
+          <button
+            type="button"
+            onClick={onOpenAppearance}
+            title={collapsed ? "Apariencia" : undefined}
+            aria-label="Apariencia"
+            style={{
+              all: "unset",
+              boxSizing: "border-box",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: collapsed ? 0 : "11px 14px",
+              width: collapsed ? 44 : "100%",
+              height: collapsed ? 40 : "auto",
+              color: "var(--navy-500)",
+              fontSize: 13.5,
+              justifyContent: collapsed ? "center" : "flex-start",
+              borderRadius: 12,
+            }}
+          >
+            <IconPalette size={18} />
+            {!collapsed && <span>Apariencia</span>}
+          </button>
         )}
         <form action="/api/auth/sign-out" method="post" style={{ width: "100%" }}>
           <button

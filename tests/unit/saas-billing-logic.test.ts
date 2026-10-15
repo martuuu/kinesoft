@@ -18,11 +18,13 @@ import {
   isOverdue,
   keyFromDbDate,
   nextSubscriptionStatus,
+  payableChargesNewestFirst,
   periodFor,
   periodStartOnOrBefore,
   receiptStorageKey,
   RECEIPT_MAX_BYTES,
   remainingCents,
+  suggestedChargeId,
   sniffReceiptType,
 } from "@/lib/saas-billing-logic";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -153,5 +155,29 @@ describe("[PL-2b] comprobantes: magic bytes", () => {
   });
   it("clave del objeto: <tenantId>/<paymentId>.<ext>", () => {
     expect(receiptStorageKey("t1", "p1", "pdf")).toBe("t1/p1.pdf");
+  });
+});
+
+describe("[PL-F1a] cargo sugerido al pagar: el último impago", () => {
+  const c = (id: string, periodStart: string, status: "OPEN" | "PAID" | "VOID" | "WAIVED" = "OPEN", remainingCents = 100) => ({
+    id,
+    periodStart,
+    status,
+    remainingCents,
+  });
+  const charges = [
+    c("old", "2026-08-10"),
+    c("paid", "2026-10-10", "PAID", 0),
+    c("new", "2026-09-10"),
+    c("zero", "2026-11-10", "OPEN", 0),
+    c("void", "2026-12-10", "VOID"),
+  ];
+  it("pendientes con saldo, del período más reciente al más viejo (cerrados y sin saldo afuera)", () => {
+    expect(payableChargesNewestFirst(charges).map((x) => x.id)).toEqual(["new", "old"]);
+  });
+  it("sugiere el más reciente (no el más viejo); sin pendientes → \"\" (a cuenta)", () => {
+    expect(suggestedChargeId(charges)).toBe("new");
+    expect(suggestedChargeId([c("p", "2026-09-10", "PAID", 0)])).toBe("");
+    expect(suggestedChargeId([])).toBe("");
   });
 });

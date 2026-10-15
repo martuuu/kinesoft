@@ -8,7 +8,7 @@
  */
 import type {
   SaasChargeStatus,
-  SaasPaymentSource,
+  SaasPaymentMethod,
   SaasPaymentStatus,
   SaasPlan,
   SubscriptionStatus,
@@ -155,48 +155,28 @@ export const PAYMENT_STATUS_LABEL: Record<SaasPaymentStatus, string> = {
   REFUNDED: "Devuelto",
 };
 
-export const PAYMENT_SOURCE_LABEL: Record<SaasPaymentSource, string> = {
-  MANUAL: "Manual",
-  MP_AUTO: "Débito de Mercado Pago",
-  MP_CHECKOUT: "Mercado Pago",
-};
-
 // ── Registrar pago ──────────────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * Medio de pago. El schema no tiene columna (M8): viaja como prefijo de la nota («Medio: Transferencia. …»), que es
- * lo que ve Plataforma en el ledger y queda en el pago. Default PL3c-D1.
- */
-export const PAYMENT_METHODS = [
-  { value: "transfer", label: "Transferencia" },
-  { value: "cash", label: "Efectivo" },
-  { value: "deposit", label: "Depósito" },
-  { value: "mp_link", label: "Mercado Pago (link o QR)" },
-  { value: "other", label: "Otro" },
-] as const;
-export type PaymentMethod = (typeof PAYMENT_METHODS)[number]["value"];
+// PL-F1a: se quitaron `PAYMENT_SOURCE_LABEL` («Manual» / «Débito de Mercado Pago» / «Mercado Pago»: sin cobro por MP
+// todo pago es MANUAL, la columna no decía nada) y los medios de pago propios con `composePaymentNote` (el medio iba
+// como prefijo de la nota porque M8 no tenía columna). El medio ahora es `SaasPayment.method` (M8c) con
+// `SAAS_PAYMENT_METHODS` / `SAAS_PAYMENT_METHOD_LABEL` de lib/saas-billing-types.ts, los mismos que el consultorio.
 
 export const NOTE_MAX = 500;
-
-export function composePaymentNote(method: PaymentMethod, note: string): string {
-  const label = PAYMENT_METHODS.find((m) => m.value === method)?.label ?? "Otro";
-  const rest = note.trim();
-  return (rest ? `Medio: ${label}. ${rest}` : `Medio: ${label}.`).slice(0, NOTE_MAX);
-}
 
 export type RecordPaymentState = {
   amountCents: number | null;
   /** «YYYY-MM-DD» del `<input type="date">`. */
   paidOn: string;
-  method: PaymentMethod;
+  method: SaasPaymentMethod;
   note: string;
-  /** "" = el cargo pendiente más viejo (lo elige el server). */
+  /** Cargo a imputar. Default (PL-F1a): el último impago. "" = a cuenta (el núcleo lo aplica del más viejo). */
   chargeId: string;
   file: { name: string; size: number; type: string } | null;
 };
 
-export function emptyRecordPayment(now: Date, amountCents: number | null = null): RecordPaymentState {
-  return { amountCents, paidOn: toARDateKey(now), method: "transfer", note: "", chargeId: "", file: null };
+export function emptyRecordPayment(now: Date, amountCents: number | null = null, chargeId = ""): RecordPaymentState {
+  return { amountCents, paidOn: toARDateKey(now), method: "TRANSFER", note: "", chargeId, file: null };
 }
 
 export function isRecordPaymentDirty(s: RecordPaymentState, initial: RecordPaymentState): boolean {
@@ -224,7 +204,7 @@ export function validateRecordPayment(s: RecordPaymentState, now: Date): Record<
   if (!s.file) e.file = "Adjuntá el comprobante (PDF, JPG, PNG o WEBP de hasta 4 MB).";
   else if (s.file.size > RECEIPT_MAX_BYTES) e.file = "El comprobante pesa más de 4 MB.";
   else if (!(RECEIPT_MIME_TYPES as readonly string[]).includes(s.file.type)) e.file = "Subí un PDF, JPG, PNG o WEBP.";
-  if (s.note.length > NOTE_MAX - 40) e.note = `La nota puede tener hasta ${NOTE_MAX - 40} caracteres.`;
+  if (s.note.trim().length > NOTE_MAX) e.note = `La nota puede tener hasta ${NOTE_MAX} caracteres.`;
   return e;
 }
 
@@ -239,7 +219,9 @@ export function buildPaymentFormData(tenantId: string, s: RecordPaymentState, fi
   fd.set("amount", formatMoneyInput(s.amountCents));
   fd.set("paidOn", s.paidOn);
   if (s.chargeId) fd.set("chargeId", s.chargeId);
-  fd.set("note", composePaymentNote(s.method, s.note));
+  fd.set("method", s.method);
+  // PL-F1a: la nota va tal cual (sin el «Medio: …» de antes de M8c).
+  if (s.note.trim()) fd.set("note", s.note.trim());
   fd.set("file", file);
   return fd;
 }

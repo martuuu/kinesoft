@@ -29,18 +29,24 @@ export const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
   CANCELLED: "Cancelada",
 };
 
-/** Nombre visible de cada módulo (chips del detalle). */
-export const MODULE_LABEL: Record<TenantModule, string> = {
+/**
+ * Nombre visible de cada módulo (chips del detalle). `null` = no se muestra el chip (PL-F1c, regla de Martin del
+ * 16-oct «lo que quede sin funcionalidad, se quita»): `reportes` era una pantalla placeholder (ahora redirige a
+ * /dashboard) y `evoluciones` no tiene pantalla hasta EV2 — cuando EV2 exista, vuelve a «Evoluciones». Mismo
+ * criterio que `MODULE_UI_LABEL` de `lib/saas-billing-view.ts` (lo que ve el consultorio en «Plan y uso»).
+ */
+export const MODULE_LABEL: Record<TenantModule, string | null> = {
   agenda: "Agenda",
   pacientes: "Pacientes",
   facturacion: "Facturación",
   obrasSociales: "Obras sociales",
   // PL-1a (C-PL1): evoluciones en el núcleo; salas y sala de espera, de Clínica/Libre.
-  evoluciones: "Evoluciones",
+  // PL-F1c: filtrado hasta que EV2 tenga la pantalla (entonces vuelve a "Evoluciones").
+  evoluciones: null,
   salas: "Salas",
   salaEspera: "Sala de espera",
   turneroPublico: "Turnos online",
-  reportes: "Reportes",
+  reportes: null,
   planes: "Planes de tratamiento",
   sesiones: "Sesiones",
   diagnostico: "Diagnóstico",
@@ -50,6 +56,16 @@ export const MODULE_LABEL: Record<TenantModule, string> = {
   favoritos: "Favoritos",
   ejerciciosGlobales: "Catálogo de la plataforma",
 };
+
+/** Módulos con chip visible (sin los `null` de `MODULE_LABEL`), en el orden recibido. */
+export function visibleModuleChips(mods: readonly TenantModule[]): { module: TenantModule; label: string }[] {
+  const out: { module: TenantModule; label: string }[] = [];
+  for (const m of mods) {
+    const label = MODULE_LABEL[m];
+    if (label) out.push({ module: m, label });
+  }
+  return out;
+}
 
 /**
  * "YYYY-MM-DD" (día AR, como viene `trialEndsOn`) → "21 de oct de 2026". Se ancla al

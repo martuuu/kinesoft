@@ -36,7 +36,9 @@ describe("ReceptionView render", () => {
     expect(html).toContain("En sala 15&#x27;");
     expect(html).toContain("Marcar Llegó: Paciente demorado, 09:40");
     expect(html).toContain("Deshacer (vuelve a Por llegar): Paciente sala, 09:50");
-    expect(html).toContain('title="Próximamente"');
+    // [PL-F1c] el «Cobrar» deshabilitado («Próximamente») se quitó: nada de botones a medio hacer.
+    expect(html).not.toContain("Próximamente");
+    expect(html).not.toContain(">Cobrar<");
     expect(html).toContain("Invitado");
     expect(html).toContain("1/6");
     // en atención primero

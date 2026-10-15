@@ -219,20 +219,9 @@ export function ReceptionRow({
                 {RECEPTION_ACTION_LABEL[a]}
               </button>
             ))}
-            {/* Cobro desde recepción: C0 (Secretaria). Visible para que se sepa
-                que viene; aria-disabled en vez de disabled para que el tooltip
-                se vea al pasar el mouse. */}
-            <button
-              type="button"
-              className="rcp-btn rcp-btn-ghost"
-              aria-disabled="true"
-              title="Próximamente"
-              aria-label={`Cobrar (próximamente): ${who}`}
-              onClick={(e) => e.preventDefault()}
-              style={{ cursor: "not-allowed", opacity: 0.55 }}
-            >
-              Cobrar
-            </button>
+            {/* PL-F1c: acá había un «Cobrar» deshabilitado («Próximamente»). Se quitó por la regla de Martin del
+                16-oct (nada de botones a medio hacer). El cobro desde recepción es C0 (Secretaria): vuelve cuando
+                abra el drawer en el cobro del copago de verdad. */}
           </div>
         ) : (
           <span style={{ color: "var(--navy-300)" }}>—</span>

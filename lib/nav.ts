@@ -93,10 +93,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // Terapia manual = biblioteca de maniobras: es la parte "kine" de la
   // biblioteca, sin módulo propio en la matriz → va con `ejercicios`.
   { href: "/terapia-manual", label: "Terapia Manual", icon: "activity", module: "ejercicios" },
-  { href: "/reportes", label: "Reportes", icon: "chart", module: "reportes", shortcut: "Reportes" },
-  // El sidebar la ubica en el pie; la entrada es una sola. Solo admins:
-  // configuracion/page.tsx redirige a cualquier otro rol, y `capability` la
-  // esconde acá para sidebar y topbar.
+  // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
+  // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige otra sesión. El módulo `reportes`
+  // y el ícono `chart` quedan: la matriz de módulos y el mapa del sidebar no cambian.
+  // El sidebar la ubica en el pie; la entrada es una sola. Solo `tenant.admin`: desde PL-F1b la página se abre para
+  // cualquier miembro (un Profesional ve solo «Soporte»), pero en el nav «Configuración» sigue siendo de quien
+  // configura; el resto llega a Soporte por «Ayuda y soporte» del menú de perfil (components/global/profile-menu.tsx).
   { href: "/configuracion", label: "Configuración", icon: "settings", capability: "tenant.admin" },
 ];
 

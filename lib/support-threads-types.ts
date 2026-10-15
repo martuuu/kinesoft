@@ -46,8 +46,6 @@ export const LEAD_MIN_FILL_MS = 3_000;
 /** Aviso en todo lugar donde se escribe (consultorio, Plataforma y landing). */
 export const NO_PATIENT_DATA_COPY = "No incluyas datos de pacientes.";
 export const SUPPORT_TEAM_NAME = "Equipo de KineSoft";
-export const SUPPORT_NO_PERMISSION =
-  "Solo el titular, quien administra la configuración o quien tiene «Planes y pagos» puede escribirle a soporte.";
 /** El superadmin «como soporte» no escribe en nombre del consultorio: para eso tiene la bandeja de /plataforma. */
 export const SUPPORT_SESSION_COPY = "Entraste como soporte: los mensajes los escribe el consultorio. Respondé desde /plataforma → Mensajes.";
 export const SUPPORT_THREAD_NOT_FOUND = "No encontramos esa conversación. Recargá la página.";

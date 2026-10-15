@@ -11,7 +11,18 @@ const nav = vi.hoisted(() => ({ pathname: "/dashboard", search: "" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => nav.pathname,
   useSearchParams: () => new URLSearchParams(nav.search),
+  // PL-F1c: el topbar monta la `NotificationsBell` real (usa el router y su action de lectura).
+  useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }),
 }));
+vi.mock("@/lib/notifications", () => ({
+  listNotifications: async () => ({ rows: [], unread: 0 }),
+  markAllNotificationsRead: async () => ({ ok: true }),
+  markNotificationRead: async () => ({ ok: true }),
+}));
+// PL-F (handoff 8): el menú de cuenta del topbar suma «Ayuda y soporte» (de profile-menu) y el switch del turnero
+// propio: sus server actions (red) se mockean; sin esto `lib/session` llama a `cache` de React fuera de Next.
+vi.mock("@/lib/preferences", () => ({ updateUserPreferences: async () => ({ ok: true, data: undefined }) }));
+vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: undefined }) }));
 
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopBar } from "@/components/layout/topbar";
@@ -67,7 +78,8 @@ const activeHrefs = (html: string) =>
     .filter((a) => a.includes('aria-current="page"'))
     .map((a) => (a.match(/href="([^"]+)"/)?.[1] ?? "").replace(/&amp;/g, "&"));
 
-const KINE_ONLY = ["Diagnóstico", "Seguimiento", "Ejercicios", "Terapia Manual", "Reportes"];
+// PL-F1b: «Reportes» salió del nav (placeholder sin funcionalidad); se sigue afirmando que no aparece.
+const KINE_ONLY = ["Diagnóstico", "Seguimiento", "Ejercicios", "Terapia Manual"];
 
 beforeEach(() => {
   nav.pathname = "/dashboard";
@@ -92,9 +104,10 @@ describe("[EV0-EV-S] sidebar por módulos", () => {
         "/seguimiento",
         "/biblioteca",
         "/terapia-manual",
-        "/reportes",
       ])
     );
+    expect(html).not.toContain(">Reportes<");
+    expect(hrefs(html)).not.toContain("/reportes");
   });
 
   it("BILLING no ve Sala de espera (no tiene agenda.reception); PRACTITIONER sí", () => {
@@ -102,7 +115,8 @@ describe("[EV0-EV-S] sidebar por módulos", () => {
     expect(sidebar(KINE_PRO, "PRACTITIONER")).toContain(">Sala de espera<");
   });
 
-  it("Configuración solo con tenant.admin (la página redirige a los demás roles)", () => {
+  // PL-F1b: la página ya no redirige (cualquier miembro entra a Soporte, desde el menú de perfil); el nav sigue igual.
+  it("Configuración en el nav solo con tenant.admin", () => {
     expect(hrefs(sidebar(KINE_PRO, "OWNER"))).toContain("/configuracion");
     expect(hrefs(sidebar(KINE_PRO, "PRACTITIONER"))).not.toContain("/configuracion");
     expect(hrefs(sidebar(KINE_PRO, "ASSISTANT"))).not.toContain("/configuracion");

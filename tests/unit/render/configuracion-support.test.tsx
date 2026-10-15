@@ -27,11 +27,32 @@ vi.mock("@/lib/saas-billing", () => ({
   submitPaymentReceipt: async () => ({ ok: false, error: "x" }),
 }));
 vi.mock("@/lib/two-factor", () => ({ getStepUpOptions: async () => ({ ok: false, error: "x" }) }));
+// PL-F1b: `ConfiguracionClient` importa todos los paneles y, con ellos, server actions que tocan lib/session
+// (`React.cache` solo existe en el runtime de RSC) y next/cache.
+vi.mock("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: () => {}, unstable_cache: (f: unknown) => f }));
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return { ...actual, default: actual, cache: <T,>(fn: T) => fn };
+});
+// PL-F1b: el menú de perfil monta el switch del propio turnero (server action: red).
+vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: undefined }) }));
+// PL-F1b: la página entera (`ConfiguracionClient`) monta Mensajes, que trae las server actions de soporte (red).
+vi.mock("@/lib/support-threads", () => ({
+  listSupportThreads: async () => ({ ok: true, data: [] }),
+  getSupportThread: async () => ({ ok: false, error: "x" }),
+  createSupportThread: async () => ({ ok: true, data: { threadId: "t" } }),
+  replySupportThread: async () => ({ ok: true, data: { messageId: "m" } }),
+  markSupportThreadRead: async () => ({ ok: true, data: undefined }),
+}));
 
 import { SupportAccessPanel, supportEndedLabel, supportWhen } from "@/components/configuracion/panels/support-access-panel";
 import { PlanUsagePanel } from "@/components/configuracion/panels/plan-usage-panel";
 import { GeneralPanel } from "@/components/configuracion/panels/general-panel";
-import { TabsBar, parseConfigTab } from "@/components/configuracion/controls";
+import { TabsBar, initialConfigTab, parseConfigTab, visibleConfigTabs } from "@/components/configuracion/controls";
+import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
+import { ProfileMenu, SUPPORT_HELP_HREF } from "@/components/global/profile-menu";
+import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
+import { DEFAULT_PREFERENCES } from "@/lib/preferences-constants";
 import { TweaksProvider } from "@/components/layout/tweaks-context";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
@@ -164,8 +185,8 @@ describe("[BO3-F] pestañas", () => {
     // Delegado con «Planes y pagos» (`grantBilling`) y sin Configuración: solo lo de la cuenta.
     const billingOnly = t({ tenantAdmin: false, billing: true, team: false });
     expect(billingOnly).toEqual(["Plan y uso", "Facturación", "Soporte"]);
-    // Sin ninguna de las dos: nada.
-    expect(t({ tenantAdmin: false, billing: false, team: false })).toEqual([]);
+    // Sin ninguna de las dos: solo Soporte (PL-F1b).
+    expect(t({ tenantAdmin: false, billing: false, team: false })).toEqual(["Soporte"]);
   });
 
   it("?tab= abre la pestaña (el mail de soporte usa ?tab=soporte); lo desconocido cae en General", () => {
@@ -174,6 +195,78 @@ describe("[BO3-F] pestañas", () => {
     expect(parseConfigTab("facturacion")).toBe("facturacion");
     expect(parseConfigTab("hackeo")).toBe("general");
     expect(parseConfigTab(undefined)).toBe("general");
+  });
+});
+
+// PL-F1b (decisión de Martin, 16-oct, literal: «profesionales también, porque pueden necesitar ayuda con algo»):
+// Configuración se abre para cualquier miembro; sin permisos, ve solo «Soporte» (Mensajes + Accesos de soporte).
+describe("[PL-F1b] Soporte para cualquier miembro", () => {
+  const NONE = { tenantAdmin: false, billing: false, team: false, canExport: false };
+
+  it("[PL-F1b] un Profesional, Secretario/a o Facturación sin delegaciones ve solo «Soporte» y entra directo ahí", () => {
+    expect(tabs(renderToStaticMarkup(<TabsBar tab="soporte" setTab={() => {}} access={NONE} modules={KINE} />))).toEqual(["Soporte"]);
+    for (const role of ["PRACTITIONER", "ASSISTANT", "BILLING"] as const) {
+      expect(tabs(renderToStaticMarkup(<TabsBar tab="soporte" setTab={() => {}} role={role} modules={KINE} />))).toEqual(["Soporte"]);
+    }
+    const v = visibleConfigTabs(NONE, KINE);
+    expect(initialConfigTab(undefined, v)).toBe("soporte");
+    expect(initialConfigTab("general", v)).toBe("soporte");
+  });
+
+  function page(role: "OWNER" | "ADMIN" | "PRACTITIONER" | "ASSISTANT", access: typeof NONE) {
+    return renderToStaticMarkup(
+      <ToastProvider>
+        <ConfirmProvider>
+          <TweaksProvider>
+            <ConfiguracionClient
+              role={role}
+              access={{ tenantAdmin: access.tenantAdmin, billing: access.billing, team: access.team }}
+              modules={KINE}
+              tenant={null}
+              insurers={[]}
+              services={[]}
+              team={[]}
+              pending={[]}
+              practitioners={[]}
+              customConditions={[]}
+              locations={[]}
+              rooms={[]}
+              scheduleSummary={[]}
+              planUsage={null}
+              supportSessions={[OPEN]}
+              initialTab="soporte"
+            />
+          </TweaksProvider>
+        </ConfirmProvider>
+      </ToastProvider>
+    );
+  }
+
+  it("[PL-F1b] el Profesional y la Secretaria ven Mensajes y los Accesos de soporte, sin acción para terminarlos", () => {
+    for (const role of ["PRACTITIONER", "ASSISTANT"] as const) {
+      const html = page(role, NONE);
+      expect(tabs(html)).toEqual(["Soporte"]);
+      expect(html).toContain("Mensajes con soporte");
+      expect(html).toContain("soporte@kinesoft.ar");
+      expect(html).toContain("Ayuda con las obras sociales");
+      expect(html).not.toMatch(/Terminar/);
+    }
+  });
+
+  it("[PL-F1b] el menú de perfil lleva a «Ayuda y soporte» (`/configuracion?tab=soporte`) a cualquiera", () => {
+    expect(SUPPORT_HELP_HREF).toBe("/configuracion?tab=soporte");
+    const html = renderToStaticMarkup(
+      <TenantModulesProvider modules={KINE} vertical="KINESIOLOGY">
+        <ProfileMenu name="Kine Tres" preferences={DEFAULT_PREFERENCES} defaultOpen />
+      </TenantModulesProvider>
+    );
+    expect(html).toMatch(/<a href="\/configuracion\?tab=soporte" role="menuitem"[^>]*>.*Ayuda y soporte<\/a>/);
+  });
+
+  it("el Titular ve lo mismo en Soporte (y el resto de sus pestañas)", () => {
+    const html = page("OWNER", { tenantAdmin: true, billing: true, team: true, canExport: true });
+    expect(tabs(html)).toContain("General");
+    expect(html).toContain("soporte@kinesoft.ar");
   });
 });
 

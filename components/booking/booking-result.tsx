@@ -125,9 +125,10 @@ export function BookingResult({
           </h1>
           <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
             {effectiveVariant === "ok"
-              ? "Te mandamos un email con los detalles."
+              ? // PL-F1c: no se manda ningún email de confirmación (es C1): no prometerlo.
+                "Abajo tenés los detalles. También lo ves en «Mis turnos»."
               : effectiveVariant === "pending"
-                ? "Apenas Mercado Pago lo confirme te avisamos. No cierres esta pestaña."
+                ? "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola. No la cierres."
                 : "Probá nuevamente con otra forma de pago."}
           </p>
 
