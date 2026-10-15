@@ -178,7 +178,7 @@ describe("copy y labels", () => {
   });
   it("labels de vertical y plan", () => {
     expect(VERTICAL_LABEL).toEqual({
-      GENERAL: "Consultorio general",
+      GENERAL: "Clínica general",
       KINESIOLOGY: "Kinesiología y osteopatía",
     });
     expect(PLAN_LABEL).toEqual({ FREE: "Free", STARTER: "Base", PRO: "PRO", ENTERPRISE: "Enterprise" });

@@ -126,6 +126,7 @@ import {
 } from "@/lib/bookings-types";
 import type { ReceptionAction } from "@/lib/reception-state";
 import { bookablePractitionerWhere, isActorPractitioner } from "@/lib/practitioner-scope";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 
 export async function listBookingsInRange(opts: {
   from: Date;
@@ -1046,7 +1047,7 @@ export async function createBooking(
           month: "short",
           hour: "2-digit",
           minute: "2-digit",
-          hour12: false,
+          hourCycle: "h23",
           timeZone: "America/Argentina/Buenos_Aires",
         }),
         link: `/agenda?date=${toARDateKey(data.scheduledFor)}`,
@@ -1062,6 +1063,9 @@ export async function createBooking(
     ]);
     return { ok: true, data: { id: b.id } };
   } catch (e) {
+    // BO3-F: modo lectura / soporte → su copy (antes caía en «No pudimos crear el turno.»).
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     // The partial unique index (tenant+patient+slot, non-cancelled) is the
     // race-free backstop for the patient-day guard: a genuinely-concurrent
     // second create at the same slot loses the INSERT race here. Two
@@ -1096,7 +1100,15 @@ type UpdateBookingResult = ActionResult<{ updatedAt: Date }> & {
   notice?: string;
 };
 
+// BO3-F: el cuerpo va en `updateBookingImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
 export async function updateBooking(
+  ...args: Parameters<typeof updateBookingImpl>
+): Promise<UpdateBookingResult> {
+  return withReadOnlyResult(() => updateBookingImpl(...args));
+}
+
+async function updateBookingImpl(
   raw: BookingUpdateInput & {
     allowOverbooking?: boolean;
     // Same flag as createBooking: the front desk confirmed the patient may
@@ -1254,7 +1266,7 @@ export async function updateBooking(
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      hourCycle: "h23",
       timeZone: "America/Argentina/Buenos_Aires",
     });
     if (patch.status === "CANCELLED") {
@@ -1342,7 +1354,15 @@ export async function setBookingStatus(
  *
  * Devuelve el `updatedAt` nuevo (ISO) para el próximo click sin refetch.
  */
+// BO3-F: el cuerpo va en `markReceptionActionImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
 export async function markReceptionAction(
+  ...args: Parameters<typeof markReceptionActionImpl>
+): Promise<ActionResult<ReceptionActionResult>> {
+  return withReadOnlyResult(() => markReceptionActionImpl(...args));
+}
+
+async function markReceptionActionImpl(
   bookingId: string,
   action: ReceptionAction,
   expectedUpdatedAt: string
@@ -1481,7 +1501,7 @@ export async function markReceptionAction(
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
-        hour12: false,
+        hourCycle: "h23",
         timeZone: "America/Argentina/Buenos_Aires",
       }),
       link: `/agenda?date=${toARDateKey(row.scheduledFor)}`,
@@ -1526,7 +1546,15 @@ export async function markReceptionAction(
   };
 }
 
+// BO3-F: el cuerpo va en `deleteBookingImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
 export async function deleteBooking(
+  ...args: Parameters<typeof deleteBookingImpl>
+): Promise<ActionResult> {
+  return withReadOnlyResult(() => deleteBookingImpl(...args));
+}
+
+async function deleteBookingImpl(
   id: string,
   expectedUpdatedAt?: string
 ): Promise<ActionResult> {
@@ -1878,12 +1906,12 @@ export async function setBookingInsurerPaid(
   paid: boolean,
   expectedUpdatedAt?: string
 ): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
-  return toggleBilling(
+  return withReadOnlyResult(() => toggleBilling(
     id,
     { insurerPaidAt: paid ? new Date() : null },
     expectedUpdatedAt,
     paid ? "booking.insurer_paid" : "booking.insurer_unpaid"
-  );
+  ));
 }
 
 /**
@@ -1905,13 +1933,13 @@ export async function setBookingCopagoPaid(
   paid: boolean,
   expectedUpdatedAt?: string
 ): Promise<ActionResult<{ updatedAt: Date; notice?: string }>> {
-  return toggleBilling(
+  return withReadOnlyResult(() => toggleBilling(
     id,
     { paymentStatus: paid ? "PAID" : "UNPAID", copagoPaidAt: paid ? new Date() : null },
     expectedUpdatedAt,
     paid ? "booking.copago_paid" : "booking.copago_unpaid",
     { freezeCopago: paid }
-  );
+  ));
 }
 
 /**
@@ -1976,7 +2004,15 @@ export type BatchOutcome = {
  * fuera de horario es solo el flag `outOfHours`, decisión 2). `count` validado
  * con zod (antes un NaN reventaba).
  */
+// BO3-F: el cuerpo va en `createBookingsBatchImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
 export async function createBookingsBatch(
+  ...args: Parameters<typeof createBookingsBatchImpl>
+): Promise<ActionResult<BatchOutcome>> {
+  return withReadOnlyResult(() => createBookingsBatchImpl(...args));
+}
+
+async function createBookingsBatchImpl(
   raw: BookingBatchCreateInput & {
     idempotencyKey?: string;
     dryRun?: boolean;
@@ -2337,6 +2373,10 @@ export async function createBookingsBatch(
       });
       if (w.isOverbook) sobreturnos++;
     } catch (e) {
+      // BO3-F: la tx de la fecha chocó contra el modo lectura / soporte: no se escribió nada y las demás fechas
+      // chocarían igual. Se corta con el copy en vez de contarla como «omitida» y devolver ok con 0 creados.
+      const ro = readOnlyFailure(e);
+      if (ro) return ro;
       // A patient+instant collision that the preflight missed (someone else
       // booked it in between) is a DUPLICATE, not a mystery failure — the old
       // catch-all lumped it into "omitidos por conflicto" with no explanation.

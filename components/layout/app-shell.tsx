@@ -37,6 +37,9 @@ import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher
  * IAM-3b (decisión 6: un usuario puede trabajar en varios consultorios): `TenantChoiceProvider` publica los
  * consultorios usables de la sesión y el activo, que el layout ya leyó para el gate. Lo leen el selector del
  * sidebar y el «Cambiar de consultorio» del menú de perfil (que vive en el dashboard, dentro de este árbol).
+ *
+ * BO3-F: `banner` es la banda de soporte (`SupportBanner`, la arma el layout cuando `actor.support`). Va arriba de la
+ * columna de contenido y no arriba de todo: el sidebar es sticky y una banda sticky de ancho completo lo pisaba.
  */
 export function AppShell({
   children,
@@ -49,8 +52,11 @@ export function AppShell({
   tenantOptions = [],
   activeTenantId = null,
   switchTenantAction = null,
+  banner = null,
 }: {
   children: ReactNode;
+  /** BO3-F: banda de soporte (null fuera de soporte). */
+  banner?: ReactNode;
   isPlatformAdmin?: boolean;
   modules: readonly TenantModule[];
   caps: readonly Capability[];
@@ -83,6 +89,7 @@ export function AppShell({
                 <Sidebar collapsed={t.sidebarCollapsed} isPlatformAdmin={isPlatformAdmin} caps={caps} />
               )}
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                {banner}
                 {!useSidebar && <TopBar caps={caps} isPlatformAdmin={isPlatformAdmin} />}
                 <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
               </div>

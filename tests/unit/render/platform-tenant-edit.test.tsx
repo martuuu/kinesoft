@@ -9,6 +9,8 @@ import { renderToStaticMarkup } from "react-dom/server";
  * confirm; nunca las funciones bajo test.
  */
 vi.mock("@/lib/platform-tenants", () => ({ updatePlatformTenant: vi.fn() }));
+// BO3-B: el Resumen monta «Editar datos» (lifecycle) y el header el soporte; sin DB en unit.
+vi.mock("@/lib/platform-tenant-lifecycle", () => ({ updatePlatformTenantProfile: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), show: vi.fn(), dismiss: vi.fn() }),
@@ -25,7 +27,8 @@ import {
 } from "@/components/plataforma/tenants/tenant-edit-drawer";
 import { TenantList, buildListHref } from "@/components/plataforma/tenants/tenant-list";
 import { PlatformOverviewView, verticalPlanMatrix } from "@/components/plataforma/tenants/tenant-overview";
-import { TenantDetailView } from "@/components/plataforma/tenants/tenant-detail";
+import { TenantSummaryView } from "@/components/plataforma/tenants/tenant-detail";
+import { TenantSubscriptionView } from "@/components/plataforma/tenants/tenant-subscription";
 import { trialDaysLabel, formatDayKeyAR, formatAuditValue } from "@/components/plataforma/tenants/labels";
 import type {
   PlatformOverview,
@@ -62,6 +65,8 @@ const row = (over: Partial<PlatformTenantRow> = {}): PlatformTenantRow => ({
 
 const detail = (over: Partial<PlatformTenantDetail> = {}): PlatformTenantDetail => ({
   ...row(),
+  legalName: null,
+  taxId: null,
   phone: "+54 11 5555-5555",
   whatsapp: null,
   publicEmail: "hola@movare.test",
@@ -147,7 +152,7 @@ describe("[EV0-P3] buildUpdatePayload", () => {
     expect(isGeneralDowngrade("GENERAL", "GENERAL")).toBe(false);
     expect(isGeneralDowngrade("GENERAL", "KINESIOLOGY")).toBe(false);
     expect(GENERAL_DOWNGRADE_COPY).toBe(
-      "Pasar a Consultorio general oculta Planes, Sesiones, Diagnóstico y Ejercicios. No se borra nada.",
+      "Pasar a Clínica general oculta Planes, Sesiones, Diagnóstico y Ejercicios. No se borra nada.",
     );
   });
 });
@@ -179,11 +184,11 @@ describe("[EV0-P3] TenantEditForm (render)", () => {
     expect(html).toContain("Turnos online");
   });
 
-  it("el hint del plan en Consultorio general", () => {
+  it("el hint del plan en Clínica general", () => {
     expect(render({ form: { ...base, vertical: "GENERAL" } })).toContain(
-      "En Consultorio general el plan no cambia módulos todavía",
+      "En Clínica general el plan no cambia módulos todavía",
     );
-    expect(render()).not.toContain("En Consultorio general el plan no cambia módulos todavía");
+    expect(render()).not.toContain("En Clínica general el plan no cambia módulos todavía");
   });
 
   it("muestra el error de stale y deshabilita guardar sin cambios", () => {
@@ -249,6 +254,7 @@ describe("[EV0-P3] TenantList (render)", () => {
 describe("[EV0-P3] Resumen (render)", () => {
   const overview: PlatformOverview = {
     totalTenants: 3,
+    byStatus: { ACTIVE: 2, SUSPENDED: 1, CLOSED: 0 },
     byVerticalPlan: [
       { vertical: "KINESIOLOGY", plan: "PRO", count: 2 },
       { vertical: "GENERAL", plan: "FREE", count: 1 },
@@ -295,15 +301,17 @@ describe("[EV0-P3] Resumen (render)", () => {
 });
 
 describe("[EV0-P3] Detalle (render)", () => {
-  it("datos de solo lectura, chips de módulos, conteos, eventos before→after y link al turnero", () => {
-    const html = renderToStaticMarkup(<TenantDetailView detail={detail()} />);
+  it("[BO3-B] Resumen: datos, chips de módulos, conteos, eventos before→after y link al turnero; la suscripción en su pestaña", () => {
+    const html = renderToStaticMarkup(<TenantSummaryView detail={detail()} seats={null} />);
     expect(html).toContain("hola@movare.test");
     expect(html).toContain("Planes de tratamiento");
     expect(html).toContain("140");
     expect(html).toContain("admin@kinesoft.test");
     expect(html).toMatch(/Free[\s\S]{0,40}→[\s\S]{0,40}PRO/);
     expect(html).toMatch(/href="\/c\/movare\/booking"/);
-    expect(html).toContain("Editar suscripción");
+    expect(html).toContain("Editar datos");
+    expect(html).not.toContain("Editar suscripción");
+    expect(renderToStaticMarkup(<TenantSubscriptionView detail={detail()} />)).toContain("Editar suscripción");
     // Lo que salió de la lista (revisión EV0) sigue en el detalle.
     expect(html).toContain("Miembros");
     expect(html).toContain("Creado");
@@ -314,7 +322,7 @@ describe("[EV0-P3] Detalle (render)", () => {
   });
 
   it("formatAuditValue: enums con su label, booleanos y fecha del trial en día AR", () => {
-    expect(formatAuditValue("vertical", "GENERAL")).toBe("Consultorio general");
+    expect(formatAuditValue("vertical", "GENERAL")).toBe("Clínica general");
     expect(formatAuditValue("publicBookingEnabled", true)).toBe("Activo");
     expect(formatAuditValue("publicBookingEnabled", false)).toBe("Apagado");
     expect(formatAuditValue("trialEndsAt", null)).toBe("Sin trial");

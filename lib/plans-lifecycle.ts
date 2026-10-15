@@ -20,6 +20,7 @@
  * Errores como resultado (`{ ok:false, … }`), no como throw: en prod Next
  * oculta el mensaje de un throw. Este archivo exporta SOLO funciones async.
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import type { z } from "zod";
 import { getActor } from "@/lib/session";
 import {
@@ -83,7 +84,13 @@ export async function previewPlanStatusChange(
  * ACTIVE re-valida sede y responsable (S13g); COMPLETED → ACTIVE pide
  * `confirm`; CANCELLED es terminal.
  */
-export async function changePlanStatus(raw: ChangePlanStatusInput): Promise<ChangePlanStatusResult> {
+// BO3-F: el cuerpo va en `changePlanStatusImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function changePlanStatus(...args: Parameters<typeof changePlanStatusImpl>): Promise<ChangePlanStatusResult> {
+  return withReadOnlyResult(() => changePlanStatusImpl(...args));
+}
+
+async function changePlanStatusImpl(raw: ChangePlanStatusInput): Promise<ChangePlanStatusResult> {
   const actor = await getActor();
   const parsed = ChangePlanStatusSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -92,7 +99,13 @@ export async function changePlanStatus(raw: ChangePlanStatusInput): Promise<Chan
 }
 
 /** Título y notas, con CAS (lo único que edita `updatePlanDetails`, PD-10). */
-export async function updatePlanDetails(raw: UpdatePlanDetailsInput): Promise<UpdatePlanDetailsResult> {
+// BO3-F: el cuerpo va en `updatePlanDetailsImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function updatePlanDetails(...args: Parameters<typeof updatePlanDetailsImpl>): Promise<UpdatePlanDetailsResult> {
+  return withReadOnlyResult(() => updatePlanDetailsImpl(...args));
+}
+
+async function updatePlanDetailsImpl(raw: UpdatePlanDetailsInput): Promise<UpdatePlanDetailsResult> {
   const actor = await getActor();
   const parsed = UpdatePlanDetailsSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -101,7 +114,13 @@ export async function updatePlanDetails(raw: UpdatePlanDetailsInput): Promise<Up
 }
 
 /** Archivar (§2.4). Un plan abierto exige `cancelOpen` (D7 a CANCELLED en la misma tx). */
-export async function archivePlan(raw: ArchivePlanInput): Promise<ArchivePlanResult> {
+// BO3-F: el cuerpo va en `archivePlanImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function archivePlan(...args: Parameters<typeof archivePlanImpl>): Promise<ArchivePlanResult> {
+  return withReadOnlyResult(() => archivePlanImpl(...args));
+}
+
+async function archivePlanImpl(raw: ArchivePlanInput): Promise<ArchivePlanResult> {
   const actor = await getActor();
   const parsed = ArchivePlanSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -110,7 +129,13 @@ export async function archivePlan(raw: ArchivePlanInput): Promise<ArchivePlanRes
 }
 
 /** `restoreProgram` de §2.4 (OWNER/ADMIN): vuelve al estado que tenía. */
-export async function restoreProgram(raw: RestorePlanInput): Promise<RestorePlanResult> {
+// BO3-F: el cuerpo va en `restoreProgramImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function restoreProgram(...args: Parameters<typeof restoreProgramImpl>): Promise<RestorePlanResult> {
+  return withReadOnlyResult(() => restoreProgramImpl(...args));
+}
+
+async function restoreProgramImpl(raw: RestorePlanInput): Promise<RestorePlanResult> {
   const actor = await getActor();
   const parsed = RestorePlanSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);

@@ -41,6 +41,7 @@ import { NotificationKind } from "@prisma/client";
 import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
 import { ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
+import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
 import {
   DEFAULT_PATIENT_ARCHIVE_PLANS_ACTION,
   PATIENT_ARCHIVE_PLANS_ACTIONS,
@@ -355,7 +356,13 @@ function patientArchivePlansRejection(e: unknown): { ok: false; error: string } 
  * siempre tienen `full`, así que la parte administrativa queda cubierta sin
  * un caso aparte; el profesional asignado o con share también puede.
  */
-export async function setPatientArchived(input: {
+// BO3-F: el cuerpo va en `setPatientArchivedImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function setPatientArchived(...args: Parameters<typeof setPatientArchivedImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => setPatientArchivedImpl(...args));
+}
+
+async function setPatientArchivedImpl(input: {
   id: string;
   archived: boolean;
   /**
@@ -981,6 +988,9 @@ export async function createPatient(
     revalidatePath("/pacientes");
     return { ok: true, data: { id: p.id } };
   } catch (e) {
+    // BO3-F (handoff 2): modo lectura / soporte → su copy (antes «No pudimos crear el paciente.»).
+    const ro = readOnlyFailure(e);
+    if (ro) return ro;
     const dup = patientUniqueError(e);
     if (dup) return dup;
     logger.error("patient.create.failed", { err: e instanceof Error ? e.message : String(e) });
@@ -1012,7 +1022,13 @@ const PATIENT_EDITABLE_FIELDS = [
  *  - exige acceso `full` (decisión del dueño 30-sep: acceso básico = solo ver).
  *  - el audit registra QUÉ campos cambiaron (solo nombres, sin valores: PHI).
  */
-export async function updatePatient(
+// BO3-F: el cuerpo va en `updatePatientImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function updatePatient(...args: Parameters<typeof updatePatientImpl>): Promise<ActionResult<{ id: string; updatedAt: string }>> {
+  return withReadOnlyResult(() => updatePatientImpl(...args));
+}
+
+async function updatePatientImpl(
   raw: PatientUpdateInput
 ): Promise<ActionResult<{ id: string; updatedAt: string }>> {
   const actor = await getActor();
@@ -1121,7 +1137,13 @@ export async function updatePatient(
  * "Usar como diagnóstico": con los campos ocultos (null) borraba el
  * diagnóstico del paciente.
  */
-export async function setPatientDiagnosis(
+// BO3-F: el cuerpo va en `setPatientDiagnosisImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function setPatientDiagnosis(...args: Parameters<typeof setPatientDiagnosisImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => setPatientDiagnosisImpl(...args));
+}
+
+async function setPatientDiagnosisImpl(
   patientId: string,
   title: string,
   note: string
@@ -1160,7 +1182,13 @@ export async function setPatientDiagnosis(
 // definitivo de una ficha arrastraba en cascada turnos, cobros, planes y
 // archivos sin retorno; la única salida es Archivar (`setPatientArchived`).
 
-export async function recordEvaScore(input: {
+// BO3-F: el cuerpo va en `recordEvaScoreImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function recordEvaScore(...args: Parameters<typeof recordEvaScoreImpl>): Promise<ActionResult<{ id: string }>> {
+  return withReadOnlyResult(() => recordEvaScoreImpl(...args));
+}
+
+async function recordEvaScoreImpl(input: {
   patientId: string;
   value: number;
   source?: string;
@@ -1207,7 +1235,13 @@ export async function recordEvaScore(input: {
  * La cobertura sigue siendo single-active (`coverages[0]` = id desc): las
  * filas legacy extra se borran.
  */
-export async function setPatientCoverage(input: {
+// BO3-F: el cuerpo va en `setPatientCoverageImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function setPatientCoverage(...args: Parameters<typeof setPatientCoverageImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => setPatientCoverageImpl(...args));
+}
+
+async function setPatientCoverageImpl(input: {
   patientId: string;
   insurerId?: string;
   insurerName?: string;
@@ -1462,7 +1496,13 @@ export async function getPatientBillingPreview(
  * the patient has no coverage (Particular), attach a Particular row carrying
  * the override.
  */
-export async function setPatientDefaultCopago(input: {
+// BO3-F: el cuerpo va en `setPatientDefaultCopagoImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function setPatientDefaultCopago(...args: Parameters<typeof setPatientDefaultCopagoImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => setPatientDefaultCopagoImpl(...args));
+}
+
+async function setPatientDefaultCopagoImpl(input: {
   patientId: string;
   copagoCents: number;
 }): Promise<ActionResult> {
@@ -1530,7 +1570,13 @@ export async function setPatientDefaultCopago(input: {
  * The visibility filter already enforces who sees what, so we just
  * enforce the role on write.
  */
-export async function assignPatientToPractitioner(input: {
+// BO3-F: el cuerpo va en `assignPatientToPractitionerImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function assignPatientToPractitioner(...args: Parameters<typeof assignPatientToPractitionerImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => assignPatientToPractitionerImpl(...args));
+}
+
+async function assignPatientToPractitionerImpl(input: {
   patientId: string;
   practitionerId: string | null;
 }): Promise<ActionResult> {
@@ -1714,7 +1760,13 @@ export async function sendPatientPortalInvite(input: {
  * every id, so a client can't sneak ids of patients they don't own.
  * Returns the count of rows that actually changed.
  */
-export async function bulkArchivePatients(input: {
+// BO3-F: el cuerpo va en `bulkArchivePatientsImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function bulkArchivePatients(...args: Parameters<typeof bulkArchivePatientsImpl>): Promise<ActionResult<{ updated: number }>> {
+  return withReadOnlyResult(() => bulkArchivePatientsImpl(...args));
+}
+
+async function bulkArchivePatientsImpl(input: {
   ids: string[];
   archived: boolean;
   /** L9 (P2-S15): igual que en `setPatientArchived`; default `pause`. */
@@ -1900,7 +1952,13 @@ async function requireShareAuthority(patientId: string) {
  * Idempotent — running with the same list twice is a no-op after the
  * first call.
  */
-export async function setPatientShares(input: {
+// BO3-F: el cuerpo va en `setPatientSharesImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function setPatientShares(...args: Parameters<typeof setPatientSharesImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => setPatientSharesImpl(...args));
+}
+
+async function setPatientSharesImpl(input: {
   patientId: string;
   practitionerIds: string[];
 }): Promise<ActionResult> {

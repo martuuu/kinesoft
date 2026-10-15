@@ -146,8 +146,10 @@ export const MODULE_DENIED_COPY: Record<TenantModule, string> = {
   ejerciciosGlobales: "El catálogo de ejercicios de la plataforma está disponible en el plan PRO.",
 };
 
+// BO3 (decisión de producto §19.6 ítem 1): «Clínica general», no «Consultorio general» (que se confundía con el
+// consultorio = tenant). Mismo nombre en Plataforma, onboarding y el selector.
 export const VERTICAL_LABEL: Record<TenantVertical, string> = {
-  GENERAL: "Consultorio general",
+  GENERAL: "Clínica general",
   KINESIOLOGY: "Kinesiología y osteopatía",
 };
 

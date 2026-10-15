@@ -3,7 +3,7 @@ import { listTagsForAdmin } from "@/lib/tags-admin";
 import { getUserPreferences } from "@/lib/preferences";
 import { DEFAULT_PREFERENCES, sanitizeCatalogPrefs, type Preferences } from "@/lib/preferences-constants";
 import { UnauthenticatedError } from "@/lib/session";
-import { ExerciseAdminClient } from "@/components/plataforma/exercise-admin-client";
+import { ExerciseAdminClient, type CatalogPrefsStore } from "@/components/plataforma/exercise-admin-client";
 
 export const dynamic = "force-dynamic";
 
@@ -35,18 +35,21 @@ const csv = (v: Param): string[] =>
  * BO3-A: `getUserPreferences` pasa por `getActor` (Actor de CONSULTORIO). Un superadmin sin consultorio propio no
  * tiene Actor (`no_membership`) y, desde que /plataforma no cuelga de `(app)`, llega igual a esta página: sin esto
  * se caía entera. Sin Actor arranca con la vista por defecto (la URL sigue mandando).
+ *
+ * BO3-E: además dice DÓNDE se guarda la vista: con Actor, en la cuenta; sin Actor, en el navegador (el cliente
+ * restaura la vista local y no llama a `updateUserPreferences`, que también pasa por `getActor`).
  */
-async function catalogPrefsOrDefault(): Promise<Preferences["catalogPrefs"]> {
+async function catalogPrefsOrDefault(): Promise<{ catalogPrefs: Preferences["catalogPrefs"]; store: CatalogPrefsStore }> {
   try {
-    return (await getUserPreferences()).catalogPrefs;
+    return { catalogPrefs: (await getUserPreferences()).catalogPrefs, store: "account" };
   } catch (err) {
-    if (err instanceof UnauthenticatedError) return DEFAULT_PREFERENCES.catalogPrefs;
+    if (err instanceof UnauthenticatedError) return { catalogPrefs: DEFAULT_PREFERENCES.catalogPrefs, store: "device" };
     throw err;
   }
 }
 
 export default async function PlataformaEjerciciosPage({ searchParams }: { searchParams: SP }) {
-  const prefs = { catalogPrefs: await catalogPrefsOrDefault() };
+  const prefs = await catalogPrefsOrDefault();
   const hasUrlState = STATE_KEYS.some((k) => searchParams[k] != null && searchParams[k] !== "");
 
   // URL wins when present; otherwise fall back to the user's saved view.
@@ -105,6 +108,8 @@ export default async function PlataformaEjerciciosPage({ searchParams }: { searc
       state={state}
       tagOptions={tagOptions}
       catalogTags={catalogTags}
+      prefsStore={prefs.store}
+      hasUrlState={hasUrlState}
     />
   );
 }

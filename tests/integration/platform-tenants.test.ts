@@ -69,12 +69,14 @@ const DETAIL_KEYS = [
   ...ROW_KEYS,
   "counts",
   "lastActivityAt",
+  "legalName", // BO3-B
   "modules",
   "phone",
   "publicBookingPath",
   "publicEmail",
   "recentPlatformEvents",
   "sharedPatientView",
+  "taxId", // BO3-B
   "updatedAt",
   "whatsapp",
 ].sort();
@@ -91,6 +93,7 @@ const COUNT_KEYS = [
 ];
 const EVENT_KEYS = ["action", "actorEmail", "changes", "createdAt", "id"];
 const OVERVIEW_KEYS = [
+  "byStatus", // BO3-B
   "byVerticalPlan",
   "onboardingPending",
   "onboardingPendingCount",

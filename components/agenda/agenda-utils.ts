@@ -390,7 +390,7 @@ export function fmtHour(d: Date) {
   return d.toLocaleTimeString("es-AR", {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
     timeZone: "America/Argentina/Buenos_Aires",
   });
 }

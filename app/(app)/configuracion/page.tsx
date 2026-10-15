@@ -12,6 +12,8 @@ import { listLocations } from "@/lib/locations";
 import { listRooms } from "@/lib/rooms";
 import { getPractitionerScheduleSummary } from "@/lib/practitioner-schedule";
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
+import { listSupportSessionsForTenant } from "@/lib/platform-support";
+import { getTenantPlanUsage } from "@/lib/tenant-plan-usage";
 import { ConfiguracionClient } from "@/components/configuracion/configuracion-client";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +26,11 @@ export const metadata = { title: "Configuración · KineSoft" };
  * /dashboard since they can't act on any of these forms anyway (the
  * server actions also enforce role independently).
  */
-export default async function ConfiguracionPage() {
+export default async function ConfiguracionPage({
+  searchParams,
+}: {
+  searchParams?: { tab?: string | string[] };
+}) {
   const actor = await getActor();
   // B1.7: rol desde `lib/authz` (cacheado por request) y criterio de
   // `lib/capabilities`: el mismo que exigen las actions (`requireTenantAdmin`).
@@ -45,6 +51,8 @@ export default async function ConfiguracionPage() {
     locations,
     scheduleSummary,
     rooms,
+    planUsage,
+    supportSessions,
   ] = await Promise.all([
     getTenantSettings(),
     listInsurers(),
@@ -72,7 +80,17 @@ export default async function ConfiguracionPage() {
     // `schedule.configure`; hoy `tenant.admin` lo implica (OWNER/ADMIN), pero
     // si la matriz cambia, mejor una lista vacía que un 500 de la página.
     caps.has("schedule.configure") ? listRooms({ includeArchived: true }) : Promise.resolve([]),
+    // BO3-F: «Plan y uso» y «Accesos de soporte». Las dos exigen `tenant.admin`, que el `redirect` de arriba ya
+    // garantizó (también el soporte, con SUPPORT_CAPS).
+    getTenantPlanUsage(),
+    listSupportSessionsForTenant(),
   ]);
+
+  // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
+  // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
+  // C-BO4; en el equipo, con los límites del ADMIN: lib/invitations.ts `requireTeamManager`). Para la pantalla
+  // se lo trata como ADMIN; lo que el server le niega igual (vista compartida de la HC) lo apaga `support`.
+  const uiRole = actor.support ? "ADMIN" : role;
 
   // EV0 (EV-K): los módulos salen de `actor.entitlements` (C-EV3, sin query
   // extra) y viajan como array (props serializables). Se pasan por props y no
@@ -81,7 +99,11 @@ export default async function ConfiguracionPage() {
 
   return (
     <ConfiguracionClient
-      role={role}
+      role={uiRole}
+      support={!!actor.support}
+      initialTab={Array.isArray(searchParams?.tab) ? searchParams?.tab[0] : searchParams?.tab}
+      planUsage={planUsage}
+      supportSessions={supportSessions}
       modules={modules}
       tenant={tenant}
       insurers={insurers}

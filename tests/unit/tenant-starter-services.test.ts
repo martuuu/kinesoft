@@ -24,7 +24,7 @@ describe("starterServicesFor", () => {
     expect(s.find((x) => x.name === "Osteopatía")?.maxConcurrent).toBe(1);
   });
 
-  it("Consultorio general: Consulta 30', Primera consulta 45', Control 20', sin disciplina", () => {
+  it("Clínica general: Consulta 30', Primera consulta 45', Control 20', sin disciplina", () => {
     const s = starterServicesFor("GENERAL");
     expect(s.map((x) => [x.name, x.durationMin])).toEqual([
       ["Consulta", 30],

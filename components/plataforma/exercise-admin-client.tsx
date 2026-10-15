@@ -5,7 +5,9 @@
  *
  * URL is the source of truth for search / filters / sort / page (shareable,
  * back-button friendly); every change is ALSO persisted to the user's
- * `catalogPrefs` so the next visit restores the same view. Quick mutations
+ * `catalogPrefs` so the next visit restores the same view (BO3-E: or to this
+ * browser's localStorage when the superadmin has no consultorio — see
+ * `CatalogPrefsStore`). Quick mutations
  * (plan tier, archive/restore) happen inline on the row — the drawer is only
  * for full edits (name, tags, media, article).
  */
@@ -22,6 +24,7 @@ import { updateUserPreferences } from "@/lib/preferences";
 import {
   CATALOG_PAGE_SIZES,
   DEFAULT_CATALOG_FILTERS,
+  sanitizeCatalogPrefs,
   type CatalogFilters,
   type CatalogPrefs,
   type CatalogSortCol,
@@ -35,6 +38,55 @@ const COLS = "minmax(190px,2.3fr) 108px 58px 92px minmax(150px,1.7fr) 96px 176px
 
 type CatalogTagOptions = { muscle: TagOpt[]; equipment: TagOpt[]; discipline: TagOpt[] };
 
+/**
+ * BO3-E (handoff de BO3-A) · dónde se recuerda la vista de la tabla.
+ *  - "account": `UserPreferences.catalogPrefs` por `updateUserPreferences` (como siempre).
+ *  - "device": localStorage de este navegador. `updateUserPreferences` pasa por `getActor` (Actor de CONSULTORIO):
+ *    un superadmin sin consultorio propio no tiene Actor y cada cambio de filtro terminaba en un rechazo sin manejar.
+ *    No se toca `lib/preferences.ts` (no es de Plataforma); sin consultorio, la vista se recuerda por navegador.
+ * La página decide: si pudo leer las preferencias de la cuenta → "account"; si no hay Actor → "device".
+ */
+export type CatalogPrefsStore = "account" | "device";
+
+export const CATALOG_PREFS_STORAGE_KEY = "kinesoft:plataforma:ejercicios:vista";
+
+/** Vista guardada en este navegador, o null (no hay, está rota, o el storage está bloqueado: modo privado). */
+export function readDeviceCatalogPrefs(): CatalogPrefs | null {
+  try {
+    const raw = window.localStorage.getItem(CATALOG_PREFS_STORAGE_KEY);
+    return raw ? sanitizeCatalogPrefs(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeDeviceCatalogPrefs(prefs: CatalogPrefs): void {
+  try {
+    window.localStorage.setItem(CATALOG_PREFS_STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    // Storage lleno o bloqueado: recordar la vista es una comodidad, no se avisa.
+  }
+}
+
+/** URL de la tabla para un estado y una página (la URL es la fuente de verdad). */
+export function catalogHref(state: CatalogPrefs, page: number): string {
+  const f = state.filters;
+  const p = new URLSearchParams();
+  if (f.q) p.set("q", f.q);
+  if (f.kind) p.set("kind", f.kind);
+  if (f.tier) p.set("tier", f.tier);
+  if (f.difficulty != null) p.set("dif", String(f.difficulty));
+  if (f.muscle.length) p.set("muscle", f.muscle.join(","));
+  if (f.equipment.length) p.set("equip", f.equipment.join(","));
+  if (f.discipline.length) p.set("disc", f.discipline.join(","));
+  if (f.archived !== "active") p.set("arch", f.archived);
+  p.set("sort", state.sortCol);
+  p.set("dir", state.sortDir);
+  p.set("size", String(state.pageSize));
+  if (page > 1) p.set("page", String(page));
+  return `/plataforma/ejercicios?${p.toString()}`;
+}
+
 export function ExerciseAdminClient({
   rows,
   total,
@@ -42,6 +94,8 @@ export function ExerciseAdminClient({
   state,
   tagOptions,
   catalogTags,
+  prefsStore = "account",
+  hasUrlState = true,
 }: {
   rows: GlobalExerciseAdminRow[];
   total: number;
@@ -51,6 +105,10 @@ export function ExerciseAdminClient({
   tagOptions: TagOption[];
   /** Grouped tags, for the toolbar filters. */
   catalogTags: CatalogTagOptions;
+  /** BO3-E: dónde se recuerda la vista (ver `CatalogPrefsStore`). */
+  prefsStore?: CatalogPrefsStore;
+  /** BO3-E: la URL trajo estado de tabla. Sin él y con "device", se restaura la vista de este navegador. */
+  hasUrlState?: boolean;
 }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
@@ -76,22 +134,11 @@ export function ExerciseAdminClient({
     // Any filter/sort change resets to page 1 unless a page was requested.
     const nextPage = next.page ?? (next.filters || next.sortCol || next.sortDir || next.pageSize ? 1 : page);
 
-    const p = new URLSearchParams();
-    if (f.q) p.set("q", f.q);
-    if (f.kind) p.set("kind", f.kind);
-    if (f.tier) p.set("tier", f.tier);
-    if (f.difficulty != null) p.set("dif", String(f.difficulty));
-    if (f.muscle.length) p.set("muscle", f.muscle.join(","));
-    if (f.equipment.length) p.set("equip", f.equipment.join(","));
-    if (f.discipline.length) p.set("disc", f.discipline.join(","));
-    if (f.archived !== "active") p.set("arch", f.archived);
-    p.set("sort", nextState.sortCol);
-    p.set("dir", nextState.sortDir);
-    p.set("size", String(nextState.pageSize));
-    if (nextPage > 1) p.set("page", String(nextPage));
-    router.push(`/plataforma/ejercicios?${p.toString()}`, { scroll: false });
-    // Fire-and-forget: remember this view for the next visit.
-    void updateUserPreferences({ catalogPrefs: nextState });
+    router.push(catalogHref(nextState, nextPage), { scroll: false });
+    // Fire-and-forget: remember this view for the next visit. El `.catch` no es decorativo: un rechazo (sesión
+    // vencida, consultorio en solo lectura) no puede quedar como unhandled rejection en la consola.
+    if (prefsStore === "device") writeDeviceCatalogPrefs(nextState);
+    else void updateUserPreferences({ catalogPrefs: nextState }).catch(() => undefined);
   };
 
   // Keep the freshest `apply` reachable from the debounce timer: the timeout
@@ -99,6 +146,15 @@ export function ExerciseAdminClient({
   // (that would resurrect filters cleared meanwhile).
   const applyRef = useRef(apply);
   applyRef.current = apply;
+
+  // BO3-E: sin consultorio, la vista guardada vive en este navegador. Se restaura una sola vez al entrar sin estado
+  // en la URL (como hace la página con las preferencias de la cuenta); después manda la URL.
+  useEffect(() => {
+    if (prefsStore !== "device" || hasUrlState) return;
+    const saved = readDeviceCatalogPrefs();
+    if (saved) router.replace(catalogHref(saved, 1), { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Re-sync the box when the applied query changes underneath us (Back/Forward,
   // "Limpiar filtros"), so input and table never disagree.

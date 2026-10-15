@@ -23,12 +23,26 @@ import { decideAppGate } from "@/lib/onboarding-logic";
 import { runWithRls } from "@/lib/rls";
 import { prisma } from "@/lib/db";
 import { runWithRequestContext } from "@/lib/request-context";
-import { isReadOnlyViolation } from "@/lib/tenant-access";
+import { READ_ONLY_MESSAGE, isReadOnlyViolation } from "@/lib/tenant-access";
+import { randomUUID } from "node:crypto";
+import { localToARIso } from "@/lib/datetime-ar";
+import {
+  createBooking,
+  createBookingsBatch,
+  deleteBooking,
+  markReceptionAction,
+  setBookingCopagoPaid,
+  setBookingInsurerPaid,
+  setBookingStatus,
+  updateBooking,
+} from "@/lib/bookings";
+import { createPatient, setPatientArchived, setPatientCoverage, updatePatient } from "@/lib/patients";
+import { createTimeBlock } from "@/lib/time-blocks";
 import { updateUserPreferences } from "@/lib/preferences";
 import { openPendingInvitation, saveOnboardingClinic } from "@/lib/onboarding";
 import { UserDisabledError, joinTenantInTx } from "@/lib/invite-activation-internal";
 import { asUser } from "@/tests/helpers/actor";
-import { ownerClient, createEphemeralTenant, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
+import { ownerClient, createEphemeralTenant, addPatient, uniqueSuffix, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 
 const RUN = process.env.INTEGRATION === "1";
 
@@ -268,6 +282,63 @@ describe.skipIf(!RUN)("[BO1-A] acceso del consultorio y bloqueos de sesión", ()
     const r = await updateUserPreferences({ palette: "mint" });
     expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/modo lectura/) });
     expect(await db.userPreferences.count({ where: { userId: t.userId } })).toBe(0);
+  });
+
+  it("[BO3-F] enforce + read_only: las actions de agenda, pacientes y bloqueos DEVUELVEN el copy (no tiran ni dan el genérico)", async () => {
+    // Sin esto el ReadOnlyModeError de `runWithRls` escapaba de la action y en prod Next redacta el mensaje (error
+    // genérico); createBooking/createPatient/createTimeBlock lo tapaban con «No pudimos crear…». lib/read-only-result.ts.
+    process.env.TENANT_ACCESS_ENFORCEMENT = "enforce";
+    const t = await readOnlyTenant();
+    const patientId = await addPatient(db, t);
+    const b = await db.booking.create({
+      data: {
+        tenantId: t.tenantId,
+        patientId,
+        practitionerId: t.practitionerId,
+        serviceId: t.serviceId,
+        scheduledFor: new Date(Date.now() + 60 * 60_000),
+        durationMin: 30,
+        status: "CONFIRMED",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    const v = b.updatedAt.toISOString();
+    asUser(t.userId);
+    expect((await getActor()).access.mode).toBe("read_only");
+    const when = new Date(localToARIso("2031-06-02T10:00:00")).toISOString();
+    const slot = { patientId, serviceId: t.serviceId, practitionerId: t.practitionerId, scheduledFor: when, allowOutOfHours: true };
+    const actions: Array<[string, () => Promise<unknown>]> = [
+      ["createBooking", () => createBooking({ ...slot, idempotencyKey: randomUUID() })],
+      ["createBookingsBatch", () => createBookingsBatch({ ...slot, count: 2, daysOfWeek: [0], idempotencyKey: randomUUID() })],
+      ["updateBooking", () => updateBooking({ id: b.id, notes: "x", expectedUpdatedAt: v } as never)],
+      ["setBookingStatus", () => setBookingStatus(b.id, "CANCELLED", v)],
+      ["markReceptionAction", () => markReceptionAction(b.id, "llego", v)],
+      ["setBookingCopagoPaid", () => setBookingCopagoPaid(b.id, true, v)],
+      ["setBookingInsurerPaid", () => setBookingInsurerPaid(b.id, true, v)],
+      ["deleteBooking", () => deleteBooking(b.id, v)],
+      ["createPatient", () => createPatient({ firstName: "Nuevo", lastName: "Paciente", documentId: `DNI-${uniqueSuffix()}` } as never)],
+      ["updatePatient", () => updatePatient({ id: patientId, phone: "1122334455" } as never)],
+      ["setPatientArchived", () => setPatientArchived({ id: patientId, archived: true })],
+      // Con OS (sin OS y sin cobertura previa es un no-op que no escribe y da ok).
+      ["setPatientCoverage", () => setPatientCoverage({ patientId, insurerName: "OSDE", memberId: "1" })],
+      ["createTimeBlock", () => createTimeBlock({ practitionerId: t.practitionerId, startsAt: when, endsAt: new Date(new Date(when).getTime() + 3600_000).toISOString() })],
+    ];
+    const results: Record<string, { kind: string; message: string }> = {};
+    for (const [name, act] of actions) {
+      try {
+        const r = (await act()) as { ok: boolean; error?: string };
+        results[name] = { kind: r.ok ? "ok" : "error", message: r.ok ? "" : String(r.error) };
+      } catch (e) {
+        results[name] = { kind: "throw", message: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    expect(results).toEqual(Object.fromEntries(actions.map(([n]) => [n, { kind: "error", message: READ_ONLY_MESSAGE }])));
+    // Nada escrito.
+    const after = await db.booking.findUniqueOrThrow({ where: { id: b.id } });
+    expect(after.updatedAt.toISOString()).toBe(v);
+    expect(await db.booking.count({ where: { tenantId: t.tenantId } })).toBe(1);
+    expect(await db.patient.count({ where: { tenantId: t.tenantId } })).toBe(1);
+    expect(await db.timeBlock.count({ where: { tenantId: t.tenantId } })).toBe(0);
   });
 
   it("enforce: una tx de OTRO tenant en el mismo request (sin Actor de ese tenant: webhook, turnero) no se bloquea", async () => {

@@ -20,9 +20,11 @@ import { auditPlatformGlobalInTx } from "@/lib/audit";
 import { tags as cacheTags } from "@/lib/cache-tags";
 import { TagAdminCreate, type ActionResult } from "@/lib/validation";
 import { slugify } from "@/lib/catalog-tags";
+import { isReservedTagSlug } from "@/lib/exercises-types";
 
 function revalidateCatalog() {
   revalidatePath("/plataforma/tags");
+  revalidatePath("/plataforma/ejercicios");
   revalidatePath("/biblioteca");
   revalidatePath("/terapia-manual");
   revalidateTag(cacheTags.catalog());
@@ -91,6 +93,57 @@ export async function createTag(raw: unknown): Promise<ActionResult<{ slug: stri
   });
   revalidateCatalog();
   return { ok: true, data: { slug: tag.slug } };
+}
+
+/**
+ * BO3-E (handoff de BO3-A) · «crear categoría» desde el combo de tags del editor de ejercicios de Plataforma.
+ *
+ * El bug: el drawer usaba `ensureTag` de `lib/exercises.ts`, que pasa por `getActor` (Actor de CONSULTORIO) y el
+ * gate de módulos del consultorio. Un superadmin sin consultorio propio no tiene Actor → «no_membership» al crear un
+ * tag; y el que sí tiene uno lo creaba con los permisos y el modo (solo lectura, módulo `ejercicios`) de SU
+ * consultorio, sin dejar rastro en el registro de plataforma.
+ *
+ * Misma semántica que `ensureTag` para no cambiar lo que ve el editor: kind GOAL, idempotente por slug (si ya existe
+ * se devuelve el existente y NO se audita: no se creó nada), slugs de disciplina reservados y un DISCIPLINE existente
+ * nunca se entrega como tag creable. Con `requirePlatformAdmin("catalog.write")` + auditoría global en la tx del
+ * insert (patrón BO2-F). Carrera de dos creaciones con el mismo slug: el P2002 se resuelve devolviendo la fila ganadora.
+ */
+export async function ensurePlatformTag(raw: unknown): Promise<ActionResult<{ slug: string; label: string }>> {
+  const actor = await requirePlatformAdmin("catalog.write");
+  const label = typeof raw === "string" ? raw.trim() : "";
+  if (!label || label.length > 80) return { ok: false, error: "Escribí un nombre de hasta 80 caracteres." };
+  const slug = slugify(label);
+  if (!slug) return { ok: false, error: "Etiqueta inválida." };
+  if (isReservedTagSlug(slug)) return { ok: false, error: "Ese nombre está reservado para las disciplinas." };
+
+  const found = await prismaService.tag.findUnique({ where: { slug }, select: { slug: true, label: true, kind: true } });
+  if (found) {
+    if (found.kind === "DISCIPLINE") return { ok: false, error: "Ese nombre está reservado para las disciplinas." };
+    return { ok: true, data: { slug: found.slug, label: found.label } };
+  }
+
+  try {
+    const created = await prismaService.$transaction(async (tx) => {
+      const row = await tx.tag.create({ data: { slug, label, kind: "GOAL" }, select: { slug: true, label: true } });
+      await auditPlatformGlobalInTx(tx, {
+        actor,
+        action: "platform.catalog.tag.create",
+        entity: "Tag",
+        entityId: row.slug,
+        payload: { kind: "GOAL", via: "exercise_drawer" },
+      });
+      return row;
+    });
+    revalidateCatalog();
+    return { ok: true, data: created };
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const winner = await prismaService.tag.findUnique({ where: { slug }, select: { slug: true, label: true, kind: true } });
+      if (winner && winner.kind !== "DISCIPLINE") return { ok: true, data: { slug: winner.slug, label: winner.label } };
+      return { ok: false, error: "Ese nombre está reservado para las disciplinas." };
+    }
+    throw e;
+  }
 }
 
 export async function renameTag(slug: string, label: string): Promise<ActionResult> {

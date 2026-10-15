@@ -40,7 +40,7 @@ const VERTICAL_OPTIONS: ReadonlyArray<{ value: OnboardingVertical; label: string
   },
   {
     value: "GENERAL",
-    label: "Consultorio general (otras especialidades)",
+    label: "Clínica general (otras especialidades)",
     help: "Agenda, pacientes, cobros y obras sociales, sin las herramientas de kinesiología.",
   },
 ];

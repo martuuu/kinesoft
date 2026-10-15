@@ -6,6 +6,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import { getAccessSnapshot, getSessionBlock, tryGetActor } from "@/lib/session";
 import { tenantAccessEnforcement } from "@/lib/env";
 import { AccessBanner } from "@/components/layout/access-banner";
+import { SupportBanner, shellTenantChoice } from "@/components/layout/support-banner";
+import { endSupport } from "@/lib/platform-support";
 import { getTenantChoiceState } from "@/lib/tenant-choice";
 import { switchTenant } from "@/lib/tenant-switch";
 import { getUserPreferences } from "@/lib/preferences";
@@ -124,6 +126,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     arrivalAlert: prefs.agendaView.arrivalAlert,
     callAlert: prefs.agendaView.callAlert,
   };
+  const shellChoice = shellTenantChoice(!!actor.support, choice.options, switchTenant);
   return (
     <TweaksProvider
       initialAgenda={{
@@ -142,12 +145,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         // IAM-3b (decisión 6: un usuario, varios consultorios): el selector del sidebar usa la MISMA foto que el
         // gate (`getTenantChoiceState` de arriba, cache por request): ninguna query más. Solo los consultorios
         // usables de esta sesión. El activo es el del Actor (lo que la app está mostrando).
-        tenantOptions={choice.options}
+        // BO3-F: en soporte, sin selector (porqué en `shellTenantChoice`).
+        tenantOptions={shellChoice.options}
         activeTenantId={actor.tenantId}
-        switchTenantAction={switchTenant}
+        switchTenantAction={shellChoice.switchAction}
+        banner={
+          actor.support ? <SupportBanner tenantName={actor.tenantName} endSupportAction={endSupport} /> : null
+        }
       >
-        {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). */}
-        <AccessBanner access={actor.access} enforcement={tenantAccessEnforcement()} />
+        {/* BO1-A: prueba por vencer, gracia o solo lectura (modo REAL; visible con `banner`/`enforce`). BO3-F: en
+            soporte habla en tercera persona del consultorio (el superadmin no es el titular) y suma suspendido/baja,
+            que el soporte sí puede mirar. */}
+        <AccessBanner access={actor.access} enforcement={tenantAccessEnforcement()} support={!!actor.support} />
         {children}
       </AppShell>
     </TweaksProvider>

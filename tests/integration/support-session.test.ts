@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import type { PrismaClient } from "@prisma/client";
 import { getActor, tryGetActor, ReadOnlyModeError } from "@/lib/session";
+import { SUPPORT_READ_ONLY_MESSAGE } from "@/lib/tenant-access";
 import { getCapabilities, getMembershipRole } from "@/lib/authz";
 import { SUPPORT_CAPS } from "@/lib/capabilities";
 import { endSupport, listSupportSessionsForTenant, startSupport } from "@/lib/platform-support";
@@ -192,6 +193,9 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect(mails[0].text).not.toContain(REASON);
     expect(mails[0].text).toContain("Accesos de soporte");
     expect(mails[0].text).toContain(`${S}@test.local`);
+    // BO3-F: el link lleva directo a la pestaña de soporte de Configuración.
+    expect(mails[0].text).toContain("/configuracion?tab=soporte");
+    expect(mails[0].html).toContain("/configuracion?tab=soporte");
     expect(await db.emailLog.count({ where: { tenantId: T.tenantId, kind: "support_access", entityId: sessionId, status: "sent" } })).toBe(1);
 
     expect(cookies().get(SUPPORT_COOKIE)?.value).toBe(makeSupportCookieValue(sessionId, S));
@@ -355,8 +359,9 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
       ["bloqueo de agenda", () => createTimeBlock({ practitionerId: T.practitionerId, startsAt: ar("2031-05-07", "10:00"), endsAt: ar("2031-05-07", "11:00") })],
       ["preferencias (fuera de runWithRls)", () => updateUserPreferences({ palette: "mint" } as never)],
     ];
-    // La red de solo lectura: `runWithRls` tira ReadOnlyModeError en la tx del soporte. Varias actions lo atrapan y
-    // devuelven su copy genérico («No pudimos crear…»: BO1-A lo dejó para BO3-F), así que se mira el log del error.
+    // La red de solo lectura: `runWithRls` tira ReadOnlyModeError en la tx del soporte. Desde BO3-F las actions de
+    // agenda/pacientes/bloqueos lo devuelven con su copy (lib/read-only-result.ts); otras todavía pueden atraparlo con
+    // un copy genérico, así que también se mira el log del error.
     const errLogs: string[] = [];
     const write = process.stdout.write.bind(process.stdout);
     const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, ...rest: unknown[]) => {
@@ -382,6 +387,57 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     expect(hitReadOnly, JSON.stringify({ results, errLogs }, null, 2)).toBeGreaterThanOrEqual(3);
     for (const r of Object.values(results)) expect(r).not.toMatch(/^ok/);
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("[BO3-F] con soporte, las actions de agenda/pacientes/bloqueos DEVUELVEN el error (no tiran) y las que llegan al write, el copy de soporte", async () => {
+    // Sin esto, en prod Next redacta el mensaje de la excepción y el superadmin ve un error genérico
+    // (lib/read-only-result.ts); createBooking/createPatient/createTimeBlock devolvían su copy genérico
+    // («No pudimos crear…»). Turno de un invitado (sin paciente) HOY: el soporte ve como la Secretaria (acceso
+    // básico a los pacientes), así que con un paciente las actions cortan antes por acceso, sin llegar al write.
+    const now = new Date();
+    const guest = await db.booking.create({
+      data: {
+        tenantId: T.tenantId,
+        practitionerId: T.practitionerId,
+        serviceId: T.serviceId,
+        scheduledFor: new Date(now.getTime() + 60 * 60_000),
+        durationMin: 30,
+        status: "CONFIRMED",
+        guestName: "Invitado Soporte",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    try {
+      await enter(S);
+      const v = guest.updatedAt.toISOString();
+      const actions: Array<[string, () => Promise<unknown>]> = [
+        ["createBooking", () => createBooking({ guestName: "Otro Invitado", serviceId: T.serviceId, practitionerId: T.practitionerId, scheduledFor: ar("2031-05-06", "11:00"), idempotencyKey: randomUUID() } as never)],
+        ["setBookingStatus", () => setBookingStatus(guest.id, "CANCELLED", v)],
+        ["markReceptionAction", () => markReceptionAction(guest.id, "llego", v)],
+        ["setBookingCopagoPaid", () => setBookingCopagoPaid(guest.id, true, v)],
+        ["deleteBooking", () => deleteBooking(guest.id, v)],
+        ["createPatient", () => createPatient({ firstName: "Nuevo", lastName: "Paciente", documentId: `DNI-${uniqueSuffix()}` } as never, { assignTo: T.practitionerId })],
+        ["createTimeBlock", () => createTimeBlock({ practitionerId: T.practitionerId, startsAt: ar("2031-05-07", "12:00"), endsAt: ar("2031-05-07", "13:00") })],
+      ];
+      const results: Record<string, { kind: string; message: string }> = {};
+      for (const [name, act] of actions) {
+        const o = await outcome(act);
+        results[name] = { kind: o.kind, message: o.message };
+      }
+      // Las que llegan a la tx de escritura: copy de soporte devuelto. El resto corta antes por acceso (el soporte
+      // tiene acceso básico, aun con un invitado: `bookingFieldAccess`), también devuelto. Ninguna tira. El camino
+      // completo de agenda/pacientes con un Actor que sí llega al write está en tenant-access.test.ts ([BO3-F]).
+      for (const n of ["markReceptionAction", "createPatient", "createTimeBlock"]) {
+        expect(results[n], n).toEqual({ kind: "error", message: SUPPORT_READ_ONLY_MESSAGE });
+      }
+      for (const [n, r] of Object.entries(results)) expect(r.kind, `${n}: ${r.message}`).toBe("error");
+      const after = await db.booking.findUniqueOrThrow({ where: { id: guest.id } });
+      expect(after.updatedAt.toISOString()).toBe(v);
+      expect(after.status).toBe("CONFIRMED");
+      expect(after.arrivedAt).toBeNull();
+    } finally {
+      await db.booking.deleteMany({ where: { id: guest.id } });
+    }
   });
 
   it("ReadOnlyModeError tirado por runWithRls en un write directo del soporte", async () => {

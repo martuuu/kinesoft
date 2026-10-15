@@ -93,7 +93,7 @@ describe("[IAM-3b] sidebar con 2+ consultorios", () => {
     expect(html).toContain("Profesional");
     expect(html).toContain("Secretario/a");
     expect(html).toContain("Kinesiología y osteopatía");
-    expect(html).toContain("Consultorio general");
+    expect(html).toContain("Clínica general");
     expect(html).toContain('href="/elegir-consultorio"');
     expect(html).toContain("Ver todos");
   });

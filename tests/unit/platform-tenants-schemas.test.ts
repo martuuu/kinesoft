@@ -23,6 +23,7 @@ import {
   TENANT_VERTICAL_VALUES,
   TENANT_PLAN_VALUES,
   SUBSCRIPTION_STATUS_VALUES,
+  SEAT_LIMIT_OVERRIDE_MAX,
 } from "@/lib/platform-tenants-schemas";
 import { toARDateKey } from "@/lib/datetime-ar";
 
@@ -71,6 +72,17 @@ describe("UpdatePlatformTenant", () => {
     expect(UpdatePlatformTenant.safeParse({ ...base, plan: "GOLD" }).success).toBe(false);
     expect(UpdatePlatformTenant.safeParse({ ...base, subscriptionStatus: "PAUSED" }).success).toBe(false);
     expect(UpdatePlatformTenant.safeParse({ ...base, publicBookingEnabled: "true" }).success).toBe(false);
+  });
+
+  it("[BO3-B] seatLimitOverride: entero ≥ 1 (CHECK de M7) o null (el del plan); ausente = no tocar", () => {
+    expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: 1 }).success).toBe(true);
+    expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: SEAT_LIMIT_OVERRIDE_MAX }).success).toBe(true);
+    const cleared = UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: null });
+    expect(cleared.success).toBe(true);
+    if (cleared.success) expect(cleared.data.seatLimitOverride).toBeNull();
+    for (const bad of [0, -1, 2.5, Number.NaN, "5", SEAT_LIMIT_OVERRIDE_MAX + 1]) {
+      expect(UpdatePlatformTenant.safeParse({ ...base, seatLimitOverride: bad }).success, String(bad)).toBe(false);
+    }
   });
 
   it("exige tenantId y un expectedUpdatedAt ISO (CAS)", () => {

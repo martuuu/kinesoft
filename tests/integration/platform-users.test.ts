@@ -77,6 +77,7 @@ const MEMBERSHIP_KEYS = [
   "tenantName",
   "tenantSlug",
   "tenantStatus",
+  "tenantVertical",
 ];
 
 /** Registro a mano (no `vi.fn`: vitest 2.1.9 rompe con un fn que tira a través de un mock). */
@@ -253,6 +254,8 @@ describe.skipIf(!RUN)("[BO2-C] directorio de usuarios y cuentas", () => {
     expect(d!.memberships).toHaveLength(1);
     expect(Object.keys(d!.memberships[0]).sort()).toEqual(MEMBERSHIP_KEYS);
     expect(d!.memberships[0]).toMatchObject({ tenantId: T.tenantId, role: "PRACTITIONER", accepted: true, suspended: false, hasPractitioner: true });
+    // BO3 (integrador): la vertical viaja para el rótulo del rol (la factory crea KINESIOLOGY por default).
+    expect(d!.memberships[0].tenantVertical).toBe("KINESIOLOGY");
     expect(d!.auth).toMatchObject({ status: "ok", emailConfirmed: true, banned: false, emailMismatch: false });
     expect(await getPlatformUser("no-existe")).toBeNull();
   });

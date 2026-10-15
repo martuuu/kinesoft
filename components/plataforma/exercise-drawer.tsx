@@ -20,7 +20,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { TagCombobox, type TagOption } from "@/components/ui/tag-combobox";
-import { ensureTag } from "@/lib/exercises";
+import { ensurePlatformTag } from "@/lib/tags-admin";
 import {
   createGlobalExercise,
   updateGlobalExercise,
@@ -263,8 +263,14 @@ export function ExerciseDrawer({
                 value={tagSlugs}
                 onChange={setTagSlugs}
                 onCreate={async (label) => {
-                  const t = await ensureTag(label);
-                  return t;
+                  // BO3-E: action de Plataforma (`requirePlatformAdmin`), no `ensureTag` del consultorio: un
+                  // superadmin sin consultorio propio no tiene Actor y el alta del tag fallaba.
+                  const r = await ensurePlatformTag(label);
+                  if (!r.ok) {
+                    toast.error("No se pudo crear la categoría", { description: r.error });
+                    return null;
+                  }
+                  return r.data;
                 }}
               />
               <span style={{ fontSize: 10.5, color: "var(--navy-300)" }}>

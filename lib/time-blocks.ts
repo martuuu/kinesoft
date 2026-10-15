@@ -51,6 +51,8 @@
  *   - Todo lo que interpreta `practitionerId: null` como "todos" (listar,
  *     desbloquear, el reuso del candado) suma `NOT_ROOM_BLOCK`.
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
+import { ReadOnlyModeError } from "@/lib/tenant-access";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
@@ -412,7 +414,13 @@ export async function listTimeBlocks(
   return { ok: true, data: rows.map(toRow) };
 }
 
-export async function createTimeBlock(
+// BO3-F: el cuerpo va en `createTimeBlockImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function createTimeBlock(...args: Parameters<typeof createTimeBlockImpl>): Promise<ActionResult<CreateTimeBlockResult>> {
+  return withReadOnlyResult(() => createTimeBlockImpl(...args));
+}
+
+async function createTimeBlockImpl(
   raw: TimeBlockCreateInput
 ): Promise<ActionResult<CreateTimeBlockResult>> {
   const parsed = TimeBlockCreate.safeParse(raw);
@@ -554,6 +562,8 @@ export async function createTimeBlock(
       return { kind: "ok", ids, locationId, affected: { count: hit.length, bookings } };
     });
   } catch (e) {
+    // BO3-F: el modo lectura / soporte sube al wrapper con su copy (no el genérico de acá).
+    if (e instanceof ReadOnlyModeError) throw e;
     logger.error("timeBlock.create.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos crear el bloqueo." };
   }
@@ -599,7 +609,13 @@ export async function createTimeBlock(
  * (`{ groupId }`). Todas las filas tienen que estar autorizadas para el actor;
  * si una no lo está, no se borra ninguna.
  */
-export async function deleteTimeBlock(
+// BO3-F: el cuerpo va en `deleteTimeBlockImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function deleteTimeBlock(...args: Parameters<typeof deleteTimeBlockImpl>): Promise<ActionResult<{ deleted: number }>> {
+  return withReadOnlyResult(() => deleteTimeBlockImpl(...args));
+}
+
+async function deleteTimeBlockImpl(
   raw: TimeBlockDeleteInput
 ): Promise<ActionResult<{ deleted: number }>> {
   const parsed = TimeBlockDelete.safeParse(raw);
@@ -646,6 +662,8 @@ export async function deleteTimeBlock(
       };
     });
   } catch (e) {
+    // BO3-F: el modo lectura / soporte sube al wrapper con su copy (no el genérico de acá).
+    if (e instanceof ReadOnlyModeError) throw e;
     logger.error("timeBlock.delete.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos quitar el bloqueo." };
   }
@@ -809,7 +827,13 @@ export async function previewDayLock(raw: DayLockPreviewInput): Promise<ActionRe
   };
 }
 
-export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLockResult> {
+// BO3-F: el cuerpo va en `applyDayLockImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function applyDayLock(...args: Parameters<typeof applyDayLockImpl>): Promise<ApplyDayLockResult> {
+  return withReadOnlyResult(() => applyDayLockImpl(...args));
+}
+
+async function applyDayLockImpl(raw: DayLockApplyInput): Promise<ApplyDayLockResult> {
   const parsed = DayLockApply.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -984,6 +1008,8 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
       };
     });
   } catch (e) {
+    // BO3-F: el modo lectura / soporte sube al wrapper con su copy (no el genérico de acá).
+    if (e instanceof ReadOnlyModeError) throw e;
     logger.error("dayLock.apply.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos bloquear el día. No se cambió nada." };
   }
@@ -1061,7 +1087,13 @@ export async function applyDayLock(raw: DayLockApplyInput): Promise<ApplyDayLock
  * Si algún bloqueo a borrar no es del actor (PRACTITIONER), no se borra
  * ninguno (`ForbiddenError`).
  */
-export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResult<RemoveDayLockData>> {
+// BO3-F: el cuerpo va en `removeDayLockImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function removeDayLock(...args: Parameters<typeof removeDayLockImpl>): Promise<ActionResult<RemoveDayLockData>> {
+  return withReadOnlyResult(() => removeDayLockImpl(...args));
+}
+
+async function removeDayLockImpl(raw: DayLockRemoveInput): Promise<ActionResult<RemoveDayLockData>> {
   const parsed = DayLockRemove.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -1121,6 +1153,8 @@ export async function removeDayLock(raw: DayLockRemoveInput): Promise<ActionResu
       return { kind: "ok", deletedIds, remaining };
     });
   } catch (e) {
+    // BO3-F: el modo lectura / soporte sube al wrapper con su copy (no el genérico de acá).
+    if (e instanceof ReadOnlyModeError) throw e;
     logger.error("dayLock.remove.failed", { err: e instanceof Error ? e.message : String(e) });
     return { ok: false, error: "No pudimos desbloquear el día." };
   }

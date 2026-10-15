@@ -19,12 +19,18 @@ import type { TenantAccess, TenantAccessMode } from "@/lib/tenant-access";
 import type { StatusReasonCode } from "@/lib/platform-tenants-schemas";
 
 export const PLATFORM_TENANTS_PAGE_SIZE = 50;
-/** "Trials que vencen pronto" en el resumen: los que vencen en ≤ N días (o ya vencieron y siguen TRIALING). */
-export const PLATFORM_TRIAL_WARNING_DAYS = 14;
+/**
+ * "Trials que vencen pronto" en el resumen: los que vencen en ≤ N días (o ya vencieron y siguen TRIALING).
+ * BO3-B: 14 → 7, el mismo umbral en el que la banda del consultorio empieza a avisar (`TRIAL_WARNING_DAYS` de
+ * `lib/tenant-access.ts`): con 14 el superadmin veía «por vencer» consultorios a los que todavía nadie avisó.
+ */
+export const PLATFORM_TRIAL_WARNING_DAYS = 7;
 /** Tope de filas de las listas del resumen (los totales van aparte). */
 export const PLATFORM_OVERVIEW_LIST_LIMIT = 20;
 /** Últimos eventos `platform.*` que muestra el detalle. */
 export const PLATFORM_RECENT_EVENTS = 10;
+/** BO3-B: eventos por página de la pestaña «Actividad» (`getPlatformTenantActivity`). */
+export const PLATFORM_ACTIVITY_PAGE_SIZE = 30;
 
 /** Fila de la lista de consultorios. */
 export type PlatformTenantRow = {
@@ -106,6 +112,9 @@ export type PlatformAuditEventRow = {
 };
 
 export type PlatformTenantDetail = PlatformTenantRow & {
+  /** BO3-B: razón social y CUIT del consultorio (datos fiscales del negocio, no PHI): los edita «Editar datos». */
+  legalName: string | null;
+  taxId: string | null;
   phone: string | null;
   whatsapp: string | null;
   publicEmail: string | null;
@@ -153,6 +162,8 @@ export type PlatformOnboardingRow = {
 
 export type PlatformOverview = {
   totalTenants: number;
+  /** BO3-B: consultorios por estado administrativo (activos / suspendidos / de baja), con ceros. */
+  byStatus: Record<TenantStatus, number>;
   /** Solo las combinaciones con al menos un consultorio. */
   byVerticalPlan: PlatformVerticalPlanCount[];
   /** TRIALING con vencimiento en ≤ PLATFORM_TRIAL_WARNING_DAYS días AR (incluye vencidos), el más urgente primero. */
@@ -162,4 +173,17 @@ export type PlatformOverview = {
   onboardingPending: PlatformOnboardingRow[];
   onboardingPendingCount: number;
   publicBookingEnabledCount: number;
+};
+
+/**
+ * BO3-B: un evento de la pestaña «Actividad». Lo mismo que muestra el detalle (`PlatformAuditEventRow`) más los
+ * NOMBRES de las claves del payload (nunca sus valores): un evento como `platform.tenant.profile` o
+ * `platform.support.start` no trae `changed/before/after` y sin esto se veía vacío.
+ */
+export type PlatformActivityRow = PlatformAuditEventRow & { payloadKeys: string[] };
+
+export type PlatformActivityPage = {
+  events: PlatformActivityRow[];
+  /** Id del último evento de la página: se pasa como `cursor` para la siguiente. null = no hay más. */
+  nextCursor: string | null;
 };

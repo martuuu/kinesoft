@@ -386,7 +386,8 @@ async function notifyOwners(p: {
       tenantName: p.tenantName,
       superadminEmail: p.superadminEmail,
       startedAt: p.startedAt,
-      url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/configuracion`,
+      // BO3-F: directo a la pestaña «Accesos de soporte» (components/configuracion/controls.tsx lee `?tab=`).
+      url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "")}/configuracion?tab=soporte`,
     });
     for (const o of owners) {
       await sendEmail({

@@ -43,7 +43,7 @@ export function resumenPlanSummary(plan: PlanDTO): {
         month: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
-        hour12: false,
+        hourCycle: "h23",
         timeZone: "America/Argentina/Buenos_Aires",
       })}`
     : null;

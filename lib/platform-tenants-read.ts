@@ -21,7 +21,8 @@ import "server-only";
  *    `auditPlatformInTx`, payload de enums/booleanos/fechas) y del payload se
  *    toman solo `changed/before/after` con valores primitivos.
  */
-import { Prisma } from "@prisma/client";
+import { Prisma, type TenantStatus } from "@prisma/client";
+import { z } from "zod";
 import { prismaService } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platform-actor";
 import { toARDateKey } from "@/lib/datetime-ar";
@@ -31,15 +32,18 @@ import { modulesFor, TENANT_MODULES } from "@/lib/tenant-modules";
 import {
   PlatformTenantId,
   PlatformTenantListQuery,
+  TENANT_STATUS_VALUES,
   parseStatusReason,
   trialEndsOnToDate,
   type PlatformTenantListQueryInput,
 } from "@/lib/platform-tenants-schemas";
 import {
+  PLATFORM_ACTIVITY_PAGE_SIZE,
   PLATFORM_OVERVIEW_LIST_LIMIT,
   PLATFORM_RECENT_EVENTS,
   PLATFORM_TENANTS_PAGE_SIZE,
   PLATFORM_TRIAL_WARNING_DAYS,
+  type PlatformActivityPage,
   type PlatformAuditChange,
   type PlatformAuditEventRow,
   type PlatformOverview,
@@ -154,12 +158,14 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
     trialEndsAt: { not: null, lte: horizon },
   };
 
-  const [groups, trialsRaw, trialsCount, pendingRaw, pendingCount, bookingOn] = await Promise.all([
+  const [groups, statusGroups, trialsRaw, trialsCount, pendingRaw, pendingCount, bookingOn] = await Promise.all([
     prismaService.tenant.groupBy({
       by: ["vertical", "plan"],
       _count: { _all: true },
       orderBy: [{ vertical: "asc" }, { plan: "asc" }],
     }),
+    // BO3-B: activos / suspendidos / de baja. Solo COUNT por estado (sin filas).
+    prismaService.tenant.groupBy({ by: ["status"], _count: { _all: true }, orderBy: { status: "asc" } }),
     prismaService.tenant.findMany({
       where: trialWhere,
       select: { id: true, name: true, slug: true, vertical: true, plan: true, trialEndsAt: true },
@@ -192,8 +198,11 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
   });
 
   const byVerticalPlan = groups.map((g) => ({ vertical: g.vertical, plan: g.plan, count: g._count._all }));
+  const byStatus = Object.fromEntries(TENANT_STATUS_VALUES.map((st) => [st, 0])) as Record<TenantStatus, number>;
+  for (const g of statusGroups) byStatus[g.status] = g._count._all;
   return {
     totalTenants: byVerticalPlan.reduce((acc, g) => acc + g.count, 0),
+    byStatus,
     byVerticalPlan,
     trialsEndingSoon: trials,
     trialsEndingSoonCount: trialsCount,
@@ -275,6 +284,34 @@ function changesOf(payload: Prisma.JsonValue | null): PlatformAuditChange[] {
   }));
 }
 
+type EventSource = { id: string; action: string; createdAt: Date; actorId: string | null; payload: Prisma.JsonValue };
+
+/** Nombres de las claves de primer nivel del payload; nunca los valores (pueden ser texto libre). */
+function payloadKeysOf(payload: Prisma.JsonValue | null): string[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  return Object.keys(payload).sort();
+}
+
+/**
+ * Filas de eventos `platform.*` → DTO. El email del actor se busca en `UserProfile` (staff, no PHI); del payload
+ * solo salen `changed/before/after` primitivos (`changesOf`) y los nombres de las claves (`payloadKeysOf`).
+ */
+async function toEventRows(events: EventSource[]): Promise<PlatformActivityPage["events"]> {
+  const actorIds = [...new Set(events.map((e) => e.actorId).filter((x): x is string => !!x))];
+  const actors = actorIds.length
+    ? await prismaService.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, email: true } })
+    : [];
+  const emailById = new Map(actors.map((a) => [a.id, a.email]));
+  return events.map((e) => ({
+    id: e.id,
+    action: e.action,
+    createdAt: e.createdAt.toISOString(),
+    actorEmail: e.actorId ? (emailById.get(e.actorId) ?? null) : null,
+    changes: changesOf(e.payload),
+    payloadKeys: payloadKeysOf(e.payload),
+  }));
+}
+
 /** Detalle de un consultorio para /plataforma. null = no existe. */
 export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTenantDetail | null> {
   await requirePlatformAdmin("platform.read");
@@ -286,6 +323,8 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
     where: { id: tenantId },
     select: {
       ...rowSelect,
+      legalName: true,
+      taxId: true,
       phone: true,
       whatsapp: true,
       publicEmail: true,
@@ -322,23 +361,15 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
     }),
   ]);
 
-  const actorIds = [...new Set(events.map((e) => e.actorId).filter((x): x is string => !!x))];
-  const actors = actorIds.length
-    ? await prismaService.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, email: true } })
-    : [];
-  const emailById = new Map(actors.map((a) => [a.id, a.email]));
-
-  const recentPlatformEvents: PlatformAuditEventRow[] = events.map((e) => ({
-    id: e.id,
-    action: e.action,
-    createdAt: e.createdAt.toISOString(),
-    actorEmail: e.actorId ? (emailById.get(e.actorId) ?? null) : null,
-    changes: changesOf(e.payload),
-  }));
+  const recentPlatformEvents: PlatformAuditEventRow[] = (await toEventRows(events)).map(
+    ({ payloadKeys: _keys, ...e }) => e
+  );
 
   const modules = modulesFor(t);
   return {
     ...toRow(t, homes, now),
+    legalName: t.legalName,
+    taxId: t.taxId,
     phone: t.phone,
     whatsapp: t.whatsapp,
     publicEmail: t.publicEmail,
@@ -359,5 +390,51 @@ export async function getPlatformTenantDetail(rawId: string): Promise<PlatformTe
     recentPlatformEvents,
     publicBookingPath: `/c/${t.slug}/booking`,
     updatedAt: t.updatedAt.toISOString(),
+  };
+}
+
+/** Cursor de «Actividad»: el id de un AuditEvent (cuid/uuid). Se valida antes de tocar la base. */
+const ActivityCursor = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/);
+
+/**
+ * BO3-B · pestaña «Actividad» del detalle: eventos `platform.*` del consultorio, del más nuevo al más viejo, de a
+ * `PLATFORM_ACTIVITY_PAGE_SIZE`, con cursor (keyset sobre `createdAt desc, id desc`).
+ *
+ * Mismo contrato PHI que el detalle: solo `AuditEvent` con `action` que empieza con `platform.` y del consultorio
+ * pedido (el `where` va siempre, también con cursor: un cursor de otro consultorio solo corre la posición, no trae
+ * sus filas). null = el consultorio no existe o el id está mal formado; un cursor inválido arranca de cero.
+ */
+export async function getPlatformTenantActivity(
+  rawTenantId: string,
+  rawCursor?: string | null
+): Promise<PlatformActivityPage | null> {
+  await requirePlatformAdmin("platform.read");
+  const parsed = PlatformTenantId.safeParse(rawTenantId);
+  if (!parsed.success) return null;
+  const tenantId = parsed.data;
+  const exists = await prismaService.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
+  if (!exists) return null;
+
+  const cur = rawCursor ? ActivityCursor.safeParse(rawCursor) : null;
+  const cursor = cur?.success ? cur.data : null;
+
+  const where = { tenantId, action: { startsWith: "platform." } } satisfies Prisma.AuditEventWhereInput;
+  // Un cursor que no es de este consultorio (o no existe) se ignora: Prisma con un cursor ajeno ordenaría desde
+  // la posición de esa fila, que no tiene sentido para el superadmin.
+  const anchor = cursor
+    ? await prismaService.auditEvent.findFirst({ where: { ...where, id: cursor }, select: { id: true } })
+    : null;
+
+  const rows = await prismaService.auditEvent.findMany({
+    where,
+    select: { id: true, action: true, createdAt: true, actorId: true, payload: true },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    ...(anchor ? { cursor: { id: anchor.id }, skip: 1 } : {}),
+    take: PLATFORM_ACTIVITY_PAGE_SIZE + 1,
+  });
+  const page = rows.slice(0, PLATFORM_ACTIVITY_PAGE_SIZE);
+  return {
+    events: await toEventRows(page),
+    nextCursor: rows.length > PLATFORM_ACTIVITY_PAGE_SIZE ? page[page.length - 1].id : null,
   };
 }

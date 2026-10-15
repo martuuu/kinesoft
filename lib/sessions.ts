@@ -40,6 +40,7 @@
  *     del commit; el verificador de invariantes corre al final de la tx donde
  *     se cierra o se mueve una sesión.
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma, type SessionExerciseStatus } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
@@ -527,7 +528,13 @@ export async function getSessionDetail(id: string) {
   });
 }
 
-export async function updateSessionExercise(input: {
+// BO3-F: el cuerpo va en `updateSessionExerciseImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function updateSessionExercise(...args: Parameters<typeof updateSessionExerciseImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => updateSessionExerciseImpl(...args));
+}
+
+async function updateSessionExerciseImpl(input: {
   sessionExerciseId: string;
   status?: SessionExerciseStatus;
   sets?: number;
@@ -634,7 +641,13 @@ function bookingOutcomeError(o: Exclude<Awaited<ReturnType<typeof applyBookingUp
  * Post-commit: `afterBookingsCommitted` una vez si se movió un turno. Al final
  * de la tx, el verificador de invariantes del plan.
  */
-export async function rescheduleSession(input: {
+// BO3-F: el cuerpo va en `rescheduleSessionImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function rescheduleSession(...args: Parameters<typeof rescheduleSessionImpl>): Promise<ActionResult<RescheduleSessionResult>> {
+  return withReadOnlyResult(() => rescheduleSessionImpl(...args));
+}
+
+async function rescheduleSessionImpl(input: {
   sessionId: string;
   scheduledFor: string; // ISO
   practitionerId?: string;
@@ -820,7 +833,13 @@ export async function rescheduleSession(input: {
  * Guarda notas / EVA pre-post / RPE sin cerrar la sesión. `null` vacía el
  * campo (antes `""` viajaba como `undefined` y las notas no se podían borrar).
  */
-export async function updateSessionMeta(input: SessionMetaUpdateInput): Promise<ActionResult> {
+// BO3-F: el cuerpo va en `updateSessionMetaImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function updateSessionMeta(...args: Parameters<typeof updateSessionMetaImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => updateSessionMetaImpl(...args));
+}
+
+async function updateSessionMetaImpl(input: SessionMetaUpdateInput): Promise<ActionResult> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);
   if (off) return off;
@@ -922,7 +941,13 @@ async function programPendingInTx(
  * Post-commit: `afterBookingsCommitted` si cambió el turno, y el aviso
  * PROGRAM_NEARING_DISCHARGE (al responsable del plan, D17) si quedan ≤ 1.
  */
-export async function completeSessionFromSeguimiento(
+// BO3-F: el cuerpo va en `completeSessionFromSeguimientoImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function completeSessionFromSeguimiento(...args: Parameters<typeof completeSessionFromSeguimientoImpl>): Promise<ActionResult<CompleteSessionResult>> {
+  return withReadOnlyResult(() => completeSessionFromSeguimientoImpl(...args));
+}
+
+async function completeSessionFromSeguimientoImpl(
   sessionId: string,
   meta?: SessionMetaInput
 ): Promise<ActionResult<CompleteSessionResult>> {
@@ -1061,7 +1086,13 @@ export async function completeSessionFromSeguimiento(
  * anotaciones") o no llegó nada que cargar; también hace idempotente el doble
  * click. Sobre una sesión abierta, rechazo: eso es "Cerrar sesión".
  */
-export async function loadSessionEvolution(
+// BO3-F: el cuerpo va en `loadSessionEvolutionImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function loadSessionEvolution(...args: Parameters<typeof loadSessionEvolutionImpl>): Promise<ActionResult<{ loaded: boolean }>> {
+  return withReadOnlyResult(() => loadSessionEvolutionImpl(...args));
+}
+
+async function loadSessionEvolutionImpl(
   sessionId: string,
   meta: SessionMetaInput
 ): Promise<ActionResult<{ loaded: boolean }>> {
@@ -1109,7 +1140,13 @@ export async function loadSessionEvolution(
  * Workaround for the @@unique([sessionId, order]) constraint: bump
  * everything to negative orders first, then rewrite to the target order.
  */
-export async function reorderSessionExercises(input: {
+// BO3-F: el cuerpo va en `reorderSessionExercisesImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function reorderSessionExercises(...args: Parameters<typeof reorderSessionExercisesImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => reorderSessionExercisesImpl(...args));
+}
+
+async function reorderSessionExercisesImpl(input: {
   sessionId: string;
   orderedIds: string[];
 }): Promise<ActionResult> {
@@ -1141,7 +1178,13 @@ export async function reorderSessionExercises(input: {
   return { ok: true, data: undefined };
 }
 
-export async function addSessionExercise(input: {
+// BO3-F: el cuerpo va en `addSessionExerciseImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function addSessionExercise(...args: Parameters<typeof addSessionExerciseImpl>): Promise<ActionResult<{ id: string }>> {
+  return withReadOnlyResult(() => addSessionExerciseImpl(...args));
+}
+
+async function addSessionExerciseImpl(input: {
   sessionId: string;
   exerciseId: string;
   sets?: number;
@@ -1199,7 +1242,13 @@ export async function addSessionExercise(input: {
   return { ok: true, data: { id: r.rowId } };
 }
 
-export async function removeSessionExercise(id: string): Promise<ActionResult> {
+// BO3-F: el cuerpo va en `removeSessionExerciseImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function removeSessionExercise(...args: Parameters<typeof removeSessionExerciseImpl>): Promise<ActionResult> {
+  return withReadOnlyResult(() => removeSessionExerciseImpl(...args));
+}
+
+async function removeSessionExerciseImpl(id: string): Promise<ActionResult> {
   const actor = await getActor();
   const off = sessionsModuleOff(actor);
   if (off) return off;
@@ -1237,7 +1286,13 @@ export async function removeSessionExercise(id: string): Promise<ActionResult> {
  * and inheriting series/reps from the replacement's defaults (unless
  * the caller overrides). The old SessionExercise row is removed.
  */
-export async function substituteSessionExercise(input: {
+// BO3-F: el cuerpo va en `substituteSessionExerciseImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function substituteSessionExercise(...args: Parameters<typeof substituteSessionExerciseImpl>): Promise<ActionResult<{ id: string }>> {
+  return withReadOnlyResult(() => substituteSessionExerciseImpl(...args));
+}
+
+async function substituteSessionExerciseImpl(input: {
   sessionExerciseId: string;
   newExerciseId: string;
 }): Promise<ActionResult<{ id: string }>> {
@@ -1376,7 +1431,13 @@ export async function listAssignablePrograms(): Promise<
  *     sueltas con el chequeo de acceso afuera (ventana entre chequeo y write);
  *   - entrada con zod (`BulkAddSessionExercisesInput`).
  */
-export async function bulkAddSessionExercises(input: {
+// BO3-F: el cuerpo va en `bulkAddSessionExercisesImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function bulkAddSessionExercises(...args: Parameters<typeof bulkAddSessionExercisesImpl>): Promise<ActionResult<{ created: number; skipped: number }>> {
+  return withReadOnlyResult(() => bulkAddSessionExercisesImpl(...args));
+}
+
+async function bulkAddSessionExercisesImpl(input: {
   programId: string;
   exerciseIds: string[];
   range: { kind: "all" } | { kind: "fromIndex"; fromIndex: number };

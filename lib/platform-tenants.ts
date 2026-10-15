@@ -3,7 +3,8 @@
 /**
  * /plataforma consultorios — la única escritura (EV0 · EV-P1, plan §15.4): el
  * Drawer "Editar suscripción" de EV-P3 cambia vertical, plan, estado de la
- * suscripción, fin del trial y el switch del turnero (EV-D6). Las lecturas viven
+ * suscripción, fin del trial y el switch del turnero (EV-D6); BO3-B suma el cupo
+ * de profesionales a medida (`seatLimitOverride`). Las lecturas viven
  * en `lib/platform-tenants-read.ts` (server-only, no son actions).
  *
  * Orden: `requirePlatformAdmin("tenant.entitlements.update")` (BO2-D: antes
@@ -38,8 +39,16 @@ export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{
     for (const [k, v] of Object.entries(parsed.error.flatten().fieldErrors)) if (v) fieldErrors[k] = v;
     return { ok: false, error: "Datos inválidos", fieldErrors };
   }
-  const { tenantId, expectedUpdatedAt, trialEndsOn, vertical, plan, subscriptionStatus, publicBookingEnabled } =
-    parsed.data;
+  const {
+    tenantId,
+    expectedUpdatedAt,
+    trialEndsOn,
+    vertical,
+    plan,
+    subscriptionStatus,
+    publicBookingEnabled,
+    seatLimitOverride,
+  } = parsed.data;
 
   // Solo las keys presentes: ausente = no tocar (el escritor ignora undefined,
   // pero así el patch que llega al audit es exactamente lo que pidió el Drawer).
@@ -48,6 +57,8 @@ export async function updatePlatformTenant(raw: unknown): Promise<ActionResult<{
   if (plan !== undefined) patch.plan = plan;
   if (subscriptionStatus !== undefined) patch.subscriptionStatus = subscriptionStatus;
   if (publicBookingEnabled !== undefined) patch.publicBookingEnabled = publicBookingEnabled;
+  // BO3-B: cupo a medida (el escritor lo acepta solo para `platform` y lo audita como número).
+  if (seatLimitOverride !== undefined) patch.seatLimitOverride = seatLimitOverride;
   if (trialEndsOn !== undefined) patch.trialEndsAt = trialEndsOn === null ? null : trialEndsOnToDate(trialEndsOn);
 
   const res = await prismaService.$transaction((tx) =>

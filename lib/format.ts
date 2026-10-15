@@ -36,7 +36,9 @@ const PRESETS: Record<DatePreset, Intl.DateTimeFormatOptions> = {
     // 24h like every other surface. Without this the locale default emits
     // "10:00 a. m." with a narrow-no-break-space, whose width differs between
     // Node's ICU and the browser's → React hydration mismatch.
-    hour12: false,
+    // BO3-F: `hourCycle: "h23"` y no `hour12: false`: con `hour12:false` el ICU (Node y V8) imprime la medianoche
+    // como «24:30»; h23 da «00:30». No combinar con `hour12` (lo pisa).
+    hourCycle: "h23",
   },
   weekdayDayMonth: {
     weekday: "short",
@@ -50,7 +52,8 @@ const PRESETS: Record<DatePreset, Intl.DateTimeFormatOptions> = {
     hour: "2-digit",
     minute: "2-digit",
   },
-  time: { hour: "2-digit", minute: "2-digit", hour12: false },
+  // h23, no hour12:false: medianoche «00:30» y no «24:30» (ver longDateTime).
+  time: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
   dayMonth: { day: "2-digit", month: "long" },
   monthYear: { month: "long", year: "numeric" },
 };

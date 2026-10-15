@@ -212,7 +212,7 @@ export function planSessionWhen(s: Pick<PlanSessionDTO, "scheduledFor" | "bookin
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
     timeZone: AR_TZ,
   });
 }
@@ -472,7 +472,7 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
                       month: "2-digit",
                       hour: "2-digit",
                       minute: "2-digit",
-                      hour12: false,
+                      hourCycle: "h23",
                       timeZone: AR_TZ,
                     })}
                   </>
@@ -852,7 +852,7 @@ export function SessionRescheduleDrawer({
             <span>
               El paciente tiene otro turno ese día a las{" "}
               <strong>
-                {new Date(moved.scheduledFor).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: AR_TZ })}
+                {new Date(moved.scheduledFor).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: AR_TZ })}
               </strong>
               : ese turno no se movió.
             </span>

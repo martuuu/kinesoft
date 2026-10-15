@@ -21,6 +21,7 @@
  *
  * Exporta SOLO funciones async.
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import type { z } from "zod";
@@ -148,7 +149,13 @@ export async function previewAddPlanSessions(raw: AddPlanSessionsPreviewInput): 
  * COMPLETED solo con `confirmReopen`. PACKAGE exige `packagePricing`. Si la
  * agenda o el plan cambiaron: `{kind:'stale-preview', preview}`.
  */
-export async function addPlanSessions(raw: AddPlanSessionsInput): Promise<AddPlanSessionsResult> {
+// BO3-F: el cuerpo va en `addPlanSessionsImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function addPlanSessions(...args: Parameters<typeof addPlanSessionsImpl>): Promise<AddPlanSessionsResult> {
+  return withReadOnlyResult(() => addPlanSessionsImpl(...args));
+}
+
+async function addPlanSessionsImpl(raw: AddPlanSessionsInput): Promise<AddPlanSessionsResult> {
   const actor = await getActor();
   const parsed = AddPlanSessionsCommitSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -174,7 +181,13 @@ export async function addPlanSessions(raw: AddPlanSessionsInput): Promise<AddPla
 // ─── Archivar / restaurar sesiones ───────────────────────────────────────────
 
 /** Archivar sesiones o reducir la cantidad (CAS `expectedUpdatedAt`). Gate `plans.manage`. */
-export async function archivePlanSessions(raw: ArchivePlanSessionsInput): Promise<ArchivePlanSessionsResult> {
+// BO3-F: el cuerpo va en `archivePlanSessionsImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function archivePlanSessions(...args: Parameters<typeof archivePlanSessionsImpl>): Promise<ArchivePlanSessionsResult> {
+  return withReadOnlyResult(() => archivePlanSessionsImpl(...args));
+}
+
+async function archivePlanSessionsImpl(raw: ArchivePlanSessionsInput): Promise<ArchivePlanSessionsResult> {
   const actor = await getActor();
   const parsed = ArchivePlanSessionsSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -189,7 +202,13 @@ export async function archivePlanSessions(raw: ArchivePlanSessionsInput): Promis
 }
 
 /** Restaurar una sesión archivada (OWNER/ADMIN). "Ya hay una sesión N viva" si otra tomó su index. */
-export async function restoreSession(raw: RestorePlanSessionInput): Promise<RestorePlanSessionResult> {
+// BO3-F: el cuerpo va en `restoreSessionImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function restoreSession(...args: Parameters<typeof restoreSessionImpl>): Promise<RestorePlanSessionResult> {
+  return withReadOnlyResult(() => restoreSessionImpl(...args));
+}
+
+async function restoreSessionImpl(raw: RestorePlanSessionInput): Promise<RestorePlanSessionResult> {
   const actor = await getActor();
   const parsed = RestorePlanSessionSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -222,7 +241,13 @@ export async function previewRepricePlan(raw: RepricePlanInput): Promise<Reprice
 }
 
 /** Reprecio C5 (solo futuros impagos; CAS por fila; rollback total). Gate `plans.manage`. */
-export async function repricePlan(raw: RepricePlanInput): Promise<RepricePlanResult> {
+// BO3-F: el cuerpo va en `repricePlanImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function repricePlan(...args: Parameters<typeof repricePlanImpl>): Promise<RepricePlanResult> {
+  return withReadOnlyResult(() => repricePlanImpl(...args));
+}
+
+async function repricePlanImpl(raw: RepricePlanInput): Promise<RepricePlanResult> {
   const actor = await getActor();
   const parsed = RepricePlanSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -239,7 +264,13 @@ export async function repricePlan(raw: RepricePlanInput): Promise<RepricePlanRes
 // ─── Autorización de la OS ───────────────────────────────────────────────────
 
 /** E2: renovar (o cargar la primera) autorización de la OS. Gate `plans.authorize`. */
-export async function renewPlanAuthorization(raw: RenewAuthorizationInput): Promise<RenewAuthorizationResult> {
+// BO3-F: el cuerpo va en `renewPlanAuthorizationImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function renewPlanAuthorization(...args: Parameters<typeof renewPlanAuthorizationImpl>): Promise<RenewAuthorizationResult> {
+  return withReadOnlyResult(() => renewPlanAuthorizationImpl(...args));
+}
+
+async function renewPlanAuthorizationImpl(raw: RenewAuthorizationInput): Promise<RenewAuthorizationResult> {
   const actor = await getActor();
   const parsed = RenewAuthorizationSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);

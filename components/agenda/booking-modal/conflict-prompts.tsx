@@ -65,7 +65,7 @@ function fmtSlot(iso: string): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
     timeZone: "America/Argentina/Buenos_Aires",
   });
 }
@@ -235,7 +235,7 @@ export function PatientOverlapPrompt({
         {new Date(patientOverlap.existingISO).toLocaleString("es-AR", {
           hour: "2-digit",
           minute: "2-digit",
-          hour12: false,
+          hourCycle: "h23",
           timeZone: "America/Argentina/Buenos_Aires",
         })}{" "}
         que se cruza con este horario. Puede ser intencional (dos servicios en
@@ -287,7 +287,7 @@ export function SamePatientPrompt({
         {new Date(samePatient.existingISO).toLocaleString("es-AR", {
           hour: "2-digit",
           minute: "2-digit",
-          hour12: false,
+          hourCycle: "h23",
           timeZone: "America/Argentina/Buenos_Aires",
         })}
         . ¿Agregar otro turno para hoy?
@@ -356,7 +356,7 @@ export function ConflictPrompt({
               month: "short",
               hour: "2-digit",
               minute: "2-digit",
-              hour12: false,
+              hourCycle: "h23",
               timeZone: "America/Argentina/Buenos_Aires",
             })}
           </Button>

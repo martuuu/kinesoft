@@ -23,10 +23,20 @@ import {
   BUSINESS_HOUR_MAX,
 } from "@/lib/tenant-settings-constants";
 import { Switch, ErrorBox } from "../controls";
+import { TENANT_BASICS_STALE_ERROR } from "../config-copy";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 
-export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: Role }) {
+export function GeneralPanel({
+  tenant,
+  role,
+  support = false,
+}: {
+  tenant: TenantSettings;
+  role: Role;
+  /** BO3-F: sesión de soporte. Ve lo de Configuración, pero no puede abrir la HC a otros ni guardar preferencias propias. */
+  support?: boolean;
+}) {
   const router = useRouter();
   const { agenda, setAgenda } = useTweaks();
   const [pending, start] = useTransition();
@@ -37,6 +47,7 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
   const [slotMinutes, setSlotMinutes] = useState(tenant.agendaSlotMinutes);
   const [hoursMsg, setHoursMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [basicsMsg, setBasicsMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [basicsStale, setBasicsStale] = useState(false);
 
   // Sync when the server refreshes the tenant prop (after router.refresh()).
   useEffect(() => { setHoursStart(tenant.businessHoursStart); }, [tenant.businessHoursStart]);
@@ -76,13 +87,20 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
   const onBasicsSubmit = (formData: FormData) => {
     setError(null);
     setBasicsMsg(null);
+    setBasicsStale(false);
     start(async () => {
       const r = await updateTenantBasics({
         name: String(formData.get("name") ?? ""),
         legalName: String(formData.get("legalName") ?? ""),
         taxId: String(formData.get("taxId") ?? ""),
+        expectedUpdatedAt: tenant.updatedAt,
       });
       if (!r.ok) {
+        if (r.error === TENANT_BASICS_STALE_ERROR) {
+          // No se pisa: se avisa y se ofrece recargar (lo tipeado queda en el form hasta que recargue).
+          setBasicsStale(true);
+          return;
+        }
         setError(r.error);
         setBasicsMsg({ tone: "err", text: r.error });
       } else {
@@ -97,11 +115,46 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Datos del consultorio</EyebrowLabel>
         <form action={onBasicsSubmit} style={{ display: "grid", gap: 12, marginTop: 10 }}>
-          <FormField label="Nombre del consultorio" name="name" defaultValue={tenant.name} required />
+          {/* `key` = updatedAt: al recargar (o después de guardar) los defaultValue vuelven a leer lo último del server. */}
+          <FormField key={`name-${tenant.updatedAt}`} label="Nombre del consultorio" name="name" defaultValue={tenant.name} required />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <FormField label="Razón social" name="legalName" defaultValue={tenant.legalName ?? ""} />
-            <FormField label="CUIT / Identificador fiscal" name="taxId" defaultValue={tenant.taxId ?? ""} />
+            <FormField key={`legal-${tenant.updatedAt}`} label="Razón social" name="legalName" defaultValue={tenant.legalName ?? ""} />
+            <FormField key={`tax-${tenant.updatedAt}`} label="CUIT / Identificador fiscal" name="taxId" defaultValue={tenant.taxId ?? ""} />
           </div>
+          {basicsStale && (
+            <div
+              role="alert"
+              data-basics-stale
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                padding: 12,
+                borderRadius: 10,
+                background: "var(--st-noshow-bg)",
+                color: "var(--st-noshow-fg)",
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+            >
+              <span>
+                <strong>Cambió en otra sesión.</strong> Alguien guardó los datos del consultorio mientras editabas.
+                Recargá para ver lo último y volvé a hacer tu cambio.
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setBasicsStale(false);
+                  router.refresh();
+                }}
+              >
+                Recargar
+              </Button>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
             {basicsMsg && (
               <span
@@ -142,10 +195,15 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
           <Switch
             on={shared}
             onChange={toggleShared}
-            disabled={role !== "OWNER" && role !== "ADMIN"}
+            disabled={support || (role !== "OWNER" && role !== "ADMIN")}
             aria-label="Vista compartida del consultorio"
           />
         </div>
+        {support && (
+          <div data-support-note style={{ marginTop: 10, fontSize: 12.5, color: "var(--navy-500)", lineHeight: 1.45 }}>
+            Como soporte no podés cambiar quién ve la historia clínica: lo decide el consultorio.
+          </div>
+        )}
         {shared && (
           <div
             style={{
@@ -250,6 +308,9 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
         )}
       </Card>
 
+      {/* BO3-F: las preferencias son de la cuenta que mira; las del superadmin como soporte no se guardan (su sesión
+          es de solo lectura fuera de las actions de Configuración) y no le sirven al consultorio. */}
+      {!support && (
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Mi vista de agenda</EyebrowLabel>
         <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 8, lineHeight: 1.45 }}>
@@ -275,8 +336,9 @@ export function GeneralPanel({ tenant, role }: { tenant: TenantSettings; role: R
           onChange={(v) => setAgenda("agendaShowSunday", v)}
         />
       </Card>
+      )}
 
-      <AlertPrefsCard />
+      {!support && <AlertPrefsCard />}
 
       {error && <ErrorBox>{error}</ErrorBox>}
     </div>

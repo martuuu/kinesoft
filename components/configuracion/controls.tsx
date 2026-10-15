@@ -10,7 +10,30 @@ export type Tab =
   | "servicios"
   | "obras-sociales"
   | "diagnosticos"
-  | "usuarios";
+  | "usuarios"
+  | "plan"
+  | "soporte";
+
+/**
+ * BO3-F: las pestañas se pueden abrir por URL (`/configuracion?tab=soporte`: el mail `support_access` lleva a
+ * «Accesos de soporte»). Lo que no sea una pestaña conocida cae en General.
+ */
+export const CONFIG_TABS: readonly Tab[] = [
+  "general",
+  "sedes",
+  "profesionales",
+  "servicios",
+  "obras-sociales",
+  "diagnosticos",
+  "usuarios",
+  "plan",
+  "soporte",
+];
+
+export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return (CONFIG_TABS as readonly string[]).includes(v ?? "") ? (v as Tab) : "general";
+}
 
 export function TabsBar({
   tab,
@@ -35,8 +58,11 @@ export function TabsBar({
     { key: "obras-sociales", label: "Obras Sociales" },
     { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico" },
     { key: "usuarios", label: "Usuarios", ownerOnly: true /* IAM-D3: OWNER y ADMIN */ },
+    // BO3-F: plan y accesos de soporte son del titular y de quien administra (los lee `tenant.admin`).
+    { key: "plan", label: "Plan y uso", ownerOnly: true },
+    { key: "soporte", label: "Accesos de soporte", ownerOnly: true },
   ];
-  // B3.4: con 7 pestañas la píldora no entra en un celular; scrollea en
+  // B3.4: con 7 pestañas (9 desde BO3-F) la píldora no entra en un celular; scrollea en
   // horizontal en vez de desbordar la página (`maxWidth: 100%`).
   return (
     <div

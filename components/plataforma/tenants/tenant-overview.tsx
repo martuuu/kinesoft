@@ -1,8 +1,12 @@
 /**
  * [EV0-P3] Resumen de /plataforma (plan §15.4): total de consultorios, matriz
- * tipo × plan, trials por vencer (≤ 14 días, vencidos incluidos), altas con el
- * onboarding sin terminar y cuántos tienen los turnos online activos. Presentacional
- * puro: los datos vienen de `getPlatformOverview()` en la página.
+ * tipo × plan, trials por vencer (≤ 7 días desde BO3-B, vencidos incluidos), altas
+ * con el onboarding sin terminar y cuántos tienen los turnos online activos.
+ * Presentacional puro: los datos vienen de `getPlatformOverview()` en la página.
+ *
+ * BO3-B suma los conteos por estado del consultorio (activos / suspendidos / de
+ * baja), cada uno con link a la lista ya filtrada, y los accesos a Consultorios,
+ * Usuarios y Salud.
  */
 import Link from "next/link";
 import type { TenantPlan, TenantVertical } from "@prisma/client";
@@ -16,7 +20,13 @@ import {
   type PlatformVerticalPlanCount,
 } from "@/lib/platform-tenants-types";
 import { formatDateAR } from "@/lib/format";
-import { formatDayKeyAR, tenantHref, trialDaysLabel } from "@/components/plataforma/tenants/labels";
+import { TENANT_STATUS_VALUES } from "@/lib/platform-tenants-schemas";
+import {
+  TENANT_STATUS_PLURAL,
+  formatDayKeyAR,
+  tenantHref,
+  trialDaysLabel,
+} from "@/components/plataforma/tenants/labels";
 
 export type VerticalPlanMatrix = {
   cells: Record<TenantVertical, Record<TenantPlan, number>>;
@@ -40,17 +50,39 @@ export function verticalPlanMatrix(groups: PlatformVerticalPlanCount[]): Vertica
   return { cells, rowTotals, colTotals };
 }
 
-function Stat({ label, value, hint }: { label: string; value: number; hint?: string }) {
-  return (
-    <Card style={{ padding: 18 }}>
+function Stat({ label, value, hint, href }: { label: string; value: number; hint?: string; href?: string }) {
+  const body = (
+    <>
       <EyebrowLabel>{label}</EyebrowLabel>
       <div className="k-display" style={{ fontSize: 30, fontWeight: 700, marginTop: 6, color: "var(--navy-900)" }}>
         {value}
       </div>
       {hint && <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 2 }}>{hint}</div>}
+    </>
+  );
+  return (
+    <Card style={{ padding: 18 }}>
+      {href ? (
+        <Link href={href} style={{ textDecoration: "none", color: "inherit", display: "block" }}>
+          {body}
+        </Link>
+      ) : (
+        body
+      )}
     </Card>
   );
 }
+
+/** Lista de consultorios filtrada por estado del consultorio (`?tenantStatus=`). */
+export function statusListHref(status: string): string {
+  return `/plataforma/consultorios?tenantStatus=${encodeURIComponent(status)}`;
+}
+
+const QUICK_LINKS = [
+  { href: "/plataforma/consultorios", label: "Consultorios", hint: "Lista, alta y ciclo de vida" },
+  { href: "/plataforma/usuarios", label: "Usuarios", hint: "Cuentas, accesos y superadmins" },
+  { href: "/plataforma/salud", label: "Salud", hint: "Inconsistencias para reparar" },
+] as const;
 
 const cell: React.CSSProperties = { padding: "10px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
@@ -158,9 +190,17 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
           value={overview.trialsEndingSoonCount}
           hint={`En ${PLATFORM_TRIAL_WARNING_DAYS} días o vencidos`}
         />
-        <Stat label="Onboarding pendiente" value={overview.onboardingPendingCount} />
+        <Stat label="Altas sin terminar" value={overview.onboardingPendingCount} />
         <Stat label="Turnos online activos" value={overview.publicBookingEnabledCount} />
       </div>
+
+      <section aria-label="Por estado del consultorio">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(170px, 100%), 1fr))", gap: 12 }}>
+          {TENANT_STATUS_VALUES.map((st) => (
+            <Stat key={st} label={TENANT_STATUS_PLURAL[st]} value={overview.byStatus[st]} href={statusListHref(st)} />
+          ))}
+        </div>
+      </section>
 
       <Card style={{ padding: 18 }}>
         <h2 className="k-display" style={{ fontSize: 17, margin: "0 0 8px", fontWeight: 700 }}>
@@ -201,7 +241,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
         </ListCard>
 
         <ListCard
-          title="Onboarding pendiente"
+          title="Altas sin terminar"
           count={overview.onboardingPendingCount}
           shown={overview.onboardingPending.length}
           empty="Todas las altas terminaron el onboarding."
@@ -223,6 +263,17 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
           ))}
         </ListCard>
       </div>
+
+      <nav aria-label="Accesos" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: 12 }}>
+        {QUICK_LINKS.map((l) => (
+          <Link key={l.href} href={l.href} style={{ textDecoration: "none" }}>
+            <Card style={{ padding: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--sky-700)" }}>{l.label} →</div>
+              <div style={{ fontSize: 12, color: "var(--navy-300)", marginTop: 2 }}>{l.hint}</div>
+            </Card>
+          </Link>
+        ))}
+      </nav>
     </div>
   );
 }

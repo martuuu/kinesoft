@@ -26,6 +26,7 @@
  * Este archivo exporta SOLO funciones async; tipos y zod en
  * `lib/plans-types.ts` / `lib/plans-schemas.ts`.
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma, NotificationKind } from "@prisma/client";
 import type { z } from "zod";
@@ -129,7 +130,13 @@ export async function previewPlan(
  * desde el preview devuelve `{ kind: 'stale-preview', preview }` con las filas
  * re-clasificadas (copy C13: "La agenda cambió mientras armabas el plan…").
  */
-export async function createPlan(raw: PlanCreateInput): Promise<CreatePlanResult> {
+// BO3-F: el cuerpo va en `createPlanImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function createPlan(...args: Parameters<typeof createPlanImpl>): Promise<CreatePlanResult> {
+  return withReadOnlyResult(() => createPlanImpl(...args));
+}
+
+async function createPlanImpl(raw: PlanCreateInput): Promise<CreatePlanResult> {
   const actor = await getActor();
   const parsed = PlanCreateInputSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);

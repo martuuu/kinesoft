@@ -1,18 +1,44 @@
-// BO3-E la reemplaza. Placeholder de BO3-A: existe para que el nav de Plataforma no dé 404 mientras tanto.
 import { Card } from "@/components/ui/card";
+import { listPlatformAudit } from "@/lib/platform-audit-read";
+import { normalizeAuditFilters } from "@/lib/platform-audit-logic";
+import { AuditView } from "@/components/plataforma/audit/audit-view";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Auditoría · Plataforma · KineSoft" };
 
-/** El guard de superadmin vive en `app/(platform)/layout.tsx`. */
-export default function PlataformaAuditoriaPlaceholder() {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+
+/**
+ * BO3-E · /plataforma/auditoria. El guard de superadmin del layout es UX; la barrera real es el
+ * `requirePlatformAdmin` de `listPlatformAudit`. Los filtros viven en la URL; un valor inválido (editado a mano)
+ * se descarta en `normalizeAuditFilters` en vez de romper la página.
+ */
+export default async function PlataformaAuditoriaPage({ searchParams }: { searchParams: SearchParams }) {
+  const filters = normalizeAuditFilters({
+    action: first(searchParams.action),
+    tenantId: first(searchParams.tenantId),
+    actorEmail: first(searchParams.actorEmail),
+    targetUserId: first(searchParams.targetUserId),
+    from: first(searchParams.from),
+    to: first(searchParams.to),
+    cursor: first(searchParams.cursor),
+  });
+  const page = await listPlatformAudit(filters);
+
   return (
-    <Card style={{ padding: 24 }}>
-      <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-        Auditoría
-      </h1>
-      <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 640, lineHeight: 1.45 }}>
-        Próximamente: registro de todo lo que se hizo desde Plataforma, con filtros por consultorio, acción y fecha.
-      </p>
-    </Card>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card style={{ padding: 24 }}>
+        <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
+          Auditoría
+        </h1>
+        <p style={{ color: "var(--navy-500)", fontSize: 13.5, marginTop: 6, marginBottom: 0, maxWidth: 640, lineHeight: 1.45 }}>
+          Todo lo que se hizo desde Plataforma: quién, cuándo, sobre qué consultorio o usuario y qué campos tocó. Las
+          fechas son de Argentina.
+        </p>
+      </Card>
+      <AuditView page={page} filters={filters} />
+    </div>
   );
 }

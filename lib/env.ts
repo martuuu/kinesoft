@@ -75,6 +75,10 @@ const schema = z.object({
     z.enum(ACCESS_ENFORCEMENTS as unknown as [AccessEnforcement, ...AccessEnforcement[]]).default("banner")
   ),
 
+  // BO3-E: secreto de los cron de Vercel (Authorization: Bearer). Opcional hasta BO5-A, que lo usa en el handler;
+  // hoy solo lo lee `/plataforma/sistema` para mostrar presencia (nunca el valor).
+  CRON_SECRET: z.preprocess(emptyAsUndefined, z.string().optional()),
+
   // Set by Vercel: "production" | "preview" | "development". Unset locally/CI.
   VERCEL_ENV: z.enum(["production", "preview", "development"]).optional(),
 });
@@ -219,6 +223,7 @@ export const env = parseEnv({
   MAILPIT_URL: process.env.MAILPIT_URL,
   VERCEL_ENV: process.env.VERCEL_ENV,
   TENANT_ACCESS_ENFORCEMENT: process.env.TENANT_ACCESS_ENFORCEMENT,
+  CRON_SECRET: process.env.CRON_SECRET,
 });
 
 /**

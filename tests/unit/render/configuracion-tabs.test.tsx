@@ -24,6 +24,8 @@ describe("[EV0-fix] TabsBar de Configuración", () => {
       "Obras Sociales",
       "Diagnósticos",
       "Usuarios",
+      "Plan y uso",
+      "Accesos de soporte",
     ]);
   });
 

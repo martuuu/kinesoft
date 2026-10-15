@@ -9,6 +9,11 @@
  * que en mobile no scrollee la página entera. "Miembros" y "Creado" viven solo
  * en el detalle: con 10 columnas la grilla (~1370px) pasaba el `minWidth` y se
  * cortaba (revisión EV0).
+ *
+ * BO3-B: filtro y columna del estado del CONSULTORIO (`Tenant.status`: activo,
+ * suspendido, de baja) con el modo de acceso que aplican hoy los cortes
+ * (`effectiveAccessMode`), y el cupo de profesionales bajo el plan. La columna
+ * de la suscripción pasa a llamarse «Suscripción» para no chocar con «Estado».
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -19,10 +24,19 @@ import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import {
   SUBSCRIPTION_STATUS_VALUES,
   TENANT_PLAN_VALUES,
+  TENANT_STATUS_VALUES,
   TENANT_VERTICAL_VALUES,
 } from "@/lib/platform-tenants-schemas";
 import type { PlatformTenantPage, PlatformTenantRow } from "@/lib/platform-tenants-types";
-import { SUBSCRIPTION_STATUS_LABEL, formatDayKeyAR, tenantHref } from "@/components/plataforma/tenants/labels";
+import {
+  ACCESS_MODE_LABEL,
+  SUBSCRIPTION_STATUS_LABEL,
+  TENANT_STATUS_LABEL,
+  TENANT_STATUS_TONE,
+  formatDayKeyAR,
+  seatLimitLabel,
+  tenantHref,
+} from "@/components/plataforma/tenants/labels";
 
 /** Filtros normalizados ("" = sin filtro), como los parsea `PlatformTenantListQuery`. */
 export type TenantListQuery = {
@@ -30,8 +44,14 @@ export type TenantListQuery = {
   vertical: string;
   plan: string;
   status: string;
+  /** BO3-B: estado del consultorio. Opcional para no romper a quien arma la query sin él. */
+  tenantStatus?: string;
   page: number;
 };
+
+function hasFilters(q: TenantListQuery): boolean {
+  return !!(q.q || q.vertical || q.plan || q.status || q.tenantStatus);
+}
 
 const LIST_PATH = "/plataforma/consultorios";
 
@@ -42,13 +62,15 @@ export function buildListHref(query: TenantListQuery, page: number): string {
   if (query.vertical) sp.set("vertical", query.vertical);
   if (query.plan) sp.set("plan", query.plan);
   if (query.status) sp.set("status", query.status);
+  if (query.tenantStatus) sp.set("tenantStatus", query.tenantStatus);
   if (page > 1) sp.set("page", String(page));
   const s = sp.toString();
   return s ? `${LIST_PATH}?${s}` : LIST_PATH;
 }
 
-// Suma de mínimos (1040) + 7 gaps de 12 + padding 32 = 1156 → `minWidth` 1160.
-const COLS = "minmax(200px,1.6fr) 150px 90px 150px 90px 100px minmax(180px,1.2fr) 80px";
+// Suma de mínimos (1180) + 8 gaps de 12 + padding 32 = 1308 → `minWidth` 1310.
+const COLS = "minmax(200px,1.6fr) 120px 150px 110px 150px 90px 100px minmax(180px,1.2fr) 80px";
+const MIN_WIDTH = 1310;
 
 const selectStyle: React.CSSProperties = {
   padding: "9px 10px",
@@ -78,7 +100,7 @@ function Head({ children, align }: { children: ReactNode; align?: "right" }) {
 }
 
 function Filters({ query }: { query: TenantListQuery }) {
-  const active = !!(query.q || query.vertical || query.plan || query.status);
+  const active = hasFilters(query);
   return (
     <form
       method="get"
@@ -116,8 +138,21 @@ function Filters({ query }: { query: TenantListQuery }) {
           </option>
         ))}
       </select>
-      <select name="status" defaultValue={query.status} aria-label="Estado" style={selectStyle}>
-        <option value="">Todos los estados</option>
+      <select
+        name="tenantStatus"
+        defaultValue={query.tenantStatus ?? ""}
+        aria-label="Estado del consultorio"
+        style={selectStyle}
+      >
+        <option value="">Activos, suspendidos y de baja</option>
+        {TENANT_STATUS_VALUES.map((v) => (
+          <option key={v} value={v}>
+            {TENANT_STATUS_LABEL[v]}
+          </option>
+        ))}
+      </select>
+      <select name="status" defaultValue={query.status} aria-label="Estado de la suscripción" style={selectStyle}>
+        <option value="">Todas las suscripciones</option>
         {SUBSCRIPTION_STATUS_VALUES.map((v) => (
           <option key={v} value={v}>
             {SUBSCRIPTION_STATUS_LABEL[v]}
@@ -169,8 +204,17 @@ function Row({ r }: { r: PlatformTenantRow }) {
         </div>
         <div style={{ fontSize: 12, color: "var(--navy-300)", fontFamily: "var(--font-mono)" }}>{r.slug}</div>
       </div>
+      <div style={{ display: "grid", gap: 3, justifyItems: "start" }}>
+        <Tag tone={TENANT_STATUS_TONE[r.status]}>{TENANT_STATUS_LABEL[r.status]}</Tag>
+        <span style={{ fontSize: 11.5, color: "var(--navy-300)" }}>
+          Acceso: {ACCESS_MODE_LABEL[r.effectiveAccessMode].toLowerCase()}
+        </span>
+      </div>
       <div>{VERTICAL_LABEL[r.vertical]}</div>
-      <div style={{ fontWeight: 600 }}>{PLAN_LABEL[r.plan]}</div>
+      <div>
+        <div style={{ fontWeight: 600 }}>{PLAN_LABEL[r.plan]}</div>
+        <div style={{ fontSize: 12, color: "var(--navy-300)" }}>{seatLimitLabel(r)}</div>
+      </div>
       <div>
         <div>{SUBSCRIPTION_STATUS_LABEL[r.subscriptionStatus]}</div>
         {r.trialEndsOn && (
@@ -220,7 +264,7 @@ function Pagination({ page, query }: { page: PlatformTenantPage; query: TenantLi
 }
 
 export function TenantList({ page, query }: { page: PlatformTenantPage; query: TenantListQuery }) {
-  const filtered = !!(query.q || query.vertical || query.plan || query.status);
+  const filtered = hasFilters(query);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card style={{ padding: 16 }}>
@@ -234,7 +278,7 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: 1160 }}>
+          <div style={{ minWidth: MIN_WIDTH }}>
             <div
               style={{
                 display: "grid",
@@ -246,9 +290,10 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
               }}
             >
               <Head>Consultorio</Head>
-              <Head>Tipo</Head>
-              <Head>Plan</Head>
               <Head>Estado</Head>
+              <Head>Tipo</Head>
+              <Head>Plan y cupo</Head>
+              <Head>Suscripción</Head>
               <Head>Turnos online</Head>
               <Head>Onboarding</Head>
               <Head>Titular</Head>

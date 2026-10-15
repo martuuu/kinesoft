@@ -59,4 +59,11 @@ describe("formatDateAR", () => {
     expect(out).toContain("26");
     expect(out).not.toContain("27");
   });
+  it("[BO3-F] medianoche AR sale «00:30», no «24:30» (hourCycle h23, no hour12:false)", () => {
+    // 03:30Z = 00:30 AR. Con `hour12:false` el ICU de Node imprimía «24:30».
+    expect(formatDateAR("2026-10-14T03:30:00Z", "time")).toBe("00:30");
+    expect(formatDateAR("2026-10-14T17:05:00Z", "time")).toBe("14:05");
+    expect(formatDateAR("2026-10-14T03:30:00Z", "longDateTime")).toContain("00:30");
+    expect(formatDateAR("2026-10-14T03:30:00Z", "longDateTime")).not.toContain("24:");
+  });
 });

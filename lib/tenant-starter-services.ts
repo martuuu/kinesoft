@@ -38,7 +38,7 @@ const KINESIOLOGY: readonly StarterService[] = [
   { name: "Evaluación inicial", durationMin: 45, priceCents: 0, color: SERVICE_COLORS[5], maxConcurrent: 1, discipline: null },
 ];
 
-// Consultorio general: consultas uno a uno, sin disciplina (no tiene Planes).
+// Clínica general: consultas uno a uno, sin disciplina (no tiene Planes).
 const GENERAL: readonly StarterService[] = [
   { name: "Consulta", durationMin: 30, priceCents: 0, color: SERVICE_COLORS[8], maxConcurrent: 1, discipline: null },
   { name: "Primera consulta", durationMin: 45, priceCents: 0, color: SERVICE_COLORS[5], maxConcurrent: 1, discipline: null },

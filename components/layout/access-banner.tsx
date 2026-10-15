@@ -1,7 +1,7 @@
 import type { AccessEnforcement, TenantAccess } from "@/lib/tenant-access";
 
 /**
- * Banda de acceso del consultorio (BO1-A; la pulen BO3-F). La monta `app/(app)/layout.tsx` arriba del contenido.
+ * Banda de acceso del consultorio (BO1-A; BO3-F le suma la variante de soporte). La monta `app/(app)/layout.tsx` arriba del contenido.
  *
  * Server component sin estado: el acceso se recalcula en cada request (`Actor.access`, modo REAL), así que la banda
  * aparece o se va sola en la próxima navegación. Solo se ve con `TENANT_ACCESS_ENFORCEMENT` en `banner` o `enforce`
@@ -67,8 +67,72 @@ export function accessBannerCopy(access: TenantAccess, enforcement: AccessEnforc
   }
 }
 
-export function AccessBanner({ access, enforcement }: { access: TenantAccess; enforcement: AccessEnforcement }) {
-  const copy = accessBannerCopy(access, enforcement);
+/**
+ * BO3-F: la misma banda cuando mira un superadmin «como soporte». Ve el acceso REAL del consultorio destino, pero el
+ * copy de arriba le habla al titular («Tu prueba…», «Escribinos…») y el soporte ES quien recibe ese «escribinos»: se
+ * leía como si su propia cuenta estuviera por vencer. Acá va en tercera persona, sin llamados a la acción, y suma
+ * suspendido/baja (el soporte puede entrar a un consultorio suspendido; sus usuarios no). La escritura del soporte ya
+ * es de solo lectura por la sesión (banda de soporte), así que no se repite.
+ */
+export function supportAccessBannerCopy(access: TenantAccess, enforcement: AccessEnforcement): AccessBannerCopy | null {
+  const days = (n: number) => (n === 1 ? "1 día" : `${n} días`);
+  // Con `off` ni la suspensión corta (`effectiveMode`): decir «no pueden entrar» sería falso.
+  if (enforcement === "off") return null;
+  switch (access.reason) {
+    case "tenant_suspended":
+      return { tone: "warn", text: "Este consultorio está suspendido: sus usuarios no pueden entrar." };
+    case "tenant_closed":
+      return { tone: "warn", text: "Este consultorio está dado de baja: sus usuarios no pueden entrar." };
+    case "trial_ending":
+      return access.daysLeft === null
+        ? null
+        : { tone: "info", text: `Al consultorio le quedan ${days(access.daysLeft)} de prueba.` };
+    case "trial_grace":
+      return {
+        tone: "warn",
+        text:
+          access.daysLeft === null
+            ? "La prueba del consultorio terminó (en gracia)."
+            : `La prueba del consultorio terminó: le quedan ${days(access.daysLeft)} de gracia.`,
+      };
+    case "past_due_grace":
+      return {
+        tone: "warn",
+        text:
+          access.daysLeft === null
+            ? "El consultorio tiene un pago pendiente (en gracia)."
+            : `El consultorio tiene un pago pendiente: le quedan ${days(access.daysLeft)} de gracia.`,
+      };
+    case "trial_expired":
+    case "past_due":
+    case "cancelled": {
+      const why =
+        access.reason === "trial_expired"
+          ? "La prueba del consultorio terminó"
+          : access.reason === "past_due"
+            ? "El consultorio tiene un pago vencido"
+            : "La suscripción del consultorio está cancelada";
+      return {
+        tone: "warn",
+        text: enforcement === "enforce" ? `${why}: sus usuarios están en modo lectura.` : `${why}.`,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+export function AccessBanner({
+  access,
+  enforcement,
+  support = false,
+}: {
+  access: TenantAccess;
+  enforcement: AccessEnforcement;
+  /** BO3-F: lo mira un superadmin como soporte (copy en tercera persona). */
+  support?: boolean;
+}) {
+  const copy = support ? supportAccessBannerCopy(access, enforcement) : accessBannerCopy(access, enforcement);
   if (!copy) return null;
   const warn = copy.tone === "warn";
   return (

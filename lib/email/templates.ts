@@ -103,7 +103,7 @@ function subjectLine(s: string): string {
  */
 export function formatExpiryAR(d: Date): string {
   const date = d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric", timeZone: AR_TZ });
-  const time = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: AR_TZ });
+  const time = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: AR_TZ });
   return `${date}, ${time}`;
 }
 

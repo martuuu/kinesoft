@@ -1,143 +1,124 @@
 /**
- * [EV0-P3] Detalle de un consultorio en /plataforma (plan §15.4). Todo de solo
- * lectura salvo el Drawer "Editar suscripción" (EV-D6: tipo, plan, estado, trial
- * y turnos online; nombre, contacto y "vista compartida" no se editan desde acá).
+ * [EV0-P3 → BO3-B] Pestaña «Resumen» del detalle de un consultorio en /plataforma. Hasta BO3 era la página entera
+ * (con el Drawer de suscripción en el header); desde BO3-B el header vive en `consultorios/[id]/layout.tsx`
+ * (`TenantDetailHeader`) y la suscripción tiene su pestaña.
  *
- * Solo muestra lo que trae `PlatformTenantDetail`: datos del consultorio,
- * conteos y eventos `platform.*`. Nada de PHI (el DTO es el allowlist, ver
- * `lib/platform-tenants-types.ts`).
+ * Muestra: datos del consultorio (editables con «Editar datos», BO2-D revisa EV-D6), slug y sus alias (BO-D9),
+ * estado del alta, módulos, uso con el cupo de profesionales y los últimos cambios desde Plataforma.
+ *
+ * Solo lo que traen `PlatformTenantDetail` y los `seats` de `getTenantTeamForPlatform`: datos del consultorio,
+ * conteos y eventos `platform.*`. Nada de PHI (el DTO es el allowlist, ver `lib/platform-tenants-types.ts`).
  */
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { EyebrowLabel } from "@/components/ui/eyebrow";
-import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { formatDateAR } from "@/lib/format";
-import {
-  MODULE_LABEL,
-  SUBSCRIPTION_STATUS_LABEL,
-  auditKeyLabel,
-  formatAuditValue,
-  formatDayKeyAR,
-} from "@/components/plataforma/tenants/labels";
-import { TenantEditDrawer } from "@/components/plataforma/tenants/tenant-edit-drawer";
+import { MODULE_LABEL, seatLimitLabel, seatUsageLabel, tenantTabHref } from "@/components/plataforma/tenants/labels";
+import { Facts, Section, muted } from "@/components/plataforma/tenants/detail-ui";
+import { TenantProfileDrawer } from "@/components/plataforma/tenants/tenant-profile-drawer";
+import { ActivityList } from "@/components/plataforma/tenants/tenant-activity";
 
-function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
-  return (
-    <Card style={{ padding: 18, minWidth: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <h2 className="k-display" style={{ fontSize: 17, margin: 0, fontWeight: 700 }}>
-          {title}
-        </h2>
-        {action}
-      </div>
-      {children}
-    </Card>
-  );
-}
+export type TenantSeats = { used: number; limit: number | null; remaining: number | null; full: boolean };
 
-/** Lista definición-valor: dos columnas que en mobile se apilan solas (auto-fit). */
-function Facts({ items }: { items: [string, ReactNode][] }) {
-  return (
-    <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: "12px 20px" }}>
-      {items.map(([k, v]) => (
-        <div key={k} style={{ minWidth: 0 }}>
-          <dt>
-            <EyebrowLabel as="span">{k}</EyebrowLabel>
-          </dt>
-          <dd style={{ margin: "4px 0 0", fontSize: 13.5, color: "var(--navy-900)", overflowWrap: "anywhere" }}>{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
+const linkStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: "var(--sky-700)" };
 
-const muted = (s: string) => <span style={{ color: "var(--navy-300)" }}>{s}</span>;
-
-export function TenantDetailView({ detail: d }: { detail: PlatformTenantDetail }) {
+export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenantDetail; seats: TenantSeats | null }) {
   const c = d.counts;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card style={{ padding: 22 }}>
-        <Link href="/plataforma/consultorios" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--sky-700)" }}>
-          ← Consultorios
-        </Link>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 12,
-            flexWrap: "wrap",
-            marginTop: 8,
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <h1 className="k-display" style={{ fontSize: 26, margin: 0, overflowWrap: "anywhere" }}>
-                {d.name}
-              </h1>
-              {d.isPlatformHome && <Tag tone="lime">Plataforma</Tag>}
-            </div>
-            <div style={{ fontSize: 13, color: "var(--navy-300)", fontFamily: "var(--font-mono)", marginTop: 2 }}>
-              {d.slug}
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-              <Tag tone="sky">{VERTICAL_LABEL[d.vertical]}</Tag>
-              <Tag tone="sky">Plan {PLAN_LABEL[d.plan]}</Tag>
-              <Tag tone="soft">{SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]}</Tag>
-            </div>
-          </div>
-          <TenantEditDrawer detail={d} />
-        </div>
-      </Card>
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap: 14 }}>
-        <Section title="Suscripción">
+        <Section title="Datos del consultorio" action={<TenantProfileDrawer detail={d} />}>
           <Facts
             items={[
-              ["Tipo", VERTICAL_LABEL[d.vertical]],
-              ["Plan", PLAN_LABEL[d.plan]],
-              ["Estado", SUBSCRIPTION_STATUS_LABEL[d.subscriptionStatus]],
-              ["Trial", d.trialEndsOn ? `Hasta el ${formatDayKeyAR(d.trialEndsOn)}` : muted("Sin trial")],
-              [
-                "Turnos online",
-                <span key="t" style={{ display: "grid", gap: 2 }}>
-                  <span>{d.publicBookingEnabled ? "Activo" : "Apagado"}</span>
-                  <a
-                    href={d.publicBookingPath}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontSize: 12.5, fontWeight: 600, color: "var(--sky-700)" }}
-                  >
-                    Ver la página de turnos ↗
-                  </a>
-                </span>,
-              ],
-            ]}
-          />
-        </Section>
-
-        <Section title="Datos del consultorio">
-          <Facts
-            items={[
-              ["Titular", d.ownerEmails.length ? d.ownerEmails.join(", ") : muted("—")],
+              ["Nombre", d.name],
+              ["Razón social", d.legalName ?? muted("—")],
+              ["CUIT", d.taxId ?? muted("—")],
+              ["Titular", d.ownerEmails.length ? d.ownerEmails.join(", ") : muted("Sin titular")],
               ["Email público", d.publicEmail ?? muted("—")],
               ["Teléfono", d.phone ?? muted("—")],
               ["WhatsApp", d.whatsapp ?? muted("—")],
               ["Vista compartida de pacientes", d.sharedPatientView ? "Sí" : "No"],
-              ["Onboarding", d.onboardingCompleted ? "Completo" : "Pendiente"],
               ["Creado", formatDateAR(d.createdAt, "short")],
               ["Última actividad", d.lastActivityAt ? formatDateAR(d.lastActivityAt, "compact") : muted("Sin actividad")],
             ]}
           />
-          <p style={{ fontSize: 12, color: "var(--navy-300)", margin: "12px 0 0" }}>
-            Estos datos los edita el consultorio desde Configuración.
-          </p>
+          {d.ownerEmails.length === 0 && (
+            <p style={{ fontSize: 12.5, color: "#9F1F1F", margin: "12px 0 0" }}>
+              Este consultorio no tiene titular.{" "}
+              <Link href={tenantTabHref(d.id, "equipo")} style={linkStyle}>
+                Ir al equipo
+              </Link>
+            </p>
+          )}
         </Section>
+
+        <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+          <Section title="Dirección y alias">
+            <Facts
+              items={[
+                ["Slug", <span key="s" style={{ fontFamily: "var(--font-mono)" }}>{d.slug}</span>],
+                [
+                  "Turnos online",
+                  <span key="t" style={{ display: "grid", gap: 2 }}>
+                    <span>{d.publicBookingEnabled ? "Activo" : "Apagado"}</span>
+                    <a href={d.publicBookingPath} target="_blank" rel="noopener noreferrer" style={linkStyle}>
+                      Ver la página de turnos ↗
+                    </a>
+                  </span>,
+                ],
+                [
+                  "Slugs anteriores",
+                  d.slugAliases.length === 0 ? (
+                    muted("Ninguno")
+                  ) : (
+                    <span key="a" style={{ display: "grid", gap: 2 }}>
+                      {d.slugAliases.map((a) => (
+                        <span key={a} style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
+                          {a}
+                        </span>
+                      ))}
+                      <span style={{ fontSize: 12, color: "var(--navy-300)" }}>Redirigen al slug actual.</span>
+                    </span>
+                  ),
+                ],
+              ]}
+            />
+          </Section>
+
+          <Section title="Alta">
+            <p style={{ margin: 0, fontSize: 13.5, color: "var(--navy-900)" }}>
+              {d.onboardingCompleted ? "Terminada" : "Sin terminar: el titular todavía no completó los pasos de bienvenida."}
+            </p>
+            {!d.onboardingCompleted && (
+              <Link href={tenantTabHref(d.id, "ciclo-de-vida")} style={{ ...linkStyle, display: "inline-block", marginTop: 6 }}>
+                Darla por terminada desde Ciclo de vida
+              </Link>
+            )}
+          </Section>
+        </div>
       </div>
+
+      <Section title="Uso">
+        <Facts
+          items={[
+            [
+              "Cupo de profesionales",
+              <span key="c" style={{ display: "grid", gap: 2 }}>
+                <span>{seats ? seatUsageLabel(seats) : seatLimitLabel(d)}</span>
+                {seats?.full && <span style={{ fontSize: 12, color: "#9F1F1F" }}>Sin lugar para otro profesional</span>}
+              </span>,
+            ],
+            ["Miembros", `${c.members}${c.pendingInvitations ? ` · ${c.pendingInvitations} invitación(es) pendiente(s)` : ""}`],
+            ["Profesionales", String(c.practitioners)],
+            ["Pacientes activos", String(c.patients)],
+            ["Servicios", String(c.services)],
+            ["Sedes", String(c.locations)],
+            ["Turnos (total)", String(c.bookingsTotal)],
+            ["Turnos últimos 30 días", String(c.bookingsLast30Days)],
+            ["Turnos próximos", String(c.bookingsUpcoming)],
+          ]}
+        />
+      </Section>
 
       <Section title="Módulos activos">
         {d.modules.length === 0 ? (
@@ -153,48 +134,15 @@ export function TenantDetailView({ detail: d }: { detail: PlatformTenantDetail }
         )}
       </Section>
 
-      <Section title="Uso">
-        <Facts
-          items={[
-            ["Miembros", `${c.members}${c.pendingInvitations ? ` · ${c.pendingInvitations} invitación(es) pendiente(s)` : ""}`],
-            ["Profesionales", String(c.practitioners)],
-            ["Pacientes activos", String(c.patients)],
-            ["Servicios", String(c.services)],
-            ["Sedes", String(c.locations)],
-            ["Turnos (total)", String(c.bookingsTotal)],
-            ["Turnos últimos 30 días", String(c.bookingsLast30Days)],
-            ["Turnos próximos", String(c.bookingsUpcoming)],
-          ]}
-        />
-      </Section>
-
-      <Section title="Cambios desde Plataforma">
-        {d.recentPlatformEvents.length === 0 ? (
-          <p style={{ margin: 0, fontSize: 13, color: "var(--navy-300)" }}>Todavía no hubo cambios desde Plataforma.</p>
-        ) : (
-          <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 10 }}>
-            {d.recentPlatformEvents.map((e) => (
-              <li key={e.id} style={{ paddingBottom: 10, borderBottom: "1px solid rgba(15,30,51,0.05)" }}>
-                <div style={{ fontSize: 12.5, color: "var(--navy-500)" }}>
-                  {formatDateAR(e.createdAt, "compact")} · {e.actorEmail ?? "cuenta eliminada"}
-                </div>
-                {e.changes.length === 0 ? (
-                  <div style={{ fontSize: 13, color: "var(--navy-300)" }}>{e.action}</div>
-                ) : (
-                  <ul style={{ listStyle: "none", margin: "4px 0 0", padding: 0, display: "grid", gap: 2 }}>
-                    {e.changes.map((ch) => (
-                      <li key={ch.key} style={{ fontSize: 13, color: "var(--navy-900)" }}>
-                        <span style={{ fontWeight: 600 }}>{auditKeyLabel(ch.key)}:</span>{" "}
-                        <span style={{ color: "var(--navy-500)" }}>{formatAuditValue(ch.key, ch.before)}</span> →{" "}
-                        <span style={{ fontWeight: 600 }}>{formatAuditValue(ch.key, ch.after)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
+      <Section
+        title="Últimos cambios desde Plataforma"
+        action={
+          <Link href={tenantTabHref(d.id, "actividad")} style={linkStyle}>
+            Ver toda la actividad →
+          </Link>
+        }
+      >
+        <ActivityList events={d.recentPlatformEvents} empty="Todavía no hubo cambios desde Plataforma." />
       </Section>
     </div>
   );

@@ -24,6 +24,7 @@
  *
  * Exporta SOLO funciones async (los zod y tipos están en `plans-edit-types`).
  */
+import { withReadOnlyResult } from "@/lib/read-only-result";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import type { z } from "zod";
@@ -118,7 +119,13 @@ export async function previewMovePlanSeries(raw: MovePlanSeriesPreviewInput): Pr
 }
 
 /** Commit de "este y los siguientes" en UNA tx (todo o nada). */
-export async function movePlanSeries(raw: MovePlanSeriesInput): Promise<MovePlanSeriesResult> {
+// BO3-F: el cuerpo va en `movePlanSeriesImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function movePlanSeries(...args: Parameters<typeof movePlanSeriesImpl>): Promise<MovePlanSeriesResult> {
+  return withReadOnlyResult(() => movePlanSeriesImpl(...args));
+}
+
+async function movePlanSeriesImpl(raw: MovePlanSeriesInput): Promise<MovePlanSeriesResult> {
   const actor = await getActor();
   const parsed = MovePlanSeriesCommitSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);
@@ -186,7 +193,13 @@ export async function previewReplanPlan(raw: ReplanPlanPreviewInput): Promise<Pl
  * Commit de L7 en UNA tx: cancela los futuros impagos desde la sesión N y
  * recrea por el motor; los turnos con cobro quedan intactos.
  */
-export async function replanPlan(raw: ReplanPlanInput): Promise<ReplanPlanResult> {
+// BO3-F: el cuerpo va en `replanPlanImpl`; el wrapper convierte el ReadOnlyModeError (modo lectura / soporte)
+// en `{ ok:false, error }` para que en prod Next no redacte el mensaje (lib/read-only-result.ts).
+export async function replanPlan(...args: Parameters<typeof replanPlanImpl>): Promise<ReplanPlanResult> {
+  return withReadOnlyResult(() => replanPlanImpl(...args));
+}
+
+async function replanPlanImpl(raw: ReplanPlanInput): Promise<ReplanPlanResult> {
   const actor = await getActor();
   const parsed = ReplanPlanCommitSchema.safeParse(raw);
   if (!parsed.success) return invalidInput(parsed.error);

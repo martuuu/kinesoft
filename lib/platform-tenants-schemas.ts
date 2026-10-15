@@ -64,6 +64,9 @@ export function trialEndsOnToDate(dayKeyAR: string): Date {
   return new Date(localToARIso(`${dayKeyAR}T23:59:59.999`));
 }
 
+/** Tope del cupo a medida que acepta el Drawer de suscripción (un número mayor es un error de tipeo). */
+export const SEAT_LIMIT_OVERRIDE_MAX = 1000;
+
 export const UpdatePlatformTenant = z
   .object({
     tenantId: id,
@@ -75,6 +78,17 @@ export const UpdatePlatformTenant = z
     /** Día AR "YYYY-MM-DD"; null = borrar el trial; ausente = no tocar. */
     trialEndsOn: dayKey.nullable().optional(),
     publicBookingEnabled: z.boolean().optional(),
+    /**
+     * BO3-B: cupo de profesionales a medida (BO-D7). null = volver al del plan; ausente = no tocar. ≥ 1 como el
+     * CHECK de M7 (`Tenant_seatLimitOverride_check`); el tope es un guard de tipeo, no una regla del negocio.
+     */
+    seatLimitOverride: z
+      .number({ invalid_type_error: "Cupo inválido" })
+      .int("Cupo inválido")
+      .min(1, "El cupo mínimo es 1")
+      .max(SEAT_LIMIT_OVERRIDE_MAX, `El cupo máximo es ${SEAT_LIMIT_OVERRIDE_MAX}`)
+      .nullable()
+      .optional(),
   })
   .strict();
 export type UpdatePlatformTenantInput = z.input<typeof UpdatePlatformTenant>;

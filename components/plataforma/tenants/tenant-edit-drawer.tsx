@@ -13,6 +13,10 @@
  * pisaría con el valor viejo una columna que otro superadmin cambió en el medio
  * si el CAS algún día se relajara.
  *
+ * BO3-B: suma el cupo de profesionales a medida (`seatLimitOverride`, BO-D7), que
+ * `updatePlatformTenant` acepta desde BO3-B. Vacío = el cupo del plan. Vive ahora
+ * en la pestaña «Suscripción» del detalle.
+ *
  * CAS: la primera versión es `detail.updatedAt`; después de cada guardado se usa
  * la `data.updatedAt` que devuelve la action (el `router.refresh()` puede tardar
  * en traer el detail nuevo, y reabrir el Drawer con la versión vieja daría un
@@ -35,6 +39,8 @@ import {
 } from "@/lib/platform-tenants-schemas";
 import type { PlatformTenantDetail } from "@/lib/platform-tenants-types";
 import { PLAN_LABEL, VERTICAL_LABEL } from "@/lib/tenant-modules";
+import { PLAN_CATALOG } from "@/lib/plan-catalog";
+import { SEAT_LIMIT_OVERRIDE_MAX } from "@/lib/platform-tenants-schemas";
 import { SUBSCRIPTION_STATUS_LABEL } from "@/components/plataforma/tenants/labels";
 
 export type TenantEditFormState = {
@@ -44,11 +50,13 @@ export type TenantEditFormState = {
   /** Día AR "YYYY-MM-DD" del `<input type="date">`; "" = sin trial. */
   trialEndsOn: string;
   publicBookingEnabled: boolean;
+  /** BO3-B: cupo a medida como texto del input; "" = el del plan (null). */
+  seatLimitOverride: string;
 };
 
 /** Copy literal del plan §15.4 para el `useConfirm` al pasar a General. */
 export const GENERAL_DOWNGRADE_COPY =
-  "Pasar a Consultorio general oculta Planes, Sesiones, Diagnóstico y Ejercicios. No se borra nada.";
+  "Pasar a Clínica general oculta Planes, Sesiones, Diagnóstico y Ejercicios. No se borra nada.";
 
 export function formFromDetail(d: PlatformTenantDetail): TenantEditFormState {
   return {
@@ -57,7 +65,18 @@ export function formFromDetail(d: PlatformTenantDetail): TenantEditFormState {
     subscriptionStatus: d.subscriptionStatus,
     trialEndsOn: d.trialEndsOn ?? "",
     publicBookingEnabled: d.publicBookingEnabled,
+    seatLimitOverride: d.seatLimitOverride == null ? "" : String(d.seatLimitOverride),
   };
+}
+
+/**
+ * "" → null (volver al cupo del plan); un entero → ese número. Lo que no es un entero viaja como NaN para que el
+ * zod del server lo rechace con su copy (no se adivina lo que quiso tipear).
+ */
+export function parseSeatOverride(v: string): number | null {
+  const t = v.trim();
+  if (t === "") return null;
+  return /^\d+$/.test(t) ? Number(t) : Number.NaN;
 }
 
 /**
@@ -77,6 +96,9 @@ export function buildUpdatePayload(
   if (form.subscriptionStatus !== initial.subscriptionStatus) payload.subscriptionStatus = form.subscriptionStatus;
   if (form.trialEndsOn !== initial.trialEndsOn) payload.trialEndsOn = form.trialEndsOn === "" ? null : form.trialEndsOn;
   if (form.publicBookingEnabled !== initial.publicBookingEnabled) payload.publicBookingEnabled = form.publicBookingEnabled;
+  if (form.seatLimitOverride.trim() !== initial.seatLimitOverride.trim()) {
+    payload.seatLimitOverride = parseSeatOverride(form.seatLimitOverride);
+  }
   return payload;
 }
 
@@ -131,7 +153,7 @@ export function TenantEditForm({
         value={form.plan}
         options={planOptions}
         onChange={(v) => onChange("plan", v as TenantPlan)}
-        hint={form.vertical === "GENERAL" ? "En Consultorio general el plan no cambia módulos todavía." : undefined}
+        hint={form.vertical === "GENERAL" ? "En Clínica general el plan no cambia módulos todavía." : undefined}
         error={fieldError("plan")}
         disabled={pending}
       />
@@ -175,6 +197,21 @@ export function TenantEditForm({
           </button>
         )}
       </div>
+      <FormField
+        type="number"
+        label="Cupo de profesionales a medida"
+        value={form.seatLimitOverride}
+        min={1}
+        max={SEAT_LIMIT_OVERRIDE_MAX}
+        step={1}
+        placeholder={
+          PLAN_CATALOG[form.plan].seats == null ? "Sin límite (el del plan)" : `${PLAN_CATALOG[form.plan].seats} (el del plan)`
+        }
+        onChange={(v) => onChange("seatLimitOverride", v)}
+        hint="Vacío = el cupo del plan. Bajarlo no saca a nadie: solo frena nuevas invitaciones de profesionales."
+        error={fieldError("seatLimitOverride")}
+        disabled={pending}
+      />
       <label
         style={{
           display: "flex",
@@ -265,7 +302,7 @@ export function TenantEditDrawer({ detail }: { detail: PlatformTenantDetail }) {
   const onChange = async <K extends keyof TenantEditFormState>(key: K, value: TenantEditFormState[K]) => {
     if (key === "vertical" && isGeneralDowngrade(form.vertical, value as TenantVertical)) {
       const ok = await confirm({
-        title: "¿Pasar a Consultorio general?",
+        title: "¿Pasar a Clínica general?",
         message: GENERAL_DOWNGRADE_COPY,
         confirmLabel: "Pasar a general",
         cancelLabel: "Dejar como está",

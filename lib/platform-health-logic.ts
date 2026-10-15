@@ -13,7 +13,7 @@
  *
  * Fechas: todo es aritmética de instantes (ms), nunca reloj del host; mismo resultado en TZ=UTC y TZ=AR.
  */
-import type { Role, TenantStatus } from "@prisma/client";
+import type { Role, TenantStatus, TenantVertical } from "@prisma/client";
 import { normalizeEmail } from "@/lib/email-match";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
@@ -81,6 +81,8 @@ export type PlatformUserMembership = {
   tenantName: string;
   tenantSlug: string;
   tenantStatus: TenantStatus;
+  /** BO3 (integrador): para el rótulo del rol («Profesional» en Clínica general, no «Kinesiólogo/a»). */
+  tenantVertical: TenantVertical;
   role: Role;
   accepted: boolean;
   acceptedAt: string | null;

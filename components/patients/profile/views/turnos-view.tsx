@@ -249,7 +249,7 @@ export function TurnosView({
         style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: cols, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: cancelled ? 0.55 : 1 }}
       >
         <span className="k-mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-700)" }}>
-          {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Argentina/Buenos_Aires" })}
+          {d.toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/Argentina/Buenos_Aires" })}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           {ord && plan && (
