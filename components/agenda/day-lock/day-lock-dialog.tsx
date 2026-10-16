@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Modal } from "@/components/ui/modal";
+import sheetStyles from "../booking-modal/booking-modal.module.css";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -604,6 +605,10 @@ export function DayLockDialog({
 
   return (
     <Modal open={open} onClose={() => void requestClose()} title={title} description={dayLabel} width={560}>
+      {/* MB-1b: misma hoja táctil que «Nuevo turno» (chips de 30 px y botones de texto → 44 px y campos a 16 px bajo
+          768; desde 768 la clase no tiene reglas). El chunk de este diálogo ya es diferido: el CSS no entra al
+          first-load de /agenda. */}
+      <div className={sheetStyles.sheet}>
       {step === "form" && (
         <div style={{ display: "grid", gap: 16 }}>
           {blocks.length > 0 && (
@@ -989,6 +994,7 @@ export function DayLockDialog({
           </div>
         </div>
       )}
+      </div>
     </Modal>
   );
 }

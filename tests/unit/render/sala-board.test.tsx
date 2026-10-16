@@ -227,7 +227,7 @@ describe("[SV10a] /sala render", () => {
     // Absoluta, colgada del bloque sticky (posicionado): aparecer/irse no mueve nada.
     expect(SALA_CSS).toMatch(/\.sala-top \{ position: sticky;/);
     expect(SALA_CSS).toMatch(/\.sala-call \{ position: absolute;[^}]*top: calc\(100% \+ 10px\)/);
-    expect(SALA_CSS).toMatch(/@media \(max-width: 640px\) \{[^@]*\.sala-top \{ position: relative; \}/);
+    expect(SALA_CSS).toMatch(/@media \(max-width: 767px\) \{[^@]*\.sala-top \{ position: relative; \}/);
   });
 
   it("[FX2a · A2] «Nadie en la sala por ahora» va en el hueco fijo del header, no arriba del tablero", () => {
@@ -286,10 +286,11 @@ describe("[SV10a] /sala render", () => {
     const html = render();
     expect(html).toContain('class="sala-board k-scroll"');
     expect(html).toContain('class="sala-col"');
-    const mobile = SALA_CSS.slice(SALA_CSS.indexOf("@media (max-width: 640px)"));
+    // [MB-1c] C-MB3: la columna única arranca bajo 768 (antes 640); mismas reglas.
+    const mobile = SALA_CSS.slice(SALA_CSS.indexOf("@media (max-width: 767px)"));
     expect(mobile).toContain(".sala-board { flex-direction: column; align-items: stretch; overflow: visible;");
     expect(mobile).toContain(".sala-col { flex: none; width: 100%; min-width: 0;");
-    expect(mobile).toContain(".sala-btn { min-height: 40px;");
+    expect(mobile).toContain(".sala-btn { min-height: 44px;"); // MB-1c: target de 44 (antes 40)
     // Desktop: columnas de mínimo 260 px con scroll horizontal del tablero.
     expect(SALA_CSS).toContain("min-width: 260px");
     expect(SALA_CSS).toMatch(/\.sala-board \{[^}]*overflow-x: auto/);

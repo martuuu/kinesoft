@@ -16,6 +16,38 @@
   border-radius: 0 0 22px 22px;
 }
 
+/*
+ * [MB-1b · C-MB2] Hoja del celular. Bajo 640 el Drawer ya es pantalla completa (MB-0d, globals.css `.k-drawer-panel`);
+ * acá va lo del contenido. Los controles del formulario tienen tamaños inline de escritorio («Cancelalo» sin padding,
+ * los botones chicos de sala, plan y reprogramar): un inline no se pisa desde
+ * un @media, pero `min-height` SÍ le gana a un `height` inline. `:where()` deja la especificidad en la de `.sheet`,
+ * así que cualquier regla propia de un control sigue mandando. Los campos van a 16 px: con menos, Safari iOS hace
+ * zoom al enfocar y la hoja queda corrida (ese `!important` es el único modo de ganarle al `fontSize` inline).
+ * Desde 768 nada cambia.
+ */
+@media (max-width: 767px) {
+  .sheet :where(button, select, summary, [role="radio"], [role="switch"], [role="option"]) {
+    min-height: 44px;
+  }
+  .sheet :where(button, [role="radio"], [role="switch"]) {
+    min-width: 44px;
+  }
+  .sheet :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select) {
+    min-height: 44px;
+  }
+  .sheet :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea) {
+    font-size: 16px !important;
+  }
+}
+
+/* < 640 el panel es hoja a pantalla completa (radio 0): el pie va de borde a borde, sin las esquinas redondeadas de
+   la tarjeta flotante. El `padding-bottom` con la safe-area lo pone globals.css sobre `[data-drawer-footer]`. */
+@media (max-width: 639px) {
+  .footer {
+    border-radius: 0;
+  }
+}
+
 /* «Abrir historia clínica»: link secundario (antes una banda azul que competía con la primaria del footer). */
 .hcLink {
   justify-content: space-between;

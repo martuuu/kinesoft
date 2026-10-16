@@ -152,25 +152,19 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
           No hay obras sociales cargadas.
         </div>
       ) : (
-        // C4: a 390 la grilla de 5 columnas desbordaba la página; ahora scrollea dentro de la card.
+        // C4: a 390 la grilla de 5 columnas desbordaba la página; scrolleaba dentro de la card. MB-1e: < 768 cada fila
+        // es una card (`.insurerRow`, configuracion.module.css) y el scroll queda solo para 768-~900 con barra lateral.
+        // La grilla va en la clase y no inline: un `style` le ganaría al @media.
         <div className={styles.tableScroll}>
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 560 }}>
+        <ul className={styles.insurerList}>
           {insurers.map((i) => {
             const suggestion = !i.payerId && !i.isParticular ? suggestions[i.id] : undefined;
             return (
               <li
                 key={i.id}
                 onClick={() => setEditing(i)}
-                style={{
-                  padding: "14px 20px",
-                  display: "grid",
-                  gridTemplateColumns: "1.4fr 110px 110px 80px 80px",
-                  gap: 14,
-                  alignItems: "center",
-                  borderBottom: "1px solid rgba(15,30,51,0.04)",
-                  cursor: "pointer",
-                  opacity: i.active ? 1 : 0.55,
-                }}
+                className={styles.insurerRow}
+                style={{ opacity: i.active ? 1 : 0.55 }}
               >
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -225,10 +219,8 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
                 </div>
                 <Money label="Copago" amount={i.copagoCents} />
                 <Money label="Monto fijo" amount={i.fixedFeeCents} />
-                <div style={{ fontSize: 12, color: "var(--navy-500)", textAlign: "right", whiteSpace: "nowrap" }}>
-                  {i.patientsCount} pac.
-                </div>
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div className={styles.insurerCount}>{i.patientsCount} pac.</div>
+                <div className={styles.insurerStatus}>
                   {i.active ? <Tag tone="lime">Activa</Tag> : <Tag tone="soft">Inactiva</Tag>}
                 </div>
               </li>
@@ -261,7 +253,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
 
 function Money({ label, amount }: { label: string; amount: number }) {
   return (
-    <div style={{ textAlign: "right" }}>
+    <div className={styles.money}>
       <div style={{ fontSize: 10, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
         {label}
       </div>

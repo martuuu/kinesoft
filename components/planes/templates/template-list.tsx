@@ -36,6 +36,7 @@ import { summarizePlanSchedule } from "@/lib/plan-schedule";
 import { PLAN_EDITOR_COPY } from "@/lib/plan-editor-state";
 import type { Discipline } from "@/lib/plans-constants";
 import type { PlanPricingInput } from "@/lib/plans-types";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 // PF1.2 (C-PF2): el drawer de plantilla (editor de horario + precio) no está en el primer pintado de /planes: baja al
 // abrirlo y se precarga en hover/foco de «Nueva plantilla» o de una fila. Cerrado ya devolvía null, así que montarlo
@@ -119,7 +120,7 @@ export function TemplateList({ discipline, canManage, templatesEnabled, initialT
  */
 function TemplateListDisabled() {
   return (
-    <Card style={{ padding: 16 }} aria-disabled="true" data-testid="template-list" data-state="disabled">
+    <Card className={tap.tapScope} style={{ padding: 16 }} aria-disabled="true" data-testid="template-list" data-state="disabled">
       <Header canCreate={false} />
       <p role="note" style={{ ...muted, marginTop: 12, padding: "10px 12px", borderRadius: 12, background: "rgba(15,30,51,0.04)", color: "var(--navy-700)" }}>
         {TEMPLATE_LIST_COPY.disabled}
@@ -229,7 +230,7 @@ function TemplateListEnabled({
   const archivedCount = rows ? rows.filter((r) => r.archivedAt != null).length : 0;
 
   return (
-    <Card style={{ padding: 16 }} data-testid="template-list" data-state={rows ? "ready" : loadError ? "error" : "loading"}>
+    <Card className={tap.tapScope} style={{ padding: 16 }} data-testid="template-list" data-state={rows ? "ready" : loadError ? "error" : "loading"}>
       <Header canCreate={canManage} onNew={() => setDrawer({ open: true, templateId: null })} />
 
       {canManage && archivedCount > 0 && (

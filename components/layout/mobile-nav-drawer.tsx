@@ -7,10 +7,17 @@
  *
  * MB-0c (C-MB1): lo abre «Más» de la barra inferior (`bottom-nav.tsx`, antes el botón «Menú» de `MobileBar`), con
  * `next/dynamic` recién al primer toque: en escritorio nunca se baja. Al cerrarse, el Drawer devuelve el foco a «Más».
+ *
+ * DIR-3d (C-DIR9): «Mi perfil público» al pie, solo para quien atiende (misma regla que el menú de cuenta,
+ * `showsPublicProfileEntry`; acá «atiende en el activo» = `clinical.read` en sus caps, que soporte nunca tiene). `<a>`
+ * y no `next/link`: `/cuenta/*` está fuera de `(app)` (navegación dura, como «Seguridad de la cuenta»).
  */
 import { Drawer } from "@/components/ui/drawer";
 import type { Capability } from "@/lib/capabilities";
+import { IconUsers } from "@/components/ui/icons";
 import { SidebarBody } from "./sidebar";
+import { PUBLIC_PROFILE_HREF, showsPublicProfileEntry } from "./topbar-account-menu";
+import { useTenantChoice } from "./tenant-switcher";
 import styles from "./shell.module.css";
 
 export function MobileNavDrawer({
@@ -26,6 +33,8 @@ export function MobileNavDrawer({
   caps: readonly Capability[];
   onOpenAppearance?: () => void;
 }) {
+  const { options } = useTenantChoice();
+  const showPublicProfile = showsPublicProfileEntry(caps.includes("clinical.read"), options);
   return (
     <Drawer open={open} onClose={onClose} title="Menú" width={300}>
       <div className={styles.drawerNav} style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 36 }}>
@@ -45,6 +54,12 @@ export function MobileNavDrawer({
               : undefined
           }
         />
+        {showPublicProfile && (
+          <a href={PUBLIC_PROFILE_HREF} className={`${styles.navItem} ${styles.navItemExpanded}`} onClick={onClose}>
+            <IconUsers size={18} />
+            <span>Mi perfil público</span>
+          </a>
+        )}
       </div>
     </Drawer>
   );

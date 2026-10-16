@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useState } from "react";
 import { IconPlus } from "@/components/ui/icons";
 import type { KpiKey, KpiRevenueScope } from "@/lib/preferences-constants";
+import dash from "./dashboard.module.css";
 
 /**
  * PF1.1-dashboard (C-PF2): el selector se baja recién al abrirlo y se precarga en hover/foco del botón (`import()` sin
@@ -37,7 +38,9 @@ export function PinKpiButton({
     <>
       <button
         type="button"
-        className="k-btn k-btn-ghost"
+        // MB-1d: el mínimo de 32 px pasó a la clase (`.pinBtn`) y < 768 sube a 44 (`.tap`): un `minHeight` inline no
+        // se pisa desde una media query.
+        className={`k-btn k-btn-ghost ${dash.pinBtn} ${dash.tap}`}
         aria-haspopup="dialog"
         onPointerEnter={preload}
         onFocus={preload}
@@ -45,7 +48,7 @@ export function PinKpiButton({
           setMounted(true);
           setOpen(true);
         }}
-        style={{ fontSize: 12, padding: "6px 12px", minHeight: 32, gap: 6 }}
+        style={{ fontSize: 12, padding: "6px 12px", gap: 6 }}
       >
         <IconPlus size={12} /> Agregar
       </button>

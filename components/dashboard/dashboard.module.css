@@ -352,6 +352,11 @@
   }
 }
 
+/* «+ Agregar» KPI: el mínimo de 32 px que antes iba inline (MB-1d lo movió acá para poder subirlo < 768). */
+.pinBtn {
+  min-height: 32px;
+}
+
 /* ── Una columna bajo 768 (D1, clase A mobile) ──
    Orden: hero → KPIs (2 col) → próximos → recientes → gráfico → ingresos → calendario. Las dos columnas pasan a
    `display: contents` y cada bloque se ordena con `order`: no se duplica nada en el DOM. */
@@ -409,5 +414,12 @@
   }
   .heroTitle {
     font-size: 22px;
+  }
+  /* MB-1d: íconos sueltos del tablero (campana, flechas del calendario, «⋯» de recientes, «+ Agregar») a 44 px de
+     área táctil con la barra inferior. Por `min-*`: el ancho/alto inline de escritorio (32-36 px) queda como piso
+     visual y en escritorio esta clase no hace nada. */
+  .tap {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

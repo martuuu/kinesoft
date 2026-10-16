@@ -16,7 +16,7 @@
  * de la suscripción pasa a llamarse «Suscripción» para no chocar con «Estado».
  */
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,10 @@ import {
   tenantHref,
 } from "@/components/plataforma/tenants/labels";
 import { AutoSubmitSelect } from "@/components/plataforma/tenants/auto-submit-select";
+import { FiltersDrawer } from "@/components/plataforma/filters-drawer";
+import { activeFilterCount } from "@/components/plataforma/filters-logic";
 import styles from "./tenant-list.module.css";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 /** Filtros normalizados ("" = sin filtro), como los parsea `PlatformTenantListQuery`. */
 export type TenantListQuery = {
@@ -73,11 +76,14 @@ export function buildListHref(query: TenantListQuery, page: number): string {
 // Suma de mínimos (1180) + 8 gaps de 12 + padding 32 = 1308 → `minWidth` 1310.
 const COLS = "minmax(200px,1.6fr) 120px 150px 110px 150px 90px 100px minmax(180px,1.2fr) 80px";
 const MIN_WIDTH = 1310;
+// MB-1f: columnas y ancho mínimo como variables (`responsive-table.module.css`): bajo 768 la fila pasa a card.
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": `${MIN_WIDTH}px` } as CSSProperties;
 
 /**
  * BO-Z C6: la tabla scrollea en horizontal (1310 px) y en un celular, al ir a «Suscripción» o «Titular», se perdía de
  * qué consultorio era la fila. La primera columna queda fija a la izquierda (sticky dentro del `overflowX`) con un
- * filete a la derecha. PF1.2 (P5): su fondo es el de su fila (`.headRow .sticky` / `.row .sticky` en el CSS Module).
+ * filete a la derecha. PF1.2 (P5): su fondo es el de su fila. MB-1f: bajo 768 la fila es una card (sin scroll de
+ * costado) y cada celda lleva su rótulo en `data-label`.
  */
 function Head({ children, align }: { children: ReactNode; align?: "right" }) {
   return (
@@ -89,6 +95,25 @@ function Head({ children, align }: { children: ReactNode; align?: "right" }) {
 
 function Filters({ query }: { query: TenantListQuery }) {
   const active = hasFilters(query);
+  const count = activeFilterCount([query.q, query.vertical, query.plan, query.status, query.tenantStatus]);
+  return (
+    <FiltersDrawer
+      count={count}
+      title="Buscar y filtrar"
+      aside={
+        active ? (
+          <Link href={LIST_PATH} className={table.chip} style={{ fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--sky-700)" }}>
+            Limpiar filtros
+          </Link>
+        ) : null
+      }
+    >
+      <FiltersForm query={query} active={active} />
+    </FiltersDrawer>
+  );
+}
+
+function FiltersForm({ query, active }: { query: TenantListQuery; active: boolean }) {
   return (
     <form method="get" action={LIST_PATH} role="search" className={styles.filters}>
       <div className={styles.searchRow}>
@@ -171,10 +196,8 @@ function YesNo({ on, yes, no }: { on: boolean; yes: string; no: string }) {
 function Row({ r }: { r: PlatformTenantRow }) {
   return (
     <div
-      className={styles.row}
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "12px 16px",
         borderBottom: "1px solid rgba(15,30,51,0.05)",
@@ -183,7 +206,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
         color: "var(--navy-700)",
       }}
     >
-      <div className={styles.sticky} style={{ minWidth: 0, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
+      <div className={table.sticky} style={{ minWidth: 0, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <Link href={tenantHref(r.id)} style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none" }}>
             {r.name}
@@ -192,30 +215,30 @@ function Row({ r }: { r: PlatformTenantRow }) {
         </div>
         <div style={{ fontSize: 12, color: "var(--navy-400)", fontFamily: "var(--font-mono)" }}>{r.slug}</div>
       </div>
-      <div style={{ display: "grid", gap: 3, justifyItems: "start" }}>
+      <div data-label="Estado" style={{ display: "grid", gap: 3, justifyItems: "start" }}>
         <Tag tone={TENANT_STATUS_TONE[r.status]}>{TENANT_STATUS_LABEL[r.status]}</Tag>
         <span style={{ fontSize: 11.5, color: "var(--navy-400)" }}>
           Acceso: {ACCESS_MODE_LABEL[r.effectiveAccessMode].toLowerCase()}
         </span>
       </div>
-      <div>{VERTICAL_LABEL[r.vertical]}</div>
-      <div>
+      <div data-label="Tipo">{VERTICAL_LABEL[r.vertical]}</div>
+      <div data-label="Plan y cupo">
         <div style={{ fontWeight: 600 }}>{SAAS_PLAN_LABEL[r.saasPlan]}</div>
         <div style={{ fontSize: 12, color: "var(--navy-400)" }}>{seatLimitLabel(r)}</div>
       </div>
-      <div>
+      <div data-label="Suscripción">
         <div>{SUBSCRIPTION_STATUS_LABEL[r.subscriptionStatus]}</div>
         {r.trialEndsOn && (
           <div style={{ fontSize: 12, color: "var(--navy-400)" }}>Prueba hasta {formatDayKeyAR(r.trialEndsOn)}</div>
         )}
       </div>
-      <div>
+      <div data-label="Turnos online">
         <YesNo on={r.publicBookingEnabled} yes="Activo" no="Apagado" />
       </div>
-      <div>
+      <div data-label="Onboarding">
         <YesNo on={r.onboardingCompleted} yes="Completo" no="Pendiente" />
       </div>
-      <div style={{ minWidth: 0, fontSize: 12.5, overflowWrap: "anywhere" }}>
+      <div data-label="Titular" className={table.wide} style={{ minWidth: 0, fontSize: 12.5, overflowWrap: "anywhere" }}>
         {/* VX0-b (decisión 19): nombre del titular; el email abajo, rotulado (nunca como nombre). */}
         {r.ownerNames.length > 0 ? (
           <>
@@ -226,7 +249,7 @@ function Row({ r }: { r: PlatformTenantRow }) {
           <span style={{ color: "var(--navy-400)" }}>—</span>
         )}
       </div>
-      <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.patientCount}</div>
+      <div data-label="Pacientes" style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.patientCount}</div>
     </div>
   );
 }
@@ -245,12 +268,12 @@ function Pagination({ page, query }: { page: PlatformTenantPage; query: TenantLi
       </span>
       <span style={{ display: "flex", gap: 16 }}>
         {page.page > 1 && (
-          <Link href={buildListHref(query, page.page - 1)} style={linkStyle}>
+          <Link href={buildListHref(query, page.page - 1)} className={table.chip} style={linkStyle}>
             ← Anterior
           </Link>
         )}
         {page.page < pages && (
-          <Link href={buildListHref(query, page.page + 1)} style={linkStyle}>
+          <Link href={buildListHref(query, page.page + 1)} className={table.chip} style={linkStyle}>
             Siguiente →
           </Link>
         )}
@@ -273,10 +296,10 @@ export function TenantList({ page, query }: { page: PlatformTenantPage; query: T
       </div>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div className={styles.scroller}>
-          <div style={{ minWidth: MIN_WIDTH }}>
-            <div className={styles.headRow} style={{ display: "grid", gridTemplateColumns: COLS, gap: 12, padding: "10px 16px" }}>
-              <div className={styles.sticky}>
+        <div className={table.scroller} style={TABLE_VARS}>
+          <div className={table.inner}>
+            <div className={`${table.head} ${styles.headRow}`} style={{ gap: 12, padding: "10px 16px" }}>
+              <div className={table.sticky}>
                 <Head>Consultorio</Head>
               </div>
               <Head>Estado</Head>

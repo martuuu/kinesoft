@@ -140,7 +140,8 @@ export function PatientsList({
             className={`${styles.row} ${isBasic ? styles.basic : ""} k-enter-fade`}
             style={{ ...cols, animationDelay: `${rowEnterDelayMs(i)}ms` }}
           >
-            <span className={styles.cellCheck} style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {/* MB-1d: el `display` va por clase (inline le ganaba al `display: none` de la card < 768). */}
+            <span className={styles.cellCheck}>
               {isBasic ? <span /> : <BulkSelectCheckbox patientId={p.id} />}
             </span>
             <Link

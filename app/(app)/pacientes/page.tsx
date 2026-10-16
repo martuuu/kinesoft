@@ -160,6 +160,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 
       {/* Sort + advanced filters row */}
       <div
+        className={directory.sortRow}
         style={{
           display: "flex",
           alignItems: "center",

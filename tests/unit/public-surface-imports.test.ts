@@ -75,6 +75,7 @@ function publicEntries(): string[] {
     "app/mantenimiento/",
     "app/verificar-acceso/",
     "app/elegir-consultorio/",
+    "app/(directory)/",
   ];
   const SINGLE = ["app/page.tsx", "app/not-found.tsx", "app/global-error.tsx"];
   return all.filter(

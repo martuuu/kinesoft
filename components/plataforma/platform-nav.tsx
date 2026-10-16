@@ -13,6 +13,7 @@ import {
   IconFilter,
   IconHome,
   IconPlans,
+  IconSearch,
   IconSettings,
   IconStar,
   IconUsers,
@@ -37,6 +38,9 @@ import { unreadBadgeLabel } from "@/components/plataforma/inbox/inbox-logic";
  *
  * PL-3c: «Facturación» (estado contable de los consultorios) y «Precios» (lista de precios de los planes) después de
  * Mensajes. Íconos del set existente (no hay uno de recibo ni de etiqueta de precio; sumar uno es de `icons.tsx`).
+ *
+ * DIR-3e: «Directorio» (moderación del directorio público, C-DIR9) después de Precios, con la lupa del set: es lo que
+ * el directorio es para el paciente (buscar un profesional).
  */
 export type PlatformNavItem = {
   href: string;
@@ -61,6 +65,7 @@ export const PLATFORM_NAV_GROUPS: readonly PlatformNavGroup[] = [
       { href: "/plataforma/mensajes", label: "Mensajes", match: "/plataforma/mensajes", icon: IconBell, badge: "inbox" },
       { href: "/plataforma/facturacion", label: "Facturación", match: "/plataforma/facturacion", icon: IconCheck },
       { href: "/plataforma/precios", label: "Precios", match: "/plataforma/precios", icon: IconStar },
+      { href: "/plataforma/directorio", label: "Directorio", match: "/plataforma/directorio", icon: IconSearch },
       { href: "/plataforma/salud", label: "Salud", match: "/plataforma/salud", icon: IconActivity },
       { href: "/plataforma/auditoria", label: "Auditoría", match: "/plataforma/auditoria", icon: IconFile },
       { href: "/plataforma/sistema", label: "Sistema", match: "/plataforma/sistema", icon: IconSettings },

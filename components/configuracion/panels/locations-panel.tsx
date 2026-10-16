@@ -42,6 +42,17 @@ import {
   updateLocation,
 } from "@/lib/locations";
 import { ErrorBox } from "../controls";
+// MB-1e: `.twoCol` (dos campos lado a lado, una columna < 768) en vez de la grilla auto-fit inline, que a 390 dejaba
+// Ciudad y Provincia lado a lado con el hint de la provincia apretado en media columna.
+import styles from "../configuracion.module.css";
+import { AR_PROVINCES } from "@/lib/ar-provinces";
+
+/**
+ * DIR-3c (DIR-D16): la provincia se elige de las 24 jurisdicciones (`provinceCode`, M11) en vez de texto libre: es lo
+ * que filtra la zona del directorio. El escritor guarda también el nombre en `province` (lo que leen turnero, agenda
+ * y export). Sin elegir, `province` no se toca: el texto viejo («Bs As») queda y se muestra como pista.
+ */
+const PROVINCE_OPTIONS = [{ value: "", label: "Elegí la provincia" }, ...AR_PROVINCES.map((p) => ({ value: p.code, label: p.name }))];
 
 // [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
 // y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
@@ -399,13 +410,14 @@ function LocationDrawer({ location, onClose }: { location?: LocationRow; onClose
     setError(null);
     setFieldErrors({});
     const str = (k: string) => String(fd.get(k) ?? "");
-    // Se mandan TODOS los campos: "" = borrar (updateLocation lo guarda null).
+    // Se mandan TODOS los campos: "" = borrar (updateLocation lo guarda null). Menos `province`: con provincia elegida
+    // el server la escribe con el nombre, y sin elegir el texto viejo se conserva (DIR-3c).
     const payload = {
       name: str("name"),
       address: str("address"),
       addressLine2: str("addressLine2"),
       city: str("city"),
-      province: str("province"),
+      provinceCode: str("provinceCode"),
       postalCode: str("postalCode"),
       phone: str("phone"),
     };
@@ -448,7 +460,7 @@ function LocationDrawer({ location, onClose }: { location?: LocationRow; onClose
           defaultValue={location?.address ?? ""}
           error={fe("address")}
         />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+        <div className={styles.twoCol}>
           <FormField
             label="Piso / depto"
             name="addressLine2"
@@ -462,13 +474,20 @@ function LocationDrawer({ location, onClose }: { location?: LocationRow; onClose
             error={fe("postalCode")}
           />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+        <div className={styles.twoCol}>
           <FormField label="Ciudad" name="city" defaultValue={location?.city ?? ""} error={fe("city")} />
           <FormField
+            as="select"
             label="Provincia"
-            name="province"
-            defaultValue={location?.province ?? ""}
-            error={fe("province")}
+            name="provinceCode"
+            options={PROVINCE_OPTIONS}
+            defaultValue={location?.provinceCode ?? ""}
+            error={fe("provinceCode")}
+            hint={
+              location?.province && !location.provinceCode
+                ? `Antes estaba cargada como «${location.province}». Elegila de la lista para que aparezca bien en el directorio.`
+                : undefined
+            }
           />
         </div>
         <FormField

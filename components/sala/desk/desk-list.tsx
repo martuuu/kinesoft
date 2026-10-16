@@ -28,6 +28,7 @@ import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_COMPACT_MAX, DESK_STACK_MAX } from "./desk-css";
 import { DeskStrip } from "./desk-strip";
 import { DeskMenu, DeskPrimaryAction, DeskStateTag } from "./desk-actions";
+import { FoldButton } from "@/components/sala/sala-fold";
 
 /**
  * A · «Lista y panel» (RX-2a, brief RX §1.2, prototipo `boardA()` de `design_source/vx0/recepcion.html`).
@@ -67,6 +68,8 @@ export function DeskList(p: {
   const viewer = live.viewer;
   const now = live.clock;
   const [filterState, setFilter] = useState<DeskFilter>("todos");
+  // [MB-1c] Pliegue de «Turnos de hoy» en una columna (C-MB3); en escritorio el botón no se ve y no esconde nada.
+  const [dayOpen, setDayOpen] = useState(true);
   // Sin `billing.manage` el chip «Por cobrar» no existe: un filtro que quedó apretado (cambio de rol en caliente) no
   // puede dejar la tabla filtrada por algo invisible.
   const filter: DeskFilter = filterState === "por-cobrar" && !viewer.canCollect ? "todos" : filterState;
@@ -170,9 +173,18 @@ export function DeskList(p: {
       <style>{DESK_LIST_CSS}</style>
       <DeskStrip live={live} proFilter={proFilter} onProFilter={onProFilter} />
 
-      <section className="dl-card dl-day" aria-labelledby="dl-h-day">
+      <section className="dl-card dl-day" aria-labelledby="dl-h-day" data-collapsed={dayOpen ? undefined : "true"}>
         <div className="dl-card-h">
           <h2 id="dl-h-day">Turnos de hoy</h2>
+          <FoldButton
+            className="desk-fold"
+            title="Turnos de hoy"
+            count={sorted.length}
+            open={dayOpen}
+            controls="dl-b-day"
+            onToggle={() => setDayOpen((o) => !o)}
+            showCount
+          />
           <div className="dl-chips" role="group" aria-label="Filtrar turnos">
             {chips.map((c) => (
               <button
@@ -189,7 +201,7 @@ export function DeskList(p: {
             ))}
           </div>
         </div>
-        <div className="dl-scroll" ref={scrollRef}>
+        <div className="dl-scroll" id="dl-b-day" ref={scrollRef}>
           {sorted.length > 0 ? (
             <table className="dl-table">
               <caption className="desk-sr">Turnos de hoy</caption>
@@ -395,15 +407,18 @@ function PanelCard({
   empty: string;
   children: JSX.Element[];
 }) {
+  // [MB-1c] Pliegue en una columna (C-MB3: secciones colapsables con conteo); ver `FoldButton`.
+  const [open, setOpen] = useState(true);
   return (
-    <section className="dl-card dl-panel" data-card={id} aria-labelledby={`dl-h-${id}`}>
+    <section className="dl-card dl-panel" data-card={id} aria-labelledby={`dl-h-${id}`} data-collapsed={open ? undefined : "true"}>
       <div className="dl-card-h">
         <h2 id={`dl-h-${id}`}>{title}</h2>
         <span className="dl-count">{count}</span>
         {note ? <span className="dl-note">{note}</span> : null}
         {extra ?? null}
+        <FoldButton className="desk-fold" title={title} count={count} open={open} controls={`dl-b-${id}`} onToggle={() => setOpen((o) => !o)} />
       </div>
-      <div className="dl-scroll">
+      <div className="dl-scroll" id={`dl-b-${id}`}>
         {children.length > 0 ? (
           <ul className="dl-items" role="list">
             {children}
@@ -606,6 +621,10 @@ function AttendingCard({
  * Espera (servicio, sala e iniciales pasan a la sublínea; la espera ya está en el tag «En sala 8'»); stack (≤ 719)
  * una columna con scroll de página, el panel arriba (la sala de espera primero) y la tabla en cards de tres líneas.
  *
+ * [MB-1c] En stack (C-MB3): cada card se pliega (`FoldButton`, abierta al cargar; el cuerpo plegado se esconde SOLO
+ * dentro del stack) y una fila sin botón primario (solo ⋯: atendidos, ausentes) lleva el ⋯ a la derecha de la segunda
+ * línea en vez de gastar una tercera línea de 44 px para él solo (con `:has`; sin soporte queda como antes).
+ *
  * [RX-Z FX-A] Por qué los anchos fijos del compact son esos: con `table-layout: fixed` y padding fuera del `width`
  * (content-box), a 1024 con el sidebar abierto las columnas fijas sumaban más que la tabla y Paciente quedaba en 0 px
  * (desaparecía el nombre). `box-sizing: border-box` en th/td + Profesional a la sublínea le devuelven ~200 px. Las
@@ -658,6 +677,12 @@ const LIST_STACK = `
 .dl-now { display: block; padding: 6px 0; }
 .dl-now td { display: block; }
 .dl-it { min-height: 44px; }
+.dl-day .desk-fold { margin-left: auto; }
+.dl-day .dl-chips { order: 3; flex: 1 1 100%; }
+.dl-card[data-collapsed=true] .dl-scroll, .dl-card[data-collapsed=true] .dl-chips { display: none; }
+.dl-card[data-collapsed=true] .dl-card-h { border-bottom: 0; }
+.dl-row:not(:has([data-primary], [data-kind=pay], .desk-paid)) .c-state { grid-column: 2; }
+.dl-row:not(:has([data-primary], [data-kind=pay], .desk-paid)) .c-act { grid-column: 3; grid-row: 2; }
 `;
 
 export const DESK_LIST_CSS = `

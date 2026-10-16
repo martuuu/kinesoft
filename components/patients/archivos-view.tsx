@@ -10,6 +10,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IconFile, IconX } from "@/components/ui/icons";
+import styles from "./archivos-view.module.css";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   deletePatientFile,
@@ -113,7 +114,8 @@ export function ArchivosView({
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: readOnly ? "1fr" : "280px 1fr", gap: 14 }}>
+    // MB-1d: grilla por clase (< 768 una columna; ver archivos-view.module.css).
+    <div className={`${styles.layout} ${readOnly ? styles.layoutReadOnly : ""}`}>
       {!readOnly && (
       <Card glass style={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="k-display" style={{ fontSize: 14, fontWeight: 700 }}>
@@ -198,6 +200,8 @@ export function ArchivosView({
       )}
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div className={styles.tableScroll}>
+        <div className={styles.table}>
         <div
           style={{
             padding: "12px 18px",
@@ -258,6 +262,8 @@ export function ArchivosView({
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
                 {!readOnly && f.hasDownload && (
                   <button
+                    type="button"
+                    className={styles.action}
                     onClick={() => onDownload(f.id)}
                     style={{
                       background: "rgba(31,79,190,0.08)",
@@ -275,6 +281,10 @@ export function ArchivosView({
                 )}
                 {!readOnly && (
                 <button
+                  type="button"
+                  className={styles.action}
+                  // Era un ícono solo, sin nombre accesible (el lector decía «botón»).
+                  aria-label={`Eliminar ${f.name}`}
                   onClick={() => onDelete(f.id)}
                   style={{
                     background: "transparent",
@@ -294,6 +304,8 @@ export function ArchivosView({
             </div>
           ))
         )}
+        </div>
+        </div>
       </Card>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState } from "react";
 import { AnimatePresence, LayoutGroup, m } from "framer-motion";
 import { rowTransition, rowVariants } from "@/lib/motion";
 import type { ReceptionAction } from "@/lib/reception-state";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/sala-board-state";
 import { PractitionerBadge } from "@/components/agenda/grid/practitioner-badge";
 import { SalaCard, type SalaCardContext } from "./sala-card";
+import { FoldButton } from "./sala-fold";
 
 type SalaColumnProps = {
   column: SalaColumnModel;
@@ -58,6 +59,9 @@ type SalaColumnProps = {
  * - Con reduced motion el `MotionConfig reducedMotion="user"` anula transform
  *   y layout: las cards aparecen directo en su lugar.
  * - `memo` con `sameColumn` (FX2a · M5): ver `SalaBoard`.
+ * - MB-1c (C-MB3) en el celular (< 768, una columna): la columna se pliega con su total (`FoldButton`, abierta al
+ *   cargar; el `useState` es local y no pasa por `sameColumn`) y la que tiene gente esperando o llamada sube
+ *   (`data-waiting` + `order` en el CSS): «Esperando» primero sin reordenar el modelo ni el escritorio.
  */
 function SalaColumnImpl({
   column,
@@ -77,9 +81,17 @@ function SalaColumnImpl({
   const shown = laterOpen ? [...column.entries, ...column.later] : column.entries;
   const transition = rowTransition(changes);
   const waiting = column.entries.filter((e) => e.band === "waiting" || e.band === "called").length;
+  const [open, setOpen] = useState(true);
+  const bodyId = `${listId}-body`;
 
   return (
-    <section className="sala-col" aria-labelledby={headingId} data-kind={column.kind}>
+    <section
+      className="sala-col"
+      aria-labelledby={headingId}
+      data-kind={column.kind}
+      data-waiting={waiting > 0 ? "true" : undefined}
+      data-collapsed={open ? undefined : "true"}
+    >
       <header className="sala-col-head">
         {column.kind === "practitioner" ? (
           <PractitionerBadge initials={column.initials ?? "?"} name={column.title} size={30} decorative />
@@ -100,9 +112,18 @@ function SalaColumnImpl({
             {waiting}
           </span>
         ) : null}
+        <FoldButton
+          className="sala-col-fold"
+          title={column.title}
+          count={column.entries.length + column.later.length}
+          open={open}
+          controls={bodyId}
+          onToggle={() => setOpen((o) => !o)}
+          showCount
+        />
       </header>
 
-      <m.div className="sala-col-body" layoutScroll>
+      <m.div className="sala-col-body" id={bodyId} layoutScroll>
         {shown.length === 0 ? <p className="sala-col-empty">{SALA_COPY.columnEmpty}</p> : null}
         <LayoutGroup id={listId}>
           <ul id={listId} className="sala-list" aria-labelledby={headingId}>

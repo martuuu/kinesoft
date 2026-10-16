@@ -16,6 +16,8 @@ const ROW_SELECT = {
   addressLine2: true,
   city: true,
   province: true,
+  // DIR-3c: el select de provincia del drawer de Sedes arranca con el código guardado.
+  provinceCode: true,
   postalCode: true,
   phone: true,
   isPrimary: true,

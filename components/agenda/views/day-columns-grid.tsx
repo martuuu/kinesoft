@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { nowOffset, type AgendaRow, type AgendaZoom, type MinuteWindow } from "@/lib/agenda-layout";
 import { GUTTER_WIDTH, TimeGutterCell, rowMinHeight } from "../grid/time-gutter";
 import { NowLine } from "../grid/now-line";
+import styles from "./views.module.css";
 
 /**
  * Shell de las vistas de UN día con una COLUMNA por recurso (SR-U4, opción C
@@ -138,14 +139,16 @@ export function DayColumnsGrid<C>({
   );
 
   return (
-    <Card style={{ padding: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    // MB-1a (C-MB3): < 768 la Card se acota a la ventana (`.columnsCard`) para que el scroll sea interno y el header
+    // `sticky top` y las horas `sticky left` funcionen en el celular; ≥ 768 la acota el contenedor de la agenda.
+    <Card className={styles.columnsCard} style={{ padding: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div
         ref={gridRef}
         role="grid"
         aria-label={ariaLabel}
         aria-rowcount={rows.length + 1}
         aria-colcount={columns.length + 1}
-        className="k-scroll"
+        className={`k-scroll ${styles.columnsScroll}`}
         style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative" }}
       >
         <div style={{ minWidth }}>

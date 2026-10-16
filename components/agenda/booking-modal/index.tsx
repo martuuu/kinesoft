@@ -805,7 +805,8 @@ export function BookingModal({
             : "El turno todavía no se creó. Si cerrás, se pierde lo que cargaste."
       }
     >
-      <div style={{ display: "grid", gap: 10 }}>
+      {/* MB-1b: `sheet` = targets de 44 px y campos de 16 px en el celular (booking-modal.module.css). */}
+      <div className={styles.sheet} style={{ display: "grid", gap: 10 }}>
         <ModeSelector modes={modes} value={mode} onChange={changeMode} disabled={pending} />
 
         {mode === "block" && (

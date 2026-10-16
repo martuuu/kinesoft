@@ -95,6 +95,7 @@ export function publicCopyFiles(): string[] {
     "app/mantenimiento/",
     "app/verificar-acceso/",
     "app/elegir-consultorio/",
+    "app/(directory)/",
   ];
   const fromApp = appAll.filter(
     (f) =>
@@ -106,6 +107,7 @@ export function publicCopyFiles(): string[] {
     ...walk("components/landing"),
     ...walk("components/auth"),
     ...walk("components/booking"),
+    ...walk("components/directory"),
     ...["login", "signup", "forgot", "reset"].flatMap((n) => walk(`components/screens/${n}-screen.tsx`)),
     ...walk("lib/portal-copy.ts"),
   ].map(rel);

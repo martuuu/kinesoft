@@ -139,3 +139,59 @@
     grid-template-areas: "rail center side";
   }
 }
+
+/* ─── Detalle: fila de ejercicio (MB-1d, cierra pf1-seguimiento-ejercicio-390) ─────────────────────────────
+   Era una grilla inline de 6 columnas: a 390 el nombre quedaba en ~40 px y las acciones se salían. Escritorio igual
+   que antes; < 640 en 2 líneas: n.º · nombre · quitar arriba, series · reps · Marcar/Skip abajo (alineadas con el
+   nombre). < 768 las acciones llegan a 44 px (targets táctiles); en escritorio quedan como estaban. */
+.exRow {
+  display: grid;
+  grid-template-columns: 28px 1fr 60px 60px auto auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.exName {
+  min-width: 0;
+}
+.exStatus {
+  display: flex;
+  gap: 4px;
+}
+
+@media (max-width: 767px) {
+  .exTap {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 639px) {
+  .exRow {
+    grid-template-columns: 28px 60px 60px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "order name name name remove"
+      ". sets reps status status";
+    row-gap: 8px;
+  }
+  .exOrder {
+    grid-area: order;
+  }
+  .exName {
+    grid-area: name;
+  }
+  .exRemove {
+    grid-area: remove;
+  }
+  .exSets {
+    grid-area: sets;
+  }
+  .exReps {
+    grid-area: reps;
+  }
+  .exStatus {
+    grid-area: status;
+    justify-content: flex-end;
+  }
+}

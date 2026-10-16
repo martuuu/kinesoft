@@ -154,6 +154,7 @@ export function planDischargePrompt(plan: Pick<PlanDTO, "status" | "archivedAt" 
 /** C13 literal; la fuente es `planes-model.ts` (también lo usa `/planes`). */
 export { PLAN_LEGACY_COPY } from "@/components/planes/planes-model";
 import { PLAN_LEGACY_COPY } from "@/components/planes/planes-model";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 export type PlanCardActionKey =
   | `status:${ProgramStatusValue}`
@@ -399,7 +400,7 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
   const reschedSession = dialog?.kind === "reschedule" ? live.find((s) => s.id === dialog.sessionId) ?? null : null;
 
   return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
+    <Card className={tap.tapScope} style={{ padding: 0, overflow: "hidden" }}>
       <section id={domId} aria-labelledby={`${domId}-title`} data-testid="plan-card" data-status={plan.status} data-archived={archivedPlan ? "1" : undefined}>
         <header style={{ padding: 16, display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           {/*
@@ -855,7 +856,7 @@ export function SessionRescheduleDrawer({
 
   return (
     <Drawer open onClose={onClose} title={`Reprogramar sesión ${session.ordinal ?? ""}`.trim()} width={460} dirty={when !== initial && !moved && !pending}>
-      <div style={{ display: "grid", gap: 12 }}>
+      <div className={tap.tapScope} style={{ display: "grid", gap: 12 }}>
         <p style={{ margin: 0, fontSize: 13, color: "var(--navy-500)" }}>
           {hasBooking
             ? "La sesión tiene turno: se mueve el turno de la agenda y la sesión lo sigue."

@@ -15,8 +15,10 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import type { BillingOverview } from "@/lib/saas-billing-types";
+import type { ConfiguracionDirectoryData } from "@/lib/configuracion-page-loader";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkelForm } from "@/components/ui/skeleton";
+import styles from "./configuracion.module.css";
 import { TabsBar, initialConfigTab, visibleConfigTabs, type ConfigTabAccess, type Tab } from "./controls";
 import type { SupportDraft } from "./panels/support-messages-panel";
 import type { PlanChoice } from "./panels/plan-change-drawer";
@@ -42,6 +44,7 @@ const PANEL_LOADERS = {
   servicios: () => import("./panels/services-panel"),
   "obras-sociales": () => import("./panels/insurers-panel"),
   diagnosticos: () => import("./panels/diagnosticos-panel"),
+  directorio: () => import("./panels/directory-panel"),
   usuarios: () => import("./panels/users-panel"),
   plan: () => import("./panels/plan-tab"),
   facturacion: () => import("./panels/billing-panel"),
@@ -72,6 +75,8 @@ const PractitionerPanel = dynamic(() => import("./panels/practitioners/practitio
 const ServicesPanel = dynamic(() => import("./panels/services-panel").then((m) => m.ServicesPanel), { loading: PanelSkeleton });
 const InsurersPanel = dynamic(() => import("./panels/insurers-panel").then((m) => m.InsurersPanel), { loading: PanelSkeleton });
 const DiagnosticosPanel = dynamic(() => import("./panels/diagnosticos-panel").then((m) => m.DiagnosticosPanel), { loading: PanelSkeleton });
+// DIR-3c: pestaña «Directorio» (C-DIR9), su propio chunk como las demás.
+const DirectoryPanel = dynamic(() => import("./panels/directory-panel").then((m) => m.DirectoryPanel), { loading: PanelSkeleton });
 const UsersPanel = dynamic(() => import("./panels/users-panel").then((m) => m.UsersPanel), { loading: PanelSkeleton });
 const PlanTab = dynamic(() => import("./panels/plan-tab").then((m) => m.PlanTab), { loading: PanelSkeleton });
 const BillingPanel = dynamic(() => import("./panels/billing-panel").then((m) => m.BillingPanel), { loading: PanelSkeleton });
@@ -129,6 +134,11 @@ type Props = {
   exportBlocked?: ExportBlockedTenant[];
   /** BO-Z B6: `?tenant=` de la URL (link del mail de pedido de export). */
   exportRequestedTenantId?: string | null;
+  /**
+   * DIR-3c (C-DIR9): pestaña «Directorio» y especialidades por profesional. null/ausente = `DIRECTORY_MODE=off` o sin
+   * «Configuración»: no hay pestaña ni sub-pestaña Especialidades.
+   */
+  directory?: ConfiguracionDirectoryData | null;
 };
 
 export function ConfiguracionClient(props: Props) {
@@ -136,28 +146,32 @@ export function ConfiguracionClient(props: Props) {
   // BO5-C: solo el titular; soporte (que llega como ADMIN) nunca baja PHI (plan §19.5). BO-Z B6: también quien es
   // titular de un consultorio suspendido aunque en el activo sea ADMIN (ve solo el botón del suspendido).
   const canExport = !props.support && (props.role === "OWNER" || exportBlocked.length > 0);
-  const access: ConfigTabAccess = { ...props.access, canExport };
+  const directory = props.directory ?? null;
+  const access: ConfigTabAccess = { ...props.access, canExport, directory: directory !== null };
   const visible = visibleConfigTabs(access, props.modules);
   const [tab, setTabRaw] = useState<Tab>(() => initialConfigTab(props.initialTab, visible));
   // B3.4: Servicios/Coberturas de un profesional se editan en línea (no en
   // Drawer); cambiar de pestaña desmonta el editor y perdía lo cargado.
   const [practitionerDirty, setPractitionerDirty] = useState(false);
+  // DIR-3c: la descripción pública del Directorio también se edita en línea.
+  const [directoryDirty, setDirectoryDirty] = useState(false);
   // PL-3a: «Consultanos» del plan Libre abre Soporte con un mensaje prellenado.
   const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
   const confirm = useConfirm();
   const setTab = useCallback(
     async (t: Tab) => {
       if (t === tab) return;
-      if (practitionerDirty) {
+      if (practitionerDirty || directoryDirty) {
         const ok = await confirm({
           title: "¿Descartar los cambios sin guardar?",
-          message: "Tenés cambios sin guardar en Profesionales. Si cambiás de pestaña, se pierden.",
+          message: `Tenés cambios sin guardar en ${practitionerDirty ? "Profesionales" : "Directorio"}. Si cambiás de pestaña, se pierden.`,
           tone: "danger",
           confirmLabel: "Descartar",
           cancelLabel: "Seguir editando",
         });
         if (!ok) return;
         setPractitionerDirty(false);
+        setDirectoryDirty(false);
       }
       setTabRaw(t);
       // Que la URL siga a la pestaña: un refresh (o el link copiado) vuelve a la misma. `replaceState` y no el router:
@@ -171,7 +185,7 @@ export function ConfiguracionClient(props: Props) {
         /* sin history: la pestaña vale igual */
       }
     },
-    [tab, practitionerDirty, confirm]
+    [tab, practitionerDirty, directoryDirty, confirm]
   );
   const can = (t: Tab) => visible.includes(t);
   // «Accesos de soporte»: PL-F1b (decisión de Martin, 16-oct), cualquier miembro, si la página pudo leerlos. Antes
@@ -179,7 +193,8 @@ export function ConfiguracionClient(props: Props) {
   const supportAccessVisible = props.supportSessions !== null;
   const overview = props.billingOverview ?? null;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    // MB-1e: `.page` = el mismo flex de antes + el ancla de los 44 px < 768 (configuracion.module.css).
+    <div className={styles.page}>
       <PageHeader eyebrow="Panel del consultorio" title="Configuración" />
 
       <TabsBar
@@ -201,6 +216,10 @@ export function ConfiguracionClient(props: Props) {
           rooms={props.rooms}
           onDirtyChange={setPractitionerDirty}
           team={props.team}
+          specialties={
+            directory ? { catalog: directory.specialtyCatalog, byPractitioner: directory.specialtiesByPractitioner } : null
+          }
+          support={props.support}
         />
       )}
       {tab === "servicios" && can("servicios") && (
@@ -208,6 +227,9 @@ export function ConfiguracionClient(props: Props) {
       )}
       {tab === "obras-sociales" && can("obras-sociales") && <InsurersPanel insurers={props.insurers} />}
       {tab === "diagnosticos" && can("diagnosticos") && <DiagnosticosPanel conditions={props.customConditions} />}
+      {tab === "directorio" && can("directorio") && directory && (
+        <DirectoryPanel directory={directory} support={props.support} onDirtyChange={setDirectoryDirty} />
+      )}
       {tab === "usuarios" && can("usuarios") && (
         <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} seats={props.planUsage?.seats} />
       )}

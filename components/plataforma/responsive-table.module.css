@@ -1,0 +1,101 @@
+/* [MB-1f · C-MB3 Plataforma] Tablas de Plataforma (consultorios, usuarios, facturación, auditoría) → cards < 768 px.
+   Desde 768 la grilla es la de siempre: columnas en `--pt-cols` y ancho mínimo en `--pt-min-w` (inline por tabla) con scroll
+   horizontal propio. Antes las columnas iban inline (`gridTemplateColumns`) y una media query no las puede pisar: por
+   eso pasan a variables. A 390 la tabla de consultorios medía 1310 px y había que scrollear de costado para saber de qué
+   consultorio era el «Titular» (la columna fija ayudaba, pero se leía una fila a la vez a pedazos).
+   Bajo 768: el encabezado se oculta, cada fila es una card (primera celda a lo ancho, el resto en 2 columnas) y cada
+   celda muestra su rótulo desde `data-label` (el texto del encabezado oculto). */
+.scroller {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.inner {
+  min-width: var(--pt-min-w, 0);
+}
+.head,
+.row {
+  display: grid;
+  grid-template-columns: var(--pt-cols);
+}
+
+/* Celda fija a la izquierda (el nombre de la fila) mientras la tabla scrollea de costado. Solo en escritorio: en el
+   celular no hay scroll horizontal y la celda va a lo ancho de la card. */
+@media (min-width: 768px) {
+  .sticky {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    box-shadow: 1px 0 0 rgba(15, 30, 51, 0.06);
+    margin-left: -16px;
+    padding-left: 16px;
+    background: var(--card-bg);
+  }
+  .head .sticky {
+    background: var(--bg-panel);
+  }
+}
+
+@media (max-width: 767px) {
+  .scroller {
+    overflow-x: visible;
+  }
+  .inner {
+    min-width: 0;
+  }
+  .head {
+    display: none;
+  }
+  .row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    row-gap: 10px;
+    padding: 14px 16px;
+  }
+  .row > :first-child,
+  .row > .wide {
+    grid-column: 1 / -1;
+  }
+  .row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--navy-500);
+  }
+  /* Alineación a la derecha de las columnas numéricas: en la card el número va debajo de su rótulo. */
+  .row > [data-label] {
+    text-align: left !important;
+  }
+
+  /* Pasada de targets (AGENTS §5, 44 px): links con forma de botón y controles de los filtros. El texto inline no
+     cambia (a un `<a>` inline `min-height` no le hace nada). */
+  .tapScope :is(button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])) {
+    min-height: 44px;
+  }
+  .tapScope button {
+    min-width: 44px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
+/* Filtros: en línea desde 768; bajo 768 un botón «Filtros (n)» abre un Drawer (`FiltersDrawer`). */
+.filtersTrigger {
+  display: none;
+}
+@media (max-width: 767px) {
+  .filtersInline {
+    display: none;
+  }
+  .filtersTrigger {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}

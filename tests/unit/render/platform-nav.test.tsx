@@ -26,7 +26,7 @@ describe("[BO3-A] PlatformNav", () => {
     pathname = "/plataforma";
   });
 
-  it("muestra los 12 links en el orden del plan (PL-2d: Mensajes después de Usuarios; PL-3c: Facturación y Precios después de Mensajes), con el separador «Catálogo global» antes de Ejercicios", () => {
+  it("muestra los 13 links (DIR-3e: Directorio después de Precios) en el orden del plan (PL-2d: Mensajes después de Usuarios; PL-3c: Facturación y Precios después de Mensajes), con el separador «Catálogo global» antes de Ejercicios", () => {
     const html = render("/plataforma");
     expect(html).toMatch(/<nav[^>]*aria-label="Secciones de Plataforma"/);
     const links = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => [m[1], m[2].replace(/<[^>]+>/g, "")]);
@@ -37,6 +37,7 @@ describe("[BO3-A] PlatformNav", () => {
       ["/plataforma/mensajes", "Mensajes"],
       ["/plataforma/facturacion", "Facturación"],
       ["/plataforma/precios", "Precios"],
+      ["/plataforma/directorio", "Directorio"],
       ["/plataforma/salud", "Salud"],
       ["/plataforma/auditoria", "Auditoría"],
       ["/plataforma/sistema", "Sistema"],
@@ -44,7 +45,7 @@ describe("[BO3-A] PlatformNav", () => {
       ["/plataforma/tags", "Tags"],
       ["/plataforma/catalogo/prestadoras", "Catálogo"],
     ]);
-    expect(PLATFORM_NAV_ITEMS).toHaveLength(12);
+    expect(PLATFORM_NAV_ITEMS).toHaveLength(13);
     const sep = html.indexOf('role="separator"');
     expect(sep).toBeGreaterThan(html.indexOf('href="/plataforma/sistema"'));
     expect(sep).toBeLessThan(html.indexOf('href="/plataforma/ejercicios"'));

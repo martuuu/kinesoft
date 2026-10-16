@@ -13,6 +13,9 @@
  * guardar. Horarios y Excepciones editan en Drawer, que tiene su propio
  * dirty-guard y tapa la pantalla mientras está abierto.
  *
+ * DIR-3c (C-DIR9): sub-pestaña Especialidades (catálogo global, ≤ 5) cuando el directorio está prendido (`directory`
+ * llega del loader; con `DIRECTORY_MODE=off` no existe). Se edita en línea, con el mismo dirty-guard.
+ *
  * Layout: tarjetas que se acomodan solas (grid auto-fill) arriba y el detalle
  * abajo; en un celular quedan apiladas sin necesitar un breakpoint.
  */
@@ -29,15 +32,23 @@ import { ExceptionsEditor } from "./exceptions-editor";
 import { ServicesEditor } from "./services-editor";
 import { PayersEditor } from "./payers-editor";
 import { PublicBookingSwitch } from "./public-booking-switch";
+import { SpecialtiesEditor } from "./specialties-editor";
 import type { TeamMemberRow } from "@/lib/invitations-types";
 
-type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas";
+type SubTab = "horarios" | "excepciones" | "servicios" | "coberturas" | "especialidades";
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: "horarios", label: "Horarios" },
   { key: "excepciones", label: "Excepciones" },
   { key: "servicios", label: "Servicios" },
   { key: "coberturas", label: "Coberturas" },
+  { key: "especialidades", label: "Especialidades" },
 ];
+
+/** DIR-3c: lo que necesita el editor de especialidades (del loader de `/configuracion`). */
+export type PractitionerSpecialtiesData = {
+  catalog: ReadonlyArray<{ id: string; name: string }>;
+  byPractitioner: Readonly<Record<string, readonly string[]>>;
+};
 
 export function PractitionerPanel({
   summary,
@@ -45,6 +56,8 @@ export function PractitionerPanel({
   rooms,
   onDirtyChange,
   team,
+  specialties,
+  support = false,
 }: {
   summary: PractitionerScheduleSummaryRow[];
   locations: LocationRow[];
@@ -61,13 +74,19 @@ export function PractitionerPanel({
    * (`TeamMemberRow.practitionerId` / `publicBookingEnabled`). Sin él, la ficha no muestra el switch.
    */
   team?: ReadonlyArray<Pick<TeamMemberRow, "practitionerId" | "publicBookingEnabled">>;
+  /** DIR-3c: sin él (directorio en `off`) no hay sub-pestaña Especialidades. */
+  specialties?: PractitionerSpecialtiesData | null;
+  /** DIR-3c: sesión de soporte → especialidades en solo lectura. */
+  support?: boolean;
 }) {
   const confirm = useConfirm();
   const [selectedId, setSelectedId] = useState<string | null>(summary[0]?.practitionerId ?? null);
   const [sub, setSub] = useState<SubTab>("horarios");
   const [svcDirty, setSvcDirty] = useState(false);
   const [payDirty, setPayDirty] = useState(false);
-  const dirty = svcDirty || payDirty;
+  const [speDirty, setSpeDirty] = useState(false);
+  const dirty = svcDirty || payDirty || speDirty;
+  const subTabs = specialties ? SUB_TABS : SUB_TABS.filter((t) => t.key !== "especialidades");
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -96,6 +115,7 @@ export function PractitionerPanel({
       }
       setSvcDirty(false);
       setPayDirty(false);
+      setSpeDirty(false);
       go();
     },
     [dirty, confirm]
@@ -119,7 +139,9 @@ export function PractitionerPanel({
       <Card style={{ padding: 16 }}>
         <EyebrowLabel>Profesionales</EyebrowLabel>
         <div style={{ fontSize: 13, color: "var(--navy-500)", margin: "4px 0 12px" }}>
-          Elegí un profesional para configurar sus horarios, días especiales, servicios y coberturas.
+          {specialties
+            ? "Elegí un profesional para configurar sus horarios, días especiales, servicios, coberturas y especialidades."
+            : "Elegí un profesional para configurar sus horarios, días especiales, servicios y coberturas."}
         </div>
         <ul
           aria-label="Profesionales"
@@ -205,7 +227,7 @@ export function PractitionerPanel({
               className="k-scroll"
               style={{ display: "flex", gap: 4, overflowX: "auto", marginTop: 8 }}
             >
-              {SUB_TABS.map((t) => {
+              {subTabs.map((t) => {
                 const on = sub === t.key;
                 return (
                   <button
@@ -270,6 +292,17 @@ export function PractitionerPanel({
                 practitionerId={selected.practitionerId}
                 practitionerName={selected.name}
                 onDirtyChange={setPayDirty}
+              />
+            )}
+            {sub === "especialidades" && specialties && (
+              <SpecialtiesEditor
+                key={selected.practitionerId}
+                practitionerId={selected.practitionerId}
+                practitionerName={selected.name}
+                catalog={specialties.catalog}
+                initial={specialties.byPractitioner[selected.practitionerId] ?? []}
+                readOnly={support}
+                onDirtyChange={setSpeDirty}
               />
             )}
           </div>

@@ -3,6 +3,7 @@
  * (`lib/locations.ts` exporta solo funciones async).
  */
 import { z } from "zod";
+import { AR_PROVINCE_CODES } from "@/lib/ar-provinces";
 
 /** "" / null / undefined → null; el resto, trim + tope. */
 const optText = (max: number) =>
@@ -23,6 +24,21 @@ export const LocationInput = z.object({
   addressLine2: optText(120),
   city: optText(80),
   province: optText(80),
+  /**
+   * DIR-3c (DIR-D16, M11): una de las 24 jurisdicciones (ISO 3166-2:AR sin «AR-»; CHECK `Location_provinceCode_check`).
+   * "" / null = sin provincia. Con código, el escritor (`lib/locations.ts`) pisa `province` con el nombre: `province`
+   * sigue siendo lo que leen turnero, agenda y export, y el texto libre («Bs As») no sirve para filtrar el directorio.
+   */
+  provinceCode: z
+    .union([z.string(), z.null()])
+    .optional()
+    .transform((v) => (typeof v === "string" && v.trim() ? v.trim() : null))
+    .pipe(
+      z
+        .string()
+        .refine((v) => (AR_PROVINCE_CODES as readonly string[]).includes(v), "Elegí una provincia de la lista")
+        .nullable()
+    ),
   postalCode: optText(16),
   phone: optText(40),
   sortOrder: z.coerce.number().int().min(0).max(9999).default(0),
@@ -36,6 +52,8 @@ export type LocationRow = {
   addressLine2: string | null;
   city: string | null;
   province: string | null;
+  /** DIR-3c: código de la jurisdicción (M11). Opcional en el tipo: el onboarding arma filas sin él. */
+  provinceCode?: string | null;
   postalCode: string | null;
   phone: string | null;
   isPrimary: boolean;

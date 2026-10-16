@@ -704,7 +704,8 @@ export function BookingDrawer({
       dirtyMessage="Tenés cambios del turno sin guardar. Si cerrás, se pierden."
     >
       {booking && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        // MB-1b: `sheet` = targets de 44 px y campos de 16 px en el celular (booking-drawer.module.css).
+        <div className={styles.sheet} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <PatientHeader booking={booking} />
 
           <div style={{ ...sectionCard, display: "grid", gap: 8, fontSize: 12.5 }}>

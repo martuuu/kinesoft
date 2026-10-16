@@ -32,6 +32,10 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  * `data-fit=natural` (ventana de menos de 560 px de alto) el shell saca el inline; en stack el `!important` le gana
  * al inline: alto natural y la página scrollea.
  *
+ * MB-1c (C-MB4): el header mide 56 px justos (54 + borde; antes 58 con el botón de 40 y 8 px de padding), la franja
+ * que el contrato fija en ≤ 56 a 1366×625/695. En stack aparece `.desk-fold` (pliegue de cada card o carril, C-MB3) y
+ * bajo 640 el modal de cobro apila sus botones a ancho completo (hoja de C-MB2).
+ *
  * `.desk` es el contenedor: `container-type` aplica contención de layout, así que un `position: fixed` adentro
  * quedaría anclado a `.desk` y recortado por su overflow. Por eso el menú ⋯ va en un portal al body y el modal de
  * cobro se monta como hermano de `.desk`, nunca adentro.
@@ -76,6 +80,7 @@ const STACK_RULES = `
 .desk-act-ico { display: inline-flex; }
 .desk-call { top: 8px; }
 .desk-call-inner { white-space: normal; }
+.desk-fold { display: inline-flex; }
 `;
 
 export const DESK_CSS = `
@@ -89,7 +94,7 @@ export const DESK_CSS = `
 .desk-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .desk kbd, .desk-kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; font: 600 11px/1 var(--font-mono); color: var(--navy-400); background: rgba(15,30,51,0.05); border: 1px solid rgba(15,30,51,0.1); }
 
-.desk-head { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 8px 12px 8px 20px; border-radius: var(--r-md); background: var(--card-bg); border: 1px solid rgba(15,30,51,0.07); box-shadow: 0 1px 2px rgba(15,30,51,0.04); min-width: 0; }
+.desk-head { display: flex; align-items: center; gap: 16px; min-height: 54px; padding: 7px 12px 7px 20px; border-radius: var(--r-md); background: var(--card-bg); border: 1px solid rgba(15,30,51,0.07); box-shadow: 0 1px 2px rgba(15,30,51,0.04); min-width: 0; }
 .desk-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .desk-h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; white-space: nowrap; line-height: 1.2; }
 .desk-date { color: var(--navy-500); font-size: 14px; white-space: nowrap; }
@@ -172,6 +177,11 @@ export const DESK_CSS = `
 .desk-menu-item:focus-visible { background: var(--bg-panel); outline: 2px solid var(--sky-700); outline-offset: -2px; }
 .desk-menu-sep { border: 0; height: 1px; background: rgba(15,30,51,0.07); margin: 4px 0; }
 
+.desk-fold { display: none; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 44px; margin: -6px -6px -6px 0; padding: 0 8px; border: 0; border-radius: 10px; background: transparent; font: inherit; font-size: 13px; font-weight: 650; color: var(--navy-500); cursor: pointer; }
+.desk-fold svg { transition: transform ${T_FAST}; }
+.desk-fold[aria-expanded=false] svg { transform: rotate(-90deg); }
+.desk-fold:focus-visible { outline: 2px solid var(--sky-700); outline-offset: -2px; }
+
 .desk-pay { display: grid; gap: 16px; }
 .desk-pay-amt { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 14px; background: var(--bg-panel); color: var(--navy-500); font-size: 14px; }
 .desk-pay-amt b { font-size: 28px; font-weight: 650; line-height: 1; letter-spacing: -0.02em; color: var(--navy-900); font-variant-numeric: tabular-nums; }
@@ -192,8 +202,15 @@ export const DESK_CSS = `
   .desk-menu-item { min-height: 44px; }
 }
 
+/* Modal de cobro como hoja (C-MB2/C-MB3): bajo 640 los botones van apilados a ancho completo. Por @media y no en
+   STACK_RULES: el modal es un portal fuera de .desk. */
+@media (max-width: 639px) {
+  .desk-pay-f { flex-direction: column-reverse; }
+  .desk-pay-f .k-btn { width: 100%; justify-content: center; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .desk-pro, .desk-act, .desk-view, .desk-menu-item { transition: none; }
+  .desk-pro, .desk-act, .desk-view, .desk-menu-item, .desk-fold svg { transition: none; }
   .desk-act:active:not(:disabled) { transform: none; }
 }
 `;

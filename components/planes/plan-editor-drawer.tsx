@@ -84,6 +84,7 @@ import {
   type PlanReplanBase,
   type PlanReplanOriginal,
 } from "@/lib/plan-editor-state";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 /**
  * Props del editor: las congeladas de C10 + `permissions` opcional (handoff
@@ -487,7 +488,7 @@ function PlanEditorInstance(props: PlanEditorDrawerOwnProps) {
 
   return (
     <Drawer open={open} onClose={onClose} title={planEditorTitle(mode)} width={PLAN_EDITOR_WIDTH} dirty={dirty} dirtyMessage={PLAN_EDITOR_COPY.dirty}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
+      <div className={tap.tapScope} style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
         {loadError ? (
           <p role="alert" style={{ margin: 0, fontSize: 13, color: "var(--danger-fg)" }}>
             {loadError}

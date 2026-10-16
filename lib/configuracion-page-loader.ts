@@ -25,8 +25,20 @@ import "server-only";
  * frescos nunca muestra algo viejo.
  *
  * `where: { tenantId }` a mano en cada consulta (en prod la conexión tiene BYPASSRLS: es la única barrera).
+ *
+ * DIR-3c (C-DIR9): la pestaña «Directorio» y el editor de especialidades leen DENTRO de la misma tx (opt-in,
+ * descripción y moderación del consultorio salen en la consulta del Tenant que ya estaba; catálogo de especialidades y
+ * las asignadas, 2 sentencias más) y, en paralelo con ella, UNA lectura por el canal service: el estado del perfil
+ * público de cada profesional (`ProfessionalPublicProfile` es SERVICE_ONLY, DIR-D12: `kinesoft_app` no la ve con ningún
+ * GUC). Esa lectura no abre tx (el presupuesto de PF2 sigue en ≤ 3) y filtra por el consultorio a mano a través de la
+ * relación (`user.practitioners.some.tenantId`). El `userId` se usa solo para cruzar y NO sale de este archivo: al
+ * cliente le llega practitionerId + nombre + estado. Con `DIRECTORY_MODE=off` no se lee nada de esto (la pestaña no
+ * existe todavía para nadie).
  */
 import { runWithRls, type DbClient } from "@/lib/rls";
+// DIR-3c: solo para `ProfessionalPublicProfile` (SERVICE_ONLY, DIR-D12); ver la cabecera.
+import { prismaService } from "@/lib/db";
+import { directoryMode } from "@/lib/directory-mode";
 import { ForbiddenError, getAccessSnapshot, type Actor } from "@/lib/session";
 import type { Capability } from "@/lib/capabilities";
 import { modulesFor, roomsEnabled } from "@/lib/tenant-modules";
@@ -56,6 +68,54 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 /** Mismo texto que `READ_MSG` de lib/locations.ts y lib/practitioner-schedule.ts (lo que tiraban sus lectores). */
 const AGENDA_READ_MSG = "No tenés permiso para ver la agenda del consultorio.";
 
+/**
+ * DIR-3c (C-DIR9): estado del perfil público de un profesional reservable, visto desde el consultorio. El perfil es
+ * PERSONAL (se edita en `/cuenta/perfil-publico`): el consultorio lo ve, no lo edita.
+ *   published = publicado con consentimiento vigente · hidden = Plataforma lo ocultó · none = sin perfil, sin
+ *   publicar o con el consentimiento retirado (para el consultorio es lo mismo: no aparece).
+ */
+export type DirectoryProfileStatus = "published" | "hidden" | "none";
+
+export type DirectoryPractitionerRow = {
+  practitionerId: string;
+  /** `displayMemberName`: nunca el email (decisión 19). */
+  name: string;
+  /** Switch del turnero de ESTE profesional (PL-3b): apagado = no es reservable, no aparece aunque esté publicado. */
+  inTurnero: boolean;
+  status: DirectoryProfileStatus;
+};
+
+/** Pestaña «Directorio» de Configuración (null = modo `off` o sin «Configuración»). */
+export type ConfiguracionDirectoryData = {
+  mode: "preview" | "public";
+  slug: string;
+  listed: boolean;
+  description: string | null;
+  /** Moderación de Plataforma («Plataforma ocultó el consultorio: <motivo>»). */
+  hidden: { at: string; reason: string } | null;
+  /** Switch del turnero del consultorio: el directorio necesita el turnero prendido (C-DIR4). */
+  turneroOn: boolean;
+  practitioners: DirectoryPractitionerRow[];
+  /** Catálogo global de especialidades (sin archivadas), por nombre: el combobox del editor. */
+  specialtyCatalog: { id: string; name: string }[];
+  /** practitionerId → ids de sus especialidades (solo las del catálogo vigente). */
+  specialtiesByPractitioner: Record<string, string[]>;
+};
+
+/** Lo que sale de la tx: igual que lo público, pero con el `userId` para cruzar con el canal service (no sale). */
+type DirectoryTxPart = Omit<ConfiguracionDirectoryData, "practitioners"> & {
+  practitioners: (Omit<DirectoryPractitionerRow, "status"> & { userId: string })[];
+};
+
+type ProfileStatusRow = { userId: string; listed: boolean; consentWithdrawnAt: Date | null; hiddenAt: Date | null };
+
+/** Puro: el estado que ve el consultorio. Oculto gana (aunque esté `listed`): Plataforma lo sacó. */
+export function directoryProfileStatus(p: Omit<ProfileStatusRow, "userId"> | null | undefined): DirectoryProfileStatus {
+  if (!p) return "none";
+  if (p.hiddenAt) return "hidden";
+  return p.listed && !p.consentWithdrawnAt ? "published" : "none";
+}
+
 export type ConfiguracionTxData = {
   tenant: TenantSettings | null;
   insurers: InsurerRow[];
@@ -69,6 +129,7 @@ export type ConfiguracionTxData = {
   scheduleSummary: PractitionerScheduleSummaryRow[];
   rooms: RoomRow[];
   supportSessions: SupportSessionRow[] | null;
+  directory: DirectoryTxPart | null;
 };
 
 type Gates = {
@@ -77,6 +138,8 @@ type Gates = {
   rooms: boolean;
   diagnostico: boolean;
   support: boolean;
+  /** DIR-3c: pestaña «Directorio» + especialidades: `tenant.admin` (soporte la ve en solo lectura) y modo ≠ off. */
+  directory: boolean;
 };
 
 /**
@@ -95,6 +158,7 @@ function gatesFor(actor: Actor, caps: ReadonlySet<Capability>): Gates {
     rooms: caps.has("schedule.configure") && roomsEnabled(actor.entitlements),
     diagnostico: modulesFor(actor.entitlements).has("diagnostico"),
     support: !actor.support,
+    directory: tenantAdmin && directoryMode() !== "off",
   };
 }
 
@@ -115,8 +179,20 @@ export async function loadConfiguracionInTx(
 
   // Dentro de una tx interactiva Prisma manda las sentencias en serie por la misma conexión: el `Promise.all` solo
   // las encola sin esperar a que el código de una termine para pedir la siguiente.
-  const [tenantRow, insurers, services, team, pending, pracs, customConditions, locations, rooms, supportRows] =
-    await Promise.all([
+  const [
+    tenantRow,
+    insurers,
+    services,
+    team,
+    pending,
+    pracs,
+    customConditions,
+    locations,
+    rooms,
+    supportRows,
+    specialtyCatalog,
+    specialtyRows,
+  ] = await Promise.all([
       // = getTenantSettings (lib/tenant-settings.ts); además da el horario del consultorio para el resumen de
       // horarios (= `tenantHours` de lib/practitioner-schedule.ts): una sentencia menos.
       g.tenantAdmin
@@ -138,6 +214,11 @@ export async function loadConfiguracionInTx(
               businessHoursEnd: true,
               agendaSlotMinutes: true,
               updatedAt: true,
+              // DIR-3c: pestaña «Directorio» (M11). Se separan abajo: `tenant` sigue igual a `getTenantSettings`.
+              directoryListed: true,
+              directoryHiddenAt: true,
+              directoryHiddenReason: true,
+              publicDescription: true,
             },
           })
         : null,
@@ -153,6 +234,9 @@ export async function loadConfiguracionInTx(
             orderBy: { createdAt: "asc" },
             select: {
               id: true,
+              // DIR-3c: `userId` para cruzar con el perfil público (no sale del loader) y el switch del turnero.
+              userId: true,
+              publicBookingEnabled: true,
               user: { select: { fullName: true, email: true } },
               schedules: {
                 where: { tenantId, OR: [{ validUntil: null }, { validUntil: { gte: today } }] },
@@ -201,13 +285,47 @@ export async function loadConfiguracionInTx(
             },
           })
         : null,
+      // DIR-3c: catálogo global (GLOBAL_READONLY, SELECT para todos) y las asignadas del consultorio.
+      g.directory
+        ? tx.specialty.findMany({ where: { archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } })
+        : [],
+      g.directory
+        ? tx.practitionerSpecialty.findMany({
+            where: { tenantId, specialty: { archivedAt: null } },
+            select: { practitionerId: true, specialtyId: true },
+          })
+        : [],
     ]);
 
   let tenant: TenantSettings | null = null;
   let scheduleSummary: PractitionerScheduleSummaryRow[] = [];
+  let directory: DirectoryTxPart | null = null;
   if (tenantRow) {
-    const { updatedAt, ...t } = tenantRow;
+    const { updatedAt, directoryListed, directoryHiddenAt, directoryHiddenReason, publicDescription, ...t } = tenantRow;
     tenant = { ...t, updatedAt: updatedAt.toISOString() };
+    const mode = directoryMode();
+    if (g.directory && mode !== "off") {
+      const specialtiesByPractitioner: Record<string, string[]> = {};
+      for (const r of specialtyRows) (specialtiesByPractitioner[r.practitionerId] ??= []).push(r.specialtyId);
+      directory = {
+        mode,
+        slug: t.slug,
+        listed: directoryListed,
+        description: publicDescription,
+        hidden: directoryHiddenAt
+          ? { at: directoryHiddenAt.toISOString(), reason: directoryHiddenReason ?? "" }
+          : null,
+        turneroOn: t.publicBookingEnabled,
+        practitioners: pracs.map((p) => ({
+          practitionerId: p.id,
+          userId: p.userId,
+          name: displayMemberName(p.user.fullName),
+          inTurnero: p.publicBookingEnabled,
+        })),
+        specialtyCatalog,
+        specialtiesByPractitioner,
+      };
+    }
     // `tenantHours`: el consultorio existe (findUniqueOrThrow), así que los `?? 8` / `?? 19` no aplican.
     const hours = { startMin: tenantRow.businessHoursStart * 60, endMin: tenantRow.businessHoursEnd * 60 };
     scheduleSummary = pracs.map((p) => {
@@ -237,6 +355,29 @@ export async function loadConfiguracionInTx(
     scheduleSummary,
     rooms,
     supportSessions: supportRows ? supportRows.map(toSupportSessionRow) : null,
+    directory,
+  };
+}
+
+/**
+ * DIR-3c: estado del perfil público de las personas que atienden en el consultorio. Canal service (SERVICE_ONLY) sin
+ * tx; `tenantId` a mano por la relación. Solo las columnas de estado: ni nombre público, ni matrícula, ni bio (son de
+ * la persona y se editan en su cuenta).
+ */
+async function loadProfileStatuses(tenantId: string): Promise<ProfileStatusRow[]> {
+  return prismaService.professionalPublicProfile.findMany({
+    where: { user: { practitioners: { some: { tenantId } } } },
+    select: { userId: true, listed: true, consentWithdrawnAt: true, hiddenAt: true },
+  });
+}
+
+/** Cruza la parte de la tx con los estados y saca el `userId` (no viaja al cliente). */
+function finishDirectory(part: DirectoryTxPart | null, statuses: ProfileStatusRow[]): ConfiguracionDirectoryData | null {
+  if (!part) return null;
+  const byUser = new Map(statuses.map((s) => [s.userId, s]));
+  return {
+    ...part,
+    practitioners: part.practitioners.map(({ userId, ...p }) => ({ ...p, status: directoryProfileStatus(byUser.get(userId)) })),
   };
 }
 
@@ -250,7 +391,9 @@ async function unlessForbidden<T>(p: () => Promise<T>): Promise<T | null> {
   }
 }
 
-export type ConfiguracionPageData = ConfiguracionTxData & {
+export type ConfiguracionPageData = Omit<ConfiguracionTxData, "directory"> & {
+  /** DIR-3c: pestaña «Directorio» (null = modo `off` o sin «Configuración»). */
+  directory: ConfiguracionDirectoryData | null;
   planUsage: Awaited<ReturnType<typeof getTenantPlanUsage>> | null;
   billingOverview: Awaited<ReturnType<typeof getBillingOverview>> | null;
   catalog: Awaited<ReturnType<typeof getPublicPlanCatalog>>;
@@ -284,8 +427,9 @@ export async function loadConfiguracionPage(
     scheduleSummary: [],
     rooms: [],
     supportSessions: null,
+    directory: null,
   };
-  const [data, planUsage, billingOverview, catalog, snapshot] = await Promise.all([
+  const [data, planUsage, billingOverview, catalog, snapshot, profileStatuses] = await Promise.all([
     needsTx ? runWithRls(actor.tenantId, (tx) => loadConfiguracionInTx(tx, actor, caps)) : empty,
     // «Plan y uso»: `getTenantPlanUsage` acepta `account.billing` o `tenant.admin` (PL-3).
     billing ? unlessForbidden(() => getTenantPlanUsage()) : null,
@@ -294,6 +438,8 @@ export async function loadConfiguracionPage(
     billing ? getPublicPlanCatalog() : [],
     // [BO-Z B6] El soporte no baja PHI.
     actor.support ? null : getAccessSnapshot(),
+    // DIR-3c: en paralelo con la tx (sin tx propia).
+    g.directory ? loadProfileStatuses(actor.tenantId) : [],
   ]);
-  return { ...data, planUsage, billingOverview, catalog, snapshot };
+  return { ...data, directory: finishDirectory(data.directory, profileStatuses), planUsage, billingOverview, catalog, snapshot };
 }

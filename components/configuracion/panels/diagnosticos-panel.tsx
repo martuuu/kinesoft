@@ -48,24 +48,12 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
         </Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          {/* C4: a 390 las 5 columnas desbordaban la página; ahora scrollean dentro de la card. */}
+          {/* C4: a 390 las 5 columnas desbordaban la página; scrolleaban dentro de la card. MB-1e: < 768 cada fila es
+              una card sin encabezado, con rótulos propios en CIE-10 y Mecanismo (sin el encabezado, un «—» suelto no
+              dice qué falta). Grilla en clases, no inline: un `style` le ganaría al @media. */}
           <div className={styles.tableScroll}>
-          <div style={{ minWidth: 600 }}>
-          <div
-            style={{
-              padding: "12px 18px",
-              display: "grid",
-              gridTemplateColumns: "1.6fr 110px 1fr 90px 110px",
-              gap: 14,
-              fontSize: 10,
-              fontWeight: 700,
-              color: "var(--navy-500)",
-              letterSpacing: "0.06em",
-              whiteSpace: "nowrap",
-              textTransform: "uppercase",
-              borderBottom: "1px solid rgba(15,30,51,0.06)",
-            }}
-          >
+          <div className={styles.condTable}>
+          <div className={styles.condHead}>
             <span>Nombre</span>
             <span>CIE-10</span>
             <span>Mecanismo</span>
@@ -73,18 +61,7 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
             <span style={{ textAlign: "right" }}>Acciones</span>
           </div>
           {conditions.map((c) => (
-            <div
-              key={c.id}
-              style={{
-                padding: "14px 18px",
-                display: "grid",
-                gridTemplateColumns: "1.6fr 110px 1fr 90px 110px",
-                gap: 14,
-                alignItems: "center",
-                fontSize: 13,
-                borderBottom: "1px solid rgba(15,30,51,0.04)",
-              }}
-            >
+            <div key={c.id} className={styles.condRow}>
               <div>
                 <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{c.name}</div>
                 {c.summary && (
@@ -94,9 +71,13 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
                 )}
               </div>
               <div className="k-mono" style={{ fontSize: 11.5, color: "var(--navy-500)" }}>
+                <span className={styles.cellLabel}>CIE-10 </span>
                 {c.cie10 ?? "—"}
               </div>
-              <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{c.mechanism ?? "—"}</div>
+              <div className={styles.condMech} style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                <span className={styles.cellLabel}>Mecanismo: </span>
+                {c.mechanism ?? "—"}
+              </div>
               <div>
                 {c.severity ? (
                   <Tag
@@ -114,7 +95,7 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
                   <span style={{ fontSize: 12, color: "var(--navy-300)" }}>—</span>
                 )}
               </div>
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              <div className={styles.condActions}>
                 <button
                   type="button"
                   onClick={() => setEditing(c)}

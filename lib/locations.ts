@@ -26,7 +26,7 @@
  */
 import { withSupportWritable } from "@/lib/support-writable";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { runWithRls, type DbClient } from "@/lib/rls";
 import { requireCapability } from "@/lib/authz";
@@ -37,6 +37,8 @@ import { dayKeyToDbDate } from "@/lib/schedule-validate";
 import { lockTenantLocations } from "@/lib/location-lock";
 import { liveProgramWhere } from "@/lib/plan-predicates";
 import { listLocationsInTx } from "@/lib/locations-read";
+import { provinceName } from "@/lib/ar-provinces";
+import { tags } from "@/lib/cache-tags";
 import {
   LocationId,
   LocationInput,
@@ -54,6 +56,20 @@ const NOT_FOUND = "Sede no encontrada.";
 function revalidateAll() {
   revalidatePath("/configuracion");
   revalidatePath("/agenda");
+  // DIR-3c: el directorio público muestra sede, ciudad y provincia (`/consultorios/<slug>`, filtro por provincia). Sin
+  // esto un cambio de sede tardaba hasta 10 min (el `revalidate` del snapshot) en verse. Después del commit (acá ya
+  // terminó la tx): adentro, un rollback dejaría el caché invalidado contra datos viejos.
+  revalidateTag(tags.directory());
+}
+
+/**
+ * DIR-3c (DIR-D16): con una provincia elegida, `province` pasa a ser su nombre (lo que leen turnero, agenda y
+ * export). Sin código (o sacándolo) `province` NO se toca: el texto libre viejo («Bs As») queda hasta que alguien
+ * elija la provincia, en vez de borrarse por guardar otra cosa de la sede.
+ */
+function withProvinceName<T extends { provinceCode?: string | null; province?: string | null }>(data: T): T {
+  const name = data.provinceCode ? provinceName(data.provinceCode) : null;
+  return name ? { ...data, province: name } : data;
 }
 
 /** Sedes del tenant: principal primero, después `sortOrder` y nombre. */
@@ -87,7 +103,7 @@ async function createLocationImpl(raw: LocationInputRaw): Promise<ActionResult<{
         where: { tenantId: actor.tenantId, isPrimary: true },
       });
       return tx.location.create({
-        data: { tenantId: actor.tenantId, ...parsed.data, isPrimary: hasPrimary === 0 },
+        data: { tenantId: actor.tenantId, ...withProvinceName(parsed.data), isPrimary: hasPrimary === 0 },
         select: { id: true, name: true, isPrimary: true },
       });
     });
@@ -120,8 +136,11 @@ async function updateLocationImpl(
   if (!parsed.success) {
     return { ok: false, error: "Datos inválidos", fieldErrors: parsed.error.flatten().fieldErrors };
   }
-  const data = Object.fromEntries(
-    Object.entries(parsed.data).filter(([k]) => k in raw)
+  const data = withProvinceName(
+    Object.fromEntries(Object.entries(parsed.data).filter(([k]) => k in raw)) as {
+      provinceCode?: string | null;
+      province?: string | null;
+    }
   ) as Prisma.LocationUpdateInput;
   try {
     const changed = await runWithRls(actor.tenantId, async (tx) => {

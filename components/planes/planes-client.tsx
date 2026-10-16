@@ -58,6 +58,7 @@ import {
   visiblePlanRows,
   type PlanesFilter,
 } from "@/components/planes/planes-model";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 const PatientPicker = dynamic(() => import("@/components/patients/patient-picker").then((m) => m.PatientPicker), {
   ssr: false,
@@ -102,7 +103,7 @@ export function PlanesClient(props: PlanesClientProps) {
   const sinTurnoCount = useMemo(() => visiblePlanRows(rows, "sin-turno").length, [rows]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
+    <div className={tap.tapScope} style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
       <PageHeader
         eyebrow={PLANES_COPY.eyebrow}
         title={PLANES_COPY.heading}

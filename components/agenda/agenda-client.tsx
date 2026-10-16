@@ -105,6 +105,8 @@ import { LocationFilter } from "./location-filter";
 import { DayLockButton } from "./day-lock/day-lock-button";
 import { WeekStrip } from "./views/week-strip";
 import { TimelineView } from "./views/timeline-view";
+import { adjacentVisibleDay, createSwipeTracker } from "@/lib/agenda-swipe";
+import viewStyles from "./views/views.module.css";
 
 // ── Bundle de /agenda (handoff de B4.3, integrador final de B-pre) ─────────
 // Con B4/B5 el first load de /agenda pasó de 183,8 a 238 kB gz (presupuesto
@@ -137,6 +139,8 @@ const RoomFilter = dynamic(() => import("./room-filter").then((m) => m.RoomFilte
 // precargan en idle (`prefetchAgendaChunks`) para que el cambio de vista no espere red.
 const WeekGridView = dynamic(() => import("./views/week-grid-view").then((m) => m.WeekGridView));
 const ListView = dynamic(() => import("./views/list-view").then((m) => m.ListView));
+// MB-1a: la Semana del celular (lista por día) en su chunk; con SSR, si la vista inicial es Semana llega renderizada.
+const WeekDayList = dynamic(() => import("./views/week-day-list").then((m) => m.WeekDayList));
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -145,6 +149,7 @@ function prefetchAgendaChunks() {
   void import("./day-lock/day-lock-dialog");
   void import("./views/week-grid-view");
   void import("./views/list-view");
+  void import("./views/week-day-list");
 }
 
 /**
@@ -384,8 +389,11 @@ export function AgendaClient(props: Props) {
   // Server-backed per-user agenda preferences, controlled from the Tweaks
   // panel + /configuracion. `agendaShowWeekHeader` drives the day-header
   // chrome — the day strip (every view) AND the week-grid header row.
-  const { agenda } = useTweaks();
+  const tweaks = useTweaks();
+  const { agenda } = tweaks;
   const showDayHeader = agenda.agendaShowWeekHeader;
+  // MB-1a (C-MB4): el alto fijo de la agenda descuenta el chrome de Apariencia (sidebar o barra superior).
+  const chrome = tweaks.t?.dashChrome === "topbar" ? "topbar" : undefined;
 
   // ── Preferencias de agenda (B4.2), optimistas ──────────────────────────────
   const [prefs, setPrefs] = useState<AgendaViewPrefs>(props.agendaPrefs ?? DEFAULT_AGENDA_VIEW_PREFS);
@@ -970,12 +978,34 @@ export function AgendaClient(props: Props) {
       </>
     );
 
+  // ── Swipe de día (MB-1a, C-MB3 / MB-D11) ───────────────────────────────────
+  // Solo en Día (`timeline`) y solo con el dedo: deslizar a la izquierda = día siguiente, a la derecha = anterior
+  // (salteando los días que la agenda no muestra). No es el único camino: la tira de días y las flechas siguen. La
+  // decisión (umbral, dirección, cancelaciones) es `lib/agenda-swipe.ts`; acá solo se navega. El tracker se crea una
+  // vez y lee la navegación vigente por ref (un handler nuevo por render cortaría un gesto a mitad de camino).
+  const swipeNavRef = useRef<(delta: 1 | -1) => void>(() => {});
+  useEffect(() => {
+    swipeNavRef.current = (delta) =>
+      go({
+        dayKey: adjacentVisibleDay(dayKey, delta, {
+          showSaturday: agenda.agendaShowSaturday,
+          showSunday: agenda.agendaShowSunday,
+        }),
+      });
+  });
+  const swipe = useMemo(() => createSwipeTracker((d) => swipeNavRef.current(d)), []);
+  // C-MB4: alto fijo (≥ 768) solo en las vistas de grilla, que scrollean adentro; Lista y Recepción son listas y
+  // siguen creciendo con la página.
+  const fitsViewport = view === "timeline" || view === "practitioner" || view === "room" || view === "week";
+
   const hasServiceLegend = props.services.some((s) => s.color);
   const anchorDate = useMemo(() => instantAt(dayKey, 12 * 60), [dayKey]);
   const multi = practitionerCount > 1;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: "calc(100vh - 60px)" }}>
+    // MB-1a (C-MB4): antes un `minHeight` inline de 100vh menos 60 px; ahora `.agendaRoot` (alto fijo ≥ 768 con
+    // `data-fit`, `dvh` con respaldo `vh`). Ver `views.module.css`.
+    <div className={viewStyles.agendaRoot} data-fit={fitsViewport || undefined} data-chrome={chrome}>
       <AgendaToolbar
         anchor={anchorDate}
         segment={segment}
@@ -1067,7 +1097,13 @@ export function AgendaClient(props: Props) {
 
       {/* G5 (PF1.1): en Lista el contenedor no estira hasta el pie de la pantalla, así la leyenda queda pegada a la
           tabla (antes flotaba ~150 px abajo). Día/Semana/columnas sí estiran: su card scrollea adentro. */}
-      <div style={{ flex: view === "list" ? "0 1 auto" : 1, minHeight: 0 }}>
+      <div
+        style={{ flex: view === "list" ? "0 1 auto" : 1, minHeight: 0 }}
+        className={view === "timeline" ? viewStyles.swipeDay : undefined}
+        onPointerDown={view === "timeline" ? swipe.onPointerDown : undefined}
+        onPointerUp={view === "timeline" ? swipe.onPointerUp : undefined}
+        onPointerCancel={view === "timeline" ? swipe.onPointerCancel : undefined}
+      >
         {/* SV09: las cards leen el flash del contexto (no se pasa por cada vista). */}
         <BookingFlashContext.Provider value={flashIds}>
           {/* PF1.1 (C-PF1.2): la entrada de la vista es CSS (`.k-page-in`, 120 ms, sin animación con movimiento
@@ -1162,6 +1198,23 @@ export function AgendaClient(props: Props) {
                   roomById={cardRooms}
                 />
               )}
+              {/* MB-1a (C-MB3 / MB-D10): < 768 la Semana es una lista por día (la grilla se oculta por CSS). */}
+              {view === "week" && (
+                <WeekDayList
+                  weekDays={weekDays}
+                  showSaturday={agenda.agendaShowSaturday}
+                  showSunday={agenda.agendaShowSunday}
+                  bookings={visibleBookings}
+                  onEdit={setEditing}
+                  highlight={highlight}
+                  practitionerById={initialsById}
+                  roomById={cardRooms}
+                  dayLocks={weekLocks}
+                  renderDayLock={(k) => renderDayLock(k, weekLocks[k] ?? null, true)}
+                  anchorDayKey={dayKey}
+                  now={now}
+                />
+              )}
               {view === "list" && (
                 <ListView
                   bookings={todayList}
@@ -1236,6 +1289,7 @@ export function AgendaClient(props: Props) {
                   type="button"
                   onClick={() => toggleLegend(own)}
                   title={active ? "Quitar resaltado" : "Resaltar estos turnos"}
+                  className={viewStyles.legendBtn}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",

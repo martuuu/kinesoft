@@ -76,7 +76,9 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-@media (max-width: 639px) {
+/* MB-1e (C-MB3): formularios en una columna en todo < 768 (antes < 640: entre 640 y 767, sin barra lateral, los
+   Drawers ya son de ancho completo y dos campos lado a lado quedaban apretados con su hint). */
+@media (max-width: 767px) {
   .twoCol {
     grid-template-columns: 1fr;
   }
@@ -201,4 +203,168 @@
 .rowLink:focus-visible {
   outline: 2px solid transparent;
   box-shadow: var(--focus-ring);
+}
+
+/* ── MB-1e (C-MB3 Configuración) ─────────────────────────────────────────────────────────────────────────────── */
+
+/* Raíz de la página (antes `style` inline en configuracion-client): ancla las reglas de 44 px de abajo. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Select de sección (< 768 reemplaza a la píldora de pestañas). Usa `.k-input` (44 px, 16 px de fuente: iOS no hace
+   zoom al enfocarlo; chevron propio). */
+.sectionPicker {
+  display: none;
+}
+.sectionPickerLabel {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-500);
+  margin-bottom: 6px;
+}
+.sectionSelect {
+  font-weight: 600;
+}
+
+/* Obras sociales: ≥ 768 la grilla de 5 columnas de siempre (scrollea adentro de la card si no entra, C4). */
+.insurerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 560px;
+}
+.insurerRow {
+  padding: 14px 20px;
+  display: grid;
+  grid-template-columns: 1.4fr 110px 110px 80px 80px;
+  gap: 14px;
+  align-items: center;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.04);
+  cursor: pointer;
+}
+.insurerRow > :first-child {
+  min-width: 0;
+}
+.money {
+  text-align: right;
+}
+.insurerCount {
+  font-size: 12px;
+  color: var(--navy-500);
+  text-align: right;
+  white-space: nowrap;
+}
+.insurerStatus {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Diagnósticos: ≥ 768 tabla de 5 columnas con encabezado. Los rótulos de celda solo existen en la card (< 768). */
+.condTable {
+  min-width: 600px;
+}
+.condHead,
+.condRow {
+  display: grid;
+  grid-template-columns: 1.6fr 110px 1fr 90px 110px;
+  gap: 14px;
+}
+.condHead {
+  padding: 12px 18px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--navy-500);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+}
+.condRow {
+  padding: 14px 18px;
+  align-items: center;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.04);
+}
+.condRow > :first-child {
+  min-width: 0;
+}
+.condActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.cellLabel {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .tabsWrap {
+    display: none;
+  }
+  .sectionPicker {
+    display: block;
+  }
+
+  /* Targets de 44 px (AGENTS §5, meta de MB): muchos botones de los paneles son `style` inline de 28-36 px de alto
+     (mini-botones de fila, flechas del mes de Excepciones, links de Servicios por profesional). `min-*` no lo pisa un
+     `height`/`width` inline (gana el mínimo), así que alcanza una regla acá en vez de tocar cada panel. Fuera: los
+     switches (el de `components/ui/switch` ya tiene 44 de área; el de Servicios por profesional es un dibujo de
+     38×22 con la perilla en absoluto), checkbox y radio (su área es el `label`). Lo que va por portal (Drawers,
+     Modales) lo cubren las primitivas (MB-0d) y `.k-input`. */
+  .page button:not([role="switch"]),
+  .page select,
+  .page input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]) {
+    min-height: 44px;
+  }
+  .page button:not([role="switch"]) {
+    min-width: 44px;
+  }
+
+  /* Obras sociales como card: nombre (y vínculo al catálogo) a lo ancho; Copago | Monto fijo; pacientes | estado. */
+  .insurerList {
+    min-width: 0;
+  }
+  .insurerRow {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px 12px;
+    padding: 14px 16px;
+  }
+  .insurerRow > :first-child {
+    grid-column: 1 / -1;
+  }
+  .money,
+  .insurerCount {
+    text-align: left;
+  }
+
+  /* Diagnósticos como card: nombre a lo ancho; CIE-10 | severidad; mecanismo a lo ancho; acciones abajo. */
+  .condTable {
+    min-width: 0;
+  }
+  .condHead {
+    display: none;
+  }
+  .condRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 14px 16px;
+  }
+  .condRow > :first-child,
+  .condMech,
+  .condActions {
+    grid-column: 1 / -1;
+  }
+  .condActions {
+    justify-content: flex-start;
+  }
+  .cellLabel {
+    display: inline;
+    font-weight: 600;
+    color: var(--navy-700);
+  }
 }

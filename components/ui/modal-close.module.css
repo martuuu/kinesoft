@@ -1,0 +1,28 @@
+/* Cierre estándar de los modales: 32×32 a 16 px del borde en escritorio (como siempre). MB-1f (AGENTS §5, targets de
+   44 px bajo 768): en el celular el área táctil sube a 44×44 y se corre 6 px hacia la esquina, así el centro de la X
+   queda casi en el mismo lugar y no se come el título. Antes era todo inline y una media query no lo podía pisar. */
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  color: var(--navy-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+@media (max-width: 767px) {
+  .close {
+    top: 10px;
+    right: 10px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+}

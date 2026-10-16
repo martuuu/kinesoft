@@ -8,6 +8,7 @@ import { TagCombobox, type TagOption } from "@/components/ui/tag-combobox";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { useToast } from "@/components/ui/toast";
 import { createExercise, ensureTag } from "@/lib/exercises";
+import tapStyles from "@/components/biblioteca/biblioteca.module.css";
 
 /**
  * [PF1.2-planes-bib] Alta de ejercicio / maniobra propia.
@@ -70,7 +71,7 @@ export function CreateExerciseDrawer({
 
   return (
     <Drawer open onClose={onClose} title={manual ? "Nueva maniobra" : "Nuevo ejercicio"} dirty={dirty} width={560}>
-      <form ref={formRef} action={submit} onInput={onFormInput} onChange={onFormInput} style={{ display: "grid", gap: 12 }}>
+      <form ref={formRef} action={submit} onInput={onFormInput} onChange={onFormInput} className={tapStyles.tapScope} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre" name="name" required placeholder={manual ? "Movilización de rótula" : "Sentadilla búlgara"} />
         <FormField label="Grupo muscular" name="muscleGroups" placeholder="Cuádriceps, glúteo" />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>

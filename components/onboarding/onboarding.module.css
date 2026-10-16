@@ -4,8 +4,11 @@
  * (§5: < 768 el riel pasa a barra de progreso arriba de la tarjeta).
  */
 
+/* MB-1e (C-MB2): `dvh` con `vh` de respaldo. En Safari iOS `100vh` cuenta la barra de direcciones escondida y el
+   fondo quedaba más alto que la pantalla (scroll de más con el paso corto). */
 .root {
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg-app);
   position: relative;
   overflow: hidden;

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { fmtHour, roomNameOf, type BookingDTO } from "@/components/agenda/agenda-utils";
 import { toARMinutes } from "@/lib/datetime-ar";
 import { formatARS } from "@/lib/format";
@@ -25,6 +25,7 @@ import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_COMPACT_MAX, DESK_STACK_MAX } from "./desk-css";
 import { DeskMenu, DeskPrimaryAction, DeskStateTag, deskRowLabel, useDeskActions } from "./desk-actions";
 import { DeskStrip } from "./desk-strip";
+import { FoldButton } from "@/components/sala/sala-fold";
 
 /*
  * B · «Flujo» (RX-2b, brief RX §1.3 y §4.4; prototipo `design_source/vx0/recepcion.html` `boardB`).
@@ -61,6 +62,9 @@ import { DeskStrip } from "./desk-strip";
  *
  * Color (AGENTS §5): la barra lateral del ticket y el punto de la línea de tiempo son el SERVICIO; el fondo es el
  * estado (llamado azul, demorado ámbar); el profesional va con iniciales, nunca con color.
+ *
+ * MB-1c (C-MB3) en una columna: la «Sala de espera» va primero (`data-lane` + `order`), cada carril y «Hoy» se pliegan
+ * (`FoldButton`; el cuerpo plegado se esconde solo en stack), el ⋯ del ticket mide 44 y «Hoy» usa `dvh`.
  *
  * PD-13: se lee nombre, hora, obra social, sobreturno, sala, servicio (color) y copago. Nunca `title`, `notes`,
  * `description` ni `patientCondition` (el render test pasa filas con esos campos llenos).
@@ -100,8 +104,14 @@ const STACK_RULES = `
 .desk-flow { display: flex; flex-direction: column; height: auto; }
 .desk-flow-main { display: contents; }
 .desk-flow-lanes { display: flex; flex-direction: column; }
-.desk-flow-day { order: 5; max-height: 60vh; }
+.desk-flow-day { order: 5; max-height: 60vh; max-height: 60dvh; }
 .desk-flow-lane .desk-flow-scroll { overflow: visible; }
+.desk-flow-lane[data-lane=wait] { order: -1; }
+.desk-tk-a .desk-act[data-kind=more] { flex: 0 0 44px; }
+.desk-flow-h .desk-fold { margin-left: auto; }
+.desk-flow-h .desk-flow-sub:not([data-hint=true]) + .desk-fold { margin-left: 8px; }
+.desk-flow-card[data-collapsed=true] .desk-flow-scroll { display: none; }
+.desk-flow-card[data-collapsed=true] .desk-flow-h { border-bottom: 0; }
 .desk-tl-row { min-height: 44px; grid-template-columns: 44px minmax(0, 1fr) auto; padding: 0 6px; }
 .desk-tl-s { grid-column: auto; }
 .desk-flow-sec { display: inline-flex; }
@@ -287,6 +297,7 @@ export function DeskFlow({
 
   const ids = useId();
   const tlId = `${ids}-tl`;
+  const [dayOpen, setDayOpen] = useState(true);
 
   const view = (e: DeskEntry, minutes: number | null, extra: Partial<Pick<FlowView, "late" | "anchor" | "just">> = {}): FlowView => ({
     pro: proOf(e.row.practitionerId),
@@ -304,13 +315,14 @@ export function DeskFlow({
     <div className="desk-face desk-flow" data-face="flow">
       <style>{DESK_FLOW_CSS}</style>
 
-      <section className="desk-flow-card desk-flow-day" aria-labelledby={tlId}>
+      <section className="desk-flow-card desk-flow-day" aria-labelledby={tlId} data-collapsed={dayOpen ? undefined : "true"}>
         <div className="desk-flow-h">
           <h2 id={tlId}>Hoy</h2>
           <span className="desk-flow-count">{visible.length}</span>
           <span className="desk-flow-sub">{done} terminados</span>
+          <FoldButton className="desk-fold" title="Hoy" count={visible.length} open={dayOpen} controls={`${tlId}-b`} onToggle={() => setDayOpen((o) => !o)} />
         </div>
-        <div className="desk-flow-scroll" ref={scrollRef}>
+        <div className="desk-flow-scroll" id={`${tlId}-b`} ref={scrollRef}>
           {timeline.length === 0 ? (
             <p className="desk-flow-empty">{dayEmpty}</p>
           ) : (
@@ -345,13 +357,13 @@ export function DeskFlow({
         <DeskStrip live={live} proFilter={proFilter} onProFilter={onProFilter} />
 
         <div className="desk-flow-lanes">
-          <Lane id={`${ids}-soon`} title="Llegan pronto" sub="30 min" count={soon.length} emptyText={empty("No llega nadie en la próxima media hora.")}>
+          <Lane id={`${ids}-soon`} lane="soon" title="Llegan pronto" sub="30 min" count={soon.length} emptyText={empty("No llega nadie en la próxima media hora.")}>
             {soon.map((e) =>
               ticket("soon", e, view(e, e.state === "demorado" ? null : Math.max(0, minutesUntil(e.row, now)), { just: live.pulseIds.has(e.row.id) }))
             )}
           </Lane>
 
-          <Lane id={`${ids}-sala`} title="Sala de espera" sub="por llegada" count={waiting.length} emptyText={empty("Nadie en la sala por ahora.")}>
+          <Lane id={`${ids}-sala`} lane="wait" title="Sala de espera" sub="por llegada" count={waiting.length} emptyText={empty("Nadie en la sala por ahora.")}>
             {waiting.map((e) =>
               ticket("wait", e, view(e, minutesSince(e.row.arrivedAt, now), { late: pastScheduled(e, now), just: live.pulseIds.has(e.row.id) }))
             )}
@@ -360,6 +372,7 @@ export function DeskFlow({
           {cash ? (
             <Lane
               id={`${ids}-cash`}
+              lane="cash"
               title="Por cobrar"
               sub={cash.entries.length > 0 ? <b className="desk-mono">{formatARS(cash.totalCents)}</b> : null}
               count={cash.entries.length}
@@ -368,7 +381,7 @@ export function DeskFlow({
               {cash.entries.map((e) => ticket("cash", e, view(e, null)))}
             </Lane>
           ) : (
-            <Lane id={`${ids}-att`} title="En atención" sub="por entrada" count={attending.length} emptyText={empty("Nadie en atención por ahora.")}>
+            <Lane id={`${ids}-att`} lane="attend" title="En atención" sub="por entrada" count={attending.length} emptyText={empty("Nadie en atención por ahora.")}>
               {attending.map((e) => ticket("attend", e, view(e, minutesSince(e.row.attendingAt, now))))}
             </Lane>
           )}
@@ -380,6 +393,7 @@ export function DeskFlow({
 
 function Lane({
   id,
+  lane,
   title,
   sub,
   count,
@@ -387,14 +401,17 @@ function Lane({
   children,
 }: {
   id: string;
+  /** Qué carril es: en una columna la sala va primero (`order`, C-MB3 «Esperando primero»). */
+  lane: "soon" | "wait" | "cash" | "attend";
   title: string;
   sub: ReactNode;
   count: number;
   emptyText: string;
   children: ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
   return (
-    <section className="desk-flow-card desk-flow-lane" aria-labelledby={id}>
+    <section className="desk-flow-card desk-flow-lane" aria-labelledby={id} data-lane={lane} data-collapsed={open ? undefined : "true"}>
       <div className="desk-flow-h">
         <h2 id={id}>{title}</h2>
         <span className="desk-flow-count">{count}</span>
@@ -403,8 +420,9 @@ function Lane({
             {sub}
           </span>
         ) : null}
+        <FoldButton className="desk-fold" title={title} count={count} open={open} controls={`${id}-b`} onToggle={() => setOpen((o) => !o)} />
       </div>
-      <ul className="desk-flow-scroll" role="list">
+      <ul className="desk-flow-scroll" id={`${id}-b`} role="list">
         {count === 0 ? <li className="desk-flow-empty">{emptyText}</li> : children}
       </ul>
     </section>

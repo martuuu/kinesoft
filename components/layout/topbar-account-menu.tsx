@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
-import { IconBell, IconCheck, IconHome, IconLogout, IconSettings } from "@/components/ui/icons";
+import { IconBell, IconCheck, IconHome, IconLogout, IconSettings, IconUsers } from "@/components/ui/icons";
 import { SUPPORT_HELP_HREF } from "./shell-links";
 import { preloadAppearance } from "./appearance-loader";
 import {
@@ -10,6 +10,23 @@ import {
   PublicBookingSwitch,
 } from "@/components/configuracion/panels/practitioners/public-booking-switch";
 import { CHOOSE_TENANT_HREF, useTenantChoice } from "./tenant-switcher";
+import type { TenantOption } from "@/lib/tenant-choice";
+
+/** DIR-3d (DIR-D11): el perfil del directorio es POR PERSONA y vive fuera de `(app)`, junto a `/cuenta/seguridad`. */
+export const PUBLIC_PROFILE_HREF = "/cuenta/perfil-publico";
+
+/**
+ * DIR-3d (C-DIR9): «Mi perfil público» solo para quien atiende (es profesional clínico) en algún consultorio. El
+ * perfil es por persona y cruza consultorios, pero el chrome solo conoce el consultorio activo, así que la regla es:
+ *  - `attendsHere`: atiende en el activo (topbar: tiene ficha propia, `ownPublicBooking`; drawer: `clinical.read` en
+ *    sus caps). `actor.practitionerId` ya es null para quien no es clínico (IAM-4a/PL-1e) y para soporte;
+ *  - o es «Profesional» (rol PRACTITIONER, clínico siempre) en otro de sus consultorios usables (`TenantChoiceProvider`).
+ * Un Titular/Admin que atiende SOLO en otro consultorio no se ve desde acá (la opción no trae el flag `clinical`): lo
+ * ve al entrar a ese consultorio. Solo esconde UI: la barrera es `resolveProfileSession` de `lib/public-profile.ts`.
+ */
+export function showsPublicProfileEntry(attendsHere: boolean, options: readonly Pick<TenantOption, "role">[]): boolean {
+  return attendsHere || options.some((o) => o.role === "PRACTITIONER");
+}
 
 /**
  * PL-F1c (H3 del barrido de UI muerta): menú de cuenta del chrome «Barra superior».
@@ -20,6 +37,7 @@ import { CHOOSE_TENANT_HREF, useTenantChoice } from "./tenant-switcher";
  * dashboard (y es de otra sesión); este menú repite sus mismas salidas, con los mismos destinos:
  *   - «Seguridad de la cuenta» → `/cuenta/seguridad` (PL-2a, C-PL6);
  *   - «Cambiar de consultorio» → `/elegir-consultorio`, solo con 2+ consultorios (IAM-3b, `useTenantChoice`);
+ *   - «Mi perfil público» → `/cuenta/perfil-publico` (DIR-3d), solo para quien atiende (`showsPublicProfileEntry`);
  *   - «Cerrar sesión» → `POST /api/auth/sign-out` (el mismo form del sidebar).
  * `<a>` y no `next/link`: esas pantallas están fuera de `(app)` (navegación dura, como en `ProfileMenu`).
  *
@@ -44,7 +62,8 @@ export function TopbarAccountMenu({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const { canSwitch } = useTenantChoice();
+  const { canSwitch, options } = useTenantChoice();
+  const showPublicProfile = showsPublicProfileEntry(ownPublicBooking !== null, options);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -145,6 +164,11 @@ export function TopbarAccountMenu({
           {canSwitch && (
             <a href={CHOOSE_TENANT_HREF} role="menuitem" style={itemStyle}>
               <IconHome size={14} /> Cambiar de consultorio
+            </a>
+          )}
+          {showPublicProfile && (
+            <a href={PUBLIC_PROFILE_HREF} role="menuitem" style={itemStyle}>
+              <IconUsers size={14} /> Mi perfil público
             </a>
           )}
           <a href="/cuenta/seguridad" role="menuitem" style={itemStyle}>

@@ -15,6 +15,7 @@ import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight"
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { PlanMarks, bookingStatusTone, planLooseSplit, planLooseSplitText } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
+import styles from "./views.module.css";
 
 /** Profesional visible con sus iniciales (orden de columnas/chips). */
 type WeekPractitioner = { id: string; initials: string; name: string };
@@ -198,6 +199,10 @@ function WeekBookingLine({
  *   sala como texto ("10:00 · Kinesiología · 45 min · Consultorio 2"). La
  *   celda (solo conteo) no cambia. El caller lo pasa solo cuando la sala
  *   aporta (`showRoomOnCards`).
+ *
+ * MB-1a (C-MB3, MB-D10): < 768 px esta grilla se oculta (`.weekGrid`) y `agenda-client` muestra `WeekDayList`
+ * (la misma semana como lista agrupada por día). Las dos se dibujan y el CSS elige: decidir por JS (matchMedia)
+ * daba un primer render con la grilla y un salto a la lista al hidratar (CLS).
  */
 export function WeekGridView({
   weekDays,
@@ -296,7 +301,7 @@ export function WeekGridView({
 
   return (
     <>
-      <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <Card className={styles.weekGrid} style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
         {showHeader && (
           <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 6, marginBottom: 6 }}>
             <div />

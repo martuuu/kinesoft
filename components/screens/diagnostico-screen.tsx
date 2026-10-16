@@ -25,6 +25,7 @@ import {
 import { BodyMapPanel } from "@/components/diagnostico/body-map-panel";
 import { RefinementPanel } from "@/components/diagnostico/refinement-panel";
 import { RightStack, ActionBar } from "@/components/diagnostico/right-stack";
+import diag from "@/components/diagnostico/diagnostico.module.css";
 import {
   DiagnosisDoorBanner,
   DiagnosisPlanDoor,
@@ -122,11 +123,11 @@ export function DiagnosticoScreen({
     <>
       <DiagnosisDoorBanner door={door} style={{ marginBottom: 12 }} />
       <div
+        className={diag.grid}
         style={{
           display: "grid",
           gridTemplateColumns: "320px 1fr 360px",
           gap: 14,
-          minHeight: "calc(100vh - 90px)",
           paddingBottom: 80, // room for the floating action bar
         }}
       >

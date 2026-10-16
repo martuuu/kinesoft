@@ -1,8 +1,39 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { m } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import type { Tab } from "./types";
+import styles from "./tabs-bar.module.css";
+
+/** Margen de los cálculos de overflow: el zoom deja subpíxeles que no son contenido escondido. */
+const FADE_EPSILON = 1;
+
+/**
+ * MB-1d (puro): qué bordes de la barra se desvanecen. Inicio = se scrolleó; final = queda contenido a la derecha.
+ */
+export function tabsFadeState(box: { scrollLeft: number; clientWidth: number; scrollWidth: number }): {
+  start: boolean;
+  end: boolean;
+} {
+  return {
+    start: box.scrollLeft > FADE_EPSILON,
+    end: box.scrollLeft + box.clientWidth < box.scrollWidth - FADE_EPSILON,
+  };
+}
+
+/**
+ * MB-1d (puro): cuánto scrollear la barra para que la pestaña activa quede a la vista, con 32 px de aire (el ancho
+ * del fade). 0 = ya se ve. Se calcula a mano y no con `scrollIntoView`: ese también mueve la página en vertical.
+ */
+export function scrollDeltaToReveal(
+  nav: { left: number; right: number },
+  tab: { left: number; right: number },
+): number {
+  if (tab.right > nav.right) return tab.right - nav.right + 32;
+  if (tab.left < nav.left) return tab.left - nav.left - 32;
+  return 0;
+}
 
 /**
  * P0-S07v: el perfil administrativo (nivel `admin`, PD-13) reusa esta barra con
@@ -61,9 +92,42 @@ export function TabsBar({
   const tabs = all
     .filter((t) => !only || only.includes(t.id))
     .map((t) => (labels?.[t.id] ? { ...t, label: labels[t.id]! } : t));
+
+  // MB-1d: fade de borde según el overflow real (SSR sin fade: no se sabe el ancho; prenderlo después es solo una
+  // máscara, no mueve layout) y la activa a la vista (un deep-link a «Facturación» a 390 quedaba fuera de pantalla).
+  const navRef = useRef<HTMLElement | null>(null);
+  const [fade, setFade] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const update = () => {
+      const next = tabsFadeState(el);
+      setFade((prev) => (prev.start === next.start && prev.end === next.end ? prev : next));
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro?.disconnect();
+    };
+  }, []);
+  useEffect(() => {
+    const el = navRef.current;
+    const btn = el?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!el || !btn) return;
+    const delta = scrollDeltaToReveal(el.getBoundingClientRect(), btn.getBoundingClientRect());
+    if (delta !== 0) el.scrollLeft += delta;
+  }, [active]);
+
   return (
     <nav
       aria-label="Secciones de la ficha"
+      className={styles.tabs}
+      ref={navRef}
+      data-fade-start={fade.start ? "" : undefined}
+      data-fade-end={fade.end ? "" : undefined}
       style={{
         display: "flex",
         alignItems: "center",
@@ -81,6 +145,7 @@ export function TabsBar({
             type="button"
             data-profile-tab={t.id}
             aria-current={on ? "true" : undefined}
+            className={styles.tab}
             onClick={() => onChange(t.id)}
             onPointerEnter={onPreload && !on ? () => onPreload(t.id) : undefined}
             onFocus={onPreload && !on ? () => onPreload(t.id) : undefined}
@@ -97,7 +162,6 @@ export function TabsBar({
               alignItems: "center",
               gap: 8,
               whiteSpace: "nowrap",
-              flexShrink: 0,
             }}
           >
             {t.label}

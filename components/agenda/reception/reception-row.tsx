@@ -139,6 +139,7 @@ export function ReceptionRow({
         <button
           type="button"
           className="rcp-link"
+          title={b.patientName}
           onClick={() => onOpen(b)}
           aria-label={`Abrir el turno de ${who}`}
         >
@@ -163,14 +164,14 @@ export function ReceptionRow({
             className="rcp-dot"
             style={{ background: b.serviceColor ?? SERVICE_COLOR_FALLBACK }}
           />
-          <span className="rcp-ellipsis">{b.serviceName}</span>
+          <span className="rcp-ellipsis" title={b.serviceName}>{b.serviceName}</span>
         </span>
       </td>
       <td data-label="Profesional">
         {practitioner ? (
           <span className="rcp-service">
             <PractitionerBadge initials={practitioner.initials} name={practitioner.name} size={24} decorative />
-            <span className="rcp-ellipsis">{practitioner.name}</span>
+            <span className="rcp-ellipsis" title={practitioner.name}>{practitioner.name}</span>
           </span>
         ) : (
           <span style={{ color: "var(--navy-300)" }}>—</span>
@@ -179,7 +180,7 @@ export function ReceptionRow({
       {room !== undefined && (
         <td data-label="Sala">
           {room ? (
-            <span className="rcp-ellipsis" style={{ display: "inline-block", maxWidth: 160, color: "var(--navy-700)", verticalAlign: "middle" }}>
+            <span className="rcp-ellipsis" title={room.name} style={{ display: "inline-block", maxWidth: 160, color: "var(--navy-700)", verticalAlign: "middle" }}>
               {room.name}
             </span>
           ) : typeof b.roomId === "string" ? (

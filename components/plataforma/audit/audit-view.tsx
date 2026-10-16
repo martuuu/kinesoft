@@ -10,13 +10,18 @@
  * `listPlatformAudit`; esta vista no tiene forma de ver otra cosa.
  *
  * La tabla tiene scroll horizontal propio (`overflowX: auto` + `minWidth`): en 360 px no scrollea la página.
+ * MB-1f (C-MB3): bajo 768 cada fila es una card con rótulos (`data-label`) y los filtros van en el Drawer
+ * «Filtros (n)»; los chips de consultorio/usuario quedan a la vista.
  */
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
 import { formatDateAR } from "@/lib/format";
+import { FiltersDrawer } from "@/components/plataforma/filters-drawer";
+import { activeFilterCount } from "@/components/plataforma/filters-logic";
+import table from "@/components/plataforma/responsive-table.module.css";
 import { auditHref, type PlatformAuditFilters, type PlatformAuditPage, type PlatformAuditRow } from "@/lib/platform-audit-logic";
 
 /** Grupos de acciones (prefijos de `platform.*`) para el filtro. El visor filtra por prefijo. */
@@ -33,6 +38,7 @@ export const AUDIT_ACTION_GROUPS: Array<{ value: string; label: string }> = [
 ];
 
 const COLS = "150px minmax(200px,1.3fr) minmax(170px,1fr) minmax(150px,1fr) minmax(220px,1.6fr)";
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": "960px" } as CSSProperties;
 
 const inputStyle: React.CSSProperties = {
   padding: "9px 10px",
@@ -140,7 +146,7 @@ function ScopeChips({ filters, tenantName }: { filters: PlatformAuditFilters; te
       {filters.tenantId && (
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           <Tag tone="sky">Consultorio: {tenantName ?? filters.tenantId}</Tag>
-          <Link href={auditHref({ ...filters, tenantId: undefined })} style={linkStyle}>
+          <Link href={auditHref({ ...filters, tenantId: undefined })} className={table.chip} style={linkStyle}>
             Quitar
           </Link>
         </span>
@@ -148,7 +154,7 @@ function ScopeChips({ filters, tenantName }: { filters: PlatformAuditFilters; te
       {filters.targetUserId && (
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           <Tag tone="sky">Usuario afectado: {filters.targetUserId}</Tag>
-          <Link href={auditHref({ ...filters, targetUserId: undefined })} style={linkStyle}>
+          <Link href={auditHref({ ...filters, targetUserId: undefined })} className={table.chip} style={linkStyle}>
             Quitar
           </Link>
         </span>
@@ -184,9 +190,8 @@ function Row({ r, filters }: { r: PlatformAuditRow; filters: PlatformAuditFilter
   return (
     <div
       role="row"
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "12px 16px",
         borderBottom: "1px solid rgba(15,30,51,0.05)",
@@ -199,7 +204,7 @@ function Row({ r, filters }: { r: PlatformAuditRow; filters: PlatformAuditFilter
         <div style={{ fontWeight: 600 }}>{formatDateAR(r.createdAt, "short")}</div>
         <div style={{ fontSize: 12, color: "var(--navy-300)" }}>{formatDateAR(r.createdAt, "time")}</div>
       </div>
-      <div style={{ minWidth: 0 }}>
+      <div data-label="Acción" style={{ minWidth: 0 }}>
         <Link
           href={auditHref({ ...filters, action: r.action, cursor: undefined })}
           title="Ver solo esta acción"
@@ -208,10 +213,10 @@ function Row({ r, filters }: { r: PlatformAuditRow; filters: PlatformAuditFilter
           {r.action}
         </Link>
       </div>
-      <div style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+      <div data-label="Quién" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
         {r.actorEmail ?? <span style={{ color: "var(--navy-300)" }}>Script o cron</span>}
       </div>
-      <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
+      <div data-label="Consultorio / usuario" className={table.wide} style={{ minWidth: 0, display: "grid", gap: 2 }}>
         {r.tenant ? (
           <span>
             <Link
@@ -245,7 +250,9 @@ function Row({ r, filters }: { r: PlatformAuditRow; filters: PlatformAuditFilter
           </span>
         )}
       </div>
-      <PayloadKeys row={r} />
+      <div data-label="Qué cambió" className={table.wide}>
+        <PayloadKeys row={r} />
+      </div>
     </div>
   );
 }
@@ -254,18 +261,28 @@ export function AuditView({ page, filters }: { page: PlatformAuditPage; filters:
   const tenantName = filters.tenantId ? page.rows.find((r) => r.tenant?.id === filters.tenantId)?.tenant?.name ?? null : null;
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <Card style={{ padding: 16, display: "grid", gap: 10 }}>
-        <Filters filters={filters} />
+      <Card className={table.tapScope} style={{ padding: 16, display: "grid", gap: 10 }}>
+        <FiltersDrawer
+          count={activeFilterCount([filters.action, filters.actorEmail, filters.from, filters.to])}
+          aside={
+            hasFilters(filters) ? (
+              <Link href="/plataforma/auditoria" className={table.chip} style={linkStyle}>
+                Limpiar
+              </Link>
+            ) : null
+          }
+        >
+          <Filters filters={filters} />
+        </FiltersDrawer>
         <ScopeChips filters={filters} tenantName={tenantName} />
       </Card>
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <div role="table" aria-label="Registro de Plataforma" style={{ minWidth: 960 }}>
+        <div className={table.scroller} style={TABLE_VARS}>
+          <div role="table" aria-label="Registro de Plataforma" className={table.inner}>
             <div
               role="row"
+              className={table.head}
               style={{
-                display: "grid",
-                gridTemplateColumns: COLS,
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.08)",
@@ -296,12 +313,12 @@ export function AuditView({ page, filters }: { page: PlatformAuditPage; filters:
         </span>
         <span style={{ display: "flex", gap: 16 }}>
           {filters.cursor && (
-            <Link href={auditHref({ ...filters, cursor: undefined })} style={linkStyle}>
+            <Link href={auditHref({ ...filters, cursor: undefined })} className={table.chip} style={linkStyle}>
               Volver a los más recientes
             </Link>
           )}
           {page.nextCursor && (
-            <Link href={auditHref(filters, page.nextCursor)} style={linkStyle}>
+            <Link href={auditHref(filters, page.nextCursor)} className={table.chip} style={linkStyle}>
               Cargar más antiguos →
             </Link>
           )}

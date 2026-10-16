@@ -28,6 +28,15 @@ import { DUR, EASE_OUT } from "@/lib/motion";
  * que cambia de fondo y el spring de framer que la desliza tienen que sentirse
  * del mismo sistema.
  *
+ * MB-1c · C-MB4 (escritorio chico, 1366/1024 × 625/695 de alto útil): con 800 px de alto o menos el header va en
+ * UNA fila (sin la fecha, como el escritorio de Recepción en compacto; contadores en línea de ~31 px), `.sala` calza
+ * en la ventana (`100dvh − 28`, el padding de `main`) y el tablero ocupa el resto con las columnas de 236 px (a 1024
+ * con el sidebar abierto entran 3 en vez de 2) y cards más densas. Antes: header de 134 px, columnas con
+ * `100dvh − 230` y 1 card entera por columna a 1366×625. Escritorio alto: sin cambios.
+ *
+ * MB-1c · C-MB3 (< 768, antes < 640): una columna, la columna con gente esperando primero (`data-waiting` +
+ * `order`), cada columna se pliega con su total (`.sala-col-fold`, solo acá) y todo lo tocable a 44 px.
+ *
  * 360 px: `.sala-board` pasa a columna, sin scroll horizontal ni alto fijo
  * (la página scrollea), y el header deja de ser sticky para no tapar media
  * pantalla.
@@ -115,6 +124,10 @@ export const SALA_CSS = `
 .sala-sep[data-band=late] { color: var(--rc-late-fg); }
 .sala-later { margin: 0 10px 10px; min-height: 36px; border-radius: var(--r-sm); border: 1px dashed rgba(15,30,51,0.18); background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--navy-500); cursor: pointer; transition: background-color ${T_FAST}, color ${T_FAST}; }
 .sala-later:hover { background: rgba(15,30,51,0.03); color: var(--navy-900); }
+.sala-col-fold { display: none; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 44px; margin: -8px -10px -8px 0; padding: 0 8px; border: none; border-radius: 10px; background: transparent; font: inherit; font-size: 13px; font-weight: 700; color: var(--navy-500); cursor: pointer; }
+.sala-col-fold svg { transition: transform ${T_FAST}; }
+.sala-col-fold[aria-expanded=false] svg { transform: rotate(-90deg); }
+.sala-col-fold:focus-visible { outline: 2px solid var(--sky-700); outline-offset: -2px; }
 
 .sala-ring { position: absolute; inset: 0; border-radius: 14px; pointer-events: none; }
 .sala-card { position: relative; display: grid; gap: 4px; padding: 10px 12px 10px 16px; border-radius: 14px; background: var(--card-bg); color: var(--navy-900); border: 1px solid rgba(15,30,51,0.06); box-shadow: 0 1px 2px rgba(15,30,51,0.05), 0 4px 14px rgba(15,30,51,0.05); overflow: hidden; transition: background-color ${T_BASE}, color ${T_BASE}, border-color ${T_BASE}; }
@@ -162,11 +175,11 @@ export const SALA_CSS = `
 .sala-skel-desk { height: calc(100dvh - 120px); min-height: 420px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sala-card, .sala-btn, .sala-seg-btn, .sala-search, .sala-search-clear, .sala-col-occ, .sala-later { transition: none; }
+  .sala-card, .sala-btn, .sala-seg-btn, .sala-search, .sala-search-clear, .sala-col-occ, .sala-later, .sala-col-fold svg { transition: none; }
   .sala-btn:hover:not(:disabled) { transform: none; }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .sala-top { position: relative; }
   .sala-head { padding: 12px; }
   .sala-h1 { font-size: 24px; }
@@ -179,6 +192,42 @@ export const SALA_CSS = `
   .sala-board { flex-direction: column; align-items: stretch; overflow: visible; padding: 0; scroll-snap-type: none; }
   .sala-col { flex: none; width: 100%; min-width: 0; max-width: none; max-height: none; min-height: 0; }
   .sala-col-body { overflow: visible; }
-  .sala-btn { min-height: 40px; padding: 8px 14px; }
+  .sala-btn { min-height: 44px; padding: 8px 14px; }
+  .sala-seg-btn { min-height: 44px; }
+  .sala-search { min-height: 44px; }
+  .sala-search input { min-height: 42px; }
+  .sala-search-clear { width: 40px; height: 40px; }
+  .sala-later { min-height: 44px; }
+  .sala-col[data-waiting=true] { order: -1; }
+  .sala-col-fold { display: inline-flex; }
+  .sala-col[data-collapsed=true] .sala-col-body, .sala-col[data-collapsed=true] .sala-later { display: none; }
+  .sala-col[data-collapsed=true] .sala-col-head { border-bottom: 0; border-radius: var(--r-lg); }
+}
+
+@media (min-width: 768px) and (max-height: 800px) {
+  .sala { gap: 10px; height: calc(100vh - 28px); height: calc(100dvh - 28px); grid-template-rows: auto minmax(0, 1fr); align-content: start; }
+  .sala-empty, .sala-note { align-self: start; }
+  .sala-fade { min-height: 0; height: 100%; }
+  .sala-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 12px; }
+  .sala-head-row { display: contents; }
+  .sala-head-title { order: 1; }
+  .sala-eyebrow { display: none; }
+  .sala-h1 { font-size: 22px; }
+  .sala-seg { order: 2; }
+  .sala-search, .sala-skel-search { order: 3; flex: 1 1 180px; max-width: 280px; }
+  .sala-status { order: 4; flex: 1 1 0; }
+  .sala-counters { order: 5; margin-left: auto; flex-wrap: nowrap; gap: 6px; }
+  .sala-counter { display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: baseline; gap: 6px; min-width: 0; padding: 5px 10px; }
+  .sala-counter-n { font-size: 18px; }
+  .sala-board { height: 100%; box-sizing: border-box; }
+  .sala-col { flex-basis: 236px; min-width: 236px; max-height: 100%; min-height: 0; }
+  .sala-col-head { min-height: 44px; padding: 6px 12px; }
+  .sala-col-body { padding: 2px 8px 8px; }
+  .sala-list { gap: 6px; }
+  .sala-sep { margin-top: 4px; }
+  .sala-card { gap: 2px; padding: 7px 10px 7px 14px; }
+  .sala-card-actions { margin-top: 4px; gap: 4px; }
+  .sala-btn { min-height: 28px; padding: 4px 10px; }
+  .sala-later { min-height: 32px; margin: 0 8px 8px; }
 }
 `;

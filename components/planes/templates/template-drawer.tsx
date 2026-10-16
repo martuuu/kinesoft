@@ -66,6 +66,7 @@ import {
   type PlanPriceMode,
 } from "@/lib/plan-editor-state";
 import type { PlanPricingInput, PlanScheduleV1 } from "@/lib/plans-types";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 // ─── Copy ────────────────────────────────────────────────────────────────────
 
@@ -605,6 +606,7 @@ function TemplateDrawerInstance({ open, templateId, discipline, onClose, onSaved
 
   return (
     <Drawer open={open} onClose={onClose} title={title} width={560} dirty={dirty} dirtyMessage={TEMPLATE_COPY.dirty}>
+      <div className={`${tap.tapScope} ${tap.contents}`}>
       {loadError ? (
         <p role="alert" style={errorText}>
           {loadError}
@@ -650,6 +652,7 @@ function TemplateDrawerInstance({ open, templateId, discipline, onClose, onSaved
           )}
         </>
       )}
+      </div>
     </Drawer>
   );
 }

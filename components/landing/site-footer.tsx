@@ -3,7 +3,7 @@ import { KineLogo } from "@/components/ui/kine-logo";
 import { SupportContact } from "@/components/ui/support-contact";
 import { supportEmail } from "@/lib/support-contact";
 import { BRAND_NAME } from "@/lib/brand";
-import { LANDING_NAV } from "./site-header";
+import { LANDING_NAV, directoryNavLinks } from "./site-header";
 import s from "./site-footer.module.css";
 
 /**
@@ -20,6 +20,8 @@ const LINKS = [
 ];
 
 export function SiteFooter({ email = supportEmail() }: { email?: string | null } = {}) {
+  // DIR-3a: el link al directorio solo con `DIRECTORY_MODE=public` (`directoryNavLinks`), antes de «Ingresar».
+  const links = [...LINKS.slice(0, LANDING_NAV.length + 1), ...directoryNavLinks(), ...LINKS.slice(LANDING_NAV.length + 1)];
   return (
     <footer className={s.footer}>
       <div className="k-container">
@@ -49,7 +51,7 @@ export function SiteFooter({ email = supportEmail() }: { email?: string | null }
           </div>
           <nav aria-label="Pie de página">
             <ul className={s.links} role="list">
-              {LINKS.map((l) => (
+              {links.map((l) => (
                 <li key={l.href}>
                   {l.href.startsWith("/") ? <Link href={l.href}>{l.label}</Link> : <a href={l.href}>{l.label}</a>}
                 </li>

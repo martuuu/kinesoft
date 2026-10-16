@@ -2,6 +2,7 @@ import Link from "next/link";
 import { KineLogo } from "@/components/ui/kine-logo";
 import { ButtonLink } from "@/components/ui/button";
 import { BRAND_NAME } from "@/lib/brand";
+import { directoryMode } from "@/lib/directory-mode";
 import { MobileNav } from "./mobile-nav";
 import s from "./site-header.module.css";
 
@@ -27,8 +28,18 @@ export function signupCtaLabel(trialDays: number | null): string {
   return trialDays != null && trialDays > 0 ? `Probá ${trialDays} días gratis` : "Creá tu cuenta";
 }
 
+/**
+ * DIR-3a (C-DIR2/C-DIR5): «Buscá un profesional» → `/profesionales`, SOLO con `DIRECTORY_MODE=public`. En `preview` el
+ * directorio se ve por link pero no se promociona (DIR-D22), y en `off` no existe. La landing es ISR (1 h): el modo se
+ * lee en el render, así que un cambio de modo aparece en la próxima regeneración.
+ */
+export function directoryNavLinks(): { href: string; label: string }[] {
+  return directoryMode() === "public" ? [{ href: "/profesionales", label: "Buscá un profesional" }] : [];
+}
+
 export function SiteHeader({ trialDays = null }: { trialDays?: number | null }) {
   const ctaLabel = signupCtaLabel(trialDays);
+  const nav = [...LANDING_NAV, ...directoryNavLinks()];
   return (
     <header className={s.header}>
       <div className={`k-container ${s.nav}`}>
@@ -39,7 +50,7 @@ export function SiteHeader({ trialDays = null }: { trialDays?: number | null }) 
           </span>
         </Link>
         <nav className={s.links} aria-label="Secciones">
-          {LANDING_NAV.map((n) => (
+          {nav.map((n) => (
             <a key={n.href} href={n.href}>
               {n.label}
             </a>
@@ -53,7 +64,7 @@ export function SiteHeader({ trialDays = null }: { trialDays?: number | null }) 
             {ctaLabel}
           </ButtonLink>
         </div>
-        <MobileNav links={[...LANDING_NAV, { href: "#contacto", label: "Contacto" }]} ctaLabel={ctaLabel} />
+        <MobileNav links={[...nav, { href: "#contacto", label: "Contacto" }]} ctaLabel={ctaLabel} />
       </div>
     </header>
   );

@@ -12,6 +12,7 @@ export type Tab =
   | "servicios"
   | "obras-sociales"
   | "diagnosticos"
+  | "directorio"
   | "usuarios"
   | "plan"
   | "facturacion"
@@ -29,6 +30,8 @@ export const CONFIG_TABS: readonly Tab[] = [
   "servicios",
   "obras-sociales",
   "diagnosticos",
+  // DIR-3c: `?tab=directorio` (el link «Configurar» de una futura comunicación del directorio).
+  "directorio",
   "usuarios",
   "plan",
   // PL-3a (PL-D21): `?tab=facturacion` es el link de los mails de cobro (cargo nuevo, vencido, comprobante revisado).
@@ -55,8 +58,16 @@ export function parseConfigTab(raw: string | string[] | null | undefined): Tab {
  *    «profesionales también, porque pueden necesitar ayuda con algo»; la misma regla que `lib/support-threads.ts` y
  *    `listSupportSessionsForTenant`). Un Profesional sin delegaciones ve solo esta pestaña.
  *  - `canExport`: Exportar datos (BO5-C: solo el titular, o el de un consultorio suspendido).
+ *  - `directory` (DIR-3c, C-DIR9): Directorio = `tenant.admin` con `DIRECTORY_MODE` ≠ off (lo decide el loader: la
+ *    pestaña existe si llegaron sus datos). Opcional: sin él (tests viejos, `legacyConfigAccess`) no se ve.
  */
-export type ConfigTabAccess = { tenantAdmin: boolean; billing: boolean; team: boolean; canExport: boolean };
+export type ConfigTabAccess = {
+  tenantAdmin: boolean;
+  billing: boolean;
+  team: boolean;
+  canExport: boolean;
+  directory?: boolean;
+};
 
 /**
  * Default por rol en abstracto, para quien todavía no pasa `access` (tests viejos): OWNER = todo; ADMIN = el ADMIN
@@ -89,6 +100,9 @@ const TAB_DEFS: readonly TabDef[] = [
   // [PF1.1-config · C5] Sentence case en todas («Obras sociales», como «Plan y uso» y «Exportar datos»).
   { key: "obras-sociales", label: "Obras sociales", visible: admin },
   { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
+  // DIR-3c: con el directorio en `off` (default de prod hasta que Martin lo prenda) la pestaña no existe: publicar en
+  // algo que el público todavía no ve sería un switch sin efecto.
+  { key: "directorio", label: "Directorio", visible: (a) => a.tenantAdmin && !!a.directory },
   { key: "usuarios", label: "Usuarios", visible: (a) => a.team },
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
   { key: "facturacion", label: "Facturación", visible: (a) => a.billing },
@@ -164,7 +178,33 @@ export function TabsBar({
 
   // B3.4: con 11 pestañas la píldora no entra en un celular (ni a 1024 con la barra lateral abierta): scrollea en
   // horizontal con un degradé en el borde que avisa que hay más (C4, configuracion.module.css).
+  // MB-1e (C-MB3): < 768 la píldora se esconde y queda un `select` nativo con las mismas secciones. A 390 la píldora
+  // mostraba 3 de 12 pestañas y había que adivinar que scrolleaba; el select las lista todas y el picker del sistema
+  // es el control táctil que el usuario ya conoce. Los dos se renderizan siempre (el CSS elige): sin `matchMedia`, sin
+  // salto de hidratación. Es controlado por `tab`: si el dirty-guard cancela el cambio, vuelve solo a la pestaña actual.
   return (
+    <>
+      <label className={styles.sectionPicker}>
+        <span className={styles.sectionPickerLabel} aria-hidden="true">
+          Sección
+        </span>
+        <select
+          className={`k-input ${styles.sectionSelect}`}
+          aria-label="Sección de Configuración"
+          value={tab}
+          onChange={(e) => {
+            const t = e.target.value as Tab;
+            onPreload?.(t);
+            setTab(t);
+          }}
+        >
+          {tabs.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </label>
     <div className={styles.tabsWrap} data-fade-start={fade.start || undefined} data-fade-end={fade.end || undefined}>
       <div
         ref={listRef}
@@ -194,6 +234,7 @@ export function TabsBar({
         })}
       </div>
     </div>
+    </>
   );
 }
 

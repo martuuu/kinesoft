@@ -149,3 +149,209 @@
   outline: 2px solid transparent;
   box-shadow: inset 0 0 0 2px var(--sky-700), inset 0 0 0 4px #fff;
 }
+
+/* ── [MB-1a · C-MB3] Semana en el celular: lista agrupada por día (`week-day-list.tsx`). `WeekGridView` dibuja la
+   grilla y la lista; acá se elige. `!important` en la grilla: la `Card` lleva `display: flex` inline. ─────────── */
+.weekList {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .weekGrid {
+    display: none !important;
+  }
+  .weekList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+}
+
+.wlDay {
+  background: var(--card-bg);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  padding: 12px;
+  /* Al traer el día ancla a la vista, que no quede debajo de la barra móvil sticky (8 + 60 px). */
+  scroll-margin-top: 76px;
+}
+
+.wlDay[aria-current="date"] {
+  box-shadow: var(--shadow-card), inset 0 0 0 2px var(--sky-700);
+}
+
+.wlHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.wlTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.wlCount {
+  font-size: 12px;
+  color: var(--navy-500);
+}
+
+.wlNote {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--navy-500);
+}
+
+.wlRows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Fila de 48 px mínimo (target ≥ 44 bajo 768): fondo = estado y barra = servicio, inline (dato del turno). */
+.wlRow {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 8px;
+  border-radius: 10px;
+  text-align: left;
+  font: inherit;
+  color: var(--navy-900);
+  cursor: pointer;
+}
+
+.wlRow:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}
+
+.wlHour {
+  flex-shrink: 0;
+  min-width: 42px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sky-700);
+}
+
+.wlMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wlPatient {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.wlName,
+.wlService {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wlService {
+  font-size: 12px;
+  color: var(--navy-500);
+}
+
+/* ── [MB-1a · C-MB4] Contenedor de la agenda (`agenda-client.tsx`). ─────────────────────────────────────────────
+   Antes: `min-height: calc(100vh - 60px)` inline. El hijo `flex: 1` tiene base `0%`, que con un alto indefinido
+   vale `content`: la grilla crecía hasta su contenido y scrolleaba el DOCUMENTO (a 1366×625 se veían ~4 h y la
+   barra de herramientas se iba arriba). Desde 768 las vistas de grilla (Día, Por profesional, Por sala, Semana)
+   tienen alto fijo = la ventana menos el relleno del `main`, y la grilla scrollea adentro con sus encabezados a la
+   vista. Lista y Recepción siguen creciendo con la página (son listas, no grillas). `dvh` con `vh` de respaldo
+   (C-MB2). El desplazamiento depende del chrome de Apariencia: sidebar = 14 + 14 px de `main` (+2 de redondeo);
+   barra superior = 18 + ~56 + 18 de la barra y 18 de `main` abajo. */
+.agendaRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* El mínimo (Lista, Recepción: crecen con la página) descuenta el mismo chrome que el alto fijo: con `- 60px` fijo,
+     en modo barra superior el documento quedaba ~50 px más alto que la ventana aunque Recepción entrara (handoff de
+     MB-1b, C-MB4). */
+  min-height: calc(100vh - 30px);
+  min-height: calc(100dvh - 30px);
+}
+
+.agendaRoot[data-chrome="topbar"] {
+  min-height: calc(100vh - 112px);
+  min-height: calc(100dvh - 112px);
+}
+
+/* En el celular la agenda crece con la página (como cualquier pantalla con barra inferior): el mínimo de alto solo
+   empujaba la leyenda abajo y forzaba scroll aunque el día tuviera dos turnos. */
+@media (max-width: 767px) {
+  .agendaRoot {
+    min-height: 0;
+  }
+}
+
+@media (min-width: 768px) {
+  .agendaRoot[data-fit] {
+    height: calc(100vh - 30px);
+    height: calc(100dvh - 30px);
+    min-height: 0;
+  }
+  .agendaRoot[data-fit][data-chrome="topbar"] {
+    height: calc(100vh - 112px);
+    height: calc(100dvh - 112px);
+  }
+}
+
+/* Monitores de recepción (1366/1024 × 768 de pantalla = 625-695 px útiles, MB-D12): menos aire vertical para que
+   la grilla muestre ≥ 6 h. Sin el rótulo «Agenda» (el sidebar ya marca dónde estás), tira de días de 40 px. */
+@media (min-width: 768px) and (max-height: 760px) {
+  .agendaRoot {
+    gap: 8px;
+  }
+  .stripDay {
+    height: 40px;
+  }
+}
+
+/* ── [MB-1a · C-MB3] Swipe de día en Día: el navegador se queda con el scroll vertical y el zoom; el gesto
+   horizontal llega como pointer events (sin esto, el primer movimiento horizontal dispara `pointercancel`). ── */
+.swipeDay {
+  touch-action: pan-y pinch-zoom;
+}
+
+/* ── [MB-1a · C-MB3] «Por profesional» / «Por sala» en el celular: la página no tiene alto fijo (< 768 la agenda
+   crece con la página), así que la grilla se acota a la ventana menos las barras para que su scroll sea interno y el
+   encabezado `sticky top` + la columna de horas `sticky left` funcionen. Quedan ~120 px de página arriba para
+   volver a scrollear la página con el dedo; `overscroll-behavior: contain` evita que el borde del scroll de la
+   grilla tire de la página (pull-to-refresh, «atrás» con el swipe horizontal). ──────────────────────────────── */
+@media (max-width: 767px) {
+  .columnsCard {
+    max-height: calc(100vh - var(--k-bottom-nav-h, 0px) - 120px);
+    max-height: calc(100dvh - var(--k-bottom-nav-h, 0px) - 120px);
+  }
+  .columnsScroll {
+    overscroll-behavior: contain;
+  }
+}
+
+/* ── [MB-1a] Leyenda de servicios: target ≥ 44 px bajo 768 (el chip visual sigue siendo la píldora). ─────────── */
+@media (max-width: 767px) {
+  .legendBtn {
+    min-height: 44px;
+  }
+}

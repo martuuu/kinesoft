@@ -76,6 +76,27 @@
   text-align: right;
 }
 
+/* MB-1d: el `display` de la celda del checkbox vivía inline (`display: flex`) y le ganaba al `display: none` de la
+   card < 768: a 390 cada fila sumaba una cuarta fila implícita con el checkbox suelto. Ahora va por clase. */
+.cellCheck {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* «⋯» de la fila: 28 px en la tabla de escritorio (como antes, inline), 44 px en la card (< 768, targets táctiles). */
+.rowMenuBtn {
+  width: 28px;
+  height: 28px;
+}
+
+/* MB-1d (C-MB3 Pacientes): «Nuevo paciente» es un FAB (`.k-fab`) < 768 y el botón de la cabecera solo en
+   escritorio. El envoltorio del FAB es `display: contents` en mobile (el FAB es `fixed`: no ocupa lugar en las
+   acciones de la cabecera) y `none` en escritorio. */
+.fabOnly {
+  display: none;
+}
+
 /* Rótulo que solo existe en la card (< 768): en la tabla lo da el encabezado. */
 .cardLabel {
   display: none;
@@ -144,6 +165,39 @@
     display: inline;
     color: var(--navy-500);
     margin-right: 4px;
+  }
+  .rowMenuBtn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .fabOnly {
+    display: contents;
+  }
+  .desktopAction {
+    display: none;
+  }
+  /* Búsqueda sticky (C-MB3): queda debajo de la barra móvil del shell (sticky en 8 px, 56 de alto + 8 de aire) y
+     por debajo de su z-index (20). */
+  .searchBar {
+    position: sticky;
+    top: 72px;
+    z-index: 15;
+  }
+  /* Fila «Ordenar / Cobertura / Ver archivados» (la pinta la página con esta clase): a 390 envolvía en 3-4 líneas y
+     cuántas entraban dependía de la fuente (fallback → web font = salto, el CLS 0,02 de PF1-Z). Una sola línea con
+     scroll horizontal: el alto es fijo. `contain`: el gesto no arrastra la página. */
+  .sortRow {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .sortRow > * {
+    flex-shrink: 0;
+  }
+  .sortRow::-webkit-scrollbar {
+    display: none;
   }
 }
 

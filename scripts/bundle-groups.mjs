@@ -27,6 +27,9 @@ export const BUNDLE_GROUPS = [
       /^\/invite\//,
       /^\/(sin-acceso|suspendido|cuenta-desactivada|mantenimiento|verificar-acceso|elegir-consultorio)$/,
       /^\/_not-found$/,
+      // DIR-3a: directorio público (mismas reglas que la landing: sin providers ni framer).
+      /^\/profesionales/,
+      /^\/consultorios\//,
     ],
   },
   { id: "turnero", budget: 135, blocking: true, match: [/^\/c\/\[slug\]\/booking/, /^\/booking\//] },

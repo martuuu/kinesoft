@@ -35,6 +35,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { PlanEditorRequest, PlanEditorSaved } from "@/components/planes/plan-editor-types";
 import type { CaseSelection, CatalogConditionDTO } from "@/lib/diagnosis-engine";
+import diag from "@/components/diagnostico/diagnostico.module.css";
 
 const PlanEditorDrawer = dynamic(
   () => import("@/components/planes/plan-editor-drawer").then((m) => m.PlanEditorDrawer),
@@ -228,7 +229,7 @@ export function DiagnosisDoorBanner({
           <span>
             Diagnóstico para <strong style={{ color: "var(--navy-900)" }}>{door.patient.name}</strong>
           </span>
-          <Link href="/diagnostico" style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }}>
+          <Link href="/diagnostico" className={diag.tapLink} style={{ fontSize: 12, fontWeight: 600, color: "var(--sky-700)" }}>
             {DIAGNOSIS_DOOR_COPY.changePatient}
           </Link>
         </div>

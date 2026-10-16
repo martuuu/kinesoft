@@ -1,0 +1,16 @@
+/* [MB-1f] Pasada de targets de 44 px (AGENTS §5, metas de MB) en Planes, plantillas y la tarjeta del plan (que
+   también vive en el perfil del paciente). Solo bajo 768: en escritorio la densidad no cambia. Se aplica por alcance
+   (`.tapScope` en la raíz de cada superficie y dentro de sus Drawers/Modales, que van por portal) en vez de tocar
+   decenas de estilos inline uno por uno: un `min-height` gana sobre un `height` inline más chico. A un `<a>` inline
+   (link dentro de un texto) `min-height` no le hace nada, que es lo buscado: el texto inline queda excluido. */
+.contents {
+  display: contents;
+}
+@media (max-width: 767px) {
+  .tapScope :is(button, select, a[href], input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"])) {
+    min-height: 44px;
+  }
+  .tapScope button {
+    min-width: 44px;
+  }
+}

@@ -3,6 +3,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { EyebrowLabel } from "@/components/ui/eyebrow";
 import { MODULE_UI_LABEL } from "@/lib/saas-billing-view";
 import { SAAS_PLAN_LABEL, type TenantModule } from "@/lib/tenant-modules";
+import styles from "./access-wall.module.css";
 
 /**
  * Muro de módulo (VX2-b2, D-VX20). Lo monta el `layout.tsx` de un segmento cuando `moduleWall(m)` (`lib/module-wall.ts`)
@@ -49,7 +50,7 @@ export function AccessWall({ module: m, plan, canBuy }: { module: TenantModule; 
           <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, maxWidth: 420 }}>
             Cambiá de plan para usarlo en tu consultorio.
           </p>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+          <div className={styles.actions} style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
             <ButtonLink href={ACCESS_WALL_PLANS_HREF}>Ver planes</ButtonLink>
             <ButtonLink href="/dashboard" variant="ghost">
               Volver al inicio
@@ -61,9 +62,11 @@ export function AccessWall({ module: m, plan, canBuy }: { module: TenantModule; 
           <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, maxWidth: 420 }}>
             Pedile a quien administra la cuenta que cambie de plan.
           </p>
-          <ButtonLink href="/dashboard" variant="ghost">
-            Volver al inicio
-          </ButtonLink>
+          <div className={styles.actions}>
+            <ButtonLink href="/dashboard" variant="ghost">
+              Volver al inicio
+            </ButtonLink>
+          </div>
         </>
       )}
     </section>

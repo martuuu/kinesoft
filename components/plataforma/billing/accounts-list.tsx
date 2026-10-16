@@ -5,6 +5,9 @@
  *
  * La tabla scrollea sola en horizontal (`overflowX: auto` + `minWidth`) y la primera columna queda fija: a 390 px no
  * scrollea la página entera. El estado contable va en texto (Tag + leyenda), nunca solo en color.
+ *
+ * MB-1f (C-MB3): bajo 768 cada fila es una card con rótulos (`data-label`) y plan, estado y búsqueda van en el Drawer
+ * «Filtros (n)»; la vista rápida (chips) queda a la vista, a 44 px.
  */
 import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
@@ -27,20 +30,15 @@ import {
   viewParam,
   type AccountsQuery,
 } from "@/components/plataforma/billing/billing-logic";
+import { FiltersDrawer } from "@/components/plataforma/filters-drawer";
+import { activeFilterCount } from "@/components/plataforma/filters-logic";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 const COLS = "minmax(200px,1.4fr) 110px 150px 130px 120px 130px minmax(150px,1fr)";
 const MIN_WIDTH = 1060;
-// Mismo sticky que la lista de Consultorios (fondo del panel para que no se transparente al scrollear).
-const STICKY_FIRST: CSSProperties = {
-  position: "sticky",
-  left: 0,
-  zIndex: 1,
-  // PF1.2 (P5): el fondo de la celda fija es el de su fila (blanco en el cuerpo; el encabezado lo pisa abajo).
-  background: "var(--card-bg)",
-  boxShadow: "1px 0 0 rgba(15,30,51,0.06)",
-  marginLeft: -16,
-  paddingLeft: 16,
-};
+// Mismo sticky que la lista de Consultorios (`table.sticky`; PF1.2 P5: el fondo de la celda fija es el de su fila).
+// MB-1f: columnas y ancho mínimo como variables para que bajo 768 la fila pase a card.
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": `${MIN_WIDTH}px` } as CSSProperties;
 
 function Head({ children, align }: { children: ReactNode; align?: "right" }) {
   return (
@@ -83,6 +81,7 @@ function Filters({ query }: { query: AccountsQuery }) {
               key={o.value}
               href={accountsHref({ ...base, view: o.value })}
               aria-current={active ? "true" : undefined}
+              className={table.chip}
               style={{
                 textDecoration: "none",
                 padding: "6px 12px",
@@ -98,6 +97,17 @@ function Filters({ query }: { query: AccountsQuery }) {
           );
         })}
       </div>
+      <FiltersDrawer
+        count={activeFilterCount([query.q, query.plan, query.status])}
+        title="Buscar y filtrar"
+        aside={
+          hasAccountFilters(query) ? (
+            <Link href={BILLING_PATH} className={table.chip} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
+              Limpiar
+            </Link>
+          ) : null
+        }
+      >
       <form method="get" action={BILLING_PATH} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {viewParam(query.view) && <input type="hidden" name="ver" value={viewParam(query.view)!} />}
         <input
@@ -133,6 +143,7 @@ function Filters({ query }: { query: AccountsQuery }) {
           </Link>
         )}
       </form>
+      </FiltersDrawer>
     </div>
   );
 }
@@ -143,9 +154,8 @@ function Row({ r }: { r: PlatformAccountRow }) {
   return (
     <div
       data-account={r.tenantId}
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "12px 16px",
         borderBottom: "1px solid rgba(15,30,51,0.05)",
@@ -154,7 +164,7 @@ function Row({ r }: { r: PlatformAccountRow }) {
         color: "var(--navy-700)",
       }}
     >
-      <div style={{ minWidth: 0, ...STICKY_FIRST, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
+      <div className={table.sticky} style={{ minWidth: 0, alignSelf: "stretch", display: "grid", alignContent: "center" }}>
         <Link
           href={tenantTabHref(r.tenantId, "facturacion")}
           style={{ fontWeight: 700, color: "var(--navy-900)", textDecoration: "none", overflowWrap: "anywhere" }}
@@ -163,12 +173,12 @@ function Row({ r }: { r: PlatformAccountRow }) {
         </Link>
         <div style={{ fontSize: 12, color: "var(--navy-300)", fontFamily: "var(--font-mono)" }}>{r.slug}</div>
       </div>
-      <div style={{ fontWeight: 600 }}>{SAAS_PLAN_LABEL[r.saasPlan]}</div>
-      <div>
+      <div data-label="Plan" style={{ fontWeight: 600 }}>{SAAS_PLAN_LABEL[r.saasPlan]}</div>
+      <div data-label="Precio">
         <div style={{ fontVariantNumeric: "tabular-nums" }}>{price.text}</div>
         {price.custom && <div style={{ fontSize: 11.5, color: "var(--navy-500)" }}>A medida</div>}
       </div>
-      <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: r.balanceCents > 0 ? 700 : 500, color: r.balanceCents > 0 ? "var(--navy-900)" : undefined }}>
+      <div data-label="Saldo" style={{ fontVariantNumeric: "tabular-nums", fontWeight: r.balanceCents > 0 ? 700 : 500, color: r.balanceCents > 0 ? "var(--navy-900)" : undefined }}>
         {balanceText(r.balanceCents)}
         {r.openCharges > 0 && (
           <div style={{ fontSize: 11.5, fontWeight: 500, color: "var(--navy-500)" }}>
@@ -176,9 +186,9 @@ function Row({ r }: { r: PlatformAccountRow }) {
           </div>
         )}
       </div>
-      <div>{r.nextChargeOn ? formatDayKeyAR(r.nextChargeOn) : <span style={{ color: "var(--navy-300)" }}>—</span>}</div>
-      <div>{r.lastPaymentAt ? formatDateAR(r.lastPaymentAt, "short") : <span style={{ color: "var(--navy-300)" }}>Sin pagos</span>}</div>
-      <div style={{ display: "grid", gap: 4, justifyItems: "start" }}>
+      <div data-label="Próximo cargo">{r.nextChargeOn ? formatDayKeyAR(r.nextChargeOn) : <span style={{ color: "var(--navy-300)" }}>—</span>}</div>
+      <div data-label="Último pago">{r.lastPaymentAt ? formatDateAR(r.lastPaymentAt, "short") : <span style={{ color: "var(--navy-300)" }}>Sin pagos</span>}</div>
+      <div data-label="Estado" className={table.wide} style={{ display: "grid", gap: 4, justifyItems: "start" }}>
         {/* PL-Z (FX5): «N cargos vencidos» es lo único urgente de la lista y con `Tag` sky se perdía entre los demás.
             Ámbar + negrita + `role="status"`; no hay token `--warn-*` en globals.css, va el literal. */}
         {state.urgent ? (
@@ -212,24 +222,23 @@ export function AccountsList({
   const base = { view: query.view, plan: query.plan, status: query.status, q: query.q };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Card style={{ padding: 16 }}>
+      <Card className={table.tapScope} style={{ padding: 16 }}>
         <Filters query={query} />
       </Card>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: MIN_WIDTH }}>
+        <div className={table.scroller} style={TABLE_VARS}>
+          <div className={table.inner}>
             <div
+              className={table.head}
               style={{
-                display: "grid",
-                gridTemplateColumns: COLS,
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.07)",
                 background: "var(--bg-panel)",
               }}
             >
-              <div style={{ ...STICKY_FIRST, background: "var(--bg-panel)" }}>
+              <div className={table.sticky}>
                 <Head>Consultorio</Head>
               </div>
               <Head>Plan</Head>
@@ -255,14 +264,14 @@ export function AccountsList({
       {(query.cursor || nextCursor) && (
         <nav aria-label="Paginación" style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           {query.cursor ? (
-            <Link href={accountsHref(base)} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
+            <Link href={accountsHref(base)} className={table.chip} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
               ← Volver al principio
             </Link>
           ) : (
             <span />
           )}
           {nextCursor && (
-            <Link href={accountsHref(base, nextCursor)} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
+            <Link href={accountsHref(base, nextCursor)} className={table.chip} style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-700)" }}>
               Siguiente →
             </Link>
           )}

@@ -1,0 +1,182 @@
+/* DIR-3d · `/cuenta/perfil-publico`. Vive dentro de la card de `AuthShell variant="centered"` (460 px): todo apilado,
+   sin columnas, para que a 360 px no haya scroll horizontal. Solo tokens (ratchet de literales de estado de C-F5). */
+
+.root {
+  display: grid;
+  gap: 18px;
+}
+
+.section {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.muted {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--navy-500);
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Bandas de aviso: el color no es el único canal (siempre llevan texto que dice qué pasa). */
+.band {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.bandInfo {
+  border-color: rgba(15, 30, 51, 0.08);
+  background: rgba(15, 30, 51, 0.03);
+  color: var(--navy-700);
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 420px) {
+  .row2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Vista previa: la misma información que la card pública del directorio (iniciales, título + nombre, matrícula). */
+.preview {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: #fff;
+}
+.previewAvatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 17px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--sky-400), var(--sky-600));
+}
+.previewBody {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.previewName {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.previewLicense {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--navy-700);
+}
+.previewBio {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--navy-700);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* Casilla de consentimiento: el texto entero es el label (área de toque grande) y la casilla mide 20 px. */
+.consent {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(15, 30, 51, 0.1);
+  background: rgba(15, 30, 51, 0.02);
+  cursor: pointer;
+}
+.consentBox {
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--sky-700);
+  cursor: pointer;
+}
+.consentBox:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}
+.consentText {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--navy-900);
+}
+.consentError {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger-fg);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* < 640 px: botones apilados a ancho completo y 44 px (como `ModalActions`, MB-0d). */
+@media (max-width: 639px) {
+  .actions > * {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+}
+
+.danger {
+  color: var(--danger-fg);
+}
+
+.back {
+  justify-self: center;
+  margin-top: 4px;
+  padding: 10px 8px;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sky-700);
+}
+.back:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+  border-radius: 8px;
+}

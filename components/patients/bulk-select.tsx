@@ -129,7 +129,8 @@ export function BulkActionBar({ archivedView = false }: { archivedView?: boolean
       aria-label="Acciones masivas"
       style={{
         position: "fixed",
-        bottom: 22,
+        // MB-1d: sobre la barra inferior si estuviera (`--k-bottom-nav-h` vale 0 en escritorio = como antes).
+        bottom: "calc(22px + var(--k-bottom-nav-h, 0px))",
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 30,

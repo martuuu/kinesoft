@@ -23,7 +23,8 @@ export function PatientsSearchBar({
   // total ya está en el título de la página.
   const plansEnabled = useTenantModules().has("planes");
   return (
-    <Card glass style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+    // MB-1d (C-MB3): `.searchBar` la vuelve sticky < 768, debajo de la barra móvil.
+    <Card glass className={styles.searchBar} style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
       {/* PF1.1 (C-PF5.4): el input no tiene borde propio; el anillo de foco lo pinta este contenedor con
           `:focus-within` (antes se apagaba el contorno sin reemplazo: el foco del buscador era invisible). */}
       <div

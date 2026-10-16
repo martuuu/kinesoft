@@ -145,6 +145,8 @@ function RecentRow({ p }: { p: DashboardData["recent"][number] }) {
         aria-label={`Acciones rápidas: ${p.name}`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
+        // MB-1d: `.tap` = 44 px de área táctil < 768.
+        className={styles.tap}
         style={{
           width: 32,
           height: 32,

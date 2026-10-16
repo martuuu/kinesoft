@@ -19,6 +19,7 @@ import {
   bulkAddSessionExercises,
   listAssignablePrograms,
 } from "@/lib/sessions";
+import tapStyles from "@/components/biblioteca/biblioteca.module.css";
 
 type Program = Awaited<ReturnType<typeof listAssignablePrograms>>[number];
 
@@ -100,7 +101,7 @@ export function BulkAssignModal({
 
   return (
     <Modal onClose={onClose} title={`Asignar ${exerciseIds.length} ejercicio${exerciseIds.length === 1 ? "" : "s"} a un plan`} width={560}>
-      <div style={{ display: "grid", gap: 14 }}>
+      <div className={tapStyles.tapScope} style={{ display: "grid", gap: 14 }}>
         <FormField
           label="Buscar plan o paciente"
           placeholder="Sofía, ITBS, etc."

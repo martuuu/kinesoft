@@ -3,7 +3,8 @@
  * server con la página que trajo `listInbox` (los filtros viven en la URL, como en Usuarios).
  *
  * No leídos: punto + negrita + fondo (no solo color). Origen con Tag («Consultorio» / «Consulta de la web»). En 360 px cada fila
- * se apila (flex-wrap) en vez de scrollear la página.
+ * se apila (flex-wrap) en vez de scrollear la página. MB-1f: los chips de filtro y la paginación miden 44 px bajo 768
+ * (dos grupos de 3 chips: no hace falta Drawer de filtros).
  */
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
@@ -17,6 +18,7 @@ import {
   inboxThreadHref,
   type InboxQuery,
 } from "@/components/plataforma/inbox/inbox-logic";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 function FilterLinks<T extends string>({
   label,
@@ -38,6 +40,7 @@ function FilterLinks<T extends string>({
             key={o.value}
             href={hrefOf(o.value)}
             aria-current={active ? "true" : undefined}
+            className={table.chip}
             style={{
               textDecoration: "none",
               padding: "6px 12px",
@@ -116,12 +119,12 @@ export function InboxList({ page, query }: { page: InboxPage; query: InboxQuery 
       {(page.nextCursor || query.cursor) && (
         <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", fontSize: 13.5 }}>
           {query.cursor && (
-            <Link href={inboxHref(base)} style={{ color: "var(--sky-700)" }}>
+            <Link href={inboxHref(base)} className={table.chip} style={{ color: "var(--sky-700)" }}>
               Volver al principio
             </Link>
           )}
           {page.nextCursor && (
-            <Link href={inboxHref(base, page.nextCursor)} style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+            <Link href={inboxHref(base, page.nextCursor)} className={table.chip} style={{ color: "var(--sky-700)", fontWeight: 600 }}>
               Ver más
             </Link>
           )}

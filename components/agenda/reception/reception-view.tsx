@@ -27,6 +27,7 @@ import { roomNameOf, type BookingDTO } from "../agenda-utils";
 import { ReceptionRow } from "./reception-row";
 import { noteLocalReception } from "@/lib/arrival-local-notes";
 import { useAttendedNoteToast } from "./use-attended-note-toast";
+import { RECEPTION_FIT_MQ, receptionScrollMaxHeight } from "./reception-fit";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -130,6 +131,35 @@ export function ReceptionView({
   const isToday = dayKey === dayKeyOf(clock);
   const showRoom = roomById != null && Object.keys(roomById).length > 0;
 
+  // [MB-1b · C-MB4] Escritorio chico: la tabla scrollea adentro y el documento no (ver `reception-fit.ts`). Se
+  // re-mide al cambiar el tamaño de la ventana o de la vista (filtros que pasan a dos renglones, un aviso nuevo);
+  // fijar el alto achica la sección, el ResizeObserver vuelve a disparar y da el mismo valor: no hay bucle.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const hasRows = shown.length > 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(RECEPTION_FIT_MQ);
+    const apply = () => {
+      const max = mq.matches
+        ? receptionScrollMaxHeight(window.innerHeight, el.getBoundingClientRect().top + window.scrollY)
+        : null;
+      const next = max == null ? "" : `${max}px`;
+      if (el.style.maxHeight !== next) el.style.maxHeight = next;
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    mq.addEventListener?.("change", apply);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    if (sectionRef.current) ro?.observe(sectionRef.current);
+    return () => {
+      window.removeEventListener("resize", apply);
+      mq.removeEventListener?.("change", apply);
+      ro?.disconnect();
+    };
+  }, [hasRows]);
+
   async function handleAction(b: BookingDTO, action: ReceptionAction) {
     // SV10b: misma regla que la fila (no muestra botones si `canOperate` del
     // DTO es false); el server lo vuelve a chequear.
@@ -182,7 +212,7 @@ export function ReceptionView({
   });
 
   return (
-    <section className="rcp" aria-labelledby="rcp-title">
+    <section ref={sectionRef} className="rcp" aria-labelledby="rcp-title">
       <style>{RECEPTION_CSS}</style>
 
       <h2 id="rcp-title" className="rcp-sr">
@@ -245,6 +275,7 @@ export function ReceptionView({
         </Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div className="rcp-scroll" ref={scrollRef}>
           <table className="rcp-table">
             <caption className="rcp-sr">
               Turnos del {dayLabel}, {RECEPTION_FILTERS.find((f) => f.id === filter)?.label.toLowerCase()}
@@ -282,6 +313,7 @@ export function ReceptionView({
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
     </section>
@@ -344,6 +376,33 @@ const RECEPTION_CSS = `
 .rcp-btn:disabled { opacity: 0.5; cursor: progress; }
 .rcp-btn:focus-visible, .rcp-chip:focus-visible, .rcp-link:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 
+/* [MB-1b · C-MB4] Escritorio chico (1366/1024 × 625 en el navegador, 695 en la PWA). KPIs en una línea (franja de
+   ~38 px; antes ~75), el link al escritorio de Recepción a la derecha de los filtros (antes un renglón propio) y
+   filas de ~42 px: con la toolbar de la agenda arriba entran ≥ 6 filas a 625 y ≥ 8 a 695. La tabla scrollea adentro
+   con el encabezado sticky (el alto lo fija reception-fit.ts). Monitores altos y celular: como siempre. */
+@media (min-width: 1024px) and (max-height: 820px) {
+  .rcp { grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; }
+  .rcp > * { grid-column: 1 / -1; }
+  .rcp-counters { grid-row: 1; }
+  .rcp-filters { grid-row: 2; grid-column: 1; }
+  .rcp-head { grid-row: 2; grid-column: 2; align-self: center; }
+  .rcp-counter { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 6px 12px; }
+  .rcp-counter-label, .rcp-counter-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .rcp-counter-value { font-size: 18px; flex-shrink: 0; }
+  .rcp-table thead th { padding-top: 8px; padding-bottom: 8px; }
+  .rcp-row > td, .rcp-row > th { padding-top: 5px; padding-bottom: 5px; }
+  .rcp-scroll { overflow: auto; overscroll-behavior: contain; }
+  .rcp-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--card-bg); }
+}
+
+/* [MB-1b] Táctil: 44 px mínimos bajo 768 (AGENTS §5). Entre 640 y 767 sigue la tabla, con filas más altas. */
+@media (max-width: 767px) {
+  .rcp-btn, .rcp-chip, .rcp-desk-link { min-height: 44px; }
+  .rcp-btn { padding: 8px 14px; }
+  /* inline-block (no flex) para que el nombre largo siga cortando con «…»; el title lo muestra entero. */
+  .rcp-link { display: inline-block; vertical-align: middle; line-height: 44px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
 @media (max-width: 639px) {
   .rcp-counters { gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rcp-counter { padding: 8px 10px; }
@@ -364,6 +423,5 @@ const RECEPTION_CSS = `
   .rcp-row > td:not(.rcp-time):not(.rcp-actions-cell) + td:not(.rcp-actions-cell)::before { content: "· "; color: var(--navy-300); }
   .rcp-row .rcp-service { max-width: 160px; vertical-align: middle; }
   .rcp-actions { justify-content: flex-end; }
-  .rcp-btn { min-height: 40px; padding: 8px 12px; }
 }
 `;

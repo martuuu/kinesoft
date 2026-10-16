@@ -230,7 +230,7 @@ export function BibliotecaClient({
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className={styles.tapScope} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <PageHeader
         eyebrow={
           <>

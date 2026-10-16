@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { IconChevL, IconChevR } from "@/components/ui/icons";
 import { getMonthBookingDays } from "@/lib/dashboard";
 import { toARDateKey } from "@/lib/datetime-ar";
+import dash from "./dashboard.module.css";
 
 /**
  * Interactive MiniCalendar — month nav + click-day → agenda.
@@ -119,6 +120,7 @@ export function MiniCalendar({ initialBookingDays, className }: { initialBooking
             type="button"
             onClick={() => nav(-1)}
             aria-label="Mes anterior"
+            className={dash.tap}
             style={chevStyle}
           >
             <IconChevL size={12} />
@@ -127,6 +129,7 @@ export function MiniCalendar({ initialBookingDays, className }: { initialBooking
             type="button"
             onClick={() => nav(1)}
             aria-label="Mes siguiente"
+            className={dash.tap}
             style={chevStyle}
           >
             <IconChevR size={12} />
@@ -196,7 +199,8 @@ export function MiniCalendar({ initialBookingDays, className }: { initialBooking
   );
 }
 
-// 32 px (antes 24): el objetivo táctil mínimo razonable sin agrandar el encabezado del calendario.
+// 32 px (antes 24): el objetivo táctil mínimo razonable sin agrandar el encabezado del calendario. MB-1d: < 768
+// `dash.tap` lo lleva a 44 (con la barra inferior el calendario es una tarjeta más de la columna).
 const chevStyle: React.CSSProperties = {
   width: 32,
   height: 32,

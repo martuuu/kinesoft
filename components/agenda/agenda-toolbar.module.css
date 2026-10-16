@@ -194,20 +194,30 @@
   order: 1;
 }
 
-@media (max-width: 479px) {
-  .title {
-    font-size: var(--fs-xl);
+/* FAB «Nuevo turno» (MB-1a): solo < 768. Dos clases para ganarle a `.k-fab` de globals sin depender del orden. */
+.actions > .fab {
+  display: none;
+}
+
+/* [MB-1a · C-MB3] < 768: «Nuevo turno» es el FAB y «.ics»/«Vista» van detrás de «⋯» (G9 lo hacía < 480; entre 480 y
+   767 la fila igual partía en 3). Con eso la barra queda en 2 filas: navegación · vista + «⋯» (con varios
+   profesionales suma el toggle Por día / Por profesional). Controles a 44 px: target táctil (AGENTS §5, C-MB1). */
+@media (max-width: 767px) {
+  .actions > .fab {
+    display: inline-flex;
+  }
+  .actions > .createBtn {
+    display: none;
   }
   .moreBtn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 44px;
+    height: 44px;
   }
   .secondary {
     display: none;
-  }
-  .createBtn {
-    order: 0;
   }
   .secondaryOpen {
     display: flex;
@@ -216,6 +226,29 @@
     gap: 10px;
     flex-wrap: wrap;
   }
+  .pillGroup {
+    height: auto;
+  }
+  .navBtn {
+    width: 44px;
+    height: 44px;
+  }
+  .navBtnText {
+    width: auto;
+  }
+  .segBtn {
+    height: 44px;
+  }
+  .select,
+  .icsLink {
+    height: 44px;
+  }
+}
+
+@media (max-width: 479px) {
+  .title {
+    font-size: var(--fs-xl);
+  }
   /* El selector de vista cabe a 390 sin cortar «Recepción»: se achica el relleno, no el texto. */
   .segBtn {
     padding: 0 10px;
@@ -223,6 +256,19 @@
   .pillGroup {
     overflow-x: auto;
     scrollbar-width: none;
+  }
+}
+
+/* [MB-1a · C-MB4] Monitores de recepción (1366/1024 × 768 de pantalla: 625-695 px útiles, MB-D12). Cada píxel de
+   cabecera es grilla que no se ve: sin el rótulo «Agenda» (el sidebar ya marca la sección) y título un escalón más
+   chico. Ancho de escritorio igual que antes. */
+@media (min-width: 768px) and (max-height: 760px) {
+  .eyebrow {
+    display: none;
+  }
+  .title {
+    font-size: var(--fs-xl);
+    margin-top: 0;
   }
 }
 

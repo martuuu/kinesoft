@@ -42,6 +42,7 @@ describe("[BO3-A] PlatformShell", () => {
       "Mensajes",
       "Facturación",
       "Precios",
+      "Directorio",
       "Salud",
       "Auditoría",
       "Sistema",

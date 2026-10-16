@@ -34,30 +34,13 @@
   text-overflow: ellipsis;
 }
 
-/* P5: la tabla scrollea por dentro (1310 px) y la primera columna queda fija. Antes la celda fija pintaba
-   `--bg-panel` sobre filas blancas y un encabezado translúcido: se veía un bloque gris distinto en la primera celda.
-   Ahora la celda fija toma el MISMO fondo que su fila (el del encabezado arriba, el de la card en el cuerpo). */
-.scroller {
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
+/* P5: la tabla scrollea por dentro (1310 px) y la primera columna queda fija con el MISMO fondo que su fila (antes la
+   celda fija pintaba `--bg-panel` sobre filas blancas). MB-1f: la grilla, el scroll y la celda fija pasaron a
+   `components/plataforma/responsive-table.module.css` (compartido con usuarios, facturación y auditoría; bajo 768
+   cada fila es una card). Acá queda el fondo del encabezado. */
 .headRow {
   background: var(--bg-panel);
   border-bottom: 1px solid rgba(15, 30, 51, 0.07);
-}
-.headRow .sticky {
-  background: var(--bg-panel);
-}
-.row .sticky {
-  background: var(--card-bg);
-}
-.sticky {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  box-shadow: 1px 0 0 rgba(15, 30, 51, 0.06);
-  margin-left: -16px;
-  padding-left: 16px;
 }
 /* P5: «Turnos online» partía el encabezado en dos líneas. */
 .head {

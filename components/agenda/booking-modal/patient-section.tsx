@@ -44,35 +44,43 @@ export function PatientSection({
 }) {
   return (
     <div>
-      {/* Single row: "Paciente *" label on the left, toggle on the right */}
-      <label
+      {/* Single row: "Paciente *" label on the left, toggle on the right.
+          MB-1b: el switch es un <button role="switch"> con «Nuevo paciente» adentro (su nombre accesible). Antes era
+          un <span> de 36×20 sin nombre dentro de un <label> sin control: en el celular había que acertarle al
+          óvalo, el texto no respondía y el lector de pantalla anunciaba «interruptor» a secas. Enter y Espacio son
+          los del botón (antes solo Espacio). */}
+      <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           marginBottom: 8,
-          cursor: "pointer",
-          userSelect: "none",
         }}
       >
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>Paciente</span>
-        <span
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isGuest}
+          onClick={onToggleGuest}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 6,
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            font: "inherit",
             fontSize: 12,
             fontWeight: 600,
             color: isGuest ? "var(--sky-700)" : "var(--navy-400)",
+            cursor: "pointer",
+            userSelect: "none",
           }}
         >
           Nuevo paciente
           <span
-            onClick={onToggleGuest}
-            role="switch"
-            aria-checked={isGuest}
-            tabIndex={0}
-            onKeyDown={(e) => e.key === " " && onToggleGuest()}
+            aria-hidden
             style={{
               display: "inline-flex",
               width: 36,
@@ -80,7 +88,6 @@ export function PatientSection({
               borderRadius: 10,
               background: isGuest ? "var(--sky-700)" : "rgba(15,30,51,0.15)",
               position: "relative",
-              cursor: "pointer",
               transition: "background 0.15s",
               flexShrink: 0,
             }}
@@ -99,8 +106,8 @@ export function PatientSection({
               }}
             />
           </span>
-        </span>
-      </label>
+        </button>
+      </div>
       {isGuest && createdPatient ? (
         // La ficha ya se creó en un intento anterior: se reusa (ver
         // `createdPatient` en index.tsx). Los campos no se muestran para que

@@ -1,0 +1,9 @@
+/* MB-1e (C-MB3 «Muro de módulo / 404 de la app»): a 390 los dos links del muro y del 404 de la app son `.k-btn` sin
+   tamaño (≈ 36 px de alto, la densidad del workspace en escritorio). Bajo 768 llegan a 44 px; en escritorio no cambian.
+   El sidebar de escritorio a 390 ya no aparece: lo esconde el shell (`.desktopOnly` + barra inferior, MB-0c). */
+@media (max-width: 767px) {
+  .actions :global(.k-btn) {
+    min-height: 44px;
+    justify-content: center;
+  }
+}

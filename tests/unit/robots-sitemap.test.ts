@@ -52,8 +52,8 @@ describe("robots", () => {
 });
 
 describe("sitemap", () => {
-  it("lista solo la landing y /login, con URLs absolutas", () => {
-    const urls = sitemap().map((e) => e.url);
+  it("lista solo la landing y /login, con URLs absolutas", async () => {
+    const urls = (await sitemap()).map((e) => e.url);
     expect(urls).toEqual([`${BASE}/`, `${BASE}/login`]);
   });
 });

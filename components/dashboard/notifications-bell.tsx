@@ -11,6 +11,7 @@ import {
 } from "@/lib/notifications";
 import type { NotificationRow } from "@/lib/notifications-types";
 import { IconBell, IconCheck } from "@/components/ui/icons";
+import dash from "./dashboard.module.css";
 
 /**
  * Notification bell + dropdown.
@@ -124,7 +125,8 @@ export function NotificationsBell() {
         aria-label="Notificaciones"
         aria-haspopup="true"
         aria-expanded={open}
-        className="k-glass"
+        // MB-1d: `.tap` = 44 px de área táctil < 768.
+        className={`k-glass ${dash.tap}`}
         style={{
           width: 36,
           height: 36,

@@ -6,11 +6,11 @@
  * render test lo fija con un fixture.
  *
  * La tabla tiene scroll horizontal propio (`overflowX: auto` + `minWidth`), como la de consultorios, para que en
- * 360 px no scrollee la página entera.
+ * 360 px no scrollee la página entera. MB-1f (C-MB3): bajo 768 cada fila es una card con rótulos (`data-label`).
  */
 import { displayUserName } from "@/lib/display-name";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import type { PlatformUserPage, PlatformUserRow } from "@/lib/platform-health-logic";
@@ -25,10 +25,12 @@ import {
   usersCountLabel,
   type UsersQuery,
 } from "@/components/plataforma/users/users-logic";
+import table from "@/components/plataforma/responsive-table.module.css";
 
 // Mínimos 240+130+200+110+110 = 790 + 4 gaps de 12 + padding 32 = 870.
 const COLS = "minmax(240px,1.6fr) 130px minmax(200px,1.2fr) 110px 110px";
 const MIN_WIDTH = 870;
+const TABLE_VARS = { "--pt-cols": COLS, "--pt-min-w": `${MIN_WIDTH}px` } as CSSProperties;
 
 function Head({ children }: { children: ReactNode }) {
   return (
@@ -42,9 +44,8 @@ function Row({ r }: { r: PlatformUserRow }) {
   return (
     <div
       data-user-row={r.id}
+      className={table.row}
       style={{
-        display: "grid",
-        gridTemplateColumns: COLS,
         gap: 12,
         padding: "12px 16px",
         borderBottom: "1px solid rgba(15,30,51,0.05)",
@@ -60,10 +61,10 @@ function Row({ r }: { r: PlatformUserRow }) {
         {/* DIR-0: el email va siempre en su línea (es el dato «Email»), nunca en lugar del nombre. */}
         <div style={{ fontSize: 12, color: "var(--navy-300)", overflowWrap: "anywhere" }}>{r.email}</div>
       </div>
-      <div>{USER_KIND_LABEL[r.kind]}</div>
-      <div style={{ fontSize: 12.5 }}>{rowTenantsSummary(r)}</div>
-      <div>{r.isPlatformAdmin ? <Tag tone="lime">Superadmin</Tag> : <span style={{ color: "var(--navy-300)" }}>—</span>}</div>
-      <div>
+      <div data-label="Tipo">{USER_KIND_LABEL[r.kind]}</div>
+      <div data-label="Consultorios" style={{ fontSize: 12.5 }}>{rowTenantsSummary(r)}</div>
+      <div data-label="Plataforma">{r.isPlatformAdmin ? <Tag tone="lime">Superadmin</Tag> : <span style={{ color: "var(--navy-300)" }}>—</span>}</div>
+      <div data-label="Estado">
         {r.disabled ? (
           <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--danger-fg)" }}>Deshabilitado</span>
         ) : (
@@ -85,12 +86,12 @@ function Pagination({ page, query }: { page: PlatformUserPage; query: UsersQuery
       </span>
       <span style={{ display: "flex", gap: 16 }}>
         {page.page > 1 && (
-          <Link href={buildUsersHref(query, page.page - 1)} style={linkStyle}>
+          <Link href={buildUsersHref(query, page.page - 1)} className={table.chip} style={linkStyle}>
             ← Anterior
           </Link>
         )}
         {page.page < pages && (
-          <Link href={buildUsersHref(query, page.page + 1)} style={linkStyle}>
+          <Link href={buildUsersHref(query, page.page + 1)} className={table.chip} style={linkStyle}>
             Siguiente →
           </Link>
         )}
@@ -103,7 +104,7 @@ export function UserList({ page, query }: { page: PlatformUserPage; query: Users
   const filtered = !!query.q || query.kind !== "all";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Card style={{ padding: 16 }}>
+      <Card className={table.tapScope} style={{ padding: 16 }}>
         <UserSearch q={query.q} kind={query.kind} />
       </Card>
 
@@ -115,12 +116,11 @@ export function UserList({ page, query }: { page: PlatformUserPage; query: Users
       </div>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: MIN_WIDTH }}>
+        <div className={table.scroller} style={TABLE_VARS}>
+          <div className={table.inner}>
             <div
+              className={table.head}
               style={{
-                display: "grid",
-                gridTemplateColumns: COLS,
                 gap: 12,
                 padding: "10px 16px",
                 borderBottom: "1px solid rgba(15,30,51,0.07)",

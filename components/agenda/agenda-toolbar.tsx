@@ -59,6 +59,12 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  *   siempre. ≥ 480 no cambia nada.
  * - «.ics» era un `<a>` con un `<button>` adentro (interactivo anidado): ahora
  *   es el link con el look de botón (`buttonClassName`).
+ *
+ * MB-1a (C-MB3 / C-MB4):
+ * - < 768: «Nuevo turno» pasa al FAB; «.ics» y «Vista» detrás de «⋯» (antes < 480) para que la barra quede en
+ *   2 filas (navegación · vista + «⋯»); controles a 44 px (target táctil).
+ * - Monitores bajos (≥ 768 y ≤ 760 px de alto): sin el rótulo «Agenda» y título más chico, para que la grilla
+ *   muestre ≥ 6 h a 1366×625.
  */
 export function AgendaToolbar({
   anchor,
@@ -208,6 +214,13 @@ export function AgendaToolbar({
           <Button variant="primary" onClick={onCreate} className={styles.createBtn}>
             <IconPlus size={14} /> Nuevo turno
           </Button>
+
+          {/* MB-1a (C-MB3): < 768 «Nuevo turno» es el FAB (`.k-fab`, sobre la barra inferior) y el botón de arriba se
+              oculta; ≥ 768 al revés. Abre el mismo modal (`onCreate`). Va antes de las secundarias en el DOM: `fixed`
+              no depende de dónde esté, y así queda fuera del menú «⋯». */}
+          <button type="button" onClick={onCreate} aria-label="Nuevo turno" title="Nuevo turno" className={`k-fab ${styles.fab}`}>
+            <IconPlus size={24} />
+          </button>
 
           <div id="agenda-toolbar-more" className={moreOpen ? `${styles.secondary} ${styles.secondaryOpen}` : styles.secondary}>
             <ViewOptionsMenu

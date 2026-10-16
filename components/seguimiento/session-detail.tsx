@@ -658,20 +658,13 @@ function ExerciseRow({
   };
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "28px 1fr 60px 60px auto auto",
-        gap: 10,
-        alignItems: "center",
-        fontSize: 13,
-        opacity: sx.status === "SKIPPED" ? 0.55 : 1,
-      }}
-    >
-      <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)" }}>
+    // MB-1d (pf1-seguimiento-ejercicio-390): la grilla va por clase (`.exRow`): igual en escritorio y en 2 líneas
+    // < 640. Inline no se podía pisar desde la media query.
+    <div className={styles.exRow} style={{ opacity: sx.status === "SKIPPED" ? 0.55 : 1 }}>
+      <span className={`k-mono ${styles.exOrder}`} style={{ fontWeight: 700, color: "var(--sky-700)" }}>
         {String(order).padStart(2, "0")}
       </span>
-      <div>
+      <div className={styles.exName}>
         <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>{sx.exercise.name}</div>
         {sx.exercise.muscleGroups && (
           <div style={{ fontSize: 11, color: "var(--navy-300)" }}>{sx.exercise.muscleGroups}</div>
@@ -719,6 +712,7 @@ function ExerciseRow({
         )}
       </div>
       <NumberInline
+        className={styles.exSets}
         value={sets}
         label="series"
         onChange={(v) => {
@@ -728,6 +722,7 @@ function ExerciseRow({
         disabled={disabled}
       />
       <NumberInline
+        className={styles.exReps}
         value={reps}
         label="reps"
         onChange={(v) => {
@@ -736,7 +731,7 @@ function ExerciseRow({
         }}
         disabled={disabled}
       />
-      <div style={{ display: "flex", gap: 4 }}>
+      <div className={styles.exStatus}>
         <StatusButton
           on={sx.status === "DONE"}
           onClick={() => flipStatus(sx.status === "DONE" ? "PENDING" : "DONE")}
@@ -765,12 +760,15 @@ function ExerciseRow({
           type="button"
           onClick={onRemove}
           aria-label="Quitar ejercicio"
+          className={`${styles.exRemove} ${styles.exTap}`}
           style={{
             border: "none",
             background: "transparent",
             color: "var(--danger-fg)",
             cursor: "pointer",
             padding: 4,
+            display: "inline-flex",
+            alignItems: "center",
           }}
         >
           <IconX size={12} />
@@ -785,14 +783,16 @@ function NumberInline({
   onChange,
   disabled,
   label,
+  className,
 }: {
   value: number;
   onChange: (v: number) => void;
   disabled: boolean;
   label?: string;
+  className?: string;
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+    <label className={className} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
       <input
         type="number"
         value={value}
@@ -845,6 +845,9 @@ function StatusButton({
   const onBg = tone === "done" ? "var(--lime-300)" : "rgba(15,30,51,0.1)";
   return (
     <button
+      type="button"
+      // MB-1d: 44 px de área táctil < 768 (`.exTap`); en escritorio, la píldora de siempre.
+      className={styles.exTap}
       onClick={onClick}
       disabled={disabled}
       style={{

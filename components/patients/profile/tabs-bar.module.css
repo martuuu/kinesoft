@@ -1,0 +1,35 @@
+/*
+ * MB-1d (C-MB3 Perfil): la barra de pestañas scrollea en horizontal (a 390 entran 3 de 9) y el borde que corta
+ * contenido se desvanece con `mask-image`, así se ve que hay más sin flechas extra. El fade lo prende `TabsBar`
+ * (data-fade-start / data-fade-end) solo si hay overflow: en escritorio sin overflow la barra queda como antes. Es una
+ * máscara, no un elemento encima: no mueve layout ni tapa clicks.
+ */
+.tabs {
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+.tabs[data-fade-end] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.tabs[data-fade-start] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+}
+.tabs[data-fade-start][data-fade-end] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+.tab {
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .tab {
+    min-height: 44px;
+  }
+}

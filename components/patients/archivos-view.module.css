@@ -1,0 +1,31 @@
+/*
+ * MB-1d · Pestaña Archivos del perfil a 390. La grilla inline `280px 1fr` dejaba ~50 px para la tabla y la Card
+ * (`overflow: hidden`) cortaba las columnas fijas: «Descargar» y «Eliminar» quedaban fuera de alcance. < 768 el
+ * formulario de subida va arriba y la tabla debajo, y la tabla scrollea DENTRO de la card (mismo patrón que Turnos,
+ * Sesiones y Facturación; la página no scrollea en horizontal, AGENTS §5). Escritorio: igual que antes.
+ */
+.layout {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 280px 1fr;
+}
+.layoutReadOnly {
+  grid-template-columns: 1fr;
+}
+.tableScroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.table {
+  min-width: 560px;
+}
+
+@media (max-width: 767px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .action {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

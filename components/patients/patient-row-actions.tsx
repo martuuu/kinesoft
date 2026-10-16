@@ -10,6 +10,7 @@ import {
   type ArchivePatientResult,
 } from "@/components/patients/archive-patient-dialog";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
+import styles from "./patients-directory.module.css";
 
 /**
  * S32a (ES4): ¿«Archivar paciente» desde la fila pasa por la pregunta L9?
@@ -110,9 +111,9 @@ export function PatientRowActions({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Acciones"
+        // MB-1d: 28 px en la tabla, 44 en la card < 768: el tamaño va por clase (un `width` inline no se pisa).
+        className={styles.rowMenuBtn}
         style={{
-          width: 28,
-          height: 28,
           borderRadius: 8,
           border: "none",
           background: open ? "rgba(31,79,190,0.1)" : "transparent",

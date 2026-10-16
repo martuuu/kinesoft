@@ -1091,3 +1091,8 @@ select.k-input { appearance: none; padding-right: 40px;
     justify-content: center;
   }
 }
+
+/* [MB-1d] Lugar para el FAB («Nuevo paciente», «Nuevo turno»): sin esto tapa la última fila y su «⋯». */
+@media (max-width: 767px) {
+  .k-app main:has(.k-fab) { padding-bottom: calc(8px + var(--k-bottom-nav-h, 0px) + 72px) !important; }
+}

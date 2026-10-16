@@ -24,6 +24,7 @@ vi.mock("@/lib/practitioner-public", () => proxy());
 vi.mock("@/lib/practitioner-schedule", () => proxy());
 vi.mock("@/lib/practitioner-services", () => proxy());
 vi.mock("@/lib/practitioner-payers", () => proxy());
+vi.mock("@/lib/directory-settings", () => proxy());
 
 import type { ReactElement } from "react";
 import type { TenantVertical } from "@prisma/client";

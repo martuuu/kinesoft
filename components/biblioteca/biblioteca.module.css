@@ -156,7 +156,8 @@
 
 .actionBar {
   position: fixed;
-  bottom: 24px;
+  /* MB-1f: sobre la barra inferior del celular (`--k-bottom-nav-h` vale 0 en escritorio: queda en 24 como antes). */
+  bottom: calc(var(--k-bottom-nav-h, 0px) + 24px);
   left: 50%;
   transform: translateX(-50%);
   /* PF1-Z-F2: era 60 fijo y quedaba ENCIMA del Drawer (46) que abre la misma pantalla (barra pisando el formulario).
@@ -171,4 +172,23 @@
   gap: 14px;
   box-shadow: 0 16px 40px -10px rgba(15, 30, 51, 0.4);
   max-width: calc(100vw - 32px);
+}
+
+/* [MB-1f] Pasada de targets de 44 px bajo 768 (AGENTS §5), por alcance: `.tapScope` en la raíz de Biblioteca y
+   dentro del Drawer/Modal (van por portal). `min-height` gana sobre un alto inline más chico y no afecta links
+   inline de un texto. En escritorio la densidad no cambia. */
+.contents {
+  display: contents;
+}
+@media (max-width: 767px) {
+  /* < 16 px Safari iOS hace zoom al enfocar el campo. */
+  .select {
+    font-size: 16px;
+  }
+  .tapScope :is(button, select, a[href], input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"])) {
+    min-height: 44px;
+  }
+  .tapScope button {
+    min-width: 44px;
+  }
 }

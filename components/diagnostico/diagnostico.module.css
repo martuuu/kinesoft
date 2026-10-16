@@ -1,0 +1,16 @@
+/* [MB-1f · C-MB2] Grilla de escritorio de /diagnostico: alto de pantalla en `dvh` (en Safari y en la PWA standalone
+   `100vh` cuenta la barra de direcciones / no coincide con el alto real) con `vh` de respaldo. Inline no se pueden
+   declarar los dos valores. */
+.grid {
+  min-height: calc(100vh - 90px);
+  min-height: calc(100dvh - 90px);
+}
+
+/* [MB-1f] «Cambiar paciente» del banner (lo usa también el asistente mobile): 44 px de alto bajo 768. */
+@media (max-width: 767px) {
+  .tapLink {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

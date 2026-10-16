@@ -14,6 +14,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { formatARS } from "@/lib/format";
 import type { PackageCountPricing } from "./plan-editor-types";
 import styles from "./plan-dialogs.module.css";
+import tap from "@/components/planes/planes-mobile.module.css";
 
 export const PLAN_DIALOG_COPY = {
   dirty: "Tenés cambios sin guardar. Si cerrás, se pierden.",
@@ -76,7 +77,8 @@ export function PlanDialogShell({
   if (!open) return null;
   return (
     <Modal open={open} onClose={() => void requestClose()} title={title} description={description} width={width} lockBackdrop={dirty}>
-      {children}
+      {/* MB-1f: targets de 44 px bajo 768 (el Modal va por portal, fuera del alcance de la pantalla). */}
+      <div className={`${tap.tapScope} ${tap.contents}`}>{children}</div>
     </Modal>
   );
 }

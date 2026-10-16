@@ -54,6 +54,7 @@ export default async function ConfiguracionPage({
     billingOverview,
     catalog,
     snapshot,
+    directory,
   } = await loadConfiguracionPage(actor, caps);
   // BO3-F: el soporte entra con `getMembershipRole` = ASSISTANT (su nivel de lectura clínica), que en la UI le
   // apagaba horarios, turnero y la pestaña Usuarios aunque el server se los deja (allowlist `withSupportWritable`,
@@ -111,6 +112,7 @@ export default async function ConfiguracionPage({
       locations={locations}
       rooms={rooms}
       scheduleSummary={scheduleSummary}
+      directory={directory}
     />
   );
 }
