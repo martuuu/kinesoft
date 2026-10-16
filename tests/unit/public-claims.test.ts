@@ -52,11 +52,7 @@ const FORBIDDEN: { id: string; re: RegExp }[] = [
  * evidencia; el dueño puede pasarlas a `// claim-ok:` en el archivo y borrarlas de acá.
  */
 const LEGIT: { file: string; id: string; why: string }[] = [
-  {
-    file: "components/booking/booking-unavailable.tsx",
-    id: "whatsapp",
-    why: "es el WhatsApp DEL CONSULTORIO como canal de contacto (Tenant.whatsapp, prisma/schema.prisma:58), no una función de la app",
-  },
+  // VX2-d2: el WhatsApp DEL CONSULTORIO de `booking-unavailable.tsx` pasó a `// claim-ok: prisma/schema.prisma:58`.
 ];
 
 /**
@@ -64,8 +60,7 @@ const LEGIT: { file: string; id: string; why: string }[] = [
  * sacarlos de la lista y nadie suma uno nuevo).
  */
 const PENDING: { file: string; id: string; owner: string }[] = [
-  // «100% seguro» + «Tu información clínica está cifrada» en el paso de pago del turnero: sin evidencia.
-  { file: "components/booking/public-booking-wizard.tsx", id: "porcentaje", owner: "VX2-d1" },
+  // VX2-d1 sacó «100% seguro» + «Tu información clínica está cifrada» del turnero (handoff 12): no queda ninguno.
 ];
 
 const EXTS = [".ts", ".tsx"];

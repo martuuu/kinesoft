@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { IconChevR } from "@/components/ui/icons";
 import { EmptyBox, StepHeader, formatWhenAR } from "./shared";
+import st from "../public-booking.module.css";
 
 type State =
   | { kind: "loading" }
@@ -96,7 +97,7 @@ export function FirstSlotStep({
       {state.kind === "rate" && (
         <EmptyBox>
           Demasiadas consultas seguidas. Esperá unos segundos y reintentá.
-          <div style={{ marginTop: 12 }}>
+          <div className={st.emptyActions}>
             <Button variant="ghost" onClick={() => setRetry((n) => n + 1)}>
               Reintentar
             </Button>
@@ -110,7 +111,7 @@ export function FirstSlotStep({
             ? "No encontramos más turnos libres en los próximos días."
             : "No encontramos turnos libres en los próximos días para este servicio."}{" "}
           Probá eligiendo un profesional.
-          <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          <div className={st.emptyActions}>
             <Button variant="primary" onClick={onPickPractitioner}>
               Elegir profesional
             </Button>
@@ -157,38 +158,22 @@ function FoundCard({
   const addr = loc ? formatLocationAddress(loc) : "";
   return (
     <>
-      <div
-        style={{
-          padding: 16,
-          borderRadius: 14,
-          border: "1px solid var(--sky-700)",
-          background: "rgba(31,79,190,0.06)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--sky-700)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-          Encontramos este turno
-        </div>
-        <div className="k-display" style={{ fontSize: 18, fontWeight: 700, textTransform: "capitalize" }}>
-          {formatWhenAR(selection.slotISO)}
-        </div>
-        <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+      <div className={st.found}>
+        <p className={st.eyebrow}>Encontramos este turno</p>
+        <div className={`k-display ${st.foundWhen}`}>{formatWhenAR(selection.slotISO)}</div>
+        <div className={st.foundWho}>
           con {pro?.name ?? "un profesional del centro"}
-          <span style={{ fontWeight: 400, color: "var(--navy-500)" }}> · {durationMin} min</span>
+          <span className={st.muted}> · {durationMin} min</span>
         </div>
         {loc && (
-          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+          <div className={st.choiceSub}>
             {loc.name}
             {addr ? ` · ${addr}` : ""}
           </div>
         )}
-        <div style={{ fontSize: 11.5, color: "var(--navy-500)", marginTop: 4 }}>
-          Si te sirve, tocá Continuar para completar tus datos.
-        </div>
+        <p className={st.help}>Si te sirve, tocá Continuar para completar tus datos.</p>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div className={st.chips}>
         <Button variant="ghost" onClick={onLater}>
           Buscar otro día <IconChevR size={12} />
         </Button>

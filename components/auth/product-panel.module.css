@@ -67,7 +67,7 @@
 }
 
 /* ── Mock de agenda ─────────────────────────────────────────── */
-/* Alto de fila: 50 px (42 en pantallas bajas). Sin custom properties locales: el guard de tokens
+/* Alto de fila: 50 px (46 en pantallas bajas). Sin custom properties locales: el guard de tokens
    (design-tokens.test.ts) exige que toda custom property usada exista en globals.css, así que la grilla va con valores literales
    y los turnos se posicionan en % de la columna. */
 .agenda {
@@ -172,9 +172,12 @@
   right: 4px;
   display: grid;
   align-content: start;
-  gap: 4px;
+  /* VX-Z: padding vertical 4 y gap 2 (eran 6 y 4). Un turno de 1 h con dos líneas (servicio + estado) pide
+     4 + 13,75 + 2 + 12,5 + 4 ≈ 36 px; con 6/4 pedía 42 y en la fila de 42 px de pantallas bajas el texto quedaba
+     recortado («Sesión de kinesiología», «Terapia manual» en la captura de VX2.1 a 1366×768). */
+  gap: 2px;
   overflow: hidden;
-  padding: 6px 8px 6px 10px;
+  padding: 4px 8px 4px 10px;
   border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
@@ -309,7 +312,8 @@
     gap: 28px;
     padding-block: 20px;
   }
+  /* VX-Z: 46 px por fila (eran 42): el turno de 1 h mide 42 px y entra con sus dos líneas. */
   .agGrid {
-    grid-template-rows: auto 210px;
+    grid-template-rows: auto 230px;
   }
 }

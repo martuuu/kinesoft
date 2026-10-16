@@ -59,9 +59,5 @@ export type AddFromCatalogResult =
   /** Ya hay un Insurer con ese nombre (`@@unique([tenantId,name])`): la UI ofrece vincularlo. */
   | { status: "exists"; insurerId: string; linkedPayerId: string | null };
 
-export const PAYER_KIND_LABEL: Record<PayerKind, string> = {
-  OBRA_SOCIAL: "Obra social",
-  PREPAGA: "Prepaga",
-  MUTUAL: "Mutual",
-  OTRA: "Otra",
-};
+// VX-Z: vive en `lib/catalog-constants.ts` (sin zod, para bundles de cliente); se re-exporta acá.
+export { PAYER_KIND_LABEL } from "@/lib/catalog-constants";

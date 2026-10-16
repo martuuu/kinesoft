@@ -14,7 +14,13 @@ import {
   isCustomSchedule,
   isValidSlug,
   maxReachableStep,
+  nextStep,
+  onboardingStepsFor,
+  prevStep,
+  stepPosition,
   ONBOARDING_STEPS,
+  FIRST_STEP,
+  LAST_STEP,
   STEP,
   pickFreeSlug,
   resolveStep,
@@ -264,6 +270,44 @@ describe("deriveResumeStep / resolveStep", () => {
 
   it("con servicios se puede volver a cualquier paso", () => {
     for (const n of [2, 3, 4, 5, 6, 7, 8, 9]) expect(resolveStep(String(n), prog({ servicesCount: 1 }))).toBe(n);
+  });
+});
+
+describe("[VX2-e] Titular que no atiende (ownerClinical=false)", () => {
+  // PL-1a/PL-1c: `saveOnboardingClinic({ ownerClinical: false })` crea al Titular SIN Practitioner ni agenda. El
+  // stepper tiene que saltear «Tu horario» (no hay semana propia que guardar) y llegar a Listo.
+  it("[VX2-e] un Titular que no atiende no puede terminar el alta", () => {
+    const p = prog({ ownerClinical: false, locationReady: true, servicesCount: 1 });
+    const visited: number[] = [];
+    let s: number = FIRST_STEP;
+    for (let i = 0; i < 12 && s !== LAST_STEP; i++) {
+      visited.push(s);
+      s = nextStep(s, p);
+    }
+    expect(s).toBe(STEP.done);
+    expect(visited).not.toContain(STEP.myHours);
+    // Un link viejo (o el riel) a «Tu horario» lo lleva a Servicios, no a un editor sin profesional.
+    expect(resolveStep(String(STEP.myHours), p)).toBe(STEP.services);
+    // El riel y «Paso N de M» no cuentan un paso que para él no existe.
+    expect(onboardingStepsFor(p).map((x) => x.key)).not.toContain("myHours");
+  });
+
+  it("[VX2-e] «Volver» y «Paso N de M» saltean «Tu horario»; quien atiende (o sin dato) sigue igual que antes", () => {
+    const no = prog({ ownerClinical: false });
+    expect(nextStep(STEP.hours, no)).toBe(STEP.services);
+    expect(prevStep(STEP.services, no)).toBe(STEP.hours);
+    expect(stepPosition(STEP.services, no)).toEqual({ index: 5, total: 8 });
+    expect(stepPosition(STEP.done, no)).toEqual({ index: 8, total: 8 });
+    for (const yes of [prog({}), prog({ ownerClinical: true })]) {
+      expect(nextStep(STEP.hours, yes)).toBe(STEP.myHours);
+      expect(prevStep(STEP.services, yes)).toBe(STEP.myHours);
+      expect(stepPosition(STEP.services, yes)).toEqual({ index: 6, total: 9 });
+      expect(resolveStep(String(STEP.myHours), yes)).toBe(STEP.myHours);
+      expect(onboardingStepsFor(yes)).toBe(ONBOARDING_STEPS);
+    }
+    // Bordes: nunca antes de Consultorio ni después de Listo.
+    expect(prevStep(STEP.clinic, no)).toBe(STEP.clinic);
+    expect(nextStep(STEP.done, no)).toBe(STEP.done);
   });
 });
 

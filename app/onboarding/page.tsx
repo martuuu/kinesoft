@@ -74,11 +74,16 @@ export default async function OnboardingPage({
     );
   }
 
-  const step = resolveStep(searchParams.step, ctx.progress);
+  // VX2-e: ¿el Titular atiende? Con tenant, el Practitioner propio es la evidencia (`bootstrapTenant` lo crea solo si
+  // `ownerClinical`; sin él `loadOnboardingContext` deja `schedule` en null). Sin tenant todavía no eligió: rige el
+  // default (atiende) hasta que el paso Consultorio lo pregunte.
+  const ownerClinical = !ctx.tenant || ctx.schedule != null;
+  const progress = { ...ctx.progress, ownerClinical };
+  const step = resolveStep(searchParams.step, progress);
 
   return (
     // Hasta dónde se puede saltar desde el riel: lo ya recorrido según el estado.
-    <OnboardingShell current={step} maxReachable={maxReachableStep(ctx.progress)}>
+    <OnboardingShell current={step} maxReachable={maxReachableStep(progress)} ownerClinical={ownerClinical}>
       {step === STEP.clinic || !ctx.tenant ? (
         <StepClinic tenant={ctx.tenant} patientIdentity={ctx.patientIdentity} />
       ) : step === STEP.location ? (
@@ -90,7 +95,7 @@ export default async function OnboardingPage({
         // refresh remonta el editor con lo guardado en vez de mostrar el borrador viejo.
         <StepMyHours key={ctx.schedule.view.version ?? "plantilla"} schedule={ctx.schedule} locations={ctx.locations} />
       ) : step === STEP.services || step === STEP.myHours ? (
-        // (Tu horario sin practitioner propio no debería pasar: el bootstrap lo crea.)
+        // (Tu horario sin practitioner propio no llega acá: `resolveStep` lo manda a Servicios.)
         <StepServices services={ctx.services} vertical={ctx.tenant?.vertical} />
       ) : step === STEP.insurers ? (
         <StepInsurers insurers={ctx.insurers} vertical={ctx.tenant?.vertical} />

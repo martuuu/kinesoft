@@ -557,6 +557,14 @@ describe.skipIf(!RUN)("reserva pública · motor de disponibilidad (B3.2 AV-publ
     expect(c.practitioners[0].locationIds).toEqual([locA]);
     expect(c.practitioners[0].acceptedInsurerIds!.sort()).toEqual([T.particularInsurerId, osdeId].sort());
     expect(c.insurers!.map((i) => i.name)).toEqual(["Particular", "OSDE"]);
+    // [VX-Z] openingSummary (VX2-d1): solo cuentan los profesionales que el turnero ofrece. P1 no tiene franjas →
+    // red de seguridad (horario del consultorio, lun a sáb); la franja de P2 (lun 14-17 en Norte) no suma porque
+    // P2 no ofrece nada online. Antes el nav decía «lun-sáb 8 a 19hs» fijo.
+    const t = await db.tenant.findUniqueOrThrow({
+      where: { id: T.tenantId },
+      select: { businessHoursStart: true, businessHoursEnd: true },
+    });
+    expect(c.openingSummary).toBe(`Lun a sáb ${t.businessHoursStart} a ${t.businessHoursEnd}`);
   });
 
   it("servicio PRIVATE: sin horarios y el submit armado a mano se rechaza", async () => {

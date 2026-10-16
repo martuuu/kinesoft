@@ -1,7 +1,89 @@
+import Link from "next/link";
+import type { ReactNode } from "react";
 import { KineLogo } from "@/components/ui/kine-logo";
-import { Card } from "@/components/ui/card";
 import { IconClock } from "@/components/ui/icons";
+import { BRAND_NAME } from "@/lib/brand";
+import { cn } from "@/lib/cn";
 import type { PublicClinicContact } from "@/lib/public-booking-internal";
+import s from "./booking-result.module.css";
+
+/** Hasta dos iniciales del nombre del consultorio (letras/números), para el monograma de la marca. */
+export function clinicInitials(name: string): string {
+  const words = name
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean);
+  return words
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+}
+
+/**
+ * [VX2-d2] Marco «centered» del turnero (resultado del pago, turnos apagados, error del segmento). Server-safe (sin
+ * hooks ni "use client"): lo montan este server component, `BookingResult` (cliente) y `app/(booking)/error.tsx`.
+ *
+ * Arriba va la marca DEL CONSULTORIO (monograma + nombre): el paciente llegó por el link del consultorio y no sabe qué
+ * es KineSoft; KineSoft queda chico en el pie. Sin `clinicName` (el error del segmento no lo conoce) va el logo de la
+ * app. Una sola h1 por página: la pone el contenido de la card; el nombre del consultorio es un `<p>`.
+ */
+export function BookingFrame({
+  clinicName,
+  topRight,
+  narrow = false,
+  children,
+}: {
+  clinicName?: string | null;
+  topRight?: ReactNode;
+  /** Card de 460 (estados cortos) en vez de 520 (resultado con detalle). */
+  narrow?: boolean;
+  children: ReactNode;
+}) {
+  const initials = clinicName ? clinicInitials(clinicName) : "";
+  return (
+    <div className={s.page} data-surface="turnero">
+      <header className={s.top}>
+        {clinicName ? (
+          <div className={s.brand}>
+            {initials && (
+              <span className={s.mono} aria-hidden="true">
+                {initials}
+              </span>
+            )}
+            <p className={s.clinic}>{clinicName}</p>
+          </div>
+        ) : (
+          <KineLogo size={32} />
+        )}
+        {topRight}
+      </header>
+      <main id="main" className={s.main}>
+        <div className={cn(s.card, "k-enter", narrow && s.cardNarrow)}>{children}</div>
+      </main>
+      <footer className={s.foot}>
+        {clinicName ? (
+          <>
+            <span>Turnos online con</span>
+            <Link href="/" className="k-link" aria-label={`${BRAND_NAME}, inicio`}>
+              <KineLogo size={18} />
+            </Link>
+          </>
+        ) : (
+          <span>© 2026 {BRAND_NAME}</span>
+        )}
+      </footer>
+    </div>
+  );
+}
+
+/** Link «Reservar otro turno» de arriba a la derecha (resultado y error). */
+export function BookAgainLink({ slug }: { slug: string }) {
+  return (
+    <Link href={`/c/${slug}/booking`} className={cn("k-link", s.topLink)}>
+      Reservar otro turno
+    </Link>
+  );
+}
 
 /**
  * `/c/[slug]/booking` con los turnos online apagados (EV0, `publicBookingEnabled`
@@ -12,9 +94,10 @@ import type { PublicClinicContact } from "@/lib/public-booking-internal";
  */
 export function BookingUnavailable({ contact }: { contact: PublicClinicContact }) {
   const channels: { label: string; value: string; href: string }[] = [];
-  if (contact.whatsapp) {
-    const digits = contact.whatsapp.replace(/\D/g, "");
-    if (digits) channels.push({ label: "WhatsApp", value: contact.whatsapp, href: `https://wa.me/${digits}` });
+  // Es el WhatsApp DEL CONSULTORIO (canal de contacto que cargó el consultorio), no una función de la app (§3.4).
+  if (contact.whatsapp) { // claim-ok: prisma/schema.prisma:58
+    const digits = contact.whatsapp.replace(/\D/g, ""); // claim-ok: prisma/schema.prisma:58
+    if (digits) channels.push({ label: "WhatsApp", value: contact.whatsapp, href: `https://wa.me/${digits}` }); // claim-ok: prisma/schema.prisma:58
   }
   if (contact.phone) {
     channels.push({ label: "Teléfono", value: contact.phone, href: `tel:${contact.phone.replace(/[^\d+]/g, "")}` });
@@ -24,121 +107,33 @@ export function BookingUnavailable({ contact }: { contact: PublicClinicContact }
   }
 
   return (
-    <div
-      className="k-app"
-      style={{
-        minHeight: "100vh",
-        background: "var(--bg-app)",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <header
-        className="k-glass"
-        style={{
-          margin: "18px 16px 0",
-          padding: "12px 20px",
-          borderRadius: 999,
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          minWidth: 0,
-        }}
-      >
-        <KineLogo size={24} />
-        <span
-          style={{
-            fontSize: 12,
-            color: "var(--navy-300)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          · {contact.name}
-        </span>
-      </header>
+    <BookingFrame clinicName={contact.name} narrow>
+      <div className={cn(s.icon, s.iconPending)} aria-hidden="true">
+        <IconClock size={28} />
+      </div>
+      <h1 className={cn("k-display", s.title)}>Turnos online no disponibles</h1>
+      <p className={s.lead}>
+        {channels.length > 0
+          ? `${contact.name} no está tomando turnos online. Escribiles o llamalos para pedir tu turno.`
+          : `${contact.name} no está tomando turnos online. Comunicate directamente con el consultorio para pedir tu turno.`}
+      </p>
 
-      <main style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-        <Card glass style={{ padding: 32, borderRadius: 24, maxWidth: 480, width: "100%", textAlign: "center" }}>
-          <div
-            aria-hidden
-            style={{
-              width: 56,
-              height: 56,
-              margin: "0 auto",
-              borderRadius: 18,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "var(--sky-100)",
-              color: "var(--sky-700)",
-            }}
-          >
-            <IconClock size={26} />
-          </div>
-          <h1 className="k-display" style={{ fontSize: 24, margin: "16px 0 8px", letterSpacing: "-0.02em" }}>
-            Turnos online no disponibles
-          </h1>
-          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-            {channels.length > 0
-              ? `${contact.name} no está tomando turnos online. Escribiles o llamalos para pedir tu turno.`
-              : `${contact.name} no está tomando turnos online. Comunicate directamente con el consultorio para pedir tu turno.`}
-          </p>
-
-          {channels.length > 0 && (
-            <ul
-              style={{
-                listStyle: "none",
-                margin: "22px 0 0",
-                padding: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                textAlign: "left",
-              }}
-            >
-              {channels.map((c) => (
-                <li key={c.label}>
-                  <a
-                    href={c.href}
-                    {...(c.href.startsWith("https://") ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 12,
-                      padding: "12px 16px",
-                      borderRadius: "var(--r-md)",
-                      background: "rgba(255,255,255,0.5)",
-                      border: "1px solid rgba(15,30,51,0.06)",
-                      textDecoration: "none",
-                      color: "var(--navy-900)",
-                    }}
-                  >
-                    <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{c.label}</span>
-                    <span
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: "var(--sky-700)",
-                        // Un email largo con nowrap+ellipsis quedaba cortado en
-                        // mobile y el paciente no podía leerlo: se parte donde
-                        // haga falta (revisión EV0).
-                        overflowWrap: "anywhere",
-                        textAlign: "right",
-                        minWidth: 0,
-                      }}
-                    >
-                      {c.value}
-                    </span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </main>
-    </div>
+      {channels.length > 0 && (
+        <ul className={s.channels}>
+          {channels.map((c) => (
+            <li key={c.label}>
+              <a
+                href={c.href}
+                className={s.channel}
+                {...(c.href.startsWith("https://") ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+              >
+                <span className={s.channelLabel}>{c.label}</span>
+                <span className={s.channelValue}>{c.value}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </BookingFrame>
   );
 }

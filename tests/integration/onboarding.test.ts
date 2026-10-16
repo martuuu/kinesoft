@@ -739,6 +739,45 @@ describe.skipIf(!RUN)("onboarding · alta del consultorio", () => {
       expect(await db.practitioner.count({ where: { tenantId: no.data.tenantId, userId: m2.userId } })).toBe(0);
     });
 
+    // VX-Z (decisión 24 del orquestador, default para Martin): un Titular que NO atiende (`ownerClinical=false`) en
+    // un plan Individual (1 lugar) ocupa ese lugar sin agenda y no puede invitar a nadie que atienda: un consultorio
+    // sin salida. Esa alta nace en prueba CONSULTORIO, con los días de la fila CONSULTORIO del catálogo (o el default).
+    it("[VX-Z] alta web con ownerClinical=false nace en prueba CONSULTORIO (días de su fila del catálogo)", async () => {
+      const before = await db.saasPlanConfig.findUnique({ where: { plan: "CONSULTORIO" } });
+      try {
+        if (before) await db.saasPlanConfig.update({ where: { plan: "CONSULTORIO" }, data: { trialDays: 9 } });
+        const uid = newIdentity();
+        const now = new Date();
+        const r = await saveOnboardingClinic({ name: "Titular Gestor", ownerClinical: false });
+        if (!r.ok) throw new Error(r.error);
+        createdTenants.push(r.data.tenantId);
+        const t = await db.tenant.findUniqueOrThrow({ where: { id: r.data.tenantId } });
+        const expected = initialSubscriptionFor("CONSULTORIO", before ? 9 : undefined, now);
+        expect(t.saasPlan).toBe("CONSULTORIO");
+        expect(t.plan).toBe("STARTER");
+        expect(t.subscriptionStatus).toBe("TRIALING");
+        expect(t.trialEndsAt?.toISOString()).toBe(expected.trialEndsAt?.toISOString());
+        const ev = await db.auditEvent.findMany({ where: { tenantId: t.id, action: "tenant.entitlements" } });
+        expect(ev).toHaveLength(1);
+        expect(ev[0]).toMatchObject({ actorId: uid });
+        expect((ev[0].payload as { changed: string[] }).changed).toContain("saasPlan");
+
+        // El que atiende sigue naciendo INDIVIDUAL (no cambia el contrato de PL-1a).
+        newIdentity();
+        const yes = await saveOnboardingClinic({ name: "Titular Que Atiende" });
+        if (!yes.ok) throw new Error(yes.error);
+        createdTenants.push(yes.data.tenantId);
+        expect((await db.tenant.findUniqueOrThrow({ where: { id: yes.data.tenantId } })).saasPlan).toBe("INDIVIDUAL");
+      } finally {
+        if (before) {
+          await db.saasPlanConfig.update({
+            where: { plan: "CONSULTORIO" },
+            data: { trialDays: before.trialDays, updatedById: before.updatedById },
+          });
+        }
+      }
+    });
+
     it("[BO-Z] SIGNUP_MODE=assisted: no crea un consultorio nuevo (copy de «escribinos»)", async () => {
       process.env.SIGNUP_MODE = "assisted";
       const uid = newIdentity();

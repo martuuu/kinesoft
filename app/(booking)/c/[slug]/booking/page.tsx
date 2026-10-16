@@ -4,6 +4,7 @@ import { getPublicClinic } from "@/lib/public-booking";
 import { getPublicBookingGate, loadPublicBookingPage } from "@/lib/public-booking-internal";
 import { PublicBookingWizard } from "@/components/booking/public-booking-wizard";
 import { BookingUnavailable } from "@/components/booking/booking-unavailable";
+import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
 
 export const dynamic = "force-dynamic";
 
@@ -30,5 +31,15 @@ export default async function PublicBookingPage({ params }: { params: { slug: st
   if (data.state === "moved") permanentRedirect(`/c/${encodeURIComponent(data.slug)}/booking`);
   if (data.state === "closed") return <BookingUnavailable contact={data.contact} />;
 
-  return <PublicBookingWizard clinic={data.clinic} session={data.session} prefill={data.prefill} />;
+  // VX-Z (D-VX16): mismo criterio que el login. Solo hace falta sin sesión (con sesión no hay botón de Google), y
+  // tiene tope propio de 600 ms: si Supabase tarda, se muestra.
+  const googleEnabled = data.session ? true : (await visibleOAuthProviders()).includes("google");
+  return (
+    <PublicBookingWizard
+      clinic={data.clinic}
+      session={data.session}
+      prefill={data.prefill}
+      googleEnabled={googleEnabled}
+    />
+  );
 }

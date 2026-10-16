@@ -24,6 +24,9 @@ export type PublicClinic = {
    *  no dice «Kinesiología» ni «sesión»). Opcional para los fixtures viejos:
    *  sin ella, el copy de Kinesiología de siempre. */
   vertical?: TenantVertical;
+  /** VX2-d1: horario resumido de las franjas reales («Lun a vie 8 a 19 · Sáb 9 a 13», `summarizeOpeningHours`).
+   *  null/ausente = sin franjas vigentes: el turnero no muestra horario (antes decía «lun-sáb 8 a 19hs» fijo). */
+  openingSummary?: string | null;
   practitioners: {
     id: string;
     name: string;

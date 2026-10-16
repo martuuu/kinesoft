@@ -12,6 +12,7 @@ import { FormField } from "@/components/ui/form-field";
 import { IconCheck } from "@/components/ui/icons";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { SupportContact } from "@/components/ui/support-contact";
 import { saveOnboardingClinic, completeOnboarding } from "@/lib/onboarding";
 import { setBusinessHours } from "@/lib/tenant-settings";
 import { BUSINESS_HOUR_MAX, BUSINESS_HOUR_MIN, AGENDA_SLOT_OPTIONS } from "@/lib/tenant-settings-constants";
@@ -21,7 +22,8 @@ import { formatHHMM, summarizeWeek } from "@/lib/schedule-validate";
 import type { OnboardingLocation, OnboardingSchedule, OnboardingTenant } from "@/lib/onboarding-internal";
 import type { OnboardingClinicInputType } from "@/lib/validation";
 import { StepHeader } from "./onboarding-shell";
-import { InlineError, StepFooter, useStepNav } from "./step-nav";
+import { InlineError, StepFooter, useOnboardingFlow, useStepNav } from "./step-nav";
+import css from "./onboarding.module.css";
 
 // ── Consultorio ────────────────────────────────────────────────────────────
 
@@ -45,6 +47,37 @@ const VERTICAL_OPTIONS: ReadonlyArray<{ value: OnboardingVertical; label: string
   },
 ];
 
+/**
+ * VX2-e: «¿Atendés pacientes?» (PL-1a, C-PL5). El server ya lo aceptaba (`saveOnboardingClinic({ ownerClinical })`)
+ * pero la UI no lo preguntaba: todo Titular nacía profesional. Solo pesa al CREAR (re-entrar al paso no lo cambia: eso
+ * es Configuración, `setMemberClinical`), así que se pregunta solo sin tenant. Copy: brief VX §3.3.
+ */
+const CLINICAL_OPTIONS: ReadonlyArray<{ value: boolean; label: string }> = [
+  { value: true, label: "Sí, atiendo" },
+  { value: false, label: "No, organizo el consultorio" },
+];
+export const OWNER_CLINICAL_HELP =
+  "Si no atendés, no vas a tener agenda propia ni ver historias clínicas. Lo podés cambiar después desde Configuración.";
+
+/**
+ * Lo que el paso Consultorio le manda a `saveOnboardingClinic`. Exportado para el render test (el submit no se puede
+ * disparar sin DOM). `ownerClinical` va solo al CREAR: re-entrando el server lo ignora, y mandarlo daría a entender
+ * que el paso lo cambia.
+ */
+export function clinicInputFrom(
+  fd: FormData,
+  o: { vertical: OnboardingVertical; ownerClinical: boolean; creating: boolean }
+): Parameters<typeof saveOnboardingClinic>[0] {
+  return {
+    name: String(fd.get("name") ?? ""),
+    phone: String(fd.get("phone") ?? ""),
+    whatsapp: String(fd.get("whatsapp") ?? ""),
+    publicEmail: String(fd.get("publicEmail") ?? ""),
+    vertical: o.vertical,
+    ...(o.creating ? { ownerClinical: o.ownerClinical } : {}),
+  };
+}
+
 export function StepClinic({
   tenant,
   patientIdentity,
@@ -52,23 +85,19 @@ export function StepClinic({
   tenant: OnboardingTenant | null;
   patientIdentity: boolean;
 }) {
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label } = useStepNav();
+  const flow = useOnboardingFlow();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
   const [vertical, setVertical] = useState<OnboardingVertical>(tenant?.vertical ?? "KINESIOLOGY");
+  const [ownerClinical, setOwnerClinical] = useState(true);
 
   const onSubmit = (fd: FormData) => {
     setError(null);
     setFieldErrors({});
     start(async () => {
-      const r = await saveOnboardingClinic({
-        name: String(fd.get("name") ?? ""),
-        phone: String(fd.get("phone") ?? ""),
-        whatsapp: String(fd.get("whatsapp") ?? ""),
-        publicEmail: String(fd.get("publicEmail") ?? ""),
-        vertical,
-      });
+      const r = await saveOnboardingClinic(clinicInputFrom(fd, { vertical, ownerClinical, creating: !tenant }));
       if (!r.ok) {
         setError(r.error);
         setFieldErrors(r.fieldErrors ?? {});
@@ -82,7 +111,7 @@ export function StepClinic({
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.clinic} · Consultorio`}
+        eyebrow={`Paso ${label(STEP.clinic)} · Consultorio`}
         title={tenant ? "Datos del consultorio" : "Contanos de tu consultorio"}
         blurb="El nombre y los datos de contacto que van a ver tus pacientes, y qué tipo de consultorio es. El teléfono, el WhatsApp y el email público son opcionales."
       />
@@ -99,7 +128,7 @@ export function StepClinic({
             required
             autoFocus={!tenant}
             defaultValue={tenant?.name ?? ""}
-            placeholder="Centro Kinésico Movare"
+            placeholder="Nombre de tu consultorio"
             error={fieldErrors.name?.[0]}
           />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
@@ -125,51 +154,69 @@ export function StepClinic({
             name="publicEmail"
             type="email"
             defaultValue={tenant?.publicEmail ?? ""}
-            placeholder="turnos@movare.com.ar"
+            placeholder="turnos@tuconsultorio.com.ar"
             hint="Opcional. Si lo dejás vacío, no se muestra ningún email."
             error={fieldErrors.publicEmail?.[0]}
           />
-          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)", marginBottom: 8 }}>
-              Tipo de consultorio
-            </legend>
+          <fieldset className={css.fieldset}>
+            <legend className={css.legend}>Tipo de consultorio</legend>
             {/* Radios nativos (mismo patrón que "Turnos cada"): flechas y foco
                 del navegador gratis. El activo se marca también por borde y
                 por el radio tildado, no solo por color. */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(220px, 100%), 1fr))", gap: 10 }}>
+            <div className={css.choices}>
               {VERTICAL_OPTIONS.map((o) => {
                 const on = vertical === o.value;
                 return (
-                  <label
-                    key={o.value}
-                    style={{
-                      display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 14px", borderRadius: 12,
-                      background: on ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)",
-                      border: on ? "1.5px solid var(--sky-500)" : "1px solid rgba(15,30,51,0.08)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name="vertical"
-                      value={o.value}
-                      checked={on}
-                      onChange={() => setVertical(o.value)}
-                      style={{ marginTop: 3 }}
-                    />
-                    <span style={{ display: "grid", gap: 2 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{o.label}</span>
-                      <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{o.help}</span>
+                  <label key={o.value} className={`${css.choice} ${on ? css.choiceOn : ""}`}>
+                    <input type="radio" name="vertical" value={o.value} checked={on} onChange={() => setVertical(o.value)} />
+                    <span className={css.choiceText}>
+                      <span className={css.choiceTitle}>{o.label}</span>
+                      <span className={css.choiceHelp}>{o.help}</span>
                     </span>
                   </label>
                 );
               })}
             </div>
-            <p style={{ fontSize: 12, color: "var(--navy-500)", margin: "8px 0 0" }}>
-              Lo podés cambiar hasta terminar el alta. Después, escribinos a soporte.
+            <p className={css.note}>
+              Lo podés cambiar hasta terminar el alta. Después, <SupportContact subject="Cambiar el tipo de consultorio" />.
             </p>
             {fieldErrors.vertical?.[0] && <InlineError>{fieldErrors.vertical[0]}</InlineError>}
           </fieldset>
+          {!tenant ? (
+            <fieldset className={css.fieldset} aria-describedby="onb-owner-clinical-help">
+              <legend className={css.legend}>¿Atendés pacientes?</legend>
+              <div className={css.choices}>
+                {CLINICAL_OPTIONS.map((o) => {
+                  const on = ownerClinical === o.value;
+                  return (
+                    <label key={String(o.value)} className={`${css.choice} ${on ? css.choiceOn : ""}`}>
+                      <input
+                        type="radio"
+                        name="ownerClinical"
+                        value={o.value ? "yes" : "no"}
+                        checked={on}
+                        onChange={() => setOwnerClinical(o.value)}
+                      />
+                      <span className={css.choiceText}>
+                        <span className={css.choiceTitle}>{o.label}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p id="onb-owner-clinical-help" className={css.note}>
+                {OWNER_CLINICAL_HELP}
+              </p>
+              {fieldErrors.ownerClinical?.[0] && <InlineError>{fieldErrors.ownerClinical[0]}</InlineError>}
+            </fieldset>
+          ) : (
+            !flow.ownerClinical && (
+              // Re-entrando no se cambia acá (el server lo ignora): se dice dónde, para que no lo busque en este paso.
+              <p className={css.note}>
+                Elegiste no atender pacientes: no tenés agenda propia. Lo podés cambiar después desde Configuración.
+              </p>
+            )
+          )}
           {tenant && (
             // EV-D2: los turnos online nacen apagados; mostrar la URL como si ya
             // funcionara llevaba a compartir un link que no acepta reservas.
@@ -190,7 +237,8 @@ export function StepClinic({
 const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
 export function StepHours({ tenant }: { tenant: OnboardingTenant }) {
-  const { go, refresh } = useStepNav();
+  const { go, refresh, next, prev, label } = useStepNav();
+  const { ownerClinical } = useOnboardingFlow();
   const confirm = useConfirm();
   const formRef = useRef<HTMLFormElement>(null);
   const { dirty, onFormInput } = useFormDirty(formRef);
@@ -216,22 +264,27 @@ export function StepHours({ tenant }: { tenant: OnboardingTenant }) {
       }
       // refresh: "Tu horario" arranca de la plantilla que `setBusinessHours`
       // acaba de mover; sin esto el router podría servir la página cacheada.
-      go(STEP.myHours);
+      // VX2-e: sin «Tu horario» (Titular que no atiende) el siguiente es Servicios.
+      go(next(STEP.hours));
       refresh();
     });
   };
 
   const onBack = async () => {
     if (dirty && !(await confirm({ title: "¿Salir sin guardar?", message: "Perdés los cambios del horario.", confirmLabel: "Salir" }))) return;
-    go(STEP.location);
+    go(prev(STEP.hours));
   };
 
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.hours} · Horario`}
+        eyebrow={`Paso ${label(STEP.hours)} · Horario`}
         title="¿En qué horario abre el consultorio?"
-        blurb="Es el marco general: lo que muestra la agenda y el horario con el que arranca cada profesional. En el paso siguiente ajustás el tuyo día por día."
+        blurb={
+          ownerClinical
+            ? "Es el marco general: lo que muestra la agenda y el horario con el que arranca cada profesional. En el paso siguiente ajustás el tuyo día por día."
+            : "Es el marco general: lo que muestra la agenda y el horario con el que arranca cada profesional que sumes."
+        }
       />
       <form ref={formRef} action={onSubmit} onInput={onFormInput} onChange={onFormInput} style={{ display: "grid", gap: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
@@ -294,6 +347,8 @@ export function StepDone({
   invitationsCount: number;
 }) {
   const router = useRouter();
+  const { label } = useStepNav();
+  const { ownerClinical } = useOnboardingFlow();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const particular = insurers.find((i) => i.isParticular);
@@ -307,7 +362,8 @@ export function StepDone({
         setError(r.error);
         return;
       }
-      router.replace("/agenda");
+      // VX2-e: sin agenda propia (y todavía sin profesionales), la agenda abriría vacía: va al panel.
+      router.replace(ownerClinical ? "/agenda" : "/dashboard");
     });
   };
 
@@ -322,7 +378,7 @@ export function StepDone({
 
   // `pending` = el paso no tiene dato propio todavía (se puede terminar igual:
   // la sede existe y el horario por defecto rige), se marca para que se vea.
-  const items: { label: string; value: string; step: number; pending?: boolean }[] = [
+  const allItems: { label: string; value: string; step: number; pending?: boolean }[] = [
     { label: "Consultorio", value: tenant.name, step: STEP.clinic },
     {
       label: "Sede",
@@ -345,13 +401,26 @@ export function StepDone({
         `Particular${particular && particular.copagoCents > 0 ? ` (${formatARS(particular.copagoCents)})` : ""}`,
       step: STEP.insurers,
     },
-    { label: "Equipo", value: invitationsCount ? `${invitationsCount} invitación${invitationsCount === 1 ? "" : "es"} enviada${invitationsCount === 1 ? "" : "s"}` : "Solo vos, por ahora", step: STEP.team },
+    {
+      label: "Equipo",
+      value: invitationsCount
+        ? `${invitationsCount} invitación${invitationsCount === 1 ? "" : "es"} enviada${invitationsCount === 1 ? "" : "s"}`
+        : ownerClinical
+          ? "Solo vos, por ahora"
+          : "Todavía nadie atiende: invitá a tus profesionales",
+      step: STEP.team,
+      // VX2-e: un Titular que no atiende sin invitaciones deja un consultorio sin quién atienda (se puede terminar
+      // igual: se marca para que se vea, como Sede o Tu horario).
+      pending: !ownerClinical && invitationsCount === 0,
+    },
   ];
+  // VX2-e: sin Practitioner propio «Tu horario» no existe (ni el link a ese paso).
+  const items = ownerClinical ? allItems : allItems.filter((it) => it.step !== STEP.myHours);
 
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.done} · Listo`}
+        eyebrow={`Paso ${label(STEP.done)} · Listo`}
         title="Tu consultorio está listo"
         blurb="Revisá el resumen. Sedes, horarios, servicios, obras sociales y equipo se ajustan después desde Configuración."
       />
@@ -393,7 +462,12 @@ export function StepDone({
         ))}
       </div>
       {error && <InlineError>{error}</InlineError>}
-      <StepFooter back={STEP.team} primaryLabel="Ir a mi agenda" onPrimary={finish} pending={pending} />
+      <StepFooter
+        back={STEP.team}
+        primaryLabel={ownerClinical ? "Ir a mi agenda" : "Ir al panel"}
+        onPrimary={finish}
+        pending={pending}
+      />
     </>
   );
 }

@@ -111,6 +111,17 @@ describe("[VX2-c1] landing", () => {
     expect(html).toContain("El plan Individual tiene 14 días gratis y no te pide medio de pago.");
   });
 
+  it("[VX-Z] el CTA del header sigue al catálogo: «Probá N días gratis» o «Creá tu cuenta» (nunca «Probá gratis» fijo)", async () => {
+    const header = (html: string) => html.match(/<header[\s\S]*?<\/header>/)?.[0] ?? "";
+    expect(header(await render())).toMatch(/<a[^>]*href="\/signup"[^>]*>Probá 14 días gratis<\/a>/);
+    for (const plans of [[plan("INDIVIDUAL", 0)], []]) {
+      catalog.plans = plans;
+      const h = header(await render());
+      expect(h).toMatch(/<a[^>]*href="\/signup"[^>]*>Creá tu cuenta<\/a>/);
+      expect(h).not.toMatch(/gratis/);
+    }
+  });
+
   it("sin días de prueba (0 o catálogo vacío) no se promete ninguna", async () => {
     for (const plans of [[plan("INDIVIDUAL", 0)], []]) {
       catalog.plans = plans;

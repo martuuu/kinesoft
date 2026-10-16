@@ -7,11 +7,12 @@
  * «Revisá tu email» con «Reenviar» y el mismo cooldown de 60 s que las pantallas de auth (IAM-2d,
  * `ResendButton`): sin cooldown, la impaciencia quemaba en segundos el límite por email (3/h).
  * `slug` (opcional) viene de `/portal?c=<slug>` (CTA de `/portal/c/<slug>`): el link vuelve a ese consultorio.
- * Pulido visual fino: VX.
+ * VX2-f (D-VX28): `Field` + `.k-input-lg` (C-F2/C-F5, como el login), `autoComplete="email"` e `inputMode` para el
+ * teclado del celular, y «Usar otro email» con área táctil de 44 px.
  */
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { FormField } from "@/components/ui/form-field";
+import { Field } from "@/components/ui/field";
 import { IconArrow } from "@/components/ui/icons";
 import { ResendButton } from "@/components/screens/resend-verification";
 import { requestPortalLink } from "@/lib/portal-auth";
@@ -50,7 +51,7 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
         <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
           Revisá tu email
         </div>
-        <p role="status" style={{ fontSize: 13, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
+        <p role="status" style={{ fontSize: 14, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
           {message} Lo mandamos a <strong>{sentTo}</strong>. Si no lo ves, fijate en spam o promociones.
         </p>
         <ResendButton
@@ -69,7 +70,8 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
             background: "none",
             border: 0,
             padding: 0,
-            fontSize: 12,
+            minHeight: 44,
+            fontSize: 14,
             color: "var(--sky-700)",
             fontWeight: 600,
             cursor: "pointer",
@@ -84,21 +86,24 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
 
   return (
     <form onSubmit={onSubmit} style={{ display: "grid", gap: 10, textAlign: "left" }} noValidate>
-      <FormField
-        label="Tu email"
-        name="email"
-        type="email"
-        required
-        placeholder="nombre@email.com"
-        error={error ?? undefined}
-        disabled={pending}
-      />
-      <Button
-        variant="ghost"
-        type="submit"
-        disabled={pending}
-        style={{ width: "100%", justifyContent: "center", padding: "12px 18px", fontSize: 14 }}
-      >
+      <Field id="portal-email" label="Tu email" error={error ?? undefined}>
+        <input
+          className="k-input k-input-lg"
+          name="email"
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          required
+          placeholder="nombre@ejemplo.com"
+          disabled={pending}
+        />
+      </Field>
+      {/* `Field` pinta el error pero no lo anuncia (no es live region): este aviso solo para lector de pantalla
+          cumple «errores con role="alert"» (VX §5) sin duplicarlo en pantalla. */}
+      <div role="alert" className="k-sr-only">
+        {error ?? ""}
+      </div>
+      <Button variant="ghost" size="lg" block type="submit" disabled={pending}>
         {pending ? "Enviando…" : "Mandame un link para entrar"} <IconArrow size={14} />
       </Button>
     </form>

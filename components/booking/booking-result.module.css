@@ -1,0 +1,261 @@
+/* [VX2-d2] Marco «centered» propio del turnero: resultado del pago (`/booking/[id]/{ok,pending,failed}`), turnos online
+   apagados (`/c/[slug]/booking` cerrado) y el error del segmento `(booking)`.
+   Por qué no `AuthShell centered`: el paciente está en el turnero DEL CONSULTORIO; la marca que tiene que ver arriba es
+   la del consultorio (monograma + nombre), no la de KineSoft con «© 2026» y links de la app. KineSoft queda en el pie,
+   chico. Mismas medidas que `components/auth/auth-shell.module.css` (card de 460-520, `--bg-public`, sin blur: D-VX9)
+   para que se lea como la misma familia. */
+
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-public);
+  color: var(--navy-900);
+  padding-inline: var(--gutter);
+}
+
+/* ── Arriba: marca del consultorio ───────────────────────────── */
+.top {
+  width: 100%;
+  max-width: var(--container-public);
+  margin-inline: auto;
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-block: 12px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.mono {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sky-700);
+  color: #fff;
+  font-weight: 700;
+  font-size: var(--fs-sm);
+  letter-spacing: 0.02em;
+}
+.clinic {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  line-height: var(--lh-snug);
+  /* Un nombre largo se parte en vez de cortarse: es lo único que identifica al consultorio. */
+  overflow-wrap: anywhere;
+}
+.topLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: var(--fs-sm);
+}
+
+/* ── Card ─────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding-block: 16px 40px;
+}
+.card {
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+  background: #fff;
+  border-radius: var(--r-xl);
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  box-shadow: var(--shadow-card-lg);
+  padding: clamp(24px, 4vw, 40px);
+  text-align: center;
+}
+.cardNarrow {
+  max-width: 460px;
+}
+
+.icon {
+  width: 64px;
+  height: 64px;
+  margin-inline: auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.iconOk {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}
+.iconPending {
+  background: var(--sky-100);
+  color: var(--sky-700);
+}
+.iconFailed {
+  background: var(--danger-bg-strong);
+  color: var(--danger-fg);
+}
+
+.title {
+  margin: 16px 0 8px;
+  font-size: var(--fs-xl);
+  line-height: var(--lh-snug);
+  letter-spacing: -0.02em;
+  color: var(--navy-900);
+}
+.lead {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  color: var(--navy-500);
+}
+
+/* ── Detalle del turno ───────────────────────────────────────── */
+.details {
+  margin: 24px 0 0;
+  padding: 4px 16px;
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  text-align: left;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(96px, 30%) minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.term {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--navy-500);
+  padding-top: 2px;
+}
+.value {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.sub {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--navy-500);
+}
+@media (max-width: 359.98px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.actions {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.note {
+  margin: 20px 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--navy-500);
+}
+
+/* ── Turnos online apagados: canales de contacto ─────────────── */
+.channels {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.channel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  border: 1px solid rgba(15, 30, 51, 0.06);
+  text-decoration: none;
+  color: var(--navy-900);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.channel:hover {
+  border-color: var(--sky-300);
+}
+.channel:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.channelLabel {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+}
+.channelValue {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--sky-700);
+  text-align: right;
+  /* Un email largo con nowrap+ellipsis quedaba cortado en mobile y el paciente no podía leerlo: se parte donde haga
+     falta (revisión EV0). */
+  overflow-wrap: anywhere;
+}
+
+/* ── Pie: KineSoft chico ─────────────────────────────────────── */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-block: 16px 28px;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+}
+
+/* ── Solo desarrollo: los webhooks de MP no llegan a localhost ── */
+.dev {
+  margin-top: 20px;
+  padding: 12px;
+  border-radius: var(--r-sm);
+  background: var(--danger-bg);
+  border: 1px dashed var(--danger-border);
+  font-size: var(--fs-xs);
+  color: var(--navy-700);
+  text-align: left;
+}
+
+@media (max-width: 767.98px) {
+  .top {
+    min-height: 64px;
+  }
+  .main {
+    place-items: start center;
+    padding-block: 8px 32px;
+  }
+}

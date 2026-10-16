@@ -28,7 +28,9 @@ import { useCatalogSearch } from "@/components/configuracion/catalog/use-catalog
 import { createService, deleteService } from "@/lib/services";
 import { addInsurerFromCatalog, createInsurer, deleteInsurer, linkInsurerToPayer, updateInsurer } from "@/lib/insurers";
 import { searchPayers } from "@/lib/catalog";
-import { PAYER_KIND_LABEL, type PayerOption } from "@/lib/catalog-schemas";
+import type { PayerOption } from "@/lib/catalog-schemas";
+// VX-Z: de `catalog-constants` (sin zod); importarla de `catalog-schemas` metía zod en el bundle de /onboarding.
+import { PAYER_KIND_LABEL } from "@/lib/catalog-constants";
 import { STEP } from "@/lib/onboarding-logic";
 import { formatARS } from "@/lib/format";
 import type { OnboardingInsurer, OnboardingService } from "@/lib/onboarding-internal";
@@ -37,6 +39,7 @@ import { StepHeader } from "./onboarding-shell";
 import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
 
 const DURATIONS = [30, 40, 45, 50, 60, 90];
+
 
 // ── Servicios ────────────────────────────────────────────────────────────
 
@@ -51,7 +54,7 @@ export function StepServices({
   vertical?: TenantVertical | null;
 }) {
   const isGeneral = vertical === "GENERAL";
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label, prev } = useStepNav();
   const confirm = useConfirm();
   const toast = useToast();
   const [pending, start] = useTransition();
@@ -113,7 +116,7 @@ export function StepServices({
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.services} · Servicios`}
+        eyebrow={`Paso ${label(STEP.services)} · Servicios`}
         title="¿Qué servicios ofrecés?"
         blurb="Cada turno se da para un servicio: define la duración, el precio particular y cuántos pacientes atendés a la vez en ese horario. Si lo elegís del catálogo de prácticas, te sugerimos el nombre y la duración."
       />
@@ -188,7 +191,8 @@ export function StepServices({
         </p>
       )}
       <StepFooter
-        back={STEP.myHours}
+        // VX2-e: «Volver» saltea «Tu horario» si el Titular no atiende.
+        back={prev(STEP.services)}
         primaryLabel="Seguir"
         onPrimary={() => go(STEP.insurers)}
         pending={pending}
@@ -213,7 +217,7 @@ export function StepInsurers({
 }) {
   // EV1-C2: en Clínica general la unidad es el turno, no la sesión.
   const perUnit = vertical === "GENERAL" ? "por turno" : "por sesión";
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label } = useStepNav();
   const confirm = useConfirm();
   const toast = useToast();
   const [pending, start] = useTransition();
@@ -309,7 +313,7 @@ export function StepInsurers({
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.insurers} · Obras sociales`}
+        eyebrow={`Paso ${label(STEP.insurers)} · Obras sociales`}
         title="¿Con qué obras sociales trabajás?"
         blurb="«Particular» ya está creada para los pacientes sin cobertura. Buscá las obras sociales y prepagas en el catálogo y cargá su copago; el resto de los valores se ajusta en Configuración."
       />

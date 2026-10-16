@@ -218,13 +218,17 @@ export async function saveOnboardingClinic(
         // VX2.1: los días salen de `SaasPlanConfig.trialDays` (lo que promete el signup, que lee el catálogo); sin
         // fila cae a `PLAN_DEFAULTS` (undefined). Antes usaba siempre el default y, si Plataforma cambiaba la prueba,
         // la pantalla y el consultorio decían cosas distintas.
-        const catalog = await tx.saasPlanConfig.findUnique({ where: { plan: "INDIVIDUAL" }, select: { trialDays: true } });
-        const sub = initialSubscriptionFor("INDIVIDUAL", catalog?.trialDays, new Date());
+        // VX-Z (decisión 24, default para Martin): un Titular que NO atiende (`ownerClinical=false`) en Individual
+        // (1 lugar) ocupa el único lugar sin agenda y no puede invitar a nadie que atienda: consultorio sin salida.
+        // Esa alta nace en prueba CONSULTORIO, con los días de SU fila del catálogo (o el default del plan).
+        const trialPlan = ownerClinical ? "INDIVIDUAL" : "CONSULTORIO";
+        const catalog = await tx.saasPlanConfig.findUnique({ where: { plan: trialPlan }, select: { trialDays: true } });
+        const sub = initialSubscriptionFor(trialPlan, catalog?.trialDays, new Date());
         const ent = await applyTenantEntitlementsInTx(tx, {
           tenantId: created.tenantId,
           source: "onboarding",
           initial: true,
-          patch: { saasPlan: "INDIVIDUAL", subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
+          patch: { saasPlan: trialPlan, subscriptionStatus: sub.subscriptionStatus, trialEndsAt: sub.trialEndsAt },
           actor: { userId: user.id, homeTenantId: created.tenantId },
         });
         if (!ent.ok) throw new Error(`[onboarding] entitlements: ${ent.reason}`);

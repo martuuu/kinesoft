@@ -2,8 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import type { TenantVertical } from "@prisma/client";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 import { submitCheckIn } from "@/lib/portal";
+import { portalCheckInCopy } from "@/lib/portal-copy";
 
 /**
  * Pre-session check-in for the patient portal.
@@ -11,19 +14,31 @@ import { submitCheckIn } from "@/lib/portal";
  * EVA pain slider (0..10) + free-form notes. The data lands in the
  * practitioner's HC notes + a sourced `EvaScore` so they see the
  * pre-visit state when they open the patient profile.
+ *
+ * VX2-f (D-VX28): copy por vertical (`lib/portal-copy.ts`: «Check-in pre-sesión» y el ejemplo de ejercicios solo en
+ * Kinesiología), notas con `Field` + `.k-input` (label real, 16 px: iOS no hace zoom al enfocar), error con
+ * `.k-alert role="alert"`, rojo del EVA con el token `--danger-solid` en vez del literal. Mismos datos que antes.
  */
+const painColour = (v: number) => (v <= 3 ? "var(--lime-400)" : v <= 6 ? "var(--sky-500)" : "var(--danger-solid)");
+
 export function PortalCheckInForm({
   slug,
   sessionId,
+  // Default Kinesiología: el check-in cuelga de un plan, y los planes son de Kinesiología (lib/tenant-modules.ts);
+  // la page lo pasa siempre con la vertical de la ficha.
+  vertical = "KINESIOLOGY",
 }: {
   slug: string;
   sessionId: string;
+  vertical?: TenantVertical;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [pain, setPain] = useState(4);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const copy = portalCheckInCopy(vertical);
+  const ids = { title: `checkin-${sessionId}-title`, pain: `checkin-${sessionId}-pain`, notes: `checkin-${sessionId}-notes` };
 
   const submit = () => {
     setError(null);
@@ -42,95 +57,70 @@ export function PortalCheckInForm({
     });
   };
 
-  const colour =
-    pain <= 3 ? "var(--lime-400)" : pain <= 6 ? "var(--sky-500)" : "#E14B4B";
+  const colour = painColour(pain);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <section aria-labelledby={ids.title} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <div
+        <h2
+          id={ids.title}
           style={{
-            fontSize: 11,
-            color: "var(--navy-300)",
+            fontSize: 12,
+            color: "var(--navy-500)",
             fontWeight: 700,
             letterSpacing: "0.06em",
             textTransform: "uppercase",
+            margin: 0,
           }}
         >
-          Check-in pre-sesión
-        </div>
-        <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2 }}>
-          ¿Cómo estás llegando? Tu profesional lo va a ver antes de la sesión.
-        </div>
+          {copy.title}
+        </h2>
+        <p style={{ fontSize: 14, color: "var(--navy-500)", margin: "2px 0 0" }}>{copy.lead}</p>
       </div>
-      <label style={{ fontSize: 12, color: "var(--navy-500)", fontWeight: 600 }}>
-        Dolor ahora · <span style={{ color: colour, fontWeight: 800 }}>{pain}/10</span>
+      <div className="k-field">
+        <label htmlFor={ids.pain} className="k-label">
+          {copy.painLabel} · <span style={{ color: colour, fontWeight: 800 }}>{pain}/10</span>
+        </label>
         <input
+          id={ids.pain}
           type="range"
           min={0}
           max={10}
           value={pain}
+          aria-valuetext={`${pain} de 10`}
           onChange={(e) => setPain(Number(e.target.value))}
-          style={{ width: "100%", marginTop: 6 }}
+          style={{ width: "100%", minHeight: 44 }}
         />
         <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(11, 1fr)",
-            gap: 2,
-            marginTop: 6,
-            height: 6,
-          }}
+          style={{ display: "grid", gridTemplateColumns: "repeat(11, 1fr)", gap: 2, height: 6 }}
           aria-hidden
         >
           {Array.from({ length: 11 }).map((_, i) => (
             <span
               key={i}
-              style={{
-                height: 6,
-                borderRadius: 2,
-                background:
-                  i <= 3 ? "var(--lime-400)" : i <= 6 ? "var(--sky-500)" : "#E14B4B",
-                opacity: i <= pain ? 1 : 0.25,
-              }}
+              style={{ height: 6, borderRadius: 2, background: painColour(i), opacity: i <= pain ? 1 : 0.25 }}
             />
           ))}
         </div>
-      </label>
-      <label style={{ fontSize: 12, color: "var(--navy-500)", fontWeight: 600 }}>
-        Notas (opcional)
+      </div>
+      <Field id={ids.notes} label={copy.notesLabel} optional>
         <textarea
+          className="k-input"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
-          placeholder="¿Hubo algo distinto esta semana? ¿Algún ejercicio que te molestó?"
-          style={{
-            marginTop: 6,
-            width: "100%",
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid rgba(15,30,51,0.08)",
-            background: "rgba(255,255,255,0.7)",
-            fontSize: 13,
-          }}
+          placeholder={copy.notesPlaceholder}
+          style={{ minHeight: 96 }}
         />
-      </label>
+      </Field>
       {error && (
-        <div
-          style={{
-            padding: 10,
-            borderRadius: 10,
-            background: "var(--danger-bg)",
-            color: "var(--danger-fg)",
-            fontSize: 12,
-          }}
-        >
+        <div role="alert" className="k-alert">
           {error}
         </div>
       )}
-      <Button variant="primary" onClick={submit} disabled={pending}>
-        {pending ? "Enviando…" : "Enviar check-in"}
+      <Button variant="primary" size="md" block onClick={submit} disabled={pending}>
+        {pending ? copy.pending : copy.submit}
       </Button>
-    </div>
+    </section>
   );
 }

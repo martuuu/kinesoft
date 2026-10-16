@@ -430,20 +430,6 @@ body {
   background-clip: padding-box;
 }
 
-/* ───── Turnero público — mobile responsiveness (las .booking-* las borra VX-Z cuando VX2-d1 las pase a su módulo) ───── */
-@media (max-width: 1024px) {
-  .booking-body {
-    flex-direction: column !important;
-    padding: 0 16px 24px !important;
-  }
-  .booking-header {
-    padding: 24px 16px !important;
-  }
-  .booking-summary {
-    width: 100% !important;
-  }
-}
-
 /* ───── [BO3-A] Shell de Plataforma (components/plataforma/platform-shell.tsx) ─────
    Bajo 900 px el sidebar no entra junto a las tablas de Plataforma: se esconde y el
    nav sale en un Drawer desde «Menú». A 640 px el email y el texto de «Cerrar sesión»

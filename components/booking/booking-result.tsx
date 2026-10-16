@@ -1,254 +1,155 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import Link from "next/link";
-import { KineLogo } from "@/components/ui/kine-logo";
-import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { IconArrow, IconCheck, IconClock, IconX } from "@/components/ui/icons";
+import { cn } from "@/lib/cn";
+import { formatARS } from "@/lib/format";
 import { devMarkBookingPaid } from "@/lib/public-booking";
 import type { PublicBookingStatus } from "@/lib/public-booking-types";
+import { BookAgainLink, BookingFrame } from "./booking-unavailable";
+import s from "./booking-result.module.css";
 
-type Variant = "ok" | "pending" | "failed";
+export type BookingResultVariant = "ok" | "pending" | "failed";
+
+/** 60 consultas cada 3 s ≈ 3 min: después se deja de consultar y se dice qué hacer, sin prometer nada. */
+export const MAX_POLL_ATTEMPTS = 60;
+const POLL_MS = 3000;
 
 /**
- * Post-MP result page. Polls `/api/booking/:id/status` every 3 s for up
- * to 60 attempts (≈3 min) until the webhook flips the booking to PAID.
- * Renders one of three variants based on the URL but auto-promotes
- * pending → ok if the poller catches the transition.
- *
- * In development a "Simular pago" button is exposed when polling stalls,
- * since MP webhooks don't reach localhost.
+ * Variante efectiva: el estado real del turno manda sobre la URL (MP vuelve a `/ok` antes de que llegue el webhook, y el
+ * poller promueve pending → ok cuando el webhook lo marca PAID).
+ */
+export function effectiveVariantFor(status: PublicBookingStatus, variant: BookingResultVariant): BookingResultVariant {
+  if (status.paymentStatus === "PAID") return "ok";
+  if (status.paymentStatus === "FAILED") return "failed";
+  if (status.paymentStatus === "AUTHORIZED" || status.status === "PENDING") return "pending";
+  return variant;
+}
+
+/**
+ * [VX2-d2] Copy de cada variante. Sin promesas (§0.2, PL-F1c): no sale ningún email de confirmación, y no se promete
+ * cancelación ni recordatorio. Antes la card mostraba `PENDING · UNPAID` y «Reintentos: 12 / 60» (jerga interna): el
+ * paciente ve un estado en palabras.
+ */
+export const RESULT_COPY: Record<BookingResultVariant, { title: string; lead: string; state: string }> = {
+  ok: {
+    title: "¡Turno confirmado!",
+    lead: "Abajo tenés los detalles. También lo ves en «Mis turnos».",
+    state: "Confirmado",
+  },
+  pending: {
+    title: "Procesando tu pago…",
+    lead: "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola. No la cierres.",
+    state: "Esperando el pago",
+  },
+  failed: {
+    title: "El pago no se completó",
+    lead: "El turno no quedó confirmado. Podés volver a reservar y elegir otra forma de pago.",
+    state: "Pago no completado",
+  },
+};
+
+/** Cuando el poller se queda sin consultas y Mercado Pago todavía no confirmó. */
+export const PENDING_TIMEOUT_NOTE =
+  "Mercado Pago todavía no nos confirmó el pago. Actualizá esta página en unos minutos para ver el estado del turno.";
+
+/**
+ * Página de resultado después de Mercado Pago. Consulta `/api/booking/:id/status` cada 3 s hasta
+ * `MAX_POLL_ATTEMPTS` veces o hasta un estado final. En desarrollo hay un «Simular webhook PAID»: los webhooks de MP
+ * no llegan a localhost.
  */
 export function BookingResult({
   initial,
   variant,
 }: {
   initial: PublicBookingStatus;
-  variant: Variant;
+  variant: BookingResultVariant;
 }) {
   const [status, setStatus] = useState(initial);
   const [attempts, setAttempts] = useState(0);
-  const effectiveVariant: Variant =
-    status.paymentStatus === "PAID"
-      ? "ok"
-      : status.paymentStatus === "FAILED"
-        ? "failed"
-        : status.paymentStatus === "AUTHORIZED" || status.status === "PENDING"
-          ? "pending"
-          : variant;
+  const effective = effectiveVariantFor(status, variant);
 
-  // Poll until we land on a terminal state or run out of tries.
   useEffect(() => {
-    if (effectiveVariant === "ok" || effectiveVariant === "failed") return;
-    if (attempts > 60) return;
+    if (effective === "ok" || effective === "failed") return;
+    if (attempts >= MAX_POLL_ATTEMPTS) return;
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/booking/${initial.bookingId}/status`, { cache: "no-store" });
-        if (res.ok) {
-          const next = (await res.json()) as PublicBookingStatus;
-          setStatus(next);
-        }
+        if (res.ok) setStatus((await res.json()) as PublicBookingStatus);
       } finally {
         setAttempts((a) => a + 1);
       }
-    }, 3000);
+    }, POLL_MS);
     return () => clearTimeout(t);
-  }, [attempts, effectiveVariant, initial.bookingId]);
+  }, [attempts, effective, initial.bookingId]);
 
   const dev = process.env.NODE_ENV !== "production";
+  const copy = RESULT_COPY[effective];
+  const timedOut = effective === "pending" && attempts >= MAX_POLL_ATTEMPTS;
 
   return (
-    <div
-      className="k-app"
-      style={{
-        minHeight: "100vh",
-        background: "var(--bg-app)",
-        position: "relative",
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <header
-        className="k-glass"
-        style={{
-          margin: "18px 24px 0",
-          padding: "12px 20px",
-          borderRadius: 999,
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-        }}
-      >
-        <KineLogo size={24} />
-        <span style={{ fontSize: 12, color: "var(--navy-300)" }}>· {status.tenantName}</span>
-        <div style={{ flex: 1 }} />
-        <Link
-          href={`/c/${status.tenantSlug}/booking`}
-          style={{ fontSize: 12.5, color: "var(--sky-700)", fontWeight: 600, textDecoration: "none" }}
-        >
-          Reservar otro turno
-        </Link>
-      </header>
+    <BookingFrame clinicName={status.tenantName} topRight={<BookAgainLink slug={status.tenantSlug} />}>
+      {/* role=status: el lector de pantalla anuncia el cambio pending → ok/failed que hace el poller. */}
+      <div role="status" aria-live="polite">
+        <StatusIcon variant={effective} />
+        <h1 className={cn("k-display", s.title)}>{copy.title}</h1>
+        <p className={s.lead}>{copy.lead}</p>
+      </div>
 
-      <main
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-        }}
-      >
-        <Card
-          glass
-          style={{
-            padding: 32,
-            borderRadius: 24,
-            maxWidth: 520,
-            width: "100%",
-            textAlign: "center",
-          }}
-        >
-          <StatusIcon variant={effectiveVariant} />
-          <h1
-            className="k-display"
-            style={{ fontSize: 26, margin: "16px 0 8px", letterSpacing: "-0.02em" }}
-          >
-            {effectiveVariant === "ok"
-              ? "¡Turno confirmado!"
-              : effectiveVariant === "pending"
-                ? "Procesando tu pago…"
-                : "El pago no se completó"}
-          </h1>
-          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-            {effectiveVariant === "ok"
-              ? // PL-F1c: no se manda ningún email de confirmación (es C1): no prometerlo.
-                "Abajo tenés los detalles. También lo ves en «Mis turnos»."
-              : effectiveVariant === "pending"
-                ? "Apenas Mercado Pago lo confirme, esta pantalla se actualiza sola. No la cierres."
-                : "Probá nuevamente con otra forma de pago."}
-          </p>
+      <dl className={s.details}>
+        <DetailRow label="Profesional" value={status.practitionerName} />
+        <DetailRow label="Servicio" value={status.serviceName} sub={`${status.durationMin} min`} />
+        <DetailRow
+          label="Fecha y hora"
+          value={new Date(status.scheduledFor).toLocaleString("es-AR", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            hour: "2-digit",
+            minute: "2-digit",
+            // 24 h como el resto del turnero: «08:30 p. m.» se leía raro.
+            hourCycle: "h23",
+            timeZone: "America/Argentina/Buenos_Aires",
+          })}
+        />
+        {status.amountCents != null && <DetailRow label="Monto" value={formatARS(status.amountCents)} />}
+        <div className={s.row}>
+          <dt className={s.term}>Estado</dt>
+          <dd className={s.value}>
+            <Tag tone={effective === "ok" ? "lime" : effective === "pending" ? "sky" : "soft"} variant="outline">
+              {copy.state}
+            </Tag>
+          </dd>
+        </div>
+      </dl>
 
-          <div
-            style={{
-              marginTop: 22,
-              padding: 18,
-              borderRadius: 16,
-              background: "rgba(255,255,255,0.5)",
-              border: "1px solid rgba(15,30,51,0.06)",
-              textAlign: "left",
-            }}
-          >
-            <DetailRow label="Centro" value={status.tenantName} />
-            <DetailRow label="Profesional" value={status.practitionerName} />
-            <DetailRow label="Servicio" value={status.serviceName} sub={`${status.durationMin} min`} />
-            <DetailRow
-              label="Fecha y hora"
-              value={new Date(status.scheduledFor).toLocaleString("es-AR", {
-                weekday: "long",
-                day: "2-digit",
-                month: "long",
-                hour: "2-digit",
-                minute: "2-digit",
-                timeZone: "America/Argentina/Buenos_Aires",
-              })}
-            />
-            {status.amountCents != null && (
-              <DetailRow
-                label="Monto"
-                value={new Intl.NumberFormat("es-AR", {
-                  style: "currency",
-                  currency: "ARS",
-                  maximumFractionDigits: 0,
-                }).format(status.amountCents / 100)}
-              />
-            )}
-            <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-              <span style={{ color: "var(--navy-500)" }}>Estado</span>
-              <Tag
-                tone={
-                  effectiveVariant === "ok"
-                    ? "lime"
-                    : effectiveVariant === "pending"
-                      ? "sky"
-                      : "soft"
-                }
-              >
-                {status.status} · {status.paymentStatus}
-              </Tag>
-            </div>
-          </div>
+      {effective === "ok" && (
+        <div className={s.actions}>
+          <ButtonLink href="/portal" size="lg" block>
+            Ver mis turnos <IconArrow size={14} />
+          </ButtonLink>
+        </div>
+      )}
+      {effective === "failed" && (
+        <div className={s.actions}>
+          <ButtonLink href={`/c/${status.tenantSlug}/booking`} size="lg" block>
+            Volver a reservar <IconArrow size={14} />
+          </ButtonLink>
+        </div>
+      )}
+      {timedOut && <p className={s.note}>{PENDING_TIMEOUT_NOTE}</p>}
 
-          {effectiveVariant === "ok" && (
-            <Link
-              href="/portal"
-              style={{ display: "block", textDecoration: "none", marginTop: 18 }}
-            >
-              <Button
-                variant="primary"
-                style={{ width: "100%", justifyContent: "center", padding: "14px" }}
-              >
-                Ver mis turnos <IconArrow size={14} />
-              </Button>
-            </Link>
-          )}
-          {effectiveVariant === "failed" && (
-            <Link
-              href={`/c/${status.tenantSlug}/booking`}
-              style={{ display: "block", textDecoration: "none", marginTop: 18 }}
-            >
-              <Button
-                variant="primary"
-                style={{ width: "100%", justifyContent: "center", padding: "14px" }}
-              >
-                Reintentar reserva <IconArrow size={14} />
-              </Button>
-            </Link>
-          )}
-          {effectiveVariant === "pending" && (
-            <div style={{ marginTop: 18, fontSize: 11.5, color: "var(--navy-300)" }}>
-              Reintentos: {attempts} / 60
-            </div>
-          )}
-
-          {dev && effectiveVariant !== "ok" && (
-            <DevPaidStub bookingId={status.bookingId} onPaid={setStatus} />
-          )}
-        </Card>
-      </main>
-    </div>
+      {dev && effective !== "ok" && <DevPaidStub bookingId={status.bookingId} onPaid={setStatus} />}
+    </BookingFrame>
   );
 }
 
-function StatusIcon({ variant }: { variant: Variant }) {
-  const bg =
-    variant === "ok"
-      ? "var(--lime-300)"
-      : variant === "pending"
-        ? "var(--sky-100)"
-        : "var(--danger-bg-strong)";
-  const color =
-    variant === "ok"
-      ? "var(--navy-900)"
-      : variant === "pending"
-        ? "var(--sky-700)"
-        : "var(--danger-fg)";
+function StatusIcon({ variant }: { variant: BookingResultVariant }) {
+  const tone = variant === "ok" ? s.iconOk : variant === "pending" ? s.iconPending : s.iconFailed;
   return (
-    <span
-      style={{
-        width: 64,
-        height: 64,
-        borderRadius: "50%",
-        background: bg,
-        color,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
+    <div className={cn(s.icon, tone)} aria-hidden="true">
       {variant === "ok" ? (
         <IconCheck size={28} stroke={3} />
       ) : variant === "pending" ? (
@@ -256,37 +157,18 @@ function StatusIcon({ variant }: { variant: Variant }) {
       ) : (
         <IconX size={28} stroke={3} />
       )}
-    </span>
+    </div>
   );
 }
 
 function DetailRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 12,
-        padding: "8px 0",
-        borderBottom: "1px solid rgba(15,30,51,0.05)",
-      }}
-    >
-      <div
-        style={{
-          width: 110,
-          fontSize: 10.5,
-          color: "var(--navy-300)",
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          paddingTop: 2,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--navy-900)" }}>{value}</div>
-        {sub && <div style={{ fontSize: 11, color: "var(--navy-500)" }}>{sub}</div>}
-      </div>
+    <div className={s.row}>
+      <dt className={s.term}>{label}</dt>
+      <dd className={s.value}>
+        {value}
+        {sub && <span className={s.sub}>{sub}</span>}
+      </dd>
     </div>
   );
 }
@@ -306,36 +188,11 @@ function DevPaidStub({
       if (res.ok) onPaid((await res.json()) as PublicBookingStatus);
     });
   return (
-    <div
-      style={{
-        marginTop: 20,
-        padding: 12,
-        borderRadius: 12,
-        background: "rgba(228,70,70,0.06)",
-        border: "1px dashed rgba(228,70,70,0.3)",
-        fontSize: 11,
-        color: "var(--navy-700)",
-      }}
-    >
-      <strong>DEV ONLY</strong> — los webhooks de MP no llegan a localhost.
-      <button
-        type="button"
-        onClick={click}
-        disabled={pending}
-        style={{
-          marginTop: 8,
-          display: "block",
-          width: "100%",
-          padding: "8px 12px",
-          borderRadius: 8,
-          border: "none",
-          background: "var(--navy-900)",
-          color: "#fff",
-          cursor: "pointer",
-        }}
-      >
+    <div className={s.dev}>
+      <strong>Solo en desarrollo</strong>: los webhooks de Mercado Pago no llegan a localhost.
+      <Button type="button" variant="dark" size="sm" block onClick={click} disabled={pending} style={{ marginTop: 8 }}>
         {pending ? "Simulando…" : "Simular webhook PAID"}
-      </button>
+      </Button>
     </div>
   );
 }

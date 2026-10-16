@@ -21,7 +21,8 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { FormField } from "@/components/ui/form-field";
 import { useFormDirty } from "@/components/ui/use-form-dirty";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { RangeRowsEditor } from "@/components/configuracion/panels/practitioners/schedule-editor";
+// VX2-e: del módulo extraído, no de `schedule-editor.tsx` (que traía la semana entera de Configuración al bundle).
+import { RangeRowsEditor } from "@/components/schedule/range-rows-editor";
 import { saveOnboardingLocation } from "@/lib/onboarding";
 import { savePractitionerWeek } from "@/lib/practitioner-schedule";
 import { STEP } from "@/lib/onboarding-logic";
@@ -41,12 +42,13 @@ import {
 import type { LocationRow } from "@/lib/locations-schemas";
 import type { OnboardingLocation, OnboardingSchedule } from "@/lib/onboarding-internal";
 import { StepHeader } from "./onboarding-shell";
-import { InlineError, StepFooter, useStepNav } from "./step-nav";
+import { InlineError, StepFooter, useOnboardingFlow, useStepNav } from "./step-nav";
 
 // ── Sede ──────────────────────────────────────────────────────────────
 
 export function StepLocation({ location }: { location: OnboardingLocation | null }) {
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label } = useStepNav();
+  const { ownerClinical } = useOnboardingFlow();
   const confirm = useConfirm();
   const formRef = useRef<HTMLFormElement>(null);
   const { dirty, onFormInput } = useFormDirty(formRef);
@@ -88,9 +90,13 @@ export function StepLocation({ location }: { location: OnboardingLocation | null
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.location} · Sede`}
-        title="¿Dónde atendés?"
-        blurb="La dirección donde recibís a tus pacientes. ¿Atendés en más de un lugar? Cargá acá el principal; las otras sedes se suman después desde Configuración."
+        eyebrow={`Paso ${label(STEP.location)} · Sede`}
+        title={ownerClinical ? "¿Dónde atendés?" : "¿Dónde queda el consultorio?"}
+        blurb={
+          ownerClinical
+            ? "La dirección donde recibís a tus pacientes. ¿Atendés en más de un lugar? Cargá acá el principal; las otras sedes se suman después desde Configuración."
+            : "La dirección donde se atiende a los pacientes. ¿Hay más de un lugar? Cargá acá el principal; las otras sedes se suman después desde Configuración."
+        }
       />
       <form ref={formRef} action={onSubmit} onInput={onFormInput} onChange={onFormInput} style={{ display: "grid", gap: 14 }}>
         <FormField
@@ -99,7 +105,7 @@ export function StepLocation({ location }: { location: OnboardingLocation | null
           required
           autoFocus={!location?.address}
           defaultValue={location?.address ?? ""}
-          placeholder="Av. Santa Fe 1234, piso 3"
+          placeholder="Av. Siempre Viva 123, piso 3"
           error={fieldErrors.address?.[0]}
         />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
@@ -158,7 +164,7 @@ export function StepMyHours({
   schedule: OnboardingSchedule;
   locations: LocationRow[];
 }) {
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label } = useStepNav();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
 
@@ -252,7 +258,7 @@ export function StepMyHours({
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.myHours} · Tu horario`}
+        eyebrow={`Paso ${label(STEP.myHours)} · Tu horario`}
         title="¿Qué días atendés vos?"
         blurb="Arrancamos con el horario del consultorio. Ajustalo día por día: si cortás al mediodía, agregá una segunda franja. La agenda y el turnero online solo ofrecen turnos dentro de tu horario."
       />

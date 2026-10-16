@@ -21,7 +21,7 @@ import { INVITABLE_ROLES, roleLabel as labelOf, roleDescription } from "@/lib/ro
 import type { Role, TenantVertical } from "@prisma/client";
 import type { OnboardingInvitation, PendingInvite } from "@/lib/onboarding-internal";
 import { StepHeader } from "./onboarding-shell";
-import { InlineError, ItemRow, StepFooter, useStepNav } from "./step-nav";
+import { InlineError, ItemRow, StepFooter, useOnboardingFlow, useStepNav } from "./step-nav";
 
 type InvitableRole = "PRACTITIONER" | "ADMIN" | "ASSISTANT" | "BILLING";
 
@@ -64,7 +64,8 @@ export function StepTeam({
   /** Vertical del consultorio en alta, para «Kinesiólogo/a» vs «Profesional». */
   vertical?: TenantVertical | null;
 }) {
-  const { go, refresh } = useStepNav();
+  const { go, refresh, label } = useStepNav();
+  const { ownerClinical } = useOnboardingFlow();
   const confirm = useConfirm();
   const toast = useToast();
   const [pending, start] = useTransition();
@@ -106,9 +107,16 @@ export function StepTeam({
   return (
     <>
       <StepHeader
-        eyebrow={`Paso ${STEP.team} · Equipo (opcional)`}
-        title="¿Trabajás con más gente?"
-        blurb="Invitá a otros profesionales o a quien te ayuda con la agenda. Les llega un mail para crear su cuenta y sumarse. Podés hacerlo después desde Configuración."
+        eyebrow={`Paso ${label(STEP.team)} · Equipo (opcional)`}
+        title={ownerClinical ? "¿Trabajás con más gente?" : "¿Quiénes atienden?"}
+        blurb={
+          ownerClinical
+            ? "Invitá a otros profesionales o a quien te ayuda con la agenda. Les llega un mail para crear su cuenta y sumarse. Podés hacerlo después desde Configuración."
+            : // VX2-e: el Titular que no atiende deja un consultorio sin profesionales (riesgo 9 del brief): se le dice acá.
+              // No promete lugar: en Individual (1 usuario) el Titular ya ocupa el único y `createInvitation` lo rechaza
+              // con el copy del cupo (`seatsFullCopy`), que dice qué plan hace falta.
+              "Como no atendés, la agenda necesita al menos un profesional para dar turnos. Invitalos acá: les llega un mail para crear su cuenta y sumarse. También podés hacerlo después desde Configuración."
+        }
       />
       {invitations.length > 0 && (
         <div style={{ display: "grid", gap: 8, marginBottom: 18 }}>

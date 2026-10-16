@@ -60,7 +60,7 @@ export default async function HomePage() {
       <a className="k-skip-link" href="#main">
         Saltar al contenido
       </a>
-      <SiteHeader />
+      <SiteHeader trialDays={trialDays} />
       <main id="main">
         <Hero trialDays={trialDays} />
         <Features />

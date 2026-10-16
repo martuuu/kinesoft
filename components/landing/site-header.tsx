@@ -18,7 +18,17 @@ export const LANDING_NAV: readonly { href: string; label: string }[] = [
   { href: "#preguntas", label: "Preguntas" },
 ];
 
-export function SiteHeader() {
+/**
+ * VX-Z: el CTA decía «Probá gratis» fijo. Ahora sigue la regla del `Hero`: con prueba en el
+ * catálogo, «Probá N días gratis»; con 0 o sin catálogo (`null`, base caída en el build ISR), «Creá tu cuenta»: no se
+ * promete una prueba que no se pudo leer.
+ */
+export function signupCtaLabel(trialDays: number | null): string {
+  return trialDays != null && trialDays > 0 ? `Probá ${trialDays} días gratis` : "Creá tu cuenta";
+}
+
+export function SiteHeader({ trialDays = null }: { trialDays?: number | null }) {
+  const ctaLabel = signupCtaLabel(trialDays);
   return (
     <header className={s.header}>
       <div className={`k-container ${s.nav}`}>
@@ -40,10 +50,10 @@ export function SiteHeader() {
             Ingresar
           </ButtonLink>
           <ButtonLink href="/signup" variant="primary" size="sm">
-            Probá gratis
+            {ctaLabel}
           </ButtonLink>
         </div>
-        <MobileNav links={[...LANDING_NAV, { href: "#contacto", label: "Contacto" }]} />
+        <MobileNav links={[...LANDING_NAV, { href: "#contacto", label: "Contacto" }]} ctaLabel={ctaLabel} />
       </div>
     </header>
   );

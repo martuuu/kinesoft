@@ -4,40 +4,47 @@ import { getPortalAuth, getPortalPlan } from "@/lib/portal";
 import { resolveSlugAlias } from "@/lib/public-booking-internal";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 import { PortalCheckInForm } from "@/components/portal/check-in-form";
-import type { PortalPatient } from "@/lib/portal-types";
+import { BRAND_NAME } from "@/lib/brand";
+import {
+  portalCheckInCopy,
+  portalNextSessionLabel,
+  portalNoPlanCopy,
+  portalPlanProgress,
+  portalSessionLabel,
+  portalTenantHeader,
+} from "@/lib/portal-copy";
 
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: { slug: string } }) {
-  return { title: `Mi plan · ${params.slug} · KineSoft` };
+  // VX2-f: «Mi plan» no vale para Clínica general (no tiene planes) y acá no se lee la vertical (sería una query más).
+  return { title: `${params.slug} · Mi portal · ${BRAND_NAME}` };
 }
 
-/**
- * EV1-C2: vertical del consultorio de la ficha (`PortalPatient.tenantVertical`, de `getPortalAuth`). Clínica
- * general no tiene planes (lib/tenant-modules.ts), así que «tu plan / cuando tu kinesiólogo lo arme» le promete
- * algo que no existe.
+/*
+ * EV1-C2: el copy depende de la vertical del consultorio de la ficha (`PortalPatient.tenantVertical`, de
+ * `getPortalAuth`): Clínica general no tiene planes (lib/tenant-modules.ts), así que «tu plan / cuando tu kinesiólogo
+ * lo arme» le promete algo que no existe. VX2-f lo movió a `lib/portal-copy.ts` (puro, testeado, punto de extensión
+ * de ES4), que además deja «sesión» solo para Kinesiología.
  */
-function isGeneralTenant(p: PortalPatient): boolean {
-  return p.tenantVertical === "GENERAL";
-}
 
 export default async function PortalTenantPage({ params }: { params: { slug: string } }) {
   const auth = await getPortalAuth();
   if (!auth.signedIn) {
     return (
-      <Card glass style={{ padding: 22 }}>
-        <p style={{ fontSize: 14, color: "var(--navy-500)" }}>
-          Iniciá sesión para ver tu plan.
+      <Card glass style={{ padding: 22, display: "grid", gap: 12, justifyItems: "start" }}>
+        {/* VX2-f: sin sesión no se sabe la vertical → copy neutral («tu plan» no vale para Clínica general). */}
+        <p style={{ fontSize: 15, color: "var(--navy-500)", margin: 0 }}>
+          Iniciá sesión para ver tus turnos y tu tratamiento.
         </p>
-        {/* IAM-3c: `?c=` hace que Google o el link por email vuelvan a este consultorio. */}
-        <Link href={`/portal?c=${encodeURIComponent(params.slug)}`}>
-          <Button variant="primary" style={{ marginTop: 8 }}>
-            Entrar con Google o con tu email <IconArrow size={14} />
-          </Button>
-        </Link>
+        {/* IAM-3c: `?c=` hace que Google o el link por email vuelvan a este consultorio. VX2-f: `ButtonLink` en vez
+            de un Link que envolvía un Button (interactivo anidado, ratchet de ui-ratchets). */}
+        <ButtonLink href={`/portal?c=${encodeURIComponent(params.slug)}`} variant="primary" size="md">
+          Entrar con Google o con tu email <IconArrow size={14} />
+        </ButtonLink>
       </Card>
     );
   }
@@ -52,8 +59,10 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
     }
     notFound();
   }
-  const general = isGeneralTenant(me);
+  const vertical = me.tenantVertical;
   const plan = await getPortalPlan(params.slug);
+  const header = portalTenantHeader({ vertical, hasPlan: !!plan, firstName: me.firstName });
+  const noPlan = portalNoPlanCopy(vertical);
   const now = Date.now();
   const nextSession = plan?.sessions.find(
     (s) => !s.completedAt && new Date(s.scheduledFor).getTime() >= now - 60_000
@@ -63,7 +72,8 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Link
         href="/portal"
-        style={{ fontSize: 12, color: "var(--sky-700)", fontWeight: 600, textDecoration: "none" }}
+        className="k-link"
+        style={{ fontSize: 14, display: "inline-flex", alignItems: "center", minHeight: 44, alignSelf: "flex-start" }}
       >
         ← Mis consultorios
       </Link>
@@ -71,28 +81,24 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
       <header>
         <Tag tone="lime">{me.tenantName}</Tag>
         <h1 className="k-display" style={{ fontSize: 26, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
-          {general && !plan ? "Tu consultorio" : "Tu plan"}
+          {header.title}
         </h1>
-        <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
-          {general && !plan
-            ? `Hola ${me.firstName}.`
-            : `Hola ${me.firstName}. Acá ves cómo viene tu recuperación, sesión por sesión.`}
-        </p>
+        <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{header.lead}</p>
       </header>
 
       {!plan ? (
         <Card glass style={{ padding: 22 }}>
-          <p style={{ fontSize: 14, color: "var(--navy-500)" }}>
-            {general ? (
+          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
+            {noPlan.linkToHome ? (
               <>
-                Este consultorio no usa planes de tratamiento. Tus próximos turnos los ves en{" "}
-                <Link href="/portal" style={{ color: "var(--sky-700)", fontWeight: 600 }}>
+                {noPlan.text}{" "}
+                <Link href="/portal" className="k-link">
                   Mis consultorios
                 </Link>
                 .
               </>
             ) : (
-              "Todavía no tenés un plan activo en este consultorio. Cuando tu profesional lo arme va a aparecer acá."
+              noPlan.text
             )}
           </p>
         </Card>
@@ -134,7 +140,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
               className="k-mono"
               style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: "var(--sky-700)" }}
             >
-              {plan.completedSessions} / {plan.totalSessions} sesiones
+              {portalPlanProgress(vertical, plan.completedSessions, plan.totalSessions)}
             </div>
           </Card>
 
@@ -150,7 +156,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                     textTransform: "uppercase",
                   }}
                 >
-                  Próxima sesión · #{nextSession.index}
+                  {portalNextSessionLabel(vertical, nextSession.index)}
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>
                   {new Date(nextSession.scheduledFor).toLocaleString("es-AR", {
@@ -165,10 +171,10 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
               </div>
               {nextSession.hasCheckIn ? (
                 <Tag tone="lime">
-                  <IconCheck size={11} stroke={3} /> Check-in registrado
+                  <IconCheck size={11} stroke={3} /> {portalCheckInCopy(vertical).done}
                 </Tag>
               ) : (
-                <PortalCheckInForm slug={params.slug} sessionId={nextSession.id} />
+                <PortalCheckInForm slug={params.slug} sessionId={nextSession.id} vertical={vertical} />
               )}
             </Card>
           )}
@@ -185,7 +191,8 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                 borderBottom: "1px solid rgba(15,30,51,0.06)",
               }}
             >
-              Timeline
+              {/* VX2-f: «Timeline» era jerga; es la lista de citas del plan. */}
+              Recorrido del plan
             </div>
             {plan.sessions.map((s) => {
               const done = !!s.completedAt;
@@ -219,10 +226,10 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>
-                      Sesión {s.index}
+                      {portalSessionLabel(vertical, s.index)}
                       {done ? " · realizada" : ""}
                     </div>
-                    <div className="k-mono" style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                    <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
                       {new Date(s.scheduledFor).toLocaleDateString("es-AR", {
                         day: "2-digit",
                         month: "short",
@@ -231,7 +238,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                       })}
                     </div>
                   </div>
-                  {!done && s.hasCheckIn && <Tag tone="sky">Check-in</Tag>}
+                  {!done && s.hasCheckIn && <Tag tone="sky">{portalCheckInCopy(vertical).done}</Tag>}
                 </div>
               );
             })}

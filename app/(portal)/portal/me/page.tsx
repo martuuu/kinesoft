@@ -3,9 +3,15 @@ import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getPortalAuth } from "@/lib/portal";
+import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Mi cuenta · KineSoft" };
+export const metadata = { title: `Mi cuenta · ${BRAND_NAME}` };
+
+/*
+ * VX2-f (D-VX28): solo cara (textos de 12 px mínimo, filas y botón con 44 px de alto, `Button` del design system con
+ * `block`). Mismos datos que antes: lo que sume el portal completo es de ES4.
+ */
 
 export default async function PortalMe() {
   const auth = await getPortalAuth();
@@ -20,7 +26,7 @@ export default async function PortalMe() {
       <Card glass style={{ padding: 18 }}>
         <div
           style={{
-            fontSize: 11,
+            fontSize: 12,
             color: "var(--sky-700)",
             fontWeight: 700,
             letterSpacing: "0.06em",
@@ -29,8 +35,8 @@ export default async function PortalMe() {
         >
           Email
         </div>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>{auth.email}</div>
-        {auth.fullName && <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{auth.fullName}</div>}
+        <div style={{ fontSize: 16, fontWeight: 700, overflowWrap: "anywhere" }}>{auth.email}</div>
+        {auth.fullName && <div style={{ fontSize: 13, color: "var(--navy-500)" }}>{auth.fullName}</div>}
       </Card>
 
       <Card style={{ padding: 18 }}>
@@ -47,6 +53,8 @@ export default async function PortalMe() {
                 href={`/c/${p.tenantSlug}/booking`}
                 style={{
                   padding: "10px 12px",
+                  minHeight: 44,
+                  gap: 12,
                   borderRadius: 12,
                   background: "rgba(246,249,253,0.7)",
                   border: "1px solid rgba(15,30,51,0.06)",
@@ -59,11 +67,11 @@ export default async function PortalMe() {
               >
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700 }}>{p.tenantName}</div>
-                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
                     Ficha: {p.firstName} {p.lastName}
                   </div>
                 </div>
-                <span style={{ color: "var(--sky-700)", fontSize: 12, fontWeight: 600 }}>
+                <span style={{ color: "var(--sky-700)", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
                   Reservar turno →
                 </span>
               </Link>
@@ -73,7 +81,7 @@ export default async function PortalMe() {
       </Card>
 
       <form action="/api/auth/sign-out?next=/portal" method="post">
-        <Button variant="ghost" type="submit" style={{ width: "100%", justifyContent: "center" }}>
+        <Button variant="ghost" size="md" block type="submit">
           Cerrar sesión
         </Button>
       </form>

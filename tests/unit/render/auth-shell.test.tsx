@@ -3,7 +3,6 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthShell } from "@/components/auth/auth-shell";
-import { AuthShell as ShimAuthShell } from "@/components/screens/auth-shell";
 
 /**
  * [VX F-b1 · C-F4] AuthShell v2 (render sin jsdom, componente real). Se afirma lo observable del markup: children en
@@ -29,11 +28,11 @@ describe("[VX F-b1] AuthShell v2", () => {
     }
   });
 
-  it("default = split con la intro como h1 (compat con los consumidores de hoy)", () => {
+  it("default = split con la intro como h1 (VX-Z: el shim components/screens/auth-shell ya no existe)", () => {
     const html = renderToStaticMarkup(
-      <ShimAuthShell eyebrow="Acceso" heading="No podés entrar todavía." blurb="Motivo">
+      <AuthShell eyebrow="Acceso" heading="No podés entrar todavía." blurb="Motivo">
         {CHILD}
-      </ShimAuthShell>,
+      </AuthShell>,
     );
     expect(html).toContain('data-variant="split"');
     expect(h1Count(html)).toBe(1);

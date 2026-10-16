@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
-import { Button } from "@/components/ui/button";
-import { IconArrow, IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
+import { GoogleIcon } from "@/components/ui/brand-icons";
+import { IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
 import { getPortalAuth } from "@/lib/portal";
+import { PORTAL_HOME, portalPatientCardCopy, portalPlanProgress } from "@/lib/portal-copy";
 import type { PortalPatient } from "@/lib/portal-types";
 import { PortalEmailForm } from "./portal-email-form";
 
@@ -35,7 +36,7 @@ export default async function PortalHome({
       <header>
         <Tag tone="lime">Hola{auth.fullName ? `, ${auth.fullName.split(" ")[0]}` : ""}</Tag>
         <h1 className="k-display" style={{ fontSize: 28, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
-          Tu recuperación, en un solo lugar
+          {PORTAL_HOME.title}
         </h1>
         <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
           Vemos {auth.patients.length === 1 ? "tu ficha" : `${auth.patients.length} fichas`} vinculadas a tu email.
@@ -51,6 +52,8 @@ export default async function PortalHome({
 
 function PatientCard({ p }: { p: PortalPatient }) {
   const program = p.programs[0];
+  // VX2-f: copy por vertical de ESTA ficha (lib/portal-copy.ts): «sesiones» y «sin plan» solo en Kinesiología.
+  const copy = portalPatientCardCopy(p.tenantVertical);
   return (
     <Card glass style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -108,10 +111,10 @@ function PatientCard({ p }: { p: PortalPatient }) {
             }}
           >
             <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              Tu plan
+              {copy.planLabel}
             </div>
-            <span style={{ fontSize: 11, color: "var(--sky-700)", fontWeight: 700 }}>
-              Ver timeline →
+            <span style={{ fontSize: 12, color: "var(--sky-700)", fontWeight: 700 }}>
+              {copy.planCta} →
             </span>
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{program.title}</div>
@@ -136,14 +139,12 @@ function PatientCard({ p }: { p: PortalPatient }) {
             className="k-mono"
             style={{ marginTop: 8, fontSize: 12, color: "var(--sky-700)", fontWeight: 700 }}
           >
-            {program.completedSessions} / {program.totalSessions} sesiones
+            {portalPlanProgress(p.tenantVertical, program.completedSessions, program.totalSessions)}
           </div>
         </Link>
-      ) : (
-        <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
-          Todavía no tenés un plan de tratamiento activo en este centro.
-        </div>
-      )}
+      ) : copy.noPlan ? (
+        <div style={{ fontSize: 13, color: "var(--navy-500)" }}>{copy.noPlan}</div>
+      ) : null}
 
       <div>
         <div
@@ -156,16 +157,13 @@ function PatientCard({ p }: { p: PortalPatient }) {
             marginBottom: 8,
           }}
         >
-          Próximos turnos
+          {PORTAL_HOME.upcomingTitle}
         </div>
         {p.upcoming.length === 0 ? (
           <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
-            No tenés turnos próximos.{" "}
-            <Link
-              href={`/c/${p.tenantSlug}/booking`}
-              style={{ color: "var(--sky-700)", fontWeight: 600 }}
-            >
-              Sacar uno →
+            {PORTAL_HOME.noUpcoming}{" "}
+            <Link href={`/c/${p.tenantSlug}/booking`} className="k-link">
+              {PORTAL_HOME.bookCta} →
             </Link>
           </div>
         ) : (
@@ -208,7 +206,7 @@ function PatientCard({ p }: { p: PortalPatient }) {
                       timeZone: "America/Argentina/Buenos_Aires",
                     })}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
                     {b.serviceName} · {b.practitionerName} · {b.durationMin} min
                   </div>
                 </div>
@@ -227,14 +225,18 @@ function PatientCard({ p }: { p: PortalPatient }) {
 function PortalSignIn({ slug }: { slug: string | null }) {
   // IAM-3c: además de Google, «Entrar con tu email» (magic link propio; IAM-D5). El `next` de Google vuelve
   // al consultorio del CTA si vino con `?c=`.
+  // VX2-f (D-VX28): copy neutral (sin saber el consultorio no se sabe la vertical: nada de «recuperación» ni «la
+  // evolución de tu dolor», que solo vale en Kinesiología) y el botón de Google con la primitiva de auth
+  // (`.k-btn-social` + `GoogleIcon`, la misma del login). La ruta `/api/auth/google` no cambia.
   const next = slug ? `/portal/c/${slug}` : "/portal";
   return (
-    <Card glass style={{ padding: 32, textAlign: "center", display: "flex", flexDirection: "column", gap: 16 }}>
+    <Card glass style={{ padding: "clamp(20px, 5vw, 32px)", display: "flex", flexDirection: "column", gap: 16 }}>
       <div
+        aria-hidden
         style={{
-          width: 64,
-          height: 64,
-          borderRadius: 18,
+          width: 56,
+          height: 56,
+          borderRadius: 16,
           margin: "0 auto",
           background: "linear-gradient(135deg, var(--sky-400), var(--sky-700))",
           color: "#fff",
@@ -243,45 +245,25 @@ function PortalSignIn({ slug }: { slug: string | null }) {
           justifyContent: "center",
         }}
       >
-        <IconHeart size={28} />
+        <IconHeart size={26} />
       </div>
-      <h1 className="k-display" style={{ fontSize: 26, margin: 0, letterSpacing: "-0.02em" }}>
-        Tu recuperación al alcance de un toque
-      </h1>
-      <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-        Entrá para ver tus próximos turnos, el plan de tratamiento y la evolución de tu dolor.
-      </p>
+      <div style={{ textAlign: "center", display: "grid", gap: 6 }}>
+        <h1 className="k-display" style={{ fontSize: 26, margin: 0, letterSpacing: "-0.02em" }}>
+          {PORTAL_HOME.title}
+        </h1>
+        <p style={{ fontSize: 15, color: "var(--navy-500)", margin: 0 }}>{PORTAL_HOME.signInLead}</p>
+      </div>
       <form action={`/api/auth/google?next=${encodeURIComponent(next)}`} method="post">
-        <Button
-          variant="primary"
-          type="submit"
-          style={{ width: "100%", justifyContent: "center", padding: "14px 18px", fontSize: 14 }}
-        >
-          <span style={{ fontWeight: 700, color: "#FFFFFF" }}>G</span> Ingresar con Google{" "}
-          <IconArrow size={14} />
-        </Button>
+        <button type="submit" className="k-btn-social">
+          <GoogleIcon />
+          Continuar con Google
+        </button>
       </form>
-      <div
-        aria-hidden
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          fontSize: 11,
-          color: "var(--navy-300)",
-          fontWeight: 700,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-        }}
-      >
-        <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
-        o entrá con tu email
-        <span style={{ flex: 1, height: 1, background: "rgba(15,30,51,0.08)" }} />
-      </div>
+      <div className="k-divider">o con tu email</div>
       <PortalEmailForm slug={slug} />
-      <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-        Usá el mismo email que tiene tu ficha en el consultorio. Nada se publica.
-      </div>
+      <p className="k-hint" style={{ margin: 0, textAlign: "center" }}>
+        {PORTAL_HOME.signInFootnote}
+      </p>
     </Card>
   );
 }

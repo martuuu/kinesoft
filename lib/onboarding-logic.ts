@@ -234,7 +234,45 @@ export type OnboardingProgress = {
   /** Obras sociales además de "Particular". */
   insurersCount: number;
   invitationsCount: number;
+  /**
+   * VX2-e: el Titular atiende pacientes (`Membership.clinical`, tiene Practitioner). Opcional: ausente = true, que es
+   * lo que pasaba antes de PL-1a (el Titular siempre era profesional). false = alta sin «Tu horario»
+   * (`onboardingStepsFor`): `saveOnboardingClinic({ ownerClinical: false })` lo crea sin Practitioner ni agenda.
+   */
+  ownerClinical?: boolean;
 };
+
+/** Ausente = atiende (default de PL-1a). */
+const isClinical = (p: Pick<OnboardingProgress, "ownerClinical">) => p.ownerClinical !== false;
+
+/**
+ * VX2-e: los pasos que existen para este alta. Un Titular que no atiende no tiene semana propia: sin esto el riel le
+ * ofrecía «Tu horario», «Horario» lo mandaba ahí y la página caía en Servicios con el número del paso equivocado. Los
+ * `n` NO se renumeran (son la clave de `?step=` y de `STEP`); lo que cambia es la posición que se muestra
+ * (`stepPosition`).
+ */
+export function onboardingStepsFor(p: Pick<OnboardingProgress, "ownerClinical">) {
+  return isClinical(p) ? ONBOARDING_STEPS : ONBOARDING_STEPS.filter((s) => s.key !== "myHours");
+}
+
+/** «Paso N de M» de este alta (N cuenta desde «Tu cuenta», como el riel). */
+export function stepPosition(n: number, p: Pick<OnboardingProgress, "ownerClinical">): { index: number; total: number } {
+  const steps = onboardingStepsFor(p);
+  const i = steps.findIndex((s) => s.n === n);
+  return { index: i >= 0 ? i + 1 : n, total: steps.length };
+}
+
+/** Paso siguiente («Guardar y seguir»), salteando los que no existen para este alta. */
+export function nextStep(n: number, p: Pick<OnboardingProgress, "ownerClinical">): OnboardingStepNumber {
+  const next = onboardingStepsFor(p).find((s) => s.n > n);
+  return (next ? next.n : LAST_STEP) as OnboardingStepNumber;
+}
+
+/** Paso anterior («Volver»), mismo criterio. Nunca antes de Consultorio (la cuenta ya está hecha). */
+export function prevStep(n: number, p: Pick<OnboardingProgress, "ownerClinical">): OnboardingStepNumber {
+  const prev = [...onboardingStepsFor(p)].reverse().find((s) => s.n < n && s.n >= FIRST_STEP);
+  return (prev ? prev.n : FIRST_STEP) as OnboardingStepNumber;
+}
 
 /**
  * Paso en el que se retoma el alta, derivado del estado (sin columna "paso
@@ -270,7 +308,8 @@ export function deriveResumeStep(p: OnboardingProgress): OnboardingStepNumber {
 /**
  * Paso a mostrar dado el `?step=` de la URL. Sin tenant solo existe
  * Consultorio (los demás escriben sobre el tenant). Sin servicios no se pasa
- * de Servicios: la agenda y el turnero necesitan al menos uno.
+ * de Servicios: la agenda y el turnero necesitan al menos uno. Sin
+ * Practitioner propio (`ownerClinical=false`) «Tu horario» cae en Servicios.
  */
 export function resolveStep(requested: string | null | undefined, p: OnboardingProgress): OnboardingStepNumber {
   const resume = deriveResumeStep(p);
@@ -278,6 +317,8 @@ export function resolveStep(requested: string | null | undefined, p: OnboardingP
   if (!requested || !Number.isInteger(n) || n < FIRST_STEP || n > LAST_STEP) return resume;
   if (!p.hasTenant) return STEP.clinic;
   if (p.servicesCount === 0 && n > STEP.services) return STEP.services;
+  // VX2-e: «Tu horario» no existe para un Titular que no atiende (no hay Practitioner): el siguiente paso real.
+  if (n === STEP.myHours && !isClinical(p)) return STEP.services;
   return n as OnboardingStepNumber;
 }
 

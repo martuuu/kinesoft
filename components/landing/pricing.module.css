@@ -70,6 +70,11 @@
 .for { margin: 0; font-size: 15px; color: var(--navy-500); min-height: 2.9em; }
 
 .priceBlock { display: grid; gap: 10px; }
+/* VX-Z: con 3 columnas, la fila de la prueba («14 días gratis…») existe aunque el plan no tenga prueba (pista explícita
+   vacía), así los tres CTA quedan a la misma altura. En una columna no hace falta y se libera. */
+@media (min-width: 1024px) {
+  .priceBlock { grid-template-rows: auto minmax(1.45em, auto); }
+}
 .amount { margin: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .amount strong {
   font-size: 40px;
@@ -92,7 +97,8 @@
 .extra { display: grid; gap: 12px; }
 .extraTitle { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sky-700); }
 
-.cta { margin-top: auto; }
+/* VX-Z: el CTA sigue al precio (antes `margin-top: auto` al pie dejaba un hueco en las tarjetas con pocos bullets). */
+.cta { margin-top: 4px; }
 
 /* Banda Libre */
 .band {

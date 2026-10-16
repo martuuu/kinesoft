@@ -22,7 +22,6 @@
  *     only callable from a server context that has already validated a
  *     Supabase session.
  */
-import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 // No-Actor surface (anonymous turnero) → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { Prisma } from "@prisma/client";
@@ -55,6 +54,7 @@ import {
 import { bookablePractitionerWhere } from "@/lib/practitioner-scope";
 import type { ActionResult } from "@/lib/validation";
 import { publicPractitionerName } from "@/lib/display-name";
+import { publicOpeningRanges, summarizeOpeningHours } from "@/lib/opening-hours-summary";
 import {
   FirstPublicSlotSchema,
   ListPublicSlotsSchema,
@@ -110,7 +110,17 @@ function publicPractitionerWhere(tenantId: string) {
 export async function getPublicClinic(slug: string): Promise<PublicClinic | null> {
   const tenant = await prisma.tenant.findUnique({
     where: { slug },
-    select: { id: true, slug: true, name: true, legalName: true, palette: true, ...PUBLIC_BOOKING_SWITCH_SELECT },
+    select: {
+      id: true,
+      slug: true,
+      name: true,
+      legalName: true,
+      palette: true,
+      // VX2-d1: red de seguridad del horario resumido (profesional sin franjas = horario del consultorio).
+      businessHoursStart: true,
+      businessHoursEnd: true,
+      ...PUBLIC_BOOKING_SWITCH_SELECT,
+    },
   });
   // Turnero apagado (EV0, EV-D2 opt-in) = mismo resultado que un slug que no
   // existe: el wizard no recibe profesionales, servicios ni sedes. La página
@@ -162,9 +172,21 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
       },
       orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
     }),
+    // VX2-d1: TODAS las franjas (también de sedes inactivas y con cualquier vigencia), como el motor
+    // (`availability-loader`): «tiene alguna franja» decide si cae a la red de seguridad. Las sedes del
+    // profesional (`locationIds`) siguen saliendo solo de las activas.
     prisma.practitionerSchedule.findMany({
-      where: { tenantId, location: { active: true } },
-      select: { practitionerId: true, locationId: true },
+      where: { tenantId },
+      select: {
+        practitionerId: true,
+        locationId: true,
+        dow: true,
+        startMin: true,
+        endMin: true,
+        validFrom: true,
+        validUntil: true,
+        location: { select: { active: true } },
+      },
     }),
   ]);
 
@@ -197,6 +219,16 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
   const offering = new Set(offered.flatMap((o) => o.offeredBy));
   const primary = locations.find((l) => l.isPrimary) ?? null;
   const locationOrder = locations.map((l) => l.id);
+  // VX2-d1: el nav del turnero decía «lun-sáb 8 a 19hs» fijo. Ahora sale de las franjas de los profesionales
+  // que el turnero ofrece (null = no se muestra). Reloj: hoy AR adentro de `summarizeOpeningHours`.
+  const openingSummary = summarizeOpeningHours(
+    publicOpeningRanges({
+      practitionerIds: pracIds.filter((id) => offering.has(id)),
+      rows: schedules.map((r) => ({ ...r, locationActive: r.location.active })),
+      tenant,
+    }),
+    new Date()
+  );
 
   return {
     slug: tenant.slug,
@@ -205,10 +237,13 @@ export async function getPublicClinic(slug: string): Promise<PublicClinic | null
     palette: tenant.palette,
     // EV1-C2: ya viene en PUBLIC_BOOKING_SWITCH_SELECT; el wizard la usa para el copy.
     vertical: tenant.vertical,
+    openingSummary,
     practitioners: practitioners
       .filter((p) => offering.has(p.id))
       .map((p) => {
-        const own = new Set(schedules.filter((r) => r.practitionerId === p.id).map((r) => r.locationId));
+        const own = new Set(
+          schedules.filter((r) => r.practitionerId === p.id && r.location.active).map((r) => r.locationId)
+        );
         // Sin franjas = red de seguridad del motor (horario del tenant en la principal).
         const locationIds = own.size > 0 ? locationOrder.filter((id) => own.has(id)) : primary ? [primary.id] : [];
         return {
@@ -728,11 +763,10 @@ export async function submitPublicBooking(
     return { ok: false, error: "No pudimos iniciar el pago. Probá de nuevo en unos segundos." };
   }
 
+  // VX2-d1 (AUDIT `turnero-revalidatepath-doble`): sin `revalidatePath("/agenda", "/dashboard")`. La
+  // invalidación la hace `afterBookingsCommitted` (tags `bookingDays` + `dashboard`) justo después del commit; los
+  // replays no escribieron nada y no tienen qué invalidar.
   logger.info("booking.public.create", { bookingId, tenant: tenant.slug, replay: !!prior });
-
-
-  revalidatePath("/agenda");
-  revalidatePath("/dashboard");
 
   return {
     ok: true,

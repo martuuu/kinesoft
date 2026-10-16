@@ -17,7 +17,8 @@ import styles from "./pricing.module.css";
  *   los precios.». No rompe ni muestra tarjetas vacías.
  * - Sin switch de vertical (D-VX15): se listan los bullets de General y, aparte, lo que Kinesiología suma en ese plan.
  *   Así un consultorio General no lee como incluido algo que su vertical no tiene.
- * - CTA → `/signup` en todos (D-VX18: toda cuenta arranca en Individual y cambia de plan desde Configuración, PL-D10);
+ * - CTA → `/signup` en todos (D-VX18: el alta no elige plan; nace Individual —o Consultorio si el Titular no atiende,
+ *   decisión 24 de VX-Z— y cambia de plan desde Configuración, PL-D10);
  *   por eso el botón no dice «Elegir Clínica» como la maqueta, y la nota lo aclara.
  */
 
@@ -54,6 +55,20 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
           </p>
         )}
       </div>
+      {/* VX-Z: el CTA va pegado al precio y no al pie. Con Individual cargando 8 bullets y Consultorio/Clínica 2-3, al
+          pie quedaba un hueco grande arriba del botón en las dos de la derecha (capturas de VX2.1 a 1366). Así los
+          tres botones quedan a la misma altura y el aire sobrante cae al final de la lista, donde no se lee como
+          «falta algo». aria-describedby: los tres botones dicen lo mismo; el lector los distingue por el plan. */}
+      <ButtonLink
+        href="/signup"
+        variant={featured ? "primary" : "ghost"}
+        size="lg"
+        block
+        className={styles.cta}
+        aria-describedby={titleId}
+      >
+        {plan.trialDays > 0 ? "Empezá gratis" : "Crear cuenta"}
+      </ButtonLink>
       <div className={styles.sep} />
       <ul className={styles.list} role="list">
         {common.map((b) => (
@@ -80,17 +95,6 @@ function PriceCard({ plan, featured }: { plan: PublicPlan; featured: boolean }) 
           </ul>
         </div>
       )}
-      {/* aria-describedby: los tres botones dicen lo mismo; el lector de pantalla los distingue por el plan. */}
-      <ButtonLink
-        href="/signup"
-        variant={featured ? "primary" : "ghost"}
-        size="lg"
-        block
-        className={styles.cta}
-        aria-describedby={titleId}
-      >
-        {plan.trialDays > 0 ? "Empezá gratis" : "Crear cuenta"}
-      </ButtonLink>
     </article>
   );
 }
@@ -145,7 +149,9 @@ export function LandingPricing({ plans }: { plans: PublicPlan[] }) {
 
         {cards.length > 0 && (
           <p className={styles.note}>
-            Precios en pesos argentinos. Toda cuenta arranca en el plan Individual y cambiás de plan desde Configuración.
+            {/* VX-Z: decía «Toda cuenta arranca en el plan Individual»; desde la decisión 24 un Titular que no atiende
+                arranca en prueba Consultorio (lib/onboarding.ts), así que la nota ya no promete el plan de arranque. */}
+            Precios en pesos argentinos. Cambiás de plan cuando quieras desde Configuración.
           </p>
         )}
       </div>

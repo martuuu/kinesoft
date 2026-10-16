@@ -13,6 +13,7 @@ import { practitionerInitials } from "@/lib/agenda-layout";
 import { deskViewer } from "@/lib/reception-desk-state";
 import { SalaClient } from "@/components/sala/sala-client";
 import { logger } from "@/lib/logger";
+import { moduleWall } from "@/lib/module-wall";
 
 export const metadata = { title: "Sala de espera · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -39,6 +40,10 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *   el viewer suma `canCollect` (`billing.manage`) para el cobro del escritorio.
  */
 export default async function SalaPage() {
+  // VX-Z: Next renderiza el layout y la página EN PARALELO. Sin el módulo, el layout muestra el muro (o redirige),
+  // pero la página igual corría `listSalaBookings`, que tira `ForbiddenError` (`assertModule`) y ensuciaba el log en
+  // cada visita al muro. Mismo veredicto que el layout (el actor está cacheado por request): si no es "ok", nada.
+  if ((await moduleWall("salaEspera")) !== "ok") return null;
   const [actor, caps] = await Promise.all([getActor(), getCapabilities()]);
   if (!caps.has("agenda.reception")) redirect("/agenda");
 

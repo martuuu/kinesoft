@@ -13,7 +13,14 @@ import s from "./site-header.module.css";
  * Sin framer (C-F3: superficie pública): la entrada del panel es `k-rise` en CSS y con reduce motion no se anima.
  * Sin JS el botón no hace nada, pero todo lo del menú también está en el footer (anclas) y en el hero (CTAs).
  */
-export function MobileNav({ links }: { links: readonly { href: string; label: string }[] }) {
+export function MobileNav({
+  links,
+  ctaLabel = "Creá tu cuenta",
+}: {
+  links: readonly { href: string; label: string }[];
+  /** VX-Z: el mismo texto que el CTA del header (`signupCtaLabel`). */
+  ctaLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -74,7 +81,7 @@ export function MobileNav({ links }: { links: readonly { href: string; label: st
         </nav>
         <div className={s.panelCta}>
           <Link href="/signup" className={buttonClassName({ variant: "primary", size: "md", block: true })} onClick={close}>
-            Probá gratis
+            {ctaLabel}
           </Link>
           <Link href="/login" className={buttonClassName({ variant: "ghost", size: "md", block: true })} onClick={close}>
             Ingresar
