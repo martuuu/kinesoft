@@ -108,8 +108,11 @@ describe("[PL-F1c] barra superior (chrome «Barra superior»)", () => {
     expect(html).toMatch(/<button[^>]*aria-label="Abrir búsqueda rápida"/);
     // Campana: la de NotificationsBell (botón con dropdown), no un <span> inerte.
     expect(html).toMatch(/<button[^>]*aria-label="Notificaciones/);
-    const code = src("components/layout/topbar.tsx");
-    expect(code).toContain('new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true })');
+    // PF1.0-a: el botón llama a `openCommandPalette`, que despacha el mismo ⌘K que escucha el launcher del shell.
+    expect(src("components/layout/topbar.tsx")).toContain("onClick={openCommandPalette}");
+    expect(src("components/layout/command-palette-launcher.tsx")).toContain(
+      'new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true })'
+    );
   });
 
   it("sin nombre cargado dice «Usuario sin nombre» (decisión 19: nunca el email)", () => {

@@ -11,13 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { updateAgendaViewPrefs, updateUserPreferences } from "@/lib/preferences";
-import {
-  DEFAULT_AGENDA_VIEW_PREFS,
-  DEFAULT_PREFERENCES,
-  RECEPTION_LAYOUTS,
-  type AgendaPrefs,
-  type ReceptionLayout,
-} from "@/lib/preferences-constants";
+import type { AgendaPrefs, ReceptionLayout } from "@/lib/preferences-constants";
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
 export type DashChrome = "sidebar" | "topbar";
@@ -75,11 +69,21 @@ export function hydrateTweaks(raw: string | null, serverPalette?: Palette | null
   };
 }
 
-const DEFAULT_AGENDA: AgendaPrefs = {
-  agendaShowWeekHeader: DEFAULT_PREFERENCES.agendaShowWeekHeader,
-  agendaShowSaturday: DEFAULT_PREFERENCES.agendaShowSaturday,
-  agendaShowSunday: DEFAULT_PREFERENCES.agendaShowSunday,
+/**
+ * PF1.0-a: copias locales de `DEFAULT_PREFERENCES` (los 3 toggles de la semana), `RECEPTION_LAYOUTS` y el default de
+ * `receptionLayout`. Antes se importaban como VALORES de `lib/preferences-constants.ts`, que trae zod (los schemas de
+ * patch) y los textos de las KPIs del dashboard: este provider monta en el layout de `(app)`, así que zod (~13 kB
+ * gz) y el chunk de strings del dashboard («Pacientes activos», «Turnos de hoy»…) iban a TODAS las rutas del
+ * workspace. `tests/unit/shell-zod-free.test.ts` afirma que estas copias siguen iguales a las de ese módulo.
+ */
+export const SHELL_DEFAULT_AGENDA: AgendaPrefs = {
+  agendaShowWeekHeader: true,
+  agendaShowSaturday: true,
+  agendaShowSunday: true,
 };
+export const SHELL_RECEPTION_LAYOUTS: readonly ReceptionLayout[] = ["board", "list", "flow"];
+export const SHELL_DEFAULT_RECEPTION_LAYOUT: ReceptionLayout = "board";
+const DEFAULT_AGENDA = SHELL_DEFAULT_AGENDA;
 
 /**
  * RX-0 (C-RX2): guarda la cara de `/sala` elegida en Apariencia. Optimista: `apply(next)` ya se hizo antes de
@@ -134,7 +138,7 @@ export function TweaksProvider({
   children,
   initialAgenda,
   initialPalette = null,
-  initialReceptionLayout = DEFAULT_AGENDA_VIEW_PREFS.receptionLayout,
+  initialReceptionLayout = SHELL_DEFAULT_RECEPTION_LAYOUT,
 }: {
   children: ReactNode;
   initialAgenda?: AgendaPrefs;
@@ -149,7 +153,7 @@ export function TweaksProvider({
   }));
   const [agenda, setAgendaState] = useState<AgendaPrefs>(initialAgenda ?? DEFAULT_AGENDA);
   const [receptionLayout, setReceptionLayoutState] = useState<ReceptionLayout>(() =>
-    RECEPTION_LAYOUTS.includes(initialReceptionLayout) ? initialReceptionLayout : DEFAULT_AGENDA_VIEW_PREFS.receptionLayout
+    SHELL_RECEPTION_LAYOUTS.includes(initialReceptionLayout) ? initialReceptionLayout : SHELL_DEFAULT_RECEPTION_LAYOUT
   );
   // Copia sincrónica del valor vigente (el «previo» del rollback no puede salir de un closure viejo) y número del
   // último pedido (ver `persistReceptionLayout`).

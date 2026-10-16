@@ -1,0 +1,55 @@
+/* [PF1.0-b · C-PF6] Switch del design system (antes vivía en components/configuracion/controls.tsx con estilo inline).
+   Dibujo 52×30 (no cambia: las filas de Configuración están alineadas a ese alto); el área de toque llega a 44×44 con
+   un pseudo-elemento transparente (WCAG 2.5.5 / criterio §5 de VX): 30 + 7 + 7 = 44 de alto, 52 de ancho. */
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 30, 51, 0.18);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  inset: -7px 0;
+}
+.switch[aria-checked="true"] {
+  background: var(--sky-700);
+}
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+/* El foco global (`:where(button…)`) ya pinta `--focus-ring`; acá solo se asegura la forma de píldora del anillo. */
+.switch:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(15, 30, 51, 0.18);
+  transition: transform var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+}
+.switch[aria-checked="true"] .thumb {
+  transform: translateX(22px);
+}
+
+/* reducedMotion: el estado final (color y posición del círculo) se ve completo sin transición. */
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .thumb {
+    transition: none;
+  }
+}

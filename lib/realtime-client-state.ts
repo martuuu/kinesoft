@@ -6,7 +6,7 @@
  * backoff, polling, refresh del token) vive acá para que los drivers sean solo
  * cableado.
  */
-import { RealtimeAgendaMessageSchema, type RealtimeAgendaMessage } from "@/lib/realtime-events";
+import { parseRealtimeAgendaMessage, type RealtimeAgendaMessage } from "@/lib/realtime-message-guard";
 import type {
   ConnectionState,
   DriverStatus,
@@ -142,13 +142,9 @@ export function nextTokenRefreshAt(expiresAt: string | Date, now: number | Date)
 
 /** Payload crudo del canal → mensaje validado o `null`. Nunca tira (el canal no es confiable). */
 export function parseIncoming(payload: unknown): RealtimeAgendaMessage | null {
-  try {
-    const parsed = RealtimeAgendaMessageSchema.safeParse(payload);
-    return parsed.success ? parsed.data : null;
-  } catch {
-    // safeParse no tira por datos inválidos, pero un getter hostil sí podría.
-    return null;
-  }
+  // PF1.0-a (C-PF3): guard TS puro con la semántica del schema zod (sin zod en el bundle del shell). Nunca tira:
+  // un getter hostil cuenta como inválido.
+  return parseRealtimeAgendaMessage(payload);
 }
 
 /**

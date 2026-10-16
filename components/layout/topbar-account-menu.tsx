@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { IconBell, IconCheck, IconHome, IconLogout, IconSettings } from "@/components/ui/icons";
-import { SUPPORT_HELP_HREF } from "@/components/global/profile-menu";
+import { SUPPORT_HELP_HREF } from "./shell-links";
+import { preloadAppearance } from "./appearance-loader";
 import {
   OWN_TURNERO_OFF_HINT,
   PublicBookingSwitch,
@@ -117,6 +118,8 @@ export function TopbarAccountMenu({
                 setOpen(false);
                 onOpenAppearance();
               }}
+              onPointerEnter={preloadAppearance}
+              onFocus={preloadAppearance}
               style={{ ...itemStyle, width: "100%", textAlign: "left", background: "transparent", border: "none", cursor: "pointer" }}
             >
               <IconSettings size={14} /> Apariencia

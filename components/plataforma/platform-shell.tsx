@@ -61,7 +61,10 @@ export function PlatformShell({
           borderRadius: "var(--r-xl)",
           position: "sticky",
           top: 14,
-          height: "calc(100vh - 28px)",
+          // PF1.0-a (S4 de VX0-b): `dvh` y no `vh`. En Safari iOS `100vh` cuenta la barra de direcciones y el pie del
+          // sidebar quedaba tapado. (El «bloque cortado» de las capturas de VX0-b era la captura de página completa:
+          // un sticky se dibuja una sola vez arriba.)
+          height: "calc(100dvh - 28px)",
           overflowY: "auto",
           display: "flex",
           flexDirection: "column",
@@ -236,9 +239,10 @@ function SupportChip({
           setError(res.error);
           return;
         }
+        // PF1.0-a (C-PF4): sin `router.refresh()`. `endSupport` ya hace `revalidatePath("/", "layout")`, así que la
+        // navegación sale con el layout re-leído (sin la cookie de soporte, sin el chip); el refresh era un segundo
+        // render completo.
         router.push(res.data.redirectTo);
-        // El layout lee la cookie de soporte en el server: sin refresh, el chip seguiría ahí.
-        router.refresh();
       } catch {
         setError("No se pudo salir de soporte. Probá de nuevo.");
       }

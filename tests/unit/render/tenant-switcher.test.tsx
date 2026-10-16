@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -13,6 +13,18 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {}, push: () => {} }),
 }));
 vi.mock("@/lib/preferences", () => ({ updateUserPreferences: async () => ({ ok: true, data: undefined }) }));
+// PF1.0-a (C-PF2): la lista del selector se baja con `next/dynamic` al abrir. Sin jsdom no hay carga diferida real:
+// el mock corre el MISMO loader (el `import()` del panel real) y, ya resuelto (`beforeAll`), pinta el componente.
+const dyn = vi.hoisted(() => ({ pending: [] as Promise<unknown>[] }));
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<React.ComponentType<Record<string, unknown>>>) => {
+    let Loaded: React.ComponentType<Record<string, unknown>> | null = null;
+    dyn.pending.push(loader().then((c) => (Loaded = c)));
+    return function Dynamic(props: Record<string, unknown>) {
+      return Loaded ? <Loaded {...props} /> : null;
+    };
+  },
+}));
 // PL-Z: el menú de perfil monta el switch del propio turnero (server action: red).
 vi.mock("@/lib/practitioner-public", () => ({ setPractitionerPublicBooking: async () => ({ ok: true, data: { enabled: true } }) }));
 
@@ -36,6 +48,10 @@ function withChoice(options: TenantOption[], active: string | null, node: React.
     </TenantChoiceProvider>
   );
 }
+
+beforeAll(async () => {
+  await Promise.all(dyn.pending);
+});
 
 beforeEach(() => {
   nav.pathname = "/dashboard";

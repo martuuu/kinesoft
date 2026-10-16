@@ -110,6 +110,12 @@ type CommonProps = {
    * `autoComplete="new-password"` los gestores de contraseñas no ofrecen generar una en el alta.
    */
   autoComplete?: string;
+  /**
+   * [PF1.0-b · C-PF6] `"inline"` = rótulo a la izquierda desde 1024 px (drawers densos de la Secretaria; debajo de
+   * 1024 se apila igual que `"stack"`). El alto del control no cambia (44 px / 16 px, D-VX13): la densidad se gana con
+   * layout. Default `"stack"`: los llamadores existentes no cambian.
+   */
+  layout?: "stack" | "inline";
 };
 
 type InputProps = CommonProps & {
@@ -147,7 +153,9 @@ export function FormField(props: FormFieldProps) {
     disabled,
     autoFocus,
     autoComplete,
+    layout = "stack",
   } = props;
+  const inline = layout === "inline";
   // useId: ids estables entre SSR e hidratación para `htmlFor` y `aria-describedby`.
   const id = useId();
   const hintId = `${id}-hint`;
@@ -166,12 +174,13 @@ export function FormField(props: FormFieldProps) {
   const controlStyle = disabled ? disabledStyle : undefined;
 
   return (
-    <div className="k-field" style={{ minWidth: 0 }}>
+    <div className={inline ? "k-field k-field-inline" : "k-field"} style={{ minWidth: 0 }}>
       {label !== "" && (
         <label
           htmlFor={isDateTime ? undefined : id}
           className="k-label"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}
+          // En `inline` el `nowrap` lo pone `.k-field-inline` (solo apilado): al lado del control el rótulo corta línea.
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: inline ? undefined : "nowrap" }}
         >
           {label}
           {required && <span style={{ color: "var(--sky-700)" }}>*</span>}

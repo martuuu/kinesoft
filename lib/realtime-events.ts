@@ -2,7 +2,9 @@
  * Mensaje del canal realtime de la agenda (SV, C-SV2 — FIRMA CONGELADA).
  *
  * Puro y client-safe: el publisher (server) arma los mensajes con
- * `buildRealtimeMessages` y el browser valida lo que recibe con el MISMO schema.
+ * `buildRealtimeMessages` y el browser valida lo que recibe con
+ * `lib/realtime-message-guard.ts` (misma semántica que el schema zod de
+ * `lib/realtime-events-schema.ts`, probada por corpus).
  *
  * Por qué el payload es tan pobre (§18.2): es un «tocá acá», no un dato. El
  * cliente nunca lo muestra ni lo confía; con `day`/`practitionerId` decide si le
@@ -18,44 +20,15 @@
  * reemplazo es un tipo estructural mínimo acá mismo al que `BookingChangeRef`
  * siga siendo asignable.
  */
-import { z } from "zod";
 import type { BookingChangeRef } from "@/lib/booking-events-internal";
 import { toARDateKey } from "@/lib/datetime-ar";
 import { MAX_MESSAGES_PER_POST, type RealtimeDriverName } from "@/lib/realtime-constants";
+import { type RealtimeAgendaMessage, type RealtimeKind } from "@/lib/realtime-message-guard";
 
-const idSchema = z.string().min(1).max(64);
-/** Día AR (`toARDateKey`), nunca el `toISOString().slice(0,10)` del host. */
-const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-
-export const REALTIME_KINDS = ["booking", "reception", "called", "availability"] as const;
-export type RealtimeKind = (typeof REALTIME_KINDS)[number];
-
-export const RealtimeAgendaMessageSchema = z
-  .object({
-    v: z.literal(1),
-    kind: z.enum(REALTIME_KINDS),
-    /** Ausente en los mensajes colapsados y en `availability`. */
-    bookingId: idSchema.optional(),
-    /** null = todo el consultorio (colapso final o candado de todos). */
-    practitionerId: idSchema.nullable(),
-    /** null = cualquier día (colapso por profesional). */
-    day: daySchema.nullable(),
-    /** Sala DESPUÉS del cambio; ausente = el write-path no la informa. */
-    roomId: idSchema.nullable().optional(),
-    /** Dónde estaba antes de un movimiento: las dos agendas tienen que re-pedir. */
-    prev: z
-      .object({
-        practitionerId: idSchema,
-        day: daySchema,
-        roomId: idSchema.nullable().optional(),
-      })
-      .strict()
-      .optional(),
-    at: z.string().datetime(),
-  })
-  .strict();
-
-export type RealtimeAgendaMessage = z.infer<typeof RealtimeAgendaMessageSchema>;
+// PF1.0-a (C-PF3): el schema zod se mudó a `lib/realtime-events-schema.ts` y el browser valida con
+// `lib/realtime-message-guard.ts` (TS puro). Este módulo lo importa el shell de `(app)` y con zod adentro sumaba
+// ~13 kB gz a cada ruta del workspace. Los nombres se re-exportan para no tocar a los importadores de tipos.
+export { REALTIME_KINDS, type RealtimeAgendaMessage, type RealtimeKind } from "@/lib/realtime-message-guard";
 
 /** DTO client-safe que el layout le pasa al `RealtimeProvider` (lo arma `realtimeBootstrap`). */
 export type RealtimeBootstrap = {

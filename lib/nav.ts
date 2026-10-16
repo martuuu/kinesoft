@@ -34,9 +34,10 @@ export type NavIconKey =
   | "heart" // IconHeart
   | "activity" // IconActivity
   | "dumbbell" // IconDumbbell
-  | "chart" // IconChart
+  | "chart" // IconChart (Seguimiento)
   | "settings" // IconSettings
-  | "bookmark"; // IconBookmark (Catálogo global de Plataforma)
+  | "plans" // IconPlans (Planes)
+  | "bookmark"; // IconBookmark (Plataforma)
 
 export type NavItem = {
   href: string;
@@ -71,9 +72,10 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/pacientes", label: "Pacientes", icon: "users", module: "pacientes", shortcut: "Pacientes" },
   // Planes (S21): sin capability a propósito, así también es atajo de ⌘K.
   // La Secretaria entra (filtro "Sesiones sin turno", sin títulos: PD-13);
-  // lo que cada rol ve lo recorta `listPlans` en el server. Ícono: reusa
-  // `bookmark` hasta que el sidebar sume uno propio (`NAV_ICONS` es exhaustivo).
-  { href: "/planes", label: "Planes", icon: "bookmark", module: "planes", shortcut: "Planes" },
+  // lo que cada rol ve lo recorta `listPlans` en el server.
+  // PF1.0-a (S3 de VX0-b): ícono propio (`plans`, el portapapeles de las pestañas). Reusaba `bookmark`, el mismo de
+  // Plataforma en el pie: con el sidebar contraído había dos «marcadores» iguales y no se sabía cuál era cuál.
+  { href: "/planes", label: "Planes", icon: "plans", module: "planes", shortcut: "Planes" },
   {
     href: "/diagnostico",
     label: "Diagnóstico",
@@ -82,10 +84,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
     shortcut: "Diagnóstico",
   },
   // Seguimiento = sesiones del plan (en General no hay "Sesiones/Seguimiento").
+  // PF1.0-a (S3): `chart` (progreso) y no `activity`, que es el de Terapia Manual: eran dos «pulsos» iguales.
   {
     href: "/seguimiento",
     label: "Seguimiento",
-    icon: "activity",
+    icon: "chart",
     module: "sesiones",
     shortcut: "Seguimiento",
   },
@@ -94,8 +97,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // biblioteca, sin módulo propio en la matriz → va con `ejercicios`.
   { href: "/terapia-manual", label: "Terapia Manual", icon: "activity", module: "ejercicios" },
   // PL-F1b: «Reportes» salió del nav y del ⌘K (regla de Martin: lo que no tiene funcionalidad se saca). La página era
-  // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige otra sesión. El módulo `reportes`
-  // y el ícono `chart` quedan: la matriz de módulos y el mapa del sidebar no cambian.
+  // un placeholder («Pendiente para una iteración posterior»); la ruta la redirige a /dashboard. El módulo `reportes`
+  // queda en la matriz; su ícono `chart` lo usa Seguimiento desde PF1.0-a.
   // El sidebar la ubica en el pie; la entrada es una sola. Solo `tenant.admin`: desde PL-F1b la página se abre para
   // cualquier miembro (un Profesional ve solo «Soporte»), pero en el nav «Configuración» sigue siendo de quien
   // configura; el resto llega a Soporte por «Ayuda y soporte» del menú de perfil (components/global/profile-menu.tsx).

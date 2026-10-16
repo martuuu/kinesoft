@@ -199,6 +199,16 @@
      de cómputo y el texto cae a la fuente por defecto del navegador (serif), no a "Onest"/system-ui. */
   --font-sans: var(--font-onest, "Onest"), "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
 
+  /* [PF1.0-b · C-PF6] Capas de los overlays. Drawer y Modal van por portal a <body> (hermanos), así que el orden lo dan
+     solo estos números: un Modal abierto desde un Drawer queda arriba, y la confirmación (`useConfirm`) y los toasts
+     arriba de todo. Antes: Modal 40 < Drawer 46 (el Modal quedaba debajo). Los menús y popovers sueltos del workspace
+     (⌘K 50, menús 60) quedan entre el Drawer y el Modal, como ya estaban respecto del Drawer. */
+  --z-drawer-backdrop: 45;
+  --z-drawer: 46;
+  --z-modal: 70;
+  --z-confirm: 80;
+  --z-toast: 90;
+
   /* Fondo público sin blur (D-VX9): gradientes pintados, no blobs con filter: blur (cuestan GPU en mobile). */
   --bg-public:
     radial-gradient(60% 50% at 88% 0%, rgba(143, 181, 221, 0.38) 0%, rgba(143, 181, 221, 0) 70%),
@@ -850,3 +860,30 @@ select.k-input { appearance: none; padding-right: 40px;
   .k-btn-social, .k-input, .k-skip-link { transition: none; }
 }
 /* .k-page-in ya existe (PF-0c, más arriba): no se redefine. */
+
+/* ─────────────────────────────────────────────────────────────────
+   [PF1.0-b · C-PF6] Clases de las primitivas.
+   ───────────────────────────────────────────────────────────────── */
+
+/* Paneles de Drawer y Modal (contenedores con tabIndex=-1: el trap los enfoca si no tienen nada focuseable). La sombra
+   de `.k-glass-strong` pisaba el anillo del foco global (`:where()` pesa 0) y el `outline: none` inline lo dejaba
+   invisible: el anillo va acá, sumado a la sombra del panel. */
+.k-overlay-panel:focus-visible { box-shadow: var(--focus-ring); }
+.k-drawer-panel { box-shadow: 0 32px 64px rgba(15, 30, 51, 0.18); }
+.k-drawer-panel:focus-visible { box-shadow: var(--focus-ring), 0 32px 64px rgba(15, 30, 51, 0.18); }
+
+/* FormField `layout="inline"`: rótulo a la izquierda desde 1024 px (drawers densos de la Secretaria). El control sigue a
+   44 px / 16 px (D-VX13): la densidad sale del layout, no de achicar el input. Debajo de 1024 se apila como siempre.
+   El rótulo se alinea con el texto del control (padding-top = (44 − 20) / 2) y puede cortar línea: a la izquierda
+   un `nowrap` empujaría el control. */
+.k-field-inline > .k-label { white-space: nowrap; }
+@media (min-width: 1024px) {
+  .k-field-inline {
+    grid-template-columns: minmax(120px, 32%) minmax(0, 1fr);
+    column-gap: var(--space-4);
+    row-gap: var(--space-1);
+    align-items: start;
+  }
+  .k-field-inline > .k-label { padding-top: 12px; white-space: normal; }
+  .k-field-inline > :not(.k-label) { grid-column: 2; }
+}

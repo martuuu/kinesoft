@@ -19,15 +19,28 @@
  *   actual puede tener ids que en el otro consultorio no existen).
  */
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import dynamic from "next/dynamic";
 import type { TenantOption } from "@/lib/tenant-choice";
 import { roleLabel } from "@/lib/roles";
-import { VERTICAL_LABEL } from "@/lib/tenant-modules";
-import { modalVariants } from "@/lib/motion";
-import { IconCheck, IconChevD } from "@/components/ui/icons";
+import { IconChevD } from "@/components/ui/icons";
+import { nameStyle } from "./tenant-switcher-styles";
 import type { ActionResult } from "@/lib/validation";
 
 export const CHOOSE_TENANT_HREF = "/elegir-consultorio";
+
+const loadPanel = () => import("./tenant-switcher-panel");
+
+/** Precarga del chunk de la lista (hover/foco del botón): el clic ya no espera red. */
+export function preloadTenantSwitcherPanel(): void {
+  void loadPanel();
+}
+
+const TenantSwitcherPanel = dynamic(() => loadPanel().then((m) => m.TenantSwitcherPanel), {
+  ssr: false,
+  // Sin placeholder: es una capa `position: absolute` sobre el sidebar, no empuja nada (CLS 0 por construcción), y el
+  // chunk ya se precargó en el hover/foco del botón. Un esqueleto acá no sabría si va al costado (contraído) o debajo.
+  loading: () => null,
+});
 
 /**
  * La action llega por props desde el layout (server → client) y no por import: así este módulo no arrastra
@@ -109,7 +122,6 @@ export function TenantSwitcher({
   const [error, setError] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const listRef = useRef<HTMLUListElement | null>(null);
   const baseId = useId();
   const listId = `${baseId}-list`;
   const optionId = (tenantId: string) => `${baseId}-opt-${tenantId}`;
@@ -130,10 +142,8 @@ export function TenantSwitcher({
     return () => window.removeEventListener("mousedown", onDown);
   }, [open, close]);
 
-  // Al abrir, el foco va a la lista con el activo marcado (aria-activedescendant).
-  useEffect(() => {
-    if (open) listRef.current?.focus();
-  }, [open]);
+  // Al abrir, el foco va a la lista con el activo marcado (aria-activedescendant): lo hace el panel al montarse
+  // (`tenant-switcher-panel.tsx`), porque con la carga diferida la lista puede no existir todavía en este render.
 
   if (options.length === 0) return null;
 
@@ -205,6 +215,8 @@ export function TenantSwitcher({
         aria-label={label}
         title={collapsed ? active?.name : undefined}
         onClick={() => (open ? close(false) : openList())}
+        onPointerEnter={preloadTenantSwitcherPanel}
+        onFocus={preloadTenantSwitcherPanel}
         onKeyDown={(e) => {
           if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
             e.preventDefault();
@@ -238,134 +250,27 @@ export function TenantSwitcher({
         )}
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            key="tenant-switcher"
-            className="k-glass-strong"
-            variants={modalVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            style={{
-              position: "absolute",
-              zIndex: 40,
-              borderRadius: 14,
-              padding: 6,
-              ...(collapsed ? { top: 0, left: "calc(100% + 12px)", width: 272 } : { top: "100%", left: 0, right: 0, marginTop: -8 }),
-            }}
-          >
-            <div style={sectionLabelStyle} id={`${baseId}-label`}>
-              Tus consultorios
-            </div>
-            <ul
-              ref={listRef}
-              id={listId}
-              role="listbox"
-              tabIndex={-1}
-              aria-labelledby={`${baseId}-label`}
-              aria-activedescendant={options[focusIndex] ? optionId(options[focusIndex].tenantId) : undefined}
-              aria-busy={pendingId ? true : undefined}
-              onKeyDown={onListKey}
-              style={{ listStyle: "none", margin: 0, padding: 0, outline: "none", maxHeight: 320, overflowY: "auto" }}
-            >
-              {options.map((o, i) => {
-                const isActive = o.tenantId === active?.tenantId;
-                const focused = i === focusIndex;
-                return (
-                  <li
-                    key={o.tenantId}
-                    id={optionId(o.tenantId)}
-                    role="option"
-                    aria-selected={isActive}
-                    onMouseEnter={() => setFocusIndex(i)}
-                    onClick={() => void choose(o)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "9px 10px",
-                      borderRadius: 10,
-                      cursor: pendingId ? "progress" : "pointer",
-                      background: focused ? "rgba(31,79,190,0.08)" : "transparent",
-                      opacity: pendingId && pendingId !== o.tenantId ? 0.5 : 1,
-                    }}
-                  >
-                    <span style={initialsStyle} aria-hidden>
-                      {tenantInitials(o.name)}
-                    </span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={nameStyle}>{o.name}</span>
-                      <span style={{ display: "block", fontSize: 11.5, color: "var(--navy-500)", marginTop: 2 }}>
-                        {roleLabel(o.role, o.vertical)} · {VERTICAL_LABEL[o.vertical]}
-                      </span>
-                    </span>
-                    <span aria-hidden style={{ width: 16, display: "inline-flex", color: "var(--sky-700)" }}>
-                      {pendingId === o.tenantId ? "…" : isActive ? <IconCheck size={14} stroke={3} /> : null}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {error && (
-              <p role="alert" style={{ margin: "6px 4px 2px", padding: "8px 10px", borderRadius: 10, fontSize: 12, background: "var(--danger-bg)", color: "var(--danger-fg)" }}>
-                {error}
-              </p>
-            )}
-            <div style={{ borderTop: "1px solid rgba(15,30,51,0.06)", marginTop: 6, paddingTop: 6 }}>
-              {/* `<a>` y no `next/link`: misma navegación dura que al elegir (la pantalla está fuera de `(app)`). */}
-              <a href={CHOOSE_TENANT_HREF} style={seeAllStyle}>
-                Ver todos
-              </a>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* PF1.0-a (C-PF2): la lista se baja recién al abrir (chunk aparte, precargado al pasar el mouse o llegar con
+          Tab al botón). Es una capa flotante: mientras llega no empuja nada (CLS 0 por construcción). */}
+      {open && (
+        <TenantSwitcherPanel
+          collapsed={collapsed}
+          options={options}
+          activeTenantId={active?.tenantId ?? null}
+          focusIndex={focusIndex}
+          onFocusIndex={setFocusIndex}
+          pendingId={pendingId}
+          error={error}
+          onChoose={(o) => void choose(o)}
+          onListKey={onListKey}
+          listId={listId}
+          labelId={`${baseId}-label`}
+          optionId={optionId}
+        />
+      )}
     </div>
   );
 }
-
-const nameStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: "var(--navy-900)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const sectionLabelStyle: React.CSSProperties = {
-  padding: "8px 10px 6px",
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
-  color: "var(--navy-300)",
-};
-
-const initialsStyle: React.CSSProperties = {
-  flex: "0 0 auto",
-  width: 30,
-  height: 30,
-  borderRadius: "var(--r-md)",
-  display: "grid",
-  placeItems: "center",
-  fontWeight: 700,
-  fontSize: 12,
-  background: "var(--sky-100)",
-  color: "var(--sky-700)",
-};
-
-const seeAllStyle: React.CSSProperties = {
-  display: "block",
-  padding: "9px 10px",
-  borderRadius: 10,
-  fontSize: 13,
-  fontWeight: 500,
-  color: "var(--sky-700)",
-  textDecoration: "none",
-};
 
 function buttonStyle(open: boolean): React.CSSProperties {
   return {

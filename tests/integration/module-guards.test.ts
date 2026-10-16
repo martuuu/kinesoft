@@ -15,30 +15,14 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { getActor, ForbiddenError } from "@/lib/session";
-import {
-  assertModule,
-  requireModule,
-  getTenantModules,
-  guardModuleSegment,
-} from "@/lib/authz";
+import { assertModule, requireModule, getTenantModules } from "@/lib/authz";
+import { moduleWall } from "@/lib/module-wall";
 import { MODULE_DENIED_COPY } from "@/lib/tenant-modules";
 import { ownerClient, createEphemeralTenant, addPatient, type EphemeralTenant } from "@/tests/helpers/tenant-factory";
 import { getPatientEvaScores, recordEvaScore } from "@/lib/patients";
 import { asUser, asAnonymous } from "@/tests/helpers/actor";
 
 const RUN = process.env.INTEGRATION === "1";
-
-/** `redirect()` de Next tira un error con `digest = "NEXT_REDIRECT;<tipo>;<url>;<status>"`. */
-async function redirectTarget(p: Promise<unknown>): Promise<string | null> {
-  try {
-    await p;
-    return null;
-  } catch (e) {
-    const digest = (e as { digest?: unknown }).digest;
-    if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) return digest.split(";")[2] ?? "";
-    throw e;
-  }
-}
 
 describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
   let db: PrismaClient;
@@ -147,15 +131,17 @@ describe.skipIf(!RUN)("EV-C1 · guards de módulo", () => {
     expect((await getPatientEvaScores(kPatient)).map((e) => e.value)).toEqual([4]);
   });
 
-  it("guardModuleSegment: GENERAL redirige a /dashboard; KINE pasa; sin sesión no-op", async () => {
+  // PF1.0-a (D-PF-K): `guardModuleSegment` se retiró (sin llamadores desde VX2-b2). Lo que el segmento hace hoy es
+  // `moduleWall`: mismo caso, sobre el actor real. Diagnóstico no existe en General → "redirect" (no un muro con upsell).
+  it("moduleWall: GENERAL sin Diagnóstico → redirect; Agenda ok; KINE ok; sin sesión no-op", async () => {
     asUser(G.userId);
-    expect(await redirectTarget(guardModuleSegment("diagnostico"))).toBe("/dashboard");
-    expect(await redirectTarget(guardModuleSegment("agenda"))).toBeNull();
+    expect(await moduleWall("diagnostico")).toBe("redirect");
+    expect(await moduleWall("agenda")).toBe("ok");
 
     asUser(K.userId);
-    expect(await redirectTarget(guardModuleSegment("diagnostico"))).toBeNull();
+    expect(await moduleWall("diagnostico")).toBe("ok");
 
     asAnonymous();
-    expect(await redirectTarget(guardModuleSegment("diagnostico"))).toBeNull();
+    expect(await moduleWall("diagnostico")).toBe("ok");
   });
 });

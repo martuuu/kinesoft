@@ -6,6 +6,13 @@ import { ModalCloseButton } from "@/components/ui/modal-close";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, drawerVariants } from "@/lib/motion";
+import { OverlayPortal, overlayArmed } from "@/components/ui/overlay-portal";
+import { useHydrated } from "@/components/ui/use-hydrated";
+
+/** Pura (para el test): ¿este Esc cierra el drawer? No si ya lo consumió un overlay de arriba (Modal, ConfirmDialog). */
+export function drawerHandlesEscape(e: { key: string; defaultPrevented: boolean }): boolean {
+  return e.key === "Escape" && !e.defaultPrevented;
+}
 
 /**
  * Right-side sliding drawer.
@@ -26,6 +33,11 @@ import { backdropVariants, drawerVariants } from "@/lib/motion";
  * Un Esc que ya consumió otro overlay (p. ej. el `ConfirmDialog`, que corta la
  * propagación) no cierra el drawer; por las dudas también se respeta
  * `defaultPrevented`.
+ *
+ * PF1.0-b (C-PF6): portal a `document.body` (`OverlayPortal`). Un `Modal` abierto desde el drawer ya no queda
+ * encerrado por el `transform` del panel y queda por encima (`--z-drawer` < `--z-modal`). Foco atrapado, Esc y
+ * scroll-lock se arman recién con el panel en su lugar definitivo (`overlayArmed`): un drawer abierto en SSR pasa de
+ * en línea a portal al hidratar, y el trap tiene que apuntar al nodo nuevo.
  */
 export function Drawer({
   open,
@@ -48,7 +60,9 @@ export function Drawer({
   dirtyMessage?: string;
   children: ReactNode;
 }) {
-  const trapRef = useFocusTrap<HTMLElement>(open);
+  const hydrated = useHydrated();
+  const armed = overlayArmed(open, hydrated);
+  const trapRef = useFocusTrap<HTMLElement>(armed);
   const offset = width + 24;
   const confirm = useConfirm();
   // Evita apilar dos confirmaciones (Esc + click en el fondo seguidos).
@@ -76,9 +90,9 @@ export function Drawer({
   }, [dirty, dirtyMessage, onClose, confirm]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!armed) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) void requestClose();
+      if (drawerHandlesEscape(e)) void requestClose();
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -87,68 +101,68 @@ export function Drawer({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, requestClose]);
+  }, [armed, requestClose]);
 
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          {/* backdrop */}
-          <m.div
-            onClick={() => void requestClose()}
-            aria-hidden
-            variants={backdropVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(15,30,51,0.32)",
-              backdropFilter: "blur(2px)",
-              zIndex: 45,
-            }}
-          />
-          {/* panel — slides in from the right */}
-          <m.aside
-            ref={trapRef}
-            tabIndex={-1}
-            role="dialog"
-            aria-modal
-            aria-label={title}
-            className="k-glass-strong k-scroll"
-            custom={offset}
-            variants={drawerVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            style={{
-              position: "fixed",
-              top: 12,
-              right: 12,
-              bottom: 12,
-              width,
-              maxWidth: "calc(100vw - 24px)",
-              borderRadius: 22,
-              padding: 22,
-              overflowY: "auto",
-              zIndex: 46,
-              boxShadow: "0 32px 64px rgba(15,30,51,0.18)",
-              outline: "none",
-            }}
-          >
-            <ModalCloseButton onClose={() => void requestClose()} />
-            {title && (
-              <header style={{ marginRight: 40, marginBottom: 16 }}>
-                <h2 className="k-display" style={{ fontSize: 20, margin: 0, fontWeight: 700 }}>
-                  {title}
-                </h2>
-              </header>
-            )}
-            {children}
-          </m.aside>
-        </>
-      )}
-    </AnimatePresence>
+    <OverlayPortal>
+      <AnimatePresence>
+        {open && (
+          <>
+            {/* backdrop */}
+            <m.div
+              onClick={() => void requestClose()}
+              aria-hidden
+              variants={backdropVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15,30,51,0.32)",
+                backdropFilter: "blur(2px)",
+                zIndex: "var(--z-drawer-backdrop)",
+              }}
+            />
+            {/* panel — slides in from the right */}
+            <m.aside
+              ref={trapRef}
+              tabIndex={-1}
+              role="dialog"
+              aria-modal
+              aria-label={title}
+              className="k-glass-strong k-scroll k-overlay-panel k-drawer-panel"
+              custom={offset}
+              variants={drawerVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              style={{
+                position: "fixed",
+                top: 12,
+                right: 12,
+                bottom: 12,
+                width,
+                maxWidth: "calc(100vw - 24px)",
+                borderRadius: 22,
+                padding: 22,
+                overflowY: "auto",
+                zIndex: "var(--z-drawer)",
+              }}
+            >
+              <ModalCloseButton onClose={() => void requestClose()} />
+              {title && (
+                <header style={{ marginRight: 40, marginBottom: 16 }}>
+                  <h2 className="k-display" style={{ fontSize: 20, margin: 0, fontWeight: 700 }}>
+                    {title}
+                  </h2>
+                </header>
+              )}
+              {children}
+            </m.aside>
+          </>
+        )}
+      </AnimatePresence>
+    </OverlayPortal>
   );
 }

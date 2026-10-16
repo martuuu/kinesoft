@@ -11,6 +11,7 @@ import type { Capability } from "@/lib/capabilities";
 import { useTenantModules } from "./tenant-modules-context";
 import { TenantSwitcher } from "./tenant-switcher";
 import { TopbarAccountMenu } from "./topbar-account-menu";
+import { openCommandPalette, preloadCommandPalette } from "./command-palette-launcher";
 import { activeNavHref, CONFIG_HREF, PLATFORM_HREF, shellNavItems, useCapSet } from "./sidebar";
 
 /**
@@ -59,10 +60,6 @@ export function TopBar({
     pathname,
     search
   );
-  // El mismo ⌘K que escucha `CommandPalette` (lo hace igual el buscador del dashboard).
-  const openPalette = () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
-  };
   return (
     <header
       className="k-glass"
@@ -102,7 +99,11 @@ export function TopBar({
       <div style={{ flex: 1 }} />
       <button
         type="button"
-        onClick={openPalette}
+        // El mismo ⌘K que escucha `CommandPaletteLauncher` (lo hace igual el buscador del dashboard). PF1.0-a: el
+        // panel se baja al abrir; hover/foco lo precargan.
+        onClick={openCommandPalette}
+        onPointerEnter={preloadCommandPalette}
+        onFocus={preloadCommandPalette}
         aria-label="Abrir búsqueda rápida"
         className="k-glass"
         style={{

@@ -8,11 +8,12 @@
 import { describe, expect, it } from "vitest";
 import type { BookingChangeRef } from "@/lib/booking-events-internal";
 import {
-  RealtimeAgendaMessageSchema,
   availabilityMessage,
   buildRealtimeMessages,
   type RealtimeAgendaMessage,
 } from "@/lib/realtime-events";
+// PF1.0-a (C-PF3): el schema zod salió de `realtime-events` (el cliente valida con `realtime-message-guard`).
+import { RealtimeAgendaMessageSchema } from "@/lib/realtime-events-schema";
 import {
   MAX_MESSAGES_PER_POST,
   REALTIME_DRIVERS,

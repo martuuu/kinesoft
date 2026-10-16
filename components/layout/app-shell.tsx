@@ -1,12 +1,15 @@
 "use client";
 
 import type { ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./topbar";
-import { TweaksPanel } from "./tweaks-panel";
+import { MobileBar } from "./mobile-bar";
+import { CommandPaletteLauncher } from "./command-palette-launcher";
 import { useTweaks } from "./tweaks-context";
-import { CommandPalette } from "@/components/global/command-palette";
 import { TenantModulesProvider } from "./tenant-modules-context";
+import { loadTweaksPanel, preloadAppearance } from "./appearance-loader";
+import styles from "./shell.module.css";
 import type { TenantModule } from "@/lib/tenant-modules";
 import type { TenantVertical } from "@prisma/client";
 import type { Capability } from "@/lib/capabilities";
@@ -47,7 +50,25 @@ import { TenantChoiceProvider, type SwitchTenantAction } from "./tenant-switcher
  * abre desde el pie del sidebar o desde el menú de cuenta de la barra superior (`openAppearance`).
  *
  * RX-1e: `canReception` habilita la sección «Recepción» de Apariencia (la cara de `/sala`); el módulo lo mira el panel.
+ *
+ * PF1.0-a (bundle, §0.2 del brief PF): el shell pesaba ~56 kB gz en cada ruta de `(app)` antes de su página. Ahora:
+ *   - Apariencia (`tweaks-panel.tsx`) y ⌘K (`command-palette.tsx`) se bajan con `next/dynamic` recién al abrirse
+ *     (precarga en hover/foco del disparador y al apretar ⌘/Ctrl). Arrancan cerrados: no pintan en el primer render.
+ *   - Sin framer `motion.*` (sidebar, selector de consultorio, campana: `m` dentro del `LazyMotion` de UIProviders).
+ *   - Sin zod (el guard de realtime es TS puro; `tweaks-context` y el menú de cuenta ya no tocan
+ *     `lib/preferences-constants.ts`).
+ * Mobile clase A (S1): bajo 768 px sidebar y topbar se esconden (`.desktopOnly`) y aparece `MobileBar` («Menú» →
+ * Drawer). Todo por CSS: el HTML es el mismo en cualquier ancho.
  */
+const TweaksPanel = dynamic(() => loadTweaksPanel().then((m) => m.TweaksPanel), {
+  ssr: false,
+  // Misma caja y lugar que el panel abierto (fija abajo a la derecha): ni salto ni hueco mientras llega.
+  loading: () => (
+    <div className={`k-glass-strong ${styles.appearanceSkeleton}`} role="status" aria-label="Cargando Apariencia">
+      Cargando…
+    </div>
+  ),
+});
 export function AppShell({
   children,
   isPlatformAdmin = false,
@@ -104,27 +125,35 @@ export function AppShell({
             >
               {useSidebar && (
                 <Sidebar
+                  className={styles.desktopOnly}
                   collapsed={t.sidebarCollapsed}
                   isPlatformAdmin={isPlatformAdmin}
                   caps={caps}
                   onOpenAppearance={openAppearance}
+                  onPreloadAppearance={preloadAppearance}
                 />
               )}
-              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <div className={styles.column}>
                 {banner}
+                <MobileBar isPlatformAdmin={isPlatformAdmin} caps={caps} onOpenAppearance={openAppearance} />
                 {!useSidebar && (
-                  <TopBar
-                    caps={caps}
-                    isPlatformAdmin={isPlatformAdmin}
-                    userName={userName}
-                    ownPublicBooking={ownPublicBooking}
-                    onOpenAppearance={openAppearance}
-                  />
+                  <div className={styles.desktopOnly}>
+                    <TopBar
+                      caps={caps}
+                      isPlatformAdmin={isPlatformAdmin}
+                      userName={userName}
+                      ownPublicBooking={ownPublicBooking}
+                      onOpenAppearance={openAppearance}
+                    />
+                  </div>
                 )}
-                <main style={{ flex: 1, padding: useSidebar ? 14 : "0 18px 18px" }}>{children}</main>
+                <main className={styles.main} style={{ flex: 1, minWidth: 0, padding: useSidebar ? 14 : "0 18px 18px" }}>
+                  {children}
+                </main>
               </div>
-              <TweaksPanel canReception={caps.includes("agenda.reception")} />
-              <CommandPalette />
+              {/* Montado solo abierto: cerrado, Apariencia no baja ni un byte (C-PF2). */}
+              {!t.minimised && <TweaksPanel canReception={caps.includes("agenda.reception")} />}
+              <CommandPaletteLauncher />
             </div>
           </ArrivalAlerts>
         </RealtimeProvider>

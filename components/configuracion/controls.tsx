@@ -178,59 +178,9 @@ export function TabsBar({
   );
 }
 
-/**
- * `aria-label`: el switch es un botón sin texto; sin nombre accesible un lector
- * de pantalla anuncia "interruptor, activado" sin decir de qué (revisión EV0).
- * Quien lo usa le pasa el label de la fila.
- */
-export function Switch({
-  on,
-  onChange,
-  disabled,
-  "aria-label": ariaLabel,
-}: {
-  on: boolean;
-  onChange: () => void;
-  disabled?: boolean;
-  "aria-label"?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={ariaLabel}
-      onClick={onChange}
-      disabled={disabled}
-      style={{
-        width: 52,
-        height: 30,
-        borderRadius: 999,
-        border: "none",
-        background: on ? "var(--sky-700)" : "rgba(15,30,51,0.18)",
-        position: "relative",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        transition: "background 160ms ease",
-        flexShrink: 0,
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          top: 3,
-          left: on ? 25 : 3,
-          width: 24,
-          height: 24,
-          borderRadius: "50%",
-          background: "#fff",
-          boxShadow: "0 2px 6px rgba(15,30,51,0.18)",
-          transition: "left 160ms ease",
-        }}
-      />
-    </button>
-  );
-}
+// [PF1.0-b · C-PF6] El `Switch` vive en `components/ui/switch.tsx` (área de toque de 44 px); este re-export deja a los
+// llamadores de Configuración como estaban.
+export { Switch } from "@/components/ui/switch";
 
 export function ErrorBox({ children }: { children: React.ReactNode }) {
   return (

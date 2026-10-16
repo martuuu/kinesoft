@@ -35,7 +35,7 @@ vi.mock("@/lib/logger", () => ({
 
 import type { BookingChangeRef } from "@/lib/booking-events-internal";
 import { MAX_MESSAGES_PER_POST, REALTIME_PUBLISH_TIMEOUT_MS, topicFor } from "@/lib/realtime-constants";
-import { RealtimeAgendaMessageSchema } from "@/lib/realtime-events";
+import { RealtimeAgendaMessageSchema } from "@/lib/realtime-events-schema";
 import { listenerCount, subscribe } from "@/lib/realtime-local-bus";
 import {
   BREAKER,

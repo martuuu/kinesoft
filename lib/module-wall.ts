@@ -1,7 +1,7 @@
 /**
  * Muro de módulo (VX2-b2, D-VX20): qué hace el `layout.tsx` de un segmento cuando el consultorio no tiene el módulo.
  *
- * Antes (EV0) `guardModuleSegment` (`lib/authz.ts`) redirigía siempre a /dashboard: un consultorio Kine Individual que
+ * Antes (EV0) `el redirect de EV0 (retirado en PF1.0-a)` (`lib/authz.ts`) redirigía siempre a /dashboard: un consultorio Kine Individual que
  * entraba a /sala rebotaba sin saber por qué, aunque el plan Clínica se la abría. D-VX20 separa los dos casos:
  *  - el módulo lo trae un plan **mayor** en su vertical → muro con upsell (`{ plan, canBuy }`);
  *  - el módulo **no existe en la vertical** (`minimumPlanFor` = null, p. ej. Diagnóstico en General) → redirect a
@@ -45,7 +45,7 @@ export function moduleWallFor(
 }
 
 /**
- * Para el `layout.tsx` de un segmento de módulo. Sin actor → "ok" (no-op, como `guardModuleSegment`): de la sesión se
+ * Para el `layout.tsx` de un segmento de módulo. Sin actor → "ok" (no-op, como `el redirect de EV0 (retirado en PF1.0-a)`): de la sesión se
  * ocupan el middleware y el layout de `(app)`, y redirigir acá haría un doble redirect.
  */
 export async function moduleWall(m: TenantModule): Promise<ModuleWallResult> {

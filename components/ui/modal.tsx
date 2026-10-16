@@ -5,6 +5,8 @@ import { AnimatePresence, m } from "framer-motion";
 import { ModalCloseButton } from "@/components/ui/modal-close";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { backdropVariants, modalVariants } from "@/lib/motion";
+import { OverlayPortal, overlayArmed } from "@/components/ui/overlay-portal";
+import { useHydrated } from "@/components/ui/use-hydrated";
 
 /** Modales abiertos, en orden de apertura (para que Esc cierre solo el de arriba, BO-Z C2). */
 const openModals: number[] = [];
@@ -37,6 +39,11 @@ export function modalOwnsEscape(p: {
  *
  * Pre-Sprint 12 every screen rolled its own modal markup (10+ callsites).
  * This primitive collapses them to one source of truth.
+ *
+ * PF1.0-b (C-PF6): portal a `document.body` (`OverlayPortal`) y z-index de token (`--z-modal`, por encima de
+ * `--z-drawer`). Antes un Modal abierto desde un Drawer quedaba adentro del panel (que tiene `transform`: el
+ * `position: fixed` se ataba al panel) y DEBAJO de él (z 40 contra 46). Foco, Esc y scroll-lock se arman con el
+ * diálogo ya en su lugar definitivo (`overlayArmed`).
  */
 export function Modal({
   open = true,
@@ -55,7 +62,9 @@ export function Modal({
   width?: number | string;
   lockBackdrop?: boolean;
 }) {
-  const trapRef = useFocusTrap<HTMLDivElement>(open);
+  const hydrated = useHydrated();
+  const armed = overlayArmed(open, hydrated);
+  const trapRef = useFocusTrap<HTMLDivElement>(armed);
 
   // BO-Z C2: Esc cierra SOLO el modal de arriba. Antes era un listener en burbuja sobre `document` que no frenaba el
   // evento: con un Modal abierto sobre un Drawer (p. ej. el de re-verificación de Plataforma sobre «Editar
@@ -64,7 +73,7 @@ export function Modal({
   // stopImmediatePropagation. «De arriba» = el último Modal abierto (`openModals`) y, si el foco está en OTRO
   // diálogo modal (un `useConfirm` abierto encima, que hace autoFocus), se lo deja a él.
   useEffect(() => {
-    if (!open) return;
+    if (!armed) return;
     const id = ++modalSeq;
     openModals.push(id);
     const onKey = (e: KeyboardEvent) => {
@@ -87,74 +96,75 @@ export function Modal({
     };
     // `trapRef` es estable (useRef).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, onClose]);
+  }, [armed, onClose]);
 
   return (
-    <AnimatePresence>
-      {open && (
-        <m.div
-          role="dialog"
-          aria-modal
-          aria-label={title}
-          onClick={lockBackdrop ? undefined : onClose}
-          variants={backdropVariants}
-          initial="initial"
-          animate="animate"
-          exit="exit"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,30,51,0.45)",
-            backdropFilter: "blur(4px)",
-            zIndex: 40,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
+    <OverlayPortal>
+      <AnimatePresence>
+        {open && (
           <m.div
-            ref={trapRef}
-            tabIndex={-1}
-            className="k-glass-strong k-scroll"
-            onClick={(e) => e.stopPropagation()}
-            variants={modalVariants}
+            role="dialog"
+            aria-modal
+            aria-label={title}
+            onClick={lockBackdrop ? undefined : onClose}
+            variants={backdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             style={{
-              position: "relative",
-              width: typeof width === "number" ? `min(${width}px, 100%)` : width,
-              maxHeight: "calc(100dvh - 40px)",
-              overflowY: "auto",
-              borderRadius: 24,
-              padding: 22,
-              outline: "none",
+              position: "fixed",
+              inset: 0,
+              background: "rgba(15,30,51,0.45)",
+              backdropFilter: "blur(4px)",
+              zIndex: "var(--z-modal)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 20,
             }}
           >
-            <ModalCloseButton onClose={onClose} />
-            {(title || description) && (
-              <header style={{ marginBottom: 14, paddingRight: 40 }}>
-                {title && (
-                  <h2 className="k-display" style={{ fontSize: 18, margin: 0, fontWeight: 700 }}>
-                    {title}
-                  </h2>
-                )}
-                {description && (
-                  <p
-                    style={{
-                      marginTop: 6,
-                      marginBottom: 0,
-                      fontSize: 13,
-                      color: "var(--navy-500)",
-                    }}
-                  >
-                    {description}
-                  </p>
-                )}
-              </header>
-            )}
-            {children}
+            <m.div
+              ref={trapRef}
+              tabIndex={-1}
+              className="k-glass-strong k-scroll k-overlay-panel"
+              onClick={(e) => e.stopPropagation()}
+              variants={modalVariants}
+              style={{
+                position: "relative",
+                width: typeof width === "number" ? `min(${width}px, 100%)` : width,
+                maxHeight: "calc(100dvh - 40px)",
+                overflowY: "auto",
+                borderRadius: 24,
+                padding: 22,
+              }}
+            >
+              <ModalCloseButton onClose={onClose} />
+              {(title || description) && (
+                <header style={{ marginBottom: 14, paddingRight: 40 }}>
+                  {title && (
+                    <h2 className="k-display" style={{ fontSize: 18, margin: 0, fontWeight: 700 }}>
+                      {title}
+                    </h2>
+                  )}
+                  {description && (
+                    <p
+                      style={{
+                        marginTop: 6,
+                        marginBottom: 0,
+                        fontSize: 13,
+                        color: "var(--navy-500)",
+                      }}
+                    >
+                      {description}
+                    </p>
+                  )}
+                </header>
+              )}
+              {children}
+            </m.div>
           </m.div>
-        </m.div>
-      )}
-    </AnimatePresence>
+        )}
+      </AnimatePresence>
+    </OverlayPortal>
   );
 }

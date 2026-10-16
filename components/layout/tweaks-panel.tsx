@@ -6,6 +6,7 @@ import { useTenantModules } from "./tenant-modules-context";
 import { IconX } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import type { ReceptionLayout } from "@/lib/preferences-constants";
+import { PALETTE_OPTIONS } from "./appearance-options";
 
 /**
  * Panel «Apariencia» (ex «KineSoft · Tweaks»; Martin lo mantiene, §20.18: «se arreglan las opciones que no
@@ -24,12 +25,8 @@ import type { ReceptionLayout } from "@/lib/preferences-constants";
  * de los Drawers («Guardar»). Se abre desde el pie del sidebar o el menú de cuenta de la barra superior; abierto va
  * debajo de modales, Drawers y toasts (zIndex 35 < 40/45/90).
  */
-export const PALETTE_OPTIONS: { value: Palette; label: string; swatch: [string, string, string] }[] = [
-  { value: "sky", label: "Celeste", swatch: ["#1F4FBE", "#C8F564", "#E6EFFA"] },
-  { value: "mint", label: "Verde", swatch: ["#1F8A5B", "#DBFD8C", "#DBF4EA"] },
-  { value: "coral", label: "Coral", swatch: ["#C9622E", "#FFD66A", "#FAE5D6"] },
-  { value: "violet", label: "Violeta", swatch: ["#5F40C7", "#B6F3D8", "#E5E0FB"] },
-];
+// PF1.0-a: las paletas viven en `appearance-options.ts` (solo datos) para que quien solo las lista no baje el panel.
+export { PALETTE_OPTIONS } from "./appearance-options";
 
 /** RX-1e: las tres caras de `/sala`, con una línea que explica cada una (orden = `RECEPTION_LAYOUTS`). */
 export const RECEPTION_LAYOUT_OPTIONS: ReadonlyArray<{ value: ReceptionLayout; label: string; hint: string }> = [

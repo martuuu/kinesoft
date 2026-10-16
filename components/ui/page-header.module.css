@@ -1,0 +1,57 @@
+/* [PF1.0-b · C-PF6] Encabezado de página del workspace: eyebrow + h1 + descripción + acciones (C-PF5.3). Unifica los
+   `<header>` a mano (Configuración 28 px, Planes 30, Inicio 34…): un solo tamaño de token y el mismo ritmo vertical. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.eyebrow {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sky-700);
+}
+.title {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-snug);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.description {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--navy-500);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Clase A de mobile (sin overflow a 390): el título baja un escalón y las acciones van debajo, a lo ancho. */
+@media (max-width: 767px) {
+  .title {
+    font-size: var(--fs-xl);
+  }
+  .actions {
+    width: 100%;
+  }
+}

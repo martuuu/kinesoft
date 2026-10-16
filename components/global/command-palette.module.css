@@ -1,0 +1,39 @@
+/*
+ * ⌘K (PF1.0-a, C-PF5.4): el input no pinta el anillo de foco propio del navegador porque el campo ES toda la barra
+ * superior del panel; el anillo va en la barra (`:focus-within`). `outline: 2px solid transparent` y no `none`: en
+ * Windows con contraste alto el contorno transparente se pinta, así el foco nunca queda invisible.
+ */
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+}
+.searchBar:focus-within {
+  box-shadow: inset 0 -2px 0 var(--sky-700);
+}
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: var(--navy-900);
+}
+.input:focus-visible,
+.input:focus {
+  outline: 2px solid transparent;
+}
+
+.categoryIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--sky-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}

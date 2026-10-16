@@ -1,0 +1,222 @@
+/*
+ * Shell del workspace `(app)` (PF1.0-a). CSS Module y no estilos inline porque lo que cambia es por breakpoint, y el
+ * server no conoce el ancho: el HTML sale igual para todos y el CSS decide (sin flash al hidratar).
+ *
+ * S1 (VX0-b, clase A mobile): bajo 768 px el sidebar flotante de 64 px se comía ~25 % del ancho a 390 y no había
+ * menú. Ahora se esconde y aparece la barra móvil con «Menú» → Drawer (el patrón de `PlatformShell`). Sin barra
+ * inferior: eso es del bloque MB.
+ */
+
+/* ── Sidebar (S4) ─────────────────────────────────────────────────────────────
+   Pegado al viewport mientras la página scrollea; `100dvh` con `100vh` de respaldo (en Safari iOS `100vh` incluye la
+   barra de direcciones y el pie del sidebar quedaba tapado). El «bloque cortado a mitad de pantalla» que vio VX0-b
+   era la captura de página completa: un sticky se dibuja una sola vez arriba en esas capturas. */
+.sidebar {
+  position: sticky;
+  top: 14px;
+  height: calc(100vh - 28px);
+  height: calc(100dvh - 28px);
+  flex-shrink: 0;
+  margin: 14px 0 14px 14px;
+  border-radius: var(--r-xl);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  /* La lista scrollea (no el aside) y el pie queda a la vista; `min-height: 0` deja que el hijo flex se achique. */
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.navItem {
+  position: relative;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  color: var(--navy-500);
+  font-weight: 500;
+  /* Reemplazo del `whileTap` de framer (PF1.0-a): mismo 0,97 en CSS, sin cargar framer para un clic. */
+  transition: transform var(--dur-fast, 0.15s) var(--ease-out, ease-out), background-color var(--dur-fast, 0.15s);
+}
+.navItem:hover {
+  background-color: rgba(15, 30, 51, 0.04);
+}
+.navItem:active {
+  transform: scale(0.97);
+}
+/* Activo de la lista principal: texto blanco sobre la pastilla. Los del pie no tienen pastilla (`.navItemFooterOn`). */
+.navItemOn {
+  color: #fff;
+  font-weight: 600;
+}
+.navItemOn:hover {
+  background-color: transparent;
+}
+.navItemExpanded {
+  padding: 11px 14px;
+}
+.navItemCollapsed {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+}
+.navItemFooterOn {
+  color: var(--sky-700);
+  font-weight: 700;
+}
+.navItemMuted {
+  color: var(--navy-300);
+}
+
+/* Botones del pie con forma de ítem (Apariencia, Cerrar sesión): sin el `all: unset` de antes, que borraba el foco. */
+.navButton {
+  appearance: none;
+  font: inherit;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* Pastilla del activo: fondo sólido; el desplazamiento entre ítems lo hace `layoutId` (framer) cuando ya cargó. */
+.activePill {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--sky-700), var(--sky-600));
+  box-shadow: 0 6px 16px rgba(31, 79, 190, 0.28);
+  z-index: 0;
+}
+.navItemInner {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 30, 51, 0.06);
+}
+
+/* Tooltip propio del sidebar contraído (S3): sale por portal con `position: fixed` (la lista tiene overflow y lo
+   recortaba). Aparece con hover y con foco de teclado; Escape lo cierra (WCAG 1.4.13). */
+.tooltip {
+  position: fixed;
+  z-index: 60;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--navy-900);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(15, 30, 51, 0.2);
+}
+
+/* ── Contenido ─────────────────────────────────────────────────────────────── */
+.column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Barra móvil (S1) ──────────────────────────────────────────────────────── */
+.mobileBar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .desktopOnly {
+    display: none !important;
+  }
+  .mobileBar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 8px 0;
+    padding: 6px 8px;
+    border-radius: var(--r-xl);
+    position: sticky;
+    top: 8px;
+    z-index: 20;
+    min-width: 0;
+  }
+  .main {
+    padding: 8px !important;
+  }
+}
+
+.mobileButton {
+  appearance: none;
+  font: inherit;
+  margin: 0;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy-700);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.mobileSpacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Lista del Drawer móvil: ítems de 44 px de alto como mínimo (táctil). */
+.drawerNav .navItem,
+.drawerNav .navButton {
+  min-height: 44px;
+}
+
+/* Esqueleto del panel «Apariencia» mientras baja su chunk: misma caja y lugar que el panel (sin salto). */
+.appearanceSkeleton {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: 296px;
+  height: 320px;
+  max-height: calc(100vh - 28px);
+  border-radius: var(--r-xl);
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--navy-500);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navItem {
+    transition: none;
+  }
+  .navItem:active {
+    transform: none;
+  }
+}

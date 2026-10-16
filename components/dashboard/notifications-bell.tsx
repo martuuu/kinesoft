@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import {
   listNotifications,
@@ -167,7 +167,7 @@ export function NotificationsBell() {
 
       <AnimatePresence>
         {open && (
-        <motion.div
+        <m.div
           ref={popRef}
           role="dialog"
           aria-label="Notificaciones"
@@ -180,7 +180,8 @@ export function NotificationsBell() {
             position: "absolute",
             top: 44,
             right: 0,
-            width: 340,
+            // PF1.0-a (clase A mobile): a 390 px un ancho fijo de 340 anclado a la derecha se salía por la izquierda.
+            width: "min(340px, calc(100vw - 32px))",
             maxHeight: 420,
             overflowY: "auto",
             borderRadius: 16,
@@ -242,7 +243,7 @@ export function NotificationsBell() {
               ))}
             </div>
           )}
-        </motion.div>
+        </m.div>
         )}
       </AnimatePresence>
     </div>

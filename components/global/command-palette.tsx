@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type ComponentType } from "react";
 import { globalSearch } from "@/lib/search";
 import type { SearchHit } from "@/lib/search-types";
-import { IconSearch } from "@/components/ui/icons";
+import { IconArrow, IconCal, IconDumbbell, IconHeart, IconSearch, IconUsers } from "@/components/ui/icons";
+import styles from "./command-palette.module.css";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import type { TenantModule } from "@/lib/tenant-modules";
 
@@ -25,14 +26,14 @@ export function paletteSearchPlaceholder(has: (m: TenantModule) => boolean): str
 /**
  * ⌘K / Ctrl+K command palette.
  *
- * Mounted once at the app-shell level. Listens for the shortcut globally,
- * debounces the search by 200 ms, and exposes a router-driven action on
- * each hit. Arrow keys + Enter navigate without leaving the keyboard.
+ * PF1.0-a (C-PF2): ya no se monta siempre ni escucha el atajo. El atajo lo escucha `CommandPaletteLauncher`
+ * (`components/layout/command-palette-launcher.tsx`, en el shell), que monta este módulo con `next/dynamic` recién al
+ * abrir y lo desmonta al cerrar: antes viajaba en el bundle inicial de TODAS las rutas del workspace aunque casi
+ * nadie lo abra. Montado = abierto. Debounce de 200 ms; flechas + Enter navegan sin soltar el teclado.
  */
-export function CommandPalette() {
+export function CommandPalette({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const modules = useTenantModules();
-  const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [active, setActive] = useState(0);
@@ -40,41 +41,31 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Global shortcut ───────────────────────────────────────────────
+  // ── Escape cierra; el foco vuelve a donde estaba (el buscador del topbar, el botón de la barra móvil…) ──
   useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (e: KeyboardEvent) => {
-      const isToggle =
-        (e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey);
-      if (isToggle) {
-        e.preventDefault();
-        setOpen((v) => !v);
-        return;
-      }
-      if (e.key === "Escape" && open) {
-        setOpen(false);
-      }
+      if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previous?.focus?.();
+    };
+  }, [onClose]);
 
-  // ── Focus the input + clear state on open ─────────────────────────
+  // ── Al abrir: atajos de entrada (el panel nunca se ve vacío) y foco en el input ──
   useEffect(() => {
-    if (!open) return;
-    setActive(0);
-    setQ("");
-    setHits([]);
-    // Seed with shortcuts immediately so the panel never looks empty.
     start(async () => {
       const r = await globalSearch("");
       setHits(r);
     });
-    setTimeout(() => inputRef.current?.focus(), 10);
-  }, [open]);
+    const t = setTimeout(() => inputRef.current?.focus(), 10);
+    return () => clearTimeout(t);
+  }, []);
 
   // ── Debounced search ──────────────────────────────────────────────
   useEffect(() => {
-    if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     // Sequence guard — drop stale responses so a late slow query can't
     // overwrite a newer fast one. Each effect run owns its own `cancelled`
@@ -92,17 +83,15 @@ export function CommandPalette() {
       cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [q, open]);
+  }, [q]);
 
   const choose = useCallback(
     (hit: SearchHit) => {
-      setOpen(false);
+      onClose();
       router.push(hit.href);
     },
-    [router]
+    [router, onClose]
   );
-
-  if (!open) return null;
 
   const onInputKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
@@ -123,7 +112,7 @@ export function CommandPalette() {
       role="dialog"
       aria-modal
       aria-label="Búsqueda rápida"
-      onClick={() => setOpen(false)}
+      onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -148,15 +137,7 @@ export function CommandPalette() {
           flexDirection: "column",
         }}
       >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "16px 20px",
-            borderBottom: "1px solid rgba(15,30,51,0.06)",
-          }}
-        >
+        <header className={styles.searchBar}>
           <IconSearch size={18} />
           <input
             ref={inputRef}
@@ -172,14 +153,8 @@ export function CommandPalette() {
             data-1p-ignore
             data-lpignore="true"
             data-form-type="other"
-            style={{
-              flex: 1,
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              fontSize: 16,
-              color: "var(--navy-900)",
-            }}
+            aria-label="Buscar"
+            className={styles.input}
           />
           <span
             className="k-mono"
@@ -375,24 +350,21 @@ function Grouped({
   );
 }
 
+// PF1.0-a: íconos del sistema en vez de emoji (👤 🏋️ 🏥 📅): el emoji cambia de dibujo según el sistema operativo y
+// desentona con el resto de la app (C-PF5).
+const CATEGORY_ICON: Record<SearchHit["category"], ComponentType<{ size?: number }>> = {
+  patient: IconUsers,
+  exercise: IconDumbbell,
+  condition: IconHeart,
+  booking: IconCal,
+  shortcut: IconArrow,
+};
+
 function CategoryIcon({ cat }: { cat: SearchHit["category"] }) {
-  const emoji =
-    cat === "patient" ? "👤" : cat === "exercise" ? "🏋️" : cat === "condition" ? "🏥" : cat === "booking" ? "📅" : "↗︎";
+  const I = CATEGORY_ICON[cat];
   return (
-    <span
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: 8,
-        background: "rgba(255,255,255,0.7)",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 14,
-        flexShrink: 0,
-      }}
-    >
-      {emoji}
+    <span className={styles.categoryIcon} aria-hidden>
+      <I size={15} />
     </span>
   );
 }

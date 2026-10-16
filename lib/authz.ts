@@ -23,8 +23,7 @@ import "server-only";
 import { cache } from "react";
 import type { Role } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
-import { redirect } from "next/navigation";
-import { getActor, tryGetActor, ForbiddenError, type Actor } from "@/lib/session";
+import { getActor, ForbiddenError, type Actor } from "@/lib/session";
 import { SUPPORT_CAPS, capabilitiesFor, capabilitiesForMember, type Capability } from "@/lib/capabilities";
 import type { MemberAccess } from "@/lib/saas-plans-types";
 import { modulesFor, MODULE_DENIED_COPY, type TenantModule } from "@/lib/tenant-modules";
@@ -164,7 +163,7 @@ export async function requireAccountOwner(
  *    vacío** sin el módulo: no rompen una pantalla del consultorio General.
  *  - **Escrituras y lecturas de detalle** **tiran** `ForbiddenError` con
  *    `MODULE_DENIED_COPY[m]` (`assertModule` / `requireModule`).
- *  - **El layout es UX; la barrera es la action.** `guardModuleSegment` en el
+ *  - **El layout es UX; la barrera es la action.** `moduleWall` (`lib/module-wall.ts`) en el
  *    `layout.tsx` del segmento solo evita mostrar una pantalla inútil: en el App
  *    Router un layout no se re-ejecuta en cada navegación y las server actions se
  *    pueden invocar sin pasar por él, así que cada action chequea igual.
@@ -202,19 +201,6 @@ export async function requireModule(m: TenantModule, message?: string): Promise<
   return actor;
 }
 
-/**
- * SOLO COMPAT/TESTS (VX2.1): desde VX2-b2 (D-VX20) ningún layout lo llama; los segmentos usan `moduleWall`
- * (`lib/module-wall.ts`), que muestra el muro del plan (`AccessWall`) o hace este mismo redirect. Queda porque
- * `tests/integration/module-guards.test.ts` lo ejercita; VX-Z/PF decide retirarlo. No usar en código nuevo.
- *
- * Para el `layout.tsx` de un segmento de un módulo (`/diagnostico`,
- * `/seguimiento`, `/biblioteca`, …): sin el módulo, `redirect("/dashboard")`.
- * Sin actor es no-op: de la sesión se ocupan el middleware y el layout de
- * `(app)`, y tirar acá rompería la pantalla de login/onboarding. Es UX, no
- * barrera (ver la regla arriba).
- */
-export async function guardModuleSegment(m: TenantModule): Promise<void> {
-  const actor = await tryGetActor();
-  if (!actor) return;
-  if (!modulesFor(actor.entitlements).has(m)) redirect("/dashboard");
-}
+// PF1.0-a (D-PF-K, `vx-guard-module-segment`): `guardModuleSegment` se retiró. Desde VX2-b2 (D-VX20) ningún layout lo
+// llamaba (los segmentos usan `moduleWall` de `lib/module-wall.ts`: muro del plan o el mismo redirect a /dashboard) y
+// solo lo ejercitaba `tests/integration/module-guards.test.ts`, que ahora prueba `moduleWall` sobre el actor real.

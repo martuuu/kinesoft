@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
+import { createPortal } from "react-dom";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import { KineLogo } from "@/components/ui/kine-logo";
 import {
@@ -18,13 +19,15 @@ import {
   IconLogout,
   IconBookmark,
   IconPalette,
+  IconPlans,
 } from "@/components/ui/icons";
-import { useMemo, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent } from "react";
 import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
 import type { Capability } from "@/lib/capabilities";
 import type { TenantModule } from "@/lib/tenant-modules";
 import { useTenantModules } from "./tenant-modules-context";
 import { TenantSwitcher } from "./tenant-switcher";
+import styles from "./shell.module.css";
 
 /**
  * EV0 (EV-S): el sidebar ya no tiene lista propia. Renderiza
@@ -43,6 +46,7 @@ export const NAV_ICONS: Record<NavIconKey, ComponentType<{ size?: number }>> = {
   dumbbell: IconDumbbell,
   chart: IconChart,
   settings: IconSettings,
+  plans: IconPlans,
   bookmark: IconBookmark,
 };
 
@@ -105,16 +109,68 @@ export function activeNavHref(
   return best?.href ?? null;
 }
 
-// `next/link` wrapped in motion so nav items can carry a subtle press
-// micro-interaction (whileTap) without giving up client-side navigation.
-const MotionLink = motion(Link);
+/**
+ * Tooltip propio del sidebar contraído (S3 de VX0-b): antes era el `title` del navegador, que no aparece con el
+ * teclado y tarda ~1 s con el mouse. Sale por portal con `position: fixed` (la lista del nav tiene `overflow-y: auto` y
+ * recortaba cualquier hijo absoluto). Es solo visual: el nombre accesible lo da el `aria-label` del ítem. Escape lo
+ * cierra sin mover el foco (WCAG 1.4.13).
+ */
+type Tip = { label: string; top: number; left: number };
+type TipHandlers = {
+  onPointerEnter?: (e: PointerEvent<Element>) => void;
+  onPointerLeave?: () => void;
+  onFocus?: (e: FocusEvent<Element>) => void;
+  onBlur?: () => void;
+};
 
-export function Sidebar({
-  collapsed = false,
-  isPlatformAdmin = false,
-  caps = [],
-  onOpenAppearance,
-}: {
+function useNavTooltip(enabled: boolean) {
+  const [tip, setTip] = useState<Tip | null>(null);
+  const hide = useCallback(() => setTip(null), []);
+  useEffect(() => {
+    if (!tip) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTip(null);
+    };
+    // Al scrollear la página el ítem se mueve y el tooltip fijo quedaría colgado.
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", hide, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", hide, true);
+    };
+  }, [tip, hide]);
+  const bind = useCallback(
+    (label: string): TipHandlers => {
+      if (!enabled) return {};
+      const show = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        setTip({ label, top: r.top + r.height / 2, left: r.right + 12 });
+      };
+      return {
+        onPointerEnter: (e: PointerEvent<Element>) => show(e.currentTarget),
+        onPointerLeave: hide,
+        // Solo con foco de teclado: el foco que deja un clic no tiene que dejar el cartel puesto.
+        onFocus: (e: FocusEvent<Element>) => {
+          if (e.currentTarget.matches(":focus-visible")) show(e.currentTarget);
+        },
+        onBlur: hide,
+      };
+    },
+    [enabled, hide]
+  );
+  const node =
+    tip && typeof document !== "undefined"
+      ? createPortal(
+          <div role="tooltip" className={styles.tooltip} style={{ top: tip.top, left: tip.left }}>
+            {tip.label}
+          </div>,
+          document.body
+        )
+      : null;
+  return { bind, node, hide };
+}
+
+type SidebarProps = {
   collapsed?: boolean;
   isPlatformAdmin?: boolean;
   /**
@@ -122,8 +178,61 @@ export function Sidebar({
    * tapaba el pie de los Drawers (zIndex 100 > 45); ahora vive acá, en el pie. Sin handler (tests), no se muestra.
    */
   onOpenAppearance?: () => void;
+  /** PF1.0-a (C-PF2): precarga el chunk de Apariencia al pasar el mouse o llegar con Tab, antes del clic. */
+  onPreloadAppearance?: () => void;
   /** Capabilities del rol (array: llega de un Server Component). Sin caps, falla cerrado. */
   caps?: readonly Capability[];
+};
+
+/**
+ * Sidebar de escritorio. PF1.0-a: el contenido vive en `SidebarBody`, que también arma el Drawer del menú móvil
+ * (`mobile-nav-drawer.tsx`): una sola lista para los dos. Bajo 768 px este `<aside>` se esconde por CSS
+ * (`.desktopOnly` en `shell.module.css`, que le pone el AppShell) y manda la barra móvil.
+ */
+export function Sidebar({
+  collapsed = false,
+  isPlatformAdmin = false,
+  caps = [],
+  onOpenAppearance,
+  onPreloadAppearance,
+  className,
+}: SidebarProps & { className?: string }) {
+  const w = collapsed ? 64 : 232;
+  return (
+    <aside
+      className={["k-glass", styles.sidebar, className].filter(Boolean).join(" ")}
+      aria-label="Navegación principal"
+      // El ancho queda inline a propósito: lo cambia Apariencia («Barra lateral contraída») y lo afirma el test.
+      style={{ width: w, padding: collapsed ? 8 : 18 }}
+    >
+      <SidebarBody
+        collapsed={collapsed}
+        isPlatformAdmin={isPlatformAdmin}
+        caps={caps}
+        onOpenAppearance={onOpenAppearance}
+        onPreloadAppearance={onPreloadAppearance}
+      />
+    </aside>
+  );
+}
+
+export function SidebarBody({
+  collapsed = false,
+  isPlatformAdmin = false,
+  caps = [],
+  onOpenAppearance,
+  onPreloadAppearance,
+  onNavigate,
+  animatedPill = true,
+}: SidebarProps & {
+  /** Drawer móvil: cerrar al tocar un destino. */
+  onNavigate?: () => void;
+  /**
+   * La pastilla del activo se desliza entre ítems con `layoutId` (framer, `m` dentro de `LazyMotion`). En el Drawer
+   * va quieta: el `<aside>` de escritorio sigue montado (solo oculto por CSS) y dos `layoutId` iguales se animarían
+   * entre sí.
+   */
+  animatedPill?: boolean;
 }) {
   const pathname = usePathname();
   const search = useSearchParams();
@@ -141,30 +250,17 @@ export function Sidebar({
     pathname,
     search
   );
-  const w = collapsed ? 64 : 232;
+  const { bind, node: tooltip, hide } = useNavTooltip(collapsed);
+  const itemClass = (extra?: string) =>
+    [styles.navItem, collapsed ? styles.navItemCollapsed : styles.navItemExpanded, extra].filter(Boolean).join(" ");
+  const go = () => {
+    hide();
+    onNavigate?.();
+  };
+  const appearanceTip = bind("Apariencia");
+
   return (
-    <aside
-      className="k-glass"
-      style={{
-        width: w,
-        flexShrink: 0,
-        padding: collapsed ? 8 : 18,
-        borderRadius: "var(--r-xl)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        margin: 14,
-        marginRight: 0,
-        // Pin the sidebar to the viewport so it never grows past the
-        // screen with the page content. Without this the flex parent
-        // stretches it to the full document height and the footer links
-        // (Configuración / Cerrar sesión) scroll out of view. The nav
-        // list below owns the overflow; the footer stays anchored.
-        position: "sticky",
-        top: 14,
-        height: "calc(100vh - 28px)",
-      }}
-    >
+    <>
       <div
         style={{
           padding: collapsed ? "8px 0 14px" : "4px 6px 18px",
@@ -179,98 +275,53 @@ export function Sidebar({
           selector (también colapsado, con las iniciales); con 1, solo el nombre; sin provider, nada. Las opciones
           llegan por `TenantChoiceProvider` (AppShell), no por props. */}
       <TenantSwitcher collapsed={collapsed} />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          flex: 1,
-          // Scroll the nav list (not the whole aside) when it overflows,
-          // so the footer below stays pinned and reachable. `minHeight: 0`
-          // lets this flex child actually shrink instead of pushing the
-          // footer off-screen.
-          minHeight: 0,
-          overflowY: "auto",
-          alignItems: collapsed ? "center" : "stretch",
-        }}
-      >
+      <nav aria-label="Secciones" className={styles.navList} style={{ alignItems: collapsed ? "center" : "stretch" }}>
         {main.map((it) => {
           const on = active === it.href;
           const I = NAV_ICONS[it.icon];
           return (
-            <MotionLink
+            <Link
               key={it.href}
               href={it.href}
-              whileTap={{ scale: 0.97 }}
               aria-current={on ? "page" : undefined}
-              style={{
-                position: "relative",
-                textDecoration: "none",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: collapsed ? 0 : "11px 14px",
-                width: collapsed ? 44 : "auto",
-                height: collapsed ? 40 : "auto",
-                borderRadius: 12,
-                background: "transparent",
-                color: on ? "#fff" : "var(--navy-500)",
-                fontWeight: on ? 600 : 500,
-                fontSize: 13.5,
-                justifyContent: collapsed ? "center" : "flex-start",
-              }}
-              title={collapsed ? it.label : undefined}
+              aria-label={collapsed ? it.label : undefined}
+              className={itemClass(on ? styles.navItemOn : undefined)}
+              onClick={go}
+              {...bind(it.label)}
             >
-              {/* Shared active highlight — slides between items on route
-                  change via layout animation. Sits behind the icon/label. */}
-              {on && (
-                <motion.span
-                  layoutId="sidebar-active"
-                  transition={{ duration: DUR.base, ease: EASE_OUT }}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    borderRadius: 12,
-                    background: "linear-gradient(180deg, var(--sky-700), var(--sky-600))",
-                    boxShadow: "0 6px 16px rgba(31,79,190,0.28)",
-                    zIndex: 0,
-                  }}
-                />
-              )}
-              <span
-                style={{
-                  position: "relative",
-                  zIndex: 1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
+              {/* Pastilla compartida del activo: se desliza entre ítems al cambiar de ruta (`layoutId`). Va detrás
+                  del ícono y el texto. Las clases (no `style`) evitan el *style mismatch* de hidratación (S5). */}
+              {on &&
+                (animatedPill ? (
+                  <m.span
+                    layoutId="sidebar-active"
+                    transition={{ duration: DUR.base, ease: EASE_OUT }}
+                    className={styles.activePill}
+                  />
+                ) : (
+                  <span className={styles.activePill} />
+                ))}
+              <span className={styles.navItemInner}>
                 <I size={18} />
                 {!collapsed && <span>{it.label}</span>}
               </span>
-            </MotionLink>
+            </Link>
           );
         })}
-      </div>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          paddingTop: 12,
-          borderTop: "1px solid rgba(15,30,51,0.06)",
-          alignItems: collapsed ? "center" : "stretch",
-        }}
-      >
+      </nav>
+      <div className={styles.footer} style={{ alignItems: collapsed ? "center" : "stretch" }}>
         {isPlatformAdmin && (
-          <FooterLink
+          <Link
             href={PLATFORM_HREF}
-            label="Plataforma"
-            Icon={IconBookmark}
-            on={active === PLATFORM_HREF}
-            collapsed={collapsed}
-          />
+            aria-current={active === PLATFORM_HREF ? "page" : undefined}
+            aria-label={collapsed ? "Plataforma" : undefined}
+            className={itemClass(active === PLATFORM_HREF ? styles.navItemFooterOn : undefined)}
+            onClick={go}
+            {...bind("Plataforma")}
+          >
+            <IconBookmark size={18} />
+            {!collapsed && <span>Plataforma</span>}
+          </Link>
         )}
         {config && (
           <FooterLink
@@ -278,62 +329,49 @@ export function Sidebar({
             label={config.label}
             Icon={NAV_ICONS[config.icon]}
             on={active === config.href}
+            className={itemClass(active === config.href ? styles.navItemFooterOn : undefined)}
             collapsed={collapsed}
+            onClick={go}
+            tip={bind(config.label)}
           />
         )}
         {onOpenAppearance && (
           <button
             type="button"
-            onClick={onOpenAppearance}
-            title={collapsed ? "Apariencia" : undefined}
+            onClick={() => {
+              hide();
+              onOpenAppearance();
+            }}
             aria-label="Apariencia"
-            style={{
-              all: "unset",
-              boxSizing: "border-box",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: collapsed ? 0 : "11px 14px",
-              width: collapsed ? 44 : "100%",
-              height: collapsed ? 40 : "auto",
-              color: "var(--navy-500)",
-              fontSize: 13.5,
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 12,
+            className={`${styles.navButton} ${itemClass()}`}
+            {...appearanceTip}
+            onPointerEnter={(e) => {
+              onPreloadAppearance?.();
+              appearanceTip.onPointerEnter?.(e);
+            }}
+            onFocus={(e) => {
+              onPreloadAppearance?.();
+              appearanceTip.onFocus?.(e);
             }}
           >
             <IconPalette size={18} />
             {!collapsed && <span>Apariencia</span>}
           </button>
         )}
-        <form action="/api/auth/sign-out" method="post" style={{ width: "100%" }}>
+        <form action="/api/auth/sign-out" method="post" style={{ width: "100%", display: "flex", justifyContent: "center" }}>
           <button
             type="submit"
-            title={collapsed ? "Cerrar sesión" : undefined}
             aria-label="Cerrar sesión"
-            style={{
-              all: "unset",
-              boxSizing: "border-box",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: collapsed ? 0 : "11px 14px",
-              width: collapsed ? 44 : "100%",
-              height: collapsed ? 40 : "auto",
-              color: "var(--navy-300)",
-              fontSize: 13.5,
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 12,
-            }}
+            className={`${styles.navButton} ${itemClass(styles.navItemMuted)}`}
+            {...bind("Cerrar sesión")}
           >
             <IconLogout size={18} />
             {!collapsed && <span>Cerrar sesión</span>}
           </button>
         </form>
       </div>
-    </aside>
+      {tooltip}
+    </>
   );
 }
 
@@ -343,32 +381,27 @@ function FooterLink({
   Icon,
   on,
   collapsed,
+  className,
+  onClick,
+  tip,
 }: {
   href: string;
   label: string;
   Icon: ComponentType<{ size?: number }>;
   on: boolean;
   collapsed: boolean;
+  className: string;
+  onClick: () => void;
+  tip: TipHandlers;
 }) {
   return (
     <Link
       href={href}
-      title={collapsed ? label : undefined}
       aria-current={on ? "page" : undefined}
-      style={{
-        textDecoration: "none",
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: collapsed ? 0 : "11px 14px",
-        width: collapsed ? 44 : "auto",
-        height: collapsed ? 40 : "auto",
-        color: on ? "var(--sky-700)" : "var(--navy-500)",
-        fontSize: 13.5,
-        fontWeight: on ? 700 : 500,
-        justifyContent: collapsed ? "center" : "flex-start",
-        borderRadius: 12,
-      }}
+      aria-label={collapsed ? label : undefined}
+      className={className}
+      onClick={onClick}
+      {...tip}
     >
       <Icon size={18} />
       {!collapsed && <span>{label}</span>}

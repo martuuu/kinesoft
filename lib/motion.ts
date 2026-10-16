@@ -2,7 +2,7 @@
  * Shared motion vocabulary for KineSoft.
  *
  * One source of truth for easing + durations + variants so every animated
- * surface (page transitions, modals, drawers, toasts, lists) feels like it
+ * surface (modals, drawers, toasts, lists) feels like it
  * belongs to the same system. Values are intentionally subtle and quick —
  * the UI should feel alive, never sluggish.
  *
@@ -36,12 +36,8 @@ export const springSoft: Transition = {
   mass: 0.9,
 };
 
-/** Page-level transition used by the workspace `template.tsx`. */
-export const pageVariants: Variants = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0, transition: { duration: DUR.slow, ease: EASE_OUT } },
-  exit: { opacity: 0, y: -6, transition: { duration: DUR.fast, ease: EASE_IN_OUT } },
-};
+// PF1.0-a: `pageVariants` se borró. Lo usaba el `template.tsx` del workspace hasta PF-0c, que pasó la entrada de
+// página a CSS (`.k-page-in`): nada visible en el primer render depende de framer (C-PF1.2).
 
 /** Centered modal card. */
 export const modalVariants: Variants = {
