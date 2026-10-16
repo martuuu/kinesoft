@@ -43,6 +43,7 @@ import { emailEqualsFilter, escapeLike, sameEmail } from "@/lib/email-match";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
 import { NotificationKind } from "@prisma/client";
 import { applyPatientArchivePlansInTx, PlanLifecycleStale } from "@/lib/plans-lifecycle-internal";
+import { liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
 import { ProgramInvariantViolation } from "@/lib/plan-invariants-internal";
 import { afterBookingsCommitted, type BookingChangeRef } from "@/lib/booking-events-internal";
 import { readOnlyFailure, withReadOnlyResult } from "@/lib/read-only-result";
@@ -67,6 +68,7 @@ import type {
   PatientAdminCore,
   PatientBookingFull,
   PatientCoreWithAccess,
+  PatientListPlanChip,
   PatientRow,
   PatientSort,
 } from "@/lib/patients-types";
@@ -173,6 +175,8 @@ export async function listPatients(opts: {
   const qLike = q ? escapeLike(q) : undefined;
   const insurerLike = opts.insurer ? escapeLike(opts.insurer) : undefined;
 
+  const activeLiveProgramWhere = { ...liveProgramWhere, status: "ACTIVE" } satisfies Prisma.TreatmentProgramWhereInput;
+
   const where: Prisma.PatientWhereInput = {
     tenantId: actor.tenantId,
     ...(filter === "archived"
@@ -188,10 +192,15 @@ export async function listPatients(opts: {
           ],
         }
       : {}),
+    // S32: «Con plan» / «Sin plan» con el MISMO predicado que la columna y el
+    // contador del pill (plan ACTIVE y vivo, `liveProgramWhere`). Antes «Con
+    // plan» contaba un ACTIVE archivado y «Sin plan» era "nunca tuvo plan"
+    // (`none: {}`), mientras el pill contaba "sin plan activo": un paciente
+    // con el plan COMPLETED sumaba en «Sin plan · N» y no aparecía al clickearlo.
     ...(filter === "active"
-      ? { programs: { some: { status: "ACTIVE" } } }
+      ? { programs: { some: activeLiveProgramWhere } }
       : filter === "no-program"
-        ? { programs: { none: {} } }
+        ? { programs: { none: activeLiveProgramWhere } }
         : {}),
     ...(insurerLike
       ? { coverages: { some: { insurer: { contains: insurerLike, mode: "insensitive" } } } }
@@ -214,16 +223,19 @@ export async function listPatients(opts: {
             ? [{ createdAt: "asc" }]
             : [{ lastName: "asc" }];
 
-  // P0-S02a: con 2 planes ACTIVE (legacy o carrera) el `take: 1` sin
-  // `orderBy` devolvía el orden físico de la tabla, así que la columna
-  // "plan activo" del directorio podía mostrar el viejo y cambiar entre
-  // requests. Gana el más reciente, como el resto de los lectores de
-  // "plan activo" de ES1 (`listBookingsInRange`, Seguimiento).
+  // P0-S02a: con 2 planes ACTIVE (legacy o carrera) el orden físico de la
+  // tabla cambiaba el "plan activo" entre requests. Gana el más reciente, como
+  // el resto de los lectores de "plan activo" de ES1 (`listBookingsInRange`,
+  // Seguimiento); `id` desempata dos altas en el mismo milisegundo.
+  // S32: ya no `take: 1`: un paciente puede tener un plan de Kine y otro de
+  // Osteo a la vez, y la columna muestra un chip por cada uno. Solo planes
+  // ACTIVE y vivos (`liveProgramWhere`) y solo las columnas del chip: las
+  // sesiones NO se incluyen (antes venían todas, fila por fila, para contar
+  // en memoria); se cuentan abajo con un único `groupBy` agregado.
   const programsInclude = {
-    where: { status: "ACTIVE" },
-    orderBy: { createdAt: "desc" },
-    take: 1,
-    include: { sessions: { orderBy: { index: "asc" } } },
+    where: activeLiveProgramWhere,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true, title: true, discipline: true },
   } satisfies Prisma.Patient$programsArgs;
   const baseInclude = {
     bookings: {
@@ -235,7 +247,7 @@ export async function listPatients(opts: {
   } satisfies Prisma.PatientInclude;
   type ProgramsPayload = Prisma.PatientGetPayload<{ include: { programs: typeof programsInclude } }>["programs"];
 
-  const { rows, lastCompletedByPatient } = await runWithRls(actor.tenantId, async (tx) => {
+  const { rows, lastCompletedByPatient, sessionAggByProgram } = await runWithRls(actor.tenantId, async (tx) => {
    // EV1-B: sin `planes` la consulta no lleva el include de programs (Prisma
    // no toca Program ni ProgramSession); la fila sale con `programs: []` para
    // que el mapeo de abajo sea uno solo.
@@ -251,6 +263,32 @@ export async function listPatients(opts: {
    // COMPLETED, la misma definición que el filtro `lastVisitFrom/To` de arriba.
    // Una sola agregación por página, no una por fila.
    const lastCompletedByPatient = new Map<string, Date>();
+   // S32: sesiones vivas / realizadas / última realizada por plan activo, en
+   // UNA consulta agregada para toda la página (`GROUP BY programId`): sin
+   // N+1 y sin traer filas de Session. `_count.completedAt` = COUNT(columna),
+   // que no cuenta NULL → realizadas. El tenant va por `program` (Session no
+   // tiene `tenantId`; en prod la conexión es BYPASSRLS).
+   const sessionAggByProgram = new Map<string, { totalLive: number; done: number; lastDoneAt: Date | null }>();
+   const programIds = plansOn ? rows.flatMap((r) => r.programs.map((p) => p.id)) : [];
+   if (programIds.length > 0) {
+     const agg = await tx.session.groupBy({
+       by: ["programId"],
+       where: {
+         ...liveSessionWhere,
+         programId: { in: programIds },
+         program: { tenantId: actor.tenantId, ...activeLiveProgramWhere },
+       },
+       _count: { _all: true, completedAt: true },
+       _max: { completedAt: true },
+     });
+     for (const a of agg) {
+       sessionAggByProgram.set(a.programId, {
+         totalLive: a._count._all,
+         done: a._count.completedAt,
+         lastDoneAt: a._max.completedAt,
+       });
+     }
+   }
    if (!plansOn && rows.length > 0) {
      const agg = await tx.booking.groupBy({
        by: ["patientId"],
@@ -261,7 +299,7 @@ export async function listPatients(opts: {
        if (a.patientId && a._max.scheduledFor) lastCompletedByPatient.set(a.patientId, a._max.scheduledFor);
      }
    }
-   return { rows, lastCompletedByPatient };
+   return { rows, lastCompletedByPatient, sessionAggByProgram };
   });
 
   // Resolve access per row in one batch — much cheaper than N share
@@ -326,18 +364,29 @@ export async function listPatients(opts: {
           activeProgramTitle: null,
           sessionsTotal: 0,
           sessionsDone: 0,
+          activePlans: [],
           lastVisit: null,
           upcomingAt,
           obraSocial: null,
           access: "basic",
         };
       }
+      // S32: un chip por plan activo y vivo (más reciente primero). Un plan
+      // sin sesiones vivas no tiene fila en el `groupBy` → 0/0.
+      const NO_SESSIONS = { totalLive: 0, done: 0, lastDoneAt: null };
+      const activePlans: PatientListPlanChip[] = p.programs.map((pr) => {
+        const a = sessionAggByProgram.get(pr.id) ?? NO_SESSIONS;
+        return { discipline: pr.discipline, done: a.done, totalLive: a.totalLive };
+      });
       const prog = p.programs[0];
-      const sessions = prog?.sessions ?? [];
-      const done = sessions.filter((s) => s.completedAt).length;
-      const lastDone = sessions
-        .filter((s) => s.completedAt)
-        .sort((a, b) => +b.completedAt! - +a.completedAt!)[0];
+      const progAgg = prog ? (sessionAggByProgram.get(prog.id) ?? NO_SESSIONS) : NO_SESSIONS;
+      // «Última visita» (Kine) = la última sesión viva realizada de CUALQUIER
+      // plan activo (antes: solo del más reciente, contando archivadas).
+      let lastDone: Date | null = null;
+      for (const pr of p.programs) {
+        const at = sessionAggByProgram.get(pr.id)?.lastDoneAt ?? null;
+        if (at && (!lastDone || at > lastDone)) lastDone = at;
+      }
       const coverage = p.coverages[0];
       const obraSocial = coverage?.insurerRef?.name ?? coverage?.insurer ?? "Particular";
       return {
@@ -351,9 +400,10 @@ export async function listPatients(opts: {
         notes: p.notes,
         createdAt: p.createdAt,
         activeProgramTitle: prog?.title ?? null,
-        sessionsTotal: prog?.totalSessions ?? 0,
-        sessionsDone: done,
-        lastVisit: plansOn ? (lastDone?.completedAt ?? null) : (lastCompletedByPatient.get(p.id) ?? null),
+        sessionsTotal: progAgg.totalLive,
+        sessionsDone: progAgg.done,
+        activePlans,
+        lastVisit: plansOn ? lastDone : (lastCompletedByPatient.get(p.id) ?? null),
         upcomingAt,
         obraSocial,
         access: "full",

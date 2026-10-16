@@ -1,4 +1,17 @@
 import type { Prisma } from "@prisma/client";
+import type { Discipline } from "@/lib/plans-constants";
+
+/**
+ * S32 (ES4): chip de un plan ACTIVE y vivo (`liveProgramWhere`) en el
+ * directorio. Mismo contenido que el chip del hero (`HeroPlanChip`): sin
+ * título (PHI, PD-11), `done` / `totalLive` sobre sesiones vivas.
+ * `discipline: null` = plan sin disciplina (legacy) → chip «Plan».
+ */
+export type PatientListPlanChip = {
+  discipline: Discipline | null;
+  done: number;
+  totalLive: number;
+};
 
 export type PatientRow = {
   id: string;
@@ -10,9 +23,18 @@ export type PatientRow = {
   dateOfBirth: Date | null;
   notes: string | null;
   createdAt: Date;
+  /** Título del plan activo más reciente (CSV de export). La UI muestra `activePlans`. */
   activeProgramTitle: string | null;
+  /** Sesiones vivas del plan activo más reciente (`sessionsDone` = realizadas). */
   sessionsTotal: number;
   sessionsDone: number;
+  /**
+   * S32: un chip por plan ACTIVE y vivo, el más reciente primero. `[]` sin plan
+   * activo, en filas `basic` y sin el módulo `planes`. Opcional solo para que
+   * los fixtures de render previos (`patients-list-modules.test.tsx`) sigan
+   * compilando: `listPatients` lo manda SIEMPRE.
+   */
+  activePlans?: PatientListPlanChip[];
   lastVisit: Date | null;
   upcomingAt: Date | null;
   /**

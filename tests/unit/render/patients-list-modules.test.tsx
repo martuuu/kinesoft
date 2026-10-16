@@ -64,7 +64,7 @@ function row(over: Partial<PatientRow> = {}): PatientRow {
 describe("[EV1-B] PatientsList", () => {
   it("GENERAL: sin columna de plan, estado Activo y grid de 7 columnas", () => {
     const html = wrap(GENERAL, <PatientsList rows={[row()]} archived={false} />);
-    expect(html).not.toContain("Sin plan asignado");
+    expect(html).not.toContain("Sin plan activo");
     expect(html).not.toContain("Inactivo");
     expect(html).toContain("Activo");
     expect(html).toContain(patientsGridColumns(false));
@@ -77,20 +77,40 @@ describe("[EV1-B] PatientsList", () => {
     expect(html).not.toContain(">Activo<");
   });
 
-  it("Kine (golden): columna de plan, sesiones y Activo/Inactivo = tiene plan", () => {
+  it("Kine (golden, S32): chips por disciplina, sesiones y Activo/Inactivo = tiene plan", () => {
     const html = wrap(
       KINE_PRO,
       <PatientsList
         rows={[
-          row({ id: "p1", activeProgramTitle: "Plan lumbar", sessionsTotal: 10, sessionsDone: 3 }),
-          row({ id: "p2", firstName: "Beto" }),
+          row({
+            id: "p1",
+            activeProgramTitle: "Plan lumbar",
+            sessionsTotal: 10,
+            sessionsDone: 3,
+            activePlans: [{ discipline: "KINESIOLOGY", done: 3, totalLive: 10 }],
+          }),
+          row({ id: "p2", firstName: "Beto", activePlans: [] }),
+          row({
+            id: "p3",
+            firstName: "Caro",
+            activeProgramTitle: "Plan cervical",
+            activePlans: [
+              { discipline: "OSTEOPATHY", done: 0, totalLive: 6 },
+              { discipline: "KINESIOLOGY", done: 2, totalLive: 8 },
+            ],
+          }),
         ]}
         archived={false}
       />
     );
     expect(html).toContain("Plan lumbar");
-    expect(html).toContain("3 / 10");
-    expect(html).toContain("Sin plan asignado");
+    expect(html).toContain("3/10");
+    expect(html).toContain("Plan de Kinesiología: 3 de 10 sesiones realizadas");
+    expect(html).toContain("Plan de Osteopatía: 0 de 6 sesiones realizadas");
+    // Con dos planes no va el título (no diría de cuál es).
+    expect(html).not.toContain("Plan cervical");
+    expect(html.match(/data-testid="patients-plan-chip"/g)).toHaveLength(3);
+    expect(html).toContain("Sin plan activo");
     expect(html).toContain("Activo");
     expect(html).toContain("Inactivo");
     expect(html).toContain(patientsGridColumns(true));
