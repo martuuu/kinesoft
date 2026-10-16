@@ -17,3 +17,16 @@ export type PortalExercisesDTO = {
   programTitle: string;
   sessions: { index: number; /** ISO 8601. */ date: string; exercises: PortalExerciseDTO[] }[];
 } | null;
+
+/**
+ * S24e: lo que necesita la página `/portal/c/[slug]/ejercicios` (resultado de `getPortalExercisesView`). Agregado al
+ * contrato de P4-C (no cambia los dos tipos de arriba).
+ *   - `signedOut`: sin sesión verificada → la página ofrece entrar;
+ *   - `notFound`: sin ficha vinculada en ese consultorio, staff, o el consultorio no tiene `planes` ∧ `ejercicios` →
+ *     404. `movedSlug` = slug vigente si el slug es un alias viejo y el paciente SÍ está vinculado allá (308);
+ *   - `ok`: `data` puede ser `null` (sin plan activo con ejercicios) → vacío, no error.
+ */
+export type PortalExercisesView =
+  | { kind: "signedOut" }
+  | { kind: "notFound"; movedSlug: string | null }
+  | { kind: "ok"; tenantName: string; vertical: import("@prisma/client").TenantVertical; data: PortalExercisesDTO };

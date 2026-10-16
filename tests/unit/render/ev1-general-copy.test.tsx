@@ -29,6 +29,7 @@ vi.mock("@/lib/portal", () => proxy());
 vi.mock("@/lib/plans", () => proxy());
 vi.mock("@/lib/plans-lifecycle", () => proxy());
 vi.mock("@/lib/patient-shares", () => proxy());
+vi.mock("@/lib/patient-portal-requests", () => proxy());
 vi.mock("@/lib/public-booking", () => ({
   listPublicSlots: vi.fn(async () => []),
   findFirstPublicSlot: vi.fn(async () => null),

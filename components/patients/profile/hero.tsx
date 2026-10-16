@@ -33,6 +33,7 @@ import { disciplineLabel } from "@/lib/plan-display";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { Section, Grid2 } from "./ui";
+import { PortalRequestBanner } from "./portal-request-banner";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
 /**
@@ -126,6 +127,9 @@ export function PatientHero({
         />
       </Card>
 
+      {/* ES4 S24r: pedido de «Mis datos» del portal (se carga solo; sin pedido no renderiza nada). */}
+      <PortalRequestBanner patientId={patient.id} />
+
       <ArchivePatientDialog
         open={askPlans}
         onClose={() => setAskPlans(false)}
@@ -179,36 +183,40 @@ export function PatientAdminHero({
   const coverageLabel = cov ? `${cov.insurer}${cov.planName ? " " + cov.planName : ""}` : "Particular";
   const practitionerFact = usePractitionerFactLabel();
   return (
-    <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-      <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 240 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-          <Tag tone="soft">Ficha administrativa</Tag>
+    <>
+      <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+        <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+            <Tag tone="soft">Ficha administrativa</Tag>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+            <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
+              {patient.firstName} {patient.lastName}
+            </h1>
+            <span style={{ fontSize: 13, color: "var(--navy-500)" }}>
+              {age != null ? `${age} años` : ""}
+              {patient.documentId ? `${age != null ? " · " : ""}DNI ${patient.documentId}` : ""}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
+            <HeroFact label="Tel." value={patient.phone ?? "—"} />
+            <HeroFact label="Email" value={patient.email ?? "—"} />
+            <HeroFact label="Cobertura" value={coverageLabel} />
+            <HeroFact label={practitionerFact} value={patient.assignedPractitionerName ?? "Consultorio común"} />
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-          <h1 className="k-display" style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
-            {patient.firstName} {patient.lastName}
-          </h1>
-          <span style={{ fontSize: 13, color: "var(--navy-500)" }}>
-            {age != null ? `${age} años` : ""}
-            {patient.documentId ? `${age != null ? " · " : ""}DNI ${patient.documentId}` : ""}
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 24, marginTop: 12, fontSize: 12, color: "var(--navy-500)", flexWrap: "wrap" }}>
-          <HeroFact label="Tel." value={patient.phone ?? "—"} />
-          <HeroFact label="Email" value={patient.email ?? "—"} />
-          <HeroFact label="Cobertura" value={coverageLabel} />
-          <HeroFact label={practitionerFact} value={patient.assignedPractitionerName ?? "Consultorio común"} />
-        </div>
-      </div>
-      {canBook && (
-        <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
-          <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
-            <IconPlus size={12} /> Agregar turno
-          </Button>
-        </Link>
-      )}
-    </Card>
+        {canBook && (
+          <Link href={`/agenda?new=1&patient=${patient.id}`} style={{ textDecoration: "none" }}>
+            <Button variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+              <IconPlus size={12} /> Agregar turno
+            </Button>
+          </Link>
+        )}
+      </Card>
+      {/* ES4 S24r · PD-13: la Secretaria aprueba contacto y cobertura del pedido del portal. */}
+      <PortalRequestBanner patientId={patient.id} />
+    </>
   );
 }
 

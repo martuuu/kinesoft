@@ -17,3 +17,23 @@ export type PortalProfileDTO = {
   }[];
   pending: { slug: string; fields: string[]; /** ISO 8601. */ updatedAt: string }[];
 };
+
+/**
+ * S24d: estado del form «Pedir un cambio» (`useFormState`, anda sin JS). En error vuelven los valores tipeados para
+ * re-llenar el form (sin JS la página se re-renderiza con este estado y los inputs arrancan de `values`).
+ */
+export type PortalProfileFormState =
+  | null
+  | { status: "sent"; slug: string; fields: string[]; at: number }
+  | { status: "error"; slug: string; error: string; values: Record<string, string> };
+
+/** S24d: estado del «Cerrar sesión en todos lados» (`signOut({ scope: "global" })`). Si sale bien, redirige. */
+export type PortalSignOutState = null | { status: "error"; error: string };
+
+/** Nombres de campo en castellano para el aviso de pedidos abiertos (sin valores). */
+export const PORTAL_PROFILE_FIELD_LABELS: Record<string, string> = {
+  phone: "teléfono",
+  email: "email",
+  emergencyContact: "contacto de emergencia",
+  coverage: "obra social",
+};

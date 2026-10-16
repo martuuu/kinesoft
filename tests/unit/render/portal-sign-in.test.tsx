@@ -49,6 +49,7 @@ const patient = (over: Partial<PortalPatient>): PortalPatient => ({
   tenantVertical: "KINESIOLOGY",
   firstName: "Ana",
   lastName: "Pérez",
+  sections: ["inicio", "plan", "checkin", "ejercicios", "cuenta", "reservar"],
   programs: [],
   upcoming: [],
   ...over,
@@ -149,7 +150,7 @@ describe("[VX2-f] /portal con sesión, por vertical de la ficha", () => {
       signedIn: true,
       email: "a@b.c",
       fullName: null,
-      patients: [patient({ tenantVertical: "GENERAL" })],
+      patients: [patient({ tenantVertical: "GENERAL", sections: ["inicio", "cuenta"] })],
     };
     const html = renderToStaticMarkup(await PortalHome({}));
     expect(html).not.toMatch(/sesi[oó]n|plan de tratamiento/i);

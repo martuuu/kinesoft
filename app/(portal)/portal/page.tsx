@@ -5,8 +5,9 @@ import { SocialButtons } from "@/components/auth/social-buttons";
 import { IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
 import { getPortalAuth } from "@/lib/portal";
 import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
-import { PORTAL_HOME, portalPatientCardCopy, portalPlanProgress } from "@/lib/portal-copy";
+import { PORTAL_HOME, portalNoLinkCopy, portalPatientCardCopy, portalPlanProgress } from "@/lib/portal-copy";
 import type { PortalPatient } from "@/lib/portal-types";
+import { PortalTabs } from "@/components/portal/portal-tabs";
 import { PortalEmailForm } from "./portal-email-form";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,10 @@ export default async function PortalHome({
           {PORTAL_HOME.title}
         </h1>
         <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-          Vemos {auth.patients.length === 1 ? "tu ficha" : `${auth.patients.length} fichas`} vinculadas a tu email.
+          {/* S24a: el portal muestra las fichas VINCULADAS a la cuenta (no las que coinciden por email). */}
+          {auth.patients.length === 1
+            ? "Vemos tu ficha vinculada a tu cuenta."
+            : `Vemos ${auth.patients.length} fichas vinculadas a tu cuenta.`}
         </p>
       </header>
 
@@ -57,6 +61,11 @@ function PatientCard({ p }: { p: PortalPatient }) {
   const program = p.programs[0];
   // VX2-f: copy por vertical de ESTA ficha (lib/portal-copy.ts): «sesiones» y «sin plan» solo en Kinesiología.
   const copy = portalPatientCardCopy(p.tenantVertical);
+  // ES4 S24: lo que se ofrece sale de las secciones de la ficha (portalSectionsFor): «sin plan» solo si el consultorio
+  // usa planes, «Sacar un turno» solo con el turnero abierto (antes se ofrecía siempre y terminaba en un turnero
+  // cerrado).
+  const usesPlans = p.sections.includes("plan");
+  const canBook = p.sections.includes("reservar");
   return (
     <Card glass style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -145,7 +154,7 @@ function PatientCard({ p }: { p: PortalPatient }) {
             {portalPlanProgress(p.tenantVertical, program.completedSessions, program.totalSessions)}
           </div>
         </Link>
-      ) : copy.noPlan ? (
+      ) : usesPlans && copy.noPlan ? (
         <div style={{ fontSize: 13, color: "var(--navy-500)" }}>{copy.noPlan}</div>
       ) : null}
 
@@ -164,10 +173,15 @@ function PatientCard({ p }: { p: PortalPatient }) {
         </div>
         {p.upcoming.length === 0 ? (
           <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
-            {PORTAL_HOME.noUpcoming}{" "}
-            <Link href={`/c/${p.tenantSlug}/booking`} className="k-link">
-              {PORTAL_HOME.bookCta} →
-            </Link>
+            {PORTAL_HOME.noUpcoming}
+            {canBook && (
+              <>
+                {" "}
+                <Link href={`/c/${encodeURIComponent(p.tenantSlug)}/booking`} className="k-link">
+                  {PORTAL_HOME.bookCta} →
+                </Link>
+              </>
+            )}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -221,6 +235,10 @@ function PatientCard({ p }: { p: PortalPatient }) {
           </div>
         )}
       </div>
+
+      {/* ES4 S24: las secciones del consultorio (Tu plan / Tu consultorio, Ejercicios, Estado de cuenta, Sacar un
+          turno). En General sin plan era la única forma de llegar a /portal/c/<slug>. */}
+      <PortalTabs slug={p.tenantSlug} sections={p.sections} />
     </Card>
   );
 }
@@ -273,18 +291,16 @@ function PortalSignIn({ slug, google }: { slug: string | null; google: boolean }
 }
 
 function NoLinkedPatient({ email }: { email: string }) {
+  // EV1-C2: sin ficha vinculada no sabemos de qué consultorio viene (puede ser de Clínica general): «tu consultorio»
+  // vale para las dos verticales. ES4 S24: el camino es la invitación (PD-15), no «cargá tu email exacto».
+  const copy = portalNoLinkCopy(email);
   return (
     <Card glass style={{ padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
-      <Tag tone="soft">Sin fichas vinculadas</Tag>
+      <Tag tone="soft">{copy.tag}</Tag>
       <h1 className="k-display" style={{ fontSize: 22, margin: 0 }}>
-        No encontramos una ficha asociada a {email}
+        {copy.title}
       </h1>
-      <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-        {/* EV1-C2: sin ficha vinculada no sabemos de qué consultorio viene (puede ser de Clínica general):
-            «tu consultorio» vale para las dos verticales. */}
-        Pedile a tu consultorio que cargue tu email exacto en tu ficha clínica, o sacá tu primer
-        turno y nosotros la creamos.
-      </p>
+      <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{copy.text}</p>
     </Card>
   );
 }

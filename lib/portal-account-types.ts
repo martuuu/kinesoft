@@ -3,8 +3,8 @@
  *
  * PROHIBIDO en cualquier nivel: `osAmountCents`, arancel, `listPriceCents`, `priceCents` crudo de Service, `notes`,
  * `insurer*`. El paciente ve lo que le toca pagar a él (copago), no lo que el consultorio factura a la obra social ni el
- * precio de lista: eso es información comercial del consultorio. El test de forma del server (S24d) recorre el DTO
- * entero buscando esas claves.
+ * precio de lista: eso es información comercial del consultorio. El test de forma del server (S24p,
+ * `tests/integration/portal-account.test.ts`) recorre el DTO entero contra una allowlist de claves.
  *
  * Plata en centavos `Int` (AGENTS §4); se formatea con `formatARS` en la UI.
  */

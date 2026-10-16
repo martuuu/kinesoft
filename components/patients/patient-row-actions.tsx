@@ -1,8 +1,44 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import { setPatientArchived } from "@/lib/patients";
 import { useToast } from "@/components/ui/toast";
+import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import {
+  ArchivePatientDialog,
+  shouldAskArchivePlans,
+  type ArchivePatientResult,
+} from "@/components/patients/archive-patient-dialog";
+import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
+
+/**
+ * S32a (ES4): ¿«Archivar paciente» desde la fila pasa por la pregunta L9?
+ * Antes la fila llamaba a `setPatientArchived` sin `plansAction` y el server
+ * pausaba los planes sin preguntar (AUDIT `archivar-paciente-lista-sin-L9`).
+ * La fila no trae los planes vivos (`PatientRow.activeProgramTitle` solo ve el
+ * ACTIVE, no los PAUSED), así que `livePlanCount` llega `null` y con el módulo
+ * `planes` se pregunta siempre: es más barato preguntar de más.
+ */
+export function rowArchiveStep(input: {
+  archived: boolean;
+  plansEnabled: boolean;
+  livePlanCount: number | null;
+}): "ask-plans" | "direct" {
+  if (input.archived) return "direct";
+  return shouldAskArchivePlans(input) ? "ask-plans" : "direct";
+}
+
+/** La action que dispara el diálogo L9 de la fila (single, como el hero). */
+export async function archiveRowWithPlans(
+  patientId: string,
+  plansAction: PatientArchivePlansAction,
+): Promise<ArchivePatientResult> {
+  const r = await setPatientArchived({ id: patientId, archived: true, plansAction });
+  if (!r.ok) return { ok: false, error: r.error };
+  // PF-0d: sin `router.refresh()`; la action revalida "/pacientes".
+  return { ok: true };
+}
 
 /**
  * Per-row "⋯" menu for the Pacientes directory.
@@ -12,13 +48,21 @@ import { useToast } from "@/components/ui/toast";
 export function PatientRowActions({
   patientId,
   archived,
+  patientName,
+  livePlanCount = null,
 }: {
   patientId: string;
   archived: boolean;
+  /** Para el título del diálogo L9; sin él dice «El paciente». */
+  patientName?: string;
+  /** Planes vivos si el caller los conoce; `null` = no se sabe → se pregunta. */
+  livePlanCount?: number | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [askPlans, setAskPlans] = useState(false);
   const [pending, start] = useTransition();
   const toast = useToast();
+  const plansEnabled = useTenantModules().has("planes");
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -39,6 +83,10 @@ export function PatientRowActions({
 
   const toggle = () => {
     setOpen(false);
+    if (rowArchiveStep({ archived, plansEnabled, livePlanCount }) === "ask-plans") {
+      setAskPlans(true);
+      return;
+    }
     start(async () => {
       const r = await setPatientArchived({ id: patientId, archived: !archived });
       // Antes se ignoraba el resultado: un rechazo (acceso básico, paciente
@@ -111,6 +159,21 @@ export function PatientRowActions({
           </button>
         </div>
       )}
+      {/* Portal a body: la fila es un `motion.div` con transform (stagger) y un
+          `position: fixed` adentro quedaría atrapado en ella. Montado solo
+          abierto: cada apertura arranca limpia (default pausar). */}
+      {askPlans && typeof document !== "undefined"
+        ? createPortal(
+            <ArchivePatientDialog
+              open
+              onClose={() => setAskPlans(false)}
+              patientName={patientName}
+              livePlanCount={livePlanCount}
+              onConfirm={(plansAction) => archiveRowWithPlans(patientId, plansAction)}
+            />,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

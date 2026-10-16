@@ -1,4 +1,5 @@
 import type { TenantVertical } from "@prisma/client";
+import type { PortalSection } from "./portal-nav";
 
 /**
  * [VX2-f · D-VX28] Copy del portal del paciente, por vertical del consultorio. Puro (sin server-only ni React): lo
@@ -108,5 +109,57 @@ export function portalCheckInCopy(vertical: TenantVertical): {
     submit: kine ? "Enviar check-in" : "Enviar",
     pending: "Enviando…",
     done: kine ? "Check-in registrado" : "Recibido",
+  };
+}
+
+// ── ES4 S24 · turnos del plan y navegación ──────────────────────────────────────────────────────────────────────
+
+/**
+ * «Sesión 3 de 10» (Kine) / «Turno 3 de 10» (General). Mismo texto que el chip de la agenda y el ICS (V1-D18,
+ * `planSessionLabel`), con la palabra por vertical. `ordinal` y `total` son sobre las sesiones VIVAS (M13).
+ */
+export function portalSessionOfTotal(vertical: TenantVertical, ordinal: number, total: number): string {
+  return `${portalSessionLabel(vertical, ordinal)} de ${total}`;
+}
+
+/** Fila del recorrido sin turno vigente (sin turno todavía, o el que había se canceló: C4). */
+export const PORTAL_PLAN_NO_BOOKING = "Todavía sin turno asignado";
+
+/** Tabs del consultorio (`components/portal/portal-tabs.tsx`). `plan` y `checkin` no son tabs: viven en «inicio». */
+export type PortalTab = Extract<PortalSection, "inicio" | "cuenta" | "ejercicios" | "reservar">;
+
+/**
+ * Rótulo de cada tab. «inicio» se llama como el encabezado de la página: «Tu plan» si el consultorio usa planes, «Tu
+ * consultorio» si no (General no tiene planes: «Tu plan» le prometería algo que no existe). «reservar» usa el mismo
+ * texto que el CTA de la home, para que el mismo destino no tenga dos nombres.
+ */
+export function portalTabLabel(tab: PortalTab, hasPlan: boolean): string {
+  switch (tab) {
+    case "inicio":
+      return hasPlan ? "Tu plan" : "Tu consultorio";
+    case "cuenta":
+      return "Estado de cuenta";
+    case "ejercicios":
+      return "Ejercicios";
+    case "reservar":
+      return PORTAL_HOME.bookCta;
+  }
+}
+
+/** Nombre accesible del `<nav>` de las tabs. */
+export const PORTAL_TABS_LABEL = "Secciones de tu consultorio";
+
+/**
+ * Cuenta sin fichas vinculadas. ES4 (S24a/S24v, PD-15): el portal ya no autoriza por coincidencia de email; el vínculo
+ * lo hace el auto-vínculo (exactamente una ficha libre con ese email) o la invitación del consultorio. «Cargá tu email
+ * exacto» ya no alcanza si hay dos fichas o si la ficha ya está tomada: lo que destraba siempre es la invitación.
+ */
+export function portalNoLinkCopy(email: string): { tag: string; title: string; text: string } {
+  return {
+    tag: "Sin fichas vinculadas",
+    title: `No encontramos una ficha vinculada a ${email}`,
+    text:
+      "Pedile a tu consultorio que te invite al portal desde tu ficha: te llega un email con el link para entrar. " +
+      "Si todavía no sos paciente, sacá tu primer turno y el consultorio crea tu ficha.",
   };
 }

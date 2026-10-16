@@ -7,13 +7,15 @@ import { Tag } from "@/components/ui/tag";
 import { ButtonLink } from "@/components/ui/button";
 import { IconArrow, IconCheck } from "@/components/ui/icons";
 import { PortalCheckInForm } from "@/components/portal/check-in-form";
+import { PortalTabs } from "@/components/portal/portal-tabs";
 import { BRAND_NAME } from "@/lib/brand";
 import {
+  PORTAL_PLAN_NO_BOOKING,
   portalCheckInCopy,
   portalNextSessionLabel,
   portalNoPlanCopy,
   portalPlanProgress,
-  portalSessionLabel,
+  portalSessionOfTotal,
   portalTenantHeader,
 } from "@/lib/portal-copy";
 
@@ -29,7 +31,32 @@ export async function generateMetadata({ params }: { params: { slug: string } })
  * `getPortalAuth`): Clínica general no tiene planes (lib/tenant-modules.ts), así que «tu plan / cuando tu kinesiólogo
  * lo arme» le promete algo que no existe. VX2-f lo movió a `lib/portal-copy.ts` (puro, testeado, punto de extensión
  * de ES4), que además deja «sesión» solo para Kinesiología.
+ *
+ * ES4 S24: qué se ve lo deciden las secciones de la ficha (`me.sections` = `portalSectionsFor(modules)`): el plan solo
+ * con `plan`, el check-in solo con `checkin`, y las tabs (Estado de cuenta, Ejercicios, Sacar un turno) con las suyas.
+ * El recorrido muestra cada sesión viva como «Sesión n de N» (ordinal por fecha, M13) con su turno (fecha, servicio y
+ * profesional; sin montos ni notas). El gate de verdad está en `getPortalPlan`/`submitCheckIn`; acá solo se pinta.
  */
+
+const dateTime: Intl.DateTimeFormatOptions = {
+  weekday: "long",
+  day: "2-digit",
+  month: "long",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "America/Argentina/Buenos_Aires",
+};
+const shortDate: Intl.DateTimeFormatOptions = {
+  day: "2-digit",
+  month: "short",
+  weekday: "short",
+  timeZone: "America/Argentina/Buenos_Aires",
+};
+const shortDateTime: Intl.DateTimeFormatOptions = {
+  ...shortDate,
+  hour: "2-digit",
+  minute: "2-digit",
+};
 
 export default async function PortalTenantPage({ params }: { params: { slug: string } }) {
   const auth = await getPortalAuth();
@@ -60,7 +87,10 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
     notFound();
   }
   const vertical = me.tenantVertical;
-  const plan = await getPortalPlan(params.slug);
+  const sections = new Set(me.sections);
+  const usesPlans = sections.has("plan");
+  // Sin `planes` ni se pregunta (getPortalPlan devolvería null igual: el gate de verdad está ahí).
+  const plan = usesPlans ? await getPortalPlan(params.slug) : null;
   const header = portalTenantHeader({ vertical, hasPlan: !!plan, firstName: me.firstName });
   const noPlan = portalNoPlanCopy(vertical);
   const now = Date.now();
@@ -85,6 +115,8 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
         </h1>
         <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{header.lead}</p>
       </header>
+
+      <PortalTabs slug={params.slug} sections={me.sections} active="inicio" />
 
       {!plan ? (
         <Card glass style={{ padding: 22 }}>
@@ -156,20 +188,19 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                     textTransform: "uppercase",
                   }}
                 >
-                  {portalNextSessionLabel(vertical, nextSession.index)}
+                  {portalNextSessionLabel(vertical, nextSession.ordinal)}
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>
-                  {new Date(nextSession.scheduledFor).toLocaleString("es-AR", {
-                    weekday: "long",
-                    day: "2-digit",
-                    month: "long",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "America/Argentina/Buenos_Aires",
-                  })}
+                  {new Date(nextSession.scheduledFor).toLocaleString("es-AR", dateTime)}
+                </div>
+                <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 2 }}>
+                  {nextSession.booking
+                    ? `${nextSession.booking.serviceName} · ${nextSession.booking.practitionerName} · ${nextSession.booking.durationMin} min`
+                    : PORTAL_PLAN_NO_BOOKING}
                 </div>
               </div>
-              {nextSession.hasCheckIn ? (
+              {/* S24: el check-in solo con la sección `checkin` (⇐ planes ∧ evaluaciones). */}
+              {!sections.has("checkin") ? null : nextSession.hasCheckIn ? (
                 <Tag tone="lime">
                   <IconCheck size={11} stroke={3} /> {portalCheckInCopy(vertical).done}
                 </Tag>
@@ -222,23 +253,26 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                       flexShrink: 0,
                     }}
                   >
-                    {done ? <IconCheck size={12} stroke={3} /> : s.index}
+                    {done ? <IconCheck size={12} stroke={3} /> : s.ordinal}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>
-                      {portalSessionLabel(vertical, s.index)}
+                      {portalSessionOfTotal(vertical, s.ordinal, plan.totalSessions)}
                       {done ? " · realizada" : ""}
                     </div>
                     <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
-                      {new Date(s.scheduledFor).toLocaleDateString("es-AR", {
-                        day: "2-digit",
-                        month: "short",
-                        weekday: "short",
-                        timeZone: "America/Argentina/Buenos_Aires",
-                      })}
+                      {/* Con turno: fecha y hora del turno. Sin turno: la fecha planificada (sin hora: no hay turno). */}
+                      {s.booking
+                        ? new Date(s.booking.scheduledFor).toLocaleString("es-AR", shortDateTime)
+                        : new Date(s.scheduledFor).toLocaleDateString("es-AR", shortDate)}
                     </div>
+                    {!done && (
+                      <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                        {s.booking ? `${s.booking.serviceName} · ${s.booking.practitionerName}` : PORTAL_PLAN_NO_BOOKING}
+                      </div>
+                    )}
                   </div>
-                  {!done && s.hasCheckIn && <Tag tone="sky">{portalCheckInCopy(vertical).done}</Tag>}
+                  {!done && s.hasCheckIn && sections.has("checkin") && <Tag tone="sky">{portalCheckInCopy(vertical).done}</Tag>}
                 </div>
               );
             })}

@@ -11,9 +11,10 @@ import { portalCheckInCopy } from "@/lib/portal-copy";
 /**
  * Pre-session check-in for the patient portal.
  *
- * EVA pain slider (0..10) + free-form notes. The data lands in the
- * practitioner's HC notes + a sourced `EvaScore` so they see the
- * pre-visit state when they open the patient profile.
+ * EVA pain slider (0..10) + free-form notes. ES4 S24: lo enviado queda en una `EvaScore` con `note` (el texto, ≤ 500)
+ * y `sessionId` (la sesión del plan), y le llega como notificación al profesional asignado. Ya no toca las notas de la
+ * ficha (A3b-S-auth). La page solo monta este form con la sección `checkin` (⇐ planes ∧ evaluaciones); el gate de
+ * verdad está en `submitCheckIn`.
  *
  * VX2-f (D-VX28): copy por vertical (`lib/portal-copy.ts`: «Check-in pre-sesión» y el ejemplo de ejercicios solo en
  * Kinesiología), notas con `Field` + `.k-input` (label real, 16 px: iOS no hace zoom al enfocar), error con
