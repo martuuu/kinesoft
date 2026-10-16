@@ -128,12 +128,12 @@ describe.skipIf(!RUN)("IAM-0a · match de email sin comodines", () => {
     expect(await getPortalPlan(A.slug)).toBeNull();
   });
 
-  it("portal: el email literal con `_` sigue matcheando su ficha, sin distinguir mayúsculas", async () => {
+  it("[ES4 S24a] portal: una ficha con el email exacto pero sin vincular no se ve (el vínculo lo hace el callback)", async () => {
     const { under } = people();
     await addPatient(db, A, { email: email(under).toUpperCase() });
     asUser(under);
     const auth = await getPortalAuth();
-    expect(auth.signedIn && auth.patients.map((p) => p.tenantSlug)).toEqual([A.slug]);
+    if (auth.signedIn) expect(auth.patients).toEqual([]);
   });
 
   // ── Callback de OAuth (vínculo Patient.userId) ──────────────────────

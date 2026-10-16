@@ -2,8 +2,10 @@
  * Portal del paciente (A3b-S-auth, 2026-09-30).
  *
  * - staff ≠ paciente: una identidad con Membership no ve fichas en el portal,
- *   aunque su email coincida con una ficha;
- * - el match de email es case-insensitive (fichas cargadas con mayúsculas);
+ *   aunque su email coincida con una ficha (y aunque esté vinculada);
+ * - [P4-S24a] el portal autoriza por el vínculo `Patient.userId` (tenantId, userId), no por email: los fixtures
+ *   crean la ficha YA vinculada a la cuenta (lo que deja el sign-in o la invitación). La regla de vínculo y el
+ *   «sin vínculo no ve nada» están en tests/integration/portal-identity.test.ts;
  * - el check-in NO toca `Patient.notes` (antes anteponía el texto y cortaba a
  *   4 kB las notas del kine): crea la EvaScore, notifica al profesional
  *   asignado y deja un audit con el texto.
@@ -34,14 +36,31 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     db = ownerClient();
     A = await createEphemeralTenant(db);
   });
+  const profiles: string[] = [];
   afterAll(async () => {
     await A?.cleanup();
+    if (profiles.length) await db.userProfile.deleteMany({ where: { id: { in: profiles } } });
     await db?.$disconnect();
   });
   beforeEach(() => __rateLimitInternals.reset());
 
-  /** Identidad de paciente (sin Membership). El mock le da `<id>@test.local`. */
-  const patientIdentity = () => `test-portal-${uniqueSuffix()}`;
+  /**
+   * Cuenta de paciente (UserProfile sin Membership; `Patient.userId` tiene FK a UserProfile). El mock de sesión le da
+   * `<id>@test.local`, verificado.
+   */
+  const patientIdentity = async () => {
+    const id = `test-portal-${uniqueSuffix()}`;
+    await db.userProfile.create({ data: { id, email: `${id}@test.local` } });
+    profiles.push(id);
+    return id;
+  };
+
+  /** Ficha VINCULADA a la cuenta (S24a): lo que deja el auto-vínculo del sign-in o `/portal/vincular`. */
+  const linkedPatient = async (uid: string, data: Parameters<typeof addPatient>[2] = {}) => {
+    const patientId = await addPatient(db, A, { email: `${uid}@test.local`, ...data });
+    await db.patient.update({ where: { id: patientId }, data: { userId: uid } });
+    return patientId;
+  };
 
   const addProgramWithSession = async (patientId: string) => {
     const program = await db.treatmentProgram.create({
@@ -59,11 +78,10 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
   };
 
   it("una identidad staff (con Membership) no ve fichas aunque su email coincida", async () => {
-    // El OWNER del tenant A tiene una ficha de paciente con SU email.
-    await addPatient(db, A, { email: `${A.userId}@test.local` });
-    await addProgramWithSession(
-      (await db.patient.findFirstOrThrow({ where: { tenantId: A.tenantId, email: `${A.userId}@test.local` } })).id
-    );
+    // El OWNER del tenant A tiene una ficha de paciente con SU email, y encima vinculada a su cuenta (dato viejo):
+    // igual no la ve (AUDIT §5.22).
+    const ownerPatientId = await linkedPatient(A.userId);
+    await addProgramWithSession(ownerPatientId);
     asUser(A.userId);
 
     const auth = await getPortalAuth();
@@ -72,9 +90,9 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
     expect(await getPortalPlan(A.slug)).toBeNull();
   });
 
-  it("el email con mayúsculas en la ficha matchea al usuario verificado", async () => {
-    const uid = patientIdentity();
-    const patientId = await addPatient(db, A, { email: `${uid}@test.local`.toUpperCase() });
+  it("[P4-S24a] la ficha vinculada se ve por userId, aunque su email esté en mayúsculas", async () => {
+    const uid = await patientIdentity();
+    const patientId = await linkedPatient(uid, { email: `${uid}@test.local`.toUpperCase() });
     await addProgramWithSession(patientId);
     asUser(uid);
 
@@ -86,9 +104,9 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
   });
 
   it("el check-in no toca Patient.notes: crea la EvaScore y notifica al asignado (sin audit, PL-A)", async () => {
-    const uid = patientIdentity();
+    const uid = await patientIdentity();
     const kineNotes = "Nota clínica del kine: no tocar.";
-    const patientId = await addPatient(db, A, { email: `${uid}@test.local`, notes: kineNotes });
+    const patientId = await linkedPatient(uid, { notes: kineNotes });
     const { sessionId } = await addProgramWithSession(patientId);
     asUser(uid);
 
@@ -125,8 +143,8 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
   // pintara. Y con dos planes ACTIVE el `findFirst` sin orden devolvía
   // cualquiera de los dos (el que el planner de Postgres leyera primero).
   it("[P0-S02p] getPortalPlan sin notes y determinístico", async () => {
-    const uid = patientIdentity();
-    const patientId = await addPatient(db, A, { email: `${uid}@test.local` });
+    const uid = await patientIdentity();
+    const patientId = await linkedPatient(uid);
     const DAY = 86_400_000;
     // El viejo se crea PRIMERO a propósito: un findFirst sin orden tiende a
     // devolver el primero insertado (menor ctid), o sea el viejo.
@@ -158,8 +176,8 @@ describe.skipIf(!RUN)("portal · identidad y check-in", () => {
   // BO2-D (C-BO1 `publicSurfacesOpen`): el check-in es una escritura sin Actor; con el consultorio suspendido
   // (o en solo lectura bajo `enforce`) se rechaza sin escribir. Leer el plan NO se corta (Ley 26.529).
   it("[BO2-D] consultorio suspendido o en solo lectura con enforce: check-in rechazado, el plan se sigue viendo", async () => {
-    const uid = patientIdentity();
-    const patientId = await addPatient(db, A, { email: `${uid}@test.local` });
+    const uid = await patientIdentity();
+    const patientId = await linkedPatient(uid);
     const { sessionId } = await addProgramWithSession(patientId);
     asUser(uid);
     const prev = process.env.TENANT_ACCESS_ENFORCEMENT;

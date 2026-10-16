@@ -3,45 +3,27 @@
 /**
  * Patient portal — server-only queries.
  *
- * The portal is consumed by *patients* (not practitioners). The actor is
- * a Supabase auth user whose email maps to one or more `Patient` rows
- * across tenants.
+ * The portal is consumed by *patients* (not practitioners). El actor es una cuenta de Supabase verificada; lo que ve
+ * lo autoriza el VÍNCULO `Patient.userId` por (tenantId, userId) — `lib/portal-identity-internal.ts`, la única puerta
+ * de autorización del portal (ES4 S24a). Hasta ES4 se autorizaba por coincidencia de email entre consultorios: una
+ * ficha con el email de la cuenta pero sin vincular ya mostraba plan y turnos (AUDIT `portal-auth-por-email-no-userid`).
+ * El vínculo lo escriben solo `lib/portal-link-internal.ts` (auto-vínculo con una única ficha libre) y la invitación.
  *
- * Security model (post-Sprint 11):
- *   - We **require `email_confirmed_at`** before treating the Supabase
- *     email as authoritative. Without verification (magic links, etc.)
- *     an attacker can sign up with a victim's email and read PHI.
- *   - `submitCheckIn` is rate-limited per patient — the prior version let
- *     an authed portal user spam-append into `Patient.notes` until the
- *     practitioner's earlier notes were truncated off the 4 kB tail.
- *
- * A3b-S-auth:
- *   - **staff ≠ paciente:** una identidad con Membership en CUALQUIER
- *     consultorio no ve fichas en el portal (el portal matchea por email
- *     entre tenants; un kine con el mismo email que una ficha de otro
- *     consultorio no tiene por qué entrar por acá). Se ve como "sin fichas".
- *   - match de email **case-insensitive**: había fichas cargadas con
- *     mayúsculas ("Juan@Mail.com") que nunca aparecían en el portal.
- *   - el check-in **ya no escribe `Patient.notes`** (ver `submitCheckIn`).
- *
- * IAM-0a: el match por email era `equals` + `mode: "insensitive"` = `ILIKE`
- * con el email pelado, y `_`/`%` son comodines: `jpere_@hotmail.com`
- * (verificado) veía fichas, turnos y planes de `jperez@hotmail.com`. Ahora va
- * por `emailEqualsFilter` (escapado) + `sameEmail` como post-filtro exacto.
+ * Security model:
+ *   - `email_confirmed_at` obligatorio (`getPortalUser`): sin verificar, alguien se registra con el email de otro.
+ *   - staff ≠ paciente (A3b-S-auth, AUDIT §5.22): con Membership en cualquier consultorio, «sin fichas».
+ *   - `submitCheckIn` con rate-limit; el check-in ya no escribe `Patient.notes` (ver `submitCheckIn`).
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-// Patient-facing portal: no practitioner Actor; getPortalAuth reads Patient
-// ACROSS tenants by verified email and the rest resolves a tenant by slug.
-// Every query is explicitly scoped by the verified patient's id/tenant, so it
-// runs on the service channel (BYPASSRLS) — same trust model as public-booking.
+// Patient-facing portal: no practitioner Actor. Las fichas salen de `requirePortalPatient` / `listPortalPatients`
+// (por userId) y cada query va acotada por el par patientId + tenantId de ese ref, así que corre en el canal service
+// (BYPASSRLS) — same trust model as public-booking.
 import { prismaService as prisma } from "@/lib/db";
-import { getVerifiedSessionUser } from "@/lib/session-user";
+import { getPortalUser, listPortalPatients, requirePortalPatient } from "@/lib/portal-identity-internal";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
 import { notify, notifyTenantOwners } from "@/lib/notifications-internal";
-import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
-import { publicSurfacesOpenFor } from "@/lib/public-booking-internal";
 import { publicPractitionerName } from "@/lib/display-name";
 import type { ActionResult } from "@/lib/validation";
 import type {
@@ -50,116 +32,80 @@ import type {
   PortalPlanDTO,
 } from "@/lib/portal-types";
 
-/**
- * Returns the verified Supabase user, or null. The portal must NEVER act
- * on an unverified email — that's how account takeover via magic-link
- * sign-up happens. (IAM-3c: el magic link del portal llega por
- * `/auth/confirm` → `verifyOtp`, que confirma el email al canjearse; un
- * usuario que nunca abrió el link no tiene `email_confirmed_at`.)
- */
-async function verifiedUser(): Promise<{
-  id: string;
-  email: string;
-  fullName: string | null;
-  isStaff: boolean;
-} | null> {
-  // IAM-3c: el `getUser()` de IAM-3a (un solo round-trip por request, chequea `{ error }` y nunca tira).
-  const user = await getVerifiedSessionUser();
-  if (!user?.email) return null;
-  if (!user.emailConfirmedAt) return null;
-  // Staff ≠ paciente (A3b-S-auth): con Membership en cualquier consultorio, el
-  // portal no la trata como paciente (ver getPortalAuth / authedPatientByTenant).
-  const staff = await prisma.membership.findFirst({
-    where: { userId: user.id },
-    select: { id: true },
-  });
-  return {
-    isStaff: !!staff,
-    id: user.id,
-    email: user.email.toLowerCase(),
-    fullName: user.fullName,
-  };
-}
-
 export async function getPortalAuth(): Promise<PortalAuth> {
-  const me = await verifiedUser();
+  const me = await getPortalUser();
   if (!me) return { signedIn: false };
   // Staff: sesión válida pero sin fichas (la pantalla "no hay fichas
-  // vinculadas a tu email"); devolver signedIn:false lo dejaba en un loop de
+  // vinculadas"); devolver signedIn:false lo dejaba en un loop de
   // "Ingresá con Google" estando ya logueado.
   if (me.isStaff) return { signedIn: true, email: me.email, fullName: me.fullName, patients: [] };
 
-  const patients = await prisma.patient.findMany({
-    where: { email: emailEqualsFilter(me.email) },
-    include: {
-      tenant: { select: { slug: true, name: true, vertical: true } },
-      programs: {
-        where: { status: "ACTIVE" },
-        include: { sessions: { select: { completedAt: true } } },
-      },
-      bookings: {
-        where: { scheduledFor: { gte: new Date() }, status: { notIn: ["CANCELLED"] } },
-        orderBy: { scheduledFor: "asc" },
-        take: 5,
-        include: {
-          service: { select: { name: true } },
-          // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
-          practitioner: { include: { user: { select: { fullName: true } } } },
-        },
-      },
-    },
-  });
+  // S24a: solo las fichas VINCULADAS a esta cuenta (por userId), nunca por email.
+  const refs = await listPortalPatients(me.id);
+  const now = new Date();
+  const patients = await Promise.all(
+    refs.map(async (ref): Promise<PortalPatient> => {
+      const [programs, bookings] = await Promise.all([
+        prisma.treatmentProgram.findMany({
+          where: { patientId: ref.patientId, tenantId: ref.tenantId, status: "ACTIVE" },
+          select: {
+            id: true,
+            title: true,
+            totalSessions: true,
+            startDate: true,
+            sessions: { select: { completedAt: true } },
+          },
+        }),
+        prisma.booking.findMany({
+          where: {
+            patientId: ref.patientId,
+            tenantId: ref.tenantId,
+            scheduledFor: { gte: now },
+            status: { notIn: ["CANCELLED"] },
+          },
+          orderBy: { scheduledFor: "asc" },
+          take: 5,
+          select: {
+            id: true,
+            scheduledFor: true,
+            durationMin: true,
+            service: { select: { name: true } },
+            // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
+            practitioner: { select: { user: { select: { fullName: true } } } },
+          },
+        }),
+      ]);
+      return {
+        id: ref.patientId,
+        tenantSlug: ref.tenant.slug,
+        tenantName: ref.tenant.name,
+        tenantVertical: ref.tenant.vertical,
+        firstName: ref.patient.firstName,
+        lastName: ref.patient.lastName,
+        programs: programs.map((pr) => ({
+          id: pr.id,
+          title: pr.title,
+          totalSessions: pr.totalSessions,
+          completedSessions: pr.sessions.filter((s) => s.completedAt).length,
+          startDate: pr.startDate,
+        })),
+        upcoming: bookings.map((b) => ({
+          id: b.id,
+          scheduledFor: b.scheduledFor,
+          durationMin: b.durationMin,
+          serviceName: b.service.name,
+          practitionerName: publicPractitionerName(b.practitioner.user.fullName),
+        })),
+      };
+    })
+  );
 
-  // Post-filtro exacto (IAM-0a): defensa en profundidad si el filtro de arriba
-  // volviera a interpretar comodines.
-  const own = patients.filter((p) => sameEmail(p.email, me.email));
-
-  return {
-    signedIn: true,
-    email: me.email,
-    fullName: me.fullName,
-    patients: own.map((p): PortalPatient => ({
-      id: p.id,
-      tenantSlug: p.tenant.slug,
-      tenantName: p.tenant.name,
-      tenantVertical: p.tenant.vertical,
-      firstName: p.firstName,
-      lastName: p.lastName,
-      programs: p.programs.map((pr) => ({
-        id: pr.id,
-        title: pr.title,
-        totalSessions: pr.totalSessions,
-        completedSessions: pr.sessions.filter((s) => s.completedAt).length,
-        startDate: pr.startDate,
-      })),
-      upcoming: p.bookings.map((b) => ({
-        id: b.id,
-        scheduledFor: b.scheduledFor,
-        durationMin: b.durationMin,
-        serviceName: b.service.name,
-        practitionerName: publicPractitionerName(b.practitioner.user.fullName),
-      })),
-    })),
-  };
+  return { signedIn: true, email: me.email, fullName: me.fullName, patients };
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // Plan timeline + pre-session check-in (Phase 9 surface)
 // ──────────────────────────────────────────────────────────────────────
-
-async function authedPatientByTenant(tenantSlug: string) {
-  const me = await verifiedUser();
-  if (!me || me.isStaff) return null;
-  const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
-  if (!tenant) return null;
-  const patient = await prisma.patient.findFirst({
-    where: { tenantId: tenant.id, email: emailEqualsFilter(me.email) },
-    select: { id: true, email: true, firstName: true, lastName: true, assignedPractitionerId: true },
-  });
-  // IAM-0a: post-filtro exacto (la ficha autoriza plan, check-in y PHI).
-  if (!patient || !sameEmail(patient.email, me.email)) return null;
-  return { user: me, tenant, patient };
-}
 
 /**
  * P0-S02p:
@@ -177,10 +123,10 @@ async function authedPatientByTenant(tenantSlug: string) {
  *   implica; es defensa en profundidad sobre el canal BYPASSRLS).
  */
 export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO | null> {
-  const auth = await authedPatientByTenant(tenantSlug);
-  if (!auth) return null;
+  const ref = await requirePortalPatient(tenantSlug);
+  if (!ref) return null;
   const program = await prisma.treatmentProgram.findFirst({
-    where: { patientId: auth.patient.id, tenantId: auth.tenant.id, status: "ACTIVE" },
+    where: { patientId: ref.patientId, tenantId: ref.tenantId, status: "ACTIVE" },
     orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     include: {
       sessions: {
@@ -191,7 +137,7 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
   });
   if (!program) return null;
   const checkIns = await prisma.evaScore.findMany({
-    where: { patientId: auth.patient.id, source: { startsWith: "checkin-" } },
+    where: { patientId: ref.patientId, source: { startsWith: "checkin-" } },
     select: { source: true },
   });
   const withCheckIn = new Set(
@@ -238,19 +184,19 @@ export async function submitCheckIn(input: {
   });
   if (!rl.ok) return { ok: false, error: rateLimitedMessage(rl.retryAfterMs) };
 
-  const auth = await authedPatientByTenant(input.tenantSlug);
-  if (!auth) return { ok: false, error: "Sin acceso." };
+  const ref = await requirePortalPatient(input.tenantSlug);
+  if (!ref) return { ok: false, error: "Sin acceso." };
   // BO2-D (C-BO1 `publicSurfacesOpen`): un consultorio suspendido / dado de baja (o en solo lectura con
   // `enforce`) no recibe check-ins: es una ESCRITURA sin Actor (EvaScore + notificación) que nadie del equipo
   // podría atender. Leer el plan (`getPortalPlan`) NO se corta: la HC del paciente se puede ver siempre.
-  if (!publicSurfacesOpenFor(auth.tenant)) {
+  if (!ref.surfacesOpen) {
     return { ok: false, error: "Tu consultorio no está recibiendo check-ins por ahora. Escribiles directamente." };
   }
 
   // Per-patient throttle — one check-in per (patient, session) is enough.
   const existing = await prisma.evaScore.findFirst({
     where: {
-      patientId: auth.patient.id,
+      patientId: ref.patientId,
       source: `checkin-${input.sessionId}`,
     },
     select: { id: true },
@@ -262,7 +208,7 @@ export async function submitCheckIn(input: {
   const sess = await prisma.session.findFirst({
     where: {
       id: input.sessionId,
-      program: { patientId: auth.patient.id, tenantId: auth.tenant.id },
+      program: { patientId: ref.patientId, tenantId: ref.tenantId },
     },
     select: { id: true, index: true },
   });
@@ -271,26 +217,26 @@ export async function submitCheckIn(input: {
   const pain = Math.min(10, Math.max(0, Math.floor(input.pain)));
   await prisma.evaScore.create({
     data: {
-      patientId: auth.patient.id,
+      patientId: ref.patientId,
       value: pain,
       source: `checkin-${sess.id}`,
     },
   });
   const patientText = input.notes?.trim().slice(0, 500) || null;
-  const patientName = `${auth.patient.firstName} ${auth.patient.lastName}`.trim();
+  const patientName = `${ref.patient.firstName} ${ref.patient.lastName}`.trim();
   const title = `Check-in de ${patientName} · sesión ${sess.index} · EVA ${pain}/10`;
-  const link = `/pacientes/${auth.patient.id}`;
-  const assignedUserId = auth.patient.assignedPractitionerId
+  const link = `/pacientes/${ref.patientId}`;
+  const assignedUserId = ref.patient.assignedPractitionerId
     ? (
         await prisma.practitioner.findFirst({
-          where: { id: auth.patient.assignedPractitionerId, tenantId: auth.tenant.id },
+          where: { id: ref.patient.assignedPractitionerId, tenantId: ref.tenantId },
           select: { userId: true },
         })
       )?.userId
     : null;
   if (assignedUserId) {
     await notify({
-      tenantId: auth.tenant.id,
+      tenantId: ref.tenantId,
       userId: assignedUserId,
       kind: "SYSTEM",
       title,
@@ -299,7 +245,7 @@ export async function submitCheckIn(input: {
     });
   } else {
     await notifyTenantOwners({
-      tenantId: auth.tenant.id,
+      tenantId: ref.tenantId,
       kind: "SYSTEM",
       title,
       body: patientText ?? undefined,

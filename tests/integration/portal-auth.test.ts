@@ -440,16 +440,16 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       expect(JSON.stringify(refused[0][1])).not.toContain("@");
     });
 
-    it("dos fichas con el mismo email en un consultorio (familia; el único (tenantId, email) distingue mayúsculas): vincula una sola y no rompe al volver a entrar", async () => {
+    it("dos fichas con el mismo email en un consultorio (familia; el único (tenantId, email) distingue mayúsculas): no vincula ninguna (ambiguous, PD-15) y no rompe al volver a entrar", async () => {
       const to = fresh("link-familia");
       const p1 = await addPatient(db, A, { email: to });
       const p2 = await addPatient(db, A, { email: to.toUpperCase() });
       const uid = await patientProfile(to);
-      expect(await linkPortalPatientsOnSignIn({ id: uid, email: to, emailVerified: true }, "/portal")).toEqual(["linked"]);
+      expect(await linkPortalPatientsOnSignIn({ id: uid, email: to, emailVerified: true }, "/portal")).toEqual(["ambiguous"]);
       // Segunda entrada: (tenantId, userId) es único → antes podía elegir la otra ficha y tirar P2002.
-      expect(await linkPortalPatientsOnSignIn({ id: uid, email: to, emailVerified: true }, "/portal")).toEqual(["linked"]);
+      expect(await linkPortalPatientsOnSignIn({ id: uid, email: to, emailVerified: true }, "/portal")).toEqual(["ambiguous"]);
       const linked = await db.patient.count({ where: { id: { in: [p1, p2] }, userId: uid } });
-      expect(linked).toBe(1);
+      expect(linked).toBe(0);
     });
   });
 

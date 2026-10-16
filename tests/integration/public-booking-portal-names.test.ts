@@ -46,6 +46,9 @@ describe.skipIf(!RUN)("DIR-0 · el email nunca como nombre del profesional", () 
 
     patientUid = `test-dir0-${uniqueSuffix()}`;
     const patientId = await addPatient(db, T, { email: `${patientUid}@test.local` });
+    // ES4 S24a: el portal autoriza por (tenantId, userId), así que la ficha va vinculada.
+    await db.userProfile.create({ data: { id: patientUid, email: `${patientUid}@test.local` } });
+    await db.patient.update({ where: { id: patientId }, data: { userId: patientUid } });
     const b = await db.booking.create({
       data: {
         tenantId: T.tenantId,
@@ -62,6 +65,7 @@ describe.skipIf(!RUN)("DIR-0 · el email nunca como nombre del profesional", () 
   });
   afterAll(async () => {
     await T?.cleanup();
+    await db?.userProfile.deleteMany({ where: { id: patientUid } });
     await db?.$disconnect();
   });
 
