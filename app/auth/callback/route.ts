@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 // OAuth callback, no Actor; tenant resolved by slug + Patient/PatientTenantLink
 // writes → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { safeNext } from "@/lib/safe-next";
-import { linkPortalPatientOnCallback, linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
+import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 import { oauthCallbackErrorCode, oauthProfileFromUser } from "@/lib/identity/oauth-profile";
 
@@ -32,7 +33,15 @@ export const runtime = "nodejs";
  *     con ficha de ese email; `/portal/c/<slug>` → ese) con
  *     `linkPortalPatientsOnSignIn`. Antes solo vinculaba con `?tenant=<slug>`,
  *     que nadie armaba (el botón de Google manda solo `next`): no vinculaba
- *     nunca. El `?tenant=` se sigue respetando por compatibilidad.
+ *     nunca. ES4 S24v: se retiró la rama `?tenant=` (nadie la armaba y vinculaba
+ *     aunque el destino no fuera el portal): todo vínculo pasa por
+ *     `linkPortalPatientsOnSignIn`, que con `next=/portal/vincular?t=…` no
+ *     hace nada (vincula la página, con el token de la invitación).
+ *   - ES4 S24v (AUDIT `portal-userid-unique-500`): un P2002 nunca sale como
+ *     500. El del vínculo lo absorbe `linkPatientCas`; el del perfil (el email
+ *     ya es de OTRO `UserProfile`: identidad borrada y recreada en Supabase
+ *     con el mismo email) cierra la sesión recién abierta y vuelve al login
+ *     con `oauth_failed`, como el caso sin email (sin perfil no hay sesión).
  *   - IAM-3c (decisión 6 de Martin, 14-oct): al iniciar sesión se BORRA la
  *     cookie del consultorio activo `kine_tenant`; con más de un consultorio
  *     usable la app pregunta a cuál entrar (IAM-3a/3b). Con el mismo path y
@@ -48,7 +57,6 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const next = safeNext(url.searchParams.get("next"));
-  const tenantSlug = url.searchParams.get("tenant");
   if (!code) {
     const providerError = url.searchParams.get("error");
     if (providerError) {
@@ -82,23 +90,27 @@ export async function GET(req: Request) {
   const email = profile.email;
   const emailVerified = !!user.email_confirmed_at;
 
-  await prisma.userProfile.upsert({
-    where: { id: user.id },
-    create: { id: user.id, email, fullName: profile.fullName, avatarUrl: profile.avatarUrl },
-    // Sin nombre/avatar usable no se pisa lo que había (`undefined` = no tocar).
-    update: { email, fullName: profile.fullName ?? undefined, avatarUrl: profile.avatarUrl ?? undefined },
-  });
-
-  if (tenantSlug && emailVerified) {
-    // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable
-    // contra Postgres; una ruta de Next no puede exportar helpers).
-    await linkPortalPatientOnCallback({ id: user.id, email, emailVerified }, tenantSlug);
-  } else if (emailVerified) {
-    await linkPortalPatientsOnSignIn({ id: user.id, email, emailVerified }, next);
-  } else if (tenantSlug && !emailVerified) {
-    // IAM-3c: sin el email en claro (alcanza con el slug y el motivo).
-    logger.warn("portal.link.refused", { tenantSlug, reason: "email_not_confirmed" });
+  try {
+    await prisma.userProfile.upsert({
+      where: { id: user.id },
+      create: { id: user.id, email, fullName: profile.fullName, avatarUrl: profile.avatarUrl },
+      // Sin nombre/avatar usable no se pisa lo que había (`undefined` = no tocar).
+      update: { email, fullName: profile.fullName ?? undefined, avatarUrl: profile.avatarUrl ?? undefined },
+    });
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
+    const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+    // Sin el email (IAM-3c): alcanza con el motivo para buscarlo en Supabase.
+    logger.warn("auth.callback.profile_conflict", {
+      provider: profile.provider,
+      ...(signOutError ? { signOutError: signOutError.message } : {}),
+    });
+    return NextResponse.redirect(`${url.origin}/login?error=oauth_failed`);
   }
+
+  // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable contra Postgres; una ruta de Next no puede
+  // exportar helpers). Sin email verificado no vincula (lo vuelve a chequear el helper). Nunca tira.
+  if (emailVerified) await linkPortalPatientsOnSignIn({ id: user.id, email, emailVerified }, next);
 
   const res = NextResponse.redirect(new URL(next, url.origin));
   res.cookies.set(ACTIVE_TENANT_COOKIE, "", { ...ACTIVE_TENANT_COOKIE_OPTIONS, maxAge: 0 });

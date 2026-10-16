@@ -11,6 +11,8 @@
  * teclado del celular, y «Usar otro email» con área táctil de 44 px.
  * VX-Z FX-portal: `useFormState(portalLinkFormAction)` con la action directa: anda sin JS (antes `onSubmit` +
  * `preventDefault`; sin JS el form hacía un GET a /portal con el email en la URL y no mandaba nada).
+ * ES4 S24v: `inviteToken` (opcional) viene de `/portal/vincular?t=`: viaja oculto (y en el «Reenviar») para que el
+ * link vuelva a la página de la invitación en vez de al portal general.
  */
 import { useEffect, useRef, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
@@ -22,7 +24,7 @@ import type { PortalLinkFormState } from "@/components/auth/auth-form-state";
 import { requestPortalLink } from "@/lib/portal-auth";
 import { portalLinkFormAction } from "./portal-link-action";
 
-export function PortalEmailForm({ slug }: { slug: string | null }) {
+export function PortalEmailForm({ slug, inviteToken }: { slug: string | null; inviteToken?: string }) {
   const [state, formAction] = useFormState<PortalLinkFormState, FormData>(portalLinkFormAction, null);
   // «Usar otro email» descarta ESTE estado (cada envío trae un objeto nuevo).
   const [dismissed, setDismissed] = useState<PortalLinkFormState>(null);
@@ -30,7 +32,15 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
   const error = state?.status === "error" ? state.error : null;
 
   if (sent) {
-    return <PortalLinkSent email={sent.email} message={sent.message} slug={slug} onBack={() => setDismissed(sent)} />;
+    return (
+      <PortalLinkSent
+        email={sent.email}
+        message={sent.message}
+        slug={slug}
+        inviteToken={inviteToken}
+        onBack={() => setDismissed(sent)}
+      />
+    );
   }
 
   return (
@@ -41,6 +51,7 @@ export function PortalEmailForm({ slug }: { slug: string | null }) {
       noValidate
     >
       {slug && <input type="hidden" name="slug" value={slug} />}
+      {inviteToken && <input type="hidden" name="t" value={inviteToken} />}
       <Field id="portal-email" label="Tu email" error={error ?? undefined}>
         <input
           className="k-input k-input-lg"
@@ -91,11 +102,13 @@ export function PortalLinkSent({
   email,
   message,
   slug,
+  inviteToken,
   onBack,
 }: {
   email: string;
   message: string;
   slug: string | null;
+  inviteToken?: string;
   onBack: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
@@ -106,6 +119,7 @@ export function PortalLinkSent({
     const fd = new FormData();
     fd.set("email", email);
     if (slug) fd.set("slug", slug);
+    if (inviteToken) fd.set("t", inviteToken);
     return requestPortalLink(fd);
   };
   return (

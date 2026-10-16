@@ -36,6 +36,8 @@ import { sendEmail } from "@/lib/email";
 // Registra el sink de EmailLog (cada emisor de mails lo importa: ver lib/email/log.ts).
 import "@/lib/email/log";
 import { portalInviteEmail } from "@/lib/email/templates";
+import { makePortalInviteToken } from "@/lib/portal-invite-token";
+import { portalVincularPath } from "@/lib/portal-vincular-copy";
 import type { EmailTransportName } from "@/lib/email/types";
 import { emailEqualsFilter, escapeLike, sameEmail } from "@/lib/email-match";
 import { hashKeyPart, rateLimitAll, rateLimitedMessage } from "@/lib/rate-limit";
@@ -1660,8 +1662,12 @@ async function assignPatientToPractitionerImpl(raw: {
  *     `transport`/`emailStatus`/`emailReason` explican por qué no (entorno sin mails, proveedor, link no
  *     emitido). `portalUrl` es la URL pública del portal (no lleva token: se puede mostrar para copiar).
  *
- * El vínculo `Patient.userId` NO se hace acá: lo hace el inicio de sesión con el email verificado
- * (`linkPortalPatientsOnSignIn`, AUDIT §5.8).
+ * El vínculo `Patient.userId` NO se hace acá. ES4 S24v (brief §3.4): la invitación lleva un token HMAC de 7 días
+ * (`makePortalInviteToken`: esta ficha, este consultorio, este email) y vincula `/portal/vincular` con un POST y CAS.
+ * Antes el link iba a `/portal/c/<slug>` y el vínculo dependía del auto-vínculo por email, que desde PD-15 se niega con
+ * dos fichas del mismo email (`ambiguous`): justo el caso en que el consultorio tiene que poder decir CUÁL ficha.
+ * El mail lleva dos links: el magic link (`next=/portal/vincular?t=…`, vence en 1 h, GoTrue) y el de respaldo a
+ * `/portal/vincular?t=…` (7 días; pide entrar con el mismo email). El token no se loguea ni va al audit.
  *
  * Staff ≠ paciente (AUDIT §5.22): si el email es de alguien del equipo de ESTE consultorio, se rechaza con el
  * motivo (dato propio del consultorio). De otros consultorios no se consulta: sería un oráculo cross-tenant.
@@ -1734,13 +1740,17 @@ export async function sendPatientPortalInvite(input: {
     emailStatus: "sent" | "skipped" | "failed" | "blocked";
     emailReason: string | null;
   };
-  const link = await issueAccessLink({ email, kind: "magiclink", next: `/portal/c/${patient.tenant.slug}` });
+  const appUrl = env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "");
+  const invitePath = portalVincularPath(
+    makePortalInviteToken({ patientId: patient.id, tenantId: actor.tenantId, email })
+  );
+  const link = await issueAccessLink({ email, kind: "magiclink", next: invitePath });
   if (!link.ok) {
     logger.warn("patient.portal_invite.link_failed", { code: link.code });
     outcome = { emailSent: false, transport: null, emailStatus: "failed", emailReason: `link_${link.code}` };
   } else {
     const r = await sendEmail({
-      ...portalInviteEmail({ tenantName: patient.tenant.name, url: link.url }),
+      ...portalInviteEmail({ tenantName: patient.tenant.name, url: link.url, fallbackUrl: `${appUrl}${invitePath}` }),
       kind: "portal_invite",
       to: email,
       tenantId: actor.tenantId,

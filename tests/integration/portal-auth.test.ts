@@ -29,6 +29,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { requestPortalLink } from "@/lib/portal-auth";
+import { makePortalInviteToken, portalEmailHash, readPortalInviteToken } from "@/lib/portal-invite-token";
 import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { sendPatientPortalInvite } from "@/lib/patients";
 import { __rateLimitInternals } from "@/lib/rate-limit";
@@ -52,6 +53,7 @@ import {
 const sb = vi.hoisted(() => ({
   user: null as null | { id: string; email: string; email_confirmed_at: string | null; user_metadata?: Record<string, unknown> },
   exchanged: [] as string[],
+  signOuts: 0,
 }));
 vi.mock("@/lib/supabase/server", () => ({
   getSupabaseServerClient: () => ({
@@ -62,6 +64,10 @@ vi.mock("@/lib/supabase/server", () => ({
         return sb.user
           ? { data: { user: sb.user, session: {} }, error: null }
           : { data: { user: null, session: null }, error: { message: "invalid code" } };
+      },
+      signOut: async () => {
+        sb.signOuts += 1;
+        return { error: null };
       },
     },
   }),
@@ -160,6 +166,7 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
     admin.invites = 0;
     sb.user = null;
     sb.exchanged.length = 0;
+    sb.signOuts = 0;
   });
   afterEach(() => {
     __setAuthAdminForTests(null);
@@ -253,6 +260,39 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       expect(gotrue.calls).toHaveLength(0);
     });
 
+    it("[P4-S24v] con `t` de la invitación para ESTE email → el link vuelve a /portal/vincular?t=…", async () => {
+      const to = fresh("pac-token");
+      const patientId = await addPatient(db, A, { email: to });
+      const t = makePortalInviteToken({ patientId, tenantId: A.tenantId, email: to.toUpperCase() });
+      const r = await requestPortalLink(form({ email: to, t }));
+      expect(r).toEqual({ ok: true, data: { message: GENERIC } });
+      expect(mail.sent).toHaveLength(1);
+      expect(confirmLink(mail.sent[0])!.q.next).toBe(`/portal/vincular?t=${t}`);
+    });
+
+    it("[P4-S24v] con `t` ajeno (de otro email, alterado o vencido) → misma respuesta y el token se ignora", async () => {
+      const to = fresh("pac-token-ajeno");
+      const patientId = await addPatient(db, A, { email: to });
+      const other = makePortalInviteToken({ patientId, tenantId: A.tenantId, email: fresh("otra") });
+      const expired = makePortalInviteToken({ patientId, tenantId: A.tenantId, email: to }, Date.now() - 8 * 86_400_000);
+      const tampered = `${makePortalInviteToken({ patientId, tenantId: A.tenantId, email: to })}x`;
+      const baseline = await requestPortalLink(form({ email: to, slug: A.slug }));
+      for (const t of [other, expired, tampered, "basura"]) {
+        __rateLimitInternals.reset();
+        expect(await requestPortalLink(form({ email: to, slug: A.slug, t }))).toEqual(baseline);
+      }
+      expect(mail.sent).toHaveLength(5);
+      for (const m of mail.sent) expect(confirmLink(m)!.q.next).toBe(`/portal/c/${A.slug}`);
+      // Email sin ficha con un token válido para él → igual nada (el token no decide a quién se manda).
+      mail.sent.length = 0;
+      gotrue.calls.length = 0;
+      const ghost = fresh("ghost-token");
+      const tg = makePortalInviteToken({ patientId, tenantId: A.tenantId, email: ghost });
+      expect(await requestPortalLink(form({ email: ghost, t: tg }))).toEqual(baseline);
+      expect(mail.sent).toHaveLength(0);
+      expect(gotrue.calls).toHaveLength(0);
+    });
+
     it("email inválido → error de formato, sin mail", async () => {
       const r = await requestPortalLink(form({ email: "no-es-un-email" }));
       expect(r.ok).toBe(false);
@@ -302,7 +342,7 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       sb.user = { id: A.userId, email: `${A.userId}@test.local`, email_confirmed_at: new Date(0).toISOString() };
     });
 
-    it("[IAM-3c] primera vez: mail portal_invite propio (sin inviteUserByEmail) con link a /auth/confirm y next=/portal/c/<slug>", async () => {
+    it("[IAM-3c][P4-S24v] primera vez: mail portal_invite propio (sin inviteUserByEmail) con magic link a /auth/confirm (next=/portal/vincular?t=) y link de respaldo de 7 días", async () => {
       const to = fresh("inv");
       const patientId = await addPatient(db, A, { email: to });
       const r = await sendPatientPortalInvite({ patientId });
@@ -323,13 +363,24 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       expect(m.subject).toContain(tenant.name);
       const link = confirmLink(m);
       expect(link!.path).toBe("/auth/confirm");
-      expect(link!.q.next).toBe(`/portal/c/${A.slug}`);
+      // S24v: el magic link vuelve a la página de la invitación con el token (vence en 1 h; el token, en 7 d).
+      const next = new URL(link!.q.next, ORIGIN);
+      expect(next.pathname).toBe("/portal/vincular");
+      const t = next.searchParams.get("t")!;
+      expect(readPortalInviteToken(t)).toMatchObject({ patientId, tenantId: A.tenantId, emailHash: portalEmailHash(to) });
       expect(gotrue.links.map((l) => l.type)).toEqual(["magiclink"]);
+      // Segundo link (respaldo, 7 días) directo a la página, con el MISMO token.
+      expect(m.text).toContain(`${ORIGIN}/portal/vincular?t=${t}`);
+      expect(m.html).toContain(`/portal/vincular?t=${t}`);
+      expect(m.text).toMatch(/vence en 1 hora/);
+      expect(m.text).toMatch(/7 días/);
 
       const ev = await db.auditEvent.findFirst({
         where: { tenantId: A.tenantId, entityId: patientId, action: "patient.portal_invite" },
       });
       expect(ev?.payload).toMatchObject({ emailSent: true, transport: "resend", linked: false });
+      // El token no va al audit.
+      expect(JSON.stringify(ev?.payload)).not.toContain(t);
     });
 
     it("[IAM-3c] reenviar a un paciente YA vinculado funciona (antes: inviteUserByEmail → «already registered» siempre)", async () => {
@@ -482,6 +533,49 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       const res = await callbackGET(new Request(`${ORIGIN}/auth/callback?code=abc&next=/portal`));
       expect(res.headers.get("set-cookie") ?? "").toMatch(new RegExp(`${ACTIVE_TENANT_COOKIE}=;`));
       expect((await db.patient.findUniqueOrThrow({ where: { id: pb } })).userId).toBeNull();
+    });
+
+    it("[P4-S24v] P2002 en el callback (el email ya es de OTRO UserProfile) → redirect, no 500", async () => {
+      // Caso real: la identidad se borró y se volvió a crear en Supabase con el mismo email (id nuevo); el perfil
+      // viejo sigue con el email (único). El upsert crea → P2002 → antes subía como 500 del callback.
+      const to = fresh("google-p2002");
+      await patientProfile(to);
+      const uid = `test-portal-${uniqueSuffix()}`;
+      sb.user = { id: uid, email: to, email_confirmed_at: new Date().toISOString() };
+      const res = await callbackGET(new Request(`${ORIGIN}/auth/callback?code=abc&next=/portal`));
+      expect(res.status).toBeGreaterThanOrEqual(300);
+      expect(res.status).toBeLessThan(400);
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login");
+      expect(loc.searchParams.get("error")).toBe("oauth_failed");
+      expect(await db.userProfile.count({ where: { id: uid } })).toBe(0);
+      // Sin perfil no queda nadie «logueado»: la sesión recién abierta se cierra.
+      expect(sb.signOuts).toBe(1);
+    });
+
+    it("[P4-S24v] se retiró la rama ?tenant=: no vincula fuera de linkPortalPatientsOnSignIn (next=/dashboard)", async () => {
+      const to = fresh("google-tenant");
+      const pa = await addPatient(db, A, { email: to });
+      const uid = `test-portal-${uniqueSuffix()}`;
+      profiles.push(uid);
+      sb.user = { id: uid, email: to, email_confirmed_at: new Date().toISOString() };
+      const res = await callbackGET(new Request(`${ORIGIN}/auth/callback?code=abc&next=/dashboard&tenant=${A.slug}`));
+      expect(new URL(res.headers.get("location")!).pathname).toBe("/dashboard");
+      expect((await db.patient.findUniqueOrThrow({ where: { id: pa } })).userId).toBeNull();
+    });
+
+    it("[P4-S24v] next=/portal/vincular?t=… no auto-vincula (vincula la página con el token) y conserva el token en el redirect", async () => {
+      const to = fresh("google-vincular");
+      const pa = await addPatient(db, A, { email: to });
+      const uid = `test-portal-${uniqueSuffix()}`;
+      profiles.push(uid);
+      sb.user = { id: uid, email: to, email_confirmed_at: new Date().toISOString() };
+      const next = encodeURIComponent("/portal/vincular?t=abc.def");
+      const res = await callbackGET(new Request(`${ORIGIN}/auth/callback?code=abc&next=${next}`));
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/portal/vincular");
+      expect(loc.searchParams.get("t")).toBe("abc.def");
+      expect((await db.patient.findUniqueOrThrow({ where: { id: pa } })).userId).toBeNull();
     });
   });
 });

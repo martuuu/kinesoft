@@ -15,6 +15,13 @@
  *
  * El vínculo `Patient.userId` NO se hace acá (el pedido es anónimo: nadie probó todavía ser dueño del
  * email): lo hace el inicio de sesión con el email ya verificado (`linkPortalPatientsOnSignIn`, AUDIT §5.8).
+ *
+ * ES4 S24v (brief §3.4): acepta `t`, el token de la invitación del consultorio, cuando el pedido sale de
+ * `/portal/vincular` (el magic link de la invitación vence en 1 h; el token, en 7 días). Si el token es válido y es
+ * para ESTE email, el link vuelve a `/portal/vincular?t=…` (donde se vincula con un clic); si no (vencido, alterado,
+ * de otro email), se ignora y todo sigue como sin token. La respuesta no cambia en ningún caso (sin oráculo: no dice
+ * si el token valía ni para quién era). El token no decide A QUIÉN se manda: eso sigue siendo
+ * `resolvePortalLinkTarget` (solo emails con ficha; un magiclink a un email sin cuenta la crea [S4]).
  */
 import { headers } from "next/headers";
 import { z } from "zod";
@@ -26,6 +33,8 @@ import { sendEmail } from "@/lib/email";
 import "@/lib/email/log";
 import { portalMagicLinkEmail } from "@/lib/email/templates";
 import { resolvePortalLinkTarget } from "@/lib/portal-auth-internal";
+import { portalEmailHash, readPortalInviteToken } from "@/lib/portal-invite-token";
+import { portalVincularPath } from "@/lib/portal-vincular-copy";
 import { logger } from "@/lib/logger";
 import type { ActionResult } from "@/lib/validation";
 
@@ -42,6 +51,8 @@ const PortalLinkInput = z.object({
     .regex(/^[a-z0-9-]{1,64}$/)
     .optional()
     .catch(undefined),
+  // Token de invitación (S24v). Uno inválido se ignora igual que el slug: nunca es un error visible.
+  t: z.string().max(1024).optional().catch(undefined),
 });
 
 export async function requestPortalLink(formData: FormData): Promise<ActionResult<{ message: string }>> {
@@ -49,6 +60,7 @@ export async function requestPortalLink(formData: FormData): Promise<ActionResul
   const parsed = PortalLinkInput.safeParse({
     email: String(formData.get("email") ?? ""),
     slug: typeof rawSlug === "string" && rawSlug.trim() ? rawSlug : undefined,
+    t: typeof formData.get("t") === "string" && formData.get("t") ? formData.get("t") : undefined,
   });
   if (!parsed.success) {
     return { ok: false, error: "Ingresá un email válido.", fieldErrors: parsed.error.flatten().fieldErrors };
@@ -79,7 +91,14 @@ export async function requestPortalLink(formData: FormData): Promise<ActionResul
     return done;
   }
 
-  const link = await issueAccessLink({ email, kind: "magiclink", next: target.next });
+  // El token solo cambia el destino, y solo si es para este email (hash del email normalizado).
+  const claims = readPortalInviteToken(parsed.data.t);
+  const next =
+    claims && parsed.data.t && claims.emailHash === portalEmailHash(email)
+      ? portalVincularPath(parsed.data.t)
+      : target.next;
+
+  const link = await issueAccessLink({ email, kind: "magiclink", next });
   if (!link.ok) {
     logger.warn("portal.link_request.link_failed", { code: link.code });
     return done;

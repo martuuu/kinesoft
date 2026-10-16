@@ -316,20 +316,41 @@ export function staffInviteEmail(p: {
   });
 }
 
-export function portalInviteEmail(p: { tenantName: string; url: string }): RenderedEmail {
+/**
+ * ES4 S24v: con `fallbackUrl` el mail lleva DOS links. El magic link (`url`) lo emite GoTrue y vence en 1 hora
+ * (`SUPABASE_LINK_TTL_COPY`); la invitación (token de `/portal/vincular?t=`) vale 7 días. Sin el segundo link, quien
+ * abría el mail al otro día tenía un botón vencido y una invitación todavía vigente que no podía usar (riesgo 2 del
+ * brief). El de respaldo lleva a la página, que pide entrar con el mismo email y vincula con un clic.
+ */
+export function portalInviteEmail(p: { tenantName: string; url: string; fallbackUrl?: string }): RenderedEmail {
   const tenant = plain(p.tenantName);
   const second = "Desde tu portal podés ver tus turnos y la información que el consultorio comparte con vos.";
+  const paragraphs = [`${tenant} te dio acceso a tu portal de paciente.`, second];
+  const htmlParagraphs = [`${strong(tenant)} te dio acceso a tu portal de paciente.`, escapeHtml(second)];
+  const ctas: Array<{ label: string; url: string; variant?: "primary" | "secondary" }> = [
+    { label: "Entrar a mi portal", url: p.url },
+  ];
+  if (p.fallbackUrl) {
+    const twoLinks =
+      `El botón «Entrar a mi portal» te hace entrar directo y vence en ${SUPABASE_LINK_TTL_COPY}. ` +
+      "Si ya venció, usá el segundo: vale 7 días y te pide entrar con este mismo email.";
+    paragraphs.push(twoLinks);
+    htmlParagraphs.push(escapeHtml(twoLinks));
+    ctas.push({ label: "Si el primero venció, entrá desde acá", url: p.fallbackUrl, variant: "secondary" });
+  }
   return compose({
     subject: `${tenant} te dio acceso a tu portal de paciente`,
     preheader: "Entrá a tu portal para ver tus turnos.",
     context: tenant,
     title: "Tu portal de paciente",
-    paragraphs: [`${tenant} te dio acceso a tu portal de paciente.`, second],
-    htmlParagraphs: [`${strong(tenant)} te dio acceso a tu portal de paciente.`, escapeHtml(second)],
-    ctas: [{ label: "Entrar a mi portal", url: p.url }],
+    paragraphs,
+    htmlParagraphs,
+    ctas,
     footer: [
       `Te llegó este mail porque ${tenant} te registró como paciente en KineSoft.`,
-      `Por seguridad, el link vence. Si venció, podés pedir uno nuevo desde la pantalla de ingreso del portal.`,
+      p.fallbackUrl
+        ? `La invitación vale 7 días. Si venció, pedile a ${tenant} que te la reenvíe.`
+        : "Por seguridad, el link vence. Si venció, podés pedir uno nuevo desde la pantalla de ingreso del portal.",
       NOT_EXPECTED,
     ],
   });

@@ -14,5 +14,8 @@ export async function portalLinkFormAction(_prev: PortalLinkFormState, fd: FormD
   body.set("email", email);
   const slug = formText(fd, "slug");
   if (slug) body.set("slug", slug);
+  // S24v: el token de la invitación (desde `/portal/vincular`) pasa tal cual; `requestPortalLink` decide si vale.
+  const t = formText(fd, "t");
+  if (t) body.set("t", t);
   return portalLinkStateFrom(await requestPortalLink(body), email);
 }
