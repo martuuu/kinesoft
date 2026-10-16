@@ -15,11 +15,11 @@ export function InviteNotice({
     tone === "success"
       ? "rgba(200,245,100,0.18)"
       : tone === "error"
-        ? "rgba(228,70,70,0.1)"
+        ? "var(--danger-bg)"
         : tone === "warning"
           ? "rgba(255,176,32,0.15)"
           : "rgba(31,79,190,0.08)";
-  const color = tone === "error" ? "#9F1F1F" : tone === "warning" ? "#7A4A00" : "var(--navy-700)";
+  const color = tone === "error" ? "var(--danger-fg)" : tone === "warning" ? "var(--warn-fg)" : "var(--navy-700)";
   return (
     <div role={role} style={{ padding: 14, borderRadius: 12, background: bg, color, fontSize: 13, lineHeight: 1.45 }}>
       {children}

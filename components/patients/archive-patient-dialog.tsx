@@ -189,8 +189,8 @@ export function ArchivePatientDialog({
             padding: 8,
             borderRadius: 8,
             fontSize: 12,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
+            background: "var(--danger-bg)",
+            color: "var(--danger-fg)",
           }}
         >
           {error}

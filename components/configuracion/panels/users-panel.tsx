@@ -111,7 +111,7 @@ export function UsersPanel({
                   {seats.full && <Tag tone="soft">Cupo lleno</Tag>}
                 </div>
                 {seats.detail && (
-                  <div style={{ fontSize: 11.5, color: seats.full ? "#7A4A00" : "var(--navy-500)", lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 11.5, color: seats.full ? "var(--warn-fg)" : "var(--navy-500)", lineHeight: 1.4 }}>
                     {seats.detail}
                   </div>
                 )}
@@ -176,7 +176,7 @@ function useTenantVertical(): TenantVertical {
 
 type RowNotice = { tone: "ok" | "warn" | "error"; text: string };
 
-const NOTICE_COLOR: Record<RowNotice["tone"], string> = { ok: "var(--navy-500)", warn: "#7A4A00", error: "#9F1F1F" };
+const NOTICE_COLOR: Record<RowNotice["tone"], string> = { ok: "var(--navy-500)", warn: "var(--warn-fg)", error: "var(--danger-fg)" };
 
 /**
  * Fila de un miembro (IAM-4c → PL-3b). El rol se cambia con el <select> (salvo el del Titular, que se transfiere);
@@ -402,7 +402,7 @@ function TeamRow({
           </div>
         )}
         {!notice && lastReset && (
-          <div style={{ fontSize: 11, marginTop: 2, color: lastReset.status === "sent" ? "var(--navy-500)" : "#9F1F1F" }}>
+          <div style={{ fontSize: 11, marginTop: 2, color: lastReset.status === "sent" ? "var(--navy-500)" : "var(--danger-fg)" }}>
             {lastReset.status === "sent" ? "Link de contraseña enviado" : "Link de contraseña no enviado"}
             {` · ${lastReset.at.toLocaleDateString("es-AR", tz)}`}
           </div>
@@ -663,7 +663,7 @@ function MemberActionsMenu({ who, actions, disabled }: { who: string; actions: M
                 padding: "8px 12px",
                 fontSize: 13,
                 fontWeight: 500,
-                color: a.danger ? "#9F1F1F" : "var(--navy-700)",
+                color: a.danger ? "var(--danger-fg)" : "var(--navy-700)",
                 borderRadius: 8,
                 cursor: "pointer",
               }}
@@ -756,16 +756,16 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
           </div>
           <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{invite.email}</div>
           {last && (
-            <div style={{ fontSize: 11, marginTop: 2, color: last.tone === "ok" ? "var(--navy-500)" : last.tone === "warn" ? "#7A4A00" : "#9F1F1F" }}>
+            <div style={{ fontSize: 11, marginTop: 2, color: last.tone === "ok" ? "var(--navy-500)" : last.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)" }}>
               {last.tone === "ok" ? "Mail enviado" : "Mail no enviado"}
               {invite.lastSentAt && ` · ${invite.lastSentAt.toLocaleDateString("es-AR", tz)}`}
               {invite.sendCount > 1 && ` · ${invite.sendCount} envíos`}
             </div>
           )}
-          {error && <div style={{ fontSize: 11, color: "#9F1F1F", marginTop: 2 }}>{error}</div>}
+          {error && <div style={{ fontSize: 11, color: "var(--danger-fg)", marginTop: 2 }}>{error}</div>}
         </div>
         <Tag tone="soft">{roleLabel(invite.role, vertical)}</Tag>
-        <div style={{ fontSize: 11, color: expired ? "#9F1F1F" : "var(--navy-500)" }}>
+        <div style={{ fontSize: 11, color: expired ? "var(--danger-fg)" : "var(--navy-500)" }}>
           {expired ? "Venció el " : "Vence "}
           {invite.expiresAt.toLocaleDateString("es-AR", tz)}
         </div>
@@ -776,7 +776,7 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
           <button type="button" onClick={regen} disabled={pending} style={linkStyle}>
             Generar link nuevo
           </button>
-          <button type="button" onClick={revoke} disabled={pending} style={{ ...linkStyle, color: "#9F1F1F" }}>
+          <button type="button" onClick={revoke} disabled={pending} style={{ ...linkStyle, color: "var(--danger-fg)" }}>
             Anular
           </button>
         </div>
@@ -850,7 +850,7 @@ function InviteModal({
           {inviteAttendsCopy(role)}
         </div>
         {noSeat && (
-          <div role="status" style={{ fontSize: 12, color: "#7A4A00", lineHeight: 1.45 }}>
+          <div role="status" style={{ fontSize: 12, color: "var(--warn-fg)", lineHeight: 1.45 }}>
             No quedan lugares en el plan para sumar a alguien con este rol. Liberá un lugar o cambiá de plan en «Plan y
             uso».
           </div>
@@ -911,7 +911,7 @@ function ShareInviteModal({ result, onClose }: { result: InvitationSendResult; o
           padding: 10,
           borderRadius: 10,
           background: status.tone === "ok" ? "rgba(200,245,100,0.18)" : status.tone === "warn" ? "rgba(228,176,32,0.15)" : "rgba(159,31,31,0.08)",
-          color: status.tone === "ok" ? "var(--navy-900)" : status.tone === "warn" ? "#7A4A00" : "#9F1F1F",
+          color: status.tone === "ok" ? "var(--navy-900)" : status.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)",
           fontSize: 12.5,
           marginBottom: 10,
         }}

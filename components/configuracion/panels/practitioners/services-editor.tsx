@@ -527,7 +527,7 @@ function ServiceRowEditor({
           )}
         </div>
         {status.kind === "error" && (
-          <span role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+          <span role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
             {status.message}
           </span>
         )}
@@ -539,7 +539,7 @@ function ServiceRowEditor({
 function FieldError({ id, msg }: { id: string; msg?: string }) {
   if (!msg) return null;
   return (
-    <span id={id} className="pse-hint" style={{ color: "#9F1F1F" }}>
+    <span id={id} className="pse-hint" style={{ color: "var(--danger-fg)" }}>
       {msg}
     </span>
   );

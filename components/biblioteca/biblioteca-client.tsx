@@ -1089,8 +1089,8 @@ function CreateExerciseModal({
               style={{
                 padding: 10,
                 borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
+                background: "var(--danger-bg)",
+                color: "var(--danger-fg)",
                 fontSize: 12,
               }}
             >

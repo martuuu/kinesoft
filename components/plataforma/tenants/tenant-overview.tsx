@@ -231,7 +231,7 @@ export function PlatformOverviewView({ overview }: { overview: PlatformOverview 
                   flexShrink: 0,
                   fontWeight: 700,
                   fontSize: 12.5,
-                  color: t.daysLeft <= 0 ? "#9F1F1F" : t.daysLeft <= 3 ? "var(--st-noshow-fg)" : "var(--navy-500)",
+                  color: t.daysLeft <= 0 ? "var(--danger-fg)" : t.daysLeft <= 3 ? "var(--st-noshow-fg)" : "var(--navy-500)",
                 }}
               >
                 {trialDaysLabel(t.daysLeft)}

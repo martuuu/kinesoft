@@ -158,7 +158,7 @@ export function TopbarAccountMenu({
                 background: "transparent",
                 border: "none",
                 cursor: "pointer",
-                color: "#9F1F1F",
+                color: "var(--danger-fg)",
               }}
             >
               <IconLogout size={14} /> Cerrar sesión

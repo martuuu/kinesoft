@@ -73,7 +73,7 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
         <div style={{ display: "grid", gap: 14 }}>
           <div
             role="alert"
-            style={{ padding: 14, borderRadius: 12, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 13, lineHeight: 1.5 }}
+            style={{ padding: 14, borderRadius: 12, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 13, lineHeight: 1.5 }}
           >
             El link venció o ya se usó. Pedí uno nuevo: te llega por email y vence en 1 hora.
           </div>
@@ -115,7 +115,7 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
                 autoComplete="current-password"
                 style={inputStyle}
               />
-              <span style={{ fontSize: 11, color: fieldErrors.currentPassword ? "#9F1F1F" : "var(--navy-300)", marginTop: 4, display: "block" }}>
+              <span style={{ fontSize: 11, color: fieldErrors.currentPassword ? "var(--danger-fg)" : "var(--navy-300)", marginTop: 4, display: "block" }}>
                 {fieldErrors.currentPassword?.[0] ?? "¿No la recordás? Pedí un link desde “Olvidé mi contraseña”."}
               </span>
             </label>
@@ -154,8 +154,8 @@ export function ResetScreen({ mode }: { mode: "recovery" | "change" | "expired" 
               style={{
                 padding: 10,
                 borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
+                background: "var(--danger-bg)",
+                color: "var(--danger-fg)",
                 fontSize: 12,
               }}
             >

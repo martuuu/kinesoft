@@ -195,7 +195,7 @@ export function NoteCard({
             </Button>
           )}
           {actions.void && (
-            <Button type="button" variant="ghost" onClick={() => setVoidOpen(true)} style={{ color: "#9F1F1F" }}>
+            <Button type="button" variant="ghost" onClick={() => setVoidOpen(true)} style={{ color: "var(--danger-fg)" }}>
               {COPY.void}
             </Button>
           )}

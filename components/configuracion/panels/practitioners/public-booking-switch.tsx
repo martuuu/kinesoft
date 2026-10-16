@@ -92,7 +92,7 @@ export function PublicBookingSwitch({
         </div>
       )}
       {error && (
-        <div role="alert" style={{ fontSize: 11.5, color: "#9F1F1F" }}>
+        <div role="alert" style={{ fontSize: 11.5, color: "var(--danger-fg)" }}>
           {error}
         </div>
       )}

@@ -181,7 +181,7 @@ function Row({ r }: { r: PlatformAccountRow }) {
         {/* PL-Z (FX5): «N cargos vencidos» es lo único urgente de la lista y con `Tag` sky se perdía entre los demás.
             Ámbar + negrita + `role="status"`; no hay token `--warn-*` en globals.css, va el literal. */}
         {state.urgent ? (
-          <span role="status" className="k-tag" style={{ background: "rgba(228,176,32,0.18)", color: "#7A4A00", fontWeight: 700 }}>
+          <span role="status" className="k-tag" style={{ background: "rgba(228,176,32,0.18)", color: "var(--warn-fg)", fontWeight: 700 }}>
             {state.label}
           </span>
         ) : (

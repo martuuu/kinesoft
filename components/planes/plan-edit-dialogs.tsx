@@ -253,7 +253,7 @@ export function reduceDoneMessage(d: { totalSessions: number; archivedSessionIds
 // ─── Estilos chicos ──────────────────────────────────────────────────────────
 
 const col: CSSProperties = { display: "flex", flexDirection: "column", gap: 14, minWidth: 0 };
-const errorText: CSSProperties = { margin: 0, fontSize: 13, color: "#9F1F1F" };
+const errorText: CSSProperties = { margin: 0, fontSize: 13, color: "var(--danger-fg)" };
 const hintText: CSSProperties = { margin: 0, fontSize: 12, color: "var(--navy-500)" };
 const sectionLabel: CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--navy-500)" };
 const footer: CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" };

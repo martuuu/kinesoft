@@ -229,13 +229,13 @@ function StatusIcon({ variant }: { variant: Variant }) {
       ? "var(--lime-300)"
       : variant === "pending"
         ? "var(--sky-100)"
-        : "rgba(228,70,70,0.18)";
+        : "var(--danger-bg-strong)";
   const color =
     variant === "ok"
       ? "var(--navy-900)"
       : variant === "pending"
         ? "var(--sky-700)"
-        : "#9F1F1F";
+        : "var(--danger-fg)";
   return (
     <span
       style={{

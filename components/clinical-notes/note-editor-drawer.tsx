@@ -110,7 +110,7 @@ export function NoteEditorDrawer({
 }
 
 const hintStyle: React.CSSProperties = { fontSize: 12, color: "var(--navy-500)", margin: 0 };
-const errorStyle: React.CSSProperties = { fontSize: 12, color: "#9F1F1F", marginTop: 4 };
+const errorStyle: React.CSSProperties = { fontSize: 12, color: "var(--danger-fg)", marginTop: 4 };
 const fieldLabelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--navy-500)" };
 /** Fuera de pantalla pero leído por el lector (no hay clase sr-only en globals.css). */
 const srOnly: React.CSSProperties = {
@@ -279,7 +279,7 @@ export function NoteEditorForm({
             fontSize: 11,
             marginTop: 4,
             fontVariantNumeric: "tabular-nums",
-            color: counter.over ? "#9F1F1F" : counter.near ? "var(--st-noshow-fg)" : "var(--navy-300)",
+            color: counter.over ? "var(--danger-fg)" : counter.near ? "var(--st-noshow-fg)" : "var(--navy-300)",
             fontWeight: counter.over ? 700 : 400,
           }}
         >

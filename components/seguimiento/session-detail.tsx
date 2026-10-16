@@ -383,8 +383,8 @@ export function SessionDetail({
             style={{
               padding: 10,
               borderRadius: 12,
-              background: "rgba(228,70,70,0.1)",
-              color: "#9F1F1F",
+              background: "var(--danger-bg)",
+              color: "var(--danger-fg)",
               fontSize: 13,
             }}
           >
@@ -550,8 +550,8 @@ function ExerciseSequencer({
           style={{
             padding: 10,
             borderRadius: 10,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
+            background: "var(--danger-bg)",
+            color: "var(--danger-fg)",
             fontSize: 12,
           }}
         >
@@ -677,7 +677,7 @@ function ExerciseRow({
           />
         )}
         {error && (
-          <div role="alert" style={{ marginTop: 4, fontSize: 11, color: "#9F1F1F" }}>
+          <div role="alert" style={{ marginTop: 4, fontSize: 11, color: "var(--danger-fg)" }}>
             No se guardó: {error}
           </div>
         )}
@@ -732,7 +732,7 @@ function ExerciseRow({
           style={{
             border: "none",
             background: "transparent",
-            color: "#9F1F1F",
+            color: "var(--danger-fg)",
             cursor: "pointer",
             padding: 4,
           }}
@@ -900,8 +900,8 @@ function SessionNotes({
           style={{
             padding: 10,
             borderRadius: 10,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
+            background: "var(--danger-bg)",
+            color: "var(--danger-fg)",
             fontSize: 12,
           }}
         >
@@ -1079,7 +1079,7 @@ function PainTimeline({
               className="k-mono"
               style={{
                 fontSize: 11,
-                color: trend < 0 ? "var(--lime-700, #4f8a10)" : trend > 0 ? "#9F1F1F" : "var(--navy-500)",
+                color: trend < 0 ? "var(--lime-700, #4f8a10)" : trend > 0 ? "var(--danger-fg)" : "var(--navy-500)",
                 fontWeight: 700,
               }}
               title="Variación entre la primera EVA pre y la última EVA post"

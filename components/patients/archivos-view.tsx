@@ -182,8 +182,8 @@ export function ArchivosView({
               style={{
                 padding: 8,
                 borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
+                background: "var(--danger-bg)",
+                color: "var(--danger-fg)",
                 fontSize: 11.5,
               }}
             >
@@ -278,7 +278,7 @@ export function ArchivosView({
                   onClick={() => onDelete(f.id)}
                   style={{
                     background: "transparent",
-                    color: "#9F1F1F",
+                    color: "var(--danger-fg)",
                     border: "none",
                     padding: "5px 8px",
                     borderRadius: 8,

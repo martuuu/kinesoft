@@ -250,9 +250,9 @@ export function BookingCard({
         borderRadius: 12,
         padding: compact ? "6px 9px" : "8px 10px",
         background: isCancelled
-          ? "rgba(228,70,70,0.1)"
+          ? "var(--danger-bg)"
           : isNoShow
-            ? "rgba(255,176,32,0.14)"
+            ? "var(--warn-bg)"
             : isDone
               ? "rgba(54,179,126,0.1)"
               : isExpiredHold

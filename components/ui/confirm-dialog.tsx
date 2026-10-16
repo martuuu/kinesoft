@@ -157,7 +157,7 @@ function ConfirmDialog({
                 autoFocus
                 style={
                   danger
-                    ? { background: "#9F1F1F", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }
+                    ? { background: "var(--danger-fg)", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }
                     : undefined
                 }
               >

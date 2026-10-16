@@ -238,8 +238,8 @@ export function ErrorBox({ children }: { children: React.ReactNode }) {
       style={{
         padding: "10px 12px",
         borderRadius: 10,
-        background: "rgba(228,70,70,0.1)",
-        color: "#9F1F1F",
+        background: "var(--danger-bg)",
+        color: "var(--danger-fg)",
         fontSize: 12,
       }}
     >

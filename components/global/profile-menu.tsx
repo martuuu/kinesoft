@@ -226,7 +226,7 @@ export function ProfileMenu({
                 padding: "10px 12px",
                 fontSize: 13,
                 fontWeight: 500,
-                color: "#9F1F1F",
+                color: "var(--danger-fg)",
                 cursor: "pointer",
                 borderRadius: 10,
                 display: "flex",
@@ -493,8 +493,8 @@ export function SettingsModal({
             style={{
               padding: 10,
               borderRadius: 10,
-              background: "rgba(228,70,70,0.1)",
-              color: "#9F1F1F",
+              background: "var(--danger-bg)",
+              color: "var(--danger-fg)",
               fontSize: 12,
               marginBottom: 12,
             }}

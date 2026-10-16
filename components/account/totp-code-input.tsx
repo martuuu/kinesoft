@@ -58,7 +58,7 @@ export function TotpCodeInput({
         }}
       />
       {error && (
-        <span role="alert" style={{ display: "block", marginTop: 6, color: "#9F1F1F", fontSize: 12.5 }}>
+        <span role="alert" style={{ display: "block", marginTop: 6, color: "var(--danger-fg)", fontSize: 12.5 }}>
           {error}
         </span>
       )}

@@ -372,7 +372,7 @@ function Field({
       <span style={{ fontSize: 12, fontWeight: 600, color: "var(--navy-500)" }}>{label}</span>
       {children}
       {error ? (
-        <span style={{ fontSize: 11, color: "#9F1F1F", marginTop: 4, display: "block" }}>{error}</span>
+        <span style={{ fontSize: 11, color: "var(--danger-fg)", marginTop: 4, display: "block" }}>{error}</span>
       ) : hint ? (
         <span style={{ fontSize: 11, color: "var(--navy-300)", marginTop: 4, display: "block" }}>{hint}</span>
       ) : null}
@@ -395,8 +395,8 @@ function Notice({
       style={{
         padding: 12,
         borderRadius: 12,
-        background: tone === "success" ? "rgba(200,245,100,0.18)" : "rgba(228,70,70,0.1)",
-        color: tone === "success" ? "var(--navy-900)" : "#9F1F1F",
+        background: tone === "success" ? "rgba(200,245,100,0.18)" : "var(--danger-bg)",
+        color: tone === "success" ? "var(--navy-900)" : "var(--danger-fg)",
         fontSize: 13,
         lineHeight: 1.5,
       }}

@@ -133,7 +133,7 @@ export function RecordPaymentForm({
         />
         <span
           role={errors.file ? "alert" : undefined}
-          style={{ display: "block", marginTop: 4, fontSize: 11, color: errors.file ? "#9F1F1F" : "var(--navy-300)" }}
+          style={{ display: "block", marginTop: 4, fontSize: 11, color: errors.file ? "var(--danger-fg)" : "var(--navy-300)" }}
         >
           {errors.file ?? (state.file ? state.file.name : "PDF, JPG, PNG o WEBP de hasta 4 MB. Es obligatorio.")}
         </span>

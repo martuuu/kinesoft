@@ -74,12 +74,12 @@ function fmtSlot(iso: string): string {
 const WARN_BOX: CSSProperties = {
   padding: 14,
   borderRadius: 12,
-  background: "rgba(255,176,32,0.14)",
+  background: "var(--warn-bg)",
   border: "1px solid rgba(255,176,32,0.45)",
   display: "grid",
   gap: 10,
 };
-const WARN_GHOST: CSSProperties = { color: "#7A4A00", borderColor: "rgba(122,74,0,0.3)" };
+const WARN_GHOST: CSSProperties = { color: "var(--warn-fg)", borderColor: "rgba(122,74,0,0.3)" };
 
 export function BatchConflictPrompt({
   promptRef,
@@ -121,7 +121,7 @@ export function BatchConflictPrompt({
   const problems = plan.dates.filter((d) => sessionDateState(d) !== "libre" || d.roomBusy === true);
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
-      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>
         {problems.length} de {plan.requested} {unit} con aviso{line ? ` · ${line}` : ""}
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
@@ -334,13 +334,13 @@ export function ConflictPrompt({
       style={{
         padding: 14,
         borderRadius: 12,
-        background: "rgba(255,176,32,0.14)",
+        background: "var(--warn-bg)",
         border: "1px solid rgba(255,176,32,0.45)",
         display: "grid",
         gap: 10,
       }}
     >
-      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>
         ⚠ {conflict.practitionerName} ya tiene un turno en ese horario
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
@@ -375,7 +375,7 @@ export function ConflictPrompt({
           variant="ghost"
           onClick={onForceOverbooking}
           disabled={pending}
-          style={{ color: "#7A4A00", borderColor: "rgba(122,74,0,0.3)" }}
+          style={{ color: "var(--warn-fg)", borderColor: "rgba(122,74,0,0.3)" }}
         >
           Forzar sobreturno
         </Button>
@@ -412,7 +412,7 @@ export function BlockedPrompt({
 }) {
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
-      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>
         Este horario está bloqueado{blocked.reason ? `: ${blocked.reason}` : ""}
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
@@ -456,7 +456,7 @@ export function OutOfHoursPrompt({
 }) {
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
-      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>
         Fuera del horario de {outOfHours.practitionerName}
       </div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>
@@ -512,7 +512,7 @@ export function RoomBusyPrompt({
   const copy = roomBusyCopy(roomBusy);
   return (
     <div ref={promptRef} role="alert" style={WARN_BOX}>
-      <div style={{ fontSize: 13, color: "#7A4A00", fontWeight: 700 }}>{copy.title}</div>
+      <div style={{ fontSize: 13, color: "var(--warn-fg)", fontWeight: 700 }}>{copy.title}</div>
       <div style={{ fontSize: 12, color: "var(--navy-700)", lineHeight: 1.45 }}>{copy.detail}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <Button type="button" variant="ghost" onClick={onForce} disabled={pending} style={WARN_GHOST}>

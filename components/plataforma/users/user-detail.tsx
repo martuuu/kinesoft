@@ -85,7 +85,7 @@ export function UserDetailView({ user, actorId }: { user: PlatformUserDetail; ac
           {user.email} · {USER_KIND_LABEL[user.kind]} · Alta {formatDateTimeAR(user.createdAt)}
         </div>
         {user.disabled && user.disabledAt && (
-          <div style={{ fontSize: 12.5, color: "#9F1F1F", marginTop: 6 }}>Deshabilitado el {formatDateTimeAR(user.disabledAt)}</div>
+          <div style={{ fontSize: 12.5, color: "var(--danger-fg)", marginTop: 6 }}>Deshabilitado el {formatDateTimeAR(user.disabledAt)}</div>
         )}
       </Card>
 

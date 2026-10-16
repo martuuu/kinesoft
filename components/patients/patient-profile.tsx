@@ -645,7 +645,7 @@ export function PatientProfile({
           >
             {loadingMore ? "Cargando…" : "Ver más"}
           </Button>
-          {moreError && <span style={{ color: "#9F1F1F" }}>{moreError}</span>}
+          {moreError && <span style={{ color: "var(--danger-fg)" }}>{moreError}</span>}
         </div>
       )}
 
@@ -801,7 +801,7 @@ export function PatientAdminProfile({
           >
             {loadingMore ? "Cargando…" : "Ver más"}
           </Button>
-          {moreError && <span style={{ color: "#9F1F1F" }}>{moreError}</span>}
+          {moreError && <span style={{ color: "var(--danger-fg)" }}>{moreError}</span>}
         </div>
       )}
     </div>

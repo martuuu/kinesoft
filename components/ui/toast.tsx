@@ -313,7 +313,7 @@ const TONE: Record<
   error: {
     bar: "#E14B4B",
     iconBg: "rgba(228,70,70,0.16)",
-    iconColor: "#9F1F1F",
+    iconColor: "var(--danger-fg)",
     glyph: <span style={{ fontWeight: 800, fontSize: 13 }}>!</span>,
   },
   warning: {

@@ -441,7 +441,7 @@ export function EvolucionesView({
       )}
       {status === "error" && (
         <Card style={{ padding: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, color: "#9F1F1F" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>
+          <span style={{ fontSize: 13, color: "var(--danger-fg)" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>
           <Button type="button" variant="ghost" onClick={() => void loadFirst(activeQuery)}>
             {EVOLUCIONES_VIEW_COPY.retry}
           </Button>
@@ -498,7 +498,7 @@ export function EvolucionesView({
           <Button type="button" variant="ghost" onClick={loadMore} disabled={loadingMore} style={{ fontSize: 12 }}>
             {loadingMore ? EVOLUCIONES_VIEW_COPY.loadingMore : EVOLUCIONES_VIEW_COPY.loadMore}
           </Button>
-          {moreError && <span style={{ fontSize: 12, color: "#9F1F1F" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>}
+          {moreError && <span style={{ fontSize: 12, color: "var(--danger-fg)" }}>{EVOLUCIONES_VIEW_COPY.loadFailed}</span>}
         </div>
       )}
 

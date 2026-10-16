@@ -154,7 +154,7 @@ export function TwoFactorChallenge({
                 </>
               ) : (
                 error && (
-                  <p role="alert" style={{ margin: 0, color: "#9F1F1F", fontSize: 13 }}>
+                  <p role="alert" style={{ margin: 0, color: "var(--danger-fg)", fontSize: 13 }}>
                     {error}
                   </p>
                 )
@@ -195,7 +195,7 @@ export function TwoFactorChallenge({
                   }}
                 />
                 {error && (
-                  <span role="alert" style={{ display: "block", marginTop: 6, color: "#9F1F1F", fontSize: 12.5 }}>
+                  <span role="alert" style={{ display: "block", marginTop: 6, color: "var(--danger-fg)", fontSize: 12.5 }}>
                     {error}
                   </span>
                 )}

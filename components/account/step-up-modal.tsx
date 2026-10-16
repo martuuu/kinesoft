@@ -166,7 +166,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
         {ask?.kind === "step_up" && (
           <div style={{ display: "grid", gap: 12 }}>
             {loadError && (
-              <p role="alert" style={{ margin: 0, color: "#9F1F1F", fontSize: 13 }}>
+              <p role="alert" style={{ margin: 0, color: "var(--danger-fg)", fontSize: 13 }}>
                 {loadError}
               </p>
             )}

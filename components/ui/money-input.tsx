@@ -162,7 +162,7 @@ export function MoneyInput({
       <div style={{ display: "grid", gap: 4, justifyItems: "end" }}>
         {input}
         {hasError && (
-          <span role="alert" style={{ fontSize: 11, color: "#9F1F1F" }}>
+          <span role="alert" style={{ fontSize: 11, color: "var(--danger-fg)" }}>
             {shownError}
           </span>
         )}
@@ -186,7 +186,7 @@ export function MoneyInput({
             display: "block",
             marginTop: 4,
             fontSize: 11,
-            color: hasError ? "#9F1F1F" : "var(--navy-300)",
+            color: hasError ? "var(--danger-fg)" : "var(--navy-300)",
           }}
         >
           {shownError ?? hint}

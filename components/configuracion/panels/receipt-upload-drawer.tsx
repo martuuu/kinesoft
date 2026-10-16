@@ -290,12 +290,12 @@ export function ReceiptUploadDrawer({
             aria-invalid={errors.file ? true : undefined}
             style={{ display: "block", marginTop: 6, maxWidth: "100%", fontSize: 13 }}
           />
-          <span style={{ display: "block", marginTop: 4, fontSize: 11, color: errors.file ? "#9F1F1F" : "var(--navy-300)" }} role={errors.file ? "alert" : undefined}>
+          <span style={{ display: "block", marginTop: 4, fontSize: 11, color: errors.file ? "var(--danger-fg)" : "var(--navy-300)" }} role={errors.file ? "alert" : undefined}>
             {preparing ? "Preparando la foto…" : (errors.file ?? fileInfo ?? "PDF, JPG, PNG o WEBP de hasta 4 MB.")}
           </span>
         </label>
         {formError && (
-          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
             {formError}
           </p>
         )}

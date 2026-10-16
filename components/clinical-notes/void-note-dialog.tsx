@@ -126,7 +126,7 @@ export function VoidNoteForm({
           type="submit"
           disabled={saving}
           // Mismo rojo que el `useConfirm` con tone="danger": anular es irreversible.
-          style={{ background: "#9F1F1F", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }}
+          style={{ background: "var(--danger-fg)", boxShadow: "0 4px 14px rgba(159,31,31,0.3)" }}
         >
           {saving ? COPY.voiding : COPY.voidConfirm}
         </Button>

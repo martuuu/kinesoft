@@ -242,7 +242,7 @@ function Section({
 
 function ErrorText({ children }: { children: React.ReactNode }) {
   return (
-    <p role="alert" style={{ margin: 0, color: "#9F1F1F", fontSize: 12.5 }}>
+    <p role="alert" style={{ margin: 0, color: "var(--danger-fg)", fontSize: 12.5 }}>
       {children}
     </p>
   );

@@ -106,8 +106,8 @@ export function ServiceSection({
             role="status"
             style={{
               fontSize: 11.5,
-              color: "#7A4A00",
-              background: "rgba(255,176,32,0.14)",
+              color: "var(--warn-fg)",
+              background: "var(--warn-bg)",
               border: "1px solid rgba(255,176,32,0.45)",
               borderRadius: 10,
               padding: "6px 10px",

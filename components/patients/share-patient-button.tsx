@@ -186,7 +186,7 @@ export function SharePatientButton({
             )}
           </div>
           {error && (
-            <div style={{ marginTop: 10, padding: 8, borderRadius: 8, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 11.5 }}>
+            <div style={{ marginTop: 10, padding: 8, borderRadius: 8, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 11.5 }}>
               {error}
             </div>
           )}

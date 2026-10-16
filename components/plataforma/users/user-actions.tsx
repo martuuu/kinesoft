@@ -69,7 +69,7 @@ function ResultBox({ msg, children }: { msg: ResultMessage; children?: React.Rea
 
 function ErrorText({ children }: { children: React.ReactNode }) {
   return (
-    <div role="alert" style={{ fontSize: 12.5, color: "#9F1F1F", lineHeight: 1.4 }}>
+    <div role="alert" style={{ fontSize: 12.5, color: "var(--danger-fg)", lineHeight: 1.4 }}>
       {children}
     </div>
   );

@@ -308,7 +308,7 @@ export function TenantSwitcher({
               })}
             </ul>
             {error && (
-              <p role="alert" style={{ margin: "6px 4px 2px", padding: "8px 10px", borderRadius: 10, fontSize: 12, background: "rgba(228,70,70,0.1)", color: "#9F1F1F" }}>
+              <p role="alert" style={{ margin: "6px 4px 2px", padding: "8px 10px", borderRadius: 10, fontSize: 12, background: "var(--danger-bg)", color: "var(--danger-fg)" }}>
                 {error}
               </p>
             )}

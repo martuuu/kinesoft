@@ -150,7 +150,7 @@ export function RightStack({
                         border: "none",
                         background: "transparent",
                         cursor: "pointer",
-                        color: "#9F1F1F",
+                        color: "var(--danger-fg)",
                         fontSize: 12,
                         fontWeight: 700,
                       }}
@@ -302,7 +302,7 @@ function DxSuggestionCard({
                   padding: "2px 7px",
                   borderRadius: 999,
                   background: "rgba(228,70,70,0.15)",
-                  color: "#9F1F1F",
+                  color: "var(--danger-fg)",
                 }}
               >
                 {l}

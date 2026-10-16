@@ -436,7 +436,7 @@ function ErrorBox({ children }: { children: React.ReactNode }) {
   return (
     <div
       role="alert"
-      style={{ padding: 10, borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 12 }}
+      style={{ padding: 10, borderRadius: 10, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 12 }}
     >
       {children}
     </div>

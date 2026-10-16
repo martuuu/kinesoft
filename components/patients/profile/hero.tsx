@@ -336,8 +336,8 @@ function PatientHeroActions({
             padding: 8,
             borderRadius: 8,
             fontSize: 11.5,
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
+            background: "var(--danger-bg)",
+            color: "var(--danger-fg)",
             textAlign: "right",
           }}
         >
@@ -355,8 +355,8 @@ function PatientHeroActions({
               ? portalResult.emailSent
                 ? "rgba(200,245,100,0.18)"
                 : "rgba(255,176,32,0.15)"
-              : "rgba(228,70,70,0.1)",
-            color: portalResult.ok ? "var(--navy-900)" : "#9F1F1F",
+              : "var(--danger-bg)",
+            color: portalResult.ok ? "var(--navy-900)" : "var(--danger-fg)",
             textAlign: "right",
           }}
         >
@@ -746,8 +746,8 @@ function EditPatientModal({
             style={{
               padding: 10,
               borderRadius: 10,
-              background: "rgba(228,70,70,0.1)",
-              color: "#9F1F1F",
+              background: "var(--danger-bg)",
+              color: "var(--danger-fg)",
               fontSize: 12,
             }}
           >

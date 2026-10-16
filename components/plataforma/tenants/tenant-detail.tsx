@@ -53,7 +53,7 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
             ]}
           />
           {d.ownerEmails.length === 0 && (
-            <p style={{ fontSize: 12.5, color: "#9F1F1F", margin: "12px 0 0" }}>
+            <p style={{ fontSize: 12.5, color: "var(--danger-fg)", margin: "12px 0 0" }}>
               Este consultorio no tiene titular.{" "}
               <Link href={tenantTabHref(d.id, "equipo")} style={linkStyle}>
                 Ir al equipo
@@ -117,7 +117,7 @@ export function TenantSummaryView({ detail: d, seats }: { detail: PlatformTenant
                 <span>{seatLimitLabel(d)}</span>
                 {seats && <span>{seatUsageByKindLabel(seats)}</span>}
                 {seats && seatFullText(seats) && (
-                  <span style={{ fontSize: 12, color: "#9F1F1F" }}>{seatFullText(seats)}</span>
+                  <span style={{ fontSize: 12, color: "var(--danger-fg)" }}>{seatFullText(seats)}</span>
                 )}
               </span>,
             ],

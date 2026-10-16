@@ -243,7 +243,7 @@ export function PlanChangeDrawer({
         )}
 
         {error && (
-          <div role="alert" style={{ display: "grid", gap: 8, padding: "10px 12px", borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 13 }}>
+          <div role="alert" style={{ display: "grid", gap: 8, padding: "10px 12px", borderRadius: 10, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 13 }}>
             <span>{error}</span>
             {canRefresh && to && (
               <div>

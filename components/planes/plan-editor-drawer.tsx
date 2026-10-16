@@ -489,7 +489,7 @@ function PlanEditorInstance(props: PlanEditorDrawerOwnProps) {
     <Drawer open={open} onClose={onClose} title={planEditorTitle(mode)} width={PLAN_EDITOR_WIDTH} dirty={dirty} dirtyMessage={PLAN_EDITOR_COPY.dirty}>
       <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
         {loadError ? (
-          <p role="alert" style={{ margin: 0, fontSize: 13, color: "#9F1F1F" }}>
+          <p role="alert" style={{ margin: 0, fontSize: 13, color: "var(--danger-fg)" }}>
             {loadError}
           </p>
         ) : !loaded || !draft ? (
@@ -553,7 +553,7 @@ function PlanEditorInstance(props: PlanEditorDrawerOwnProps) {
             )}
 
             {formError && (
-              <p id="plan-editor-error" role="alert" style={{ margin: 0, fontSize: 13, color: "#9F1F1F" }}>
+              <p id="plan-editor-error" role="alert" style={{ margin: 0, fontSize: 13, color: "var(--danger-fg)" }}>
                 {formError}
               </p>
             )}

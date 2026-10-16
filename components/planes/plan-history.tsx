@@ -121,7 +121,7 @@ export function PlanHistoryBody({ state }: { state: PlanHistoryState }) {
   }
   if (state.kind === "error") {
     return (
-      <p role="alert" style={{ fontSize: 13, color: "#9F1F1F" }}>
+      <p role="alert" style={{ fontSize: 13, color: "var(--danger-fg)" }}>
         {state.error}
       </p>
     );

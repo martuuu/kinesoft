@@ -475,7 +475,7 @@ function SeriesMove({
       )}
 
       {error && (
-        <p role="alert" style={{ margin: 0, fontSize: 12, color: "#9F1F1F" }}>
+        <p role="alert" style={{ margin: 0, fontSize: 12, color: "var(--danger-fg)" }}>
           {error}
         </p>
       )}

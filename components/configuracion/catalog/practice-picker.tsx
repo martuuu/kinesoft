@@ -72,7 +72,7 @@ export function PracticePicker({
             style={searchInputStyle}
           />
           {loading && <div style={{ color: "var(--navy-300)" }}>Buscando…</div>}
-          {error && <div style={{ color: "#9F1F1F" }}>No pudimos buscar en el catálogo.</div>}
+          {error && <div style={{ color: "var(--danger-fg)" }}>No pudimos buscar en el catálogo.</div>}
           <div className="k-scroll" style={{ display: "grid", gap: 4, maxHeight: 220, overflowY: "auto" }}>
             {results.map((p) => (
               <button

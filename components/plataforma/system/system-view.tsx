@@ -17,8 +17,8 @@ function StateBadge({ c }: { c: SystemCheck }) {
     <span
       className="k-tag"
       style={{
-        background: warn ? "rgba(214,158,46,0.14)" : "rgba(228,70,70,0.1)",
-        color: warn ? "#7A5410" : "#9F1F1F",
+        background: warn ? "rgba(214,158,46,0.14)" : "var(--danger-bg)",
+        color: warn ? "#7A5410" : "var(--danger-fg)",
       }}
     >
       {warn ? (c.value ? `Revisar · ${c.value}` : "Revisar") : c.value ? `Falta · ${c.value}` : "Falta"}

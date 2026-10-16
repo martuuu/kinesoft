@@ -862,8 +862,8 @@ export function BookingDrawer({
               style={{
                 padding: 10,
                 borderRadius: 10,
-                background: "rgba(228,70,70,0.1)",
-                color: "#9F1F1F",
+                background: "var(--danger-bg)",
+                color: "var(--danger-fg)",
                 fontSize: 12,
               }}
             >
@@ -887,7 +887,7 @@ export function BookingDrawer({
                 style={{
                   background: "transparent",
                   border: "none",
-                  color: "#9F1F1F",
+                  color: "var(--danger-fg)",
                   cursor: "pointer",
                   fontSize: 12.5,
                   fontWeight: 700,

@@ -426,7 +426,7 @@ function ServiceModal({
               style={{
                 background: "transparent",
                 border: "none",
-                color: "#9F1F1F",
+                color: "var(--danger-fg)",
                 cursor: "pointer",
                 fontSize: 12.5,
                 fontWeight: 700,

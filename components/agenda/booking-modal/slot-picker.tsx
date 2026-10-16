@@ -295,8 +295,8 @@ function Warn({ children }: { children: React.ReactNode }) {
     <div
       style={{
         fontSize: 12,
-        color: "#7A4A00",
-        background: "rgba(255,176,32,0.14)",
+        color: "var(--warn-fg)",
+        background: "var(--warn-bg)",
         borderRadius: 8,
         padding: "6px 8px",
         lineHeight: 1.4,
@@ -312,7 +312,7 @@ function LiveStatus({ state, onRetry }: { state: Load<unknown>; onRetry: () => v
     <div aria-live="polite" role="status">
       {state.status === "loading" && <Muted>Buscando horarios…</Muted>}
       {state.status === "error" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#9F1F1F" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--danger-fg)" }}>
           <span>{state.error}</span>
           <button type="button" style={{ ...navBtn, height: 24, fontSize: 12 }} onClick={onRetry}>
             Reintentar
@@ -521,10 +521,10 @@ function chipStyle(tone: ChipTone, selected: boolean): React.CSSProperties {
     case "free":
       return { background: "#fff", color: "var(--sky-800)", border: "1px solid var(--sky-300)" };
     case "full":
-      return { background: "rgba(255,176,32,0.14)", color: "#7A4A00", border: "1px solid rgba(122,74,0,0.25)" };
+      return { background: "var(--warn-bg)", color: "var(--warn-fg)", border: "1px solid rgba(122,74,0,0.25)" };
     case "conflict":
       // Borde punteado: canal no cromático para "el paciente ya tiene turno".
-      return { background: "rgba(255,176,32,0.08)", color: "#7A4A00", border: "1px dashed #7A4A00" };
+      return { background: "rgba(255,176,32,0.08)", color: "var(--warn-fg)", border: "1px dashed var(--warn-fg)" };
     case "blocked":
       return {
         background: "rgba(15,30,51,0.04)",

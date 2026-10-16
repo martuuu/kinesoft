@@ -50,7 +50,7 @@ export function PayerPickerModal({
           <div style={{ fontSize: 12, color: "var(--navy-300)", textAlign: "center" }}>Buscando…</div>
         )}
         {error && (
-          <div style={{ fontSize: 12, color: "#9F1F1F", textAlign: "center" }}>
+          <div style={{ fontSize: 12, color: "var(--danger-fg)", textAlign: "center" }}>
             No pudimos buscar en el catálogo. Probá de nuevo.
           </div>
         )}

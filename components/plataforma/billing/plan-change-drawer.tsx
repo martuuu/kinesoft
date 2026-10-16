@@ -147,7 +147,7 @@ export function PlanChangeForm({
               {limitText(preview.limits.maxProfessionals)} · no clínicos: {limitText(preview.limits.maxStaff)}.
             </div>
             {moduleLabels(preview.modulesLost).length > 0 && (
-              <div style={{ fontSize: 12.5, color: "#9F1F1F" }}>Pierde: {moduleLabels(preview.modulesLost).join(", ")}. No se borra nada.</div>
+              <div style={{ fontSize: 12.5, color: "var(--danger-fg)" }}>Pierde: {moduleLabels(preview.modulesLost).join(", ")}. No se borra nada.</div>
             )}
             {moduleLabels(preview.modulesGained).length > 0 && (
               <div style={{ fontSize: 12.5, color: "var(--lime-700)" }}>Suma: {moduleLabels(preview.modulesGained).join(", ")}.</div>

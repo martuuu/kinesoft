@@ -299,7 +299,7 @@ const PRICE_OPTIONS: ReadonlyArray<{ value: PlanPriceMode; label: string }> = [
 ];
 
 const sectionLabel: CSSProperties = { fontSize: 12, fontWeight: 600, color: "var(--navy-500)" };
-const errorText: CSSProperties = { margin: "4px 0 0", fontSize: 12, color: "#9F1F1F" };
+const errorText: CSSProperties = { margin: "4px 0 0", fontSize: 12, color: "var(--danger-fg)" };
 const hintText: CSSProperties = { margin: "4px 0 0", fontSize: 12, color: "var(--navy-500)" };
 const grid2: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 };
 

@@ -209,7 +209,7 @@ export function MfaVerifyForm({ next, verifyAction }: { next: string; verifyActi
 
 function ErrorText({ children }: { children: React.ReactNode }) {
   return (
-    <p role="alert" style={{ margin: 0, color: "#9F1F1F", fontSize: 13 }}>
+    <p role="alert" style={{ margin: 0, color: "var(--danger-fg)", fontSize: 13 }}>
       {children}
     </p>
   );

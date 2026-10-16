@@ -130,7 +130,7 @@ export function SupportMessagesPanel({
       </div>
 
       {loadError && (
-        <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+        <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
           {loadError}
         </p>
       )}
@@ -293,10 +293,10 @@ function ComposeDrawer({
           hint={`Hasta ${SUPPORT_BODY_MAX} caracteres.`}
         />
         {subject.length > SUPPORT_SUBJECT_MAX && (
-          <p style={{ margin: 0, fontSize: 12.5, color: "#9F1F1F" }}>El asunto puede tener hasta {SUPPORT_SUBJECT_MAX} caracteres.</p>
+          <p style={{ margin: 0, fontSize: 12.5, color: "var(--danger-fg)" }}>El asunto puede tener hasta {SUPPORT_SUBJECT_MAX} caracteres.</p>
         )}
         {error && (
-          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
             {error}
           </p>
         )}
@@ -432,7 +432,7 @@ function ThreadDrawer({
           </div>
         )}
         {error && (
-          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
             {error}
           </p>
         )}

@@ -185,7 +185,7 @@ const warnBox: React.CSSProperties = {
   padding: 10,
   borderRadius: 10,
   background: "rgba(228,176,32,0.15)",
-  color: "#7A4A00",
+  color: "var(--warn-fg)",
   fontSize: 12.5,
   lineHeight: 1.45,
 };
@@ -194,7 +194,7 @@ const errorBox: React.CSSProperties = {
   padding: 10,
   borderRadius: 10,
   background: "rgba(159,31,31,0.08)",
-  color: "#9F1F1F",
+  color: "var(--danger-fg)",
   fontSize: 12.5,
   lineHeight: 1.45,
 };

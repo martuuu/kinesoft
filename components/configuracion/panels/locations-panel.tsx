@@ -251,7 +251,7 @@ export function LocationsPanel({
                       </button>
                       <button
                         type="button"
-                        style={{ ...linkBtn, color: "#9F1F1F" }}
+                        style={{ ...linkBtn, color: "var(--danger-fg)" }}
                         onClick={() => onArchive(l)}
                         disabled={pending}
                       >
@@ -381,7 +381,7 @@ function ArchiveBlockers({
       <button
         type="button"
         onClick={onDismiss}
-        style={{ ...linkBtn, color: "#9F1F1F", padding: "4px 0 0", minHeight: 0 }}
+        style={{ ...linkBtn, color: "var(--danger-fg)", padding: "4px 0 0", minHeight: 0 }}
       >
         Entendido
       </button>

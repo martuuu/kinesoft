@@ -116,7 +116,7 @@ export function DeleteBookingButton({
         style={{
           background: "transparent",
           border: "none",
-          color: blockedByNote ? "var(--navy-300)" : "#9F1F1F",
+          color: blockedByNote ? "var(--navy-300)" : "var(--danger-fg)",
           cursor: blockedByNote ? "not-allowed" : "pointer",
           fontSize: 12.5,
           fontWeight: 700,

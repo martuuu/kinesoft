@@ -223,8 +223,8 @@ export function ScheduleSection({
 
 const TONE_STYLE: Record<InstantTone, React.CSSProperties> = {
   ok: { background: "rgba(142,204,48,0.16)", color: "#3F5F0E" },
-  warn: { background: "rgba(255,176,32,0.14)", color: "#7A4A00" },
-  danger: { background: "rgba(225,75,75,0.12)", color: "#9F1F1F" },
+  warn: { background: "var(--warn-bg)", color: "var(--warn-fg)" },
+  danger: { background: "rgba(225,75,75,0.12)", color: "var(--danger-fg)" },
 };
 
 function InstantStatusLine({ live }: { live: LiveState }) {

@@ -303,7 +303,7 @@ export function PlanStatusDialog({ open, onClose, programId, from, to, mode = "s
             onClick={() => send(false)}
             disabled={pending || !preview}
             data-tone={danger ? "danger" : undefined}
-            style={danger ? { background: "#9F1F1F" } : undefined}
+            style={danger ? { background: "var(--danger-fg)" } : undefined}
           >
             {pending ? "Guardando…" : mode === "archive" ? "Cancelar y archivar" : PLAN_STATUS_ACTION_LABEL[target]}
           </Button>
@@ -411,8 +411,8 @@ const errorBox: React.CSSProperties = {
   margin: 0,
   padding: 10,
   borderRadius: 10,
-  background: "rgba(228,70,70,0.1)",
-  color: "#9F1F1F",
+  background: "var(--danger-bg)",
+  color: "var(--danger-fg)",
   fontSize: 12.5,
 };
 

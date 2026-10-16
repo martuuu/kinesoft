@@ -157,7 +157,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
           ))}
 
         {error && (
-          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+          <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
             {error}
           </p>
         )}
@@ -224,7 +224,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
                         <span style={{ fontSize: 12.5, color: "var(--navy-500)", overflowWrap: "anywhere" }}>«{p.note}»</span>
                       )}
                       {p.status === "REJECTED" && (
-                        <span data-reject-reason style={{ fontSize: 12.5, color: "#9F1F1F", overflowWrap: "anywhere" }}>
+                        <span data-reject-reason style={{ fontSize: 12.5, color: "var(--danger-fg)", overflowWrap: "anywhere" }}>
                           Motivo: {p.reviewNote ?? "sin detalle. Escribinos desde Soporte."}
                         </span>
                       )}

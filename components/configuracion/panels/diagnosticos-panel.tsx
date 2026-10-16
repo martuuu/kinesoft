@@ -194,7 +194,7 @@ function DeleteConditionButton({
       type="button"
       onClick={onClick}
       disabled={pending}
-      style={{ ...miniBtn, color: "#9F1F1F", borderColor: "rgba(159,31,31,0.25)" }}
+      style={{ ...miniBtn, color: "var(--danger-fg)", borderColor: "rgba(159,31,31,0.25)" }}
       title={error ?? undefined}
     >
       {pending ? "…" : "Eliminar"}
@@ -293,7 +293,7 @@ function CustomConditionModal({
         {error && (
           <div
             role="alert"
-            style={{ padding: 10, borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 12 }}
+            style={{ padding: 10, borderRadius: 10, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 12 }}
           >
             {error}
           </div>

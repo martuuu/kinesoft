@@ -301,7 +301,7 @@ export function RangeRowsEditor({
               />
             )}
             {err && (
-              <div role="alert" style={{ fontSize: 12, color: "#9F1F1F", padding: "2px 8px 0" }}>
+              <div role="alert" style={{ fontSize: 12, color: "var(--danger-fg)", padding: "2px 8px 0" }}>
                 {err}
               </div>
             )}

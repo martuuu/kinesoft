@@ -90,7 +90,7 @@ export function PlanView({
       {error && (
         <p
           role="alert"
-          style={{ margin: 0, padding: 10, borderRadius: 10, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", fontSize: 12.5 }}
+          style={{ margin: 0, padding: 10, borderRadius: 10, background: "var(--danger-bg)", color: "var(--danger-fg)", fontSize: 12.5 }}
         >
           {error}
         </p>

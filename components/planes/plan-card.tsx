@@ -567,7 +567,7 @@ export function PlanCard({ plan, patientId, permissions, insured, focused = fals
                   </button>
                 )}
                 {has("archive") && (
-                  <button type="button" style={{ ...miniBtn, color: "#9F1F1F" }} disabled={pending} onClick={runArchive}>
+                  <button type="button" style={{ ...miniBtn, color: "var(--danger-fg)" }} disabled={pending} onClick={runArchive}>
                     Archivar
                   </button>
                 )}
@@ -938,7 +938,7 @@ const errorBox: React.CSSProperties = {
   margin: 0,
   padding: 10,
   borderRadius: 10,
-  background: "rgba(228,70,70,0.1)",
-  color: "#9F1F1F",
+  background: "var(--danger-bg)",
+  color: "var(--danger-fg)",
   fontSize: 12.5,
 };

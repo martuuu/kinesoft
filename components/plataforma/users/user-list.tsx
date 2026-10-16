@@ -65,7 +65,7 @@ function Row({ r }: { r: PlatformUserRow }) {
       <div>{r.isPlatformAdmin ? <Tag tone="lime">Superadmin</Tag> : <span style={{ color: "var(--navy-300)" }}>—</span>}</div>
       <div>
         {r.disabled ? (
-          <span style={{ fontSize: 12.5, fontWeight: 600, color: "#9F1F1F" }}>Deshabilitado</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--danger-fg)" }}>Deshabilitado</span>
         ) : (
           <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lime-700)" }}>Habilitado</span>
         )}

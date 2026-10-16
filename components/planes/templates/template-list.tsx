@@ -234,7 +234,7 @@ function TemplateListEnabled({
 
       <div style={{ marginTop: 12 }}>
         {loadError ? (
-          <p role="alert" style={{ ...muted, color: "#9F1F1F" }}>
+          <p role="alert" style={{ ...muted, color: "var(--danger-fg)" }}>
             {loadError}
           </p>
         ) : !rows ? (
@@ -320,7 +320,7 @@ function TemplateRowItem({
             <Button type="button" variant="ghost" style={smallBtn} onClick={() => onArchive(!archived)} disabled={busy} aria-label={`${archived ? "Restaurar" : "Archivar"} ${row.name}`}>
               {archived ? "Restaurar" : "Archivar"}
             </Button>
-            <Button type="button" variant="ghost" style={{ ...smallBtn, color: "#9F1F1F" }} onClick={onDelete} disabled={busy} aria-label={`Borrar ${row.name}`}>
+            <Button type="button" variant="ghost" style={{ ...smallBtn, color: "var(--danger-fg)" }} onClick={onDelete} disabled={busy} aria-label={`Borrar ${row.name}`}>
               Borrar
             </Button>
           </>

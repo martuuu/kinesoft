@@ -82,7 +82,7 @@ export function PlatformTeamPanel({
               </span>
               {seats.full && <Tag tone="soft">Cupo lleno</Tag>}
             </div>
-            <div style={{ fontSize: 12, color: seats.full ? "#7A4A00" : "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
+            <div style={{ fontSize: 12, color: seats.full ? "var(--warn-fg)" : "var(--navy-500)", marginTop: 4, lineHeight: 1.45 }}>
               {seats.hint}
             </div>
           </div>
@@ -196,7 +196,7 @@ function RowAction({
         aria-label={state.reason ? `${label} (no disponible: ${state.reason})` : undefined}
         style={{
           ...LINK_BTN,
-          color: danger ? "#9F1F1F" : LINK_BTN.color,
+          color: danger ? "var(--danger-fg)" : LINK_BTN.color,
           opacity: state.enabled ? 1 : 0.45,
           cursor: disabled ? "not-allowed" : "pointer",
         }}
@@ -494,7 +494,7 @@ export function InvitationItem({
   const ref = { tenantId, invitationId: invite.id };
   const expired = invite.status === "expired";
   const mail = emailStatusLabel(invite.lastEmailStatus);
-  const mailColor = mail.tone === "ok" ? "var(--navy-500)" : mail.tone === "warn" ? "#7A4A00" : "#9F1F1F";
+  const mailColor = mail.tone === "ok" ? "var(--navy-500)" : mail.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)";
 
   const resend = async () => {
     const ok = await confirm({
@@ -554,7 +554,7 @@ export function InvitationItem({
           {" · "}
           <span style={{ color: mailColor }}>{mail.text}</span>
           {" · "}
-          <span style={{ color: expired ? "#9F1F1F" : "var(--navy-500)" }}>
+          <span style={{ color: expired ? "var(--danger-fg)" : "var(--navy-500)" }}>
             {expired ? "Venció el " : "Vence el "}
             {formatARDate(invite.expiresAt)}
           </span>
@@ -564,7 +564,7 @@ export function InvitationItem({
         <button type="button" onClick={resend} disabled={busy} style={LINK_BTN}>
           Reenviar
         </button>
-        <button type="button" onClick={revoke} disabled={busy} style={{ ...LINK_BTN, color: "#9F1F1F" }}>
+        <button type="button" onClick={revoke} disabled={busy} style={{ ...LINK_BTN, color: "var(--danger-fg)" }}>
           Anular
         </button>
       </div>

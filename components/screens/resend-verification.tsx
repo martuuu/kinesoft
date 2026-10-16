@@ -89,7 +89,7 @@ export function ResendButton({
             margin: 0,
             fontSize: 12,
             lineHeight: 1.5,
-            color: feedback.tone === "error" ? "#9F1F1F" : "var(--navy-500)",
+            color: feedback.tone === "error" ? "var(--danger-fg)" : "var(--navy-500)",
           }}
         >
           {feedback.text}

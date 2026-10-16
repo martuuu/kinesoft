@@ -112,7 +112,7 @@ function RunsTable({ runs }: { runs: CatalogImportRunRow[] }) {
                 <span className="k-mono">{r.created}</span>
                 <span className="k-mono">{r.updated}</span>
                 <span className="k-mono">{r.skipped}</span>
-                <span className="k-mono" style={{ color: r.conflictCount ? "#9F1F1F" : "var(--navy-300)", fontWeight: r.conflictCount ? 700 : 400 }}>
+                <span className="k-mono" style={{ color: r.conflictCount ? "var(--danger-fg)" : "var(--navy-300)", fontWeight: r.conflictCount ? 700 : 400 }}>
                   {r.conflictCount}
                 </span>
                 <span style={{ fontSize: 12, color: "var(--navy-500)" }}>{r.ranBy ?? "—"}</span>

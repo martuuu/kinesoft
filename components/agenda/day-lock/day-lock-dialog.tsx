@@ -154,7 +154,7 @@ const labelStyle: React.CSSProperties = {
   color: "var(--navy-500)",
   marginBottom: 6,
 };
-const errorStyle: React.CSSProperties = { fontSize: 11, color: "#9F1F1F", marginTop: 4 };
+const errorStyle: React.CSSProperties = { fontSize: 11, color: "var(--danger-fg)", marginTop: 4 };
 const selectStyle: React.CSSProperties = {
   padding: "8px 6px",
   borderRadius: 10,
@@ -830,7 +830,7 @@ export function DayLockDialog({
           </div>
 
           {error && (
-            <div role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+            <div role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
               {error}
             </div>
           )}
@@ -885,7 +885,7 @@ export function DayLockDialog({
           )}
 
           {error && (
-            <div role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+            <div role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
               {error}
             </div>
           )}

@@ -272,7 +272,7 @@ function QuickMenu({
               />
               <MenuButton
                 disabled={pending}
-                icon={<span style={{ color: "#9F1F1F", fontWeight: 700 }}>✕</span>}
+                icon={<span style={{ color: "var(--danger-fg)", fontWeight: 700 }}>✕</span>}
                 label="Marcar ausente"
                 onClick={() => setStatus("NO_SHOW")}
               />
@@ -299,7 +299,7 @@ function QuickMenu({
           style={{
             padding: "6px 12px",
             fontSize: 11,
-            color: "#9F1F1F",
+            color: "var(--danger-fg)",
           }}
         >
           {error}

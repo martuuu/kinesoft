@@ -286,7 +286,7 @@ function SupportChip({
         </Button>
       )}
       {error && (
-        <span role="alert" style={{ color: "#9F1F1F", fontSize: 12 }}>
+        <span role="alert" style={{ color: "var(--danger-fg)", fontSize: 12 }}>
           {error}
         </span>
       )}

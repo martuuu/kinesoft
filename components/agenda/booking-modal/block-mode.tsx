@@ -59,7 +59,7 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 6,
 };
 
-const errorStyle: React.CSSProperties = { fontSize: 11, color: "#9F1F1F", marginTop: 4 };
+const errorStyle: React.CSSProperties = { fontSize: 11, color: "var(--danger-fg)", marginTop: 4 };
 
 function chipStyle(active: boolean): React.CSSProperties {
   return {
@@ -419,7 +419,7 @@ export function BlockMode({
       </div>
 
       {error && (
-        <div role="alert" style={{ fontSize: 12, color: "#9F1F1F" }}>
+        <div role="alert" style={{ fontSize: 12, color: "var(--danger-fg)" }}>
           {error}
         </div>
       )}

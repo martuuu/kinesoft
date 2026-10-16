@@ -163,7 +163,7 @@ export function GeneralPanel({
                 style={{
                   fontSize: 12.5,
                   fontWeight: 600,
-                  color: basicsMsg.tone === "ok" ? "var(--navy-900)" : "#9F1F1F",
+                  color: basicsMsg.tone === "ok" ? "var(--navy-900)" : "var(--danger-fg)",
                 }}
               >
                 {basicsMsg.text}
@@ -299,8 +299,8 @@ export function GeneralPanel({
               background:
                 hoursMsg.tone === "ok"
                   ? "rgba(200,245,100,0.18)"
-                  : "rgba(228,70,70,0.1)",
-              color: hoursMsg.tone === "ok" ? "var(--navy-900)" : "#9F1F1F",
+                  : "var(--danger-bg)",
+              color: hoursMsg.tone === "ok" ? "var(--navy-900)" : "var(--danger-fg)",
               fontSize: 12,
             }}
           >

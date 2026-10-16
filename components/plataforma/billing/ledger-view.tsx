@@ -171,7 +171,7 @@ export function ChargesList({
                 {c.overdue && c.status === "OPEN" ? "Vencido" : CHARGE_STATUS_LABEL[c.status]}
               </Tag>
               {c.status === "OPEN" && (
-                <span style={{ fontSize: 12.5, color: c.overdue ? "#9F1F1F" : "var(--navy-500)" }}>
+                <span style={{ fontSize: 12.5, color: c.overdue ? "var(--danger-fg)" : "var(--navy-500)" }}>
                   {c.overdue ? "Venció" : "Vence"} el {formatDayKeyAR(c.dueDate)} · falta {formatARS(c.remainingCents)}
                   {c.paidCents > 0 ? ` (pagó ${formatARS(c.paidCents)})` : ""}
                 </span>
@@ -185,7 +185,7 @@ export function ChargesList({
                   </button>
                   <button
                     type="button"
-                    style={{ ...linkBtn, color: c.paidCents > 0 ? "var(--navy-300)" : "#9F1F1F" }}
+                    style={{ ...linkBtn, color: c.paidCents > 0 ? "var(--navy-300)" : "var(--danger-fg)" }}
                     onClick={() => onVoid(c)}
                     disabled={disabled || c.paidCents > 0}
                     title={c.paidCents > 0 ? "Tiene pagos aprobados: condonalo en vez de anularlo." : undefined}
@@ -229,7 +229,7 @@ export function PaymentsList({
               </span>
               {p.note && <span style={{ fontSize: 12.5, color: "var(--navy-500)", overflowWrap: "anywhere", minWidth: 0 }}>{p.note}</span>}
               {p.reviewNote && (
-                <span style={{ fontSize: 12.5, color: p.status === "REJECTED" ? "#9F1F1F" : "var(--navy-500)", overflowWrap: "anywhere", minWidth: 0 }}>
+                <span style={{ fontSize: 12.5, color: p.status === "REJECTED" ? "var(--danger-fg)" : "var(--navy-500)", overflowWrap: "anywhere", minWidth: 0 }}>
                   {p.status === "REJECTED" ? "Motivo del rechazo" : "Revisión"}: {p.reviewNote}
                 </span>
               )}

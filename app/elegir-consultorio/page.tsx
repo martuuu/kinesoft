@@ -73,8 +73,8 @@ export default async function ElegirConsultorioPage({
             padding: "10px 12px",
             borderRadius: "var(--r-md)",
             // Mismo rojo que el aviso de error de /invite (no hay token de error en globals.css).
-            background: "rgba(228,70,70,0.1)",
-            color: "#9F1F1F",
+            background: "var(--danger-bg)",
+            color: "var(--danger-fg)",
           }}
         >
           Ese consultorio ya no está disponible para tu usuario. Elegí otro.

@@ -315,7 +315,7 @@ export function TenantEditForm({
             borderRadius: "var(--r-sm)",
             background: "rgba(225,75,75,0.08)",
             border: "1px solid rgba(225,75,75,0.25)",
-            color: "#9F1F1F",
+            color: "var(--danger-fg)",
             fontSize: 13,
           }}
         >

@@ -161,7 +161,7 @@ export function InboxThreadView({ thread }: { thread: InboxThreadDetail }) {
             <p style={{ margin: 0, fontSize: 12.5, color: "var(--navy-500)" }}>Si respondés, la conversación se vuelve a abrir.</p>
           )}
           {error && (
-            <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "#9F1F1F" }}>
+            <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger-fg)" }}>
               {error}
             </p>
           )}

@@ -168,7 +168,7 @@ export function ScheduleSessionModal({
           </div>
         )}
         {error && (
-          <div role="alert" style={{ ...notice, background: "rgba(228,70,70,0.1)", color: "#9F1F1F", border: "none" }}>
+          <div role="alert" style={{ ...notice, background: "var(--danger-bg)", color: "var(--danger-fg)", border: "none" }}>
             {error}
           </div>
         )}

@@ -149,7 +149,7 @@ export function PlanesClient(props: PlanesClientProps) {
           )}
 
           {error ? (
-            <Card role="alert" style={{ padding: 16, fontSize: 13, color: "#9F1F1F" }}>
+            <Card role="alert" style={{ padding: 16, fontSize: 13, color: "var(--danger-fg)" }}>
               {error}
             </Card>
           ) : (

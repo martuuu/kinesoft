@@ -57,8 +57,8 @@ const TONE_STYLE: Record<
     border: "rgba(140,190,40,0.4)",
   },
   warn: {
-    color: "#7A4A00",
-    background: "rgba(255,176,32,0.14)",
+    color: "var(--warn-fg)",
+    background: "var(--warn-bg)",
     border: "rgba(255,176,32,0.45)",
   },
   danger: {
@@ -328,14 +328,14 @@ export function SessionsMode({
             style={{
               fontSize: 12,
               fontWeight: 600,
-              color: counts ? "#7A4A00" : "var(--navy-500)",
+              color: counts ? "var(--warn-fg)" : "var(--navy-500)",
             }}
           >
             {counts || "Todas las fechas están libres"}
           </div>
         )}
         {shortfall && (
-          <div style={{ fontSize: 11, color: "#7A4A00" }}>{shortfall}</div>
+          <div style={{ fontSize: 11, color: "var(--warn-fg)" }}>{shortfall}</div>
         )}
 
         {rows.length > 0 && (

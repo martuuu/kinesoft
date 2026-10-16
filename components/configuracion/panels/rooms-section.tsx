@@ -367,7 +367,7 @@ function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps
                   )}
                   <button
                     type="button"
-                    style={{ ...linkBtn, color: "#9F1F1F" }}
+                    style={{ ...linkBtn, color: "var(--danger-fg)" }}
                     onClick={() => onArchive(r)}
                     disabled={pending}
                     aria-label={`Archivar ${r.name}`}
@@ -483,7 +483,7 @@ export function RoomArchiveBlockers({
       <button
         type="button"
         onClick={onDismiss}
-        style={{ ...linkBtn, color: "#9F1F1F", padding: "4px 0 0", minHeight: 0 }}
+        style={{ ...linkBtn, color: "var(--danger-fg)", padding: "4px 0 0", minHeight: 0 }}
       >
         Entendido
       </button>

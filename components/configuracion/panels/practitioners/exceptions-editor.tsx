@@ -252,7 +252,7 @@ export function ExceptionsEditor({
                   </button>
                   <button
                     type="button"
-                    style={{ ...linkBtn, color: "#9F1F1F" }}
+                    style={{ ...linkBtn, color: "var(--danger-fg)" }}
                     onClick={() => onDelete(r)}
                     disabled={pending}
                   >

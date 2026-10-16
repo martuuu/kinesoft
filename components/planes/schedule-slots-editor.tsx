@@ -298,7 +298,7 @@ export function ScheduleSlotsEditor({ value, onChange, disabled, error, idPrefix
       </div>
 
       {problem && (
-        <div id={errorId} role="alert" style={{ fontSize: 12, color: "#9F1F1F", fontWeight: 600 }}>
+        <div id={errorId} role="alert" style={{ fontSize: 12, color: "var(--danger-fg)", fontWeight: 600 }}>
           {problem}
         </div>
       )}

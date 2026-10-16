@@ -368,7 +368,7 @@ function TurnoActionsMenu({
     fontSize: 12.5, fontWeight: 600, color: "var(--navy-700)", padding: "8px 10px", borderRadius: 8, display: "block",
   };
   const Item = ({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) => (
-    <button type="button" disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "#9F1F1F" : "var(--navy-700)" }}>
+    <button type="button" disabled={disabled} onClick={() => { setOpen(false); onClick(); }} style={{ ...itemStyle, color: danger ? "var(--danger-fg)" : "var(--navy-700)" }}>
       {label}
     </button>
   );

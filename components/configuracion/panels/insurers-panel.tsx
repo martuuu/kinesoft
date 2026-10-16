@@ -384,7 +384,7 @@ function InsurerModal({
               style={{
                 background: "transparent",
                 border: "none",
-                color: "#9F1F1F",
+                color: "var(--danger-fg)",
                 cursor: "pointer",
                 fontSize: 12.5,
                 fontWeight: 700,
@@ -477,7 +477,7 @@ function CatalogLinkSection({
             <button type="button" disabled={pending} onClick={() => setPicking(true)} style={linkStyle}>
               Cambiar
             </button>
-            <button type="button" disabled={pending} onClick={unlink} style={{ ...linkStyle, color: "#9F1F1F" }}>
+            <button type="button" disabled={pending} onClick={unlink} style={{ ...linkStyle, color: "var(--danger-fg)" }}>
               Desvincular
             </button>
           </>
