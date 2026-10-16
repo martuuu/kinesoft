@@ -423,3 +423,11 @@
     min-height: 44px;
   }
 }
+
+/* MB-Z-F3 (B3): período de Sesiones (Semana / Mes / 3 meses) e Ingresos (Mes / Semana). Inline miden 27 px de alto
+   (padding 5/4 + 11 px de texto) y una media query no pisa un `style`; por eso la clase (sin reglas en escritorio). */
+@media (max-width: 767px) {
+  .rangeBtn {
+    min-height: 44px;
+  }
+}

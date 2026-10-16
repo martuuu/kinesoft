@@ -64,7 +64,7 @@ export function ModeToggle({
             aria-checked={on}
             tabIndex={o.value === focusable ? 0 : -1}
             title={o.hint}
-            className={styles.segBtn}
+            className={`${styles.segBtn} k-tap-m`}
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => {
               // Radiogroup: las flechas cambian la opción (patrón WAI-ARIA), con vuelta entre N.

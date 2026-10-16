@@ -549,7 +549,39 @@ marca framer-motion / zod / @supabase / react-dom; `npm run perf:bundle:baseline
 `scripts/bundle-groups.mjs`; sale 1 si una ruta excede o crece > 10 % sobre `scripts/bundle-baseline.json`.
 
 **Bloqueantes:** públicas ≤ 120, turnero ≤ 135, portal ≤ 125 (desde F-Z, 15-oct) y **onboarding ≤ 160, Plataforma ≤ 180
-y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z.
+y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z y en el
+cierre DIR-Z/MB-Z (16-oct, con el build de producción del gate).
+
+### DIR y MB (16-oct-2026, cierre DIR-Z/MB-Z)
+
+`check-bundle-budget.mjs` exit 0, todo dentro del presupuesto y del 10 %; baseline regrabado.
+
+| Grupo | Ruta | PF1-Z | DIR-Z/MB-Z | Presupuesto |
+|---|---|---|---|---|
+| workspace | `/agenda` | 175,7 | 175,4 | 180 |
+| workspace | piso del shell (`/reportes`) | 137,7 | **134,9** | 180 |
+| workspace | `/sala` | 157,2 | 155,2 | 180 |
+| workspace | `/cuenta/perfil-publico` (nueva, DIR-3d) | — | 125,6 | 180 |
+| plataforma | máx. `/plataforma/consultorios` · `/plataforma/directorio` (nueva) | 159,7 | 157,5 · 135,3 | 180 |
+| públicas | `/profesionales`, `/profesionales/[nombreId]`, `/consultorios/[slug]` (nuevas) | — | 98,1 | 120 (meta ≤ 100) |
+| públicas | máx. `/forgot` | 116,3 | 109,7 | 120 |
+| turnero | máx. `/c/[slug]/booking` | 118,6 | 112,8 | 135 |
+| portal | máx. `/portal/vincular` | 109,1 | 102,6 | 125 |
+| onboarding | `/onboarding` | 153 | 147 | 160 |
+
+- **`cn` sin `twMerge`** (fixer de bundle de MB): `lib/cn.ts` quedó en `clsx` solo (el árbol no tenía clases de
+  Tailwind en conflicto que `twMerge` resolviera; verificado con los mismos inputs). Sacó tailwind-merge (6,7 kB gz) del
+  piso de todas las rutas: `/agenda` 180,6 → 174,5 en ese momento, shell 137,7 → 134,6 (hoy 134,9). La dependencia
+  sigue en `package.json` sin usos: sacarla pide `npm install` para regenerar el lockfile (si no, `npm ci` de Vercel
+  falla), así que queda para una tanda con instalación.
+- **Directorio:** las 3 rutas son server components sin JS propio (98,1 = el piso público). La barra inferior y el
+  registro del SW suman < 2 kB al workspace y nada a públicas/turnero/portal (MB-D5).
+- **CLS de la agenda (integrador MB-Z):** el 0,16-0,18 a 360/390 en Semana/Lista/Recepción no era el chunk de la vista
+  sino toda la página re-renderizada en el cliente: el `setT` urgente del effect de `TweaksProvider` llegaba al Suspense
+  de `agenda/loading.tsx` todavía deshidratado y React 18 descartaba el HTML del server (visto con un MutationObserver:
+  `.agendaRoot` borrado y recreado). Con la hidratación de Apariencia en `startTransition` (y sin update si no cambió
+  nada) mide **0** en las 6 combinaciones y en el drawer; `/dashboard`, `/pacientes`, `/sala` y `/configuracion` a 390
+  también 0.
 
 ### PF1 (16-oct-2026): antes = baseline de ES4 (`ff858db`), después = PF1-Z
 
@@ -580,7 +612,7 @@ y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entra
 
 - **Piso del shell de `(app)`** (`/reportes`, página vacía): 184,2 → **137,7**. El brief pedía ~130-135: quedan
   react-dom 52,5, el runtime de Next 31,3, el layout 9, framer (`m` + `AnimatePresence`, sin features) 8,4,
-  tailwind-merge 6,7 y el resto del shell. Siguiente palanca, si hace falta: tailwind-merge fuera del shell.
+  tailwind-merge 6,7 y el resto del shell. (tailwind-merge salió del shell en MB-Z: ver «DIR y MB» abajo.)
 - **Qué lo bajó:** PF1.0 (shell sin framer completo ni zod, paneles diferidos, primitivas con portal), PF1.1/PF1.2
   (`motion.` → `m.` en todo el árbol, ⌘K/Apariencia/drawers/caras de Recepción con `next/dynamic`) y en PF1-Z: zod
   fuera del cliente en los módulos compartidos (D-PF5: `bookings-schemas`, `availability-actions-schemas`,

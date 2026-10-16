@@ -1564,7 +1564,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 ### Turnero
 - [ ] Alta nueva: el Titular que atiende aparece en el turnero al prenderlo (nace con su switch en sí); General avisa que el turnero arranca apagado.
 - [ ] Profesional sin «Configuración»: el switch de su propio turnero está en el menú de perfil del dashboard (el avatar); apagado, desaparece de `/c/<slug>/booking`; al recargar el dashboard el switch conserva el valor. Con el turnero del consultorio apagado, el switch está deshabilitado con «Primero el consultorio tiene que prender el turnero.». La Secretaria (sin ficha) no lo ve.
-- [ ] El switch del menú de perfil mide 52×30 (< 44 px): pendiente de PF/MB, no es un bug de PL.
+- [ ] El switch del menú de perfil tiene área táctil de 44 px en el celular (MB-Z-F3).
 
 ## PL-F · UI sin funcionalidad, medio de pago y Soporte para todos (15/16-oct-2026)
 
@@ -1626,8 +1626,8 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Layout (en Chrome, ventana de app o PWA)
 - [ ] **1366×680** y **1024×680**, en Lista y en Flujo, con el sidebar **abierto y cerrado**: sin scroll de página (cada columna scrollea por dentro), la tira de profesionales no se recorta y ninguna fila pierde el nombre del paciente.
-- [ ] A 1024 con sidebar abierto, «Por cobrar» puede cortar nombres largos (abierto, va a PF/MB): anotar si molesta.
-- [ ] **390** (móvil): una sola columna, el estado no tapa el nombre y las acciones bajan a su propia fila; los ítems del menú de acciones tienen 44 px de alto. (El sidebar todavía no tiene modo móvil: abierto, MB.)
+- [ ] A 1024 con sidebar abierto, «Por cobrar» muestra los nombres largos en 2 líneas o apellido + inicial con el nombre entero al pasar el mouse (PF1.1).
+- [ ] **390** (móvil): una sola columna, el estado no tapa el nombre y las acciones bajan a su propia fila; los ítems del menú de acciones tienen 44 px de alto.
 
 ### Recepción de la agenda
 - [ ] `/agenda?view=reception` en un día **pasado**: ninguna fila dice «Demorado» y los contadores no se ponen en ámbar (G1).
@@ -1682,7 +1682,7 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 
 ### Layout
 - [ ] **390**: búsqueda de 16 px (no hace zoom), botones del header de 44 px, tipo de nota de 44 px; el Drawer ocupa la pantalla.
-- [ ] **1024** con sidebar abierto: perfil y editor sin scroll horizontal (el detalle de Seguimiento todavía no es responsive: abierto, PF/MB).
+- [ ] **1024** con sidebar abierto: perfil y editor sin scroll horizontal; el detalle de Seguimiento también (PF1.2), y a 390 cada ejercicio va en 2 líneas (MB-1d).
 - [ ] **1366**: la línea de tiempo agrupa nota y sesión del mismo turno.
 
 ## VX · Cara pública y cimientos visuales (15/16-oct-2026)
@@ -1866,5 +1866,89 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Diálogo de confirmación: Tab no se escapa del diálogo (foco atrapado) y Esc lo cierra devolviendo el foco.
 - [ ] Perfil → hero y pestaña Turnos: los botones que navegan son links (clic medio abre otra pestaña); no hay `<button>` dentro de `<a>`.
 - [ ] Con un drawer abierto, un diálogo de confirmación queda por encima del fondo del drawer; ⌘K abierto con un Modal queda por debajo del Modal.
-- [ ] Conocido (abierto, MB): un toast tapa el encabezado del drawer abierto.
+- [ ] Con un drawer abierto, un toast sale arriba a la izquierda (≥ 768) o sobre el pie del drawer (< 768) y no tapa su encabezado (MB).
 
+## DIR · Directorio público (16-oct-2026, DIR-Z)
+
+> **Migración M11** (orden de prod en [RUNBOOK «M11 en prod»](MIGRACIONES-RUNBOOK.md)). Con `next build && next start`,
+> `TZ=UTC`. La base local no tiene consultorios publicados: armar uno en `preview` (Configuración → Directorio + un
+> perfil publicado). Diseño en ADR-023, seguridad en [SECURITY §22](SECURITY.md), abiertos en [AUDIT «DIR y MB»](AUDIT.md).
+
+### Modos
+- [ ] `DIRECTORY_MODE` sin setear (= `off`): `/profesionales`, `/profesionales/<x>` y `/consultorios/<slug>` dan 404 genérico **sin** el marco del directorio; sitemap y robots como antes; la landing sin «Buscá un profesional».
+- [ ] `preview`: las 3 rutas responden; `view-source` con `<meta name="robots" content="noindex, nofollow">`; no están en `/sitemap.xml`; la landing no las linkea.
+- [ ] `public`: indexables, en el sitemap (consultorios y perfiles publicados) y con el link en la landing. Antes: revisión legal del texto de consentimiento (DIR-D20).
+- [ ] Cambiar de modo y redeployar: las fichas ya generadas toman el modo nuevo (sin redeploy pueden seguir hasta 10 min).
+- [ ] `node scripts/smoke-directory.mjs <url> --mode=preview --alias=<slugViejo> --listed=<slugListado>`: todo OK (alias → 308 al slug nuevo; ficha listada 200).
+
+### Consentimiento y perfil público (`/cuenta/perfil-publico`)
+- [ ] Como profesional que atiende en ≥ 1 consultorio: el nombre público viene prellenado con el nombre (nunca el email); guardar sin publicar no aparece en el directorio.
+- [ ] Publicar exige tildar el consentimiento (texto `2026-10-v1`); aparece en `/profesionales` en el próximo request.
+- [ ] Retirar el consentimiento: deja de verse en el próximo request (ficha 404, fuera del listado y de la página del consultorio).
+- [ ] Nombre con «@», matrícula MP sin provincia o bio de más de lo permitido: rebota con el mensaje del campo.
+- [ ] Cambiar el número de matrícula borra el «verificada».
+- [ ] Quien no atiende en ningún consultorio no ve la entrada del menú (o ve el aviso «es para quienes atienden»). Conocido: un Titular/Admin que atiende solo en otro consultorio no ve la entrada (abierto).
+- [ ] Cuenta deshabilitada por Plataforma: sale del directorio enseguida (aunque no pueda entrar a retirarse).
+- [ ] Sin 2FA verificada (si está prendida): no deja publicar ni guardar.
+
+### Configuración → Directorio (consultorio)
+- [ ] Como Titular con `DIRECTORY_MODE=preview`: prender «Aparecer en el directorio», descripción y especialidades (≤ 5 por profesional, sub-pestaña Especialidades); la página `/consultorios/<slug>` aparece.
+- [ ] Como Soporte de Plataforma: ve la pestaña pero no puede cambiar la publicación (mensaje «Soporte no puede…»).
+- [ ] Sedes: el select de provincia guarda y la página del consultorio muestra ciudad y provincia; editar una sede actualiza el directorio enseguida.
+- [ ] Un consultorio listado sin profesionales publicados tiene su página con «Ver todos en el turnero» y no aparece en `/profesionales`.
+- [ ] Turnero apagado, consultorio suspendido u oculto por Plataforma: fuera del directorio.
+
+### Páginas públicas
+- [ ] `/profesionales`: filtros por provincia, ciudad, especialidad y cobertura; orden alfabético; paginado; sin emails, precios ni puntajes en el HTML ni en `view-source`.
+- [ ] Ficha de profesional: título y matrícula (badge «verificada» solo si Plataforma la verificó), consultorios con «Sacar turno» que abre el turnero con ese profesional elegido (`?pro=`).
+- [ ] Ficha de consultorio: descripción, sedes, teléfono y WhatsApp (sin email), profesionales publicados.
+- [ ] Un slug que existe pero no está publicado da el mismo 404 que uno inexistente.
+- [ ] Slug viejo de un consultorio que cambió de slug → redirige al nuevo (308), sin 500.
+- [ ] JSON-LD (`MedicalClinic`/`Person`) válido en el validador de schema.org; sin matrícula ni email.
+- [ ] 360, 390, 768, 1024×768, 1366×768 y 1728: sin scroll horizontal; canonical y OG correctos.
+
+### Plataforma → Directorio (moderación)
+- [ ] Ocultar un consultorio o un perfil con motivo corto: rebota; con motivo válido: desaparece del directorio enseguida; queda auditado.
+- [ ] Editar el motivo; mostrar de nuevo; verificar / quitar verificación de matrícula; filtro «sin verificar».
+- [ ] A 360: la lista se usa sin scroll horizontal.
+
+## MB · Mobile 100 % y PWA (16-oct-2026, MB-Z)
+
+> Sin migración. Con `next build && next start` (el SW no se registra en `next dev`). Teléfono real para instalar,
+> swipe y teclado. Diseño de la PWA en ADR-022; interruptor `NEXT_PUBLIC_PWA` en [EXTERNAL-CONFIG §0.7](EXTERNAL-CONFIG.md);
+> abiertos en [AUDIT «DIR y MB»](AUDIT.md).
+
+### Instalar la app (PWA)
+- [ ] **Android** (Chrome): menú → «Instalar app» (o el aviso del navegador); abre en `/dashboard` sin barra del navegador; ícono y nombre correctos.
+- [ ] **iOS** (Safari): Compartir → «Agregar a inicio»; abre a pantalla completa; la barra inferior respeta el indicador de inicio (safe area).
+- [ ] **macOS**: Safari «Archivo → Agregar al Dock» y Chrome «Instalar KineSoft»; abre en ventana propia.
+- [ ] **Windows**: Edge/Chrome «Instalar esta aplicación»; abre en ventana propia y se puede anclar a la barra de tareas.
+- [ ] Después de un deploy nuevo, la app instalada toma la versión nueva en la próxima carga (sin quedar pegada).
+- [ ] Con `NEXT_PUBLIC_PWA=off` + redeploy: en la próxima carga se desregistra el SW (DevTools → Application → Service workers vacío).
+
+### Sin conexión
+- [ ] Modo avión y navegar a otra pantalla: aparece «Sin conexión» (no una pantalla vieja con datos).
+- [ ] DevTools → Application → Cache Storage después de navegar 10 pantallas: solo `ks-sw-v2` con `offline.html` y el ícono (nada de HTML, RSC ni `/api`).
+- [ ] Volver a tener conexión y recargar: la app vuelve normal.
+
+### Barra inferior y navegación (< 768)
+- [ ] Barra inferior fija con las secciones del rol y «Más»; la sección actual marcada; 44 px por ítem.
+- [ ] Con el teclado abierto (buscar paciente, formulario) la barra se oculta y no salta sobre el teclado (iOS).
+- [ ] «Menú» abre el Drawer de navegación; el FAB «Nuevo turno» no tapa contenido ni la barra.
+- [ ] Toasts sobre la barra inferior (o sobre el pie de un drawer abierto), nunca debajo.
+
+### Agenda en el teléfono (390)
+- [ ] Semana como lista por día; Día con swipe a izquierda/derecha **sobre la lista de turnos** para cambiar de día (teléfono real, Chrome Android y Safari).
+- [ ] Toolbar: todos los botones de 44 px (vista, filtros, «Más opciones», candado); el selector de vista no corta «Recepción».
+- [ ] Al cargar Semana, Lista o Recepción nada salta (la leyenda de servicios no sube y baja).
+- [ ] Dar un turno desde el FAB, moverlo, marcar «Llegó» y «Llamar» en Sala, cobrar.
+
+### Resto de las áreas a 390
+- [ ] Buscar un paciente y abrir su perfil (0 interactivos anidados); cargar una evolución.
+- [ ] `/seguimiento/<id>`: cada ejercicio en 2 líneas.
+- [ ] `/sala`: plegar y desplegar secciones; Tablero usable.
+- [ ] Cambiar de consultorio; Configuración → Horarios.
+
+### Escritorio chico (monitores de recepción)
+- [ ] **1366×768** y **1024×768** de pantalla (625 px útiles en el navegador, 695 instalada), con sidebar contraído, expandido y con «Barra superior»: Recepción de la agenda y `/sala` sin scroll del documento; la tira de KPIs de `/sala` siempre a la vista.
+- [ ] Grilla de la agenda a 1366×625: se ven ≥ 6 h sin scroll del documento.

@@ -27,6 +27,11 @@ import base from "@/components/landing/landing.module.css";
  * - Superficie pública (C-F7): sin providers ni framer; lo único cliente es el menú mobile y el form de contacto.
  */
 export const revalidate = 3600;
+// DIR-Z (16-oct, default del orquestador): en Next 14.2 el `app/not-found.tsx` raíz se evalúa en cada render RSC y lee
+// la cookie de sesión, así que sin esto la landing quedaba ƒ (dinámica) pese al `revalidate`. La landing no lee
+// sesión, cookies ni headers: con `force-static` vuelve a ser ISR de 1 h (el precio sale de `getPublicPlanCatalog`,
+// cacheado y con tag `saas-plans`).
+export const dynamic = "force-static";
 
 const TITLE = `${BRAND_NAME} — agenda, turnos online e historia clínica para tu consultorio`;
 const DESCRIPTION =

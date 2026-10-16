@@ -1020,3 +1020,41 @@ acceso `full` al paciente para leer; además `practitionerId` para escribir. Los
   genérico, no «tiene una evolución».
 - 🔴 **Abierto (a6, C0):** un kine que atiende el turno de un paciente de otro kine sin share no puede cargarle la
   evolución (falla cerrado), aunque la UI le ofrezca el toast.
+
+## 22. Directorio público (DIR, 16-oct-2026)
+
+Diseño en [ARCHITECTURE.md ADR-023](ARCHITECTURE.md); migración M11 en [RUNBOOK «M11 en prod»](MIGRACIONES-RUNBOOK.md);
+hallazgos en [AUDIT.md «DIR y MB (16-oct)»](AUDIT.md). Por default **apagado** (`DIRECTORY_MODE` sin setear = `off`,
+[EXTERNAL-CONFIG §0.7](EXTERNAL-CONFIG.md)).
+
+- **Consentimiento por persona (Ley 25.326, DIR-D1/D11).** Aparecer es decisión de cada profesional en
+  `/cuenta/perfil-publico`, no del consultorio: el consultorio solo hace opt-in de su propia página. Publicar guarda
+  `listed`, `consentAt` y `consentVersion` (`2026-10-v1`, texto literal en `lib/directory-constants.ts`) en la MISMA
+  escritura que los campos (lo publicado es lo que se aceptó); retirar = `listed = false` + `consentWithdrawnAt`. El
+  CHECK `ProfessionalPublicProfile_listed_consent_check` de M11 impide en la base un `listed` sin consentimiento
+  vigente. Revisión legal del texto **antes** de `public` (DIR-D20).
+- **SERVICE_ONLY (DIR-D12).** `ProfessionalPublicProfile` no tiene `tenantId` ni hay GUC de usuario: RLS ENABLE + FORCE
+  con **cero policies** (patrón de las tablas de 2FA), así que `kinesoft_app` no la ve con ningún GUC. La barrera es que
+  el `userId` sale **siempre** de la sesión verificada (`getAccessSnapshot`), nunca del input; las actions exigen cuenta
+  no deshabilitada y 2FA no pendiente. Soporte de Plataforma no puede publicar ni retirar por la persona
+  (`DIRECTORY_SUPPORT_DENIED`, DIR-D9).
+- **Sin PII en lo público (DIR-D15/D18/D21).** El snapshot, el HTML de las 3 rutas, el payload RSC y el JSON-LD no llevan
+  emails (ni el público del consultorio), `userId`, `rating`, precios ni datos de pacientes; la matrícula va en el HTML
+  solo si está cargada y nunca en el JSON-LD (escapado contra `</script>` y U+2028). Lo fijan
+  `tests/integration/directory-no-pii.test.ts`, `directory-snapshot.test.ts` y el revisor A de DIR-Z con `curl` contra
+  `next start`. Un consultorio existente sin publicar da un 404 idéntico al de uno inexistente (sin enumeración).
+- **Salida inmediata.** Retiro, ocultamiento, cuenta deshabilitada por Plataforma (DIR-Z M2: el snapshot filtra
+  `user.disabledAt`) o consultorio fuera de condición → fuera en el próximo request (`revalidateTag("global:directory")`
+  después del commit; test `directory-disabled-user`). 404 inmediato, no 410 (DIR-D23).
+- **Sin actions anónimas nuevas.** `lib/directory-internal.ts` es `server-only` y NO `"use server"`. Los `"use server"`
+  del área exigen identidad: `lib/directory-settings.ts` (actor del consultorio) y `lib/public-profile.ts` (sesión
+  verificada, sin actor porque el perfil cruza consultorios), más `lib/platform-directory.ts` (superadmin). El guard
+  `directory-writers` fija escritor único para la moderación.
+- **Moderación de Plataforma** (`lib/platform-directory.ts`, `requirePlatformAdmin("directory.moderate")`, canal
+  service; motivo obligatorio para ocultar). Acciones auditadas en el registro solo inserción de Plataforma:
+  `platform.directory.tenant_hide` · `tenant_show` · `profile_hide` · `profile_show` · `license_verify` ·
+  `license_unverify`. «Verificada» solo la pone Plataforma, y cambiar la matrícula la borra (trigger de M11).
+- 🔴 **Abiertos (baja):** B1 el lookup de alias de slug no tiene caché ni rate limit en el 404 (cada slug nuevo = una
+  lectura por PK; el 404 de ficha sí queda en ISR 600 s); B2 las actions de `lib/public-profile.ts` sin rate limit
+  (sesión + 2FA, solo abuso); usuario deshabilitado por Plataforma **sigue reservable en el turnero** (pre-DIR,
+  `bookablePractitionerWhere` solo mira `Membership.disabledAt`).

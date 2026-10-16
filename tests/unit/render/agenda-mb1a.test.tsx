@@ -196,7 +196,9 @@ describe("[MB-1a] Swipe de día y alto de la agenda (C-MB3 / C-MB4)", () => {
     expect(code).toContain('view === "timeline" || view === "practitioner" || view === "room" || view === "week"');
     const m = media(css, "(min-width: 768px)");
     expect(m).toMatch(/\.agendaRoot\[data-fit\] \{\s*height: calc\(100vh - 30px\);\s*height: calc\(100dvh - 30px\);/);
-    expect(m).toMatch(/\.agendaRoot\[data-fit\]\[data-chrome="topbar"\] \{\s*height: calc\(100vh - 112px\);\s*height: calc\(100dvh - 112px\);/);
+    // MB-Z: con «Barra superior» descuenta el alto MEDIDO de la barra (`--k-topbar-h`, 94 por defecto) + 18 de `main`:
+    // el 112 fijo dejaba 41 px de scroll a 1366/1024, donde el menú pasa a dos líneas.
+    expect(m).toMatch(/\.agendaRoot\[data-fit\]\[data-chrome="topbar"\] \{\s*height: calc\(100vh - var\(--k-topbar-h\) - 18px\);\s*height: calc\(100dvh - var\(--k-topbar-h\) - 18px\);/);
   });
 
   it("«Por profesional»/«Por sala» < 768: grilla acotada con scroll interno y overscroll contenido", () => {

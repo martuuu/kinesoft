@@ -77,10 +77,16 @@
   color: var(--navy-300);
 }
 
-/* Botones del pie con forma de ítem (Apariencia, Cerrar sesión): sin el `all: unset` de antes, que borraba el foco. */
+/* Botones del pie con forma de ítem (Apariencia, Cerrar sesión): sin el `all: unset` de antes, que borraba el foco.
+   MB-Z-F3 (B1): era `font: inherit`; el shorthand (misma especificidad que `.navItem`, declarado después) pisaba su
+   13,5 px / 500 y estos dos salían con la tipografía del padre. Se hereda solo lo que el UA de `<button>` resetea y
+   `.navItem` no fija (familia, interlineado, tracking); tamaño y peso quedan los del ítem. */
 .navButton {
   appearance: none;
-  font: inherit;
+  font-family: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: left;
   margin: 0;
   border: none;
   background: transparent;

@@ -27,7 +27,7 @@ import { roomNameOf, type BookingDTO } from "../agenda-utils";
 import { ReceptionRow } from "./reception-row";
 import { noteLocalReception } from "@/lib/arrival-local-notes";
 import { useAttendedNoteToast } from "./use-attended-note-toast";
-import { RECEPTION_FIT_MQ, receptionScrollMaxHeight } from "./reception-fit";
+import { RECEPTION_FIT_MQ, measureReceptionBottomGap, receptionScrollMaxHeight } from "./reception-fit";
 
 /**
  * Modo Recepción de la agenda (B4.5, plan §11.3 punto 4): la lista del día de
@@ -142,8 +142,14 @@ export function ReceptionView({
     if (!el || typeof window.matchMedia !== "function") return;
     const mq = window.matchMedia(RECEPTION_FIT_MQ);
     const apply = () => {
+      // MB-Z-F2: lo de abajo se mide (leyenda de la agenda, padding de `main` según Apariencia), no se adivina.
+      const section = sectionRef.current;
       const max = mq.matches
-        ? receptionScrollMaxHeight(window.innerHeight, el.getBoundingClientRect().top + window.scrollY)
+        ? receptionScrollMaxHeight(
+            window.innerHeight,
+            el.getBoundingClientRect().top + window.scrollY,
+            section ? measureReceptionBottomGap(el, section) : undefined
+          )
         : null;
       const next = max == null ? "" : `${max}px`;
       if (el.style.maxHeight !== next) el.style.maxHeight = next;
@@ -153,6 +159,9 @@ export function ReceptionView({
     mq.addEventListener?.("change", apply);
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
     if (sectionRef.current) ro?.observe(sectionRef.current);
+    // La leyenda o el chrome (Apariencia → Barra superior) cambian de alto sin que cambie la sección.
+    const main = sectionRef.current?.closest("main");
+    if (main) ro?.observe(main);
     return () => {
       window.removeEventListener("resize", apply);
       mq.removeEventListener?.("change", apply);
@@ -404,9 +413,16 @@ const RECEPTION_CSS = `
 }
 
 @media (max-width: 639px) {
-  .rcp-counters { gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .rcp-counter { padding: 8px 10px; }
-  .rcp-counter-value { font-size: 18px; }
+  /* MB-Z-F2: a 390 los KPIs 2×2 (~130 px) + los filtros en dos renglones bajaban la 1.ª fila a y≈680, debajo del
+     pliegue. Ahora los KPIs son una franja de una línea («rótulo valor») y los filtros una fila; las dos scrollean de
+     costado si no entran (los chips son botones: el foco los trae a la vista). */
+  .rcp { gap: 8px; }
+  .rcp-counters { display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .rcp-counter { flex: 0 0 auto; display: flex; align-items: baseline; gap: 6px; padding: 6px 10px; }
+  .rcp-counter-label, .rcp-counter-hint { white-space: nowrap; }
+  .rcp-counter-value { font-size: 16px; }
+  .rcp-filters { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .rcp-chip { flex-shrink: 0; }
   .rcp-table, .rcp-table tbody { display: block; }
   .rcp-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   /* G8 (VX0-b): card de 2 líneas, «hora + paciente» arriba y «servicio · profesional · estado · espera» abajo, con

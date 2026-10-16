@@ -72,6 +72,7 @@ export function RoomFilter({
             tabIndex={on ? 0 : -1}
             aria-label={o.count == null ? undefined : `${o.label}, ${o.count} ${o.count === 1 ? "turno" : "turnos"}`}
             data-room={o.key}
+            className="k-tap-m"
             title={o.label}
             onClick={() => select(o.key)}
             onKeyDown={(e) => {

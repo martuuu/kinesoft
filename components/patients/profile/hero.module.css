@@ -1,0 +1,9 @@
+/* MB-Z-F3 (B3): acciones del perfil del paciente (Agregar turno, Compartir, Enviar al portal, Editar, Archivar, «Ver
+   plan» de Resumen y Sesiones). Son `Button` con `padding: 8px 14px` inline y a 390 medían 36 px de alto. Una media
+   query no pisa un `style`, pero `min-height` no compite con el padding: alcanza esta clase. En escritorio no define
+   nada (densidad del hero igual). */
+@media (max-width: 767px) {
+  .action {
+    min-height: 44px;
+  }
+}

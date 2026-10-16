@@ -15,6 +15,7 @@ import type { AgendaHighlight } from "@/lib/agenda-highlight";
 import { BookingCard, type BookingCardSizing } from "../grid/booking-card";
 import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
 import { denseOverflow, overflowButtonText, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
+import viewStyles from "./views.module.css";
 
 /** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
 export type PractitionerInitialsMap = Readonly<Record<string, { initials: string; name: string }>>;
@@ -162,6 +163,7 @@ export function TimelineView({
       type="button"
       onClick={() => setShowAllRows(true)}
       data-fold
+      className={viewStyles.dayFold}
       style={{
         display: "block",
         width: "100%",
@@ -290,7 +292,7 @@ function SlotRow({
       <button
         onClick={create}
         aria-label={`Nuevo turno ${label}`}
-        className="k-mono"
+        className={`k-mono ${viewStyles.slotLabel}`}
         style={{
           width: 48,
           flexShrink: 0,
@@ -337,6 +339,7 @@ function SlotRow({
               highlight={highlight}
               compact={compact}
               sizing={timelineCardSizing}
+              className={viewStyles.dayCard}
               showEnd
               practitioner={practitionerById?.[b.practitionerId] ?? null}
               room={cardRoom(roomById, b)}
@@ -389,6 +392,7 @@ function SlotRow({
           <button
             onClick={create}
             aria-label={`Nuevo turno ${label}`}
+            className={viewStyles.slotFiller}
             style={{
               flex: `1 1 40px`,
               maxWidth: CARD_MAX,
@@ -511,6 +515,7 @@ function OutOfRangeRow({
             highlight={highlight}
             compact={compact}
             sizing={timelineCardSizing}
+            className={viewStyles.dayCard}
             showEnd
             practitioner={practitionerById?.[b.practitionerId] ?? null}
             room={cardRoom(roomById, b)}

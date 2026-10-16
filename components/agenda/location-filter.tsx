@@ -24,6 +24,7 @@ export function LocationFilter({
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
       aria-label="Filtrar por sede"
+      className="k-tap-m"
       style={{
         height: 36,
         padding: "0 12px",

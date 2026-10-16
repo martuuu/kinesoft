@@ -49,7 +49,7 @@ import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { DIRECTORY_CONSENT_TEXT, DIRECTORY_CONSENT_VERSION } from "@/lib/directory-constants";
 import { modulesFor } from "@/lib/tenant-modules";
-import type { MyPublicProfile } from "@/lib/public-profile";
+import type { MyPublicProfile } from "@/lib/public-profile-types";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 const unescape = (html: string) =>

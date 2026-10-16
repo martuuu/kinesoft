@@ -95,7 +95,7 @@ export function ViewOptionsMenu({
         onFocus={preloadAlertControls}
         aria-haspopup="true"
         aria-expanded={open}
-        className="k-glass"
+        className="k-glass k-tap-m"
         style={{
           height: 36,
           padding: "0 12px",
@@ -156,6 +156,7 @@ export function ViewOptionsMenu({
                   key={d}
                   type="button"
                   onClick={() => setDensity(d)}
+                  className="k-tap-m"
                   style={{
                     flex: 1,
                     padding: "6px 10px",
@@ -196,6 +197,7 @@ export function ViewOptionsMenu({
                       role="radio"
                       aria-checked={on}
                       onClick={() => setZoom(z)}
+                      className="k-tap-m"
                       style={{
                         flex: 1,
                         padding: "6px 10px",
@@ -238,6 +240,7 @@ export function ViewOptionsMenu({
                       role="radio"
                       aria-checked={on}
                       onClick={() => setPlanScope(sc)}
+                      className="k-tap-m"
                       style={{
                         flex: 1,
                         padding: "6px 8px",

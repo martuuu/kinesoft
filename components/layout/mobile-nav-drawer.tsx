@@ -11,6 +11,8 @@
  * DIR-3d (C-DIR9): «Mi perfil público» al pie, solo para quien atiende (misma regla que el menú de cuenta,
  * `showsPublicProfileEntry`; acá «atiende en el activo» = `clinical.read` en sus caps, que soporte nunca tiene). `<a>`
  * y no `next/link`: `/cuenta/*` está fuera de `(app)` (navegación dura, como «Seguridad de la cuenta»).
+ * MB-Z-F3 (B2): va DENTRO del pie (`footerExtra`), antes de Apariencia y Cerrar sesión; montado después del
+ * `SidebarBody` quedaba debajo de «Cerrar sesión».
  */
 import { Drawer } from "@/components/ui/drawer";
 import type { Capability } from "@/lib/capabilities";
@@ -44,6 +46,14 @@ export function MobileNavDrawer({
           caps={caps}
           onNavigate={onClose}
           animatedPill={false}
+          footerExtra={
+            showPublicProfile ? (
+              <a href={PUBLIC_PROFILE_HREF} className={`${styles.navItem} ${styles.navItemExpanded}`} onClick={onClose}>
+                <IconUsers size={18} />
+                <span>Mi perfil público</span>
+              </a>
+            ) : null
+          }
           onOpenAppearance={
             onOpenAppearance
               ? () => {
@@ -54,12 +64,6 @@ export function MobileNavDrawer({
               : undefined
           }
         />
-        {showPublicProfile && (
-          <a href={PUBLIC_PROFILE_HREF} className={`${styles.navItem} ${styles.navItemExpanded}`} onClick={onClose}>
-            <IconUsers size={18} />
-            <span>Mi perfil público</span>
-          </a>
-        )}
       </div>
     </Drawer>
   );

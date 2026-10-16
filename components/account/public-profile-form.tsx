@@ -28,7 +28,8 @@ import { Tag } from "@/components/ui/tag";
 import { FormField } from "@/components/ui/form-field";
 import { useConfirm, type ConfirmOptions } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { publishPublicProfile, savePublicProfile, withdrawPublicProfile, type MyPublicProfile } from "@/lib/public-profile";
+import { publishPublicProfile, savePublicProfile, withdrawPublicProfile } from "@/lib/public-profile";
+import type { MyPublicProfile } from "@/lib/public-profile-types";
 import {
   DIRECTORY_CONSENT_TEXT,
   DIRECTORY_CONSENT_VERSION,

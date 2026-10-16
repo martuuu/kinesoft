@@ -27,8 +27,7 @@
       max(4px, env(safe-area-inset-left, 0px));
     /* `k-glass-strong` trae borde en los 4 lados y sombra de tarjeta: acá es un borde de pantalla, solo arriba. */
     border: none;
-    /* El token `--line` de C-MB1 no existe en globals.css: mismo gris de los separadores del sidebar. */
-    border-top: 1px solid rgba(15, 30, 51, 0.08);
+    border-top: 1px solid var(--line);
     border-radius: 0;
     box-shadow: 0 -6px 20px rgba(31, 79, 190, 0.08);
   }

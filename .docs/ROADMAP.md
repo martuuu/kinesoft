@@ -22,7 +22,7 @@
 > [AUDIT.md §Ronda 24](AUDIT.md). Prod tiene **datos demo** y no hay staging ni reset: cada migración va incremental con
 > precheck → backup → `db:prod:deploy` ([MIGRACIONES-RUNBOOK.md](MIGRACIONES-RUNBOOK.md)).
 
-**Orden (decisión 17 de Martin):** 0 → PL → EV2 → VX → ES4 → PF → DIR.
+**Orden (decisión 17 de Martin):** 0 → PL → EV2 → VX → ES4 → PF → DIR (+ MB, sumado al final). **Todo ✅ al 16-oct.**
 
 | # | Bloque | Qué incluye | Migración |
 |---|---|---|---|
@@ -32,7 +32,8 @@
 | 3 | **VX** Cara pública ✅ | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
 | 4 | **ES4** Portal (P4) ✅ | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
 | 5 | **PF** Performance + pulido ✅ | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
-| 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
+| 6 | **DIR** Directorio ✅ | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
+| 7 | **MB** Mobile 100 % + PWA ✅ | Barra inferior, layouts mobile-first por área, escritorio chico (1366/1024 × 625/695), PWA instalable sin caché de datos | — |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
 
 **Estado de PL (16-oct): PL ✅ completo (PL-A..PL-Z) y PL-F ✅.** Commiteados: PL-A (`68b26f0`) · PL-0 M8 (`6b1c50d`) ·
@@ -55,8 +56,8 @@ prender el cobro.
 **RX ✅ (15/16-oct) — Escritorio de Recepción** (§20.19): `/sala` con tres caras elegibles en Apariencia → Recepción
 (Tablero, Lista y panel, Flujo; ADR-019), sin migración (`agendaPrefs.receptionLayout`), `useSalaLive` compartido,
 token `--now-line`, Recepción de la agenda sin demora fuera de hoy (G1) y con link al escritorio. RX-0 (`a762130`) y
-RX-1 (`ee97af3`) y RX-2 + RX-Z (`a5ca20a`) commiteados ([QA «RX»](QA.md), [AUDIT «RX»](AUDIT.md)). Abiertos:
-nombres de «Por cobrar» cortados a 1024 con sidebar (PF/MB) y sidebar sin modo móvil (MB).
+RX-1 (`ee97af3`) y RX-2 + RX-Z (`a5ca20a`) commiteados ([QA «RX»](QA.md), [AUDIT «RX»](AUDIT.md)). Los dos abiertos
+de entonces (nombres de «Por cobrar» a 1024 y sidebar sin modo móvil) se cerraron en PF1.1 y MB.
 Decisiones RX con default (para Martin):
 - **RX-D1** dónde vive: `/sala` con tres caras; `/agenda?view=reception` queda.
 - **RX-D2** cara por defecto: Tablero para todos. *Recomendado:* después del QA, «Lista y panel» para quien tiene
@@ -76,8 +77,8 @@ ADR-020). Pestaña «Evoluciones» en el perfil (la curva pasa a «EVA»), fila 
 evolución» al marcar «Atendido» (agenda, Recepción), Seguimiento con «Registrar sesión» + «Cargar evolución»,
 impresión auditada y export del consultorio con HC. Commiteados EV2-0 (`8e3e9f6`), EV2-1 (`5e11c95`), EV2-2
 (`1597903`), EV2-3 (`55042c5`), EV2-Z (`9827545`) ([QA «EV2»](QA.md), [AUDIT «EV2»](AUDIT.md)). **Prod:** M9
-antes del deploy (RUNBOOK «M9 en prod»). Abiertos: a6 (C0, decide Martin), detalle de Seguimiento a 1024 (PF/MB),
-Drawer/Modal sin portal (PF), `updateBooking` en perf (PF). El borde de `KindTag` lo cerró VX F-b2.
+antes del deploy (RUNBOOK «M9 en prod»). Abierto: a6 (C0, decide Martin); el detalle de Seguimiento
+(PF1.2 + MB-1d), Drawer/Modal sin portal y `updateBooking` en perf se cerraron en PF/MB. El borde de `KindTag` lo cerró VX F-b2.
 Decisiones EV2 con default (para Martin; las EV2-D1..D12 son suyas, §20.11):
 - **EV2-D13** un turno ausente tampoco admite evolución (igual que cancelado).
 - **EV2-D14** enmienda: cualquier profesional con escritura sobre el paciente, sin límite de tiempo, solo sobre una
@@ -174,9 +175,24 @@ Gate completo verde (dos roles). Números y TTFB en [PERF.md §PF2](PERF.md); ab
 (el título del perfil bloquea su esqueleto: decide Martin; tx en serie del layout); checklist en [QA §PF2](QA.md).
 M10 sigue siendo la única migración de PF (orden en el RUNBOOK, antes del deploy).
 
-**Siguiente:** **DIR** (directorio público, M11) → **MB**. De ES4 siguen: EXPLAIN de `listOpenSessions` (18
-sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`);
-`vx-formfield-densidad` sigue abierta.
+**DIR ✅ + MB ✅** (16-oct; DIR-1 M11 `b45be05`, DIR-2 + MB-0 `86337d9`, DIR-3 + MB-1 `943ea90`, DIR-Z/MB-Z parte 1
+`74ff0f9`; fixers e integrador sin commitear). **Única migración: M11**, aplicada solo en local. Directorio con
+consentimiento por persona (SERVICE_ONLY), snapshot global con tag `global:directory`, fichas `force-static` + ISR,
+moderación en Plataforma → Directorio, `/cuenta/perfil-publico`; apagado por default (`DIRECTORY_MODE`). Mobile:
+barra inferior fija, Semana como lista por día, swipe de Día, FAB, 44 px en la toolbar, Recepción y `/sala` sin scroll
+en monitores bajos, CLS 0 en la agenda a 360/390; PWA instalable (`ks-sw-v2`, solo «Sin conexión», interruptor
+`NEXT_PUBLIC_PWA`). Gate completo verde ([AUDIT §Ronda 29](AUDIT.md)); ADR-022/023; [QA «DIR» y «MB»](QA.md);
+abiertos en [AUDIT «DIR y MB»](AUDIT.md) (alias/ficha sin verificar con datos, backlog < 44 px, tablas de Plataforma,
+rate limits B1/B2, usuario deshabilitado reservable en el turnero).
+
+**Orden de prod de todo lo pendiente:** M8 → M8b → M8c → M9 → M10 → M11 → deploy con `DIRECTORY_MODE` sin setear
+([RUNBOOK](MIGRACIONES-RUNBOOK.md)).
+
+**Siguiente:** QA manual de Martin ([QA «DIR» y «MB»](QA.md), más las secciones pendientes de PL/EV2/VX/ES4/PF) y
+**push cuando Martin decida** (Vercel deploya `main` y auto-migra: precheck → backup antes). Después: `DIRECTORY_MODE=
+preview` → revisión legal del consentimiento → `public`. De ES4 siguen: EXPLAIN de `listOpenSessions` (18 sentencias),
+check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`); `vx-formfield-densidad` sigue
+abierta.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,

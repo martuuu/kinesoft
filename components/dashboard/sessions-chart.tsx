@@ -124,6 +124,7 @@ export function SessionsChart({
                 key={r.value}
                 type="button"
                 aria-pressed={on}
+                className={styles.rangeBtn}
                 onClick={() => setRangeAndFetch(r.value)}
                 style={{
                   position: "relative",

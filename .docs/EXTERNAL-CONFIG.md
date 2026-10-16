@@ -209,6 +209,14 @@ corre. Un superadmin no puede resetear la 2FA de otro superadmin (recuperación:
    termina en «Ese método de ingreso no está disponible por ahora».
 7. La CSP ya permite `www.facebook.com`/`m.facebook.com` en `form-action` y el avatar de `platform-lookaside.fbsbx.com`.
 
+### 0.7 Directorio y PWA (DIR + MB, 16-oct-2026) 🔴
+
+| Qué | Dónde | Cuándo |
+|---|---|---|
+| `DIRECTORY_MODE` | Vercel → Production | **Sin setear = `off`** (default seguro, DIR-D2): `/profesionales` y `/consultorios/*` dan 404 y sitemap, robots y landing quedan como antes de DIR. `preview`: las rutas responden con `noindex, nofollow`, fuera del sitemap y sin link en la landing (para revisar con el link). `public`: indexables, en el sitemap y con «Buscá un profesional» en la landing. Cualquier otro valor lo rechaza el boot (`lib/env.ts`); en runtime cae a `off`. Se lee en cada request, pero las páginas son ISR: al cambiar de modo, **redeploy** (si no, una ficha ya generada puede seguir sirviéndose hasta 10 min). Pasar a `public` **después** de M11 en prod, de revisar en `preview` y de la **revisión legal del texto de consentimiento** (DIR-D20) |
+| `NEXT_PUBLIC_PWA` | Vercel → Production | **Sin setear = prendido**: el workspace y Plataforma registran `/sw.js` (instalable; offline muestra «Sin conexión», nada de datos en caché, ADR-022). `off` es el **interruptor de emergencia** (MB-D6): en la próxima carga desregistra todos los service workers. Es `NEXT_PUBLIC_*`: se inlinea en el build, así que cambiarlo **requiere redeploy** |
+| Instalar la app | Teléfono / PC real | QA manual de [QA.md «MB»](QA.md): Android (Chrome «Instalar app»), iOS (Safari → Compartir → «Agregar a inicio»), macOS (Safari «Agregar al Dock» / Chrome) y Windows (Edge/Chrome). No se promociona hasta el cambio de dominio (MB-D9): una PWA instalada en el dominio viejo no migra |
+
 ### 1. Hosting / plataforma de despliegue — Vercel
 - **Qué configura:** proyecto en Vercel (región `gru1` ya fijada en `vercel.json`); env vars de prod;
   branch protection en `main` exigiendo el check de CI como required; `KINESOFT_ALLOW_DEMO_ACTOR`

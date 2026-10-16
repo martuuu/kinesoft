@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_IN_OUT, EASE_OUT } from "@/lib/motion";
 import { useToast } from "@/components/ui/toast";
+import { useTweaksOptional } from "@/components/layout/tweaks-context";
 import { IconBell, IconCal, IconPlus } from "@/components/ui/icons";
 import { updateAgendaViewPrefs } from "@/lib/preferences";
 import { SALA_COPY, boardCounters, buildBoard, filterByQuery } from "@/lib/sala-board-state";
@@ -33,6 +34,8 @@ import { salaDayLabel } from "./sala-day-label";
  *   cambia de estado se desliza a su banda (`changes` → `rowTransition`).
  */
 export function SalaBoardFace({ live, initialGroupBy }: { live: SalaLiveWithBoard; initialGroupBy: SalaGroupBy }) {
+  // Fuera del provider (render tests del Tablero): sin chrome, como siempre.
+  const chrome = useTweaksOptional()?.t?.dashChrome === "topbar" ? "topbar" : undefined;
   const toast = useToast();
   const { dayKey, clock, loading, rows, practitioners, rooms, viewer, call } = live;
   const [groupBy, setGroupBy] = useState<SalaGroupBy>(initialGroupBy);
@@ -83,7 +86,9 @@ export function SalaBoardFace({ live, initialGroupBy }: { live: SalaLiveWithBoar
   const waitingForDay = loading && rows.length === 0;
 
   return (
-    <div className="sala">
+    // MB-Z-F2: con «Barra superior» (Apariencia) el alto fijo del monitor bajo descuenta la barra (sala-css). La tweak
+    // arranca en «sidebar» en el server y en el cliente y se hidrata de localStorage en un effect: sin mismatch.
+    <div className="sala" data-chrome={chrome}>
       <style>{SALA_CSS}</style>
 
       {/* Bloque sticky: header + banda de llamado colgada como overlay (A2):

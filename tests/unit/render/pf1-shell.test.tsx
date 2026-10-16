@@ -248,7 +248,8 @@ describe("[PF1.0-a] mobile clase A (S1) y sidebar (S3, S4)", () => {
     expect(css).toMatch(/\.mobileBar\s*\{\s*display:\s*none;\s*\}/);
     const appShell = src("components/layout/app-shell.tsx");
     expect(appShell).toMatch(/<Sidebar\s+className=\{styles\.desktopOnly\}/);
-    expect(appShell).toMatch(/<div className=\{styles\.desktopOnly\}>\s*<TopBar/);
+    // MB-Z: el wrapper lleva además el ref que mide la barra (`--k-topbar-h`).
+    expect(appShell).toMatch(/<div ref=\{topbarRef\} className=\{styles\.desktopOnly\}>\s*<TopBar/);
     // Táctil: los botones de la barra móvil miden 44 px como mínimo.
     expect(css).toMatch(/\.mobileButton\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/);
   });

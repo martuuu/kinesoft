@@ -46,10 +46,49 @@
   transform: translateX(22px);
 }
 
+/* MB-Z-F3 (B3): bajo 768 la CAJA del botón pasa a 52×44 (el `::before` de arriba daba el área, pero la caja seguía
+   en 52×30 y así la miden la revisión y las herramientas de accesibilidad). El dibujo no cambia: la pista de 52×30 la
+   pinta el `::before` centrado (7 + 30 + 7) y la perilla baja 7 px (3 → 10). El anillo de foco va sobre la pista,
+   no sobre la caja de 44. Escritorio: nada de esto aplica. */
+@media (max-width: 767px) {
+  .switch {
+    height: 44px;
+  }
+  /* También el encendido: `.switch[aria-checked]` de arriba pesa más que `.switch` y pintaría la caja de 44. */
+  .switch,
+  .switch[aria-checked="true"] {
+    background: transparent;
+  }
+  .switch::before {
+    inset: 7px 0;
+    border-radius: 999px;
+    background: rgba(15, 30, 51, 0.18);
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .switch[aria-checked="true"]::before {
+    background: var(--sky-700);
+  }
+  .switch:focus-visible {
+    box-shadow: none;
+  }
+  .switch:focus-visible::before {
+    box-shadow: var(--focus-ring);
+  }
+  .thumb {
+    top: 10px;
+  }
+}
+
 /* reducedMotion: el estado final (color y posición del círculo) se ve completo sin transición. */
 @media (prefers-reduced-motion: reduce) {
   .switch,
   .thumb {
+    transition: none;
+  }
+}
+/* La pista de < 768 (`::before`) también, aparte: el bloque de arriba lo fija `primitives-pf.test.tsx` literal. */
+@media (prefers-reduced-motion: reduce) {
+  .switch::before {
     transition: none;
   }
 }

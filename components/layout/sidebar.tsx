@@ -21,7 +21,7 @@ import {
   IconPalette,
   IconPlans,
 } from "@/components/ui/icons";
-import { useCallback, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType, type FocusEvent, type PointerEvent, type ReactNode } from "react";
 import { navFor, type NavIconKey, type NavItem } from "@/lib/nav";
 import type { Capability } from "@/lib/capabilities";
 import type { TenantModule } from "@/lib/tenant-modules";
@@ -224,6 +224,7 @@ export function SidebarBody({
   onPreloadAppearance,
   onNavigate,
   animatedPill = true,
+  footerExtra,
 }: SidebarProps & {
   /** Drawer móvil: cerrar al tocar un destino. */
   onNavigate?: () => void;
@@ -233,6 +234,11 @@ export function SidebarBody({
    * entre sí.
    */
   animatedPill?: boolean;
+  /**
+   * MB-Z-F3 (B2): ítems extra del pie, antes de Apariencia y Cerrar sesión (el Drawer móvil pone «Mi perfil
+   * público»). Antes iban después del `SidebarBody` y quedaban debajo de «Cerrar sesión».
+   */
+  footerExtra?: ReactNode;
 }) {
   const pathname = usePathname();
   const search = useSearchParams();
@@ -335,6 +341,7 @@ export function SidebarBody({
             tip={bind(config.label)}
           />
         )}
+        {footerExtra}
         {onOpenAppearance && (
           <button
             type="button"

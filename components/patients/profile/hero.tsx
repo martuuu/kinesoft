@@ -24,6 +24,7 @@ import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { PortalRequestBanner } from "./portal-request-banner";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
 
+import heroStyles from "./hero.module.css";
 /** PF1.1 (C-PF2): «Editar paciente» diferido; `preloadEditPatient` lo baja en hover/foco del botón. */
 const loadEditPatient = () => import("./edit-patient-drawer");
 function preloadEditPatient() {
@@ -232,7 +233,7 @@ export function PatientAdminHero({
         </div>
         {canBook && (
           // PF1-Z-F2: un solo <a> con aspecto de botón (antes <Link><Button/></Link>: <button> dentro de <a>).
-          <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+          <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" className={heroStyles.action} style={{ fontSize: 12, padding: "8px 14px" }}>
             <IconPlus size={12} /> Agregar turno
           </ButtonLink>
         )}
@@ -324,7 +325,7 @@ function PatientHeroActions({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" style={{ fontSize: 12, padding: "8px 14px" }}>
+        <ButtonLink href={`/agenda?new=1&patient=${patient.id}`} variant="primary" className={heroStyles.action} style={{ fontSize: 12, padding: "8px 14px" }}>
           <IconPlus size={12} /> Agregar turno
         </ButtonLink>
         <SharePatientButton
@@ -335,6 +336,7 @@ function PatientHeroActions({
         <Button
           variant="ghost"
           onClick={sendToPortal}
+          className={heroStyles.action}
           disabled={portalSending || !patient.email}
           title={patient.email ? "Invitar al paciente al portal" : "Cargá un email primero"}
           style={{ fontSize: 12, padding: "8px 14px" }}
@@ -344,6 +346,7 @@ function PatientHeroActions({
         <Button
           variant="ghost"
           onClick={onEdit}
+          className={heroStyles.action}
           onPointerEnter={preloadEditPatient}
           onFocus={preloadEditPatient}
           style={{ fontSize: 12, padding: "8px 14px" }}
@@ -353,6 +356,7 @@ function PatientHeroActions({
         <Button
           variant="ghost"
           onClick={toggleArchive}
+          className={heroStyles.action}
           disabled={archiving}
           title={
             isArchived

@@ -73,6 +73,8 @@ export function DayLockButton({
       aria-label={label}
       aria-haspopup="dialog"
       data-lock-status={status}
+      // MB-Z-F2: 44 px de área táctil bajo 768 (`.k-tap-m`, globals.css). El `min-*` le gana al `height` inline de 24/28.
+      className="k-tap-m"
       style={{
         display: "inline-flex",
         alignItems: "center",

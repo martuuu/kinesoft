@@ -17,6 +17,7 @@ import {
   getPatientShareList,
 } from "@/lib/patients";
 
+import heroStyles from "./profile/hero.module.css";
 type PractitionerOption = { id: string; name: string };
 
 export function SharePatientButton({
@@ -108,6 +109,7 @@ export function SharePatientButton({
         variant="ghost"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        className={heroStyles.action}
         style={{ fontSize: 12.5 }}
       >
         Compartir

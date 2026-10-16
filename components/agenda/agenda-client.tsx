@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { AnimatePresence } from "framer-motion";
@@ -107,6 +107,8 @@ import { WeekStrip } from "./views/week-strip";
 import { TimelineView } from "./views/timeline-view";
 import { adjacentVisibleDay, createSwipeTracker } from "@/lib/agenda-swipe";
 import viewStyles from "./views/views.module.css";
+import { SsrHold } from "./views/ssr-hold";
+import { agendaViewChunks, agendaViewChunksReady, type AgendaViewChunk } from "./views/view-chunks";
 
 // ── Bundle de /agenda (handoff de B4.3, integrador final de B-pre) ─────────
 // Con B4/B5 el first load de /agenda pasó de 183,8 a 238 kB gz (presupuesto
@@ -141,6 +143,55 @@ const WeekGridView = dynamic(() => import("./views/week-grid-view").then((m) => 
 const ListView = dynamic(() => import("./views/list-view").then((m) => m.ListView));
 // MB-1a: la Semana del celular (lista por día) en su chunk; con SSR, si la vista inicial es Semana llega renderizada.
 const WeekDayList = dynamic(() => import("./views/week-day-list").then((m) => m.WeekDayList));
+// MB-Z-F2: los mismos `import()` de las vistas (el bundler los deduplica con los de `dynamic()`), para saber CUÁNDO
+// llegó cada chunk y tener el módulo a mano. Hasta entonces `SsrHold` deja quieto el HTML del server (CLS, ver
+// `views/view-chunks.ts`). Ya cargado, el cliente dibuja el componente directo (`preferLoaded`): pasar por el
+// `React.lazy` de `next/dynamic` recién ahí volvería a suspender un tick (su `import()` es otra promesa) y mostraría
+// el `fallback={null}` justo en el cambio, el mismo salto que se quiere evitar.
+type ViewModules = {
+  practitioner?: typeof import("./views/practitioner-day-view");
+  room?: typeof import("./views/room-day-panel");
+  "week-grid"?: typeof import("./views/week-grid-view");
+  "week-list"?: typeof import("./views/week-day-list");
+  list?: typeof import("./views/list-view");
+  reception?: typeof import("./reception/reception-view");
+};
+/** Módulos de vista ya cargados en esta pestaña (el registro del bundler también es por página). */
+const viewModules: ViewModules = {};
+const VIEW_CHUNK_LOADERS: Record<AgendaViewChunk, () => Promise<unknown>> = {
+  practitioner: () => import("./views/practitioner-day-view").then((m) => void (viewModules.practitioner = m)),
+  room: () => import("./views/room-day-panel").then((m) => void (viewModules.room = m)),
+  "week-grid": () => import("./views/week-grid-view").then((m) => void (viewModules["week-grid"] = m)),
+  "week-list": () => import("./views/week-day-list").then((m) => void (viewModules["week-list"] = m)),
+  list: () => import("./views/list-view").then((m) => void (viewModules.list = m)),
+  reception: () => import("./reception/reception-view").then((m) => void (viewModules.reception = m)),
+};
+const loadedViewChunks = new Set<AgendaViewChunk>();
+function loadViewChunks(chunks: readonly AgendaViewChunk[]): Promise<void> {
+  return Promise.all(
+    chunks.map((c) =>
+      VIEW_CHUNK_LOADERS[c]().then(() => {
+        loadedViewChunks.add(c);
+      })
+    )
+  ).then(() => undefined);
+}
+/** En el server, `next/dynamic` (SSR); en el cliente, el módulo ya cargado sin Suspense (si no está, `next/dynamic`). */
+function preferLoaded<P extends object>(Dyn: ComponentType<P>, pick: () => ComponentType<P> | undefined): ComponentType<P> {
+  function PreferLoaded(props: P) {
+    const Loaded = typeof window === "undefined" ? undefined : pick();
+    return Loaded ? <Loaded {...props} /> : <Dyn {...props} />;
+  }
+  return PreferLoaded;
+}
+const ReceptionViewC = preferLoaded(ReceptionView, () => viewModules.reception?.ReceptionView);
+const PractitionerDayViewC = preferLoaded(PractitionerDayView, () =>
+  viewModules.practitioner ? viewModules.practitioner.PractitionerDayView<BookingDTO> : undefined
+);
+const RoomDayPanelC = preferLoaded(RoomDayPanel, () => viewModules.room?.RoomDayPanel);
+const WeekGridViewC = preferLoaded(WeekGridView, () => viewModules["week-grid"]?.WeekGridView);
+const ListViewC = preferLoaded(ListView, () => viewModules.list?.ListView);
+const WeekDayListC = preferLoaded(WeekDayList, () => viewModules["week-list"]?.WeekDayList);
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
@@ -150,6 +201,8 @@ function prefetchAgendaChunks() {
   void import("./views/week-grid-view");
   void import("./views/list-view");
   void import("./views/week-day-list");
+  // Marca las vistas como listas (el cambio de vista ya no pasa por el `<div>` vacío de `SsrHold`).
+  loadViewChunks(["week-grid", "list", "week-list"]).catch(() => {});
 }
 
 /**
@@ -341,6 +394,21 @@ export function AgendaClient(props: Props) {
     (b: BookingDTO | null) => setEditingState(b ? { id: b.id, updatedAt: b.updatedAt } : null),
     []
   );
+  // MB-Z-F2 (CLS): la vista dinámica se suelta cuando su chunk está (`SsrHold`). Si falla la red se suelta igual:
+  // `next/dynamic` reintenta y, si vuelve a fallar, el error sale como siempre (antes no quedaba el HTML congelado).
+  const [releasedView, setReleasedView] = useState<string | null>(null);
+  const viewReady = releasedView === view || agendaViewChunksReady(view, loadedViewChunks);
+  useEffect(() => {
+    if (agendaViewChunksReady(view, loadedViewChunks)) return;
+    let alive = true;
+    const release = () => {
+      if (alive) setReleasedView(view);
+    };
+    loadViewChunks(agendaViewChunks(view)).then(release, release);
+    return () => {
+      alive = false;
+    };
+  }, [view]);
   // Chunks diferidos (modal/drawer/candado): precarga cuando el navegador
   // está ocioso. Safari no tiene requestIdleCallback → setTimeout.
   useEffect(() => {
@@ -1111,6 +1179,8 @@ export function AgendaClient(props: Props) {
               el first load, el `initial={{ opacity: 0 }}` dejaba la vista SSR invisible hasta hidratar (LCP) y el
               «wait» demoraba cada cambio de día/vista lo que duraba la salida. El `key` remonta igual que antes. */}
           <div key={`${view}-${dayKey}`} className="k-page-in" style={{ height: "100%" }}>
+            {/* MB-Z-F2: congela el HTML del server de la vista dinámica hasta su chunk (CLS; `views/view-chunks.ts`). */}
+            <SsrHold ready={viewReady} wrap={agendaViewChunks(view).length > 0}>
               {view === "timeline" && (
                 <TimelineView
                   bookings={todayList}
@@ -1128,7 +1198,7 @@ export function AgendaClient(props: Props) {
                 />
               )}
               {view === "practitioner" && practitionerLayout && (
-                <PractitionerDayView
+                <PractitionerDayViewC
                   dayKey={dayKey}
                   layout={practitionerLayout}
                   practitioners={visiblePracs}
@@ -1157,7 +1227,7 @@ export function AgendaClient(props: Props) {
                 />
               )}
               {view === "room" && (
-                <RoomDayPanel
+                <RoomDayPanelC
                   dayKey={dayKey}
                   scopeRooms={scopeRooms}
                   roomId={roomId}
@@ -1182,7 +1252,7 @@ export function AgendaClient(props: Props) {
                 />
               )}
               {view === "week" && (
-                <WeekGridView
+                <WeekGridViewC
                   weekDays={weekDays}
                   bookings={visibleBookings}
                   onEdit={setEditing}
@@ -1200,7 +1270,7 @@ export function AgendaClient(props: Props) {
               )}
               {/* MB-1a (C-MB3 / MB-D10): < 768 la Semana es una lista por día (la grilla se oculta por CSS). */}
               {view === "week" && (
-                <WeekDayList
+                <WeekDayListC
                   weekDays={weekDays}
                   showSaturday={agenda.agendaShowSaturday}
                   showSunday={agenda.agendaShowSunday}
@@ -1216,7 +1286,7 @@ export function AgendaClient(props: Props) {
                 />
               )}
               {view === "list" && (
-                <ListView
+                <ListViewC
                   bookings={todayList}
                   onEdit={setEditing}
                   highlight={highlight}
@@ -1226,7 +1296,7 @@ export function AgendaClient(props: Props) {
                 />
               )}
               {view === "reception" && (
-                <ReceptionView
+                <ReceptionViewC
                   dayKey={dayKey}
                   bookings={todayList}
                   practitioners={visiblePracs}
@@ -1250,6 +1320,7 @@ export function AgendaClient(props: Props) {
                   }}
                 />
               )}
+            </SsrHold>
           </div>
         </BookingFlashContext.Provider>
       </div>

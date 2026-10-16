@@ -223,6 +223,12 @@
   /* Alto de la barra inferior: 0 por defecto (escritorio, Plataforma, públicas). Lo sube la regla de abajo cuando la
      barra está montada; el `main`, el toast, el FAB y el esqueleto de Apariencia lo suman para no quedar debajo. */
   --k-bottom-nav-h: 0px;
+  /* [MB-Z] Separador hairline (C-MB1 lo nombraba y no existía): el gris de los bordes de tarjetas, sidebar y tablas de
+     Plataforma, que hoy lo repiten como literal. Lo usa la barra inferior; los literales se migran cuando se toquen. */
+  --line: rgba(15, 30, 51, 0.08);
+  /* [MB-Z] Alto de la barra superior (chrome «Barra superior», margen incluido). 94 = una línea de menú; con el menú
+     en dos líneas (1366 y 1024) la mide y la publica `AppShell`. La usan la agenda y `/sala` para su alto fijo. */
+  --k-topbar-h: 94px;
   /* Ancho del Drawer (lo fija inline la prop `width`) y alto de su pie sticky (lo publica drawer.tsx en el <html>
      mientras está abierto, para que el toast del celular quede encima). */
   --k-drawer-width: 480px;
@@ -1095,4 +1101,12 @@ select.k-input { appearance: none; padding-right: 40px;
 /* [MB-1d] Lugar para el FAB («Nuevo paciente», «Nuevo turno»): sin esto tapa la última fila y su «⋯». */
 @media (max-width: 767px) {
   .k-app main:has(.k-fab) { padding-bottom: calc(8px + var(--k-bottom-nav-h, 0px) + 72px) !important; }
+}
+
+/* MB-Z: área táctil de 44 px solo bajo 768 (toolbar de la agenda, candado, chips, leyenda); escritorio sin cambios. */
+@media (max-width: 767px) {
+  .k-tap-m {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }

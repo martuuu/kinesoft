@@ -1392,6 +1392,54 @@ See §Agenda profesional y catálogo (B-pre). Adjusts the plan's §11.3.
   montarle el provider en su layout. Sumar una dependencia pesada a una superficie pública rompe CI. Los mails y
   `next/og` siguen con hex literales (no leen variables CSS).
 
+### ADR-022 — PWA sin caché de datos (status: ACCEPTED, MB, 16-oct-2026)
+
+- **Contexto.** MB pidió el workspace instalable (celular y PC de recepción) sin dependencias nuevas. La recepción es
+  una PC compartida: cualquier HTML, payload RSC o respuesta de `/api` guardado por un service worker queda en disco con
+  datos de pacientes, y un SW con cache-first de `_next/static` deja pegados deploys viejos.
+- **Decisión.**
+  - `public/sw.js` (`ks-sw-v2`) precachea **solo** `offline.html` y un ícono. En `fetch` responde únicamente
+    navegaciones GET del mismo origen: red (con *navigation preload*) y, si falla, «Sin conexión»; todo lo demás (RSC,
+    `/api`, actions, POST, estáticos) va directo a la red sin pasar por el SW. Sin caché offline de pantallas.
+  - Se registra solo en `AppShell` y `PlatformShell` (MB-D5), nunca en el root, landing, turnero ni portal (cero bytes
+    en superficies públicas), y nunca en `next dev`. `updateViaCache: "none"` + `Cache-Control: no-store` en `/sw.js` +
+    `skipWaiting`/`clients.claim`: cada deploy toma el SW nuevo en la próxima carga.
+  - El matcher del middleware deja afuera `sw.js`, `manifest.webmanifest`, `offline.html` e `icons/` (si pasaran,
+    saldrían `private, no-store` con cookie o 503 con mantenimiento y la instalación fallaría). Íconos por `next/og` en
+    route handlers estáticos (MB-D15). `start_url` = `/dashboard`, `display: standalone` (MB-D7/D8).
+  - Interruptor `NEXT_PUBLIC_PWA=off` (MB-D6): desregistra en el próximo load; requiere redeploy
+    ([EXTERNAL-CONFIG §0.7](EXTERNAL-CONFIG.md)).
+- **Consecuencias.** Sin conexión no se ve nada de la app (a propósito). Avisos push, badge y portal instalable quedan
+  para el roadmap (MB-D3/D4). Lo verifican `tests/unit/pwa-*.test.ts` (matcher con el `getMiddlewareMatchers` del
+  build, contenido del SW) y el QA manual de instalación ([QA «MB»](QA.md)).
+
+### ADR-023 — Directorio: snapshot compacto con tag global, fichas `force-static` (status: ACCEPTED, DIR, 16-oct-2026)
+
+- **Contexto.** El directorio (`/profesionales`, `/profesionales/[nombreId]`, `/consultorios/[slug]`) es anónimo e
+  indexable: no puede pegarle a la base por visita ni leer cookies, y tiene que dejar de mostrar a alguien en el próximo
+  request cuando retira el consentimiento, lo oculta Plataforma o se deshabilita su cuenta.
+- **Decisión.**
+  - **Un snapshot global** (`getDirectorySnapshot`, `lib/directory-internal.ts`, `server-only`): una sola entrada de
+    `unstable_cache` con clave `directory:snapshot:v1`, tag **`global:directory`** (`tags.directory()`) y `revalidate:
+    600`. Se arma por el canal service (la tabla por persona es SERVICE_ONLY) reusando `getPublicClinic` por consultorio
+    listado (DIR-D14: cero drift con el turnero) y se guarda **compacto** (índices de especialidades y coberturas,
+    claves cortas, `compactDirectorySnapshot`/`expandDirectorySnapshot` de `lib/directory-logic.ts`) para quedar lejos del límite de 2 MB
+    por entrada del data cache de Next 14 (test de volumen 200 × 5 ≤ 1 MB). Sin cookies ni headers adentro.
+  - **Invalidación por un embudo:** todo escritor que cambia algo visible (perfil y consentimiento, ajustes del
+    directorio, sedes, servicios, switch del turnero, ciclo de vida y entitlements del consultorio, slug, moderación de
+    Plataforma, deshabilitar usuario) llama `revalidateTag(tags.directory())` **después** del commit.
+  - **Fichas `force-static` + ISR 600 s.** En Next 14.2 el `app/not-found.tsx` raíz se evalúa en cada render RSC y lee
+    la cookie de sesión; en una ruta ISR eso daba 500 («static to dynamic at runtime»). Por eso las dos fichas declaran
+    `dynamic = "force-static"` (no usan cookies, headers ni la query) y el grupo tiene su `not-found` estático
+    (`app/(directory)/not-found.tsx`). La landing (`app/page.tsx`) también es `force-static` por la misma causa (default
+    del orquestador; `○` en el build, `x-nextjs-cache: HIT`). `/profesionales` queda `ƒ` porque filtra por
+    `searchParams` en memoria sobre el snapshot cacheado.
+  - El alias de un slug viejo redirige con `permanentRedirect` **sin** la query (leer `searchParams` en ISR también
+    rompe el render; la ficha no usa query).
+- **Consecuencias.** Cambiar `DIRECTORY_MODE` pide redeploy (las páginas ya generadas pueden vivir hasta 600 s). Un 404
+  de ficha también se cachea 600 s, pero lleva el tag del snapshot: publicar algo lo purga. Un componente nuevo de la
+  ruta que lea la sesión rompe el ISR: va por cliente o fuera del grupo.
+
 ## Cache & cookies (what is implemented — updated 30-sep-2026)
 
 **Data cache** — `unstable_cache` in 9 loaders, **every key carries the

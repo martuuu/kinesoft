@@ -236,8 +236,10 @@
   .navBtnText {
     width: auto;
   }
+  /* MB-Z: «Día» medía 39 de ancho a 390 (texto corto con el relleno de 10 de abajo); 44 como todo target táctil. */
   .segBtn {
     height: 44px;
+    min-width: 44px;
   }
   .select,
   .icsLink {

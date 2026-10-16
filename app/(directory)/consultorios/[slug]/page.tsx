@@ -35,6 +35,17 @@ import s from "@/components/directory/directory.module.css";
  */
 export const revalidate = 600;
 
+/**
+ * DIR-Z-F1: `force-static`. El 404 (y cualquier render) de esta ruta arma también el `not-found` del ROOT: Next 14.2
+ * lo pasa como prop `notFound` del `LayoutRouter` raíz y RSC lo evalúa aunque no se muestre
+ * (`next/dist/server/app-render/create-component-tree.js`, `notFoundComponent`). Ese 404 lee la cookie de sesión
+ * (VX2-b1) y en un render ISR eso tiraba «Page changed from static to dynamic at runtime, reason: cookies» → 500 en
+ * `next start` (medido: 500 en `/consultorios/no-existe` aun con `app/(directory)/not-found.tsx` estático). Con
+ * `force-static`, `cookies()`/`headers()` devuelven vacío y la página no usa ninguno ni la query: el 404 del root ve
+ * «sin sesión» y la ficha sigue siendo ISR (`revalidate`). Smoke: `scripts/smoke-directory.mjs`.
+ */
+export const dynamic = "force-static";
+
 export function generateStaticParams(): { slug: string }[] {
   return [];
 }

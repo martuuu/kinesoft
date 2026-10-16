@@ -293,8 +293,8 @@
 }
 
 .agendaRoot[data-chrome="topbar"] {
-  min-height: calc(100vh - 112px);
-  min-height: calc(100dvh - 112px);
+  min-height: calc(100vh - var(--k-topbar-h) - 18px);
+  min-height: calc(100dvh - var(--k-topbar-h) - 18px);
 }
 
 /* En el celular la agenda crece con la página (como cualquier pantalla con barra inferior): el mínimo de alto solo
@@ -312,8 +312,8 @@
     min-height: 0;
   }
   .agendaRoot[data-fit][data-chrome="topbar"] {
-    height: calc(100vh - 112px);
-    height: calc(100dvh - 112px);
+    height: calc(100vh - var(--k-topbar-h) - 18px);
+    height: calc(100dvh - var(--k-topbar-h) - 18px);
   }
 }
 
@@ -357,6 +357,30 @@
 /* ── [MB-1a] Leyenda de servicios: target ≥ 44 px bajo 768 (el chip visual sigue siendo la píldora). ─────────── */
 @media (max-width: 767px) {
   .legendBtn {
+    min-height: 44px;
+  }
+}
+
+/* ── [MB-Z-F2] Día en el celular ────────────────────────────────────────────────────────────────────────────────
+   - Cards al ancho disponible: con `flex-basis` de 1/5 y `min-width: 186` (escritorio, hasta 5 por franja) a 390 cada
+     card medía 186 de ~310 px y cortaba el nombre. Bajo 768 no entran dos de 186 lado a lado, así que cada turno ya
+     iba en su renglón: ahora lo ocupa entero (con solapamiento quedan apiladas, igual que antes). El `sizing` va
+     inline en la card (escritorio), por eso el `!important`.
+   - El hueco «Nuevo turno» a la derecha de las cards (66×26) no se muestra: con la card a todo el ancho caía en un
+     renglón propio, una franja invisible. La hora de la franja y el FAB siguen creando el turno.
+   - La hora de la franja (48×20) y el pliegue «Ver 08:00–10:00 (sin turnos)» (~26 px) llegan a 44 px (AGENTS §5). */
+@media (max-width: 767px) {
+  .dayCard {
+    flex-grow: 1 !important;
+    max-width: none !important;
+  }
+  .slotFiller {
+    display: none;
+  }
+  .slotLabel {
+    min-height: 44px;
+  }
+  .dayFold {
     min-height: 44px;
   }
 }

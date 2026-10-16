@@ -13,6 +13,7 @@
  * cruza esta frontera.
  */
 import { AR_PROVINCES, isProvinceCode, provinceName } from "@/lib/ar-provinces";
+import { HONORIFIC_OPTIONS } from "@/lib/directory-constants";
 import { bookingHref } from "@/lib/public-booking-links";
 import type {
   DirectoryClinic,
@@ -110,13 +111,9 @@ export function normalizeCity(city: string | null | undefined): string {
     .trim();
 }
 
-const HONORIFIC_LABELS: Record<string, string> = {
-  LIC: "Lic.",
-  KLGO: "Klgo.",
-  KLGA: "Klga.",
-  DR: "Dr.",
-  DRA: "Dra.",
-};
+// DIR-Z: antes había una copia literal del mapa acá; ahora sale de `HONORIFIC_OPTIONS` (la misma lista que valida el
+// form y que refleja el CHECK de M11), así sumar un título no puede dejar al directorio mostrándolo como null.
+const HONORIFIC_LABELS: Record<string, string> = Object.fromEntries(HONORIFIC_OPTIONS.map((o) => [o.value, o.label]));
 
 /** Código del CHECK de M11 → abreviatura que se muestra. Desconocido → null (no se inventa un título). */
 export function honorificLabel(code: string | null | undefined): string | null {

@@ -213,6 +213,7 @@ export function BookingCard({
   room = null,
   flash,
   showEnd = false,
+  className,
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
@@ -225,6 +226,8 @@ export function BookingCard({
   flash?: boolean;
   /** G3 (PF1.1): «08:00–08:45» en vez de «08:00». Solo el Día (cards en fila por franja); en columnas no entra. */
   showEnd?: boolean;
+  /** MB-Z-F2: clase de la vista (el Día la usa para estirar la card al ancho bajo 768; el `sizing` es inline). */
+  className?: string;
 }) {
   const flashIds = useContext(BookingFlashContext);
   const isFlashing = flash ?? flashIds?.has(b.id) ?? false;
@@ -272,7 +275,7 @@ export function BookingCard({
     <button
       type="button"
       onClick={() => onEdit(b)}
-      className={isFlashing ? "k-flash" : undefined}
+      className={[isFlashing ? "k-flash" : null, className].filter(Boolean).join(" ") || undefined}
       data-flash={isFlashing ? "true" : undefined}
       title={`${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}${hold ? ` · ${PAYMENT_HOLD_LABEL[hold]}` : ""}${extras.length ? ` · ${extras.join(" · ")}` : ""}${cardLabel ? ` · ${cardLabel}` : ""}`}
       style={{

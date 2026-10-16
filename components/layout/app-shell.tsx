@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./topbar";
@@ -116,6 +116,27 @@ export function AppShell({
   const { t, set } = useTweaks();
   const useSidebar = t.dashChrome === "sidebar";
   const openAppearance = () => set("minimised", false);
+  // MB-Z (integrador): alto real de la barra superior → `--k-topbar-h` (globals.css, default 94 px). La agenda y `/sala`
+  // descontaban un fijo de 112 (94 + 18 de `main`), medido a 1728; a 1366 y 1024 los ítems del menú pasan a dos
+  // líneas, la barra mide 135 y el documento scrolleaba 41 px en Recepción y en el Tablero (C-MB4).
+  const topbarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = topbarRef.current;
+    const root = document.documentElement;
+    if (useSidebar || !el || typeof ResizeObserver === "undefined") return;
+    const publish = () => {
+      const h = el.getBoundingClientRect().height;
+      // Bajo 768 `.desktopOnly` no se ve (0 px): ahí manda la barra móvil y nadie lee la variable.
+      if (h > 0) root.style.setProperty("--k-topbar-h", `${Math.ceil(h)}px`);
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--k-topbar-h");
+    };
+  }, [useSidebar]);
 
   return (
     <TenantChoiceProvider options={tenantOptions} activeTenantId={activeTenantId} switchTenant={switchTenantAction}>
@@ -143,7 +164,7 @@ export function AppShell({
                 {banner}
                 <MobileBar userName={userName} ownPublicBooking={ownPublicBooking} onOpenAppearance={openAppearance} />
                 {!useSidebar && (
-                  <div className={styles.desktopOnly}>
+                  <div ref={topbarRef} className={styles.desktopOnly}>
                     <TopBar
                       caps={caps}
                       isPlatformAdmin={isPlatformAdmin}

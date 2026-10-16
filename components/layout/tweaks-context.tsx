@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  startTransition,
   useState,
   type ReactNode,
 } from "react";
@@ -134,6 +135,10 @@ type Ctx = {
 
 const TweaksContext = createContext<Ctx | null>(null);
 
+function sameTweaks(a: TweaksState, b: TweaksState): boolean {
+  return a.palette === b.palette && a.dashChrome === b.dashChrome && a.sidebarCollapsed === b.sidebarCollapsed && a.minimised === b.minimised;
+}
+
 export function TweaksProvider({
   children,
   initialAgenda,
@@ -168,12 +173,26 @@ export function TweaksProvider({
     } catch {
       /* storage bloqueado: defaults */
     }
-    setT(hydrateTweaks(raw, initialPalette));
+    const next = hydrateTweaks(raw, initialPalette);
+    // MB-Z (integrador, CLS 0,18 a 360/390 en Semana/Lista/Recepción): este effect corre cuando el layout ya hidrató
+    // pero el Suspense de `agenda/loading.tsx` (la página) todavía no. Un update urgente que llega por contexto a un
+    // Suspense deshidratado obliga a React 18 a tirar el HTML del server y renderizar TODA la página en el cliente
+    // (medido con un MutationObserver: se borraba y recreaba `.agendaRoot` entero; el `SsrHold` de la vista no podía
+    // salvar nada). Como transición, React espera a hidratar y aplica después. Y sin cambios (lo más común: nada
+    // guardado o lo mismo que el default) no se toca el estado, así no hay update ninguno.
+    startTransition(() => setT((prev) => (sameTweaks(prev, next) ? prev : next)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist + apply palette to <html>.
+  // Orquestador (16-oct, antes de la demo en `next dev`): el estado inicial (defaults) NO se persiste. Este effect
+  // corría en el mismo commit que la hidratación y escribía los defaults en localStorage antes de que se aplicara lo
+  // guardado; con StrictMode (dev) el segundo pase de la hidratación ya leía los defaults y la Apariencia elegida se
+  // perdía al recargar. Solo se escribe cuando `t` dejó de ser el objeto inicial (un cambio real o la hidratación).
+  const initialTRef = useRef(t);
   useEffect(() => {
+    document.documentElement.setAttribute("data-palette", t.palette);
+    if (t === initialTRef.current) return;
     try {
       // `minimised` no se guarda: cada carga arranca con el panel cerrado.
       const persisted = { palette: t.palette, dashChrome: t.dashChrome, sidebarCollapsed: t.sidebarCollapsed };
@@ -181,7 +200,6 @@ export function TweaksProvider({
     } catch {
       /* ignore */
     }
-    document.documentElement.setAttribute("data-palette", t.palette);
   }, [t]);
 
   const set: Ctx["set"] = useCallback((key, value) => {

@@ -16,6 +16,7 @@ import { KindTag } from "@/components/clinical-notes/kind-tag";
 import { authorLine, noteDateLabel } from "@/components/clinical-notes/clinical-notes-ui";
 import type { ClinicalNoteDTO, PatientClinicalSummary } from "@/lib/clinical-notes-types";
 
+import heroStyles from "../hero.module.css";
 /**
  * EV2-3a: lo que Resumen agrega a `ResumenViewProps` (el contrato de Planes vive en plan-editor-types.ts y no se toca).
  * `clinicalSummary` null = sin módulo `evoluciones` o sin `clinical.read`: la card no existe.
@@ -224,6 +225,7 @@ export function ResumenView({
                       variant="ghost"
                       onClick={() => onOpenPlan(plan.id)}
                       style={{ fontSize: 12, padding: "8px 12px" }}
+                      className={heroStyles.action}
                     >
                       Ver plan
                     </Button>

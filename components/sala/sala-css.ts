@@ -206,6 +206,9 @@ export const SALA_CSS = `
 
 @media (min-width: 768px) and (max-height: 800px) {
   .sala { gap: 10px; height: calc(100vh - 28px); height: calc(100dvh - 28px); grid-template-rows: auto minmax(0, 1fr); align-content: start; }
+  /* MB-Z-F2: con «Barra superior» el chrome no es el padding 14 + 14 de main sino la barra + 0/18 (el mismo descuento que
+     .agendaRoot[data-chrome=topbar]: --k-topbar-h medido por AppShell + 18); con -28 la tira de KPIs se iba de vista al scrollear el documento. */
+  .sala[data-chrome=topbar] { height: calc(100vh - var(--k-topbar-h) - 18px); height: calc(100dvh - var(--k-topbar-h) - 18px); }
   .sala-empty, .sala-note { align-self: start; }
   .sala-fade { min-height: 0; height: 100%; }
   .sala-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 12px; }

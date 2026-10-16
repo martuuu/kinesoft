@@ -221,3 +221,26 @@
 .seg:focus-visible {
   box-shadow: var(--focus-ring);
 }
+
+/* MB-Z-F3 (B3): a 390 los pills medían 30 px de alto, las opciones de «Ordenar» 27-29 y el buscador 21 (la revisión
+   mide la caja del elemento). Solo bajo 768: en escritorio la fila conserva su densidad. Las opciones de orden y el
+   campo de cobertura los pinta `app/(app)/pacientes/page.tsx` con `style` inline sin `display` ni `min-height`, así
+   que alcanza con apuntarlos desde `.sortRow` (hijos de un flex: el `min-height` aplica). */
+@media (max-width: 767px) {
+  .seg {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .sortRow > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .sortRow input:not([type="hidden"]) {
+    min-height: 44px;
+  }
+  .bareInput {
+    min-height: 44px;
+  }
+}

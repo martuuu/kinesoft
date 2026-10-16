@@ -170,6 +170,7 @@ export function RevenueCard({
                 key={r.value}
                 type="button"
                 aria-pressed={on}
+                className={styles.rangeBtn}
                 onClick={() => choose(r.value)}
                 style={{
                   position: "relative",

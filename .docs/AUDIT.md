@@ -1032,6 +1032,15 @@ enforce) y lo de PF1 (bundle del workspace, colores no exactos, densidad de `For
   `/portal` 107,3 (≤ 125) · onboarding 148,8 (≤ 160) · Plataforma máx. 167,2 · workspace sobre 180 solo en reporte
   (`/configuracion` 260,7). Ratchets de UI sin cambios (4 / 29 / 2; literales exactos en 0).
 
+**Ronda 29 — DIR + MB: directorio público y mobile/PWA (16-oct-2026):** DIR-1 (M11, `b45be05`), DIR-2 + MB-0
+(`86337d9`), DIR-3 + MB-1 (`943ea90`), DIR-Z/MB-Z parte 1 (`74ff0f9`) commiteados; fixers F1/F2/F3 e integrador sin
+commitear. **Única migración: M11** (aplicada solo en local). Tabla «DIR y MB (16-oct)» en §2; ADR-022/023; SECURITY §22.
+- **Gate del integrador (en solitario):** tsc 0 (app y scripts); unit 300 archivos / 5370 en UTC y en AR;
+  `guard:isolation` OK; integración app 197 archivos / 2624 + 19 skip y owner 196 + 1 skip / 2593 + 50 skip; `migrate
+  status` al día (40); perf `compare.ts` sin regresiones fuera de umbral (48 escenarios, 18 nuevos; payload de agenda
+  317 049 ≤ 400 000); `NODE_ENV=production next build` OK y `check-bundle-budget.mjs` exit 0 (baseline regrabado);
+  `smoke-directory.mjs` 8/8 en `preview` y en `off` contra `next start`; `/sw.js` 200 `no-store`, ícono 200.
+
 ## Cómo leer la severidad
 
 | Severidad | Criterio |
@@ -2025,7 +2034,7 @@ los cerraron los fixers FX-A (Lista), FX-B (Flujo) y FX-C (shell) y el integrado
 | rxz-now-line-contraste | media | RX-Z | app/globals.css (`--now-line`) · components/agenda/grid/now-line.tsx · desk-list/desk-flow | 🟢 FX-C | Token único `--now-line: #c2410c` (5,2:1 con blanco; el anterior #E4572E daba 3,6:1); ningún otro archivo usa el hex como color |
 | rxz-blancos-literales | baja | RX-Z | components/sala/desk/desk-css.ts · reception-view.tsx | 🟢 FX-C | Los fondos `#fff` de `desk-css.ts` y del link de `reception-view` → `var(--card-bg)`; el verde `rgba(27,112,75,…)` → token. Quedan grises `rgba(15,30,51,…)` de bordes, como en el resto de la app |
 | rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🟢 PF1.1 | Nombres largos de «Por cobrar» en 2 líneas / apellido + inicial con `title` (PF1.1-sala). Verificación visual: revisor B de PF1-Z |
-| rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🔴 abierto | A 390 el sidebar no tiene modo móvil (drawer); el escritorio ya cae a una columna |
+| rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🟢 MB-0c/0d | Bajo 768 el sidebar se esconde y quedan la barra inferior fija (C-MB1) y «Menú» → Drawer (`mobile-nav-drawer.tsx`); ver «DIR y MB (16-oct)» |
 | rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | ↪ ver `plf-toggle-billing-sin-cap` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
 
 ### Hallazgos de EV2 (EV2-Z, 15/16-oct-2026)
@@ -2047,7 +2056,7 @@ real — (a) seguridad/RLS/PHI: 0 altos ni medios; (b) UX/copy — + 3 fixers + 
 | b-bajos impresion-y-copy | baja | EV2 | app/(app)/pacientes/[id]/imprimir/** · lib/bookings-constants.ts · booking-drawer/** | 🟢 EV2-Z | Impresión (shell con `display:none`, anulada sin tachar con quién y motivo, «Turno: …», aviso de corte a 2000, pie con paciente y DNI, sin botón si no hay notas, «Cerrar» = `window.close`); «Eliminar turno» deshabilitado con hint si hay evolución; error de red ≠ sin acceso; búsqueda 16 px en mobile; copy de acciones y `SESSION_KEPT_DONE_NOTICE` |
 | ev2z-future-sin-turno | baja | EV2 | lib/clinical-notes-types.ts (`futureNoBooking`) · lib/clinical-notes.ts · components/clinical-notes/clinical-notes-ui.ts | 🟢 integrador EV2-Z | «Todavía no llegó la hora del turno…» salía también en notas sin turno: sin turno el copy es «La fecha de la evolución no puede ser más de 12 h en el futuro.» (cliente y server, crear y editar; tests unit + integración) |
 | a6 kine-atiende-paciente-ajeno | media | **C0** | lib/clinical-notes-internal.ts (gate) · components/agenda/reception/** (toast) | 🔴 abierto — **decide Martin** | Un profesional que atiende un turno de un paciente asignado a otro kine, sin share, recibe `forbidden` al cargar la evolución (falla cerrado, correcto) pero el toast «Cargar evolución» se le ofrece igual. Opciones: share automático al atender (C0), o esconder el toast si no hay `canCreate`. *Recomendado:* C0 con el modelo de visibilidad por registro (EV2-D7) |
-| ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🟢 PF1.2 | Grilla del detalle responsive a 1024 con sidebar abierto (PF1.2-planes-bib). Queda MB: la fila de ejercicio a 390 (6 columnas) |
+| ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🟢 PF1.2 + MB-1d | Grilla del detalle responsive a 1024 con sidebar abierto (PF1.2-planes-bib); la fila de ejercicio a 390 va en 2 líneas por clase (`.exRow`, MB-1d) |
 | ev2-drawer-modal-sin-portal | baja | **PF** | components/ui/Drawer · components/ui/Modal | 🔴 abierto | Sin portal: el «Historial» abierto desde el drawer del turno queda dentro del panel. Evaluar portal en las primitivas (toca todo) |
 | ev2-perf-update-booking | baja | **PF** | tests/perf | 🟢 | **PF-M (16-oct)** — `loaders.perf.test.ts`: `updateBooking.patientChange` (sin evolución, re-vincula) y `updateBooking.patientChange.withNote` (con evolución, se rechaza sin escribir), regla estricta de `compare.ts` con referencia en `tests/perf/pf.json` (además del techo de S26s en `plans.perf`). [PERF.md §PF-M](PERF.md) |
 | ev2-kindtag-borde-inline | baja | **VX (Ola F)** | components/clinical-notes/kind-tag.tsx | 🟢 VX F-b2 | `<Tag variant="outline">` para Alta/Anulada (`components/clinical-notes/kind-tag.tsx:15`). Queda `note-card.tsx:117` → `vx-note-card-tag` (PF1) |
@@ -2082,7 +2091,7 @@ diff real — (a) a11y/responsive/copy-claims; (b) seguridad y contratos: 0 alto
 | vx-formfield-densidad | baja | **PF1** | components/ui/form-field.tsx (49 llamadores) | 🔴 abierto | D-VX13: `.k-input` pasó a 44 px / 16 px y textarea `min-height: 120`. Revisar drawers densos de la Secretaria a 1366×768 (riesgo 3 del brief); no achicar el token |
 | vx-note-card-tag | baja | **PF1** | components/clinical-notes/note-card.tsx:117 | 🟢 PF1.1 | `<Tag tone="soft" variant="outline">` en `note-card.tsx:127` |
 | vx-guard-module-segment | baja | C | lib/authz.ts:216 | 🔴 abierto | `guardModuleSegment` sin llamadores de producción tras el muro (solo `tests/integration/module-guards.test.ts`). Retirarlo junto con su test y los comentarios de `lib/nav.ts`, `tenant-modules-context.tsx`, `sidebar.tsx` |
-| vx-visual-pendiente | baja | **PF1** | components/landing/pricing.tsx · components/auth/product-panel.tsx | 🔴 abierto | Tarjetas de precios desbalanceadas (Individual con más bullets); mock del login con filas bajas y texto recortado; el muro a 390 muestra el sidebar de escritorio (MB) |
+| vx-visual-pendiente | baja | **PF1** | components/landing/pricing.tsx · components/auth/product-panel.tsx | 🔴 abierto | Tarjetas de precios desbalanceadas (Individual con más bullets); mock del login con filas bajas y texto recortado. (La parte MB, el muro a 390 con el sidebar de escritorio, quedó cerrada: bajo 768 el sidebar no se monta visible y manda la barra inferior.) |
 
 ### PF1-Z (16-oct-2026): cierre de PF1
 
@@ -2106,10 +2115,10 @@ después en [PERF.md §Bundle](PERF.md).
 |---|---|---|---|---|---|
 | pf1-outline-none-8 | baja | PF-Z | app/** · components/** | 🔴 abierto | Meta del brief ≤ 5; quedan 8 `outline: none` (ratchet en 8). Revisar si cada uno pinta otro foco |
 | pf1-refresh-sin-marca-3 | baja | PF-Z | components/onboarding/step-nav.tsx:30 · step-team.tsx:183 · components/portal/check-in-form.tsx:57 | 🔴 abierto | Sin `// refresh-ok:` (ratchet en 3, meta ≤ 30 cumplida): marcar o sacar según C-PF4 |
-| pf1-shell-137 | baja | PF-Z | app/(app)/layout.tsx · tailwind-merge | 🟡 | Piso del shell `/reportes` 137,7 kB (meta ~130-135): react-dom + runtime de Next = 83,8; candidatos: tailwind-merge (6,7) fuera del shell |
+| pf1-shell-137 | baja | PF-Z | app/(app)/layout.tsx · tailwind-merge | 🟢 MB-Z | `lib/cn.ts` sin `twMerge`: piso del shell `/reportes` 137,7 → **134,9 kB** (meta ~130-135). La dependencia queda en `package.json` sin usos (sacarla pide `npm install`) |
 | pf1-publicas-suben | baja | PF-Z | superficies públicas | 🟡 | +1-5 kB en PF1 (`/forgot` 110,8 → 116,3), dentro de 120 y del 10 %: medir con `--explain` qué entró |
 | pf1-zod-planes-seguimiento | baja | C | lib/plans-deeplink.ts (`planDeepLinkHref` → `encodePlanPrefill`) | 🔴 abierto | Zod (12,9 kB) sigue en `/planes*` y `/seguimiento/[sessionId]` (170-172 kB, entran). Separar el validador del prefill como `realtime-message-guard` (TS puro, test de equivalencia) |
-| pf1-seguimiento-ejercicio-390 | baja | MB | components/seguimiento/session-detail.tsx | 🔴 MB | Fila de ejercicio de `/seguimiento/[id]` con 6 columnas a 390 |
+| pf1-seguimiento-ejercicio-390 | baja | MB | components/seguimiento/session-detail.tsx | 🟢 MB-1d | Fila de ejercicio en 2 líneas a 390 (`.exRow`) |
 
 ### PF2 y PF-Z (16-oct-2026): cierre del bloque PF
 
@@ -2142,8 +2151,79 @@ del revisor B de PF1-Z; PF-Z integrador. Números en [PERF.md §PF2](PERF.md).
 | session-exercise-count-full-scan | media | C1 | lib/plans-read-internal.ts:114 (`_count: { exercises }`) | 🔴 re-verificar | El lector nuevo de planes sigue con `_count` de ejercicios por sesión; falta medir si el plan agrega `SessionExercise` entera como el retirado (A1) |
 | pf2-seguimiento-2-tx | baja | PF / C | /seguimiento (request entero) | 🟡 | `ttfb.mjs`: 1 → 2 tx por request desde PF-0b (la página no cambió desde VX-Z: probablemente el layout). Presupuesto «no sube» |
 | pf2-agenda-bundle-176 | baja | PF | /agenda | 🟡 | 176,9 kB (presupuesto 180, +0,7 % sobre baseline): poco margen |
-| pf1z-toast-tapa-drawer | baja | MB | components/ui/toast.tsx:361 (`top: 16`) | 🔴 MB | El toast tapa el header del Drawer abierto (revisor B #11) |
-| pf1z-cls-390 | baja | MB | agenda Semana 390 | 🔴 MB | CLS 0,069 en Semana a 390 (Lista/Pacientes ≤ 0,02) |
+| pf1z-toast-tapa-drawer | baja | MB | components/ui/toast.tsx (`ToastRegion`) | 🟢 MB (resto abierto abajo) | Con un Drawer abierto (marca `data-k-drawer-open` de drawer.tsx) el toast va arriba a la izquierda ≥ 768 y sobre el pie del drawer < 768. Queda `mbz-toast-drawer-768-880` en «DIR y MB» |
+| pf1z-cls-390 | baja | MB | agenda Semana 390 | 🟢 integrador MB-Z | CLS **0** en Semana/Lista/Recepción y drawer a 360/390 (causa y medición en «DIR y MB (16-oct)», `mbz-cls-hidratacion`) |
+
+### DIR y MB (16-oct)
+
+DIR = directorio público (DIR-1 M11 `b45be05`, DIR-2 `86337d9`, DIR-3 `943ea90`); MB = mobile 100 % + PWA (MB-0 con
+DIR-2, MB-1 con DIR-3); cierre conjunto DIR-Z/MB-Z: revisor A de DIR (privacidad), revisor de código de MB, revisor B
+visual de MB, fixers DIR-Z-F1 y MB-Z-F2/F3, orquestador (`74ff0f9` = parte 1) e integrador (WIP). **Única migración: M11**
+(orden de prod en el [RUNBOOK](MIGRACIONES-RUNBOOK.md): M8 → M8b → M8c → M9 → M10 → M11 → deploy). Diseño en ADR-022
+(PWA) y ADR-023 (directorio); seguridad en [SECURITY §22](SECURITY.md); QA en [QA «DIR» y «MB»](QA.md).
+
+- **Cerrado (con evidencia):**
+  - **M1 de DIR** (alias `/consultorios/<viejo>` daba 500 por leer `searchParams` en ISR): `permanentRedirect` sin
+    query (`app/(directory)/consultorios/[slug]/page.tsx`), test de render actualizado.
+  - **M2 de DIR** (usuario deshabilitado por Plataforma seguía publicado y no podía retirarse): el snapshot filtra
+    `user.disabledAt` (`lib/directory-internal.ts`) y `setPlatformUserDisabled` revalida `tags.directory()`
+    (`lib/platform-users.ts`). Test nuevo `tests/integration/directory-disabled-user.test.ts` con el `unstable_cache`
+    real: dentro → deshabilitar → fuera → habilitar → dentro, en los 2 roles; **falla** si se saca el `revalidateTag`
+    (verificado).
+  - **404 de fichas ISR con 500** (el `not-found` raíz lee la cookie): fichas `force-static` + `not-found` propio del
+    grupo + layout sin marco en `off` (DIR-Z-F1). `scripts/smoke-directory.mjs` contra `next start` (NODE_ENV=production)
+    en `preview` y `off`: 8/8 rutas con el código esperado en los dos modos; 404 de ficha con `x-nextjs-cache: HIT`.
+  - **Landing `ƒ`** por la misma causa: `force-static` (default del orquestador) → `○` en el build y `x-nextjs-cache:
+    HIT`, `s-maxage=3600` en `next start`. Ver `dir-landing-force-static` abajo (decisión).
+  - **Tipo exportado desde `"use server"`** (`lib/public-profile.ts:57`, `MyPublicProfile`) → `lib/public-profile-types.ts`.
+  - **`honorificLabel` duplicaba la lista**: ahora sale de `HONORIFIC_OPTIONS` (`lib/directory-logic.ts`).
+  - **Swipe de Día** sobre la lista (Chrome Android, `touch-action` en `.k-scroll`) y **SW sin navigation preload**
+    (`ks-sw-v2`, `Response.error()`): M1 y L2 del revisor de código de MB, aplicados con tests.
+  - **`mbz-cls-hidratacion`** (CLS 0,16-0,18 a 360/390 en Semana/Lista/Recepción y en el drawer; antes `pf1z-cls-390`):
+    la causa real era que el `setT` urgente del effect de `TweaksProvider` llegaba por contexto al Suspense de
+    `agenda/loading.tsx` todavía deshidratado y React 18 tiraba TODO el HTML del server (MutationObserver: `.agendaRoot`
+    borrado y recreado; el `SsrHold` de MB-Z-F2 no podía evitarlo). Fix del integrador: la hidratación de Apariencia en
+    `startTransition` y sin update si no cambió nada (`components/layout/tweaks-context.tsx`). Medido en el navegador
+    (Playwright, dev, `?date=2026-07-27`): **CLS 0** en Semana, Lista, Recepción y drawer a 360 y 390, también con
+    Apariencia no default; `/dashboard`, `/pacientes`, `/sala` y `/configuracion` a 390 en 0; cero avisos de
+    hidratación; cambiar de vista (Semana → Lista → Recepción → Día → Semana → Lista) dibuja cada vista a 390 y 1366.
+  - **`mbz-topbar-alto-fijo`** (L1 del revisor de código + medición del integrador): con «Barra superior», `/sala` y
+    Recepción de la agenda scrolleaban **41 px** a 1366/1024 × 625/695 porque el descuento era un fijo de 112 (barra de
+    una línea) y a esos anchos el menú va en dos líneas (barra de 135). `AppShell` publica `--k-topbar-h` medido
+    (ResizeObserver; default 94 en `globals.css`) y agenda y sala descuentan `var(--k-topbar-h) + 18`. Medido: scroll
+    del documento **0** en las 16 combinaciones (4 tamaños × agenda/sala × sidebar contraído / expandido / barra
+    superior); la tira de KPIs de `/sala` queda a la vista. `reception-fit` mide el hueco de abajo en el DOM (MB-Z-F2).
+  - **Targets de la toolbar de la agenda a 390:** «Día» medía 39 de ancho; `min-width: 44px` bajo 768
+    (`agenda-toolbar.module.css`). Medido: 0 interactivos < 44 en la toolbar, la tira, los filtros y la leyenda (20
+    con el menú cerrado, 22 abierto). `.k-tap-m` (globals) en chips, filtros de sala/sede, menú de vista, modos,
+    leyenda y candado compacto.
+  - Token **`--line`** creado (`globals.css`) y usado por la barra inferior; los literales iguales se migran al tocarlos.
+  - Ratchets de UI sin cambios (`outlineNone` 8, `linkWrappingButton` 0, `demoPlaceholders` 2, literales 0): no subieron
+    con MB ni bajaron (no hubo nada que regrabar). El ratchet `tapTargetsUnder44` del brief no se creó: el conteo sale
+    del navegador (no del unit) y quedó medido acá.
+- **Abierto:**
+
+| Hallazgo | Sev | Bloque | Ubicación | Estado | Nota |
+|---|---|---|---|---|---|
+| dir-alias-ficha-sin-datos | media | DIR (QA) | consultorios/[slug] · profesionales/[nombreId] | 🔴 QA | Alias 308 y ficha 200 en ISR sin verificar en runtime: la base local no tiene consultorios publicados (no se siembra). En `preview` con datos: `node scripts/smoke-directory.mjs <url> --mode=preview --alias=<slugViejo> --listed=<slug>` |
+| dir-landing-force-static | baja | DIR (decide Martin) | app/page.tsx | 🟢 default | **Decisión con default:** `force-static` en la landing (no lee sesión) → vuelve a ser ISR de 1 h. Alternativa: 404 raíz estático, que pierde el CTA según sesión de VX2-b1. Recomendado: así |
+| mbz-tap-backlog-44 | baja | MB/C | configuracion (segmentado de avisos) · services-editor (switch 38×22) · dashboard («Ver todos →», filas de recientes) · perfil (chip «Plan», «Volver al listado») · timeline (botón de pliegue ~26 px) · mini-calendario (celdas) | 🔴 | Interactivos < 44 a 390 fuera de la toolbar de la agenda (MB-Z-F3 cubrió pills, selectores, switch de 52 y acciones del perfil) |
+| mbz-plataforma-tablas-scroll | baja | C | components/plataforma (catálogo, ejercicios) | 🔴 C | Tablas de catálogo y ejercicios de Plataforma siguen con scroll horizontal a 390 (MB-D16: uso de escritorio) |
+| mbz-diagnostico-wizard-390 | baja | MB/C | components/diagnostico (wizard) | 🔴 | Targets del wizard de diagnóstico a 390 sin revisar (MB-1f) |
+| mbz-roomfilter-cls | baja | MB | components/agenda/room-filter.tsx | 🔴 | CLS del filtro de sala en la toolbar (anotado en el cierre); solo existe en consultorios con salas y el demo local no tiene: sin medir en DIR-Z/MB-Z |
+| mbz-toast-drawer-768-880 | baja | MB | components/ui/toast.tsx | 🔴 | Entre 768 y 880 de ancho, con un Drawer abierto, el toast (arriba a la izquierda) puede quedar tapado por el panel: queda poco ancho libre a la izquierda |
+| mbz-plan-editor-test-fragil | baja | C | tests/unit/render/plan-editor.test.tsx:168 | 🔴 | `toContain("width:600px")` pasa por la subcadena `--k-drawer-width:600px`: afirmar la variable o el ancho real |
+| mbz-recepcion-plegable-390 | baja | MB | components/agenda/reception | 🔴 | Secciones plegables por estado en Recepción de la agenda a 390 (pedido de MB-1b, no hecho) |
+| mbz-perfil-tabs-tablas-390 | baja | MB/C | components/patients/profile (Turnos, Facturación, Sesiones) | 🔴 | Siguen como tablas con scroll horizontal a 390 |
+| mbz-sala-total-columna | baja | MB (decide Martin) | components/sala | 🟡 | Decisión a mostrar (MB-1c): en el celular el header de columna del Tablero lleva el total con dos números. Default: queda como está hasta que Martin decida |
+| dir-b1-alias-sin-rate-limit | baja | C | app/(directory)/consultorios/[slug]/page.tsx (`resolveSlugAlias`) | 🔴 | Cada slug nuevo inexistente hace una lectura por PK (el 404 sí queda en ISR 600 s). Opción: cache por slug o rate limit |
+| dir-b2-public-profile-sin-rate-limit | baja | C | lib/public-profile.ts | 🔴 | Actions sin rate limit (exigen sesión + 2FA; riesgo de abuso, no de fuga). Opción: limiter por usuario de `/cuenta/seguridad` |
+| turnero-usuario-deshabilitado-reservable | media | C0 | lib/practitioner-scope.ts (`bookablePractitionerWhere`) | 🔴 | Pre-DIR: un usuario deshabilitado por Plataforma sigue reservable en el turnero (solo se mira `Membership.disabledAt`) |
+| dir-ver-mi-perfil-link | baja | DIR | components/account/public-profile-form.tsx | 🔴 | Falta el link «Ver mi perfil público» (`MyPublicProfile` no trae `profileId`) |
+| dir-menu-perfil-otro-consultorio | baja | DIR | layout de `/cuenta` (`TenantOption` sin `clinical`) | 🔴 | La entrada «Perfil público» no aparece para un Titular/Admin que atiende solo en otro consultorio |
+| dir-tagcombobox-aria | baja | C | components (TagCombobox de especialidades) | 🔴 C | Sin roles ARIA `combobox`/`listbox` |
+| pf1-outline-none-8 | baja | C | app/** · components/** | 🔴 | Sigue en 8 (meta ≤ 5), sin cambios en DIR/MB |
+| tailwind-merge-sin-uso | baja | C | package.json | 🔴 | Sin importadores desde MB-Z; sacarlo pide `npm install` (lockfile), no se hizo en el cierre |
 
 ### Hallazgos de ES4 (P4.Z, 15/16-oct-2026)
 

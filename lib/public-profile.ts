@@ -42,6 +42,7 @@ import {
   type PublicProfileFieldsInput,
   type PublicProfileStatus,
 } from "@/lib/public-profile-logic";
+import type { MyPublicProfile } from "@/lib/public-profile-types";
 import type { ActionResult } from "@/lib/validation";
 
 const NO_SESSION = "Tu sesión venció. Volvé a entrar.";
@@ -53,20 +54,6 @@ const NO_PROFILE = "Primero guardá tu perfil público.";
 
 const PATH = "/cuenta/perfil-publico";
 
-/** Lo que ve la persona de SU perfil (incluye el estado de moderación: es suyo). */
-export type MyPublicProfile = {
-  /** Para prellenar el nombre público la primera vez (nunca el email: decisión 19). */
-  defaultPublicName: string;
-  status: PublicProfileStatus;
-  profile:
-    | (PublicProfileFields & {
-        consentVersion: string | null;
-        consentAt: string | null;
-        hiddenReason: string | null;
-        licenseVerified: boolean;
-      })
-    | null;
-};
 
 type ProfileSession = { ok: true; userId: string; fullName: string | null } | { ok: false; error: string };
 

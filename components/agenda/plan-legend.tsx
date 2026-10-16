@@ -67,6 +67,8 @@ export function PlanLegend({
                   ? "Resaltar los turnos que son sesiones de un plan"
                   : "Resaltar los turnos sueltos (sin plan)"
             }
+            // MB-Z-F2: 44 px bajo 768 (`.k-tap-m`); al final para no mover el orden de atributos del markup.
+            className="k-tap-m"
             style={{
               display: "inline-flex",
               alignItems: "center",

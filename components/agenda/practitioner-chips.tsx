@@ -76,6 +76,7 @@ export function PractitionerChips({
         aria-pressed={all}
         aria-label={`Todos los profesionales, ${total} ${total === 1 ? "turno" : "turnos"}`}
         onClick={() => onChange([])}
+        className="k-tap-m"
         style={chipStyle(all)}
       >
         Todos <Count n={total} active={all} />
@@ -85,6 +86,7 @@ export function PractitionerChips({
         aria-pressed={favsActive}
         aria-label={favs.length > 0 ? `Mis favoritos, ${favTotal} ${favTotal === 1 ? "turno" : "turnos"}` : "Mis favoritos (no marcaste ninguno)"}
         disabled={favs.length === 0}
+        className="k-tap-m"
         title={favs.length === 0 ? "Marcá profesionales con la estrella para armar tus favoritos" : undefined}
         onClick={() => onChange(favs.length === allIds.length ? [] : allIds.filter((id) => favs.includes(id)))}
         style={{ ...chipStyle(favsActive), opacity: favs.length === 0 ? 0.5 : 1, cursor: favs.length === 0 ? "default" : "pointer" }}
@@ -102,6 +104,7 @@ export function PractitionerChips({
           <span
             key={p.id}
             data-chip={p.id}
+            className="k-tap-m"
             style={{
               ...chipStyle(on),
               padding: 0,
@@ -139,6 +142,7 @@ export function PractitionerChips({
                 aria-pressed={fav}
                 aria-label={fav ? `Quitar a ${p.name} de favoritos` : `Marcar a ${p.name} como favorito`}
                 title={fav ? "Quitar de favoritos" : "Marcar como favorito"}
+                className="k-tap-m"
                 onClick={() => onToggleFavorite(p.id)}
                 style={{
                   display: "inline-flex",

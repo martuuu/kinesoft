@@ -11,6 +11,7 @@ import { sessionCounterLabel, sessionHref } from "@/components/seguimiento/segui
 import { disciplineLabel } from "@/lib/plan-display";
 import type { PlanDTO, PlanSessionDTO, SesionesViewProps } from "@/components/planes/plan-editor-types";
 
+import heroStyles from "../hero.module.css";
 /**
  * Tab Sesiones del perfil (S22h, ES3). Historia:
  *   - P0-S02u-perfil: listaba solo las del primer plan mientras el badge
@@ -210,7 +211,7 @@ function PlanGroup({
           </Button>
         )}
         {onOpenPlan && (
-          <Button variant="ghost" onClick={() => onOpenPlan(plan.id)} style={{ fontSize: 12, padding: "6px 10px" }}>
+          <Button variant="ghost" onClick={() => onOpenPlan(plan.id)} style={{ fontSize: 12, padding: "6px 10px" }} className={heroStyles.action}>
             Ver plan
           </Button>
         )}
