@@ -106,18 +106,18 @@ describe("[MB-0a] public/sw.js", () => {
     const { event, done } = extendable();
     sw.listeners.install(event);
     await done();
-    expect(sw.log.opened).toEqual(["ks-sw-v1"]);
+    expect(sw.log.opened).toEqual(["ks-sw-v2"]);
     expect(sw.log.added).toEqual([["/offline.html", "/icons/icon-192.png"]]);
     expect(sw.log.put).toEqual([]);
     expect(sw.log.skipWaiting).toBe(1);
   });
 
   it("activate borra las cachés de otras versiones (no la propia) y toma los clientes", async () => {
-    sw = loadSw({ existingKeys: ["ks-sw-v0", "ks-sw-v1", "workbox-precache-v2"] });
+    sw = loadSw({ existingKeys: ["ks-sw-v0", "ks-sw-v1", "ks-sw-v2", "workbox-precache-v2"] });
     const { event, done } = extendable();
     sw.listeners.activate(event);
     await done();
-    expect(sw.log.deleted.sort()).toEqual(["ks-sw-v0", "workbox-precache-v2"]);
+    expect(sw.log.deleted.sort()).toEqual(["ks-sw-v0", "ks-sw-v1", "workbox-precache-v2"]);
     expect(sw.log.claim).toBe(1);
   });
 

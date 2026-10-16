@@ -8,7 +8,6 @@ import { directoryMode } from "@/lib/directory-mode";
 import { getDirectorySnapshot } from "@/lib/directory-internal";
 import { resolveSlugAlias } from "@/lib/public-booking-internal";
 import { clinicJsonLd, clinicPath, findDirectoryClinic, jsonLdScript } from "@/lib/directory-logic";
-import { withSearchParams } from "@/lib/public-booking-links";
 import { ButtonLink } from "@/components/ui/button";
 import { DirectoryAvatar, DirectoryCrumbs, JsonLd } from "@/components/directory/directory-shell";
 import {
@@ -27,11 +26,10 @@ import s from "@/components/directory/directory.module.css";
  * DIR-3a (C-DIR5) · `/consultorios/[slug]`: página pública de un consultorio listado (C-DIR4: opt-in, no oculto,
  * turnero abierto y ≥ 1 profesional reservable).
  *
- * - Alias (BO2-D): un slug viejo → `permanentRedirect` al vigente CON la query (mismo criterio que el turnero,
- *   C-DIR7). Solo se redirige si el vigente está en el directorio: un consultorio que no se publicó no revela por acá
- *   a qué slug se mudó (y el redirect terminaría en 404 igual).
- * - `searchParams` se lee SOLO en esa rama: en Next 14 leerlo hace dinámica la ruta, y así la página normal sigue
- *   siendo ISR (`generateStaticParams` vacío + `revalidate`). El slug con forma imposible corta antes de ir a la base.
+ * - Alias (BO2-D): un slug viejo → `permanentRedirect` al vigente, SIN la query: la página es ISR y en Next 14.2 leer
+ *   `searchParams` en un render ISR tira DYNAMIC_SERVER_USAGE (500, revisor A de DIR-Z); la página no usa la query.
+ *   Solo se redirige si el vigente está en el directorio: un consultorio que no se publicó no revela por acá a qué
+ *   slug se mudó (y el redirect terminaría en 404 igual). El slug con forma imposible corta antes de ir a la base.
  * - Profesionales: solo los que publicaron su perfil (DIR-D25); el resto del equipo queda detrás de «Ver todos en el
  *   turnero». Sin email del consultorio (DIR-D15); teléfono y WhatsApp sí.
  */
@@ -79,7 +77,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function ConsultorioPage({ params, searchParams }: Props) {
+export default async function ConsultorioPage({ params }: Props) {
   if (directoryMode() === "off") notFound();
   const slug = decodeSlug(params.slug);
   if (!slug) notFound();
@@ -88,7 +86,9 @@ export default async function ConsultorioPage({ params, searchParams }: Props) {
   if (!clinic) {
     const moved = await resolveSlugAlias(slug);
     if (moved && findDirectoryClinic(snapshot, moved.slug)) {
-      permanentRedirect(withSearchParams(clinicPath(moved.slug), searchParams));
+      // DIR-Z (revisor A, M1): sin `searchParams`. La ruta es ISR y en Next 14.2 leer `searchParams` en un render ISR
+      // tira DYNAMIC_SERVER_USAGE (500 en todo alias, con o sin query). La página no usa ningún parámetro de query.
+      permanentRedirect(clinicPath(moved.slug));
     }
     notFound();
   }

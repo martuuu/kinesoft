@@ -107,6 +107,8 @@ export async function buildDirectorySnapshot(now: Date = new Date()): Promise<Di
           consentVersion: { not: null },
           consentWithdrawnAt: null,
           hiddenAt: null,
+          // DIR-Z (revisor A, M2): un usuario deshabilitado por Plataforma no puede entrar a retirarse; sale solo.
+          user: { disabledAt: null },
         },
         select: {
           id: true,

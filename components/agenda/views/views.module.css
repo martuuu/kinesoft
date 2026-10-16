@@ -330,7 +330,12 @@
 
 /* ── [MB-1a · C-MB3] Swipe de día en Día: el navegador se queda con el scroll vertical y el zoom; el gesto
    horizontal llega como pointer events (sin esto, el primer movimiento horizontal dispara `pointercancel`). ── */
-.swipeDay {
+/* MB-Z (revisor de código, M1): Chrome reinicia el touch-action en cada contenedor con scroll; sin repetirlo en el
+   scroller del timeline (.k-scroll) el arrastre horizontal se lo quedaba el navegador. El primer valor es respaldo
+   para Safari si no parsea «pan-y pinch-zoom». */
+.swipeDay,
+.swipeDay :global(.k-scroll) {
+  touch-action: pan-y;
   touch-action: pan-y pinch-zoom;
 }
 

@@ -437,11 +437,13 @@ describe("[DIR-3a] /consultorios/[slug]", () => {
     expect(h).toContain('href="/c/sin-perfiles/booking"');
   });
 
-  it("alias: slug viejo → permanentRedirect al vigente con la query; no listado → 404", async () => {
+  // DIR-Z (revisor A, M1): sin la query. La ruta es ISR y leer `searchParams` en un render ISR de Next 14.2 tira
+  // DYNAMIC_SERVER_USAGE (500 en producción); un objeto plano en el test no lo reproducía.
+  it("alias: slug viejo → permanentRedirect al vigente (sin la query); no listado → 404", async () => {
     state.aliases = { "kine-viejo": "kine-centro", "otro-viejo": "no-listado" };
     expect(
       await thrown(ConsultorioPage({ params: { slug: "kine-viejo" }, searchParams: { utm_source: "x", a: ["1", "2"] } }))
-    ).toBe("NEXT_REDIRECT;replace;/consultorios/kine-centro?utm_source=x&a=1&a=2;308;");
+    ).toBe("NEXT_REDIRECT;replace;/consultorios/kine-centro;308;");
     expect(await thrown(ConsultorioPage({ params: { slug: "kine-viejo" }, searchParams: {} }))).toBe(
       "NEXT_REDIRECT;replace;/consultorios/kine-centro;308;"
     );

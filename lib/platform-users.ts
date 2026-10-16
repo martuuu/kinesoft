@@ -233,6 +233,8 @@ export async function setPlatformUserDisabled(raw: unknown): Promise<ActionResul
   if (!authSynced) logger.warn("platform.user.ban_sync_failed", { userId, disabled, code: ban.code });
 
   revalidatePath("/plataforma", "layout");
+  // DIR-Z (revisor A, M2): el snapshot del directorio excluye a los deshabilitados; purgarlo ya.
+  revalidateTag(tags.directory());
   return { ok: true, data: { changed: res.data, authSynced } };
 }
 

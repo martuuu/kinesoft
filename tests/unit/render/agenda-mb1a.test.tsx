@@ -187,7 +187,8 @@ describe("[MB-1a] Swipe de día y alto de la agenda (C-MB3 / C-MB4)", () => {
     expect(code).toContain('onPointerUp={view === "timeline" ? swipe.onPointerUp : undefined}');
     expect(code).toContain('onPointerCancel={view === "timeline" ? swipe.onPointerCancel : undefined}');
     expect(code).toContain("adjacentVisibleDay(dayKey, delta");
-    expect(css).toMatch(/\.swipeDay \{\s*touch-action: pan-y pinch-zoom;/);
+    // MB-Z: también en el scroller del timeline (Chrome reinicia touch-action por contenedor con scroll).
+    expect(css).toMatch(/\.swipeDay,\s*\.swipeDay :global\(\.k-scroll\) \{\s*touch-action: pan-y;\s*touch-action: pan-y pinch-zoom;/);
   });
 
   it("alto fijo ≥ 768 solo en vistas de grilla, con dvh y respaldo vh; sin `100vh` inline", () => {
