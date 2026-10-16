@@ -18,6 +18,7 @@
  * seed/tear-down cross-tenant fixtures the app role could never create.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import {
@@ -1020,5 +1021,153 @@ describe.skipIf(!RUN || BYPASS)("RLS plataforma (BO0 M7, app role)", () => {
     ]);
     expect(counts).toEqual([0, 0]);
     expect((await prismaOwner.supportSession.findUniqueOrThrow({ where: { id: sessB } })).endedAt).toBeNull();
+  });
+});
+
+// ── EV2-0 M9 (20261017120000_clinical_notes) · ES4-S26b ─────────────────
+// ClinicalNote y ClinicalNoteRevision: ENABLE + FORCE + UNA policy `<T>_tenant_isolation` (ALL, USING = WITH CHECK).
+// La evolución es la HC más sensible del sistema: acá se prueba con `kinesoft_app` (vía `runWithRls`) que A no lee,
+// no inserta, no modifica ni muda lo de B; que sin GUC no se ve nada; y que A sí opera lo propio (no es deny-all).
+// La revisión la inserta el trigger con el rol y el GUC de quien edita (sin SECURITY DEFINER): por eso una edición de
+// A produce una revisión que A ve y B no. Los triggers (sin DELETE, solo inserción, red de 24 h), los CHECK y las FKs
+// compuestas se prueban en clinical-notes-m9.test.ts; PatientChangeRequest, en el bloque «Planes M1» de arriba.
+describe.skipIf(!RUN || BYPASS)("RLS evoluciones (EV2-0 M9 ClinicalNote / ClinicalNoteRevision, app role)", () => {
+  const prismaOwner = new PrismaClient({
+    datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
+  });
+  const TABLES = ["ClinicalNote", "ClinicalNoteRevision"] as const;
+
+  let A: EphemeralTenant;
+  let B: EphemeralTenant;
+  let patA: string;
+  let patB: string;
+  let noteA: string;
+  let noteB: string;
+  let revA: string;
+  let revB: string;
+
+  const noteData = (t: EphemeralTenant, patientId: string, body: string) => ({
+    tenantId: t.tenantId,
+    patientId,
+    body,
+    occurredAt: new Date(),
+    authorUserId: t.userId,
+    authorPractitionerId: t.practitionerId,
+    authorName: "Kine Titular",
+    idempotencyKey: `s26b-${randomUUID()}`,
+  });
+
+  /** Paciente + evolución + una edición (el trigger deja la revisión 1 con el texto anterior). Todo con el owner. */
+  async function seed(t: EphemeralTenant, label: string) {
+    const pat = await prismaOwner.patient.create({
+      data: { tenantId: t.tenantId, firstName: "M9", lastName: label, assignedPractitionerId: t.practitionerId },
+    });
+    const note = await prismaOwner.clinicalNote.create({ data: noteData(t, pat.id, `Evolución ${label} v1`) });
+    await prismaOwner.clinicalNote.update({ where: { id: note.id }, data: { body: `Evolución ${label} v2` } });
+    const rev = await prismaOwner.clinicalNoteRevision.findFirstOrThrow({ where: { noteId: note.id }, select: { id: true } });
+    return { pat: pat.id, note: note.id, rev: rev.id };
+  }
+
+  beforeAll(async () => {
+    A = await createEphemeralTenant(prismaOwner);
+    B = await createEphemeralTenant(prismaOwner);
+    ({ pat: patA, note: noteA, rev: revA } = await seed(A, "A"));
+    ({ pat: patB, note: noteB, rev: revB } = await seed(B, "B"));
+  });
+
+  afterAll(async () => {
+    // deleteTenantDeep borra las 2 tablas en modo réplica (el trigger rechaza DELETE incluso al owner).
+    await A?.cleanup();
+    await B?.cleanup();
+    await prismaOwner.$disconnect();
+  });
+
+  it("catálogo: relrowsecurity y relforcerowsecurity en true, una sola policy `<tabla>_tenant_isolation` (ALL)", async () => {
+    const rel = await prismaOwner.$queryRaw<{ relname: string; rls: boolean; force: boolean }[]>`
+      SELECT relname, relrowsecurity AS rls, relforcerowsecurity AS force
+      FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = ANY(${[...TABLES]})`;
+    expect(rel.sort((a, b) => a.relname.localeCompare(b.relname))).toEqual([
+      { relname: "ClinicalNote", rls: true, force: true },
+      { relname: "ClinicalNoteRevision", rls: true, force: true },
+    ]);
+    const pol = await prismaOwner.$queryRaw<{ tablename: string; policyname: string; cmd: string; qual: string; with_check: string }[]>`
+      SELECT tablename, policyname, cmd, qual, with_check FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = ANY(${[...TABLES]}) ORDER BY tablename`;
+    expect(pol.map((p) => [p.tablename, p.policyname, p.cmd])).toEqual([
+      ["ClinicalNote", "ClinicalNote_tenant_isolation", "ALL"],
+      ["ClinicalNoteRevision", "ClinicalNoteRevision_tenant_isolation", "ALL"],
+    ]);
+    for (const p of pol) {
+      expect(p.qual).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+      expect(p.with_check).toMatch(/"tenantId" = app_current_tenant_id\(\)/);
+    }
+  });
+
+  it("lectura: A ve su evolución y su revisión, no las de B (y B no ve las de A), ni buscando por id", async () => {
+    const [notesA, revsA] = await runWithRls(A.tenantId, async (tx) => [
+      (await tx.clinicalNote.findMany({ where: { id: { in: [noteA, noteB] } }, select: { id: true } })).map((r) => r.id),
+      (await tx.clinicalNoteRevision.findMany({ where: { id: { in: [revA, revB] } }, select: { id: true } })).map((r) => r.id),
+    ]);
+    expect(notesA).toEqual([noteA]);
+    expect(revsA).toEqual([revA]);
+    const [notesB, revsB] = await runWithRls(B.tenantId, async (tx) => [
+      await tx.clinicalNote.count({ where: { patientId: patA } }),
+      await tx.clinicalNoteRevision.count({ where: { noteId: noteA } }),
+    ]);
+    expect([notesB, revsB]).toEqual([0, 0]);
+  });
+
+  it("INSERT con el tenantId de A desde B → rechazado por el WITH CHECK; A sigue con 1 evolución", async () => {
+    await expect(
+      runWithRls(B.tenantId, (tx) => tx.clinicalNote.create({ data: noteData(A, patA, "Colada desde B") }))
+    ).rejects.toThrow(/row-level security/i);
+    expect(await prismaOwner.clinicalNote.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("UPDATE desde B sobre la evolución de A afecta 0 filas: ni body ni anulación; sin revisión nueva", async () => {
+    const counts = await runWithRls(B.tenantId, async (tx) => [
+      (await tx.clinicalNote.updateMany({ where: { id: noteA }, data: { body: "Pisada por B" } })).count,
+      (await tx.clinicalNote.updateMany({
+        where: { id: noteA },
+        data: { voidedAt: new Date(), voidedByUserId: B.userId, voidReason: "Anulada por B" },
+      })).count,
+    ]);
+    expect(counts).toEqual([0, 0]);
+    const a = await prismaOwner.clinicalNote.findUniqueOrThrow({ where: { id: noteA } });
+    expect(a.body).toBe("Evolución A v2");
+    expect(a.voidedAt).toBeNull();
+    expect(a.revision).toBe(2);
+    expect(await prismaOwner.clinicalNoteRevision.count({ where: { noteId: noteA } })).toBe(1);
+  });
+
+  it("A no puede mudar su evolución al tenant de B (WITH CHECK en UPDATE)", async () => {
+    // El trigger de identidad (P0001) también la frenaría: cualquiera de los dos tiene que abortar la sentencia.
+    await expect(
+      runWithRls(A.tenantId, (tx) => tx.clinicalNote.update({ where: { id: noteA }, data: { tenantId: B.tenantId } }))
+    ).rejects.toThrow();
+    expect((await prismaOwner.clinicalNote.findUniqueOrThrow({ where: { id: noteA } })).tenantId).toBe(A.tenantId);
+  });
+
+  it("sin GUC (fuera de runWithRls): 0 evoluciones y 0 revisiones visibles, y ningún INSERT entra", async () => {
+    const app = new PrismaClient();
+    try {
+      expect(await app.clinicalNote.count({ where: { id: { in: [noteA, noteB] } } })).toBe(0);
+      expect(await app.clinicalNoteRevision.count({ where: { id: { in: [revA, revB] } } })).toBe(0);
+      await expect(app.clinicalNote.create({ data: noteData(A, patA, "Sin GUC") })).rejects.toThrow(/row-level security/i);
+    } finally {
+      await app.$disconnect();
+    }
+    expect(await prismaOwner.clinicalNote.count({ where: { tenantId: A.tenantId } })).toBe(1);
+  });
+
+  it("intra-tenant: A crea, lee y edita lo propio; la revisión del trigger pasa el WITH CHECK y B no la ve", async () => {
+    const created = await runWithRls(A.tenantId, (tx) => tx.clinicalNote.create({ data: noteData(A, patA, "Propia v1") }));
+    expect(created.tenantId).toBe(A.tenantId);
+    await runWithRls(A.tenantId, (tx) => tx.clinicalNote.update({ where: { id: created.id }, data: { body: "Propia v2" } }));
+    const mine = await runWithRls(A.tenantId, (tx) =>
+      tx.clinicalNoteRevision.findMany({ where: { noteId: created.id }, select: { tenantId: true, body: true } })
+    );
+    expect(mine).toEqual([{ tenantId: A.tenantId, body: "Propia v1" }]);
+    expect(await runWithRls(B.tenantId, (tx) => tx.clinicalNoteRevision.count({ where: { noteId: created.id } }))).toBe(0);
   });
 });
