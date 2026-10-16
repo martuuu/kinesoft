@@ -36,7 +36,8 @@ describe("[P3-S22h] L9: diálogo de archivar paciente", () => {
     const bulk = archivePatientDialogCopy({ count: 3, livePlanCount: null });
     expect(bulk.title).toBe("Archivar 3 pacientes");
     expect(bulk.message).toContain("3 pacientes dejan de aparecer");
-    expect(bulk.message).toContain("los podés desarchivar");
+    expect(bulk.message).toContain("los podés reactivar");
+    expect(bulk.message).toContain("se desvinculan sus cuentas");
     expect(bulk.message).toContain("Si alguno tiene planes activos");
   });
 

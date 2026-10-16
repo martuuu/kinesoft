@@ -19,6 +19,7 @@
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { getActor, writableError } from "@/lib/session";
 import { patientAccessFor } from "@/lib/visibility";
@@ -30,6 +31,7 @@ import type { ActionResult } from "@/lib/validation";
 import {
   applyPortalRequestInTx,
   coverageChangesOsInTx,
+  coverageImpactInTx,
   countUnpaidCopagoBookingsInTx,
   emailApplies,
   parseStoredChanges,
@@ -43,7 +45,7 @@ const COPY = {
   notFound: "Pedido no encontrado.",
   patientNotFound: "Paciente no encontrado.",
   forbidden: "No tenés acceso a los pedidos de este paciente.",
-  stale: "El pedido cambió o ya se resolvió en otra sesión. Volvé a abrir la ficha para ver la versión actual.",
+  stale: "El pedido cambió o ya lo resolvió otra persona. Recargá la ficha para ver la versión actual.",
   badChanges: "El pedido tiene datos que ya no son válidos: rechazalo y pedile al paciente que lo vuelva a enviar.",
 } as const;
 
@@ -119,12 +121,13 @@ export async function listPatientPortalRequests(input: { patientId: string }): P
 }
 
 /**
- * Impacto de aprobar: si cambia la OS, cuántos turnos impagos cobran el copago de la cobertura (la UI lo pide con
- * `useConfirm` «Cambia el copago de N turnos impagos»). Solo lectura. `decidePatientPortalRequest` lo recalcula en su tx.
+ * Impacto de aprobar: si cambia la OS, cuántos turnos impagos cobran el copago de la cobertura y si se borra un copago
+ * propio cargado (`ownCopagoCents`, ES4-Z M2: antes se borraba sin preguntar cuando no había turnos impagos). La UI lo
+ * pide con `useConfirm`. Solo lectura. `decidePatientPortalRequest` lo recalcula en su tx.
  */
 export async function previewPortalRequestImpact(input: {
   id: string;
-}): Promise<ActionResult<{ osChanges: boolean; unpaidCopagoBookings: number }>> {
+}): Promise<ActionResult<{ osChanges: boolean; unpaidCopagoBookings: number; ownCopagoCents: number | null }>> {
   const actor = await getActor();
   const parsed = PreviewInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: COPY.invalid };
@@ -133,7 +136,7 @@ export async function previewPortalRequestImpact(input: {
   type Outcome =
     | { kind: "notfound" }
     | { kind: "forbidden" }
-    | { kind: "ok"; osChanges: boolean; unpaidCopagoBookings: number };
+    | { kind: "ok"; osChanges: boolean; unpaidCopagoBookings: number; ownCopagoCents: number | null };
   const out = await runWithRls(actor.tenantId, async (tx): Promise<Outcome> => {
     const req = await tx.patientChangeRequest.findFirst({
       where: { id, tenantId: actor.tenantId, status: "PENDING" },
@@ -142,17 +145,23 @@ export async function previewPortalRequestImpact(input: {
     if (!req) return { kind: "notfound" };
     if (!canDecide(await patientAccessFor(actor, req.patientId, tx))) return { kind: "forbidden" };
     const changes = parseStoredChanges(req.changes);
-    const osChanges = changes?.coverage
-      ? await coverageChangesOsInTx(tx, actor.tenantId, req.patientId, changes.coverage)
-      : false;
+    const { osChanges, ownCopagoCents } = await coverageImpactInTx(
+      tx,
+      actor.tenantId,
+      req.patientId,
+      changes?.coverage
+    );
     const unpaidCopagoBookings = osChanges
       ? await countUnpaidCopagoBookingsInTx(tx, actor.tenantId, req.patientId)
       : 0;
-    return { kind: "ok", osChanges, unpaidCopagoBookings };
+    return { kind: "ok", osChanges, unpaidCopagoBookings, ownCopagoCents };
   });
   if (out.kind === "notfound") return { ok: false, error: COPY.notFound };
   if (out.kind === "forbidden") return { ok: false, error: COPY.forbidden };
-  return { ok: true, data: { osChanges: out.osChanges, unpaidCopagoBookings: out.unpaidCopagoBookings } };
+  return {
+    ok: true,
+    data: { osChanges: out.osChanges, unpaidCopagoBookings: out.unpaidCopagoBookings, ownCopagoCents: out.ownCopagoCents },
+  };
 }
 
 /** Aprobar o rechazar un pedido (brief ES4 §3.6). */
@@ -250,7 +259,12 @@ export async function decidePatientPortalRequest(input: {
     const dup = portalRequestUniqueError(e);
     if (dup) return { ok: false, error: dup };
     if (e instanceof PortalRequestInvalid) return { ok: false, error: e.message };
-    logger.error("patient.portalRequest.decide.failed", { err: e instanceof Error ? e.message : String(e) });
+    // ES4-Z (B5): sin `e.message` — un error de Prisma o de validación puede traer valores del pedido (teléfono,
+    // email). Alcanza con el nombre y el código para encontrarlo.
+    logger.error("patient.portalRequest.decide.failed", {
+      name: e instanceof Error ? e.name : typeof e,
+      code: e instanceof Prisma.PrismaClientKnownRequestError ? e.code : undefined,
+    });
     throw e;
   }
 

@@ -64,6 +64,9 @@ const ALLOWED_KEYS = new Set([
   "serviceName",
   "amount",
   "paid",
+  "inProcess",
+  "pending",
+  "cancelled",
   // PortalMoney
   "kind",
   "cents",
@@ -230,6 +233,17 @@ describe.skipIf(!RUN)("[P4-S24p] portal · estado de cuenta", () => {
       await booking(K, mePatientK, { scheduledFor: at(-400), status: "COMPLETED", copagoCents: 60_000 })
     ).id;
     // Del otro paciente del mismo consultorio: nunca aparece.
+    // ES4-Z B3: REFUNDED no reabre deuda; AUTHORIZED (por el Payment de MP) está en proceso; cancelado con cobro.
+    ids.refunded = (
+      await booking(K, mePatientK, { scheduledFor: at(-6), status: "COMPLETED", paymentStatus: "REFUNDED", copagoCents: 33_000 })
+    ).id;
+    ids.authorized = (
+      await booking(K, mePatientK, { scheduledFor: at(-7), status: "COMPLETED", copagoCents: 44_000 })
+    ).id;
+    await db.payment.create({ data: { bookingId: ids.authorized, status: "AUTHORIZED", amountCents: 0 } });
+    ids.cancelledPaid = (
+      await booking(K, mePatientK, { scheduledFor: at(-8), status: "CANCELLED", paymentStatus: "PAID", copagoCents: 55_000 })
+    ).id;
     ids.otherLoose = (
       await booking(K, otherPatientK, { scheduledFor: at(-2), status: "COMPLETED", copagoCents: 99_000 })
     ).id;
@@ -302,7 +316,13 @@ describe.skipIf(!RUN)("[P4-S24p] portal · estado de cuenta", () => {
     ]);
     // Ventana ES4-D7: últimos 12 meses + futuros; sin los cancelados no cobrados; solo turnos sin plan.
     const byId = new Map(acc.looseBookings.map((b) => [b.id, b]));
-    expect([...byId.keys()].sort()).toEqual([ids.osNoCopago, ids.paid, ids.unpaid, ids.future].sort());
+    expect([...byId.keys()].sort()).toEqual(
+      [ids.osNoCopago, ids.paid, ids.unpaid, ids.future, ids.refunded, ids.authorized, ids.cancelledPaid].sort()
+    );
+    expect(byId.get(ids.unpaid)).toMatchObject({ pending: true, inProcess: false, cancelled: false });
+    expect(byId.get(ids.refunded)).toMatchObject({ paid: false, pending: false, inProcess: false });
+    expect(byId.get(ids.authorized)).toMatchObject({ paid: false, pending: false, inProcess: true });
+    expect(byId.get(ids.cancelledPaid)).toMatchObject({ paid: true, pending: false, cancelled: true });
     expect(byId.get(ids.paid)).toMatchObject({ amount: { kind: "amount", cents: 250_000 }, paid: true, serviceName: "Consulta" });
     expect(byId.get(ids.unpaid)).toMatchObject({ amount: { kind: "amount", cents: 150_000 }, paid: false });
     expect(byId.get(ids.paid)!.date).toBe(tzBookingAt.toISOString());
@@ -341,6 +361,8 @@ describe.skipIf(!RUN)("[P4-S24p] portal · estado de cuenta", () => {
     expect(html).toContain(formatARS(250_000)); // pendiente total y turno cobrado
     expect(html).toContain(formatARS(300_000)); // pactado del plan
     expect(html).toContain("A confirmar en el consultorio");
+    expect(html).toContain("Pago en proceso");
+    expect(html).toContain("A pagar");
     expect(html).not.toContain("250000");
     // 02:30Z → día anterior en AR. Con la fecha UTC del host mostraría otro día.
     const opts: Intl.DateTimeFormatOptions = { day: "2-digit", month: "short", year: "numeric" };

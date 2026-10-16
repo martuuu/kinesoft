@@ -29,6 +29,20 @@ export const PORTAL_HOME = {
   bookCta: "Sacar un turno",
 } as const;
 
+/** ES4-D2 (ES4-Z b1): «Buscar mis fichas» (form POST de la home; `?buscar=` con el resultado). */
+export const PORTAL_SEARCH = {
+  cta: "¿No ves tu consultorio? Buscar mis fichas",
+  ok: "Listo: encontramos y vinculamos tus fichas nuevas.",
+  nada: "No encontramos fichas nuevas con tu email. Pedile a tu consultorio que te invite desde tu ficha.",
+  limite: "Ya buscaste varias veces. Probá de nuevo en un rato.",
+} as const;
+export type PortalSearchOutcome = Exclude<keyof typeof PORTAL_SEARCH, "cta">;
+
+/** «Tenés 1 consultorio vinculado a tu cuenta.» / «Tenés N consultorios…». */
+export function portalLinkedCount(n: number): string {
+  return n === 1 ? "Tenés 1 consultorio vinculado a tu cuenta." : `Tenés ${n} consultorios vinculados a tu cuenta.`;
+}
+
 /** «sesión» solo en Kinesiología; en Clínica general, «turno». */
 export function portalSessionWord(vertical: TenantVertical): { one: string; many: string } {
   return isKinePortal(vertical) ? { one: "sesión", many: "sesiones" } : { one: "turno", many: "turnos" };
@@ -64,14 +78,18 @@ export function portalTenantHeader(o: {
   return { title: "Tu consultorio", lead: `Hola ${o.firstName}.` };
 }
 
-/** Sin plan activo en `/portal/c/<slug>`. En General, `linkToHome` = el texto remite a «Mis consultorios». */
-export function portalNoPlanCopy(vertical: TenantVertical): { text: string; linkToHome: boolean } {
-  return isKinePortal(vertical)
+/**
+ * Sin plan activo en `/portal/c/<slug>`. Depende de si el consultorio USA planes (la sección `plan`, ⇐ módulo `planes`),
+ * no de la vertical. ES4-Z (b4): sin planes, la página muestra los próximos turnos ahí mismo (antes mandaba a «Mis
+ * consultorios» a buscarlos: `linkToHome`, que queda en false en los dos casos y se conserva por compatibilidad).
+ */
+export function portalNoPlanCopy(usesPlans: boolean): { text: string; linkToHome: boolean } {
+  return usesPlans
     ? {
         text: "Todavía no tenés un plan activo en este consultorio. Cuando tu profesional lo arme va a aparecer acá.",
         linkToHome: false,
       }
-    : { text: "Este consultorio no usa planes de tratamiento. Tus próximos turnos los ves en", linkToHome: true };
+    : { text: "Acá ves tus próximos turnos en este consultorio.", linkToHome: false };
 }
 
 /** Rótulo de la próxima cita del plan y de cada fila del timeline. */
@@ -80,11 +98,12 @@ export function portalSessionLabel(vertical: TenantVertical, index: number): str
   return `${w.charAt(0).toUpperCase()}${w.slice(1)} ${index}`;
 }
 
-export function portalNextSessionLabel(vertical: TenantVertical, index: number): string {
-  return `${isKinePortal(vertical) ? "Próxima sesión" : "Próximo turno"} · #${index}`;
+/** «Próxima sesión · Sesión 3 de 10» (Kine) / «Próximo turno · Turno 3 de 10» (General). Antes: «· #3». */
+export function portalNextSessionLabel(vertical: TenantVertical, ordinal: number, total: number): string {
+  return `${isKinePortal(vertical) ? "Próxima sesión" : "Próximo turno"} · ${portalSessionOfTotal(vertical, ordinal, total)}`;
 }
 
-/** Check-in antes de la cita (`components/portal/check-in-form.tsx`). «Check-in pre-sesión» solo en Kinesiología. */
+/** Check-in antes de la cita (`components/portal/check-in-form.tsx`). «Antes de tu sesión» solo en Kinesiología (antes «Check-in pre-sesión»). */
 export function portalCheckInCopy(vertical: TenantVertical): {
   title: string;
   lead: string;
@@ -97,7 +116,8 @@ export function portalCheckInCopy(vertical: TenantVertical): {
 } {
   const kine = isKinePortal(vertical);
   return {
-    title: kine ? "Check-in pre-sesión" : "Antes de tu turno",
+    // ES4-Z (b): «Check-in pre-sesión» era jerga; el botón y el estado conservan «check-in».
+    title: kine ? "Antes de tu sesión" : "Antes de tu turno",
     lead: kine
       ? "¿Cómo estás llegando? Tu profesional lo va a ver antes de la sesión."
       : "¿Cómo estás llegando? Tu profesional lo va a ver antes del turno.",

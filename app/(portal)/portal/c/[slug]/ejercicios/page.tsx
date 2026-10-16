@@ -38,15 +38,14 @@ export default async function PortalExercisesPage({ params }: { params: { slug: 
     notFound();
   }
 
-  const planHref = `/portal/c/${encodeURIComponent(params.slug)}`;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Link
-        href={planHref}
+        href="/portal"
         className="k-link"
         style={{ fontSize: 14, display: "inline-flex", alignItems: "center", minHeight: 44, alignSelf: "flex-start" }}
       >
-        ← Tu plan
+        ← Mis consultorios
       </Link>
 
       <header>
@@ -54,11 +53,12 @@ export default async function PortalExercisesPage({ params }: { params: { slug: 
         <h1 className="k-display" style={{ fontSize: 26, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
           Tus ejercicios
         </h1>
-        <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-          {view.data
-            ? `Los ejercicios de «${view.data.programTitle}». Hacelos como te indicó tu profesional; si algo te duele, frená y consultale.`
-            : "Lo que tu profesional te indique para hacer en casa va a aparecer acá."}
-        </p>
+        {/* Un solo vacío (ES4-Z): sin ejercicios, el texto va en la tarjeta de abajo y no repetido en el encabezado. */}
+        {view.data && (
+          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
+            {`Los ejercicios de «${view.data.programTitle}». Hacelos como te indicó tu profesional; si algo te duele, frená y consultale.`}
+          </p>
+        )}
       </header>
 
       <PortalTabs slug={params.slug} sections={view.sections} active="ejercicios" />
@@ -68,7 +68,7 @@ export default async function PortalExercisesPage({ params }: { params: { slug: 
       ) : (
         <Card glass style={{ padding: 22 }}>
           <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-            Todavía no tenés ejercicios cargados en tu plan.
+            Cuando tu profesional te indique ejercicios para hacer en casa, los vas a ver acá.
           </p>
         </Card>
       )}

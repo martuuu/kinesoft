@@ -168,13 +168,27 @@ pages, the MP webhook):
 
 ## 3. Patient portal
 
-`lib/portal.ts` requires `email_confirmed_at` on the Supabase user before
-treating the email as authoritative — Supabase magic-link / unverified
-sign-ups can never read PHI on a Patient row that happens to share their
-email.
+**Desde ES4 (15/16-oct-2026) el portal autoriza por el VÍNCULO, nunca por email.** `lib/portal-identity-internal.ts`
+(`getPortalUser`, `requirePortalPatient(slug)`, `listPortalPatients(userId)`) resuelve por `(tenantId, userId)` con
+`archivedAt: null`, por el canal service (cada query lleva `tenantId` y `userId` explícitos). Una ficha que solo comparte
+el email con la cuenta no muestra nada. Siguen valiendo: email verificado (`email_confirmed_at`) para cualquier acción y
+staff (con `Membership`) ≠ paciente.
 
-The portal matches the patient's email exactly (escaped + `sameEmail`, §18) and treats any
-identity with a `Membership` as "no patient files" (staff ≠ patient, §9).
+- **Vínculo** (`lib/portal-link-internal.ts`, AUDIT §5.8): auto-vínculo al entrar solo si hay **exactamente una** ficha
+  no archivada con el email exacto en ese consultorio y está libre; 0 → nada, >1 → `ambiguous` (decide la invitación).
+  La única escritura es el CAS `linkPatientCas` (count 1; P2002 → `conflict`, nunca 500). «Buscar mis fichas» corre la
+  misma regla (5/h por cuenta). Archivar una ficha desvincula la cuenta (audit `patient.portal.unlink` en la tx).
+- **Invitación** (`lib/portal-invite-token.ts`, `/portal/vincular?t=`): token HMAC de 7 días con `patientId`,
+  `tenantId` y el **hash** del email (no el email). El GET nunca escribe (anti-escáner); vincula el POST, con la sesión
+  del mismo email y rate-limit 10/h. El token viaja en la URL (riesgo aceptado, AUDIT B6): `referrer: same-origin`,
+  nunca en logs ni en el audit.
+- **«Mis datos»** nunca escribe la ficha: crea o actualiza un `PatientChangeRequest` PENDING (allowlist estricta, ≤ 4 KB,
+  3/h); lo aprueba el consultorio en una tx con CAS y audit sin valores. Un cambio de OS que borra copago propio o cambia
+  el copago de turnos impagos pide confirmación.
+- **Estado de cuenta y ejercicios:** DTO por allowlist (sin montos de la OS, aranceles ni notas); el plan es el mismo
+  `PORTAL_PROGRAM_WHERE` en todas las vistas. Evoluciones nunca (guard `clinical-notes-guard`).
+- **Logs del portal:** slug, motivo y nombres de campo; **nunca** email, token, valores del pedido ni `e.message` de un
+  error que pueda traerlos (ES4-Z B5).
 
 `submitCheckIn` (`lib/portal.ts:196`):
 
@@ -185,8 +199,7 @@ identity with a `Membership` as "no patient files" (staff ≠ patient, §9).
   `AuditEvent` `portal.checkin` with the text (capped at 500 chars). Before, the
   text was prepended to `Patient.notes` and the field truncated to 4 kB, which
   cut off the practitioner's older notes.
-- Known gap (C1, portal v2): `getPortalPlan` returns the practitioner's
-  `Session.notes` to the patient.
+- ~~Known gap: `getPortalPlan` returns `Session.notes`~~ — cerrado en P0-S02p (el select no las pide).
 
 ## 4. Mercado Pago webhook
 

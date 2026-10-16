@@ -54,6 +54,9 @@ export function AccountStatement({
 }) {
   const word = portalSessionWord(vertical);
   const { totals } = account;
+  // Sin deuda con cifra, pero con turnos «a confirmar» sin cobrar: «Estás al día» sería una promesa que el consultorio
+  // todavía no hizo.
+  const hasToConfirm = account.looseBookings.some((b) => b.amount.kind === "to_confirm" && !b.paid && !b.cancelled);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Card glass style={{ padding: 18, display: "grid", gap: 8 }}>
@@ -61,11 +64,14 @@ export function AccountStatement({
         {totals.pendingCents > 0 ? (
           <Figure label="Te falta pagar" value={formatARS(totals.pendingCents)} strong />
         ) : (
-          <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Estás al día.</p>
+          <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+            {hasToConfirm ? "No tenés deuda con monto definido." : "Estás al día."}
+          </p>
         )}
         {totals.creditCents > 0 && <Figure label="Tenés a favor" value={formatARS(totals.creditCents)} />}
         <p style={{ margin: 0, fontSize: 12, color: "var(--navy-500)" }}>
-          Cuenta solo lo ya atendido con monto definido. Para pagar o por cualquier duda, hablá con el consultorio.
+          El total incluye solo los turnos ya atendidos que tienen monto definido. Para pagar o por cualquier duda, hablá
+          con el consultorio.
         </p>
       </Card>
 
@@ -96,7 +102,7 @@ export function AccountStatement({
           </div>
           {account.looseBookings.length === 0 ? (
             <p style={{ ...row, margin: 0, fontSize: 14, color: "var(--navy-500)" }}>
-              No tenés turnos en los últimos 12 meses.
+              No tenés turnos próximos ni de los últimos 12 meses.
             </p>
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -123,6 +129,12 @@ export function AccountStatement({
                       </span>
                       {b.paid ? (
                         <Tag tone="lime">Pagado</Tag>
+                      ) : b.inProcess ? (
+                        <Tag tone="sky">Pago en proceso</Tag>
+                      ) : b.cancelled ? (
+                        <Tag tone="soft">Cancelado</Tag>
+                      ) : b.pending ? (
+                        <Tag tone="sky">A pagar</Tag>
                       ) : upcoming ? (
                         <Tag tone="soft">Próximo</Tag>
                       ) : null}

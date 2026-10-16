@@ -25,7 +25,7 @@ import { prisma } from "@/lib/db";
 import { runWithRequestContext } from "@/lib/request-context";
 import { READ_ONLY_MESSAGE, isReadOnlyViolation } from "@/lib/tenant-access";
 import { randomUUID } from "node:crypto";
-import { localToARIso } from "@/lib/datetime-ar";
+import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import {
   createBooking,
   createBookingsBatch,
@@ -296,7 +296,9 @@ describe.skipIf(!RUN)("[BO1-A] acceso del consultorio y bloqueos de sesión", ()
         patientId,
         practitionerId: t.practitionerId,
         serviceId: t.serviceId,
-        scheduledFor: new Date(Date.now() + 60 * 60_000),
+        // HOY a las 12:00 AR (no «ahora + 1 h»: pasadas las 23:00 AR caía mañana y la recepción, que opera turnos del día,
+        // cortaba antes del write con otro copy; flake por la hora, ES4-Z).
+        scheduledFor: new Date(localToARIso(`${toARDateKey(new Date())}T12:00`)),
         durationMin: 30,
         status: "CONFIRMED",
         idempotencyKey: randomUUID(),

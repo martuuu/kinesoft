@@ -259,13 +259,13 @@ function PatientHeroActions({
     const ok = await confirm(
       isArchived
         ? {
-            title: "Desarchivar paciente",
+            title: "Reactivar paciente",
             message: `${patient.firstName} ${patient.lastName} vuelve a aparecer en el listado de pacientes.`,
-            confirmLabel: "Desarchivar",
+            confirmLabel: "Reactivar",
           }
         : {
             title: "Archivar paciente",
-            message: `${patient.firstName} ${patient.lastName} deja de aparecer en el listado. La ficha, los turnos y el historial se conservan, y lo podés desarchivar cuando quieras.`,
+            message: `${patient.firstName} ${patient.lastName} deja de aparecer en el listado. La ficha, los turnos y el historial se conservan, y lo podés reactivar cuando quieras. Si usaba el portal, se desvincula su cuenta.`,
             confirmLabel: "Archivar",
           }
     );
@@ -334,7 +334,7 @@ function PatientHeroActions({
           }
           style={{ fontSize: 12, padding: "8px 14px", color: "#9A5B00" }}
         >
-          {archiving ? "Guardando…" : isArchived ? "Desarchivar" : "Archivar"}
+          {archiving ? "Guardando…" : isArchived ? "Reactivar" : "Archivar"}
         </Button>
       </div>
       {archiveError && (

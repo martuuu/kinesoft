@@ -5,7 +5,7 @@
  * host ajeno cuando se arma `${origin}${next}` o `new URL(next, origin)`.
  */
 import { describe, it, expect } from "vitest";
-import { isAllowedOrigin, safeNext, safeNextFromUrl, unwrapConfirmNext } from "@/lib/safe-next";
+import { authErrorPath, isAllowedOrigin, safeNext, safeNextFromUrl, unwrapConfirmNext } from "@/lib/safe-next";
 
 const APP = "https://app.kinesoft.com.ar";
 
@@ -127,5 +127,15 @@ describe("unwrapConfirmNext (bug signup-confirm-doble-salto)", () => {
   it("paths que no son /auth/confirm pasan intactos", () => {
     expect(unwrapConfirmNext("/auth/confirmado", "/dashboard")).toBe("/auth/confirmado");
     expect(unwrapConfirmNext("/reset", "/dashboard")).toBe("/reset");
+  });
+});
+
+describe("[ES4-Z] authErrorPath", () => {
+  it("portal → /portal?error=; lo demás → /login?error=", () => {
+    expect(authErrorPath("/portal", "oauth_failed")).toBe("/portal?error=oauth_failed");
+    expect(authErrorPath("/portal/c/demo", "oauth_no_email")).toBe("/portal?error=oauth_no_email");
+    expect(authErrorPath("/portal?c=demo", "x")).toBe("/portal?error=x");
+    expect(authErrorPath("/portalx", "x")).toBe("/login?error=x");
+    expect(authErrorPath("/dashboard", "missing_code")).toBe("/login?error=missing_code");
   });
 });

@@ -13,6 +13,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { resolveInsurerName } from "@/lib/insurers-internal";
+import { emailEqualsFilter, sameEmail } from "@/lib/email-match";
 import { bookingHasPaymentWhere } from "@/lib/plan-predicates";
 import {
   changedFieldNames,
@@ -127,6 +128,26 @@ export async function coverageChangesOsInTx(
     resolveRequestedInsurer(tx, tenantId, coverage.insurerName),
   ]);
   return !sameObraSocial(existing, next);
+}
+
+/**
+ * ES4-Z (M2): impacto del pedido sobre la cobertura, para la confirmación del consultorio. `ownCopagoCents` = el
+ * copago propio cargado en la cobertura actual que se BORRA al aprobar (misma regla que `copagoReset` en
+ * `applyPortalCoverageInTx`): solo si cambia la OS y había uno cargado. Sin escribir.
+ */
+export async function coverageImpactInTx(
+  tx: Tx,
+  tenantId: string,
+  patientId: string,
+  coverage: PortalPendingChangesT["coverage"]
+): Promise<{ osChanges: boolean; ownCopagoCents: number | null }> {
+  if (!coverage) return { osChanges: false, ownCopagoCents: null };
+  const [existing, next] = await Promise.all([
+    readCoverage(tx, patientId),
+    resolveRequestedInsurer(tx, tenantId, coverage.insurerName),
+  ]);
+  const osChanges = !sameObraSocial(existing, next);
+  return { osChanges, ownCopagoCents: osChanges ? existing?.copagoCents ?? null : null };
 }
 
 /**
@@ -274,23 +295,27 @@ export async function applyPortalRequestInTx(
   if (Object.keys(data).length > 0) {
     // Choque con otra ficha: se busca ANTES del write para nombrar el campo. Medido contra el Docker local: el P2002 de
     // `updateMany` llega con `meta.target = null` (Prisma 5), así que desde la excepción no se sabe si fue el email o
-    // el teléfono. Misma comparación que los únicos `(tenantId, email)` / `(tenantId, phone)` (case-sensitive). Si
-    // igual pasa una carrera entre el check y el write, el P2002 revierte la tx y `portalRequestUniqueError` responde.
-    const clash = await tx.patient.findFirst({
-      where: {
-        tenantId: ref.tenantId,
-        id: { not: ref.patientId },
-        OR: [
-          ...(data.email ? [{ email: data.email }] : []),
-          ...(data.phone ? [{ phone: data.phone }] : []),
-        ],
-      },
-      select: { email: true, phone: true },
-    });
-    if (clash && (data.email || data.phone)) {
-      throw new PortalRequestInvalid(
-        data.email && clash.email === data.email ? UNIQUE_COPY.email : UNIQUE_COPY.phone
-      );
+    // el teléfono. El teléfono, igual que el único `(tenantId, phone)`. El email, SIN distinguir mayúsculas (ES4-Z B1):
+    // el único `(tenantId, email)` distingue, pero `Ana@x` y `ana@x` en dos fichas dejan el auto-vínculo del portal en
+    // `ambiguous` para las dos; filtro escapado + `sameEmail` (IAM-0a). Si igual pasa una carrera entre el check y el
+    // write, el P2002 revierte la tx y `portalRequestUniqueError` responde.
+    if (data.email || data.phone) {
+      const clashes = await tx.patient.findMany({
+        where: {
+          tenantId: ref.tenantId,
+          id: { not: ref.patientId },
+          OR: [
+            ...(data.email ? [{ email: emailEqualsFilter(data.email) }] : []),
+            ...(data.phone ? [{ phone: data.phone }] : []),
+          ],
+        },
+        select: { email: true, phone: true },
+        take: 5,
+      });
+      if (data.email && clashes.some((c) => sameEmail(c.email, data.email))) {
+        throw new PortalRequestInvalid(UNIQUE_COPY.email);
+      }
+      if (data.phone && clashes.some((c) => c.phone === data.phone)) throw new PortalRequestInvalid(UNIQUE_COPY.phone);
     }
     const res = await tx.patient.updateMany({ where: { id: ref.patientId, tenantId: ref.tenantId }, data });
     if (res.count !== 1) throw new PortalRequestInvalid("Paciente no encontrado.");

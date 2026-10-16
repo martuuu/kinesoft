@@ -33,7 +33,8 @@ export function patientListPlanChipText(chip: PatientListPlanChip): { progress: 
  * los chips (un título suelto no diría de cuál es).
  */
 function PlanCell({ plans, title }: { plans: PatientListPlanChip[]; title: string | null }) {
-  if (plans.length === 0) return <span style={{ color: "var(--navy-300)" }}>Sin plan activo</span>;
+  // ES4-Z: navy-500 (navy-300 no llegaba a 4.5:1 sobre el fondo de la fila).
+  if (plans.length === 0) return <span style={{ color: "var(--navy-500)" }}>Sin plan activo</span>;
   return (
     <div style={{ minWidth: 0 }}>
       <ul

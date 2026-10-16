@@ -27,7 +27,7 @@ import {
 } from "@/lib/support-session-internal";
 import { __setEmailTransportForTests, type SendEmailInput, type SendEmailResult } from "@/lib/email";
 import { __rateLimitInternals } from "@/lib/rate-limit";
-import { localToARIso } from "@/lib/datetime-ar";
+import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
 import {
   createBooking,
   setBookingStatus,
@@ -403,13 +403,15 @@ describe.skipIf(!RUN)("[BO2-E] sesión de soporte", () => {
     // (lib/read-only-result.ts); createBooking/createPatient/createTimeBlock devolvían su copy genérico
     // («No pudimos crear…»). Turno de un invitado (sin paciente) HOY: el soporte ve como la Secretaria (acceso
     // básico a los pacientes), así que con un paciente las actions cortan antes por acceso, sin llegar al write.
-    const now = new Date();
+    // HOY en AR, a las 12:00 AR. Antes era «ahora + 1 h»: pasadas las 23:00 AR el turno caía MAÑANA y la recepción
+    // (solo turnos del día) cortaba antes del write con otro mensaje: flake por la hora (ES4-Z).
+    const todayNoonAr = new Date(localToARIso(`${toARDateKey(new Date())}T12:00`));
     const guest = await db.booking.create({
       data: {
         tenantId: T.tenantId,
         practitionerId: T.practitionerId,
         serviceId: T.serviceId,
-        scheduledFor: new Date(now.getTime() + 60 * 60_000),
+        scheduledFor: todayNoonAr,
         durationMin: 30,
         status: "CONFIRMED",
         guestName: "Invitado Soporte",

@@ -27,6 +27,8 @@ export type PortalPatient = {
     id: string;
     scheduledFor: Date;
     durationMin: number;
+    /** CONFIRMED (o ya atendido) → «Confirmado»; PENDING → «A confirmar». */
+    confirmed: boolean;
     serviceName: string;
     practitionerName: string;
   }[];

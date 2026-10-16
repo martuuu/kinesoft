@@ -169,6 +169,14 @@ describe.skipIf(!RUN)("PL-2e · callback de OAuth: perfil desde Google/Facebook 
     expect(loginError(denied)).toBe("oauth_failed");
   });
 
+  it("[ES4-Z] con destino en el portal, el error vuelve a /portal?error= (no al login del equipo)", async () => {
+    const res = await call("error=access_denied&next=/portal/c/demo");
+    const u = new URL(res.headers.get("location")!);
+    expect(u.pathname).toBe("/portal");
+    expect(u.searchParams.get("error")).toBe("oauth_failed");
+    expect(loginError(await call("error=access_denied&next=/dashboard"))).toBe("oauth_failed");
+  });
+
   it("sin code ni error sigue siendo missing_code; next malicioso se sanea", async () => {
     expect(loginError(await call("next=/x"))).toBe("missing_code");
     const id = newId();

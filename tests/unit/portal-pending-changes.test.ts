@@ -32,7 +32,7 @@ describe("[P4-C] PortalPendingChanges", () => {
     expect(ok({ email: null })).toBe(true);
     expect(ok({ emergencyContact: null })).toBe(true);
     expect(ok({ coverage: { insurerName: "OSDE", planName: null, memberId: null } })).toBe(true);
-    expect(ok({ emergencyContact: { name: "Juan", relation: null, phone: "11" } })).toBe(true);
+    expect(ok({ emergencyContact: { name: "Juan", relation: null, phone: "1144445555" } })).toBe(true);
   });
 
   it("coverage no admite null (no es «borrar la cobertura» desde el portal)", () => {
@@ -40,11 +40,11 @@ describe("[P4-C] PortalPendingChanges", () => {
   });
 
   it("rechaza claves extra en la raíz", () => {
-    expect(ok({ phone: "11", dni: "30111222" })).toBe(false);
+    expect(ok({ phone: "1144445555", dni: "30111222" })).toBe(false);
   });
 
   it("rechaza claves extra en emergencyContact (strict anidado)", () => {
-    expect(ok({ emergencyContact: { name: "J", phone: "11", email: "x@y.com" } })).toBe(false);
+    expect(ok({ emergencyContact: { name: "J", phone: "1144445555", email: "x@y.com" } })).toBe(false);
   });
 
   it("rechaza claves extra en coverage (strict anidado)", () => {
@@ -58,18 +58,22 @@ describe("[P4-C] PortalPendingChanges", () => {
 
   it("aplica los topes por campo", () => {
     const s = (n: number) => "a".repeat(n);
-    expect(ok({ phone: s(32) })).toBe(true);
-    expect(ok({ phone: s(33) })).toBe(false);
+    // ES4-Z B2: teléfono de 6 a 30 caracteres.
+    expect(ok({ phone: s(30) })).toBe(true);
+    expect(ok({ phone: s(31) })).toBe(false);
+    expect(ok({ phone: s(6) })).toBe(true);
+    expect(ok({ phone: s(5) })).toBe(false);
     const local = s(120 - "@example.com".length);
     expect(ok({ email: `${local}@example.com` })).toBe(true);
     expect(ok({ email: `a${local}@example.com` })).toBe(false);
     expect(ok({ email: "no-es-un-mail" })).toBe(false);
-    const ec = (o: object) => ({ emergencyContact: { name: "J", phone: "11", ...o } });
+    const ec = (o: object) => ({ emergencyContact: { name: "J", phone: "1144445555", ...o } });
     expect(ok(ec({ name: s(80) }))).toBe(true);
     expect(ok(ec({ name: s(81) }))).toBe(false);
     expect(ok(ec({ relation: s(40) }))).toBe(true);
     expect(ok(ec({ relation: s(41) }))).toBe(false);
-    expect(ok(ec({ phone: s(33) }))).toBe(false);
+    expect(ok(ec({ phone: s(31) }))).toBe(false);
+    expect(ok(ec({ phone: s(5) }))).toBe(false);
     const cov = (o: object) => ({ coverage: { insurerName: "OSDE", ...o } });
     expect(ok(cov({ insurerName: s(80) }))).toBe(true);
     expect(ok(cov({ insurerName: s(81) }))).toBe(false);
@@ -79,7 +83,7 @@ describe("[P4-C] PortalPendingChanges", () => {
   });
 
   it("rechaza obligatorios vacíos o con solo espacios", () => {
-    expect(ok({ emergencyContact: { name: "  ", phone: "11" } })).toBe(false);
+    expect(ok({ emergencyContact: { name: "  ", phone: "1144445555" } })).toBe(false);
     expect(ok({ coverage: { insurerName: "" } })).toBe(false);
     expect(ok({ phone: "" })).toBe(false);
   });
@@ -111,7 +115,7 @@ describe("[P4-C] tope de bytes (espejo de PatientChangeRequest_changes_check)", 
   });
 
   it("el schema rechaza un payload de 4097 B", () => {
-    const v = { phone: "11", pad: "a".repeat(4097) };
+    const v = { phone: "1144445555", pad: "a".repeat(4097) };
     expect(pendingChangesByteLength(v)).toBeGreaterThan(4096);
     expect(ok(v)).toBe(false);
   });
@@ -119,9 +123,9 @@ describe("[P4-C] tope de bytes (espejo de PatientChangeRequest_changes_check)", 
   it("el peor caso permitido por los topes por campo entra en el CHECK", () => {
     const s = (n: number) => "\u0001".repeat(n); // se serializa como \u0001 (6 B por carácter)
     const worst = {
-      phone: s(32),
+      phone: s(30),
       email: null,
-      emergencyContact: { name: s(80), relation: s(40), phone: s(32) },
+      emergencyContact: { name: s(80), relation: s(40), phone: s(30) },
       coverage: { insurerName: s(80), planName: s(80), memberId: s(40) },
     };
     expect(fitsPendingChangesBudget(worst)).toBe(true);

@@ -135,3 +135,13 @@ export function unwrapConfirmNext(path: string, fallback = "/dashboard"): string
   }
   return current.startsWith("/auth/confirm") ? fallback : current;
 }
+
+/**
+ * ES4-Z (b): destino de un error del callback de auth. Si el ingreso venía al PORTAL (`next` = `/portal…`), el error
+ * vuelve al portal (`/portal?error=<código>`) y no al login del equipo: el paciente caía en «Ingresá a tu consultorio»
+ * con un error y sin el botón del portal. `code` es un código propio (nunca texto del proveedor).
+ */
+export function authErrorPath(next: string, code: string): string {
+  const portal = next === "/portal" || next.startsWith("/portal/") || next.startsWith("/portal?");
+  return `${portal ? "/portal" : "/login"}?error=${encodeURIComponent(code)}`;
+}

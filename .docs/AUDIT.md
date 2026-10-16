@@ -1449,9 +1449,9 @@ nuevos de A2/A3 están en la tabla "Hallazgos de la auditoría 23-sep y de A2/A3
 | roles-assistant-billing-cosmeticos | media | lib/roles.ts · lib/session.ts · lib/practitioner-scope.ts | 🟢 | **IAM-0c/2e/4a** (Ronda 21) — etiquetas únicas (`roleLabel`: Secretario/a, Facturación), no reservables (`bookablePractitionerWhere` mira rol clínico), entran sin `Practitioner` (`Actor.practitionerId` null) |
 | no-seat-usage-limits | media | lib/plan-catalog.ts · lib/team-internal.ts | 🟢 | **BO1-C/BO2-B** (Ronda 22) — Free 1 · Base 3 · PRO 10 · Enterprise sin tope, `seatLimitOverride`; rige al invitar, subir de rol y aceptar (`lib/team-internal.ts:269`); Secretaria/Facturación no ocupan |
 | no-realtime-agenda-compartida | media | lib/booking-events-internal.ts · lib/realtime-*.ts · components/providers/realtime-provider.tsx | 🟢 | **SV** (Ronda 20, 14-oct) — Broadcast privado por tenant publicado desde el hook post-commit; agenda, Recepción y `/sala` re-piden en vivo (ADR-006) |
-| portal-auth-por-email-no-userid | media | lib/portal.ts:52 | 🔴 | Planes P4-S24a: el portal autoriza por `(tenantId, userId)`; vínculo automático por email verificado o invitación (PD-15) |
-| patient-tenancy-single-home-row | baja | schema.prisma:250 | 🔴 | Planes P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + P4-S24a (una cuenta, fichas por consultorio, sin compartir nada clínico) |
-| l1-portal-minimo | baja | lib/portal.ts:1 | 🔴 | Portal v2 (Ola 2.6) |
+| portal-auth-por-email-no-userid | media | lib/portal-identity-internal.ts | 🟢 | **ES4 S24a** — el portal autoriza por `(tenantId, userId)` (`requirePortalPatient`, `listPortalPatients`), nunca por email; vínculo automático con UNA ficha libre del email exacto o invitación (PD-15) |
+| patient-tenancy-single-home-row | baja | schema.prisma:250 | 🟢 | P1-S10 (M1: `Patient.userId` único por consultorio, PD-14) + **ES4 S24a** (una cuenta, una ficha por consultorio, sin compartir nada clínico) |
+| l1-portal-minimo | baja | lib/portal.ts:1 | 🟢 | **ES4** — portal ampliado: varios consultorios, plan y turnos, estado de cuenta, «Mis datos», ejercicios, invitación |
 | scripts-adhoc-como-tests | baja | scripts/create-tenant.ts:1 | 🔴 | suite-integracion |
 | no-qa-checklist-versionado | baja | — | 🟢 | TESTING.md |
 | roadmap-vacio | media | docs/roadmap.md | 🟢 | ROADMAP.md |
@@ -1560,7 +1560,7 @@ decisión del 04-oct ("nada se despliega hasta cerrar B") **siguen vivos en prod
 | listbookingsinrange-rpc-sin-clinical | media | A | lib/bookings.ts:663,727,744-777 | 🟢 | P0-S07k — `bookingFieldAccess` + `patientCondition` solo con `clinical.read` y full; test `bookings-range-clinical.test.ts` (borrarla sigue en C1) |
 | secretaria-autoasigna-pacientes | alta | A | lib/patients.ts:757-857 | 🟢 | P0-S07sp — `createPatient(raw, {assignTo})` al profesional del turno, validado en la tx. Prod: precheck (15) antes del deploy |
 | secretaria-ve-hc-con-shared | alta | A | lib/visibility.ts:138,153-155,200,249 · lib/patients.ts:332-402,1026-1036 · booking-drawer/index.tsx:163 · patient-profile.tsx:356 | 🟢 | P0-S02p (nivel `admin`) + P0-S07sp (proyección `admin`, `setPatientDiagnosis` con `canWriteClinical`) + P0-S07u (drawer; "Usar como diagnóstico" ya no borra) + P0-S07v (perfil) |
-| portal-userid-unique-500 | media | B | prisma/schema.prisma (Patient) · app/auth/callback/route.ts:69-83 | 🟡 | **Índice listo en P1-S10** (ES2a): `Patient_tenantId_userId_key` reemplaza al global, test en `plans-m1-new-tables.test.ts` (mismo `userId` en 2 tenants pasa, en el mismo da P2002). Se cierra con P4-S24a (el flujo del callback y el P2002 del mismo consultorio) |
+| portal-userid-unique-500 | media | B | prisma/schema.prisma (Patient) · lib/portal-link-internal.ts · app/auth/{callback,confirm}/route.ts | 🟢 | Índice en P1-S10 (ES2a) + **ES4 S24a/S24v/P4.Z**: CAS `linkPatientCas` (count 1; P2002 → `conflict`), el callback y `/auth/confirm` capturan el P2002 del `UserProfile` (signOut + redirect, nunca 500) |
 | plan-creation-sin-gate-basic | alta | B | ~~lib/programs.ts:164-187~~ · lib/plans-engine-internal.ts (`createPlanInTx`) | 🟢 | P0-S02a — `createProgram` con `hcAccessError` en la tx. Desde ES3 (S27a) `createProgram` no existe: toda alta va por el motor (`plans.manage`) |
 | diagnosis-ejercicios-y-condicion-sin-gate | alta | B | lib/diagnosis.ts:208-280 | 🟢 | P0-S02d — gate full en la tx, ejercicios `assignable`, condición global o del tenant |
 | apply-plan-template-null-sets-reps | media | B | lib/plans-engine-internal.ts:249-277 | 🟢 | P0-S02t — dosis `?? 3/12`. Desde ES3 el `applyPlanTemplate` viejo no existe (S27b): la plantilla va por `createPlan` con `templateId` y el motor usa `defaultSets ?? 3` / `defaultReps ?? 12` del ejercicio (P3.Z F1) |
@@ -1579,7 +1579,7 @@ decisión del 04-oct ("nada se despliega hasta cerrar B") **siguen vivos en prod
 | reception-p2002-500 | media | B | lib/bookings.ts:1285 (`markReceptionAction`) | 🟢 | P2-S12 (Ronda 17) — "Deshacer Ausente" con otro turno activo de la sesión atrapa P2002 → mensaje. Test `plans-sync-bookings.test.ts` |
 | upsert-holder-pisa-turno-de-plan | alta | B | lib/bookings.ts:759 (`createBooking`, upsert del holder) | 🟢 | P2-S12 (Ronda 17) — un reintento de alta sobre un turno adoptado (`programId` no nulo) devuelve éxito idempotente sin update (C3) |
 | dashboard-session-index-crudo | baja | B | lib/dashboard.ts · app/(app)/seguimiento/[sessionId]/page.tsx:17-18,48 | 🟢 | P2-S14 (server, Ronda 17) + P3-S20 (página, Ronda 18) — "Sesión n de N" por ordinal entre vivas (M13); título/condición nulos sin `clinical.read` |
-| limites-sesiones-divergentes | baja | B | lib/validation.ts:318 · diagnosis · plantillas · plan-view.tsx:419 | 🟡 | tope 60 (`PLAN_MAX_SESSIONS`) aplicado en P0 (S02a/S02d/S02t/S02u-plan) → se cierra en P4.Z con el editor |
+| limites-sesiones-divergentes | baja | B | lib/validation.ts:318 · diagnosis · plantillas · plan-view.tsx:419 | 🟡 | tope 60 (`PLAN_MAX_SESSIONS`) aplicado en P0 (S02a/S02d/S02t/S02u-plan). ES4: portal, chip e ICS cuentan sesiones VIVAS (V1-D18, «Sesión n de N»); el editor sigue sin verificar → **PF1** |
 | plantillas-sin-crud | media | B | lib/plan-templates.ts · components/planes/templates/ | 🟢 | P3-S17t + P3-S21t (Ronda 18) — CRUD con disciplina, servicio, horario, precio y archivo; CAS opcional; autor o admin; `getTemplatePrefill` abre el editor; solo con el módulo `plantillas` |
 | plan-status-sin-confirm | baja | B | components/planes/plan-lifecycle-dialogs.tsx:158 (`PlanStatusDialog`) | 🟢 | P0-S02u-plan + P3-S22a (Ronda 18) — cambio de estado por diálogo D7 (cancelar/mantener futuros), "cancelar" en variante danger |
 | hero-plan-activo-falso | baja | B | components/patients/profile/hero.tsx:41-45 | 🟢 | P0-S02u-perfil + P3-S22h (Ronda 18) — chips por disciplina (`heroPlanChips`: ACTIVE antes que PAUSED), sin título; `HeroPlanState` retirado |
@@ -1605,7 +1605,7 @@ E0/E1): 0 fugas nuevas; los H-b son preexistentes.
 | Slug | Sev | Bloque | Ubicación | Estado | Destino |
 |---|---|---|---|---|---|
 | search-condition-sin-tenant-y-email-basic | baja | C | lib/search.ts:76-83,126 | 🟡 condiciones 🟢 en EV0 (EV-G) | C (queda el email) — la búsqueda de `condition` no filtra por tenant (con BYPASSRLS ve los nombres de condiciones privadas de otros consultorios; sin PHI) y a nivel basic muestra el email del paciente si no hay DNI |
-| secretaria-edita-contacto-cobertura | media | C0 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🔴 | C0 — PD-13 dice que `admin` ve contacto y cobertura; en ES1 el perfil `admin` es **solo lectura**. También: selector "Profesional a cargo" al crear desde el directorio (hoy la Secretaria crea solo desde el modal del turno) y `getPatientBillingPreview` sigue pidiendo full (la Secretaria ve copago null en el modal) |
+| secretaria-edita-contacto-cobertura | media | C0 | lib/patients.ts (`updatePatient`, cobertura) · perfil `admin` | 🔴 | C0 (ES4 S26b lo confirma: celdas `it.fails` en `authz-matrix.test.ts`; aprueba el pedido del portal pero no edita a mano) — PD-13 dice que `admin` ve contacto y cobertura; en ES1 el perfil `admin` es **solo lectura**. También: selector "Profesional a cargo" al crear desde el directorio (hoy la Secretaria crea solo desde el modal del turno) y `getPatientBillingPreview` sigue pidiendo full (la Secretaria ve copago null en el modal) |
 | ui-filtros-y-selector-sin-clinical | baja | C0 | profile/hero.tsx (selector "Profesional a cargo") · PatientsSearchBar | 🔴 | C0 — el selector del hero debería listar solo roles clínicos (el server ya rechaza los otros) y la barra del directorio debería ocultar "Con plan/Sin plan" y el filtro de diagnóstico sin `clinical.read` (el server ya devuelve vacío) |
 | directorio-admin-sin-contacto | baja | C0 | lib/patients.ts (`listPatients`) · patients-list.tsx:44 · recent-patients.tsx | 🔴 | C0 (no entró en ES3) — el directorio para `admin` sigue con la proyección básica (sin contacto); al sumar `admin` a `PatientRow`, los chequeos de UI pasan a la forma positiva `=== "full"` |
 | deshacer-atendido-no-reabre-sesion-a-medida | media | B | lib/sessions.ts (`addCustomSession`) | 🟢 | P2-S12b (Ronda 17) — el título va a `Session.title` (M1), no a `notes`: la sesión a medida queda "untouched" y "Deshacer Atendido" la reabre. Desde P2.Z `addCustomSession` delega en el motor (H-a3) |
@@ -1744,7 +1744,7 @@ cerraron los fixers F1-F3b o el integrador, con test primero, y se verificó en 
 | diagnosis-name-en-plandto | baja | C1 | lib/plans-read-types.ts (`PlanDTO`) · resumen-view | 🔴 | **C1** (decisión 6) — el Resumen muestra `diagnosisTitle ?? título del plan`; la condición requiere `diagnosisName` |
 | renovar-autorizacion-sin-os | baja | C1 | booking-drawer (fila Plan) | 🔴 | **C1** (decisión 7) — "Renovar autorización" aparece en todo turno de plan con `plans.authorize`; C9 no dice si el plan tiene OS |
 | bundle-es3-sobre-criterio | baja | C1 | `/planes` 184,5 kB · `/agenda` 202 · `/pacientes/[id]` 205 | 🔴 | **C1** — decisión 1 de Martin (08-oct): crecimiento de ES3 **aceptado**; el bundle bloqueante sigue en C1. Ver [PERF.md §ES3](PERF.md) |
-| archivar-paciente-lista-sin-L9 | baja | B (ES4) | patient-row-actions · bulk-select | 🔴 | **ES4 (S32a)** — reusar `ArchivePatientDialog` + `shouldAskArchivePlans` (en bulk `livePlanCount` es null) |
+| archivar-paciente-lista-sin-L9 | baja | B (ES4) | patient-row-actions · bulk-select | 🟢 | **ES4 S32a** — la fila y el bulk pasan por `ArchivePatientDialog` (`rowArchiveStep`; sin `livePlanCount` se pregunta siempre con `planes`) |
 | bookings-conflict-literal | baja | B | lib/bookings.ts:1075 | 🔴 | nota — el literal del conflicto → `PRACTITIONER_CONFLICT_ERROR` (`lib/bookings-constants.ts`) cuando se reabra el archivo |
 | r-legacy-sin-a-medida | baja | B | motor (`addPlanSessions`) | ⚪ decidido | Decisión 3 de Martin (08-oct): un plan sin responsable/servicio no acepta "a medida" ("Plan inválido."). **Se deja** (prod se resetea) |
 
@@ -2084,6 +2084,34 @@ diff real — (a) a11y/responsive/copy-claims; (b) seguridad y contratos: 0 alto
 | vx-guard-module-segment | baja | C | lib/authz.ts:216 | 🔴 abierto | `guardModuleSegment` sin llamadores de producción tras el muro (solo `tests/integration/module-guards.test.ts`). Retirarlo junto con su test y los comentarios de `lib/nav.ts`, `tenant-modules-context.tsx`, `sidebar.tsx` |
 | vx-visual-pendiente | baja | **PF1** | components/landing/pricing.tsx · components/auth/product-panel.tsx | 🔴 abierto | Tarjetas de precios desbalanceadas (Individual con más bullets); mock del login con filas bajas y texto recortado; el muro a 390 muestra el sidebar de escritorio (MB) |
 
+### Hallazgos de ES4 (P4.Z, 15/16-oct-2026)
+
+ES4 = portal del paciente (P4) + listado y archivado de pacientes (S32/S32a) + matrices de permisos, soak y perf
+(S26a/b/p/s). P4.Z = 2 revisores de solo lectura (a: seguridad, 0 altos; b: UX, 0 altos) + fixer/integrador en dos
+tandas. «M*/B*» = hallazgos de (a), «b-*» = de (b). Decisiones con default en ROADMAP («ES4-D* para Martin»).
+
+| Slug | Sev | Bloque | Ubicación | Estado | Cierre / destino |
+|---|---|---|---|---|---|
+| auth-confirm-p2002-500 | media | ES4 | app/auth/confirm/route.ts | 🟢 P4.Z (1) | El upsert de `UserProfile` en el magic link no capturaba el P2002 (email de otro perfil) → 500. Mismo patrón que el callback: signOut + `/login?error=oauth_failed`; `auth-confirm.test.ts` |
+| diagnostico-sin-gate-de-modulo | media | ES4 | lib/patients.ts (`setPatientDiagnosisImpl`) · EVA | 🟢 P4.Z (1) | Un consultorio GENERAL escribía diagnóstico por RPC; ahora exige el módulo `diagnostico` y devuelve `{ ok:false }`. `recordEvaScore` en GENERAL también devuelve `{ ok:false }` en vez de tirar `ForbiddenError` |
+| portal-cuenta-sin-sesion-404 | baja | ES4 | app/(portal)/portal/c/[slug]/cuenta/page.tsx | 🟢 P4.Z (1) | Sin sesión verificada daba 404; ahora el CTA a `/portal?c=<slug>` (como Ejercicios). Tabs montadas en Cuenta y Ejercicios |
+| perf-s26s-agenda-portal | media | ES4 | lib/agenda-plan-projection-internal.ts · lib/bookings.ts · lib/portal-identity-internal.ts · lib/portal.ts | 🟢 P4.Z (1) | Agenda con planes sin las 5 sentencias extra (`pricedByPlan` en el select y un solo `bulkPatientAccess`); `requirePortalPatient` 4 → 3 (entitlements en la lectura del tenant); home del portal en lote (no 2 por consultorio). `listOpenSessions` (18) → EXPLAIN en **PF** |
+| M1 ficha-archivada-bloquea-vinculo | media | ES4 | lib/portal-link-internal.ts · lib/portal-vincular.ts · lib/patients.ts | 🟢 P4.Z (2) | Una ficha archivada con `userId` ocupaba el único `(tenantId, userId)`: la cuenta no podía vincular la ficha nueva. Candidatas y `already` sin archivadas; el CAS libera la archivada en la misma tx; **archivar desvincula** (`setPatientArchived`/`bulkArchivePatients`, audit `patient.portal.unlink` en la tx; decisión con default) |
+| M2 copago-propio-sin-confirmar | media | ES4 (plata) | lib/patient-portal-requests.ts · portal-request-banner.tsx | 🟢 P4.Z (2) | Aprobar un cambio de OS sin turnos impagos borraba el copago propio sin preguntar. `previewPortalRequestImpact` devuelve `ownCopagoCents`; el banner confirma si cambia la OS y hay turnos impagos o copago propio |
+| B1 email-choque-mayusculas | baja | ES4 | lib/patient-portal-requests-internal.ts | 🟢 P4.Z (2) | Aprobar un email que solo difería en mayúsculas de otra ficha pasaba (el único distingue) y dejaba el auto-vínculo en `ambiguous`. Pre-check con `emailEqualsFilter` + `sameEmail` |
+| B2 telefono-1-caracter | baja | ES4 | lib/portal-pending-changes.ts | 🟢 P4.Z (2) | Teléfono (raíz y contacto de emergencia) de 6 a 30 caracteres; error por campo |
+| B3 refunded-reabre-deuda | baja | ES4 (plata) | lib/portal-account-internal.ts · components/portal/account-statement.tsx | 🟢 P4.Z (2) | REFUNDED **no** reabre la deuda (decisión con default); cobrado = turno PAID o `Payment` PAID; AUTHORIZED = «Pago en proceso»; DTO con `pending`/`inProcess`/`cancelled` |
+| B4 ejercicios-otro-plan | baja | ES4 | lib/plan-predicates.ts (`PORTAL_PROGRAM_WHERE`) · lib/portal-exercises-internal.ts | 🟢 P4.Z (2) | Ejercicios usaba otro where (sin «vinculado») y podía mostrar un plan legacy distinto del de «Tu plan». Una sola fuente + mismo orden; numeración «Sesión n de N» por fecha (M13) |
+| B5 log-con-mensaje | baja | ES4 (PHI) | lib/patient-portal-requests.ts | 🟢 P4.Z (2) | `decide.failed` logueaba `e.message` (puede traer valores del pedido): ahora `name` + `code` |
+| B6 token-en-query | baja | ES4 | /portal/vincular?t= | 🟡 riesgo aceptado | El token de invitación viaja en la URL (lo exige el link del mail). Mitigado: `referrer: same-origin`, nunca en logs ni audit, vence a 7 días, atado al hash del email y a una ficha |
+| b-portal-ux | media/baja | ES4 | app/(portal)/** · components/portal/** · lib/portal-copy.ts | 🟢 P4.Z (2) | «Buscar mis fichas» (ES4-D2, 5/h); General ve sus próximos turnos en «Tu consultorio»; «← Mis consultorios» unificado; estado real del turno (Confirmado / A confirmar); «Próxima sesión · Sesión n de N»; aviso de pedidos también a quien tiene `agenda.operateAll`; vincular sin form cuando no hay arreglo; error del callback con destino portal vuelve a `/portal?error=`; esqueleto `loading.tsx`; «Mis datos» |
+| portal-vincular-consultorio-suspendido | baja | ES4 — **decide Martin** | lib/portal-vincular.ts | 🟡 default: vincula | Vincular con el consultorio suspendido **vincula** (solo habilita lecturas, que la suspensión permite); el `it` lo afirma |
+| aviso-pedido-a-secretaria | baja | ES4 — **decide Martin** | lib/notifications-internal.ts · lib/portal-profile.ts | 🟢 default | El aviso del pedido de «Mis datos» llega también a quien tiene `agenda.operateAll` (Secretaria, activa) |
+| billing-aprueba-cobertura | baja | ES4 — **decide Martin** | lib/patient-portal-requests.ts (`canDecide`) | 🔴 abierto | BILLING aprueba pedidos de cobertura del portal (contrato §3.6) pero no edita cobertura a mano. Recomendado: restringir `decidePatientPortalRequest` a ASSISTANT/OWNER/ADMIN (C0 o ya) |
+| patientUniqueError-sin-campo | baja | C | lib/patients.ts (`patientUniqueError`) | 🔴 abierto | Tras `updateMany` el P2002 llega con `meta.target = null` y el mensaje no nombra el campo. El portal ya hace pre-check; falta en `updatePatient` |
+| p2002-reintento-ruido-log | baja | C | lib/portal-profile-internal.ts | 🟡 aceptado | El P2002 del INSERT de la PENDING (carrera) se reintenta como UPDATE, pero Prisma lo loguea como `prisma:error`: ruido, no falla |
+| portal-checkin-sin-js | baja | PF | components/portal/check-in-form.tsx | 🔴 abierto | El check-in sigue necesitando JS (los otros forms del portal no). Pasar a `useFormState` con action directa |
+
 ### Resumen del checklist (al 2026-09-29)
 
 93 filas en total (26 confirmados + 62 menores + 5 ítems nuevos). No incluye los hallazgos de la
@@ -2189,8 +2217,13 @@ era intencional.
    **exacto** (`emailEqualsFilter` + `sameEmail`, hallazgo ILIKE). El vínculo lo dispara `linkPortalPatientsOnSignIn`
    según el `next` (`/portal` = cada consultorio con ese email; `/portal/c/<slug>` = solo ese), tanto en `/auth/callback`
    (Google) como en `/auth/confirm` (magic link): antes dependía de un `?tenant=` que nadie armaba y no ocurría nunca.
-   Con dos fichas del mismo email en un consultorio vincula siempre la más vieja (determinístico). El log de rechazo no
-   lleva el email.
+   ~~Con dos fichas del mismo email en un consultorio vincula siempre la más vieja (determinístico).~~ El log de rechazo
+   no lleva el email.
+   **Enmienda ES4 (15/16-oct):** con dos o más fichas del mismo email en el consultorio el resultado es `ambiguous` y
+   no vincula: lo decide la invitación del consultorio (token firmado a UNA ficha, `/portal/vincular`; PD-15). La
+   autorización del portal es el vínculo `(tenantId, userId)` (`lib/portal-identity-internal.ts`), y la única escritura
+   es el CAS `linkPatientCas` (count 1). Las fichas archivadas no son candidatas ni cuentan para `ambiguous`; archivar
+   desvincula (ES4-Z M1).
 9. **`lib/files.ts`** — `ALLOWED_MIME`, `SAFE_EXT_RE /^[a-z0-9]{1,8}$/` contra traversal,
    `getDownloadUrl` audita cada URL firmada. Mantener el audit por descarga.
 10. **`lib/insurers-internal.ts`** — `resolveInsurerName` normaliza y linkea free-form al catálogo

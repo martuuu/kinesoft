@@ -37,11 +37,17 @@ const req = (max: number) => z.string().trim().min(1).max(max);
 /** Texto opcional: `null` borra el valor; un string vacío no es un valor (se manda `null`). */
 const opt = (max: number) => req(max).nullable().optional();
 
+/**
+ * Teléfono: 6 a 30 caracteres (ES4-Z B2). Antes alcanzaba con 1 («1» llegaba a la bandeja del consultorio como pedido
+ * válido). Mismo rango que el alta del consultorio; no se valida el formato (fijos, celulares, con o sin +54).
+ */
+const phone = () => z.string().trim().min(6).max(30);
+
 const EmergencyContact = z
   .object({
     name: req(80),
     relation: opt(40),
-    phone: req(32),
+    phone: phone(),
   })
   .strict();
 
@@ -65,7 +71,7 @@ export function fitsPendingChangesBudget(value: unknown): boolean {
 
 export const PortalPendingChanges: z.ZodType<PortalPendingChangesT> = z
   .object({
-    phone: opt(32),
+    phone: phone().nullable().optional(),
     email: z.string().trim().max(120).email().nullable().optional(),
     emergencyContact: EmergencyContact.nullable().optional(),
     coverage: Coverage.optional(),

@@ -10,6 +10,7 @@ import { PortalCheckInForm } from "@/components/portal/check-in-form";
 import { PortalTabs } from "@/components/portal/portal-tabs";
 import { BRAND_NAME } from "@/lib/brand";
 import {
+  PORTAL_HOME,
   PORTAL_PLAN_NO_BOOKING,
   portalCheckInCopy,
   portalNextSessionLabel,
@@ -58,7 +59,13 @@ const shortDateTime: Intl.DateTimeFormatOptions = {
   minute: "2-digit",
 };
 
-export default async function PortalTenantPage({ params }: { params: { slug: string } }) {
+export default async function PortalTenantPage({
+  params,
+  searchParams,
+}: {
+  params: { slug: string };
+  searchParams?: { [k: string]: string | string[] | undefined };
+}) {
   const auth = await getPortalAuth();
   if (!auth.signedIn) {
     return (
@@ -92,7 +99,8 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
   // Sin `planes` ni se pregunta (getPortalPlan devolvería null igual: el gate de verdad está ahí).
   const plan = usesPlans ? await getPortalPlan(params.slug) : null;
   const header = portalTenantHeader({ vertical, hasPlan: !!plan, firstName: me.firstName });
-  const noPlan = portalNoPlanCopy(vertical);
+  const noPlan = portalNoPlanCopy(usesPlans);
+  const canBook = sections.has("reservar");
   const now = Date.now();
   const nextSession = plan?.sessions.find(
     (s) => !s.completedAt && new Date(s.scheduledFor).getTime() >= now - 60_000
@@ -108,6 +116,13 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
         ← Mis consultorios
       </Link>
 
+      {/* ES4-Z (b): vuelta de /portal/vincular (`submitPortalInvite`). */}
+      {searchParams?.vinculado === "1" && (
+        <p role="status" className="k-alert k-alert-success" style={{ margin: 0 }}>
+          Listo: vinculaste tu ficha de {me.tenantName}.
+        </p>
+      )}
+
       <header>
         <Tag tone="lime">{me.tenantName}</Tag>
         <h1 className="k-display" style={{ fontSize: 26, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
@@ -118,21 +133,66 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
 
       <PortalTabs slug={params.slug} sections={me.sections} active="inicio" />
 
-      {!plan ? (
+      {!plan && usesPlans ? (
         <Card glass style={{ padding: 22 }}>
-          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
-            {noPlan.linkToHome ? (
-              <>
-                {noPlan.text}{" "}
-                <Link href="/portal" className="k-link">
-                  Mis consultorios
-                </Link>
-                .
-              </>
-            ) : (
-              noPlan.text
-            )}
-          </p>
+          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{noPlan.text}</p>
+        </Card>
+      ) : !plan ? (
+        // ES4-Z (b4): consultorio sin planes (Clínica general) → «Tu consultorio» con los próximos turnos acá mismo
+        // (antes: «no usa planes… los ves en Mis consultorios», una vuelta para ver lo que ya teníamos leído).
+        <Card glass style={{ padding: 18, display: "grid", gap: 10 }}>
+          <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{noPlan.text}</p>
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--navy-300)",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            {PORTAL_HOME.upcomingTitle}
+          </div>
+          {me.upcoming.length === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0 }}>
+              {PORTAL_HOME.noUpcoming}
+              {canBook && (
+                <>
+                  {" "}
+                  <Link href={`/c/${encodeURIComponent(params.slug)}/booking`} className="k-link">
+                    {PORTAL_HOME.bookCta} →
+                  </Link>
+                </>
+              )}
+            </p>
+          ) : (
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
+              {me.upcoming.map((b) => (
+                <li
+                  key={b.id}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    background: "rgba(255,255,255,0.6)",
+                    border: "1px solid rgba(15,30,51,0.06)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>
+                      {b.scheduledFor.toLocaleString("es-AR", dateTime)}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                      {b.serviceName} · {b.practitionerName} · {b.durationMin} min
+                    </div>
+                  </div>
+                  {b.confirmed ? <Tag tone="lime">Confirmado</Tag> : <Tag tone="soft">A confirmar</Tag>}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       ) : (
         <>
@@ -188,7 +248,7 @@ export default async function PortalTenantPage({ params }: { params: { slug: str
                     textTransform: "uppercase",
                   }}
                 >
-                  {portalNextSessionLabel(vertical, nextSession.ordinal)}
+                  {portalNextSessionLabel(vertical, nextSession.ordinal, plan.totalSessions)}
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>
                   {new Date(nextSession.scheduledFor).toLocaleString("es-AR", dateTime)}

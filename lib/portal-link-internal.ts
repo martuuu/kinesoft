@@ -75,6 +75,12 @@ export async function linkPatientCas(o: {
       if (current.userId === o.userId) {
         outcome = "already";
       } else {
+        // ES4-Z (M1): una ficha ARCHIVADA de esta cuenta en el consultorio (archivada antes de que archivar
+        // desvinculara) ocupa el único (tenantId, userId) y haría P2002. Se libera acá, en la misma tx del vínculo.
+        await tx.patient.updateMany({
+          where: { tenantId: o.tenantId, userId: o.userId, archivedAt: { not: null }, NOT: { id: o.patientId } },
+          data: { userId: null },
+        });
         const { count } = await tx.patient.updateMany({
           where: {
             id: o.patientId,
@@ -117,12 +123,13 @@ export async function linkPortalPatientOnCallback(user: LinkUser, tenantSlug: st
   // Ya vinculada a ESTA cuenta en este consultorio (el único (tenantId, userId) no admite una segunda ficha):
   // nada que hacer, y sin escribir.
   const already = await prisma.patient.findFirst({
-    where: { tenantId: tenant.id, userId: user.id },
+    where: { tenantId: tenant.id, userId: user.id, archivedAt: null },
     select: { id: true },
   });
   if (already) return "already";
   const candidates = await prisma.patient.findMany({
-    where: { tenantId: tenant.id, email: emailEqualsFilter(user.email) },
+    // ES4-Z (M1): las archivadas no son candidatas (el portal no las muestra) ni cuentan para `ambiguous`.
+    where: { tenantId: tenant.id, email: emailEqualsFilter(user.email), archivedAt: null },
     select: { id: true, userId: true, email: true },
   });
   const exact = candidates.filter((c) => sameEmail(c.email, user.email));

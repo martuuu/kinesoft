@@ -138,6 +138,11 @@ defecto al generar turnos) ya está detrás del módulo `planes`.
 - **C-EV2 `lib/nav.ts`*** (puro): `NAV_ITEMS` (con `module?`/`capability?`), `navFor(modules, caps)`, `shortcutsFor(modules)`. **Única fuente** de sidebar, topbar y atajos ⌘K. "Sala de espera" apunta a `/agenda?view=reception` hasta que SV cree `/sala`. **SV11a ✅: apunta a `/sala`.**
 - **C-EV3 `lib/session.ts`**: `Actor.entitlements` desde la fila de tenant que `buildActor` ya lee (`:78`), sin queries extra.
 - **C-EV4 `lib/authz.ts`**: `getTenantModules()`, `assertModule(actor, m)`, `requireModule(m)`, `guardModuleSegment(m)` (para `layout.tsx`, redirige a `/dashboard`). **Regla:** lecturas compartidas devuelven vacío sin el módulo; escrituras y lecturas de detalle tiran. El layout es UX; la barrera es la action.
+  **Enmienda ES4 (P4.Z, 15/16-oct):** las escrituras sin módulo que son server actions llamadas desde la UI (diagnóstico
+  `setPatientDiagnosis`, EVA `recordEvaScore`) devuelven `{ ok: false, error }` en vez de tirar: en prod Next redacta el
+  mensaje de una excepción y la UI mostraba un error genérico. Otras escrituras siguen tirando (`ForbiddenError` vía
+  `assertModule`). Las dos formas son barrera; lo que no vale es escribir sin el módulo (`authz-matrix.test.ts`,
+  `module-guards.test.ts`).
 - **C-EV5 `lib/tenant-entitlements-internal.ts`*** (server-only): `applyTenantEntitlementsInTx(tx, {tenantId, source, patch, expectedUpdatedAt?, actor})` con allowlist por `source` (`platform`: todo; `tenant-settings`: solo `publicBookingEnabled`; `onboarding`: `vertical` mientras el onboarding siga abierto; `billing`: `plan/subscriptionStatus/trialEndsAt`, para el futuro webhook de MP). FOR UPDATE + CAS + audit en el **tenant afectado**. **Único escritor** de esas columnas después de `bootstrapTenant`. `getTenantModulesById(tenantId)` para portal y turnero (sin Actor).
 - **C-EV6 `lib/audit.ts`**: `auditPlatformInTx` → audita en `affectedTenantId` con `action: "platform.*"` y `payload.platform.actorHomeTenantId`.
 - **C-EV7 `lib/cache-tags.ts`**: `tenantEntitlementTags(t)` revalidados después del commit.

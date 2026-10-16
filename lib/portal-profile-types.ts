@@ -25,7 +25,14 @@ export type PortalProfileDTO = {
 export type PortalProfileFormState =
   | null
   | { status: "sent"; slug: string; fields: string[]; at: number }
-  | { status: "error"; slug: string; error: string; values: Record<string, string> };
+  | {
+      status: "error";
+      slug: string;
+      error: string;
+      values: Record<string, string>;
+      /** ES4-Z (b): error por grupo (`phone`, `email`, `emergencyContact`, `coverage`), debajo de su campo. */
+      fieldErrors?: Record<string, string[]>;
+    };
 
 /** S24d: estado del «Cerrar sesión en todos lados» (`signOut({ scope: "global" })`). Si sale bien, redirige. */
 export type PortalSignOutState = null | { status: "error"; error: string };

@@ -105,13 +105,31 @@ export default async function PortalVincular({
     where: { id: claims.patientId, tenantId: claims.tenantId },
     select: { userId: true },
   });
+  // ES4-Z (b): ya vinculada a OTRA cuenta (o el POST volvió con un rechazo sin arreglo desde acá) → sin form: volver a
+  // intentar no cambia nada. Antes se ofrecía «Vincular» y recién el POST lo decía.
+  const dead: PortalVincularError | null =
+    patient?.userId && patient.userId !== me.id
+      ? "linked_elsewhere"
+      : error === "linked_elsewhere" || error === "conflict"
+        ? error
+        : null;
+  if (dead) {
+    return (
+      <Shell tag={tenant.name} title="No pudimos vincular tu ficha">
+        <ErrorBox code={dead} />
+        <ButtonLink href="/portal" variant="primary" size="lg" block>
+          Ir a Mis consultorios
+        </ButtonLink>
+      </Shell>
+    );
+  }
   if (patient?.userId === me.id) {
     return (
       <Shell tag={tenant.name} title="Tu ficha ya está vinculada">
         <Lead>
           Ya podés ver tu portal de <strong>{tenant.name}</strong>.
         </Lead>
-        <ButtonLink href={`/portal/c/${tenant.slug}`} variant="primary" size="lg" block>
+        <ButtonLink href={`/portal/c/${encodeURIComponent(tenant.slug)}`} variant="primary" size="lg" block>
           Ir a mi portal
         </ButtonLink>
       </Shell>

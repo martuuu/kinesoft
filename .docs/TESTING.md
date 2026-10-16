@@ -314,6 +314,31 @@ su alcance queda vacío (anti falso verde).
   (`components/auth/auth-form-actions.ts`, `app/(portal)/portal/portal-link-action.ts`); el estado se deriva del
   resultado, así el form funciona antes de hidratar (`tests/unit/auth-form-actions.test.ts`).
 
+### Patrones nuevos de ES4 (portal, matrices, soak y perf de planes, 15/16-oct-2026)
+
+- **Matrices de permisos como tabla viva.** `tests/integration/authz-matrix.test.ts` (staff: XT, OWNER, BASIC,
+  ASSISTANT, BILLING, GENERAL, SUPPORT × cada action) y `tests/integration/portal-authz-matrix.test.ts` (portal: P, P-otro,
+  P-sinvínculo, P-sinverif, STAFF, consultorio suspendido × cada superficie). Cada celda llama al **símbolo real** y
+  afirma el efecto (fila escrita o intacta, `{ ok:false }` con el copy). Lo que la tabla dice y el código no hace queda
+  como celda `fails: "<sesión>"` (= `it.fails`) con su slug de AUDIT; el día que se arregla, el test avisa y se da vuelta.
+  Las respuestas del portal se comparan con el **copy literal** (un cambio de texto rompe la matriz a propósito).
+- **DTO por allowlist recorrido entero.** `portal-account.test.ts` y la matriz del portal recorren todas las claves del
+  DTO contra un `Set` literal (`ALLOWED_KEYS`): una clave nueva (aunque la UI no la pinte) rompe el test hasta que se
+  agrega a mano. Sumar una clave es una decisión de PHI, no un refactor.
+- **Soak** (`tests/integration/plans-soak.test.ts`): N rondas concurrentes de alta de plan, doble clic, reprogramación
+  cruzada y turno suelto sobre las mismas claves de cupo. Afirma: ninguna action tira, ningún P2002/40P01 crudo, cupo 1
+  respetado y `pg_stat_database.deadlocks` sin subir (cuenta los 40P01 que el retry absorbe).
+- **Perf de planes y del portal** (`tests/perf/plans.perf.test.ts`, `npm run test:perf`): cuenta sentencias con el
+  harness de `agenda-multi` sobre ~6.900 turnos y 150 planes vinculados. Presupuestos: `createPlan` 20 filas ≤ 60 en 1 tx,
+  `previewPlan` ≤ 30, agenda con planes ≤ +5 % contra `agenda-multi.json`, `requirePortalPatient` ≤ 3, home del portal
+  ≤ 1 por consultorio; el resto con techo medido. Un presupuesto incumplido es `it.fails("[ES4-S26s] …")` hasta el fix
+  (los tres de S26s se dieron vuelta en P4.Z). `PERF_OUT_DIR=<scratchpad>` para no ensuciar el árbol.
+- **Flakes por la hora:** un test que arma un turno «dentro de una hora» cae mañana pasadas las 23:00 AR. Para «hoy» se
+  usa un instante de HOY en AR (`localToARIso(`${toARDateKey(now)}T12:00`)`), nunca `now + Δ` (ES4-Z,
+  `support-session.test.ts`).
+- **Redirects de server actions:** `redirect()` tira un error con `digest = "NEXT_REDIRECT;<tipo>;<url>;<status>"`; los
+  tests leen la URL del digest (`redirectOf` en `portal-invite.test.ts` y `portal-identity.test.ts`).
+
 ### Build local (`next build`) — por qué con `-v NODE_ENV=production`
 
 `.env.local` define `NODE_ENV`, y `next build` con ese valor falla en el

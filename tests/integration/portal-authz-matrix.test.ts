@@ -103,6 +103,9 @@ const ACCOUNT_KEYS = new Set([
   "serviceName",
   "amount",
   "paid",
+  "inProcess",
+  "pending",
+  "cancelled",
   "kind",
   "cents",
 ]);
@@ -577,7 +580,10 @@ describe.skipIf(!RUN)("[ES4-S26p] matriz de autorización del portal", () => {
       const r = await refusedWithoutWrite(() =>
         requestPortalProfileChange({ tenantSlug: K.slug, changes: { phone: PHONE } })
       );
-      expect(r).toEqual({ ok: false, error: "Sin acceso." });
+      expect(r).toEqual({
+        ok: false,
+        error: "No encontramos tu ficha en este consultorio. Volvé a Mis consultorios y probá de nuevo.",
+      });
     });
 
     it.each([

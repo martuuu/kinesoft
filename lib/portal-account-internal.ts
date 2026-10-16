@@ -43,7 +43,11 @@ export function explicitMoney(cents: number | null): PortalMoney {
  * del §16.1: cancelar no genera cargo) y solo confundiría.
  */
 const LOOSE_VISIBLE: Prisma.BookingWhereInput = {
-  OR: [{ status: { notIn: ["CANCELLED", "NO_SHOW"] } }, { paymentStatus: { in: ["PAID", "AUTHORIZED"] } }],
+  OR: [
+    { status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+    { paymentStatus: { in: ["PAID", "AUTHORIZED"] } },
+    { payment: { is: { status: { in: ["PAID", "AUTHORIZED"] } } } },
+  ],
 };
 
 const LOOSE_SELECT = {
@@ -53,17 +57,37 @@ const LOOSE_SELECT = {
   paymentStatus: true,
   copagoCents: true,
   service: { select: { name: true } },
+  payment: { select: { status: true } },
 } satisfies Prisma.BookingSelect;
 
 type LooseRow = Prisma.BookingGetPayload<{ select: typeof LOOSE_SELECT }>;
 
+type LooseMoneyRow = Pick<LooseRow, "status" | "paymentStatus" | "copagoCents"> & {
+  payment?: { status: LooseRow["paymentStatus"] } | null;
+};
+
+/** Cobrado: el estado del turno o el del `Payment` de MP (el webhook puede ir adelante del turno). */
+export function looseIsPaid(b: Pick<LooseMoneyRow, "paymentStatus" | "payment">): boolean {
+  return b.paymentStatus === "PAID" || b.payment?.status === "PAID";
+}
+
+/** Pago en proceso (AUTHORIZED) y todavía no cobrado. */
+export function looseInProcess(b: Pick<LooseMoneyRow, "paymentStatus" | "payment">): boolean {
+  return !looseIsPaid(b) && (b.paymentStatus === "AUTHORIZED" || b.payment?.status === "AUTHORIZED");
+}
+
 /**
  * Deuda de un turno suelto: solo uno REALIZADO, con monto explícito y sin cobrar (ni en proceso). Un futuro todavía
  * no se debe; uno «a confirmar» no tiene cifra honesta para sumar.
+ *
+ * ES4-Z (B3, decisión con default): REFUNDED NO reabre la deuda. Un reintegro lo decide el consultorio (devolvió la
+ * plata por algo); mostrarle al paciente «Te falta pagar» por un turno que le devolvieron sería falso. Si el
+ * consultorio quiere volver a cobrarlo, lo marca impago.
  */
-export function loosePendingCents(b: Pick<LooseRow, "status" | "paymentStatus" | "copagoCents">): number {
+export function loosePendingCents(b: LooseMoneyRow): number {
   if (b.status !== "COMPLETED" || b.copagoCents == null) return 0;
-  if (b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED") return 0;
+  if (b.paymentStatus === "PAID" || b.paymentStatus === "AUTHORIZED" || b.paymentStatus === "REFUNDED") return 0;
+  if (looseIsPaid(b) || looseInProcess(b)) return 0;
   return b.copagoCents;
 }
 
@@ -119,7 +143,10 @@ export async function loadPortalAccount(
     date: b.scheduledFor.toISOString(),
     serviceName: b.service.name,
     amount: explicitMoney(b.copagoCents),
-    paid: b.paymentStatus === "PAID",
+    paid: looseIsPaid(b),
+    inProcess: looseInProcess(b),
+    pending: loosePendingCents(b) > 0,
+    cancelled: b.status === "CANCELLED" || b.status === "NO_SHOW",
   }));
 
   const pendingCents =

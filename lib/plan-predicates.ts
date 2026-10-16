@@ -65,6 +65,26 @@ export const linkedProgramWhere = {
 } satisfies Prisma.TreatmentProgramWhereInput;
 
 /**
+ * ES4-D5: el plan que ve el PACIENTE en el portal es un plan ACTIVE, vivo y VINCULADO (`linkedProgramWhere`). Un legacy
+ * (alta vieja, sesiones a las 00:00Z sin turnos) mostraba fechas corridas un día en AR y no tiene turnos que listar.
+ * Una sola fuente para «Tu plan», la home y «Ejercicios» (ES4-Z B4: ejercicios usaba otro where y podía mostrar los
+ * ejercicios de un plan legacy distinto del que «Tu plan» mostraba). Lleva su propio `OR`: combinar con `AND`, nunca
+ * con spread junto a otro `OR`.
+ */
+export const PORTAL_PROGRAM_WHERE = {
+  status: "ACTIVE",
+  ...liveProgramWhere,
+  ...linkedProgramWhere,
+} satisfies Prisma.TreatmentProgramWhereInput;
+
+/** Orden del plan «actual» del portal (el más reciente; desempate estable). */
+export const PORTAL_PROGRAM_ORDER = [
+  { startDate: "desc" },
+  { createdAt: "desc" },
+  { id: "desc" },
+] satisfies Prisma.TreatmentProgramOrderByWithRelationInput[];
+
+/**
  * "Sin turno" (C4, literal): sesión viva, no completada y **sin** turno con
  * `sessionId` y `status ∉ {CANCELLED, NO_SHOW}`. Un turno cancelado o ausente
  * deja la sesión "sin turno" con su cuota y su fecha planificada.

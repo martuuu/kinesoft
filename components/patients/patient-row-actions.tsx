@@ -98,6 +98,7 @@ export function PatientRowActions({
         });
         return;
       }
+      toast.success(archived ? "Paciente reactivado" : "Paciente archivado");
       // PF-0d: sin `router.refresh()`. `setPatientArchived` hace
       // `revalidatePath("/pacientes")` en el OK y la respuesta de la action ya
       // trae la lista nueva (el refresh era un segundo render, +139 ms).
@@ -169,7 +170,11 @@ export function PatientRowActions({
               onClose={() => setAskPlans(false)}
               patientName={patientName}
               livePlanCount={livePlanCount}
-              onConfirm={(plansAction) => archiveRowWithPlans(patientId, plansAction)}
+              onConfirm={async (plansAction) => {
+                const r = await archiveRowWithPlans(patientId, plansAction);
+                if (r.ok) toast.success("Paciente archivado");
+                return r;
+              }}
             />,
             document.body,
           )

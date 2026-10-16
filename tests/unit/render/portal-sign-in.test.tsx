@@ -10,7 +10,11 @@ import type { PortalAuth, PortalPatient } from "@/lib/portal-types";
  * ni «la evolución de tu dolor» (solo Kinesiología), y una ficha de Clínica general no ve «sesiones» ni «sin plan».
  */
 const portal = { auth: { signedIn: false } as PortalAuth };
-vi.mock("@/lib/portal", () => ({ getPortalAuth: async () => portal.auth, submitCheckIn: vi.fn() }));
+vi.mock("@/lib/portal", () => ({
+  getPortalAuth: async () => portal.auth,
+  submitCheckIn: vi.fn(),
+  searchMyPortalPatients: vi.fn(),
+}));
 vi.mock("@/lib/portal-auth", () => ({
   requestPortalLink: async () => ({ ok: true, data: { message: "x" } }),
 }));
@@ -121,13 +125,13 @@ describe("[VX-Z FX-portal] ingreso", () => {
     expect(err).toMatch(/<input[^>]*name="email"[^>]*value="x"|<input[^>]*value="x"[^>]*name="email"/);
   });
 
-  it("layout: «Mi cuenta» solo con sesión", async () => {
+  it("layout: «Mis datos» solo con sesión", async () => {
     const out = renderToStaticMarkup(await PortalLayout({ children: <p>x</p> }));
-    expect(out).not.toContain("Mi cuenta");
+    expect(out).not.toContain("Mis datos");
     expect(out).not.toContain('href="/portal/me"');
     ext.session = { id: "u1" };
     const inn = renderToStaticMarkup(await PortalLayout({ children: <p>x</p> }));
-    expect(inn).toMatch(/<a[^>]*href="\/portal\/me"[^>]*>Mi cuenta<\/a>/);
+    expect(inn).toMatch(/<a[^>]*href="\/portal\/me"[^>]*>Mis datos<\/a>/);
   });
 });
 
@@ -159,10 +163,10 @@ describe("[VX2-f] /portal con sesión, por vertical de la ficha", () => {
 });
 
 describe("[VX2-f] check-in del portal por vertical", () => {
-  it("Kinesiología: «Check-in pre-sesión»; General: «Antes de tu turno», sin sesión ni ejercicios", () => {
+  it("Kinesiología: «Antes de tu sesión»; General: «Antes de tu turno», sin sesión ni ejercicios", () => {
     const k = renderToStaticMarkup(<PortalCheckInForm slug="demo" sessionId="s1" vertical="KINESIOLOGY" />);
     const g = renderToStaticMarkup(<PortalCheckInForm slug="demo" sessionId="s1" vertical="GENERAL" />);
-    expect(k).toContain("Check-in pre-sesión");
+    expect(k).toContain("Antes de tu sesión");
     expect(g).toContain("Antes de tu turno");
     expect(g).not.toMatch(/sesi[oó]n|check-in|ejercicio/i);
     // Labels reales: el slider y las notas tienen su <label for>.

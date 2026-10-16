@@ -68,7 +68,8 @@ async function linkByInvite(token: string | null): Promise<Outcome> {
     // El único (tenantId, userId) no admite una segunda ficha de esta cuenta en el consultorio: se avisa con su
     // motivo en vez de dejar que el CAS lo descubra como P2002.
     const other = await prisma.patient.findFirst({
-      where: { tenantId: claims.tenantId, userId: me.id, NOT: { id: patient.id } },
+      // Las archivadas no cuentan (M1): el CAS libera su vínculo en la misma tx.
+      where: { tenantId: claims.tenantId, userId: me.id, archivedAt: null, NOT: { id: patient.id } },
       select: { id: true },
     });
     if (other) return refuse("conflict", slug);
@@ -99,7 +100,8 @@ export async function linkPortalByInvite(formData: FormData): Promise<ActionResu
 export async function submitPortalInvite(formData: FormData): Promise<void> {
   const token = tokenFrom(formData);
   const r = await linkByInvite(token);
-  if (r.ok) redirect(`/portal/c/${r.slug}`);
+  // ES4-Z (b): `?vinculado=1` → la página del consultorio confirma «Listo: vinculaste tu ficha de …».
+  if (r.ok) redirect(`/portal/c/${encodeURIComponent(r.slug)}?vinculado=1`);
   if (!token || token.length > 1024) redirect("/portal");
   redirect(portalVincularPath(token, r.code));
 }

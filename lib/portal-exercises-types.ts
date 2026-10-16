@@ -15,7 +15,15 @@ export type PortalExerciseDTO = {
 /** `null` = no hay plan activo con ejercicios (la página muestra el vacío, no un error). */
 export type PortalExercisesDTO = {
   programTitle: string;
-  sessions: { index: number; /** ISO 8601. */ date: string; exercises: PortalExerciseDTO[] }[];
+  /** Sesiones vivas del plan (la N de «Sesión n de N»), tengan o no ejercicios. */
+  totalSessions: number;
+  sessions: {
+    index: number;
+    /** Ordinal por fecha entre las sesiones vivas (M13): el mismo número que «Tu plan». */
+    ordinal: number;
+    /** ISO 8601. */ date: string;
+    exercises: PortalExerciseDTO[];
+  }[];
 } | null;
 
 /**

@@ -30,6 +30,12 @@ export type PortalAccountDTO = {
     serviceName: string;
     amount: PortalMoney;
     paid: boolean;
+    /** Pago en proceso (AUTHORIZED): «Pago en proceso». */
+    inProcess: boolean;
+    /** Realizado, con monto y sin cobrar: suma a «Te falta pagar» («A pagar»). */
+    pending: boolean;
+    /** Cancelado o ausente (solo se lista si tiene plata en juego). */
+    cancelled: boolean;
   }[];
   totals: { pendingCents: number; creditCents: number };
 };

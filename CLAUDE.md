@@ -62,7 +62,9 @@
       brief (ROADMAP «VX ✅»). No confundir F-a..F-e con los fixers «F1/F2/F3a» de P3.Z ni con «F2» de AUDIT/Planes.
     - «PF» = performance + pulido: «PF-0a..d» (diagnóstico temprano), «PF1», «PF-M» (M10), «PF2»; «D-PF*» decisiones.
       «PF0» (sin guion) es la parte de bundle de la Ola F.
-    - «ES4-D*» = decisiones del portal en §20.8. «DIR-0» = hotfix del email como nombre; «DIR-1..3» olas del directorio
+    - «ES4-D*» = decisiones del portal en §20.8. Sesiones de ES4: «S24a/S24t/S24v» (identidad, token, invitación),
+      «P4-C» (contratos de datos del portal), «S24/S24p/S24d/S24r/S24e/S24i/S32/S32a» (P4.1) y «S26b/S26p/S26s»
+      (matriz staff, matriz portal, perf/soak). «DIR-0» = hotfix del email como nombre; «DIR-1..3» olas del directorio
       (DIR-1 = M11), «DIR-D*» decisiones.
     - «M8» = `pl_accounts_billing`, «M9» = `clinical_notes`, «M10» = `perf_fk_indexes`, «M11» = `public_directory`.
     - «H-SLOW» (lentitud general), «H-TURN» (turnero por profesional), «H-EV2», «H-LAND», «H-LOGIN», «H-BUNDLE», «H-DOC»:

@@ -63,6 +63,9 @@
   "/elegir-consultorio": 96.7,
   "/sin-acceso": 96.7,
   "/suspendido": 96.7,
-  "/portal/me": 95.9,
-  "/_not-found": 88.1
+  "/portal/me": 106.7,
+  "/_not-found": 88.1,
+  "/portal/vincular": 107.4,
+  "/portal/c/[slug]/cuenta": 95.9,
+  "/portal/c/[slug]/ejercicios": 95.9
 }

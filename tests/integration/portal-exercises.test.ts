@@ -85,7 +85,7 @@ describe.skipIf(!RUN)("portal · ejercicios del plan (S24e)", () => {
   const program = async (
     T: EphemeralTenant,
     patientId: string,
-    o: { title?: string; startDate?: Date; status?: "ACTIVE" | "COMPLETED"; notes?: string } = {}
+    o: { title?: string; startDate?: Date; status?: "ACTIVE" | "COMPLETED"; notes?: string; legacy?: boolean } = {}
   ) =>
     (
       await db.treatmentProgram.create({
@@ -96,6 +96,8 @@ describe.skipIf(!RUN)("portal · ejercicios del plan (S24e)", () => {
           startDate: o.startDate ?? new Date(),
           status: o.status ?? "ACTIVE",
           notes: o.notes,
+          // ES4-Z B4: el portal muestra el plan VINCULADO (`PORTAL_PROGRAM_WHERE`); un `schedule` lo vincula.
+          schedule: o.legacy ? undefined : { v: 1 },
         },
       })
     ).id;
@@ -160,9 +162,11 @@ describe.skipIf(!RUN)("portal · ejercicios del plan (S24e)", () => {
     if (view.kind !== "ok") return;
     expect(view.data).toEqual({
       programTitle: "Plan lumbar",
+      totalSessions: 2,
       sessions: [
         {
           index: 1,
+          ordinal: 1,
           date: new Date(Date.UTC(2026, 9, 11, 13, 0)).toISOString(),
           exercises: [
             {
@@ -187,6 +191,30 @@ describe.skipIf(!RUN)("portal · ejercicios del plan (S24e)", () => {
     const html = renderToStaticMarkup(await PortalExercisesPage({ params: { slug: K.slug } }));
     expect(html).toContain("Puente de glúteos");
     for (const s of [SECRET_SE, SECRET_SESSION, SECRET_PROGRAM, RAW_URL, "Mulligan"]) expect(html).not.toContain(s);
+  });
+
+  it("[ES4-Z B4] mismo plan que «Tu plan»: un legacy más nuevo no se muestra; «Sesión n de N» por fecha", async () => {
+    const uid = await patientIdentity();
+    const patientId = await linkedPatient(K, uid);
+    const puente = await exercise({ name: "Puente", tenantId: K.tenantId });
+    const legacyEx = await exercise({ name: "Del legacy", tenantId: K.tenantId });
+    const linkedPid = await program(K, patientId, { title: "Vinculado", startDate: new Date(Date.UTC(2026, 0, 1)) });
+    // index 1 es POSTERIOR a index 2 (se movió): el ordinal por fecha la pone segunda.
+    const s1 = await session(K, linkedPid, 1, [{ exerciseId: puente }]);
+    await db.session.update({ where: { id: s1 }, data: { scheduledFor: new Date(Date.UTC(2026, 9, 30, 13, 0)) } });
+    await session(K, linkedPid, 2, []);
+    const legacy = await program(K, patientId, { title: "Legacy", legacy: true, startDate: new Date(Date.UTC(2026, 5, 1)) });
+    await session(K, legacy, 1, [{ exerciseId: legacyEx }]);
+    asUser(uid);
+    const view = await getPortalExercisesView(K.slug);
+    if (view.kind !== "ok") throw new Error(view.kind);
+    expect(view.data?.programTitle).toBe("Vinculado");
+    expect(view.data?.totalSessions).toBe(2);
+    expect(view.data?.sessions.map((x) => [x.index, x.ordinal])).toEqual([[1, 2]]);
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const html = renderToStaticMarkup(await PortalExercisesPage({ params: { slug: K.slug } }));
+    expect(html).toContain("Sesión 2 de 2");
+    expect(html).not.toContain("Del legacy");
   });
 
   it("[P4-S24e] media de un ejercicio fuera de sus sesiones → null", async () => {

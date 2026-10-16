@@ -193,6 +193,7 @@ function humanizeAction(action: string): string {
     "patient.bulk_unarchive": "Restaurado en lote",
     "patient.portal_invite": "Invitado al portal",
     "patient.portal_invite.resend": "Invitación al portal reenviada",
+    "patient.portal.unlink": "Desvinculado del portal (archivado)",
     "patient.share.update": "Permisos de acceso actualizados",
     "booking.create": "Turno creado",
     "booking.update": "Turno actualizado",

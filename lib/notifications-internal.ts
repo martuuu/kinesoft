@@ -12,6 +12,7 @@ import { NotificationKind } from "@prisma/client";
 import { runWithRls } from "@/lib/rls";
 import { logger } from "@/lib/logger";
 import { captureException } from "@/lib/observability";
+import { capabilitiesForMember, MEMBER_ACCESS_SELECT } from "@/lib/capabilities";
 
 /**
  * Fire-and-forget enqueue helper called by domain mutations. Never throws
@@ -61,6 +62,12 @@ export async function notifyTenantOwners(p: {
   body?: string;
   link?: string;
   alsoPractitionerId?: string;
+  /**
+   * ES4-Z (b7, decisión con default): avisar también a quien opera la agenda de todos (`agenda.operateAll`: hoy la
+   * Secretaria). El pedido de «Mis datos» del portal lo aprueba ella (PD-13) y antes no le llegaba. Solo membresías
+   * activas (las suspendidas no entran).
+   */
+  alsoAgendaOperators?: boolean;
 }) {
   try {
     const recipients = new Set<string>();
@@ -76,6 +83,13 @@ export async function notifyTenantOwners(p: {
       select: { userId: true },
     }));
     for (const m of memberships) recipients.add(m.userId);
+    if (p.alsoAgendaOperators) {
+      const operators = await runWithRls(p.tenantId, (tx) => tx.membership.findMany({
+        where: { tenantId: p.tenantId, disabledAt: null, role: { notIn: ["OWNER", "ADMIN"] } },
+        select: { userId: true, ...MEMBER_ACCESS_SELECT },
+      }));
+      for (const m of operators) if (capabilitiesForMember(m).has("agenda.operateAll")) recipients.add(m.userId);
+    }
 
     if (recipients.size === 0) return;
     await runWithRls(p.tenantId, (tx) => tx.notification.createMany({

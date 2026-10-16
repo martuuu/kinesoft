@@ -5,7 +5,7 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 // writes → service channel (BYPASSRLS). See lib/db.ts#prismaService.
 import { prismaService as prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { safeNext } from "@/lib/safe-next";
+import { authErrorPath, safeNext } from "@/lib/safe-next";
 import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { ACTIVE_TENANT_COOKIE, ACTIVE_TENANT_COOKIE_OPTIONS } from "@/lib/active-tenant-cookie";
 import { oauthCallbackErrorCode, oauthProfileFromUser } from "@/lib/identity/oauth-profile";
@@ -64,16 +64,16 @@ export async function GET(req: Request) {
       const mapped = oauthCallbackErrorCode(providerError, errorCode, url.searchParams.get("error_description"));
       // Sin la descripción: es texto libre de GoTrue / del proveedor.
       logger.warn("auth.callback.provider_error", { error: providerError, errorCode, mapped });
-      return NextResponse.redirect(`${url.origin}/login?error=${mapped}`);
+      return NextResponse.redirect(`${url.origin}${authErrorPath(next, mapped)}`);
     }
-    return NextResponse.redirect(`${url.origin}/login?error=missing_code`);
+    return NextResponse.redirect(`${url.origin}${authErrorPath(next, "missing_code")}`);
   }
 
   const supabase = getSupabaseServerClient();
   const { data: session, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error || !session.user) {
     logger.warn("auth.callback.exchange_failed", { message: error?.message ?? "no_user" });
-    return NextResponse.redirect(`${url.origin}/login?error=oauth_failed`);
+    return NextResponse.redirect(`${url.origin}${authErrorPath(next, "oauth_failed")}`);
   }
   const user = session.user;
   const profile = oauthProfileFromUser(user);
@@ -85,7 +85,7 @@ export async function GET(req: Request) {
       provider: profile.provider,
       ...(signOutError ? { signOutError: signOutError.message } : {}),
     });
-    return NextResponse.redirect(`${url.origin}/login?error=oauth_no_email`);
+    return NextResponse.redirect(`${url.origin}${authErrorPath(next, "oauth_no_email")}`);
   }
   const email = profile.email;
   const emailVerified = !!user.email_confirmed_at;
@@ -105,7 +105,7 @@ export async function GET(req: Request) {
       provider: profile.provider,
       ...(signOutError ? { signOutError: signOutError.message } : {}),
     });
-    return NextResponse.redirect(`${url.origin}/login?error=oauth_failed`);
+    return NextResponse.redirect(`${url.origin}${authErrorPath(next, "oauth_failed")}`);
   }
 
   // IAM-0a: la vinculación vive en `lib/portal-link-internal.ts` (testeable contra Postgres; una ruta de Next no puede

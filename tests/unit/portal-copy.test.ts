@@ -35,9 +35,9 @@ describe("[VX2-f] portal-copy", () => {
       portalPatientCardCopy("GENERAL"),
       portalTenantHeader({ vertical: "GENERAL", hasPlan: false, firstName: "Ana" }),
       portalTenantHeader({ vertical: "GENERAL", hasPlan: true, firstName: "Ana" }),
-      portalNoPlanCopy("GENERAL"),
+      portalNoPlanCopy(false),
       portalSessionLabel("GENERAL", 3),
-      portalNextSessionLabel("GENERAL", 3),
+      portalNextSessionLabel("GENERAL", 3, 5),
       portalCheckInCopy("GENERAL"),
     ];
     expect(ALL(g)).not.toMatch(/sesi[oó]n|check-in|ejercicio/i);
@@ -47,7 +47,8 @@ describe("[VX2-f] portal-copy", () => {
       lead: "Hola Ana.",
     });
     expect(portalPlanProgress("GENERAL", 2, 5)).toBe("2 / 5 turnos");
-    expect(portalNoPlanCopy("GENERAL").linkToHome).toBe(true);
+    expect(portalNoPlanCopy(false)).toEqual({ text: "Acá ves tus próximos turnos en este consultorio.", linkToHome: false });
+    expect(portalNextSessionLabel("GENERAL", 3, 5)).toBe("Próximo turno · Turno 3 de 5");
   });
 
   it("Kinesiología conserva «sesión por sesión» y el check-in pre-sesión", () => {
@@ -56,10 +57,10 @@ describe("[VX2-f] portal-copy", () => {
     );
     expect(portalPlanProgress("KINESIOLOGY", 3, 10)).toBe("3 / 10 sesiones");
     expect(portalSessionLabel("KINESIOLOGY", 4)).toBe("Sesión 4");
-    expect(portalNextSessionLabel("KINESIOLOGY", 4)).toBe("Próxima sesión · #4");
-    expect(portalCheckInCopy("KINESIOLOGY").title).toBe("Check-in pre-sesión");
+    expect(portalNextSessionLabel("KINESIOLOGY", 3, 10)).toBe("Próxima sesión · Sesión 3 de 10");
+    expect(portalCheckInCopy("KINESIOLOGY").title).toBe("Antes de tu sesión");
     expect(portalPatientCardCopy("KINESIOLOGY").noPlan).toMatch(/plan de tratamiento/);
-    expect(portalNoPlanCopy("KINESIOLOGY").linkToHome).toBe(false);
+    expect(portalNoPlanCopy(true).linkToHome).toBe(false);
   });
 });
 

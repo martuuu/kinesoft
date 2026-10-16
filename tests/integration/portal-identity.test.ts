@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { getPortalAuth, getPortalPlan, submitCheckIn } from "@/lib/portal";
+import { getPortalAuth, getPortalPlan, searchMyPortalPatients, submitCheckIn } from "@/lib/portal";
 import { requirePortalPatient, listPortalPatients, getPortalUser } from "@/lib/portal-identity-internal";
 import {
   linkPatientCas,
@@ -22,6 +22,7 @@ import {
   linkPortalPatientsOnSignIn,
 } from "@/lib/portal-link-internal";
 import { prismaService } from "@/lib/db";
+import { bulkArchivePatients, setPatientArchived } from "@/lib/patients";
 import { logger } from "@/lib/logger";
 import { __rateLimitInternals } from "@/lib/rate-limit";
 import {
@@ -234,6 +235,74 @@ describe.skipIf(!RUN)("[P4-S24a] portal · identidad por (tenantId, userId)", ()
     expect(await requirePortalPatient(A.slug)).toBeNull();
     const auth = await getPortalAuth();
     if (auth.signedIn) expect(auth.patients).toEqual([]);
+  });
+
+  it("[ES4-Z b1] «Buscar mis fichas»: vincula la ficha nueva sin re-login; sin novedades → nada; 5/h", async () => {
+    const redirectOf = async (p: Promise<unknown>) => {
+      try {
+        await p;
+      } catch (err) {
+        const digest = (err as { digest?: unknown }).digest;
+        if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) return digest.split(";")[2];
+        throw err;
+      }
+      throw new Error("no redirigió");
+    };
+    const me = await account();
+    asUser(me.id);
+    expect(await redirectOf(searchMyPortalPatients())).toBe("/portal?buscar=nada");
+    // El consultorio carga el email en una ficha después de que la persona entró.
+    const pa = await addPatient(db, A, { email: me.email });
+    expect(await redirectOf(searchMyPortalPatients())).toBe("/portal?buscar=ok");
+    expect((await db.patient.findUniqueOrThrow({ where: { id: pa } })).userId).toBe(me.id);
+    expect(await redirectOf(searchMyPortalPatients())).toBe("/portal?buscar=nada");
+    for (let i = 0; i < 2; i++) await redirectOf(searchMyPortalPatients());
+    expect(await redirectOf(searchMyPortalPatients())).toBe("/portal?buscar=limite");
+  });
+
+  describe("[ES4-Z M1] ficha archivada vinculada", () => {
+    it("archivar (setPatientArchived) desvincula la cuenta en la misma tx, con audit", async () => {
+      const me = await account();
+      const pa = await addPatient(db, A, { email: me.email });
+      await db.patient.update({ where: { id: pa }, data: { userId: me.id } });
+      asUser(A.userId);
+      expect(await setPatientArchived({ id: pa, archived: true })).toEqual({ ok: true, data: undefined });
+      const row = await db.patient.findUniqueOrThrow({ where: { id: pa }, select: { userId: true, archivedAt: true } });
+      expect(row.userId).toBeNull();
+      expect(row.archivedAt).not.toBeNull();
+      const ev = await db.auditEvent.findFirst({ where: { tenantId: A.tenantId, action: "patient.portal.unlink", entityId: pa } });
+      expect(ev?.payload).toMatchObject({ reason: "archived" });
+      // Reactivar no re-vincula.
+      expect((await setPatientArchived({ id: pa, archived: false })).ok).toBe(true);
+      expect((await db.patient.findUniqueOrThrow({ where: { id: pa } })).userId).toBeNull();
+    });
+
+    it("bulkArchivePatients desvincula cada ficha con su audit; sin vínculo no audita", async () => {
+      const me = await account();
+      const p1 = await addPatient(db, A, { email: me.email });
+      const p2 = await addPatient(db, A, {});
+      await db.patient.update({ where: { id: p1 }, data: { userId: me.id } });
+      asUser(A.userId);
+      expect(await bulkArchivePatients({ ids: [p1, p2], archived: true })).toEqual({ ok: true, data: { updated: 2 } });
+      expect((await db.patient.findUniqueOrThrow({ where: { id: p1 } })).userId).toBeNull();
+      const evs = await db.auditEvent.findMany({
+        where: { tenantId: A.tenantId, action: "patient.portal.unlink", entityId: { in: [p1, p2] } },
+      });
+      expect(evs.map((e) => e.entityId)).toEqual([p1]);
+    });
+
+    it("archivada vinculada (dato previo) + ficha nueva con el email → el login vincula la nueva y libera la vieja", async () => {
+      const me = await account();
+      const old = await addPatient(db, A, { email: me.email });
+      await db.patient.update({ where: { id: old }, data: { userId: me.id, archivedAt: new Date() } });
+      // Única (tenantId, email) distingue mayúsculas: la ficha nueva lleva el email en mayúsculas.
+      const fresh = await addPatient(db, A, { email: me.email.toUpperCase() });
+      expect(await linkPortalPatientOnCallback(verified(me), A.slug)).toBe("linked");
+      expect((await db.patient.findUniqueOrThrow({ where: { id: fresh } })).userId).toBe(me.id);
+      expect((await db.patient.findUniqueOrThrow({ where: { id: old } })).userId).toBeNull();
+      asUser(me.id);
+      expect((await requirePortalPatient(A.slug))?.patientId).toBe(fresh);
+    });
   });
 
   describe("linkPatientCas", () => {

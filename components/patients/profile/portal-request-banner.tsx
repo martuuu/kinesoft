@@ -11,14 +11,17 @@
  * aprobar los datos del hero se refrescan sin `router.refresh()`.
  *
  * Aprobar un cambio de obra social pide confirmación con `useConfirm` cuando hay turnos impagos cuyo copago sale de la
- * cobertura («Cambia el copago de N turnos impagos»): el número sale de `previewPortalRequestImpact` en el momento del
- * clic, no del listado (puede haber cambiado mientras la ficha estaba abierta).
+ * cobertura («Cambia el copago de N turnos impagos») o un copago propio cargado que se borra (ES4-Z M2: antes, sin
+ * turnos impagos, el copago propio se borraba sin preguntar). Los datos salen de `previewPortalRequestImpact` en el
+ * momento del clic, no del listado (puede haber cambiado mientras la ficha estaba abierta).
  */
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
+import { formatARS } from "@/lib/format";
 import {
   decidePatientPortalRequest,
   listPatientPortalRequests,
@@ -60,9 +63,9 @@ function diffOf(row: PortalRequestRow, field: PortalPendingChangeField): [string
   const c = row.changes!;
   switch (field) {
     case "phone":
-      return [row.current.phone ?? "—", c.phone ?? "Borrar"];
+      return [row.current.phone ?? "(sin dato)", c.phone ?? "Borrar"];
     case "email":
-      return [row.current.email ?? "—", c.email ?? "Borrar"];
+      return [row.current.email ?? "(sin dato)", c.email ?? "Borrar"];
     case "emergencyContact":
       return [contactText(row.current.emergencyContact), c.emergencyContact ? contactText(c.emergencyContact) : "Borrar"];
     case "coverage":
@@ -108,21 +111,37 @@ function PortalRequestCard({
   setError: (e: string | null) => void;
 }) {
   const confirm = useConfirm();
+  const toast = useToast();
   const [pending, start] = useTransition();
+  // El preview es una ida al server: los botones quedan deshabilitados desde el clic (antes un doble clic disparaba
+  // dos previews y dos confirmaciones).
+  const [previewing, setPreviewing] = useState(false);
+  const busy = pending || previewing;
 
   const approve = async () => {
     setError(null);
     if (row.changes?.coverage) {
-      const impact = await previewPortalRequestImpact({ id: row.id });
+      setPreviewing(true);
+      const impact = await previewPortalRequestImpact({ id: row.id }).finally(() => setPreviewing(false));
       if (!impact.ok) {
         setError(impact.error);
         return;
       }
       const n = impact.data.unpaidCopagoBookings;
-      if (impact.data.osChanges && n > 0) {
+      const own = impact.data.ownCopagoCents;
+      if (impact.data.osChanges && (n > 0 || own != null)) {
+        const parts: string[] = [];
+        if (n > 0) {
+          parts.push(
+            `Cambia el copago de ${n} ${n === 1 ? "turno impago" : "turnos impagos"}: se van a cobrar con la cobertura nueva.`
+          );
+        }
+        if (own != null) {
+          parts.push(`${n > 0 ? "También se borra" : "Se borra"} el copago propio de ${formatARS(own)} que tenía cargado.`);
+        }
         const ok = await confirm({
           title: "Cambiar la obra social",
-          message: `Cambia el copago de ${n} ${n === 1 ? "turno impago" : "turnos impagos"}: se van a cobrar con la cobertura nueva. Si el paciente tenía un copago propio, se borra.`,
+          message: parts.join(" "),
           confirmLabel: "Aprobar y cambiar",
           tone: "danger",
         });
@@ -152,6 +171,7 @@ function PortalRequestCard({
         await reload();
         return;
       }
+      toast.success(decision === "APPROVE" ? "Datos actualizados" : "Pedido rechazado");
       await reload();
     });
 
@@ -209,11 +229,11 @@ function PortalRequestCard({
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {row.changes && (
-          <Button variant="primary" size="sm" disabled={pending} onClick={() => void approve()}>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => void approve()}>
             Aprobar y aplicar
           </Button>
         )}
-        <Button variant="ghost" size="sm" disabled={pending} onClick={() => void reject()}>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void reject()}>
           Rechazar
         </Button>
       </div>

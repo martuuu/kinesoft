@@ -20,14 +20,16 @@
  */
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 // Patient-facing portal: no practitioner Actor. Las fichas salen de `requirePortalPatient` / `listPortalPatients`
 // (por userId) y cada query va acotada por el par patientId + tenantId de ese ref, así que corre en el canal service
 // (BYPASSRLS) — same trust model as public-booking.
 import { prismaService as prisma } from "@/lib/db";
 import { getPortalUser, listPortalPatients, requirePortalPatient } from "@/lib/portal-identity-internal";
+import { linkPortalPatientsOnSignIn } from "@/lib/portal-link-internal";
 import { PORTAL_SECTIONS, portalSectionsFor } from "@/lib/portal-nav";
-import { linkedProgramWhere, liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
+import { PORTAL_PROGRAM_ORDER, PORTAL_PROGRAM_WHERE, liveProgramWhere, liveSessionWhere } from "@/lib/plan-predicates";
 import { planSessionOrdinals } from "@/lib/plan-display";
 import { rateLimit, rateLimitedMessage } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
@@ -40,18 +42,6 @@ import type {
   PortalPatient,
   PortalPlanDTO,
 } from "@/lib/portal-types";
-
-/**
- * ES4-D5: el plan que ve el paciente es un plan ACTIVE, vivo y VINCULADO (`linkedProgramWhere`: tiene agenda o turnos
- * con `programId`). Un legacy (alta vieja, sesiones a las 00:00Z sin turnos) mostraba fechas corridas un día en AR y
- * no tiene turnos que listar; prod es demo y el precheck (a) de ES4 confirma que no hay planes legacy que rescatar.
- * No se exporta: un archivo "use server" solo exporta funciones async.
- */
-const PORTAL_PROGRAM_WHERE = {
-  status: "ACTIVE",
-  ...liveProgramWhere,
-  ...linkedProgramWhere,
-} satisfies Prisma.TreatmentProgramWhereInput;
 
 /**
  * Turno vigente de una sesión: ni cancelado ni ausente (C4: un turno cancelado o ausente deja la sesión «sin turno»).
@@ -89,7 +79,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
           where: {
             AND: [{ OR: planRefs.map((ref) => ({ patientId: ref.patientId, tenantId: ref.tenantId })) }, PORTAL_PROGRAM_WHERE],
           },
-          orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+          orderBy: PORTAL_PROGRAM_ORDER,
           select: {
             id: true,
             patientId: true,
@@ -115,6 +105,7 @@ export async function getPortalAuth(): Promise<PortalAuth> {
         tenantId: true,
         scheduledFor: true,
         durationMin: true,
+        status: true,
         service: { select: { name: true } },
         // DIR-0: sin `email`; el portal nunca muestra el email del profesional como nombre.
         practitioner: { select: { user: { select: { fullName: true } } } },
@@ -152,6 +143,8 @@ export async function getPortalAuth(): Promise<PortalAuth> {
           id: b.id,
           scheduledFor: b.scheduledFor,
           durationMin: b.durationMin,
+          // ES4-Z (b, BAJO): antes todos decían «Confirmado», también un PENDING del turnero.
+          confirmed: b.status === "CONFIRMED" || b.status === "COMPLETED",
           serviceName: b.service.name,
           practitionerName: publicPractitionerName(b.practitioner.user.fullName),
         })),
@@ -159,6 +152,25 @@ export async function getPortalAuth(): Promise<PortalAuth> {
   });
 
   return { signedIn: true, email: me.email, fullName: me.fullName, patients };
+}
+
+/**
+ * ES4-D2 (ES4-Z b1): «¿No ves tu consultorio? Buscar mis fichas». Corre el MISMO auto-vínculo del login
+ * (`linkPortalPatientsOnSignIn` con destino `/portal`: cada consultorio con una ficha de ese email exacto, PD-15) sin
+ * tener que salir y volver a entrar. Antes, quien ya tenía sesión cuando el consultorio le cargaba el email en la
+ * ficha no veía el consultorio hasta el próximo login.
+ *
+ * Form POST sin JS: vuelve a `/portal?buscar=<ok|nada|limite>` (nunca texto libre en la URL). 5/h por cuenta: cada
+ * intento lee fichas de todos los consultorios por email.
+ */
+export async function searchMyPortalPatients(): Promise<void> {
+  const me = await getPortalUser();
+  if (!me || me.isStaff) redirect("/portal");
+  const rl = await rateLimit(`portal-buscar:user:${me.id}`, { limit: 5, windowMs: 3_600_000 });
+  if (!rl.ok) redirect("/portal?buscar=limite");
+  const outcomes = await linkPortalPatientsOnSignIn({ id: me.id, email: me.email, emailVerified: true }, "/portal");
+  revalidatePath("/portal");
+  redirect(outcomes.includes("linked") ? "/portal?buscar=ok" : "/portal?buscar=nada");
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -191,7 +203,7 @@ export async function getPortalPlan(tenantSlug: string): Promise<PortalPlanDTO |
   if (!ref || !portalSectionsFor(ref.modules).has("plan")) return null;
   const program = await prisma.treatmentProgram.findFirst({
     where: { patientId: ref.patientId, tenantId: ref.tenantId, ...PORTAL_PROGRAM_WHERE },
-    orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    orderBy: PORTAL_PROGRAM_ORDER,
     select: {
       id: true,
       title: true,
@@ -335,7 +347,8 @@ export async function submitCheckIn(input: {
     },
     select: { id: true, index: true },
   });
-  if (!sess) return { ok: false, error: "Sesión no encontrada." };
+  // ES4-Z (b): «Sesión no encontrada» no le decía qué hacer (y en General no hay «sesiones»).
+  if (!sess) return { ok: false, error: "No encontramos esa cita de tu plan. Recargá la página." };
 
   // Per-patient throttle — one check-in per (patient, session) is enough.
   const existing = await prisma.evaScore.findFirst({

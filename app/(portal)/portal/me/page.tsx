@@ -8,14 +8,14 @@ import { PORTAL_PROFILE_FIELD_LABELS } from "@/lib/portal-profile-types";
 import { BRAND_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: `Mi cuenta · ${BRAND_NAME}` };
+export const metadata = { title: `Mis datos · ${BRAND_NAME}` };
 
 /*
  * VX2-f (D-VX28): textos de 12 px mínimo, filas y botones con 44 px de alto, `Button` del design system con `block`.
  *
  * ES4 S24d («Mis datos»):
  *   - lee `loadPortalProfile()` (fichas VINCULADAS por userId, `PortalProfileDTO`), ya no `getPortalAuth()`;
- *   - «Reservar turno» solo con el turnero abierto (`canBook` = `turneroPublico` y consultorio abierto): antes salía
+ *   - «Sacar un turno» (antes «Reservar turno») solo con el turnero abierto (`canBook` = `turneroPublico` y consultorio abierto): antes salía
  *     siempre y llevaba a un turnero cerrado;
  *   - por consultorio, el pedido de cambio de datos (inline, ES4-D8) y el aviso de pedidos abiertos con los NOMBRES de
  *     los campos (los valores no se muestran: lo que vale es lo que el consultorio apruebe);
@@ -44,8 +44,15 @@ export default async function PortalMe() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Link
+        href="/portal"
+        className="k-link"
+        style={{ fontSize: 14, display: "inline-flex", alignItems: "center", minHeight: 44, alignSelf: "flex-start" }}
+      >
+        ← Mis consultorios
+      </Link>
       <h1 className="k-display" style={{ fontSize: 26, margin: 0 }}>
-        Mi cuenta
+        Mis datos
       </h1>
 
       <Card glass style={{ padding: 18 }}>
@@ -90,7 +97,7 @@ export default async function PortalMe() {
                     </div>
                     {t.canBook && (
                       <Link
-                        href={`/c/${t.slug}/booking`}
+                        href={`/c/${encodeURIComponent(t.slug)}/booking`}
                         style={{
                           color: "var(--sky-700)",
                           fontSize: 13,
@@ -102,12 +109,14 @@ export default async function PortalMe() {
                           textDecoration: "none",
                         }}
                       >
-                        Reservar turno →
+                        Sacar un turno →
                       </Link>
                     )}
                   </div>
+                  {/* Sin role="status": es contenido de la página, no un aviso que cambió (un lector lo anunciaba al
+                      cargar). */}
                   {pending && (
-                    <p role="status" style={{ fontSize: 13, margin: "4px 0", lineHeight: 1.5 }}>
+                    <p style={{ fontSize: 13, margin: "4px 0", lineHeight: 1.5 }}>
                       Pediste cambiar: {pending.fields.map((f) => PORTAL_PROFILE_FIELD_LABELS[f] ?? f).join(", ")}{" "}
                       (el {pendingDate(pending.updatedAt)}). El consultorio todavía lo tiene que revisar.
                     </p>

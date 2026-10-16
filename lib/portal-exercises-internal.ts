@@ -26,6 +26,8 @@ import { prismaService as prisma } from "@/lib/db";
 import { signExerciseMedia, youtubeId } from "@/lib/exercise-media-internal";
 import type { PortalExerciseDTO, PortalExercisesDTO } from "@/lib/portal-exercises-types";
 import type { ExerciseMediaType, Prisma } from "@prisma/client";
+import { PORTAL_PROGRAM_ORDER, PORTAL_PROGRAM_WHERE } from "@/lib/plan-predicates";
+import { planSessionOrdinals } from "@/lib/plan-display";
 
 /** El par que sale de `requirePortalPatient` (PortalPatientRef). */
 export type PortalExercisesScope = { tenantId: string; patientId: string };
@@ -57,8 +59,9 @@ const EXERCISE_SELECT = {
 /** Plan que ve el paciente (ES4-D5). Una sola fuente para el listado y para la resolución de media. */
 function currentProgramArgs(scope: PortalExercisesScope) {
   return {
-    where: { patientId: scope.patientId, tenantId: scope.tenantId, status: "ACTIVE", archivedAt: null },
-    orderBy: [{ startDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    // ES4-Z (B4): el MISMO plan que «Tu plan» (`PORTAL_PROGRAM_WHERE`: ACTIVE, vivo y vinculado) y el mismo orden.
+    where: { AND: [{ patientId: scope.patientId, tenantId: scope.tenantId }, PORTAL_PROGRAM_WHERE] },
+    orderBy: PORTAL_PROGRAM_ORDER,
   } satisfies Prisma.TreatmentProgramFindFirstArgs;
 }
 
@@ -107,8 +110,10 @@ export async function loadPortalExercises(scope: PortalExercisesScope): Promise<
         where: { archivedAt: null },
         orderBy: { index: "asc" },
         select: {
+          id: true,
           index: true,
           scheduledFor: true,
+          archivedAt: true,
           exercises: {
             where: { exercise: { kind: "EXERCISE" } },
             orderBy: { order: "asc" },
@@ -131,11 +136,17 @@ export async function loadPortalExercises(scope: PortalExercisesScope): Promise<
     return p;
   };
 
+  // ES4-Z (b3): «Sesión n de N» con el MISMO ordinal por fecha que «Tu plan» (M13, `planSessionOrdinals`). El `index`
+  // es fijo y no se renumera: mostrarlo daba «Sesión 4» acá y «Sesión 3 de 10» en el inicio para la misma sesión.
+  const ordinals = planSessionOrdinals(program.sessions);
+  const totalSessions = ordinals.size;
   const sessions = await Promise.all(
     program.sessions
       .filter((s) => s.exercises.length > 0)
+      .sort((a, b) => (ordinals.get(a.id) ?? a.index) - (ordinals.get(b.id) ?? b.index))
       .map(async (s) => ({
         index: s.index,
+        ordinal: ordinals.get(s.id) ?? s.index,
         date: s.scheduledFor.toISOString(),
         exercises: await Promise.all(
           s.exercises.map(
@@ -152,7 +163,7 @@ export async function loadPortalExercises(scope: PortalExercisesScope): Promise<
       }))
   );
   if (sessions.length === 0) return null;
-  return { programTitle: program.title, sessions };
+  return { programTitle: program.title, totalSessions, sessions };
 }
 
 /**

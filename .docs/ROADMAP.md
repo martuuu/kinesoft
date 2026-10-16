@@ -30,7 +30,7 @@
 | 1 | **PL** Planes, cobros y cuenta | Recorte de auditoría (PL-A), planes Individual/Consultorio/Clínica/Libre en ARS, cupos (Consultorio 5 y Clínica 10 de cualquier tipo) y bajar de plan, Titular y permisos delegables, 2FA opcional por usuario, pagos manuales (sin Mercado Pago, ADR-016) + estado contable, mensajes y leads, alta con Google/Facebook, salas y sala de espera solo en Clínica/Libre, turnero por profesional | **M8** `pl_accounts_billing` |
 | 2 | **EV2** Evoluciones | HC base para todas las verticales: evolución por consulta, 24 h para editar, después enmienda o anulación; nunca se borra ni va al portal | **M9** `clinical_notes` |
 | 3 | **VX** Cara pública ✅ | Cimientos (Ola F: tokens, fuentes, `AuthShell` v2, framer fuera del root; F2 codemod de colores) y superficies públicas (VX2: auth, status, landing, turnero, onboarding, portal) | — |
-| 4 | **ES4** Portal (P4) | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
+| 4 | **ES4** Portal (P4) ✅ | Identidad del portal por `(tenantId, userId)`, turnos y progreso del plan, estado de cuenta, «Mis datos», ejercicios, matriz authz. Sin E2E (al roadmap), sin legacy S25*, sin reset | — |
 | 5 | **PF** Performance + pulido | PF1 bundle + pulido por área (mismo dueño), «sesión→turno»; PF-M índices FK; PF2 una tx por loader y actor memoizado | **M10** `perf_fk_indexes` |
 | 6 | **DIR** Directorio | Consultorios y profesionales públicos con opt-in y consentimiento por persona, SEO con `DIRECTORY_MODE`, deep link al turnero | **M11** `public_directory` |
 | — | Roadmap después | E2E Playwright (C); facturación AFIP (D); chat interno (C2); contract de `TenantPlan` (C); recordatorios a pacientes (C1); «Mantenerme conectado» real (C) | — |
@@ -135,8 +135,32 @@ onboarding ≤ 160 kB gz.
 - Copy a mirar en el QA: h1 del turnero «Reservá tu turno», «El pago se hace en Mercado Pago», «Consultorio» en vez de
   «Centro», portal «Recorrido del plan», bullets de cobros unidos en precios, CTA «Crear cuenta» (no «Elegir X»).
 
-**Siguiente:** **ES4** (portal, P4) → PF → DIR → MB. PF1 hereda de VX: bundle del workspace, colores no exactos,
-densidad de `FormField` a 44 px y `note-card` (AUDIT «Hallazgos de VX»).
+**Estado de ES4 (16-oct): ES4 ✅ (P4 completo, sin migración).** Commiteados: P4.0a (`890f902`) · P4.0b (`3b61579`) ·
+P4.1 A (`5e045bd`) · P4.1 B (`e28d2c4`) · P4.2 (`bd1faad`) · P4.Z (1) (`48eefb9`); P4.Z (2) sin commitear. Qué trae: el
+portal autoriza por el vínculo `(tenantId, userId)` (nunca por email), auto-vínculo solo con UNA ficha libre del email
+exacto, invitación con token HMAC de 7 días y `/portal/vincular` (sin JS), «Buscar mis fichas», plan y turnos con
+«Sesión n de N», estado de cuenta por allowlist, «Mis datos» como pedido que aprueba el consultorio, ejercicios del plan,
+ICS «Sesión n/N», listado con chips por disciplina, archivar desde el listado con L9, matrices de permisos del staff y
+del portal, soak y perf de planes. Hallazgos en [AUDIT «Hallazgos de ES4»](AUDIT.md); QA en [QA §ES4](QA.md).
+
+**ES4-D* para Martin** (todas aplicadas con el default; cambiar cualquiera es una línea):
+- **ES4-D1..D12** del brief: D2 «Buscar mis fichas» (5/h) · D3 `resolvePortalLinkTarget` se conserva (no autoriza) ·
+  D4 ficha archivada no ve el portal · D5 plan = el vinculado ACTIVE más reciente · D6 media propia solo YouTube ·
+  D7 cuenta = 12 meses + futuros, máx. 50 · D8 forms inline (sin Drawer/Toast) · D9 aviso sin valores · D11 cuenta en
+  General sin planes.
+- **Archivar desvincula** la cuenta del portal (audit `patient.portal.unlink`; reactivar no re-vincula). Recomendado: así.
+- **REFUNDED no reabre deuda** en el estado de cuenta; AUTHORIZED = «Pago en proceso». Recomendado: así.
+- **Vincular con el consultorio suspendido vincula** (solo habilita lecturas). Recomendado: así.
+- **Aviso de pedidos de «Mis datos» también a la Secretaria** (`agenda.operateAll`). Recomendado: así.
+- **Abierto:** BILLING aprueba pedidos de cobertura del portal pero no edita cobertura → recomendado restringir a
+  ASSISTANT/OWNER/ADMIN. `secretaria-edita-contacto-cobertura` sigue en C0. ICS «n/N» vs «Sesión n de N» en el resto
+  (una línea). «Mis datos» no muestra los valores actuales (contrato; recomendado: así).
+- **Riesgo aceptado:** token de invitación en la URL (mitigado); quien entraba solo por email deja de ver sus fichas
+  hasta volver a entrar o tocar «Buscar mis fichas».
+
+**Siguiente:** **PF** (performance + pulido) → DIR → MB. PF1 hereda de VX: bundle del workspace, colores no exactos,
+densidad de `FormField` a 44 px y `note-card` (AUDIT «Hallazgos de VX»); de ES4: EXPLAIN de `listOpenSessions` (18
+sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`).
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,
@@ -218,7 +242,7 @@ Gate final del Bloque A (30-sep): `tsc` 0 · unit 252/252 (UTC y AR) · guard �
 | **EV0** (07-oct) | Tipo de consultorio (General / Kinesiología), matriz de módulos, guards de segmento, nav único, turnero con switch, onboarding con vertical, /plataforma de consultorios, REVOKE de la Data API. **Migración M2 `20261007120000_tenant_verticals`** (sola) | ✅ **ejecutada (07-oct), commit `ddfdff3`**; M2 solo en el Docker local. Cierres en [AUDIT.md §Ronda 16](AUDIT.md), QA en [QA.md §EV0](QA.md), ADR-005 |
 | **SR** (08-oct) | Salas/Consultorios: `Room` por sede, sala por franja y por turno, conflicto de sala, bloqueo de sala, filtro y vista "Por sala"; Facturación con cancelados cobrados e ingresos por rol. **Migración M4 `20261009120000_rooms`** (sola) | ✅ **ejecutada (08-oct), commit `5811ea2`**; M4 solo en el Docker local. Cierres en [AUDIT.md §Ronda 19](AUDIT.md), QA en [QA.md §Salas (SR)](QA.md), resumen abajo («SR · Salas/Consultorios») |
 | **SV** (13/14-oct) | Sala de Espera realtime para las dos verticales: Broadcast privado por tenant, estado «Llamado», `/sala`, avisos «Llegó» / «Pase …», agenda y Recepción en vivo; evento y "Llamar" con `roomId`. **Migración M5 `20261013120000_reception_call_realtime`** (sola) | ✅ **ejecutada (14-oct), commit `d70513a`**; M5 aplicada en prod el 14-oct. Cierres en [AUDIT.md §Ronda 20](AUDIT.md), QA en [QA.md §Sala de Espera realtime (SV)](QA.md), ADR-006, resumen abajo («SV») |
-| **ES4** (P4) | Cierre de Planes ([PLANES.md](PLANES.md)) | ⏳ bloque 4 de §20 (después de PL, EV2 y VX), sin E2E ni legacy |
+| **ES4** (P4) | Cierre de Planes ([PLANES.md](PLANES.md)) | ✅ 16-oct (P4.0a..P4.Z, sin migración), sin E2E ni legacy |
 | **EV1** (14-oct) | Barrido de la vertical General (dashboard, perfil, copy neutral, lista de pacientes, Plataforma "Común/Pro" muerto), ILIKE escapado en todas las búsquedas, solo lectura en las actions que faltaban. R-LEGACY se dejó (decisión del 08-oct) | ✅ **en develop, sin migración**. Cierres en [AUDIT.md §Ronda 23](AUDIT.md), QA en [QA.md §EV1](QA.md) |
 | **Go-live de B** | Migraciones incrementales sobre la base viva, **sin reset ni staging** (decisiones del 14-oct) | ✅ 14-oct ([GO-LIVE-PASO-A-PASO.md](GO-LIVE-PASO-A-PASO.md)) |
 

@@ -546,7 +546,8 @@ describe.skipIf(!RUN)("IAM-3c · portal con magic link, invitación por mail pro
       expect(res.status).toBeGreaterThanOrEqual(300);
       expect(res.status).toBeLessThan(400);
       const loc = new URL(res.headers.get("location")!);
-      expect(loc.pathname).toBe("/login");
+      // ES4-Z: con destino en el portal, el error vuelve al portal (antes al login del equipo).
+      expect(loc.pathname).toBe("/portal");
       expect(loc.searchParams.get("error")).toBe("oauth_failed");
       expect(await db.userProfile.count({ where: { id: uid } })).toBe(0);
       // Sin perfil no queda nadie «logueado»: la sesión recién abierta se cierra.

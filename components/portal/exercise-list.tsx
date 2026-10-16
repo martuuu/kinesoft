@@ -12,7 +12,7 @@
 import type { TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import type { PortalExerciseDTO, PortalExercisesDTO } from "@/lib/portal-exercises-types";
-import { portalSessionLabel } from "@/lib/portal-copy";
+import { portalSessionOfTotal } from "@/lib/portal-copy";
 
 type Props = { data: NonNullable<PortalExercisesDTO>; vertical: TenantVertical };
 
@@ -84,7 +84,7 @@ export function PortalExerciseList({ data, vertical }: Props) {
               gap: 12,
             }}
           >
-            <span style={eyebrow}>{portalSessionLabel(vertical, s.index)}</span>
+            <span style={eyebrow}>{portalSessionOfTotal(vertical, s.ordinal, data.totalSessions)}</span>
             <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {new Date(s.date).toLocaleDateString("es-AR", {
                 weekday: "short",

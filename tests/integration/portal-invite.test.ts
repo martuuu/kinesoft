@@ -291,7 +291,7 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       expect(back.searchParams.get("e")).toBe("other_email");
 
       asUser(me.id);
-      expect(await redirectOf(submitPortalInvite(form({ t })))).toBe(`/portal/c/${A.slug}`);
+      expect(await redirectOf(submitPortalInvite(form({ t })))).toBe(`/portal/c/${A.slug}?vinculado=1`);
       expect((await snapshot(patientId)).userId).toBe(me.id);
 
       expect(await redirectOf(submitPortalInvite(form({})))).toBe("/portal");
@@ -335,6 +335,22 @@ describe.skipIf(!RUN)("[P4-S24v] invitación al portal y /portal/vincular", () =
       const t = invite(patientId, A, me.email);
       await linkPortalByInvite(form({ t }));
       expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("Tu ficha ya está vinculada");
+    });
+
+    it("[ES4-Z] ficha ya vinculada a OTRA cuenta → sin form desde el GET; ?e=conflict tampoco ofrece reintentar", async () => {
+      const me = await account();
+      const other = await account();
+      const patientId = await addPatient(db, A, { email: me.email });
+      await db.patient.update({ where: { id: patientId }, data: { userId: other.id } });
+      const t = invite(patientId, A, me.email);
+      asUser(me.id);
+      expect(titleOf((await PortalVincular({ searchParams: { t } })) as El)).toBe("No pudimos vincular tu ficha");
+      const free = await addPatient(db, A, { email: me.email.toUpperCase() });
+      const t2 = invite(free, A, me.email.toUpperCase());
+      expect(titleOf((await PortalVincular({ searchParams: { t: t2, e: "conflict" } })) as El)).toBe(
+        "No pudimos vincular tu ficha"
+      );
+      expect(titleOf((await PortalVincular({ searchParams: { t: t2 } })) as El)).toBe("Vinculá tu ficha");
     });
   });
 

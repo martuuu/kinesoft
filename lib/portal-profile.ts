@@ -12,7 +12,8 @@
  *   4. rate-limit 3/h por (cuenta, consultorio): es una escritura que notifica al equipo; tres pedidos por hora
  *      alcanzan para corregir un error de tipeo y frenan que un loop llene la campana del consultorio;
  *   5. pedido PENDING (INSERT o UPDATE con CAS) — NUNCA la ficha;
- *   6. aviso al profesional asignado y a OWNER/ADMIN (ES4-D9) con los NOMBRES de los campos, sin valores.
+ *   6. aviso al profesional asignado, a OWNER/ADMIN (ES4-D9) y a quien opera la agenda de todos (`agenda.operateAll`,
+ *      la Secretaria que lo aprueba; ES4-Z b7) con los NOMBRES de los campos, sin valores.
  * Logs `portal.profile.*` con slug y campos: nunca valores ni el email.
  */
 import { revalidatePath } from "next/cache";
@@ -36,11 +37,13 @@ import type { ActionResult } from "@/lib/validation";
 
 const Slug = z.string().trim().min(1).max(100);
 
+const NO_REF = "No encontramos tu ficha en este consultorio. Volvé a Mis consultorios y probá de nuevo.";
+
 /** Mensaje por campo (voseo, sin jerga): el error de zod crudo no le sirve al paciente. */
 const FIELD_ERRORS: Record<string, string> = {
-  phone: "Revisá el teléfono (hasta 32 caracteres).",
+  phone: "Revisá el teléfono: tiene que tener entre 6 y 30 caracteres.",
   email: "Revisá el email: no parece válido.",
-  emergencyContact: "Para el contacto de emergencia necesitamos nombre y teléfono.",
+  emergencyContact: "Para el contacto de emergencia necesitamos nombre y un teléfono (entre 6 y 30 caracteres).",
   coverage: "Para la obra social necesitamos al menos su nombre.",
 };
 
@@ -58,9 +61,10 @@ export async function requestPortalProfileChange(input: {
   changes: unknown;
 }): Promise<ActionResult<{ fields: string[] }>> {
   const slug = Slug.safeParse(input.tenantSlug);
-  if (!slug.success) return { ok: false, error: "Sin acceso." };
+  // ES4-Z (b): «Sin acceso.» no decía qué hacer.
+  if (!slug.success) return { ok: false, error: NO_REF };
   const ref = await requirePortalPatient(slug.data);
-  if (!ref) return { ok: false, error: "Sin acceso." };
+  if (!ref) return { ok: false, error: NO_REF };
   if (!ref.surfacesOpen) {
     return {
       ok: false,
@@ -88,7 +92,7 @@ export async function requestPortalProfileChange(input: {
       ok: false,
       error:
         r.reason === "invalid"
-          ? "Tu pedido junto con el que ya tenías abierto es demasiado largo. Escribile al consultorio."
+          ? "Ya tenés un pedido abierto con muchos cambios. Esperá a que el consultorio lo revise o escribiles directamente."
           : "No pudimos guardar tu pedido. Probá de nuevo en un momento.",
     };
   }
@@ -103,6 +107,7 @@ export async function requestPortalProfileChange(input: {
     body: `Desde el portal: ${labels}. Revisalo en su ficha para aprobarlo.`,
     link: `/pacientes/${ref.patientId}`,
     alsoPractitionerId: ref.patient.assignedPractitionerId ?? undefined,
+    alsoAgendaOperators: true,
   });
   logger.info("portal.profile.requested", { tenantSlug: ref.tenant.slug, mode: r.mode, fields: r.fields });
   revalidatePath("/portal/me");
@@ -146,7 +151,7 @@ export async function submitPortalProfileChange(
   if (r.ok) return { status: "sent", slug, fields: r.data.fields, at: Date.now() };
   const values: Record<string, string> = {};
   for (const k of FORM_KEYS) values[k] = text(fd, k).slice(0, 200);
-  return { status: "error", slug, error: r.error, values };
+  return { status: "error", slug, error: r.error, values, ...(r.fieldErrors ? { fieldErrors: r.fieldErrors } : {}) };
 }
 
 /**

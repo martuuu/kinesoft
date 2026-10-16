@@ -85,7 +85,7 @@ export function archivePatientDialogCopy(input: {
       : `${many ? "Tienen" : "Tiene"} ${n} ${n === 1 ? "plan activo" : "planes activos"}. Elegí qué hacer con ${n === 1 ? "él" : "ellos"}.`;
   return {
     title: many ? `Archivar ${count} pacientes` : "Archivar paciente",
-    message: `${who} ${many ? "dejan" : "deja"} de aparecer en el listado. La ficha, los turnos y el historial se conservan, y ${many ? "los" : "lo"} podés desarchivar cuando quieras. ${plans}`,
+    message: `${who} ${many ? "dejan" : "deja"} de aparecer en el listado. La ficha, los turnos y el historial se conservan, y ${many ? "los" : "lo"} podés reactivar cuando quieras. ${many ? "Si usaban el portal, se desvinculan sus cuentas." : "Si usaba el portal, se desvincula su cuenta."} ${plans}`,
     confirmLabel: "Archivar",
   };
 }

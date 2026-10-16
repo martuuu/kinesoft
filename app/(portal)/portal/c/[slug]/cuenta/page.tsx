@@ -51,11 +51,11 @@ export default async function PortalAccountPageRoute({ params }: { params: { slu
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Link
-        href={`/portal/c/${encodeURIComponent(params.slug)}`}
+        href="/portal"
         className="k-link"
         style={{ fontSize: 14, display: "inline-flex", alignItems: "center", minHeight: 44, alignSelf: "flex-start" }}
       >
-        ← Volver
+        ← Mis consultorios
       </Link>
 
       <header>

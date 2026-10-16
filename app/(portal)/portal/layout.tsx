@@ -8,7 +8,7 @@
  * del `maxWidth: 720` + padding fijo; fuera el blob con blur de fondo (D-VX9: sin blobs con blur). «Mi cuenta» con
  * área táctil de 44 px (criterio AA de VX §5, controles ≥ 44 px en < 768).
  *
- * VX-Z: «Mi cuenta» solo con sesión. Sin sesión llevaba a `/portal/me`, que redirige a `/portal`: un link que vuelve a
+ * VX-Z: «Mi cuenta» (desde ES4-Z, «Mis datos»: el nombre de la pantalla) solo con sesión. Sin sesión llevaba a `/portal/me`, que redirige a `/portal`: un link que vuelve a
  * la misma pantalla. Se lee con `getSessionUser()` (verificación local del token, sin red; memo por request), no con
  * `getPortalAuth()` (consulta las fichas): para decidir un link alcanza con saber si hay sesión.
  */
@@ -48,7 +48,7 @@ export default async function PortalLayout({ children }: { children: React.React
           <div style={{ flex: 1 }} />
           {signedIn && (
             <Link href="/portal/me" className="k-link" style={{ ...headerLink, fontSize: 14, padding: "0 8px" }}>
-              Mi cuenta
+              Mis datos
             </Link>
           )}
         </div>

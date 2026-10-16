@@ -88,15 +88,16 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   const canCreateHere = caps.has("clinical.read");
   // S32: «Con plan» = al menos un plan ACTIVE y vivo (`activePlans`, mismo
   // predicado que el filtro `active`/`no-program` de `listPatients`), así el
-  // número del pill coincide con la lista que abre. Ojo: una fila `basic` sale
-  // con `activePlans: []` y cuenta en «Sin plan» (no se le ve el plan), pero al
-  // filtrar no aparece (H-b1: los filtros clínicos solo dejan filas `full`).
+  // número del pill coincide con la lista que abre. Una fila `basic` sale con
+  // `activePlans: []` (no se le ve el plan) y al filtrar no aparece (H-b1: los
+  // filtros clínicos solo dejan filas `full`), así que «Sin plan» cuenta solo
+  // filas `full` (ES4-Z: antes las contaba y el pill no coincidía con la lista).
   const hasPlan = (p: (typeof patients)[number]) => (p.activePlans?.length ?? 0) > 0;
   const totals = plansEnabled
     ? {
         all: patients.length,
         withProgram: patients.filter(hasPlan).length,
-        withoutProgram: patients.filter((p) => !hasPlan(p)).length,
+        withoutProgram: patients.filter((p) => p.access === "full" && !hasPlan(p)).length,
       }
     : { all: patients.length };
 

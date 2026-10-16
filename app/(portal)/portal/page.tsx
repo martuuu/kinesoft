@@ -3,9 +3,19 @@ import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { SocialButtons } from "@/components/auth/social-buttons";
 import { IconCal, IconCheck, IconHeart } from "@/components/ui/icons";
-import { getPortalAuth } from "@/lib/portal";
+import { getPortalAuth, searchMyPortalPatients } from "@/lib/portal";
+import { loginErrorMessage } from "@/components/screens/auth-feedback";
+import { greetingFirstName } from "@/lib/display-name";
 import { visibleOAuthProviders } from "@/lib/oauth-providers-public";
-import { PORTAL_HOME, portalNoLinkCopy, portalPatientCardCopy, portalPlanProgress } from "@/lib/portal-copy";
+import {
+  PORTAL_HOME,
+  PORTAL_SEARCH,
+  portalLinkedCount,
+  portalNoLinkCopy,
+  portalPatientCardCopy,
+  portalPlanProgress,
+  type PortalSearchOutcome,
+} from "@/lib/portal-copy";
 import type { PortalPatient } from "@/lib/portal-types";
 import { PortalTabs } from "@/components/portal/portal-tabs";
 import { PortalEmailForm } from "./portal-email-form";
@@ -18,6 +28,30 @@ function slugParam(raw: string | string[] | undefined): string | null {
   return v && /^[a-z0-9-]{1,64}$/.test(v) ? v : null;
 }
 
+/** `?buscar=`: resultado de «Buscar mis fichas» (solo los tres códigos conocidos; nunca texto libre). */
+function searchParam(raw: string | string[] | undefined): PortalSearchOutcome | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "ok" || v === "nada" || v === "limite" ? v : null;
+}
+
+/**
+ * ES4-D2 (ES4-Z b1): form POST (anda sin JS) que corre el auto-vínculo del login sin salir y volver a entrar.
+ */
+function SearchMyPatients({ outcome }: { outcome: PortalSearchOutcome | null }) {
+  return (
+    <form action={searchMyPortalPatients} style={{ display: "grid", gap: 6, justifyItems: "start" }}>
+      {outcome && (
+        <p role="status" style={{ margin: 0, fontSize: 13, color: outcome === "ok" ? "var(--sky-700)" : "var(--navy-500)" }}>
+          {PORTAL_SEARCH[outcome]}
+        </p>
+      )}
+      <button type="submit" className="k-link" style={{ background: "none", border: 0, padding: 0, minHeight: 44, cursor: "pointer", font: "inherit", fontSize: 14 }}>
+        {PORTAL_SEARCH.cta}
+      </button>
+    </form>
+  );
+}
+
 export default async function PortalHome({
   searchParams,
 }: {
@@ -28,31 +62,35 @@ export default async function PortalHome({
   if (!auth.signedIn) {
     // VX-Z (D-VX16): Google apagado en Supabase no se ofrece (antes el botón terminaba en `provider_disabled`).
     const google = (await visibleOAuthProviders()).includes("google");
-    return <PortalSignIn slug={slugParam(searchParams?.c)} google={google} />;
+    const rawError = searchParams?.error;
+    const error = loginErrorMessage(Array.isArray(rawError) ? rawError[0] : rawError);
+    return <PortalSignIn slug={slugParam(searchParams?.c)} google={google} error={error} />;
   }
 
+  const searched = searchParam(searchParams?.buscar);
   if (auth.patients.length === 0) {
-    return <NoLinkedPatient email={auth.email} />;
+    return <NoLinkedPatient email={auth.email} searched={searched} />;
   }
+  const firstName = greetingFirstName(auth.fullName);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <header>
-        <Tag tone="lime">Hola{auth.fullName ? `, ${auth.fullName.split(" ")[0]}` : ""}</Tag>
+        <Tag tone="lime">Hola{firstName ? `, ${firstName}` : ""}</Tag>
         <h1 className="k-display" style={{ fontSize: 28, margin: "10px 0 4px", letterSpacing: "-0.02em" }}>
           {PORTAL_HOME.title}
         </h1>
         <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>
           {/* S24a: el portal muestra las fichas VINCULADAS a la cuenta (no las que coinciden por email). */}
-          {auth.patients.length === 1
-            ? "Vemos tu ficha vinculada a tu cuenta."
-            : `Vemos ${auth.patients.length} fichas vinculadas a tu cuenta.`}
+          {portalLinkedCount(auth.patients.length)}
         </p>
       </header>
 
       {auth.patients.map((p) => (
         <PatientCard key={p.id} p={p} />
       ))}
+
+      <SearchMyPatients outcome={searched} />
     </div>
   );
 }
@@ -227,9 +265,13 @@ function PatientCard({ p }: { p: PortalPatient }) {
                     {b.serviceName} · {b.practitionerName} · {b.durationMin} min
                   </div>
                 </div>
-                <Tag tone="lime">
-                  <IconCheck size={10} stroke={3} /> Confirmado
-                </Tag>
+                {b.confirmed ? (
+                  <Tag tone="lime">
+                    <IconCheck size={10} stroke={3} /> Confirmado
+                  </Tag>
+                ) : (
+                  <Tag tone="soft">A confirmar</Tag>
+                )}
               </div>
             ))}
           </div>
@@ -243,7 +285,7 @@ function PatientCard({ p }: { p: PortalPatient }) {
   );
 }
 
-function PortalSignIn({ slug, google }: { slug: string | null; google: boolean }) {
+function PortalSignIn({ slug, google, error }: { slug: string | null; google: boolean; error: string | null }) {
   // IAM-3c: además de Google, «Entrar con tu email» (magic link propio; IAM-D5). El `next` de Google vuelve
   // al consultorio del CTA si vino con `?c=`.
   // VX2-f (D-VX28): copy neutral (sin saber el consultorio no se sabe la vertical: nada de «recuperación» ni «la
@@ -276,6 +318,13 @@ function PortalSignIn({ slug, google }: { slug: string | null; google: boolean }
         </h1>
         <p style={{ fontSize: 15, color: "var(--navy-500)", margin: 0 }}>{PORTAL_HOME.signInLead}</p>
       </div>
+      {/* ES4-Z (b): el callback de Google con destino en el portal vuelve acá con `?error=<código>` (antes, al login
+          del equipo). `loginErrorMessage` da el copy del login (genérico para un código desconocido; nunca el texto crudo). */}
+      {error && (
+        <div role="alert" className="k-alert">
+          {error}
+        </div>
+      )}
       {google && (
         <>
           <SocialButtons providers={["google"]} next={next} />
@@ -290,7 +339,7 @@ function PortalSignIn({ slug, google }: { slug: string | null; google: boolean }
   );
 }
 
-function NoLinkedPatient({ email }: { email: string }) {
+function NoLinkedPatient({ email, searched }: { email: string; searched: PortalSearchOutcome | null }) {
   // EV1-C2: sin ficha vinculada no sabemos de qué consultorio viene (puede ser de Clínica general): «tu consultorio»
   // vale para las dos verticales. ES4 S24: el camino es la invitación (PD-15), no «cargá tu email exacto».
   const copy = portalNoLinkCopy(email);
@@ -301,6 +350,7 @@ function NoLinkedPatient({ email }: { email: string }) {
         {copy.title}
       </h1>
       <p style={{ fontSize: 14, color: "var(--navy-500)", margin: 0 }}>{copy.text}</p>
+      <SearchMyPatients outcome={searched} />
     </Card>
   );
 }

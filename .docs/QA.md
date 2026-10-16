@@ -1752,3 +1752,53 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] Copy neutral sin consultorio («Tus turnos y tu tratamiento, en un solo lugar»); «sesión por sesión» y check-in solo en Kinesiología.
 - [ ] «Entrar con tu email» sin JS y con JS → «Revisá tu email» con foco en el título.
 - [ ] «Continuar con Google» solo si Google está prendido; «Mi cuenta» solo con sesión.
+
+## ES4 · Portal del paciente, listado de pacientes y matrices (15/16-oct-2026)
+
+> P4.0a (`890f902`) · P4.0b (`3b61579`) · P4.1 A (`5e045bd`) · P4.1 B (`e28d2c4`) · P4.2 (`bd1faad`) · P4.Z (1)
+> (`48eefb9`) commiteados; P4.Z (2) sin commitear. **Sin migración.** Con `next build && next start`, `TZ=UTC`, una
+> cuenta de paciente con fichas en un consultorio **Kinesiología** (con planes) y otro **General**, y una cuenta de staff.
+> Anchos 360 / 390 / 1366×768. Hallazgos en [AUDIT «Hallazgos de ES4»](AUDIT.md); decisiones ES4-D* en el ROADMAP.
+
+### Portal por vertical
+- [ ] Home: «Hola, <nombre>» (sin «Hola, Usuario»); «Tenés 1 consultorio vinculado a tu cuenta.» / «Tenés N consultorios…».
+- [ ] Kine con plan: tarjeta «Tu plan» con «3 / 10 sesiones»; «Próxima sesión · Sesión 3 de 10»; recorrido «Sesión n de N» por fecha.
+- [ ] General: sin «sesión» ni «plan» en ningún texto; «Tu consultorio» muestra «Acá ves tus próximos turnos en este consultorio.» y la lista de próximos turnos (o «No tenés turnos próximos.» + «Sacar un turno» con el turnero abierto).
+- [ ] Próximos turnos: un turno CONFIRMED dice «Confirmado»; uno PENDING (turnero) dice «A confirmar».
+- [ ] Check-in: Kine «Antes de tu sesión», General «Antes de tu turno»; con la sesión borrada → «No encontramos esa cita de tu plan. Recargá la página.»
+- [ ] Tabs en inicio, Estado de cuenta y Ejercicios; en las tres el volver dice «← Mis consultorios» y va a `/portal`.
+- [ ] Navegar entre tabs muestra el esqueleto (sin pantalla congelada).
+
+### Vincular e invitación
+- [ ] Ficha con «Invitar al portal»: el mail trae **dos links** (magic link a `/auth/confirm` y respaldo de 7 días a `/portal/vincular?t=`); el respaldo anda después de 1 h.
+- [ ] `/portal/vincular` **sin JS**: «Vincular mi ficha de <consultorio>» vincula y cae en el consultorio con «Listo: vinculaste tu ficha de <consultorio>.».
+- [ ] Con **otra cuenta** (otro email): «Esta invitación es para otro email» + «Cerrar sesión».
+- [ ] Ficha ya vinculada a otra cuenta → «No pudimos vincular tu ficha» **sin** botón de vincular, con «Ir a Mis consultorios».
+- [ ] Dos fichas `Ana@x` / `ana@x`: el login no vincula ninguna (ambiguous); la invitación vincula la elegida.
+- [ ] Sin fichas vinculadas: «¿No ves tu consultorio? Buscar mis fichas». Cargar el email en una ficha con la sesión abierta → buscar → aparece; sin novedades → «No encontramos fichas nuevas con tu email. Pedile a tu consultorio que te invite desde tu ficha.»
+- [ ] Google cancelado desde el portal → vuelve a `/portal` con el aviso (no al login del equipo).
+- [ ] Archivar una ficha vinculada → el paciente deja de ver ese consultorio; una ficha nueva con su email se vincula al volver a entrar (o con «Buscar mis fichas»).
+
+### Mis datos y pedidos en el perfil
+- [ ] Header «Mis datos»; «← Mis consultorios»; «Sacar un turno» solo con el turnero abierto.
+- [ ] Pedir un cambio: teléfono de 5 caracteres → error debajo del campo; envío OK → el `<details>` queda abierto con «Listo: le mandamos tu pedido…».
+- [ ] Contacto de emergencia «Nombre y apellido»; obra social «Obra social o prepaga».
+- [ ] El aviso del pedido llega al titular, al profesional asignado **y a la Secretaria**; no a Facturación.
+- [ ] Perfil (OWNER y Secretaria): banner con el pedido, valores actuales tachados («(sin dato)» si no había) → nuevos.
+- [ ] Cambio de OS **sin** turnos impagos y con copago propio cargado → confirma «Se borra el copago propio de $ X que tenía cargado.»; con turnos impagos → «Cambia el copago de N turnos impagos…» (+ «También se borra…»).
+- [ ] Aprobar → toast «Datos actualizados»; rechazar → «Pedido rechazado»; pedido resuelto en otra pestaña → «El pedido cambió o ya lo resolvió otra persona…».
+- [ ] Email que solo difiere en mayúsculas de otra ficha → «Ese email ya está en otra ficha del consultorio.».
+
+### Estado de cuenta
+- [ ] Resumen «Te falta pagar» solo con atendidos con monto; con «a confirmar» y sin deuda → «No tenés deuda con monto definido.»; nota «El total incluye solo los turnos ya atendidos…».
+- [ ] Tags por turno: «Pagado», «Pago en proceso» (AUTHORIZED), «Cancelado» (con cobro), «A pagar», «Próximo». Un REFUNDED no suma deuda.
+- [ ] Sin turnos → «No tenés turnos próximos ni de los últimos 12 meses.»; montos con `formatARS`, fechas en AR con `TZ=UTC`.
+
+### Ejercicios
+- [ ] Solo el plan que muestra «Tu plan» (un legacy más nuevo no aparece); cada bloque «Sesión n de N» igual que el recorrido.
+- [ ] Sin ejercicios: un solo texto «Cuando tu profesional te indique ejercicios para hacer en casa, los vas a ver acá.»; maniobras nunca.
+
+### Consultorio: ICS, listado y archivar
+- [ ] ICS de la agenda: turnos de plan con «Sesión n/N» en el título.
+- [ ] Listado Kine con plan Kine + Osteo → dos chips «Kine 1/3» «Osteo 0/2»; General sin columna de plan; pill «Sin plan · N» = filas al clickear (sin contar filas de acceso básico); «Sin plan activo» legible.
+- [ ] Archivar desde la fila (con `planes`) pregunta qué hacer con los planes; toasts «Paciente archivado» / «Paciente reactivado»; el texto avisa que se desvincula el portal; en el perfil el botón dice «Reactivar».

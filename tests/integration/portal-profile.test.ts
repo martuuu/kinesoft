@@ -156,7 +156,7 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     }
   }
 
-  it("[P4-S24d] Reservar turno oculto con el turnero cerrado", async () => {
+  it("[P4-S24d] «Sacar un turno» oculto con el turnero cerrado", async () => {
     const me = await account();
     await linked(open, me.id);
     await linked(closed, me.id);
@@ -165,7 +165,7 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     const tree = collect((await PortalMe()) as Node);
     expect(tree.hrefs).toContain(`/c/${open.slug}/booking`);
     expect(tree.hrefs).not.toContain(`/c/${closed.slug}/booking`);
-    expect(tree.text.filter((s) => s.includes("Reservar turno"))).toHaveLength(1);
+    expect(tree.text.filter((s) => s.includes("Sacar un turno"))).toHaveLength(1);
   });
 
   it("el portal nunca escribe la ficha: lib/portal*.ts sin patient.update/updateMany/upsert/create (salvo el vínculo)", () => {
@@ -204,6 +204,33 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     for (const secret of [PHONE, "OSDE", "123456789", me.email]) expect(dump).not.toContain(secret);
     expect(notes[0].body).toContain("teléfono");
     expect(notes[0].body).toContain("obra social");
+  });
+
+  it("[ES4-Z b7] el aviso llega también a la Secretaria (agenda.operateAll); no a Facturación ni a suspendidas", async () => {
+    const staff = async (role: "ASSISTANT" | "BILLING", disabled = false) => {
+      const id = `test-staff-${uniqueSuffix()}`;
+      await db.userProfile.create({ data: { id, email: `${id}@test.local` } });
+      profiles.push(id);
+      await db.membership.create({
+        data: { userId: id, tenantId: open.tenantId, role, disabledAt: disabled ? new Date() : null },
+      });
+      return id;
+    };
+    const assistant = await staff("ASSISTANT");
+    const billing = await staff("BILLING");
+    const suspended = await staff("ASSISTANT", true);
+    const me = await account();
+    const patientId = await linked(open, me.id);
+    asUser(me.id);
+    expect((await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: PHONE } })).ok).toBe(true);
+    const to = (await db.notification.findMany({ where: { tenantId: open.tenantId, link: `/pacientes/${patientId}` } })).map(
+      (n) => n.userId
+    );
+    expect(to).toContain(open.userId);
+    expect(to).toContain(assistant);
+    expect(to).not.toContain(billing);
+    expect(to).not.toContain(suspended);
+    await db.membership.deleteMany({ where: { userId: { in: [assistant, billing, suspended] } } });
   });
 
   it("un segundo pedido actualiza la misma PENDING y fusiona por campo", async () => {
@@ -289,12 +316,12 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     const otherPatient = await linked(closed, me.id);
     asUser(me.id);
     for (const n of [1, 2, 3]) {
-      expect((await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: `11-${n}` } })).ok).toBe(true);
+      expect((await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: `11-4000-000${n}` } })).ok).toBe(true);
     }
-    const r = await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: "11-4" } });
+    const r = await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: "11-4000-0004" } });
     expect(r.ok).toBe(false);
-    expect((await pending(patientId))[0].changes).toEqual({ phone: "11-3" });
-    expect((await requestPortalProfileChange({ tenantSlug: closed.slug, changes: { phone: "11-5" } })).ok).toBe(true);
+    expect((await pending(patientId))[0].changes).toEqual({ phone: "11-4000-0003" });
+    expect((await requestPortalProfileChange({ tenantSlug: closed.slug, changes: { phone: "11-4000-0005" } })).ok).toBe(true);
     expect(await pending(otherPatient)).toHaveLength(1);
   });
 
@@ -311,7 +338,7 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     asUser(unlinkedOwner.id);
     expect(await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: PHONE } })).toEqual({
       ok: false,
-      error: "Sin acceso.",
+      error: "No encontramos tu ficha en este consultorio. Volvé a Mis consultorios y probá de nuevo.",
     });
     expect(await pending(unlinked)).toHaveLength(0);
 
@@ -342,8 +369,15 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
       changes: { emergencyContact: { name: "Marta", phone: "" } },
     });
     expect(ec.ok === false && ec.fieldErrors?.emergencyContact).toEqual([
-      "Para el contacto de emergencia necesitamos nombre y teléfono.",
+      "Para el contacto de emergencia necesitamos nombre y un teléfono (entre 6 y 30 caracteres).",
     ]);
+    // ES4-Z B2: teléfono de 6 a 30 caracteres (antes «1» era un pedido válido).
+    const short = await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: "12345" } });
+    expect(short.ok === false && short.fieldErrors?.phone).toEqual([
+      "Revisá el teléfono: tiene que tener entre 6 y 30 caracteres.",
+    ]);
+    const long = await requestPortalProfileChange({ tenantSlug: open.slug, changes: { phone: "1".repeat(31) } });
+    expect(long.ok).toBe(false);
     expect(await requestPortalProfileChange({ tenantSlug: open.slug, changes: {} })).toMatchObject({
       ok: false,
       error: "Completá al menos un dato para cambiar.",
@@ -373,7 +407,7 @@ describe.skipIf(!RUN)("[P4-S24d] «Mis datos» del portal", () => {
     const err = await submitPortalProfileChange(null, bad);
     expect(err).toMatchObject({
       status: "error",
-      error: "Para el contacto de emergencia necesitamos nombre y teléfono.",
+      error: "Para el contacto de emergencia necesitamos nombre y un teléfono (entre 6 y 30 caracteres).",
       values: { ecName: "Marta" },
     });
   });

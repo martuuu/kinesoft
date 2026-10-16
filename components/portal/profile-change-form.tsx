@@ -65,6 +65,7 @@ export function ProfileChangeForm({ slug, tenantName }: { slug: string; tenantNa
   const sent = state?.status === "sent" ? state : null;
   const failed = state?.status === "error" ? state : null;
   const v = failed?.values ?? {};
+  const fe = (k: string) => failed?.fieldErrors?.[k]?.[0];
   const id = (k: string) => `profile-${slug}-${k}`;
 
   useEffect(() => {
@@ -72,7 +73,8 @@ export function ProfileChangeForm({ slug, tenantName }: { slug: string; tenantNa
   }, [sent]);
 
   return (
-    <details open={!!failed || undefined}>
+    // Abierto también después de enviar: si se cerraba, el «Listo» quedaba adentro de un `<details>` cerrado.
+    <details open={!!failed || !!sent || undefined}>
       <summary style={summaryStyle}>Pedir un cambio de datos</summary>
       {sent && (
         <p ref={sentRef} tabIndex={-1} role="status" style={{ fontSize: 14, margin: "4px 0 10px", lineHeight: 1.5 }}>
@@ -94,26 +96,26 @@ export function ProfileChangeForm({ slug, tenantName }: { slug: string; tenantNa
         </p>
 
         <h3 style={groupTitle}>Contacto</h3>
-        <Field id={id("phone")} label="Teléfono nuevo" optional>
-          <input className="k-input" name="phone" type="tel" inputMode="tel" autoComplete="tel" maxLength={32} defaultValue={v.phone} />
+        <Field id={id("phone")} label="Teléfono nuevo" optional error={fe("phone")}>
+          <input className="k-input" name="phone" type="tel" inputMode="tel" autoComplete="tel" maxLength={30} defaultValue={v.phone} />
         </Field>
-        <Field id={id("email")} label="Email nuevo" optional>
+        <Field id={id("email")} label="Email nuevo" optional error={fe("email")}>
           <input className="k-input" name="email" type="email" inputMode="email" autoComplete="email" maxLength={120} defaultValue={v.email} />
         </Field>
 
         <h3 style={groupTitle}>Contacto de emergencia</h3>
-        <Field id={id("ecName")} label="Nombre" optional>
+        <Field id={id("ecName")} label="Nombre y apellido" optional>
           <input className="k-input" name="ecName" autoComplete="off" maxLength={80} defaultValue={v.ecName} />
         </Field>
         <Field id={id("ecRelation")} label="Vínculo" hint="Por ejemplo: madre, pareja, amigo." optional>
           <input className="k-input" name="ecRelation" autoComplete="off" maxLength={40} defaultValue={v.ecRelation} />
         </Field>
-        <Field id={id("ecPhone")} label="Teléfono" optional>
-          <input className="k-input" name="ecPhone" type="tel" inputMode="tel" autoComplete="off" maxLength={32} defaultValue={v.ecPhone} />
+        <Field id={id("ecPhone")} label="Teléfono" optional error={fe("emergencyContact")}>
+          <input className="k-input" name="ecPhone" type="tel" inputMode="tel" autoComplete="off" maxLength={30} defaultValue={v.ecPhone} />
         </Field>
 
         <h3 style={groupTitle}>Obra social o prepaga</h3>
-        <Field id={id("insurerName")} label="Nombre" optional>
+        <Field id={id("insurerName")} label="Obra social o prepaga" optional error={fe("coverage")}>
           <input className="k-input" name="insurerName" autoComplete="off" maxLength={80} defaultValue={v.insurerName} />
         </Field>
         <Field id={id("planName")} label="Plan" optional>
@@ -146,7 +148,7 @@ export function SignOutEverywhereForm() {
       <form action={formAction} style={{ display: "grid", gap: 10, marginTop: 6 }}>
         <p style={{ fontSize: 13, color: "var(--navy-500)", margin: 0, lineHeight: 1.5 }}>
           Se cierra tu sesión en este y en todos los dispositivos donde entraste (celular, otra computadora). Para volver
-          a entrar vas a necesitar un link nuevo o Google.
+          a entrar vas a tener que pedir un link nuevo o entrar con Google.
         </p>
         {state?.status === "error" && (
           <div role="alert" className="k-alert">

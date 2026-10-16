@@ -4,8 +4,13 @@
 > **Criterio cuando hay conflicto:** primero la integridad de los datos del cliente vivo; después, que cada sesión sea chica, tenga un solo dueño por archivo y se pueda verificar.
 > **Estado verificado:** `develop @ 3ff2e50`, working tree limpio, todo en solo lectura.
 
-## Estado y decisiones firmadas (03-oct, actualizado 15-oct)
+## Estado y decisiones firmadas (03-oct, actualizado 16-oct)
 
+- **16-oct: ES4 (P4) ✅ — Planes completo (P0-P4).** Sin migración. Commits P4.0a `890f902` · P4.0b `3b61579` · P4.1 A
+  `5e045bd` · P4.1 B `e28d2c4` · P4.2 `bd1faad` · P4.Z (1) `48eefb9`; P4.Z (2) sin commitear. Hechas S24a, S24t, S24v,
+  S24, S24p, S24d, S24r, S24e, S24i, S32, **S32a**, S26b, S26p, S26s; **no** se hicieron S26a (E2E → roadmap) ni
+  S25L/S25n/S25b (sin legacy). Hallazgos en [AUDIT «Hallazgos de ES4»](AUDIT.md), QA en [QA §ES4](QA.md), decisiones
+  ES4-D* en el [ROADMAP](ROADMAP.md). Siguiente: **PF**.
 - **15-oct: manda el §20 del plan vigente** (resumen en [ROADMAP.md «Plan vigente (15-oct)»](ROADMAP.md)). Orden:
   0 → PL → EV2 → VX → **ES4** → PF → DIR. B, SR y SV están en prod desde el 14-oct (migraciones incrementales, **sin
   reset**); prod tiene datos demo. **ES4 sin E2E** (S26a Playwright → roadmap), **sin legacy** (S25L/S25n/S25b no se
@@ -2217,8 +2222,8 @@ Tandas sugeridas:
 | **S24i** ICS "Sesión n/N" (medio) | `lib/bookings-export-internal.ts`, `tests/integration/ics-export.test.ts` | "Kine · Sesión 3/10 · <servicio>"; sin título sin `clinical.read` (el gate ya está desde ES1); la autorización de la OS nunca sale |
 | ~~**S25L** Legacy server (alto)~~ — **Eliminada (reset de prod 07-oct)**: no hay planes viejos en prod. Texto original como historia: | `lib/plans-legacy.ts`*, `lib/plans-legacy-internal.ts`*, `tests/integration/plans-legacy.test.ts`* | "Completar datos" (refs por `validatePlanRefsInTx` + reconciliar `totalSessions` con confirmación); vincular el mismo día AR (00:00Z por fecha UTC); adoptar series. Tests: 00:00Z en TZ=UTC, nunca adopta una reserva pública PENDING, idempotencia, cross-tenant con el rol owner, reconciliar 10 vs 8 |
 | ~~**S25n** Script de normalización (alto)~~ — **Eliminada (reset de prod 07-oct)**: no hay fechas legacy que normalizar. Texto original como historia: | `scripts/normalize-plan-session-dates.ts`*, `lib/plan-legacy-normalize.ts`* (puro), `lib/plan-legacy-normalize-internal.ts`*, `tsconfig.scripts.json`, `tests/unit/plan-legacy-normalize.test.ts`*, `tests/integration/normalize-plan-session-dates.test.ts`* | Dry-run por defecto, `--apply`, `assert-safe-target`, aborta sin BYPASSRLS. Excluye sesiones con algún `Booking.sessionId` y programas con `schedule`. Nunca toca Booking. Idempotente (2.ª corrida = 0) |
-| **S32** Listado de pacientes (medio) | `lib/patients.ts`, `lib/patients-types.ts`, `components/patients/patients-list.tsx`, `app/(app)/pacientes/page.tsx`, `tests/integration/patients-list-plans.test.ts`* | Chips por disciplina con `liveProgramWhere`. No cambia las firmas de `updatePatient`, `setPatientCoverage` ni `getPatientCore`; nadie más toca `lib/patients.ts` en P4.1 |
-| **S32a** Archivar desde el listado (medio) | `components/patients/patient-row-actions.tsx`, `components/patients/bulk-select.tsx`, `tests/unit/render/archive-from-list.test.tsx`* | Usan `archive-patient-dialog` (L9) |
+| **S32** Listado de pacientes (medio) ✅ | `lib/patients.ts`, `lib/patients-types.ts`, `components/patients/patients-list.tsx`, `app/(app)/pacientes/page.tsx`, `tests/integration/patients-list-plans.test.ts`* | Chips por disciplina con `liveProgramWhere`. No cambia las firmas de `updatePatient`, `setPatientCoverage` ni `getPatientCore`; nadie más toca `lib/patients.ts` en P4.1 |
+| **S32a** Archivar desde el listado (medio) ✅ | `components/patients/patient-row-actions.tsx`, `components/patients/bulk-select.tsx`, `tests/unit/render/archive-from-list.test.tsx`* | Usan `archive-patient-dialog` (L9) |
 
 ### P4.2 · S26b (S25b eliminada)
 
@@ -2247,6 +2252,10 @@ Tandas sugeridas:
   - cambio de precio con un turno cobrado.
 
 ### P4.Z · Cierre de ES4 y gate final del bloque B
+
+> **✅ 16-oct.** Hecho en dos tandas (P4.Z (1) `48eefb9`: gate de diagnóstico/EVA, `/auth/confirm` sin 500, cuenta y
+> tabs, perf S26s; P4.Z (2): hallazgos de los revisores (a) y (b), docs). Sin `test:e2e` (roadmap) ni RUNBOOK de deploy de
+> Planes: no hay migración en ES4. El comando de commit de abajo es historia (formato viejo).
 
 1. Integrador.
 2. Revisor de solo lectura (PHI del portal, E2E sin prod, gates de módulo por vertical). ~~Legacy y datos de prod~~: no aplican desde el reset del 07-oct.

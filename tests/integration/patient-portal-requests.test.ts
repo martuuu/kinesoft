@@ -381,7 +381,7 @@ describe.skipIf(!RUN)("S24r · pedidos de cambio del portal (lado consultorio)",
 
     const req = await seedRequest(A, patientId, { coverage: { insurerName: "Swiss Medical", memberId: "SM-1" } }, userId);
     const preview = await previewPortalRequestImpact({ id: req.id });
-    expect(preview).toEqual({ ok: true, data: { osChanges: true, unpaidCopagoBookings: 2 } });
+    expect(preview).toEqual({ ok: true, data: { osChanges: true, unpaidCopagoBookings: 2, ownCopagoCents: 90000 } });
 
     const r = await decide(req);
     expect(r).toEqual({ ok: true, data: { unpaidCopagoBookings: 2 } });
@@ -405,10 +405,41 @@ describe.skipIf(!RUN)("S24r · pedidos de cambio del portal (lado consultorio)",
       userId
     );
     const preview = await previewPortalRequestImpact({ id: req.id });
-    expect(preview).toEqual({ ok: true, data: { osChanges: false, unpaidCopagoBookings: 0 } });
+    expect(preview).toEqual({ ok: true, data: { osChanges: false, unpaidCopagoBookings: 0, ownCopagoCents: null } });
     expect((await decide(req)).ok).toBe(true);
     const [cov] = await db.coverage.findMany({ where: { patientId } });
     expect(cov).toMatchObject({ insurerId: galeno, insurer: name, planName: "B", memberId: "G-2", copagoCents: 50000 });
+  });
+
+  it("[ES4-Z M2] cambio de OS sin turnos impagos pero con copago propio → el preview lo informa (la UI confirma)", async () => {
+    asUser(A.userId);
+    const { patientId, userId } = await linkedPatient(A);
+    const osde = await addInsurer(db, A, { name: `OSDE ${uniqueSuffix()}`, copagoCents: 150000 });
+    await db.coverage.create({ data: { patientId, insurer: "OSDE", insurerId: osde, copagoCents: 45000 } });
+    const req = await seedRequest(A, patientId, { coverage: { insurerName: `Otra OS ${uniqueSuffix()}` } }, userId);
+    expect(await previewPortalRequestImpact({ id: req.id })).toEqual({
+      ok: true,
+      data: { osChanges: true, unpaidCopagoBookings: 0, ownCopagoCents: 45000 },
+    });
+    // Sin copago propio cargado: nada que confirmar por ese lado.
+    const other = await linkedPatient(A);
+    await db.coverage.create({ data: { patientId: other.patientId, insurer: "OSDE", insurerId: osde } });
+    const req2 = await seedRequest(A, other.patientId, { coverage: { insurerName: `Otra OS ${uniqueSuffix()}` } }, other.userId);
+    expect(await previewPortalRequestImpact({ id: req2.id })).toEqual({
+      ok: true,
+      data: { osChanges: true, unpaidCopagoBookings: 0, ownCopagoCents: null },
+    });
+  });
+
+  it("[ES4-Z B1] email que choca solo en mayúsculas con otra ficha → «ya está en otra ficha», nada aplicado", async () => {
+    asUser(A.userId);
+    const local = `ocupado-${randomUUID()}`;
+    await addPatient(db, A, { email: `${local.toUpperCase()}@Test.Local` });
+    const { patientId, userId } = await linkedPatient(A);
+    const req = await seedRequest(A, patientId, { email: `${local}@test.local` }, userId);
+    const before = await snapshot(patientId, req.id);
+    expect(await decide(req)).toEqual({ ok: false, error: "Ese email ya está en otra ficha del consultorio." });
+    await expectUntouched(patientId, req.id, before);
   });
 
   it("contacto de emergencia en null → se borra el contacto", async () => {

@@ -483,10 +483,30 @@ async function setPatientArchivedImpl(input: {
       const plans = input.archived
         ? await applyPatientArchivePlansInTx(tx, actor, { patientIds: [input.id], action: plansAction, now: new Date() })
         : null;
+      // ES4-Z (M1, decisión con default): archivar DESVINCULA la cuenta del portal. Una ficha archivada con `userId`
+      // ocupaba el único (tenantId, userId): la persona no podía vincular una ficha nueva en ese consultorio (el CAS
+      // daba P2002 → «conflict») y tampoco veía la archivada. Reactivar no re-vincula: lo hace el próximo login o una
+      // invitación. Audit en la misma tx (sin el userId: alcanza con saber que se desvinculó).
+      const unlinked = input.archived
+        ? await tx.patient.updateMany({
+            where: { id: input.id, tenantId: actor.tenantId, userId: { not: null } },
+            data: { userId: null },
+          })
+        : { count: 0 };
       await tx.patient.update({
         where: { id: input.id, tenantId: actor.tenantId },
         data: { archivedAt: input.archived ? new Date() : null },
       });
+      if (unlinked.count > 0) {
+        await auditInTx(tx, {
+          tenantId: actor.tenantId,
+          actorId: actor.userId ?? undefined,
+          action: "patient.portal.unlink",
+          entity: "Patient",
+          entityId: input.id,
+          payload: { reason: "archived" },
+        });
+      }
       return { denied: null, refs: plans?.refs ?? [] };
     });
   } catch (e) {
@@ -1892,6 +1912,31 @@ async function bulkArchivePatientsImpl(input: {
       const plans = input.archived
         ? await applyPatientArchivePlansInTx(tx, actor, { patientIds: ids, action: plansAction, now: new Date() })
         : null;
+      // ES4-Z (M1): igual que `setPatientArchived`, archivar desvincula la cuenta del portal, con un audit por ficha.
+      if (input.archived) {
+        const linked = await tx.patient.findMany({
+          where: { id: { in: ids }, tenantId: actor.tenantId, userId: { not: null } },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        });
+        if (linked.length) {
+          await tx.patient.updateMany({
+            where: { id: { in: linked.map((p) => p.id) }, tenantId: actor.tenantId },
+            data: { userId: null },
+          });
+          // `auditInTx` uno por uno (máx. 200) y no `createMany`: así cada fila lleva el `supportSessionId` si lo hay.
+          for (const p of linked) {
+            await auditInTx(tx, {
+              tenantId: actor.tenantId,
+              actorId: actor.userId ?? undefined,
+              action: "patient.portal.unlink",
+              entity: "Patient",
+              entityId: p.id,
+              payload: { reason: "archived" },
+            });
+          }
+        }
+      }
       const r = await tx.patient.updateMany({
         where: { id: { in: ids }, tenantId: actor.tenantId },
         data: { archivedAt: input.archived ? new Date() : null },
