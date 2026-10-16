@@ -38,14 +38,16 @@ describe("[VX F-e] scripts/bundle-groups.mjs", () => {
     expect(groupFor("/portal")).toMatchObject({ budget: 125, blocking: true });
   });
 
-  it("/plataforma-mfa/verificar → plataforma; /cuenta/seguridad → workspace; /onboarding → onboarding (report-only)", () => {
+  it("/plataforma-mfa/verificar → plataforma; /cuenta/seguridad → workspace; /onboarding → onboarding (bloqueantes desde PF1-Z, D-PF-B)", () => {
     expectGroup("/plataforma-mfa/verificar", "plataforma");
     expectGroup("/plataforma/consultorios/[id]", "plataforma");
     expectGroup("/cuenta/seguridad", "workspace");
     expectGroup("/onboarding", "onboarding");
     expectGroup("/agenda", "workspace");
     for (const r of ["/plataforma-mfa/verificar", "/cuenta/seguridad", "/onboarding", "/agenda"])
-      expect(groupFor(r)?.blocking, r).toBe(false);
+      expect(groupFor(r)?.blocking, r).toBe(true);
+    expect(groupFor("/onboarding")).toMatchObject({ budget: 160 });
+    expect(groupFor("/agenda")).toMatchObject({ budget: 180 });
   });
 
   it("los prefijos no se escapan: /loginx, /portales-algo no son públicas ni portal por accidente de regex", () => {

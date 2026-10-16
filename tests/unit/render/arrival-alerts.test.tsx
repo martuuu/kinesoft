@@ -376,7 +376,9 @@ describe("[SV11b] render", () => {
     const secre = wrap(SECRE, { arrivalAlert: "visual", callAlert: "sound" });
     expect(secre).not.toContain("Cuando llega un paciente mío");
     expect(secre).toContain("Cuando un profesional llama a un paciente");
-    expect(secre).toMatch(/aria-checked="true"[^>]*>Visual y sonido</);
+    // PF1-Z (C-PF2): en el menú «Vista» el control va con `next/dynamic` (se ve recién al abrir el menú); en SSR sale
+    // el esqueleto. El estado elegido del control lo cubre la Card de Configuración (abajo), que lo importa directo.
+    expect(secre).toContain('class="k-skel"');
   });
 
   it("sin canal realtime (driver off) el menú «Vista» no muestra Avisos; fuera del provider tampoco", () => {

@@ -120,11 +120,9 @@ import {
   type BookingUpdateInput,
 } from "@/lib/validation";
 
+import { AgendaBookingsQuery, ReceptionActionInput, type AgendaBookingsQueryInput } from "@/lib/bookings-schemas";
 import {
-  AgendaBookingsQuery,
-  ReceptionActionInput,
   type AgendaBookingRow,
-  type AgendaBookingsQueryInput,
   type BatchDateOutcome,
   type BookingBlockedPrompt,
   type BookingOutOfHoursPrompt,

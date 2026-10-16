@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   AGENDA_PLAN_SCOPES,
   AGENDA_PLAN_SCOPE_LABEL,
@@ -9,7 +10,18 @@ import {
 } from "@/lib/agenda-filters";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
-import { AlertModeControl, SOUND_BLOCKED_NOTE } from "@/components/realtime/alert-prefs-controls";
+import { SOUND_BLOCKED_NOTE } from "@/components/providers/arrival-alerts-constants";
+
+// PF1-Z (C-PF2): el control de avisos solo se ve con el menú abierto (después de un click), así que va diferido: eran
+// ~2,6 kB gz del JS inicial de /agenda, que quedaba 2,6 kB sobre el presupuesto de 180. Se precarga en
+// hover/foco del botón «Vista» (`preloadAlertControls`) para que al abrir no espere red. El esqueleto tiene el alto
+// del control compacto (segmentado + «Probar sonido») para que el menú no salte.
+const loadAlertControls = () => import("@/components/realtime/alert-prefs-controls");
+const preloadAlertControls = () => void loadAlertControls();
+const AlertModeControl = dynamic(() => loadAlertControls().then((m) => m.AlertModeControl), {
+  ssr: false,
+  loading: () => <div aria-hidden className="k-skel" style={{ height: 68, borderRadius: 8 }} />,
+});
 
 const ZOOMS: ReadonlyArray<AgendaViewZoom> = [15, 30, 60];
 
@@ -79,6 +91,8 @@ export function ViewOptionsMenu({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        onPointerEnter={preloadAlertControls}
+        onFocus={preloadAlertControls}
         aria-haspopup="true"
         aria-expanded={open}
         className="k-glass"

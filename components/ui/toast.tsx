@@ -307,7 +307,7 @@ const TONE: Record<
   success: {
     bar: "#36B37E",
     iconBg: "rgba(54,179,126,0.16)",
-    iconColor: "#1F7A52",
+    iconColor: "var(--success-fg)",
     glyph: <IconCheck size={13} stroke={3} />,
   },
   error: {
@@ -319,7 +319,7 @@ const TONE: Record<
   warning: {
     bar: "#D98200",
     iconBg: "rgba(255,176,32,0.18)",
-    iconColor: "#9A5B00",
+    iconColor: "var(--warn-fg)",
     glyph: <span style={{ fontWeight: 800, fontSize: 13 }}>!</span>,
   },
   info: {

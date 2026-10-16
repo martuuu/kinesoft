@@ -17,12 +17,8 @@
  * `canBlockAll` acá solo esconde la opción y frena el submit.
  */
 import { toARDateKey, toARDow, toARMinutes } from "@/lib/datetime-ar";
-import {
-  TIME_BLOCK_MAX_DAYS,
-  arDayStart,
-  type CreateTimeBlockResult,
-  type TimeBlockCreateInput,
-} from "@/lib/time-blocks-schemas";
+import type { CreateTimeBlockResult, TimeBlockCreateInput } from "@/lib/time-blocks-schemas";
+import { TIME_BLOCK_MAX_DAYS, arDayStart } from "@/lib/time-blocks-window";
 
 /** Paso de la franja: el mismo de `DateTime24Picker` (05'). */
 export const BLOCK_STEP_MIN = 5;

@@ -154,7 +154,7 @@ export function ExerciseSearchPicker({
                     width: 4,
                     alignSelf: "stretch",
                     borderRadius: 2,
-                    background: manual ? "var(--lime-700, #4f8a10)" : "var(--sky-700)",
+                    background: manual ? "var(--lime-700)" : "var(--sky-700)",
                   }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -215,7 +215,7 @@ function KindChips({
         {items.map((it) => {
           const on = value === it.value;
           const accent =
-            it.tone === "sky" ? "var(--sky-700)" : it.tone === "lime" ? "var(--lime-700, #4f8a10)" : "var(--navy-900)";
+            it.tone === "sky" ? "var(--sky-700)" : it.tone === "lime" ? "var(--lime-700)" : "var(--navy-900)";
           return (
             <button
               key={it.value}

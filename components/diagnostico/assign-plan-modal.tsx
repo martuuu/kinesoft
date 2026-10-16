@@ -181,8 +181,10 @@ export function DiagnosisPlanDoor({
     const href =
       planDeepLinkHref({ kind: "program", patientId: saved.patientId, programId: saved.programId }) ??
       `/pacientes/${saved.patientId}`;
+    // Sin `router.refresh()` (C-PF4, PF1-Z): todas las actions de guardado del editor (`createPlanFromDiagnosis`,
+    // `createPlan`, `generatePlanBookings`, `replanPlan`) hacen `revalidatePath(`/pacientes/${id}`)`, que en Next 14
+    // vacía el router cache del cliente; el push ya trae el perfil fresco y el refresh era un segundo render entero.
     router.push(href);
-    router.refresh();
   };
   return <PlanEditorDrawer {...request} open={open} onClose={onClose} onSaved={(s) => void onSaved(s)} />;
 }

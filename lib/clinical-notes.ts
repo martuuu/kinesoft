@@ -38,13 +38,15 @@ import {
   CreateClinicalNoteSchema,
   EditClinicalNoteSchema,
   VoidClinicalNoteSchema,
+  type CreateClinicalNoteParsed,
+} from "@/lib/clinical-notes-schemas";
+import {
   amendDecision,
   bookingTargetDecision,
   defaultOccurredAt,
   editDecision,
   occurredAtDecision,
   voidDecision,
-  type CreateClinicalNoteParsed,
 } from "@/lib/clinical-notes-logic";
 import {
   CLINICAL_NOTE_COPY as COPY,

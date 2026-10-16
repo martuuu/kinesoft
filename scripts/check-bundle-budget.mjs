@@ -4,8 +4,8 @@
  * de cada ruta del App Router: root main files + chunks de cada layout ancestro + los de la page, como los baja el
  * browser en la primera carga.
  *
- * Presupuesto por GRUPO de ruta (`scripts/bundle-groups.mjs`): públicas ≤ 120 kB, turnero ≤ 135, portal ≤ 125 son
- * bloqueantes; onboarding / Plataforma / workspace solo informan. Sale 1 si una ruta de grupo bloqueante excede su
+ * Presupuesto por GRUPO de ruta (`scripts/bundle-groups.mjs`): públicas ≤ 120 kB, turnero ≤ 135, portal ≤ 125,
+ * onboarding ≤ 160, Plataforma ≤ 180 y workspace ≤ 180; todos bloqueantes desde PF1-Z (D-PF-B). Sale 1 si una ruta de grupo bloqueante excede su
  * presupuesto o crece > 10 % sobre `scripts/bundle-baseline.json` (el 10 % atrapa una regresión que todavía entra en
  * el número absoluto, p. ej. alguien que vuelve a meter framer-motion en el root).
  *

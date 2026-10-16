@@ -5,7 +5,6 @@
  * client components can import the types and the KPI option list without
  * dragging in the server-only Prisma path.
  */
-import { z } from "zod";
 import type { TenantModule } from "@/lib/tenant-modules";
 
 export type Palette = "sky" | "mint" | "coral" | "violet";
@@ -48,7 +47,9 @@ export type Preferences = {
 /** Período del widget de ingresos: semana lunes→domingo AR o mes calendario AR. */
 export type RevenueRange = "week" | "month";
 export const REVENUE_RANGES: ReadonlyArray<RevenueRange> = ["week", "month"];
-export const RevenueRangeSchema = z.enum(["week", "month"]);
+// PF1-Z (D-PF5): los zod de este bloque (`RevenueRangeSchema`, `DashboardPrefsPatchSchema`) viven en
+// `lib/preferences-schemas.ts` (server-only). Este archivo lo importan el shell, el tablero, la sala y la agenda por
+// sus tipos y `KPI_OPTIONS`, y con zod adentro arrastraba ~13 kB gz de zod al JS inicial de esas rutas.
 
 export type DashboardPrefs = {
   revenueRange: RevenueRange;
@@ -62,18 +63,15 @@ export const DEFAULT_DASHBOARD_PREFS: DashboardPrefs = {
 
 /** Lectura: blob no confiable (DB) → `DashboardPrefs` válido. Total, nunca tira. */
 export function sanitizeDashboardPrefs(raw: unknown): DashboardPrefs {
+  // TS puro (antes `z.object({ revenueRange: RevenueRangeSchema.catch(default) }).parse(o)`): misma semántica, valor
+  // fuera de dominio o ausente → default y claves extra descartadas.
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  return z
-    .object({ revenueRange: RevenueRangeSchema.catch(DEFAULT_DASHBOARD_PREFS.revenueRange) })
-    .parse(o);
+  const r = o.revenueRange;
+  return { revenueRange: REVENUE_RANGES.includes(r as RevenueRange) ? (r as RevenueRange) : DEFAULT_DASHBOARD_PREFS.revenueRange };
 }
 
-/** Escritura: patch parcial, estricto (campo desconocido o fuera de dominio → error). */
-export const DashboardPrefsPatchSchema = z
-  .object({ revenueRange: RevenueRangeSchema })
-  .partial()
-  .strict();
-export type DashboardPrefsPatch = z.input<typeof DashboardPrefsPatchSchema>;
+/** Escritura: patch parcial, estricto. El schema es `DashboardPrefsPatchSchema` de `lib/preferences-schemas.ts`. */
+export type DashboardPrefsPatch = { revenueRange?: RevenueRange };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform catalog table (Plataforma → Ejercicios)
@@ -338,7 +336,6 @@ export function pinnableKpis(pinned: readonly KpiKey[], scope: KpiRevenueScope, 
  */
 export type AgendaMode = "day" | "practitioner" | "room";
 export const AGENDA_MODES: ReadonlyArray<AgendaMode> = ["day", "practitioner", "room"];
-const modeSchema = z.enum(["day", "practitioner", "room"]);
 /** Mismo dominio que `AgendaZoom` de `lib/agenda-layout.ts` (no se importa para no
  *  arrastrar el motor al bundle de cada pantalla que lee preferencias). */
 export type AgendaViewZoom = 15 | 30 | 60;
@@ -347,18 +344,15 @@ export type AgendaViewDensity = "comfortable" | "compact";
 /** SV: "visual" = toast; "sound" = toast + chime; "off" = nada. */
 export type AlertMode = "visual" | "sound" | "off";
 export const ALERT_MODES: ReadonlyArray<AlertMode> = ["visual", "sound", "off"];
-const alertModeSchema = z.enum(["visual", "sound", "off"]);
 /** SV-D13: columnas de `/sala` por profesional o por sala. */
 export type SalaGroupBy = "practitioner" | "room";
 export const SALA_GROUP_BYS: ReadonlyArray<SalaGroupBy> = ["practitioner", "room"];
-const salaGroupBySchema = z.enum(["practitioner", "room"]);
 /** RX: cara de /sala. "board" = columnas (SV10a), "list" = A · Lista y panel, "flow" = B · Flujo. */
 export type ReceptionLayout = "board" | "list" | "flow";
 export const RECEPTION_LAYOUTS: ReadonlyArray<ReceptionLayout> = ["board", "list", "flow"];
-const receptionLayoutSchema = z.enum(["board", "list", "flow"]);
 /** Tope de favoritos guardados (un consultorio grande ronda los 10-15). */
 export const AGENDA_MAX_FAVORITES = 50;
-const ID_MAX = 64;
+export const AGENDA_PREF_ID_MAX = 64;
 
 export type AgendaViewPrefs = {
   mode: AgendaMode;
@@ -395,87 +389,9 @@ export const DEFAULT_AGENDA_VIEW_PREFS: AgendaViewPrefs = {
   receptionLayout: "board",
 };
 
-const zoomSchema = z.union([z.literal(15), z.literal(30), z.literal(60)]);
-const idSchema = z.string().trim().min(1).max(ID_MAX);
-
-/** Lista de ids → strings válidos, sin duplicados, en orden, con tope. */
-function cleanIds(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  const out: string[] = [];
-  for (const x of v) {
-    const r = idSchema.safeParse(x);
-    if (r.success && !out.includes(r.data)) out.push(r.data);
-    if (out.length >= AGENDA_MAX_FAVORITES) break;
-  }
-  return out;
-}
-
-/**
- * Lectura: blob no confiable (DB) → `AgendaViewPrefs` válido. Total y por
- * campo. `defaults` permite que el caller ponga su propio default (p. ej. el
- * zoom = `Tenant.agendaSlotMinutes` cuando el usuario nunca eligió uno).
- */
-export function sanitizeAgendaViewPrefs(
-  raw: unknown,
-  defaults: AgendaViewPrefs = DEFAULT_AGENDA_VIEW_PREFS
-): AgendaViewPrefs {
-  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const schema = z.object({
-    mode: modeSchema.catch(defaults.mode),
-    zoom: zoomSchema.catch(defaults.zoom),
-    density: z.enum(["comfortable", "compact"]).catch(defaults.density),
-    favoritePractitionerIds: z.unknown().transform(cleanIds),
-    locationId: idSchema.nullable().catch(defaults.locationId),
-    // SV: ausente o inválido → default del caller (`.catch` cubre `undefined`).
-    arrivalAlert: alertModeSchema.catch(defaults.arrivalAlert),
-    callAlert: alertModeSchema.catch(defaults.callAlert),
-    salaGroupBy: salaGroupBySchema.catch(defaults.salaGroupBy),
-    receptionLayout: receptionLayoutSchema.catch(defaults.receptionLayout),
-  });
-  const parsed = schema.parse({
-    ...o,
-    // Campo ausente = default del caller (no `[]`/null forzado).
-    favoritePractitionerIds: "favoritePractitionerIds" in o ? o.favoritePractitionerIds : defaults.favoritePractitionerIds,
-    locationId: "locationId" in o ? o.locationId : defaults.locationId,
-  });
-  // `roomId` fuera del schema de arriba: null/ausente/inválido = todas = se omite.
-  const room = idSchema.safeParse("roomId" in o ? o.roomId : defaults.roomId);
-  return room.success ? { ...parsed, roomId: room.data } : parsed;
-}
-
-/** Escritura: patch parcial, estricto (campos desconocidos o fuera de dominio → error). */
-export const AgendaViewPrefsPatchSchema = z
-  .object({
-    mode: modeSchema,
-    zoom: zoomSchema,
-    density: z.enum(["comfortable", "compact"]),
-    favoritePractitionerIds: z
-      .array(idSchema)
-      .max(AGENDA_MAX_FAVORITES)
-      .transform((ids) => Array.from(new Set(ids))),
-    locationId: idSchema.nullable(),
-    roomId: idSchema.nullable(),
-    arrivalAlert: alertModeSchema,
-    callAlert: alertModeSchema,
-    salaGroupBy: salaGroupBySchema,
-    receptionLayout: receptionLayoutSchema,
-  })
-  .partial()
-  .strict();
-export type AgendaViewPrefsPatch = z.input<typeof AgendaViewPrefsPatchSchema>;
-
-/** Merge puro de un patch YA validado sobre las prefs actuales. */
-export function mergeAgendaViewPrefs(
-  current: AgendaViewPrefs,
-  patch: z.output<typeof AgendaViewPrefsPatchSchema>
-): AgendaViewPrefs {
-  const next: Record<string, unknown> = { ...current, ...patch };
-  // D2: la sala es de una sede. Un patch que cambia la sede sin traer sala la limpia.
-  const locationChanged =
-    patch.locationId !== undefined && (patch.locationId ?? null) !== (current.locationId ?? null);
-  if (locationChanged && patch.roomId === undefined) delete next.roomId;
-  return sanitizeAgendaViewPrefs(next);
-}
+// PF1-Z (D-PF5): la lectura total (`sanitizeAgendaViewPrefs`), el patch estricto (`AgendaViewPrefsPatchSchema`) y
+// el merge (`mergeAgendaViewPrefs`) viven en `lib/preferences-schemas.ts` (server-only): usan zod y este archivo lo
+// importan el shell, la sala y la agenda por sus tipos y constantes. Los consume solo `lib/preferences.ts`.
 
 /** Marca/desmarca un profesional como favorito (puro; el nuevo va al final). */
 export function toggleFavoritePractitioner(ids: ReadonlyArray<string>, practitionerId: string): string[] {

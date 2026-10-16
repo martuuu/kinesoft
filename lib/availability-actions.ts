@@ -74,6 +74,8 @@ import {
   ClassifyInstantQuery,
   ListSlotsQuery,
   RecurrencePreviewQuery,
+} from "@/lib/availability-actions-schemas";
+import {
   STAFF_SLOT_STEP_MIN,
   type AgendaAvailability,
   type AgendaAvailabilityQueryInput,

@@ -15,8 +15,8 @@ import {
   revenueTitle,
 } from "@/lib/dashboard-revenue";
 import { capabilitiesFor } from "@/lib/capabilities";
+import { DashboardPrefsPatchSchema } from "@/lib/preferences-schemas";
 import {
-  DashboardPrefsPatchSchema,
   DEFAULT_DASHBOARD_PREFS,
   DEFAULT_PREFERENCES,
   sanitizeDashboardPrefs,

@@ -10,15 +10,15 @@
  */
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import type { DayLockState, DayLockStatus } from "@/lib/availability/types";
-import {
-  arDayStart,
-  type DayLockAffected,
-  type DayLockApplyData,
-  type DayLockPreviewInput,
-  type DayLockRemainingBlock,
-  type DayLockRemoveInput,
-  type DayLockSkipReason,
+import type {
+  DayLockAffected,
+  DayLockApplyData,
+  DayLockPreviewInput,
+  DayLockRemainingBlock,
+  DayLockRemoveInput,
+  DayLockSkipReason,
 } from "@/lib/time-blocks-schemas";
+import { arDayStart } from "@/lib/time-blocks-window";
 import type { RoomOption } from "@/lib/rooms-types";
 
 /** Motivos sugeridos (decisión 10: no hay feriados automáticos en B-pre). */

@@ -51,7 +51,7 @@ import {
   type TimelineItem,
   type TimelineSessionDTO,
 } from "@/lib/clinical-notes-types";
-import { stripPlanIntentParams } from "@/lib/plans-deeplink";
+import { stripPlanIntentParams } from "@/lib/plans-deeplink-params";
 import { formatDateAR } from "@/lib/format";
 import type { BookingStatus } from "@prisma/client";
 

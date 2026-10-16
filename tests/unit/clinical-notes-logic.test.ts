@@ -10,6 +10,8 @@ import {
   CreateClinicalNoteSchema,
   EditClinicalNoteSchema,
   VoidClinicalNoteSchema,
+} from "@/lib/clinical-notes-schemas";
+import {
   amendDecision,
   bookingTargetDecision,
   canReadClinicalNotes,

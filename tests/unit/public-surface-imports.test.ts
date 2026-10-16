@@ -38,12 +38,13 @@ const UI_PROVIDER_MOUNTS = [
   "app/plataforma-mfa/layout.tsx",
 ];
 
-// ── C-F3.7: ratchet. Medido el 15-oct después de F-d (toast/modal/drawer/confirm pasaron a `m`). PF1 los baja; si
-// un número baja, se baja acá (nunca se sube). ──
+// ── C-F3.7: ratchet. Medido el 15-oct después de F-d (20 con `motion`, 26 con framer) y regrabado en PF1-Z (16-oct):
+// `motion` = 0 (C-PF1.3, con `LazyMotion strict`) y 21 importadores reales (`m`, `AnimatePresence`, tipos). Si un
+// número baja, se baja acá (nunca se sube). ──
 /** Archivos que importan el componente `motion` (pesado: trae sus features) de framer-motion. */
-const MOTION_COMPONENT_IMPORTERS_MAX = 20;
+const MOTION_COMPONENT_IMPORTERS_MAX = 0;
 /** Archivos que importan cualquier cosa de framer-motion (incluye `m`, `LazyMotion`, tipos). */
-const FRAMER_IMPORTERS_MAX = 26;
+const FRAMER_IMPORTERS_MAX = 21;
 
 const SOURCE_DIRS = ["app", "components", "lib", "hooks"];
 const EXTS = [".ts", ".tsx"];
@@ -216,12 +217,11 @@ describe("[VX F-d] superficies públicas sin framer-motion ni providers de UI (C
     expect(importers).toEqual([...UI_PROVIDER_MOUNTS].sort());
   });
 
-  it("UIProviders = LazyMotion (features async de lib/motion-features) → MotionConfig reducedMotion=user, sin strict", () => {
+  it("UIProviders = LazyMotion (features async de lib/motion-features) → MotionConfig reducedMotion=user, strict desde PF1-Z (C-PF1.3)", () => {
     const src = readFileSync(join(ROOT, "components/providers/ui-providers.tsx"), "utf8");
-    expect(src).toMatch(/<LazyMotion features=\{loadMotionFeatures\}>/);
+    expect(src).toMatch(/<LazyMotion features=\{loadMotionFeatures\} strict>/);
     expect(src).toMatch(/import\(\s*"@\/lib\/motion-features"\s*\)/);
     expect(src).toMatch(/<MotionConfig reducedMotion="user">/);
-    expect(src).not.toMatch(/<LazyMotion[^>]*\bstrict\b/);
     const order = ["<LazyMotion", "<MotionConfig", "<ToastProvider>", "<ConfirmProvider>"].map((t) => src.indexOf(t));
     expect(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1]))).toBe(true);
     const feats = readFileSync(join(ROOT, "lib/motion-features.ts"), "utf8");

@@ -116,7 +116,7 @@ export const rowVariants: Variants = {
  * stiffness 420 (vs 520 de `springSoft`): el recorrido de una fila entre
  * bandas puede ser de 300+ px y con 520 llegaba "de golpe"; damping 38 y mass
  * 0.9 = sin rebote visible (un rebote en una lista densa se confunde con otro
- * cambio). Uso: `<motion.li layout transition={rowLayout} variants={rowVariants}>`;
+ * cambio). Uso: `<m.li layout transition={rowLayout} variants={rowVariants}>`;
  * las transiciones de enter/exit de las variantes tienen prioridad, este
  * objeto solo gobierna `layout`.
  */
@@ -157,7 +157,7 @@ export function rowTransition(changesInBatch: number): Transition {
  * `var(--lime-400)` de la paleta vigente. Con reduced motion la clase no
  * dibuja el anillo (framer no frena variables CSS, solo transform/layout).
  *
- * Uso: `<motion.li className="k-arrival-ring" variants={arrivalPulse}
+ * Uso: `<m.li className="k-arrival-ring" variants={arrivalPulse}
  * initial="rest" animate="pulse" key={arrivedAt}>`, o `animate={pulseKey ?
  * "pulse" : "rest"}`. El card conserva su sombra propia vía `--k-ring-base`.
  */
@@ -172,7 +172,7 @@ export const arrivalPulse: Variants = {
 /**
  * Contador del header (En sala · Llamado · …) al cambiar: 1 → 1.15 → 1 en
  * `DUR.fast`. Escala y no color: el número sigue legible todo el tiempo y con
- * reduced motion simplemente no se mueve. Uso: `<motion.span key={count}
+ * reduced motion simplemente no se mueve. Uso: `<m.span key={count}
  * variants={countBump} initial="rest" animate="bump">`.
  */
 export const countBump: Variants = {

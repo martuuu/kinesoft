@@ -15,8 +15,9 @@
  *   (`lib/motion-features.ts`). Mientras no llega, un `m.div` pinta su estado `initial` sin animar; los modales y
  *   toasts se abren después de una interacción, cuando el chunk ya está. Nada visible en el primer render depende de
  *   framer: las entradas de página son CSS (`.k-enter*`, `.k-page-in`).
- * - Sin `strict`: todavía hay ~20 archivos con `motion.*` (que traen sus features propias). Se prende en PF1-Z,
- *   cuando el ratchet de `public-surface-imports` llegue a 0.
+ * - `strict` (PF1-Z, C-PF1.3): un `motion.*` en cualquier pantalla bajo este provider tira en desarrollo en vez de
+ *   traer en silencio su copia completa de features (~30 kB). PF1.0-PF1.2 pasaron los ~20 archivos a `m.*`; el
+ *   ratchet `MOTION_COMPONENT_IMPORTERS_MAX = 0` de `public-surface-imports` impide que vuelva uno.
  * - `MotionConfig reducedMotion="user"`: framer respeta «reducir movimiento» del sistema (las animaciones pasan a
  *   instantáneas, el estado final se ve completo) sin manejo por componente.
  */
@@ -28,7 +29,7 @@ const loadMotionFeatures = () => import("@/lib/motion-features").then((m) => m.d
 
 export function UIProviders({ children }: { children: React.ReactNode }) {
   return (
-    <LazyMotion features={loadMotionFeatures}>
+    <LazyMotion features={loadMotionFeatures} strict>
       <MotionConfig reducedMotion="user">
         <ToastProvider>
           <ConfirmProvider>{children}</ConfirmProvider>

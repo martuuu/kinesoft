@@ -26,26 +26,24 @@
 import { z } from "zod";
 import { DISCIPLINES, PLAN_MAX_DURATION, PLAN_MAX_SESSIONS, PLAN_MIN_DURATION } from "@/lib/plans-constants";
 import { DayKeySchema, PlanPricingSchema, PlanScheduleV1Schema } from "@/lib/plans-schemas";
+import { PLANS_TAB, PLAN_DEEPLINK_PARAMS, normalizeProfileTab } from "@/lib/plans-deeplink-params";
+
+// PF1-Z (D-PF5): las constantes y helpers sin zod (pestaña, nombres de params, `normalizeProfileTab`,
+// `stripPlanIntentParams`) viven en `lib/plans-deeplink-params.ts` y se re-exportan acá (misma API). El perfil del
+// paciente los importa de allá: importarlos de este archivo bajaba zod (~13 kB gz) a su JS inicial.
+export {
+  PLANS_TAB,
+  PLAN_DEEPLINK_PARAMS,
+  PROFILE_TAB_ALIASES,
+  normalizeProfileTab,
+  stripPlanIntentParams,
+} from "@/lib/plans-deeplink-params";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
-/** Pestaña del perfil (C10). */
-export const PLANS_TAB = "planes" as const;
-/** Alias de pestañas del perfil → la canónica. */
-export const PROFILE_TAB_ALIASES: Readonly<Record<string, string>> = Object.freeze({ plan: PLANS_TAB });
 /** Tope del `prefill` (string base64url, C10). */
 export const PLAN_PREFILL_MAX_CHARS = 2048;
 
-/** Nombres de los params (una sola fuente; el shell los limpia después de abrir). */
-export const PLAN_DEEPLINK_PARAMS = {
-  tab: "tab",
-  program: "programa",
-  isNew: "nuevo",
-  booking: "turno",
-  prefill: "prefill",
-  diagnosisPatient: "patientId",
-  diagnosisBooking: "bookingId",
-} as const;
 
 /**
  * Id que viaja en la URL (cuid). Más estricto que `PlanEntityId`: solo
@@ -197,11 +195,6 @@ function urlId(raw: string | null): string | null {
   return raw != null && UrlIdSchema.safeParse(raw).success ? raw : null;
 }
 
-/** Pestaña del perfil normalizada (`'plan'` → `'planes'`); `null` sin `?tab=`. */
-export function normalizeProfileTab(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  return PROFILE_TAB_ALIASES[raw] ?? raw;
-}
 
 export type ProfilePlanIntent =
   | { kind: "none" }
@@ -244,19 +237,4 @@ export function parseProfilePlanParams(sp: SearchParamsLike): { tab: string | nu
 export function parseDiagnosisDeepLink(sp: SearchParamsLike): { patientId: string | null; bookingId: string | null } {
   const P = PLAN_DEEPLINK_PARAMS;
   return { patientId: urlId(param(sp, P.diagnosisPatient)), bookingId: urlId(param(sp, P.diagnosisBooking)) };
-}
-
-/**
- * URL sin los params de una intención ya consumida (`nuevo`, `turno`,
- * `prefill`, `programa`), para `history.replaceState` después de abrir el
- * editor o la card: un refresh no lo vuelve a disparar (mismo patrón que
- * `/agenda?new=1`). Conserva `tab` y el resto.
- */
-export function stripPlanIntentParams(href: string): string {
-  const url = new URL(href, "http://x");
-  const P = PLAN_DEEPLINK_PARAMS;
-  for (const k of [P.program, P.isNew, P.booking, P.prefill]) url.searchParams.delete(k);
-  const qs = url.searchParams.toString();
-  const path = `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
-  return /^https?:\/\//.test(href) ? `${url.origin}${path}` : path;
 }

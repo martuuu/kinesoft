@@ -53,14 +53,6 @@ export type NoteCardProps = {
   onAmendmentAdded?: (amendment: ClinicalNoteDTO) => void;
   /** Esconde la línea «Turno del …» (p. ej. dentro del drawer del turno, donde es redundante). */
   hideBooking?: boolean;
-  /**
-   * @deprecated PF1.1: no hace nada. Escondía «Ver versiones anteriores» en el drawer del turno porque el Modal
-   * (`position: fixed`) quedaba encerrado en el panel con `transform`; desde PF1.0-b `Modal` va por portal a body y
-   * queda por encima del Drawer (`--z-modal` > `--z-drawer`), así que el historial se ofrece en todos lados. Queda en
-   * el tipo solo para que `components/agenda/booking-drawer/clinical-note-row.tsx` compile hasta que PF1.2-agenda-b
-   * saque el prop (handoff); después se borra esta línea.
-   */
-  hideHistory?: boolean;
   /** Solo tests: reloj fijo. */
   now?: Date;
   /** Interno: la tarjeta de una enmienda (sin enmiendas propias, más compacta). */

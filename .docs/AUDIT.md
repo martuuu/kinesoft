@@ -1534,7 +1534,7 @@ Evidencia en §Ronda 13. Ninguno bloquea el deploy de B-pre.
 | perf-agenda-payload-1mb | media | C1 | lib/bookings.ts `listAgendaBookings` · app/(app)/agenda/page.tsx | 🔴 | C1 perf — ~1 MB por semana con 6 profesionales |
 | perf-harness-explain-params-tipados | baja | C1 | tests/perf/loaders.perf.test.ts | 🔴 | C1 — pasar a literales como `agenda-multi.perf.test.ts`; los Seq Scan del baseline de A1 pueden ser falsos positivos |
 | missing-fk-indexes (`Coverage.patientId`) | baja | C1 | prisma/schema.prisma | 🔴 | C1 (ya anotado en A1; se re-confirmó) |
-| bundle-sobre-presupuesto-bpre | media | C1 | /agenda 195 · /configuracion 209 · /pacientes/[id] 194 · /onboarding 185 · /plataforma/ejercicios 184 · /diagnostico 180 · /c/[slug]/booking 153 kB | 🔴 | C1 — el layout compartido creció 10-16% |
+| bundle-sobre-presupuesto-bpre | media | C1 | /agenda 195 · /configuracion 209 · /pacientes/[id] 194 · /onboarding 185 · /plataforma/ejercicios 184 · /diagnostico 180 · /c/[slug]/booking 153 kB | 🟢 | **PF1-Z (16-oct)** — todas las rutas entran y workspace/Plataforma/onboarding son bloqueantes (D-PF-B): `/agenda` 175,7 · `/configuracion` 140,7 · `/pacientes/[id]` 171,7 · `/onboarding` 153 · `/plataforma/ejercicios` 149,9 · `/diagnostico` 152,4 · `/c/[slug]/booking` 118,6 kB. [PERF.md §Bundle](PERF.md) |
 | zoom-dia-semana | baja | C1 | lib/preferences.ts · components/agenda/agenda-utils.ts | 🔴 | C1 — el zoom 15/30/60 solo aplica a Por profesional; decidir zoom por usuario vs `Tenant.agendaSlotMinutes` |
 | statustag-fmtmoney-duplicados | baja | B | components/ui/status-tag.tsx · components/agenda/booking-drawer/billing-rows.tsx:4,68 | 🟢 | P0-S04b (un `StatusTag`, `formatARS` en `billing-rows`); cierre formal en P3.Z (Ronda 18) |
 | booking-body-css-regla-muerta | baja | C | app/globals.css | 🔴 | C — regla `.booking-body` (≤1024 px) |
@@ -1743,7 +1743,7 @@ cerraron los fixers F1-F3b o el integrador, con test primero, y se verificó en 
 | tabs-perfil-patron-incompleto | baja | C1 | components/patients/profile/tabs-bar.tsx | 🔴 | **C1** — hoy `nav` + `aria-current` (correcto); el patrón tabs completo con flechas queda para C1 |
 | diagnosis-name-en-plandto | baja | C1 | lib/plans-read-types.ts (`PlanDTO`) · resumen-view | 🔴 | **C1** (decisión 6) — el Resumen muestra `diagnosisTitle ?? título del plan`; la condición requiere `diagnosisName` |
 | renovar-autorizacion-sin-os | baja | C1 | booking-drawer (fila Plan) | 🔴 | **C1** (decisión 7) — "Renovar autorización" aparece en todo turno de plan con `plans.authorize`; C9 no dice si el plan tiene OS |
-| bundle-es3-sobre-criterio | baja | C1 | `/planes` 184,5 kB · `/agenda` 202 · `/pacientes/[id]` 205 | 🔴 | **C1** — decisión 1 de Martin (08-oct): crecimiento de ES3 **aceptado**; el bundle bloqueante sigue en C1. Ver [PERF.md §ES3](PERF.md) |
+| bundle-es3-sobre-criterio | baja | C1 | `/planes` 184,5 kB · `/agenda` 202 · `/pacientes/[id]` 205 | 🟢 | **PF1-Z (16-oct)** — `/planes` 170,6 · `/agenda` 175,7 · `/pacientes/[id]` 171,7 kB; bundle bloqueante ≤ 180. [PERF.md §Bundle](PERF.md) |
 | archivar-paciente-lista-sin-L9 | baja | B (ES4) | patient-row-actions · bulk-select | 🟢 | **ES4 S32a** — la fila y el bulk pasan por `ArchivePatientDialog` (`rowArchiveStep`; sin `livePlanCount` se pregunta siempre con `planes`) |
 | bookings-conflict-literal | baja | B | lib/bookings.ts:1075 | 🔴 | nota — el literal del conflicto → `PRACTITIONER_CONFLICT_ERROR` (`lib/bookings-constants.ts`) cuando se reabra el archivo |
 | r-legacy-sin-a-medida | baja | B | motor (`addPlanSessions`) | ⚪ decidido | Decisión 3 de Martin (08-oct): un plan sin responsable/servicio no acepta "a medida" ("Plan inválido."). **Se deja** (prod se resetea) |
@@ -1777,7 +1777,7 @@ FX2b drawer/modal/PlanCard, FX3 editor y KPI) o el orquestador en el gate, y se 
 | golden-sin-salas | baja | C1 (tests) | tests/unit/render/agenda-client.test.tsx | 🔴 | **C1** — "sin salas = igual" compara `rooms` ausente contra `[]` con el código nuevo; la comparación contra HEAD se hizo con un test temporal. Dejar un golden fijo de las 5 vistas |
 | room-filter-densidad | baja | C1 | components/agenda/room-filter.tsx | 🔴 | **C1** — con > 4 salas los chips parten el toolbar en 2 líneas; pasar a `<select>` como el fallback de profesionales |
 | por-sala-filtro-sin-sala | baja | C1 | components/agenda/views/room-day-panel.tsx | 🔴 | **C1** — con el filtro "Sin sala", "Por sala" dibuja las salas vacías más "Sin sala"; mostrar solo esa columna |
-| bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🔴 | **Decisión de Martin** (recomendado aceptar, C1) — criterio "≤ +1 kB" no cumplido; mejora concreta: `WeekDrawer` del editor de horarios con `dynamic`. [PERF.md §SR](PERF.md) |
+| bundle-sr-sobre-criterio | baja | C1 | `/agenda` 204,5 kB · `/configuracion` 216,2 kB | 🟢 | **PF1-Z (16-oct)** — `/agenda` 175,7 · `/configuracion` 140,7 kB (paneles y `WeekDrawer` diferidos en PF1.1). [PERF.md §Bundle](PERF.md) |
 | dashboard-counts-tx-paralelas | baja | C1 (perf) | lib/dashboard.ts:153-300 (`_loadDashboardCounts`) | 🔴 | **C1 perf** — sigue abriendo ~8 `runWithRls` en paralelo, el mismo patrón que daba timeout de pool en ingresos |
 | ingresos-filtro-owner-por-profesional | baja | C0 | dashboard (widget de ingresos) | 🔴 | **C0** — el OWNER ve el total del consultorio; filtrar por profesional queda para C0 (SR-D5I) |
 
@@ -1906,7 +1906,7 @@ Ronda 24. Evidencia y diseño en §20.2 del plan vigente; la ola de destino se c
 | H-EV2 pestana-evolucion-es-eva | baja | B | components/patients/profile/tabs-bar.tsx · components/seguimiento/seguimiento-model.ts | 🟢 | **EV2** — la pestaña de la curva pasa a «EVA» (id `evol`, EV2-D10/D20) y la nueva «Evoluciones» (`evoluciones`) es la HC; en Seguimiento la meta de sesión se llama «Registrar sesión» y «Cargar evolución» abre la evolución de HC del turno (EV2-D19) |
 | H-LAND landing-claims-inexistentes | media | VX | components/screens/landing-screen.tsx | 🟢 | **VX2-c1/c2 + VX-Z** — landing B nueva (`app/page.tsx`, `components/landing/**`), `landing-screen.tsx` borrado; solo claims con evidencia (brief §3) y guard `tests/unit/public-claims.test.ts` (incluye «no cobrar turnos con Mercado Pago», VX-Z) |
 | H-LOGIN login-layout-roto | media | VX | components/screens/login-screen.tsx · app/globals.css:384-390 · auth-shell.tsx | 🟢 | **Ola F (F-b1/F-b2) + VX2-a/b1** — `AuthShell` v2 (`product`/`split`/`centered`, contenedor máximo, apila < 1024), sin «Matrícula» ni «recordarme», foco global `--focus-ring`; los 13 consumidores migrados y el shim borrado |
-| H-BUNDLE framer-en-root | media | VX / PF | app/layout.tsx:26-33 · components/providers/ui-providers.tsx | 🟢 | **Ola F (F-a/F-d/F-e)** — root sin `UIProviders` ni `<link>` (fuentes por `next/font`); presupuesto bloqueante por grupo (`scripts/bundle-groups.mjs`): públicas ≤ 120, turnero ≤ 135, portal ≤ 125. Workspace sigue arriba de 180 → `vx-bundle-workspace` (PF1) |
+| H-BUNDLE framer-en-root | media | VX / PF | app/layout.tsx:26-33 · components/providers/ui-providers.tsx | 🟢 | **Ola F (F-a/F-d/F-e)** — root sin `UIProviders` ni `<link>` (fuentes por `next/font`); presupuesto bloqueante por grupo (`scripts/bundle-groups.mjs`): públicas ≤ 120, turnero ≤ 135, portal ≤ 125; onboarding ≤ 160, Plataforma ≤ 180 y workspace ≤ 180 bloqueantes desde PF1-Z |
 | H-DOC docs-cliente-vivo-y-reset | baja | docs | AGENTS.md:8 · .docs/PLANES.md · .docs/MIGRACIONES-RUNBOOK.md | 🟢 | **Paso 0** (15-oct) — prod con datos demo; ES4 sin E2E, sin legacy, sin reset; orden incremental y M8-M11 reservadas |
 
 
@@ -1971,7 +1971,7 @@ auditoría) + el revisor del diff (b). Commiteado en 74642cf; sin migraciones nu
 | b-B11 candado-seguridad | baja | UI | components/global/profile-menu.tsx («Seguridad de la cuenta») | 🟢 VX-Z | `IconShield` (`components/ui/icons.tsx:244`) en «Seguridad de la cuenta» (`components/global/profile-menu.tsx:184`) |
 | b-FX2 reset-2fa-otro-admin-ui | baja | UI | components/plataforma/users/user-actions.tsx | 🟢 PL-Z | = a2#8 en la UI: con destino superadmin, «Resetear verificación» queda deshabilitado con el porqué (el server ya lo rechazaba) |
 | b-FX4 turnero-propio-en-menu | media | PL | lib/dashboard.ts (`ownPublicBooking`) · components/screens/dashboard-screen.tsx · components/global/profile-menu.tsx · lib/practitioner-public.ts | 🟢 PL-Z | El Profesional (sin Configuración) prende/apaga su propio «Aparece en el turnero online» desde el menú de perfil del dashboard. El dato se lee fuera del `unstable_cache` de los counts y el toggle revalida `/dashboard`. Desde PL-F también está en el menú de cuenta de la barra superior (el layout lee `ownPublicBooking`) |
-| PF/MB switch-config-chico | baja | PF/MB (a11y) | components/configuracion/controls.tsx (`Switch`) | 🔴 PF | El `Switch` mide 52×30: por debajo del target táctil de 44 px. Se usa en Configuración y en el menú de perfil; agrandar el área de toque (no el dibujo) en PF |
+| PF/MB switch-config-chico | baja | PF/MB (a11y) | components/configuracion/controls.tsx (`Switch`) | 🟢 PF1.0-b | `components/ui/switch.tsx`: dibujo 52×30, área de toque 44×44 por pseudo-elemento; Configuración lo re-exporta |
 | b-B10 nombres-de-modulo-distintos | baja | UI | components/plataforma/billing/plan-change-drawer.tsx | 🟢 PL-Z | El drawer de Plataforma decía «Facturación», «Sesiones», «Evoluciones»…; ahora usa `moduleLabels` (`MODULE_UI_LABEL`), lo mismo que ve el consultorio |
 | b-leads-jerga | baja | UI | components/plataforma/inbox/** | 🟢 PL-Z | «Leads» → «Consultas de la web» en la bandeja (el slug `?origen=leads` queda) |
 | b-B12 external-config-checkout | baja | docs | .docs/EXTERNAL-CONFIG.md | 🟢 PL-Z | «Bloquea:» de MP corregido a «checkout de turnos» (MP ya no cobra el plan) |
@@ -2024,7 +2024,7 @@ los cerraron los fixers FX-A (Lista), FX-B (Flujo) y FX-C (shell) y el integrado
 | rxz-atajos-con-apariencia / contexto-por-tick / menu-44 | media | RX-Z | components/sala/desk/reception-desk.tsx · desk-actions.tsx · desk-css.ts | 🟢 FX-C | Los atajos solo con foco en el body o en el escritorio; contexto estable separado del vivo; ítems del menú de 44 px en puntero grueso o < 720 px |
 | rxz-now-line-contraste | media | RX-Z | app/globals.css (`--now-line`) · components/agenda/grid/now-line.tsx · desk-list/desk-flow | 🟢 FX-C | Token único `--now-line: #c2410c` (5,2:1 con blanco; el anterior #E4572E daba 3,6:1); ningún otro archivo usa el hex como color |
 | rxz-blancos-literales | baja | RX-Z | components/sala/desk/desk-css.ts · reception-view.tsx | 🟢 FX-C | Los fondos `#fff` de `desk-css.ts` y del link de `reception-view` → `var(--card-bg)`; el verde `rgba(27,112,75,…)` → token. Quedan grises `rgba(15,30,51,…)` de bordes, como en el resto de la app |
-| rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🔴 abierto | A 1024 con sidebar abierto (232 px), los nombres largos de «Por cobrar» se cortan con elipsis |
+| rx-por-cobrar-nombres-1024 | baja | **PF/MB** | components/sala/desk/desk-list.tsx | 🟢 PF1.1 | Nombres largos de «Por cobrar» en 2 líneas / apellido + inicial con `title` (PF1.1-sala). Verificación visual: revisor B de PF1-Z |
 | rx-sidebar-sin-movil-390 | media | **MB** | components/layout (sidebar) | 🔴 abierto | A 390 el sidebar no tiene modo móvil (drawer); el escritorio ya cae a una columna |
 | rx-toggle-billing-sin-cap | alta | **C0** | lib/bookings.ts (`toggleBilling`) | ↪ ver `plf-toggle-billing-sin-cap` | RX esconde «Cobrar» y «Por cobrar» a quien no tiene `billing.manage`; el server todavía no lo exige |
 
@@ -2047,7 +2047,7 @@ real — (a) seguridad/RLS/PHI: 0 altos ni medios; (b) UX/copy — + 3 fixers + 
 | b-bajos impresion-y-copy | baja | EV2 | app/(app)/pacientes/[id]/imprimir/** · lib/bookings-constants.ts · booking-drawer/** | 🟢 EV2-Z | Impresión (shell con `display:none`, anulada sin tachar con quién y motivo, «Turno: …», aviso de corte a 2000, pie con paciente y DNI, sin botón si no hay notas, «Cerrar» = `window.close`); «Eliminar turno» deshabilitado con hint si hay evolución; error de red ≠ sin acceso; búsqueda 16 px en mobile; copy de acciones y `SESSION_KEPT_DONE_NOTICE` |
 | ev2z-future-sin-turno | baja | EV2 | lib/clinical-notes-types.ts (`futureNoBooking`) · lib/clinical-notes.ts · components/clinical-notes/clinical-notes-ui.ts | 🟢 integrador EV2-Z | «Todavía no llegó la hora del turno…» salía también en notas sin turno: sin turno el copy es «La fecha de la evolución no puede ser más de 12 h en el futuro.» (cliente y server, crear y editar; tests unit + integración) |
 | a6 kine-atiende-paciente-ajeno | media | **C0** | lib/clinical-notes-internal.ts (gate) · components/agenda/reception/** (toast) | 🔴 abierto — **decide Martin** | Un profesional que atiende un turno de un paciente asignado a otro kine, sin share, recibe `forbidden` al cargar la evolución (falla cerrado, correcto) pero el toast «Cargar evolución» se le ofrece igual. Opciones: share automático al atender (C0), o esconder el toast si no hay `canCreate`. *Recomendado:* C0 con el modelo de visibilidad por registro (EV2-D7) |
-| ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🔴 abierto | La grilla del detalle de una sesión no es responsive a 1024 con sidebar abierto |
+| ev2-seguimiento-detalle-1024 | baja | **PF/MB** | components/seguimiento/session-detail.tsx | 🟢 PF1.2 | Grilla del detalle responsive a 1024 con sidebar abierto (PF1.2-planes-bib). Queda MB: la fila de ejercicio a 390 (6 columnas) |
 | ev2-drawer-modal-sin-portal | baja | **PF** | components/ui/Drawer · components/ui/Modal | 🔴 abierto | Sin portal: el «Historial» abierto desde el drawer del turno queda dentro del panel. Evaluar portal en las primitivas (toca todo) |
 | ev2-perf-update-booking | baja | **PF** | tests/perf | 🔴 abierto | Falta el escenario `updateBooking` en el harness de perf (el chequeo de evolución al re-vincular paciente no está medido) |
 | ev2-kindtag-borde-inline | baja | **VX (Ola F)** | components/clinical-notes/kind-tag.tsx | 🟢 VX F-b2 | `<Tag variant="outline">` para Alta/Anulada (`components/clinical-notes/kind-tag.tsx:15`). Queda `note-card.tsx:117` → `vx-note-card-tag` (PF1) |
@@ -2077,12 +2077,39 @@ diff real — (a) a11y/responsive/copy-claims; (b) seguridad y contratos: 0 alto
 | B8 csp-facebook-enforce | baja | C (config) | next.config.mjs (CSP report-only) | 🔴 abierto — Martin | Antes de pasar la CSP pública a enforce, sumar `web.facebook.com` a `form-action` (el OAuth de Facebook redirige por ahí) |
 | vx-404-dinamico | baja | VX — **decide Martin** | app/not-found.tsx | 🟡 aceptado (default) | El 404 lee la sesión para elegir el CTA: deja de ser estático (una verificación JWT local por request). Recomendado aceptar |
 | vx-incidente-git-rm-cached | — | proceso | components/screens/landing-screen.tsx | 🟢 asentado | VX2-c1 corrió `git rm --cached` (prohibido: git es de Martin). Efecto = el del `git add -A` del commit; no se perdió nada. Reforzado en las reglas de los agentes |
-| vx-bundle-workspace | media | **PF1** | /configuracion · /sala · /pacientes/[id] · /agenda | 🔴 abierto | First Load sobre el corte de 180 kB (reporte, no bloquea): `/configuracion` 260,6 · `/sala` 230,7 · `/pacientes/[id]` 227,3 · `/agenda` 226,7 kB gz (`scripts/bundle-baseline.json`) |
-| F2-colores-no-exactos | baja | **PF1** | app/** · components/** | 🔴 abierto | D-VX23: el codemod reemplazó solo igualdades exactas. Quedan `#9A5B00` 14, `#4F8A10` 8 (**4,2:1, no llega a AA**), `#E14B4B` 4, `#1F7A52` 3, `#E59A00` 1, `#7A5410` 1 y `rgba` con alfa distinto (familias 255,176,32 / 225,75,75 / 228,70,70 / 159,31,31 / 54,179,126). Lista: `node scripts/codemod-status-colors.mjs --dry`; ratchet de los dos primeros en `ui-ratchets.baseline.json` |
+| vx-bundle-workspace | media | **PF1** | /configuracion · /sala · /pacientes/[id] · /agenda | 🟢 PF1-Z | **PF1-Z (16-oct)** — `/configuracion` 260,6 → 140,7 · `/sala` 230,7 → 157,2 · `/pacientes/[id]` 227,3 → 171,7 · `/agenda` 226,7 → 175,7 kB gz; workspace bloqueante ≤ 180 (`scripts/bundle-groups.mjs`) |
+| F2-colores-no-exactos | baja | **PF1** | app/** · components/** | 🟡 PF1-Z | **PF1-Z (16-oct)** — `#9A5B00` 14 → 0 y `#4F8A10` 8 → 0 (ratchet en 0). Quedan 7 no exactos en `components/ui` (`node scripts/codemod-status-colors.mjs --dry`): `rgba(159,31,31,0.3)` ×2 (void-note-dialog, confirm-dialog), `rgba(225,75,75,0.5)` (money-input) y en `toast.tsx` las barras/fondos del ícono (`#E14B4B`, `rgba(54,179,126,0.16)`, `rgba(228,70,70,0.16)`, `rgba(255,176,32,0.18)`) → PF-Z |
 | vx-formfield-densidad | baja | **PF1** | components/ui/form-field.tsx (49 llamadores) | 🔴 abierto | D-VX13: `.k-input` pasó a 44 px / 16 px y textarea `min-height: 120`. Revisar drawers densos de la Secretaria a 1366×768 (riesgo 3 del brief); no achicar el token |
-| vx-note-card-tag | baja | **PF1** | components/clinical-notes/note-card.tsx:117 | 🔴 abierto | Borde inline → `<Tag variant="outline">` como `kind-tag.tsx` |
+| vx-note-card-tag | baja | **PF1** | components/clinical-notes/note-card.tsx:117 | 🟢 PF1.1 | `<Tag tone="soft" variant="outline">` en `note-card.tsx:127` |
 | vx-guard-module-segment | baja | C | lib/authz.ts:216 | 🔴 abierto | `guardModuleSegment` sin llamadores de producción tras el muro (solo `tests/integration/module-guards.test.ts`). Retirarlo junto con su test y los comentarios de `lib/nav.ts`, `tenant-modules-context.tsx`, `sidebar.tsx` |
 | vx-visual-pendiente | baja | **PF1** | components/landing/pricing.tsx · components/auth/product-panel.tsx | 🔴 abierto | Tarjetas de precios desbalanceadas (Individual con más bullets); mock del login con filas bajas y texto recortado; el muro a 390 muestra el sidebar de escritorio (MB) |
+
+### PF1-Z (16-oct-2026): cierre de PF1
+
+PF1 = bundle y pulido (PF1.0 shell y primitivas, PF1.1 áreas con framer, PF1.2 resto; PF1-Z integrador). Bundle antes y
+después en [PERF.md §Bundle](PERF.md).
+
+- **Cerrado por las sesiones** (según sus reportes; la verificación visual a 390/1024/1366 es del revisor B):
+  VX0-b **G6** (orden del modal, «Detalles» colapsable, sin blur del drawer), **G7** (footer sticky, una primaria),
+  **G8** (Recepción mobile en 2 líneas), **C1** (card sin `<button>` anidado), **C2** (filtros en `Drawer` < 1024),
+  **C8** (Vencidas agrupadas), **C9** (CTA «Configurar servicios»), **D9** (`plan-card` con la misma estructura),
+  **VX3-f** («sesión → turno» según el módulo, `lib/copy/booking-unit.ts`), C3-C7 de Configuración y P2-P5 de
+  Plataforma.
+- **PF1-Z aplicó:** `LazyMotion strict` (`components/providers/ui-providers.tsx`) y ratchet `motion.` = 0, framer 26 →
+  21 importadores; ratchets de UI y de `router.refresh()` regrabados hacia abajo con el árbol entero (`outlineNone`
+  29 → 8, `#9A5B00` 14 → 0, `#4F8A10` 8 → 0, `linkWrappingButton` 4 → 3, refresh sin marcar 88 → 3); zod fuera del
+  cliente en los módulos compartidos (D-PF5); `hideHistory` y `.k-skel-aside` borrados; `router.refresh()` de
+  `assign-plan-modal.tsx` sacado (las actions revalidan `/pacientes/[id]`); `PageHeader` en `/diagnostico`.
+- **Abierto:**
+
+| Hallazgo | Sev | Bloque | Ubicación | Estado | Nota |
+|---|---|---|---|---|---|
+| pf1-outline-none-8 | baja | PF-Z | app/** · components/** | 🔴 abierto | Meta del brief ≤ 5; quedan 8 `outline: none` (ratchet en 8). Revisar si cada uno pinta otro foco |
+| pf1-refresh-sin-marca-3 | baja | PF-Z | components/onboarding/step-nav.tsx:30 · step-team.tsx:183 · components/portal/check-in-form.tsx:57 | 🔴 abierto | Sin `// refresh-ok:` (ratchet en 3, meta ≤ 30 cumplida): marcar o sacar según C-PF4 |
+| pf1-shell-137 | baja | PF-Z | app/(app)/layout.tsx · tailwind-merge | 🟡 | Piso del shell `/reportes` 137,7 kB (meta ~130-135): react-dom + runtime de Next = 83,8; candidatos: tailwind-merge (6,7) fuera del shell |
+| pf1-publicas-suben | baja | PF-Z | superficies públicas | 🟡 | +1-5 kB en PF1 (`/forgot` 110,8 → 116,3), dentro de 120 y del 10 %: medir con `--explain` qué entró |
+| pf1-zod-planes-seguimiento | baja | C | lib/plans-deeplink.ts (`planDeepLinkHref` → `encodePlanPrefill`) | 🔴 abierto | Zod (12,9 kB) sigue en `/planes*` y `/seguimiento/[sessionId]` (170-172 kB, entran). Separar el validador del prefill como `realtime-message-guard` (TS puro, test de equivalencia) |
+| pf1-seguimiento-ejercicio-390 | baja | MB | components/seguimiento/session-detail.tsx | 🔴 MB | Fila de ejercicio de `/seguimiento/[id]` con 6 columnas a 390 |
 
 ### Hallazgos de ES4 (P4.Z, 15/16-oct-2026)
 

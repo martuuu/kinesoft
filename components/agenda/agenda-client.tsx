@@ -105,8 +105,6 @@ import { LocationFilter } from "./location-filter";
 import { DayLockButton } from "./day-lock/day-lock-button";
 import { WeekStrip } from "./views/week-strip";
 import { TimelineView } from "./views/timeline-view";
-import { WeekGridView } from "./views/week-grid-view";
-import { ListView } from "./views/list-view";
 
 // ── Bundle de /agenda (handoff de B4.3, integrador final de B-pre) ─────────
 // Con B4/B5 el first load de /agenda pasó de 183,8 a 238 kB gz (presupuesto
@@ -134,12 +132,19 @@ const PractitionerDayView = dynamic(() =>
 // llega renderizada.
 const RoomDayPanel = dynamic(() => import("./views/room-day-panel").then((m) => m.RoomDayPanel));
 const RoomFilter = dynamic(() => import("./room-filter").then((m) => m.RoomFilter));
+// PF1-Z (D-PF-B): Semana y Lista también fuera del first load (con SSR: si es la vista inicial llega renderizada y su
+// chunk se precarga desde el HTML). Día es la vista por defecto; con esto /agenda baja de 180,9 a ≤ 180 kB gz. Se
+// precargan en idle (`prefetchAgendaChunks`) para que el cambio de vista no espere red.
+const WeekGridView = dynamic(() => import("./views/week-grid-view").then((m) => m.WeekGridView));
+const ListView = dynamic(() => import("./views/list-view").then((m) => m.ListView));
 /** Precarga en idle de los chunks que se abren con un click. Idempotente: el
  *  bundler cachea el `import()`. */
 function prefetchAgendaChunks() {
   void import("./booking-modal");
   void import("./booking-drawer");
   void import("./day-lock/day-lock-dialog");
+  void import("./views/week-grid-view");
+  void import("./views/list-view");
 }
 
 /**

@@ -696,14 +696,6 @@ body {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
-/* El aside del tablero (320 px) se esconde en pantallas angostas para que
-   el esqueleto no fuerce scroll horizontal. */
-@media (max-width: 900px) {
-  .k-skel-aside {
-    display: none !important;
-  }
-}
-
 /* Entrada de página de `(app)/template.tsx`: solo opacidad, 120 ms. Sin
    `transform` a propósito: el framer anterior subía 8 px y, mientras dura,
    un transform convierte al wrapper en el containing block de los

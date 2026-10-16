@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-15 sobre HEAD 9827545 + ola F (F-Z regrabó solo hacia abajo: outlineNone 36→35, #9F1F1F 157→156; VX F2 (codemod de colores) bajó a 0 los 10 literales exactos del mapa: #9F1F1F 156→0, rgba(228,70,70,0.1) 44→0, rgba(228,70,70,0.18) 1→0, #7A4A00 28→0, rgba(255,176,32,0.14) 8→0; #4F8A10 y #9A5B00 no son exactos (D-VX23) y quedan para PF1; integrador VX2.1 regrabó solo hacia abajo sobre HEAD 31fcc91 + VX2-a/b1/b2/c1/c2: linkWrappingButton 13→5, outlineNone 35→31, demoPlaceholders 11→4; integrador VX-Z regrabó solo hacia abajo sobre HEAD 4203e93 + VX2-d1/d2/e/f: linkWrappingButton 5→4, outlineNone 31→29, demoPlaceholders 4→2)",
-  "linkWrappingButton": 4,
-  "outlineNone": 29,
+  "measuredAt": "2026-10-15 sobre HEAD 9827545 + ola F (F-Z regrabó solo hacia abajo: outlineNone 36→35, #9F1F1F 157→156; VX F2 (codemod de colores) bajó a 0 los 10 literales exactos del mapa: #9F1F1F 156→0, rgba(228,70,70,0.1) 44→0, rgba(228,70,70,0.18) 1→0, #7A4A00 28→0, rgba(255,176,32,0.14) 8→0; #4F8A10 y #9A5B00 no son exactos (D-VX23) y quedan para PF1; integrador VX2.1 regrabó solo hacia abajo sobre HEAD 31fcc91 + VX2-a/b1/b2/c1/c2: linkWrappingButton 13→5, outlineNone 35→31, demoPlaceholders 11→4; integrador VX-Z regrabó solo hacia abajo sobre HEAD 4203e93 + VX2-d1/d2/e/f: linkWrappingButton 5→4, outlineNone 31→29, demoPlaceholders 4→2; integrador PF1-Z regrabó solo hacia abajo sobre HEAD ab30377 + PF1-Z, medido con el guard sobre el árbol entero: linkWrappingButton 4→3, outlineNone 29→8, #4F8A10 8→0, #9A5B00 14→0 (los últimos 3 en toast/exercise-search-picker pasaron a token en PF1-Z))",
+  "linkWrappingButton": 3,
+  "outlineNone": 8,
   "demoPlaceholders": 2,
   "statusLiterals": {
     "#9F1F1F": 0,
@@ -14,7 +14,7 @@
     "rgba(255,176,32,0.24)": 0,
     "#1B704B": 0,
     "rgba(54,179,126,0.12)": 0,
-    "#4F8A10": 8,
-    "#9A5B00": 14
+    "#4F8A10": 0,
+    "#9A5B00": 0
   }
 }

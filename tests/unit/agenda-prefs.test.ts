@@ -6,14 +6,12 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  AgendaViewPrefsPatchSchema,
   DEFAULT_AGENDA_VIEW_PREFS,
   DEFAULT_PREFERENCES,
-  mergeAgendaViewPrefs,
-  sanitizeAgendaViewPrefs,
   toggleFavoritePractitioner,
   AGENDA_MAX_FAVORITES,
 } from "@/lib/preferences-constants";
+import { AgendaViewPrefsPatchSchema, mergeAgendaViewPrefs, sanitizeAgendaViewPrefs } from "@/lib/preferences-schemas";
 import { nextSelection } from "@/components/agenda/practitioner-chips";
 
 describe("sanitizeAgendaViewPrefs (lectura)", () => {

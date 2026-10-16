@@ -55,10 +55,10 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
 
       # VX F-e (C-F6): JS inicial por ruta, con presupuesto por grupo (scripts/bundle-groups.mjs): públicas ≤ 120 kB,
-      # turnero ≤ 135, portal ≤ 125 bloquean (exit 1 si exceden o crecen > 10 % sobre scripts/bundle-baseline.json);
-      # onboarding / Plataforma / workspace solo informan.
-      # Bloqueante desde F-Z (15-oct): con framer fuera del root (F-d) las públicas quedaron ≤ 110, turnero ≤ 115 y
-      # portal ≤ 108 kB; el baseline se regrabó en ese momento.
+      # turnero ≤ 135, portal ≤ 125, onboarding ≤ 160, Plataforma ≤ 180 y workspace ≤ 180. TODOS bloquean (exit 1 si
+      # exceden o crecen > 10 % sobre scripts/bundle-baseline.json).
+      # Públicas/turnero/portal bloquean desde F-Z (15-oct); onboarding, Plataforma y workspace desde PF1-Z (16-oct,
+      # D-PF-B), cuando todas sus rutas entraron (máx. /agenda 175,7, /pacientes/[id] 171,7); baseline regrabado ahí.
       - name: Presupuesto de bundle
         run: node scripts/check-bundle-budget.mjs
 

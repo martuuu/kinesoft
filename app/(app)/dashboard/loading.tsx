@@ -5,7 +5,7 @@ import styles from "@/components/dashboard/dashboard.module.css";
  * Esqueleto del tablero (PF-0c): columna principal (indicadores fijados + gráfico y últimas sesiones) y el aside de
  * 320 px (calendario, próximos turnos). Misma grilla que `DashboardScreen` para que al llegar los datos no salte.
  * PF1.1-dashboard: usa las MISMAS clases del CSS Module (aside de 280 en tablero angosto, una columna bajo 768) en vez
- * de la grilla inline + `.k-skel-aside` (que escondía el aside bajo 900 y el tablero real no).
+ * de la grilla inline + la vieja `.k-skel-aside` (escondía el aside bajo 900 y el tablero real no; borrada en PF1-Z).
  */
 export default function DashboardLoading() {
   return (

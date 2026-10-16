@@ -1,6 +1,6 @@
 /**
- * Contrato de `lib/availability-actions.ts` (B3.3 AV-actions, B-pre): zod de
- * entrada, tipos de salida y helpers puros para la UI (B4.x agenda, B5.x
+ * Contrato de `lib/availability-actions.ts` (B3.3 AV-actions, B-pre): tipos de
+ * entrada (los zod, en `availability-actions-schemas.ts` desde PF1-Z), tipos de salida y helpers puros para la UI (B4.x agenda, B5.x
  * modal). Vive aparte porque un archivo `"use server"` solo exporta funciones
  * async; esto lo importan también los componentes cliente (sin `server-only`,
  * sin Prisma, sin reloj).
@@ -17,9 +17,6 @@
  *     (convenciones de `lib/availability/types.ts`).
  *   • Serializable (sin `Date`, sin funciones): cruza el borde server→client.
  */
-import { z } from "zod";
-import { dayKeyDiff, isDayKey } from "@/lib/availability/day";
-import { RECURRENCE_MAX_COUNT } from "@/lib/availability/recurrence";
 import {
   type DayKey,
   type DayLockState,
@@ -75,88 +72,18 @@ export const INSTANT_CLASS_LABEL: Record<InstantClass, string> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrada (zod)
+// Entrada: los zod (`AgendaAvailabilityQuery`, `ListSlotsQuery`, `ClassifyInstantQuery`, `RecurrencePreviewQuery`)
+// viven en `lib/availability-actions-schemas.ts` (server-only) desde PF1-Z (D-PF5): este archivo lo importan los
+// componentes de la agenda y del modal, y con zod adentro arrastraba ~13 kB gz al JS inicial de /agenda. Acá quedan
+// solo los tipos de entrada (re-export de tipo, se borra al compilar).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const Id = z.string().trim().min(1).max(64);
-const OptId = Id.nullish().or(z.literal("").transform(() => null));
-const DayKeyZ = z.string().refine((s) => isDayKey(s), "Fecha inválida (YYYY-MM-DD)");
-// ISO con offset o Z: `new Date()` de un "2027-03-09T10:00" sin zona lo lee
-// en la TZ del host (UTC en Vercel) → 3 h corrido. Se exige la zona.
-const IsoInstant = z
-  .string()
-  .max(40)
-  .refine((s) => /(Z|[+-]\d{2}:\d{2})$/.test(s) && !Number.isNaN(Date.parse(s)), "Instante inválido (ISO con zona)");
-const DurationMin = z.number().int().min(5).max(480);
-
-export const AgendaAvailabilityQuery = z
-  .object({
-    from: DayKeyZ,
-    to: DayKeyZ,
-    practitionerIds: z.array(Id).max(AVAILABILITY_MAX_PRACTITIONERS).optional(),
-    locationId: OptId,
-  })
-  .superRefine((v, ctx) => {
-    if (!isDayKey(v.from) || !isDayKey(v.to)) return;
-    const span = dayKeyDiff(v.from, v.to);
-    if (span < 0) ctx.addIssue({ code: "custom", path: ["to"], message: "La fecha final es anterior a la inicial." });
-    else if (span + 1 > AGENDA_AVAILABILITY_MAX_DAYS) {
-      ctx.addIssue({ code: "custom", path: ["to"], message: `Máximo ${AGENDA_AVAILABILITY_MAX_DAYS} días.` });
-    }
-  });
-export type AgendaAvailabilityQueryInput = z.input<typeof AgendaAvailabilityQuery>;
-
-export const ListSlotsQuery = z.object({
-  /** Un profesional, o "any" = cualquiera habilitado para el servicio. */
-  practitionerId: z.union([z.literal("any"), Id]),
-  serviceId: Id,
-  dayKey: DayKeyZ,
-  locationId: OptId,
-  /** Cobertura del paciente (`Insurer.id`): con "any", filtra por PractitionerPayer. */
-  insurerId: OptId,
-  /** Marca los slots donde el paciente ya está ocupado (no sale en la respuesta). */
-  patientId: OptId,
-  /** Duración forzada; sin ella, la del profesional para el servicio (o la del servicio). */
-  durationMin: DurationMin.optional(),
-  /** Uno de `STAFF_SLOT_STEPS`; sin él, `STAFF_SLOT_STEP_MIN`. */
-  stepMin: z.union([z.literal(15), z.literal(30), z.literal(45), z.literal(60)]).optional(),
-});
-export type ListSlotsQueryInput = z.input<typeof ListSlotsQuery>;
-
-export const ClassifyInstantQuery = z.object({
-  practitionerId: Id,
-  serviceId: Id,
-  scheduledFor: IsoInstant,
-  durationMin: DurationMin.optional(),
-  locationId: OptId,
-  patientId: OptId,
-  /** Edición: el turno que se mueve no cuenta contra sí mismo. */
-  excludeBookingId: OptId,
-  /**
-   * SR: sala a chequear. AUSENTE (undefined) = la sala por defecto de la franja
-   * (`defaultRoomFor`), que vuelve en `InstantCheck.defaultRoomId`; null (o "")
-   * = "Sin sala" explícito: no se chequea ocupación. El modal NO manda el campo
-   * con "Según el horario del profesional". Hasta SR3a la action lo ignora.
-   */
-  roomId: OptId,
-});
-export type ClassifyInstantQueryInput = z.input<typeof ClassifyInstantQuery>;
-
-export const RecurrencePreviewQuery = z.object({
-  /** Primera sesión (fecha y hora de pared que se repite). */
-  anchor: IsoInstant,
-  count: z.number().int().min(1).max(RECURRENCE_MAX_COUNT),
-  /** 0=Lun … 6=Dom (convención del batch/UI, NO el `Dow` 0=Dom del motor).
-   *  Vacío/ausente = el día del ancla. Ignorado en mensual. */
-  daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
-  frequency: z.enum(["weekly", "biweekly", "monthly"]),
-  practitionerId: Id,
-  serviceId: Id,
-  patientId: OptId,
-  durationMin: DurationMin.optional(),
-  locationId: OptId,
-});
-export type RecurrencePreviewQueryInput = z.input<typeof RecurrencePreviewQuery>;
+export type {
+  AgendaAvailabilityQueryInput,
+  ClassifyInstantQueryInput,
+  ListSlotsQueryInput,
+  RecurrencePreviewQueryInput,
+} from "@/lib/availability-actions-schemas";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salida

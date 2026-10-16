@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { BookingStatus, PaymentStatus } from "@prisma/client";
 import type { BatchSlotStatus } from "@/lib/booking-schedule";
 import type { ReceptionAction, ReceptionState } from "@/lib/reception-state";
@@ -117,9 +116,10 @@ export type BatchDateOutcome = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // B4.1 AV-bookings-2 — proyección liviana de la agenda y recepción.
-// Los zod viven acá y no en lib/validation.ts porque son el contrato de esta
-// sesión con B4.3/B4.5 (mismo criterio que los `*-schemas.ts` de B-pre); el
-// archivo no es "use server", así que puede exportar constantes.
+// Los zod (`AgendaBookingsQuery`, `ReceptionActionInput`) viven en
+// `lib/bookings-schemas.ts` desde PF1-Z (D-PF5): este archivo lo importan los
+// componentes de la agenda por sus tipos y constantes, y con el zod adentro
+// arrastraba ~13 kB gz de zod al JS inicial de /agenda.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -229,37 +229,9 @@ export const AGENDA_BOOKINGS_MAX_DAYS = 62;
 /** Tope de profesionales en el filtro (la agenda multi-prof muestra ≤ ~12). */
 export const AGENDA_BOOKINGS_MAX_PRACTITIONERS = 50;
 
-export const AgendaBookingsQuery = z
-  .object({
-    from: z.coerce.date(),
-    to: z.coerce.date(),
-    /** Vacío / ausente = todos los profesionales del tenant. */
-    practitionerIds: z.array(z.string().min(1).max(64)).max(AGENDA_BOOKINGS_MAX_PRACTITIONERS).optional(),
-    /** Ausente / null = todas las sedes. La principal incluye `locationId` null. */
-    locationId: z.string().min(1).max(64).nullable().optional(),
-    /**
-     * SR: ausente / null = todas las salas; `"none"` = solo los turnos SIN sala
-     * (filtro "Sin sala"; un id de sala es un cuid, nunca "none"); un id = esa
-     * sala. Lo implementa SR3a en el `where`, sin queries nuevas.
-     */
-    roomId: z.union([z.literal("none"), z.string().min(1).max(64)]).nullable().optional(),
-    /** Default true (la agenda muestra los cancelados tachados). */
-    includeCancelled: z.boolean().optional(),
-  })
-  .refine((q) => q.to.getTime() > q.from.getTime(), { message: "Rango inválido." })
-  .refine((q) => q.to.getTime() - q.from.getTime() <= AGENDA_BOOKINGS_MAX_DAYS * 86_400_000, {
-    message: `El rango no puede superar ${AGENDA_BOOKINGS_MAX_DAYS} días.`,
-  });
-export type AgendaBookingsQueryInput = z.input<typeof AgendaBookingsQuery>;
 
 export const RECEPTION_ACTIONS = ["llego", "llamar", "en-atencion", "atendido", "ausente", "deshacer"] as const satisfies ReadonlyArray<ReceptionAction>;
 
-export const ReceptionActionInput = z.object({
-  bookingId: z.string().min(1).max(64),
-  action: z.enum(RECEPTION_ACTIONS),
-  /** Obligatorio: la recepción es justo donde dos personas tocan el mismo turno. */
-  expectedUpdatedAt: z.string().datetime({ offset: true }),
-});
 
 /**
  * Resultado OK de `markReceptionAction` (fechas en ISO para el cliente). La UI

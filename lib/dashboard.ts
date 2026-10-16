@@ -19,7 +19,8 @@ import { getUserPreferences } from "@/lib/preferences";
 import { getParticularCopagoCents, resolveBookingCopagoCents } from "@/lib/billing-internal";
 import { tags, ttl } from "@/lib/cache-tags";
 import { toARDateKey, toARDow, localToARIso } from "@/lib/datetime-ar";
-import { RevenueRangeSchema, type KpiKey } from "@/lib/preferences-constants";
+import type { KpiKey } from "@/lib/preferences-constants";
+import { RevenueRangeSchema } from "@/lib/preferences-schemas";
 import {
   revenuePeriod,
   revenueScopeFor,

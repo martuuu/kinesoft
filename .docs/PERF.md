@@ -452,10 +452,54 @@ evolución» que ya existía (`lib/sessions.ts`, `listOpenSessions`): +0 sentenc
 | Dashboard ~1 s | **Refutado como problema de prod:** era un artefacto de estadísticas vacías (sin `ANALYZE` el planner arrancaba por los 10k turnos). Con estadísticas reales, 43 ms. Queda como lección: después de imports masivos, correr `ANALYZE` | — |
 | `service-channel-direct-url-pool-prod` (P) | Sin medir: depende del `DATABASE_URL` real de Vercel (tarea A0a del dueño). El test de pool da el mecanismo | A0a → C1 |
 
-## Bundle (first-load JS gzip, raíz + layouts + página)
+## Bundle (JS inicial gzip por ruta: raíz + layouts + página)
 
-Baseline de A1 en `scripts/bundle-baseline.json` (no se regrabó; el estado al cierre de B-pre está en §B4.6). Las
-más pesadas en A1: `/agenda` 176,6 kB · `/pacientes/[id]` 174 kB ·
-`/plataforma/ejercicios` 167 kB. Presupuesto del workspace: ≤ 180 kB. Las públicas quedan **al borde** de su
-presupuesto de 150 kB: `/c/[slug]/booking` 147,3 kB · `/signup` 143,8 kB · `/portal/*` 139-141 kB. framer-motion
-(~35 kB gz) viaja en el root layout a todas las rutas → C1.
+Lo mide `node scripts/check-bundle-budget.mjs` sobre la salida de `next build` (`--explain <ruta>` lista los chunks y
+marca framer-motion / zod / @supabase / react-dom; `npm run perf:bundle:baseline` regraba). Presupuesto por grupo en
+`scripts/bundle-groups.mjs`; sale 1 si una ruta excede o crece > 10 % sobre `scripts/bundle-baseline.json`.
+
+**Bloqueantes:** públicas ≤ 120, turnero ≤ 135, portal ≤ 125 (desde F-Z, 15-oct) y **onboarding ≤ 160, Plataforma ≤ 180
+y workspace ≤ 180 desde PF1-Z (16-oct, D-PF-B)**, cuando todas sus rutas entraron. Baseline regrabado en PF1-Z.
+
+### PF1 (16-oct-2026): antes = baseline de ES4 (`ff858db`), después = PF1-Z
+
+| Grupo | Ruta | Antes | Después | Δ | Presupuesto |
+|---|---|---|---|---|---|
+| workspace | `/agenda` | 226,7 | 175,7 | −51,0 | 180 |
+| workspace | `/seguimiento/[sessionId]` | 210,9 | 171,8 | −39,1 | 180 |
+| workspace | `/pacientes/[id]` | 227,3 | 171,7 | −55,6 | 180 |
+| workspace | `/planes/[discipline]` | 201,4 | 170,6 | −30,8 | 180 |
+| workspace | `/planes` | 201,4 | 170,6 | −30,8 | 180 |
+| workspace | `/sala` | 230,7 | 157,2 | −73,5 | 180 |
+| workspace | `/pacientes` | 198,8 | 153,7 | −45,1 | 180 |
+| workspace | `/diagnostico` | 196,2 | 152,4 | −43,8 | 180 |
+| workspace | `/biblioteca` | 198,4 | 150,9 | −47,5 | 180 |
+| workspace | `/terapia-manual` | 198,4 | 150,9 | −47,5 | 180 |
+| workspace | `/dashboard` | 195,7 | 148,5 | −47,2 | 180 |
+| workspace | `/configuracion` | 260,6 | 140,7 | −119,9 | 180 |
+| workspace | `/pacientes/[id]/imprimir` | 184,5 | 138 | −46,5 | 180 |
+| workspace | `/seguimiento` | 184,2 | 138 | −46,2 | 180 |
+| workspace | `/biblioteca/[slug]` | 184,2 | 137,8 | −46,4 | 180 |
+| workspace | `/reportes` | 184,2 | 137,7 | −46,5 | 180 |
+| workspace | `/cuenta/seguridad` | 128,4 | 132,4 | +4,0 | 180 |
+| plataforma | máx. `/plataforma/consultorios` (`/suscripcion` 167,1 → 159) | 159,9 | 159,7 | −0,2 | 180 |
+| onboarding | `/onboarding` | 148,7 | 153 | +4,3 | 160 |
+| turnero | máx. `/c/[slug]/booking` | 116,6 | 118,6 | +2,0 | 135 |
+| portal | máx. `/portal/vincular` | 107,4 | 109,1 | +1,7 | 125 |
+| públicas | máx. `/forgot` | 110,8 | 116,3 | +5,5 | 120 |
+
+- **Piso del shell de `(app)`** (`/reportes`, página vacía): 184,2 → **137,7**. El brief pedía ~130-135: quedan
+  react-dom 52,5, el runtime de Next 31,3, el layout 9, framer (`m` + `AnimatePresence`, sin features) 8,4,
+  tailwind-merge 6,7 y el resto del shell. Siguiente palanca, si hace falta: tailwind-merge fuera del shell.
+- **Qué lo bajó:** PF1.0 (shell sin framer completo ni zod, paneles diferidos, primitivas con portal), PF1.1/PF1.2
+  (`motion.` → `m.` en todo el árbol, ⌘K/Apariencia/drawers/caras de Recepción con `next/dynamic`) y en PF1-Z: zod
+  fuera del cliente en los módulos compartidos (D-PF5: `bookings-schemas`, `availability-actions-schemas`,
+  `preferences-schemas`, `clinical-notes-schemas` con `server-only`; `time-blocks-window` y
+  `plans-deeplink-params` sin zod), Semana/Lista de la agenda y el control de avisos del menú «Vista» con
+  `next/dynamic`, y `LazyMotion strict`.
+- **Metas:** `/dashboard` ≤ 160 ✓ (148,5) · `/configuracion` ≤ 170 ✓ (140,7) · `/sala` ≤ 165 ✓ (157,2) · onboarding
+  ≤ 160 ✓ · Plataforma ≤ 180 ✓ · workspace ≤ 180 ✓ (máx. `/agenda` 175,7).
+- **Zod que sigue en el cliente (12,9 kB, chunk compartido):** `/seguimiento/[sessionId]` y `/planes*` (vía
+  `planDeepLinkHref` de `lib/plans-deeplink.ts`, que valida el prefill con zod) y Plataforma (formularios de
+  `/plataforma/consultorios`, a propósito). Entran en 180; sacarlos es C (no D-PF5).
+- **Públicas subieron 1-5 kB** en PF1 (`/forgot` +5,5) sin pasar el presupuesto ni el 10 %: queda anotado para PF-Z.

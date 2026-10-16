@@ -1802,3 +1802,39 @@ Verificación automática: `tsc` ✅ · `next build` ✅ · `vitest` ✅. **Sin 
 - [ ] ICS de la agenda: turnos de plan con «Sesión n/N» en el título.
 - [ ] Listado Kine con plan Kine + Osteo → dos chips «Kine 1/3» «Osteo 0/2»; General sin columna de plan; pill «Sin plan · N» = filas al clickear (sin contar filas de acceso básico); «Sin plan activo» legible.
 - [ ] Archivar desde la fila (con `planes`) pregunta qué hacer con los planes; toasts «Paciente archivado» / «Paciente reactivado»; el texto avisa que se desvincula el portal; en el perfil el botón dice «Reactivar».
+
+## PF1 · Bundle y pulido (16-oct-2026)
+
+> PF1.0 (`4b10731`) · PF1.1 (`de02fb9`) · PF1.2 (`ab30377`) commiteados; PF1-Z sin commitear. **Sin migración.** Con
+> `next build && next start`, `TZ=UTC`, un consultorio Kinesiología con 3+ profesionales, salas y turnos de hoy, y
+> cuentas OWNER, profesional y Secretaria. Anchos 390×844, 1024×768 y 1366×768 (sidebar contraído y expandido).
+> Bundle en [PERF.md §Bundle](PERF.md); hallazgos en [AUDIT «PF1-Z»](AUDIT.md).
+
+### Shell y motion
+- [ ] Consola sin avisos de hidratación ni el error de `LazyMotion strict` («You have rendered a `motion` component…») en agenda, sala, dashboard, perfil, configuración, biblioteca y Plataforma.
+- [ ] Modales, drawers, toasts y el selector de vista animan como antes (el chunk de features llega después del primer render); con «reducir movimiento» del sistema se ven completos sin animar.
+- [ ] < 768: topbar con «Menú» abre el Drawer; sin overflow horizontal a 390 en dashboard, pacientes, biblioteca y configuración.
+
+### Agenda
+- [ ] Día → Semana → Lista → Día: el cambio no deja hueco ni salta (Semana y Lista se bajan en idle; con red lenta se ve el esqueleto un instante).
+- [ ] Entrar directo con `?view=week` y `?view=list`: la vista llega renderizada del server (sin pantalla vacía).
+- [ ] Menú «Vista» con sala en vivo: la sección «Avisos» muestra el control al abrir (esqueleto de 68 px a lo sumo un instante con red lenta); cambiar «Visual / Visual y sonido / Nada» guarda.
+- [ ] Candado de día y modo bloqueo del modal: el rango de fechas y el tope de 31 días siguen igual.
+- [ ] «Nuevo turno» a 1366×768: profesional → servicio → paciente → fecha/hora → Guardar sin scroll interno; footer pegado abajo a 1366×768 y 1024×768; «Detalles» se abre y cierra con teclado.
+- [ ] Drawer del turno → Historial de la evolución: el Modal queda encima; Esc cierra solo el Modal y el foco vuelve al drawer.
+- [ ] Recepción a 390 (filas en 2 líneas) y en General la unidad dice «turnos» («Varios turnos»), en Kinesiología «sesiones».
+
+### Sala
+- [ ] Las 3 caras de Recepción a 1366 y 1024 con sidebar abierto: «Por cobrar» con nombres largos legibles (con `title`); cambiar de cara muestra el esqueleto y no salta; «Cobrar» abre el modal sin esperar.
+
+### Pacientes, planes, diagnóstico y seguimiento
+- [ ] Perfil con `?tab=plan` abre «Planes» y con `?tab=planes&nuevo=1&prefill=…` abre el editor prellenado; la URL queda limpia después.
+- [ ] Evolución desde el drawer del turno y desde el perfil: alta, edición, enmienda y anulación como antes (los zod se movieron a `lib/clinical-notes-schemas.ts`).
+- [ ] `/diagnostico`: encabezado «Diagnóstico · Armá el caso» en escritorio y en el asistente mobile; «Asignar diagnóstico y armar plan» → guardar lleva al perfil con el plan nuevo visible sin recargar.
+- [ ] `/seguimiento/[id]` a 1024 con sidebar abierto: la grilla del detalle no se corta.
+- [ ] Biblioteca/planes: cards sin botón anidado (Tab llega a la estrella y a la card por separado); filtros en Drawer < 1024.
+
+### Dashboard y configuración
+- [ ] Tablero: cambiar «Semana / Mes» de ingresos guarda y persiste al recargar; el esqueleto de carga tiene la misma grilla que el tablero (sin salto).
+- [ ] Configuración → General → avisos de la sala: el control funciona igual que en el menú «Vista».
+- [ ] Toasts de éxito y de aviso: ícono con el color del token (verde / ámbar) legible.

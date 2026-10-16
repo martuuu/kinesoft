@@ -14,10 +14,12 @@ import type { ActionResult } from "@/lib/validation";
 import {
   AgendaViewPrefsPatchSchema,
   DashboardPrefsPatchSchema,
-  DEFAULT_PREFERENCES,
-  KPI_OPTIONS,
   mergeAgendaViewPrefs,
   sanitizeAgendaViewPrefs,
+} from "@/lib/preferences-schemas";
+import {
+  DEFAULT_PREFERENCES,
+  KPI_OPTIONS,
   sanitizeCatalogPrefs,
   sanitizeDashboardPrefs,
   type AgendaViewPrefs,

@@ -158,9 +158,14 @@ del portal, soak y perf de planes. Hallazgos en [AUDIT «Hallazgos de ES4»](AUD
 - **Riesgo aceptado:** token de invitación en la URL (mitigado); quien entraba solo por email deja de ver sus fichas
   hasta volver a entrar o tocar «Buscar mis fichas».
 
-**Siguiente:** **PF** (performance + pulido) → DIR → MB. PF1 hereda de VX: bundle del workspace, colores no exactos,
-densidad de `FormField` a 44 px y `note-card` (AUDIT «Hallazgos de VX»); de ES4: EXPLAIN de `listOpenSessions` (18
-sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`).
+**PF1 ✅** (16-oct, PF1.0 → PF1.2 commiteados, PF1-Z sin commitear, sin migración): workspace ≤ 180 kB y bloqueante
+(máx. `/agenda` 175,7; `/configuracion` 260,6 → 140,7), Plataforma y onboarding bloqueantes, `motion.` = 0 con
+`LazyMotion strict`, colores no exactos `#9A5B00`/`#4F8A10` en 0. Números en [PERF.md §Bundle](PERF.md); abiertos en
+[AUDIT «PF1-Z»](AUDIT.md); checklist en [QA §PF1](QA.md).
+
+**Siguiente:** **PF-M** (M10) → **PF2** (una tx por loader, actor memoizado) → PF-Z → DIR → MB. De ES4 siguen: EXPLAIN de
+`listOpenSessions` (18 sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`);
+`vx-formfield-densidad` sigue abierta.
 
 **Modo de ejecución (decisión 22):** se ejecuta completo, ola por ola, sin frenar: brief con contratos literales →
 sesiones en paralelo con dueño único por archivo → integrador → gate → **commit local** (`git add -A -- . ':!Screenshot*'`,

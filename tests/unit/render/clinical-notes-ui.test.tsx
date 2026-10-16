@@ -324,11 +324,11 @@ describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
     expect(buttons(render(<NoteCard note={{ ...n, revision: 1 }} now={NOW} />))).toEqual([]);
   });
 
-  it("[PF1.1] `hideHistory` ya no esconde el historial (el Modal va por portal y queda sobre el Drawer, C-PF6)", () => {
+  it("[PF1-Z] en el drawer del turno (`hideBooking`) se ofrece el historial: el Modal va por portal sobre el Drawer (C-PF6)", () => {
     const voided = note({ revision: 2, voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
-    expect(buttons(render(<NoteCard note={voided} now={NOW} hideHistory />))).toEqual(["Ver versiones anteriores"]);
+    expect(buttons(render(<NoteCard note={voided} now={NOW} hideBooking />))).toEqual(["Ver versiones anteriores"]);
     // Viva editada de otro autor (el caso del drawer del turno): enmienda e historial.
-    expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideHistory />))).toEqual([
+    expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideBooking />))).toEqual([
       "Agregar enmienda",
       "Ver versiones anteriores",
     ]);

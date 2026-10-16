@@ -6,17 +6,11 @@
  * Las ventanas se miden en milisegundos absolutos (`getTime()`), nunca con el reloj local del host: así dan lo mismo
  * en Vercel (UTC) y en una máquina AR (el test corre en las dos TZ).
  */
-import { z } from "zod";
 import type { BookingStatus } from "@prisma/client";
 import type { Capability, PatientAccessLevel } from "@/lib/capabilities";
 import {
-  CLINICAL_NOTE_BODY_MAX,
   CLINICAL_NOTE_EDIT_WINDOW_MS,
   CLINICAL_NOTE_FUTURE_LIMIT_MS,
-  CLINICAL_NOTE_KINDS,
-  CLINICAL_NOTE_TITLE_MAX,
-  CLINICAL_NOTE_VOID_REASON_MAX,
-  CLINICAL_NOTE_VOID_REASON_MIN,
   TIMELINE_QUERY_MAX,
   type ClinicalNoteDTO,
   type ClinicalNotePermissions,
@@ -31,96 +25,11 @@ function no<R extends string>(reason: R): Decision<R> {
   return { ok: false, reason };
 }
 
-// ─── Schemas (zod `.strict()`) ───────────────────────────────────────────────
-
-/** Ids de Prisma (cuid) y de los tests: el mismo molde que `UrlIdSchema` de lib/plans-deeplink.ts. */
-const IdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Id inválido");
-
-/** `""` → null: un `<select>` o un input vacío del form llega como string vacío. */
-const OptionalIdSchema = z.preprocess((v) => (v === "" ? null : v), IdSchema.nullable()).optional();
-
-const KindSchema = z.enum(CLINICAL_NOTE_KINDS);
-
-/** Título opcional: trim; vacío → null (la base no acepta un título de puros espacios: ClinicalNote_title_check). */
-const TitleSchema = z
-  .string()
-  .nullable()
-  .transform((v) => {
-    if (v == null) return null;
-    const t = v.trim();
-    return t === "" ? null : t;
-  })
-  .refine((v) => v == null || v.length <= CLINICAL_NOTE_TITLE_MAX, {
-    message: `El título puede tener hasta ${CLINICAL_NOTE_TITLE_MAX} caracteres.`,
-  });
-
-/** Texto clínico: trim y 1..20.000 (el mismo rango que ClinicalNote_body_check, así la base nunca tira 23514). */
-const BodySchema = z
-  .string()
-  .transform((v) => v.trim())
-  .refine((v) => v.length >= 1, { message: "Escribí la evolución." })
-  .refine((v) => v.length <= CLINICAL_NOTE_BODY_MAX, {
-    message: `La evolución puede tener hasta ${CLINICAL_NOTE_BODY_MAX.toLocaleString("es-AR")} caracteres.`,
-  });
-
-/** ISO con zona (el cliente manda `toISOString()`): sin zona sería hora del host, el bug de siempre en Vercel. */
-const IsoDateSchema = z
-  .string()
-  .datetime({ offset: true, message: "Elegí una fecha válida." })
-  .transform((s) => new Date(s));
-
-export const CreateClinicalNoteSchema = z
-  .object({
-    patientId: IdSchema,
-    bookingId: OptionalIdSchema,
-    kind: KindSchema.optional(),
-    title: TitleSchema.optional(),
-    body: BodySchema,
-    occurredAt: IsoDateSchema.nullable().optional(),
-    idempotencyKey: z.string().uuid(),
-  })
-  .strict();
-
-export const EditClinicalNoteSchema = z
-  .object({
-    noteId: IdSchema,
-    expectedRevision: z.number().int().min(1),
-    kind: KindSchema.optional(),
-    title: TitleSchema.optional(),
-    body: BodySchema.optional(),
-    occurredAt: IsoDateSchema.optional(),
-  })
-  .strict()
-  .refine((v) => v.kind !== undefined || v.title !== undefined || v.body !== undefined || v.occurredAt !== undefined, {
-    message: "No hay cambios para guardar.",
-  });
-
-export const AmendClinicalNoteSchema = z
-  .object({
-    noteId: IdSchema,
-    title: TitleSchema.optional(),
-    body: BodySchema,
-    idempotencyKey: z.string().uuid(),
-  })
-  .strict();
-
-export const VoidClinicalNoteSchema = z
-  .object({
-    noteId: IdSchema,
-    expectedRevision: z.number().int().min(1),
-    reason: z
-      .string()
-      .transform((v) => v.trim())
-      .refine((v) => v.length >= CLINICAL_NOTE_VOID_REASON_MIN && v.length <= CLINICAL_NOTE_VOID_REASON_MAX, {
-        message: `El motivo tiene que tener entre ${CLINICAL_NOTE_VOID_REASON_MIN} y ${CLINICAL_NOTE_VOID_REASON_MAX} caracteres.`,
-      }),
-  })
-  .strict();
-
-export type CreateClinicalNoteParsed = z.output<typeof CreateClinicalNoteSchema>;
-export type EditClinicalNoteParsed = z.output<typeof EditClinicalNoteSchema>;
-export type AmendClinicalNoteParsed = z.output<typeof AmendClinicalNoteSchema>;
-export type VoidClinicalNoteParsed = z.output<typeof VoidClinicalNoteSchema>;
+// ─── Schemas ─────────────────────────────────────────────────────────────────
+// PF1-Z (D-PF5): los zod de alta/edición/enmienda/anulación viven en `lib/clinical-notes-schemas.ts` (server-only).
+// Este archivo lo importan componentes cliente (`clinicalNoteDeepLink` en la sala y el drawer del turno,
+// `bookingTargetDecision` en Evoluciones) y con los schemas adentro arrastraba zod (~13 kB gz) al JS inicial de /sala,
+// /seguimiento/[id] y el perfil del paciente.
 
 // ─── Permisos ────────────────────────────────────────────────────────────────
 

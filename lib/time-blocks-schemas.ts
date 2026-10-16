@@ -14,10 +14,13 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import type { AgendaRoomBlockView } from "@/lib/availability-actions-types";
-import { AR_OFFSET, toARDateKey } from "@/lib/datetime-ar";
+import { toARDateKey } from "@/lib/datetime-ar";
+import { arDayStart } from "@/lib/time-blocks-window";
 
-/** Tope de un bloqueo: más largo que esto es una licencia, no un candado. */
-export const TIME_BLOCK_MAX_DAYS = 31;
+// PF1-Z (D-PF5): `TIME_BLOCK_MAX_DAYS` y `arDayStart` viven en `lib/time-blocks-window.ts` (sin zod) y se re-exportan
+// acá. Los componentes cliente de la agenda (`day-lock-state`, `block-mode-state`) los importan de allá: importarlos de
+// este archivo arrastraba zod (~13 kB gz) al JS inicial de /agenda.
+export { TIME_BLOCK_MAX_DAYS, arDayStart } from "@/lib/time-blocks-window";
 /** Tope de la ventana de `listTimeBlocks` (una vista mensual + bordes). */
 export const TIME_BLOCK_LIST_MAX_DAYS = 62;
 /** Cuántos turnos afectados se devuelven en detalle (el conteo es completo). */
@@ -30,10 +33,6 @@ const Id = z.string().trim().min(1).max(64);
 const IsoInstant = z.string().datetime({ offset: true, message: "Fecha/hora inválida" });
 const DayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Día inválido (YYYY-MM-DD)");
 
-/** 00:00 AR del día `dayKey`, como instante. */
-export function arDayStart(dayKey: string): Date {
-  return new Date(`${dayKey}T00:00:00${AR_OFFSET}`);
-}
 
 /**
  * Ventana efectiva del bloqueo.

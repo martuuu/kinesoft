@@ -6,6 +6,7 @@ import { DiagnosticoScreen } from "@/components/screens/diagnostico-screen";
 import { DiagnosticoWizard } from "@/components/screens/diagnostico-wizard";
 import type { DiagnosisDoor } from "@/components/diagnostico/assign-plan-modal";
 import { moduleWall } from "@/lib/module-wall";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata = { title: "Diagnóstico · KineSoft" };
 export const dynamic = "force-dynamic";
@@ -55,6 +56,14 @@ export default async function DiagnosticoPage({
   };
   return (
     <>
+      {/* PF1-Z (C-PF5.3): la pantalla no tenía h1; `PageHeader` común a escritorio y al asistente mobile. */}
+      <div style={{ marginBottom: 14 }}>
+        <PageHeader
+          eyebrow="Diagnóstico"
+          title="Armá el caso"
+          description="Marcá la zona, los síntomas y la fase para ver los diagnósticos probables y los ejercicios sugeridos."
+        />
+      </div>
       <div className="diag-desktop">
         <DiagnosticoScreen catalog={catalog} door={door} />
       </div>
