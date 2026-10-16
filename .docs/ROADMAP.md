@@ -163,7 +163,11 @@ del portal, soak y perf de planes. Hallazgos en [AUDIT «Hallazgos de ES4»](AUD
 `LazyMotion strict`, colores no exactos `#9A5B00`/`#4F8A10` en 0. Números en [PERF.md §Bundle](PERF.md); abiertos en
 [AUDIT «PF1-Z»](AUDIT.md); checklist en [QA §PF1](QA.md).
 
-**Siguiente:** **PF-M** (M10) → **PF2** (una tx por loader, actor memoizado) → PF-Z → DIR → MB. De ES4 siguen: EXPLAIN de
+**PF-M ✅** (16-oct, sin commitear): **migración nueva M10** `20261018120000_perf_fk_indexes` (13 índices FK, aditiva),
+aplicada solo en el Docker local; orden para prod en [RUNBOOK «M10 en prod»](MIGRACIONES-RUNBOOK.md) (antes del
+deploy de PF). Perf sin regresiones, `tests/perf/pf.json` como referencia nueva ([PERF.md §PF-M](PERF.md)).
+
+**Siguiente:** **PF2** (una tx por loader, actor memoizado) → PF-Z → DIR → MB. De ES4 siguen: EXPLAIN de
 `listOpenSessions` (18 sentencias), check-in del portal sin JS y el editor de sesiones (`limites-sesiones-divergentes`);
 `vx-formfield-densidad` sigue abierta.
 

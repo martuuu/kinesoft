@@ -138,7 +138,7 @@ Lectura:
   de Booking del baseline de A1 pueden ser este artefacto**; pasar `loaders.perf.test.ts` a literales es C1
   (`perf-harness-explain-params-tipados`). Los Seq Scan que todavía muestra B4.6 sobre Booking devuelven 1.365 de
   6.885 filas del tenant (~20 %): ahí es elección legítima del planner, no el artefacto.
-- `Coverage.patientId` sin índice se re-confirmó → C1 (`missing-fk-indexes`).
+- `Coverage.patientId` sin índice se re-confirmó → cerrado en PF-M (M10).
 
 **Bundle al cierre de B-pre** (`next build` + `perf:bundle`, first-load gzip):
 
@@ -440,6 +440,35 @@ evolución» que ya existía (`lib/sessions.ts`, `listOpenSessions`): +0 sentenc
 (`/seguimiento/[id]`) suma el turno activo en el mismo `findFirst` (include) y `getBookingClinicalNote` en paralelo con
 `listSchedulablePlanSessions`.
 
+## PF-M · M10 `perf_fk_indexes` (16-oct-2026)
+
+Migración `20261018120000_perf_fk_indexes` (C-PF7): 13 índices btree de una columna sobre FKs que no eran prefijo de
+ningún índice. Orden para prod en [RUNBOOK «M10 en prod»](MIGRACIONES-RUNBOOK.md).
+
+- **Catálogo local:** la query de FKs sin índice (FK cuyas columnas no son el prefijo exacto de ningún índice) pasó de
+  **47 a 34 filas**. Las 34 que quedan son compuestas con `tenantId` (ClinicalNote, SupportThread, SaasPayment…) o
+  tienen un índice con `tenantId` adelante que cubre las lecturas (`Booking (tenantId, programId)`, `Patient (tenantId,
+  assignedPractitionerId)`…): no van, a propósito.
+- **EXPLAIN de lecturas por FK** (nuevo `fkExplain` de `loaders.perf`, fixture de volumen de A1): `Coverage` por
+  `patientId` → `Coverage_patientId_idx`, sin Seq Scan; `count(*)` de `Booking` por `serviceId` →
+  `Booking_serviceId_idx`. (El Docker local de dev tiene 7 coberturas: ahí el planner siempre elige Seq Scan; por eso
+  el chequeo va en el fixture de volumen.)
+- **Suite completa antes/después de M10** (`PERF_OUT_DIR` en scratch + `compare.ts`): 0 regresiones fuera de umbral
+  (47 escenarios). Statements y tx idénticos en `loaders.perf` (los índices no cambian el SQL); wall-clock dentro del
+  ruido de laptop.
+- **EXPLAIN con literales** (`perf-harness-explain-params-tipados`): `loaders.perf` inlinea los parámetros como
+  `agenda-multi`. Los Seq Scan de la query más lenta del baseline **se mantienen** con literales (Booking en
+  `agenda.bookings`, Session en agenda/dashboard, SessionExercise en paciente): con un tenant que concentra todo el
+  volumen son elección del planner, no el artefacto de tipos que se sospechaba en B4.6.
+- **`updateBooking` re-vinculando paciente** (`ev2-perf-update-booking`): `updateBooking.patientChange` (sin
+  evolución) = **14 sentencias / 1 tx**; `updateBooking.patientChange.withNote` (con evolución, se rechaza sin
+  escribir) = **8 / 1**. Ambos entran a la regla estricta de `compare.ts` con esa referencia.
+- **`agendaPayloadBytes`** (DTO de la semana de `/agenda` en el fixture de A1): **802.569 bytes** (~784 kB). Es la
+  referencia de PF2 (meta ≤ 400 kB en el fixture de agenda-multi, C-PF8).
+- **Referencia nueva versionada:** `tests/perf/pf.json` (mismas claves que `baseline.json` + `agendaPayloadBytes` y
+  `fkExplain`). `compare.ts` la lee **última**: solo aporta techo a los escenarios que A1/B4.6 no tenían, así regrabar
+  no afloja los techos viejos. `baseline.json` no se tocó.
+
 ## Qué confirman o refutan estos números (hallazgos de la auditoría del 23-sep)
 
 | Hallazgo | Veredicto con datos | Destino |
@@ -448,7 +477,7 @@ evolución» que ya existía (`lib/sessions.ts`, `listOpenSessions`): +0 sentenc
 | `bulk-writes-one-tx-per-row` / `write-paths-tx-secuenciales` | **Confirmado.** `createBooking` abre 7 tx para 1 turno; el batch, 23 tx para 20 turnos, en serie | C1 (y el motor de Planes de B lo hace en 1 tx) |
 | `agenda-loads-full-patient-directory` | **Confirmado.** `listPatients()` sola cuesta más wall-clock (135 ms) que los turnos de la semana (69 ms) con 1.000 pacientes, y hace un Seq Scan de Booking. Crece con el directorio | C1 |
 | **NUEVO** `session-exercise-count-full-scan` | El `_count` de ejercicios por sesión del perfil (`getPatientProgramsLite`, **retirada en ES3**; falta re-verificar los lectores nuevos) agrega la tabla `SessionExercise` **entera** (de todos los tenants), con RLS fila por fila, antes de filtrar: 250-380 ms con 24k filas. **Crece con el tamaño de la plataforma**, no del paciente | C1 |
-| `missing-fk-indexes` (`Coverage.patientId`) | **Confirmado** en el plan de la suma de "OS percibido": Seq Scan de `Coverage` por cada turno | C1 (migración chica de índices) |
+| `missing-fk-indexes` (`Coverage.patientId`) | **Confirmado** en el plan de la suma de "OS percibido": Seq Scan de `Coverage` por cada turno | ✅ **PF-M (M10)**: `Coverage_patientId_idx` + 12 índices más ([§PF-M](#pf-m--m10-perf_fk_indexes-16-oct-2026)) |
 | Dashboard ~1 s | **Refutado como problema de prod:** era un artefacto de estadísticas vacías (sin `ANALYZE` el planner arrancaba por los 10k turnos). Con estadísticas reales, 43 ms. Queda como lección: después de imports masivos, correr `ANALYZE` | — |
 | `service-channel-direct-url-pool-prod` (P) | Sin medir: depende del `DATABASE_URL` real de Vercel (tarea A0a del dueño). El test de pool da el mecanismo | A0a → C1 |
 

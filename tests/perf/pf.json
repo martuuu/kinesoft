@@ -1,0 +1,395 @@
+{
+  "measuredAt": "2026-10-16T04:12:16.957Z",
+  "role": "app",
+  "agendaPayloadBytes": 802569,
+  "fkExplain": [
+    {
+      "check": "Coverage.patientId",
+      "seqScans": [],
+      "indexes": [
+        "Coverage_patientId_idx"
+      ],
+      "execMs": 0
+    },
+    {
+      "check": "Booking.serviceId (count)",
+      "seqScans": [],
+      "indexes": [
+        "Booking_serviceId_idx"
+      ],
+      "execMs": 1
+    }
+  ],
+  "rows": [
+    {
+      "scenario": "agenda",
+      "runs": 3,
+      "statements": 30,
+      "transactions": 9,
+      "dbMs": 85,
+      "wallMs": 128,
+      "byClient": {
+        "app": 24,
+        "service": 6
+      },
+      "slowest": [
+        {
+          "ms": 38,
+          "sql": "SELECT COUNT(\"public\".\"Session\".\"completedAt\"), COUNT(*), MAX(\"public\".\"Session\".\"completedAt\"), \"public\".\"Session\".\"programId\" FROM \"public\".\"Session\" LEFT JOIN \"public\".\"TreatmentProgram\" AS \"j1\" ON (\"j1\".\"id\") = (\"public\".\"Session\".\"prog"
+        },
+        {
+          "ms": 20,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 6,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Session"
+        ],
+        "execMs": 2
+      }
+    },
+    {
+      "scenario": "agenda.bookings",
+      "runs": 3,
+      "statements": 11,
+      "transactions": 3,
+      "dbMs": 11,
+      "wallMs": 67,
+      "byClient": {
+        "app": 10,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 4,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Coverage\".\"id\", \"public\".\"Coverage\".\"patientId\", \"public\".\"Coverage\".\"insurer\", \"public\".\"Coverage\".\"insurerId\", \"public\".\"Coverage\".\"payerPlanId\", \"public\".\"Coverage\".\"planName\", \"public\".\"Coverage\".\"memberId\", \"public\".\"C"
+        },
+        {
+          "ms": 2,
+          "sql": "SELECT \"public\".\"Patient\".\"id\", \"public\".\"Patient\".\"tenantId\", \"public\".\"Patient\".\"userId\", \"public\".\"Patient\".\"assignedPractitionerId\", \"public\".\"Patient\".\"firstName\", \"public\".\"Patient\".\"lastName\", \"public\".\"Patient\".\"email\", \"public\".\"Pa"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Booking"
+        ],
+        "execMs": 2
+      }
+    },
+    {
+      "scenario": "agenda.listPatients",
+      "runs": 3,
+      "statements": 10,
+      "transactions": 2,
+      "dbMs": 64,
+      "wallMs": 118,
+      "byClient": {
+        "app": 9,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 38,
+          "sql": "SELECT COUNT(\"public\".\"Session\".\"completedAt\"), COUNT(*), MAX(\"public\".\"Session\".\"completedAt\"), \"public\".\"Session\".\"programId\" FROM \"public\".\"Session\" LEFT JOIN \"public\".\"TreatmentProgram\" AS \"j1\" ON (\"j1\".\"id\") = (\"public\".\"Session\".\"prog"
+        },
+        {
+          "ms": 19,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"tenantId\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public"
+        },
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Coverage\".\"id\", \"public\".\"Coverage\".\"patientId\", \"public\".\"Coverage\".\"insurer\", \"public\".\"Coverage\".\"insurerId\", \"public\".\"Coverage\".\"payerPlanId\", \"public\".\"Coverage\".\"planName\", \"public\".\"Coverage\".\"memberId\", \"public\".\"C"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Session"
+        ],
+        "execMs": 2
+      }
+    },
+    {
+      "scenario": "dashboard",
+      "runs": 3,
+      "statements": 37,
+      "transactions": 15,
+      "dbMs": 37,
+      "wallMs": 42,
+      "byClient": {
+        "app": 32,
+        "service": 5
+      },
+      "slowest": [
+        {
+          "ms": 5,
+          "sql": "SELECT COUNT(*) FROM (SELECT \"public\".\"TreatmentProgram\".\"id\" FROM \"public\".\"TreatmentProgram\" WHERE (\"public\".\"TreatmentProgram\".\"tenantId\" = $1 AND \"public\".\"TreatmentProgram\".\"status\" = CAST($2::text AS \"public\".\"ProgramStatus\") AND \"pub"
+        },
+        {
+          "ms": 4,
+          "sql": "SELECT COUNT(*) FROM (SELECT \"public\".\"Patient\".\"id\" FROM \"public\".\"Patient\" WHERE (\"public\".\"Patient\".\"tenantId\" = $1 AND (\"public\".\"Patient\".\"id\") IN (SELECT \"t1\".\"patientId\" FROM \"public\".\"TreatmentProgram\" AS \"t1\" WHERE (\"t1\".\"status\" ="
+        },
+        {
+          "ms": 3,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"scheduledFor\" FROM \"public\".\"Booking\" WHERE (\"public\".\"Booking\".\"tenantId\" = $1 AND \"public\".\"Booking\".\"scheduledFor\" >= $2 AND \"public\".\"Booking\".\"scheduledFor\" < $3 AND \"public\".\"Booking"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "Session"
+        ],
+        "execMs": 1
+      }
+    },
+    {
+      "scenario": "paciente",
+      "runs": 3,
+      "statements": 53,
+      "transactions": 14,
+      "dbMs": 568,
+      "wallMs": 323,
+      "byClient": {
+        "app": 44,
+        "service": 9
+      },
+      "slowest": [
+        {
+          "ms": 301,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"practitionerId\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"archivedAt\", \"public\".\"Session\".\"title\", \"public\".\"Ses"
+        },
+        {
+          "ms": 261,
+          "sql": "SELECT \"public\".\"Session\".\"id\", \"public\".\"Session\".\"index\", \"public\".\"Session\".\"practitionerId\", \"public\".\"Session\".\"scheduledFor\", \"public\".\"Session\".\"completedAt\", \"public\".\"Session\".\"archivedAt\", \"public\".\"Session\".\"title\", \"public\".\"Ses"
+        },
+        {
+          "ms": 1,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        }
+      ],
+      "explain": {
+        "seqScans": [
+          "SessionExercise"
+        ],
+        "execMs": 5
+      }
+    },
+    {
+      "scenario": "seguimiento",
+      "runs": 3,
+      "statements": 17,
+      "transactions": 1,
+      "dbMs": 60,
+      "wallMs": 88,
+      "byClient": {
+        "app": 16,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 36,
+          "sql": "\n          WITH progs AS (\n            SELECT DISTINCT s.\"programId\" FROM \"Session\" s WHERE s.id = ANY($1)\n          ), live AS (\n            SELECT s.id,\n              row_number() OVER (PARTITION BY s.\"programId\" ORDER BY s.\"scheduledFor\""
+        },
+        {
+          "ms": 15,
+          "sql": "\n      SELECT s.id, count(*) OVER ()::int AS total\n      FROM \"Session\" s\n      JOIN \"TreatmentProgram\" tp ON tp.id = s.\"programId\"\n      JOIN \"Patient\" pa ON pa.id = tp.\"patientId\"\n      WHERE tp.\"tenantId\" = $1 AND tp.\"archivedAt\" IS NULL"
+        },
+        {
+          "ms": 2,
+          "sql": "SELECT \"public\".\"TreatmentProgram\".\"id\", \"public\".\"TreatmentProgram\".\"patientId\", \"public\".\"TreatmentProgram\".\"title\", \"public\".\"TreatmentProgram\".\"discipline\"::text, \"public\".\"TreatmentProgram\".\"totalSessions\" FROM \"public\".\"TreatmentProgr"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 2
+      }
+    },
+    {
+      "scenario": "biblioteca",
+      "runs": 3,
+      "statements": 14,
+      "transactions": 4,
+      "dbMs": 1,
+      "wallMs": 7,
+      "byClient": {
+        "app": 7,
+        "service": 7
+      },
+      "slowest": [
+        {
+          "ms": 1,
+          "sql": "SELECT \"public\".\"Tag\".\"id\", \"public\".\"Tag\".\"slug\", \"public\".\"Tag\".\"label\" FROM \"public\".\"Tag\" WHERE ((\"public\".\"Tag\".\"id\") IN (SELECT \"t1\".\"tagId\" FROM \"public\".\"ExerciseTag\" AS \"t1\" LEFT JOIN \"public\".\"Exercise\" AS \"j2\" ON (\"j2\".\"id\") = (\""
+        },
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        },
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "createBooking",
+      "runs": 3,
+      "statements": 27,
+      "transactions": 5,
+      "dbMs": 0,
+      "wallMs": 21,
+      "byClient": {
+        "app": 26,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Patient\".\"id\", \"public\".\"Patient\".\"diagnosisTitle\", \"public\".\"Patient\".\"diagnosisNote\" FROM \"public\".\"Patient\" WHERE (\"public\".\"Patient\".\"id\" = $1 AND \"public\".\"Patient\".\"tenantId\" = $2) LIMIT $3 OFFSET $4"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Service\".\"id\", \"public\".\"Service\".\"durationMin\", \"public\".\"Service\".\"name\", \"public\".\"Service\".\"maxConcurrent\", \"public\".\"Service\".\"practitionerId\" FROM \"public\".\"Service\" WHERE (\"public\".\"Service\".\"id\" = $1 AND \"public\".\"S"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "createBookingsBatch.20",
+      "runs": 3,
+      "statements": 140,
+      "transactions": 22,
+      "dbMs": 3,
+      "wallMs": 104,
+      "byClient": {
+        "app": 139,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 1,
+          "sql": "SELECT \"public\".\"Booking\".\"id\" FROM \"public\".\"Booking\" WHERE (\"public\".\"Booking\".\"idempotencyKey\" = $1 AND 1=1) OFFSET $2"
+        },
+        {
+          "ms": 1,
+          "sql": "INSERT INTO \"public\".\"Booking\" (\"id\",\"tenantId\",\"patientId\",\"practitionerId\",\"serviceId\",\"scheduledFor\",\"durationMin\",\"copagoCents\",\"status\",\"paymentStatus\",\"seriesId\",\"idempotencyKey\",\"title\",\"description\",\"locationId\",\"isOverbooked\",\"isTe"
+        },
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "createPlan.16",
+      "runs": 3,
+      "statements": 33,
+      "transactions": 1,
+      "dbMs": 7,
+      "wallMs": 30,
+      "byClient": {
+        "app": 32,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 2,
+          "sql": "INSERT INTO \"public\".\"Booking\" (\"paymentStatus\",\"seriesId\",\"description\",\"telemedicineUrl\",\"updatedAt\",\"patientId\",\"locationId\",\"status\",\"title\",\"id\",\"roomId\",\"durationMin\",\"idempotencyKey\",\"scheduledFor\",\"createdAt\",\"tenantId\",\"sessionId\","
+        },
+        {
+          "ms": 2,
+          "sql": "\n    SELECT tp.\"patientId\", tp.\"status\"::text AS \"status\", tp.\"archivedAt\",\n           (tp.\"schedule\" IS NOT NULL) AS \"hasSchedule\", tp.\"totalSessions\",\n           tp.\"pricingMode\"::text AS \"pricingMode\", tp.\"totalPriceCents\",\n           tp"
+        },
+        {
+          "ms": 2,
+          "sql": "\n    SELECT b.\"id\", b.\"programId\", b.\"sessionId\", b.\"patientId\", b.\"status\"::text AS \"status\",\n           b.\"scheduledFor\", b.\"copagoCents\", b.\"pricedByPlan\"\n      FROM \"Booking\" b\n     WHERE b.\"tenantId\" = $1\n       AND (b.\"programId\" = $2"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 2
+      }
+    },
+    {
+      "scenario": "updateBooking.patientChange",
+      "runs": 3,
+      "statements": 14,
+      "transactions": 1,
+      "dbMs": 0,
+      "wallMs": 8,
+      "byClient": {
+        "app": 13,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"status\"::text, \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"pu"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Service\".\"id\", \"public\".\"Service\".\"durationMin\", \"public\".\"Service\".\"maxConcurrent\", \"public\".\"Service\".\"practitionerId\" FROM \"public\".\"Service\" WHERE \"public\".\"Service\".\"id\" IN ($1) OFFSET $2"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    },
+    {
+      "scenario": "updateBooking.patientChange.withNote",
+      "runs": 3,
+      "statements": 8,
+      "transactions": 1,
+      "dbMs": 0,
+      "wallMs": 5,
+      "byClient": {
+        "app": 7,
+        "service": 1
+      },
+      "slowest": [
+        {
+          "ms": 0,
+          "sql": "\n    SELECT u.\"fullName\", u.\"email\", u.\"isPlatformAdmin\", u.\"disabledAt\" AS \"userDisabledAt\",\n           u.\"twoFactorTotp\", u.\"twoFactorEmail\",\n           m.\"tenantId\", m.\"role\"::text AS \"role\", m.\"acceptedAt\", m.\"disabledAt\" AS \"membership"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Booking\".\"id\", \"public\".\"Booking\".\"patientId\", \"public\".\"Booking\".\"status\"::text, \"public\".\"Booking\".\"scheduledFor\", \"public\".\"Booking\".\"durationMin\", \"public\".\"Booking\".\"practitionerId\", \"public\".\"Booking\".\"serviceId\", \"pu"
+        },
+        {
+          "ms": 0,
+          "sql": "SELECT \"public\".\"Service\".\"id\", \"public\".\"Service\".\"durationMin\", \"public\".\"Service\".\"maxConcurrent\", \"public\".\"Service\".\"practitionerId\" FROM \"public\".\"Service\" WHERE \"public\".\"Service\".\"id\" IN ($1) OFFSET $2"
+        }
+      ],
+      "explain": {
+        "seqScans": [],
+        "execMs": 0
+      }
+    }
+  ]
+}

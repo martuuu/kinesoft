@@ -23,7 +23,16 @@ vi.mock("@/lib/db", async (importOriginal) => {
 });
 
 import { measure, type Measurement } from "@/tests/helpers/query-counter";
-import { listBookingsInRange, listPractitioners, listServices, createBooking, createBookingsBatch } from "@/lib/bookings";
+import {
+  listBookingsInRange,
+  listAgendaBookings,
+  listPractitioners,
+  listServices,
+  createBooking,
+  createBookingsBatch,
+  updateBooking,
+} from "@/lib/bookings";
+import { toBookingDTO } from "@/components/agenda/agenda-utils";
 import {
   listPatients,
   getPatientCore,
@@ -48,6 +57,7 @@ import { runWithRls } from "@/lib/rls";
 import { localToARIso, toARDateKey, toARDow } from "@/lib/datetime-ar";
 import { ownerClient } from "@/tests/helpers/tenant-factory";
 import { asUser } from "@/tests/helpers/actor";
+import { BOOKING_CLINICAL_NOTE_PATIENT_ERROR } from "@/lib/bookings-constants";
 import { createVolumeTenant, type VolumeTenant } from "./volume-fixture";
 
 const RUN = process.env.PERF_IT === "1";
@@ -67,6 +77,12 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
   let db: PrismaClient;
   let T: VolumeTenant;
   const rows: Row[] = [];
+  // PF-M: claves extra de la corrida (no son filas: compare.ts no las lee como escenarios).
+  //  - agendaPayloadBytes: JSON de los DTO de la semana que /agenda le pasa al cliente (referencia de PF2, que la
+  //    vuelve regla estricta; acá solo se mide con el fixture de volumen de A1).
+  //  - fkExplain: EXPLAIN de lecturas por FK que M10 indexó (antes Seq Scan del hijo).
+  let agendaPayloadBytes: number | null = null;
+  const fkExplain: { check: string; seqScans: string[]; indexes: string[]; execMs: number }[] = [];
 
   beforeAll(async () => {
     db = ownerClient();
@@ -81,7 +97,11 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
     // para compararla con `tests/perf/compare.ts` sin pisar el baseline versionado.
     writeFileSync(
       join(process.env.PERF_OUT_DIR ?? "tests/perf", "baseline.json"),
-      JSON.stringify({ measuredAt: new Date().toISOString(), role: process.env.PERF_ROLE ?? "app", rows }, null, 2) + "\n",
+      JSON.stringify(
+        { measuredAt: new Date().toISOString(), role: process.env.PERF_ROLE ?? "app", agendaPayloadBytes, fkExplain, rows },
+        null,
+        2,
+      ) + "\n",
     );
     console.table(
       rows.map((r) => ({ escenario: r.scenario, statements: r.statements, tx: r.transactions, dbMs: r.dbMs, wallMs: r.wallMs, seqScans: r.explain?.seqScans.join(",") ?? "" })),
@@ -112,44 +132,91 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
     expect(row.statements).toBeGreaterThan(0);
   }
 
-  /** EXPLAIN ANALYZE (solo SELECT) de la query más lenta, como owner. */
+  /**
+   * EXPLAIN ANALYZE (solo SELECT) de la query más lenta, como owner.
+   *
+   * PF-M (AUDIT `perf-harness-explain-params-tipados`): los parámetros se INLINEAN como literales sin tipo, igual que
+   * `agenda-multi.perf.test.ts`. Antes se pasaban como `$n` y un `Date` viajaba como `timestamptz`: Postgres casteaba
+   * la COLUMNA `timestamp(3)`, el índice `(tenantId, scheduledFor)` dejaba de servir y el EXPLAIN mostraba un Seq Scan
+   * de Booking que la query real de Prisma no hace (falso positivo de A1, .docs/PERF.md §B4.6). Un literal
+   * 'YYYY-MM-DD hh:mm:ss' toma el tipo de la columna; Prisma serializa los DateTime como "… UTC" y la columna guarda
+   * UTC sin zona.
+   */
   async function explainSlowest(m: Measurement): Promise<Row["explain"]> {
     const q = m.slowest.find((e) => /^\s*SELECT/i.test(e.query));
     if (!q) return null;
-    let params: unknown[];
+    let sql: string;
     try {
-      // Prisma serializa las fechas como "YYYY-MM-DD hh:mm:ss.mmm UTC": se
-      // devuelven como Date para que Postgres las tipe como timestamp.
-      params = (JSON.parse(q.params) as unknown[]).map((p) =>
-        typeof p === "string" && /^\d{4}-\d{2}-\d{2} [\d:.]+ UTC$/.test(p) ? new Date(p.replace(" UTC", "Z").replace(" ", "T")) : p,
-      );
+      sql = inlineParams(q.query, JSON.parse(q.params) as unknown[]);
     } catch {
       return null;
     }
     try {
-      const out = await db.$queryRawUnsafe<{ "QUERY PLAN": unknown }[]>(
-        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${q.query}`,
-        ...params,
-      );
-      const plan = (out[0]["QUERY PLAN"] as { Plan: PlanNode; "Execution Time": number }[])[0];
-      const seq: string[] = [];
-      const walk = (n: PlanNode) => {
-        if (n["Node Type"] === "Seq Scan" && (n["Actual Rows"] ?? 0) * (n["Actual Loops"] ?? 1) > 500) seq.push(n["Relation Name"] ?? "?");
-        (n.Plans ?? []).forEach(walk);
-      };
-      walk(plan.Plan);
-      return { seqScans: [...new Set(seq)], execMs: Math.round(plan["Execution Time"]) };
+      const plan = await explainJson(sql);
+      return { seqScans: seqScansOf(plan.Plan), execMs: Math.round(plan["Execution Time"]) };
     } catch {
       return null;
     }
   }
-  type PlanNode = { "Node Type": string; "Relation Name"?: string; "Actual Rows"?: number; "Actual Loops"?: number; Plans?: PlanNode[] };
+  type PlanNode = {
+    "Node Type": string;
+    "Relation Name"?: string;
+    "Index Name"?: string;
+    "Actual Rows"?: number;
+    "Actual Loops"?: number;
+    Plans?: PlanNode[];
+  };
+
+  function inlineParams(query: string, params: unknown[]): string {
+    const lit = (p: unknown): string => {
+      if (p === null || p === undefined) return "NULL";
+      if (typeof p === "number" || typeof p === "boolean") return String(p);
+      const str = typeof p === "string" ? p.replace(/^(\d{4}-\d{2}-\d{2} [\d:.]+) UTC$/, "$1") : JSON.stringify(p);
+      return `'${str.replace(/'/g, "''")}'`;
+    };
+    return query.replace(/\$(\d+)\b/g, (_, n: string) => lit(params[Number(n) - 1]));
+  }
+
+  async function explainJson(sql: string): Promise<{ Plan: PlanNode; "Execution Time": number }> {
+    const out = await db.$queryRawUnsafe<{ "QUERY PLAN": unknown }[]>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`);
+    return (out[0]["QUERY PLAN"] as { Plan: PlanNode; "Execution Time": number }[])[0];
+  }
+
+  /** Seq Scans de más de 500 filas (los chicos son elección legítima del planner). */
+  function seqScansOf(root: PlanNode): string[] {
+    const seq: string[] = [];
+    const walk = (n: PlanNode) => {
+      if (n["Node Type"] === "Seq Scan" && (n["Actual Rows"] ?? 0) * (n["Actual Loops"] ?? 1) > 500) seq.push(n["Relation Name"] ?? "?");
+      (n.Plans ?? []).forEach(walk);
+    };
+    walk(root);
+    return [...new Set(seq)];
+  }
+
+  function indexesOf(root: PlanNode): string[] {
+    const idx: string[] = [];
+    const walk = (n: PlanNode) => {
+      if (n["Index Name"]) idx.push(n["Index Name"]);
+      (n.Plans ?? []).forEach(walk);
+    };
+    walk(root);
+    return [...new Set(idx)];
+  }
 
   it("GET /agenda (semana actual, 6 loaders en paralelo)", async () => {
     const w = weekOf(new Date());
     await bench("agenda", () =>
       Promise.all([listBookingsInRange(w), listServices(), listPractitioners(), listPatients(), listInsurers({ onlyActive: true }), getTenantSettings()]),
     );
+  });
+
+  it("GET /agenda — payload de la semana (agendaPayloadBytes, referencia de PF)", async () => {
+    // Lo que /agenda serializa al cliente por turno (app/(app)/agenda/page.tsx pasa `toBookingDTO`). Se graba como
+    // número de referencia en tests/perf/pf.json; la regla estricta la pone PF2 (C-PF8, `perf-agenda-payload-1mb`).
+    const w = weekOf(new Date());
+    const dtos = (await listAgendaBookings({ from: w.from, to: w.to })).map(toBookingDTO);
+    agendaPayloadBytes = JSON.stringify(dtos).length;
+    expect(dtos.length).toBeGreaterThan(0);
   });
 
   it("GET /agenda — solo listBookingsInRange (semana)", async () => {
@@ -259,5 +326,95 @@ describe.skipIf(!RUN)("perf baseline — cargas de página y write-paths", () =>
       const r = await createPlan(inputs[i++]);
       if (!r.ok) throw new Error(`createPlan falló: ${"kind" in r ? r.kind : r.error}`);
     });
+  });
+
+  // ── updateBooking re-vinculando paciente (PF-M, AUDIT `ev2-perf-update-booking`) ─────────────────────────
+  // El chequeo de evolución de EV2 (lib/bookings-core.ts, C-EV2-7) corre SOLO cuando el turno cambia de un paciente a
+  // otro: +1 sentencia (findFirst de ClinicalNote por bookingId). Dos caras: sin evolución (pasa el chequeo y re-vincula)
+  // y con evolución (corta antes de escribir). Son write-paths de turnos: entran a la regla estricta de compare.ts con
+  // esta primera medición como referencia (tests/perf/pf.json). `plans.perf` mide lo mismo sobre otro fixture
+  // (`f.updateBooking.patientChange`, techo de S26s).
+
+  /** Turno suelto nuevo (insert del owner, fuera de la medición) en una hora libre lejos de la grilla del fixture. */
+  async function looseBooking(k: number, patientId: string) {
+    return db.booking.create({
+      data: {
+        tenantId: T.tenantId,
+        patientId,
+        practitionerId: T.practitionerId,
+        serviceId: T.serviceId,
+        scheduledFor: new Date(localToARIso(`2029-03-${String(5 + k).padStart(2, "0")}T08:00:00`)),
+        durationMin: 45,
+        idempotencyKey: randomUUID(),
+        status: "CONFIRMED",
+      },
+      select: { id: true, updatedAt: true },
+    });
+  }
+
+  it("POST updateBooking — cambiar el paciente de un turno sin evolución", async () => {
+    // Warm-up + 3 corridas = 4 turnos distintos (cada corrida re-vincula uno nuevo).
+    const bs = await Promise.all([0, 1, 2, 3].map((k) => looseBooking(k, T.patientIds[700 + k])));
+    let i = 0;
+    const results: { ok: boolean }[] = [];
+    await bench("updateBooking.patientChange", async () => {
+      const k = i++;
+      const r = await updateBooking({ id: bs[k].id, patientId: T.patientIds[720 + k], expectedUpdatedAt: bs[k].updatedAt.toISOString() });
+      results.push(r);
+    });
+    expect(results.every((r) => r.ok)).toBe(true);
+    const moved = await db.booking.findMany({ where: { id: { in: bs.map((b) => b.id) } }, select: { patientId: true } });
+    expect(new Set(moved.map((b) => b.patientId))).toEqual(new Set([0, 1, 2, 3].map((k) => T.patientIds[720 + k])));
+  });
+
+  it("POST updateBooking — cambiar el paciente de un turno CON evolución (se rechaza sin escribir)", async () => {
+    const b = await looseBooking(10, T.patientIds[740]);
+    // Evolución colgada del turno (insert del owner: no es el código bajo test el que siembra). La limpieza del
+    // fixture la borra en modo réplica (tests/helpers/tenant-factory.ts): el trigger de M9 rechaza el DELETE.
+    await db.clinicalNote.create({
+      data: {
+        tenantId: T.tenantId,
+        patientId: T.patientIds[740],
+        bookingId: b.id,
+        body: "Evolución de perf",
+        occurredAt: new Date(),
+        authorUserId: T.userId,
+        authorPractitionerId: T.practitionerId,
+        authorName: "Profesional perf",
+        idempotencyKey: `perf-${randomUUID()}`,
+      },
+    });
+    const results: { ok: boolean; error?: string }[] = [];
+    await bench("updateBooking.patientChange.withNote", async () => {
+      results.push(await updateBooking({ id: b.id, patientId: T.patientIds[741], expectedUpdatedAt: b.updatedAt.toISOString() }));
+    });
+    expect(results.every((r) => !r.ok)).toBe(true);
+    expect(results[0].error).toBe(BOOKING_CLINICAL_NOTE_PATIENT_ERROR);
+    const after = await db.booking.findUniqueOrThrow({ where: { id: b.id }, select: { patientId: true, updatedAt: true } });
+    expect(after).toEqual({ patientId: T.patientIds[740], updatedAt: b.updatedAt });
+  });
+
+  // ── EXPLAIN de lecturas por FK de M10 (PF-M) ───────────────────────────────────────────────────────────────
+  it("EXPLAIN — lecturas por FK que indexó M10 no hacen Seq Scan del hijo", async () => {
+    // Coverage.patientId: el «OS percibido» de cada turno lee las coberturas del paciente (Seq Scan confirmado en A1).
+    // Booking.serviceId: el panel de Servicios cuenta «N turnos» por servicio; informativo (el servicio cubre 1/3 de los
+    // turnos del fixture y el planner puede elegir un Seq Scan legítimo). Literales sin tipo (ver inlineParams).
+    const checks: { check: string; sql: string }[] = [
+      {
+        check: "Coverage.patientId",
+        sql: `SELECT * FROM "Coverage" WHERE "patientId" = ${inlineParams("$1", [T.patientIds[2]])}`,
+      },
+      {
+        check: "Booking.serviceId (count)",
+        sql: `SELECT count(*) FROM "Booking" WHERE "serviceId" = ${inlineParams("$1", [T.secondServiceId])}`,
+      },
+    ];
+    for (const c of checks) {
+      const plan = await explainJson(c.sql);
+      fkExplain.push({ check: c.check, seqScans: seqScansOf(plan.Plan), indexes: indexesOf(plan.Plan), execMs: Math.round(plan["Execution Time"]) });
+    }
+    console.table(fkExplain);
+    expect(fkExplain[0].indexes).toContain("Coverage_patientId_idx");
+    expect(fkExplain[0].seqScans).toEqual([]);
   });
 });

@@ -355,6 +355,8 @@ model Patient {
   @@unique([id, tenantId], map: "Patient_id_tenantId_key")
   @@index([tenantId, lastName])
   @@index([tenantId, assignedPractitionerId])
+  // M10 (PF-M): el portal busca las fichas del usuario en todos los consultorios (where userId, sin tenant).
+  @@index([userId])
 }
 
 // Explicit per-practitioner share of a patient HC. A row here grants
@@ -426,6 +428,8 @@ model PatientTenantLink {
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([patientId, tenantId])
+  // M10 (PF-M): FK sin índice (la unique empieza por patientId).
+  @@index([tenantId])
 }
 
 model Coverage {
@@ -457,6 +461,8 @@ model Coverage {
 
   @@index([insurerId])
   @@index([payerPlanId])
+  // M10 (PF-M): lectura de coberturas por paciente («OS percibido» del turno) y ON DELETE del paciente.
+  @@index([patientId])
 }
 
 // Per-tenant insurer catalogue (Obras Sociales / Prepagas). Each row
@@ -939,6 +945,9 @@ model EmergencyContact {
   phone     String
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  // M10 (PF-M): FK sin índice; la ficha lee los contactos por paciente y el borrado del paciente los recorre.
+  @@index([patientId])
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1013,6 +1022,8 @@ model Condition {
   diagnoses Diagnosis[]
 
   @@index([tenantId])
+  // M10 (PF-M): FK sin índice (ON DELETE del autor).
+  @@index([createdById])
 }
 
 enum Severity {
@@ -1031,6 +1042,8 @@ model ConditionTag {
   tag       Tag       @relation(fields: [tagId], references: [id])
 
   @@id([conditionId, tagId])
+  // M10 (PF-M): filtro por tag (la PK empieza por conditionId).
+  @@index([tagId])
 }
 
 enum ExerciseKind {
@@ -1138,6 +1151,8 @@ model Favorite {
 
   @@unique([userId, exerciseId])
   @@index([tenantId, userId])
+  // M10 (PF-M): FK sin índice (la unique empieza por userId).
+  @@index([exerciseId])
 }
 
 // Reusable plan templates ("my plans") — practitioner-curated session
@@ -1186,6 +1201,8 @@ model ExerciseTag {
   tag      Tag      @relation(fields: [tagId], references: [id])
 
   @@id([exerciseId, tagId])
+  // M10 (PF-M): filtro por tag de Biblioteca (la PK empieza por exerciseId).
+  @@index([tagId])
 }
 
 enum ExerciseRelation {
@@ -1470,6 +1487,8 @@ model Session {
   // NULL` then sorts by it descending. A partial index would be ideal
   // but Prisma doesn't expose them; this still helps the planner.
   @@index([completedAt])
+  // M10 (PF-M): FK sin índice (ON DELETE del profesional).
+  @@index([practitionerId])
 }
 
 model SessionExercise {
@@ -1486,6 +1505,8 @@ model SessionExercise {
   exercise Exercise @relation(fields: [exerciseId], references: [id])
 
   @@unique([sessionId, order])
+  // M10 (PF-M): FK sin índice; filtros de Biblioteca y borrado de un ejercicio.
+  @@index([exerciseId])
 }
 
 enum SessionExerciseStatus {
@@ -1621,6 +1642,9 @@ model Service {
   planTemplates        PlanTemplate[]
 
   @@index([practiceId])
+  // M10 (PF-M): cada carga de agenda y configuración lee los servicios por tenant.
+  @@index([tenantId])
+  @@index([practitionerId])
 }
 
 model Booking {
@@ -1722,6 +1746,8 @@ model Booking {
   @@index([sessionId], map: "Booking_sessionId_idx")
   // SR M4: ocupación de la sala, vista "Por sala" y chequeo del RESTRICT.
   @@index([tenantId, roomId, scheduledFor], map: "Booking_tenantId_roomId_scheduledFor_idx")
+  // M10 (PF-M): el panel de Servicios cuenta «N turnos» y el borrado de un servicio recorre el hijo.
+  @@index([serviceId])
 }
 
 enum BookingStatus {

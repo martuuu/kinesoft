@@ -12,7 +12,8 @@
  *
  * Referencia: las filas de `tests/perf/baseline.json` (A1) y, para los
  * escenarios de agenda que A1 no tenía (`listAgendaBookings`…), las de
- * `tests/perf/agenda-multi.json` (B4.6), ambos versionados. Se empareja por
+ * `tests/perf/agenda-multi.json` (B4.6) y, para los que sumó PF-M, las de
+ * `tests/perf/pf.json`, todos versionados. Se empareja por
  * nombre de escenario EXACTO: `f.createBooking` (34 statements, con motor y
  * lock de cupo) no se compara contra el `createBooking` de A1 (12), que mide
  * otro camino; esa comparación cruzada ya la informa agenda-multi en `vsA1`.
@@ -46,8 +47,15 @@ export type Verdict = {
   reason?: string;
 };
 
-/** Archivos versionados que hacen de referencia (en este orden; el primero gana si se repite un escenario). */
-export const REFERENCE_FILES = ["baseline.json", "agenda-multi.json"] as const;
+/**
+ * Archivos versionados que hacen de referencia (en este orden; el primero gana si se repite un escenario).
+ *
+ * `pf.json` (PF-M, C-PF7): la medición de `loaders.perf` al cierre de M10, mismas claves que `baseline.json` +
+ * `agendaPayloadBytes`. Va ÚLTIMO a propósito: solo aporta referencia a los escenarios que A1/B4.6 no tenían
+ * (`updateBooking.patientChange*`, write-paths de turnos → regla estricta desde su primera medición); los que ya
+ * estaban siguen comparándose contra su fila original, así el techo no se afloja por regrabar.
+ */
+export const REFERENCE_FILES = ["baseline.json", "agenda-multi.json", "pf.json"] as const;
 
 const STRICT = /(^|\.)(createBooking|updateBooking|createBookingsBatch)(\.|$)/;
 const PLUS10 = /(^|\.)(listAgendaBookings|listOpenSessions)(\.|$)/;

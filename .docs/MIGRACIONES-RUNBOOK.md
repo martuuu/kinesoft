@@ -56,7 +56,7 @@ ES4 → PF (M10) → DIR (M11). (El «reset + deploy único» del 13-oct no se h
 | `20261015200000_pl_admin_consultorio` (**M8b**) | PL-2 (inicio, sola) | **escrita y aplicada solo en el Docker local (15-oct), commiteada (`74642cf`)**. sha256 de `migration.sql` = `6c0c816f1539c5915a59df59fc1e6f5823a8b3891c37e555796b86cbba41d551`. **Solo datos** (sin DDL, el schema de Prisma no cambia), una tx, `lock_timeout` 5 s, idempotente, sin tocar `updatedAt`. Decisiones de Martin §20.17: (1) `SaasPlanConfig` CONSULTORIO → `maxProfessionals`/`maxStaff` NULL («5 usuarios de cualquier tipo»; `maxUsers` 5 no se toca); (2) ADMIN `clinical = true` con `Practitioner` en ese consultorio y agenda en uso (≥ 1 turno futuro PENDING/CONFIRMED, paciente asignado sin archivar o plan ACTIVE sin archivar a cargo: el criterio de `countPractitionerLoad` + `countActivePlansAsResponsible`) → `PRACTITIONER` + `clinical` + `grantSettings`; (3) el resto de los ADMIN → `clinical = false` («el Administrador/a nunca atiende»). No borra `Practitioner`. Verificada con psql (fila 5/–/–, `migrate status` al día: 36) y `tests/integration/pl-m8b.test.ts` (UPDATEs del SQL real en ROLLBACK, 2 roles). Orden para prod abajo («M8b») |
 | `20261016120000_saas_payment_method` (**M8c**) | PL-F0 (sola) | **commiteada en `cb99c06`, aplicada solo en el Docker local (16-oct)**. sha256 de `migration.sql` = `273abbe33484e5be2fec08523ff3124899b076967031de268ac6b9323d640e0f`. Decisión de Martin (16-oct): el medio de pago de la suscripción va en columna propia, no en la nota. Aditiva, una tx, `lock_timeout` 5 s: enum nuevo `SaasPaymentMethod` (TRANSFER/CASH/CARD/WALLET/MERCADO_PAGO/OTHER) + `SaasPayment.method` NULL sin default (NULL = sin informar; sin backfill desde `note`; sin CHECK contra `source` para no romper el código viejo en la ventana de deploy). RLS, CHECKs, FKs e índices de `SaasPayment` sin cambios. Verificada con psql (columna `SaasPaymentMethod` nullable sin default, 6 valores en orden, RLS/FORCE + 1 policy SELECT, 4 CHECKs, `migrate status` al día: 37) y `tests/integration/pl-m8c.test.ts` (2 roles). Orden para prod abajo («M8c») |
 | `20261017120000_clinical_notes` (**M9**) | EV2-0 (sola) | **commiteada (`8e3e9f6`), aplicada solo en el Docker local; re-verificada objeto por objeto en EV2-Z (5 triggers, 9 FKs, parcial, RLS ENABLE+FORCE, 2 policies)**. sha256 de `migration.sql` = `755ae1891bc3a989685bc37e4c4ba6903b23076889ac2d67f013d3730284fa3b`. Decisión 13 de Martin (evoluciones por consulta para todas las verticales; Ley 26.529: la inalterabilidad va en la base porque prod conecta con BYPASSRLS). Aditiva (expand), una tx, `lock_timeout` 5 s, sin backfill, sin ALTER de columnas existentes. Objetos: enum `ClinicalNoteKind` (EVOLUTION/FIRST_VISIT/DISCHARGE); únicos nuevos sobre tablas existentes `Booking_id_tenantId_patientId_key` y `Practitioner_id_tenantId_key` (destinos de FK compuesta; sobre `id`, no fallan por datos); tabla `ClinicalNote` (turno opcional, enmienda `amendsNoteId`, autor congelado, `revision`, anulación con motivo 3..500 todo-o-nada, `idempotencyKey` 8..100 única por consultorio; 9 FKs RESTRICT: 4 simples + 5 compuestas `(patientId, tenantId)`, `(bookingId, tenantId, patientId)`, `(authorPractitionerId, tenantId)`, `(amendsNoteId, tenantId, patientId)` y la de la revisión; índice **parcial** único `ClinicalNote_bookingId_live_key` = una raíz viva por turno; keyset `(tenantId, patientId, occurredAt DESC, id DESC)`); tabla `ClinicalNoteRevision` (versión anterior de cada edición, única `(noteId, revision)`); funciones `clinical_note_guard()` y `clinical_note_revision_insert_guard()` (`search_path` fijo, INVOKER) + 5 triggers: DELETE/TRUNCATE de la nota rechazados **también para el owner**, identidad inmutable, anulada = congelada, editar contenido solo dentro de 24 h 10 min y copia la versión anterior, la revisión solo nace del trigger y es solo inserción (`kinesoft_append_only()` de M8). RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 2 tablas; sin GRANT (DEFAULT PRIVILEGES). Consecuencia buscada: un turno con evolución no se borra ni cambia de paciente (23503; la app lo traduce en EV2-2c). Parcial, FKs compuestas, CHECKs, funciones, triggers y policies no están en Prisma: drift aceptado («EV2 M9: DRIFT ACEPTADO» en el SQL y en `schema.prisma`; `migrate diff` solo propone borrar las 5 FKs compuestas, como las de M1/M4). Verificada objeto por objeto (psql + `tests/integration/clinical-notes-m9.test.ts`, 2 roles); `migrate status` al día (38); `guard:isolation` OK. Orden para prod abajo («M9») |
-| `<ts>_perf_fk_indexes` (**M10**) | PF-M (sola) | **pendiente, se escribe en su ola** (§20.9). `CREATE INDEX IF NOT EXISTS` sobre FKs sin índice; sin `CONCURRENTLY` (tablas chicas), documentado |
+| `20261018120000_perf_fk_indexes` (**M10**) | PF-M (sola) | **escrita y aplicada solo en el Docker local (16-oct), sin commitear**. sha256 de `migration.sql` = `807a05097f9f021e0d6122b11f53a43fe0ac5fcbedb97e22383ca249cfda26c3`. Aditiva: solo 13 `CREATE INDEX IF NOT EXISTS` btree de una columna, sin `WHERE`, sin `UNIQUE`, sin backfill, una tx, `lock_timeout` 5 s, sin `CONCURRENTLY` (Prisma corre la migración en una tx; tablas chicas). Objetos: `Coverage_patientId_idx`, `EmergencyContact_patientId_idx`, `Patient_userId_idx`, `PatientTenantLink_tenantId_idx`, `Service_tenantId_idx`, `Service_practitionerId_idx`, `Session_practitionerId_idx`, `SessionExercise_exerciseId_idx`, `Booking_serviceId_idx`, `Favorite_exerciseId_idx`, `ExerciseTag_tagId_idx`, `ConditionTag_tagId_idx`, `Condition_createdById_idx`. Todos declarados en `schema.prisma` con `@@index` (mismo nombre): **sin drift nuevo** (`migrate diff` solo sigue proponiendo borrar las FKs compuestas aceptadas de M1/M4/M9). Verificada objeto por objeto (13 filas `USING btree (<col>)` en `pg_indexes`, `indisvalid`/`indisready`, sin predicado; la query de FKs sin índice pasó de 47 a 34 filas); `migrate status` al día (39); integración completa en los 2 roles. Orden para prod abajo («M10») |
 | `<ts>_public_directory` (**M11**) | DIR-1 (sola) | **pendiente, se escribe en su ola** (§20.10). Aditiva: `Tenant.directoryListed*`, `publicDescription`, `ProfessionalPublicProfile` (RLS); `DIRECTORY_MODE=off` por default |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
@@ -443,6 +443,46 @@ no haya evoluciones, ningún RESTRICT nuevo puede dispararse → se aplica **ant
    trigger frena un `DROP TABLE`: no se hace nunca; el backup del paso 2 es la red). Para limpiar en local/test hay que
    usar `deleteTenantDeep` (modo réplica, solo superusuario): en prod no existe esa salida, a propósito.
 
+**M10 en prod (PF-M).** Aditiva, sin reset y sin staging separado (AGENTS). Orden: **M9 → M10 → deploy** (si M9 ya
+está aplicada, M10 sola). **Compatible con cualquier código**: solo crea índices, ninguna query depende de ellos para
+ser correcta → se aplica **antes** del deploy de PF. sha256 de `migration.sql` =
+`807a05097f9f021e0d6122b11f53a43fe0ac5fcbedb97e22383ca249cfda26c3`.
+1. Precheck de solo lectura (anotar los resultados):
+   ```sql
+   SELECT migration_name FROM _prisma_migrations
+    WHERE migration_name IN ('20261017120000_clinical_notes', '20261018120000_perf_fk_indexes')
+      AND finished_at IS NOT NULL;                                           -- M9 sí, M10 no
+   SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname IN (
+     'Coverage_patientId_idx','EmergencyContact_patientId_idx','Patient_userId_idx','PatientTenantLink_tenantId_idx',
+     'Service_tenantId_idx','Service_practitionerId_idx','Session_practitionerId_idx','SessionExercise_exerciseId_idx',
+     'Booking_serviceId_idx','Favorite_exerciseId_idx','ExerciseTag_tagId_idx','ConditionTag_tagId_idx',
+     'Condition_createdById_idx');                                           -- 0 filas
+   SELECT (SELECT count(*) FROM "Coverage") cov, (SELECT count(*) FROM "EmergencyContact") ec,
+          (SELECT count(*) FROM "Patient") pat, (SELECT count(*) FROM "PatientTenantLink") ptl,
+          (SELECT count(*) FROM "Service") svc, (SELECT count(*) FROM "Session") ses,
+          (SELECT count(*) FROM "SessionExercise") sx, (SELECT count(*) FROM "Booking") bk,
+          (SELECT count(*) FROM "Favorite") fav, (SELECT count(*) FROM "ExerciseTag") et,
+          (SELECT count(*) FROM "ConditionTag") ct, (SELECT count(*) FROM "Condition") cond;  -- tamaño del build
+   SELECT pid, state, now() - xact_start AS age, left(query, 80) FROM pg_stat_activity
+    WHERE xact_start < now() - interval '1 minute';                         -- sin tx largas
+   ```
+2. Backup: `npm run db:prod:backup` (si no se acaba de hacer el de M9 en la misma ventana).
+3. `npm run db:prod:deploy` (aplica solo M10) y `npm run db:prod:status` → "Database schema is up to date!". Si sale
+   P3009 por `lock_timeout` (alguien escribía en `Booking`/`Patient` con un lock largo): §2.4 «Si falla: P3009»
+   (resolver como rolled back y reintentar en un momento sin uso; `IF NOT EXISTS` la hace re-ejecutable).
+4. Postcheck (solo lectura):
+   ```sql
+   SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname IN (…los 13 de arriba…);
+     -- 13 filas, todas «USING btree ("<col>")» sin WHERE
+   SELECT count(*) FILTER (WHERE i.indisvalid AND i.indisready AND i.indpred IS NULL) FROM pg_index i
+     JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname IN (…los 13…);  -- 13
+   ```
+5. **Antes o después del código:** **antes** del deploy de PF (cuando Martin pushee, Vercel migra en el build y M10 ya
+   estará aplicada: no-op). Locks: cada `CREATE INDEX` toma SHARE sobre su tabla (frena escrituras, no lecturas) hasta
+   el COMMIT de la migración; con datos demo son milisegundos. Aplicar en un momento sin uso.
+6. Rollback: no hace falta (los índices no cambian resultados). Si un índice molestara, una migración nueva
+   `DROP INDEX IF EXISTS "<nombre>"` + sacar el `@@index` del schema en la misma tanda.
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -681,6 +721,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 21 | `20261015200000_pl_admin_consultorio` | M8b (solo datos): Consultorio sin tope por tipo; ADMIN con agenda en uso → PRACTITIONER + «Configuración», el resto `clinical=false` | PL-2 — **ver «M8b en prod»** |
 | 22 | `20261016120000_saas_payment_method` | M8c: enum `SaasPaymentMethod` + `SaasPayment.method` (NULL = sin informar, sin backfill) | PL-F0 — **ver «M8c en prod»** |
 | 23 | `20261017120000_clinical_notes` | M9: `ClinicalNote` (evoluciones de HC, nunca se borran) + `ClinicalNoteRevision` (solo inserción), triggers de inalterabilidad, FKs compuestas, una raíz viva por turno (parcial), RLS; únicos destino en `Booking`/`Practitioner` | EV2-0 — **ver «M9 en prod»** |
+| 24 | `20261018120000_perf_fk_indexes` | M10: 13 índices btree de una columna sobre FKs sin índice (`Coverage.patientId`, `Patient.userId`, `Service.tenantId`, `Booking.serviceId`, tags/favoritos…), sin parciales | PF-M — **ver «M10 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**
