@@ -68,6 +68,10 @@ model SaasPayment {
   id       String @id
   tenantId String
 }
+model ProfessionalPublicProfile {
+  id     String @id
+  userId String @unique
+}
 ${extra}
 `;
 
@@ -114,6 +118,10 @@ CREATE POLICY "${m}_tenant_read" ON "${m}" FOR SELECT USING ("tenantId" = app_cu
   ),
 ].join("\n");
 
+// DIR-1 (M11 public_directory): perfil por persona, SERVICE_ONLY sin tenantId (como las tablas de 2FA de M8).
+const M11 = `ALTER TABLE "ProfessionalPublicProfile" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ProfessionalPublicProfile" FORCE ROW LEVEL SECURITY;`;
+
 // GLOBAL_READONLY (B-pre M-cat + PL-0 SaasPlanConfig) exige sus modelos: se declaran sin tenantId con su policy SELECT.
 const CATALOG = ["Specialty", "Practice", "PracticeSpecialty", "Payer", "CatalogImportRun", "SaasPlanConfig"];
 const CATALOG_SCHEMA = CATALOG.map((m) => `model ${m} {\n  id String @id\n}`).join("\n");
@@ -143,6 +151,7 @@ function runGuard(p: { schemaExtra?: string; m7?: string; extraMigration?: strin
   mig("20260101000000_base", BASE + CATALOG_SQL + M2_REVOKE);
   mig("20261015120000_platform_backoffice", p.m7 ?? M7);
   mig("20261015180000_pl_accounts_billing", M8);
+  mig("20261019120000_public_directory", M11);
   if (p.extraMigration) mig("20261016000000_extra", p.extraMigration);
   const r = spawnSync(process.execPath, [SCRIPT], {
     env: { ...process.env, GUARD_ISOLATION_ROOT: root, NO_COLOR: "1" },
@@ -155,7 +164,7 @@ describe("guard de aislamiento · SERVICE_ONLY / TENANT_READONLY (BO0)", () => {
   it("control: el repo de juguete con M7 tal cual pasa", () => {
     const r = runGuard({});
     expect(r.out).toContain("GLOBAL_READONLY (6): ENABLE + FORCE, SELECT-only policies");
-    expect(r.out).toContain("SERVICE_ONLY (6): ENABLE + FORCE, zero policies. TENANT_READONLY (4)");
+    expect(r.out).toContain("SERVICE_ONLY (7): ENABLE + FORCE, zero policies. TENANT_READONLY (4)");
     expect(r.code).toBe(0);
   });
 

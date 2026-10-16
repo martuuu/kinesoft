@@ -57,6 +57,7 @@ ES4 → PF (M10) → DIR (M11). (El «reset + deploy único» del 13-oct no se h
 | `20261016120000_saas_payment_method` (**M8c**) | PL-F0 (sola) | **commiteada en `cb99c06`, aplicada solo en el Docker local (16-oct)**. sha256 de `migration.sql` = `273abbe33484e5be2fec08523ff3124899b076967031de268ac6b9323d640e0f`. Decisión de Martin (16-oct): el medio de pago de la suscripción va en columna propia, no en la nota. Aditiva, una tx, `lock_timeout` 5 s: enum nuevo `SaasPaymentMethod` (TRANSFER/CASH/CARD/WALLET/MERCADO_PAGO/OTHER) + `SaasPayment.method` NULL sin default (NULL = sin informar; sin backfill desde `note`; sin CHECK contra `source` para no romper el código viejo en la ventana de deploy). RLS, CHECKs, FKs e índices de `SaasPayment` sin cambios. Verificada con psql (columna `SaasPaymentMethod` nullable sin default, 6 valores en orden, RLS/FORCE + 1 policy SELECT, 4 CHECKs, `migrate status` al día: 37) y `tests/integration/pl-m8c.test.ts` (2 roles). Orden para prod abajo («M8c») |
 | `20261017120000_clinical_notes` (**M9**) | EV2-0 (sola) | **commiteada (`8e3e9f6`), aplicada solo en el Docker local; re-verificada objeto por objeto en EV2-Z (5 triggers, 9 FKs, parcial, RLS ENABLE+FORCE, 2 policies)**. sha256 de `migration.sql` = `755ae1891bc3a989685bc37e4c4ba6903b23076889ac2d67f013d3730284fa3b`. Decisión 13 de Martin (evoluciones por consulta para todas las verticales; Ley 26.529: la inalterabilidad va en la base porque prod conecta con BYPASSRLS). Aditiva (expand), una tx, `lock_timeout` 5 s, sin backfill, sin ALTER de columnas existentes. Objetos: enum `ClinicalNoteKind` (EVOLUTION/FIRST_VISIT/DISCHARGE); únicos nuevos sobre tablas existentes `Booking_id_tenantId_patientId_key` y `Practitioner_id_tenantId_key` (destinos de FK compuesta; sobre `id`, no fallan por datos); tabla `ClinicalNote` (turno opcional, enmienda `amendsNoteId`, autor congelado, `revision`, anulación con motivo 3..500 todo-o-nada, `idempotencyKey` 8..100 única por consultorio; 9 FKs RESTRICT: 4 simples + 5 compuestas `(patientId, tenantId)`, `(bookingId, tenantId, patientId)`, `(authorPractitionerId, tenantId)`, `(amendsNoteId, tenantId, patientId)` y la de la revisión; índice **parcial** único `ClinicalNote_bookingId_live_key` = una raíz viva por turno; keyset `(tenantId, patientId, occurredAt DESC, id DESC)`); tabla `ClinicalNoteRevision` (versión anterior de cada edición, única `(noteId, revision)`); funciones `clinical_note_guard()` y `clinical_note_revision_insert_guard()` (`search_path` fijo, INVOKER) + 5 triggers: DELETE/TRUNCATE de la nota rechazados **también para el owner**, identidad inmutable, anulada = congelada, editar contenido solo dentro de 24 h 10 min y copia la versión anterior, la revisión solo nace del trigger y es solo inserción (`kinesoft_append_only()` de M8). RLS ENABLE + FORCE + `<T>_tenant_isolation` en las 2 tablas; sin GRANT (DEFAULT PRIVILEGES). Consecuencia buscada: un turno con evolución no se borra ni cambia de paciente (23503; la app lo traduce en EV2-2c). Parcial, FKs compuestas, CHECKs, funciones, triggers y policies no están en Prisma: drift aceptado («EV2 M9: DRIFT ACEPTADO» en el SQL y en `schema.prisma`; `migrate diff` solo propone borrar las 5 FKs compuestas, como las de M1/M4). Verificada objeto por objeto (psql + `tests/integration/clinical-notes-m9.test.ts`, 2 roles); `migrate status` al día (38); `guard:isolation` OK. Orden para prod abajo («M9») |
 | `20261018120000_perf_fk_indexes` (**M10**) | PF-M (sola) | **escrita y aplicada solo en el Docker local (16-oct), sin commitear**. sha256 de `migration.sql` = `807a05097f9f021e0d6122b11f53a43fe0ac5fcbedb97e22383ca249cfda26c3`. Aditiva: solo 13 `CREATE INDEX IF NOT EXISTS` btree de una columna, sin `WHERE`, sin `UNIQUE`, sin backfill, una tx, `lock_timeout` 5 s, sin `CONCURRENTLY` (Prisma corre la migración en una tx; tablas chicas). Objetos: `Coverage_patientId_idx`, `EmergencyContact_patientId_idx`, `Patient_userId_idx`, `PatientTenantLink_tenantId_idx`, `Service_tenantId_idx`, `Service_practitionerId_idx`, `Session_practitionerId_idx`, `SessionExercise_exerciseId_idx`, `Booking_serviceId_idx`, `Favorite_exerciseId_idx`, `ExerciseTag_tagId_idx`, `ConditionTag_tagId_idx`, `Condition_createdById_idx`. Todos declarados en `schema.prisma` con `@@index` (mismo nombre): **sin drift nuevo** (`migrate diff` solo sigue proponiendo borrar las FKs compuestas aceptadas de M1/M4/M9). Verificada objeto por objeto (13 filas `USING btree (<col>)` en `pg_indexes`, `indisvalid`/`indisready`, sin predicado; la query de FKs sin índice pasó de 47 a 34 filas); `migrate status` al día (39); integración completa en los 2 roles. Orden para prod abajo («M10») |
+| `20261019120000_public_directory` (**M11**) | DIR-1 (sola) | **aplicada solo en el Docker local (16-oct)**. sha256 `a35fdd6b3f5fe8a9b4b9bbf8fcebb0cff8a82031a9721ddfca171c6af067177d`. Aditiva: 6 columnas en `Tenant` (`directoryListed` default false, `directoryListedAt`, `directoryHiddenAt/Reason/ById`, `publicDescription`), `Location.provinceCode` y la tabla `ProfessionalPublicProfile` (por persona, `userId` único, FK CASCADE). 11 CHECK (los de matrícula/ocultamiento con `COALESCE`), trigger que des-verifica la matrícula, RLS **SERVICE_ONLY** (ENABLE + FORCE, 0 policies). Drift aceptado: CHECK, función, trigger, ENABLE/FORCE. Verificada objeto por objeto; `migrate status` al día (40); integración completa en los 2 roles. Orden: «M11 en prod» |
 | `<ts>_public_directory` (**M11**) | DIR-1 (sola) | **pendiente, se escribe en su ola** (§20.10). Aditiva: `Tenant.directoryListed*`, `publicDescription`, `ProfessionalPublicProfile` (RLS); `DIRECTORY_MODE=off` por default |
 
 **M3a en prod (ES3).** Prod se resetea antes del go-live (plan §15.6), así que M3a **no se aplica sola**: va dentro de la
@@ -483,6 +484,48 @@ ser correcta → se aplica **antes** del deploy de PF. sha256 de `migration.sql`
 6. Rollback: no hace falta (los índices no cambian resultados). Si un índice molestara, una migración nueva
    `DROP INDEX IF EXISTS "<nombre>"` + sacar el `@@index` del schema en la misma tanda.
 
+**M11 en prod (DIR-1).** Aditiva, sin reset y sin staging separado (AGENTS). Orden: **M10 → M11 → deploy** (si M10 ya
+está aplicada, M11 sola). Compatible con el código anterior: nadie lee las columnas nuevas y todo nace en false/NULL, así
+que los CHECK validan sin backfill; va **antes** del deploy de DIR. sha256 de `migration.sql` =
+`a35fdd6b3f5fe8a9b4b9bbf8fcebb0cff8a82031a9721ddfca171c6af067177d`. Los CHECK de matrícula y ocultamiento van con
+`COALESCE(…, false)` (un CHECK acepta NULL: sin eso entraban MP sin jurisdicción, matrícula sin tipo y «oculto» sin motivo).
+1. Precheck de solo lectura:
+   ```sql
+   SELECT version();
+   SELECT migration_name FROM _prisma_migrations
+    WHERE migration_name IN ('20261018120000_perf_fk_indexes', '20261019120000_public_directory')
+      AND finished_at IS NOT NULL;                                           -- M10 sí, M11 no
+   SELECT count(*) FROM "Tenant";
+   SELECT column_name FROM information_schema.columns WHERE table_name IN ('Tenant','Location')
+     AND column_name IN ('directoryListed','provinceCode');                  -- 0 filas
+   SELECT to_regclass('"ProfessionalPublicProfile"');                       -- NULL
+   SELECT count(*) FILTER (WHERE province IS NOT NULL) FROM "Location";      -- sedes a cargar a mano (provincia)
+   SELECT pid, state, now() - xact_start AS age, left(query, 80) FROM pg_stat_activity
+    WHERE xact_start < now() - interval '1 minute';                         -- sin tx largas
+   ```
+2. Backup: `npm run db:prod:backup`.
+3. `npm run db:prod:deploy` y `npm run db:prod:status` («Database schema is up to date!»). P3009 por `lock_timeout` →
+   §2.4 y reintentar sin uso.
+4. Postcheck de solo lectura:
+   ```sql
+   SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid IN
+     ('"Tenant"'::regclass, '"Location"'::regclass, '"ProfessionalPublicProfile"'::regclass)
+     AND (conname LIKE 'ProfessionalPublicProfile_%' OR conname IN ('Tenant_directoryListed_check',
+          'Tenant_directoryHidden_check','Tenant_publicDescription_check','Location_provinceCode_check'));  -- 11 filas
+   SELECT relrowsecurity, relforcerowsecurity,
+          (SELECT count(*) FROM pg_policies WHERE tablename = 'ProfessionalPublicProfile') AS policies
+     FROM pg_class WHERE oid = '"ProfessionalPublicProfile"'::regclass;      -- t, t, 0
+   SELECT tgname, tgenabled FROM pg_trigger
+    WHERE tgrelid = '"ProfessionalPublicProfile"'::regclass AND NOT tgisinternal;  -- license_guard, O
+   SELECT grantee FROM information_schema.role_table_grants WHERE table_name = 'ProfessionalPublicProfile'
+     AND grantee IN ('anon','authenticated');                               -- 0 filas
+   SELECT count(*) FILTER (WHERE "directoryListed") FROM "Tenant";           -- 0
+   ```
+5. Deploy con `DIRECTORY_MODE` sin setear (= `off`) → `preview` para revisar → `public` cuando Martin decida, con
+   revisión legal del texto de consentimiento antes (DIR-D20).
+6. Rollback: revertir el código sin tocar M11 (columnas sin lector son inocuas). Sacarla = migración nueva con DROP y
+   se pierden perfiles y consentimientos (backup del paso 2).
+
 **Deploy de BO** (código de `0d058bb`..`c60014f`, después de M7). Las variables nuevas nacen en su default seguro, así
 que el deploy no cambia el comportamiento de nadie salvo lo que se describe abajo.
 1. **Antes del deploy (solo lectura):**
@@ -722,6 +765,7 @@ En orden. Todas aplicadas y verificadas en local:
 | 22 | `20261016120000_saas_payment_method` | M8c: enum `SaasPaymentMethod` + `SaasPayment.method` (NULL = sin informar, sin backfill) | PL-F0 — **ver «M8c en prod»** |
 | 23 | `20261017120000_clinical_notes` | M9: `ClinicalNote` (evoluciones de HC, nunca se borran) + `ClinicalNoteRevision` (solo inserción), triggers de inalterabilidad, FKs compuestas, una raíz viva por turno (parcial), RLS; únicos destino en `Booking`/`Practitioner` | EV2-0 — **ver «M9 en prod»** |
 | 24 | `20261018120000_perf_fk_indexes` | M10: 13 índices btree de una columna sobre FKs sin índice (`Coverage.patientId`, `Patient.userId`, `Service.tenantId`, `Booking.serviceId`, tags/favoritos…), sin parciales | PF-M — **ver «M10 en prod»** |
+| 25 | `20261019120000_public_directory` | M11: opt-in y moderación del directorio en `Tenant`, `Location.provinceCode` (24 jurisdicciones) y `ProfessionalPublicProfile` (perfil por persona con consentimiento, SERVICE_ONLY, CHECK listed ⇒ consentimiento, nombre sin «@», trigger que des-verifica la matrícula) | DIR-1 — **ver «M11 en prod»** |
 
 ⚠️ La #7 además crea políticas RLS (`ENABLE`/`FORCE` + `SELECT` en las dos tablas nuevas).
 ⚠️ La #3 falla si ya existieran dos turnos activos del **mismo paciente en el mismo instante**

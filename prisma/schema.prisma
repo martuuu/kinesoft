@@ -78,6 +78,18 @@ model Tenant {
   maxUsersOverride            Int?
   maxProfessionalsOverride    Int?
   maxStaffOverride            Int?
+  // DIR-1 (M11 public_directory, §20.10): opt-in del directorio público (lo escribe
+  // solo lib/directory-settings.ts con tenant.admin, nunca soporte) y moderación de
+  // Plataforma (ocultar con motivo, solo lib/platform-directory.ts). CHECKs en la
+  // base (drift aceptado): listed ⇒ listedAt; oculto ⇒ motivo de 3..500 y los tres
+  // campos juntos; publicDescription ≤ 800. Sin email: el directorio no publica
+  // ninguno (DIR-D15).
+  directoryListed             Boolean   @default(false)
+  directoryListedAt           DateTime?
+  directoryHiddenAt           DateTime?
+  directoryHiddenReason       String?
+  directoryHiddenById         String?
+  publicDescription           String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -208,6 +220,46 @@ model UserProfile {
   twoFactorChallenges    TwoFactorChallenge[]
   twoFactorRecoveryCodes TwoFactorRecoveryCode[]
   supportThreadReads     SupportThreadRead[]
+  // DIR-1 (M11): perfil público del directorio, POR PERSONA (no por consultorio).
+  publicProfile          ProfessionalPublicProfile?
+}
+
+// DIR-1 (M11 public_directory, §20.10, DIR-D12): perfil del directorio público POR
+// PERSONA. El consentimiento es de la persona (Ley 25.326) y una persona tiene N
+// Practitioner (IAM-1), por eso no cuelga de Practitioner ni lleva tenantId. Sin
+// tenantId no hay policy de tenant ni GUC de usuario → SERVICE_ONLY (ENABLE + FORCE,
+// cero policies; `kinesoft_app` no ve nada): se escribe por `prismaService` con el
+// userId de la sesión verificada, nunca del input (lib/public-profile.ts).
+// En la base y NO acá (drift aceptado; NO borrar si `migrate dev` lo propone):
+//   * CHECK listed ⇒ consentAt + consentVersion y sin consentWithdrawnAt;
+//   * CHECK publicName 2..120 y sin «@» (decisión 19: nunca un email como nombre);
+//   * CHECKs de honorific, matrícula (MN sin jurisdicción, MP con una de las 24),
+//     bio ≤ 1000, oculto ⇒ motivo, verificada ⇒ licenseNumber;
+//   * trigger: cambiar la matrícula borra licenseVerified* (DIR-D10).
+// Escritor único (tests/unit/directory-writers.test.ts): listed/consent* solo
+// lib/public-profile.ts; hidden*/licenseVerified* solo lib/platform-directory.ts.
+model ProfessionalPublicProfile {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  publicName          String
+  honorific           String?   // LIC | KLGO | KLGA | DR | DRA (CHECK en la base)
+  licenseKind         String?   // MN | MP
+  licenseNumber       String?
+  licenseJurisdiction String?   // código de provincia; solo MP
+  bio                 String?
+  listed              Boolean   @default(false)
+  consentAt           DateTime?
+  consentVersion      String?
+  consentWithdrawnAt  DateTime?
+  hiddenAt            DateTime?
+  hiddenReason        String?
+  hiddenById          String?
+  licenseVerifiedAt   DateTime?
+  licenseVerifiedById String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Membership {
@@ -2058,6 +2110,10 @@ model Location {
   addressLine2 String?
   city         String?
   province     String?
+  // DIR-1 (M11): provincia normalizada para filtrar el directorio (`province` es
+  // texto libre: «Bs As», «CABA»). Código ISO 3166-2:AR sin «AR-» (24; CHECK en la
+  // base). El editor de sedes escribe los dos.
+  provinceCode String?
   postalCode   String?
   lat          Float?
   lng          Float?

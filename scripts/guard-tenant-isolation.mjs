@@ -91,6 +91,11 @@ const SERVICE_ONLY = new Set([
   "TwoFactorChallenge",
   "TwoFactorRecoveryCode",
   "UserSecurityEvent",
+  // DIR-1 (M11 public_directory, DIR-D12): perfil del directorio POR PERSONA (sin
+  // tenantId: el consentimiento es de la persona y tiene N Practitioner). No hay GUC
+  // de usuario para filtrarlo: lo escribe el server por el canal service con el
+  // userId de la sesión verificada (lib/public-profile.ts) y lo lee el snapshot.
+  "ProfessionalPublicProfile",
 ]);
 
 // BO0 (M7): tablas con tenantId que el consultorio LEE pero que solo escribe la
