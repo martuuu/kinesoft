@@ -132,7 +132,7 @@ export const DESK_FLOW_CSS = `
 .desk-tl-row .desk-tag { height: 20px; font-size: 11px; padding: 0 7px; }
 .desk-tl-hour { min-height: 26px; padding: 8px 6px 0; font-size: 11px; font-weight: 650; line-height: 1; color: var(--navy-400); text-transform: uppercase; letter-spacing: 0.06em; }
 .desk-tl-now { position: relative; height: 2px; margin: 10px 0; background: var(--now-line); }
-.desk-tl-now span { position: absolute; left: 0; top: -9px; height: 18px; padding: 0 6px; border-radius: 6px; background: var(--now-line); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; }
+.desk-tl-now span { position: absolute; left: 0; top: -9px; height: 18px; padding: 0 6px; border-radius: 6px; background: var(--now-line); color: var(--card-bg); font-size: 11px; font-weight: 700; line-height: 18px; }
 .desk-av-sm { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; background: transparent; color: var(--navy-700); box-shadow: inset 0 0 0 1px rgba(15,30,51,0.2); }
 
 .desk-flow-lane .desk-flow-scroll { margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 8px; list-style: none; }
@@ -476,7 +476,7 @@ const TimelineRow = memo(function TimelineRow({ entry: e, view: v }: { sig: stri
       <span className="desk-tl-t desk-mono">{fmtHour(new Date(b.scheduledFor))}</span>
       <span className="desk-tl-n">
         <span className="desk-tl-dot" aria-hidden="true" style={{ background: b.serviceColor ?? SERVICE_COLOR_FALLBACK }} />
-        <span className="desk-tl-name">{b.patientName}</span>
+        <span className="desk-tl-name" title={b.patientName}>{b.patientName}</span>
         <span className="desk-av-sm" aria-hidden="true">
           {v.pro.initials}
         </span>
@@ -511,7 +511,7 @@ const FlowTicket = memo(function FlowTicket({ kind, entry: e, view: v }: { sig: 
   const b = e.row;
   const head = (right: ReactNode) => (
     <div className="desk-tk-h">
-      <span className="desk-tk-name">{b.patientName}</span>
+      <span className="desk-tk-name" title={b.patientName}>{b.patientName}</span>
       {right}
     </div>
   );

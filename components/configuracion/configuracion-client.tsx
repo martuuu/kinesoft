@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import dynamic from "next/dynamic";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type { Role, TenantVertical } from "@prisma/client";
-import { EyebrowLabel } from "@/components/ui/eyebrow";
 import type { InsurerRow } from "@/lib/insurers-types";
 import type { ServiceRow } from "@/lib/services-types";
 import type { InvitationRow, TeamMemberRow } from "@/lib/invitations-types";
@@ -15,21 +15,71 @@ import type { PractitionerScheduleSummaryRow } from "@/lib/practitioner-schedule
 import type { SupportSessionRow } from "@/lib/support-session-internal";
 import type { TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import type { BillingOverview } from "@/lib/saas-billing-types";
-import { StepUpProvider } from "@/components/account/step-up-modal";
+import { PageHeader } from "@/components/ui/page-header";
+import { SkelForm } from "@/components/ui/skeleton";
 import { TabsBar, initialConfigTab, visibleConfigTabs, type ConfigTabAccess, type Tab } from "./controls";
-import { GeneralPanel } from "./panels/general-panel";
-import { ServicesPanel } from "./panels/services-panel";
-import { InsurersPanel } from "./panels/insurers-panel";
-import { DiagnosticosPanel } from "./panels/diagnosticos-panel";
-import { UsersPanel } from "./panels/users-panel";
-import { LocationsPanel } from "./panels/locations-panel";
-import { PractitionerPanel } from "./panels/practitioners/practitioner-panel";
-import { PlanUsagePanel } from "./panels/plan-usage-panel";
-import { SupportAccessPanel } from "./panels/support-access-panel";
-import { SupportMessagesPanel, type SupportDraft } from "./panels/support-messages-panel";
-import { BillingPanel } from "./panels/billing-panel";
+import type { SupportDraft } from "./panels/support-messages-panel";
 import type { PlanChoice } from "./panels/plan-change-drawer";
-import { ExportPanel, type ExportBlockedTenant } from "./panels/export-panel";
+import type { ExportBlockedTenant } from "./panels/export-panel";
+
+/**
+ * [PF1.1-config · C-PF2] Cada pestaña es un chunk aparte (`next/dynamic`). Antes los 12 paneles viajaban en el JS
+ * inicial de /configuracion (260,7 kB gz, el más pesado del workspace) aunque se viera uno solo.
+ *
+ * Con SSR (el default de `dynamic`, a propósito; NO `ssr: false`): la pestaña inicial sale pintada en el HTML del
+ * server (sin hueco ni salto, CLS 0, LCP igual que antes) y su chunk no cuenta en el JS inicial de la ruta (no está en
+ * `app-build-manifest`, lo que mide `scripts/check-bundle-budget.mjs`). Las otras se bajan al elegirlas; el esqueleto
+ * aparece solo si el chunk todavía no llegó, y casi nunca: `preloadConfigTab` lo pide en hover/foco de la pestaña.
+ *
+ * Cada `import()` va literal dos veces, en `PANEL_LOADERS` (precarga) y en su `dynamic` (render): webpack resuelve las
+ * dos al MISMO chunk, y el `import()` literal dentro de `dynamic` deja que Next registre el módulo para precargar el
+ * chunk de la pestaña inicial junto con el HTML del server.
+ */
+const PANEL_LOADERS = {
+  general: () => import("./panels/general-panel"),
+  sedes: () => import("./panels/locations-panel"),
+  profesionales: () => import("./panels/practitioners/practitioner-panel"),
+  servicios: () => import("./panels/services-panel"),
+  "obras-sociales": () => import("./panels/insurers-panel"),
+  diagnosticos: () => import("./panels/diagnosticos-panel"),
+  usuarios: () => import("./panels/users-panel"),
+  plan: () => import("./panels/plan-tab"),
+  facturacion: () => import("./panels/billing-panel"),
+  soporte: () => Promise.all([import("./panels/support-messages-panel"), import("./panels/support-access-panel")]),
+  exportar: () => import("./panels/export-panel"),
+} satisfies Record<Tab, () => Promise<unknown>>;
+
+/** `import()` sin await (C-PF2): deja el chunk de la pestaña en camino antes del click. */
+export function preloadConfigTab(t: Tab): void {
+  void PANEL_LOADERS[t]().catch(() => {
+    /* sin red: el click lo vuelve a intentar y muestra el error de la ruta */
+  });
+}
+
+/** Mismo alto aproximado que una card de formulario: al cambiar de pestaña la página no colapsa y vuelve a crecer. */
+function PanelSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Cargando la pestaña" style={{ minHeight: 420 }}>
+      <SkelForm fields={4} />
+    </div>
+  );
+}
+// Opciones como literal en cada llamada: el transform de Next pide un objeto literal en el segundo argumento.
+
+const GeneralPanel = dynamic(() => import("./panels/general-panel").then((m) => m.GeneralPanel), { loading: PanelSkeleton });
+const LocationsPanel = dynamic(() => import("./panels/locations-panel").then((m) => m.LocationsPanel), { loading: PanelSkeleton });
+const PractitionerPanel = dynamic(() => import("./panels/practitioners/practitioner-panel").then((m) => m.PractitionerPanel), { loading: PanelSkeleton });
+const ServicesPanel = dynamic(() => import("./panels/services-panel").then((m) => m.ServicesPanel), { loading: PanelSkeleton });
+const InsurersPanel = dynamic(() => import("./panels/insurers-panel").then((m) => m.InsurersPanel), { loading: PanelSkeleton });
+const DiagnosticosPanel = dynamic(() => import("./panels/diagnosticos-panel").then((m) => m.DiagnosticosPanel), { loading: PanelSkeleton });
+const UsersPanel = dynamic(() => import("./panels/users-panel").then((m) => m.UsersPanel), { loading: PanelSkeleton });
+const PlanTab = dynamic(() => import("./panels/plan-tab").then((m) => m.PlanTab), { loading: PanelSkeleton });
+const BillingPanel = dynamic(() => import("./panels/billing-panel").then((m) => m.BillingPanel), { loading: PanelSkeleton });
+const SupportMessagesPanel = dynamic(() => import("./panels/support-messages-panel").then((m) => m.SupportMessagesPanel), { loading: PanelSkeleton });
+const SupportAccessPanel = dynamic(() => import("./panels/support-access-panel").then((m) => m.SupportAccessPanel), {
+  loading: () => null,
+});
+const ExportPanel = dynamic(() => import("./panels/export-panel").then((m) => m.ExportPanel), { loading: PanelSkeleton });
 
 type Props = {
   role: Role;
@@ -130,14 +180,15 @@ export function ConfiguracionClient(props: Props) {
   const overview = props.billingOverview ?? null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <header>
-        <EyebrowLabel tone="accent">Panel del consultorio</EyebrowLabel>
-        <h1 className="k-display" style={{ fontSize: 28, margin: "6px 0 0", letterSpacing: "-0.02em" }}>
-          Configuración
-        </h1>
-      </header>
+      <PageHeader eyebrow="Panel del consultorio" title="Configuración" />
 
-      <TabsBar tab={tab} setTab={(t) => void setTab(t)} access={access} modules={props.modules} />
+      <TabsBar
+        tab={tab}
+        setTab={(t) => void setTab(t)}
+        access={access}
+        modules={props.modules}
+        onPreload={preloadConfigTab}
+      />
 
       {tab === "general" && can("general") && props.tenant && (
         <GeneralPanel tenant={props.tenant} role={props.role} support={props.support} />
@@ -161,22 +212,20 @@ export function ConfiguracionClient(props: Props) {
         <UsersPanel team={props.team} pending={props.pending} viewerRole={props.role} seats={props.planUsage?.seats} />
       )}
       {tab === "plan" && can("plan") && overview && (
-        // PL-D11: cambiar de plan pide step-up; el provider monta el modal del código (o el aviso de activar la 2FA).
-        <StepUpProvider>
-          <PlanUsagePanel
-            usage={props.planUsage}
-            overview={overview}
-            modules={props.modules}
-            choices={props.planChoices ?? []}
-            vertical={props.vertical}
-            readOnly={!!props.readOnly}
-            onContactSales={(draft) => {
-              setSupportDraft(draft);
-              void setTab("soporte");
-            }}
-            onGoToBilling={() => void setTab("facturacion")}
-          />
-        </StepUpProvider>
+        // PL-D11: cambiar de plan pide step-up; `PlanTab` monta el provider del modal del código (o el aviso de 2FA).
+        <PlanTab
+          usage={props.planUsage}
+          overview={overview}
+          modules={props.modules}
+          choices={props.planChoices ?? []}
+          vertical={props.vertical}
+          readOnly={!!props.readOnly}
+          onContactSales={(draft) => {
+            setSupportDraft(draft);
+            void setTab("soporte");
+          }}
+          onGoToBilling={() => void setTab("facturacion")}
+        />
       )}
       {tab === "facturacion" && can("facturacion") && overview && <BillingPanel initial={overview} />}
       {tab === "soporte" && can("soporte") && (

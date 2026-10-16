@@ -97,12 +97,19 @@ describe("[PF-0c] CSS de esqueletos y entrada de página", () => {
 });
 
 describe("[PF-0c] stagger del tablero", () => {
-  it("la entrada de los KPIs no usa staggerList/staggerItem y entra en ≤ 200 ms con ≤ 6 ítems", () => {
+  // PF1.1-dashboard (C-PF1.2): la entrada de los KPIs pasó de framer (`KPI_ENTER_LIST`/`KPI_ENTER_ITEM`) a CSS
+  // (`.kpi` de dashboard.module.css + `animationDelay` inline de `KPI_STAGGER_MS`). Mismo presupuesto: ≤ 200 ms con 6.
+  it("la entrada de los KPIs es CSS, solo opacidad, y entra en ≤ 200 ms con ≤ 6 ítems", () => {
     const code = src("components/screens/dashboard-screen.tsx");
     expect(code).not.toMatch(/variants=\{stagger(List|Item)\}/);
-    const stagger = Number(code.match(/staggerChildren:\s*([\d.]+)/)![1]);
-    const dur = Number(code.match(/KPI_ENTER_ITEM[\s\S]*?duration:\s*([\d.]+)/)![1]);
-    expect(code).toMatch(/\.slice\(0, 6\)/);
-    expect(5 * stagger + dur).toBeLessThanOrEqual(0.2);
+    expect(code).not.toMatch(/from "framer-motion"/);
+    const css = src("components/dashboard/dashboard.module.css");
+    const kpi = css.match(/\n\.kpi \{([\s\S]*?)\n\}/)![1];
+    const dur = Number(kpi.match(/animation:\s*dash-fade\s+(\d+)ms/)![1]);
+    const stagger = Number(src("components/dashboard/kpi-view.ts").match(/KPI_STAGGER_MS = (\d+);/)![1]);
+    expect(code).toMatch(/animationDelay: `\$\{index \* KPI_STAGGER_MS\}ms`/);
+    expect(css.match(/@keyframes dash-fade \{([\s\S]*?)\n\}/)![1]).not.toContain("transform");
+    expect(src("components/dashboard/kpi-view.ts")).toMatch(/\.slice\(0, 6\)/);
+    expect(5 * stagger + dur).toBeLessThanOrEqual(200);
   });
 });

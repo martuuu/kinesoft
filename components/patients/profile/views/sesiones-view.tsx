@@ -84,6 +84,19 @@ export function sessionStateLabel(s: Pick<PlanSessionDTO, "state" | "sinTurno">)
   }
 }
 
+/**
+ * D10 (VX0-b, PF1.1): una sesión legacy «Programada» (sin turno vinculado, `sinTurno` false) con fecha pasada no
+ * tenía ninguna marca: 22 filas de mayo/junio se leían como agenda futura. Lleva el mismo «Sin cerrar» que
+ * Seguimiento. Las `overdue` ya lo dicen en su rótulo («Vencida sin cerrar»); las `booked` pasadas las cierra la
+ * agenda (el server las pasa a `overdue`), así que no se marcan acá.
+ */
+export function sessionPastUnclosed(
+  s: Pick<PlanSessionDTO, "state" | "sinTurno" | "scheduledFor">,
+  now: Date
+): boolean {
+  return s.state === "unbooked" && !s.sinTurno && +new Date(s.scheduledFor) < +now;
+}
+
 export function SesionesView({ patient, plans, permissions, onOpenEditor, onOpenPlan }: SesionesViewProps) {
   const groups = sesionesViewGroups(plans);
   const empty = groups.every((g) => g.sessions.length === 0);
@@ -229,6 +242,7 @@ function SessionRow({
 }) {
   const done = session.state === "done";
   const state = sessionStateLabel(session);
+  const unclosed = sessionPastUnclosed(session, new Date());
   const counter = sessionCounterLabel(session.ordinal, totalLive);
   // Sesión a medida: su título (S12b); si no, la evolución o los ejercicios.
   const note =
@@ -249,7 +263,8 @@ function SessionRow({
         opacity: done ? 0.85 : 1,
       }}
     >
-      <span className="k-mono" style={{ fontWeight: 700, color: "var(--sky-700)", fontSize: 12 }}>
+      {/* D10: el contador ya no va en azul de link (no lo es; el link es «Abrir →»). */}
+      <span className="k-mono" style={{ fontWeight: 700, color: "var(--navy-700)", fontSize: 12, whiteSpace: "nowrap" }}>
         {counter}
       </span>
       <span style={{ color: "var(--navy-700)" }}>
@@ -263,10 +278,15 @@ function SessionRow({
           timeZone: "America/Argentina/Buenos_Aires",
         })}
       </span>
-      <span>
+      <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
         <Tag tone={state.tone}>
           {done && <IconCheck size={10} stroke={3} />} {state.label}
         </Tag>
+        {unclosed && (
+          <Tag tone="soft" variant="outline">
+            Sin cerrar
+          </Tag>
+        )}
       </span>
       <span
         style={{

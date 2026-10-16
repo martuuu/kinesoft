@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -16,9 +15,12 @@ import {
   deleteCustomCondition,
   type CustomConditionRow,
 } from "@/lib/conditions";
+import styles from "../configuracion.module.css";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionRow[] }) {
-  const router = useRouter();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<CustomConditionRow | null>(null);
 
@@ -46,6 +48,9 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
         </Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
+          {/* C4: a 390 las 5 columnas desbordaban la página; ahora scrollean dentro de la card. */}
+          <div className={styles.tableScroll}>
+          <div style={{ minWidth: 600 }}>
           <div
             style={{
               padding: "12px 18px",
@@ -54,8 +59,9 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
               gap: 14,
               fontSize: 10,
               fontWeight: 700,
-              color: "var(--navy-300)",
+              color: "var(--navy-500)",
               letterSpacing: "0.06em",
+              whiteSpace: "nowrap",
               textTransform: "uppercase",
               borderBottom: "1px solid rgba(15,30,51,0.06)",
             }}
@@ -116,10 +122,12 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
                 >
                   Editar
                 </button>
-                <DeleteConditionButton id={c.id} name={c.name} onDone={() => router.refresh()} />
+                <DeleteConditionButton id={c.id} name={c.name} />
               </div>
             </div>
           ))}
+          </div>
+          </div>
         </Card>
       )}
 
@@ -128,7 +136,6 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
           onClose={() => setCreating(false)}
           onSaved={() => {
             setCreating(false);
-            router.refresh();
           }}
         />
       )}
@@ -138,7 +145,6 @@ export function DiagnosticosPanel({ conditions }: { conditions: CustomConditionR
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            router.refresh();
           }}
         />
       )}
@@ -164,7 +170,7 @@ function DeleteConditionButton({
 }: {
   id: string;
   name: string;
-  onDone: () => void;
+  onDone?: () => void;
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -186,7 +192,7 @@ function DeleteConditionButton({
         toast.error(r.error);
         return;
       }
-      onDone();
+      onDone?.();
     });
   };
   return (
@@ -194,7 +200,7 @@ function DeleteConditionButton({
       type="button"
       onClick={onClick}
       disabled={pending}
-      style={{ ...miniBtn, color: "var(--danger-fg)", borderColor: "rgba(159,31,31,0.25)" }}
+      style={{ ...miniBtn, color: "var(--danger-fg)", borderColor: "var(--danger-border)" }}
       title={error ?? undefined}
     >
       {pending ? "…" : "Eliminar"}
@@ -250,7 +256,7 @@ function CustomConditionModal({
           defaultValue={existing?.name ?? ""}
           placeholder="Ej. Tendinopatía rotuliana posquirúrgica"
         />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className={styles.twoCol}>
           <FormField
             label="CIE-10 (opcional)"
             name="cie10"

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
@@ -22,7 +21,11 @@ import {
   deleteService,
 } from "@/lib/services";
 import { ErrorBox } from "../controls";
+import styles from "../configuracion.module.css";
 import { PracticePicker, type PickedPractice } from "../catalog/practice-picker";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 export function ServicesPanel({
   services,
@@ -64,59 +67,57 @@ export function ServicesPanel({
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {services.map((s) => (
-            <li
-              key={s.id}
-              onClick={() => setEditing(s)}
-              style={{
-                padding: "14px 20px",
-                display: "grid",
-                gridTemplateColumns: "1.4fr 1fr 100px 110px 80px",
-                gap: 14,
-                alignItems: "center",
-                borderBottom: "1px solid rgba(15,30,51,0.04)",
-                cursor: "pointer",
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
-                  <span
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 999,
-                      background: s.color ?? "rgba(15,30,51,0.12)",
-                      flexShrink: 0,
-                    }}
-                  />
-                  {s.name}
-                </div>
-                {s.description && (
-                  <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{s.description}</div>
-                )}
-                {s.practiceName && (
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>Práctica: {s.practiceName}</div>
-                )}
-                {hasPlanes && s.discipline && (
-                  <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                    Disciplina: {disciplineLabel(s.discipline)}
-                  </div>
-                )}
-              </div>
-              <div style={{ fontSize: 13, color: "var(--navy-500)" }}>
-                {s.practitionerName ?? "Todos los profesionales"}
-              </div>
-              <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)", textAlign: "right" }}>
-                {s.durationMin} min
-                {s.maxConcurrent != null && (
-                  <div style={{ fontSize: 10, color: "var(--navy-300)" }}>{s.maxConcurrent}/horario</div>
-                )}
-              </div>
-              <div className="k-mono" style={{ fontSize: 13, fontWeight: 700, textAlign: "right" }}>
-                {s.priceCents > 0 ? formatARS(s.priceCents) : "—"}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--navy-300)", textAlign: "right" }}>
-                {s.bookingsCount} turnos
-              </div>
+            // [PF1.1-config · C6] La fila es un <button> (antes un <li onClick>: sin teclado ni foco) con columnas de
+            // ancho fijo (antes «Profesional» flotaba al centro) y el conteo en gris AA (antes --navy-300, ilegible).
+            // < 768 se apila (configuracion.module.css): a 390 la grilla de 5 columnas desbordaba.
+            <li key={s.id}>
+              <button type="button" className={styles.serviceRow} onClick={() => setEditing(s)} aria-label={`Editar ${s.name}`}>
+                <span className={styles.serviceMain}>
+                  <span style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, color: "var(--navy-900)" }}>
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 999,
+                        background: s.color ?? "rgba(15,30,51,0.12)",
+                        // El color del servicio es pastel (es la barra de la agenda): el borde lo separa del blanco.
+                        boxShadow: "inset 0 0 0 1px rgba(15,30,51,0.18)",
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span className={styles.ellipsis} title={s.name}>{s.name}</span>
+                  </span>
+                  {s.description && (
+                    <span className={styles.ellipsis} style={{ fontSize: 12, color: "var(--navy-500)" }} title={s.description}>
+                      {s.description}
+                    </span>
+                  )}
+                  {s.practiceName && (
+                    <span style={{ display: "block", fontSize: 11, color: "var(--navy-500)" }}>Práctica: {s.practiceName}</span>
+                  )}
+                  {hasPlanes && s.discipline && (
+                    <span style={{ display: "block", fontSize: 11, color: "var(--navy-500)" }}>
+                      Disciplina: {disciplineLabel(s.discipline)}
+                    </span>
+                  )}
+                </span>
+                <span className={styles.ellipsis} style={{ fontSize: 13, color: "var(--navy-500)" }} title={s.practitionerName ?? undefined}>
+                  {s.practitionerName ?? "Todos los profesionales"}
+                </span>
+                <span className={`k-mono ${styles.num}`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                  {s.durationMin} min
+                  {s.maxConcurrent != null && (
+                    <span style={{ display: "block", fontSize: 11, color: "var(--navy-500)" }}>{s.maxConcurrent}/horario</span>
+                  )}
+                </span>
+                <span className={`k-mono ${styles.num}`} style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>
+                  {s.priceCents > 0 ? formatARS(s.priceCents) : "—"}
+                </span>
+                <span className={styles.num} style={{ fontSize: 12, color: "var(--navy-500)" }}>
+                  {s.bookingsCount} {s.bookingsCount === 1 ? "turno" : "turnos"}
+                </span>
+              </button>
             </li>
           ))}
         </ul>
@@ -151,7 +152,6 @@ function ServiceModal({
   service?: ServiceRow;
   onClose: () => void;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(service?.color ?? null);
@@ -210,7 +210,6 @@ function ServiceModal({
       if (!r.ok) setError(r.error);
       else {
         onClose();
-        router.refresh();
       }
     });
   };
@@ -229,7 +228,6 @@ function ServiceModal({
       if (!r.ok) setError(r.error);
       else {
         onClose();
-        router.refresh();
       }
     });
   };
@@ -244,7 +242,7 @@ function ServiceModal({
           name="description"
           defaultValue={service?.description ?? ""}
         />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className={styles.twoCol}>
           <FormField
             label="Duración (min)"
             name="durationMin"

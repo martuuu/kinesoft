@@ -2,7 +2,6 @@
 
 import { displayUserName } from "@/lib/display-name";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import type { Role, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,6 +34,10 @@ import { canAddSeat, seatKindOf } from "@/lib/plan-catalog";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { PublicBookingSwitch } from "./practitioners/public-booking-switch";
 import { ErrorBox, Switch } from "../controls";
+import styles from "../configuracion.module.css";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 /** Roles del selector de un miembro. OWNER no: la titularidad se transfiere aparte (con confirmación y step-up). */
 const ASSIGNABLE_ROLES: readonly Role[] = ROLE_ORDER.filter((r) => r !== "OWNER");
@@ -197,7 +200,6 @@ function TeamRow({
 }) {
   const isOwnerRow = member.role === "OWNER";
   const ownerLocked = !viewerIsOwner && isOwnerRow;
-  const router = useRouter();
   const vertical = useTenantVertical();
   const label = (r: Role) => roleLabel(r, vertical);
   const runStepUp = useStepUpAction();
@@ -304,7 +306,6 @@ function TeamRow({
           text: `Tiene ${n} turno${n === 1 ? "" : "s"} futuro${n === 1 ? "" : "s"}: siguen agendados. Reasignalos o cancelalos si no los va a atender.`,
         });
       }
-      router.refresh();
     });
   };
 
@@ -319,7 +320,6 @@ function TeamRow({
     start(async () => {
       const r = await reactivateMember(member.membershipId);
       if (!r.ok) setNotice({ tone: "error", text: r.error });
-      else router.refresh();
     });
   };
 
@@ -335,7 +335,6 @@ function TeamRow({
       const r = await sendMemberPasswordReset(member.membershipId);
       if (!r.ok) return setNotice({ tone: "error", text: r.error });
       setNotice(passwordResetEmailStatusCopy(r.data.emailStatus, r.data.emailReason));
-      router.refresh();
     });
   };
 
@@ -352,7 +351,6 @@ function TeamRow({
     start(async () => {
       const r = await removeMember(member.membershipId);
       if (!r.ok) setNotice({ tone: "error", text: r.error });
-      else router.refresh();
     });
   };
 
@@ -683,7 +681,6 @@ function MemberActionsMenu({ who, actions, disabled }: { who: string; actions: M
  * link que se compartió donde no debía) y «Anular» (la invitación deja de valer; queda como historia).
  */
 function PendingInviteRow({ invite }: { invite: InvitationRow }) {
-  const router = useRouter();
   const vertical = useTenantVertical();
   const [pending, start] = useTransition();
   const [shareResult, setShareResult] = useState<InvitationSendResult | null>(null);
@@ -696,7 +693,6 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
       const r = await fn();
       if (r.ok) {
         setShareResult(r.data);
-        router.refresh();
       } else setError(r.error);
     });
   };
@@ -720,41 +716,39 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
     setError(null);
     start(async () => {
       const r = await revokeInvitation(invite.id);
-      if (r.ok) router.refresh();
-      else setError(r.error);
+      if (!r.ok) setError(r.error);
     });
   };
 
   const tz = { timeZone: "America/Argentina/Buenos_Aires" } as const;
   const expired = invite.status === "expired";
   const last = invite.lastEmail ? inviteEmailStatusCopy(invite.lastEmail.status, invite.lastEmail.reason) : null;
-  const linkStyle = {
-    background: "transparent",
-    border: "none",
-    color: "var(--sky-700)",
-    cursor: "pointer",
-    fontSize: 12,
-    fontWeight: 700,
-    padding: 0,
-  } as const;
+  // [PF1.1-config · C7] Las tres acciones van al mismo menú «⋯» que las de un miembro (antes, tres links en dos
+  // líneas desalineadas).
+  const actions: MemberAction[] = [
+    { label: "Reenviar invitación", onSelect: resend },
+    { label: "Generar link nuevo", onSelect: () => void regen() },
+    { label: "Anular invitación", onSelect: () => void revoke(), danger: true },
+  ];
 
   return (
     <>
+      {/* Misma estructura que la fila de un miembro (flex con wrap): a 390 no desborda. */}
       <li
         style={{
           padding: "12px 20px",
-          display: "grid",
-          gridTemplateColumns: "1.5fr 1fr 150px 210px",
-          gap: 14,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "10px 14px",
           alignItems: "center",
           borderBottom: "1px solid rgba(15,30,51,0.04)",
         }}
       >
-        <div>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600 }}>
             {invite.firstName} {invite.lastName}
           </div>
-          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>{invite.email}</div>
+          <div style={{ fontSize: 12, color: "var(--navy-500)", overflowWrap: "anywhere" }}>{invite.email}</div>
           {last && (
             <div style={{ fontSize: 11, marginTop: 2, color: last.tone === "ok" ? "var(--navy-500)" : last.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)" }}>
               {last.tone === "ok" ? "Mail enviado" : "Mail no enviado"}
@@ -764,21 +758,16 @@ function PendingInviteRow({ invite }: { invite: InvitationRow }) {
           )}
           {error && <div style={{ fontSize: 11, color: "var(--danger-fg)", marginTop: 2 }}>{error}</div>}
         </div>
-        <Tag tone="soft">{roleLabel(invite.role, vertical)}</Tag>
-        <div style={{ fontSize: 11, color: expired ? "var(--danger-fg)" : "var(--navy-500)" }}>
-          {expired ? "Venció el " : "Vence "}
+        {/* C7: el rol en texto, como lo muestra el selector de un miembro (el Tag lo ponía en mayúsculas). */}
+        <span data-invite-role style={{ fontSize: 12.5, fontWeight: 600, color: "var(--navy-700)", flex: "0 0 auto" }}>
+          {roleLabel(invite.role, vertical)}
+        </span>
+        <span style={{ fontSize: 12, color: expired ? "var(--danger-fg)" : "var(--navy-500)", flex: "0 0 auto", whiteSpace: "nowrap" }}>
+          {expired ? "Venció el " : "Vence el "}
           {invite.expiresAt.toLocaleDateString("es-AR", tz)}
-        </div>
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button type="button" onClick={resend} disabled={pending} style={linkStyle}>
-            Reenviar
-          </button>
-          <button type="button" onClick={regen} disabled={pending} style={linkStyle}>
-            Generar link nuevo
-          </button>
-          <button type="button" onClick={revoke} disabled={pending} style={{ ...linkStyle, color: "var(--danger-fg)" }}>
-            Anular
-          </button>
+        </span>
+        <div style={{ textAlign: "right", flex: "0 0 32px" }}>
+          <MemberActionsMenu who={`${invite.firstName} ${invite.lastName}`.trim() || "la invitación"} actions={actions} disabled={pending} />
         </div>
       </li>
       {shareResult && <ShareInviteModal result={shareResult} onClose={() => setShareResult(null)} />}
@@ -795,7 +784,6 @@ function InviteModal({
   onSuccess: (result: InvitationSendResult) => void;
   seats?: TenantPlanUsageView["seats"];
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const vertical = useTenantVertical();
@@ -823,7 +811,6 @@ function InviteModal({
       });
       if (!r.ok) setError(r.error);
       else {
-        router.refresh();
         onSuccess(r.data);
       }
     });
@@ -833,7 +820,7 @@ function InviteModal({
     <Modal onClose={onClose} title="Invitar usuario" width={520}>
       <form action={submit} style={{ display: "grid", gap: 12 }}>
         <FormField label="Email" name="email" type="email" required placeholder="nombre@ejemplo.com" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className={styles.twoCol}>
           <FormField label="Nombre" name="firstName" required />
           <FormField label="Apellido" name="lastName" required />
         </div>
@@ -910,8 +897,8 @@ function ShareInviteModal({ result, onClose }: { result: InvitationSendResult; o
         style={{
           padding: 10,
           borderRadius: 10,
-          background: status.tone === "ok" ? "rgba(200,245,100,0.18)" : status.tone === "warn" ? "rgba(228,176,32,0.15)" : "rgba(159,31,31,0.08)",
-          color: status.tone === "ok" ? "var(--navy-900)" : status.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)",
+          background: status.tone === "ok" ? "var(--success-bg)" : status.tone === "warn" ? "var(--warn-bg)" : "var(--danger-bg)",
+          color: status.tone === "ok" ? "var(--success-fg)" : status.tone === "warn" ? "var(--warn-fg)" : "var(--danger-fg)",
           fontSize: 12.5,
           marginBottom: 10,
         }}

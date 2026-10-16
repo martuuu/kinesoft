@@ -222,9 +222,17 @@ describe("AgendaClient render (B4.3)", () => {
     expect((html.match(/role="columnheader"/g) ?? []).length).toBe(7);
   });
   it("Semana: conteo partido y día bloqueado", () => {
+    // [PF1.1-agenda-a] G2: los 3 turnos de las 09:00 entran como líneas (hora + paciente + iniciales); el conteo
+    // partido «AP 2 · BD 1» queda para el agregado (celda que no alcanza), cubierto abajo con franja de 60 min.
     const html = r({ ...base, view: "week" }, "week");
-    expect(html).toContain("AP 2 · BD 1");
+    expect(html).toContain('data-week-cell="lines"');
+    expect(html.match(/data-week-line/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(html).toMatch(/data-week-line[^>]*>.*?>AP</);
     expect(html).toContain('data-blocked="true"');
+    const hourly = r({ ...base, view: "week", businessHours: { start: 8, end: 19, slotMinutes: 60 } }, "week-60");
+    // 60 min → 50 px de celda: entran 2 líneas; con 3 turnos va el agregado partido por profesional.
+    expect(hourly).toContain('data-week-cell="aggregate"');
+    expect(hourly).toContain("AP 2 · BD 1");
   });
   it("Lista y Recepción montan", () => {
     expect(r({ ...base, view: "list" }, "list")).toContain("Sobreturno");
@@ -403,8 +411,9 @@ describe("[SR-U6] salas en la agenda", () => {
   it("Por profesional, Lista y Semana: la sala en la tarjeta", () => {
     expect(r({ ...roomed, view: "practitioner" }, "rooms-prac")).toMatch(/data-room="true"[^>]*>.*?Gimnasio/);
     expect(r({ ...roomed, view: "list" }, "rooms-list")).toContain("Consultorio 1");
-    // Semana: la celda es solo conteo; la sala va en el modal de la celda (SR-U5a). Monta igual.
-    expect(r({ ...roomed, view: "week" }, "rooms-week")).toContain("AP 2 · BD 1");
+    // Semana (PF1.1 G2): si los turnos entran como líneas, la sala va en el `title` de cada línea; en el agregado,
+    // en el modal de la celda (SR-U5a).
+    expect(r({ ...roomed, view: "week" }, "rooms-week")).toMatch(/title="[^"]*en (Consultorio|Gimnasio)[^"]*"[^>]*data-week-line/);
   });
 
   it("vista 'Por sala': monta RoomDayView con sus props y el toggle marca 'Por sala'", () => {

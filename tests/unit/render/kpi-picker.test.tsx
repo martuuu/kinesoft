@@ -19,8 +19,9 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/components/layout/tweaks-context", () => ({ useTweaks: () => ({ set: () => {} }) }));
 
-import { PinKpiModal } from "@/components/dashboard/pin-kpi-button";
-import { SettingsModal } from "@/components/global/profile-menu";
+// PF1.1-dashboard: los dos pickers viven en su propio módulo (los bajan con `next/dynamic` el botón y el menú).
+import { PinKpiModal } from "@/components/dashboard/pin-kpi-modal";
+import { SettingsModal } from "@/components/global/settings-modal";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { modulesFor } from "@/lib/tenant-modules";
 import {

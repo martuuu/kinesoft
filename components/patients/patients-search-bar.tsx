@@ -5,6 +5,7 @@ import { useDebouncedSearchParam } from "@/hooks/use-debounced-search-param";
 import { Card } from "@/components/ui/card";
 import { IconSearch } from "@/components/ui/icons";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import styles from "./patients-directory.module.css";
 
 type Filter = "all" | "active" | "no-program" | "archived";
 
@@ -23,13 +24,18 @@ export function PatientsSearchBar({
   const plansEnabled = useTenantModules().has("planes");
   return (
     <Card glass style={{ padding: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      {/* PF1.1 (C-PF5.4): el input no tiene borde propio; el anillo de foco lo pinta este contenedor con
+          `:focus-within` (antes se apagaba el contorno sin reemplazo: el foco del buscador era invisible). */}
       <div
+        className={styles.pill}
         style={{
           flex: 1,
           display: "flex",
           alignItems: "center",
           gap: 8,
-          minWidth: 240,
+          minWidth: 220,
+          borderRadius: 12,
+          padding: "4px 6px",
         }}
       >
         <span style={{ color: "var(--navy-300)" }}>
@@ -56,10 +62,11 @@ export function PatientsSearchBar({
           data-1p-ignore
           data-lpignore="true"
           data-form-type="other"
+          className={styles.bareInput}
           style={{
             flex: 1,
+            minWidth: 0,
             border: "none",
-            outline: "none",
             background: "transparent",
             fontSize: 14,
             color: "var(--navy-900)",
@@ -89,16 +96,9 @@ export function PatientsSearchBar({
               key={key}
               href={`/pacientes?filter=${key}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
               scroll={false}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 600,
-                textDecoration: "none",
-                background: on ? "#fff" : "transparent",
-                color: on ? "var(--navy-900)" : "var(--navy-500)",
-                boxShadow: on ? "0 2px 6px rgba(15,30,51,0.08)" : "none",
-              }}
+              aria-current={on ? "page" : undefined}
+              // La sombra del seleccionado va por clase: un `boxShadow` inline pisaba el anillo de foco global.
+              className={`${styles.seg} ${on ? styles.segOn : ""}`}
             >
               {label}
             </Link>

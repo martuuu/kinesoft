@@ -273,7 +273,7 @@ export function PayersEditor({
           )}
 
           <div className="ppe-actions">
-            <span role="status" style={{ fontSize: 12, color: dirty ? "#9A5B00" : "var(--navy-300)", fontWeight: dirty ? 600 : 400 }}>
+            <span role="status" style={{ fontSize: 12, color: dirty ? "var(--warn-fg)" : "var(--navy-300)", fontWeight: dirty ? 600 : 400 }}>
               {dirty ? "Tenés cambios sin guardar" : "Sin cambios"}
             </span>
             <div style={{ display: "flex", gap: 8 }}>

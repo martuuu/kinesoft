@@ -166,7 +166,7 @@ export function SupportMessagesPanel({
                     padding: "12px 14px",
                     borderRadius: 14,
                     border: "1px solid rgba(15,30,51,0.08)",
-                    background: t.unread ? "var(--sky-50)" : "#fff",
+                    background: t.unread ? "var(--sky-50)" : "var(--card-bg)",
                     cursor: "pointer",
                     font: "inherit",
                     color: "var(--navy-900)",

@@ -217,7 +217,7 @@ export function ServicesEditor({
           del servicio. Cada fila se guarda por separado.
         </div>
         {dirtyCount > 0 && (
-          <div role="status" style={{ fontSize: 12, color: "#9A5B00", marginTop: 6, fontWeight: 600 }}>
+          <div role="status" style={{ fontSize: 12, color: "var(--warn-fg)", marginTop: 6, fontWeight: 600 }}>
             {dirtyCount === 1 ? "1 servicio con cambios sin guardar" : `${dirtyCount} servicios con cambios sin guardar`}
           </div>
         )}
@@ -366,7 +366,7 @@ function ServiceRowEditor({
           aria-label={`Visibilidad de ${n}`}
           aria-describedby={`${idp}-vis-hint`}
           onChange={(e) => set({ visibility: e.target.value === "PRIVATE" ? "PRIVATE" : "PUBLIC" })}
-          style={{ background: "#fff", appearance: "auto" }}
+          style={{ background: "var(--card-bg)", appearance: "auto" }}
         >
           <option value="PUBLIC">Pública</option>
           <option value="PRIVATE">Privada</option>
@@ -520,10 +520,10 @@ function ServiceRowEditor({
         )}
         <div aria-live="polite" style={{ minHeight: 16 }}>
           {status.kind === "saved" && !dirty && (
-            <span style={{ fontSize: 12, color: "#1F7A52", fontWeight: 600 }}>Guardado</span>
+            <span style={{ fontSize: 12, color: "var(--success-fg)", fontWeight: 600 }}>Guardado</span>
           )}
           {dirty && !saving && status.kind !== "error" && (
-            <span style={{ fontSize: 12, color: "#9A5B00" }}>Sin guardar</span>
+            <span style={{ fontSize: 12, color: "var(--warn-fg)" }}>Sin guardar</span>
           )}
         </div>
         {status.kind === "error" && (
@@ -594,7 +594,7 @@ function MiniSwitch({
           width: 18,
           height: 18,
           borderRadius: "50%",
-          background: "#fff",
+          background: "var(--card-bg)",
           boxShadow: "0 1px 4px rgba(15,30,51,0.2)",
           transition: "left 160ms ease",
         }}
@@ -629,7 +629,7 @@ const PSE_CSS = `
   padding: 7px 9px; border-radius: 10px; background: rgba(255,255,255,0.96);
   border: 1px solid rgba(15,30,51,0.12); font-size: 13px; color: var(--navy-900); min-width: 0;
 }
-.pse .pse-input[aria-invalid="true"] { border-color: rgba(225,75,75,0.6); }
+.pse .pse-input[aria-invalid="true"] { border-color: var(--danger-border); }
 .pse .pse-input:disabled { cursor: not-allowed; opacity: 0.6; }
 .pse .pse-actions { align-items: flex-start; }
 .pse .pse-link {

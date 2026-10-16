@@ -91,9 +91,16 @@ export type PractitionerDayViewProps<B extends PractitionerDayBooking = Practiti
   roomById?: Readonly<Record<string, { name: string }>> | null;
 };
 
-/** Ancho mínimo de columna: debajo de esto la card no deja leer el nombre. */
+/**
+ * Ancho mínimo de columna: debajo de esto la card no deja leer el nombre.
+ *
+ * PF1.1 (densidad de la Secretaria, brief PF §3.2): 200/164 → 172/148. Con 200 a 1024×768 y la barra lateral abierta
+ * (~710 px útiles) entraban 3 profesionales y el 4.º obligaba a scrollear de costado; con 172 entran 4 (5 con la barra
+ * contraída) y a 1366 entran 5-6. La card de columna no lleva el fin del turno (`showEnd`, solo en el Día): la hora
+ * de la fila ya lo ubica y el `45′` de la segunda línea da la duración.
+ */
 export function columnMinWidth(density: "comfortable" | "compact"): number {
-  return density === "compact" ? 164 : 200;
+  return density === "compact" ? 148 : 172;
 }
 
 export type ColumnDayStatus = {

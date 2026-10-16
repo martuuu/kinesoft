@@ -11,14 +11,30 @@
  * - El estado lo maneja el caller: `onNoteChange` (reemplazar por id, raíz o enmienda) y `onAmendmentAdded`.
  */
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
+import { Tag } from "@/components/ui/tag";
 import { KindTag } from "@/components/clinical-notes/kind-tag";
-import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
-import { VoidNoteDialog } from "@/components/clinical-notes/void-note-dialog";
-import { NoteHistoryModal } from "@/components/clinical-notes/note-history-modal";
+
+/*
+ * PF1.1 (C-PF2): editor, anular e historial se bajan recién al abrirlos (solo existen después de un click; por eso
+ * `ssr: false` y se montan solo abiertos). Antes los tres viajaban en el chunk de la pestaña Evoluciones y del drawer
+ * del turno aunque nadie editara.
+ */
+const NoteEditorDrawer = dynamic(
+  () => import("@/components/clinical-notes/note-editor-drawer").then((m) => m.NoteEditorDrawer),
+  { ssr: false, loading: () => null }
+);
+const VoidNoteDialog = dynamic(
+  () => import("@/components/clinical-notes/void-note-dialog").then((m) => m.VoidNoteDialog),
+  { ssr: false, loading: () => null }
+);
+const NoteHistoryModal = dynamic(
+  () => import("@/components/clinical-notes/note-history-modal").then((m) => m.NoteHistoryModal),
+  { ssr: false, loading: () => null }
+);
 import {
   CLINICAL_NOTES_UI_COPY as COPY,
-  SOFT_TAG_BORDER,
   authorLine,
   bookingLabel,
   editableUntilLabel,
@@ -38,8 +54,11 @@ export type NoteCardProps = {
   /** Esconde la línea «Turno del …» (p. ej. dentro del drawer del turno, donde es redundante). */
   hideBooking?: boolean;
   /**
-   * Esconde «Ver versiones anteriores» (el drawer del turno: el Modal es `position: fixed` y dentro del panel con
-   * `transform` quedaría encerrado en el panel; ahí se ofrece el link a la historia clínica).
+   * @deprecated PF1.1: no hace nada. Escondía «Ver versiones anteriores» en el drawer del turno porque el Modal
+   * (`position: fixed`) quedaba encerrado en el panel con `transform`; desde PF1.0-b `Modal` va por portal a body y
+   * queda por encima del Drawer (`--z-modal` > `--z-drawer`), así que el historial se ofrece en todos lados. Queda en
+   * el tipo solo para que `components/agenda/booking-drawer/clinical-note-row.tsx` compile hasta que PF1.2-agenda-b
+   * saque el prop (handoff); después se borra esta línea.
    */
   hideHistory?: boolean;
   /** Solo tests: reloj fijo. */
@@ -64,7 +83,6 @@ export function NoteCard({
   onNoteChange,
   onAmendmentAdded,
   hideBooking = false,
-  hideHistory = false,
   now: nowProp,
   variant = "root",
 }: NoteCardProps) {
@@ -96,7 +114,6 @@ export function NoteCard({
             onNoteChange={onNoteChange}
             now={nowProp}
             hideBooking
-            hideHistory={hideHistory}
           />
         ))}
       </div>
@@ -104,7 +121,7 @@ export function NoteCard({
 
   if (note.voided) {
     // EV2-Z bajo: las versiones anteriores de una anulada también son HC; se ofrecen dentro del details.
-    const voidedHistory = !hideHistory && note.revision > 1;
+    const voidedHistory = note.revision > 1;
     return (
       <article style={{ ...shellStyle, opacity: 0.85 }} data-note-id={note.id} data-voided="">
         <details>
@@ -114,9 +131,10 @@ export function NoteCard({
             ) : (
               <KindTag kind={note.kind} />
             )}
-            <span className="k-tag k-tag-soft" style={{ textTransform: "none", border: SOFT_TAG_BORDER }}>
+            {/* vx-note-card-tag (PF1.1): la primitiva, como `KindTag` (antes borde inline). */}
+            <Tag tone="soft" variant="outline">
               {COPY.voidedBadge}
-            </span>
+            </Tag>
             <span style={metaStyle}>
               {noteDateLabel(note.occurredAt)} · {note.author.name}
             </span>
@@ -140,13 +158,12 @@ export function NoteCard({
           </div>
         </details>
         {amendmentList}
-        {voidedHistory && <NoteHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} note={note} />}
+        {voidedHistory && historyOpen && <NoteHistoryModal open onClose={() => setHistoryOpen(false)} note={note} />}
       </article>
     );
   }
 
-  const raw = noteActions(note, now);
-  const actions = hideHistory ? { ...raw, history: false } : raw;
+  const actions = noteActions(note, now);
   const until = editableUntilLabel(note, now);
   const booking = hideBooking ? null : bookingLabel(note.booking);
   const anyAction = actions.edit || actions.amend || actions.void || actions.history;
@@ -215,10 +232,10 @@ export function NoteCard({
           }}
         />
       )}
-      {actions.void && (
-        <VoidNoteDialog open={voidOpen} onClose={() => setVoidOpen(false)} note={note} onVoided={(n) => onNoteChange?.(n)} />
+      {actions.void && voidOpen && (
+        <VoidNoteDialog open onClose={() => setVoidOpen(false)} note={note} onVoided={(n) => onNoteChange?.(n)} />
       )}
-      {actions.history && <NoteHistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} note={note} />}
+      {actions.history && historyOpen && <NoteHistoryModal open onClose={() => setHistoryOpen(false)} note={note} />}
     </article>
   );
 }

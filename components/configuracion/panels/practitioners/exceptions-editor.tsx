@@ -16,7 +16,6 @@
  * excepción de TZ permitida por AGENTS.md); "hoy" sale de `toARDateKey`.
  */
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
@@ -58,6 +57,9 @@ import { FALLBACK_TENANT_HOURS } from "@/lib/availability/types";
 import { ErrorBox } from "../../controls";
 import { RangeRowsEditor, infoBox, linkBtn, locationName } from "./schedule-editor";
 
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
+
 type Kind = "CLOSED" | "CUSTOM_HOURS";
 type Scope = "practitioner" | "tenant";
 
@@ -75,7 +77,6 @@ export function ExceptionsEditor({
   /** SR-U2: catálogo de salas (archivadas incluidas). Sin salas, todo igual que antes. */
   rooms?: ReadonlyArray<RoomCatalogEntry>;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const today = toARDateKey(new Date());
@@ -129,7 +130,6 @@ export function ExceptionsEditor({
       else {
         toast.success("Excepción borrada");
         await load();
-        router.refresh();
       }
     });
   };
@@ -280,7 +280,6 @@ export function ExceptionsEditor({
             setDrawer(null);
             if (monthOf(date) !== month) setMonth(monthOf(date));
             else void load();
-            router.refresh();
           }}
         />
       )}
@@ -468,7 +467,7 @@ function ExceptionDrawer({
     minHeight: 40,
     borderRadius: 10,
     border: on ? "1px solid var(--navy-900)" : "1px solid rgba(15,30,51,0.12)",
-    background: on ? "var(--navy-900)" : "#fff",
+    background: on ? "var(--navy-900)" : "var(--card-bg)",
     color: on ? "#fff" : "var(--navy-700)",
     fontSize: 13,
     fontWeight: 600,
@@ -583,7 +582,7 @@ function ExceptionDrawer({
                   minHeight: 30,
                   borderRadius: 999,
                   border: "1px solid rgba(15,30,51,0.12)",
-                  background: reason === s ? "var(--sky-100)" : "#fff",
+                  background: reason === s ? "var(--sky-100)" : "var(--card-bg)",
                   color: "var(--navy-700)",
                   fontSize: 12,
                   cursor: "pointer",

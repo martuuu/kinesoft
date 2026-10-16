@@ -32,7 +32,6 @@
  * Clínica no se borran: «duermen» y vuelven al subir de plan.
  */
 import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { FormField } from "@/components/ui/form-field";
@@ -58,6 +57,9 @@ import type { RoomArchiveBlockers as Blockers, RoomRow } from "@/lib/rooms-types
 import { archiveRoom, createRoom, restoreRoom, updateRoom } from "@/lib/rooms";
 import { ErrorBox } from "../controls";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 // ─── Copy (voseo, literal del relevamiento SR-U1) ───
 
@@ -229,7 +231,6 @@ export function RoomsSection(props: RoomsSectionProps) {
 }
 
 function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps) {
-  const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -255,7 +256,6 @@ function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps
           break;
         }
       }
-      router.refresh();
     });
   };
 
@@ -275,7 +275,6 @@ function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps
       }
       setBlocked(null);
       toast.success(ROOMS_COPY.archived(r.name));
-      router.refresh();
     });
   };
 
@@ -287,7 +286,6 @@ function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps
       if (!res.ok) toast.error("No se pudo restaurar", { description: res.error });
       else {
         toast.success(ROOMS_COPY.restored(r.name));
-        router.refresh();
       }
     });
   };
@@ -315,7 +313,7 @@ function RoomsSectionBody({ locationId, locationName, rooms }: RoomsSectionProps
                 padding: "8px 12px",
                 borderRadius: "var(--r-sm)",
                 border: "1px solid rgba(15,30,51,0.06)",
-                background: "#fff",
+                background: "var(--card-bg)",
               }}
             >
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
@@ -524,7 +522,6 @@ export function RoomForm({ draft, errors, autoFocus }: { draft: RoomDraft; error
 }
 
 function RoomDrawer({ locationId, room, onClose }: { locationId: string; room?: RoomRow; onClose: () => void }) {
-  const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -556,7 +553,6 @@ function RoomDrawer({ locationId, room, onClose }: { locationId: string; room?: 
       }
       toast.success(room ? ROOMS_COPY.saved : ROOMS_COPY.created);
       onClose();
-      router.refresh();
     });
   };
 

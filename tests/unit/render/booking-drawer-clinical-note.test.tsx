@@ -242,10 +242,10 @@ describe("[EV2-Z] fixes de UI del drawer del turno", () => {
     expect(free).toContain("Eliminar turno");
   });
 
-  it("[EV2-Z] link a la HC con target de 44 px; la tarjeta del drawer no ofrece versiones (Modal fixed en el panel)", () => {
+  it("[EV2-Z/PF1.0-b] link a la HC con target de 44 px; la tarjeta del drawer ofrece versiones (el Modal va por portal)", () => {
     const html = row(view({ note: note({ revision: 2 }) }));
     expect(html).toMatch(/<a[^>]*style="[^"]*min-height:44px[^"]*"[^>]*>[^<]*historia clínica/);
-    expect(html).not.toContain("Ver versiones anteriores");
+    expect(html).toContain("Ver versiones anteriores");
   });
 
   it("[EV2-Z M10] historial del plan: `session.evolution` = «Sesión registrada»", () => {

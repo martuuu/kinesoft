@@ -175,6 +175,28 @@ const RECEPTION_BADGE_STYLE: Record<"en-sala" | "llamado" | "en-atencion", CSSPr
   "en-atencion": { color: "#fff", background: "var(--navy-700)" },
 };
 
+/**
+ * Fondo y borde de un turno según su ESTADO (AGENTS §5: el fondo es el estado). Lo comparten la card y las líneas
+ * compactas de la Semana (G2, PF1.1) para que un «Ausente» se lea igual en todas las vistas. Colores de token
+ * (C-PF5.2): antes eran rgba sueltos de la familia verde/roja/ámbar con alfas fuera del token.
+ */
+export function bookingStatusTone(
+  status: BookingDTO["status"],
+  expiredHold: boolean
+): { background: string; border: string } {
+  if (expiredHold) return { background: "rgba(15,30,51,0.03)", border: "1px dashed rgba(15,30,51,0.3)" };
+  switch (status) {
+    case "CANCELLED":
+      return { background: "var(--danger-bg)", border: "1px solid var(--danger-border)" };
+    case "NO_SHOW":
+      return { background: "var(--warn-bg)", border: "1px solid var(--warn-border)" };
+    case "COMPLETED":
+      return { background: "var(--success-bg)", border: "1px solid var(--success-border)" };
+    default:
+      return { background: "rgba(255,255,255,0.85)", border: "1px solid rgba(31,79,190,0.12)" };
+  }
+}
+
 export type BookingCardSizing = Pick<
   CSSProperties,
   "flexBasis" | "flexGrow" | "flexShrink" | "minWidth" | "maxWidth"
@@ -190,6 +212,7 @@ export function BookingCard({
   now,
   room = null,
   flash,
+  showEnd = false,
 }: {
   b: BookingDTO;
   onEdit: (b: BookingDTO) => void;
@@ -200,6 +223,8 @@ export function BookingCard({
   now?: Date;
   room?: { name: string } | null;
   flash?: boolean;
+  /** G3 (PF1.1): «08:00–08:45» en vez de «08:00». Solo el Día (cards en fila por franja); en columnas no entra. */
+  showEnd?: boolean;
 }) {
   const flashIds = useContext(BookingFlashContext);
   const isFlashing = flash ?? flashIds?.has(b.id) ?? false;
@@ -214,6 +239,10 @@ export function BookingCard({
   const hold = paymentHoldState(b, clock);
   const reception = receptionCardBadge(b, clock);
   const isExpiredHold = hold === "vencida";
+  const tone = bookingStatusTone(b.status, isExpiredHold);
+  // G3 (VX0-b): la card dice el FIN («08:00–08:45»). Las cards van en fila por franja, no proporcionales a la
+  // duración: sin el fin, un 08:45 de 15′ parecía simultáneo al 08:00 de 45′ de al lado.
+  const end = new Date(date.getTime() + b.durationMin * 60_000);
 
   // Left bar = the service's colour (identity); state is conveyed by the
   // card's tint / opacity / strike-through.
@@ -241,6 +270,7 @@ export function BookingCard({
 
   return (
     <button
+      type="button"
       onClick={() => onEdit(b)}
       className={isFlashing ? "k-flash" : undefined}
       data-flash={isFlashing ? "true" : undefined}
@@ -249,26 +279,8 @@ export function BookingCard({
         ...sizing,
         borderRadius: 12,
         padding: compact ? "6px 9px" : "8px 10px",
-        background: isCancelled
-          ? "var(--danger-bg)"
-          : isNoShow
-            ? "var(--warn-bg)"
-            : isDone
-              ? "rgba(54,179,126,0.1)"
-              : isExpiredHold
-                ? "rgba(15,30,51,0.03)"
-                : "rgba(255,255,255,0.85)",
-        border:
-          (isExpiredHold ? "1px dashed " : "1px solid ") +
-          (isExpiredHold
-            ? "rgba(15,30,51,0.3)"
-            : isCancelled
-            ? "rgba(228,70,70,0.3)"
-            : isNoShow
-              ? "rgba(255,176,32,0.45)"
-              : isDone
-                ? "rgba(54,179,126,0.35)"
-                : "rgba(31,79,190,0.12)"),
+        background: tone.background,
+        border: tone.border,
         boxShadow: isHighlighted ? "var(--shadow-card-lg)" : "0 2px 6px rgba(15,30,51,0.04)",
         color: "var(--navy-900)",
         display: "flex",
@@ -300,6 +312,7 @@ export function BookingCard({
             style={{ fontSize: 10, color: "var(--sky-700)", fontWeight: 600, flexShrink: 0 }}
           >
             {fmtHour(date)}
+            {showEnd && <>–{fmtHour(end)}</>}
           </span>
           <span
             style={{
@@ -353,7 +366,7 @@ export function BookingCard({
             </span>
           )}
           {b.isOverbooked && (
-            <span data-badge="sobreturno" style={{ ...miniBadge, color: "#9A5B00", background: "rgba(255,176,32,0.22)" }}>
+            <span data-badge="sobreturno" style={{ ...miniBadge, color: "var(--warn-fg)", background: "var(--warn-bg-strong)" }}>
               Sobreturno
             </span>
           )}
@@ -371,7 +384,7 @@ export function BookingCard({
               style={{
                 flexShrink: 0,
                 fontWeight: 700,
-                color: isExpiredHold ? "var(--navy-500)" : "#9A5B00",
+                color: isExpiredHold ? "var(--navy-500)" : "var(--warn-fg)",
               }}
             >
               · {PAYMENT_HOLD_LABEL[hold]}

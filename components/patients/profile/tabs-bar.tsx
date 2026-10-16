@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
 import type { Tab } from "./types";
 
@@ -24,16 +24,24 @@ import type { Tab } from "./types";
  *
  * EV2-3a (EV2-D10/D20): `evol` (la curva EVA) se llamaba «Evolución» y chocaba con la evolución de HC (H-EV2): pasa a
  * «EVA» con el mismo id. «Evoluciones» (`evoluciones`) cuenta las evoluciones vivas (raíces no anuladas).
+ *
+ * PF1.1 (C-PF1/C-PF2): el subrayado es `m.span` (no `motion.`): lo pinta el SSR con su `style` y el deslizamiento
+ * (`layoutId`) llega cuando `LazyMotion` carga las features. `onPreload` se llama en `pointerenter`/`focus` para
+ * bajar el chunk de la pestaña antes del click. `whiteSpace: nowrap` + `flexShrink: 0`: a 1024 con el sidebar
+ * abierto «Facturación 12» se partía en dos líneas; ahora la barra scrollea (ya tenía `overflowX: auto`).
  */
 export function TabsBar({
   active,
   onChange,
+  onPreload,
   counts,
   only,
   labels,
 }: {
   active: Tab;
   onChange: (t: Tab) => void;
+  /** Precarga del chunk de la pestaña (hover/foco), antes del click. */
+  onPreload?: (t: Tab) => void;
   counts: { evoluciones?: number; turnos?: number; sesiones?: number; planes?: number; fact?: number };
   only?: readonly Tab[];
   labels?: Partial<Record<Tab, string>>;
@@ -74,6 +82,8 @@ export function TabsBar({
             data-profile-tab={t.id}
             aria-current={on ? "true" : undefined}
             onClick={() => onChange(t.id)}
+            onPointerEnter={onPreload && !on ? () => onPreload(t.id) : undefined}
+            onFocus={onPreload && !on ? () => onPreload(t.id) : undefined}
             style={{
               padding: "12px 18px",
               position: "relative",
@@ -86,6 +96,8 @@ export function TabsBar({
               display: "inline-flex",
               alignItems: "center",
               gap: 8,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             {t.label}
@@ -104,7 +116,7 @@ export function TabsBar({
               </span>
             )}
             {on && (
-              <motion.span
+              <m.span
                 layoutId="patient-tab-underline"
                 transition={{ duration: DUR.base, ease: EASE_OUT }}
                 style={{

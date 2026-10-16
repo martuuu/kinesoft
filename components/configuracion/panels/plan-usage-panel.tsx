@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import type { SubscriptionStatus, TenantVertical } from "@prisma/client";
 import { Card } from "@/components/ui/card";
@@ -12,7 +13,16 @@ import type { TenantModule } from "@/lib/tenant-modules";
 import type { BillingOverview } from "@/lib/saas-billing-types";
 import type { PlanUsageTone, TenantPlanUsageView } from "@/lib/tenant-plan-usage-logic";
 import { READ_ONLY_PLAN_COPY, moduleLabels, planSeatsLabel, planStatusView } from "@/lib/saas-billing-view";
-import { PlanChangeDrawer, type PlanChoice } from "./plan-change-drawer";
+import type { PlanChoice } from "./plan-change-drawer";
+
+// [PF1.1-config · C-PF2] El drawer de cambio de plan (con el step-up) se baja recién al abrirlo; se precarga en
+// hover/foco de «Cambiar de plan». Sin SSR: solo existe tras un click y es una capa fija (no desplaza nada).
+const loadPlanChangeDrawer = () => import("./plan-change-drawer");
+const PlanChangeDrawer = dynamic(() => loadPlanChangeDrawer().then((m) => m.PlanChangeDrawer), {
+  ssr: false,
+  loading: () => null,
+});
+const preloadPlanChangeDrawer = () => void loadPlanChangeDrawer();
 import type { SupportDraft } from "./support-messages-panel";
 
 /**
@@ -30,7 +40,7 @@ import type { SupportDraft } from "./support-messages-panel";
  */
 
 const TONE_STYLE: Record<PlanUsageTone, { background: string; color: string }> = {
-  ok: { background: "rgba(200,245,100,0.18)", color: "var(--navy-900)" },
+  ok: { background: "var(--success-bg)", color: "var(--success-fg)" },
   info: { background: "var(--sky-100)", color: "var(--sky-800)" },
   warn: { background: "var(--st-noshow-bg)", color: "var(--st-noshow-fg)" },
 };
@@ -54,6 +64,13 @@ function Row({ label, value, hint }: { label: string; value: ReactNode; hint?: R
       </div>
       <div style={{ flexShrink: 0, maxWidth: "100%" }}>{value}</div>
     </div>
+  );
+}
+
+/** [PF1.1-config · C5] Un valor es texto; la píldora queda solo para ESTADOS (activa, solo lectura, cupo lleno). */
+function Value({ children }: { children: ReactNode }) {
+  return (
+    <span style={{ fontSize: 15, fontWeight: 700, color: "var(--navy-900)", whiteSpace: "nowrap" }}>{children}</span>
   );
 }
 
@@ -104,6 +121,8 @@ export function PlanUsagePanel({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  // Montado desde la primera apertura (y no solo mientras `open`): así el Drawer conserva su salida animada.
+  const [mounted, setMounted] = useState(false);
   const plan = usage?.plan ?? overview.plan;
   const planLabel = usage?.planLabel ?? overview.planLabel;
   const status = planStatusView(
@@ -116,7 +135,16 @@ export function PlanUsagePanel({
     <Card style={{ padding: 20 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <EyebrowLabel>Plan y uso</EyebrowLabel>
-        <Button type="button" onClick={() => setOpen(true)} data-plan-change>
+        <Button
+          type="button"
+          onClick={() => {
+            setMounted(true);
+            setOpen(true);
+          }}
+          onPointerEnter={preloadPlanChangeDrawer}
+          onFocus={preloadPlanChangeDrawer}
+          data-plan-change
+        >
           Cambiar de plan
         </Button>
       </div>
@@ -128,7 +156,7 @@ export function PlanUsagePanel({
               ? `${formatARS(overview.effectivePriceCents)} por mes${overview.customPriceCents != null ? " (precio acordado para tu consultorio)" : ""}.`
               : "Precio a confirmar: te lo contamos antes del primer cargo."
           }
-          value={<Pill>{planLabel}</Pill>}
+          value={<Value>{planLabel}</Value>}
         />
         <Row
           label="Estado"
@@ -172,7 +200,11 @@ export function PlanUsagePanel({
           value={
             total ? (
               <span data-seats={planSeatsLabel(plan, total)}>
-                <Pill tone={usage?.seats.full ? "warn" : "ok"}>{planSeatsLabel(plan, total)}</Pill>
+                {usage?.seats.full ? (
+                  <Pill tone="warn">{planSeatsLabel(plan, total)}</Pill>
+                ) : (
+                  <Value>{planSeatsLabel(plan, total)}</Value>
+                )}
               </span>
             ) : null
           }
@@ -211,19 +243,21 @@ export function PlanUsagePanel({
           .
         </p>
       )}
-      <PlanChangeDrawer
-        open={open}
-        onClose={() => setOpen(false)}
-        currentPlan={plan}
-        choices={choices}
-        vertical={vertical}
-        trialing={overview.subscriptionStatus === "TRIALING"}
-        usersNow={total?.used ?? null}
-        onContactSales={(d) => onContactSales?.(d)}
-        // refresh-ok: el plan cambia los módulos del shell (nav, salas, sala de espera); el `revalidatePath` de la
-        // action trae la página pero no re-renderiza el layout `(app)`.
-        onChanged={() => router.refresh()}
-      />
+      {mounted && (
+        <PlanChangeDrawer
+          open={open}
+          onClose={() => setOpen(false)}
+          currentPlan={plan}
+          choices={choices}
+          vertical={vertical}
+          trialing={overview.subscriptionStatus === "TRIALING"}
+          usersNow={total?.used ?? null}
+          onContactSales={(d) => onContactSales?.(d)}
+          // refresh-ok: el plan cambia los módulos del shell (nav, salas, sala de espera); el `revalidatePath` de la
+          // action trae la página pero no re-renderiza el layout `(app)`.
+          onChanged={() => router.refresh()}
+        />
+      )}
     </Card>
   );
 }

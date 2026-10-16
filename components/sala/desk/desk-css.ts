@@ -83,6 +83,7 @@ export const DESK_CSS = `
 .desk-frame { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; min-width: 0; height: calc(100dvh - 28px); overflow: hidden; }
 .desk-frame[data-fit=natural] { height: auto; overflow: visible; }
 .desk-body { position: relative; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+.desk-body-skel { min-height: 320px; border-radius: 14px; background: rgba(15,30,51,0.05); border: 1px solid rgba(15,30,51,0.04); }
 .desk-face { min-height: 0; min-width: 0; }
 .desk-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .desk-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
@@ -101,7 +102,7 @@ export const DESK_CSS = `
 .desk-search { position: relative; width: 260px; min-width: 160px; flex-shrink: 1; }
 .desk-search-ico { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--navy-400); display: inline-flex; pointer-events: none; }
 .desk-search input { width: 100%; height: 40px; padding: 0 40px 0 38px; border-radius: 12px; border: 1px solid rgba(15,30,51,0.12); background: var(--bg-panel); font: inherit; font-size: 15px; color: var(--navy-900); }
-.desk-search input:focus { outline: none; border-color: var(--sky-700); box-shadow: 0 0 0 3px rgba(31,79,190,0.18); background: var(--card-bg); }
+.desk-search input:focus { outline: 2px solid transparent; border-color: var(--sky-700); box-shadow: var(--focus-ring); background: var(--card-bg); }
 .desk-search kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
 .desk-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--navy-500); cursor: pointer; }
 .desk-search-clear:hover { background: rgba(15,30,51,0.06); color: var(--navy-900); }
@@ -167,7 +168,8 @@ export const DESK_CSS = `
 .desk-menu { position: fixed; z-index: 60; min-width: 220px; max-width: calc(100vw - 16px); padding: 6px; border-radius: 12px; background: var(--card-bg); box-shadow: 0 0 0 1px rgba(15,30,51,0.08), 0 18px 40px rgba(15,30,51,0.18); display: grid; gap: 2px; }
 .desk-menu-h { padding: 6px 10px 4px; font-size: 12px; color: var(--navy-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .desk-menu-item { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; font: inherit; font-size: 14px; font-weight: 500; color: var(--navy-900); text-decoration: none; cursor: pointer; }
-.desk-menu-item:hover, .desk-menu-item:focus-visible { background: var(--bg-panel); outline: none; }
+.desk-menu-item:hover { background: var(--bg-panel); }
+.desk-menu-item:focus-visible { background: var(--bg-panel); outline: 2px solid var(--sky-700); outline-offset: -2px; }
 .desk-menu-sep { border: 0; height: 1px; background: rgba(15,30,51,0.07); margin: 4px 0; }
 
 .desk-pay { display: grid; gap: 16px; }

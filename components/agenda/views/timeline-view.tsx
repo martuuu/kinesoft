@@ -14,7 +14,7 @@ import {
 import type { AgendaHighlight } from "@/lib/agenda-highlight";
 import { BookingCard, type BookingCardSizing } from "../grid/booking-card";
 import { BLOCKED_STRIPES, LockIcon } from "../grid/unavailable-overlay";
-import { denseOverflow, overflowButtonText } from "../grid/slot-cell";
+import { denseOverflow, overflowButtonText, visibleSlotWindow } from "@/lib/agenda-slot-helpers";
 
 /** Iniciales por profesional (solo con más de uno en pantalla; ver `BookingCard`). */
 export type PractitionerInitialsMap = Readonly<Record<string, { initials: string; name: string }>>;
@@ -148,6 +148,38 @@ export function TimelineView({
     return { slots, bySlot, before, after, ongoing };
   }, [bookings, start, end, slotMinutes]);
 
+  // G3 (PF1.1): las filas vacías de los bordes (fuera de turnos ± 1 h) se pliegan. A 1366×768 la grilla de 08 a 22
+  // con la mitad de abajo vacía ocupaba la mitad del alto útil. Un click las vuelve a mostrar (alta en franja vacía).
+  const [showAllRows, setShowAllRows] = useState(false);
+  const rowWindow = useMemo(
+    () => visibleSlotWindow(slots, [...bySlot.keys(), ...ongoing.keys()], slotMinutes),
+    [slots, bySlot, ongoing, slotMinutes]
+  );
+  const from = showAllRows ? 0 : rowWindow.from;
+  const to = showAllRows ? slots.length - 1 : rowWindow.to;
+  const foldButton = (a: number, b: number) => (
+    <button
+      type="button"
+      onClick={() => setShowAllRows(true)}
+      data-fold
+      style={{
+        display: "block",
+        width: "100%",
+        padding: "6px 0 6px 56px",
+        border: "none",
+        borderTop: "1px solid rgba(15,30,51,0.07)",
+        background: "transparent",
+        textAlign: "left",
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: "var(--sky-700)",
+        cursor: "pointer",
+      }}
+    >
+      Ver {slotLabel(slots[a])}–{slotLabel(slots[b] + slotMinutes)} (sin turnos)
+    </button>
+  );
+
   return (
     <Card style={{ padding: 14, height: "100%", display: "flex", flexDirection: "column" }}>
       <div className="k-scroll" style={{ flex: 1, overflowY: "auto" }}>
@@ -155,7 +187,10 @@ export function TimelineView({
           <OutOfRangeRow label="Antes del horario" items={before} onEdit={onEdit} highlight={highlight} compact={density === "compact"} {...cardExtras} />
         )}
 
+        {from > 0 && foldButton(0, from - 1)}
+
         {slots.map((slot, i) => {
+          if (i < from || i > to) return null;
           const blocked = !!dayLocked || (blockedRows?.has(slot) ?? false);
           const prevBlocked = i > 0 && (!!dayLocked || (blockedRows?.has(slots[i - 1]) ?? false));
           return (
@@ -181,6 +216,8 @@ export function TimelineView({
           />
           );
         })}
+
+        {to < slots.length - 1 && foldButton(to + 1, slots.length - 1)}
 
         {after.length > 0 && (
           <OutOfRangeRow label="Después del horario" items={after} onEdit={onEdit} highlight={highlight} compact={density === "compact"} {...cardExtras} />
@@ -300,6 +337,7 @@ function SlotRow({
               highlight={highlight}
               compact={compact}
               sizing={timelineCardSizing}
+              showEnd
               practitioner={practitionerById?.[b.practitionerId] ?? null}
               room={cardRoom(roomById, b)}
               now={now}
@@ -448,7 +486,7 @@ function OutOfRangeRow({
         gap: 8,
         padding: "6px 0",
         borderTop: "1px solid rgba(15,30,51,0.07)",
-        background: "rgba(255,176,32,0.05)",
+        background: "var(--warn-bg)",
       }}
     >
       <span
@@ -459,7 +497,7 @@ function OutOfRangeRow({
           fontSize: 9.5,
           fontWeight: 700,
           lineHeight: 1.25,
-          color: "#9A5B00",
+          color: "var(--warn-fg)",
         }}
       >
         {label}
@@ -473,6 +511,7 @@ function OutOfRangeRow({
             highlight={highlight}
             compact={compact}
             sizing={timelineCardSizing}
+            showEnd
             practitioner={practitionerById?.[b.practitionerId] ?? null}
             room={cardRoom(roomById, b)}
             now={now}

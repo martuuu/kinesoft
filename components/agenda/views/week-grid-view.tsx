@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
-import { IconX } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/modal";
 import { toARDateKey, toARMinutes } from "@/lib/datetime-ar";
 import { dowOfDayKey } from "@/lib/availability/day";
 import { splitCountByPractitioner, type AggregatedDayLock } from "@/lib/agenda-client-state";
@@ -13,13 +13,17 @@ import { StatusTag } from "@/components/ui/status-tag";
 import { paymentHoldState } from "@/lib/agenda-filters";
 import { anyHighlightMatch, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { PractitionerBadge } from "../grid/practitioner-badge";
-import { PlanMarks, planLooseSplit, planLooseSplitText } from "../grid/booking-card";
+import { PlanMarks, bookingStatusTone, planLooseSplit, planLooseSplitText } from "../grid/booking-card";
 import { BLOCKED_STRIPES } from "../grid/unavailable-overlay";
 
 /** Profesional visible con sus iniciales (orden de columnas/chips). */
 type WeekPractitioner = { id: string; initials: string; name: string };
 
-/** Slot overflow modal — shows when user clicks "+N más" in the week grid. */
+/**
+ * Lista de una celda de la Semana (click en el agregado «N turnos»). PF1.1: va sobre el `Modal` de `components/ui`
+ * (portal, foco atrapado, Esc, botón de cierre con nombre). Antes era un `div` propio con `backdrop-filter: blur`,
+ * sin Esc ni trampa de foco y con una «X» sin `aria-label`.
+ */
 function WeekSlotModal({
   bookings,
   label,
@@ -36,95 +40,146 @@ function WeekSlotModal({
   roomById: Readonly<Record<string, { name: string }>> | null;
 }) {
   return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
+    <Modal onClose={onClose} title={label} width={560}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {bookings.map((b) => {
+          const date = new Date(b.scheduledFor);
+          const isCancelled = b.status === "CANCELLED";
+          const prac = practitionerById?.get(b.practitionerId) ?? null;
+          const roomName = roomNameOf(roomById, b);
+          return (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => { onEdit(b); onClose(); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "10px 12px", borderRadius: 12, border: "none",
+                background: isCancelled ? "var(--danger-bg)" : "rgba(255,255,255,0.7)",
+                cursor: "pointer", textAlign: "left", width: "100%",
+                opacity: isCancelled ? 0.6 : 1,
+              }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: b.serviceColor ?? SERVICE_COLOR_FALLBACK,
+                  flexShrink: 0,
+                }}
+              />
+              <Avatar name={b.patientName} size={32} tone="sky" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {b.patientName}
+                  {b.isOverbooked && (
+                    <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", color: "var(--warn-fg)", background: "var(--warn-bg-strong)", borderRadius: 999, padding: "0 6px" }}>
+                      Sobreturno
+                    </span>
+                  )}
+                  <PlanMarks b={b} />
+                </div>
+                <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
+                  {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
+                  {roomName && <span data-room> · {roomName}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--navy-400)", marginTop: 1 }}>
+                  {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={24} />}
+              <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+/** G2: alto de una línea compacta de la Semana (hora + paciente + barra de servicio) y separación entre líneas. */
+const WEEK_LINE_H = 22;
+const WEEK_LINE_GAP = 2;
+const WEEK_CELL_PAD = 2;
+
+/**
+ * Cuántas líneas compactas entran en una celda de `cellPx` de alto (G2). Pura y exportada para el test: si TODOS los
+ * turnos entran se dibujan uno por uno; si no, la celda es el agregado «N turnos» (tono suave) que abre la lista.
+ */
+export function weekCellLineCapacity(cellPx: number): number {
+  return Math.max(1, Math.floor((cellPx - 2 * WEEK_CELL_PAD + WEEK_LINE_GAP) / (WEEK_LINE_H + WEEK_LINE_GAP)));
+}
+
+/**
+ * Línea compacta de un turno en la Semana (G2, VX0-b clase A). Regla de color de la agenda (AGENTS §5): la barra
+ * lateral es el servicio, el fondo es el estado (`bookingStatusTone`, el mismo de la card del Día) y la opacidad es el
+ * resaltado. El profesional va con iniciales (canal no cromático), solo con más de uno en pantalla.
+ */
+function WeekBookingLine({
+  b,
+  onEdit,
+  practitioner,
+  dimmed,
+  roomName,
+}: {
+  b: BookingDTO;
+  onEdit: (b: BookingDTO) => void;
+  practitioner: WeekPractitioner | null;
+  dimmed: boolean;
+  roomName: string | null;
+}) {
+  const date = new Date(b.scheduledFor);
+  const tone = bookingStatusTone(b.status, paymentHoldState(b, new Date()) === "vencida");
+  const isCancelled = b.status === "CANCELLED";
+  const label = [
+    `${fmtHour(date)} · ${b.durationMin} min · ${b.patientName}`,
+    b.serviceName,
+    roomName ? `en ${roomName}` : null,
+    practitioner?.name ?? null,
+    b.isOverbooked ? "sobreturno" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <button
+      type="button"
+      onClick={() => onEdit(b)}
+      title={label}
+      data-week-line
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15,30,51,0.45)",
-        backdropFilter: "blur(4px)",
-        zIndex: 50,
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
+        gap: 5,
+        height: WEEK_LINE_H,
+        minWidth: 0,
+        width: "100%",
+        padding: "0 6px 0 0",
+        borderRadius: 6,
+        background: tone.background,
+        border: tone.border,
+        borderLeft: `3px solid ${b.serviceColor ?? SERVICE_COLOR_FALLBACK}`,
+        color: "var(--navy-900)",
+        cursor: "pointer",
+        textAlign: "left",
+        overflow: "hidden",
+        opacity: isCancelled ? 0.6 : dimmed ? 0.45 : 1,
+        textDecoration: isCancelled ? "line-through" : "none",
+        flexShrink: 0,
       }}
     >
-      <div
-        className="k-glass-strong"
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: "min(560px,100%)", borderRadius: 20, padding: 20 }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-700)" }}>{label}</span>
-          <button
-            onClick={onClose}
-            style={{
-              border: "none", background: "rgba(255,255,255,0.7)", width: 30, height: 30,
-              borderRadius: 8, cursor: "pointer", color: "var(--navy-700)",
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-            }}
-          >
-            <IconX size={13} />
-          </button>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {bookings.map((b) => {
-            const date = new Date(b.scheduledFor);
-            const isCancelled = b.status === "CANCELLED";
-            const isDone = b.status === "COMPLETED";
-            const prac = practitionerById?.get(b.practitionerId) ?? null;
-            const roomName = roomNameOf(roomById, b);
-            return (
-              <button
-                key={b.id}
-                onClick={() => { onEdit(b); onClose(); }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 12px", borderRadius: 12, border: "none",
-                  background: isCancelled ? "rgba(228,70,70,0.08)" : "rgba(255,255,255,0.7)",
-                  cursor: "pointer", textAlign: "left", width: "100%",
-                  opacity: isCancelled ? 0.6 : 1,
-                }}
-              >
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: b.serviceColor ?? SERVICE_COLOR_FALLBACK,
-                    flexShrink: 0,
-                  }}
-                />
-                <Avatar name={b.patientName} size={32} tone="sky" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy-900)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    {b.patientName}
-                    {b.isOverbooked && (
-                      <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", color: "#9A5B00", background: "rgba(255,176,32,0.22)", borderRadius: 999, padding: "0 6px" }}>
-                        Sobreturno
-                      </span>
-                    )}
-                    <PlanMarks b={b} />
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
-                    {fmtHour(date)} · {b.serviceName} · {b.durationMin} min
-                    {roomName && <span data-room> · {roomName}</span>}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--navy-400)", marginTop: 1 }}>
-                    {[osLabel(b.obraSocial), fmtMoney(b.copagoCents)].filter(Boolean).join(" · ")}
-                  </div>
-                </div>
-                {prac && <PractitionerBadge initials={prac.initials} name={prac.name} size={24} />}
-                <StatusTag s={b.status} hold={paymentHoldState(b, new Date())} />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
+      <span className="k-mono" style={{ fontSize: 10, fontWeight: 600, color: "var(--sky-700)", paddingLeft: 4, flexShrink: 0 }}>
+        {fmtHour(date)}
+      </span>
+      <span style={{ fontSize: 11, fontWeight: 600, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {b.patientName}
+      </span>
+      {practitioner && (
+        <span className="k-mono" aria-hidden="true" style={{ fontSize: 9, fontWeight: 700, color: "var(--navy-500)", flexShrink: 0 }}>
+          {practitioner.initials}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -322,7 +377,7 @@ export function WeekGridView({
             })
           )}
 
-          {/* One chip per cell showing total count — click opens the list modal */}
+          {/* Por celda: líneas compactas si entran; si no, el agregado que abre la lista (G2). */}
           {Array.from(cellMap.entries()).map(([cellKey, cellBookings]) => {
             const [dayColStr, rowStartStr] = cellKey.split("-");
             const dayCol = Number(dayColStr);
@@ -365,10 +420,53 @@ export function WeekGridView({
             const planSplitText = planSplit ? planLooseSplitText(planSplit) : null;
             const multiSplit = split != null && split.length > 1;
 
+            // G2 (VX0-b, clase A): si todos los turnos de la celda entran como líneas compactas, se ven uno por uno
+            // (hora + paciente + barra de servicio + fondo de estado) y el click abre el drawer directo. Antes TODA
+            // celda era un bloque `--sky-700` sólido «4 turnos» (aun con 1 turno): se perdían servicio, estado,
+            // paciente y hora. El agregado queda solo cuando no entran, en tono suave.
+            const cellPx = span * ROW + (span - 1) * 6;
+            if (count <= weekCellLineCapacity(cellPx)) {
+              return (
+                <div
+                  key={cellKey}
+                  data-week-cell="lines"
+                  style={{
+                    gridColumn: colPos + 2,
+                    gridRow: `${rowStart} / span ${span}`,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: WEEK_LINE_GAP,
+                    padding: WEEK_CELL_PAD,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    position: "relative",
+                    zIndex: hasMatch ? 5 : undefined,
+                  }}
+                >
+                  {cellBookings.map((b) => (
+                    <WeekBookingLine
+                      key={b.id}
+                      b={b}
+                      onEdit={onEdit}
+                      practitioner={practitionerById?.get(b.practitionerId) ?? null}
+                      dimmed={highlight != null && !anyHighlightMatch(highlight, [b])}
+                      roomName={roomNameOf(roomById, b)}
+                    />
+                  ))}
+                </div>
+              );
+            }
+
+            // Barras de los servicios de la celda (hasta 4): el agregado no pierde el canal de servicio.
+            const serviceColors = Array.from(new Set(cellBookings.map((b) => b.serviceColor ?? SERVICE_COLOR_FALLBACK))).slice(0, 4);
+
             return (
               <button
                 key={cellKey}
+                type="button"
+                data-week-cell="aggregate"
                 title={planSplitText ? `${count} ${count === 1 ? "turno" : "turnos"} · ${planSplitText}` : undefined}
+                aria-label={`${fmtHour(date0)}: ${count} ${count === 1 ? "turno" : "turnos"}${planSplitText ? ` (${planSplitText})` : ""}. Ver la lista`}
                 onClick={() =>
                   setOverflow({
                     bookings: cellBookings,
@@ -378,9 +476,9 @@ export function WeekGridView({
                 style={{
                   gridColumn: colPos + 2,
                   gridRow: `${rowStart} / span ${span}`,
-                  background: "var(--sky-700)",
-                  color: "#fff",
-                  border: "none",
+                  background: "var(--sky-50)",
+                  color: "var(--navy-900)",
+                  border: "1px solid rgba(31,79,190,0.22)",
                   borderRadius: 8,
                   cursor: "pointer",
                   display: "flex",
@@ -388,7 +486,7 @@ export function WeekGridView({
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 2,
-                  padding: "4px 6px",
+                  padding: "4px 6px 4px 10px",
                   overflow: "hidden",
                   position: "relative",
                   zIndex: hasMatch ? 5 : undefined,
@@ -398,29 +496,29 @@ export function WeekGridView({
                   transition: "transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease",
                 }}
               >
-                <span className="k-mono" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
-                  {count}
+                <span aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, display: "flex", flexDirection: "column" }}>
+                  {serviceColors.map((c) => (
+                    <span key={c} style={{ flex: 1, background: c }} />
+                  ))}
+                </span>
+                <span aria-hidden="true" style={{ display: "flex", alignItems: "baseline", gap: 4, lineHeight: 1 }}>
+                  <span className="k-mono" style={{ fontSize: 15, fontWeight: 700, color: "var(--sky-700)" }}>{count}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: "var(--navy-500)" }}>{count === 1 ? "turno" : "turnos"}</span>
                 </span>
                 {split && multiSplit ? (
                   <span
                     aria-label={split.map((x) => `${practitionerById?.get(x.id)?.name ?? x.initials}: ${x.count}`).join(", ")}
-                    style={{ fontSize: 9, opacity: 0.9, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
+                    style={{ fontSize: 9, color: "var(--navy-500)", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
                   >
                     {split.map((x) => `${x.initials} ${x.count}`).join(" · ")}
                   </span>
                 ) : planSplitText ? null : split && split.length === 1 ? (
-                  <span style={{ fontSize: 9, opacity: 0.9, fontWeight: 600 }}>
-                    {split[0].initials} · {count === 1 ? "turno" : "turnos"}
-                  </span>
-                ) : (
-                  <span style={{ fontSize: 9, opacity: 0.85, fontWeight: 600 }}>
-                    {count === 1 ? "turno" : "turnos"}
-                  </span>
-                )}
+                  <span style={{ fontSize: 9, color: "var(--navy-500)", fontWeight: 600 }}>{split[0].initials}</span>
+                ) : null}
                 {planSplitText && (
                   <span
                     data-plan-split
-                    style={{ fontSize: 9, opacity: 0.95, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
+                    style={{ fontSize: 9, color: "var(--navy-700)", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}
                   >
                     {/* Un solo profesional en la celda: sus iniciales van en la misma línea. */}
                     {!multiSplit && split?.length === 1 ? `${split[0].initials} · ` : ""}

@@ -103,7 +103,10 @@ describe("[IAM-4c] UsersPanel · administración del equipo", () => {
   it("las pendientes ya no dicen «Compartí el link» (la lista nunca lo muestra)", () => {
     const html = renderToStaticMarkup(<UsersPanel team={TEAM} pending={PENDING} viewerRole="OWNER" />);
     expect(html).not.toContain("Compartí el link con el invitado");
-    expect(html).toContain("Reenviar");
+    // [PF1.1-config · C7] Reenviar / Generar link nuevo / Anular viven en el menú «⋯» de la invitación (cerrado en el
+    // render inicial); el rol va en texto, sin el Tag en mayúsculas.
+    expect(html).toContain('aria-label="Acciones para Nueva Persona"');
+    expect(html).toMatch(/data-invite-role="[^"]*"[^>]*>[^<]*[a-z]/);
   });
 });
 

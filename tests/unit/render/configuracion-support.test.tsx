@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -6,6 +6,22 @@ import { renderToStaticMarkup } from "react-dom/server";
  * General cuando mira el soporte. Componentes REALES con props; se mockean el router de Next y las server actions
  * (red) que importa General.
  */
+// [PF1.1-config · C-PF2] Las pestañas de `ConfiguracionClient` son `next/dynamic`. `renderToStaticMarkup` no espera
+// Suspense: el mock resuelve cada `import()` en `beforeAll` y después renderiza el panel real, sincrónico (mismo patrón
+// que tests/unit/render/agenda-client.test.tsx).
+const { dynamicLoads } = vi.hoisted(() => ({ dynamicLoads: [] as Promise<unknown>[] }));
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<React.ComponentType<Record<string, unknown>>>) => {
+    let Loaded: React.ComponentType<Record<string, unknown>> | null = null;
+    dynamicLoads.push(loader().then((C) => (Loaded = C)));
+    return function DynamicMock(props: Record<string, unknown>) {
+      return Loaded ? <Loaded {...props} /> : null;
+    };
+  },
+}));
+beforeAll(async () => {
+  await Promise.all(dynamicLoads);
+});
 vi.mock("next/navigation", () => ({
   usePathname: () => "/configuracion",
   useSearchParams: () => new URLSearchParams(""),

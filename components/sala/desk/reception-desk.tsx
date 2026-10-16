@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+import dynamic from "next/dynamic";
+import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_IN_OUT, EASE_OUT } from "@/lib/motion";
 import { useToast } from "@/components/ui/toast";
 import { IconBell } from "@/components/ui/icons";
@@ -16,9 +17,22 @@ import type { SalaLive } from "@/components/sala/sala-live-types";
 import { DESK_CSS } from "./desk-css";
 import { DeskHeader } from "./desk-header";
 import { DeskActionsProvider, deskActionToast, type DeskActionsApi } from "./desk-actions";
-import { DeskPayModal } from "./desk-pay-modal";
-import { DeskList } from "./desk-list";
-import { DeskFlow } from "./desk-flow";
+import { loadDeskFlow, loadDeskList, loadDeskPayModal } from "@/components/sala/sala-faces";
+
+/*
+ * PF1.1-sala (C-PF2): las dos caras y el modal de cobro son chunks aparte. La cara va con SSR (default de
+ * `next/dynamic`): el primer pintado sigue en el HTML y `SalaClient` ya pidió su chunk en paralelo con el de este shell
+ * (`preloadSalaFace`). El `loading` (un bloque del alto del cuerpo) solo se ve al cambiar de cara sin recargar.
+ * El modal de cobro no se ve en el primer pintado: va sin SSR, se monta recién la primera vez que alguien cobra y
+ * su chunk se precarga después del mount si el viewer cobra (`billing.manage`), así «Cobrar» no espera red.
+ */
+const DeskList = dynamic(() => loadDeskList().then((mod) => mod.DeskList), {
+  loading: () => <div className="desk-body-skel" aria-busy="true" />,
+});
+const DeskFlow = dynamic(() => loadDeskFlow().then((mod) => mod.DeskFlow), {
+  loading: () => <div className="desk-body-skel" aria-busy="true" />,
+});
+const DeskPayModal = dynamic(() => loadDeskPayModal().then((mod) => mod.DeskPayModal), { ssr: false });
 
 /** «Nuevo turno» (RX-D3): el modal de alta de la agenda (`agenda/page.tsx` → `autoCreate` → `BookingModal`). */
 export const DESK_NEW_BOOKING_HREF = "/agenda?new=1";
@@ -118,6 +132,8 @@ export function ReceptionDesk({
   const [query, setQuery] = useState("");
   const [proFilter, setProFilter] = useState<string | null>(null);
   const [payId, setPayId] = useState<string | null>(null);
+  // El modal se monta la primera vez que se abre y queda montado (su animación de salida necesita que siga ahí).
+  const [payMounted, setPayMounted] = useState(false);
   const [undoCheck, setUndoCheck] = useState<DeskUndoCheck | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -205,12 +221,26 @@ export function ReceptionDesk({
   const collect = useCallback(
     (entry: DeskEntry) => {
       if (!viewer.canCollect) return;
+      setPayMounted(true);
       setPayId(entry.row.id);
     },
     [viewer.canCollect]
   );
   const payRow: BookingDTO | null = payId ? live.rows.find((r) => r.id === payId) ?? null : null;
   const closePay = useCallback(() => setPayId(null), []);
+
+  // Precarga del chunk del cobro: solo quien cobra lo va a usar; en idle para no competir con la hidratación.
+  useEffect(() => {
+    if (!viewer.canCollect) return;
+    const w = window as Window & { requestIdleCallback?: (cb: () => void) => number; cancelIdleCallback?: (id: number) => void };
+    const load = () => void loadDeskPayModal().catch(() => {});
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(load);
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = window.setTimeout(load, 1_500);
+    return () => window.clearTimeout(t);
+  }, [viewer.canCollect]);
 
   // ── Atajos ──
   useEffect(() => {
@@ -266,7 +296,7 @@ export function ReceptionDesk({
           <div className="desk-call" role="status" aria-live="polite" aria-atomic="true">
             <AnimatePresence mode="wait" initial={false}>
               {live.call && (
-                <motion.div
+                <m.div
                   key={live.call.key}
                   className="desk-call-inner"
                   initial={{ opacity: 0, y: -8, scale: 0.97 }}
@@ -278,7 +308,7 @@ export function ReceptionDesk({
                   <button type="button" className="desk-call-close" onClick={live.dismissCall}>
                     Cerrar
                   </button>
-                </motion.div>
+                </m.div>
               )}
             </AnimatePresence>
           </div>
@@ -292,13 +322,15 @@ export function ReceptionDesk({
         </div>
       </div>
 
-      <DeskPayModal
-        row={payRow}
-        practitionerName={payRow ? practitionerName(payRow.practitionerId) : ""}
-        viewer={viewer}
-        onClose={closePay}
-        onSaved={live.replaceRow}
-      />
+      {payMounted && (
+        <DeskPayModal
+          row={payRow}
+          practitionerName={payRow ? practitionerName(payRow.practitionerId) : ""}
+          viewer={viewer}
+          onClose={closePay}
+          onSaved={live.replaceRow}
+        />
+      )}
     </>
   );
 }

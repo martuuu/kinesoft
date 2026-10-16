@@ -13,7 +13,27 @@ import { toARDateKey } from "@/lib/datetime-ar";
  * Booking-day dots are loaded server-side when the month changes. Today
  * is always highlighted; selected day (if any) takes precedence.
  */
-export function MiniCalendar({ initialBookingDays }: { initialBookingDays: number[] }) {
+/**
+ * Grilla del mes, pura (render test). PF1.1-dashboard: antes salía de `new Date(year, month, 1)` en la zona del
+ * navegador y el nombre del mes de `toLocaleDateString` SIN `timeZone` (AGENTS §4: todo `toLocale*` del cliente va con
+ * AR). Con el navegador en UTC+1, la medianoche local del 1/10 es el 30/9 en AR y el título decía «septiembre». Ahora
+ * todo es aritmética UTC de fecha calendario (sin hora) y el nombre se formatea al mediodía UTC en AR.
+ */
+export function monthGrid(year: number, month: number): { cells: (number | null)[]; monthName: string } {
+  const offset = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7; // lunes = 0
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < offset; i++) cells.push(null);
+  for (let i = 1; i <= daysInMonth; i++) cells.push(i);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const monthName = new Date(Date.UTC(year, month, 15, 15)).toLocaleDateString("es-AR", {
+    month: "long",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+  return { cells, monthName };
+}
+
+export function MiniCalendar({ initialBookingDays, className }: { initialBookingDays: number[]; className?: string }) {
   const router = useRouter();
   // "Today" resolved in the business timezone (AR), not the browser's — so
   // the highlighted day and the initial month don't drift near midnight.
@@ -37,7 +57,13 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
     }
     let cancelled = false;
     start(async () => {
-      const days = await getMonthBookingDays(year, month);
+      // Error de red: el mes se ve sin puntos (no con los del mes anterior, que mentirían sobre qué días hay turnos).
+      let days: number[] = [];
+      try {
+        days = await getMonthBookingDays(year, month);
+      } catch {
+        days = [];
+      }
       if (cancelled) return;
       setBookingDays(new Set(days));
     });
@@ -61,15 +87,7 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
     setYear(y);
   };
 
-  const firstDayOfMonth = new Date(year, month, 1);
-  const offset = (firstDayOfMonth.getDay() + 6) % 7; // Mon = 0
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const grid: (number | null)[] = [];
-  for (let i = 0; i < offset; i++) grid.push(null);
-  for (let i = 1; i <= daysInMonth; i++) grid.push(i);
-  while (grid.length % 7 !== 0) grid.push(null);
-
-  const monthName = firstDayOfMonth.toLocaleDateString("es-AR", { month: "long" });
+  const { cells: grid, monthName } = monthGrid(year, month);
 
   const openDay = (day: number) => {
     const iso = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -77,7 +95,7 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
   };
 
   return (
-    <Card glass style={{ padding: 18 }}>
+    <Card glass className={className} style={{ padding: 18 }}>
       <div
         style={{
           display: "flex",
@@ -86,15 +104,16 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
           marginBottom: 12,
         }}
       >
-        <div
+        <h2
           className="k-display"
-          style={{ fontSize: 17, fontWeight: 600, textTransform: "capitalize" }}
+          aria-live="polite"
+          style={{ fontSize: 17, fontWeight: 600, textTransform: "capitalize", margin: 0 }}
         >
-          {monthName} <span style={{ color: "var(--navy-300)" }}>{year}</span>
+          {monthName} <span style={{ color: "var(--navy-500)" }}>{year}</span>
           {pending && (
-            <span style={{ marginLeft: 6, fontSize: 10, color: "var(--navy-300)" }}>…</span>
+            <span aria-hidden style={{ marginLeft: 6, fontSize: 10, color: "var(--navy-500)" }}>…</span>
           )}
-        </div>
+        </h2>
         <div style={{ display: "flex", gap: 4 }}>
           <button
             type="button"
@@ -118,9 +137,10 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
         {["L", "M", "M", "J", "V", "S", "D"].map((d, i) => (
           <div
             key={i}
+            aria-hidden
             style={{
               textAlign: "center",
-              color: "var(--navy-300)",
+              color: "var(--navy-500)",
               fontWeight: 600,
               padding: "4px 0",
             }}
@@ -137,7 +157,8 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
               key={i}
               type="button"
               onClick={() => openDay(n)}
-              aria-label={`Ver agenda del ${n}`}
+              aria-label={`Ver agenda del ${n}${hasBooking ? " (con turnos)" : ""}`}
+              aria-current={isToday ? "date" : undefined}
               style={{
                 aspectRatio: "1",
                 display: "flex",
@@ -175,9 +196,10 @@ export function MiniCalendar({ initialBookingDays }: { initialBookingDays: numbe
   );
 }
 
+// 32 px (antes 24): el objetivo táctil mínimo razonable sin agrandar el encabezado del calendario.
 const chevStyle: React.CSSProperties = {
-  width: 24,
-  height: 24,
+  width: 32,
+  height: 32,
   borderRadius: 8,
   display: "inline-flex",
   alignItems: "center",

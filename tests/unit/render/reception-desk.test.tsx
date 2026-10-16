@@ -3,8 +3,29 @@
  * los stubs de las caras según el layout. Render SSR (`renderToStaticMarkup`) de los componentes REALES; se mockean
  * la red (server actions), el router y el toast. Horas AR explícitas y `now` fijo: corre igual con TZ=UTC y AR.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+
+// [PF1.1-sala] Las caras de /sala, el cuerpo del escritorio y el modal de cobro van con `next/dynamic` (C-PF2).
+// `renderToStaticMarkup` no espera Suspense: el mock resuelve cada `import()` en `beforeAll` (hasta que no aparecen
+// cargas nuevas: el shell del escritorio declara las suyas al importarse) y después renderiza el componente REAL.
+const { dynamicLoads } = vi.hoisted(() => ({ dynamicLoads: [] as Promise<unknown>[] }));
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<import("react").ComponentType<Record<string, unknown>>>) => {
+    let Loaded: import("react").ComponentType<Record<string, unknown>> | null = null;
+    dynamicLoads.push(loader().then((C) => (Loaded = C)));
+    return function DynamicMock(props: Record<string, unknown>) {
+      return Loaded ? <Loaded {...props} /> : null;
+    };
+  },
+}));
+beforeAll(async () => {
+  let seen = -1;
+  while (seen !== dynamicLoads.length) {
+    seen = dynamicLoads.length;
+    await Promise.all(dynamicLoads);
+  }
+});
 
 vi.mock("@/lib/bookings", () => ({ markReceptionAction: vi.fn(), setBookingCopagoPaid: vi.fn(), listAgendaBookings: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));

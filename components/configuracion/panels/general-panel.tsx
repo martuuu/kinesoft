@@ -24,6 +24,7 @@ import {
 } from "@/lib/tenant-settings-constants";
 import { Switch, ErrorBox } from "../controls";
 import { TENANT_BASICS_STALE_ERROR } from "../config-copy";
+import styles from "../configuracion.module.css";
 import { useAlertPrefs } from "@/components/providers/arrival-alerts";
 import { AlertModeControl } from "@/components/realtime/alert-prefs-controls";
 import { supportContactText } from "@/lib/support-contact";
@@ -50,7 +51,7 @@ export function GeneralPanel({
   const [basicsMsg, setBasicsMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [basicsStale, setBasicsStale] = useState(false);
 
-  // Sync when the server refreshes the tenant prop (after router.refresh()).
+  // Sync when the server re-renders the tenant prop (the action's `revalidatePath` brings the new tree, PF-0d).
   useEffect(() => { setHoursStart(tenant.businessHoursStart); }, [tenant.businessHoursStart]);
   useEffect(() => { setHoursEnd(tenant.businessHoursEnd); }, [tenant.businessHoursEnd]);
   useEffect(() => { setSlotMinutes(tenant.agendaSlotMinutes); }, [tenant.agendaSlotMinutes]);
@@ -64,8 +65,8 @@ export function GeneralPanel({
       if (!r.ok) {
         setHoursMsg({ tone: "err", text: r.error });
       } else {
+        // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
         setHoursMsg({ tone: "ok", text: "Horario actualizado." });
-        router.refresh();
       }
     });
   };
@@ -79,9 +80,8 @@ export function GeneralPanel({
       if (!r.ok) {
         setShared(!next);
         setError(r.error);
-      } else {
-        router.refresh();
       }
+      // [PF1.1-config · C-PF4] Sin `router.refresh()`: la action revalida `/configuracion`.
     });
   };
 
@@ -105,7 +105,9 @@ export function GeneralPanel({
         setError(r.error);
         setBasicsMsg({ tone: "err", text: r.error });
       } else {
-        setBasicsMsg({ tone: "ok", text: "Guardado ✓" });
+        setBasicsMsg({ tone: "ok", text: "Guardado." });
+        // refresh-ok: el nombre del consultorio se ve en el shell (selector de consultorio); la action revalida
+        // `/configuracion` pero no re-renderiza el layout `(app)` (mismo caso que el cambio de plan).
         router.refresh();
       }
     });
@@ -118,7 +120,7 @@ export function GeneralPanel({
         <form action={onBasicsSubmit} style={{ display: "grid", gap: 12, marginTop: 10 }}>
           {/* `key` = updatedAt: al recargar (o después de guardar) los defaultValue vuelven a leer lo último del server. */}
           <FormField key={`name-${tenant.updatedAt}`} label="Nombre del consultorio" name="name" defaultValue={tenant.name} required />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className={styles.twoCol}>
             <FormField key={`legal-${tenant.updatedAt}`} label="Razón social" name="legalName" defaultValue={tenant.legalName ?? ""} />
             <FormField key={`tax-${tenant.updatedAt}`} label="CUIT / Identificador fiscal" name="taxId" defaultValue={tenant.taxId ?? ""} />
           </div>
@@ -149,6 +151,7 @@ export function GeneralPanel({
                 variant="ghost"
                 onClick={() => {
                   setBasicsStale(false);
+                  // refresh-ok: «Recargar» explícito del usuario tras el rechazo por CAS (la action no cambió nada).
                   router.refresh();
                 }}
               >
@@ -190,7 +193,7 @@ export function GeneralPanel({
               de todos los pacientes del consultorio. <strong>Desactivado</strong> (por defecto):
               cada profesional sólo ve los pacientes que cargó. Para compartir un paciente puntual con
               otro profesional, usá el botón <strong>Compartir</strong> en el perfil del paciente.
-              OWNER/ADMIN siempre ven todo independientemente del modo.
+              El Titular y los administradores ven todo, con cualquiera de los dos modos.
             </div>
           </div>
           <Switch
@@ -211,8 +214,8 @@ export function GeneralPanel({
               marginTop: 14,
               padding: 12,
               borderRadius: 10,
-              background: "rgba(255,176,32,0.12)",
-              border: "1px solid rgba(255,176,32,0.3)",
+              background: "var(--warn-bg)",
+              border: "1px solid var(--warn-border)",
               fontSize: 12.5,
               color: "var(--navy-700)",
               lineHeight: 1.45,
@@ -252,22 +255,15 @@ export function GeneralPanel({
             max={BUSINESS_HOUR_MAX}
             disabled={!canAdmin}
           />
-          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
-            <span style={{ fontWeight: 600, color: "var(--navy-500)" }}>Vista de agenda</span>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
+            <span style={{ fontWeight: 600, color: "var(--navy-500)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Vista de agenda
+            </span>
             <select
+              className={styles.select}
               value={slotMinutes}
               onChange={(e) => setSlotMinutes(Number(e.target.value))}
               disabled={!canAdmin}
-              style={{
-                padding: "9px 12px",
-                borderRadius: 12,
-                border: "1px solid rgba(15,30,51,0.1)",
-                background: "rgba(255,255,255,0.95)",
-                fontSize: 13.5,
-                color: "var(--navy-900)",
-                cursor: canAdmin ? "pointer" : "not-allowed",
-                outline: "none",
-              }}
             >
               <option value={60}>Cada 1 hora</option>
               <option value={30}>Cada 30 minutos</option>
@@ -298,9 +294,9 @@ export function GeneralPanel({
               borderRadius: 10,
               background:
                 hoursMsg.tone === "ok"
-                  ? "rgba(200,245,100,0.18)"
+                  ? "var(--success-bg)"
                   : "var(--danger-bg)",
-              color: hoursMsg.tone === "ok" ? "var(--navy-900)" : "var(--danger-fg)",
+              color: hoursMsg.tone === "ok" ? "var(--success-fg)" : "var(--danger-fg)",
               fontSize: 12,
             }}
           >
@@ -315,8 +311,8 @@ export function GeneralPanel({
       <Card style={{ padding: 20 }}>
         <EyebrowLabel>Mi vista de agenda</EyebrowLabel>
         <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4, marginBottom: 8, lineHeight: 1.45 }}>
-          Personalización por usuario. Cada profesional ajusta su propia vista semanal;
-          las preferencias se guardan en tu cuenta y también están en el panel de Tweaks.
+          Personalización por usuario: cada uno ajusta su propia vista semanal y se guarda en tu cuenta. También
+          la cambiás desde «Apariencia», en el menú de tu cuenta.
         </div>
         <PrefRow
           label="Encabezado de días"
@@ -423,18 +419,10 @@ function HourSelect({
         {label}
       </span>
       <select
+        className={styles.select}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}
-        style={{
-          padding: "8px 12px",
-          borderRadius: 10,
-          border: "1px solid rgba(15,30,51,0.1)",
-          background: disabled ? "rgba(15,30,51,0.04)" : "#fff",
-          fontSize: 14,
-          minWidth: 110,
-          cursor: disabled ? "not-allowed" : "pointer",
-        }}
       >
         {options.map((h) => (
           <option key={h} value={h}>
@@ -490,6 +478,8 @@ function FeaturesCard({ tenant, canAdmin }: { tenant: TenantSettings; canAdmin: 
           setBooking(!next);
           setError(r.error);
         } else {
+          // refresh-ok: los turnos online son un módulo del consultorio (entitlements): cambian el shell, que la
+          // action revalida con `revalidatePath("/", "layout")` pero el árbol de la action no re-renderiza `(app)`.
           router.refresh();
         }
       } catch {
@@ -618,20 +608,10 @@ function PrefRow({
   children?: ReactNode;
 }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 16,
-        // SV11b: el segmentado de avisos no entra al lado del texto a 360 px;
-        // con wrap baja abajo (los Switch, angostos, no cambian).
-        flexWrap: "wrap",
-        padding: "10px 0",
-        borderTop: "1px solid rgba(15,30,51,0.06)",
-      }}
-    >
-      <div style={{ maxWidth: 520, flex: "1 1 220px" }}>
+    // C3: el Switch queda a la derecha del texto también a 390 (antes bajaba abajo); un control ancho (`children`,
+    // el segmentado de avisos o un valor) sí baja cuando no entra.
+    <div className={styles.prefRow} data-wide={children ? "" : undefined}>
+      <div className={styles.prefText}>
         <div style={{ fontSize: 14, fontWeight: 600, color: "var(--navy-900)" }}>{label}</div>
         <div style={{ fontSize: 12.5, color: "var(--navy-500)", marginTop: 2, lineHeight: 1.4 }}>{hint}</div>
       </div>

@@ -1,0 +1,413 @@
+/* [PF1.1-dashboard] Layout y animaciones del tablero (Inicio).
+
+   Por qué un CSS Module: el layout vivía en estilos inline (columna principal flex + aside fijo de 320 px), sin
+   ningún `@media`. A 390 px el aside de 320 más el gap empujaba la página a scroll horizontal, y a 1024×768 con el
+   sidebar abierto la columna principal quedaba en ~410 px con 3 KPIs de 130 px y el gráfico al lado de los recientes
+   (D1 de VX0-b). Y las entradas (KPIs, barras del gráfico, barra de ingresos) eran componentes `motion` de framer con `initial`: lo que
+   se ve en el primer render dependía de framer (C-PF1.2). Ahora son keyframes con el estado final natural.
+
+   Contraste (C-PF5): el texto secundario de los widgets del tablero pasó de `--navy-300` (#6a7b96, 4,3:1 sobre blanco:
+   no llega a AA en 11-13 px) a `--navy-400` (5,4:1). */
+
+.root {
+  container: dash / inline-size;
+  display: flex;
+  gap: 18px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.main {
+  container: dashmain / inline-size;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.aside {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Tablero angosto (1024×768 con el sidebar abierto, ~750 px útiles): el aside cede 40 px a la columna principal. */
+@container dash (max-width: 899px) {
+  .aside {
+    width: 280px;
+  }
+}
+
+.accountRow {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Buscador del encabezado (solo con sidebar: el topbar y la barra mobile tienen el suyo). */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  min-width: min(280px, 100%);
+  font-size: 13px;
+  color: var(--navy-500);
+  border: none;
+  cursor: pointer;
+}
+.searchSpacer {
+  flex: 1;
+}
+.kbd {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(15, 30, 51, 0.1);
+  color: var(--navy-500);
+}
+.titleAccent {
+  color: var(--sky-700);
+}
+
+/* ── Indicadores fijados ── */
+.kpiHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.kpiHeadLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-700);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+@container dashmain (max-width: 559px) {
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.kpiEmpty {
+  grid-column: 1 / -1;
+  padding: 14px 16px;
+  border-radius: var(--r-lg);
+  border: 1px dashed rgba(15, 30, 51, 0.14);
+  font-size: 13px;
+  color: var(--navy-500);
+}
+
+/* [PF-0c] Entrada recortada: solo opacidad, 120 ms y 15 ms entre tarjetas (≤ 6 → ≤ 195 ms en total). Antes con
+   framer (`KPI_ENTER_LIST`/`KPI_ENTER_ITEM`); el hover (subida de 3 px) también era framer (`whileHover`). */
+@keyframes dash-fade {
+  from {
+    opacity: 0;
+  }
+}
+.kpi {
+  padding: 16px 18px;
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  /* El escalonado (15 ms por tarjeta, `KPI_STAGGER_MS` de kpi-view.ts) va inline como `animation-delay`: una custom
+     property local no la acepta el guard de tokens (`design-tokens.test.ts` exige que todo `var()` exista en globals). */
+  animation: dash-fade 120ms var(--ease-out) both;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.kpi:hover {
+  transform: translateY(-3px);
+}
+.kpiTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kpiIcon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sky-700);
+  background: rgba(255, 255, 255, 0.6);
+}
+.kpiIcon[data-tone="sky"] {
+  background: var(--sky-100);
+}
+.kpiIcon[data-tone="lime"] {
+  background: var(--lime-300);
+  color: var(--navy-900);
+}
+.kpiDelta {
+  font-size: 11px;
+  color: var(--sky-700);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+}
+.kpiValue {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--navy-900);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.kpiLabel {
+  font-size: 12.5px;
+  color: var(--navy-500);
+}
+
+/* ── Recordatorio (hero) ── */
+.hero {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(115deg, var(--sky-700) 0%, var(--sky-500) 60%, var(--sky-400) 100%);
+  color: #fff;
+  padding: 24px 28px;
+  box-shadow: 0 12px 36px rgba(31, 79, 190, 0.28);
+}
+.heroGlow1,
+.heroGlow2 {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.heroGlow1 {
+  top: -60px;
+  right: 120px;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.15), transparent 70%);
+}
+.heroGlow2 {
+  top: 30px;
+  right: -40px;
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, var(--lime-300), transparent 60%);
+  opacity: 0.35;
+}
+.heroBody {
+  position: relative;
+  z-index: 1;
+  max-width: 520px;
+}
+.heroTag {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+.heroTitle {
+  font-size: 26px;
+  margin: 12px 0 8px;
+  line-height: 1.15;
+  font-weight: 600;
+}
+.heroText {
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.88);
+  margin: 0;
+  line-height: 1.5;
+}
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+/* `.hero` delante: le gana a `.k-btn-ghost` de globals.css sin depender del orden de carga de las hojas. */
+.hero .heroPrimary {
+  background: #fff;
+  color: var(--navy-900);
+  border-color: transparent;
+}
+.hero .heroSecondary {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+/* El anillo de foco global (blanco + sky-700) no se ve sobre el degradé sky: acá va en blanco sobre navy. */
+.hero .heroPrimary:focus-visible,
+.hero .heroSecondary:focus-visible {
+  box-shadow: 0 0 0 2px var(--navy-900), 0 0 0 4px #fff;
+}
+.restorePill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px dashed rgba(15, 30, 51, 0.12);
+  font-size: 12.5px;
+  color: var(--navy-500);
+}
+
+/* ── Fila de abajo: gráfico + recientes ── */
+.bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+.bottomSingle {
+  grid-template-columns: minmax(0, 1fr);
+}
+@container dashmain (max-width: 679px) {
+  .bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── Próximos turnos ── */
+.nextRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  min-width: 0;
+}
+.nextTime {
+  font-size: 12px;
+  color: var(--sky-700);
+  font-weight: 600;
+  width: 40px;
+  flex-shrink: 0;
+}
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Animaciones de los widgets (antes componentes `motion` de framer con `initial`) ── */
+@keyframes dash-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+.bar {
+  transform-origin: bottom;
+  animation: dash-grow-y var(--dur-slow) var(--ease-out) both;
+}
+@keyframes dash-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+.shareBar {
+  transform-origin: left;
+  animation: dash-grow-x var(--dur-slow) var(--ease-out) both;
+}
+
+/* Menú rápido de recientes: entra con CSS (sin animación de salida). */
+@keyframes dash-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+.menuPop {
+  transform-origin: top right;
+  animation: dash-pop var(--dur-fast) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kpi,
+  .bar,
+  .shareBar,
+  .menuPop {
+    animation: none;
+  }
+  .kpi {
+    transition: none;
+  }
+  .kpi:hover {
+    transform: none;
+  }
+}
+
+/* ── Una columna bajo 768 (D1, clase A mobile) ──
+   Orden: hero → KPIs (2 col) → próximos → recientes → gráfico → ingresos → calendario. Las dos columnas pasan a
+   `display: contents` y cada bloque se ordena con `order`: no se duplica nada en el DOM. */
+@media (max-width: 767px) {
+  .root {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .main,
+  .aside {
+    display: contents;
+  }
+  .oAccount {
+    order: 0;
+  }
+  .oHeader {
+    order: 1;
+  }
+  .oHero {
+    order: 2;
+  }
+  .oKpis {
+    order: 3;
+  }
+  .oNext {
+    order: 4;
+  }
+  .oBottom {
+    order: 5;
+  }
+  .oRevenue {
+    order: 6;
+  }
+  .oCalendar {
+    order: 7;
+  }
+  .bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bottom > .oRecent {
+    order: -1;
+  }
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kpiValue {
+    font-size: 24px;
+  }
+  /* La barra mobile del shell ya tiene el buscador ⌘K. */
+  .search {
+    display: none;
+  }
+  .hero {
+    padding: 20px;
+  }
+  .heroTitle {
+    font-size: 22px;
+  }
+}

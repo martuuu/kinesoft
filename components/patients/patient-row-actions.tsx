@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { createPortal } from "react-dom";
 import { setPatientArchived } from "@/lib/patients";
 import { useToast } from "@/components/ui/toast";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
@@ -160,25 +159,21 @@ export function PatientRowActions({
           </button>
         </div>
       )}
-      {/* Portal a body: la fila es un `motion.div` con transform (stagger) y un
-          `position: fixed` adentro quedaría atrapado en ella. Montado solo
-          abierto: cada apertura arranca limpia (default pausar). */}
-      {askPlans && typeof document !== "undefined"
-        ? createPortal(
-            <ArchivePatientDialog
-              open
-              onClose={() => setAskPlans(false)}
-              patientName={patientName}
-              livePlanCount={livePlanCount}
-              onConfirm={async (plansAction) => {
-                const r = await archiveRowWithPlans(patientId, plansAction);
-                if (r.ok) toast.success("Paciente archivado");
-                return r;
-              }}
-            />,
-            document.body,
-          )
-        : null}
+      {/* Montado solo abierto: cada apertura arranca limpia (default pausar). PF1.1: sin `createPortal` propio; el
+          `Modal` ya va por portal a body desde PF1.0-b (C-PF6) y la fila dejó de ser un `motion.div` con transform. */}
+      {askPlans ? (
+        <ArchivePatientDialog
+          open
+          onClose={() => setAskPlans(false)}
+          patientName={patientName}
+          livePlanCount={livePlanCount}
+          onConfirm={async (plansAction) => {
+            const r = await archiveRowWithPlans(patientId, plansAction);
+            if (r.ok) toast.success("Paciente archivado");
+            return r;
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -10,11 +10,17 @@ import { highlightState, type AgendaHighlight } from "@/lib/agenda-highlight";
 import { fmtHour, fmtMoney, osLabel, roomNameOf, type BookingDTO } from "../agenda-utils";
 import { PractitionerBadge } from "../grid/practitioner-badge";
 import { PlanMarks } from "../grid/booking-card";
+import { isPastUnclosed } from "@/lib/agenda-slot-helpers";
+import styles from "./views.module.css";
 
 /** Shared column track for the Lista view header + rows (kept in one
  *  place so the two grids never drift): Hora · Paciente · Servicio ·
- *  Obra social · Copago · Duración · Estado. */
-const LIST_COLS = "70px 1.4fr 1.2fr 1fr 90px 80px 80px";
+ *  Obra social · Copago · Duración · Estado.
+ *
+ *  PF1.1 (G5): columnas con tope (`minmax`) y la card con `max-width`
+ *  (`views.module.css`), texto con `minmax(0, …)` + elipsis (a 1024 con la barra abierta no desborda): a 1728 la tabla iba a todo el ancho y «Servicio»
+ *  quedaba a 470 px del paciente. Estado en 120 px: entra «Sin cerrar». */
+const LIST_COLS = "70px minmax(0, 1.4fr) minmax(0, 1.1fr) minmax(0, 1fr) 90px 72px 112px";
 
 /**
  * B4.3: con más de un profesional en pantalla (`practitionerById`), la hora
@@ -53,7 +59,7 @@ export function ListView({
     );
   }
   return (
-    <Card style={{ padding: 0, overflow: "hidden" }}>
+    <Card className={styles.listCard} style={{ padding: 0, overflow: "hidden" }}>
       <div
         style={{
           padding: "12px 18px",
@@ -74,7 +80,7 @@ export function ListView({
         <span>Obra social</span>
         <span>Copago</span>
         <span>Duración</span>
-        <span style={{ textAlign: "right" }}>Estado</span>
+        <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>Estado</span>
       </div>
       {bookings.map((b) => {
         const date = new Date(b.scheduledFor);
@@ -99,6 +105,7 @@ export function ListView({
         return (
           <button
             key={b.id}
+            type="button"
             onClick={() => onEdit(b)}
             style={{
               padding: "14px 18px",
@@ -135,7 +142,7 @@ export function ListView({
                   <div style={{ fontSize: 11, color: "var(--navy-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{sub}</div>
                 )}
                 {marks.length > 0 && (
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: b.isOverbooked ? "#9A5B00" : "var(--navy-500)" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: b.isOverbooked ? "var(--warn-fg)" : "var(--navy-500)" }}>
                     {marks.join(" · ")}
                   </div>
                 )}
@@ -171,8 +178,25 @@ export function ListView({
             <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {b.durationMin} min
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
               <StatusTag s={b.status} hold={paymentHoldState(b, clock)} />
+              {isPastUnclosed(b, clock) && (
+                <span
+                  data-badge="sin-cerrar"
+                  title="Ya pasó el horario y no se marcó Atendido ni Ausente"
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: "var(--warn-fg)",
+                    border: "1px dashed var(--warn-border)",
+                    borderRadius: 999,
+                    padding: "0 6px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Sin cerrar
+                </span>
+              )}
             </div>
           </button>
         );

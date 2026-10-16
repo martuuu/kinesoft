@@ -23,14 +23,24 @@
  *   la lectura devuelve `null` se muestra el rechazo genérico (no revela nada).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { IconPlus } from "@/components/ui/icons";
 import { NoteCard } from "@/components/clinical-notes/note-card";
-import { NoteEditorDrawer } from "@/components/clinical-notes/note-editor-drawer";
 import type { NoteEditorBooking, NoteEditorMode } from "@/components/clinical-notes/clinical-notes-ui";
 import { getBookingClinicalNote, getPatientTimeline } from "@/lib/clinical-notes-read";
+
+/** PF1.1 (C-PF2): el editor se baja al abrirlo; «Nueva evolución» lo precarga en hover/foco. */
+const loadNoteEditor = () => import("@/components/clinical-notes/note-editor-drawer");
+const NoteEditorDrawer = dynamic(() => loadNoteEditor().then((m) => m.NoteEditorDrawer), {
+  ssr: false,
+  loading: () => null,
+});
+function preloadNoteEditor() {
+  void loadNoteEditor().catch(() => {});
+}
 import { bookingTargetDecision } from "@/lib/clinical-notes-logic";
 import type { BookingClinicalNoteView } from "@/lib/clinical-notes-types";
 import {
@@ -406,6 +416,8 @@ export function EvolucionesView({
               variant="primary"
               className="k-evo-head-btn"
               onClick={() => setEditor({ type: "create", patientId })}
+              onPointerEnter={preloadNoteEditor}
+              onFocus={preloadNoteEditor}
               style={{ fontSize: 12, padding: "8px 12px" }}
             >
               <IconPlus size={14} /> {EVOLUCIONES_VIEW_COPY.newNote}

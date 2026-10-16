@@ -1,13 +1,15 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { useState } from "react";
+import { m } from "framer-motion";
 import { DUR, EASE_OUT } from "@/lib/motion";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { IconChevL, IconChevR, IconPlus } from "@/components/ui/icons";
 import type { AgendaPlanScope, AgendaVisibility } from "@/lib/agenda-filters";
 import type { ViewSegment } from "@/lib/agenda-client-state";
 import type { AgendaViewZoom } from "@/lib/preferences-constants";
 import { ViewOptionsMenu } from "./view-options-menu";
+import styles from "./agenda-toolbar.module.css";
 
 export type { AgendaView } from "@/lib/agenda-client-state";
 export type AgendaDensity = "comfortable" | "compact";
@@ -49,6 +51,14 @@ const SEGMENT_LABEL: Record<ViewSegment, string> = {
  * - `locationFilter`: el `<LocationFilter>` (no dibuja nada con una sede).
  * - `dayLock`: el candado del día (Día/Lista) junto al título.
  * - `zoom`/`onZoomChange`: franja 15/30/60 en el menú Vista (solo Por profesional).
+ *
+ * PF1.1-agenda-a:
+ * - C-PF1: sin `motion.button` (el `whileTap` es CSS `:active`) y la pastilla del
+ *   selector es `m.span` con clase (S5). Estilos en `agenda-toolbar.module.css`.
+ * - G9: < 480 px «.ics» y «Vista» quedan detrás de «⋯» y «Nuevo turno» se ve
+ *   siempre. ≥ 480 no cambia nada.
+ * - «.ics» era un `<a>` con un `<button>` adentro (interactivo anidado): ahora
+ *   es el link con el look de botón (`buttonClassName`).
  */
 export function AgendaToolbar({
   anchor,
@@ -104,140 +114,62 @@ export function AgendaToolbar({
   planScope?: AgendaPlanScope | null;
   onPlanScopeChange?: (s: AgendaPlanScope) => void;
 }) {
+  const [moreOpen, setMoreOpen] = useState(false);
   return (
-    <header style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Agenda</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
+    <header className={styles.header}>
+      <div className={styles.topRow}>
+        <div className={styles.titleBlock}>
+          <div className={styles.eyebrow}>Agenda</div>
+          <div className={styles.titleRow}>
+            <h1 className={`k-display ${styles.title}`}>
               {anchor.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Argentina/Buenos_Aires" })}
             </h1>
             {dayLock}
           </div>
           {hiddenLabel && (
-            <div
-              role="status"
-              style={{
-                marginTop: 4,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 12,
-                color: "var(--navy-500)",
-              }}
-            >
+            <div role="status" className={styles.hidden}>
               <span>{hiddenLabel}</span>
-              <button
-                type="button"
-                onClick={onShowAll}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  padding: 0,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "var(--sky-700)",
-                  cursor: "pointer",
-                }}
-              >
+              <button type="button" onClick={onShowAll} className={styles.linkBtn}>
                 Mostrar todos
               </button>
             </div>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {/* Week nav cluster — consistent 36 px height for all three controls */}
-          <div
-            className="k-glass"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 2,
-              padding: 3,
-              borderRadius: 999,
-              height: 36,
-            }}
-          >
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={() => onNavigateWeeks(-1)}
-              aria-label="Semana anterior"
-              style={navPillBtn}
-            >
+        <div className={styles.actions}>
+          {/* Navegación de semana: los tres controles a 36 px de alto. */}
+          <div className={`k-glass ${styles.pillGroup}`}>
+            <button type="button" onClick={() => onNavigateWeeks(-1)} aria-label="Semana anterior" className={styles.navBtn}>
               <IconChevL size={14} />
-            </motion.button>
-            <motion.button
-              whileTap={{ scale: 0.94 }}
-              onClick={onToday}
-              style={{
-                ...navPillBtn,
-                width: "auto",
-                padding: "0 14px",
-                fontSize: 12.5,
-                fontWeight: 600,
-              }}
-            >
+            </button>
+            <button type="button" onClick={onToday} className={`${styles.navBtn} ${styles.navBtnText}`}>
               Hoy
-            </motion.button>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={() => onNavigateWeeks(1)}
-              aria-label="Semana siguiente"
-              style={navPillBtn}
-            >
+            </button>
+            <button type="button" onClick={() => onNavigateWeeks(1)} aria-label="Semana siguiente" className={styles.navBtn}>
               <IconChevR size={14} />
-            </motion.button>
+            </button>
           </div>
 
-          {/* View switch */}
-          <div
-            className="k-glass"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              borderRadius: 999,
-              padding: 3,
-              height: 36,
-            }}
-          >
+          {/* Selector de vista */}
+          <div className={`k-glass ${styles.pillGroup}`} role="group" aria-label="Vista de la agenda">
             {segments.map((v) => {
               const on = segment === v;
-              const label = SEGMENT_LABEL[v];
               return (
-                <motion.button
+                <button
                   key={v}
-                  whileTap={{ scale: 0.95 }}
+                  type="button"
                   aria-pressed={on}
                   onClick={() => onSegmentChange(v)}
-                  style={{
-                    position: "relative",
-                    height: 30,
-                    padding: "0 14px",
-                    borderRadius: 999,
-                    border: "none",
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    background: "transparent",
-                    color: on ? "#fff" : "var(--navy-500)",
-                    cursor: "pointer",
-                  }}
+                  className={styles.segBtn}
                 >
                   {on && (
-                    <motion.span
+                    <m.span
                       layoutId="agenda-view-pill"
                       transition={{ duration: DUR.base, ease: EASE_OUT }}
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        borderRadius: 999,
-                        background: "var(--navy-900)",
-                        zIndex: 0,
-                      }}
+                      className={styles.segPill}
                     />
                   )}
-                  <span style={{ position: "relative", zIndex: 1 }}>{label}</span>
-                </motion.button>
+                  <span className={styles.segLabel}>{SEGMENT_LABEL[v]}</span>
+                </button>
               );
             })}
           </div>
@@ -249,16 +181,7 @@ export function AgendaToolbar({
               value={practitionerFilterId ?? ""}
               onChange={(e) => onPractitionerFilterChange(e.target.value)}
               aria-label="Filtrar por profesional"
-              style={{
-                height: 36,
-                padding: "0 12px",
-                borderRadius: 999,
-                fontSize: 12.5,
-                fontWeight: 600,
-                border: "1px solid rgba(15,30,51,0.08)",
-                background: "rgba(255,255,255,0.7)",
-                color: "var(--navy-700)",
-              }}
+              className={styles.select}
             >
               <option value="">Todos los profesionales</option>
               {practitioners.map((p) => (
@@ -271,51 +194,45 @@ export function AgendaToolbar({
 
           {locationFilter}
 
-          <ViewOptionsMenu
-            density={density}
-            setDensity={onDensityChange}
-            visibility={visibility}
-            setVisibility={onVisibilityChange}
-            zoom={zoom}
-            setZoom={onZoomChange}
-            planScope={planScope}
-            setPlanScope={onPlanScopeChange}
-          />
+          <button
+            type="button"
+            className={styles.moreBtn}
+            aria-expanded={moreOpen}
+            aria-controls="agenda-toolbar-more"
+            aria-label={moreOpen ? "Ocultar opciones de vista y exportar" : "Más opciones: vista y exportar"}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            <span aria-hidden="true">⋯</span>
+          </button>
 
-          <a
-            href={`/api/agenda/export?from=${exportFromKey}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Exportar semana a .ics"
-            style={{ textDecoration: "none" }}
-          >
-            <Button variant="ghost" style={{ height: 36, padding: "0 14px" }}>
-              .ics
-            </Button>
-          </a>
-          <Button
-            variant="primary"
-            onClick={onCreate}
-            style={{ height: 36, padding: "0 18px" }}
-          >
+          <Button variant="primary" onClick={onCreate} className={styles.createBtn}>
             <IconPlus size={14} /> Nuevo turno
           </Button>
+
+          <div id="agenda-toolbar-more" className={moreOpen ? `${styles.secondary} ${styles.secondaryOpen}` : styles.secondary}>
+            <ViewOptionsMenu
+              density={density}
+              setDensity={onDensityChange}
+              visibility={visibility}
+              setVisibility={onVisibilityChange}
+              zoom={zoom}
+              setZoom={onZoomChange}
+              planScope={planScope}
+              setPlanScope={onPlanScopeChange}
+            />
+            <a
+              href={`/api/agenda/export?from=${exportFromKey}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Exportar la semana a tu calendario (.ics)"
+              className={buttonClassName({ variant: "ghost", className: styles.icsLink })}
+            >
+              .ics
+            </a>
+          </div>
         </div>
       </div>
       {practitionerChips}
     </header>
   );
 }
-
-const navPillBtn: React.CSSProperties = {
-  width: 30,
-  height: 30,
-  borderRadius: 999,
-  background: "transparent",
-  border: "none",
-  cursor: "pointer",
-  color: "var(--navy-700)",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-};

@@ -13,6 +13,7 @@
  * Fechas: períodos y vencimientos son claves civiles AR (`formatDateKey`, sin `Date`); los instantes, día AR.
  */
 import { useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Tag } from "@/components/ui/tag";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,13 @@ import {
   paymentStatusView,
   periodLabel,
 } from "@/lib/saas-billing-view";
-import { ReceiptUploadDrawer } from "./receipt-upload-drawer";
+// [PF1.1-config · C-PF2] El drawer del comprobante se baja recién al abrirlo (precarga en hover/foco del botón).
+const loadReceiptDrawer = () => import("./receipt-upload-drawer");
+const ReceiptUploadDrawer = dynamic(() => loadReceiptDrawer().then((m) => m.ReceiptUploadDrawer), {
+  ssr: false,
+  loading: () => null,
+});
+const preloadReceiptDrawer = () => void loadReceiptDrawer();
 
 export const BILLING_OFF_COPY = "Todavía no estamos cobrando desde la app.";
 /** PL-Z A2: sin `SAAS_BILLING_TRANSFER_INFO` no hay a dónde transferir, así que tampoco se ofrece «Informar pago». */
@@ -59,6 +66,8 @@ const rowStyle: React.CSSProperties = {
 export function BillingPanel({ initial }: { initial: BillingOverview }) {
   const [o, setO] = useState<BillingOverview>(initial);
   const [uploadOpen, setUploadOpen] = useState(false);
+  // Montado desde la primera apertura: el Drawer conserva su salida animada.
+  const [uploadMounted, setUploadMounted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
 
@@ -110,7 +119,16 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
             </p>
           </div>
           {o.canSubmitReceipt && (
-            <Button type="button" onClick={() => setUploadOpen(true)} data-receipt-open>
+            <Button
+              type="button"
+              onClick={() => {
+                setUploadMounted(true);
+                setUploadOpen(true);
+              }}
+              onPointerEnter={preloadReceiptDrawer}
+              onFocus={preloadReceiptDrawer}
+              data-receipt-open
+            >
               Informar pago
             </Button>
           )}
@@ -248,7 +266,7 @@ export function BillingPanel({ initial }: { initial: BillingOverview }) {
         </Card>
       )}
 
-      {o.canSubmitReceipt && (
+      {o.canSubmitReceipt && uploadMounted && (
         <ReceiptUploadDrawer
           open={uploadOpen}
           onClose={() => setUploadOpen(false)}

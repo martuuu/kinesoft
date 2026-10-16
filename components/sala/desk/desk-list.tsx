@@ -326,7 +326,7 @@ const DeskListRow = memo(
         </td>
         <td className="c-pat">
           <div className="dl-pat">
-            <span className="dl-name">{b.patientName}</span>
+            <span className="dl-name" title={b.patientName}>{b.patientName}</span>
             <span className="dl-sub">
               {/* Primero: la sublínea corta con overflow y las iniciales son lo que la Secretaria escanea. */}
               <span className="dl-sub-pro" title={pro.name}>
@@ -443,7 +443,7 @@ function WaitingCard({
         return (
           <li key={b.id} className="dl-it dl-wt" data-row={b.id} data-called={called ? "true" : undefined} data-late={late ? "true" : undefined}>
             <div className="dl-it-txt">
-              <div className="dl-it-name">{b.patientName}</div>
+              <div className="dl-it-name" title={b.patientName}>{b.patientName}</div>
               <div className="dl-it-meta">
                 <span className="desk-mono">{fmtHour(new Date(b.scheduledFor))}</span> · {pro(b.practitionerId).name}
                 {called ? (
@@ -488,7 +488,7 @@ function SoonCard({ entries, now, pro }: { entries: ReadonlyArray<DeskEntry>; no
         return (
           <li key={b.id} className="dl-it" data-row={b.id} data-late={lateTxt ? "true" : undefined}>
             <div className="dl-it-txt">
-              <div className="dl-it-name">
+              <div className="dl-it-name" title={b.patientName}>
                 {b.patientName}
                 {b.isOverbooked ? <span className="dl-flag">Sobreturno</span> : null}
               </div>
@@ -533,10 +533,10 @@ function CashCard({ entries, pro }: { entries: ReadonlyArray<DeskEntry>; pro: Pr
         const b = e.row;
         const what = !b.obraSocial || b.obraSocial === "Particular" ? "Sesión particular" : `Copago ${b.obraSocial}`;
         return (
-          <li key={b.id} className="dl-it" data-row={b.id}>
+          <li key={b.id} className="dl-it dl-cash" data-row={b.id}>
             <div className="dl-it-txt">
-              <div className="dl-it-name">{b.patientName}</div>
-              <div className="dl-it-meta">
+              <div className="dl-it-name" title={b.patientName}>{b.patientName}</div>
+              <div className="dl-it-meta" title={`${what} · ${pro(b.practitionerId).name}`}>
                 {what} · {pro(b.practitionerId).name}
               </div>
             </div>
@@ -572,7 +572,7 @@ function AttendingCard({
         return (
           <li key={b.id} className="dl-it dl-wt" data-row={b.id}>
             <div className="dl-it-txt">
-              <div className="dl-it-name">{b.patientName}</div>
+              <div className="dl-it-name" title={b.patientName}>{b.patientName}</div>
               <div className="dl-it-meta">
                 <span className="desk-mono">{fmtHour(new Date(b.scheduledFor))}</span> · {pro(b.practitionerId).name}
                 {room ? <> · {room}</> : null}
@@ -628,6 +628,9 @@ const LIST_COMPACT = `
 .dl-chips { margin-left: 0; flex-wrap: wrap; row-gap: 4px; }
 .dl-it.dl-wt { grid-template-columns: minmax(0, 1fr) auto; }
 .dl-wt .desk-acts { grid-column: 1 / -1; }
+.dl-it.dl-cash { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+.dl-cash .desk-acts { justify-content: space-between; }
+.dl-panel .dl-it-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
 `;
 
 const LIST_STACK = `

@@ -309,22 +309,28 @@ describe("[EV2-Z] fixes de UI del editor y la tarjeta", () => {
   it("[EV2-Z M8/M9] anulada: badge con borde visible y el summary dice «Ver el texto anulado»", () => {
     const n = note({ voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
     const html = render(<NoteCard note={n} now={NOW} />);
-    expect(html).toContain('style="text-transform:none;border:1px solid var(--navy-200)">Anulada</span>');
+    // vx-note-card-tag (PF1.1): la primitiva `Tag` outline, igual que `KindTag` (antes clases + borde inline).
+    expect(html).toContain('<span class="k-tag k-tag-soft" style="border:1px solid var(--navy-200)">Anulada</span>');
     const summary = html.slice(html.indexOf("<summary"), html.indexOf("</summary>"));
     expect(summary).toContain("Ver el texto anulado");
   });
 
-  it("[EV2-Z] anulada y editada: «Ver versiones anteriores» dentro del details; `hideHistory` lo saca", () => {
+  it("[EV2-Z] anulada y editada: «Ver versiones anteriores» dentro del details", () => {
     const n = note({ revision: 2, voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
     const html = render(<NoteCard note={n} now={NOW} />);
     const details = html.slice(html.indexOf("<details>"), html.indexOf("</details>"));
     expect(buttons(details)).toEqual(["Ver versiones anteriores"]);
-    expect(buttons(render(<NoteCard note={n} now={NOW} hideHistory />))).toEqual([]);
     // Revisión 1: no hay versiones que ver.
     expect(buttons(render(<NoteCard note={{ ...n, revision: 1 }} now={NOW} />))).toEqual([]);
-    // Viva editada con hideHistory (drawer del turno): tampoco.
+  });
+
+  it("[PF1.1] `hideHistory` ya no esconde el historial (el Modal va por portal y queda sobre el Drawer, C-PF6)", () => {
+    const voided = note({ revision: 2, voided: { at: "2026-10-15T20:15:00.000Z", byUserId: AUTHOR, reason: "Duplicada" } });
+    expect(buttons(render(<NoteCard note={voided} now={NOW} hideHistory />))).toEqual(["Ver versiones anteriores"]);
+    // Viva editada de otro autor (el caso del drawer del turno): enmienda e historial.
     expect(buttons(render(<NoteCard note={note({ revision: 2 }, { actor: "user-other" })} now={NOW} hideHistory />))).toEqual([
       "Agregar enmienda",
+      "Ver versiones anteriores",
     ]);
   });
 

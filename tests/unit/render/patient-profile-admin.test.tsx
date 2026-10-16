@@ -203,7 +203,13 @@ describe("[P0-S07v] PatientAdminProfile", () => {
     for (const s of CLINICAL) expect(html).not.toContain(s);
   });
 
-  it("Turnos: estado del turno y de cobro, sin título/descripción/notas", () => {
+  it("Turnos: estado del turno y de cobro, sin título/descripción/notas", async () => {
+    // PF1.1 (C-PF2): Turnos es diferida (`next/dynamic` con SSR). `renderToStaticMarkup` no espera Suspense: el
+    // primer render dispara la carga y pinta el skeleton; una vez resuelto el chunk, el segundo pinta la tabla
+    // (en Next el SSR sí la espera: `?tab=turnos` sale completo en el HTML).
+    expect(render({ initialTab: "turnos" })).toContain('aria-busy="true"');
+    await import("@/components/patients/profile/views/turnos-view");
+    await new Promise((r) => setTimeout(r, 0));
     const html = render({ initialTab: "turnos" });
     expect(html.match(/data-testid="turno-row"/g)?.length).toBe(2);
     expect(html).not.toContain("admin-turno-row");

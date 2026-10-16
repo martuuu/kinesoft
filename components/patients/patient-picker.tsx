@@ -26,6 +26,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { searchForPicker, type PatientPickerSource } from "@/components/patients/patient-picker-search";
+import pickerStyles from "./patients-directory.module.css";
 
 export type PickedPatient = { id: string; name: string };
 
@@ -221,6 +222,8 @@ export function PatientPicker({
             data-1p-ignore
             data-lpignore="true"
             data-form-type="other"
+            // PF1.1 (C-PF5.4): foco visible por clase (antes se apagaba el contorno sin reemplazo).
+            className={pickerStyles.field}
             onChange={(e) => {
               setQ(e.target.value);
               setOpen(true);
@@ -235,7 +238,6 @@ export function PatientPicker({
               width: "100%",
               fontSize: 14,
               color: "var(--navy-900)",
-              outline: "none",
             }}
           />
         )}

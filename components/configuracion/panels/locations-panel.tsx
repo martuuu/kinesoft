@@ -22,7 +22,6 @@
  */
 import { useRef, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
@@ -43,6 +42,9 @@ import {
   updateLocation,
 } from "@/lib/locations";
 import { ErrorBox } from "../controls";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 const RoomsSection = dynamic(() => import("./rooms-section").then((m) => m.RoomsSection), {
   ssr: false,
@@ -83,7 +85,6 @@ export function LocationsPanel({
   /** Todas las salas del consultorio, archivadas incluidas (SR-U1). */
   rooms?: RoomRow[];
 }) {
-  const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const [pending, start] = useTransition();
@@ -123,7 +124,6 @@ export function LocationsPanel({
       else {
         toast.success(`${l.name} es ahora la sede principal`);
         setBlocked(null);
-        router.refresh();
       }
     });
   };
@@ -145,7 +145,6 @@ export function LocationsPanel({
       }
       setBlocked(null);
       toast.success(`${l.name} archivada`);
-      router.refresh();
     });
   };
 
@@ -155,7 +154,6 @@ export function LocationsPanel({
       if (!r.ok) toast.error("No se pudo restaurar", { description: r.error });
       else {
         toast.success(`${l.name} restaurada`);
-        router.refresh();
       }
     });
   };
@@ -390,7 +388,6 @@ function ArchiveBlockers({
 }
 
 function LocationDrawer({ location, onClose }: { location?: LocationRow; onClose: () => void }) {
-  const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -421,7 +418,6 @@ function LocationDrawer({ location, onClose }: { location?: LocationRow; onClose
       }
       toast.success(location ? "Sede guardada" : "Sede creada");
       onClose();
-      router.refresh();
     });
   };
 

@@ -1,0 +1,92 @@
+/*
+ * [PF1.1-agenda-a] Estilos de las vistas de la agenda que necesitan `@media` (C-PF5.7: CSS Module, no inline).
+ */
+
+/* ── Tira de días (G4): 52 px de alto, una línea «LUN 13» + el conteo. Antes eran 3 líneas (~70 px) que repetían el
+   encabezado de la grilla y a 1728 medían 320 px de ancho cada una. ───────────────────────────────────────────── */
+.strip {
+  display: grid;
+  gap: 6px;
+}
+
+.stripDay {
+  height: 52px;
+  padding: 0 8px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  color: var(--navy-500);
+  text-align: center;
+}
+
+.stripDay[aria-current="date"] {
+  background: var(--sky-700);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(31, 79, 190, 0.24);
+}
+
+.stripTop {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.stripLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.stripNum {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.stripDay[aria-current="date"] .stripNum {
+  color: #fff;
+}
+
+.stripCount {
+  font-size: 10px;
+  opacity: 0.85;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+/* A 390 con 5-7 días cada botón mide ~48 px: queda el número de turnos sin la palabra. */
+@media (max-width: 479px) {
+  .stripDay {
+    padding: 0 2px;
+  }
+  .stripWord {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* ── Lista (G5): ancho de contenido acotado y columnas fijas. A 1728 la tabla iba a todo el ancho y «Servicio»
+   quedaba a 470 px del paciente. ─────────────────────────────────────────────────────────────────────────── */
+.listCard {
+  max-width: 1180px;
+}
+
+/* ── Celda de «Por profesional» / «Por sala»: el botón de alta cubre la celda. El anillo global (box-shadow hacia
+   afuera) lo tapaba la celda vecina: va hacia adentro, con el mismo azul del token. ─────────────────────────── */
+.slotBtn:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: inset 0 0 0 2px var(--sky-700), inset 0 0 0 4px #fff;
+}

@@ -3,7 +3,8 @@ import { getUserPreferences } from "@/lib/preferences";
 import { DashboardScreen } from "@/components/screens/dashboard-screen";
 import { toARDateKey } from "@/lib/datetime-ar";
 
-export const metadata = { title: "Dashboard · KineSoft" };
+// PF1.1-dashboard (C-PF5.8): el nav la llama «Inicio»; la pestaña del navegador decía «Dashboard», en inglés.
+export const metadata = { title: "Inicio · KineSoft" };
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {

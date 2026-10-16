@@ -313,8 +313,8 @@ export function NoteEditorForm({
           style={{
             padding: "10px 12px",
             borderRadius: "var(--r-sm)",
-            background: "rgba(225,75,75,0.08)",
-            border: "1px solid rgba(225,75,75,0.25)",
+            background: "var(--danger-bg)",
+            border: "1px solid var(--danger-border)",
             fontSize: 13,
             color: "var(--navy-900)",
             display: "grid",

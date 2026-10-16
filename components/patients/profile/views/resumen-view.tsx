@@ -23,7 +23,16 @@ import type { ClinicalNoteDTO, PatientClinicalSummary } from "@/lib/clinical-not
 export type ResumenClinicalProps = {
   clinicalSummary?: PatientClinicalSummary | null;
   onOpenEvoluciones?: () => void;
+  /** PF1.1 (D6): abre «Editar paciente» (donde se carga el diagnóstico). Sin él, el vacío no ofrece acción. */
+  onEditPatient?: () => void;
 };
+
+/** Copy del Resumen (PF1.1: D6 y D12 de VX0-b). */
+export const RESUMEN_COPY = {
+  noDiagnosis: "Sin diagnóstico cargado",
+  addDiagnosis: "Cargar diagnóstico",
+  evaEmpty: "Todavía no hay puntajes de EVA. Registrá el de hoy abajo.",
+} as const;
 
 /** Tope del extracto de «Última evolución»: la nota entera está en la pestaña. */
 export const LATEST_NOTE_EXCERPT_MAX = 280;
@@ -87,6 +96,7 @@ export function ResumenView({
   onOpenPlan,
   clinicalSummary = null,
   onOpenEvoluciones,
+  onEditPatient,
 }: ResumenViewProps & ResumenClinicalProps) {
   // P3.Z (F3b): en un consultorio General (sin `planes` / `diagnostico`) el
   // Resumen mostraba la card de Plan y "Diagnóstico principal": la UI tiene que
@@ -253,16 +263,29 @@ export function ResumenView({
             <div
               style={{
                 fontSize: 10,
-                color: "var(--navy-300)",
+                color: "var(--navy-500)",
                 fontWeight: 700,
                 textTransform: "uppercase",
               }}
             >
               Diagnóstico principal
             </div>
-            <div className="k-display" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
-              {diagnosisName ?? "Aún no asignado"}
-            </div>
+            {/* D6 (VX0-b): sin diagnóstico cargado se dice eso y se ofrece cargarlo; nunca el título del plan como
+                fallback (el shell lo pasaba y se leía «Plan Sesión kinésica · 6 sesiones» como diagnóstico). */}
+            {diagnosisName ? (
+              <div className="k-display" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                {diagnosisName}
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+                <span style={{ fontSize: 14, color: "var(--navy-500)" }}>{RESUMEN_COPY.noDiagnosis}</span>
+                {onEditPatient && (
+                  <Button type="button" variant="ghost" onClick={onEditPatient} style={{ fontSize: 12 }}>
+                    {RESUMEN_COPY.addDiagnosis}
+                  </Button>
+                )}
+              </div>
+            )}
           </Card>
         )}
         {clinicalSummary && (
@@ -393,18 +416,21 @@ function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
           <div
             style={{
               fontSize: 12,
-              color: "var(--navy-300)",
+              color: "var(--navy-500)",
               textAlign: "center",
               paddingTop: 24,
             }}
           >
-            Sin registros aún
+            {RESUMEN_COPY.evaEmpty}
           </div>
         )}
       </div>
       <form action={submit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <label style={{ fontSize: 11, color: "var(--navy-500)", fontWeight: 600 }}>EVA hoy</label>
+        <label htmlFor={`eva-${patient.id}`} style={{ fontSize: 11, color: "var(--navy-500)", fontWeight: 600 }}>
+          EVA hoy
+        </label>
         <input
+          id={`eva-${patient.id}`}
           name="value"
           type="number"
           min={0}
@@ -420,7 +446,7 @@ function EvaScoreSide({ patient }: { patient: PatientWithRelations }) {
           }}
         />
         <Button type="submit" variant="primary" disabled={pending} style={{ fontSize: 12, padding: "8px 12px" }}>
-          {pending ? "…" : "Registrar"}
+          {pending ? "Guardando…" : "Registrar"}
         </Button>
       </form>
     </Card>

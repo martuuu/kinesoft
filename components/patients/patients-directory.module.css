@@ -1,0 +1,169 @@
+/*
+ * PF1.1 · Directorio de pacientes (D2 de VX0-b, C-PF5.7): a 390 la grilla de 8 columnas encimaba el plan sobre el
+ * avatar y el nombre. ≥ 768 sigue la tabla (columnas de `patientsGridColumns`); < 768 cada fila es una
+ * card: nombre + estado + acciones arriba, plan abajo, cobertura y próximo turno en una línea. El checkbox de
+ * selección masiva y «Última visita» se esconden en mobile (el archivo masivo es tarea de escritorio).
+ * Las columnas de escritorio van inline (`gridTemplateColumns` de `patientsGridColumns`, la fuente compartida con
+ * el encabezado); por eso la card las pisa con `!important` (un estilo inline le gana a cualquier clase).
+ * Encabezado y filas leen las mismas clases: si se desalinean, cada celda cae bajo el título equivocado.
+ */
+.head,
+.row {
+  display: grid;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 18px;
+}
+
+.head {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--navy-500);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.06);
+  white-space: nowrap;
+}
+
+.row {
+  padding: 14px 18px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(15, 30, 51, 0.04);
+}
+
+.basic {
+  opacity: 0.75;
+}
+
+.nameLink {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  border-radius: 10px;
+}
+
+.name {
+  font-weight: 600;
+  color: var(--navy-900);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  font-size: 11px;
+  color: var(--navy-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.right {
+  text-align: right;
+}
+
+/* Rótulo que solo existe en la card (< 768): en la tabla lo da el encabezado. */
+.cardLabel {
+  display: none;
+}
+
+/* Campo de texto sin borde dentro de una píldora: el anillo de foco lo pinta la píldora (`:focus-within`). */
+.pill:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.bareInput:focus,
+.bareInput:focus-visible {
+  outline: 2px solid transparent;
+}
+
+/* Inputs chicos de filtros y del buscador de pacientes (antes se apagaba el contorno sin reemplazo). */
+.field:focus-visible,
+.field:focus {
+  outline: 2px solid transparent;
+  border-color: var(--sky-700);
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 767px) {
+  .head {
+    display: none;
+  }
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    grid-template-areas:
+      "name state actions"
+      "plan plan plan"
+      "meta meta meta";
+    gap: 6px 10px;
+    padding: 12px 14px;
+  }
+  .cellCheck,
+  .cellLast {
+    display: none;
+  }
+  .cellName {
+    grid-area: name;
+  }
+  .cellPlan {
+    grid-area: plan;
+  }
+  .cellState {
+    grid-area: state;
+  }
+  .cellActions {
+    grid-area: actions;
+  }
+  .cellInsurer,
+  .cellNext {
+    grid-area: meta;
+    font-size: 12px;
+  }
+  /* Cobertura a la izquierda y próximo turno a la derecha, en la misma fila. */
+  .cellNext {
+    justify-self: end;
+  }
+  .cellInsurer {
+    justify-self: start;
+    max-width: 50%;
+  }
+  .cardLabel {
+    display: inline;
+    color: var(--navy-500);
+    margin-right: 4px;
+  }
+}
+
+/* Pills «Todos / Con plan / Sin plan» del buscador. La sombra del seleccionado vive acá y no inline: un
+   `box-shadow` inline le gana al anillo de foco global (`:where(a):focus-visible`) y el foco quedaba invisible. */
+.seg {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--navy-500);
+}
+.segOn {
+  background: #fff;
+  color: var(--navy-900);
+  box-shadow: 0 2px 6px rgba(15, 30, 51, 0.08);
+}
+.seg:focus-visible {
+  box-shadow: var(--focus-ring);
+}

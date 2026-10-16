@@ -12,11 +12,12 @@
  * el server (`getRevenue`, `lib/dashboard-revenue.ts`); acá solo se muestran.
  */
 import { useState, useTransition } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Card } from "@/components/ui/card";
 import { IconArrowUp } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
-import { DUR, EASE_OUT, springSoft } from "@/lib/motion";
+import { springSoft } from "@/lib/motion";
+import styles from "./dashboard.module.css";
 import { formatARS } from "@/lib/format";
 import { getRevenue } from "@/lib/dashboard";
 import { updateDashboardPrefs } from "@/lib/preferences";
@@ -86,7 +87,9 @@ export function RevenueCard({
   initial,
   month,
   scope = "tenant",
+  className,
 }: {
+  className?: string;
   /** El período que el usuario dejó elegido (`dashboardPrefs.revenueRange`). */
   initial: RevenueSummary;
   /** El mes ya calculado para la KPI: cambiar a "Mes" se ve sin esperar. */
@@ -134,6 +137,7 @@ export function RevenueCard({
 
   return (
     <Card
+      className={className}
       style={{
         padding: 18,
         background: "linear-gradient(160deg, var(--navy-900), var(--navy-700))",
@@ -179,11 +183,12 @@ export function RevenueCard({
                   cursor: "pointer",
                 }}
               >
+                {/* C-PF1: `m` + `layoutId` (domMax llega aparte); orden de `style` fijo (C-PF1.4). */}
                 {on && (
-                  <motion.span
+                  <m.span
                     layoutId="revenue-range-indicator"
                     transition={springSoft}
-                    style={{ position: "absolute", inset: 0, borderRadius: 999, background: "#fff", zIndex: 0 }}
+                    style={{ position: "absolute", inset: 0, zIndex: 0, borderRadius: 999, background: "#fff" }}
                   />
                 )}
                 <span style={{ position: "relative", zIndex: 1 }}>{r.label}</span>
@@ -207,7 +212,9 @@ export function RevenueCard({
             style={{
               padding: "4px 8px",
               borderRadius: 8,
-              background: v.delta.up ? "rgba(180,233,74,0.2)" : "rgba(228,70,70,0.2)",
+              // Sobre el fondo navy no hay token de estado (los `--danger-*` son para fondo claro): el rojo claro
+              // #FFC0C0 da 9:1 sobre navy-900. El fondo de la baja pasa al token más cercano (C-PF5.2).
+              background: v.delta.up ? "rgba(180,233,74,0.2)" : "var(--danger-bg-strong)",
               color: v.delta.up ? "var(--lime-300)" : "#FFC0C0",
               fontSize: 11,
               fontWeight: 600,
@@ -215,7 +222,11 @@ export function RevenueCard({
             }}
           >
             {v.delta.text}{" "}
-            {v.delta.up && <IconArrowUp size={10} style={{ display: "inline-block", verticalAlign: -2 }} />}
+            {/* La baja lleva la misma flecha girada: antes solo la suba tenía flecha y el color era la única señal. */}
+            <IconArrowUp
+              size={10}
+              style={{ display: "inline-block", verticalAlign: -2, transform: v.delta.up ? undefined : "rotate(180deg)" }}
+            />
           </span>
         )}
       </div>
@@ -224,17 +235,15 @@ export function RevenueCard({
         aria-hidden
         style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.1)" }}
       >
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${shown.privateShare}%` }}
-          transition={{ duration: DUR.slow, ease: EASE_OUT }}
-          style={{ background: "var(--lime-400)" }}
+        {/* C-PF1.2: el ancho es el dato (se ve sin JS); la entrada es CSS (`.shareBar`) y el cambio de período anima
+            con `transition`. Antes era un componente `motion` de framer con `initial={{ width: 0 }}`: sin framer la barra quedaba vacía. */}
+        <div
+          className={styles.shareBar}
+          style={{ width: `${shown.privateShare}%`, background: "var(--lime-400)", transition: "width var(--dur-slow) var(--ease-out)" }}
         />
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${shown.insurerShare}%` }}
-          transition={{ duration: DUR.slow, ease: EASE_OUT, delay: 0.06 }}
-          style={{ background: "var(--sky-500)" }}
+        <div
+          className={styles.shareBar}
+          style={{ width: `${shown.insurerShare}%`, background: "var(--sky-500)", transition: "width var(--dur-slow) var(--ease-out)" }}
         />
       </div>
       <div

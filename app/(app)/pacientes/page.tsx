@@ -6,8 +6,10 @@ import { getCapabilities, getTenantModules } from "@/lib/authz";
 import { patientsGridColumns } from "@/components/patients/patients-grid";
 import type { PatientSort } from "@/lib/patients-types";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { IconUsers, IconPlus } from "@/components/ui/icons";
+import { PageHeader } from "@/components/ui/page-header";
+import directory from "@/components/patients/patients-directory.module.css";
+import { ButtonLink, buttonClassName } from "@/components/ui/button";
+import { IconUsers } from "@/components/ui/icons";
 import { NewPatientButton } from "@/components/patients/new-patient-button";
 import { PatientsSearchBar } from "@/components/patients/patients-search-bar";
 import { PatientsList } from "@/components/patients/patients-list";
@@ -124,35 +126,35 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 12, color: "var(--navy-300)", fontWeight: 500 }}>Pacientes</div>
-          <h1 className="k-display" style={{ fontSize: 30, margin: "2px 0 0" }}>
-            Directorio · <span style={{ color: "var(--sky-700)" }}>{totals.all}</span> pacientes
-          </h1>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {/* En "Archivados" exporta los archivados (la ruta excluye por default). */}
-          <a
-            href={`/api/pacientes/export${filter === "archived" ? "?archived=only" : ""}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Button variant="ghost">Exportar CSV</Button>
-          </a>
-          {canCreateHere && (
-            <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
-          )}
-        </div>
-      </header>
+      {/* PF1.1 (C-PF5.3): `PageHeader` (eyebrow + h1 + acciones). El conteo queda en el h1 con el color de marca. */}
+      <PageHeader
+        eyebrow="Pacientes"
+        title={
+          <>
+            Directorio · <span style={{ color: "var(--sky-700)" }}>{totals.all}</span>{" "}
+            {totals.all === 1 ? "paciente" : "pacientes"}
+          </>
+        }
+        actions={
+          <>
+            {/* En "Archivados" exporta los archivados (la ruta excluye por default). */}
+            {/* PF1.1: un solo `<a>` con look de botón (antes `<a><Button/></a>`: botón anidado en un link). `<a>` y no
+                `ButtonLink`: es una descarga de un route handler, no una navegación del router. */}
+            <a
+              href={`/api/pacientes/export${filter === "archived" ? "?archived=only" : ""}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonClassName({ variant: "ghost" })}
+              style={{ textDecoration: "none" }}
+            >
+              Exportar CSV
+            </a>
+            {canCreateHere && (
+              <NewPatientButton insurers={insurers.filter((i) => !i.isParticular).map((i) => ({ id: i.id, name: i.name }))} />
+            )}
+          </>
+        }
+      />
 
       <PatientsSearchBar filter={filter} totals={totals} />
 
@@ -200,6 +202,8 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             name="insurer"
             defaultValue={insurer}
             placeholder="OSDE, Swiss…"
+            aria-label="Filtrar por cobertura"
+            className={directory.field}
             style={{
               padding: "5px 10px",
               borderRadius: 999,
@@ -242,23 +246,16 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
       />
 
       {patients.length === 0 ? (
-        <EmptyState />
+        <EmptyState
+          filtered={Boolean(q || insurer || ageMin != null || ageMax != null || diagnosisSlug || lastVisitFrom || lastVisitTo || filter !== "all")}
+          canCreate={canCreateHere}
+        />
       ) : (
         <BulkSelectProvider>
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div
-            style={{
-              padding: "12px 18px",
-              display: "grid",
-              gridTemplateColumns: patientsGridColumns(plansEnabled),
-              gap: 14,
-              fontSize: 10,
-              fontWeight: 700,
-              color: "var(--navy-300)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              borderBottom: "1px solid rgba(15,30,51,0.06)",
-            }}
+            className={directory.head}
+            style={{ gridTemplateColumns: patientsGridColumns(plansEnabled) }}
           >
             <span />
             <span>Paciente</span>
@@ -266,7 +263,7 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
             <span>Obra social</span>
             <span>Próx. turno</span>
             <span>Última visita</span>
-            <span style={{ textAlign: "right" }}>Estado</span>
+            <span className={directory.right}>Estado</span>
             <span />
           </div>
           <PatientsList rows={patients} archived={filter === "archived"} />
@@ -278,7 +275,13 @@ export default async function PacientesPage({ searchParams }: { searchParams: SP
   );
 }
 
-function EmptyState() {
+/**
+ * Vacío del directorio (C-PF5.5). Antes decía «Usá el botón “Nuevo paciente”» en un `<span>` con ícono que parecía
+ * un botón y no hacía nada. Con filtros: «Quitar filtros» (link real a la vista sin filtros). Sin filtros: el
+ * texto apunta al botón del encabezado, que solo existe si el rol puede crear (la Secretaria da de alta desde el
+ * turno).
+ */
+function EmptyState({ filtered, canCreate }: { filtered: boolean; canCreate: boolean }) {
   return (
     <Card style={{ padding: 40, textAlign: "center" }}>
       <div
@@ -296,26 +299,21 @@ function EmptyState() {
       >
         <IconUsers size={26} />
       </div>
-      <div className="k-display" style={{ fontSize: 18, fontWeight: 700 }}>
-        Sin pacientes en esta vista
-      </div>
-      <p style={{ color: "var(--navy-500)", maxWidth: 360, margin: "8px auto 16px" }}>
-        Probá quitar filtros o creá tu primer paciente.
+      <h2 className="k-display" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
+        {filtered ? "Ningún paciente coincide con la búsqueda" : "Todavía no hay pacientes"}
+      </h2>
+      <p style={{ color: "var(--navy-500)", maxWidth: 380, margin: "8px auto 16px" }}>
+        {filtered
+          ? "Probá con otro nombre o DNI, o quitá los filtros."
+          : canCreate
+            ? "Creá el primero con «Nuevo paciente», arriba a la derecha."
+            : "Los pacientes se dan de alta al agendar su primer turno."}
       </p>
-      <div style={{ display: "inline-flex", gap: 8 }}>
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 13,
-            color: "var(--sky-700)",
-            fontWeight: 600,
-          }}
-        >
-          <IconPlus size={14} /> Usá el botón “Nuevo paciente”
-        </span>
-      </div>
+      {filtered && (
+        <ButtonLink href="/pacientes" variant="ghost" style={{ textDecoration: "none" }}>
+          Quitar filtros
+        </ButtonLink>
+      )}
     </Card>
   );
 }

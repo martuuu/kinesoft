@@ -1,17 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
 import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/tag";
 import { BulkSelectCheckbox } from "@/components/patients/bulk-select";
 import { PatientRowActions } from "@/components/patients/patient-row-actions";
 import { DisciplineChip } from "@/components/planes/discipline-chip";
 import { disciplineLabel } from "@/lib/plan-display";
-import { staggerList, staggerItem } from "@/lib/motion";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
 import { patientsGridColumns } from "@/components/patients/patients-grid";
 import type { PatientListPlanChip, PatientRow } from "@/lib/patients-types";
+import styles from "./patients-directory.module.css";
 
 /**
  * Texto de un chip de plan del directorio (S32, puro). Mismo formato que el
@@ -77,18 +76,31 @@ function PlanCell({ plans, title }: { plans: PatientListPlanChip[]; title: strin
 }
 
 /**
- * Client boundary for the patient directory rows.
+ * Línea secundaria de la fila (D11 de VX0-b): DNI o teléfono, que sirven para distinguir homónimos al escanear. El
+ * email ya no va en la fila (era la línea de todas las filas y no aporta para buscar a ojo); queda en el `title` del
+ * nombre y en la ficha. Una fila `basic` muestra solo el DNI.
+ */
+export function patientRowSubline(p: Pick<PatientRow, "access" | "documentId" | "phone">): string {
+  if (p.access === "basic") return p.documentId ? `DNI ${p.documentId}` : "Sin acceso";
+  if (p.documentId) return `DNI ${p.documentId}`;
+  return p.phone ?? "—";
+}
+
+/** Retardo de la entrada escalonada: 35 ms por fila, tope en la 12 (una lista de 200 no tarda 7 s en aparecer). */
+export function rowEnterDelayMs(index: number): number {
+  return Math.min(index, 12) * 35;
+}
+
+/**
+ * Filas del directorio (client boundary: checkbox de selección y acciones por fila).
  *
- * Renders the exact same grid rows as before, but wrapped in a
- * `staggerList` container so each row fades/rises in on a subtle,
- * sequenced delay. The container `key` is a signature of the current
- * row set (order-sensitive) so the reveal re-fires whenever the list
- * changes via search / filter / sort — the wrapper remounts and the
- * `initial → animate` transition runs again.
+ * PF1.1 (C-PF1.2): la entrada escalonada era framer (`staggerList`/`staggerItem`) y el SSR pintaba las filas con
+ * `opacity: 0` hasta hidratar. Ahora es CSS (`.k-enter-fade` + `animation-delay` por fila): se ve sin JS y
+ * `prefers-reduced-motion` la apaga. El `key` del contenedor (firma ordenada de ids) re-monta la lista al buscar,
+ * filtrar u ordenar, así la entrada se repite como antes.
  *
- * Zero visual change beyond the staggered entrance: the column grid,
- * spacing, colors, links and row actions are identical to the previous
- * inline `patients.map(...)`.
+ * D2 (VX0-b): la grilla y su versión card (< 768) viven en `patients-directory.module.css`; las columnas siguen
+ * saliendo de `patientsGridColumns` (compartidas con el encabezado de la página), inline.
  */
 export function PatientsList({
   rows,
@@ -102,16 +114,12 @@ export function PatientsList({
   // ser "tiene plan activo" (que ahí sería siempre «Inactivo") para ser el del
   // paciente: Activo o Archivado según la vista.
   const plansEnabled = useTenantModules().has("planes");
+  const cols: React.CSSProperties = { gridTemplateColumns: patientsGridColumns(plansEnabled) };
 
   return (
-    <motion.div
-      key={signature}
-      variants={staggerList}
-      initial="initial"
-      animate="animate"
-    >
-      {rows.map((p) => {
-        const initials = `${p.firstName} ${p.lastName}`;
+    <div key={signature}>
+      {rows.map((p, i) => {
+        const fullName = `${p.firstName} ${p.lastName}`;
         const isBasic = p.access === "basic";
         // S32: "tiene plan" = al menos un chip (plan ACTIVE y vivo); avatar,
         // celda y «Estado» leen lo mismo.
@@ -124,49 +132,32 @@ export function PatientsList({
           : hasPlan
             ? "lime"
             : "sky";
+        const insurer = isBasic || !p.obraSocial || p.obraSocial.toLowerCase() === "particular" ? "—" : p.obraSocial;
         return (
-          <motion.div
+          <div
             key={p.id}
-            variants={staggerItem}
-            style={{
-              padding: "14px 18px",
-              display: "grid",
-              gridTemplateColumns: patientsGridColumns(plansEnabled),
-              gap: 14,
-              alignItems: "center",
-              fontSize: 13,
-              borderBottom: "1px solid rgba(15,30,51,0.04)",
-              opacity: isBasic ? 0.75 : 1,
-            }}
+            data-testid="patients-row"
+            className={`${styles.row} ${isBasic ? styles.basic : ""} k-enter-fade`}
+            style={{ ...cols, animationDelay: `${rowEnterDelayMs(i)}ms` }}
           >
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span className={styles.cellCheck} style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
               {isBasic ? <span /> : <BulkSelectCheckbox patientId={p.id} />}
             </span>
             <Link
               href={`/pacientes/${p.id}`}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                textDecoration: "none",
-                color: "inherit",
-                minWidth: 0,
-              }}
+              className={`${styles.nameLink} ${styles.cellName}`}
+              title={!isBasic && p.email ? `${fullName} · ${p.email}` : fullName}
             >
-              <Avatar name={initials} size={36} tone={tone} />
+              <Avatar name={fullName} size={36} tone={tone} />
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: "var(--navy-900)" }}>
+                <div className={styles.name}>
                   {p.lastName}, {p.firstName}
                 </div>
-                <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
-                  {isBasic
-                    ? p.documentId ? `DNI ${p.documentId}` : "Sin acceso"
-                    : (p.email ?? p.phone ?? p.documentId ?? "—")}
-                </div>
+                <div className={styles.sub}>{patientRowSubline(p)}</div>
               </div>
             </Link>
             {plansEnabled && (
-            <div style={{ minWidth: 0 }}>
+            <div className={styles.cellPlan} style={{ minWidth: 0 }}>
               {isBasic ? (
                 <Tag tone="soft">Sin acceso</Tag>
               ) : (
@@ -174,12 +165,16 @@ export function PatientsList({
               )}
             </div>
             )}
-            <div style={{ color: isBasic ? "var(--navy-300)" : "var(--navy-700)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {isBasic || !p.obraSocial || p.obraSocial.toLowerCase() === "particular"
-                ? "—"
-                : p.obraSocial}
+            <div
+              className={`${styles.cellInsurer} ${styles.ellipsis}`}
+              title={insurer === "—" ? undefined : insurer}
+              style={{ color: isBasic ? "var(--navy-500)" : "var(--navy-700)", fontSize: 12 }}
+            >
+              <span className={styles.cardLabel}>Cobertura:</span>
+              {insurer}
             </div>
-            <div style={{ color: "var(--navy-500)" }}>
+            <div className={`${styles.cellNext} ${styles.nowrap}`} style={{ color: "var(--navy-500)" }}>
+              <span className={styles.cardLabel}>Próx. turno:</span>
               {p.upcomingAt
                 ? p.upcomingAt.toLocaleString("es-AR", {
                     day: "2-digit",
@@ -191,7 +186,7 @@ export function PatientsList({
                   })
                 : "—"}
             </div>
-            <div className="k-mono" style={{ fontSize: 12, color: "var(--navy-500)" }}>
+            <div className={`${styles.cellLast} ${styles.nowrap} k-mono`} style={{ fontSize: 12, color: "var(--navy-500)" }}>
               {isBasic
                 ? "—"
                 : p.lastVisit
@@ -202,7 +197,7 @@ export function PatientsList({
                     })
                   : "—"}
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div className={styles.cellState} style={{ display: "flex", justifyContent: "flex-end" }}>
               {isBasic ? (
                 <Tag tone="soft">—</Tag>
               ) : !plansEnabled ? (
@@ -214,16 +209,18 @@ export function PatientsList({
               )}
             </div>
             {isBasic ? (
-              <span />
+              <span className={styles.cellActions} />
             ) : (
               // S32a (handoff): el diálogo de archivar nombra al paciente. `livePlanCount`
               // queda en null (pregunta siempre): `activePlans` cuenta solo ACTIVE y
               // L9 también pausa/cancela planes PAUSED.
-              <PatientRowActions patientId={p.id} archived={archived} patientName={`${p.firstName} ${p.lastName}`} />
+              <span className={styles.cellActions}>
+                <PatientRowActions patientId={p.id} archived={archived} patientName={fullName} />
+              </span>
             )}
-          </motion.div>
+          </div>
         );
       })}
-    </motion.div>
+    </div>
   );
 }

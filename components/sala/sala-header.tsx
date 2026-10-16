@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { DUR, EASE_IN_OUT, EASE_OUT, countBump, springSoft } from "@/lib/motion";
 import { IconSearch, IconX } from "@/components/ui/icons";
 import { LiveIndicator } from "@/components/realtime/live-indicator";
@@ -13,7 +13,7 @@ import type { SalaGroupBy } from "@/lib/preferences-constants";
  * Header sticky de /sala (SV10a, plan §18.5): título + fecha de hoy AR,
  * `LiveIndicator`, contadores, «Por profesional | Por sala» y el buscador.
  *
- * Contadores: el número es un `motion.span` con `key={valor}`, así cada cambio
+ * Contadores: el número es un `m.span` (C-PF1, PF1.1-sala) con `key={valor}`, así cada cambio
  * lo remonta y corre `countBump` una vez. En el primer render NO late (si no,
  * al abrir la página latirían los cuatro): `mounted` arranca en false y pasa a
  * true después del primer effect. Con reduced motion no se mueve (es scale).
@@ -63,11 +63,13 @@ export function SalaHeader({
           </div>
         </div>
         <dl className="sala-counters" aria-label="Resumen de hoy">
+          {/* Primer render sin framer (C-PF1.2): `initial="rest"` es `scale: 1`, el estado final; el latido solo corre
+              en un cambio posterior, con las features de `LazyMotion` ya cargadas. */}
           {SALA_COUNTERS.map((c) => (
             <div key={c.key} className="sala-counter" data-counter={c.key} data-active={counters[c.key] > 0 ? "" : undefined}>
               <dt>{c.label}</dt>
               <dd>
-                <motion.span
+                <m.span
                   key={counters[c.key]}
                   className="sala-counter-n k-mono"
                   variants={countBump}
@@ -75,7 +77,7 @@ export function SalaHeader({
                   animate={mounted.current ? "bump" : "rest"}
                 >
                   {counters[c.key]}
-                </motion.span>
+                </m.span>
               </dd>
             </div>
           ))}
@@ -99,7 +101,7 @@ export function SalaHeader({
                 onClick={() => groupBy !== id && onGroupBy(id)}
               >
                 {groupBy === id && (
-                  <motion.span
+                  <m.span
                     layoutId="sala-seg-thumb"
                     className="sala-seg-thumb"
                     aria-hidden="true"
@@ -137,10 +139,9 @@ export function SalaHeader({
         <div className="sala-status">
           <AnimatePresence initial={false}>
             {status === "no-one-waiting" && (
-              <motion.p
+              <m.p
                 key="no-one-waiting"
                 className="sala-status-msg"
-                style={{ margin: 0 }}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1, transition: { duration: DUR.base, ease: EASE_OUT } }}
                 exit={{ opacity: 0, transition: { duration: DUR.fast, ease: EASE_IN_OUT } }}
@@ -148,7 +149,7 @@ export function SalaHeader({
                 <span className="sala-status-dot" aria-hidden="true" />
                 <strong>{SALA_COPY.noOneWaiting}</strong>
                 <span>· Estos son los próximos turnos del día.</span>
-              </motion.p>
+              </m.p>
             )}
           </AnimatePresence>
         </div>

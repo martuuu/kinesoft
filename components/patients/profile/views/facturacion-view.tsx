@@ -30,6 +30,16 @@ const FACT_COLS = "92px 1fr 0.9fr 1.25fr 1.25fr 96px";
  */
 const FACT_MIN_WIDTH = 720;
 
+/** Fecha de la fila de Facturación (D8, puro): `dd/mm/aa` en hora AR. */
+export function factDateLabel(d: Date | string): string {
+  return new Date(d).toLocaleDateString("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+}
+
 function TableScroll({ children }: { children: React.ReactNode }) {
   return (
     <div data-testid="profile-table-scroll" style={{ overflowX: "auto" }}>
@@ -52,7 +62,7 @@ function PaidCell({
   pending: boolean;
   onToggle: (next: boolean) => void;
 }) {
-  if (!available) return <span style={{ fontSize: 12, color: "var(--navy-300)" }}>—</span>;
+  if (!available) return <span style={{ fontSize: 12, color: "var(--navy-500)" }}>—</span>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
       <span className="k-mono" style={{ fontSize: 13, fontWeight: 700, color: "var(--navy-900)" }}>
@@ -64,7 +74,7 @@ function PaidCell({
           onClick={() => onToggle(false)}
           disabled={pending}
           title="Cobrado — click para deshacer"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "none", cursor: "pointer", background: "rgba(54,179,126,0.14)", color: "#1F7A52", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "none", cursor: "pointer", background: "var(--success-bg)", color: "var(--success-fg)", fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999 }}
         >
           <IconCheck size={9} stroke={3} /> Cobrado
         </button>
@@ -171,7 +181,7 @@ export function FacturacionView({
   };
 
   const columnsHeader = (
-    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-300)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
+    <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, fontSize: 10, fontWeight: 700, color: "var(--navy-500)", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap", borderBottom: "1px solid rgba(15,30,51,0.06)" }}>
       <span>Fecha</span>
       <span>Servicio</span>
       <span>Obra social</span>
@@ -181,7 +191,11 @@ export function FacturacionView({
     </div>
   );
   const row = (b: PatientBookingFull, plan: PlanGroupMeta | null) => {
-    const hasOS = b.obraSocial.toLowerCase() !== "particular" && b.osAmountCents > 0;
+    // PF1.1 (D8): la columna «Obra social» dice la cobertura del turno aunque la OS no reintegre nada (monto 0);
+    // antes decía «Particular» a un paciente de OSDE con un servicio sin parte de OS. El toggle de la OS sigue
+    // existiendo solo con monto.
+    const insured = b.obraSocial.toLowerCase() !== "particular";
+    const hasOS = insured && b.osAmountCents > 0;
     const ord = plan ? bookingPlanOrdinal(b, plan) : null;
     const offStatus = b.status === "CANCELLED" || b.status === "NO_SHOW";
     return (
@@ -191,8 +205,9 @@ export function FacturacionView({
         data-plan={b.programId ?? undefined}
         style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: FACT_COLS, gap: 14, alignItems: "center", fontSize: 13, borderBottom: "1px solid rgba(15,30,51,0.04)", opacity: offStatus ? 0.75 : 1 }}
       >
-        <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)" }}>
-          {new Date(b.scheduledFor).toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })}
+        {/* D8: `dd/mm/aa` en una línea (con `month: "short"` salía «27 de jul de / 26» partido en dos). */}
+        <span className="k-mono" style={{ fontSize: 12, color: "var(--navy-700)", whiteSpace: "nowrap" }}>
+          {factDateLabel(b.scheduledFor)}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           {ord && plan && (
@@ -201,7 +216,7 @@ export function FacturacionView({
           <span style={{ color: "var(--navy-700)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.serviceName}</span>
         </span>
         <span style={{ color: "var(--navy-500)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {hasOS ? b.obraSocial : "Particular"}
+          {insured ? b.obraSocial : "Particular"}
         </span>
         <PaidCell amountCents={b.osAmountCents} paid={!!b.insurerPaidAt} available={hasOS} pending={pending} onToggle={(n) => confirmOS(b, n)} />
         <PaidCell amountCents={b.copagoCents} paid={b.paymentStatus === "PAID"} available pending={pending} onToggle={(n) => confirmCopago(b, n)} />
@@ -231,7 +246,7 @@ export function FacturacionView({
   );
 
   const footnote = (
-    <div style={{ fontSize: 11, color: "var(--navy-300)", paddingLeft: 4, lineHeight: 1.5 }}>
+    <div style={{ fontSize: 11, color: "var(--navy-500)", paddingLeft: 4, lineHeight: 1.5 }}>
       <strong>OS</strong> = monto que reintegra la obra social al consultorio · <strong>Copago</strong> = lo que abona el paciente. Tocá «Confirmar» en cada lado cuando lo cobres.
       {grouped && (
         <> En cada plan, «Pendiente» es lo realizado que falta cobrar; lo que paga la obra social va aparte.</>
@@ -257,7 +272,7 @@ export function FacturacionView({
                 </div>
               )}
               {g.bookings.length === 0 ? (
-                <div style={{ padding: 16, textAlign: "center", color: "var(--navy-300)", fontSize: 12.5 }}>
+                <div style={{ padding: 16, textAlign: "center", color: "var(--navy-500)", fontSize: 12.5 }}>
                   {plan ? "Sin turnos para facturar entre los cargados." : "Sin turnos sueltos para facturar."}
                 </div>
               ) : (
@@ -281,7 +296,7 @@ export function FacturacionView({
         {visible.length === 0 ? (
           <>
             {columnsHeader}
-            <div style={{ padding: 24, textAlign: "center", color: "var(--navy-300)", fontSize: 13 }}>
+            <div style={{ padding: 24, textAlign: "center", color: "var(--navy-500)", fontSize: 13 }}>
               Sin turnos confirmados para facturar todavía.
             </div>
           </>

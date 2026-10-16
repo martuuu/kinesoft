@@ -310,7 +310,7 @@ export function PlanPicker({
               padding: "12px 14px",
               borderRadius: 14,
               border: on ? "2px solid var(--sky-700)" : "1px solid rgba(15,30,51,0.1)",
-              background: isCurrent ? "rgba(15,30,51,0.04)" : "#fff",
+              background: isCurrent ? "rgba(15,30,51,0.04)" : "var(--card-bg)",
               cursor: disabled || isCurrent ? "default" : "pointer",
               font: "inherit",
               color: "var(--navy-900)",
@@ -446,7 +446,7 @@ export function PlanChangeReview({
                     padding: "10px 12px",
                     borderRadius: 12,
                     border: "1px solid rgba(15,30,51,0.08)",
-                    background: checked ? "var(--st-noshow-bg, rgba(228,70,70,0.08))" : "#fff",
+                    background: checked ? "var(--danger-bg)" : "var(--card-bg)",
                     opacity: selectable ? 1 : 0.7,
                     cursor: selectable && !disabled ? "pointer" : "default",
                   }}

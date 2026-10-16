@@ -1,0 +1,238 @@
+/*
+ * [PF1.1-agenda-a] Encabezado de la agenda: segmentados (Día/Semana/Lista/Recepción y Por día/Por profesional/Por sala),
+ * navegación de semana y la fila de acciones. Antes eran estilos inline + `motion.button whileTap`: el `whileTap` metía
+ * framer completo en el first load de /agenda (C-PF1) y el `style` de la pastilla con `layoutId` daba *style mismatch*
+ * de hidratación (S5). Ahora el «apretado» es CSS (`:active`) y la pastilla lleva clase, no `style`.
+ */
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.topRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.titleBlock {
+  min-width: 0;
+}
+
+.eyebrow {
+  font-size: var(--fs-xs);
+  color: var(--navy-300);
+  font-weight: 500;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: var(--fs-2xl);
+  margin: 2px 0 0;
+  /* La fecha larga («miércoles, 15 de octubre») no se corta: baja de línea antes que salirse a 390. */
+  overflow-wrap: anywhere;
+}
+
+.hidden {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--navy-500);
+}
+
+.linkBtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--sky-700);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pillGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  height: 36px;
+  max-width: 100%;
+}
+
+.navBtn {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--navy-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.navBtnText {
+  width: auto;
+  padding: 0 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.segBtn {
+  position: relative;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--navy-500);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.segBtn[aria-pressed="true"],
+.segBtn[aria-checked="true"] {
+  color: #fff;
+}
+
+.navBtn:active,
+.segBtn:active {
+  transform: scale(0.95);
+}
+
+.navBtn:focus-visible,
+.segBtn:focus-visible,
+.linkBtn:focus-visible,
+.select:focus-visible,
+.moreBtn:focus-visible {
+  outline: 2px solid transparent; /* forced-colors lo pinta; el anillo visible es el box-shadow */
+  box-shadow: var(--focus-ring);
+}
+
+/* Pastilla navy del activo. Va detrás del texto; con `layoutId` se desliza (framer `m`, tras interacción). */
+.segPill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--navy-900);
+  z-index: 0;
+}
+
+.segLabel {
+  position: relative;
+  z-index: 1;
+}
+
+.select {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--navy-700);
+  max-width: 220px;
+}
+
+/* Acciones secundarias (.ics y Vista). ≥ 480 van en la fila; < 480 detrás de «⋯» (G9), y «Nuevo turno» queda visible. */
+.secondary {
+  display: contents;
+}
+
+.moreBtn {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 30, 51, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--navy-700);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.icsLink {
+  height: 36px;
+  padding: 0 14px;
+  text-decoration: none;
+}
+
+/* La primaria va última en la fila (como siempre) aunque en el DOM esté antes de las secundarias: así < 480, con las
+   secundarias detrás de «⋯», queda a mano y en el orden de Tab antes que el menú desplegado. */
+.createBtn {
+  height: 36px;
+  padding: 0 18px;
+  order: 1;
+}
+
+@media (max-width: 479px) {
+  .title {
+    font-size: var(--fs-xl);
+  }
+  .moreBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .secondary {
+    display: none;
+  }
+  .createBtn {
+    order: 0;
+  }
+  .secondaryOpen {
+    display: flex;
+    flex-basis: 100%;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  /* El selector de vista cabe a 390 sin cortar «Recepción»: se achica el relleno, no el texto. */
+  .segBtn {
+    padding: 0 10px;
+  }
+  .pillGroup {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navBtn,
+  .segBtn {
+    transition: none;
+  }
+  .navBtn:active,
+  .segBtn:active {
+    transform: none;
+  }
+}

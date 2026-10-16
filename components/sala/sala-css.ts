@@ -68,16 +68,16 @@ export const SALA_CSS = `
 .sala-seg { position: relative; flex-shrink: 0; display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(15,30,51,0.06); }
 .sala-seg-btn { position: relative; min-height: 32px; padding: 6px 14px; border: none; border-radius: 999px; background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--navy-500); cursor: pointer; transition: color ${T_FAST}; }
 .sala-seg-btn[aria-pressed=true] { color: var(--navy-900); }
-.sala-seg-thumb { position: absolute; inset: 0; border-radius: 999px; background: #fff; box-shadow: 0 1px 3px rgba(15,30,51,0.12); }
+.sala-seg-thumb { position: absolute; inset: 0; border-radius: 999px; background: var(--card-bg); box-shadow: 0 1px 3px rgba(15,30,51,0.12); }
 .sala-seg-label { position: relative; }
 .sala-search { position: relative; display: inline-flex; align-items: center; gap: 8px; flex: 1 1 220px; max-width: 340px; min-width: 0; min-height: 36px; padding: 0 2px 0 12px; border-radius: 999px; background: var(--card-bg); border: 1px solid rgba(15,30,51,0.1); color: var(--navy-400); transition: border-color ${T_FAST}, box-shadow ${T_FAST}; }
-.sala-search:focus-within { border-color: var(--sky-600); box-shadow: 0 0 0 3px rgba(31,79,190,0.12); }
-.sala-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; font: inherit; font-size: 13px; color: var(--navy-900); padding: 8px 0; }
+.sala-search:focus-within { border-color: var(--sky-700); box-shadow: var(--focus-ring); }
+.sala-search input { flex: 1; min-width: 0; border: none; outline: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--navy-900); padding: 8px 0; }
 .sala-search input::-webkit-search-cancel-button { display: none; }
 .sala-search-clear { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; border-radius: 999px; background: rgba(15,30,51,0.06); color: var(--navy-700); cursor: pointer; transition: background-color ${T_FAST}; }
 .sala-search-clear:hover { background: rgba(15,30,51,0.1); }
 .sala-status { flex: 1 1 0; min-width: 0; display: flex; justify-content: flex-end; align-items: center; min-height: 20px; font-size: 12.5px; color: var(--navy-500); }
-.sala-status-msg { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.sala-status-msg { margin: 0; display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .sala-status-msg strong { color: var(--navy-900); font-weight: 600; white-space: nowrap; }
 .sala-status-msg span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sala-status-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 999px; background: var(--navy-300); }
@@ -142,18 +142,24 @@ export const SALA_CSS = `
 .sala-card-room { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sala-card-wait { margin-left: auto; font-weight: 700; white-space: nowrap; }
 .sala-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.sala-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; border: 1px solid rgba(15,30,51,0.14); background: #fff; color: var(--navy-900); transition: transform ${T_FAST}, box-shadow ${T_FAST}, background-color ${T_FAST}, border-color ${T_FAST}, color ${T_FAST}; }
+.sala-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; border: 1px solid rgba(15,30,51,0.14); background: var(--card-bg); color: var(--navy-900); transition: transform ${T_FAST}, box-shadow ${T_FAST}, background-color ${T_FAST}, border-color ${T_FAST}, color ${T_FAST}; }
 .sala-btn:hover:not(:disabled) { transform: translateY(-1px); }
 .sala-btn:active:not(:disabled) { transform: translateY(0); }
-.sala-btn[data-kind=primary] { background: var(--sky-700); border-color: var(--sky-700); color: #fff; box-shadow: 0 3px 10px rgba(31,79,190,0.25); }
+.sala-btn[data-kind=primary] { background: var(--sky-700); border-color: var(--sky-700); color: var(--card-bg); box-shadow: 0 3px 10px rgba(31,79,190,0.25); }
 .sala-btn[data-kind=ghost] { background: transparent; border-color: transparent; color: inherit; text-decoration: underline; text-underline-offset: 2px; padding-left: 6px; padding-right: 6px; }
-.sala-card[data-state=llamado] .sala-btn[data-kind=primary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=primary] { background: #fff; border-color: #fff; color: var(--navy-900); box-shadow: none; }
-.sala-card[data-state=llamado] .sala-btn[data-kind=secondary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=secondary] { background: transparent; border-color: rgba(255,255,255,0.5); color: #fff; }
+.sala-card[data-state=llamado] .sala-btn[data-kind=primary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=primary] { background: var(--card-bg); border-color: var(--card-bg); color: var(--navy-900); box-shadow: none; }
+.sala-card[data-state=llamado] .sala-btn[data-kind=secondary], .sala-card[data-state=en-atencion] .sala-btn[data-kind=secondary] { background: transparent; border-color: rgba(255,255,255,0.5); color: var(--card-bg); }
 .sala-btn:disabled { opacity: 0.55; cursor: progress; }
 .sala-btn:focus-visible, .sala-seg-btn:focus-visible, .sala-later:focus-visible, .sala-search-clear:focus-visible { outline: 2px solid var(--sky-700); outline-offset: 2px; }
 .sala-card[data-state=llamado] .sala-btn:focus-visible, .sala-card[data-state=en-atencion] .sala-btn:focus-visible, .sala-card[data-state=llamado]:focus-visible, .sala-card[data-state=en-atencion]:focus-visible { outline-color: var(--navy-900); }
 
 .sala-skel { border-radius: 14px; background: rgba(15,30,51,0.05); border: 1px solid rgba(15,30,51,0.04); }
+.sala-skel-eyebrow { display: inline-block; width: 140px; height: 12px; vertical-align: middle; border-radius: 6px; }
+.sala-skel-search { flex: 1 1 220px; max-width: 340px; height: 36px; border-radius: 999px; }
+.sala-skel-avatar { width: 30px; height: 30px; border-radius: 999px; }
+.sala-skel-title { width: 120px; height: 14px; border-radius: 6px; }
+.sala-skel-body { display: grid; gap: 8px; align-content: start; padding-top: 12px; }
+.sala-skel-desk { height: calc(100dvh - 120px); min-height: 420px; }
 
 @media (prefers-reduced-motion: reduce) {
   .sala-card, .sala-btn, .sala-seg-btn, .sala-search, .sala-search-clear, .sala-col-occ, .sala-later { transition: none; }

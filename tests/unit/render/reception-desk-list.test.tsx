@@ -4,8 +4,29 @@
  * mockean la red (server actions), el router y el toast. Horas AR explícitas y `now` fijo (10:42 AR): corre igual con
  * TZ=UTC y con TZ=AR.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+
+// [PF1.1-sala] Las caras de /sala, el cuerpo del escritorio y el modal de cobro van con `next/dynamic` (C-PF2).
+// `renderToStaticMarkup` no espera Suspense: el mock resuelve cada `import()` en `beforeAll` (hasta que no aparecen
+// cargas nuevas: el shell del escritorio declara las suyas al importarse) y después renderiza el componente REAL.
+const { dynamicLoads } = vi.hoisted(() => ({ dynamicLoads: [] as Promise<unknown>[] }));
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<import("react").ComponentType<Record<string, unknown>>>) => {
+    let Loaded: import("react").ComponentType<Record<string, unknown>> | null = null;
+    dynamicLoads.push(loader().then((C) => (Loaded = C)));
+    return function DynamicMock(props: Record<string, unknown>) {
+      return Loaded ? <Loaded {...props} /> : null;
+    };
+  },
+}));
+beforeAll(async () => {
+  let seen = -1;
+  while (seen !== dynamicLoads.length) {
+    seen = dynamicLoads.length;
+    await Promise.all(dynamicLoads);
+  }
+});
 
 vi.mock("@/lib/bookings", () => ({ markReceptionAction: vi.fn(), setBookingCopagoPaid: vi.fn(), listAgendaBookings: vi.fn() }));
 vi.mock("@/lib/preferences", () => ({ updateAgendaViewPrefs: vi.fn(), updateUserPreferences: vi.fn() }));
@@ -406,5 +427,21 @@ describe("[RX-2a] DESK_LIST_CSS", () => {
     expect(c).toMatch(/\.dl-chips \{[^}]*flex-wrap: wrap/);
     expect(c).toContain(".dl-it.dl-wt { grid-template-columns: minmax(0, 1fr) auto; }");
     expect(c).toContain(".dl-wt .desk-acts { grid-column: 1 / -1; }");
+  });
+
+  it("[PF1.1-sala] rx-por-cobrar-nombres-1024: en compact el nombre usa el ancho entero (2 líneas) y lleva title", () => {
+    const largo = "Fernández de la Vega Rodríguez, María Inés Guadalupe";
+    const rows = [dto("cobrar", "09:00", { status: "COMPLETED", copagoCents: 600000, obraSocial: "OSDE", patientName: largo })];
+    const cash = card(face(makeLive(TITULAR, {}, rows)), "cash");
+    // El ítem de «Por cobrar» se marca para el layout de dos filas y el nombre completo queda en el title.
+    expect(cash).toContain('class="dl-it dl-cash"');
+    expect(cash).toContain(`<div class="dl-it-name" title="${largo}">${largo}</div>`);
+    expect(cash).toContain('title="Copago OSDE · Ana Pérez"');
+    // Compact (≤ 1179 de contenedor = 1024 con sidebar abierto): una columna, importe y «Cobrar» abajo, y el nombre
+    // del panel hasta 2 líneas en vez de cortarse en una con elipsis.
+    const c = block(1179);
+    expect(c).toContain(".dl-it.dl-cash { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }");
+    expect(c).toContain(".dl-cash .desk-acts { justify-content: space-between; }");
+    expect(c).toMatch(/\.dl-panel \.dl-it-name \{[^}]*-webkit-line-clamp: 2;[^}]*white-space: normal/);
   });
 });

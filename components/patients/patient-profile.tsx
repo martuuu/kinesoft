@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { AnimatePresence, motion } from "framer-motion";
-import { DUR, EASE_OUT } from "@/lib/motion";
 import { getPatientBookingsAll } from "@/lib/patients";
 import { getPatientPlanBalances, getPatientPlans } from "@/lib/plans-read";
 import { getPatientClinicalSummary } from "@/lib/clinical-notes-read";
@@ -27,7 +25,6 @@ import { useToast } from "@/components/ui/toast";
 import { PatientHero, PatientAdminHero } from "@/components/patients/profile/hero";
 import { TabsBar } from "@/components/patients/profile/tabs-bar";
 import { ResumenView } from "@/components/patients/profile/views/resumen-view";
-import { TurnosView } from "@/components/patients/profile/views/turnos-view";
 import {
   heroPlanChips,
   planUiPermissions,
@@ -66,14 +63,41 @@ const PlanEditorDrawer = dynamic(
 function TabLoading() {
   return <div aria-busy="true" style={{ minHeight: 120 }} />;
 }
-const ActivityView = dynamic(() => import("@/components/patients/activity-view").then((m) => m.ActivityView), { loading: TabLoading });
-const ArchivosView = dynamic(() => import("@/components/patients/archivos-view").then((m) => m.ArchivosView), { loading: TabLoading });
-const SesionesView = dynamic(() => import("@/components/patients/profile/views/sesiones-view").then((m) => m.SesionesView), { loading: TabLoading });
-const PlanView = dynamic(() => import("@/components/patients/profile/views/plan-view").then((m) => m.PlanView), { loading: TabLoading });
-const AntecedentesView = dynamic(() => import("@/components/patients/profile/views/antecedentes-view").then((m) => m.AntecedentesView), { loading: TabLoading });
-const EvolucionesView = dynamic(() => import("@/components/patients/profile/views/evoluciones-view").then((m) => m.EvolucionesView), { loading: TabLoading });
-const EvolucionView = dynamic(() => import("@/components/patients/profile/views/evolucion-view").then((m) => m.EvolucionView), { loading: TabLoading });
-const FacturacionView = dynamic(() => import("@/components/patients/profile/views/facturacion-view").then((m) => m.FacturacionView), { loading: TabLoading });
+
+/**
+ * PF1.1 (C-PF2): un loader por pestaña, compartido entre `dynamic()` y la precarga. `TabsBar` llama
+ * `preloadProfileTab` en `pointerenter`/`focus` de la pestaña: el `import()` ya está en vuelo (o resuelto) cuando
+ * llega el click, y el skeleton casi no se ve. Turnos pasa a diferida también (antes estática porque la usa la ficha
+ * administrativa): sigue con SSR, así un `?tab=turnos` pinta igual en el primer render, pero sale del chunk de la
+ * ficha cuando se entra por Resumen (la mayoría de las visitas). Resumen queda estática: es la de entrada.
+ */
+const TAB_LOADERS = {
+  turnos: () => import("@/components/patients/profile/views/turnos-view"),
+  actividad: () => import("@/components/patients/activity-view"),
+  archivos: () => import("@/components/patients/archivos-view"),
+  sesiones: () => import("@/components/patients/profile/views/sesiones-view"),
+  planes: () => import("@/components/patients/profile/views/plan-view"),
+  antec: () => import("@/components/patients/profile/views/antecedentes-view"),
+  evoluciones: () => import("@/components/patients/profile/views/evoluciones-view"),
+  evol: () => import("@/components/patients/profile/views/evolucion-view"),
+  fact: () => import("@/components/patients/profile/views/facturacion-view"),
+} satisfies Partial<Record<Tab, () => Promise<unknown>>>;
+
+/** Precarga el chunk de una pestaña (sin await: un fallo de red se reintenta solo al montar). */
+export function preloadProfileTab(t: Tab): void {
+  const load = (TAB_LOADERS as Partial<Record<Tab, () => Promise<unknown>>>)[t];
+  if (load) void load().catch(() => {});
+}
+
+const TurnosView = dynamic(() => TAB_LOADERS.turnos().then((m) => m.TurnosView), { loading: TabLoading });
+const ActivityView = dynamic(() => TAB_LOADERS.actividad().then((m) => m.ActivityView), { loading: TabLoading });
+const ArchivosView = dynamic(() => TAB_LOADERS.archivos().then((m) => m.ArchivosView), { loading: TabLoading });
+const SesionesView = dynamic(() => TAB_LOADERS.sesiones().then((m) => m.SesionesView), { loading: TabLoading });
+const PlanView = dynamic(() => TAB_LOADERS.planes().then((m) => m.PlanView), { loading: TabLoading });
+const AntecedentesView = dynamic(() => TAB_LOADERS.antec().then((m) => m.AntecedentesView), { loading: TabLoading });
+const EvolucionesView = dynamic(() => TAB_LOADERS.evoluciones().then((m) => m.EvolucionesView), { loading: TabLoading });
+const EvolucionView = dynamic(() => TAB_LOADERS.evol().then((m) => m.EvolucionView), { loading: TabLoading });
+const FacturacionView = dynamic(() => TAB_LOADERS.fact().then((m) => m.FacturacionView), { loading: TabLoading });
 
 /** Tamaño de página de turnos del perfil (Turnos + Facturación). */
 const BOOKINGS_PAGE = 100;
@@ -493,10 +517,12 @@ export function PatientProfile({
     [plans]
   );
   const heroChips = useMemo(() => (plansEnabled ? heroPlanChips(plans) : []), [plansEnabled, plans]);
-  // `PlanDTO` no trae el caso clínico (lo traía `PatientProgramLite.case`): el
-  // nombre del diagnóstico sale del paciente; si no hay, el título del plan
-  // (null sin `clinical.read`, nunca se inventa).
-  const diagnosisName = patientCore.diagnosisTitle ?? focusPlan?.title ?? null;
+  // El diagnóstico sale del paciente y de ningún otro lado. PF1.1 (D6 de VX0-b): antes caía al título del plan
+  // («Plan Sesión kinésica · obra social · 6 sesiones» leído como diagnóstico); sin dato, Resumen dice «Sin
+  // diagnóstico cargado» y ofrece cargarlo (abre «Editar paciente» del hero).
+  const diagnosisName = patientCore.diagnosisTitle ?? null;
+  const [editPatientRequest, setEditPatientRequest] = useState(0);
+  const requestEditPatient = useCallback(() => setEditPatientRequest((n) => n + 1), []);
   const age = patient.dateOfBirth
     ? Math.floor((Date.now() - +patient.dateOfBirth) / (365.25 * 86_400_000))
     : null;
@@ -514,11 +540,13 @@ export function PatientProfile({
         insurers={insurers}
         practitioners={practitioners}
         canReassign={canReassign}
+        editRequest={editPatientRequest}
       />
 
       <TabsBar
         active={tab}
         onChange={setTab}
+        onPreload={preloadProfileTab}
         only={allowedTabs}
         counts={{
           evoluciones: summary?.liveCount,
@@ -531,17 +559,12 @@ export function PatientProfile({
         }}
       />
 
-      {/* Active view swaps with a sober fade + slight rise. `mode="wait"`
-          lets the outgoing view finish before the next enters so the
-          content never overlaps or jumps. Keyed by `tab`. */}
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={tab}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          transition={{ duration: DUR.base, ease: EASE_OUT }}
-        >
+      {/* PF1.1 (C-PF1.2): la entrada de la pestaña es CSS (`.k-page-in`, re-montada por `key`), no framer: con
+          `initial={{ opacity: 0 }}` el SSR pintaba la vista inicial invisible hasta hidratar, y framer arrastraba
+          su runtime al chunk de la ficha. Solo opacidad y 120 ms (sin `transform`, ver globals.css: un transform
+          ancla los `position: fixed` de la vista al wrapper). Se pierde la salida (`mode="wait"`): la vista nueva
+          entra sin esperar a la vieja. `prefers-reduced-motion` la apaga. */}
+      <div key={tab} className="k-page-in">
           {tab === "resumen" && (
             <ResumenView
               patient={patient}
@@ -553,6 +576,7 @@ export function PatientProfile({
               onOpenPlan={openPlan}
               clinicalSummary={notesEnabled ? summary : null}
               onOpenEvoluciones={notesEnabled ? openEvoluciones : undefined}
+              onEditPatient={requestEditPatient}
             />
           )}
           {tab === "evoluciones" && notesEnabled && (
@@ -604,7 +628,7 @@ export function PatientProfile({
           )}
           {tab === "archivos" && <ArchivosView patientId={patient.id} />}
           {tab === "antec" && <AntecedentesView patient={patient} />}
-          {tab === "evol" && <EvolucionView patient={patient} />}
+          {tab === "evol" && <EvolucionView patient={patient} onRegister={() => setTab("resumen")} />}
           {tab === "fact" && (
             <FacturacionView
               bookings={bookingsAll}
@@ -618,8 +642,7 @@ export function PatientProfile({
             />
           )}
           {tab === "actividad" && <ActivityView patientId={patient.id} />}
-        </motion.div>
-      </AnimatePresence>
+      </div>
 
       {needsBookings && bookingsAll && nextCursor && (
         <div
@@ -757,6 +780,7 @@ export function PatientAdminProfile({
       <TabsBar
         active={tab}
         onChange={(t) => setTab(t as AdminTab)}
+        onPreload={preloadProfileTab}
         only={ADMIN_PROFILE_TABS}
         labels={{ resumen: "Datos" }}
         counts={{ turnos: bookings.length }}

@@ -152,7 +152,7 @@ export function PractitionerPanel({
                     padding: "12px 14px",
                     borderRadius: "var(--r-sm)",
                     border: on ? "2px solid var(--navy-900)" : "1px solid rgba(15,30,51,0.1)",
-                    background: on ? "var(--sky-50)" : "#fff",
+                    background: on ? "var(--sky-50)" : "var(--card-bg)",
                     cursor: "pointer",
                     color: "inherit",
                     display: "grid",

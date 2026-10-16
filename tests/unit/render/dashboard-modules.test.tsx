@@ -47,10 +47,12 @@ vi.mock("@/components/global/profile-menu", () => ({
     profileMenuProps.push(p);
     return null;
   },
+  SettingsModalLazy: () => null,
+  preloadSettingsModal: () => {},
 }));
 
 import { DashboardScreen } from "@/components/screens/dashboard-screen";
-import { PinKpiModal } from "@/components/dashboard/pin-kpi-button";
+import { PinKpiModal } from "@/components/dashboard/pin-kpi-modal";
 import { TenantModulesProvider } from "@/components/layout/tenant-modules-context";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
@@ -213,7 +215,8 @@ describe("DashboardScreen · Kine (golden)", () => {
       expect(text).toContain("Planes en curso");
       expect(text).toContain("Últimas sesiones registradas");
       expect(text).toMatch(/Sesiones\s/);
-      expect(screen(modules)).toContain("kine c/paciente");
+      // PF1.1-dashboard (D3 de VX0-b): el placeholder «kine c/paciente» del hero se fue también en Kine.
+      expect(screen(modules)).not.toContain("kine c/paciente");
     });
   }
 

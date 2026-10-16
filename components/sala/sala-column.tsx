@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import { AnimatePresence, LayoutGroup, m } from "framer-motion";
 import { rowTransition, rowVariants } from "@/lib/motion";
 import type { ReceptionAction } from "@/lib/reception-state";
 import {
@@ -37,7 +37,7 @@ type SalaColumnProps = {
  * sigue montado. Si cada banda fuera su propia lista, «Llamar» desmontaría la
  * card de En sala y montaría otra en Llamado (un fade, sin relación visual);
  * con una lista sola, la MISMA card se desliza a su banda nueva, que es lo que
- * le explica a la Secretaria qué pasó. Los separadores también son `motion.li`
+ * le explica a la Secretaria qué pasó. Los separadores también son `m.li` (C-PF1: `m` + `LazyMotion`)
  * con `layout`, así acompañan el movimiento en vez de saltar; van `aria-hidden`
  * (la banda está en el `aria-label` de cada card) para que el lector no los
  * cuente como ítems.
@@ -102,14 +102,14 @@ function SalaColumnImpl({
         ) : null}
       </header>
 
-      <motion.div className="sala-col-body" layoutScroll>
+      <m.div className="sala-col-body" layoutScroll>
         {shown.length === 0 ? <p className="sala-col-empty">{SALA_COPY.columnEmpty}</p> : null}
         <LayoutGroup id={listId}>
           <ul id={listId} className="sala-list" aria-labelledby={headingId}>
             <AnimatePresence mode="popLayout" initial={false}>
               {flatten(shown).map((item) =>
                 item.kind === "sep" ? (
-                  <motion.li
+                  <m.li
                     key={`sep:${item.band}`}
                     layout="position"
                     className="sala-sep"
@@ -123,9 +123,9 @@ function SalaColumnImpl({
                   >
                     <span>{SALA_BAND_LABEL[item.band]}</span>
                     <span className="sala-sep-n k-mono">{item.count}</span>
-                  </motion.li>
+                  </m.li>
                 ) : (
-                  <motion.li
+                  <m.li
                     key={item.entry.row.id}
                     layout
                     className="sala-item"
@@ -143,13 +143,13 @@ function SalaColumnImpl({
                       pulseKey={pulses[item.entry.row.id] ?? null}
                       onAction={onAction}
                     />
-                  </motion.li>
+                  </m.li>
                 )
               )}
             </AnimatePresence>
           </ul>
         </LayoutGroup>
-      </motion.div>
+      </m.div>
 
       {column.later.length > 0 && (
         <button

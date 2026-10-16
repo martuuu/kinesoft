@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { MoneyInput } from "@/components/ui/money-input";
 import { fmtMoney } from "./agenda-utils";
@@ -21,6 +21,7 @@ export function DayOfWeekPicker({ value, onChange }: { value: number[]; onChange
           <button
             key={i}
             type="button"
+            aria-pressed={on}
             onClick={() => toggle(i)}
             style={{
               flex: 1,
@@ -108,7 +109,7 @@ export function CopagoRow({
 
       <AnimatePresence initial={false}>
         {showPrompt && (
-          <motion.div
+          <m.div
             key="copago-prompt"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
@@ -146,7 +147,7 @@ export function CopagoRow({
                 </Button>
               </div>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
 
@@ -210,5 +211,5 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   fontSize: 14,
   color: "var(--navy-900)",
-  outline: "none",
+  // PF1.1 (C-PF5.4): se sacó el outline anulado; el foco es el anillo global de `:focus-visible` (globals.css).
 };

@@ -6,6 +6,7 @@ import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { fmtHour } from "@/components/agenda/agenda-utils";
 import type { DeskKpis } from "@/lib/reception-desk-state";
 import { salaDayLabel } from "@/components/sala/sala-day-label";
+import { preloadSalaFaces } from "@/components/sala/sala-faces";
 
 /**
  * Header del escritorio de Recepción (RX-1b, prototipo `.top`): «Recepción», fecha, «En vivo», KPIs, buscador con
@@ -18,7 +19,8 @@ import { salaDayLabel } from "@/components/sala/sala-day-label";
  * - Fecha: `salaDayLabel`, la misma del Tablero («Jueves, 15 de octubre»).
  * - Reloj HH:MM AR del reloj único del hook (tick de 30 s): no tiene timer propio.
  * - «Vista» abre Apariencia (donde se elige la cara de /sala). Solo se dibuja si hay a dónde ir (`onOpenView`): sin
- *   el provider de Apariencia (tests, demo), no hay botón que no haga nada.
+ *   el provider de Apariencia (tests, demo), no hay botón que no haga nada. Con hover o foco precarga las tres caras
+ *   (PF1.1-sala, C-PF2: cada cara es un chunk aparte y el cambio en Apariencia no espera red).
  */
 export function DeskHeader({
   dayKey,
@@ -103,7 +105,15 @@ export function DeskHeader({
       </time>
 
       {onOpenView && (
-        <button type="button" className="desk-view" aria-label="Cambiar vista (Apariencia)" title="Cambiar vista" onClick={onOpenView}>
+        <button
+          type="button"
+          className="desk-view"
+          aria-label="Cambiar vista (Apariencia)"
+          title="Cambiar vista"
+          onClick={onOpenView}
+          onPointerEnter={preloadSalaFaces}
+          onFocus={preloadSalaFaces}
+        >
           <IconSettings size={18} />
         </button>
       )}

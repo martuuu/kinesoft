@@ -1,25 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
-import { Card, PhotoSlot } from "@/components/ui/card";
+import dynamic from "next/dynamic";
+import { Card } from "@/components/ui/card";
+import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { IconPlus } from "@/components/ui/icons";
-import { Drawer } from "@/components/ui/drawer";
-import { useFormDirty } from "@/components/ui/use-form-dirty";
-import { FormField } from "@/components/ui/form-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatARS } from "@/lib/format";
-import {
-  assignPatientToPractitioner,
-  sendPatientPortalInvite,
-  setPatientArchived,
-  setPatientCoverage,
-  updatePatient,
-} from "@/lib/patients";
-import { listPayerPlans, proposePayerPlan } from "@/lib/catalog";
-import type { PayerPlanOption } from "@/lib/catalog-schemas";
+import { sendPatientPortalInvite, setPatientArchived } from "@/lib/patients";
 import type { PatientAdminCore } from "@/lib/patients-types";
 import { SharePatientButton } from "@/components/patients/share-patient-button";
 import {
@@ -32,9 +22,34 @@ import type { HeroPlanChip, PatientHeroProps } from "@/components/planes/plan-ed
 import { disciplineLabel } from "@/lib/plan-display";
 import type { PatientArchivePlansAction } from "@/lib/plans-lifecycle-state";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
-import { Section, Grid2 } from "./ui";
 import { PortalRequestBanner } from "./portal-request-banner";
 import type { PatientWithRelations, InsurerOption, PractitionerOption } from "./types";
+
+/** PF1.1 (C-PF2): «Editar paciente» diferido; `preloadEditPatient` lo baja en hover/foco del botón. */
+const loadEditPatient = () => import("./edit-patient-drawer");
+function preloadEditPatient() {
+  void loadEditPatient().catch(() => {});
+}
+const EditPatientModal = dynamic(() => loadEditPatient().then((m) => m.EditPatientModal), {
+  ssr: false,
+  loading: () => null,
+});
+
+/**
+ * Avatar del hero (D5 de VX0-b): iniciales sobre color, como en la lista, hasta que haya foto. Antes era el
+ * `PhotoSlot` rayado con el rótulo «paciente» en monoespaciada (un placeholder de maqueta en producción).
+ */
+function HeroAvatar({ firstName, lastName }: { firstName: string; lastName: string }) {
+  return (
+    <Avatar
+      // Primer nombre + apellido: «María José Pérez» → «MP», no «MJ».
+      name={`${firstName.trim().split(/\s+/)[0] ?? ""} ${lastName.trim()}`}
+      size={72}
+      tone="sky"
+      style={{ borderRadius: 20 }}
+    />
+  );
+}
 
 /**
  * Hero del perfil `full`. S22h (ES3): el chip único de plan
@@ -55,10 +70,20 @@ export function PatientHero({
   canReassign,
   plansEnabled,
   onOpenPlan,
-}: PatientHeroProps) {
+  editRequest = 0,
+}: PatientHeroProps & {
+  /**
+   * PF1.1 (D6): contador que sube cuando otra superficie de la ficha pide «Editar paciente» (el «Cargar diagnóstico»
+   * de Resumen). Cada cambio > 0 abre el drawer; el estado del drawer sigue viviendo acá.
+   */
+  editRequest?: number;
+}) {
   // Modals lifted here — outside the <Card glass> — so backdrop-filter
   // on the card doesn't create a stacking context that traps position:fixed.
   const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (editRequest > 0) setEditing(true);
+  }, [editRequest]);
   const [askPlans, setAskPlans] = useState(false);
   const livePlanCount = plansEnabled ? plans.length : 0;
   const practitionerFact = usePractitionerFactLabel();
@@ -74,8 +99,8 @@ export function PatientHero({
   return (
     <>
       <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-        <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
-        <div style={{ flex: 1, minWidth: 240 }}>
+        <HeroAvatar firstName={patient.firstName} lastName={patient.lastName} />
+        <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
             <span
               className="k-mono"
@@ -185,8 +210,8 @@ export function PatientAdminHero({
   return (
     <>
       <Card glass style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-        <PhotoSlot label="paciente" style={{ width: 88, height: 88, borderRadius: 22, flexShrink: 0 }} />
-        <div style={{ flex: 1, minWidth: 240 }}>
+        <HeroAvatar firstName={patient.firstName} lastName={patient.lastName} />
+        <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
             <Tag tone="soft">Ficha administrativa</Tag>
           </div>
@@ -320,7 +345,13 @@ function PatientHeroActions({
         >
           {portalSending ? "Enviando…" : patient.userId ? "Reenviar portal" : "Enviar al portal"}
         </Button>
-        <Button variant="ghost" onClick={onEdit} style={{ fontSize: 12, padding: "8px 14px" }}>
+        <Button
+          variant="ghost"
+          onClick={onEdit}
+          onPointerEnter={preloadEditPatient}
+          onFocus={preloadEditPatient}
+          style={{ fontSize: 12, padding: "8px 14px" }}
+        >
           Editar
         </Button>
         <Button
@@ -332,7 +363,7 @@ function PatientHeroActions({
               ? "Volver a mostrar el paciente en el listado"
               : "Ocultar del listado sin borrar la ficha ni el historial"
           }
-          style={{ fontSize: 12, padding: "8px 14px", color: "#9A5B00" }}
+          style={{ fontSize: 12, padding: "8px 14px", color: "var(--warn-fg)" }}
         >
           {archiving ? "Guardando…" : isArchived ? "Reactivar" : "Archivar"}
         </Button>
@@ -361,8 +392,8 @@ function PatientHeroActions({
             fontSize: 11.5,
             background: portalResult.ok
               ? portalResult.emailSent
-                ? "rgba(200,245,100,0.18)"
-                : "rgba(255,176,32,0.15)"
+                ? "var(--success-bg)"
+                : "var(--warn-bg)"
               : "var(--danger-bg)",
             color: portalResult.ok ? "var(--navy-900)" : "var(--danger-fg)",
             textAlign: "right",
@@ -377,7 +408,7 @@ function PatientHeroActions({
             : portalResult.error}
         </div>
       )}
-      <div style={{ fontSize: 11, color: "var(--navy-300)" }}>
+      <div style={{ fontSize: 11, color: "var(--navy-500)" }}>
         Última actualización:{" "}
         {patient.updatedAt.toLocaleString("es-AR", {
           dateStyle: "short",
@@ -391,421 +422,6 @@ function PatientHeroActions({
   );
 }
 
-function EditPatientModal({
-  patient,
-  insurers,
-  practitioners,
-  canReassign,
-  onClose,
-}: {
-  patient: PatientWithRelations;
-  insurers: InsurerOption[];
-  practitioners: PractitionerOption[];
-  canReassign: boolean;
-  onClose: () => void;
-}) {
-  const confirm = useConfirm();
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const currentCoverage = patient.coverages[0];
-  const initialCoverageMode = currentCoverage
-    ? currentCoverage.insurerId
-      ? `ins:${currentCoverage.insurerId}`
-      : "other"
-    : "particular";
-  const [coverageMode, setCoverageMode] = useState(initialCoverageMode);
-  const [otherInsurerName, setOtherInsurerName] = useState(
-    currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : ""
-  );
-  const [assignedKine, setAssignedKine] = useState<string>(
-    patient.assignedPractitionerId ?? ""
-  );
-  // EV1-C2: en Clínica general no hay «diagnóstico» de kinesiología; los campos
-  // (`diagnosisTitle/Note`) son los mismos, pero se rotulan como motivo de consulta.
-  const isKine = useTenantModules().has("diagnostico");
-
-  // ── Plan del catálogo (B1) ────────────────────────────────────────────
-  // Si la OS elegida está vinculada a una prestadora del catálogo, el plan
-  // se elige de sus planes (globales + propuestos por este consultorio) y se
-  // guarda como `payerPlanId`; "Otro plan…" lo propone (`proposePayerPlan`,
-  // idempotente: si ya existe con ese nombre devuelve el mismo). Sin
-  // prestadora queda el texto libre de siempre.
-  const selectedInsurer = coverageMode.startsWith("ins:")
-    ? insurers.find((i) => `ins:${i.id}` === coverageMode)
-    : undefined;
-  const payerId = selectedInsurer?.payerId ?? null;
-  const initialPayerId = insurers.find((i) => `ins:${i.id}` === initialCoverageMode)?.payerId ?? null;
-  // Estado inicial del picker, solo con prestadora: plan vinculado → su id;
-  // plan escrito a mano antes del catálogo → "Otro plan…" con ese texto (al
-  // guardar se propone y queda vinculado); sin plan → "".
-  const initialPlanChoice = !initialPayerId
-    ? ""
-    : currentCoverage?.payerPlanId
-      ? currentCoverage.payerPlanId
-      : currentCoverage?.planName
-        ? OTHER_PLAN
-        : "";
-  const initialNewPlanName =
-    initialPlanChoice === OTHER_PLAN ? (currentCoverage?.planName ?? "") : "";
-  const [planChoice, setPlanChoice] = useState(initialPlanChoice);
-  const [newPlanName, setNewPlanName] = useState(initialNewPlanName);
-  const [plans, setPlans] = useState<PayerPlanOption[] | null>(null);
-  useEffect(() => {
-    if (!payerId) {
-      setPlans(null);
-      return;
-    }
-    let alive = true;
-    setPlans(null);
-    listPayerPlans(payerId)
-      .then((rows) => {
-        if (alive) setPlans(rows);
-      })
-      .catch(() => {
-        if (alive) setPlans([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [payerId]);
-
-  const changeCoverageMode = (v: string) => {
-    setCoverageMode(v);
-    // Volver a la OS original recupera su plan; otra OS arranca sin plan.
-    if (v === initialCoverageMode) {
-      setPlanChoice(initialPlanChoice);
-      setNewPlanName(initialNewPlanName);
-    } else {
-      setPlanChoice("");
-      setNewPlanName("");
-    }
-  };
-
-  // Optimistic lock (A2a-S08): el `updatedAt` que vio este formulario. Se
-  // actualiza tras un guardado OK, así un reintento (p. ej. si falló la
-  // cobertura después de guardar los datos) no choca contra sí mismo.
-  const expectedUpdatedAt = useRef(patient.updatedAt.toISOString());
-  // Dirty-guard (A2b-S-ui): Esc / fondo / X piden confirmación si hay cambios.
-  const formRef = useRef<HTMLFormElement | null>(null);
-  const { dirty, onFormInput } = useFormDirty(formRef, {
-    coverageMode,
-    otherInsurerName,
-    assignedKine,
-    planChoice,
-    newPlanName,
-  });
-  const initialPlan = currentCoverage?.planName ?? "";
-  const initialMember = currentCoverage?.memberId ?? "";
-  const initialOther = currentCoverage && !currentCoverage.insurerId ? currentCoverage.insurer : "";
-
-  const submit = async (formData: FormData) => {
-    setError(null);
-    const planName = String(formData.get("coveragePlan") ?? "").trim();
-    const memberId = String(formData.get("coverageMember") ?? "").trim();
-    // H2 (A2a-S08): dirty-check de la cobertura. Antes se re-guardaba siempre
-    // con OS "Otra" (y el server hacía delete+create), borrando el copago
-    // propio del paciente sin avisar.
-    const norm = (v: string) => v.trim().toLowerCase();
-    const osChanged =
-      coverageMode !== initialCoverageMode ||
-      (coverageMode === "other" && norm(otherInsurerName) !== norm(initialOther));
-    const planDirty = payerId
-      ? planChoice !== initialPlanChoice ||
-        (planChoice === OTHER_PLAN && newPlanName.trim() !== initialNewPlanName.trim())
-      : planName !== initialPlan;
-    const coverageDirty =
-      osChanged || (coverageMode !== "particular" && (planDirty || memberId !== initialMember));
-    if (payerId && coverageDirty && planChoice === OTHER_PLAN && !newPlanName.trim()) {
-      setError("Escribí el nombre del plan o elegí uno de la lista.");
-      return;
-    }
-    const ownCopago = currentCoverage?.copagoCents ?? null;
-    let resetCopago = false;
-    if (osChanged && ownCopago != null) {
-      const ok = await confirm({
-        title: "Cambiar la obra social",
-        message: `Este paciente tiene un copago propio de ${formatARS(ownCopago)}. Al cambiar la cobertura, el copago propio se va a borrar y los próximos turnos van a cobrar el de la nueva cobertura.`,
-        confirmLabel: "Cambiar y borrar el copago",
-        tone: "danger",
-      });
-      if (!ok) return;
-      resetCopago = true;
-    }
-
-    start(async () => {
-      const updateResult = await updatePatient({
-        id: patient.id,
-        expectedUpdatedAt: expectedUpdatedAt.current,
-        firstName: String(formData.get("firstName") ?? ""),
-        lastName: String(formData.get("lastName") ?? ""),
-        email: String(formData.get("email") ?? ""),
-        phone: String(formData.get("phone") ?? ""),
-        documentId: String(formData.get("documentId") ?? ""),
-        dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
-        notes: String(formData.get("notes") ?? ""),
-        diagnosisTitle: String(formData.get("diagnosisTitle") ?? ""),
-        diagnosisNote: String(formData.get("diagnosisNote") ?? ""),
-      });
-      if (!updateResult.ok) {
-        setError(updateResult.error);
-        return;
-      }
-      expectedUpdatedAt.current = updateResult.data.updatedAt;
-
-      // Coverage update — only when something actually changed.
-      if (coverageDirty) {
-        let cov;
-        if (coverageMode === "particular") {
-          cov = await setPatientCoverage({ patientId: patient.id, resetCopago });
-        } else if (coverageMode === "other") {
-          cov = await setPatientCoverage({
-            patientId: patient.id,
-            insurerName: otherInsurerName,
-            planName,
-            memberId,
-            resetCopago,
-          });
-        } else {
-          const insurerId = coverageMode.replace("ins:", "");
-          let payerPlanId: string | undefined;
-          let planText = planName;
-          if (payerId) {
-            planText = "";
-            if (planChoice === OTHER_PLAN) {
-              const proposed = await proposePayerPlan(payerId, newPlanName.trim());
-              if (!proposed.ok) {
-                setError(proposed.error);
-                return;
-              }
-              payerPlanId = proposed.data.id;
-            } else if (planChoice && (plans === null || plans.some((p) => p.id === planChoice))) {
-              // `plans === null` = todavía cargando: se manda el id y lo valida el server.
-              payerPlanId = planChoice;
-            } else if (planChoice) {
-              // El plan vinculado ya no está en el catálogo (Plataforma lo
-              // archivó): se conserva como texto en vez de rechazar el guardado.
-              planText = currentCoverage?.planName ?? "";
-            }
-          }
-          cov = await setPatientCoverage({
-            patientId: patient.id,
-            insurerId,
-            planName: planText,
-            payerPlanId,
-            memberId,
-            resetCopago,
-          });
-        }
-        if (!cov.ok) {
-          setError(cov.error);
-          return;
-        }
-      }
-
-      // Re-assignment (OWNER/ADMIN only).
-      if (canReassign && assignedKine !== (patient.assignedPractitionerId ?? "")) {
-        const r = await assignPatientToPractitioner({
-          patientId: patient.id,
-          practitionerId: assignedKine || null,
-        });
-        if (!r.ok) {
-          setError(r.error);
-          return;
-        }
-      }
-
-      onClose();
-      // PF-0d: sin `router.refresh()`. `updatePatient`, `setPatientCoverage` y
-      // `assignPatientToPractitioner` revalidan `/pacientes/<id>` en su OK:
-      // cada respuesta trae la ficha nueva (la última, el estado final).
-    });
-  };
-
-  const dobIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : "";
-
-  return (
-    <Drawer open onClose={onClose} title="Editar paciente" width={560} dirty={dirty}>
-      <form
-        ref={formRef}
-        action={submit}
-        onInput={onFormInput}
-        onChange={onFormInput}
-        style={{ display: "flex", flexDirection: "column", gap: 14 }}
-      >
-        <Section title="Datos personales">
-          <Grid2>
-            <FormField label="Nombre" name="firstName" required defaultValue={patient.firstName} />
-            <FormField label="Apellido" name="lastName" required defaultValue={patient.lastName} />
-          </Grid2>
-          <Grid2>
-            <FormField label="DNI" name="documentId" defaultValue={patient.documentId ?? ""} />
-            <FormField label="Fecha de nacimiento" name="dateOfBirth" type="date" defaultValue={dobIso} />
-          </Grid2>
-          <Grid2>
-            <FormField label="Email" name="email" type="email" defaultValue={patient.email ?? ""} />
-            <FormField label="Teléfono" name="phone" defaultValue={patient.phone ?? ""} />
-          </Grid2>
-        </Section>
-
-        <Section title="Cobertura - Obra social">
-          <FormField
-            as="select"
-            label=""
-            value={coverageMode}
-            onChange={changeCoverageMode}
-            options={[
-              { value: "particular", label: "Particular (sin cobertura)" },
-              ...insurers.map((i) => ({ value: `ins:${i.id}`, label: i.name })),
-              { value: "other", label: "Otra (escribir manualmente)" },
-            ]}
-          />
-          {coverageMode === "other" && (
-            <FormField
-              label="Nombre de la obra social"
-              value={otherInsurerName}
-              onChange={(v) => setOtherInsurerName(v)}
-              placeholder="Ej: PAMI, IOSFA…"
-            />
-          )}
-          {coverageMode !== "particular" && (
-            <Grid2>
-              {payerId ? (
-                <FormField
-                  as="select"
-                  label="Plan"
-                  value={planChoice}
-                  onChange={setPlanChoice}
-                  disabled={plans === null}
-                  options={planOptions({
-                    plans,
-                    planChoice,
-                    fallbackName: currentCoverage?.planName ?? null,
-                  })}
-                />
-              ) : (
-                <FormField
-                  label="Plan"
-                  name="coveragePlan"
-                  defaultValue={currentCoverage?.planName ?? ""}
-                  placeholder="210, Black, …"
-                />
-              )}
-              <FormField
-                label="N° de afiliado"
-                name="coverageMember"
-                defaultValue={currentCoverage?.memberId ?? ""}
-              />
-            </Grid2>
-          )}
-          {coverageMode !== "particular" && payerId && planChoice === OTHER_PLAN && (
-            <FormField
-              label="Nombre del plan"
-              value={newPlanName}
-              onChange={setNewPlanName}
-              placeholder="Ej: 310, Plan Joven…"
-              hint="Si no está en la lista, lo sumamos para este consultorio."
-            />
-          )}
-        </Section>
-
-        {canReassign && (
-          <Section title={isKine ? "Asignación - Kinesiólogo asignado" : "Asignación - Profesional asignado"}>
-            <FormField
-              as="select"
-              label=""
-              // A2b: el hint anterior ("visible para todos los kines") era falso —
-              // sin asignación, la HC completa la ven OWNER/ADMIN y los demás
-              // profesionales solo ven datos básicos (salvo que se la compartan).
-              hint="«Consultorio común» = visible para OWNER/ADMIN; los profesionales ven datos básicos."
-              value={assignedKine}
-              onChange={(v) => setAssignedKine(v)}
-              options={[
-                { value: "", label: "Consultorio común" },
-                ...practitioners.map((p) => ({ value: p.id, label: p.name })),
-              ]}
-            />
-          </Section>
-        )}
-
-        <Section title={isKine ? "Diagnóstico (opcional)" : "Motivo de consulta (opcional)"}>
-          <FormField
-            label="Título"
-            name="diagnosisTitle"
-            placeholder={isKine ? "ej: Lumbalgia" : "ej: Control anual"}
-            defaultValue={patient.diagnosisTitle ?? ""}
-            hint="Máx. 80 caracteres."
-          />
-          <FormField
-            as="textarea"
-            label="Descripción"
-            name="diagnosisNote"
-            placeholder="Detalle del cuadro, objetivos, indicaciones…"
-            defaultValue={patient.diagnosisNote ?? ""}
-            hint="Autocompleta el título y la descripción de los turnos nuevos del paciente."
-          />
-        </Section>
-
-        <Section title="Notas generales">
-          <FormField as="textarea" label="" name="notes" defaultValue={patient.notes ?? ""} />
-        </Section>
-
-        {error && (
-          <div
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              background: "var(--danger-bg)",
-              color: "var(--danger-fg)",
-              fontSize: 12,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancelar
-          </Button>
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending ? "Guardando…" : "Guardar cambios"}
-          </Button>
-        </div>
-      </form>
-    </Drawer>
-  );
-}
-
-/** Valor del select de plan que abre el campo "Nombre del plan". */
-const OTHER_PLAN = "__other";
-
-/**
- * Opciones del select de plan. Mientras cargan, el plan ya vinculado se
- * muestra igual (su nombre está en `Coverage.planName`) para que el select
- * no salte; si después no aparece en la lista (archivado por Plataforma), se
- * mantiene como opción con su nombre.
- */
-function planOptions({
-  plans,
-  planChoice,
-  fallbackName,
-}: {
-  plans: PayerPlanOption[] | null;
-  planChoice: string;
-  fallbackName: string | null;
-}): { value: string; label: string }[] {
-  const opts: { value: string; label: string }[] = [
-    { value: "", label: plans === null ? "Cargando planes…" : "Sin plan" },
-  ];
-  for (const p of plans ?? []) {
-    opts.push({ value: p.id, label: p.proposed ? `${p.name} (cargado por el consultorio)` : p.name });
-  }
-  if (planChoice && planChoice !== OTHER_PLAN && !(plans ?? []).some((p) => p.id === planChoice)) {
-    opts.push({ value: planChoice, label: fallbackName ?? "Plan actual" });
-  }
-  opts.push({ value: OTHER_PLAN, label: "Otro plan…" });
-  return opts;
-}
 
 /**
  * EV1-C2: rótulo del profesional asignado en el hero. «Kine» es de kinesiología;
@@ -853,6 +469,26 @@ export function heroPlanChipText(chip: HeroPlanChip): { progress: string; ariaLa
   };
 }
 
+/** Desde cuántos planes vivos el hero muestra un chip resumen en vez de uno por plan (D7). */
+export const HERO_PLAN_SUMMARY_FROM = 3;
+
+/** Texto del chip resumen (puro): «3 planes activos», «2 planes activos · 1 pausado», «3 planes pausados». */
+export function heroPlanSummaryText(plans: readonly HeroPlanChip[]): { text: string; ariaLabel: string } {
+  const paused = plans.filter((p) => p.status === "PAUSED").length;
+  const active = plans.length - paused;
+  const parts: string[] = [];
+  if (active > 0) parts.push(`${active} ${active === 1 ? "plan activo" : "planes activos"}`);
+  if (paused > 0) {
+    parts.push(
+      active > 0
+        ? `${paused} ${paused === 1 ? "pausado" : "pausados"}`
+        : `${paused} ${paused === 1 ? "plan pausado" : "planes pausados"}`
+    );
+  }
+  const text = parts.join(" · ");
+  return { text, ariaLabel: `${plans.length} planes en curso (${text})` };
+}
+
 function HeroPlanChips({
   plans,
   onOpenPlan,
@@ -861,6 +497,43 @@ function HeroPlanChips({
   onOpenPlan?: (programId: string) => void;
 }) {
   if (plans.length === 0) return <Tag tone="soft">Sin plan activo</Tag>;
+  // D7 (VX0-b): con 3 o más planes vivos, una fila de chips «Plan 0/6 · Plan 0/8 · Plan 0/8 Pausado» arriba del
+  // nombre era ruido. Pasa a UN chip resumen que lleva a Planes; el detalle queda en su `title`/aria. Con 1 o 2 se
+  // mantienen los chips por disciplina de S22h (Kine y Osteo en paralelo, que «Plan activo +1» no distinguía).
+  if (plans.length >= HERO_PLAN_SUMMARY_FROM) {
+    const { text, ariaLabel } = heroPlanSummaryText(plans);
+    const detail = plans.map((p) => heroPlanChipText(p).ariaLabel).join(" · ");
+    const style: React.CSSProperties = {
+      // `font` primero: el shorthand pisa `fontSize`/`fontWeight` si va después.
+      font: "inherit",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "3px 10px",
+      borderRadius: 999,
+      background: "#fff",
+      border: "1px solid rgba(15,30,51,0.08)",
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: "var(--navy-700)",
+    };
+    return onOpenPlan ? (
+      <button
+        type="button"
+        data-testid="hero-plan-summary"
+        onClick={() => onOpenPlan(plans[0].programId)}
+        title={detail}
+        aria-label={`${ariaLabel}: ${detail}. Ver los planes`}
+        style={{ ...style, cursor: "pointer" }}
+      >
+        {text}
+      </button>
+    ) : (
+      <span data-testid="hero-plan-summary" role="group" title={detail} aria-label={`${ariaLabel}: ${detail}`} style={style}>
+        {text}
+      </span>
+    );
+  }
   return (
     <ul
       aria-label="Planes en curso"

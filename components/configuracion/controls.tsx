@@ -1,6 +1,8 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Role } from "@prisma/client";
+import styles from "./configuracion.module.css";
 import type { TenantModule } from "@/lib/tenant-modules";
 
 export type Tab =
@@ -84,7 +86,8 @@ const TAB_DEFS: readonly TabDef[] = [
   { key: "sedes", label: "Sedes", visible: admin },
   { key: "profesionales", label: "Profesionales", visible: admin },
   { key: "servicios", label: "Servicios", visible: admin },
-  { key: "obras-sociales", label: "Obras Sociales", visible: admin },
+  // [PF1.1-config · C5] Sentence case en todas («Obras sociales», como «Plan y uso» y «Exportar datos»).
+  { key: "obras-sociales", label: "Obras sociales", visible: admin },
   { key: "diagnosticos", label: "Diagnósticos", module: "diagnostico", visible: admin },
   { key: "usuarios", label: "Usuarios", visible: (a) => a.team },
   { key: "plan", label: "Plan y uso", visible: (a) => a.billing },
@@ -118,6 +121,7 @@ export function TabsBar({
   access,
   modules,
   canExport,
+  onPreload,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
@@ -127,55 +131,91 @@ export function TabsBar({
   modules: readonly TenantModule[];
   /** BO-Z B6: pisa `access.canExport` (el titular de un consultorio suspendido). */
   canExport?: boolean;
+  /** [PF1.1-config · C-PF2] Precarga del chunk de la pestaña en hover/foco (cada panel es un `next/dynamic`). */
+  onPreload?: (t: Tab) => void;
 }) {
   const base = access ?? (role ? legacyConfigAccess(role) : LEGACY_ACCESS.PRACTITIONER);
   const eff = canExport === undefined ? base : { ...base, canExport };
   const keys = visibleConfigTabs(eff, modules);
   const tabs = TAB_DEFS.filter((t) => keys.includes(t.key));
-  // B3.4: con 7 pestañas (11 desde PL-3a) la píldora no entra en un celular; scrollea en
-  // horizontal en vez de desbordar la página (`maxWidth: 100%`).
+  const listRef = useRef<HTMLDivElement>(null);
+  const fade = useScrollFade(listRef);
+
+  // La pestaña activa siempre a la vista (entrar por `?tab=exportar` en un celular la dejaba fuera del scroll).
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [tab]);
+
+  // Teclado del patrón tablist (WAI-ARIA): ← → recorren, Inicio/Fin van a los extremos; una sola parada de Tab.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = tabs.findIndex((t) => t.key === tab);
+    const next =
+      e.key === "ArrowRight" ? (i + 1) % tabs.length
+      : e.key === "ArrowLeft" ? (i - 1 + tabs.length) % tabs.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? tabs.length - 1
+      : -1;
+    if (next < 0 || !tabs[next]) return;
+    e.preventDefault();
+    setTab(tabs[next].key);
+    listRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  };
+
+  // B3.4: con 11 pestañas la píldora no entra en un celular (ni a 1024 con la barra lateral abierta): scrollea en
+  // horizontal con un degradé en el borde que avisa que hay más (C4, configuracion.module.css).
   return (
-    <div
-      className="k-glass k-scroll"
-      role="tablist"
-      style={{
-        display: "inline-flex",
-        padding: 4,
-        borderRadius: 999,
-        gap: 2,
-        alignSelf: "flex-start",
-        maxWidth: "100%",
-        overflowX: "auto",
-      }}
-    >
-      {tabs.map((t) => {
-        const on = tab === t.key;
-        return (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={() => setTab(t.key)}
-            style={{
-              padding: "8px 16px",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-              borderRadius: 999,
-              border: "none",
-              fontSize: 13,
-              fontWeight: 600,
-              background: on ? "var(--navy-900)" : "transparent",
-              color: on ? "#fff" : "var(--navy-500)",
-              cursor: "pointer",
-            }}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+    <div className={styles.tabsWrap} data-fade-start={fade.start || undefined} data-fade-end={fade.end || undefined}>
+      <div
+        ref={listRef}
+        className={`k-glass ${styles.tabs}`}
+        role="tablist"
+        aria-label="Secciones de Configuración"
+        onKeyDown={onKeyDown}
+        onScroll={fade.update}
+      >
+        {tabs.map((t) => {
+          const on = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              tabIndex={on ? 0 : -1}
+              className={styles.tab}
+              onClick={() => setTab(t.key)}
+              onPointerEnter={onPreload ? () => onPreload(t.key) : undefined}
+              onFocus={onPreload ? () => onPreload(t.key) : undefined}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
+}
+
+/** ¿Hay contenido escondido a la izquierda / derecha del scroller? (para el degradé del borde). */
+function useScrollFade(ref: React.RefObject<HTMLElement>) {
+  const [fade, setFade] = useState({ start: false, end: false });
+  const update = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.scrollLeft > 2;
+    const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setFade((f) => (f.start === start && f.end === end ? f : { start, end }));
+  }, [ref]);
+  useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, update]);
+  return { ...fade, update };
 }
 
 // [PF1.0-b · C-PF6] El `Switch` vive en `components/ui/switch.tsx` (área de toque de 44 px); este re-export deja a los

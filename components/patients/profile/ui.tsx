@@ -72,8 +72,10 @@ export function Summary({
   value: string;
   tone?: "lime" | "sky" | "navy";
 }) {
+  // PF1.1 (D8 de VX0-b): `lime` pintaba el monto con `--lime-500` sobre la card celeste (< 3:1). El tono sigue
+  // llamándose `lime` (lo usan los llamadores para «percibido»), pero el color es `--success-fg` (AA).
   const colour =
-    tone === "lime" ? "var(--lime-500)" : tone === "sky" ? "var(--sky-700)" : "var(--navy-900)";
+    tone === "lime" ? "var(--success-fg)" : tone === "sky" ? "var(--sky-700)" : "var(--navy-900)";
   return (
     <div>
       <div

@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import styles from "./patients-directory.module.css";
 
 type ConditionOption = { slug: string; name: string };
 
@@ -115,7 +116,7 @@ export function AdvancedPatientFilters({
               max={120}
               defaultValue={current.ageMin ?? ""}
               placeholder="—"
-              style={inputStyle}
+              className={styles.field} style={inputStyle}
             />
           </Field>
           <Field label="Edad máxima">
@@ -126,13 +127,13 @@ export function AdvancedPatientFilters({
               max={120}
               defaultValue={current.ageMax ?? ""}
               placeholder="—"
-              style={inputStyle}
+              className={styles.field} style={inputStyle}
             />
           </Field>
 
           {diagnosisEnabled && (
           <Field label="Último diagnóstico">
-            <select name="diagnosisSlug" defaultValue={current.diagnosisSlug ?? ""} style={inputStyle}>
+            <select name="diagnosisSlug" defaultValue={current.diagnosisSlug ?? ""} className={styles.field} style={inputStyle}>
               <option value="">Cualquiera</option>
               {conditions.map((c) => (
                 <option key={c.slug} value={c.slug}>
@@ -148,7 +149,7 @@ export function AdvancedPatientFilters({
               type="date"
               name="lastVisitFrom"
               defaultValue={current.lastVisitFrom ?? ""}
-              style={inputStyle}
+              className={styles.field} style={inputStyle}
             />
           </Field>
           <Field label="Última visita hasta">
@@ -156,7 +157,7 @@ export function AdvancedPatientFilters({
               type="date"
               name="lastVisitTo"
               defaultValue={current.lastVisitTo ?? ""}
-              style={inputStyle}
+              className={styles.field} style={inputStyle}
             />
           </Field>
 
@@ -208,6 +209,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** PF1.1 (C-PF5.4): el foco lo pinta `.field` (borde + `--focus-ring`); antes se apagaba el contorno sin reemplazo. */
 const inputStyle: React.CSSProperties = {
   marginTop: 4,
   padding: "6px 10px",
@@ -217,7 +219,6 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   fontSize: 13,
   color: "var(--navy-900)",
-  outline: "none",
   boxSizing: "border-box",
 };
 

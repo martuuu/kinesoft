@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { AnimatePresence, motion } from "framer-motion";
-import { DUR, EASE_OUT } from "@/lib/motion";
+import { AnimatePresence } from "framer-motion";
 import { useTweaks } from "@/components/layout/tweaks-context";
 import { useToast } from "@/components/ui/toast";
 import { localToARIso, toARDateKey } from "@/lib/datetime-ar";
@@ -1061,18 +1060,16 @@ export function AgendaClient(props: Props) {
         />
       )}
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      {/* G5 (PF1.1): en Lista el contenedor no estira hasta el pie de la pantalla, así la leyenda queda pegada a la
+          tabla (antes flotaba ~150 px abajo). Día/Semana/columnas sí estiran: su card scrollea adentro. */}
+      <div style={{ flex: view === "list" ? "0 1 auto" : 1, minHeight: 0 }}>
         {/* SV09: las cards leen el flash del contexto (no se pasa por cada vista). */}
         <BookingFlashContext.Provider value={flashIds}>
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={`${view}-${dayKey}`}
-              initial={{ opacity: 0, y: 6, scale: 0.995 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.995 }}
-              transition={{ duration: DUR.base, ease: EASE_OUT }}
-              style={{ height: "100%" }}
-            >
+          {/* PF1.1 (C-PF1.2): la entrada de la vista es CSS (`.k-page-in`, 120 ms, sin animación con movimiento
+              reducido). Antes era `motion.div` con `AnimatePresence mode="wait"`: además de meter framer completo en
+              el first load, el `initial={{ opacity: 0 }}` dejaba la vista SSR invisible hasta hidratar (LCP) y el
+              «wait» demoraba cada cambio de día/vista lo que duraba la salida. El `key` remonta igual que antes. */}
+          <div key={`${view}-${dayKey}`} className="k-page-in" style={{ height: "100%" }}>
               {view === "timeline" && (
                 <TimelineView
                   bookings={todayList}
@@ -1195,8 +1192,7 @@ export function AgendaClient(props: Props) {
                   }}
                 />
               )}
-            </motion.div>
-          </AnimatePresence>
+          </div>
         </BookingFlashContext.Provider>
       </div>
 

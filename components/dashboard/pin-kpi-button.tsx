@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Modal } from "@/components/ui/modal";
-import { IconCheck, IconPlus } from "@/components/ui/icons";
-import { updateUserPreferences } from "@/lib/preferences";
-import {
-  kpiOptionsFor,
-  pinnableKpis,
-  type KpiKey,
-  type KpiRevenueScope,
-} from "@/lib/preferences-constants";
-import { useTenantModules } from "@/components/layout/tenant-modules-context";
+import dynamic from "next/dynamic";
+import { useState } from "react";
+import { IconPlus } from "@/components/ui/icons";
+import type { KpiKey, KpiRevenueScope } from "@/lib/preferences-constants";
+
+/**
+ * PF1.1-dashboard (C-PF2): el selector se baja recién al abrirlo y se precarga en hover/foco del botón (`import()` sin
+ * await), así el click no espera red. `ssr: false` es seguro: el modal nunca está abierto en el primer render.
+ */
+const loadPinKpiModal = () => import("./pin-kpi-modal");
+const PinKpiModal = dynamic(() => loadPinKpiModal().then((m) => m.PinKpiModal), { ssr: false, loading: () => null });
 
 /**
  * The "+ Agregar" button on the pinned-KPIs row.
@@ -32,183 +30,33 @@ export function PinKpiButton({
   revenueScope?: KpiRevenueScope;
 }) {
   const [open, setOpen] = useState(false);
+  // Una vez abierto queda montado: el Modal anima la salida y la segunda apertura no vuelve a pedir el chunk.
+  const [mounted, setMounted] = useState(false);
+  const preload = () => void loadPinKpiModal();
   return (
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "6px 10px",
-          borderRadius: 999,
-          background: "rgba(255,255,255,0.6)",
-          border: "1px solid rgba(15,30,51,0.06)",
-          fontSize: 12,
-          color: "var(--navy-700)",
-          fontWeight: 600,
-          cursor: "pointer",
+        className="k-btn k-btn-ghost"
+        aria-haspopup="dialog"
+        onPointerEnter={preload}
+        onFocus={preload}
+        onClick={() => {
+          setMounted(true);
+          setOpen(true);
         }}
+        style={{ fontSize: 12, padding: "6px 12px", minHeight: 32, gap: 6 }}
       >
         <IconPlus size={12} /> Agregar
       </button>
-      <PinKpiModal
-        open={open}
-        currentPinned={currentPinned}
-        revenueScope={revenueScope}
-        onClose={() => setOpen(false)}
-      />
+      {mounted && (
+        <PinKpiModal
+          open={open}
+          currentPinned={currentPinned}
+          revenueScope={revenueScope}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
-  );
-}
-
-/** Exportado para el test de render (tests/unit/render/kpi-picker.test.tsx). */
-export function PinKpiModal({
-  open,
-  currentPinned,
-  onClose,
-  revenueScope = "tenant",
-}: {
-  open: boolean;
-  currentPinned: KpiKey[];
-  onClose: () => void;
-  revenueScope?: KpiRevenueScope;
-}) {
-  const router = useRouter();
-  // EV1-A: sin `planes` (General) el picker no ofrece KPIs de planes y rotula
-  // con turnos (`kpiOptionsFor`). Fuera del AppShell el default es Kine PRO.
-  const modules = useTenantModules();
-  const options = kpiOptionsFor(revenueScope, modules);
-  const [pinned, setPinned] = useState<KpiKey[]>(() => pinnableKpis(currentPinned, revenueScope, modules));
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  // Reset the draft selection each time the picker opens so a prior
-  // cancelled edit doesn't linger (the component stays mounted for the
-  // exit animation).
-  useEffect(() => {
-    if (open) {
-      setPinned(pinnableKpis(currentPinned, revenueScope, modules));
-      setError(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  const toggle = (key: KpiKey) =>
-    setPinned((s) => (s.includes(key) ? s.filter((k) => k !== key) : [...s, key]));
-
-  const save = () => {
-    setError(null);
-    start(async () => {
-      const r = await updateUserPreferences({ pinnedKpis: pinned });
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      onClose();
-      router.refresh();
-    });
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      width={520}
-      title="Indicadores fijados"
-      description="Elegí hasta 6. El orden de selección define el orden en la grilla."
-    >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-          {options.map((opt) => {
-            const on = pinned.includes(opt.key);
-            const idx = pinned.indexOf(opt.key);
-            return (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => toggle(opt.key)}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: on
-                    ? "1px solid var(--sky-700)"
-                    : "1px solid rgba(15,30,51,0.08)",
-                  background: on ? "rgba(31,79,190,0.06)" : "rgba(255,255,255,0.6)",
-                  textAlign: "left",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 8,
-                }}
-              >
-                <span
-                  style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: 5,
-                    background: on ? "var(--sky-700)" : "rgba(15,30,51,0.06)",
-                    color: "#fff",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    marginTop: 1,
-                    fontSize: 9,
-                    fontWeight: 800,
-                  }}
-                >
-                  {on ? idx + 1 : ""}
-                </span>
-                <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--navy-900)" }}>
-                    {opt.label}
-                  </div>
-                  <div style={{ fontSize: 10.5, color: "var(--navy-300)" }}>
-                    {opt.description}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {error && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 10,
-              borderRadius: 10,
-              background: "var(--danger-bg)",
-              color: "var(--danger-fg)",
-              fontSize: 12,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 10,
-            marginTop: 16,
-          }}
-        >
-          <div style={{ fontSize: 12, color: "var(--navy-500)" }}>
-            <IconCheck size={12} stroke={3} /> {pinned.length} de 6 seleccionados
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Button variant="ghost" onClick={onClose} disabled={pending}>
-              Cancelar
-            </Button>
-            <Button variant="primary" onClick={save} disabled={pending}>
-              {pending ? "Guardando…" : "Guardar"}
-            </Button>
-          </div>
-        </div>
-    </Modal>
   );
 }

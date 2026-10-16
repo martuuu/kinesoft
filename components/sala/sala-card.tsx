@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { arrivalPulse } from "@/lib/motion";
 import { SERVICE_COLOR_FALLBACK } from "@/lib/service-colors";
 import { RECEPTION_ACTION_LABEL, type ReceptionAction } from "@/lib/reception-state";
@@ -39,7 +39,7 @@ type SalaCardProps = {
  * plan sin título, invitado/sobreturno, espera). El DTO ya llega sin lo
  * clínico (`toSalaWire` en el server), y acá tampoco se lee.
  *
- * Anillo de llegada (FX2a · M1): es un `<motion.span>` hermano, superpuesto y
+ * Anillo de llegada (FX2a · M1): es un `<m.span>` hermano, superpuesto y
  * `aria-hidden`, con `key={pulseKey}`: lo que se remonta en cada llegada es el
  * anillo, NO la card. Antes la key estaba en la card y remontarla le sacaba
  * el foco a quien la estaba operando con teclado. Va fuera de la card porque
@@ -65,7 +65,7 @@ function SalaCardImpl({ entry, now, context, pending, pulseKey, onAction }: Sala
   return (
     <>
       {pulseKey ? (
-        <motion.span
+        <m.span
           key={pulseKey}
           aria-hidden="true"
           className="sala-ring k-arrival-ring"

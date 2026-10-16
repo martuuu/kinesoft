@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
@@ -24,9 +23,13 @@ import {
 } from "@/lib/insurers";
 import { listInsurerPayerSuggestions } from "@/lib/catalog";
 import { ErrorBox } from "../controls";
+import styles from "../configuracion.module.css";
 import { PayerPickerModal } from "../catalog/payer-picker";
 import { PayerPlansInfo } from "../catalog/payer-plans-info";
 import { useTenantModules } from "@/components/layout/tenant-modules-context";
+
+// [PF1.1-config · C-PF4] Sin `router.refresh()` después de las actions de este archivo: todas revalidan `/configuracion`
+// y la respuesta de la action ya trae el árbol nuevo (un refresh era un segundo render entero, PF-0d).
 
 /**
  * EV1-C2: en Kinesiología la prestadora paga «al kine por sesión»; en Clínica
@@ -41,7 +44,6 @@ function usePayeeCopy() {
 }
 
 export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
-  const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<InsurerRow | null>(null);
@@ -86,7 +88,6 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
       if (!r.ok) toast.error("No pudimos vincular", { description: r.error });
       else {
         toast.success(`«${insurer.name}» quedó vinculada a ${payer.name}`);
-        router.refresh();
       }
     });
 
@@ -101,7 +102,6 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
       if (r.data.status === "created") {
         toast.success(`Agregaste ${payer.name}`, { description: "Cargá el copago y el monto fijo." });
         setOpenAfterRefresh(r.data.insurerId);
-        router.refresh();
         return;
       }
       // Ya hay una OS con ese nombre (único por consultorio): no se duplica.
@@ -133,7 +133,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
         }}
       >
         <div style={{ flex: "1 1 280px", minWidth: 0 }}>
-          <EyebrowLabel>Obras Sociales y Prepagas</EyebrowLabel>
+          <EyebrowLabel>Obras sociales y prepagas</EyebrowLabel>
           <div style={{ fontSize: 13, color: "var(--navy-500)", marginTop: 4 }}>
             {`Cada paciente puede tener una cobertura. El copago lo paga el paciente; el monto fijo es lo que le abona la prestadora ${payeeCopy.payee} ${payeeCopy.unit}.`}
           </div>
@@ -152,7 +152,9 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
           No hay obras sociales cargadas.
         </div>
       ) : (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        // C4: a 390 la grilla de 5 columnas desbordaba la página; ahora scrollea dentro de la card.
+        <div className={styles.tableScroll}>
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 560 }}>
           {insurers.map((i) => {
             const suggestion = !i.payerId && !i.isParticular ? suggestions[i.id] : undefined;
             return (
@@ -172,7 +174,18 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
               >
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    {i.name}
+                    {/* La fila entera abre la edición con el mouse; el nombre es el botón para el teclado (antes la
+                        fila era un <li onClick> sin foco posible). */}
+                    <button
+                      type="button"
+                      className={styles.rowLink}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(i);
+                      }}
+                    >
+                      {i.name}
+                    </button>
                     {i.isParticular && <Tag tone="soft">Por defecto</Tag>}
                     {i.payerName && (
                       <span title="Vinculada al catálogo de prestadoras">
@@ -212,7 +225,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
                 </div>
                 <Money label="Copago" amount={i.copagoCents} />
                 <Money label="Monto fijo" amount={i.fixedFeeCents} />
-                <div style={{ fontSize: 11, color: "var(--navy-300)", textAlign: "right" }}>
+                <div style={{ fontSize: 12, color: "var(--navy-500)", textAlign: "right", whiteSpace: "nowrap" }}>
                   {i.patientsCount} pac.
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -222,6 +235,7 @@ export function InsurersPanel({ insurers }: { insurers: InsurerRow[] }) {
             );
           })}
         </ul>
+        </div>
       )}
       {pickingFromCatalog && (
         <PayerPickerModal
@@ -267,7 +281,6 @@ function InsurerModal({
   suggestion?: PayerOption;
   onClose: () => void;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(insurer?.active ?? true);
@@ -299,7 +312,6 @@ function InsurerModal({
       if (!r.ok) setError(r.error);
       else {
         onClose();
-        router.refresh();
       }
     });
   };
@@ -319,7 +331,6 @@ function InsurerModal({
       if (!r.ok) setError(r.error);
       else {
         onClose();
-        router.refresh();
       }
     });
   };
@@ -332,7 +343,7 @@ function InsurerModal({
     >
       <form action={submit} style={{ display: "grid", gap: 12 }}>
         <FormField label="Nombre" name="name" required defaultValue={insurer?.name ?? ""} placeholder="OSDE, Swiss Medical…" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className={styles.twoCol}>
           <MoneyInput
             label="Copago (paciente, ARS)"
             value={copagoCents}
@@ -421,7 +432,6 @@ function CatalogLinkSection({
   suggestion?: PayerOption;
   onLinked: () => void;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const [picking, setPicking] = useState(false);
@@ -437,7 +447,6 @@ function CatalogLinkSection({
       toast.success(payer ? `Vinculada a ${payer.name}` : "Desvinculada del catálogo");
       setPicking(false);
       onLinked();
-      router.refresh();
     });
 
   const unlink = async () => {
